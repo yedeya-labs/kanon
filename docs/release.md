@@ -103,7 +103,6 @@ Made once, by an Owner:
    gh api -X PUT orgs/<owner>/actions/permissions/workflow -F can_approve_pull_request_reviews=true
    gh api -X PUT repos/<owner>/<repo>/actions/permissions/workflow -F can_approve_pull_request_reviews=true
    ```
-3. **While Kanon is private**, the two settings in the [`pr-title` README](../actions/pr-title/README.md#one-time-settings-while-kanon-is-private): Kanon's Actions **Access** for your organisation (without it the caller fails at setup, unable to resolve `yedeya-labs/kanon/...`), and Dependabot's access to Kanon.
 
 ## Known limits
 

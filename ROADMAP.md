@@ -11,7 +11,7 @@ Write every opinion down in [`rulebook/`](rulebook/). Each opinion gets its reas
 
 ## Where Kanon lives
 
-Kanon's repositories live in the **`yedeya-labs`** GitHub organisation. They are **private for now**, and each goes public on its own, at its own gate ([ADR 0008 §2](docs/decisions/0008-installation-test-decisions.md)). This is the same rule Kanon sets for its adopters (`K-ADOPT-2`).
+Kanon's repositories live in the **`yedeya-labs`** GitHub organisation. **Kanon itself is public since 2026-09-30**, under Apache-2.0 ([ADR 0010](docs/decisions/0010-licence.md)), recreated without its private drafting history. Each other repository goes public on its own, at its own gate ([ADR 0008 §2](docs/decisions/0008-installation-test-decisions.md)). This is the same rule Kanon sets for its adopters (`K-ADOPT-2`).
 
 ## Phase 2: Second adopter and extraction, together
 
@@ -120,6 +120,7 @@ Decided in [ADR 0007](docs/decisions/0007-data-boundary.md) and written as rules
 - **Roles for teams:** the Owner, Maintainer and Stakeholder roles (ADR 0005, ADR 0006), tested on an adopter where they are different people.
 - **Published per-run cost data**, from the telemetry.
 - **Done 2026-09-30:** the extraction's working files moved to a separate private repository. A test keeps the reference adopter's names out of the public tree.
+- **Done 2026-09-30:** Kanon is public. Its main branch has a ruleset: a PR is required, squash merges only, no force-pushes or deletion, and CI, the PR title and the DCO sign-off are required checks. **Bootstrap exception:** repository admins may bypass the ruleset on pull requests, because release PRs are opened with the workflow token and run no CI. It ends when a release App opens release PRs. No approving review is required until the Reviewer's App exists (`K-ADOPT-6`).
 
 ## Later: Kanon Cloud
 

@@ -23,7 +23,7 @@ A bot's name on a commit isn't enough: anyone can write that email into a commit
 
 ## Use it
 
-Add `.github/workflows/dco.yml`, pinned to an **exact version** ([`K-ADOPT-11`](../../rulebook/10-adoption.md)). Replace `vX.Y.Z` with the exact Kanon release you adopt, never the moving `v0`:
+Add `.github/workflows/dco.yml`, pinned to an **exact version** ([`K-ADOPT-11`](../../rulebook/10-adoption.md)). Use the exact Kanon release you adopt (the action first shipped in `v0.4.0`), never the moving `v0`:
 
 ```yaml
 name: DCO
@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: yedeya-labs/kanon/actions/dco@vX.Y.Z
+      - uses: yedeya-labs/kanon/actions/dco@v0.4.0
 ```
 
 - **No checkout needed.** The action reads the pull request's commits through the REST API with the workflow token, and carries its own script, read from its own directory at the version you pinned.
@@ -52,7 +52,7 @@ jobs:
 - **Node 18 or later** must be on the runner. GitHub's hosted runners have it. On a self-hosted runner, add `actions/setup-node` before this step.
 - **Commits made in GitHub's web editor** need a sign-off too. Turn on **Settings → General → "Require contributors to sign off on web-based commits"** and GitHub adds it for them.
 
-Dependabot and the one-time settings while Kanon is private are the same as for the [PR-title action](../pr-title/README.md#upgrades-dependabot).
+Dependabot is set up the same way as for the [PR-title action](../pr-title/README.md#upgrades-dependabot).
 
 ## Fix a failing pull request
 
