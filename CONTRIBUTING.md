@@ -10,7 +10,11 @@ Kanon uses the [Developer Certificate of Origin](https://developercertificate.or
 Signed-off-by: Your Name <you@example.com>
 ```
 
-`git commit -s` adds it for you, using your git `user.name` and `user.email`. A pull request whose commits aren't all signed off can't be merged. To fix one that isn't, run `git commit --amend -s`, or `git rebase --signoff main` for several commits, and force-push.
+`git commit -s` adds it for you, using your git `user.name` and `user.email`. A pull request whose commits aren't all signed off can't be merged: the [DCO check](actions/dco/README.md) fails it, and lists each commit whose sign-off is missing or isn't its author's. To fix one that isn't, run `git commit --amend -s`, or `git rebase --signoff main` for several commits, and force-push.
+
+### AI-assisted changes
+
+AI-assisted changes are welcome. The **human** who submits them signs off, and so certifies the DCO and takes responsibility for the change. The AI may be credited with a `Co-Authored-By:` trailer, but never signs off: the DCO check fails a commit whose only sign-off is an AI or bot identity.
 
 ## How changes land
 

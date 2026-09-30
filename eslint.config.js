@@ -7,7 +7,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     languageOptions: {
-      globals: { process: 'readonly', console: 'readonly' },
+      globals: { process: 'readonly', console: 'readonly', fetch: 'readonly' },
     },
   },
 );

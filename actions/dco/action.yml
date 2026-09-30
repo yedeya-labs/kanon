@@ -1,0 +1,32 @@
+# Kanon's DCO check (ADR 0010), as a composite action.
+#
+# Every commit in the pull request must carry a `Signed-off-by:` trailer whose name and
+# email are the commit author's. The commits are read through the REST API with the
+# workflow token, so no checkout is needed, and the token needs only `pull-requests: read`
+# (and `contents: read` on a private repository).
+#
+# The script is read from this action's own directory ($GITHUB_ACTION_PATH), at the ref
+# the adopter pinned, so the action and its script can never drift apart.
+#
+# Everything reaches the script through the environment, never interpolated into a shell
+# line. There are no inputs (ADR 0002): the exemptions are fixed, and listed with their
+# reasons in dco.mjs's header: merge commits, and GitHub-signed commits by Dependabot and
+# by the github-actions bot (release PRs).
+#
+# Requires Node 18 or later on the runner. GitHub's hosted runners have it; a
+# self-hosted runner must provide it. The action does not install Node itself.
+name: Kanon DCO
+description: Fails unless every commit in the pull request is signed off (Signed-off-by) by its author.
+author: yedeya-labs
+
+runs:
+  using: composite
+  steps:
+    - name: Check every commit's sign-off
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        BASE_REF: ${{ github.base_ref }}
+      run: node "$GITHUB_ACTION_PATH/dco.mjs"
