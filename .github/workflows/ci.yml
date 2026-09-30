@@ -1,10 +1,17 @@
 # Kanon's own checks on every pull request: lint, type-check and unit tests.
 #
+# It also runs on merge_group (K-MERGE-7). The merge queue tests each queued PR on top of
+# main and whatever is ahead of it in the queue, and this is the check that makes that
+# test mean something: it runs the full suite on the combined commit. Without the
+# trigger, a required check never reports on the queue's branch and queued PRs wait
+# until they time out.
+#
 # Read-only on purpose. This workflow needs nothing but the code, so it gets nothing else.
 name: CI
 
 on:
   pull_request:
+  merge_group:
   push:
     branches: [main]
 

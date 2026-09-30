@@ -6,11 +6,22 @@
 # commits; `contents: read` is what a private repository also needs for them. A
 # `pull_request` run gets a read-only token and no secrets, so running the PR's own
 # version of the check is safe.
+#
+# On merge_group (K-MERGE-7) the check passes without checking anything, under the same
+# job name, because a required check must report on the queue's branch or the queue
+# waits for it. A merge group carries no pull request, so there are no PR commits to
+# list, and none is needed: a PR can only be queued once this check passes, and pushing
+# to a queued PR removes it from the queue, so the commits that were checked are exactly
+# the commits that merge. The queue's own commits on its temporary branch are GitHub's,
+# not a contributor's, so there is nothing there to sign off. CI runs the real test of
+# the combined code. The job runs and passes rather than being skipped by a job-level
+# `if`, so the queue's check doesn't rest on how GitHub scores a skipped required check.
 name: DCO
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  merge_group:
 
 permissions:
   contents: read
@@ -22,5 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Already checked on the pull request
+        if: github.event_name == 'merge_group'
+        run: echo "Merge group. Each queued PR's commits passed this check before it could be queued."
       - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
       - uses: ./actions/dco
+        if: github.event_name == 'pull_request'

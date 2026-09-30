@@ -4,11 +4,26 @@
 # The local path runs the action as it is in the PR, so a PR that changes the check is
 # checked by its own version. That is the point of dogfooding, and it is safe here:
 # `pull_request` runs get a read-only token and no secrets.
+#
+# On merge_group (K-MERGE-7) the check passes without checking anything, under the same
+# job name, because a required check must report on the queue's branch or the queue
+# waits for it. A merge group carries no pull request, so there is no title to read, and
+# none is needed: a PR can only be queued once its required checks pass, this one
+# included. What the queue adds is a test of the combined code, and CI runs that. The job
+# runs and passes rather than being skipped by a job-level `if`, so the queue's check
+# doesn't rest on how GitHub scores a skipped required check. Reading
+# the PR back from the queue's branch name was rejected: it re-checks a title that
+# already passed, for a group of up to five PRs, with a parser for a ref format GitHub
+# doesn't document as stable. One gap is accepted: editing a title doesn't take a PR out
+# of the queue, and GitHub doesn't document whether a red re-check on the PR does, so a
+# title edited while queued is treated as unchecked. The window is the queue's wait, a
+# few minutes at Kanon's volume.
 name: PR title
 
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  merge_group:
 
 permissions:
   contents: read
@@ -19,5 +34,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Already checked on the pull request
+        if: github.event_name == 'merge_group'
+        run: echo "Merge group. Each queued PR's title passed this check before it could be queued."
       - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
       - uses: ./actions/pr-title
+        if: github.event_name == 'pull_request'

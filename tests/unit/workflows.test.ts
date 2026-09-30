@@ -13,7 +13,15 @@ type Step = {
   with?: Record<string, string>;
   'continue-on-error'?: unknown;
 };
-type Job = { permissions?: Record<string, string>; uses?: string; concurrency?: unknown; steps: Step[] };
+type Job = {
+  name?: string;
+  if?: string;
+  strategy?: unknown;
+  permissions?: Record<string, string>;
+  uses?: string;
+  concurrency?: unknown;
+  steps: Step[];
+};
 type Workflow = { on: Record<string, unknown>; permissions?: Record<string, string>; jobs: Record<string, Job> };
 
 const load = (name: string): { text: string; wf: Workflow } => {
@@ -22,12 +30,30 @@ const load = (name: string): { text: string; wf: Workflow } => {
 };
 const stepsOf = (wf: Workflow): Step[] => Object.values(wf.jobs).flatMap((job) => job.steps ?? []);
 
+const ON_PULL_REQUEST = "github.event_name == 'pull_request'";
+const ON_MERGE_GROUP = "github.event_name == 'merge_group'";
+
+// A check that reads the pull request has nothing to read on merge_group, so on that
+// event it runs one step that passes, and its real steps only on pull_request. Every
+// step is gated one way or the other, so neither event runs both, or neither.
+const expectPassesOnMergeGroup = (wf: Workflow, action: string) => {
+  const steps = stepsOf(wf);
+  const real = steps.filter((s) => s.uses === action || s.uses?.startsWith('actions/checkout@'));
+  expect(real.map((s) => s.uses)).toEqual(['actions/checkout@v7', action]);
+  for (const s of real) expect(s.if).toBe(ON_PULL_REQUEST);
+  const passes = steps.filter((s) => s.if === ON_MERGE_GROUP);
+  expect(passes).toHaveLength(1);
+  expect(passes[0]?.uses).toBeUndefined();
+  expect(steps.filter((s) => s.if !== ON_PULL_REQUEST && s.if !== ON_MERGE_GROUP)).toEqual([]);
+};
+
 describe('CI runs lint, type-check and unit tests on every pull request', () => {
   const { wf } = load('ci.yml');
   const runs = stepsOf(wf).map((s) => s.run ?? '');
 
-  it('triggers on pull_request', () => {
+  it('triggers on pull_request, and on merge_group so the merge queue tests the combined commit', () => {
     expect(Object.keys(wf.on)).toContain('pull_request');
+    expect(Object.keys(wf.on)).toContain('merge_group');
   });
 
   it('runs all three, none of them allowed to fail', () => {
@@ -45,8 +71,13 @@ describe('CI runs lint, type-check and unit tests on every pull request', () => 
 describe('K-SHIP-4 Kanon dogfoods its PR-title action', () => {
   const { wf, text } = load('pr-title.yml');
 
-  it('runs on pull requests, including title edits', () => {
+  it('runs on pull requests, including title edits, and on merge_group', () => {
     expect(wf.on.pull_request).toMatchObject({ types: expect.arrayContaining(['opened', 'edited', 'synchronize']) });
+    expect(Object.keys(wf.on)).toContain('merge_group');
+  });
+
+  it('checks the title on pull requests only, and passes on merge_group', () => {
+    expectPassesOnMergeGroup(wf, './actions/pr-title');
   });
 
   it('uses the action by local path, after checking the repository out', () => {
@@ -64,8 +95,12 @@ describe('K-SHIP-4 Kanon dogfoods its PR-title action', () => {
 describe('ADR 0010 Kanon dogfoods its DCO action', () => {
   const { wf } = load('dco.yml');
 
-  it('runs on pull requests opened, pushed to and reopened', () => {
-    expect(wf.on).toEqual({ pull_request: { types: ['opened', 'synchronize', 'reopened'] } });
+  it('runs on pull requests opened, pushed to and reopened, and on merge_group', () => {
+    expect(wf.on).toEqual({ pull_request: { types: ['opened', 'synchronize', 'reopened'] }, merge_group: null });
+  });
+
+  it('checks the commits on pull requests only, and passes on merge_group', () => {
+    expectPassesOnMergeGroup(wf, './actions/dco');
   });
 
   it('uses the action by local path, after checking the repository out', () => {
@@ -184,5 +219,30 @@ describe('no workflow interpolates github.event into a run line', () => {
 
   it.each(names)('%s', (name) => {
     for (const s of stepsOf(load(name).wf)) expect(s.run ?? '').not.toContain('github.event');
+  });
+});
+
+// The ruleset on main (id 24259403) requires these checks by name. A merge queue waits
+// for each one on the queue's branch, so each must report there under the same name it
+// reports under on the pull request (K-MERGE-7).
+const REQUIRED_CHECKS = ['Lint, type-check and unit tests', 'Conventional title', 'Signed-off commits'];
+
+describe('K-MERGE-7 every required check reports on pull requests and in the merge queue, under one name', () => {
+  const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
+  const jobs = names.flatMap((file) => {
+    const { wf } = load(file);
+    return Object.values(wf.jobs).map((job) => ({ file, on: wf.on, job }));
+  });
+
+  it.each(REQUIRED_CHECKS)('%s', (check) => {
+    const matches = jobs.filter(({ job }) => job.name === check);
+    expect(matches.map(({ file }) => file)).toHaveLength(1);
+    const { on, job } = matches[0]!;
+    expect(Object.keys(on)).toEqual(expect.arrayContaining(['pull_request', 'merge_group']));
+    // The same literal name under both events: a job-level `if` would skip it on one of
+    // them, and an expression or a matrix would change the name the check reports.
+    expect(job.if).toBeUndefined();
+    expect(job.strategy).toBeUndefined();
+    expect(job.name).not.toContain('${{');
   });
 });
