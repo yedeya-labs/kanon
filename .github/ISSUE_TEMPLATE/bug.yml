@@ -1,0 +1,25 @@
+name: Bug
+description: A check, workflow or document in Kanon does the wrong thing.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Kanon version
+      description: The exact version you pinned, for example v0.4.0.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran or merged, and what Kanon did. Paste the failing log lines.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: Cite the rule id (for example K-SHIP-4) if a rule says what should happen.
+    validations:
+      required: true

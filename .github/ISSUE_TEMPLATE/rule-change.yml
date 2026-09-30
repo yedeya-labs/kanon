@@ -1,0 +1,33 @@
+name: Rule change
+description: Propose adding, changing or retiring a rule. Rules are fixed for every adopter, so a change has to argue for all of them.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Kanon is opinionated on purpose, and its rules can't be configured ([ADR 0002](https://github.com/yedeya-labs/kanon/blob/main/docs/decisions/0002-standardise-dont-parameterise.md)). If a rule doesn't fit your project, either the rule is wrong for everyone, or your project is outside what Kanon is for. This form is for the first case.
+  - type: input
+    id: rule
+    attributes:
+      label: Rule id
+      description: The rule you want to change or retire, for example K-MERGE-7. Leave it empty for a new rule.
+  - type: textarea
+    id: change
+    attributes:
+      label: The change
+      description: The rule as you would write it.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What went wrong, or would go wrong, under the current rule. A real incident is the strongest argument.
+    validations:
+      required: true
+  - type: textarea
+    id: cost
+    attributes:
+      label: What it costs adopters
+      description: What every adopter would have to change, and what it would cost them.
+    validations:
+      required: true
