@@ -35,6 +35,7 @@ jobs:
 
 - **No checkout needed.** The action carries its own script and reads it from its own directory, at the version you pinned, so the action and its script can't drift apart.
 - **`edited` matters.** Without it, fixing a bad title doesn't re-run the check.
+- **With a merge queue** (`K-MERGE-7`), a required check must also run on `merge_group`, or queued PRs wait until they time out. A merge group carries no pull request, so add `merge_group:` under `on:`, gate this step with `if: github.event_name == 'pull_request'`, and add a step before it that passes with `if: github.event_name == 'merge_group'`. Keep the job's `name:` literal and the job itself unconditional, so the check reports under the same name on both events. Skipping the title check on the queue is safe because a PR can only be queued once this check has passed on it. Kanon's own [`pr-title.yml`](../../.github/workflows/pr-title.yml) is the worked example.
 - **Node 18 or later** must be on the runner. GitHub's hosted runners have it. On a self-hosted runner, add `actions/setup-node` before this step.
 - **Input `title`** (optional) defaults to the pull request's title. The title reaches the check only through an environment variable, never through the shell, because a PR title is untrusted input.
 - **The release tool must agree.** Your `release-please-config.json` needs a changelog section, not hidden, for each of the eleven types above (`K-SHIP-7`). A type the release tool doesn't know is dropped silently.
