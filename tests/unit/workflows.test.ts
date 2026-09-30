@@ -1,0 +1,163 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
+
+type Step = {
+  id?: string;
+  name?: string;
+  uses?: string;
+  run?: string;
+  if?: string;
+  shell?: string;
+  env?: Record<string, string>;
+  with?: Record<string, string>;
+  'continue-on-error'?: unknown;
+};
+type Job = { permissions?: Record<string, string>; uses?: string; concurrency?: unknown; steps: Step[] };
+type Workflow = { on: Record<string, unknown>; permissions?: Record<string, string>; jobs: Record<string, Job> };
+
+const load = (name: string): { text: string; wf: Workflow } => {
+  const text = readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), 'utf8');
+  return { text, wf: parse(text) as Workflow };
+};
+const stepsOf = (wf: Workflow): Step[] => Object.values(wf.jobs).flatMap((job) => job.steps ?? []);
+
+describe('CI runs lint, type-check and unit tests on every pull request', () => {
+  const { wf } = load('ci.yml');
+  const runs = stepsOf(wf).map((s) => s.run ?? '');
+
+  it('triggers on pull_request', () => {
+    expect(Object.keys(wf.on)).toContain('pull_request');
+  });
+
+  it('runs all three, none of them allowed to fail', () => {
+    for (const command of ['npm run lint', 'npm run typecheck', 'npm test']) expect(runs).toContain(command);
+    const steps = stepsOf(wf);
+    expect(steps.filter((s) => s['continue-on-error'])).toEqual([]);
+  });
+
+  it('reads contents only', () => {
+    expect(wf.permissions).toEqual({ contents: 'read' });
+    for (const job of Object.values(wf.jobs)) expect(job.permissions).toBeUndefined();
+  });
+});
+
+describe('K-SHIP-4 Kanon dogfoods its PR-title action', () => {
+  const { wf, text } = load('pr-title.yml');
+
+  it('runs on pull requests, including title edits', () => {
+    expect(wf.on.pull_request).toMatchObject({ types: expect.arrayContaining(['opened', 'edited', 'synchronize']) });
+  });
+
+  it('uses the action by local path, after checking the repository out', () => {
+    const uses = stepsOf(wf).map((s) => s.uses);
+    expect(uses).toContain('./actions/pr-title');
+    expect(uses.indexOf('./actions/pr-title')).toBeGreaterThan(uses.findIndex((u) => u?.startsWith('actions/checkout@')));
+  });
+
+  it('reads contents only, and never interpolates the title itself', () => {
+    expect(wf.permissions).toEqual({ contents: 'read' });
+    expect(text).not.toContain('github.event.pull_request.title');
+  });
+});
+
+describe('K-SHIP-7 the reusable release workflow', () => {
+  const { wf, text } = load('release.yml');
+  const jobs = Object.values(wf.jobs);
+  const steps = stepsOf(wf);
+  const index = (predicate: (s: Step) => boolean) => steps.findIndex(predicate);
+  const guard = steps.find((s) => s.id === 'merge-settings');
+  const release = steps.find((s) => s.uses?.startsWith('googleapis/release-please-action@'));
+  const explain = steps.find((s) => s.name === 'Explain a failed release');
+  const moveTag = steps.find((s) => s.run?.includes('git/refs'));
+
+  it('is called, never triggered, and takes no inputs or secrets (ADR 0002)', () => {
+    expect(wf.on).toEqual({ workflow_call: null });
+  });
+
+  it('grants nothing at the top, and exactly contents and pull-requests write on its one job', () => {
+    expect(wf.permissions).toEqual({});
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.permissions).toEqual({ contents: 'write', 'pull-requests': 'write' });
+  });
+
+  it('never cancels a release in progress', () => {
+    expect(jobs[0]?.concurrency).toEqual({ group: 'kanon-release', 'cancel-in-progress': false });
+  });
+
+  it('checks the merge settings first, before release-please, with the workflow token', () => {
+    expect(index((s) => s.id === 'merge-settings')).toBe(0);
+    expect(index((s) => s.id === 'release')).toBeGreaterThan(0);
+    expect(guard?.shell).toBe('node {0}');
+    expect(guard?.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
+    expect(guard?.run).toContain('`repos/${repo}`');
+    expect(guard?.run).toContain('process.env.GITHUB_REPOSITORY');
+  });
+
+  it('runs release-please v5 against the repository config and manifest, and lets it fail the job', () => {
+    expect(release?.uses).toBe('googleapis/release-please-action@v5');
+    expect(release?.id).toBe('release');
+    expect(release?.with).toEqual({
+      'config-file': 'release-please-config.json',
+      'manifest-file': '.release-please-manifest.json',
+    });
+    expect(steps.filter((s) => s['continue-on-error'] !== undefined)).toEqual([]);
+  });
+
+  it('explains a failed release-please run, only when release-please itself failed', () => {
+    expect(index((s) => s.name === 'Explain a failed release')).toBe(index((s) => s.id === 'release') + 1);
+    expect(explain?.if).toBe("failure() && steps.release.conclusion == 'failure'");
+    expect(explain?.shell).toBe('node {0}');
+    expect(explain?.env).toMatchObject({ STARTED: '${{ steps.merge-settings.outputs.started }}' });
+  });
+
+  it('moves the major tag to the released commit, only when a release was created', () => {
+    expect(index((s) => s === moveTag)).toBeGreaterThan(index((s) => s.id === 'release'));
+    expect(moveTag?.if).toBe("steps.release.outputs.release_created == 'true'");
+    expect(moveTag?.env).toMatchObject({
+      MAJOR: '${{ steps.release.outputs.major }}',
+      SHA: '${{ steps.release.outputs.sha }}',
+    });
+    expect(moveTag?.run).toContain('TAG="v$MAJOR"');
+    expect(moveTag?.run).toContain('force=true');
+  });
+
+  it('interpolates no expression into any run line', () => {
+    for (const s of steps) expect(s.run ?? '').not.toContain('${{');
+  });
+
+  it('says in its header why it has no inputs, and which permission the guard needs', () => {
+    const header = text.slice(0, text.indexOf('\nname:'));
+    expect(header).toContain('ADR 0002');
+    expect(header).toContain('No inputs');
+    expect(header).toContain('contents: write');
+  });
+});
+
+describe("K-SHIP-7 Kanon's release caller", () => {
+  const { wf } = load('release-please.yml');
+  const jobs = Object.values(wf.jobs);
+
+  it('runs on every push to main, and nowhere else', () => {
+    expect(wf.on).toEqual({ push: { branches: ['main'] } });
+  });
+
+  it('calls the reusable workflow by local path, from its one job', () => {
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.uses).toBe('./.github/workflows/release.yml');
+    expect(jobs[0]?.steps).toBeUndefined();
+  });
+
+  it('grants nothing at the top, and the two writes on the calling job only', () => {
+    expect(wf.permissions).toEqual({});
+    expect(jobs[0]?.permissions).toEqual({ contents: 'write', 'pull-requests': 'write' });
+  });
+});
+
+describe('no workflow interpolates github.event into a run line', () => {
+  const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
+
+  it.each(names)('%s', (name) => {
+    for (const s of stepsOf(load(name).wf)) expect(s.run ?? '').not.toContain('github.event');
+  });
+});

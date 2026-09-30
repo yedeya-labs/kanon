@@ -1,0 +1,23 @@
+# Kanon's PR-title check (K-SHIP-4), dogfooded: this repository runs its own action by
+# local path, so every Kanon PR exercises the action exactly as an adopter's would.
+#
+# The local path runs the action as it is in the PR, so a PR that changes the check is
+# checked by its own version. That is the point of dogfooding, and it is safe here:
+# `pull_request` runs get a read-only token and no secrets.
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: Conventional title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./actions/pr-title

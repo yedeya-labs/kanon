@@ -1,0 +1,22 @@
+# Kanon's releases (K-SHIP-7), through its own reusable release workflow, by local path.
+# The local path runs the workflow as it is on main, so Kanon is always the first
+# repository to release with a change to it. Adopters call the same workflow pinned to an
+# exact version instead: see docs/release.md.
+#
+# The writes are granted here, on the calling job only: a reusable workflow can use no
+# more than its caller grants.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  release:
+    name: Release
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/release.yml

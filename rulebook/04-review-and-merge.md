@@ -1,0 +1,183 @@
+# 04 Review and merge
+
+This chapter governs how a pull request gets from "opened" to "merged": how it asks for review, how its author answers review, what a reviewer's approval is worth, who may merge, and which changes always go to a human. Kanon's position is that review is adversarial and runs until approval, and that **every merge is made either by a human or by a merger agent inside a green zone the project defines**, with anything on an escalation path always going to a human (ADR 0004 §1). The rules here exist because the merge is the one step that cannot be undone by a later review, so the authority to make it has to come from a mechanism an agent can verify but cannot waive.
+
+## Merge authority
+
+### `K-MERGE-1` A human merges, or a merger agent merges inside the green zone
+
+**Rule.** Every merge to the main branch is made either by a human, or by a merger agent acting inside a green zone the project defines. A change that touches an escalation path always goes to a human. Inside the zone, a reviewer agent's approval is enough to satisfy the repository's rules; outside it, a human merges. "A human merges everything" is a valid adoption: it is simply an empty green zone. (ADR 0004 §1)
+
+**Why.** The reference adopter's documents said "a human approves every merge, no auto-merge ever" for weeks after an agent merger was running, so the old rule described nothing real. This rule describes what actually happens, raises the unit of human decision from a single PR to a whole project where the project wants that, and still gives the strictest teams exactly what they need. The repository must therefore not demand an extra human approval for AI-written changes, because that setting is the mechanical form of the empty zone and would make any non-empty zone impossible.
+
+**Enforced by.** The merger calls a pure verdict function over the PR's state (author, reviews, checks, paths, labels, closing set, mergeability) and merges only when it returns "merge". Once bootstrap has ended, the repository ruleset requires an approving review, so nothing reaches the main branch without one (`K-MERGE-6`). During bootstrap there is no merger agent, so a human merges everything.
+
+**Class.** split. The merger, the green-zone checks and escalation are framework. **The project supplies:** its escalation paths and the width of its zone.
+
+### `K-MERGE-2` Start the zone narrow, and only a human widens it
+
+**Rule.** Launch a merger agent with an aggressively narrow green zone. Widen it only by a human decision, made on evidence (false merges measured at zero). An agent never widens its own authority. (ADR 0004 §1)
+
+**Why.** Authority is earned by evidence, and a zone that starts wide has nowhere to climb from. An agent that could widen its own zone would have authority nothing verifies.
+
+**Enforced by.** Prose only.
+
+**Class.** framework
+
+### `K-MERGE-3` The green zone is a fixed set of checks, all read at the head commit
+
+**Rule.** A merger may merge a PR only when every one of these holds:
+
+1. the author is the implementer agent's identity, and the PR carries the implementer's label;
+2. the reviewer agent's latest verdict **on the current head commit** is an approval; an approval on an earlier commit says nothing about the head;
+3. every check has completed and passed, excluding the merger's own run and any job started by the same review event;
+4. no changed path is on an escalation path, and the PR carries no escalating label;
+5. the squash commit would close exactly the issues the PR body declares (`K-SHIP-5`);
+6. the platform reports the PR as cleanly mergeable.
+
+The merge is pinned to the head commit the verdict read. If the head has moved, that is a wait, not a failure.
+
+**Why.** Each check closes a hole that was hit. One PR merged on an approval of an earlier commit. Counting its own check run and the review event's jobs made the merger wait on itself, so every merge fell through to the hourly sweep. Pinning the head stops a commit pushed between the verdict and the merge from riding in unreviewed.
+
+**Enforced by.** The merger's pure, unit-tested verdict function, and a merge call that names the expected head commit and fails if it has moved.
+
+**Class.** split. The check set is framework. **The project supplies:** the identity and label names its agents use.
+
+### `K-MERGE-4` The pipeline itself and the project's high-risk paths always escalate
+
+**Rule.** A PR always goes to a human if it changes **the pipeline itself**: CI and agent workflow files, the pipeline's scripts, or agent instructions and playbooks. It also goes to a human if it changes one of the project's own high-risk paths. Match escalation paths against implementation code, not against documents that merely discuss the topic. Don't escalate spec files: specs are the deliverable of a planned project, reviewed against its approved plan.
+
+**Why.** A PR can hollow out a required job while keeping its check name, and a merged bad pipeline script governs every later review, so the agent that merges must never be able to change what gates a merge. In the reference adopter a third of the implementer's PRs touched pipeline files. High-risk surfaces such as schema changes or payments code are where a wrong merge is most expensive, and an agent's willingness to stop is only a prompt, while escalation is a mechanism. Matching documents produced false escalations, and escalating specs made the merger decline every PR of the first planned project. Each over-broad entry interrupts a human and trains them to ignore the surface.
+
+**Enforced by.** The merger's verdict function refuses any PR whose diff touches an escalation path, matched by path patterns that include every workflow file, every file directly inside `docs/qa/` and the project's own list.
+
+**Class.** split. Escalating the pipeline, matching code rather than documents, and never escalating specs are framework. **The project supplies:** its list of high-risk paths, kept under `## Escalation paths` in `docs/qa/escalation-paths.md` (`K-LAYOUT-8`) and filled in before the first brief is written.
+
+### `K-MERGE-5` Merge through the front door
+
+**Rule.** The merger is never a ruleset bypass actor; it merges only when the repository's own rules are satisfied. The reviewer agent has the access its approval needs to count toward those rules. The merger uses its own App token, never the platform's default workflow token, and fails rather than falling back when its credentials are missing.
+
+**Why.** A bypass actor skips every required check, which makes one script the only guard on the main branch. A merge made with the default workflow token triggers no further workflows, so nothing releases and nothing deploys, and the failure is silent.
+
+**Enforced by.** The ruleset's bypass list, and a merge step that refuses to run without its App token.
+
+**Class.** framework
+
+### `K-MERGE-6` The ruleset requires an approval on the current head
+
+**Rule.** The main branch's ruleset requires one approving review, and dismisses an approval when a new commit is pushed. The requirement is switched on when bootstrap ends, and switching it on is what ends bootstrap (`K-ADOPT-6`); before then it stays off.
+
+**Why.** An approval has to sit on the code that is merged. Without dismissal, a PR approved at one commit can merge at another. Before the Reviewer's App exists, the requirement would lock out a solo Owner, because GitHub refuses self-approval and the only permitted bypass is the release bot.
+
+**Enforced by.** The repository ruleset.
+
+**Class.** framework
+
+### `K-MERGE-7` Use the platform's merge queue
+
+**Rule.** Use GitHub's native merge queue where the plan provides it. Where it doesn't, use the fixed fallback: leave "require branches to be up to date" off, and let the release commit's full CI run (`K-SHIP-8`) catch a stale base before anything deploys. Either way, never require branches to be up to date before merging. ([ADR 0004 §2](../docs/decisions/0004-disputed-rules.md), amended by [ADR 0008 §2](../docs/decisions/0008-installation-test-decisions.md); `K-ADOPT-3`)
+
+**Why.** Requiring an up-to-date branch, combined with dismissing approvals on every push (`K-MERGE-6`), makes the cost of review grow quadratically: every merge invalidates every other PR's approval. It once deadlocked merging for a day. A merge queue tests each change against the real result of merging without re-reviewing it. Kanon prefers a native platform feature to its own mechanism wherever one exists. The queue isn't available on every plan (private repositories on the Team plan lack it), and the fallback keeps the same property one step later: a stale base that breaks the main branch is caught before it deploys.
+
+**Enforced by.** Prose only.
+
+**Class.** framework
+
+### `K-MERGE-8` The release bot is the only bypass, and it is bounded
+
+**Rule.** The release bot is the only actor allowed to bypass the ruleset, and only to merge its own release PRs. Its diff is bounded to the release file set, and every commit on the main branch must have a PR. The one exception is the first commit and the installation commits made during bootstrap, each recorded in the adoption record (`K-ADOPT-4`, `K-ADOPT-5`).
+
+**Why.** Once merging is unattended, the release bot is the one path to the main branch that nobody reads. Bounding it keeps that path from carrying anything but a release.
+
+**Enforced by.** The ruleset's bypass list names only the release bot. Restricting it to release PRs, the file-set bound and the every-commit-has-a-PR assertion are prose only; a guard is planned.
+
+**Class.** framework
+
+## The merger's behaviour
+
+### `K-MERGE-9` Recover pipeline problems; escalate only decisions
+
+**Rule.** Every merger run ends in one of a fixed set of outcomes: merge, wait, recover, escalate, skip, or release. A pipeline problem (a stale or misattributed approval, a review with no verdict) is recovered by the merger itself, for example by re-dispatching the reviewer. Only a decision a human can make is escalated. Skips and changes-requested states stay silent; every waiting PR is named in the run's summary.
+
+**Why.** A refusal is only worth a human's attention if a human can fix it. Labelling routine states trains humans to ignore the label, and a wait that nobody can see is a PR parked forever.
+
+**Enforced by.** The merger's verdict function returns only these outcomes, and its summary lists every waiting PR.
+
+**Class.** framework
+
+### `K-MERGE-10` Escalate once per head, and lift only your own escalation
+
+**Rule.** Escalate with one PR comment and the `needs:human` label per rule and head commit; re-apply the label if it goes missing. A new commit re-opens the question. The merger may lift an escalation it applied for a head-specific reason once the head moves, but never a path or label escalation, and never a label a person applied.
+
+**Why.** One comment plus a label is the cheapest surface that leaves a record on the PR itself. Without the lift, a PR whose author fixed the problem stayed parked on an escalation that no longer applied. A human's label is a human's decision, and the merger does not reverse it.
+
+**Enforced by.** A per-rule, per-head marker in the escalation comment, and a fixed list of head-scoped reasons the merger is allowed to lift.
+
+**Class.** framework
+
+### `K-MERGE-11` A conflicting PR goes to the conflict resolver first
+
+**Rule.** When a PR has merge conflicts, the merger waits until the conflict-resolution lane has attempted that head, and escalates only after it has. Recovery that re-triggers review is refused on a conflicting PR and reports the needed rebase instead. When CI seems not to have run on a PR, check whether it is mergeable before investigating the trigger. Treat "mergeability still computing" as proceed, and a mergeability field that cannot be read as an error.
+
+**Why.** A PR with merge conflicts runs no pull-request workflows at all, because there is no merge ref to run them on. In the reference adopter, label churn on a conflicting PR fired 25 times and started no runs. And a merger that escalated a conflict immediately disqualified the lane built to resolve it.
+
+**Enforced by.** One shared conflict-state module that every lane reads, and the merger's verdict function, which waits while the conflict lane has not tried the head.
+
+**Class.** framework
+
+### `K-MERGE-12` Verify the platform's side effects after merging
+
+**Rule.** After a merge, check that the platform did what it should have (for example, that the linked issues were closed) rather than assuming it.
+
+**Why.** Platform side effects run under the merger's identity and can fail silently. In the reference adopter, auto-closing linked issues quietly needed a permission the merger didn't have.
+
+**Enforced by.** A post-merge check in the merger that reads the linked issues' state.
+
+**Class.** framework
+
+## Review
+
+### `K-MERGE-13` Verify red-first on agent-written PRs
+
+**Rule.** An agent-written PR must include a test that fails without the fix and passes with it. CI verifies this mechanically, and the agent cannot waive it. PRs written by humans are not subject to it. (ADR 0004 §7)
+
+**Why.** Only agents claim to work test-first, and "I confirmed it was red" is the one step that leaves no artifact and is the most attractive to fake. Applied to human PRs, the check was measured blocking about half of them wrongly, because many real changes aren't observable by a test. A team that also wants it for humans may adopt that as its own practice; it is not a Kanon rule.
+
+**Enforced by.** A CI check on agent-authored PRs that reverts the non-test part of the change, re-runs the changed tests, and fails when they still pass.
+
+**Class.** framework
+
+### `K-MERGE-14` Ask for review by label, and make sure it lands
+
+**Rule.** Every PR that should be reviewed carries a review-trigger label; an unlabelled PR is never reviewed. After asking for review, watch for the verdict. A review that never landed is re-requested by re-applying the label once per head commit, only after CI has settled and a waiting threshold has passed. A red PR with no review verdict is reported; the implementer is not sent in without findings.
+
+**Why.** The review lane is label-gated, so a missing label is a PR nobody will review. Reviews do fail to land (a dropped event, an outage, a crash), and in the reference adopter PRs sat green, labelled and unreviewed until someone noticed. Sending an implementer to "fix" a red PR with no findings repairs the wrong thing: the missing review is the problem.
+
+**Enforced by.** The review workflow runs only on the trigger label; a recovery script re-applies it under the stated conditions; a warning-level check reports red PRs with no verdict.
+
+**Class.** framework
+
+### `K-MERGE-15` An author session never merges or force-pushes
+
+**Rule.** A session that takes work to review (an interactive ship session or an agent author) never merges, and its tool allowlist never pre-approves a merge or a force-push. Never force-push over a branch a reviewer has read unless asked; resolve conflicts with a merge commit.
+
+**Why.** Merging is the authority `K-MERGE-1` gives to someone else. In the reference adopter, prefix rules in an allowlist silently pre-approved `git push --force` and `gh pr merge`. A force-push detaches a review from the commits it cites.
+
+**Enforced by.** A unit test that fails when the ship command's allowlist would permit a merge or a force-push. Not force-pushing over a read branch is prose only.
+
+**Class.** framework
+
+### `K-MERGE-16` Answer every finding, and stop when one survives two rounds
+
+**Rule.** Answer each review finding by fixing it or by disagreeing openly with reasons; never comply silently with a wrong finding, and never ignore one. An approach the reviewer calls unverified is not an acceptance criterion. Don't absorb issues the reviewer filed as follow-ups into the current PR. When the same finding survives two pushes, stop and ask the human.
+
+**Why.** A finding that survives two rounds is a substantive disagreement, and a third round of the same argument between two agents costs money without converging. The reviewer splits work into follow-ups on purpose, to keep the PR reviewable.
+
+**Enforced by.** The agent revise lanes cap revision rounds and escalate after the cap. For human-driven sessions it is prose only.
+
+**Class.** framework
+
+## Examples from the reference adopter
+
+- **Escalation paths.** Beyond the pipeline itself, the reference adopter escalates infrastructure and cost configuration, database migrations and schema, and payments and authentication code. Documents about payments, and the spec corpus, are deliberately not on the list.
+- **Launching the zone.** The reference adopter's zone admits only PRs authored by its implementer agent; a dependency-update bot's PR falls outside it.

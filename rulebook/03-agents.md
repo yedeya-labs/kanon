@@ -1,0 +1,467 @@
+# 03 Agents
+
+This chapter governs who acts on a Kanon project: the human roles, the agent roles, the identities they run under, the GitHub permissions each holds, and how each agent behaves inside its lane. Kanon's safety comes less from any one agent being careful than from each agent holding exactly the authority its job needs and no more. The author, the reviewer and the merger are different identities, the component that watches the pipeline can only propose, and every run is bounded and leaves a record. The review-and-merge mechanics themselves (the green zone, escalation paths, the merge gate) belong to [04 Review and merge](04-review-and-merge.md); the Overseer's audit work belongs to [09 Self-maintenance](09-self-maintenance.md).
+
+## Roles
+
+Every Kanon project has the same roles. A person may hold several human roles at once; on a solo project the owner, the maintainer and often the stakeholder are one person. An agent role is never held by a person, and a person's identity is never used to run an agent lane.
+
+| Role | Kind | May | May not | GitHub permissions |
+|---|---|---|---|---|
+| **Owner** | human | Administer the repository: create GitHub Apps and their keys, set App permissions, edit rulesets. Agree any change that raises spend. Widen the Merger's green zone, on evidence. | Delegate any of these to an agent. | Repository admin. |
+| **Maintainer** | human | Merge anything outside the green zone. Answer escalations (the human-escalation label, held projects, a third changes-request). Approve a project brief by merging it. Promote a spec clause from seed to confirmed. Curate Overseer output and fold capability-ledger deltas in. Approve production promotion. | Be nagged by the pipeline about their own queue. | Write or Maintain; a required reviewer on the production environment, or, where the plan has no environment reviewers, the only person allowed to run the production workflow (`K-ADOPT-3`). |
+| **Stakeholder** | human | Place work on roadmap milestones and prioritise them. Decide whether a `gate-candidate` joins the launch gate. Agree the project closure rule. Each decision is approved in GitHub, or attested by the Maintainer where the Stakeholder doesn't use GitHub (`K-PRIN-18`). Receive the weekly digest. | Merge, or answer code escalations. The pipeline waits on the stakeholder for roadmap placement only. | Triage (enough to set milestones). |
+| **Session** | agent, under a human's identity | Run the local gates, open a PR, request review, fold review rounds in until approval. | Merge. Force-push. Milestone a PR. | The human's own; its tool allowlist must not pre-approve merge or force-push. |
+| **Explorer** | agent | Sweep a running stage for objective signals, audit code for objective contradictions, verify cited invariants. File bugs and spec deltas on a bucket; comment on duplicates. | File without evidence; target production; edit code or open PRs; use a roadmap milestone or mark a gate candidate; type credentials. | Contents read, Issues write, Pull requests read. |
+| **Implementer** | agent | Reproduce, write the failing test, open fix and feature PRs, revise its own PRs within the round cap, resolve conflicts on the pipeline's own PRs, edit workflow files, escalate a conflict of product intent. | Merge. Promote invariants. Make a change on the bail list without a human. Guess at vague acceptance criteria. Build a prescribed remedy it has not verified. Force-push. | Contents, Issues and Pull requests write; **Workflows write (the only App that holds it)**. |
+| **Reviewer** | agent | Review any PR carrying a review label; submit a real approve or request-changes; file follow-ups with a severity, on a bucket; review briefs. | Author the PR it reviews. Merge. Post a comment in place of a verdict in CI. Place work on a roadmap milestone. Dispatch its own follow-ups for implementation. Write its own commit stamp. | Contents write (so its approval satisfies the ruleset), Issues and Pull requests write. |
+| **Merger** | agent | Merge green-zone PRs through the front door; wait, recover, escalate or release; re-dispatch the Reviewer; lift a head-scoped escalation it applied itself once the head moves. | Be a ruleset bypass actor. Edit workflows. Judge correctness. Merge an escalating path or label. Use the default workflow token. Lift a label a person applied. | Contents, Issues and Pull requests write; Actions write; Checks and Commit statuses read; **no Workflows access**. |
+| **Lead** | agent | Author a brief as a PR on a manual mandate and revise it; file and dispatch the brief's issues under WIP caps once it merges; re-deliver a lost event by churning a recovery label; propose splitting an exhausted item; hold a project for a human. | Merge. Approve. Promote. Create issues from a brief before it merges. Re-label an issue already labelled. Start workflows directly. | Contents, Issues and Pull requests write; Actions read; **no Actions write, no Workflows access**. |
+| **Overseer** | agent | Read aggregates; file pipeline-improvement issues; keep one rolling audit issue; propose capability-ledger deltas; restrict another agent's authority. | Fix, merge, or close other work. Write repository files, the ledger included. Set a target on a backlog metric or propose "file less". Widen anyone's authority. | Contents read, Issues write, Pull requests read. |
+| **Releaser** | bot, not an agent | Open and merge its own release PRs. | Touch any file outside the release file set. | Contents and Pull requests write; a ruleset bypass limited to release PRs. |
+| **Intake** | App, not an agent | File a report from the running application as an issue carrying exactly one intake label. | Read, decide, run in a workflow, apply any other label, or trigger an agent. | Issues write only. |
+
+### `K-AGENT-1` Run every agent role under its own GitHub App identity
+
+**Rule.** Each agent role runs under its own GitHub App, with its own installation token. No agent step uses the default workflow token or a person's token.
+
+**Why.** Attribution is only half of it. GitHub refuses to let an identity approve its own PR, so when the author and the reviewer share an identity, review silently becomes advisory. The reference adopter began with one shared token, and every actor read as the same person.
+
+**Enforced by.** Workflows mint a per-role App token for every agent step, and a run-time assertion fails the job when the minted identity is not the one the code expects (see `K-AGENT-5`).
+
+**Class.** framework
+
+### `K-AGENT-2` Staff the pipeline with the fixed role set
+
+**Rule.** A Kanon project has the roles in the table above, with the authority boundaries the table gives them. Two roles are never merged into one identity to save setup, even when their permissions are identical.
+
+**Why.** Each role exists because it has a distinct authority boundary. Sharing an identity turns every comment marker into the only thing separating one agent's action from another's, and a lost marker then strands work in a human queue permanently.
+
+The `agent:` labels mark lanes rather than roles; how they map onto this table is in `K-WORK-12`.
+
+**Enforced by.** The set of lane workflows, each minting its own role's token.
+
+**Class.** split. The role set and the boundaries are framework. **The project supplies:** the display names of its Apps.
+
+### `K-AGENT-3` Keep a register of every App and record every broadened permission
+
+**Rule.** Keep one register, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), listing every GitHub App installed on the repository, agent or not, with its least-privilege permissions. When a permission is broadened, record the reason and what bounds its use in the same change.
+
+**Why.** An App or a permission nobody can explain is indistinguishable from drift or compromise. A register without reasons tempts the next reader to "tidy" a grant that was load-bearing, or to widen one that was deliberately withheld.
+
+**Enforced by.** Prose only. App scopes live in the installation, not in any file, so the register is a claim; `K-AGENT-5` turns the parts of it the code depends on into run-time checks.
+
+**Class.** framework
+
+### `K-AGENT-4` Derive an App's permissions from everything it causes, and prefer the lower-authority route only when it works
+
+**Rule.** Work out an App's permissions from the platform's side effects as well as from the calls your code makes. Where two routes exist (for example re-delivering an event by re-applying a label instead of holding permission to start workflows), prefer the one needing less authority, but first check it can express every case you need.
+
+**Why.** Platform side effects run as the acting identity: auto-closing an issue linked from a merged PR needs issue-write on the merger, and without it the issue silently stayed open. In the other direction, a workflow that could only be started by dispatch had no label to re-apply, and the "lower-authority" call failed in production.
+
+**Enforced by.** Prose only, plus post-merge verification of side effects in the merger (see chapter 04).
+
+**Class.** framework
+
+### `K-AGENT-5` Verify identity and scopes at run time
+
+**Rule.** Wherever code compares a bot login, assert that the minted App slug equals the expected constant and fail on a mismatch. Probe the App's scopes at the start of a run and fail fast with a message naming the missing grant.
+
+**Why.** App names are not logins, and an unknown login reads as "a human" and errs toward action. A missing scope found deep in a run loses the whole run: the reference adopter lost more than twenty scheduled ticks to one unrecorded read permission before a probe existed.
+
+**Enforced by.** A slug assertion in every workflow that compares logins, and a scope probe step that turns a permission error into an immediate, named failure.
+
+**Class.** framework
+
+### `K-AGENT-6` A human creates every credential
+
+**Rule.** Only a human (the Owner) creates Apps and their private keys. Keys live in a secrets manager, never in the repository, and are rotated on any exposure; agents act only through short-lived installation tokens. **GitHub Actions secrets count as the secrets manager** for App ids and private keys, at repository or organisation level; an adopter needs no external manager for them.
+
+**Why.** An agent that could mint credentials could grant itself authority, which defeats every other boundary in this chapter. Actions secrets are encrypted, write-only once set, and readable only by the workflows that run the lanes, which is everything this rule needs from a secrets manager.
+
+**Enforced by.** Prose only.
+
+**Class.** framework
+
+### `K-AGENT-7` Only the code-authoring App may edit workflows, and never the Merger
+
+**Rule.** Grant workflow-file write access to the one App that authors code PRs, and to no other. The Merger never holds it.
+
+**Why.** Without it, one logical change that touches a workflow gets split across two PRs, and the reference adopter shipped a guard inert behind a green test that way. The Merger must not hold it because the agent that merges must not be able to edit what gates a merge.
+
+**Enforced by.** The App permission grants.
+
+**Class.** framework
+
+### `K-AGENT-8` Never put two agents on one file
+
+**Rule.** Cap how many agents work concurrently, and never assign two concurrent agents work that touches the same file.
+
+**Why.** Two agents editing one file produce conflicts that neither can see coming, and each one's verification is invalidated by the other's change.
+
+**Enforced by.** Prose only.
+
+**Class.** split. The one-file rule is framework. **The project supplies:** the concurrency cap, set by its rate-limit quota.
+
+## The Explorer
+
+### `K-AGENT-9` File a bug only on an objective signal, and deduplicate by exact signature
+
+**Rule.** The Explorer files a bug only on an objective signal or on a violation of a promoted invariant; everything else it notices is a spec delta. In code-reading mode, an objective signal is a contradiction it can cite by file and line against the contract it contradicts. In invariant-verification mode, it files only a test that ran and failed. Before filing, it computes a normalised signature (where, what signal, the message with volatile parts stripped) and comments on a matching open issue instead of filing again.
+
+**Why.** Facts need no promotion and opinions are not bugs. A code audit has no deterministic backstop, so the bar is contradiction, not suspicion. A test that did not run is an evidence gap, not a failure. Without an exact signature, a nightly sweep re-files the same bug every night.
+
+**Enforced by.** Prose only; the runtime sweep implements the objective-signal tier in code.
+
+**Class.** split. The gate and the deduplication are framework. **The project supplies:** the list of objective signals for its stack (for a web application: unhandled exceptions, 5xx or unexpected 4xx responses, console errors, hydration mismatches, schema-contract violations).
+
+### `K-AGENT-10` Explore only an isolated, seedable stage, and never with credentials
+
+**Rule.** Run exploration and reproduction against an isolated stage that can be seeded, never against production. Check a flow's data preconditions before exploring it; a failed precondition is a blocked-run note, never a bug. The Explorer never types credentials; it uses a session or saved role state a human provided.
+
+**Why.** Blast radius: production is observed through alarms, by design, not by an agent clicking through it. An unseeded stage otherwise produces a stream of false "broken" findings.
+
+**Enforced by.** The exploration workflows target the isolated stage; the rest is prose only.
+
+**Class.** split. Isolation is framework. **The project supplies:** which stage is explored.
+
+### `K-AGENT-11` Report what was examined, not only what was found
+
+**Rule.** Every Explorer run emits a structured report: coverage walked, skipped and blocked, a cost proxy, findings, and the candidate findings it deliberately held back.
+
+**Why.** The Overseer measures precision and coverage from these reports. Recording held-back true negatives makes "didn't cry wolf" visible, where otherwise a quiet run and a broken one look the same.
+
+**Enforced by.** The run-report writer validates the report against its schema.
+
+**Class.** framework
+
+## The Implementer
+
+### `K-AGENT-12` Reproduce independently before spending any fix effort
+
+**Rule.** Reproduce a reported bug independently before working on a fix. If it cannot be reproduced, comment what was tried, apply the outcome label and stop. Apply the outcome label (reproduced, false positive, cannot reproduce) even when handing the fix back.
+
+**Why.** Most false positives die at reproduction, which is the cheapest place for them to die. The outcome label is what makes precision per signal type measurable.
+
+**Enforced by.** Prose only.
+
+**Class.** framework
+
+### `K-AGENT-13` Assess scope first, and bail with a plan on the bail list
+
+**Rule.** Assess a change's size and risk before starting. If it falls on the project's bail list, or the right fix is unclear, stop and hand off a plan: root cause, reproduction status, proposed approach, and why it needs human design. A review finding that would require a bail-list change is treated the same way: reply and stop, because a reviewer asking is not a human authorising.
+
+**Why.** A clean hand-off beats a half-finished risky change. The bail list can be relaxed where a fail-closed test makes a class of change safe, which is how additive schema changes came off the reference adopter's list.
+
+**Enforced by.** The agent prompt; the merge gate independently escalates the same paths to a human (chapter 04).
+
+**Class.** split. Scope-first bailing is framework. **The project supplies:** the bail list, kept under `## Bail list` in `docs/qa/escalation-paths.md` (`K-LAYOUT-8`), typically data migrations, security, auth and credential changes, destructive schema changes and cross-cutting refactors.
+
+### `K-AGENT-14` Never end a run with no output
+
+**Rule.** An agent run always leaves a visible result. Before its turn or budget runs out, it posts its progress and what remains.
+
+**Why.** A silent dead run is the worst outcome: nobody knows whether work happened, and the next attempt starts blind.
+
+**Enforced by.** Prompts, plus a crash handler that posts a stand-in comment when the agent could not.
+
+**Class.** framework
+
+### `K-AGENT-15` Write the failing test first, and say honestly when something is untestable
+
+**Rule.** Write the failing test first, confirm it fails for the right reason, fix to green, then run the whole relevant suite. Use the most deterministic test layer that can observe the behaviour. When a change genuinely cannot be observed by a test, say so in those words on the PR and let a human decide; never add an assertion whose only purpose is to go red.
+
+**Why.** A confirmed bug becomes permanent coverage. A contrived red test is worse than none: it passes verification while asserting nothing about the behaviour.
+
+**Enforced by.** The red-test check (`K-MERGE-13`) for sensitivity; honesty is prose only.
+
+**Class.** framework
+
+### `K-AGENT-16` Verify "red first" mechanically on agent-written PRs (**retired**)
+
+**Retired.** This rule duplicated [`K-MERGE-13`](04-review-and-merge.md), which is now its only home ([`K-PRIN-2`](00-principles.md): a rule has exactly one home). The id stays reserved and is never reused.
+
+### `K-AGENT-17` Build to the acceptance criteria, and treat a prescribed remedy as a hypothesis
+
+**Rule.** Build to the issue's acceptance criteria. If they are too vague to build to, comment what needs clarifying, keep the label and stop. A remedy the issue prescribes is a hypothesis: check what the changed state reaches (other readers, other callers) before building it, and if it is wrong, don't build it; explain and stop.
+
+**Why.** Guessing produces confident, wrong PRs. In the reference adopter, a remedy copied faithfully from an issue caused a regression because nobody checked who else read the state it changed.
+
+**Enforced by.** Prose only.
+
+**Class.** framework
+
+### `K-AGENT-18` Revise in place, within a round cap, and escalate the third changes-request
+
+**Rule.** In a revision, fix on the same branch and PR, read the checks before the review, and address every point: fix it, lock it with a test where that is deterministic, or acknowledge it as untestable. Stop after two revision rounds and leave a marker for every round, even one that changed nothing; a rebase with no content change spends no round. The third changes-request goes to the maintainer. A manual reset authorises exactly one further revision, whose mandate is to apply the maintainer's decision, not to re-read the answered review.
+
+**Why.** Unbounded rounds turn a real disagreement into an expensive loop. Markers make disagreement rounds visible; counting rebases inflated the reference adopter's round counts. Escalation that has no way back is a dead end, and a reset that keeps the old instructions re-litigates the review the human just answered.
+
+**Enforced by.** The revision lanes count rounds from their markers and refuse past the cap; a crash handler writes a stand-in marker.
+
+**Class.** framework
+
+### `K-AGENT-19` Stack a follow-up on its still-open parent
+
+**Rule.** Build a follow-up to a PR that is still open on the parent's branch, not on the main branch. If the follow-up supersedes the parent, say so and recommend closing the parent.
+
+**Why.** Two PRs built side by side on the main branch conflict, and reconciling a supersession pair by hand is pure waste.
+
+**Enforced by.** Prose only.
+
+**Class.** framework
+
+### `K-AGENT-20` Sweep a claim before changing it, and state the blast radius honestly
+
+**Rule.** When a change makes a claim false (a name, a behaviour, a message string), sweep the whole repository, tests included, with at least three different queries: the name, the idiom, and the adjacent concept. Where the claim lives in prose, pair the predicate and the name by line window rather than trusting a keyword query. Decide every hit, and put the inventory in the PR body. State the root cause, the fix and the honest blast radius; never describe a change to a shared utility as "minimal".
+
+**Why.** A restatement that doesn't use the name survives a name search: one reference-adopter sweep took four review rounds, and five successive query-based sweeps of another looked clean and were wrong. A changed message string breaks assertions elsewhere. Undersold blast radius steers the reviewer away from exactly what needs reading.
+
+**Enforced by.** Prose only; the Reviewer treats a missing inventory as a finding.
+
+**Class.** framework
+
+## The Reviewer
+
+### `K-AGENT-21` Review adversarially, including your own earlier advice
+
+**Rule.** Review agent-written PRs with more scrutiny than human ones, and verify the blast radius yourself by finding the usages rather than trusting the PR's framing. When reviewing a PR built from an issue you filed, re-derive the fix from the code, and reverse your own earlier finding out loud if it was wrong.
+
+**Why.** The author optimised for closing the issue. When the reviewer also filed the issue, author and reviewer otherwise confirm a shared mistake.
+
+**Enforced by.** Prose only.
+
+**Class.** framework
+
+### `K-AGENT-22` Take agent instructions and configuration from the base branch only
+
+**Rule.** The Reviewer's instructions, and everything they delegate to, come from the base branch, never from the PR under review; it refuses to review if the PR's install step changed a pinned file. Trigger the Reviewer only through paths that run the base branch's copy of its workflow. Treat any change to agent configuration as inert until merged, and plan trials of it as "merge, then observe the next run". Write agent hook commands as pinned direct invocations with their configuration on the command line, never as repository scripts a PR could change.
+
+**Why.** A PR must not be able to rewrite the gate that judges it. The agent runtime restores its configuration from the base branch on PR runs, but hooks resolve files from the PR head, so a hook that calls a repository script runs the PR's version of it.
+
+**Enforced by.** The review workflow restores its instruction files from base and verifies their digests before starting, and is triggered only by events that run the base copy.
+
+**Class.** framework
+
+### `K-AGENT-23` Read pipeline-changing diffs by eye
+
+**Rule.** Read by eye every diff that touches pipeline scripts, agent workflows, the package manifest or dependency patches, regardless of what the pinned instructions say about it.
+
+**Why.** A merged bad pipeline script governs every later review, including the reviews of its own fixes.
+
+**Enforced by.** Prose only.
+
+**Class.** split. The rule is framework. **The project supplies:** its list of pipeline paths.
+
+### `K-AGENT-24` Read mechanical results instead of re-deriving them, and never call a subset "full"
+
+**Rule.** Read the red-test result rather than re-deriving test sensitivity, and spend the review on whether each test asserts the invariant it claims. Read the slow end-to-end tier from its required check; never re-run it inside a review. Never report a subset of tests as full verification.
+
+**Why.** The red-test check proves sensitivity, never meaningfulness, so meaningfulness is where the reviewer's attention pays. Re-running the slow tier caused reviews that never posted. A handful of tests once went out labelled "full check" while the real tier was red.
+
+**Enforced by.** Prose only.
+
+**Class.** framework
+
+### `K-AGENT-25` Post a real verdict, always
+
+**Rule.** A review in CI posts approve or request-changes, never a comment. It never approves over a failing required check. If a required check is still pending, it gives a real verdict anyway and notes the anomaly. It labels the reviewed PR and links every follow-up it filed.
+
+**Why.** A comment leaves the revision lane nothing to act on and the Merger nothing to merge. Holding a verdict looked exactly like a crash.
+
+**Enforced by.** A verdict check in the review workflow that fails when the run posted no verdict.
+
+**Class.** framework
+
+### `K-AGENT-26` Stamp each verdict with the commit the job actually read
+
+**Rule.** The review job, not the agent, writes the commit SHA it checked out into the verdict; every reader takes the last stamp. Before posting a review by hand, read the verdicts already on that SHA and supersede them explicitly in the body, or post nothing.
+
+**Why.** GitHub re-attributes a verdict to a commit pushed while the review was running, so the platform's commit id can name a commit nobody reviewed. Opposite verdicts on one SHA leave every reader guessing.
+
+**Enforced by.** The merge gate reads the job-written stamp and refuses an approval over an unanswered changes-request on the same SHA.
+
+**Class.** framework
+
+### `K-AGENT-27` Hold an irreversible data change to the severity of its worst outcome
+
+**Rule.** Review any change containing an irreversible data migration at the severity of the worst state it could leave behind; any finding in the transformation is request-changes.
+
+**Why.** A migration runs once per database and cannot be fixed by a later PR.
+
+**Enforced by.** Prose only.
+
+**Class.** split. The irreversible-change floor is framework. **The project supplies:** where its migrations live and how they run.
+
+### `K-AGENT-28` Re-review every push, incrementally, with a filter that shows its inputs
+
+**Rule.** Re-review on every push. Skip a docs-only push only on a PR that also changes code, and never skip one touching agent instructions, project briefs or spec promotions; a human re-applying a review label always gets a review. Scope a re-review to the commits since the last stamped verdict, and review in full when there is no stamp. The skip filter prints every input it read before its verdict, and reads CI completion per commit, distinguishing done, running, not started and unknown.
+
+**Why.** Each of these skip cases was once wrong in the reference adopter. Re-review rounds were over half of reviewer spend before they were scoped incrementally. A wrong skip that doesn't print its inputs is undiagnosable hours later, and the platform's rollup reports no checks at all just after a push.
+
+**Enforced by.** The review workflow's filter job and incremental-scope step.
+
+**Class.** framework
+
+## The Lead
+
+### `K-AGENT-29` Run the Lead as a stateless reconciler tick
+
+**Rule.** The Lead wakes, reads the world from GitHub, takes at most a bounded number of actions, and exits. It is never a long-running process and keeps no checkpoint.
+
+**Why.** CI jobs have a hard time cap, waiting burns wall-clock, and state derived fresh on every tick cannot drift or corrupt.
+
+**Enforced by.** The reconciler runs as a scheduled, bounded job.
+
+**Class.** framework
+
+### `K-AGENT-30` The Lead writes a brief only on a manual mandate, and nothing moves until a human merges it
+
+**Rule.** The Lead authors a project brief only when a human starts it manually, and only as a PR for review. It creates no issues, merges nothing and closes nothing; nothing downstream happens until a maintainer merges the brief. It refuses to write a brief without a numeric tracking issue, and reads its mandate from that issue's body (`K-PROJ-15`).
+
+**Why.** The brief merge is the one human gate per project, and it replaces a human decision per PR. A brief with no tracking issue can never be reconciled.
+
+**Enforced by.** The brief workflow can only be started by hand; the tracking-issue refusal is in its prompt and a workflow warning.
+
+**Class.** framework
+
+### `K-AGENT-31` Dispatch in dependency order under WIP caps
+
+**Rule.** Dispatch a project's issues in dependency order, under a per-project and a global WIP cap. An issue parked on a human frees its slot. Never re-label an issue that is already labelled.
+
+**Why.** WIP caps bound the event rate, the spend and the collisions between concurrent agents. Re-labelling an already-labelled issue fires a second run for the same work.
+
+**Enforced by.** The project reconciler.
+
+**Class.** framework
+
+### `K-AGENT-32` Hold a stuck project for a human, but never on a transient failure
+
+**Rule.** When no tick can advance a project, hold it: apply the human-escalation label to its tracking issue with one comment per distinct reason. A held project takes no actions, and only a human removing the label releases it. On a transient failure, never hold; let the tick fail instead.
+
+**Why.** Stuck states otherwise recompute every hour, forever, as green runs nobody reads. Holding on blips cost the reference adopter about two days of throughput each time.
+
+**Enforced by.** The project reconciler.
+
+**Class.** framework
+
+### `K-AGENT-33` Retry a crash, split an exhaustion
+
+**Rule.** Clear a crashed implementation run automatically, at most twice, then ask for information. Never retry a run that exhausted its turn or budget cap; instead propose splitting the item into two to four children, as a PR against the brief, once per lineage. A split child that exhausts goes to a human.
+
+**Why.** A crash is often transient; three unattended crashes once starved every project for up to two days. Re-running an exhausted item fails the same way every time.
+
+**Enforced by.** The crash handler and the split lane, which tracks lineage.
+
+**Class.** framework
+
+### `K-AGENT-34` Resolve merge conflicts on pipeline PRs with an agent, by merge commit
+
+**Rule.** Resolve conflicts on the pipeline's own PRs with an agent, using a merge commit, never a force-push. Bound it: a few PRs per run, and one attempt per head, marked before the session starts. Escalate only a conflict of product intent.
+
+**Why.** A conflicting PR runs no PR-triggered workflows, so it stalls silently. Scripted merges can't resolve real conflicts. A merge commit keeps the review attached to the commits it cites, and escalating every awkward merge re-creates the bottleneck the pipeline replaces.
+
+**Enforced by.** The conflict lane, with a slug assertion keeping it to branches its own App authored.
+
+**Class.** framework
+
+## The Overseer
+
+### `K-AGENT-35` The Overseer may only propose or restrict
+
+**Rule.** The Overseer runs on a schedule, outside the hot path, with read-only repository access. It files issues and may restrict another agent's authority; it never fixes, merges, widens authority, or closes anything except its own superseded audit issue.
+
+**Why.** A component with zero blast radius needs no overseer of its own, which dissolves "who watches the watcher".
+
+**Enforced by.** Its App has read-only contents and its run has read-only tools. The restricting mechanism (revoking the Merger's authority when precision drifts) is prose only; a guard is planned.
+
+**Class.** framework
+
+## Every agent run
+
+### `K-AGENT-36` Every command in a one-shot CI run completes within the turn
+
+**Rule.** A one-shot CI agent run starts nothing in the background and never waits or polls.
+
+**Why.** A backgrounded command yields the turn, and the run ends before the result arrives: a review that backgrounded a build never posted its verdict.
+
+**Enforced by.** Prose only.
+
+**Class.** framework
+
+### `K-AGENT-37` Give every agent step the same bounded flag block
+
+**Rule.** Every agent step sets the same block explicitly: model, effort, maximum turns, maximum budget, allowed tools, a fallback-model decision, cache setting and a step id.
+
+**Why.** A copied workflow dropped its block unnoticed. An unset value is indistinguishable from a deliberately chosen one, so every value is stated.
+
+**Enforced by.** A unit test that fails when any agent step is missing a flag in the block, and a guard that fails when the installed CLI rejects a flag (chapter 09).
+
+**Class.** framework. Kanon fixes the values too: each lane's model, effort, turn cap and budget come from Kanon's standard lane table, which ships with Kanon's code and is the table's only home. Adopters don't edit it; a change to a value is a change to Kanon ([ADR 0005](../docs/decisions/0005-roles-and-standard-lane-settings.md) §2).
+
+### `K-AGENT-38` Verdict-producing runs have no fallback model
+
+**Rule.** Runs that produce a verdict (review, audit, oversight) have no fallback model. Runs whose output something else checks (implementation, fixes) may fall back to a model of the same tier or cheaper ([ADR 0004 §6](../docs/decisions/0004-disputed-rules.md)).
+
+**Why.** A fallback silently changes who judged. A missing verdict is already loud; a verdict from a different model than intended is not.
+
+**Enforced by.** A unit test holding the fallback and no-fallback lists, which fails when a lane departs from them.
+
+**Class.** framework
+
+### `K-AGENT-39` Contain tools by withholding them, and commit no project MCP servers
+
+**Rule.** Withhold tools with the disallowed-tools list; never treat the allowed-tools list as containment. Don't commit project MCP server configuration for CI agents.
+
+**Why.** In the agent action, the allowed-tools list is additive, so it widens rather than narrows. The action auto-approves a committed MCP configuration, which once handed every workflow roughly two hundred tools at once.
+
+**Enforced by.** Prose only.
+
+**Class.** framework
+
+### `K-AGENT-40` Hand off between agent and workflow through a schema, never through prose
+
+**Rule.** Every new handoff from an agent to a workflow is a JSON-schema structured output from the first day. Never parse an agent's prose.
+
+**Why.** Prose parsing breaks silently when the model rephrases, and a broken parse usually reads as "nothing to do".
+
+**Enforced by.** Prose only.
+
+**Class.** framework
+
+### `K-AGENT-41` Feed an agent only what it will use
+
+**Rule.** Give an agent a precomputed starting map (the issue, the spec clauses it cites, which named paths exist) and have it read that first. Give it only the playbook sections it uses, cut before the model starts, falling back to the whole playbook with a warning when a heading is missing. Make test and lint runners print failures only.
+
+**Why.** Every turn re-reads everything earlier turns produced. Discovery turns, a whole playbook and verbose passing output are paid for again on every later turn of the most expensive lane.
+
+**Enforced by.** The excerpting step and its test; a guard that refuses to commit the starting map; quiet-runner settings in the implementation lanes.
+
+**Class.** framework
+
+### `K-AGENT-42` Classify every run's outcome in one place
+
+**Rule.** Classify every agent run as ok, unavailable, exhausted, failed or not reached, using one shared classifier keyed on whether the configured model appears in the run's usage and on the reported terminal reason. Never classify on cost or turn count.
+
+**Why.** A capped run still bills a pre-flight, so cost doesn't mean the model ran; caps aren't hard stops, so turn count doesn't mean exhaustion. The right response differs by class, and two classifiers would disagree.
+
+**Enforced by.** The shared classifier module, used by every lane.
+
+**Class.** framework
+
+### `K-AGENT-43` A red run means work was lost, and every run leaves a record
+
+**Rule.** Downgrade a non-zero agent exit to a warning only when the run's durable artifact exists and is complete; fail closed when that can't be read. When an agent produces no report, write a synthesised degraded record first, then fail the job. Agents rewrite their summary files incrementally, so a capped run leaves a partial report marked incomplete.
+
+**Why.** Runs that finished their work but went red taught readers that red is negotiable. CI logs expire before the weekly audit reads them, so the record must be written by the job, not left in the log.
+
+**Enforced by.** An explicit outcome step in each agent workflow, and a completeness flag on reports.
+
+**Class.** framework
+
+## Examples from the reference adopter
+
+- **Bail list** (`K-AGENT-13`): data migrations, auth and credential changes, security changes and destructive schema changes; additive schema and unique-index changes were allowed once conformance tests failed closed on them.
+- **Fail-closed schema check** (`K-AGENT-13`): after any schema change, the Implementer re-applied row-level security and ran the data-isolation conformance tests, and opened no PR if they failed.
+- **Stack landmines** (`K-AGENT-13`, `K-AGENT-21`): both the Implementer and the Reviewer checked a short list of failures that appear only in a production build or break isolation silently, such as server-rendered values that arrive as strings.
+- **Concurrency cap** (`K-AGENT-8`): one agent at a time on the solo developer's quota, later raised to three.
