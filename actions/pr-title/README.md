@@ -73,19 +73,8 @@ updates:
 
 If you already have a `github-actions` entry for other actions, keep one entry per ecosystem and directory. Add the `allow` pattern and the group to it instead of adding a second entry.
 
-## One-time settings while Kanon is private
+## Settings
 
-Both are made by an Owner, once:
-
-1. **Let the organisation's workflows use Kanon.** In the Kanon repository, **Settings → Actions → General → Access** (at the very bottom of the page, shown only for private repositories): "Accessible from repositories in the `yedeya-labs` organization". The section is easy to miss, and the API sets it directly:
-
-   ```sh
-   gh api -X PUT repos/yedeya-labs/kanon/actions/permissions/access -f access_level=organization
-   ```
-
-   Without it, a workflow outside Kanon can't resolve `yedeya-labs/kanon/...` and fails at setup.
-2. **Let Dependabot read Kanon.** Organisation → **Settings → Advanced Security → Global settings**, then scroll to the **bottom** of the page, below the Dependabot and code-scanning sections, to **"Grant Dependabot access to repositories"**. Tick **`yedeya-labs/kanon`**: the repository Dependabot reads *from*, not the adopter's own. Without it, every Dependabot run fails with *"Either the repo doesn't exist, or Dependabot doesn't have access to it"*.
+Kanon is public, so an adopter needs no settings to use its actions or to let Dependabot read its releases.
 
 A failed Dependabot run can't be re-run. To start a fresh one, change `.github/dependabot.yml` on the main branch.
-
-An adopter outside the `yedeya-labs` organisation can't use the action until Kanon is public.
