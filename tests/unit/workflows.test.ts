@@ -52,7 +52,9 @@ describe('K-SHIP-4 Kanon dogfoods its PR-title action', () => {
   it('uses the action by local path, after checking the repository out', () => {
     const uses = stepsOf(wf).map((s) => s.uses);
     expect(uses).toContain('./actions/pr-title');
-    expect(uses.indexOf('./actions/pr-title')).toBeGreaterThan(uses.findIndex((u) => u?.startsWith('actions/checkout@')));
+    const checkout = uses.findIndex((u) => u?.startsWith('actions/checkout@'));
+    expect(checkout).toBeGreaterThanOrEqual(0);
+    expect(uses.indexOf('./actions/pr-title')).toBeGreaterThan(checkout);
   });
 
   it('reads contents only, and never interpolates the title itself', () => {
@@ -90,7 +92,12 @@ describe('K-SHIP-7 the reusable release workflow', () => {
   const { wf, text } = load('release.yml');
   const jobs = Object.values(wf.jobs);
   const steps = stepsOf(wf);
-  const index = (predicate: (s: Step) => boolean) => steps.findIndex(predicate);
+  // Throws when no step matches, so an ordering assertion can never compare against -1.
+  const index = (predicate: (s: Step) => boolean) => {
+    const i = steps.findIndex(predicate);
+    if (i < 0) throw new Error(`no step matches ${predicate.toString()}`);
+    return i;
+  };
   const guard = steps.find((s) => s.id === 'merge-settings');
   const release = steps.find((s) => s.uses?.startsWith('googleapis/release-please-action@'));
   const explain = steps.find((s) => s.name === 'Explain a failed release');
@@ -152,7 +159,9 @@ describe('K-SHIP-7 the reusable release workflow', () => {
   });
 
   it('says in its header why it has no inputs, and which permission the guard needs', () => {
-    const header = text.slice(0, text.indexOf('\nname:'));
+    const end = text.indexOf('\nname:');
+    expect(end).toBeGreaterThan(0);
+    const header = text.slice(0, end);
     expect(header).toContain('ADR 0002');
     expect(header).toContain('No inputs');
     expect(header).toContain('contents: write');
