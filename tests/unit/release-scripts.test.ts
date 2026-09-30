@@ -160,6 +160,8 @@ describe('K-SHIP-7 explaining a failed release', () => {
     expect(result.stdout).toContain('::error title=release-please failed::');
     expect(result.stdout).not.toContain('may not create pull requests');
     expect(result.stderr).toContain('If that log says "GitHub Actions is not permitted to create or approve pull requests"');
-    expect(result.stderr.indexOf('Organisation acme:')).toBeLessThan(result.stderr.indexOf(`Repository ${REPO}:`));
+    const org = result.stderr.indexOf('Organisation acme:');
+    expect(org).toBeGreaterThan(-1);
+    expect(result.stderr.indexOf(`Repository ${REPO}:`)).toBeGreaterThan(org);
   });
 });
