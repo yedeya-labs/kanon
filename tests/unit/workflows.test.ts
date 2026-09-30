@@ -61,6 +61,31 @@ describe('K-SHIP-4 Kanon dogfoods its PR-title action', () => {
   });
 });
 
+describe('ADR 0010 Kanon dogfoods its DCO action', () => {
+  const { wf } = load('dco.yml');
+
+  it('runs on pull requests opened, pushed to and reopened', () => {
+    expect(wf.on).toEqual({ pull_request: { types: ['opened', 'synchronize', 'reopened'] } });
+  });
+
+  it('uses the action by local path, after checking the repository out', () => {
+    const uses = stepsOf(wf).map((s) => s.uses);
+    expect(uses).toContain('./actions/dco');
+    const checkout = uses.findIndex((u) => u?.startsWith('actions/checkout@'));
+    expect(checkout).toBeGreaterThanOrEqual(0);
+    expect(uses.indexOf('./actions/dco')).toBeGreaterThan(checkout);
+  });
+
+  it('reads contents and pull requests only, and grants nothing per job', () => {
+    expect(wf.permissions).toEqual({ contents: 'read', 'pull-requests': 'read' });
+    for (const job of Object.values(wf.jobs)) expect(job.permissions).toBeUndefined();
+  });
+
+  it('interpolates no expression into any run line', () => {
+    for (const s of stepsOf(wf)) expect(s.run ?? '').not.toContain('${{');
+  });
+});
+
 describe('K-SHIP-7 the reusable release workflow', () => {
   const { wf, text } = load('release.yml');
   const jobs = Object.values(wf.jobs);

@@ -1,0 +1,26 @@
+# Kanon's DCO check (ADR 0010), dogfooded: this repository runs its own action by local
+# path, so every Kanon PR exercises the action exactly as an adopter's would.
+#
+# The action reads the PR's commits through the API, so the checkout is only there to
+# make the local path resolve. `pull-requests: read` lets the workflow token list the
+# commits; `contents: read` is what a private repository also needs for them. A
+# `pull_request` run gets a read-only token and no secrets, so running the PR's own
+# version of the check is safe.
+name: DCO
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  dco:
+    name: Signed-off commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./actions/dco

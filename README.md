@@ -34,7 +34,7 @@ To adopt Kanon, start with [10 Adoption](rulebook/10-adoption.md).
 | [`ROADMAP.md`](ROADMAP.md) | The phases of the extraction, and the decisions still needed. |
 | [`rulebook/`](rulebook/) | The opinions. This is the product's specification. |
 | [`docs/decisions/`](docs/decisions/) | Architecture decision records: why Kanon is shaped the way it is. |
-| [`actions/`](actions/) | Kanon's checks, each a versioned composite action an adopter uses by reference. The first is [`pr-title`](actions/pr-title/README.md). |
+| [`actions/`](actions/) | Kanon's checks, each a versioned composite action an adopter uses by reference. [`pr-title`](actions/pr-title/README.md) checks the PR title, and [`dco`](actions/dco/README.md) checks every commit's sign-off. |
 | [`tests/`](tests/) | Kanon's own unit tests, run by CI on every pull request. |
 | [`.github/workflows/`](.github/workflows/) | Kanon's own CI, its PR-title check (using its own action), and the reusable [release workflow](docs/release.md) that adopters call and Kanon calls itself. |
 | `package.json`, `release-please-config.json`, `.release-please-manifest.json` | Kanon's test harness (lint, type-check, Vitest) and its release configuration. |
