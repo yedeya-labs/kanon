@@ -1,41 +1,76 @@
 # Kanon
 
+[![CI](https://github.com/yedeya-labs/kanon/actions/workflows/ci.yml/badge.svg)](https://github.com/yedeya-labs/kanon/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/yedeya-labs/kanon?sort=semver)](https://github.com/yedeya-labs/kanon/releases)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+**An opinionated agentic development workflow for GitHub and Claude Code.** AI agents file, implement and review the work on your repository, under rules that fail the build, not settings that can be switched off.
+
 > **κανών** (*kanōn*): a measuring rod; the rule that work is checked against.
 
-Kanon is an **opinionated agentic development workflow**. AI agents file, triage, implement, review and ship the work on a GitHub project, and they do it under a fixed set of rules. The rules are enforced by guards that fail the build, not by good intentions.
+## Why Kanon
 
-**Kanon is not configurable, on purpose.** A project adopts Kanon by accepting its opinions and following its rules. If a rule doesn't fit your project, one of two things is true: the rule is wrong and Kanon should change it, or your project is outside what Kanon is for. Either way the answer is recorded, never worked around with a setting. See [ADR 0002](docs/decisions/0002-standardise-dont-parameterise.md).
+Running AI agents in GitHub Actions is a solved problem. What isn't solved is everything around it: what an agent may decide on its own, what counts as done, who has the last word, and how you find out when it went wrong. Kanon is that governance, written down and enforced.
 
-## What Kanon is
+- **Specs as acceptance criteria.** Behaviour is stated once, as a numbered invariant, and every issue's acceptance criteria cite it. "Done" means those invariants pass, not that an agent says so.
+- **Review until approval, then a human merges.** An adversarial reviewer agent reviews every PR until it approves. An agent only merges inside a narrow green zone the project defines, and anything on an escalation path always goes to a human.
+- **One taxonomy for work.** Labels, severities and milestone kinds are fixed, with a clear line between what an agent may decide and what a human must.
+- **Cost and signal discipline.** Anything that raises cloud spend is discussed before it is incurred, and every operational signal has a recorded decision.
+- **Guards on everything above,** including guards on the guards: a check that cannot fail is treated as a bug.
 
-Kanon's value is the **governance**, not the orchestration. Running agents in GitHub Actions is a solved problem. Deciding what they may do, what counts as done, and who has the last word is not. The opinions cover:
+## How it works
 
-- **Work items:** one taxonomy of labels, severities and milestone kinds, and a clear line between what an agent may decide and what a human must.
-- **Specs as acceptance criteria:** behaviour is stated once, as a numbered invariant, and every issue's acceptance criteria cite it.
-- **Review until approval:** an adversarial reviewer agent, and a human who merges.
-- **Isolation:** one issue, one worktree, one database.
-- **Cost and signal discipline:** anything that raises spend is discussed first, and every operational signal has a recorded decision.
-- **Guards on everything above**, including guards on the guards.
+```mermaid
+flowchart LR
+    B["Brief<br/>(approved by a human)"] --> I["Issues<br/>filed by the Lead"]
+    I --> P["Pull request<br/>by the Implementer"]
+    P --> R{"Reviewer"}
+    R -- "changes requested" --> P
+    R -- "approved" --> M["Merge<br/>(a human, or the Merger<br/>inside the green zone)"]
+```
+
+A human approves a **brief** that decides and decomposes a piece of work. The agents take it from there, and the rulebook decides at every step what they may do.
+
+## Opinionated on purpose
+
+**Kanon has no configuration.** You adopt it by accepting its rules. When a rule doesn't fit your project, one of two things is true: the rule is wrong for everyone and Kanon changes it, or your project is outside what Kanon is for. Either way the answer is recorded, never worked around with a setting. That is what lets Kanon's checks mean the same thing in every repository ([ADR 0002](docs/decisions/0002-standardise-dont-parameterise.md)).
+
+## Getting started
+
+1. **Read [who Kanon is for](rulebook/00-principles.md).** It assumes a GitHub organisation, Claude Code, and a test suite the agents can run.
+2. **Follow the [adoption checklist](rulebook/10-adoption.md)**, which takes a new repository from its first commit through the bootstrap phase.
+3. **Use Kanon's code by reference, pinned to an exact version,** and let Dependabot propose upgrades ([`K-ADOPT-11`](rulebook/10-adoption.md)):
+
+| What | Use it as |
+|---|---|
+| [PR-title check](actions/pr-title/README.md) | `uses: yedeya-labs/kanon/actions/pr-title@v0.4.0` |
+| [DCO sign-off check](actions/dco/README.md) | `uses: yedeya-labs/kanon/actions/dco@v0.4.0` |
+| [Release workflow](docs/release.md) | `uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.4.0` |
 
 ## Status
 
-**Private draft.** Kanon is being extracted from the project where it grew up (the *reference adopter*). The order of work:
+**Pre-1.0, used in production by its reference adopter.**
 
-1. **Rulebook:** write every opinion down with its reason, and class it as framework opinion or project policy. See [`rulebook/`](rulebook/).
-2. **Second adopter and extraction, together:** Kanon was installed on a second project from the rulebook alone, and every point of friction was logged. That project now continues with humans playing the agent roles, and each piece of Kanon's code (agent lanes, guards, playbooks, the operational store) lands on it first as it is extracted. See [ROADMAP.md](ROADMAP.md).
-3. **Before going public:** choose a licence, build an installer, and publish real per-run cost data.
+- **Complete:** the [rulebook](rulebook/), about 200 rules, each with its reason.
+- **Released:** the checks and the release workflow above.
+- **Being extracted:** the agent lanes (Lead, Implementer, Reviewer, Merger). They are *moved* from the reference adopter unchanged, not rewritten ([ADR 0009](docs/decisions/0009-move-dont-rewrite.md)), so the loop you adopt is the one already running in production.
 
-To adopt Kanon, start with [10 Adoption](rulebook/10-adoption.md).
+See the [roadmap](ROADMAP.md) for what comes next.
 
-## Layout
+## Repository layout
 
 | Path | What |
 |---|---|
-| [`ROADMAP.md`](ROADMAP.md) | The phases of the extraction, and the decisions still needed. |
-| [`rulebook/`](rulebook/) | The opinions. This is the product's specification. |
+| [`rulebook/`](rulebook/) | The rules. This is Kanon's specification. |
 | [`docs/decisions/`](docs/decisions/) | Architecture decision records: why Kanon is shaped the way it is. |
-| [`actions/`](actions/) | Kanon's checks, each a versioned composite action an adopter uses by reference. [`pr-title`](actions/pr-title/README.md) checks the PR title, and [`dco`](actions/dco/README.md) checks every commit's sign-off. |
-| [`tests/`](tests/) | Kanon's own unit tests, run by CI on every pull request. |
-| [`.github/workflows/`](.github/workflows/) | Kanon's own CI, its PR-title check (using its own action), and the reusable [release workflow](docs/release.md) that adopters call and Kanon calls itself. |
-| `package.json`, `release-please-config.json`, `.release-please-manifest.json` | Kanon's test harness (lint, type-check, Vitest) and its release configuration. |
-| `CHANGELOG.md` | Written by the release workflow from the merged PR titles. It appears with the first release. |
+| [`actions/`](actions/) | Kanon's checks, each a versioned composite action. |
+| [`.github/workflows/`](.github/workflows/) | Kanon's own CI, and the reusable release workflow. |
+| [`tests/`](tests/) | Kanon's own tests, run on every pull request. |
+
+## Contributing
+
+Contributions are welcome, and every commit must be signed off by its human author. AI-assisted changes are fine, but a person certifies them. See [CONTRIBUTING.md](CONTRIBUTING.md), and please follow the [code of conduct](CODE_OF_CONDUCT.md). Report security problems privately, as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+Kanon is licensed under the [Apache License 2.0](LICENSE). The name "Kanon" is not covered by the licence; see [TRADEMARK.md](TRADEMARK.md).
