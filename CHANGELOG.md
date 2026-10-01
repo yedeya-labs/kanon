@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.4](https://github.com/yedeya-labs/kanon/compare/v0.4.3...v0.4.4) (2026-10-01)
+
+
+### Documentation
+
+* **plans:** plan the move of the agent lanes into Kanon ([#13](https://github.com/yedeya-labs/kanon/issues/13)) ([81214fb](https://github.com/yedeya-labs/kanon/commit/81214fb23e421d153be18a69e85ed8a443fd1cb1))
+
 ## [0.4.3](https://github.com/yedeya-labs/kanon/compare/v0.4.2...v0.4.3) (2026-09-30)
 
 
