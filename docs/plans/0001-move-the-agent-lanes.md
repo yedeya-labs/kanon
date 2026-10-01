@@ -1,297 +1,341 @@
 # Plan 0001: move the agent lanes into Kanon
 
-- **Status:** proposed. The Owner has decided questions 1 to 6 and 8 in principle (2026-10-01). Where a measurement below changes how a decision is carried out, the plan says so.
-- **Governed by:** [ADR 0009](../decisions/0009-move-dont-rewrite.md) (move, don't rewrite), [ADR 0002](../decisions/0002-standardise-dont-parameterise.md) (no configuration), `K-ADOPT-11` (delivery forms), [chapter 11](../../rulebook/11-repository-layout.md) (fixed paths).
-- **Measured on** the reference adopter's main branch on 2026-10-01, after its reviewer lane joined the blocks. That was the last of its lane conversions onto the blocks. The commands are in [Measurements](#measurements).
+- **Status:** proposed, revised 2026-10-01.
+  - The Owner agreed questions 1 to 6 and 8 in principle, and decisions 2, 3, 5 and 8.
+  - The Owner **rejected decision 1** (adopter-written lanes around Kanon's blocks). This revision plans the replacement direction, which the Owner decided: **Kanon ships each lane as a reusable workflow; the adopter writes a trigger-only caller and one project-setup hook.**
+- **Governed by:** [ADR 0009](../decisions/0009-move-dont-rewrite.md) (move, don't rewrite), [ADR 0002](../decisions/0002-standardise-dont-parameterise.md), `K-ADOPT-11`, and [chapter 11](../../rulebook/11-repository-layout.md).
+- **Measured on** the reference adopter's main branch on 2026-10-01. The commands are in [Measurements](#measurements).
 
 ## The plan in one paragraph
 
-The reference adopter's lanes are built from four composite actions: the three **blocks** (`agent-setup`, `agent-run`, `agent-finish`) and `agent-telemetry`. Ten lane workflows call them, either through a reusable **spine** (`agent-lane.yml`) or directly. The blocks and the scripts they run move to Kanon's `actions/`. The spine and the lane callers **stay in the adopter**, because the Owner decided that the project's own literals (database, toolchain, App identities) stay there, and a reusable workflow can't take steps or services from its caller. Before anything moves, three preparatory changes are made in the reference adopter itself (ADR 0009 §4). The last of them switches the blocks to GitHub's new self-reference syntax, `$/`, and removes the load, reload and tamper machinery. The move itself is then purely mechanical. The adopter's scanners don't move as code. They become Kanon unit tests and the rules of one new check action, `lane-check`, which ships in the same release as the blocks.
+**Today.** The reference adopter runs ten agent lanes on four composite actions: the three **blocks** (`agent-setup`, `agent-run`, `agent-finish`) and `agent-telemetry`. Five lanes go through a reusable **spine** (`agent-lane.yml`), and five call the blocks directly.
+
+**Where it ends.**
+- **Kanon ships:**
+  - the actions;
+  - the spine;
+  - one reusable workflow per lane, holding everything but the triggers;
+  - the **pipeline library**: the 39 scripts the lanes run, which import each other too densely to move one at a time.
+- **The adopter keeps:**
+  - per lane, a caller holding its triggers, `permissions:`, secrets and one `uses:` line;
+  - one **project-setup hook** at a fixed path, holding every project literal.
+- **Kanon fixes one standard test database.**
+
+**How it gets there.**
+- **Prepare in the adopter first** (ADR 0009 §4). The last preparation step switches the blocks to `$/` and deletes the load, reload and tamper machinery.
+- **Then the moves.** Each one is a file move plus listed substitutions, and the adopter's callers shrink in the same step.
 
 ## 1. Order of moves
 
-**Decided (Owner):** blocks first, scanners never blind. **What this plan changes about that order:** the spine and the lane callers don't move (see §5), and the work starts with preparatory changes in the reference adopter.
-
 | Step | Where | What | Falsifiable check |
 |---|---|---|---|
-| **P1** | adopter | Split the classifier step out of `agent-finish` into a fourth local block, `agent-classify`. It has inputs `arm`, `recover` and `non-fatal`, and outputs `kind` and `retry`. Point every other caller of the classifier script at it: the reviewer's reconcile step, explore, overseer, code-audit and both digests. | The effective step list of every lane, resolved before and after the change, is identical apart from the new block boundary. The comparison is the one the adopter's block split used. A red run prints the same annotation, with the same `kind` and `retry`. |
-| **P2** | adopter | Take the project literals out of the blocks and into the callers (§5): Node, npm cache, `npm ci`, the App-slug assertion, `AGENT_QUIET`, the starting map. | `grep -nE 'node-version\|npm ci\|AGENT_QUIET\|starting-map\|expect-slug' .github/actions/agent-{setup,run,finish}/action.yml` prints nothing. The per-lane step-list comparison shows the same steps, moved only from inside a block to just around it. |
-| **P3** | adopter | Every block reference becomes `$/.github/actions/agent-*`, including the nested `agent-finish` → `agent-telemetry` call. The blocks read their scripts through `$GITHUB_ACTION_PATH`. The load, reload and tamper machinery is deleted (§2). | `grep -rn 'uses: ./.github/actions/agent-' .github/workflows` prints 0 lines, and so does a grep for the machinery's step names. **Live:** on a revise lane, the first round on a PR branch cut before P3 shows a green `Post Run` for both setup and run, and a collected cost row. The first review after P3 posts a verdict and a cost row. If either fails, §2's verdict is falsified: revert P3, which is one PR. |
-| **1** | Kanon vN | Move `agent-classify` and `agent-telemetry` with their scripts. Ship `lane-check` v1, with the permission rules and the telemetry-caller rules. The adopter, in the same PR: `$/.github/actions/agent-{classify,telemetry}` becomes `yedeya-labs/kanon/actions/…@vN`, the local copies are deleted, `lane-check` is added to CI, the Kanon Dependabot entry is added, and `permissions-guard.mjs` is deleted. | Kanon's CI runs both actions through `$/`. In the adopter, `grep -rln 'classify-agent-result.mjs'` finds nothing outside `node_modules`, and `lane-check` is green on main. **Mutation:** dropping `continue-on-error` from one telemetry caller turns `lane-check` red. Over 24 hours, the collector receives an artifact from every lane it expects. Kolophon's CI and its Dependabot bump to vN are green. |
-| **2** | Kanon vN+1 | Move `agent-setup`, `agent-run` and `agent-finish` with the quality script. `lane-check` v2 adds the lane-shape, standard-lane-table, CLI-flag and cache-setting rules. The adopter switches and deletes `cli-flag-guard.mjs`, `agent-lanes.mjs` and the block-internal tests (§7). | The adopter's `.github/actions/` holds no `agent-*` directory, and `lane-check` is green. **Mutation:** a direct-block lane whose finish call lacks `always()` turns it red. **Live:** one run of each lane shape (a spine lane, a direct-block lane, the reviewer) records a cost row. |
-| **3** | Kolophon | Kolophon installs the lanes it can run: thin callers around Kanon's blocks, its Apps and its secrets (§8). | Kolophon's `lane-check` is green, and a first lane run uploads its telemetry artifact. The roadmap's falsifier applies: setup takes no more than about a day. |
-| **later** | both | Telemetry collection and its scanners move with the store (`K-OBS-17`). The starting map moves with Kanon's spec tooling, once the adopter declares its spec prefixes in its spec files (`K-LAYOUT-2`). | Each gets its own plan. |
+| **P1** | adopter | Split the classifier into a fourth local block, `agent-classify` (inputs `arm`, `recover`, `non-fatal`; outputs `kind`, `retry`). Point the reviewer's reconcile, explore, overseer, code-audit and both digests at it. | Every lane's effective step list is identical, before and after, apart from the block boundary. The comparison is the one the adopter's block split used. A red run prints the same `kind` and `retry`. |
+| **P2** | adopter | Create `.github/actions/project-setup` (§5) and move every project literal into it: Node, `npm ci`, `DATABASE_URL_APP`, `db:init`, Playwright, `AGENT_QUIET`, the App-slug assertion and the starting map. Switch the lanes to Kanon's standard database values (§5). The blocks and spine call the hook after checkout and before `agent-setup`. | `grep -nE 'node-version\|npm ci\|db:init\|AGENT_QUIET\|starting-map\|expect-slug\|5433' .github/actions/agent-*/action.yml .github/workflows/agent-*.yml` prints nothing. An implement run passes `db:init` and the RLS conformance test against the standard service. |
+| **P3** | adopter | Every block reference becomes `$/.github/actions/agent-*`. The blocks read their scripts through `$GITHUB_ACTION_PATH`. The load, reload and tamper machinery goes (§2). | `grep -rn 'uses: ./.github/actions/agent-'` prints only the hook. **Live:** a revise round on a PR branch cut before P3 has a green `Post Run`, and the first review after P3 posts a verdict and a cost row. If either fails, §2 is falsified and P3 is reverted. |
+| **P4** | adopter | Take the adopter literals out of the pipeline library: declare each spec area's prefix in its spec file (`K-LAYOUT-2`) instead of `spec-lib.mjs`'s 16-entry map, and read App logins from the register (`K-LAYOUT-6`) instead of constants. | `grep -rnE "AGENT_LOGIN = '\|PREFIXES = \{"` over the library prints nothing, and `npm test` is green. |
+| **1** | Kanon vN | Move the five actions. The adopter switches `$/` to `yedeya-labs/kanon/actions/…@vN`, adds the Kanon Dependabot entry, and points its existing scanners at a checkout of Kanon at the pinned tag (§6). | The adopter's `.github/actions/` holds only `project-setup`, and its scanners report the same lane list as before the switch. **Mutation:** a lane whose finish call lacks `always()` still turns them red. Kolophon's Dependabot bump is green. |
+| **2** | Kanon vN+1 | Move the spine, and the three lanes that run no workspace script (triage, implement-revise, lead-revise), as Kanon lane workflows. Their callers shrink to triggers. Ship `lane-check` (§6). | `lane-check` is green on the adopter, and each of the three callers is under 40 lines. **Live:** one run per lane records a cost row. |
+| **3** | Kanon vN+2 | Move the pipeline library (39 files) and `actions/kanon-path` (§3), with the implement and merge-reconcile lanes. In the same PR, the adopter's not-yet-moved workflows switch from `node scripts/qa/…` to `node "$KANON/…"`. Its lint-run guards import the library from the npm package (decision 13). | `grep -rnE 'node (\./)?scripts/qa/' .github/workflows` prints nothing, and the adopter's `npm run lint` and `npm test` are green. **Live:** an implement run and a merge-reconcile run. |
+| **4** | Kanon vN+3 | Move the review and verify-acs lanes. | **Live:** a review run posts a verdict and its cost row, on a PR branch cut before the step. |
+| **5** | Kanon vN+4 | Move the lead, lead-split and rebase lanes. | **Live:** one run per lane. The adopter holds no `agent-*` lane logic. |
+| **6** | Kolophon | Kolophon installs trigger-only callers, its hook (`setup-node` and `npm ci`, no database) and its Apps. The Reviewer comes first, because it ends bootstrap (`K-ADOPT-6`). | `lane-check` is green on Kolophon, and a first review posts a verdict. The roadmap's falsifier applies: setup takes no more than about a day. |
+| **later** | both | The non-model lanes (merge, lead-reconcile, dispatch-sweep) follow the same way. The store-coupled lanes (explore, overseer, code-audit, the digests) and the telemetry scanners move with the store (`K-OBS-17`). | Each gets its own plan. |
 
-**Why this order.** Each step leaves both adopters working, and no step leaves a scanner blind.
-
-- **The leaves move before the trunk.** `agent-classify` and `agent-telemetry` are called by every lane. Moving them first proves the pin, the Dependabot upgrade and `$/` nesting on code that can't red a run, because both are `continue-on-error`.
-- **`lane-check` ships in the same release as what it checks**, and the adopter deletes a scanner only in the PR that installs the rule replacing it. Until then, P3 teaches the adopter's own scanners the `$/` form, and step 1 teaches them the remote form, in the same PR as each switch.
-- **Why P3 matters most.** The resolver recognises a block only as `./.github/actions/<name>`. A lane switched to any other form drops out of every scan **silently**: a shorter list, not an error.
+**Why this order.**
+- **The non-mechanical changes (P1 to P4) are made where they already run,** and are proven there. That leaves every Kanon step a move.
+- **The lanes with no workspace script go first,** so the reusable-workflow shape is proven before the library moves under it.
+- **The library moves in one step** because it can't move in parts (§3).
+- **No scanner is ever blind.** Each adopter scanner keeps running until its last lane leaves (§6).
 
 ## 2. The load, reload and tamper machinery: verified, it goes
 
-**Verdict: it holds.** A block referenced remotely, or through `$/`, is never read from the workspace. So nothing an agent or a PR does to the workspace can reach it.
+**Verdict: it holds.** A block referenced remotely or through `$/` is never read from the workspace.
 
-**GitHub's documentation** (workflow syntax, `jobs.<job_id>.steps[*].uses`):
-- `./path` "resolves against the runner's workspace rather than the repository of the running workflow". That is the root cause of all the machinery.
-- `{owner}/{repo}/{path}@{ref}` names a repository at a ref.
-- `$/path`, documented since 2026-07-29, "resolves to that repository at the running commit … You do not need to check out the repository first". It "always resolves against the repository of the file it appears in".
+**GitHub's documentation** (workflow syntax, `steps[*].uses`):
+- `./path` "resolves against the runner's workspace".
+- `$/path`, documented since 2026-07-29, "resolves to that repository at the running commit … You do not need to check out the repository first". It "always resolves against the repository of the file it appears in": in a reusable workflow called from another organisation, that is the called workflow's repository.
 
-**The runner's behaviour** (actions/runner v2.336.0, which added `$/`):
-- Every action reference, nested composite references included, is resolved and downloaded during **Set up job**, before any step runs. Pre and post steps are registered from that complete walk.
-- A `$/` reference "is indistinguishable from a normal `owner/repo/path@sha` reference" once resolved.
-- `LoadAction` re-reads `action.yml` from the runner's action cache (`_work/_actions/<owner>/<repo>/<ref>/`) at execution time, not from the workspace. The post steps of `setup-node` and `claude-code-action` inside a block therefore no longer need the block's file in the workspace. Their absence there is what made the reload necessary.
-- `github.action_path` points into that cache. The whole repository archive is downloaded, which is why a block can reach `$GITHUB_ACTION_PATH/../<other-action>/`. The adopter's telemetry action already relies on this.
+**The runner** (actions/runner v2.336.0, which added `$/`):
+- Every reference, nested ones included, is resolved and downloaded during **Set up job**, and pre and post steps are registered from that walk.
+- `LoadAction` re-reads `action.yml` from the action cache (`_work/_actions/…`), never from the workspace, so a block's post steps no longer need its file in the workspace.
 
-**What goes** (measured at 652 lines in 7 files, plus the reviewer's classifier pin):
+**What goes:** 652 lines in 7 files, plus about 40 lines of the reviewer's classifier pin.
 
 | File | Removed | Lines |
 |---|---|---|
-| spine | "Load the lane's building blocks", "Load the blocks again", "Restore the telemetry action from the default branch" | 102 |
-| `agent-run` | the `restore-paths` input and its "Return the checked-out branch" step | 13 + input |
-| reviewer lane | the load step; "Record what the blocks hold" (the digest and its pinned file list); "Re-verify the blocks before the agent runs from them"; the reload; the telemetry restore; "Re-verify the blocks before the finish block runs from them" | 260 |
-| reviewer lane | the classifier extracted from the base branch, its `classify_sha256`, and the re-check before running it. Replaced by a `uses:` of `agent-classify` (P1). | about 40 |
-| four direct-block lanes (rebase, lead split, merge-reconcile, verify-acs) | their copies of the load, reload and restore steps | 277 |
+| spine | the block load, the reload, and the telemetry restore from the default branch | 102 |
+| `agent-run` | the `restore-paths` input, and the step that returns the checked-out branch | 13 |
+| reviewer lane | the load; the block digest ("Record what the blocks hold") and both re-verifications; the reload; the telemetry restore | 260 |
+| the other four direct-block lanes | their copies of the load, reload and restore steps | 277 |
+| reviewer lane | the classifier extracted from the base branch, and its digest check. `agent-classify` replaces it (P1). | about 40 |
 
-**What stays:** the reviewer's base pin of *documents* (`restore-agent-docs.sh` and its `pin_digest`). The agent reads those from the workspace, and nothing about actions changes that.
+**What stays:** the reviewer's base pin of *documents*, which the agent reads from the workspace.
 
-**Why ADR 0009 allows this one non-mechanical change.**
-- The machinery isn't part of what the lanes do. It is a workaround for one property of `./` references, and that property disappears with the reference form.
-- Moving it would carry several hundred lines that run, check nothing, and fail closed on situations that can no longer arise.
-- It is done in the adopter (P3) as an ordinary reviewed change with a live test, so the moves that follow stay purely mechanical.
+**Why ADR 0009 allows this one non-mechanical change.** The machinery is a workaround for one property of `./` references, and it does nothing once that property is gone.
 
-**Open security concerns it closes:**
-1. **An agent editing a block mid-run.** An agent working a pipeline issue may edit, move or delete `.github/actions/agent-*`. Today the reload reverses that. Afterwards the workspace copy is simply never read.
-2. **The reviewer's install rewriting `.git` before a restore.** `npm ci` and `db:init` run the PR's code, which can plant a hook, a filter or a re-pointed `origin`. Today the reload and the telemetry restore then run `git checkout` and `git fetch` in that `.git`, which is why the digests exist. Afterwards no step restores anything with `git`.
-3. **A PR branch older than the blocks.** The blocks are no longer looked for in the branch at all.
+**It closes three open concerns:**
+- **An agent editing a block mid-run.** The workspace copy is never read.
+- **The reviewer's PR install rewriting `.git`** before a reload runs `git checkout`. Nothing reloads any more.
+- **PR branches older than the blocks.** The blocks aren't looked for there.
 
-**The residue, stated plainly.** The action cache is on the runner's disk and writable by the job's user. `LoadAction` reads it at execution time, so a process that deliberately rewrites `_work/_actions/…` can still change a block. That belongs to the class the reviewer lane already records as undefendable in-job: "a lifecycle script that subverts the runner rather than the files". It is bounded the same way, by the fork gate and the human merge.
+**The residue.** The action cache is writable by the job's user. That is the "subverts the runner" class the reviewer lane already accepts.
 
-**Two risks to check in P3:**
-- The runner gates `$/` behind a feature flag (`actions_dollar_self_reference`). The documentation presents it as available, but P3's live run is the proof.
-- The adopter's actionlint may not parse `$/` yet. Check its version before P3.
+**Risks to check in P3:**
+- `$/` sits behind a runner feature flag (`actions_dollar_self_reference`).
+- The adopter's actionlint may not parse `$/` yet.
+- **Fallback:** remote `@vX.Y.Z` references with a release-time rewrite (§4).
 
-If `$/` fails, the fallback is the remote form `yedeya-labs/kanon/...@vX.Y.Z` (§4), and P3 is folded into step 1.
+## 3. Reusable workflows: what moves, what can't, and the library
 
-## 3. Scripts the blocks call, and where each lands
+**Can move into Kanon's lane workflow.** A called workflow's jobs are ordinary jobs: `needs`, job `if`, job `concurrency`, `strategy.matrix`, `services`, `timeout-minutes`, outputs, steps and App minting.
 
-Every one uses only `node:` built-ins. A grep for language features newer than Node 18 found none. The runner tools they call are `bash`, `git`, `gh`, `jq` and `sha256sum`. Like `pr-title`, the blocks don't install Node: the caller's job does (§5).
+That covers every job-level part of the lanes:
+- the review filter's deduplication, its deferral while CI runs, and its label exemption;
+- the claim gate;
+- lead-split's per-issue concurrency;
+- rebase's matrix, and its record-the-attempt step.
 
-| Script | Lines | Dependencies | Lands in |
-|---|---|---|---|
-| `classify-agent-result.mjs` | 460 | `node:fs`, `node:url` | `actions/agent-classify/`. Its importers are tests and `agent-telemetry.mjs`, which reaches it at `$GITHUB_ACTION_PATH/../agent-classify/`. |
-| `agent-telemetry.mjs` (normaliser) | 616 | `node:child_process`, `node:crypto`, `node:fs`, the classifier | `actions/agent-telemetry/` |
-| `agent-quality-prs.mjs` | 80 | `node:child_process`, `node:fs` | `actions/agent-finish/` |
-| `starting-map.mjs` | 281 | `node:*`, and `spec-lib.mjs` (281 lines), whose `PREFIXES` map hard-codes the adopter's 16 spec areas | **Not moved now.** It becomes an adopter step before `agent-run` (P2). It moves later with the spec tooling. |
-| `install-playwright-chromium.sh` | 58 | `apt`, `npx` | **Stays in the adopter.** Browsers are project setup (§5), and the adopter's `ci.yml` uses it too. |
+Two context facts make this work:
+- In a called workflow, "the `github` context is always associated with the caller workflow". So every `if` and filter that reads `github.event` works unchanged, including on `pull_request_target` and `workflow_run`.
+- The caller's file comes from the base or default branch on those triggers, so the Kanon tag it pins is as trusted as the lane file is today.
 
-## 4. Self-pinning: `$/`, not a release-time rewrite
+**Must stay in the caller** (from GitHub's reusable-workflow reference):
 
-**Decided (Owner):** the blocks must always be the same Kanon version as each other.
+| Key | Why |
+|---|---|
+| `on:` and the `workflow_dispatch` form | Triggers are the caller's by definition. Kanon's lane declares the same inputs under `workflow_call` and the caller passes them through (`with: issue_number: ${{ inputs.issue_number }}`), so every `inputs.x` in the lane still resolves. |
+| `permissions:` on the calling job | It is the ceiling. "Permissions passed from the caller workflow can be only downgraded" by the called one. |
+| `secrets:` | Passed explicitly, by the fixed names (§8). |
+| **workflow-level `concurrency`** (9 of 10 lanes) | **Genuinely unresolved.** The calling job's `concurrency` is a documented key and is equivalent for a caller with one job. A top-level `concurrency:` *inside* a called workflow is undocumented. Decision 11. |
 
-**Measured:** the runner now does this natively, so the release-please rewrite agreed in principle isn't needed. The runner's own rationale for `$/` is exactly this circular-tag problem.
+**Behaves differently, and is handled:**
+- Workflow-level `env` "is not propagated", so any lane-level env moves into Kanon's jobs.
+- `github.workflow` is the caller's name. No lane's concurrency group uses it: each uses a fixed prefix.
 
-- Inside Kanon, one action reaches another only as `$/actions/<name>`. That resolves to the commit the adopter pinned. `agent-finish` → `$/actions/agent-telemetry` is the one nested reference today.
-- An adopter refers to each block as `yedeya-labs/kanon/actions/<name>@vX.Y.Z`. One Dependabot group bumps every reference together (`K-ADOPT-11`), `lane-check` included.
-- **Guard test** (Kanon, `tests/unit/`): no file under `actions/` contains `uses: ./` or `uses: yedeya-labs/kanon/`. A `./` reference would resolve against the *adopter's* workspace, and a tag reference would name the previous release.
-- **Kanon's own CI before any release:** a smoke workflow calls `$/actions/agent-classify`, `agent-telemetry` and `agent-finish` with fixture execution files, and `agent-setup` with the push probe off. No model runs and nothing is spent. `$/` resolves to the PR's own commit, so every PR exercises its own blocks. The adopter's block split gave this as the reason it couldn't use remote references. `agent-run`'s single real step, the model call, is covered by the adopter's first live run after each upgrade.
-- **The `lane-check` rule:** every Kanon reference in an adopter names the same `vX.Y.Z`.
-- **Fallback, if `$/` is unavailable:** release-please `extra-files` with an `x-release-please-version` marker on each internal reference, the same guard test, and the blocks and the spine released in consecutive versions so that every pin names an existing tag.
+**The library, and how a reusable workflow reaches it.** The lanes run 14 scripts by workspace path. Their import graph, taken in both directions, joins **39 of the adopter's 66 pipeline scripts (19,846 lines, `node:` built-ins only)**. For example, `implement-crash.mjs` imports `dispatch-sweep.mjs`, which `lead-reconcile.mjs` imports too. Moving part of that graph would leave two live copies, so the library moves whole, at step 3.
 
-## 5. Repository-specific literals: all stay in the adopter
+A reusable workflow can't read its own repository by path: a `run:` step reads the adopter's checkout. The new `$/` fixes this.
+- Kanon adds `actions/kanon-path`, one step that outputs the absolute path of Kanon's root in the action cache.
+- A lane step then runs `node "$KANON/scripts/<name>.mjs"`. That is a mechanical substitution, at the version the caller pinned, outside the workspace.
+- **Lanes never import the library from `node_modules`**, because on a PR lane the install is the PR's.
+- The header comment of Kanon's `release.yml`, which says this is impossible, gets a separate fix.
 
-**Decided (Owner):** none becomes a Kanon input or a fixed path.
+**Scripts inside the actions** (decided Q3): the classifier (460 lines) goes to `actions/agent-classify/`, the telemetry normaliser (616) to `actions/agent-telemetry/`, and the quality count (80) to `actions/agent-finish/`. All use `node:` built-ins only. The starting map (281) joins the library at step 3, because P4 removes the adopter literals from `spec-lib.mjs` that held it back (decision 8).
 
-**The consequence, which P2 carries out:** the literals leave the *blocks*. The spine and the lane callers stay in the adopter as the jobs that hold them. Measured in the blocks, the telemetry action and the spine (`grep -oE … | wc -l`):
+## 4. Self-pinning
 
-| Literal | Today | Ends up |
+**Decided (decision 3).** Every Kanon-internal reference uses `$/`:
+- lane workflow → `$/.github/workflows/agent-lane.yml`;
+- spine and lanes → `$/actions/agent-*`;
+- `agent-finish` → `$/actions/agent-telemetry`;
+- lanes → `$/actions/kanon-path`.
+
+All of these resolve to the commit of the tag the caller pinned.
+
+**Guard test (Kanon):** no file under `actions/` or `.github/workflows/` references `yedeya-labs/kanon/` or `./`, except the hook.
+
+**Kanon's CI:** a smoke workflow runs the actions through `$/` on fixtures, with no model call, so every PR exercises its own code. A lane's single model call is proven by the adopter's live run after each upgrade.
+
+**The adopter:** pins one `vX.Y.Z` in every caller and in `lane-check`. One Dependabot group bumps them together (`K-ADOPT-11`).
+
+## 5. The project-setup hook and the standard database
+
+**The hook (a split rule; `K-LAYOUT-1` gains its path).** `./.github/actions/project-setup/action.yml` is a composite action the adopter writes. The mechanism and the inputs are Kanon's; the content is the project's.
+
+**What Kanon passes it** (all strings):
+- `lane`;
+- `install`, `database`, `browsers`;
+- `issue-number`;
+- `app-slug`;
+- `github-token`.
+
+**What it does**, in the reference adopter's file:
+- `setup-node` 24 with the npm cache, and `npm ci` when `install` is true;
+- `DATABASE_URL_APP` written to `$GITHUB_ENV`, then `npm run db:init`, when `database` is true;
+- `install-playwright-chromium.sh` when `browsers` is true;
+- `AGENT_QUIET=1` written to `$GITHUB_ENV`, for the lanes that opt in;
+- the App-slug assertion against its login constant;
+- the starting map, when there is an issue number.
+
+**One hook, not one per lane** (decision 10). The inputs say what each lane needs. Kolophon's hook is three lines.
+
+**When a lane calls it.** Every lane that checks out calls the hook after the checkout and before `agent-setup`. A lane that needs no project setup (merge-reconcile installs nothing) doesn't call it at all. That is a property of Kanon's lane, not a setting.
+
+If the file is missing, the lane fails with a named error. That happens on PR branches cut before P2: rebase them. It is a one-time transition, and it is the hook's own version of the problem §2 removes for the blocks.
+
+**The standard test database (Kanon-fixed, decision 12).**
+- The service is `pgvector/pgvector:pg17`, with user, password and database all `kanon`, on port 5432, switched on by the lane's `database` input.
+- Kanon writes `DATABASE_URL=postgres://kanon:kanon@localhost:5432/kanon`.
+- The adopter's hook runs its own schema setup against it.
+
+**What the reference adopter migrates in P2.** It runs the project's database name as user, password and database, on port 5433.
+1. The hook writes `DATABASE_URL_APP` with the standard host, port and database name. The app role's name stays the adopter's: its `setup.sql` creates the role, and its setup script sets the role's password from that URL.
+2. Confirm that nothing CI runs hard-codes the old database name or port. Its migrator, setup script and `env.ts` only *default* to them when `DATABASE_URL` is unset, and the standard sets it.
+3. Its own `ci.yml` services aren't lanes, and stay as they are. So do the local worktree defaults.
+
+**Security of the hook.** It runs adopter code, which on a PR-head lane is PR-controlled. That is the same class as the reviewer's PR `npm ci` today, and the reference adopter's deferred job-isolation issue, RA-2690, covers it.
+
+| Lane | Checks out | App token reachable when the hook runs? |
 |---|---|---|
-| Postgres service: image, the project's database name ×10, port 5433 ×3, `DATABASE_URL`, `DATABASE_URL_APP` | spine | **The adopter's job** `services:` and its env step. They already sit outside the blocks, because a composite action can't declare `services:`. |
-| `npm run db:init` ×4 | spine | An adopter step between `agent-setup` and `agent-run`. Unchanged. |
-| `setup-node` with `node-version: "24"`, `cache: npm`, `npm ci` ×3 | `agent-setup` | **Out of the block (P2)**, into the adopter's job before `agent-setup`. The `install` and `npm-cache` inputs disappear, and the reviewer's own late install becomes simply its own step. |
-| App-slug assertion (`expect-slug-export`, the module path of the login constant) | `agent-setup` | **Out of the block (P2)**, as an adopter step after `agent-setup`. The block keeps the push probe, which is Kanon's runtime scope check (`K-AGENT-5`). |
-| `docs/qa/agent-identities.md` in the push-probe message | `agent-setup` | **Stays in the block.** It is Kanon's fixed path (`K-LAYOUT-6`), not the adopter's. |
-| `AGENT_QUIET` ×2 | `agent-run` | **Out of the block (P2).** The adopter sets it as `env:` on its `agent-run` call, and env on a composite step reaches the steps inside it. P2 verifies this with the failures-only test output. |
-| Starting map and `.agent/starting-map.md` | `agent-run` | **Out of the block (P2)**, as an adopter step just before `agent-run` (§3). |
-| `install-playwright-chromium.sh` | spine | An adopter step. Unchanged. |
-| `claude_args` per lane (model, effort, turns, budget) | each caller | Stays an input for now. `lane-check` checks it against Kanon's standard lane table (ADR 0005 §2). It becomes Kanon-internal when the table moves into the blocks, which is a later Kanon change. |
-| The reference adopter's organisation, its QA role name and its infrastructure file, in the telemetry header ×5 | `agent-telemetry` | **Literal substitution** on the move ("the QA store's role", "the store's infrastructure code"). The public-tree test would fail without it. |
-| A persona name and "Gate C" ×1 | `agent-run` | Substitution: "the Maintainer's merge". |
-| Section anchors of the adopter's own documents (`observability.md §8`, `agentic-qa-pipeline.md §6`) | all four | Substitution: the Kanon rule id, or the action's README. |
-| Issue references: 6, 8, 15, 16, and 62 in the three scripts | all moving files | **Owner decision 5.** |
+| implement, triage, lead, lead-split, verify-acs | the default branch (reviewed code) | yes, persisted by checkout |
+| implement-revise, lead-revise, rebase | the PR head (PR code) | **yes**, as with `npm ci` today |
+| review | the PR head (PR code) | **no**. The token is minted after the hook, and the document base pin is re-verified in between, as today. |
+| merge-reconcile | not called | none |
 
-**What P2 costs.** Every lane caller gains up to three explicit steps that were inside `agent-setup`, and the spine gains the same.
+In every lane the hook runs before the agent, and the Claude token is never passed to it.
 
-**Why there's no Kanon spine.** A reusable workflow can't host the adopter's services or steps, so a Kanon spine could hold none of the literals above. That conflicts with `K-ADOPT-11`'s "Lane → reusable workflow" row. Owner decision 1 resolves it.
+**Every literal, and where it ends up:**
+
+| Literal | Ends up |
+|---|---|
+| Postgres image, credentials and port; `DATABASE_URL` | the Kanon standard |
+| `DATABASE_URL_APP`, `db:init`, Node 24, the npm cache, `npm ci`, Playwright, `AGENT_QUIET`, the App-slug assertion, the starting map | the hook |
+| Push-probe message naming `docs/qa/agent-identities.md` | stays in the block: it is a Kanon path (`K-LAYOUT-6`) |
+| Each lane's `claude_args` (model, effort, turns, budget) | Kanon's lane file. ADR 0005 §2's standard lane table is now Kanon's by construction. |
+| Logins and spec prefixes in the library | removed in P4 (the register, and `K-LAYOUT-2`) |
+| The organisation name, the QA role and the infrastructure file in the telemetry header; a persona name; "Gate C"; the adopter's own document anchors | substitutions at each move |
+| `#N` issue references | `RA-N` (decision 5) |
 
 ## 6. The scanners
 
-**What they are.** The reference adopter has five scripts, plus one shared resolver, that read its workflow files to answer one question: **which agent lanes exist, and what does each pass the model?** Each uses the answer differently:
+**What they are.** Five scripts and a shared resolver read the adopter's workflows to answer one question: which lanes exist, and what does each pass the model?
+- `agent-lanes.mjs` (259 lines) expands each lane into its effective steps.
+- `cli-flag-guard.mjs` (370) runs the real CLI against each lane's flags.
+- `permissions-guard.mjs` (593) checks each job's grants.
+- `cache-ttl-check.mjs` (424) joins cache pins to arms and to the store.
+- `qa-store.mjs` (106) and `collect-agent-telemetry.mjs` (294) list the store's lanes.
 
-| Scanner | Lines | What it does |
+**Why they matter.** A miss is a **shorter list**, not an error. A remote `uses:` matches none of their patterns, so a lane that moves would silently drop out of every scan.
+
+**Now that the lanes move, most of the YAML they check becomes Kanon's.**
+
+| Scanner | Becomes | Why |
 |---|---|---|
-| `agent-lanes.mjs` | 259 | The shared resolver. It expands a lane, whether direct, spine or direct-block, into its effective steps, reading each block's `action.yml`. |
-| `cli-flag-guard.mjs` | 370 | Runs the real Claude CLI against every lane's flag block, with no credentials, and fails on a flag the CLI rejects. `claude-code-action@v1` floats, so a CLI update can break every lane at once. |
-| `permissions-guard.mjs` | 593 | Checks that each job grants the scopes its steps need, and nothing broader. |
-| `cache-ttl-check.mjs` | 424 | Joins each lane's prompt-cache pin to its arm and to the store's cutover records, for the Overseer's audit. |
-| `qa-store.mjs` (`agentsIn`, `agentNames`) | 106 | Which agent partitions exist in the store. A regex copy, because the Overseer runs without `node_modules`. |
-| `collect-agent-telemetry.mjs` (`AGENT_WORKFLOWS`) | 294 | The collector's expected list of lanes. |
+| `cli-flag-guard.mjs` | **Kanon test** | The flags live in Kanon's lane files. `agent-run` pins `claude-code-action` exactly, so the CLI is fixed per release (decision 14). |
+| `permissions-guard.mjs`: grants inside each job | **Kanon test** | The jobs are Kanon's. |
+| `permissions-guard.mjs`: the calling job's `permissions:` ceiling | **`lane-check` rule** | The caller holds it. |
+| `agent-lanes.mjs` | **Kanon test helper** | Kanon's own tests use it to expand its lanes. No adopter rule needs it. |
+| `cache-ttl-check.mjs`: the pin per lane | **Kanon test** | The pin is in Kanon's lane file. |
+| `cache-ttl-check.mjs`: the store join | **with telemetry, later** | It reads the store. |
+| `qa-store.mjs`, `collect-agent-telemetry.mjs` | **with telemetry, later** | Each lane's move PR teaches them the caller form. |
 
-**Why they matter.** A scanner that misses a lane doesn't fail. It produces a **shorter list**: fewer flags probed, fewer partitions read, fewer permissions checked. That reads as a clean run. Moving the blocks is exactly the change that makes them miss, because a remote `uses:` matches none of their patterns. Hence §1's rule that a scanner is replaced in the same PR that would otherwise blind it.
+**`lane-check`** is a check action (`K-ADOPT-11`) with **permanent rules only**:
+- each caller holds only `on`, `permissions`, the decided `concurrency` and one job;
+- that job `uses:` a Kanon lane at the shared tag, and maps secrets by their fixed names;
+- the hook exists at its path and declares Kanon's inputs;
+- App slugs match the register;
+- the Dependabot entry exists.
 
-**Decided (Owner):** the scanners become Kanon code in two forms:
-- **Kanon unit tests,** for what Kanon fixes inside its blocks;
-- **`lane-check` rules,** for what the adopter controls. `yedeya-labs/kanon/actions/lane-check@vX.Y.Z` reads the adopter's `.github/workflows/`, and reads the block definitions at its own version through `$GITHUB_ACTION_PATH/../agent-*/action.yml`.
+It parses this small YAML with the runner's `yq` (decision 6).
 
-Telemetry collection is not a lint check: it moves later, with the store. The disposition of each:
-
-| Existing code | Becomes | Why |
-|---|---|---|
-| `agent-lanes.mjs` (the resolver) | `lane-check`'s internal library, and its tests | Every rule needs effective steps, and it has no imports. |
-| `permissions-guard.mjs` | `lane-check` rule (v1) | Each job's grant is the adopter's. What the blocks need is known at lane-check's version. |
-| `cli-flag-guard.mjs`: does the CLI accept the flags | `lane-check` rule (v2) | The flags are the adopter's input until the standard lane table moves in, and the CLI floats under `@v1`. It becomes a Kanon test once both are fixed inside the blocks. |
-| `cli-flag-guard.mjs`: the prompt-cache pin list | split. Block-level pin: Kanon test. Per-arm pin: `lane-check` rule. | The Owner placed the cache setting in the standard lane table. |
-| `cache-ttl-check.mjs` | **moves with telemetry later** | It queries the store's cutovers. |
-| `qa-store.mjs` (`agentsIn`, `agentNames`) | **moves with telemetry later** | It enumerates store partitions. Until then it is taught each new `uses:` form in the PR that introduces it. |
-| `collect-agent-telemetry.mjs` (`AGENT_WORKFLOWS`) | **moves with telemetry later** | The Owner's point 3. |
-| `ship-review-scope.mjs` (uses the resolver) | stays in the adopter, with the block paths dropped from its scope | It decides the adopter's own `/code-review` scope. It isn't a scanner. |
-
-**Delivery form.** `lane-check` is a **check** in `K-ADOPT-11`'s sense: a composite action under `actions/`. It isn't an npm guard, and no npm package is needed for this plan.
-
-**Parsing YAML without dependencies.** It parses YAML with the runner's preinstalled `yq` (`yq -o=json`), with a first step that fails by name if `yq` is absent (Owner decision 6).
-
-**Its rules are mutation-checked** in Kanon's tests: a rule that can't fail is a bug.
+**Through the transition** (steps 1 to 5), the adopter's existing scanners keep checking its not-yet-moved lanes. Each lane leaves their scope in its move PR, and they're deleted when the last lane leaves.
+- **How they still see the blocks** (decision 15): CI checks out Kanon at the tag the workflows pin, and the resolver maps `yedeya-labs/kanon/actions/<name>@vX` to that checkout.
+- **Why not transitional rules:** that writes no `lane-check` rules only to delete them five steps later.
 
 ## 7. The tests
 
-**Scope.** 61 files in the adopter touch the blocks, the spine, the lanes or the resolver. 43 of them name a lane workflow only to test that lane's own logic.
+**Scope.** 61 adopter files touch the blocks, the spine, the lanes or the resolver. The lane-contract tests now move **with their lane**.
 
-| Disposition | Count | Files |
+| Disposition | n | Files |
 |---|---|---|
-| **Kanon unit test** (block internals) | 0 whole, 9 in part | Below. |
-| **`lane-check` rule test** (in Kanon) | 3 whole | the direct-lane fixture (`agent-direct-lane.yml`, the shape every rule is tested on); `direct-block-lane-2669` (the scanners agree on that fixture); `permissions-guard` |
-| **Moves with telemetry later** | 1 whole | `collect-agent-telemetry` |
-| **Deleted with the machinery** (§2) | 0 whole, 2 in part | Below. |
-| **Stays in the adopter** | 43 whole | Each lane's own contract and the adopter's own scripts: `agent-implement-revise`, `agent-lead`, `agent-lead-revise`, `agent-verify-acs`, `agent-review-filter`, `agent-review-verdict`, `rebase-lane`, `revise-round-record`, `implement-crash`, `split-lineage`, `lead-reconcile`, `merge-gate`, `dispatch-sweep` (and its fixture), `brief-revise-recovery`, `review-recovery`, `review-run-evidence`, `review-trailer`, `red-test`, `red-unreviewed`, `incremental-review`, `pinned-docs`, `playbook-excerpt-2488`, `project-digest`, `project-inheritance`, `decomposition-contract`, `capability-interlock-countable`, `code-audit-report-invalid-639`, `explorer-change-gate-714`, `filter-job-if-2596`, `follow-up-membership`, `issue-triage-defaults`, `label-guard`, `overseer-backlog-dynamics`, `overseer-dependency-free`, `doc-path-guard-919`, `runner-artifact-guard`, `ship-review-scope`, `workflow-health`, `agent-quiet-output-2456` and `starting-map-2456` (both P2 literals), `install-playwright-chromium`, and the `workflow-step` helper (§8, decision 7) |
-| **Split** | 14 | Below. |
+| Kanon at step 1 (actions) | 5 | `agent-lane-blocks` (its load and reload part is deleted at P3), `classify-agent-result`, `agent-telemetry`, `agent-step-flags`, `prompt-cache-ttl-pin` |
+| Kanon at step 2, as tests and helpers | 12 | the spine helper `helpers/spine` and its resolver tests (`agent-lanes`, `direct-block-lane-2669`, the fixture lane); `permissions-guard`'s per-job half; `lane-retry`; `revise-round-record`; `agent-implement-revise`; `agent-lead-revise`; `implement-turn-cap-2207`; `agent-full-transcript-2651`; `implement-crash` (at step 3, with the library) |
+| Kanon at step 4 | 10 | `agent-review-filter`, `agent-review-verdict`, `incremental-review`, `pinned-docs`, `reviewer-base-instructions` (its block-digest part is deleted at P3), `project-inheritance`, `agent-quality-columns`, `agent-verify-acs`, `merge-reconcile-lane-2660` and `playbook-excerpt-2488` (both at step 3) |
+| Kanon at step 5 | 4 | `agent-lead`, `rebase-lane`, `split-lineage`, `decomposition-contract` |
+| Kanon later, with the library's other lanes and guards | 22 | `lead-reconcile`, `merge-gate`, `dispatch-sweep` and its fixture, `brief-revise-recovery`, `review-recovery`, `red-unreviewed`, `red-test`, `review-run-evidence`, `review-trailer`, `follow-up-membership`, `issue-triage-defaults`, `label-guard`, `capability-interlock-countable`, `overseer-backlog-dynamics`, `overseer-dependency-free`, `code-audit-report-invalid-639`, `explorer-change-gate-714`, `project-digest`, `workflow-health`, `doc-path-guard-919`, `filter-job-if-2596` |
+| With telemetry, later | 2 | `collect-agent-telemetry`, and `cache-ttl-check` (its pin half goes at step 1) |
+| Stays in the adopter | 6 | `install-playwright-chromium` and `agent-quiet-output-2456` (both hook content), `starting-map-2456` (until step 3), `runner-artifact-guard`, `ship-review-scope`, the `workflow-step` helper (decision 9). A new test of the hook itself joins them. |
 
-The 14 split files, each with its halves:
+**Library tests move in step 3,** and where one tests a not-yet-moved lane, it imports from the npm package (decision 13).
 
-| File | Kanon test | `lane-check` rule | Telemetry later | Deleted | Adopter |
-|---|---|---|---|---|---|
-| `agent-lane-blocks` | the composite rules each block lives with (string inputs, `bash -e {0}`, `job-status` instead of `failure()`) | | | load and reload bodies run against real git | |
-| `classify-agent-result` | the classifier | each lane wires it | | | |
-| `agent-telemetry` | the action and the normaliser | every caller has `always()` and `continue-on-error` | | | |
-| `agent-quality-columns` | `agent-quality-prs.mjs` | | the column builder | | |
-| `agent-step-flags` | flags declared where the action reads them | per-arm fallback chains (standard lane table) | | | |
-| `prompt-cache-ttl-pin` | the block passes the pin through | per-arm pin values | | | |
-| `cache-ttl-check` | the block-level pin fixture | | the store join | | |
-| `agent-full-transcript-2651` | the block passes `show_full_output` | | | | which lanes opt in |
-| `lane-retry` | `agent-finish`'s `retry` output contract | | | | the job-level breadcrumbs (the adopter's protocol) |
-| `implement-turn-cap-2207` | | turn cap per lane | | | the wall-clock timeout |
-| `merge-reconcile-lane-2660` | | a direct-block lane calls the blocks in order | | | "installs nothing" |
-| `agent-lanes` | | the resolver (`lane-check`'s library) | its agreement with `qa-store`'s regex | | |
-| `reviewer-base-instructions` | | | | the block digests and the classifier pin (27 + 3 references) | the documents' base pin |
-| `helpers/spine.ts` | | block expansion (`readBlock`, `blockInputsFor`, `effectiveSteps`) | | | the per-lane caller helpers |
-
-**How the moved tests keep asserting against real steps.**
-- **In Kanon,** a test parses the real `actions/*/action.yml` in the same tree and runs the real scripts against fixtures, as `action.test.ts` does for `pr-title`. The smoke workflow (§4) runs the blocks for real through `$/` on every PR.
-- **In the adopter,** `lane-check` runs on its real workflows in CI, against block definitions of the exact version they call. The lane tests that stay assert the adopter's own steps and the `with:` it hands each block. Anything inside a block is Kanon's test, so the 15 staying tests that expand blocks through `helpers/spine.ts` are re-pointed to stop at the block boundary.
+**How the moved tests keep asserting against real steps.** They parse Kanon's real lane files and actions in Kanon's tree, and run the real scripts against fixtures. The smoke workflow runs the actions through `$/`. In the adopter, only the callers and the hook remain, and `lane-check` and the hook test cover them.
 
 ## 8. Identities and secrets
 
-**Decided (Owner):** fixed names.
+**What an adopter creates:**
+- **One App per role** it runs (`K-ADOPT-8`), listed in `docs/qa/agent-identities.md`.
+- **Two secrets per App:** `<ROLE>_APP_ID` and `<ROLE>_APP_PRIVATE_KEY`.
+- **The subscription token,** `CLAUDE_CODE_OAUTH_TOKEN`.
 
-**What an adopter creates to run the lanes:**
-- **One App per role** it runs, from the roles table (`K-ADOPT-8`): Lead, Implementer, Reviewer, Merger, Explorer, Overseer. Each is listed in `docs/qa/agent-identities.md` with its slug.
-- **Two secrets per App,** under fixed names: `<ROLE>_APP_ID` and `<ROLE>_APP_PRIVATE_KEY`, for example `REVIEWER_APP_ID`.
-- **`CLAUDE_CODE_OAUTH_TOKEN`:** the subscription token (`claude setup-token`). The second adopter chose it, with one lane run at a time (ADR 0009).
-- **No repository variables.** The lanes need none. The adopter's `QA_*` variables belong to the store, and move with it.
+**How they reach a lane.** Kanon's lane workflow declares exactly the secrets it uses, under those names, and the caller maps them explicitly, never with `secrets: inherit` (decision 7). The lanes need no repository variables.
 
-The blocks never name a secret. They receive the tokens as inputs, because a composite action can't read `secrets`. So the names live in the adopter's jobs, and a `lane-check` rule in v2 enforces them, together with the App slugs against the register.
+**The reference adopter** renames its `QA_<ROLE>_*` secrets by minting new keys, by step 2.
 
-**The reference adopter today:** its secrets use a project prefix and an older role name (`QA_<ROLE>_APP_*`, with the Implementer stored under the triage name). It renames them at step 2. Actions secrets can't be read back, so renaming means generating a new key per App, which is also a rotation (Owner decision 7).
-
-**Kolophon's install is the test.** It has no Apps yet. Its register reads "None installed", and it is private on a plan without rulesets. Step 3 succeeds only if its Owner can create the Apps and secrets from this list and `K-ADOPT-8` alone, and `lane-check` then passes.
+**Kolophon has no Apps yet.** Step 6 is the test: it must be possible from this list alone.
 
 ## 9. Issues
 
-None are migrated ahead of time. When a piece moves, its open issues in the reference adopter are re-filed on Kanon and written neutrally, and the original is closed with a link. GitHub can't transfer an issue between organisations.
+None are migrated ahead of time. A piece's open issues are re-filed on Kanon when it moves, written neutrally, and closed at the source with a link. GitHub can't transfer issues between organisations.
 
 ## Measurements
 
-Run in the reference adopter's checkout (`RA`) and in Kanon's. All commands were run with `AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null`.
+All commands were run with `AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null`, in the reference adopter's checkout (`RA`) or the GitHub docs source.
 
-**Block, spine and reviewer sizes** (145, 138, 177, 245, 474 and 2,329 lines):
-
-```
-wc -l $RA/.github/actions/*/action.yml $RA/.github/workflows/agent-lane.yml $RA/.github/workflows/agent-review.yml
-```
-
-**Which lanes use which form** (5 spine callers; 5 direct-block lanes: rebase, merge-reconcile, lead split, verify-acs, review; 5 raw classifier callers):
+**Sizes** (blocks 145, 138 and 177 lines; telemetry 245; spine 474; review 2,329):
 
 ```
-for f in $RA/.github/workflows/agent-*.yml; do echo "$f $(grep -c 'agent-lane.yml' $f) $(grep -c 'actions/agent-run' $f)"; done
-grep -n 'classify-agent-result' $RA/.github/workflows/*.yml
+wc -l $RA/.github/actions/*/action.yml $RA/.github/workflows/agent-*.yml
 ```
 
-**Literals per file** (the counts in §5): for each pattern, count matches in each of the blocks, the telemetry action and the spine.
+**Triggers, and top-level concurrency (9 of 10):**
 
 ```
-for p in pgvector 5433 db:init node-version 'npm ci' AGENT_QUIET '#[0-9]{3,4}'; do grep -oE "$p" FILE | wc -l; done
+grep -c '^concurrency:' $RA/.github/workflows/agent-*.yml
 ```
 
-**Machinery lines** (652 lines in 7 files): a Python walk that sums each step whose name starts "Load the lane's building blocks", "Load the blocks again", "Restore the telemetry action", "Record what the blocks hold", "Re-verify the blocks" or "Return the checked-out branch", including its leading comment block.
-
-**Script dependencies, sizes and importers.** For each script: its sizes, then its imports, then which other files import it.
+**Workspace scripts per lane** (14):
 
 ```
-wc -l SCRIPT
-grep -nE "^import" SCRIPT
-grep -rl "SCRIPT_BASENAME" --include="*.mjs" --include="*.ts" --include="*.yml" $RA/.github $RA/scripts $RA/tests
+grep -vE '^\s*#' LANE | grep -oE '(\.github/scripts|scripts)/[A-Za-z0-9_./-]+\.(mjs|sh)' | sort -u
 ```
 
-**Node version features:**
+**The library** (39 of 66 files, 19,846 lines): a Python walk of every relative `import` under the adopter's two script directories, taking the undirected component of the 14 lane scripts plus the block scripts. The same walk lists non-`node:` imports, and there are none.
+
+**Machinery** (652 lines): a Python walk summing each step named "Load the lane's building blocks", "Load the blocks again", "Restore the telemetry action", "Record what the blocks hold", "Re-verify the blocks" or "Return the checked-out branch", with its leading comment block.
+
+**Database literals:**
 
 ```
-grep -nE "import\.meta\.dirname|globSync|Object\.groupBy|toSorted|findLast|withResolvers" SCRIPTS
+grep -nE "$DB_NAME|5433" src/db/setup.sql scripts/db-setup.ts src/env.ts scripts/db-migrate.ts
 ```
 
-It prints nothing.
+Each hit is a default or a role name.
 
-**Tests in scope** (61 files):
-
-```
-grep -rlE "agent-lane\.yml|actions/agent-(setup|run|finish|telemetry)|agent-lanes\.mjs|helpers/spine|classify-agent-result|agent-quality-prs|starting-map|\.github/workflows/agent-" $RA/tests
-```
-
-That finds 59 files. These add 2 more:
+**Tests** (59 files, plus 2):
 
 ```
-grep -rlE "\.github/actions|install-playwright-chromium|claude-code-action" $RA/tests
+grep -rlE 'agent-lane\.yml|actions/agent-|agent-lanes\.mjs|helpers/spine|classify-agent-result|agent-quality-prs|starting-map|\.github/workflows/agent-' $RA/tests
+grep -rlE '\.github/actions|install-playwright-chromium|claude-code-action' $RA/tests
 ```
 
-Each file was then classified by reading its `describe` titles and its references.
+Each file was classified by its `describe` titles and its references.
 
 **Secrets:**
 
 ```
-grep -ohE "secrets\.[A-Za-z_-]+|vars\.[A-Z_]+" $RA/.github/workflows/agent-*.yml | sort | uniq -c
+grep -ohE 'secrets\.[A-Za-z_-]+' $RA/.github/workflows/agent-*.yml | sort | uniq -c
 ```
 
-**`$/` support:**
-- the documentation source, `github/docs`: `content/actions/reference/workflows-and-actions/workflow-syntax.md`, §`steps[*].uses`, and `metadata-syntax.md`, §`runs.steps[*].uses`;
-- `gh api repos/actions/runner/releases/tags/v2.336.0`, which lists "add self-repository action reference syntax";
-- the runner PR's description, for the Set up job resolution, `LoadAction`'s re-read from the action cache, and the feature flag.
+**Reusable workflows:**
+- `github/docs`, `reusing-workflow-configurations.md`: its limitations, the keywords a calling job may use, and the `github` context;
+- `contexts.md`: `job.workflow_sha`;
+- `workflow-syntax.md` and `metadata-syntax.md`: `$/`;
+- actions/runner v2.336.0's release notes and its `$/` pull request.
 
 ## Decisions for the Owner
 
-1. **Amend `K-ADOPT-11`: lanes ship as composite actions, and each adopter writes a thin caller job around them.** The "Lane → reusable workflow" row can't hold your Q5 decision, because a reusable workflow takes no steps or services from its caller. *Recommend: yes.* The release workflow keeps its row. The reviewer and lead lanes' own logic (thousands of lines of steps) then reaches Kolophon later, as further composite actions, one plan per lane. That keeps ADR 0009 §6's promise that the second adopter installs the real loop, rather than a copy of the reference adopter's callers.
-2. **Do P1 to P3 in the reference adopter before step 1,** including the §2 removal under `$/`. *Recommend: yes.* The one non-mechanical change is then reviewed and proven live where it already runs, and every move after it is a file move plus substitutions.
-3. **Self-pinning by `$/` rather than a release-time rewrite** (§4), with the rewrite as the fallback. *Recommend: yes.* It changes the mechanism you agreed in principle, not the outcome.
-4. **A fourth block, `agent-classify`** (P1). *Recommend: yes.* Six workflows run the classifier outside `agent-finish`, two of them with flags `agent-finish` doesn't pass. Without it, the classifier has no single remote home they can all call.
-5. **Issue references in moved comments** (107 in the moving actions and scripts, 23 in the resolver). GitHub would autolink each one to an unrelated Kanon issue. *Recommend:* the mechanical substitution `#N` → `RA-N`, with one line in each action's README saying `RA-N` is a reference-adopter issue. That keeps the reasoning and the provenance trail, and no longer links anywhere.
-6. **`lane-check` parses YAML with the runner's `yq`,** rather than a bundled parser. *Recommend: yes.* No dependency, no build step, and no vendored third-party code. A self-hosted runner without `yq` gets a named failure.
-7. **Secret names `<ROLE>_APP_ID` and `<ROLE>_APP_PRIVATE_KEY`, plus `CLAUDE_CODE_OAUTH_TOKEN`,** written into `K-AGENT-6`. The reference adopter renames its secrets at step 2, by minting a new key per App. *Recommend: yes.* Kolophon creates the fixed names from the start.
-8. **The starting map stays in the adopter** until it declares its spec prefixes in its spec files (`K-LAYOUT-2`). *Recommend: yes.* Moving it now would carry 16 of the adopter's domain areas into Kanon.
-9. **One test-only duplicate.** The adopter's `workflow-step` test helper (31 users, several of them deploy tests) is copied into Kanon's `tests/` for the moved tests. It is recorded as test scaffolding that isn't shipped, not a live copy under ADR 0009 §2. *Recommend: yes.* The alternative would be publishing a test-utility package for one helper.
+1. **Decided by the Owner, 2026-10-01:** Kanon ships each lane as a reusable workflow built from its blocks. Adopters write trigger-only callers and one project-setup hook at a fixed path. `K-ADOPT-11`'s "Lane → reusable workflow" row stands, and `K-LAYOUT-1` gains the hook's path as a split rule.
+2. **Agreed:** prepare in the adopter first. This revision adds P4.
+3. **Agreed:** self-pinning by `$/`, with a release-time rewrite as the fallback.
+4. **Re-checked: keep `agent-classify`.** Kanon's reviewer lane calls it. So do the store-coupled lanes, which stay in the adopter until the store moves, and need the classifier without the rest of `agent-finish`.
+5. **Agreed:** `#N` → `RA-N`.
+6. **Re-checked: `lane-check` still parses with `yq`.** Its input is now only the callers and the hook, which makes a bundled parser even harder to justify.
+7. **Re-checked:** the fixed names matter more now, because they are the `workflow_call` secret names Kanon declares. *Recommend:* explicit mapping in every caller, never `secrets: inherit`, which would hand all of an adopter's secrets to Kanon's code.
+8. **Agreed:** the starting map stays in the adopter until the spec prefixes are declared in the spec files. P4 now does exactly that, so it moves at step 3 with the library.
+9. **Re-checked: the test helper.** About 45 of its users move to Kanon. *Recommend:* Kanon holds it, and the adopter keeps a test-only copy for its deploy tests. It is recorded as unshipped scaffolding.
+10. **New: one hook with inputs, not one per lane.** *Recommend:* one. Per-lane hooks multiply the adopter's files, and the differences between lanes are already inputs.
+11. **New: where workflow-level concurrency lives.** *Recommend:* top-level `concurrency:` in Kanon's lane workflow, if Kanon's smoke test proves the runner honours it in a called workflow (two dispatches must queue). Otherwise the calling job's `concurrency:`, with `lane-check` holding its text to Kanon's published value.
+12. **New: the standard database.** It would be `pgvector/pgvector:pg17`, `kanon`/`kanon`/`kanon`, on port 5432. *Recommend:* yes. pgvector is a superset of plain Postgres, and port 5432 is Postgres's own.
+13. **New: deliver the library to adopter-side code as the npm package `@yedeya-labs/kanon`.** That means guards run in the adopter's `lint` (spec, citation and path guards), and tests of not-yet-moved lanes. *Recommend:* yes. It is `K-ADOPT-11`'s guard form, and lanes still read the library only through `kanon-path`.
+14. **New: pin `claude-code-action` exactly in `agent-run`,** with Kanon's Dependabot proposing bumps. *Recommend:* yes. Without it, the CLI-flag test in Kanon's CI doesn't describe what an adopter runs.
+15. **New: during the transition, the adopter's scanners read the blocks from a CI checkout of Kanon at the pinned tag,** instead of `lane-check` carrying rules that are deleted five steps later. *Recommend:* yes.
