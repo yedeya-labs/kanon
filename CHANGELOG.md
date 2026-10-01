@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/yedeya-labs/kanon/compare/v0.4.2...v0.4.3) (2026-09-30)
+
+
+### Documentation
+
+* **release:** confirm release PRs merge through the admin bypass with the queue on ([#11](https://github.com/yedeya-labs/kanon/issues/11)) ([27762cd](https://github.com/yedeya-labs/kanon/commit/27762cd275c1a878f199969e6723e68f5e4f9882))
+
 ## [0.4.2](https://github.com/yedeya-labs/kanon/compare/v0.4.1...v0.4.2) (2026-09-30)
 
 
