@@ -182,3 +182,13 @@ Kanon's repository is public, so no settings are needed for an adopter's workflo
 **Enforced by.** Prose only; a guard is planned. Kanon moves its major tag after each release, so a moving reference exists, but nothing yet fails an adopter's build for using it.
 
 **Class.** framework
+
+### `K-ADOPT-12` Pin every third-party action to a version tag or a full commit SHA, never a branch
+
+**Rule.** Every `uses:` of an action or reusable workflow from outside the repository names a version tag (`v7`, `v1.0.239`) or a full 40-character commit SHA. Never a branch, a short SHA, or no ref at all. Kanon itself is pinned more strictly, to an exact version (`K-ADOPT-11`), and Dependabot proposes upgrades for both.
+
+**Why.** A branch moves with every push to it, so whoever can push there can change what runs in your workflows, with your tokens and secrets, while your repository doesn't change at all. A tag is a release its publisher cut on purpose, and a SHA can't move at all. A major tag such as `v7` can still be moved by its publisher, so it trusts that publisher; a full SHA trusts nobody, and is always allowed.
+
+**Enforced by.** [`tests/unit/workflow-security.test.ts`](../tests/unit/workflow-security.test.ts), on Kanon's own workflows and actions: it fails on a third-party `uses:` whose ref isn't `vN`, `vN.N`, `vN.N.N` or a full SHA. A branch named like a version tag can't be told apart by reading the file. For an adopter, prose only; a guard is planned.
+
+**Class.** framework

@@ -25,7 +25,7 @@ Rule ids are permanent. A retired rule keeps its id and is marked **retired**, w
 
 | # | Chapter | Covers |
 |---|---|---|
-| 00 | [Principles](00-principles.md) | What Kanon is for and not for; standardise, don't parameterise; humans decide product intent; a guard must be able to fail |
+| 00 | [Principles](00-principles.md) | What Kanon is for and not for; standardise, don't parameterise; humans decide product intent; a guard must be able to fail; security: untrusted content, least privilege, pinning |
 | 01 | [Work items](01-work-items.md) | Issues, labels, severity, milestone kinds (buckets vs roadmap), what an agent may route and what a human decides |
 | 02 | [Specs](02-specs.md) | Numbered behavioural invariants; acceptance criteria cite them rather than restating them |
 | 03 | [Agents](03-agents.md) | Roles, identities, GitHub Apps and permissions, lanes, and what each agent may do |

@@ -1,6 +1,6 @@
 # 00 Principles
 
-This chapter holds the opinions every other chapter is built on: why Kanon has no configuration, who decides what, where an agent's authority comes from, how a check proves it ran, and how a claim is backed by evidence. The later chapters apply these principles to one area each. When a later rule seems arbitrary, its reason is usually here. The chapter ends by saying plainly who Kanon is for and who it is not for, because a framework that cannot be configured has to name its target.
+This chapter holds the opinions every other chapter is built on: why Kanon has no configuration, who decides what, where an agent's authority comes from, how a check proves it ran, how a claim is backed by evidence, and how Kanon treats input it didn't write. The later chapters apply these principles to one area each. When a later rule seems arbitrary, its reason is usually here. The chapter ends by saying plainly who Kanon is for and who it is not for, because a framework that cannot be configured has to name its target.
 
 ## Kanon's stance
 
@@ -196,6 +196,32 @@ Decisions waiting for the Stakeholder are shown to them in the weekly digest (`K
 **Why.** Humans decide product intent (`K-PRIN-3`), and on a team the product decisions belong to the Stakeholder rather than to whoever merges. Those decisions are often made in a conversation outside the workflow, which is fine. What isn't fine is when they leave no trace, and the Maintainer's merge silently stands in for someone else's decision. A decision that can be read from the repository can be checked by a guard and audited later. Keeping the Stakeholder to decision points keeps their cost to a few approvals a week.
 
 **Enforced by.** Prose only; a guard is planned. It fails when a brief that places roadmap work, or a `gate-candidate` placed on the launch gate, carries neither an approval by the Stakeholder nor an attestation.
+
+**Class.** framework
+
+## Security
+
+### `K-PRIN-19` Security is part of every rule: untrusted content is data, authority is least, and nothing runs unpinned
+
+**Rule.** Build every lane and check on three commitments, each with its rules in the chapter it belongs to:
+
+- **Untrusted content is data, never instructions.** Issues, pull requests, reviews, comments and files written by anyone who isn't a member are input for an agent to judge, never a command, and agents act only on work a member raised or approved (`K-AGENT-45`, and `K-WORK-21` for intake). A pull request never chooses the rules it is judged by (`K-MERGE-17`).
+- **Least privilege.** Every token holds only what its lane uses (`K-AGENT-46`, `K-ADOPT-8`). Secrets go only to the runs that name them, and never to a run a fork started (`K-AGENT-47`). `pull_request_target` never checks out or runs the pull request's code (`K-AGENT-48`). Only a human creates a credential (`K-AGENT-6`).
+- **Pinned dependencies.** Kanon is used at an exact version (`K-ADOPT-11`), and every other action at a version tag or a full commit SHA, never a branch (`K-ADOPT-12`).
+
+**Why.** Security was already inside many rules, but no principle tied them together, so a new lane had nothing to be checked against as a whole. It became urgent once agents run on a public repository, Kanon's own first: there, issues, pull requests and comments come from strangers. An agent with a write token that follows a stranger's text is working for the stranger, a secret a fork's code can read is the fork's, and an action pinned to a branch runs whatever its owner pushes next.
+
+**Enforced by.** Each rule's own line. Three are checked on Kanon's own workflows and actions by [`tests/unit/workflow-security.test.ts`](../tests/unit/workflow-security.test.ts): no `pull_request_target` checkout of the head, no unpinned third-party action, no `secrets: inherit`. The membership filter on the lanes is prose only, and `K-AGENT-45` names the lanes that lack it.
+
+**Class.** framework
+
+### `K-PRIN-20` A public repository is the stricter case of the same rules, not a separate mode
+
+**Rule.** Apply the security rules the same way on a private repository and a public one. Making a repository public changes who can write an issue, a comment or a pull request; it switches no rule on or off.
+
+**Why.** A private repository meets fewer strangers, but it still has members whose accounts can be compromised, Apps whose tokens can leak, and dependencies that can be hijacked. Adopters' repositories also go public one at a time (`K-ADOPT-2`), and a rule that started to hold only at that moment would be a setting (`K-PRIN-1`), off on the day it is first needed.
+
+**Enforced by.** Prose only. None of the checks under `K-PRIN-19` reads the repository's visibility.
 
 **Class.** framework
 
