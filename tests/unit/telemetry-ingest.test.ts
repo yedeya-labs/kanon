@@ -252,6 +252,13 @@ describe('the write and its signature', () => {
       + 'SignedHeaders=content-type;host;x-amz-date, Signature=5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7');
   });
 
+  it('signs the body: a different body gets a different signature', () => {
+    const at = (body: string) => sign({ method: 'POST', url: 'https://x.example/', body, region: 'eu-central-1', service: 'lambda',
+      credentials: { accessKeyId: 'A', secretAccessKey: 'S' }, now: new Date('2026-10-02T12:00:00Z') }).authorization;
+    expect(at('[1]')).not.toBe(at('[2]'));
+    expect(at('[1]')).toBe(at('[1]'));
+  });
+
   it('signs a session token in', () => {
     const h = sign({ method: 'POST', url: 'https://x.example/', region: 'eu-central-1', service: 'lambda',
       credentials: { accessKeyId: 'A', secretAccessKey: 'S', sessionToken: 'T' } });
