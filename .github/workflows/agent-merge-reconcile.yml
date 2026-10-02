@@ -112,7 +112,18 @@ jobs:
       run: ${{ steps.decide.outputs.run }}
       pr: ${{ steps.decide.outputs.pr }}
     steps:
+      # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
+      # this lane acts only when the event's actor is a member or a registered agent App.
+      # `scripts/lane-gate.mjs` says who the actor is for each event; a refusal leaves
+      # `member=false`, a notice and a step-summary line, and every later step and job skips.
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
       - name: Decide whether to reconcile
+        if: steps.gate.outputs.member == 'true'
         id: decide
         env:
           GH_TOKEN: ${{ github.token }}

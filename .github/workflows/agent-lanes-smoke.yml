@@ -12,7 +12,7 @@
 # smoke run has no App and must not spend anything. So each lane is called with events that
 # its own admission rules turn away: on pull_request, merge_group and push no lane admits
 # the event, and the implement-revise filter, which runs on everything but a label event,
-# skips before its first API call. The merge-reconcile filter admits only a merged pull
+# is refused by its membership gate (no lane acts on these events) before any API call. The merge-reconcile filter admits only a merged pull
 # request, and the implement lane's crash recovery runs only after its agent job failed. The
 # jobs that would mint and run are skipped. The model
 # call is proven by the reference adopter's live run after each upgrade.
@@ -105,6 +105,24 @@ jobs:
 
       # For the fixture adopter only. lane-check itself comes from `$/`.
       - uses: actions/checkout@v7
+
+      # THE MEMBERSHIP GATE'S ONE LIVE CALL (kanon#46). No lane above reaches its gate with a
+      # label event, so this runs the gate on one: a label applied by `octocat`, who is not
+      # a collaborator. It proves the permission lookup works with the workflow token and
+      # this workflow's `contents: read` (the endpoint needs only Metadata read, which
+      # every workflow token holds), and that a refusal is a clean `member=false`.
+      - uses: $/actions/kanon-path
+      - name: Check the membership gate refuses a non-member's label, with the workflow token
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' '{"action":"labeled","sender":{"login":"octocat"}}' > "$RUNNER_TEMP/gate-event.json"
+          : > "$RUNNER_TEMP/gate-output"
+          GITHUB_EVENT_NAME=issues GITHUB_EVENT_PATH="$RUNNER_TEMP/gate-event.json" \
+            GITHUB_OUTPUT="$RUNNER_TEMP/gate-output" GITHUB_STEP_SUMMARY="$RUNNER_TEMP/gate-summary" \
+            node "$KANON/scripts/lane-gate.mjs"
+          cat "$RUNNER_TEMP/gate-summary"
+          grep -qx 'member=false' "$RUNNER_TEMP/gate-output"
 
       # lane-check reads the repository it runs in, so the fixture adopter replaces this
       # checkout's `.github/` and `docs/` in the runner's workspace (never in the repository).

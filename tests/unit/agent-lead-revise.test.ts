@@ -603,9 +603,10 @@ describe('cost shape', () => {
     // and is gated on its `act`. The round record carries the SAME gate wrapped in
     // `always()`, so it still runs after an agent job that FAILED — a run that died is
     // the one that most needs its round recorded.
+    // The membership gate (kanon#46) comes first, and `lane-gate.test.ts` holds it there.
     const names = wf.jobs.filter.steps.map((s: { name?: string; uses?: string }) => s.name ?? s.uses);
-    expect(names[0]).toBe('Should this review be acted on?');
-    for (const st of wf.jobs.filter.steps.slice(1)) {
+    expect(names.slice(0, 3)).toEqual(['$/actions/kanon-path', 'Is the actor a member?', 'Should this review be acted on?']);
+    for (const st of wf.jobs.filter.steps.slice(3)) {
       expect(st.if).toContain("steps.filter.outputs.act == 'true'");
     }
     expect(names.some((n: string) => /token/i.test(n ?? ''))).toBe(false);
