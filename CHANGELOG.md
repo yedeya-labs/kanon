@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.1](https://github.com/yedeya-labs/kanon/compare/v0.8.0...v0.8.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **cli:** make the `kanon apps` pre-check write a secret, and add an `apps-check` workflow ([#59](https://github.com/yedeya-labs/kanon/issues/59)) ([2cad45d](https://github.com/yedeya-labs/kanon/commit/2cad45dc6f1984fc02af8e58e43765801a5fe224))
+* **library:** report a skipped cost read in the dispatch sweep (port of RA-2714) ([#60](https://github.com/yedeya-labs/kanon/issues/60)) ([8912e2b](https://github.com/yedeya-labs/kanon/commit/8912e2b1cb6f6c5440f58a12edd02f4fb0344373))
+
+
+### Documentation
+
+* **readme:** show the CI badge for pushes to main only ([#57](https://github.com/yedeya-labs/kanon/issues/57)) ([2e4328c](https://github.com/yedeya-labs/kanon/commit/2e4328ca0b5b80dd06141762c2aba8d9e7c1889b))
+
 ## [0.8.0](https://github.com/yedeya-labs/kanon/compare/v0.7.0...v0.8.0) (2026-10-02)
 
 
