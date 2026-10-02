@@ -180,7 +180,7 @@ export const carriedOut = (world) =>
 // criteria that do not fit on a line:
 //
 //     ### Issue B — Move the settlement status guard into settleOrderWith
-//     **Milestone:** Production Ready · **Labels:** `sev:critical` · **Closes RA-897**
+//     **Milestone:** Production Ready · **Labels:** `sev:critical` · **Closes #897**
 //     **Depends on:** Issue A (needs the decided from-sets)
 //
 //     …acceptance criteria, rationale, "not in this issue"…

@@ -231,6 +231,23 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => { extra(t, VERIFY); }, 'lists the role Explorer 0 times'));
   });
 
+  describe('the lead, lead-split and rebase lanes (step 5)', () => {
+    const LANES = ['agent-lead', 'agent-lead-split', 'agent-rebase'].map((f) => `.github/workflows/${f}.yml`);
+    const extra = (t: Tree, f: string) => t.write(f, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra', f.split('/').pop()!), 'utf8'));
+    const REBASE = LANES[2]!;
+    it('accepts all three callers, run as the Lead and the Implementer the register lists', () => {
+      const t = adopter();
+      for (const f of LANES) extra(t, f);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('7 lane caller(s) pass');
+    });
+    it('refuses a rebase caller that does not grant the filter job’s read of runs', () =>
+      red((t) => { extra(t, REBASE); t.edit(REBASE, (d) => { delete (d as Caller).permissions!.actions; }); }, 'needs actions: read'));
+    it('refuses a split caller that grants the gate’s label edit only read', () =>
+      red((t) => { extra(t, LANES[1]!); t.edit(LANES[1]!, (d) => { (d as Caller).permissions!.issues = 'read'; }); }, 'needs issues: write'));
+  });
+
   describe('the project-setup hook (§5)', () => {
     const HOOK = '.github/actions/project-setup/action.yml';
     it('refuses a missing hook', () => red((t) => t.rm(HOOK), 'the project-setup hook is missing'));

@@ -57,7 +57,7 @@ describe('the implementer transcript reaches the job log', () => {
     };
     expect(handed('agent-implement.yml', 'implement')).toBe('true');
     expect(handed('agent-implement-revise.yml', 'revise')).toBe('true');
-    for (const [file, job] of [['agent-triage.yml', 'triage-fix'], ['agent-lead-revise.yml', 'revise']]) {
+    for (const [file, job] of [['agent-triage.yml', 'triage-fix'], ['agent-lead-revise.yml', 'revise'], ['agent-lead.yml', 'brief']]) {
       expect(handed(file!, job!), `${file} prints a transcript it never opted into`).toBe('false');
     }
   });

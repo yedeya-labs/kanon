@@ -13,15 +13,18 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Merge reconcile | `agent-merge-reconcile.yml` | Reviewer | `pull_request: [closed]`; `pull_request_review: [submitted]`; `workflow_dispatch` with `pr_number` |
 | Review | `agent-review.yml` | Reviewer | `workflow_run` of your `CI` workflow, `types: [completed]`; `pull_request_target: [opened, labeled]`; `workflow_dispatch` with `pr_number` |
 | Verify acceptance criteria | `agent-verify-acs.yml` | Explorer | `workflow_dispatch` with `project` and `ref`; `issues: [labeled]` |
+| Lead, brief | `agent-lead.yml` | Lead | `workflow_dispatch` with `mandate` and `context` |
+| Lead, split | `agent-lead-split.yml` | Lead | `issues: [labeled]`; `workflow_dispatch` with `issue` |
+| Rebase (resolve a conflict) | `agent-rebase.yml` | Implementer | `workflow_run` of your `CI` workflow, `types: [completed]`, `branches` your default branch; `schedule` (a daily floor); `workflow_dispatch` with `pr_number` |
 
-Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile calls the blocks itself and installs nothing, so it never calls your hook, and review and verify-acs call the blocks around steps of their own. The other lanes move in later steps of plan 0001.
+Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile calls the blocks itself and installs nothing, so it never calls your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own.
 
 **The review lane** has three things the others don't:
 - **Its caller sets `run-name`,** ending with `${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}`. A called workflow's `run-name` is ignored, and the review-run evidence finds a head's reviews by the last token of the run's title. `lane-check` holds the caller to it.
 - **It reads your CI from `.github/workflows/ci.yml`.** A review label added while CI is still running defers to CI's completion, and the lane asks Actions about the runs of that file for the head. Your caller's `workflow_run` names that workflow.
 - **It never reviews under the pull request's own instructions** (`K-MERGE-17`). Before any of the PR's code runs, it restores every input on the rule's list from your default branch: `AGENTS.md`, `CLAUDE.md`, `.claude/`, every markdown file directly inside `docs/qa/`, your project-setup hook, and every markdown document those link to or import. The PR's own copies are set aside under `.qa-pr/`, so the Reviewer still reads them as part of the diff, and a push that touches one re-opens an approved review. The specs under `docs/qa/specs/` come from the PR. Your own tests that read one of those files should read the `.qa-pr/` copy when there is one, or they will fail in the Reviewer's tree on a PR that changes it.
 
-**Grant a lane's job-level permissions too.** The implement lane's crash recovery runs on the workflow token and writes issues, reads pull requests and starts the split lane, so its caller grants `contents: read`, `issues: write`, `pull-requests: read` and `actions: write`.
+**Grant a lane's job-level permissions too.** The implement lane's crash recovery runs on the workflow token and writes issues, reads pull requests and starts the split lane, so its caller grants `contents: read`, `issues: write`, `pull-requests: read` and `actions: write`. The rebase lane's filter reads pull requests and its earlier runs' jobs on the workflow token, so its caller grants `contents: read`, `actions: read` and `pull-requests: read`; the split lane's gate edits the issue's labels, so its caller grants `issues: write` and `pull-requests: read`.
 
 ## Only members start a lane
 
@@ -35,11 +38,14 @@ Every lane starts real work only when the actor of its triggering event is a mem
 | A dispatch | whoever ran it, re-runs included | the same; only write access can dispatch, so this refuses only an unregistered App |
 | A pull request opened (`pull_request_target`) | whoever opened it | the same |
 | A finished workflow (`workflow_run`) | whoever pushed the commit it ran on | the same; the review lane refuses a fork's head separately |
+| A schedule | the user GitHub runs it as: whoever last changed the cron, or the default branch | the same, so a schedule set by someone who has since lost access is refused |
 | Anything else | none | refused: no lane acts on it |
 
 A login ending in `[bot]` is judged by the App register alone, read from your default branch, never from the pull request. A refused event leaves the lane's later steps and jobs skipped, with a notice and a step-summary line naming who was refused and why; it does not turn the run red. A failed API call or a malformed register does.
 
-**Every lane carries the gate, including the lanes that move later** (lead, lead-split and rebase). [`tests/unit/lane-gate.test.ts`](../tests/unit/lane-gate.test.ts) fails for a lane in Kanon without it, or with a step or job that can run past a refusal, and for a lane whose triggers it doesn't list.
+**Every lane carries the gate.** [`tests/unit/lane-gate.test.ts`](../tests/unit/lane-gate.test.ts) fails for a lane in Kanon without it, or with a step or job that can run past a refusal, and for a lane whose triggers it doesn't list.
+
+**A dispatch made with the workflow token is refused.** Its actor is `github-actions[bot]`, which is not in your App register. The implement lane's crash recovery starts the split lane that way today, so that path is refused, visibly, and the issue keeps `qa:needs-split` with no split PR. If you run the Lead's reconciler, it re-delivers the label on the Lead's App token once the stall window passes; otherwise re-apply the label yourself.
 
 ## The caller
 

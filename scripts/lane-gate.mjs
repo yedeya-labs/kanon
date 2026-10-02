@@ -80,6 +80,7 @@ const MEMBER_PERMISSIONS = ['admin', 'maintain', 'push', 'triage'];
  *   review?: { user?: User, author_association?: string },
  *   pull_request?: { merged_by?: User },
  *   workflow_run?: { triggering_actor?: User, actor?: User },
+ *   schedule?: string,
  * }} GitHubEvent
  */
 

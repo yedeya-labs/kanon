@@ -17,9 +17,13 @@ import { type WorkflowStep } from './helpers/workflow-step.js';
  * retry breadcrumbs, and the rule that nothing in them names a project.
  */
 const WF = '.github/workflows';
-const LANES = ['agent-triage.yml', 'agent-implement.yml', 'agent-implement-revise.yml', 'agent-lead-revise.yml', 'agent-merge-reconcile.yml'] as const;
-/** The lanes that hand their body to the spine; merge-reconcile calls the blocks itself. */
-const SPINE_LANES = LANES.filter((f) => f !== 'agent-merge-reconcile.yml');
+const LANES = [
+  'agent-triage.yml', 'agent-implement.yml', 'agent-implement-revise.yml', 'agent-lead-revise.yml', 'agent-merge-reconcile.yml',
+  'agent-lead.yml', 'agent-lead-split.yml', 'agent-rebase.yml',
+] as const;
+/** The lanes that call the blocks themselves; the rest hand their body to the spine. */
+const DIRECT_LANES: readonly string[] = ['agent-merge-reconcile.yml', 'agent-lead-split.yml', 'agent-rebase.yml'];
+const SPINE_LANES = LANES.filter((f) => !DIRECT_LANES.includes(f));
 type Job = {
   uses?: string;
   with?: Record<string, unknown>;
@@ -47,6 +51,9 @@ const ROLE: Record<(typeof LANES)[number], string> = {
   'agent-implement-revise.yml': 'IMPLEMENTER',
   'agent-lead-revise.yml': 'LEAD',
   'agent-merge-reconcile.yml': 'REVIEWER',
+  'agent-lead.yml': 'LEAD',
+  'agent-lead-split.yml': 'LEAD',
+  'agent-rebase.yml': 'IMPLEMENTER',
 };
 
 describe('plan 0001 §3: each lane is a reusable workflow, called with its inputs and its secrets', () => {
@@ -103,8 +110,18 @@ describe('plan 0001 decision 11: each lane keeps its concurrency group at the to
   // and the group stays with the lane that knows what it serialises. A caller must not
   // repeat it: the same group on both levels would have the caller wait on itself, which is
   // why `lane-check` refuses a caller with any `concurrency`.
-  it.each(LANES)('%s', (file) => {
+  // The split lane's group is on its JOB, as it was in the adopter (RA-1781's review): every
+  // label event on the issue reaches the workflow, and at workflow level each would join the
+  // group and could replace a pending real run.
+  const JOB_GROUP: Record<string, string> = { 'agent-lead-split.yml': 'split' };
+  it.each(LANES.filter((f) => !(f in JOB_GROUP)))('%s', (file) => {
     const c = lane(file).concurrency;
+    expect(c?.group).toBeTruthy();
+    expect(c?.['cancel-in-progress']).toBe(false);
+  });
+  it.each(Object.entries(JOB_GROUP))('%s, on its %s job', (file, job) => {
+    expect(lane(file).concurrency).toBeUndefined();
+    const c = (lane(file).jobs[job] as { concurrency?: { group: string; 'cancel-in-progress': boolean } }).concurrency;
     expect(c?.group).toBeTruthy();
     expect(c?.['cancel-in-progress']).toBe(false);
   });
@@ -128,7 +145,7 @@ describe('every arm passes the flags its run is measured and bounded by', () => 
 
   it('finds one arm per lane', () => {
     expect(arms.map((a) => a.file)).toEqual([...LANES]);
-    expect(arms.map((a) => a.agent)).toEqual(['triage-fix', 'implementer', 'implementer-revise', 'lead-revise', 'merge-reconcile']);
+    expect(arms.map((a) => a.agent)).toEqual(['triage-fix', 'implementer', 'implementer-revise', 'lead-revise', 'merge-reconcile', 'lead', 'lead-split', 'rebase-lane']);
   });
 
   it.each(['--model', '--effort', '--max-turns', '--max-budget-usd', '--allowedTools'])('every arm passes %s', (name) => {
@@ -162,7 +179,9 @@ describe('every arm passes the flags its run is measured and bounded by', () => 
       for (const [, job] of spineCalls(file)) expect(job.with?.['timeout-minutes'], file).toEqual(expect.any(Number));
     }
     // A lane on its own jobs bounds each of them itself.
-    for (const job of Object.values(lane('agent-merge-reconcile.yml').jobs)) expect((job as { 'timeout-minutes'?: number })['timeout-minutes']).toEqual(expect.any(Number));
+    for (const file of DIRECT_LANES) {
+      for (const job of Object.values(lane(file).jobs)) expect((job as { 'timeout-minutes'?: number })['timeout-minutes'], file).toEqual(expect.any(Number));
+    }
   });
 });
 
@@ -219,6 +238,19 @@ describe('every PR lane leaves the breadcrumbs (RA-2519)', () => {
       }
       expect(source?.run ?? '', `${file}: steps.${m![1]} must run classify-agent-result.mjs`).toMatch(/classify-agent-result\.mjs/);
       expect(steps.indexOf(crumb!)).toBeGreaterThan(steps.indexOf(ran!));
+    }
+  });
+
+  it('the rebase lane, which calls the blocks itself, leaves them after its finish block', () => {
+    // Its matrix job is the one `scripts/rebase-lane.mjs` reads them from, per PR.
+    type Step = WorkflowStep & { id?: string; name?: string; if?: string };
+    const steps = lane('agent-rebase.yml').jobs.resolve!.steps as Step[];
+    const finish = steps.findIndex((s) => laneBlockOf(s) === 'agent-finish');
+    expect(steps[finish]?.id).toBe('finish');
+    for (const [cls, name] of Object.entries(RETRY_STEPS)) {
+      const at = steps.findIndex((s) => s.name === name);
+      expect(at, `the rebase lane lacks "${name}"`).toBeGreaterThan(finish);
+      expect(steps[at]!.if).toBe(`failure() && steps.finish.outputs.retry == '${cls}'`);
     }
   });
 
