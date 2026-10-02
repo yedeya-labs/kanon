@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/yedeya-labs/kanon/compare/v0.9.1...v0.10.0) (2026-10-02)
+
+
+### Features
+
+* **lanes:** move the review and verify-acs lanes into Kanon, and restore K-MERGE-17's list from the default branch ([#67](https://github.com/yedeya-labs/kanon/issues/67)) ([18c6bcd](https://github.com/yedeya-labs/kanon/commit/18c6bcdd94a42024b58acd3ca77f6ca5d6b0397f))
+
 ## [0.9.1](https://github.com/yedeya-labs/kanon/compare/v0.9.0...v0.9.1) (2026-10-02)
 
 
