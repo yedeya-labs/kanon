@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/yedeya-labs/kanon/compare/v0.6.1...v0.7.0) (2026-10-02)
+
+
+### Features
+
+* **cli:** add `kanon apps`, which creates an adopter's agent Apps from manifests ([#45](https://github.com/yedeya-labs/kanon/issues/45)) ([b4d6560](https://github.com/yedeya-labs/kanon/commit/b4d65601f32a4a9de0aa9371d8249b1e1d7ccebb))
+* delegate sign-off for an adopter's own agents, and make security a principle ([#44](https://github.com/yedeya-labs/kanon/issues/44)) ([a0b6cd3](https://github.com/yedeya-labs/kanon/commit/a0b6cd3f9477380cf9fa6c152de89f8ba3858117))
+
 ## [0.6.1](https://github.com/yedeya-labs/kanon/compare/v0.6.0...v0.6.1) (2026-10-02)
 
 
