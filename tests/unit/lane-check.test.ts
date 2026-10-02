@@ -66,6 +66,15 @@ type Caller = { on?: unknown; concurrency?: unknown; env?: unknown; permissions?
 const job = (doc: Record<string, unknown>) => Object.values((doc as Caller).jobs)[0]!;
 
 describe.skipIf(!hasYq)('lane-check', () => {
+  it('passes Kanon itself, which calls its own review lane (ADR 0011, plan 0001 step 4b)', () => {
+    // In this tree, not a copy: Kanon is its own adopter. CI also runs the released action on
+    // it; this run reads the lanes as this PR leaves them, so a lane change that would break
+    // Kanon's own caller is red here before it is released.
+    const r = spawnSync('bash', [SCRIPT], { cwd: ROOT, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '' } });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain('1 lane caller(s) pass');
+  });
+
   it('passes the fixture adopter whole, and counts its four callers', () => {
     const r = check(adopter());
     expect(r.status, r.out).toBe(0);

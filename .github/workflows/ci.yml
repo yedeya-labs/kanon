@@ -6,6 +6,12 @@
 # trigger, a required check never reports on the queue's branch and queued PRs wait
 # until they time out.
 #
+# It also runs `lane-check` on Kanon itself (plan 0001 step 4b), now that Kanon calls its own
+# review lane (review.yml). Like the DCO and PR-title checks, it runs Kanon's LAST release,
+# never `$/` (ADR 0011, #47): this is a required check, so a PR must not bring the check that
+# passes it. Released lane-check also reads the lanes at that release, which is the version
+# the caller pins, and fails unless every Kanon reference in .github/ names that one version.
+#
 # Read-only on purpose. This workflow needs nothing but the code, so it gets nothing else.
 name: CI
 
@@ -29,6 +35,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      - uses: yedeya-labs/kanon/actions/lane-check@v0.10.0
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc

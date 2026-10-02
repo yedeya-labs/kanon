@@ -77,6 +77,7 @@ The agent-lane blocks moved first ([plan 0001](docs/plans/0001-move-the-agent-la
 
 - **Complete:** the [rulebook](rulebook/), about 200 rules, each with its reason.
 - **Released:** the checks and the release workflow above.
+- **Running on Kanon itself:** the Reviewer reviews Kanon's own pull requests, through the review lane at Kanon's last release, never the PR's own copy ([ADR 0011](docs/decisions/0011-kanon-runs-its-own-lanes.md)). It reviews members' PRs labelled `review:please`, and the Owner merges.
 - **Being extracted:** the agent lanes (Lead, Implementer, Reviewer, Merger). They are *moved* from the reference adopter unchanged, not rewritten ([ADR 0009](docs/decisions/0009-move-dont-rewrite.md)), so the loop you adopt is the one already running in production.
 
 See the [roadmap](ROADMAP.md) for what comes next.

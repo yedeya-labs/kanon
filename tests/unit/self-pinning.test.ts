@@ -24,12 +24,19 @@ const files = [
 // PR can't weaken the check that passes it: ADR 0011's bootstrap, applied to a check's code.
 // Their version is whatever Dependabot last proposed, so it is compared as `vX.Y.Z`, and only
 // an exact version matches. The PR's own copies run as a test, in judging-actions-smoke.yml.
+//
+// The last two are Kanon running its own lanes (ADR 0011, plan 0001 step 4b), for the same
+// reason. review.yml is the caller of the review lane: through `$/`, a PR's own lane code
+// would review that same PR. CI's lane-check judges that caller, and is a required check, so
+// it runs the release too; it then reads the lanes at the version the caller pins.
 const EXEMPT = new Set([
   '.github/workflows/agent-lane.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-review.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-verify-acs.yml: ./.github/actions/project-setup',
   '.github/workflows/dco.yml: yedeya-labs/kanon/actions/dco@vX.Y.Z',
   '.github/workflows/pr-title.yml: yedeya-labs/kanon/actions/pr-title@vX.Y.Z',
+  '.github/workflows/review.yml: yedeya-labs/kanon/.github/workflows/agent-review.yml@vX.Y.Z',
+  '.github/workflows/ci.yml: yedeya-labs/kanon/actions/lane-check@vX.Y.Z',
 ]);
 /** An exact release, written as the form, so the exemption survives each Dependabot bump. */
 const form = (entry: string): string => entry.replace(/^(.*: yedeya-labs\/kanon\/[^@]+)@v\d+\.\d+\.\d+$/, '$1@vX.Y.Z');

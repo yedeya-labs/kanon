@@ -1,13 +1,14 @@
 # Dependabot for Kanon's own actions (plan 0001, decision 14).
 #
 # `/` covers .github/workflows. Each composite action under actions/ is its own directory,
-# so it is listed by glob. That includes the exact pin of claude-code-action in
+# so it is listed by glob, and so is Kanon's own project-setup hook under .github/actions/. That includes the exact pin of claude-code-action in
 # actions/agent-run: the pin fixes the CLI per Kanon release, and this is what proposes
 # each bump, as an ordinary Kanon PR that runs the smoke workflow and the tests.
 #
 # Kanon itself is a dependency here too (#47): the DCO and PR-title checks that judge a PR
 # run Kanon's last release, `yedeya-labs/kanon/actions/…@vX.Y.Z`, and this entry proposes
-# each new release to them, as K-ADOPT-11 has it for any adopter: Kanon's own references in
+# each new release to them and to the review lane's caller (review.yml) and CI's lane-check
+# (ADR 0011, plan 0001 step 4b), as K-ADOPT-11 has it for any adopter: Kanon's own references in
 # a group of their own, and never held back by a cooldown. Kanon is first-party, so a
 # cooldown would only delay the release that judges the next PR. No entry sets a cooldown
 # today; one added later must exclude `yedeya-labs/kanon*`, which
@@ -18,6 +19,7 @@ updates:
     directories:
       - /
       - /actions/*
+      - /.github/actions/*
     schedule:
       interval: weekly
     commit-message:
