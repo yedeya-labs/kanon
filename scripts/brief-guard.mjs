@@ -482,6 +482,20 @@ export const acBullets = (body) => {
   return out;
 };
 
+/**
+ * A measurement item's bullets (`K-PROJ-16`, `K-LAYOUT-12`): the top-level bullets that
+ * open with `**Measures:**`. An item whose deliverable is a number carries these instead
+ * of acceptance criteria, because a number is not behaviour and has no spec clause.
+ *
+ * @returns {{line: string, wellFormed: boolean}[]} each one, and whether it names a
+ *   quantity and, after a dash, the command that measures it in backticks.
+ */
+export const measureBullets = (body) =>
+  (body ?? '')
+    .split('\n')
+    .filter((l) => /^\s{0,3}[-*+]\s+\*\*Measures:\*\*/.test(l))
+    .map((line) => ({ line, wellFormed: /^\s{0,3}[-*+]\s+\*\*Measures:\*\*\s+\S.*?\s[—–-]+\s+`[^`]+`/.test(line) }));
+
 // ── Consistency checks a re-scope can break (RA-2147, RA-2153, RA-1748) ─────────────
 //
 // All three are pure and exported so each can be tested in isolation, and all three run
@@ -832,17 +846,31 @@ export function checkBrief(path, markdown) {
     // agreement: a deliverable AC ("add a CSV export") was allowed to be plain prose,
     // and that is exactly the criterion nothing can ever verify. It gets a `[seed]`
     // clause too, which costs one allocator run and makes it checkable.
+    //
+    // A MEASUREMENT ITEM IS THE ONE EXCEPTION (`K-PROJ-16`). Its deliverable is a number and
+    // the command that produced it, so it carries `**Measures:**` bullets instead of
+    // criteria. It is accepted when it has no criteria region and at least one such
+    // bullet, each naming its command; an item with neither ids nor measurements is refused.
     if (!isPreStandard(path)) {
       const bullets = acBullets(p.body);
-      if (bullets === null) {
+      const measures = bullets === null ? measureBullets(p.body) : [];
+      for (const m of measures.filter((x) => !x.wellFormed)) {
         findings.push({
           at: at(0),
           problem:
-            `${label} names no **Acceptance criteria** — the implementer builds to them and ` +
+            `${label} has a measurement line with no command: \`${m.line.trim().slice(0, 60)}\`. ` +
+            'Write it as `- **Measures:** <quantity> — `<command>``, so the number can be re-derived (`K-PROJ-16`)',
+        });
+      }
+      if (bullets === null && measures.length === 0) {
+        findings.push({
+          at: at(0),
+          problem:
+            `${label} names no **Acceptance criteria** and no **Measures:** lines — the implementer builds to them and ` +
             '`verify-acs.mjs` closes the project on them, so an issue without any is filed ' +
             'with nothing to satisfy',
         });
-      } else if (!bullets.length) {
+      } else if (bullets !== null && !bullets.length) {
         findings.push({
           at: at(0),
           problem: `${label} has an **Acceptance criteria** heading with no criteria under it`,

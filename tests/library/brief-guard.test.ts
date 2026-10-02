@@ -13,6 +13,7 @@ import {
   REQUIRED_SECTIONS,
   ROUTING_MILESTONES,
   acBullets,
+  measureBullets,
   briefCorpus,
   criteriaOrdinalGap,
   danglingCriterionRefs,
@@ -491,6 +492,32 @@ describe('an acceptance criterion is a spec id, never restated prose (RA-1742)',
     expect(problems(none).join('\n')).toContain('names no **Acceptance criteria**');
   });
 
+  // K-PROJ-16: a measurement item's deliverable is a number and its command, not a spec
+  // clause, so `**Measures:**` bullets stand in for the criteria.
+  const withMeasures = (lines: string) =>
+    withSection(
+      'Decomposition',
+      SECTIONS[2][1].replace('Acceptance criteria:\n\n- `[AREA-2]` — the criterion this issue takes on.', lines),
+    );
+
+  it('accepts a measurement item in place of acceptance criteria (K-PROJ-16)', () => {
+    expect(problems(withMeasures('- **Measures:** the monthly cost at idle — `npm run cost:idle`'))).toEqual([]);
+    expect(measureBullets('- **Measures:** p95 latency — `k6 run load.js`\n- other')).toEqual([
+      { line: '- **Measures:** p95 latency — `k6 run load.js`', wellFormed: true },
+    ]);
+  });
+
+  it('refuses a measurement line that names no command', () => {
+    const found = problems(withMeasures('- **Measures:** the monthly cost at idle')).join('\n');
+    expect(found).toContain('has a measurement line with no command');
+    expect(found).not.toContain('names no **Acceptance criteria**');
+  });
+
+  it('still refuses an item with neither criteria nor measurements', () => {
+    const found = problems(withMeasures('- **Measured** somewhere, somehow — `cmd`')).join('\n');
+    expect(found).toContain('names no **Acceptance criteria** and no **Measures:** lines');
+  });
+
   it('shares one definition of the form with `verify-acs.mjs`', () => {
     // What lint demands and what phase 5 counts as a commitment must be the same shape:
     // a guard accepting a form `verify-acs` reads as nothing produces a project
@@ -850,3 +877,11 @@ describe('RA-1748 — a decisions section that parses to zero items is surfaced'
   });
 });
 
+describe("Kanon's own brief template passes the brief guard (#55)", () => {
+  // The template says the guard runs against it (`K-PRIN-11`). This is that run, so a
+  // change to either side that breaks the other fails here, not in an adopter's first brief.
+  it('has no findings', () => {
+    const template = readFileSync(join(ROOT, 'rulebook/templates/brief.md'), 'utf8');
+    expect(checkBrief('docs/projects/_template.md', template)).toEqual([]);
+  });
+});
