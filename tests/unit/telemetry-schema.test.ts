@@ -198,6 +198,11 @@ describe('every fixture\'s version-2 row validates (S1, M1)', () => {
     expect(validate(v2)).toEqual({ ok: true });
   });
 
+  it('derives the role from the lane', () => {
+    expect(both('tests/fixtures/agent-blocks/finished.json', { TELEMETRY_LANE: 'implement' }).v2).toMatchObject({ lane: 'implement', role: 'implementer' });
+    expect(both('tests/fixtures/agent-blocks/finished.json', { TELEMETRY_LANE: 'lead-split' }).v2).toMatchObject({ lane: 'lead-split', role: 'lead' });
+  });
+
   it('a smoke row validates with its tag, and the tag defaults to run', () => {
     expect(both('tests/fixtures/agent-blocks/finished.json', { TELEMETRY_TAG: 'smoke' }).v2?.tag).toBe('smoke');
     expect(finished().tag).toBe('run');
@@ -240,6 +245,17 @@ describe('the mutations plan 0002 §8 lists each fail validate', () => {
     const item = { schema_version: 1, row_kind: 'work_item', tag: 'run', recorded_at: '2026-10-02T10:00:00Z', pr_number: 7, closed_at: '2026-10-01T09:00:00Z', fate: 'merged' };
     expect(validate(item)).toEqual({ ok: true });
     fails({ ...item, total_cost_usd: 1.2 }, 'total_cost_usd');
+  });
+  it('a version the kind does not have', () => {
+    fails({ ...finished(), schema_version: 1 }, 'schema_version');
+    fails({ ...finished(), schema_version: 3 }, 'schema_version');
+    const item = { schema_version: 2, row_kind: 'work_item', tag: 'run', recorded_at: '2026-10-02T10:00:00Z', pr_number: 7, closed_at: '2026-10-01T09:00:00Z', fate: 'merged' };
+    fails(item, 'schema_version');
+  });
+  it('a time that is not ISO-8601 UTC', () => {
+    fails({ ...finished(), recorded_at: '2026-10-02 10:00:00' }, 'recorded_at');
+    fails({ ...finished(), recorded_at: '2026-10-02T10:00:00+02:00' }, 'recorded_at');
+    fails({ ...finished(), recorded_at: '2026-13-45T10:00:00Z' }, 'recorded_at');
   });
   it('a field the store sets', () => fails({ ...finished(), received_at: '2026-10-02T10:00:00Z' }, 'received_at'));
   it('a value of the wrong type', () => fails({ ...finished(), num_turns: '20' }, 'num_turns'));
@@ -290,6 +306,7 @@ describe('fault attribution (plan 0002 §2.6)', () => {
     expect(failedStage(parseStageOutcomes('token=skipped checkout=skipped hook=skipped setup=skipped agent=skipped finish=skipped'), 'not-reached')).toBe('token');
     expect(failedStage(parseStageOutcomes('token=success checkout=success hook=success setup=success agent=success finish=skipped'), 'failed')).toBe('agent');
     expect(failedStage(parseStageOutcomes('token=success checkout=success hook=success setup=success agent=success finish=failure'), 'failed')).toBe('finish');
+    expect(failedStage(parseStageOutcomes('token=failure checkout=skipped hook=skipped setup=skipped agent=failure'), 'failed')).toBe('token');
     expect(failedStage({}, 'failed')).toBeUndefined();
     expect(STAGES).toEqual(['token', 'checkout', 'hook', 'setup', 'agent', 'finish']);
   });
