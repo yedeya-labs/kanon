@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -426,8 +427,70 @@ describe('where the rows go', () => {
     }
   });
 
+  it('the spine hands the finish block every stage, both Kanon codes, and its start and timeout', () => {
+    const spine = finishCalls.find((c) => c.f === 'agent-lane.yml')!.with;
+    for (const stage of ['token', 'checkout', 'hook', 'setup', 'agent']) expect(spine, stage).toHaveProperty(`${stage}-outcome`);
+    expect(String(spine['kanon-error'])).toContain('steps.hook.outputs.kanon-error');
+    expect(String(spine['kanon-error'])).toContain('steps.setup.outputs.kanon-error');
+    expect(spine['job-started-at']).toBe('${{ steps.job.outputs.started-at }}');
+    expect(spine['timeout-minutes']).toBe('${{ inputs.timeout-minutes }}');
+    expect(spine.lane).toBe('${{ inputs.lane }}');
+  });
+
+  it('the finish block hands all of it to the telemetry action', () => {
+    const finish = parse(readFileSync('actions/agent-finish/action.yml', 'utf8')) as { runs: { steps: Step[] } };
+    const t = finish.runs.steps.find((s) => s.uses === '$/actions/agent-telemetry')!.with!;
+    for (const stage of STAGES) expect(String(t.stage_outcomes), stage).toMatch(new RegExp(`\\b${stage}=\\$\\{\\{ [^}]*outcome`));
+    expect(String(t.kanon_error)).toContain('inputs.kanon-error');
+    expect(String(t.kanon_error)).toContain('steps.quality.outputs.kanon-error');
+    expect(t).toMatchObject({ lane: '${{ inputs.lane }}', tag: '${{ inputs.tag }}', job_status: '${{ inputs.job-status }}' });
+  });
+
+  it('every hook-missing error writes its code', () => {
+    const files = workflows.map(({ f }) => join('.github/workflows', f));
+    let errors = 0;
+    for (const path of files) {
+      const src = readFileSync(path, 'utf8');
+      const n = (src.match(/title=project-setup hook missing::/g) ?? []).length;
+      errors += n;
+      expect((src.match(/echo "kanon-error=hook_missing" >> "\$GITHUB_OUTPUT"/g) ?? []).length, path).toBe(n);
+    }
+    expect(errors).toBe(5);
+  });
+
   it('the blocks smoke marks its row smoke', () => {
     const smoke = finishCalls.find((c) => c.f === 'agent-blocks-smoke.yml');
     expect(smoke?.with.tag).toBe('smoke');
+  });
+});
+
+describe('the script writes the version-2 row only when it validates', () => {
+  const runScript = (env: Record<string, string>) => {
+    const out = mkdtempSync(join(tmpdir(), 'telemetry-cli-'));
+    const v1 = join(out, 'v1.json');
+    const v2 = join(out, 'v2.json');
+    const stdout = execFileSync('node', [
+      'actions/agent-telemetry/agent-telemetry.mjs', '--agent', 'reviewer',
+      '--execution-file', 'tests/fixtures/agent-blocks/finished.json', '--out', v1, '--out-v2', v2,
+    ], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...BASE_ENV, ...env } });
+    return { stdout, v1: existsSync(v1), v2: existsSync(v2) ? JSON.parse(readFileSync(v2, 'utf8')) as Row : null };
+  };
+
+  it('a valid row is written', () => {
+    const r = runScript({});
+    expect(r.v1).toBe(true);
+    expect(r.v2).toMatchObject({ schema_version: 2, lane: 'review', kanon_version: '0.12.0' });
+  });
+
+  it('an invalid row is not written, and the warning names the field, not its value', () => {
+    const r = runScript({ TELEMETRY_KANON_ERROR: 'quoted src/app.ts' });
+    expect(r.v1).toBe(true);
+    expect(r.v2).toBeNull();
+    expect(r.stdout).toMatch(/::warning title=agent-telemetry::.*kanon_error \(enum\)/);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('::'))).not.toContainEqual(expect.stringContaining('src/app.ts'));
+  });
+
+  it('no lane, no version-2 row', () => {
+    expect(runScript({ TELEMETRY_LANE: '' }).v2).toBeNull();
   });
 });
