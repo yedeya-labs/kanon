@@ -45,7 +45,7 @@
 #
 # Known limits, all accepted while Kanon has no release App:
 #   - a PR opened with the workflow token triggers no workflows, so the release PR runs
-#     no CI. It changes only the changelog, the version and the manifest;
+#     no CI. It changes only the changelog, the version, the manifest and the `extra-files`;
 #   - releases pool into the release PR, which a human merges, so during bootstrap a
 #     merge doesn't produce a release by itself, as K-SHIP-7 asks;
 #   - the release tag, pushed with the same token, triggers no tag-driven workflow.

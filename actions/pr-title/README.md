@@ -14,6 +14,8 @@ On failure it prints the reason and the recognised types.
 
 Add a workflow such as `.github/workflows/pr-title.yml`, pinned to an **exact version** ([`K-ADOPT-11`](../../rulebook/10-adoption.md)):
 
+<!-- x-release-please-start-version -->
+
 ```yaml
 name: PR title
 
@@ -30,8 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: yedeya-labs/kanon/actions/pr-title@v0.3.0
+      - uses: yedeya-labs/kanon/actions/pr-title@v0.6.0
 ```
+
+<!-- x-release-please-end -->
 
 - **No checkout needed.** The action carries its own script and reads it from its own directory, at the version you pinned, so the action and its script can't drift apart.
 - **`edited` matters.** Without it, fixing a bad title doesn't re-run the check.

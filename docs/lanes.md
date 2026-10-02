@@ -16,6 +16,8 @@ Each lane calls the shared lane workflow, `agent-lane.yml`, which is not called 
 
 A caller holds `name`, `on`, `permissions` and one job, and nothing else:
 
+<!-- x-release-please-start-version -->
+
 ```yaml
 name: Implement — revise
 
@@ -41,7 +43,7 @@ permissions:
 
 jobs:
   revise:
-    uses: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@vX.Y.Z
+    uses: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@v0.6.0
     with:
       pr_number: ${{ inputs.pr_number }}
       reset: ${{ inputs.reset }}
@@ -50,6 +52,8 @@ jobs:
       IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
+
+<!-- x-release-please-end -->
 
 - **Triggers are yours.** A reusable workflow can't declare its caller's events. The `github` context in a called workflow is the caller's, so the lane reads the triggering event exactly as it would in your own file.
 - **Inputs pass through, by name.** `with:` passes your `workflow_dispatch` inputs as `${{ inputs.<name> }}`, and nothing else. On the other triggers they arrive empty, which the lane expects.

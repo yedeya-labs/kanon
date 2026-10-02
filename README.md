@@ -41,18 +41,22 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 2. **Follow the [adoption checklist](rulebook/10-adoption.md)**, which takes a new repository from its first commit through the bootstrap phase.
 3. **Use Kanon's code by reference, pinned to an exact version,** and let Dependabot propose upgrades ([`K-ADOPT-11`](rulebook/10-adoption.md)):
 
+<!-- x-release-please-start-version -->
+
 | What | Use it as |
 |---|---|
-| [PR-title check](actions/pr-title/README.md) | `uses: yedeya-labs/kanon/actions/pr-title@v0.4.0` |
-| [DCO sign-off check](actions/dco/README.md) | `uses: yedeya-labs/kanon/actions/dco@v0.4.0` |
-| [Release workflow](docs/release.md) | `uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.4.0` |
-| [Agent lane: set up](actions/agent-setup/README.md) | `uses: yedeya-labs/kanon/actions/agent-setup@vX.Y.Z` |
-| [Agent lane: run the agent](actions/agent-run/README.md) | `uses: yedeya-labs/kanon/actions/agent-run@vX.Y.Z` |
-| [Agent lane: finish](actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@vX.Y.Z` |
-| [Agent lane: classify a red run](actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@vX.Y.Z` |
-| [Agent telemetry](actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@vX.Y.Z` |
-| [Agent lanes: triage, implement-revise, lead-revise](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@vX.Y.Z` in a job |
-| [Lane check](actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@vX.Y.Z` |
+| [PR-title check](actions/pr-title/README.md) | `uses: yedeya-labs/kanon/actions/pr-title@v0.6.0` |
+| [DCO sign-off check](actions/dco/README.md) | `uses: yedeya-labs/kanon/actions/dco@v0.6.0` |
+| [Release workflow](docs/release.md) | `uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.6.0` |
+| [Agent lane: set up](actions/agent-setup/README.md) | `uses: yedeya-labs/kanon/actions/agent-setup@v0.6.0` |
+| [Agent lane: run the agent](actions/agent-run/README.md) | `uses: yedeya-labs/kanon/actions/agent-run@v0.6.0` |
+| [Agent lane: finish](actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@v0.6.0` |
+| [Agent lane: classify a red run](actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@v0.6.0` |
+| [Agent telemetry](actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@v0.6.0` |
+| [Agent lanes: triage, implement-revise, lead-revise](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.6.0` in a job |
+| [Lane check](actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@v0.6.0` |
+
+<!-- x-release-please-end -->
 
 The agent-lane blocks moved first ([plan 0001](docs/plans/0001-move-the-agent-lanes.md), step 1), then the shared lane workflow and the three lanes that run no workspace script (step 2). The other lanes follow in later releases.
 

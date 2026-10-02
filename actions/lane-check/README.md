@@ -13,6 +13,8 @@ What a lane declares, and what the hook must accept, is read from Kanon's own fi
 
 ## Use it
 
+<!-- x-release-please-start-version -->
+
 ```yaml
 name: Lane check
 
@@ -30,8 +32,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - uses: yedeya-labs/kanon/actions/lane-check@vX.Y.Z
+      - uses: yedeya-labs/kanon/actions/lane-check@v0.6.0
 ```
+
+<!-- x-release-please-end -->
 
 - **Check out first.** It reads your repository's files.
 - **`yq` and `jq`.** It parses YAML with `yq` (mikefarah v4) and checks it with `jq`. GitHub's hosted runners have both; a self-hosted runner must provide them.

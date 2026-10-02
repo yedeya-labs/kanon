@@ -8,15 +8,19 @@ The action is pinned to an exact version, so each Kanon release fixes the Claude
 
 Call it with `id: agent`, so the lane reads `steps.agent.outputs.execution_file` and `steps.agent.outcome` as it would for the action itself.
 
+<!-- x-release-please-start-version -->
+
 ```yaml
 - id: agent
-  uses: yedeya-labs/kanon/actions/agent-run@vX.Y.Z
+  uses: yedeya-labs/kanon/actions/agent-run@v0.6.0
   with:
     prompt: ${{ env.PROMPT }}
     claude_args: ${{ env.CLAUDE_ARGS }}
     claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     github-token: ${{ steps.app-token.outputs.token }}
 ```
+
+<!-- x-release-please-end -->
 
 | Input | Required | Meaning |
 |---|---|---|
