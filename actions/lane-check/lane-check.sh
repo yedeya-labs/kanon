@@ -73,10 +73,23 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
   fi
   lane_doc="$(json "$lane_file")" || die "Kanon's $lane.yml does not parse"
 
-  # Only `on`, `permissions` and one job (and a `name`). No `concurrency`: the lane holds
-  # its own group, and the same group on the caller would deadlock the two (decision 11).
-  extra="$(jq -r 'keys - ["name","on","permissions","jobs"] | join(", ")' <<<"$doc")"
-  [ -z "$extra" ] || fail "$f" "a lane caller holds only name, on, permissions and one job; it also has: $extra"
+  # Only `on`, `permissions` and one job (and a `name` and a `run-name`). No `concurrency`:
+  # the lane holds its own group, and the same group on the caller would deadlock the two
+  # (decision 11).
+  extra="$(jq -r 'keys - ["name","run-name","on","permissions","jobs"] | join(", ")' <<<"$doc")"
+  [ -z "$extra" ] || fail "$f" "a lane caller holds only name, run-name, on, permissions and one job; it also has: $extra"
+
+  # A run's title is its caller's: a called workflow's `run-name` is ignored. A lane whose
+  # title is read by another program (the review lane's, by the review-run evidence) says
+  # what the caller's title must end with, on a `# CALLER RUN-NAME ENDS WITH: <text>` line.
+  want_title="$(sed -n 's/^# CALLER RUN-NAME ENDS WITH: //p' "$lane_file" | head -1)"
+  if [ -n "$want_title" ]; then
+    title="$(jq -r '."run-name" // ""' <<<"$doc")"
+    case "$title" in
+      *" $want_title") ;;
+      *) fail "$f" "its run-name must end with \` $want_title\`, as the last token: the Kanon lane $lane's runs are found by it" ;;
+    esac
+  fi
   njobs="$(jq '.jobs | length' <<<"$doc")"
   [ "$njobs" = 1 ] || fail "$f" "a lane caller has exactly one job, not $njobs"
   job="$(jq -c '.jobs | to_entries[0].value' <<<"$doc")"

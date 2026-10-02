@@ -32,13 +32,15 @@ const LANES = readdirSync(WORKFLOWS)
   .sort();
 
 /** The triggers each lane's caller holds (docs/lanes.md), as the event the gate sees. */
-type Trigger = 'review' | 'issue-label' | 'pr-label' | 'merged' | 'dispatch';
+type Trigger = 'review' | 'issue-label' | 'pr-label' | 'merged' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened';
 const TRIGGERS: Record<string, Trigger[]> = {
   'agent-implement-revise.yml': ['review', 'pr-label', 'dispatch'],
   'agent-implement.yml': ['issue-label', 'dispatch'],
   'agent-lead-revise.yml': ['review', 'pr-label', 'dispatch'],
   'agent-merge-reconcile.yml': ['merged', 'review', 'dispatch'],
+  'agent-review.yml': ['ci-finished', 'pr-target-label', 'pr-target-opened', 'dispatch'],
   'agent-triage.yml': ['issue-label', 'dispatch'],
+  'agent-verify-acs.yml': ['issue-label', 'dispatch'],
 };
 
 /** The job holding the gate step, and the step's index in it. */
@@ -175,6 +177,12 @@ const eventFor = (trigger: Trigger, actor: Actor): { name: string; payload: obje
       return { name: 'pull_request', payload: { action: 'closed', pull_request: { merged: true, merged_by: user }, sender: { login: 'someone-else' } }, env: {} };
     case 'dispatch':
       return { name: 'workflow_dispatch', payload: {}, env: { GITHUB_ACTOR: 'someone-else', GITHUB_TRIGGERING_ACTOR: actor.login } };
+    case 'ci-finished':
+      return { name: 'workflow_run', payload: { action: 'completed', workflow_run: { triggering_actor: user, actor: { login: 'someone-else' } }, sender: { login: 'someone-else' } }, env: {} };
+    case 'pr-target-label':
+      return { name: 'pull_request_target', payload: { action: 'labeled', sender: user }, env: {} };
+    case 'pr-target-opened':
+      return { name: 'pull_request_target', payload: { action: 'opened', sender: user }, env: {} };
   }
 };
 
@@ -292,6 +300,19 @@ describe('who the actor is', () => {
   it('a label: whoever applied it, with no association to trust', () => {
     expect(triggeringActor('issues', { action: 'labeled', sender: { login: 'labeller' } }, env))
       .toEqual({ actor: { login: 'labeller', source: 'user who applied the label' } });
+  });
+  it('a pull_request_target label or opening: the sender, as for pull_request', () => {
+    expect(triggeringActor('pull_request_target', { action: 'labeled', sender: { login: 'labeller' } }, env))
+      .toEqual({ actor: { login: 'labeller', source: 'user who applied the label' } });
+    expect(triggeringActor('pull_request_target', { action: 'opened', sender: { login: 'opener' } }, env))
+      .toEqual({ actor: { login: 'opener', source: 'user who opened it' } });
+    expect(triggeringActor('issues', { action: 'opened', sender: { login: 'opener' } }, env)).toHaveProperty('refuse');
+  });
+  it('a finished workflow: whoever pushed the commit it ran on, never the sender', () => {
+    expect(triggeringActor('workflow_run', { workflow_run: { triggering_actor: { login: 'pusher' }, actor: { login: 'a' } }, sender: { login: 's' } }, env))
+      .toEqual({ actor: { login: 'pusher', source: 'user whose push the finished workflow ran on' } });
+    expect(triggeringActor('workflow_run', { workflow_run: { actor: { login: 'a' } } }, env))
+      .toEqual({ actor: { login: 'a', source: 'user whose push the finished workflow ran on' } });
   });
   it('a merge: whoever merged it', () => {
     expect(triggeringActor('pull_request', { action: 'closed', pull_request: { merged_by: { login: 'merger' } }, sender: { login: 'x' } }, env))

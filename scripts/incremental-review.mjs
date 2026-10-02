@@ -36,10 +36,12 @@
 // tests/unit/incremental-review.test.ts (rebase, merge-from-base, force-push).
 //
 // ── HOW THE WORKFLOW RUNS THIS ──────────────────────────────────────────────
-// `agent-review.yml` extracts this file and `review-trailer.mjs` from the BASE branch
-// into $RUNNER_TEMP (a PR must not supply the logic that decides how much of it is read)
-// and runs it before any PR code executes. It never fails the job: any error is a full
-// review.
+// Kanon's review lane runs this file from the action cache, at the Kanon tag its caller
+// pins (plan 0001 §3), never from the PR's checkout: a PR must not supply the logic that
+// decides how much of it is read. The reference adopter extracted it and its imports from
+// the base branch for the same reason; with the library in Kanon there is nothing left to
+// extract. It runs before any PR code executes, and never fails the job: any error is a
+// full review.
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -54,10 +56,10 @@ import { readTrailer } from './review-trailer.mjs';
 // WHOSE LOGIN (RA-2701). The reviewer's slug is the App register's `Reviewer` row, not a
 // constant here. The default reads the working tree's register, which is right for the
 // unit tier and for any checkout of `main`. It is NOT right in CI: the workflow runs
-// this file from BASE against the PR's checkout, where the working tree's register is
-// the PR's — and a PR must not choose whose verdicts scope its own review. So `main`
-// takes the register's path as `--register` (the workflow extracts BASE's copy beside
-// this file) and passes the login to every function below explicitly.
+// this file against the PR's checkout, where the working tree's register is the PR's —
+// and a PR must not choose whose verdicts scope its own review. So `main` takes the
+// register's path as `--register` (the workflow writes the default branch's copy there,
+// `K-MERGE-17`) and passes the login to every function below explicitly.
 const reviewerLogins = (reviewer) => new Set([`${reviewer}[bot]`, reviewer]);
 const VERDICTS = new Set(['APPROVED', 'CHANGES_REQUESTED']);
 

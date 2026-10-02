@@ -14,6 +14,13 @@
 //                            only the Metadata read every workflow token holds.
 //   pull_request `closed`    whoever merged it, `pull_request.merged_by` (else `sender`),
 //                            checked like a label's sender.
+//   pull_request `opened`    whoever opened it, `sender`, checked the same way.
+//   pull_request_target      as `pull_request`: the review lane's label trigger runs the base
+//                            branch's copy of its caller, with the same payload.
+//   workflow_run             whoever pushed the commit the finished workflow ran on,
+//                            `workflow_run.triggering_actor` (else `workflow_run.actor`),
+//                            checked the same way. The review lane fires on CI finishing; a
+//                            fork's head is refused separately, by the lane's own filter.
 //   workflow_dispatch        whoever ran it, `GITHUB_TRIGGERING_ACTOR` (else `GITHUB_ACTOR`),
 //                            checked the same way. Only someone with write access can
 //                            dispatch, so this cannot refuse a human today; it is checked
@@ -66,6 +73,7 @@ const MEMBER_PERMISSIONS = ['admin', 'maintain', 'push', 'triage'];
  *   sender?: User,
  *   review?: { user?: User, author_association?: string },
  *   pull_request?: { merged_by?: User },
+ *   workflow_run?: { triggering_actor?: User, actor?: User },
  * }} GitHubEvent
  */
 
@@ -86,8 +94,10 @@ export function triggeringActor(eventName, event, env) {
       return found(event.review?.user?.login, 'reviewer', event.review?.author_association ?? '');
     case 'issues':
     case 'pull_request':
+    case 'pull_request_target':
       if (event.action === 'labeled') return found(event.sender?.login, 'user who applied the label');
-      if (eventName === 'pull_request' && event.action === 'closed') {
+      if (eventName !== 'issues' && event.action === 'opened') return found(event.sender?.login, 'user who opened it');
+      if (eventName !== 'issues' && event.action === 'closed') {
         return event.pull_request?.merged_by?.login
           ? found(event.pull_request.merged_by.login, 'user who merged it')
           : found(event.sender?.login, 'user who closed it');
@@ -95,6 +105,8 @@ export function triggeringActor(eventName, event, env) {
       return { refuse: `the ${eventName} event's \`${event.action ?? ''}\` action is not one a lane acts on` };
     case 'workflow_dispatch':
       return found(env.GITHUB_TRIGGERING_ACTOR || env.GITHUB_ACTOR, 'user who ran it');
+    case 'workflow_run':
+      return found(event.workflow_run?.triggering_actor?.login || event.workflow_run?.actor?.login, 'user whose push the finished workflow ran on');
     default:
       return { refuse: `no lane acts on a ${eventName || 'nameless'} event` };
   }

@@ -1,0 +1,30 @@
+# A trigger-only caller of Kanon's verify-acs lane, as an adopter writes it (plan 0001 §3).
+name: Verify ACs
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: Project tracking-issue number
+        required: true
+      ref:
+        description: Tag or SHA to verify
+        required: false
+        default: ''
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  verify:
+    uses: yedeya-labs/kanon/.github/workflows/agent-verify-acs.yml@v1.2.3
+    with:
+      project: ${{ inputs.project }}
+      ref: ${{ inputs.ref }}
+    secrets:
+      EXPLORER_APP_ID: ${{ secrets.EXPLORER_APP_ID }}
+      EXPLORER_APP_PRIVATE_KEY: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
