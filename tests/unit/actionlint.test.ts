@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -15,21 +15,71 @@ import { writeStub } from './helpers/stub-bin.js';
  * Kanon's CI didn't run actionlint at all, so the review lane's reads of hook outputs the
  * hook contract doesn't define (#77) stayed green.
  *
- * These cases SPAWN the real wrapper, so they run the real pinned binary: it is downloaded
- * once (checksum-verified) into ACTIONLINT_CACHE_DIR, which in CI the actionlint step of the
- * checks job has already filled before the unit tests run.
+ * NO CASE HERE REACHES THE NETWORK (#85). Every spawn puts a `curl` stub first on PATH, so
+ * the wrapper's one download goes to the stub, never to github.com:
+ *
+ * - The wrapper's own behaviour (the pinned URL, both sha256 checks, the cache, the `$/`
+ *   rewrite and the mapping back) is proven against a COPY of the wrapper whose pins for
+ *   this platform are swapped for those of a locally built archive holding a stub binary.
+ *   The swap lives only in that copy, so the real wrapper has no override CI could reach.
+ * - The cases that need the REAL actionlint (does it check a rewritten call's inputs?) use
+ *   the verified binary already in the default cache, and never download it: CI's actionlint
+ *   step, which runs before `npm test`, is the one place that downloads. With no verified
+ *   binary cached they are SKIPPED, by name, outside CI; in CI that is a failure, because the
+ *   step before should have left one there.
  */
 const REPO = fileURLToPath(new URL('../..', import.meta.url));
 const WRAPPER = join(REPO, '.github/scripts/actionlint.sh');
 const TIMEOUT = 120_000;
-const version = /^ACTIONLINT_VERSION=(\S+)$/m.exec(readFileSync(WRAPPER, 'utf8'))?.[1];
+const SOURCE = readFileSync(WRAPPER, 'utf8');
+const version = /^ACTIONLINT_VERSION=(\S+)$/m.exec(SOURCE)?.[1];
 
-function run(root: string, args: string[] = []) {
-  const r = spawnSync('bash', [WRAPPER, ...args], {
+const sh = (cmd: string, args: string[]) => spawnSync(cmd, args, { encoding: 'utf8' }).stdout.trim();
+// The same mapping as the wrapper's, from the same `uname`.
+const OS = ({ Linux: 'linux', Darwin: 'darwin' } as Record<string, string>)[sh('uname', ['-s'])];
+const ARCH = ({ x86_64: 'amd64', amd64: 'amd64', aarch64: 'arm64', arm64: 'arm64' } as Record<string, string>)[sh('uname', ['-m'])];
+const PLATFORM = `${OS}_${ARCH}`;
+/** The wrapper's pins for this platform: the first table is the archive's, the second the binary's. */
+const PINS = [...SOURCE.matchAll(new RegExp(`^\\s*${PLATFORM}\\)\\s+echo ([0-9a-f]{64}) ;;$`, 'gm'))].map((m) => m[1]!);
+const [ARCHIVE_PIN, BINARY_PIN] = PINS;
+
+const sha256 = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
+
+/** The verified binary the real-binary cases use, if CI's actionlint step (or a local run) left one. */
+const CACHED = join(process.env.ACTIONLINT_CACHE_DIR ?? join(homedir(), '.cache/kanon-actionlint'), version ?? '', 'actionlint');
+const REAL_BINARY = existsSync(CACHED) && sha256(CACHED) === BINARY_PIN;
+
+const dirs: string[] = [];
+afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
+const tmp = (prefix: string) => { const d = mkdtempSync(join(tmpdir(), prefix)); dirs.push(d); return d; };
+
+/**
+ * A `curl` that never leaves the machine. It logs its arguments to `$CURL_LOG` and copies
+ * `$CURL_SERVES` to the `-o` path; with nothing to serve it fails as an offline curl would.
+ */
+const NET = tmp('actionlint-85-net-');
+writeStub(join(NET, 'curl'), `#!/usr/bin/env bash
+printf '%s\\n' "$@" >> "$CURL_LOG"
+out=; while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
+[ -n "\${CURL_SERVES:-}" ] && [ -n "$out" ] || { echo "curl stub: no network in unit tests" >&2; exit 7; }
+cp "$CURL_SERVES" "$out"
+`);
+
+/** Spawn `wrapper` with the curl stub first on PATH. `curl` is what that stub was asked for, if anything. */
+function spawn(wrapper: string, args: string[], env: Record<string, string>) {
+  const curlLog = join(tmp('actionlint-85-log-'), 'curl');
+  const r = spawnSync('bash', [wrapper, ...args], {
     cwd: REPO, encoding: 'utf8', timeout: TIMEOUT,
-    env: { ...process.env, ACTIONLINT_ROOT: root },
+    env: { ...process.env, PATH: `${NET}:${process.env.PATH}`, CURL_LOG: curlLog, ...env },
   });
-  return { code: r.status, out: `${r.stdout}${r.stderr}` };
+  return { code: r.status, out: `${r.stdout}${r.stderr}`, stdout: r.stdout, curl: existsSync(curlLog) ? readFileSync(curlLog, 'utf8') : null };
+}
+
+/** The real wrapper with the real cached binary. It must never have to download. */
+function run(root: string, args: string[] = []) {
+  const r = spawn(WRAPPER, args, { ACTIONLINT_ROOT: root });
+  expect(r.curl, 'a unit test reached for the network').toBeNull();
+  return r;
 }
 
 /** One digest over every path and byte under `<root>/.github`. */
@@ -42,9 +92,6 @@ function hashGithub(root: string): string {
   }
   return h.digest('hex');
 }
-
-const dirs: string[] = [];
-afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 
 const BLOCK = `name: blk
 description: fixture block
@@ -73,7 +120,15 @@ function fixture(withLines: string[], dir = '.github/actions/blk'): string {
   return root;
 }
 
-describe('the actionlint wrapper checks `$/` block calls (#77)', () => {
+const SKIP_REASON = `SKIPPED: no verified actionlint ${version} cached at ${CACHED}; \`bash .github/scripts/actionlint.sh\` fetches it`;
+// In CI the actionlint step has just run, so a missing binary is a red, not a skip. Outside
+// it the skip is said out loud, since a summary's "skipped" count alone names no reason.
+it.runIf(!REAL_BINARY || !!process.env.CI)('has the verified binary to run the real-actionlint cases with', (ctx) => {
+  if (!process.env.CI) ctx.skip(`the real-actionlint cases are ${SKIP_REASON}`);
+  expect(REAL_BINARY, `${CACHED} is missing or not the pinned binary`).toBe(true);
+});
+
+describe.skipIf(!REAL_BINARY)('the actionlint wrapper checks `$/` block calls (#77)', () => {
   it('passes on the current tree, and leaves the real .github/ byte for byte as it was', () => {
     const before = hashGithub(REPO);
     const r = run(REPO);
@@ -131,30 +186,150 @@ describe('the actionlint wrapper checks `$/` block calls (#77)', () => {
   }, TIMEOUT);
 });
 
-describe('the actionlint wrapper keeps its own failures apart from findings (#77)', () => {
-  it('exits 3, not 1, when the wrapper itself cannot run', () => {
-    const root = mkdtempSync(join(tmpdir(), 'actionlint-77-'));
-    dirs.push(root);
-    const r = run(root);
-    expect(r.code, r.out).toBe(3);
-    expect(r.out).toContain('no .github/ under');
+/**
+ * A copy of the wrapper that pins `archive` and `binary` for this platform in place of the
+ * release's, and differs from the real one in nothing else.
+ */
+function forge(archive: string, binary: string): string {
+  expect(PINS, `the wrapper pins ${PLATFORM} exactly once per table`).toHaveLength(2);
+  expect(SOURCE.split(ARCHIVE_PIN!)).toHaveLength(2);
+  expect(SOURCE.split(BINARY_PIN!)).toHaveLength(2);
+  const path = join(tmp('actionlint-85-wrapper-'), 'actionlint.sh');
+  writeFileSync(path, SOURCE.replace(ARCHIVE_PIN!, archive).replace(BINARY_PIN!, binary));
+  return path;
+}
+
+/**
+ * A release archive holding a stand-in `actionlint` that records where it ran, with what
+ * arguments, and the workflow it was shown, then prints a finding as actionlint would: its
+ * path absolute in the copy, its snippet the copy's (rewritten) line.
+ */
+function archive(tag: string): { tarball: string; binary: string } {
+  const dir = tmp('actionlint-85-release-');
+  const bin = join(dir, 'actionlint');
+  writeFileSync(bin, `#!/usr/bin/env bash
+# ${tag}
+{ printf '%s\\n' "$PWD" "$@"; } > "$STUB_LOG"
+cp .github/workflows/w.yml "$STUB_LOG.w.yml"
+echo "$PWD/.github/workflows/w.yml:7:9: stand-in finding [stub]"
+echo "   7 |       - uses: ./.github/actions/blk"
+exit "\${STUB_RC:-0}"
+`);
+  chmodSync(bin, 0o755);
+  const tarball = join(dir, 'release.tar.gz');
+  const t = spawnSync('tar', ['-czf', tarball, '-C', dir, 'actionlint'], { encoding: 'utf8' });
+  expect(t.status, t.stderr).toBe(0);
+  return { tarball, binary: bin };
+}
+
+const GOOD = archive('good');
+const OTHER = archive('other');
+
+/** The forged wrapper over a `$/` fixture, with a fresh cache unless one is given. */
+function fetchRun(o: { wrapper?: string; serves?: string; cache?: string; rc?: number; args?: string[]; root?: string } = {}) {
+  const cache = o.cache ?? tmp('actionlint-85-cache-');
+  const stubLog = join(tmp('actionlint-85-stub-'), 'ran');
+  const root = o.root ?? fixture(['arm: x']);
+  const r = spawn(o.wrapper ?? forge(sha256(GOOD.tarball), sha256(GOOD.binary)), o.args ?? [], {
+    ACTIONLINT_ROOT: root, ACTIONLINT_CACHE_DIR: cache, STUB_LOG: stubLog, STUB_RC: String(o.rc ?? 0),
+    ...(o.serves ? { CURL_SERVES: o.serves } : {}),
+  });
+  const cached = join(cache, version!, 'actionlint');
+  return {
+    ...r, root, cache, cached, stubLog,
+    ran: existsSync(stubLog) ? readFileSync(stubLog, 'utf8').split('\n') : null,
+    copy: existsSync(`${stubLog}.w.yml`) ? readFileSync(`${stubLog}.w.yml`, 'utf8') : null,
+  };
+}
+
+describe('the actionlint wrapper gets, checks and caches its binary, with no network (#85)', () => {
+  it('downloads the pinned version for this platform on a miss, verifies and caches it, then runs it', () => {
+    const r = fetchRun({ serves: GOOD.tarball });
+    expect(r.code, r.out).toBe(0);
+    expect(r.curl?.split('\n')).toContain(
+      `https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_${PLATFORM}.tar.gz`);
+    expect(r.ran, 'the verified binary did not run').not.toBeNull();
+    expect(sha256(r.cached)).toBe(sha256(GOOD.binary));
   }, TIMEOUT);
 
-  it('never runs a cached binary whose sha256 is not the pinned one', () => {
+  it('runs a cached binary whose sha256 is the pinned one without downloading again', () => {
+    const first = fetchRun({ serves: GOOD.tarball });
+    const again = fetchRun({ cache: first.cache });
+    expect(again.code, again.out).toBe(0);
+    expect(again.curl, 'it downloaded although the cache held the pinned binary').toBeNull();
+    expect(again.ran).not.toBeNull();
+  }, TIMEOUT);
+
+  it('never runs a cached binary whose sha256 is not the pinned one, and replaces it', () => {
     // A stand-in that claims the pinned version and leaves a mark if it is ever executed.
-    const cache = mkdtempSync(join(tmpdir(), 'actionlint-77-cache-'));
-    dirs.push(cache);
+    const cache = tmp('actionlint-85-cache-');
     const mark = join(cache, 'ran');
     mkdirSync(join(cache, version!), { recursive: true });
     writeStub(join(cache, version!, 'actionlint'), `#!/usr/bin/env bash\ntouch '${mark}'\necho ${version}\nexit 0\n`);
-    const r = spawnSync('bash', [WRAPPER], {
-      cwd: REPO, encoding: 'utf8', timeout: TIMEOUT,
-      env: { ...process.env, ACTIONLINT_ROOT: fixture(['arm: x', 'bogus: y']), ACTIONLINT_CACHE_DIR: cache },
-    });
+    const r = fetchRun({ cache, serves: GOOD.tarball, rc: 1 });
     expect(existsSync(mark), 'the tampered binary was executed').toBe(false);
-    // It was replaced by the verified one, which finds the bad input.
-    expect(r.status, `${r.stdout}${r.stderr}`).toBe(1);
-    expect(r.stdout).toMatch(/input "bogus" is not defined/);
+    expect(r.curl, 'the tampered binary was not replaced').not.toBeNull();
+    expect(r.code, r.out).toBe(1);
+    expect(r.ran).not.toBeNull();
+    expect(sha256(r.cached)).toBe(sha256(GOOD.binary));
+  }, TIMEOUT);
+
+  it('refuses an archive whose sha256 is not the pinned one: exit 3, nothing cached, nothing run', () => {
+    const r = fetchRun({ serves: OTHER.tarball });
+    expect(r.code, r.out).toBe(3);
+    expect(r.out).toContain(`archive checksum mismatch for actionlint ${version} ${PLATFORM}: got ${sha256(OTHER.tarball)}`);
+    expect(existsSync(r.cached)).toBe(false);
+    expect(r.ran).toBeNull();
+  }, TIMEOUT);
+
+  it('refuses a binary whose sha256 is not the pinned one, even from a verified archive', () => {
+    const r = fetchRun({ serves: GOOD.tarball, wrapper: forge(sha256(GOOD.tarball), sha256(OTHER.binary)) });
+    expect(r.code, r.out).toBe(3);
+    expect(r.out).toContain(`binary checksum mismatch for actionlint ${version} ${PLATFORM}: got ${sha256(GOOD.binary)}`);
+    expect(existsSync(r.cached)).toBe(false);
+    expect(r.ran).toBeNull();
+  }, TIMEOUT);
+
+  it('exits 3, not 1, when the download fails', () => {
+    const r = fetchRun();
+    expect(r.code, r.out).toBe(3);
+    expect(r.out).toContain(`download of actionlint ${version} failed`);
+    expect(r.ran).toBeNull();
+  }, TIMEOUT);
+
+  it('exits 3, not 1, when the wrapper itself cannot run', () => {
+    const r = fetchRun({ root: tmp('actionlint-77-') });
+    expect(r.code, r.out).toBe(3);
+    expect(r.out).toContain('no .github/ under');
+    expect(r.curl).toBeNull();
+  }, TIMEOUT);
+});
+
+describe('the actionlint wrapper rewrites `$/` in a copy only, and maps the output back (#85)', () => {
+  it('shows the binary `./` on every `uses:` key, never in a comment, and leaves the real tree alone', () => {
+    const root = fixture(['arm: x']);
+    const w = join(root, '.github/workflows/w.yml');
+    writeFileSync(w, `${readFileSync(w, 'utf8')}      - uses: '$/.github/actions/blk'\n        with:\n          arm: x\n# uses: $/kept\n`);
+    const before = hashGithub(root);
+    const r = fetchRun({ root, serves: GOOD.tarball, args: ['-oneline'] });
+    expect(r.code, r.out).toBe(0);
+    expect(r.copy).toContain('      - uses: ./.github/actions/blk\n');
+    expect(r.copy).toContain("      - uses: './.github/actions/blk'\n");
+    expect(r.copy).toContain('# uses: $/kept\n');
+    expect(r.copy?.match(/\$\//g)).toHaveLength(1);
+    expect(hashGithub(root), 'the wrapper wrote to the .github/ it was pointed at').toBe(before);
+    // In the copy, with its flags first and the caller's after them.
+    expect(r.ran![0]).toMatch(/\/actionlint-dollar\.[^/]+\/repo$/);
+    expect(r.ran!.slice(1, 5)).toEqual(['-no-color', '-shellcheck=', '-pyflakes=', '-oneline']);
+  }, TIMEOUT);
+
+  it("maps the copy's path to the real one, quotes the real `$/` line, and passes the exit code through", () => {
+    const root = fixture(['arm: x']);
+    const r = fetchRun({ root, serves: GOOD.tarball, rc: 1 });
+    expect(r.code, r.out).toBe(1);
+    expect(r.stdout).toContain(`${realpathSync(root)}/.github/workflows/w.yml:7:9: stand-in finding [stub]\n`);
+    expect(r.stdout).toMatch(/^ {3}7 \| {7}- uses: \$\/\.github\/actions\/blk$/m);
+    expect(r.out).not.toMatch(/actionlint-dollar\./);
   }, TIMEOUT);
 });
 
