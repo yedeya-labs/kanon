@@ -15,13 +15,17 @@ A lane is built from four composite actions, so that a lane with steps of its ow
 
 ## Use it
 
+<!-- x-release-please-start-version -->
+
 ```yaml
-- uses: yedeya-labs/kanon/actions/agent-setup@vX.Y.Z
+- uses: yedeya-labs/kanon/actions/agent-setup@v0.6.0
   with:
     arm: lead agent
     app-slug: ${{ steps.app-token.outputs.app-slug }}
     push-probe: "true"
 ```
+
+<!-- x-release-please-end -->
 
 | Input | Required | Meaning |
 |---|---|---|

@@ -6,16 +6,20 @@ Turns `claude-code-action`'s result file into one telemetry row (cost, turns, to
 
 ## Use it
 
+<!-- x-release-please-start-version -->
+
 ```yaml
 - if: always()
   continue-on-error: true
-  uses: yedeya-labs/kanon/actions/agent-telemetry@vX.Y.Z
+  uses: yedeya-labs/kanon/actions/agent-telemetry@v0.6.0
   with:
     agent: reviewer
     execution_file: ${{ steps.agent.outputs.execution_file }}
     claude_args: ${{ env.CLAUDE_ARGS }}
     pr_number: ${{ env.PR_NUMBER }}
 ```
+
+<!-- x-release-please-end -->
 
 - **`always()`**, because a failed run is the one you most want measured.
 - **`continue-on-error`**, because an observer must never turn a good run red. The upload step can't swallow its own failure, so the caller does.

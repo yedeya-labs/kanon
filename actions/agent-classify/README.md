@@ -8,13 +8,17 @@ Block 4 of an agent lane (see [`agent-setup`](../agent-setup/README.md)). It rea
 
 The block has no `if:` of its own, because the right gate depends on the lane. Gate it yourself:
 
+<!-- x-release-please-start-version -->
+
 ```yaml
 - id: classify
   if: failure()
-  uses: yedeya-labs/kanon/actions/agent-classify@vX.Y.Z
+  uses: yedeya-labs/kanon/actions/agent-classify@v0.6.0
   with:
     arm: review agent
 ```
+
+<!-- x-release-please-end -->
 
 | Input | Required | Meaning |
 |---|---|---|

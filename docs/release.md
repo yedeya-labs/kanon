@@ -17,6 +17,8 @@ It takes no inputs and no secrets ([ADR 0002](decisions/0002-standardise-dont-pa
 
 Add `.github/workflows/release.yml` to your repository, pinned to an **exact version**:
 
+<!-- x-release-please-start-version -->
+
 ```yaml
 name: Release
 
@@ -32,8 +34,10 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.3.0
+    uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.6.0
 ```
+
+<!-- x-release-please-end -->
 
 - **Grant the writes on the calling job only.** A reusable workflow can use no more than its caller grants, and nothing else in the file needs them.
 - **`contents: write` is also what lets the guard read your merge settings.** GitHub returns those fields to a workflow token only when it can push; with `metadata` or `contents: read` they come back empty. If they are unreadable, the guard fails and says so, rather than passing.
@@ -108,7 +112,7 @@ Made once, by an Owner:
 
 All are accepted while Kanon has no release App, and all go away when one exists.
 
-- **The release PR runs no CI.** It is opened with the workflow's own token, and a PR opened with that token triggers no workflows. It changes only the changelog, the version and the manifest, but a test that pins one of those can still go red on `main` after the release PR merges. Kanon's own did once, on its first release: a test had pinned the manifest's starting value.
+- **The release PR runs no CI.** It is opened with the workflow's own token, and a PR opened with that token triggers no workflows. It changes only the changelog, the version, the manifest and any `extra-files` you list (Kanon lists the documents holding its `uses:` lines, so they always name the latest release), but a test that pins one of those can still go red on `main` after the release PR merges. Kanon's own did once, on its first release: a test had pinned the manifest's starting value.
 - **With a merge queue, the release PR can't be queued**, because its required checks never report, so an admin merges it directly through the ruleset's pull-request bypass (`gh pr merge <n> --squash --admin`, or "Merge without waiting for requirements to be met" in the web UI). A bypass actor's merge skips the queue as well as the checks, which `K-MERGE-8` already allows for the release bot's PRs. This is confirmed on Kanon: with the queue on, release 0.4.2 was merged through the admin bypass on 2026-09-30. Closing and reopening the release PR as a person also works: the reopen triggers the PR's workflows, and once they pass it can be queued like any other.
 - **Releases pool into a release PR that a human merges.** During bootstrap a merge doesn't produce a release by itself, which falls short of `K-SHIP-7`'s "every merge produces a release".
 - **The release tag triggers no workflows either**, for the same reason. A deploy workflow `on: push: tags` (`K-SHIP-7`'s deploy leg) won't fire from these tags; that needs the release App too.

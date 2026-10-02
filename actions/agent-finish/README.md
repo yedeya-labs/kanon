@@ -6,11 +6,13 @@ Block 3 of an agent lane (see [`agent-setup`](../agent-setup/README.md)). It exp
 
 Call it with `id: finish`, `if: always()` and `continue-on-error: true`, and hand it the job's status:
 
+<!-- x-release-please-start-version -->
+
 ```yaml
 - id: finish
   if: always()
   continue-on-error: true
-  uses: yedeya-labs/kanon/actions/agent-finish@vX.Y.Z
+  uses: yedeya-labs/kanon/actions/agent-finish@v0.6.0
   with:
     arm: lead agent
     agent: lead
@@ -18,6 +20,8 @@ Call it with `id: finish`, `if: always()` and `continue-on-error: true`, and han
     claude_args: ${{ env.CLAUDE_ARGS }}
     execution_file: ${{ steps.agent.outputs.execution_file }}
 ```
+
+<!-- x-release-please-end -->
 
 - **`always()`**, because a failed run is the one you most want explained and measured.
 - **`continue-on-error`**, because an observer must never turn a good run red, including when the block itself fails to load.

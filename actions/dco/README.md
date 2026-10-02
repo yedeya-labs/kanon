@@ -25,6 +25,8 @@ A bot's name on a commit isn't enough: anyone can write that email into a commit
 
 Add `.github/workflows/dco.yml`, pinned to an **exact version** ([`K-ADOPT-11`](../../rulebook/10-adoption.md)). Use the exact Kanon release you adopt (the action first shipped in `v0.4.0`), never the moving `v0`:
 
+<!-- x-release-please-start-version -->
+
 ```yaml
 name: DCO
 
@@ -42,8 +44,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: yedeya-labs/kanon/actions/dco@v0.4.0
+      - uses: yedeya-labs/kanon/actions/dco@v0.6.0
 ```
+
+<!-- x-release-please-end -->
 
 - **No checkout needed.** The action reads the pull request's commits through the REST API with the workflow token, and carries its own script, read from its own directory at the version you pinned.
 - **`pull-requests: read`** lets the token list the commits. **`contents: read`** is also needed on a private repository.

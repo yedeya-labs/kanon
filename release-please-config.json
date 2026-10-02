@@ -10,6 +10,19 @@
       "include-v-in-tag": true,
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": false,
+      "extra-files": [
+        "README.md",
+        "actions/agent-classify/README.md",
+        "actions/agent-finish/README.md",
+        "actions/agent-run/README.md",
+        "actions/agent-setup/README.md",
+        "actions/agent-telemetry/README.md",
+        "actions/dco/README.md",
+        "actions/lane-check/README.md",
+        "actions/pr-title/README.md",
+        "docs/lanes.md",
+        "docs/release.md"
+      ],
       "changelog-sections": [
         {
           "type": "feat",

@@ -10,7 +10,7 @@ This chapter governs the spec layer: the numbered behavioural invariants that sa
 
 **Why.** The spec corpus is the highest-stakes oracle in the pipeline, so it has to be diffable, auditable and unable to change silently. A reviewer checking a PR that changes behaviour must read the oracle as that PR leaves it.
 
-**Enforced by.** The step that restores agent instructions from the base branch on PR runs deliberately excludes the spec directory. The "only via reviewed PR" half is the main branch's ruleset.
+**Enforced by.** The step that restores agent instructions from the base branch on PR runs deliberately excludes the spec directory, the one exception `K-MERGE-17` names. The "only via reviewed PR" half is the main branch's ruleset.
 
 **Class.** framework
 
