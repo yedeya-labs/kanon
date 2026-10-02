@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/yedeya-labs/kanon/compare/v0.12.0...v0.13.0) (2026-10-02)
+
+
+### Features
+
+* **telemetry:** validate a version-2 run row and upload it beside the old one ([#96](https://github.com/yedeya-labs/kanon/issues/96)) ([c6c2190](https://github.com/yedeya-labs/kanon/commit/c6c2190629f7f7bd7711f89df765892a8725fbf2))
+
+
+### Tests
+
+* **ci:** keep actionlint's unit tests off the network ([#94](https://github.com/yedeya-labs/kanon/issues/94)) ([dee8960](https://github.com/yedeya-labs/kanon/commit/dee896016649edaef9f9cac3bf9947f4d1d52499))
+
 ## [0.12.0](https://github.com/yedeya-labs/kanon/compare/v0.11.0...v0.12.0) (2026-10-02)
 
 
