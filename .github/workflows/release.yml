@@ -16,6 +16,13 @@
 #   4. After a release, creates or moves the major tag (v0, later v1, ...) to the
 #      released commit. Adopters still pin an exact version; the major tag is a
 #      convenience, not the supported form.
+#   5. Guard (#73). Fails, and comments on the release PR, when the open release PR
+#      changes anything but version strings outside the changelog, the manifest,
+#      package.json and package-lock.json. In its `extra-files`, and in any other file it
+#      modifies, only a line whose sole change is a version may differ, and it may add,
+#      remove or rename no file. Release PRs run no CI and merge through the admin
+#      bypass, so on 0.10.0 a release PR built from stale `extra-files` reverted #67's
+#      documentation (db99870) and nothing noticed.
 #
 # No inputs, no secrets, by ADR 0002 ("standardise, don't parameterise"). Each candidate
 # was checked and rejected:
@@ -45,7 +52,8 @@
 #
 # Known limits, all accepted while Kanon has no release App:
 #   - a PR opened with the workflow token triggers no workflows, so the release PR runs
-#     no CI. It changes only the changelog, the version, the manifest and the `extra-files`;
+#     no CI. It may change only the changelog, the version, the manifest and the version
+#     strings in the `extra-files`, which step 5 checks;
 #   - releases pool into the release PR, which a human merges, so during bootstrap a
 #     merge doesn't produce a release by itself, as K-SHIP-7 asks;
 #   - the release tag, pushed with the same token, triggers no tag-driven workflow.
@@ -190,3 +198,118 @@ jobs:
             gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA"
           fi
           echo "Moved $TAG to $SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Refuse a release PR that changes more than version strings
+        id: release-pr-guard
+        shell: node {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          const { execFileSync } = require('node:child_process');
+          const { posix } = require('node:path');
+          const { mkdtempSync, writeFileSync } = require('node:fs');
+          const { tmpdir } = require('node:os');
+
+          const repo = process.env.GITHUB_REPOSITORY;
+          const gh = (args) => execFileSync('gh', args, { encoding: 'utf8' });
+          const api = (path) => JSON.parse(gh(['api', path]));
+          const pages = (path) => JSON.parse(gh(['api', '--paginate', '--slurp', path])).flat();
+
+          // release-please's generic updater rewrites the version on a line and nothing else,
+          // so a line that differs once every version on it is blanked out is not its work.
+          const SEMVER = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?/g;
+          const blank = (line) => line.replace(SEMVER, '<version>');
+          const at = (pkg, file) => posix.normalize(file.startsWith('/') ? file.slice(1) : posix.join(pkg, file));
+
+          // The changed lines of one file's patch that are not a version-string change.
+          const offending = (patch) => {
+            const bad = [];
+            let removed = [];
+            let added = [];
+            const flush = () => {
+              for (let i = 0; i < Math.max(removed.length, added.length); i++) {
+                const was = removed[i];
+                const now = added[i];
+                if (was === undefined || now === undefined || blank(was) !== blank(now)) {
+                  if (was !== undefined) bad.push(`-${was}`);
+                  if (now !== undefined) bad.push(`+${now}`);
+                }
+              }
+              removed = [];
+              added = [];
+            };
+            for (const line of patch.split('\n')) {
+              if (line.startsWith('\\')) continue;
+              if (line.startsWith('-')) {
+                if (added.length > 0) flush();
+                removed.push(line.slice(1));
+              } else if (line.startsWith('+')) added.push(line.slice(1));
+              else flush();
+            }
+            flush();
+            return bad;
+          };
+
+          const releasePrs = pages(`repos/${repo}/pulls?state=open&per_page=100`).filter(
+            (pr) => pr.head.ref.startsWith('release-please--') && pr.head.repo?.full_name === repo,
+          );
+          if (releasePrs.length === 0) {
+            console.log('No open release PR to check.');
+            process.exit(0);
+          }
+
+          let failed = false;
+          for (const pr of releasePrs) {
+            const raw = api(`repos/${repo}/contents/release-please-config.json?ref=${pr.head.sha}`);
+            const config = JSON.parse(Buffer.from(raw.content, 'base64').toString('utf8'));
+            const versionFiles = new Set(['.release-please-manifest.json']);
+            const extraFiles = new Set();
+            for (const [path, pkg] of Object.entries(config.packages ?? {})) {
+              versionFiles.add(at(path, pkg['changelog-path'] ?? config['changelog-path'] ?? 'CHANGELOG.md'));
+              versionFiles.add(at(path, 'package.json'));
+              versionFiles.add(at(path, 'package-lock.json'));
+              // The `simple` release type, which docs/release.md offers, keeps its version here.
+              if ((pkg['release-type'] ?? config['release-type']) === 'simple') versionFiles.add(at(path, 'version.txt'));
+              for (const entry of [...(config['extra-files'] ?? []), ...(pkg['extra-files'] ?? [])]) {
+                extraFiles.add(at(path, typeof entry === 'string' ? entry : entry.path));
+              }
+            }
+
+            const problems = [];
+            for (const file of pages(`repos/${repo}/pulls/${pr.number}/files?per_page=100`)) {
+              if (versionFiles.has(file.filename)) continue;
+              // Any other modified file is held to the same version-only rule as the
+              // `extra-files`, so a release type's own version files (pyproject.toml,
+              // Cargo.toml, pom.xml, ...) pass without Kanon naming each one, and the workflow
+              // stays language-agnostic. A file added, removed or renamed is never a version
+              // string's change.
+              if (file.status !== 'modified') {
+                problems.push(`${file.filename}: ${file.status}${extraFiles.has(file.filename) ? '' : ', and it is not in extra-files'}`);
+              }
+              else if (typeof file.patch !== 'string') problems.push(`${file.filename}: its diff is too large for GitHub to return, so it can't be checked`);
+              else for (const line of offending(file.patch)) problems.push(`${file.filename}: ${line}`);
+            }
+
+            if (problems.length === 0) {
+              console.log(`Release PR #${pr.number} changes only version strings outside the changelog and the version files.`);
+              continue;
+            }
+            failed = true;
+            const shown = problems.slice(0, 60);
+            const more = problems.length > shown.length ? `\n…and ${problems.length - shown.length} more.` : '';
+            const marker = `<!-- kanon-release-pr-guard ${pr.head.sha} -->`;
+            const body =
+              `${marker}\n**This release PR is stale: merging it would revert changes on \`${pr.base.ref}\`.** ` +
+              'Outside the changelog, the manifest, `package.json` and `package-lock.json`, a release PR may change only version strings, and this one changes more:\n\n' +
+              '````diff\n' + shown.join('\n') + more + '\n````\n\n' +
+              `Don't merge it. Close it and delete its branch, \`${pr.head.ref}\`, and the next push to \`${pr.base.ref}\` opens a fresh one; or re-run the Release workflow on \`${pr.base.ref}\` and check that this comment doesn't come back.`;
+            console.log(`::error title=Release PR is stale::Release PR #${pr.number} would revert changes on ${pr.base.ref}: ${problems.length} line(s) beyond version strings.`);
+            console.error(body);
+            const comments = pages(`repos/${repo}/issues/${pr.number}/comments?per_page=100`);
+            if (!comments.some((c) => (c.body ?? '').includes(marker))) {
+              const file = `${mkdtempSync(`${tmpdir()}/release-pr-guard-`)}/body.md`;
+              writeFileSync(file, body);
+              gh(['api', '-X', 'POST', `repos/${repo}/issues/${pr.number}/comments`, '-F', `body=@${file}`]);
+            }
+          }
+          if (failed) process.exit(1);

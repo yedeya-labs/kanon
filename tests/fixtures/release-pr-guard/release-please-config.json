@@ -1,0 +1,76 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "kanon",
+      "changelog-path": "CHANGELOG.md",
+      "initial-version": "0.1.0",
+      "include-component-in-tag": false,
+      "include-v-in-tag": true,
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": false,
+      "extra-files": [
+        "README.md",
+        "actions/agent-classify/README.md",
+        "actions/agent-finish/README.md",
+        "actions/agent-run/README.md",
+        "actions/agent-setup/README.md",
+        "actions/agent-telemetry/README.md",
+        "actions/dco/README.md",
+        "actions/kanon-path/README.md",
+        "actions/lane-check/README.md",
+        "actions/pr-title/README.md",
+        "docs/apps.md",
+        "docs/lanes.md",
+        "docs/release.md"
+      ],
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "Features"
+        },
+        {
+          "type": "fix",
+          "section": "Bug Fixes"
+        },
+        {
+          "type": "perf",
+          "section": "Performance"
+        },
+        {
+          "type": "refactor",
+          "section": "Refactoring"
+        },
+        {
+          "type": "build",
+          "section": "Build and Dependencies"
+        },
+        {
+          "type": "revert",
+          "section": "Reverts"
+        },
+        {
+          "type": "docs",
+          "section": "Documentation"
+        },
+        {
+          "type": "style",
+          "section": "Styling"
+        },
+        {
+          "type": "test",
+          "section": "Tests"
+        },
+        {
+          "type": "ci",
+          "section": "CI"
+        },
+        {
+          "type": "chore",
+          "section": "Chores"
+        }
+      ]
+    }
+  }
+}
