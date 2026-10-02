@@ -1,6 +1,7 @@
 # Plan 0002: the hosted telemetry store
 
 - **Status:** proposed, 2026-10-02. Nothing in it is built until the Owner approves the cost (§9).
+- **Amended** 2026-10-02 by [plan 0003](0003-metrics.md) (its decision 17): six run-row fields, a second row kind (the work-item row), its key and retention, and a wider `K-OBS-16` amendment. Each amended place says so.
 - **Tracks:** #32. **Governed by:** [ADR 0007](../decisions/0007-data-boundary.md) (the data boundary), `K-OBS-13`, `K-OBS-16` to `K-OBS-18`, [ADR 0009](../decisions/0009-move-dont-rewrite.md) (move, don't rewrite), and #19 (the cloud-neutral store interface).
 - **Measured on** the reference adopter's main branch, and Kanon's, on 2026-10-02. The commands are in [Measurements](#measurements). Two numbers need AWS or GitHub access this plan did not have; they are marked **not run**, with the command the Owner runs.
 
@@ -10,7 +11,7 @@
 
 **Where it ends.**
 - **One store in a new Kanon AWS account, in Frankfurt.** A DynamoDB table, written only by a small validating function.
-- **One fixed schema, version 2.** Fifty-three fields, every string an enum or a strict pattern, and a reason code instead of a sentence. The function rejects any row with a field outside the list.
+- **One fixed schema, version 2.** Fifty-nine fields for a run row, plus a second row kind, the work-item row (plan 0003), every string an enum or a strict pattern, and a reason code instead of a sentence. The function rejects any row with a field outside the list.
 - **Per-repository roles through GitHub OIDC.** No stored secrets. A writer role can only call the function, and the function takes the partition from the role, never from the row. A reader role can only query its own partitions.
 - **The reference adopter's history moves in once,** cleaned, through the same function.
 
@@ -71,11 +72,11 @@ The partition list comes from `qa-store.mjs`, which scans the workflows for `age
 
 ### 2.1 The fixed field list
 
-**Version 2. Fifty-three fields. Each is optional unless marked required. No nesting.** Field names are the reference adopter's stored attribute names wherever one exists, so its readers keep their column names.
+**Version 2. Fifty-nine fields. Each is optional unless marked required. No nesting.** (Fifty-three as accepted; plan 0003 §5.1 added `row_kind` and the five fields marked below, before S1 shipped.) Field names are the reference adopter's stored attribute names wherever one exists, so its readers keep their column names.
 
 | Group | Fields | Type |
 |---|---|---|
-| **Row** | `schema_version` (required, `2`); `tag` (required, §2.4); `recorded_at` (required) | integer; enum; ISO-8601 UTC |
+| **Row** | `schema_version` (required, `2`); `row_kind` (required, `run`; plan 0003); `tag` (required, §2.4); `recorded_at` (required) | integer; enum; enum; ISO-8601 UTC |
 | **Run** | `run_id`, `run_attempt` (both required); `trigger`; `pr_number`, `issue_number` | integers; GitHub event name from GitHub's documented list |
 | **Who** | `role` (required): `explorer`, `implementer`, `reviewer`, `merger`, `lead`, `overseer`; `lane` (required): Kanon's lane names | enums |
 | **Outcome** | `outcome` (required): `ok`, `unavailable`, `exhausted`, `failed`, `not-reached`; `reason` (required, §2.3); `execution_file_form`: `ok`, `no-path`, `absent`, `unparseable`, `no-result-event`; `terminal_reason`; `is_error`; `api_error_status`; `verdict`: `approved`, `changes_requested` | enums; boolean; integer 100 to 599 |
@@ -83,8 +84,13 @@ The partition list comes from `qa-store.mjs`, which scans the workflows for `age
 | **Configuration** | `model`, `configured_model`; `effort`: `low`, `medium`, `high`, `xhigh`, `max`; `max_turns`; `autocompact`; `config_fingerprint` | model id pattern `^[a-z0-9][a-z0-9.-]{0,63}(\[1m\])?$`; enum; integer; `auto` or `^\d+[km]?$`; `^[0-9a-f]{12}$` |
 | **Cost** | `total_cost_usd`; `num_turns`, `duration_ms`, `duration_api_ms` | number 0 to 1,000; integers |
 | **Tokens** | `input_tokens`, `output_tokens`, `total_input_tokens`, `thinking_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cache_write_1h_tokens`, `cache_write_5m_tokens` | integers |
-| **Behaviour** | `permission_denials`, `subagents_spawned`, `subagents_completed`, `subagents_failed`, `subagents_max_depth` | integers |
+| **Behaviour** | `permission_denials`, `subagents_spawned`, `subagents_completed`, `subagents_failed`, `subagents_max_depth`; `tool_calls`, `tool_errors`, `compactions` (plan 0003) | integers |
+| **Job** (plan 0003) | `job_status`: `success`, `failure`, `cancelled`; `timed_out` | enum; boolean |
 | **Work size** | `changed_lines`, `changed_files`, `issue_body_chars`, `issue_paths_named`, `produced_lines`, `artifacts_filed`, `severities_critical`, `severities_high`, `severities_medium`, `severities_low` | integers |
+
+**How the plan 0003 fields are derived.** `tool_calls` counts `tool_use` blocks in the execution file, and `tool_errors` the `tool_result` blocks with `is_error: true`. `compactions` counts the CLI's compaction-boundary system events. `job_status` is `job.status`, which the lane passes to `agent-finish`. `timed_out` is true when `job_status` is `cancelled` and the job ran at least its `timeout-minutes`, which the lane passes too. S1 checks against a real run that the execution file carries every tool and compaction event; where it doesn't, those fields stay absent, never zero.
+
+**The second row kind.** A work-item row (`row_kind: work_item`, its own version 1) describes one pull request: its size, band, flow, accuracy, reviewer, autonomy and Kanon-health fields. Its field list is [plan 0003 §3.3](0003-metrics.md#33-the-fields). It lives in the same table and the same schema module, and passes through the same function.
 
 Every integer is non-negative and bounded below 2³¹. `terminal_reason` is an enum that starts from the values found in the reference adopter's history (§7 lists them in its dry run), plus `other`. The normaliser maps any new CLI value to `other`, so a CLI release can't make rows fail.
 
@@ -94,7 +100,7 @@ Every integer is non-negative and bounded below 2³¹. `terminal_reason` is an e
 
 ### 2.2 The version field
 
-`schema_version` is required. The store accepts each version it lists, each with its own field list. A new version is a Kanon release that adds a list; the old one stays accepted until no supported Kanon release writes it. Readers see the version on every row.
+`schema_version` and `row_kind` are required. The store keeps one field list per **(`row_kind`, `schema_version`)** pair, and accepts each pair it lists. Run rows start at version 2, work-item rows at version 1. A new version is a Kanon release that adds a list; the old one stays accepted until no supported Kanon release writes it. Readers see the version on every row.
 
 ### 2.3 Reason codes
 
@@ -123,7 +129,7 @@ Smoke and test rows are stored, which proves the path end to end, but they expir
 
 ### 2.5 How the store rejects a field outside the list
 
-**One schema module,** `actions/agent-telemetry/schema.mjs` (`node:` built-ins only), exports the field lists and a `validate(row)` function. The same file at the same tag is used three times:
+**One schema module,** `actions/agent-telemetry/schema.mjs` (`node:` built-ins only), exports the field lists and a `validate(row)` function. `validate` reads `row_kind` first and checks the row against that kind's list. The work-item row's list fields (`closing_issues`, `fix_prs`, `escalation_reasons`, `guard_failures`) are checked element by element, against their number pattern or Kanon's code list. Plan 0003's `bandOf` and `areaOf` live in the same module. The same file at the same tag is used three times:
 1. **By the normaliser's tests:** every fixture's row must validate.
 2. **By the collector,** before it sends a row, so a bad row fails the collector with the field's name.
 3. **By the ingest function** (§4), which is the enforcement. A row with any field not in its version's list, a value of the wrong type, a string outside its enum or pattern, or a reason that doesn't match its outcome, is **rejected whole**, with HTTP 422 and the offending field **names**. The function never echoes values, so a bad row can't leak into a log.
@@ -179,7 +185,8 @@ The table is guidance for reading the data, not a field. The store records facts
 - **One Lambda function** (Node 24, `node:` built-ins and the schema module) with a **function URL, auth type `AWS_IAM`**. Its resource policy allows only the writer roles.
 - **The collector sends** up to 25 rows per `POST`, signed with SigV4 by the runner's `curl --aws-sigv4`. No SDK, no new dependency.
 - **The function reads the caller's role** from the request context (`requestContext.authorizer.iam.userArn`), maps it to the adopter's key, and builds the key itself: `pk = <key>#<lane>`, `sk = <recorded_at as YYYYMMDDTHHMMSSZ>#<run id>-<attempt>-<pr or issue number, or 0>`. **The row can't name a partition**, so a writer can only ever write its own.
-- **It checks** `recorded_at` is between 8 days ago and 10 minutes ahead, which is artifact retention plus slack, so a collector can't backdate rows.
+- **A work-item row** (plan 0003) gets `pk = <key>#work`. **`work` is reserved:** no lane may be named `work`, and the schema module's test fails if the lane enum ever contains it. Its sort key is `sk = pr-<pr number, zero-padded to ten digits>`. The key holds no date, so a PR closed, reopened and closed again overwrites its one row instead of leaving a second (plan 0003 §3.1). Its `closed_at` must be in the past and at most 13 months old. A work item is rewritten whole when a later revert, linked fix or follow-up close changes it, and the rewrite has the same key, so it overwrites.
+- **It checks** `recorded_at` is between 8 days ago and 10 minutes ahead, which is artifact retention plus slack, so a collector can't backdate rows. This applies to both row kinds: a work-item row's `recorded_at` is when it was derived, not when its PR closed.
 - **It writes with `PutItem`.** A re-sent row has the same key and overwrites identically, as today.
 - **It answers per row,** and the collector turns red on any rejection, which keeps today's paging contract.
 - **Hard limits:** reserved concurrency of 2, and a body of at most 256 KB. An adopter writing garbage can fill only its own partition, slowly.
@@ -202,7 +209,7 @@ The table is guidance for reading the data, not a field. The store records facts
 
 CloudFormation needs only the AWS CLI. AWS keeps the state. `DeletionPolicy: Retain` and deletion protection on the table make its lifecycle independent of the stack, which `K-OBS-17` requires. The Lambda code is packaged with `aws cloudformation package` from a Kanon release tag. The template lives at `infra/telemetry/` and is parsed by a unit test, like the actions.
 
-**The register is not public.** The list of opted-in repositories, their keys, and their reader environments is a parameter file the Owner keeps outside the public tree. Publishing it would tell everyone who opted in. Kanon's public tree holds the template and an example register naming only Kanon. **Rows carry the opaque key, never the repository name,** so the table alone doesn't say whose rows it holds.
+**The register is not public.** The list of opted-in repositories, their keys, and their reader environments is a parameter file the Owner keeps outside the public tree. Publishing it would tell everyone who opted in. Kanon's public tree holds the template and an example register naming only Kanon. **Rows carry the opaque key, never the repository name,** so the table alone doesn't say whose rows it holds. **It also holds, per key, the adopter's time from install to first review** (plan 0003 §4, group 9), which describes one adopter and so never enters the public tree; only its distribution across adopters is published, under the three-adopter rule (§6).
 
 **Behind #19's interface.** The store is defined by four operations, and the AWS stack is their first implementation:
 
@@ -210,6 +217,7 @@ CloudFormation needs only the AWS CLI. AWS keeps the state. `DeletionPolicy: Ret
 |---|---|---|
 | `put(rows)` | the collector | `POST` to the ingest function |
 | `query(lane, from, to)` | the adopter's own readers | a Kanon read helper over `aws dynamodb query` with the reader role |
+| `query('work', from, to)` (plan 0003) | the adopter's own readers, and its metrics report | the same helper, reading the `<key>#work` partition and filtering on `closed_at`; the partition is small (plan 0003 §8) |
 | `erase(adopter)` | the Owner | §10 |
 | `aggregate()` | the Owner | §6 |
 
@@ -228,6 +236,7 @@ The dispatch sweep keeps its three-field projection.
 
 **Cross-adopter aggregates: none published at the start.**
 - The first one, when there is something to publish, is per lane and model: run count, and median and 90th-percentile cost per run, on `tag = run` rows only.
+- Plan 0003 adds its three headline indicators per complexity band (cost per merged work item, yield, escaped-defect rate), under the same three-adopter rule, with intervals by a bootstrap over adopters.
 - A cell is published only when **at least three distinct adopters** contribute to it. Nothing names an adopter.
 - It is computed by an Owner-run script, not on a schedule. The three first adopters are all the Owner's, so the Owner decides when aggregates mean anything (decision 7).
 
@@ -247,6 +256,13 @@ The dispatch sweep keeps its three-field projection.
 3. **Dry run.** The script prints, per lane, the rows exported, the rows to import, the reasons dropped, and every distinct `terminal_reason`. These are counts and enum values only. They seed the `terminal_reason` enum and go into the import PR.
 4. **Import** through the function, with an **importer role** only the Owner can assume. It may name the adopter key, and it accepts `recorded_at` up to 13 months back. It is deleted afterwards.
 
+**The backfill role (plan 0003, step S7a)** is a separate, narrower role, not the importer kept alive. The importer is the most powerful writer the store ever has: it names any adopter's partition **and** backdates. Keeping it from S5 to S7a would leave that power standing for weeks, for a job that needs only half of it. A work-item row's `recorded_at` is when it was derived, so the backfill needs no backdating. So the backfill role:
+- may be assumed only by the Owner, like the importer;
+- may name the adopter key;
+- is accepted for `row_kind: work_item` rows only;
+- gets the normal `recorded_at` window (§4), not the importer's 13 months;
+- is added to the template for S7a and removed from it when the backfill is done, so between S5 and S7a no role can name an adopter's key.
+
 | Old `agent` | `lane` | `role` |
 |---|---|---|
 | `reviewer` | `review` | reviewer |
@@ -265,13 +281,14 @@ The dispatch sweep keeps its three-field projection.
 
 | Step | Where | What | Falsifiable check |
 |---|---|---|---|
-| **S1** | Kanon vN | The schema module (§2.5). `agent-classify` returns a code beside its sentence. `agent-telemetry` gains `tag` and `lane` inputs, the spine passes each stage's outcome for `failed_stage`, and Kanon's scripts write their `kanon_error` codes; `agent-telemetry` uploads a **second** artifact, `kanon-telemetry-<lane>-<run id>-<attempt>`, holding the version-2 row. `K-OBS-16` is amended (decision 2). | Every fixture's version-2 row validates. **Mutations:** a row with one extra field, a `reason` sentence, or `reason: turn_cap` with `outcome: ok`, a `not-reached` row without `failed_stage`, or a `kanon_error` outside the list each fails `validate`. A lane whose hook fails records `failed_stage: hook` and nothing else from the hook. The reference adopter's collector still matches only `agent-telemetry-*`, so after its Dependabot bump its next sweep pushes the same number of rows as the one before. |
+| **S1** | Kanon vN | The schema module (§2.5). `agent-classify` returns a code beside its sentence. `agent-telemetry` gains `tag` and `lane` inputs, the spine passes each stage's outcome for `failed_stage`, and Kanon's scripts write their `kanon_error` codes; `agent-telemetry` uploads a **second** artifact, `kanon-telemetry-<lane>-<run id>-<attempt>`, holding the version-2 row. The row carries `row_kind: run` and plan 0003's five run fields (§2.1); the schema module holds the work-item field list too. `K-OBS-16` is amended (decision 2, extended by plan 0003). | Every fixture's version-2 row validates. A cancelled job records `job_status: cancelled`, and an execution file with no tool events leaves `tool_errors` absent, not 0. **Mutations:** a run row with `row_kind: work_item`, or a work-item row carrying a run field, fails; a row with one extra field, a `reason` sentence, or `reason: turn_cap` with `outcome: ok`, a `not-reached` row without `failed_stage`, or a `kanon_error` outside the list each fails `validate`. A lane whose hook fails records `failed_stage: hook` and nothing else from the hook. The reference adopter's collector still matches only `agent-telemetry-*`, so after its Dependabot bump its next sweep pushes the same number of rows as the one before. |
 | **S2** | Owner | Create the `kanon` account, the region SCP and the $1 budget. | `aws organizations list-accounts` lists it; a `describe` call in `us-east-1` from inside it is denied by the SCP; the budget exists. |
 | **S3** | Kanon PR; Owner deploys | The template (§4, §5): table, function, URL, OIDC provider, table resource policy, and roles for Kanon, the reference adopter and the importer. A verify script ships with it. | The Owner runs the verify script, which sends `tag: test` rows: a valid row gets 200; a row with an extra field gets 422 naming that field; a row naming a partition gets 422; the reader role querying another adopter's key gets `AccessDeniedException`; a direct `PutItem` with the writer role is denied; the stored row's `expires_at` is 30 days out. |
 | **S4** | adopter | **Prepare in the adopter** (ADR 0009 §4). Its collector also sends each `kanon-telemetry-*` row to the function, after its existing push. Its job gets the `kanon-telemetry` environment and the writer role, and keeps the QA role for the old push. | For one week, the hosted store's `tag = run` rows per lane equal the adopter's new `COST#` rows per agent over the same window, and the collector logged no rejections. |
 | **S5** | Owner, with the Kanon script | Import the history (§7), from 2026-09-04 to the start of S4. | Per lane: exported = imported + stopped, and stopped = 0. The dry-run counts are in the import PR. The hosted store's oldest `tag = run` row is from 2026-09-04. |
 | **S6** | adopter | Switch the four readers to the read helper and the reader role. | `token-trend.mjs` with a fixed `--now` prints the same report from both stores; `cache-ttl-check.mjs` reports the same row count. Any difference is explained before S7. |
 | **S7** | Kanon vN+k, adopter | Move the collector into Kanon as the reusable workflow `telemetry-collect.yml`, sending only version 2 (ADR 0009 §2: one step, no second live copy). The adopter's caller keeps the schedule. Its QA role and the `COST#` push go. Kanon installs its own caller. The next release stops uploading the version-1 artifact. | The adopter's table gets no `COST#` row dated after the switch. Kanon's collector is green, and Kanon's smoke rows appear with `tag: smoke` and nothing else. |
+| **S7a** | Kanon, after S7 | **The work-item row starts:** [plan 0003](0003-metrics.md)'s steps M4 to M7. The work-item step joins the collector Kanon now owns, the reference adopter's and Kanon's work items are backfilled from 2026-09-04 through the **backfill role** (§7), and the metrics report and public page follow. The backfill role is created for this step and deleted when the backfill is done. | Plan 0003 §7's checks for M4 to M7. The backfill role's own checks: a `run` row sent with it gets 422; a work-item row whose `recorded_at` is older than 8 days gets 422; after the backfill, the role no longer exists. |
 | **S8** | gate | **The store is live before step 6 of plan 0001.** At step 6, Kolophon's register entry, roles and collector caller go in with its other callers. | Kolophon's first review run's row is in the hosted store with `tag: run`, and in no other store. |
 | **S9** | Kanon | **Kanon writes `run` rows from #22,** when the Reviewer runs on Kanon's PRs. Nothing new is needed; S7 installed the collector. | The first review of a Kanon PR has its row in the hosted store. |
 | **S10** | Kanon account, later | **Kanon files its own bugs (#41).** A scheduled job reads the aggregates and files a Kanon issue for a new combination of `failed_stage`, `kanon_error` and `kanon_version`, or a rise in failures after a release. The issue holds counts and codes only. It needs a few weeks of data first, and the Owner approves its thresholds, cadence and cost separately (the cost-discussion rule). | A seeded `test` combination files exactly one Kanon issue, and a second run updates that issue instead of filing another. |
@@ -286,14 +303,17 @@ The dispatch sweep keeps its three-field projection.
 
 **Estimate: about $0.05 a month, under $0.10, and under $5 at a hundred times the volume.** Approval is asked for a **$1 ceiling**, watched by a free budget alert.
 
-**Volume.** The reference adopter writes about 42 rows a day (quoted, §1.3). Kanon and Kolophon are assumed to write no more each. That is at most **4,000 rows a month**, and about **52,000 held** at 13 months. A version-2 row is about 1.2 KB, or 2 write units.
+**Plan 0003's work-item rows add about $0.03 a month** (its §8, approved by the Owner, 2026-10-02), so the store stays under $0.10, and under $9 at a hundred times the volume. The $1 ceiling is unchanged. The work-item step runs inside the existing collector job, so it adds no schedule; on a private adopter it can add up to one billed minute per hourly run, which plan 0003 measures in its step M4.
+
+**Volume.** The reference adopter writes about 42 rows a day (quoted, §1.3). Kanon and Kolophon are assumed to write no more each. That is at most **4,000 rows a month**, and about **52,000 held** at 13 months. A version-2 run row is about 1.35 KB (1.2 KB as accepted, plus about 0.15 KB for plan 0003's six fields), or 2 write units.
 
 | Item | Driver | Month |
 |---|---|---|
 | DynamoDB writes, on demand | 8,000 write units | < $0.01 |
 | DynamoDB reads | weekly full reads of each lane plus the daily sweep: about 25,000 read units | < $0.01 |
-| DynamoDB storage | about 62 MB at steady state | about $0.02 |
-| Point-in-time recovery | the same 62 MB | about $0.015 |
+| DynamoDB storage | about 70 MB at steady state (62 MB before plan 0003's run fields) | about $0.02 |
+| Work-item rows (plan 0003 §8) | at most 1,600 writes a month, about 34 MB held, weekly report reads | about $0.03 in all |
+| Point-in-time recovery | the same 70 MB | about $0.02 |
 | Lambda requests and compute | about 2,200 calls (hourly collectors, three adopters), 128 MB, under a second each | < $0.01; inside the free tier |
 | CloudWatch Logs | keys and field names only, 30-day retention | < $0.01 |
 | Account, IAM roles, OIDC provider, SCP, function URL, TTL deletes | | $0 |
@@ -311,11 +331,11 @@ The dispatch sweep keeps its three-field projection.
 
 ## 10. Retention and deletion (decision 11)
 
-- **Thirteen months.** The function sets `expires_at` to `recorded_at` plus 13 calendar months (30 days for `smoke` and `test`). DynamoDB's TTL deletes expired items at no cost, usually within a few days. **The read helper filters `expires_at > now`,** so a row past its date is never read even before it is deleted.
+- **Thirteen months.** The function sets `expires_at` to `recorded_at` plus 13 calendar months (30 days for `smoke` and `test`). **A work-item row expires at `closed_at` plus 13 months** (plan 0003), never `recorded_at` plus 13, so a rewrite can't extend its retention. DynamoDB's TTL deletes expired items at no cost, usually within a few days. **The read helper filters `expires_at > now`,** so a row past its date is never read even before it is deleted.
 - **Deletion on request,** done by the Owner with an erase script:
   1. remove the adopter from the register and redeploy, which deletes both its roles, so writes and reads stop at once;
-  2. delete every partition `<key>#<lane>`, one per lane in the enum. The lane list is closed, so this is complete without a scan;
-  3. record the date and the key, not the repository, in the private register.
+  2. delete every partition `<key>#<lane>`, one per lane in the enum, **and `<key>#work`** (plan 0003). The lane list is closed, so this is complete without a scan;
+  3. remove the key's time from install to first review from the private register (plan 0003), and record the date and the key, not the repository, in it.
 - **Backups.** Point-in-time recovery keeps 35 days. So the promise is: **deleted from the table at once, and from backups within 35 days.** The alternative, no point-in-time recovery, would make an operator mistake unrecoverable for every adopter's history. The ingest logs hold keys and field names only, and expire in 30 days.
 
 ## Measurements
@@ -403,8 +423,8 @@ Repeat with `AWSLambda` and `AmazonCloudWatch`.
 
 ## Decisions for the Owner
 
-1. **Accepted by the Owner, 2026-10-02.** **The schema** (§2): version 2, fifty-three flat fields (the three attribution fields added by the Owner the same day, §2.6), every string an enum or a strict pattern, `tag` required, rows rejected whole.
-2. **Accepted by the Owner, 2026-10-02.** **Amend `K-OBS-16`'s allowed list.** It is a closed list, and it doesn't name fields the cost work needs and that hold no content: the run id and attempt, the trigger, the time, the configuration (effort, turn cap, compaction, fingerprint), work-size and output counts, the verdict, and the diagnostic codes (terminal reason, API status, error flag, execution-file form), plus the attribution codes (Kanon version, failed stage, Kanon error code, §2.6). The amendment adds these five groups to the rule, with ADR 0007 noted, in S1. Without it, version 2 breaks the rule it exists to enforce.
+1. **Accepted by the Owner, 2026-10-02.** **The schema** (§2): version 2, fifty-three flat fields (the three attribution fields added by the Owner the same day, §2.6), every string an enum or a strict pattern, `tag` required, rows rejected whole. **Amended 2026-10-02** by plan 0003's decisions 12 and 17: fifty-nine run fields with `row_kind` required, and the work-item row as a second kind.
+2. **Accepted by the Owner, 2026-10-02.** **Amend `K-OBS-16`'s allowed list.** It is a closed list, and it doesn't name fields the cost work needs and that hold no content: the run id and attempt, the trigger, the time, the configuration (effort, turn cap, compaction, fingerprint), work-size and output counts, the verdict, and the diagnostic codes (terminal reason, API status, error flag, execution-file form), plus the attribution codes (Kanon version, failed stage, Kanon error code, §2.6). The amendment adds these five groups to the rule, with ADR 0007 noted, in S1. Without it, version 2 breaks the rule it exists to enforce. **Extended 2026-10-02** by plan 0003 (§5.3, decision 17): the same amendment also adds six groups for the work-item row, each metadata: work amounts (counts of lines, files, directories, files per area, tests, acceptance criteria, cited spec ids, blocking issues and commits, and booleans per escalation category from Kanon's closed list); times of platform events and the durations between them; actor classes (a role, `human` or `other_bot`, never a login, name or account id); label-derived enums and counts (origin, follow-up severities and fates, check conclusions); Kanon's own codes (the Merger's escalation reasons, guard ids); and linked numbers (closing issues, and the PRs that revert or fix an item). **Plan 0003's five new run-row fields** need no new group: `tool_calls`, `tool_errors` and `compactions` are counts of the run's own behaviour, covered by the work-size and output counts above like the accepted Behaviour fields, and `job_status` and `timed_out` are diagnostic codes, covered with the terminal reason and error flag. The rule's "never" list is unchanged. One amendment, in S1.
 3. **Accepted by the Owner, 2026-10-02.** **Write auth** (§3): a writer and a reader role per repository; the writer trusted only for the `kanon-telemetry` environment.
 4. **Accepted by the Owner, 2026-10-02.** **Ingest** (§4): a validating function behind an IAM-authenticated URL, with the table's resource policy making it the only writer. Option B.
 5. **Decided by the Owner, 2026-10-02:** a new `kanon` member account, a region SCP, CloudFormation, and a private register (§5). CloudFormation was chosen over the reference adopter's stack tool because the same template is what every adopter deploys for its own stores (`K-OBS-17`, `K-OBS-18`), so it must need nothing beyond the AWS CLI.
