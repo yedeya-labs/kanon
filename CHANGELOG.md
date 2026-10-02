@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.0](https://github.com/yedeya-labs/kanon/compare/v0.13.0...v0.14.0) (2026-10-02)
+
+
+### Features
+
+* **telemetry:** deploy the hosted store with CloudFormation, and verify it ([#100](https://github.com/yedeya-labs/kanon/issues/100)) ([9bfd1cb](https://github.com/yedeya-labs/kanon/commit/9bfd1cbef22d30f00fc9454b91d029d3e9ee4cca))
+
+
+### Documentation
+
+* **qa:** add Kanon's own adoption record and record the end of bootstrap ([#98](https://github.com/yedeya-labs/kanon/issues/98)) ([70eccc1](https://github.com/yedeya-labs/kanon/commit/70eccc181ffba5ff03d28ac802036d8bf1109d7e))
+
 ## [0.13.0](https://github.com/yedeya-labs/kanon/compare/v0.12.0...v0.13.0) (2026-10-02)
 
 
