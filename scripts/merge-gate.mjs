@@ -105,8 +105,10 @@ export const SELF_CHECKS = ['Review (Thomas)', 'Merge (Joshua)'];
  *     `revise` job calls, so GitHub names its jobs `revise / <job>`. Its agent job
  *     (`revise / revise / run`, through the spine) is NOT excluded: it runs the Implementer and
  *     pushes, and when it is genuinely running the Merger must wait for it.
- *   - `Merge Reconcile (Reviewer)` / `filter` checks whether the PR is already MERGED, and
- *     skips every open one; its `reconcile` job never runs on an open PR.
+ *   - `Merge Reconcile (Reviewer)` / `reconcile / filter` checks whether the PR is already
+ *     MERGED, and skips every open one; its `reconcile` job never runs on an open PR. Since
+ *     plan 0001 step 3 the lane is Kanon's reusable workflow, which the reference adopter's
+ *     `reconcile` job calls, so GitHub names its jobs `reconcile / <job>`.
  *
  * `Lead (Lead) — revise` needs no entry: the only root job of its Kanon lane (`filter`,
  * reported as `revise / filter`) is gated at job level on `review.state ==
@@ -126,7 +128,7 @@ export const SELF_CHECKS = ['Review (Thomas)', 'Merge (Joshua)'];
  */
 export const REVIEW_EVENT_CHECKS = [
   { workflow: 'Implement (Oholiab) — revise', job: 'revise / filter' },
-  { workflow: 'Merge Reconcile (Thomas)', job: 'filter' },
+  { workflow: 'Merge Reconcile (Thomas)', job: 'reconcile / filter' },
 ];
 const isReviewEventRacer = (c) =>
   REVIEW_EVENT_CHECKS.some((r) => r.workflow === c.workflowName && r.job === c.name);

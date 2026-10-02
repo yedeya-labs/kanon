@@ -85,7 +85,6 @@ export const EXEMPTIONS = [
   { file: 'docs/qa/capability-ledger.md', path: 'docs/configuration.md', reason: 'a file:line in the claude-code-action repository, quoted as evidence' },
   { file: 'docs/qa/capability-ledger.md', path: 'docs/security.md', reason: 'a file:line in the claude-code-action repository, quoted as evidence' },
   { file: 'docs/agentic-qa-pipeline.md', path: 'docs/a.md', reason: 'the same illustrative cite, in the doc describing that telemetry field' },
-  { file: 'scripts/qa/label-guard.mjs', path: '.github/labels.yml', reason: 'names a declared-list design this guard deliberately does NOT adopt' },
   { file: '.github/ISSUE_TEMPLATE/agent-implement.md', path: 'docs/qa/specs/____.md', reason: 'a blank the issue author fills in' },
 ];
 
