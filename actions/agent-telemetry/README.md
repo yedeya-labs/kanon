@@ -34,9 +34,9 @@ Turns `claude-code-action`'s result file into one telemetry row (cost, turns, to
 | `outcome_label`, `artifacts_filed`, `severities` | no | The lane's own result columns. Empty adds no column. |
 | `lane` | no | Kanon's lane name (`LANES` in [`schema.mjs`](schema.mjs)). Set, the action also writes the version-2 row. |
 | `tag` | no | `run` (the default), `smoke` or `test`. Every read and aggregate keeps only `run`. |
-| `stage_outcomes` | no | The lane's stage outcomes as `stage=outcome` pairs (`token`, `checkout`, `hook`, `setup`, `agent`, `finish`). The row's `failed_stage` is the first that was not success. |
+| `stages` | no | The lane's stages in the order it runs them, as `stage=conclusion` pairs (`token`, `checkout`, `hook`, `setup`, `agent`, `finish`). The row's `failed_stage` is the first that ended the run. A step the lane runs on past concludes `success`, so it is never blamed. |
 | `kanon_error` | no | A code from Kanon's error list, when one of Kanon's steps failed and wrote one. |
-| `job_status`, `job_started_at`, `timeout_minutes` | no | The job's status, start and timeout, for `job_status` and `timed_out`. |
+| `job_status`, `job_started_at`, `timeout_minutes` | no | The job's status, start and timeout, for `job_status` and `timed_out`. A cancel within three minutes of the limit counts as the timeout, because the start stamp is the job's first step, not its start. |
 | `retention_days` | no | How long the artifacts are kept for the collector. Default 7. |
 
 ## Two rows, two artifacts

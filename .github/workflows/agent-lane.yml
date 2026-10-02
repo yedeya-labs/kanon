@@ -391,15 +391,17 @@ jobs:
           quality-pr-label: ${{ inputs.quality-pr-label }}
           started-at: ${{ steps.agent.outputs.started-at }}
           github-token: ${{ steps.app-token.outputs.token }}
-          # THE VERSION-2 ROW (plan 0002 §2.6). Each stage's step OUTCOME, so the row can say
-          # where a red run failed. The hook's is the presence check's when that failed, else
-          # the hook's own: an outcome only, never the adopter's step names.
+          # THE VERSION-2 ROW (plan 0002 §2.6). Each stage's step CONCLUSION, in the order this
+          # spine runs them, so the row can say where a red run failed. The hook's is the
+          # presence check's when that failed, else the hook's own: a conclusion only, never
+          # the adopter's step names.
           lane: ${{ inputs.lane }}
-          token-outcome: ${{ steps.app-token.outcome }}
-          checkout-outcome: ${{ steps.checkout.outcome }}
-          hook-outcome: ${{ steps.hook.outcome != 'success' && steps.hook.outcome || steps.project.outcome }}
-          setup-outcome: ${{ steps.setup.outcome }}
-          agent-outcome: ${{ steps.agent.outcome }}
+          stages: >-
+            token=${{ steps.app-token.conclusion }}
+            checkout=${{ steps.checkout.conclusion }}
+            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.project.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            agent=${{ steps.agent.conclusion }}
           kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
           job-started-at: ${{ steps.job.outputs.started-at }}
           timeout-minutes: ${{ inputs.timeout-minutes }}

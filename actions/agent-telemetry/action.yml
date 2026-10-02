@@ -118,12 +118,14 @@ inputs:
       on `run`.
     required: false
     default: run
-  stage_outcomes:
+  stages:
     description: >-
-      The lane's stage outcomes, as `stage=outcome` pairs separated by spaces: `token`,
-      `checkout`, `hook`, `setup`, `agent` and `finish`, each a step's `outcome`. The row's
-      `failed_stage` is the first that was not success (plan 0002 §2.6). Outcomes only:
-      never a step's name or log, so a hook failure is recorded as `hook` and nothing else.
+      The lane's stages IN THE ORDER IT RUNS THEM, as `stage=conclusion` pairs separated by
+      spaces: `token`, `checkout`, `hook`, `setup`, `agent` and `finish`, each a step's
+      `conclusion`. The row's `failed_stage` is the first that ended the run (plan 0002 §2.6).
+      Conclusions, not outcomes: a step the lane runs on past (`continue-on-error`) concludes
+      `success` and so is never blamed. Conclusions only, never a step's name or log, so a hook
+      failure is recorded as `hook` and nothing else.
     required: false
     default: ""
   kanon_error:
@@ -245,7 +247,7 @@ runs:
         TELEMETRY_LANE: ${{ inputs.lane }}
         TELEMETRY_TAG: ${{ inputs.tag }}
         TELEMETRY_KANON_REF: ${{ github.action_ref }}
-        TELEMETRY_STAGE_OUTCOMES: ${{ inputs.stage_outcomes }}
+        TELEMETRY_STAGES: ${{ inputs.stages }}
         TELEMETRY_KANON_ERROR: ${{ inputs.kanon_error }}
         TELEMETRY_JOB_STATUS: ${{ inputs.job_status }}
         TELEMETRY_JOB_STARTED_AT: ${{ inputs.job_started_at }}

@@ -205,6 +205,12 @@ jobs:
       DATABASE_URL: postgres://kanon:kanon@localhost:5432/kanon
       PR_NUMBER: ${{ matrix.pr }}
     steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
+      # it is as close to the job's start as a step can be.
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # The token FIRST so checkout persists it as the git credential — the resolution
       # is a push, and the default token is `contents: read` here.
       - name: Mint triage-fix App token
@@ -419,13 +425,16 @@ jobs:
             --allowedTools Read,Edit,Write,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
           # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
-          # step OUTCOME, never a step's name or log.
+          # step CONCLUSION in the lane's own order, never a step's name or log.
           lane: rebase
-          token-outcome: ${{ steps.app-token.outcome }}
-          checkout-outcome: ${{ steps.checkout.outcome }}
-          hook-outcome: ${{ steps.hook.outcome != 'success' && steps.hook.outcome || steps.project.outcome }}
-          setup-outcome: ${{ steps.setup.outcome }}
-          agent-outcome: ${{ steps.agent.outcome }}
+          stages: >-
+            token=${{ steps.app-token.conclusion }}
+            checkout=${{ steps.checkout.conclusion }}
+            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.project.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "90"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
           kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
 
       # BREADCRUMBS FOR THE RETRY (RA-2519). A run that died of its CAUSE (the model was

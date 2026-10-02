@@ -86,9 +86,10 @@ export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 export const JOB_STATUSES = Object.freeze(['success', 'failure', 'cancelled']);
 
 /**
- * The lane stages, in the order a lane runs them (plan 0002 §2.6). `failed_stage` is the first
- * whose outcome was not success. A hook failure is recorded as `hook` and nothing else: the
- * adopter's own step names are its content.
+ * The lane stages' names (plan 0002 §2.6). `failed_stage` is the first stage that ended the
+ * run, in the order THAT LANE runs them, which differs between lanes (the review lane mints its
+ * token last), so the lane passes its own order and this list is only the names. A hook failure
+ * is recorded as `hook` and nothing else: the adopter's own step names are its content.
  */
 export const STAGES = Object.freeze(['token', 'checkout', 'hook', 'setup', 'agent', 'finish']);
 

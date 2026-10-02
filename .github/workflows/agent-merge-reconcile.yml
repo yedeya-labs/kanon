@@ -152,6 +152,12 @@ jobs:
     env:
       PR_NUMBER: ${{ needs.filter.outputs.pr }}
     steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
+      # it is as close to the job's start as a step can be.
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # The merged default branch — so the agent can grep whether a fold-in landed.
       # Checked out with the DEFAULT token, before the App token is minted, as it always
       # was: this arm only reads the tree and files issues through `gh`, so the persisted
@@ -327,10 +333,13 @@ jobs:
             --allowedTools Read,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
           # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
-          # step OUTCOME, never a step's name or log.
+          # step CONCLUSION in the lane's own order, never a step's name or log.
           lane: merge-reconcile
-          token-outcome: ${{ steps.app-token.outcome }}
-          checkout-outcome: ${{ steps.checkout.outcome }}
-          setup-outcome: ${{ steps.setup.outcome }}
-          agent-outcome: ${{ steps.agent.outcome }}
+          stages: >-
+            checkout=${{ steps.checkout.conclusion }}
+            token=${{ steps.app-token.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "30"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
           kanon-error: ${{ steps.setup.outputs.kanon-error }}

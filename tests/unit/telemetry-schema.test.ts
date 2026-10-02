@@ -23,7 +23,8 @@ import {
 import {
   failedStage,
   kanonVersion,
-  parseStageOutcomes,
+  parseStages,
+  TIMEOUT_SLACK_MS,
   runBoth,
   timedOut,
   transcriptCounts,
@@ -88,12 +89,12 @@ const CASES: Record<string, { file: string | null; env?: Record<string, string>;
   },
   did_not_finish: {
     file: file('failed.json', [INIT, { ...RESULT, is_error: true, terminal_reason: 'api_error', api_error_status: 529 }]),
-    env: { TELEMETRY_STAGE_OUTCOMES: 'token=success checkout=success hook=success setup=success agent=failure' },
+    env: { TELEMETRY_STAGES: 'token=success checkout=success hook=success setup=success agent=failure' },
     outcome: 'failed', reason: 'did_not_finish',
   },
   no_result_file: {
     file: null,
-    env: { TELEMETRY_STAGE_OUTCOMES: 'token=success checkout=failure hook=skipped setup=skipped agent=skipped', TELEMETRY_JOB_STATUS: 'failure' },
+    env: { TELEMETRY_STAGES: 'token=success checkout=failure hook=skipped setup=skipped agent=skipped', TELEMETRY_JOB_STATUS: 'failure' },
     outcome: 'not-reached', reason: 'no_result_file',
   },
 };
@@ -186,7 +187,7 @@ describe('every fixture\'s version-2 row validates (S1, M1)', () => {
   ];
 
   it.each(fixtures)('%s', (path) => {
-    const { v2, errors } = both(path, { TELEMETRY_STAGE_OUTCOMES: 'token=success checkout=success hook=success setup=success agent=success' });
+    const { v2, errors } = both(path, { TELEMETRY_STAGES: 'token=success checkout=success hook=success setup=success agent=success' });
     expect(errors).toEqual([]);
     expect(validate(v2)).toEqual({ ok: true });
   });
@@ -298,34 +299,55 @@ describe('fault attribution (plan 0002 §2.6)', () => {
     expect(kanonVersion('')).toBe('dev');
   });
 
-  it('takes the first stage that was not success, in the lane\'s order', () => {
-    const o = parseStageOutcomes('token=success checkout=success hook=failure setup=skipped agent=skipped finish=success');
+  it('takes the first stage that ended the run, in the order the lane gave', () => {
+    const o = parseStages('token=success checkout=success hook=failure setup=skipped agent=skipped finish=success');
     expect(failedStage(o, 'not-reached')).toBe('hook');
     expect(failedStage(o, 'ok')).toBeUndefined();
-    expect(failedStage(parseStageOutcomes('token=success checkout=success hook=success setup=success agent=cancelled'), 'not-reached')).toBe('agent');
-    expect(failedStage(parseStageOutcomes('token=skipped checkout=skipped hook=skipped setup=skipped agent=skipped finish=skipped'), 'not-reached')).toBe('token');
-    expect(failedStage(parseStageOutcomes('token=success checkout=success hook=success setup=success agent=success finish=skipped'), 'failed')).toBe('agent');
-    expect(failedStage(parseStageOutcomes('token=success checkout=success hook=success setup=success agent=success finish=failure'), 'failed')).toBe('finish');
-    expect(failedStage(parseStageOutcomes('token=failure checkout=skipped hook=skipped setup=skipped agent=failure'), 'failed')).toBe('token');
-    expect(failedStage({}, 'failed')).toBeUndefined();
-    expect(STAGES).toEqual(['token', 'checkout', 'hook', 'setup', 'agent', 'finish']);
+    expect(failedStage(parseStages('token=success checkout=success hook=success setup=success agent=cancelled'), 'not-reached')).toBe('agent');
+    expect(failedStage(parseStages('token=skipped checkout=skipped hook=skipped setup=skipped agent=skipped finish=skipped'), 'not-reached')).toBe('token');
+    expect(failedStage(parseStages('token=success checkout=success hook=success setup=success agent=success finish=skipped'), 'failed')).toBe('agent');
+    expect(failedStage(parseStages('token=success checkout=success hook=success setup=success agent=success finish=failure'), 'failed')).toBe('finish');
+    expect(failedStage(parseStages('token=failure checkout=skipped hook=skipped setup=skipped agent=failure'), 'failed')).toBe('token');
+    expect(failedStage([], 'failed')).toBeUndefined();
+    expect([...STAGES].sort()).toEqual(['agent', 'checkout', 'finish', 'hook', 'setup', 'token']);
+  });
+
+  it('keeps the lane\'s own order: the review lane mints its token last', () => {
+    // A Kanon step between the checkout and agent-setup failed: the first stage the review
+    // lane never reached is `setup`, not `token`, which it runs after the hook.
+    const review = parseStages('checkout=success setup=skipped hook=skipped token=skipped agent=skipped finish=success');
+    expect(review.map(([s]) => s)).toEqual(['checkout', 'setup', 'hook', 'token', 'agent', 'finish']);
+    expect(failedStage(review, 'not-reached')).toBe('setup');
+    expect(failedStage(parseStages('checkout=success token=failure setup=skipped agent=skipped'), 'not-reached')).toBe('token');
+    expect(parseStages('hook=failure hook=success')).toEqual([['hook', 'failure']]);
+  });
+
+  it('never blames a stage the lane ran on past: a tolerated hook, then a failed agent, is the agent', () => {
+    // The review lane's hook steps are `continue-on-error`: their CONCLUSION is success, which
+    // is what the lane passes. The agent's is too (its reconcile step reds the job instead).
+    const { v2, errors } = both(CASES.did_not_finish!.file, {
+      TELEMETRY_STAGES: 'checkout=success setup=success hook=success token=success agent=success',
+      TELEMETRY_LANE: 'review',
+    });
+    expect(errors).toEqual([]);
+    expect(v2).toMatchObject({ outcome: 'failed', failed_stage: 'agent' });
   });
 
   it('a lane whose hook fails records failed_stage hook, and nothing else from the hook', () => {
     const { v2, errors } = both(null, {
-      TELEMETRY_STAGE_OUTCOMES: 'token=success checkout=success hook=failure setup=skipped agent=skipped finish=skipped',
+      TELEMETRY_STAGES: 'token=success checkout=success hook=failure setup=skipped agent=skipped finish=skipped',
       TELEMETRY_JOB_STATUS: 'failure',
     });
     expect(errors).toEqual([]);
     expect(v2).toMatchObject({ outcome: 'not-reached', reason: 'no_result_file', failed_stage: 'hook' });
     expect(v2).not.toHaveProperty('kanon_error');
     // Only the stage outcomes come in: nothing names the hook's own steps.
-    expect(parseStageOutcomes('hook=failure install=failure Run_npm_ci=failure')).toEqual({ hook: 'failure' });
+    expect(parseStages('hook=failure install=failure Run_npm_ci=failure')).toEqual([['hook', 'failure']]);
   });
 
   it('a missing hook records Kanon\'s code for it', () => {
     const { v2, errors } = both(null, {
-      TELEMETRY_STAGE_OUTCOMES: 'token=success checkout=success hook=failure setup=skipped agent=skipped',
+      TELEMETRY_STAGES: 'token=success checkout=success hook=failure setup=skipped agent=skipped',
       TELEMETRY_KANON_ERROR: 'hook_missing',
     });
     expect(errors).toEqual([]);
@@ -334,7 +356,7 @@ describe('fault attribution (plan 0002 §2.6)', () => {
 
   it('a kanon_error outside the list leaves the row unwritten, naming the field', () => {
     const { errors } = both(null, {
-      TELEMETRY_STAGE_OUTCOMES: 'token=failure',
+      TELEMETRY_STAGES: 'token=failure',
       TELEMETRY_KANON_ERROR: 'something else',
     });
     expect(errors.map((e) => e.field)).toEqual(['kanon_error']);
@@ -365,7 +387,15 @@ describe('plan 0003 M1: the job and transcript fields', () => {
   it('a cancelled job that ran its timeout timed out; one that did not, or wasn\'t cancelled, did not', () => {
     const now = '2026-10-02T10:00:00.000Z';
     expect(timedOut('cancelled', '2026-10-02T09:15:00Z', '45', now)).toBe(true);
-    expect(timedOut('cancelled', '2026-10-02T09:30:00Z', '45', now)).toBe(false);
+    // Cancelled AT its limit, stamped 16 s after the job started (a measured setup), recorded
+    // 5 s after the cancel: the stamp sees 44m49s, and it is still the timeout.
+    expect(timedOut('cancelled', '2026-10-02T09:15:16Z', '45', '2026-10-02T10:00:05Z')).toBe(true);
+    // …and with a slow image pull, a minute and a half late.
+    expect(timedOut('cancelled', '2026-10-02T09:16:30Z', '45', '2026-10-02T10:00:05Z')).toBe(true);
+    // Cancelled clearly before the limit: by hand, ten minutes short, or just past the slack.
+    expect(timedOut('cancelled', '2026-10-02T09:25:00Z', '45', now)).toBe(false);
+    expect(timedOut('cancelled', '2026-10-02T09:18:01Z', '45', now)).toBe(false);
+    expect(TIMEOUT_SLACK_MS).toBe(180_000);
     expect(timedOut('failure', '2026-10-02T09:00:00Z', '45', now)).toBe(false);
     expect(timedOut('cancelled', '', '45', now)).toBeUndefined();
     expect(timedOut('', '2026-10-02T09:00:00Z', '45', now)).toBeUndefined();
@@ -431,33 +461,64 @@ describe('where the rows go', () => {
     for (const c of lanes) expect(LANES, c.f).toContain(c.with.lane);
   });
 
-  it('passes each stage as a step outcome and never as anything a step wrote', () => {
-    const passed = finishCalls.filter((c) => c.f !== 'agent-blocks-smoke.yml');
-    expect(passed.length).toBe(6);
-    for (const c of passed) {
-      for (const [k, v] of Object.entries(c.with)) {
-        if (!k.endsWith('-outcome')) continue;
-        expect(String(v), `${c.f} ${k}`).toMatch(/^\$\{\{ [^}]*\.outcome[^}]*\}\}$/);
-        expect(String(v), `${c.f} ${k}`).not.toMatch(/outputs/);
+  type Job = { 'timeout-minutes'?: number; steps?: (Step & { id?: string; name?: string; run?: string; 'continue-on-error'?: boolean })[] };
+  const laneJobs = workflows.flatMap(({ f, doc }) => Object.values(doc.jobs as Record<string, Job>)
+    .filter((j) => (j.steps ?? []).some((s) => s.uses === '$/actions/agent-finish'))
+    .map((j) => ({ f, job: j, with: j.steps!.find((s) => s.uses === '$/actions/agent-finish')!.with ?? {} })))
+    .filter((c) => c.f !== 'agent-blocks-smoke.yml');
+
+  it('passes each stage as a step conclusion, in the order the job runs those steps', () => {
+    expect(laneJobs.length).toBe(6);
+    for (const c of laneJobs) {
+      expect(Object.keys(c.with).filter((k) => k.endsWith('-outcome')), c.f).toEqual([]);
+      const pairs = String(c.with.stages ?? '').trim().split(/\s+(?=[a-z]+=)/);
+      expect(pairs.length, c.f).toBeGreaterThanOrEqual(4);
+      const at: number[] = [];
+      for (const pair of pairs) {
+        const m = /^([a-z]+)=\$\{\{ (.*) \}\}$/.exec(pair);
+        expect(m, `${c.f} ${pair}`).not.toBeNull();
+        expect(STAGES, c.f).toContain(m![1]);
+        // A conclusion, so a tolerated step is never blamed; never an output a step wrote.
+        expect(m![2], `${c.f} ${pair}`).not.toMatch(/\.outcome|outputs/);
+        const ids = [...m![2]!.matchAll(/steps\.([a-z-]+)\.conclusion/g)].map((x) => x[1]);
+        expect(ids.length, `${c.f} ${pair}`).toBeGreaterThan(0);
+        at.push(c.job.steps!.findIndex((s) => s.id === ids[0]));
       }
-      expect(c.with['agent-outcome'], c.f).toBe('${{ steps.agent.outcome }}');
+      expect(at.every((i) => i >= 0), c.f).toBe(true);
+      expect(at, `${c.f}: stages out of the job's order`).toEqual([...at].sort((x, y) => x - y));
+      expect(pairs.at(-1), c.f).toBe('agent=${{ steps.agent.conclusion }}');
     }
   });
 
-  it('the spine hands the finish block every stage, both Kanon codes, and its start and timeout', () => {
-    const spine = finishCalls.find((c) => c.f === 'agent-lane.yml')!.with;
-    for (const stage of ['token', 'checkout', 'hook', 'setup', 'agent']) expect(spine, stage).toHaveProperty(`${stage}-outcome`);
+  it('passes no Kanon code from a step the lane runs on past', () => {
+    for (const c of laneJobs) {
+      for (const id of [...String(c.with['kanon-error'] ?? '').matchAll(/steps\.([a-z-]+)\.outputs\.kanon-error/g)].map((m) => m[1])) {
+        expect(c.job.steps!.find((s) => s.id === id)?.['continue-on-error'], `${c.f} ${id}`).not.toBe(true);
+      }
+    }
+  });
+
+  it('every lane stamps its start first and passes its own timeout, so a timed-out run says so', () => {
+    for (const c of laneJobs) {
+      expect(c.job.steps![0]?.id, c.f).toBe('job');
+      expect(c.job.steps![0]?.run, c.f).toContain('started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)');
+      expect(c.with['job-started-at'], c.f).toBe('${{ steps.job.outputs.started-at }}');
+      if (c.f === 'agent-lane.yml') expect(c.with['timeout-minutes']).toBe('${{ inputs.timeout-minutes }}');
+      else expect(Number(c.with['timeout-minutes']), c.f).toBe(c.job['timeout-minutes']);
+    }
+  });
+
+  it('the spine hands the finish block both Kanon codes and its lane', () => {
+    const spine = laneJobs.find((c) => c.f === 'agent-lane.yml')!.with;
     expect(String(spine['kanon-error'])).toContain('steps.hook.outputs.kanon-error');
     expect(String(spine['kanon-error'])).toContain('steps.setup.outputs.kanon-error');
-    expect(spine['job-started-at']).toBe('${{ steps.job.outputs.started-at }}');
-    expect(spine['timeout-minutes']).toBe('${{ inputs.timeout-minutes }}');
     expect(spine.lane).toBe('${{ inputs.lane }}');
   });
 
   it('the finish block hands all of it to the telemetry action', () => {
     const finish = parse(readFileSync('actions/agent-finish/action.yml', 'utf8')) as { runs: { steps: Step[] } };
     const t = finish.runs.steps.find((s) => s.uses === '$/actions/agent-telemetry')!.with!;
-    for (const stage of STAGES) expect(String(t.stage_outcomes), stage).toMatch(new RegExp(`\\b${stage}=\\$\\{\\{ [^}]*outcome`));
+    expect(t.stages).toBe('${{ inputs.stages }} finish=${{ steps.quality.conclusion }}');
     expect(String(t.kanon_error)).toContain('inputs.kanon-error');
     expect(String(t.kanon_error)).toContain('steps.quality.outputs.kanon-error');
     expect(t).toMatchObject({ lane: '${{ inputs.lane }}', tag: '${{ inputs.tag }}', job_status: '${{ inputs.job-status }}' });

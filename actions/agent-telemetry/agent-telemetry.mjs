@@ -625,41 +625,52 @@ export function kanonVersion(ref) {
   return m ? m[1] : "dev";
 }
 
-/** `stage=outcome` pairs, separated by spaces or commas, into a map over Kanon's stages. */
-export function parseStageOutcomes(text) {
-  const out = {};
+/**
+ * The lane's stages as `stage=conclusion` pairs, IN THE ORDER THE LANE RUNS THEM, separated by
+ * spaces or commas. Lanes differ: the spine mints its token before the checkout, the review
+ * lane mints it last, after the PR's setup. So the order is the lane's to give, and this keeps
+ * it. Names outside Kanon's stages, and a stage named twice, are dropped.
+ * @returns {[string, string][]}
+ */
+export function parseStages(text) {
+  const out = [];
   for (const pair of String(text ?? "").split(/[\s,]+/)) {
     const i = pair.indexOf("=");
     if (i < 1) continue;
     const stage = pair.slice(0, i);
     const value = pair.slice(i + 1);
-    if (STAGES.includes(stage) && value) out[stage] = value;
+    if (STAGES.includes(stage) && value && !out.some(([s]) => s === stage)) out.push([stage, value]);
   }
   return out;
 }
 
 /**
- * THE FIRST LANE STAGE WHOSE OUTCOME WAS NOT SUCCESS (§2.6), for a run that failed or was not
- * reached; undefined for any other outcome, which the schema requires.
+ * THE FIRST LANE STAGE THAT ENDED THE RUN (§2.6), for a run that failed or was not reached;
+ * undefined for any other outcome, which the schema requires.
  *
- * Only the step OUTCOMES come in, never a step's name or log, so a failure in the adopter's
- * project-setup hook is recorded as `hook` and nothing else: its own step names are its
- * content. In order:
+ * CONCLUSIONS, NOT OUTCOMES. A step's `outcome` is `failure` even when the lane marked it
+ * `continue-on-error` and ran on past it; its `conclusion` is then `success`. A stage the lane
+ * tolerated didn't end the run, so it must never be its `failed_stage`: the review lane runs
+ * on past a PR whose own project setup is broken, and an agent failure after that is the
+ * agent's, not the adopter's setup. The lanes pass conclusions.
+ *
+ * Only conclusions come in, never a step's name or log, so a failure in the adopter's
+ * project-setup hook is recorded as `hook` and nothing else. In the lane's own order:
  *   1. the first stage that failed or was cancelled;
  *   2. otherwise the first stage before `finish` that was SKIPPED: a step outside the
  *      stages failed and the lane never reached it;
- *   3. otherwise `agent`, when the lane reported the agent's outcome: every stage succeeded
- *      and the agent step still left no usable result, so the agent is where it ended.
- * A lane that reported no outcomes gets no stage, and its row fails validation rather than
- * being guessed.
+ *   3. otherwise `agent`, when the lane reported it: every stage got through and the agent
+ *      still left no usable result, so the agent is where it ended.
+ * A lane that reported no stages gets none, and its row fails validation rather than being
+ * guessed.
  */
-export function failedStage(outcomes, outcome) {
+export function failedStage(stages, outcome) {
   if (outcome !== "failed" && outcome !== "not-reached") return undefined;
-  const hit = STAGES.find((s) => outcomes[s] === "failure" || outcomes[s] === "cancelled");
-  if (hit) return hit;
-  const skipped = STAGES.filter((s) => s !== "finish").find((s) => outcomes[s] === "skipped");
-  if (skipped) return skipped;
-  return outcomes.agent ? "agent" : undefined;
+  const hit = stages.find(([, v]) => v === "failure" || v === "cancelled");
+  if (hit) return hit[0];
+  const skipped = stages.find(([s, v]) => s !== "finish" && v === "skipped");
+  if (skipped) return skipped[0];
+  return stages.some(([s]) => s === "agent") ? "agent" : undefined;
 }
 
 /**
@@ -700,9 +711,20 @@ export function verdictOf(label) {
 }
 
 /**
- * Whether the job was cancelled by its own timeout (plan 0003 §5.1): cancelled, and running
- * at least its `timeout-minutes`. False for a job that wasn't cancelled. Undefined when a
- * cancelled job's start or timeout is unknown.
+ * How close to its limit a cancel must come to count as the timeout. The lane's start stamp is
+ * its first STEP, which runs after "Set up job" and the service containers: 16 s after the
+ * job started on a measured review run, and longer when a container image has to be pulled.
+ * GitHub counts `timeout-minutes` from the job's start, so a job cancelled at its limit reads,
+ * from the stamp, as a little short of it. Three minutes covers that; a cancel earlier than
+ * that is not the timeout.
+ */
+export const TIMEOUT_SLACK_MS = 3 * 60_000;
+
+/**
+ * Whether the job was cancelled by its own timeout (plan 0003 §5.1): cancelled, at or within
+ * `TIMEOUT_SLACK_MS` of its `timeout-minutes`. False for a job that wasn't cancelled, or was
+ * cancelled clearly before its limit. Undefined when a cancelled job's start or timeout is
+ * unknown.
  */
 export function timedOut(jobStatus, startedAt, timeoutMinutes, now) {
   if (!jobStatus) return undefined;
@@ -711,7 +733,7 @@ export function timedOut(jobStatus, startedAt, timeoutMinutes, now) {
   const limit = Number(timeoutMinutes);
   const end = Date.parse(now ?? "");
   if (Number.isNaN(start) || Number.isNaN(end) || !(limit > 0)) return undefined;
-  return end - start >= limit * 60_000;
+  return end - start >= limit * 60_000 - TIMEOUT_SLACK_MS;
 }
 
 const intOf = (v) => {
@@ -751,7 +773,7 @@ export function buildRowV2(row, classification, extra) {
     api_error_status: row.api_error_status ?? undefined,
     verdict: verdictOf(row.outcome_label),
     kanon_version: kanonVersion(extra.kanon_ref),
-    failed_stage: failedStage(extra.stage_outcomes ?? {}, row.outcome),
+    failed_stage: failedStage(extra.stages ?? [], row.outcome),
     kanon_error: extra.kanon_error || undefined,
     model: row.model ?? undefined,
     configured_model: row.configured_model ?? undefined,
@@ -799,7 +821,7 @@ function readExtra(args, env, path) {
     tag: args.tag ?? env.TELEMETRY_TAG ?? "run",
     lane: args.lane ?? env.TELEMETRY_LANE ?? "",
     kanon_ref: args.kanon_ref ?? env.TELEMETRY_KANON_REF ?? "",
-    stage_outcomes: parseStageOutcomes(args.stage_outcomes ?? env.TELEMETRY_STAGE_OUTCOMES),
+    stages: parseStages(args.stages ?? env.TELEMETRY_STAGES),
     kanon_error: args.kanon_error ?? env.TELEMETRY_KANON_ERROR ?? "",
     job_status: args.job_status ?? env.TELEMETRY_JOB_STATUS ?? "",
     job_started_at: args.job_started_at ?? env.TELEMETRY_JOB_STARTED_AT ?? "",

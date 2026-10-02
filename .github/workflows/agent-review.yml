@@ -1123,6 +1123,12 @@ jobs:
       # The Reviewer's login, from the App register on the default branch (`filter`).
       REVIEWER_LOGIN: ${{ needs.filter.outputs.login }}
     steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
+      # it is as close to the job's start as a step can be.
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # BELT AND BRACES for the empty-ref failure. `decide` now emits `head_sha` on
       # every exit path, so this should be unreachable — but the consequence of it
       # being wrong is silent and severe (`actions/checkout` treats an empty `ref` as
@@ -2237,14 +2243,19 @@ jobs:
             --allowedTools Read,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
           # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
-          # step OUTCOME, never a step's name or log.
+          # step CONCLUSION in the lane's own order, never a step's name or log.
           lane: review
-          token-outcome: ${{ steps.app-token.outcome }}
-          checkout-outcome: ${{ steps.checkout.outcome }}
-          hook-outcome: ${{ steps.hook.outcome != 'success' && steps.hook.outcome || steps.project.outcome }}
-          setup-outcome: ${{ steps.setup.outcome }}
-          agent-outcome: ${{ steps.agent.outcome }}
-          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
+          stages: >-
+            checkout=${{ steps.checkout.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            hook=${{ steps.hook.conclusion }}
+            token=${{ steps.app-token.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "45"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
+          # Not the hook check's code: this lane runs on past a missing hook, so nothing of
+          # Kanon's ended the run there.
+          kanon-error: ${{ steps.setup.outputs.kanon-error }}
       - name: Upload reviewer transcript
         if: always() && steps.claim.outputs.proceed == 'true'
         uses: actions/upload-artifact@v7

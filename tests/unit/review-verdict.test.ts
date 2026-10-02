@@ -573,8 +573,10 @@ esac
     const steps = review.steps as { id?: string; name?: string; uses?: string; run?: string; if?: string }[];
     const from = steps.findIndex((s) => s.id === 'claim');
     expect(from, 'the claim step must exist').toBeGreaterThan(0);
-    // Everything before it is the empty-head refusal, which must stay unconditional.
-    expect(steps.slice(0, from).map((s) => s.name)).toEqual(['Refuse to review without a head SHA']);
+    // Everything before it is the job's start stamp (a `date`, for the telemetry row's
+    // `timed_out`) and the empty-head refusal, both of which must stay unconditional.
+    expect(steps.slice(0, from).map((s) => s.name)).toEqual(['Record when the job started', 'Refuse to review without a head SHA']);
+    expect(steps[0]?.run?.trim()).toBe('echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"');
     const after = steps.slice(from + 1);
     expect(after.length, 'a vacuous sweep proves nothing').toBeGreaterThan(10);
     for (const s of after) {

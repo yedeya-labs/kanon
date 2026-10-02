@@ -133,6 +133,12 @@ jobs:
     # the brief lane's 100 minutes is the ceiling of the same agent doing more.
     timeout-minutes: 60
     steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
+      # it is as close to the job's start as a step can be.
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # Checked out on the default token first: the gate needs the script and the brief
       # file, and a skipped or refused run must cost no minted token.
       - uses: actions/checkout@v7
@@ -376,11 +382,14 @@ jobs:
           started-at: ${{ steps.agent.outputs.started-at }}
           github-token: ${{ steps.app-token.outputs.token }}
           # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
-          # step OUTCOME, never a step's name or log.
+          # step CONCLUSION in the lane's own order, never a step's name or log.
           lane: lead-split
-          token-outcome: ${{ steps.app-token.outcome }}
-          checkout-outcome: ${{ steps.checkout.outcome }}
-          hook-outcome: ${{ steps.hook.outcome != 'success' && steps.hook.outcome || steps.project.outcome }}
-          setup-outcome: ${{ steps.setup.outcome }}
-          agent-outcome: ${{ steps.agent.outcome }}
+          stages: >-
+            token=${{ steps.app-token.conclusion }}
+            checkout=${{ steps.checkout.conclusion }}
+            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.project.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "60"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
           kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
