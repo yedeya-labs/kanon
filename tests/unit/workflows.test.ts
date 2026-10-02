@@ -207,9 +207,9 @@ describe("K-SHIP-7 Kanon's release caller", () => {
     expect(wf.on).toEqual({ push: { branches: ['main'] } });
   });
 
-  it('calls the reusable workflow by local path, from its one job', () => {
+  it('calls the reusable workflow through `$/`, from its one job', () => {
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.uses).toBe('./.github/workflows/release.yml');
+    expect(jobs[0]?.uses).toBe('$/.github/workflows/release.yml');
     expect(jobs[0]?.steps).toBeUndefined();
   });
 
