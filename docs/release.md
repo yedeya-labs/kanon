@@ -34,7 +34,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.8.1
+    uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.9.0
 ```
 
 <!-- x-release-please-end -->
