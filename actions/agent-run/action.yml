@@ -1,0 +1,99 @@
+# Building block 2 of 4 of an agent lane: RUN THE AGENT (RA-2666). See `agent-setup` for
+# why the spine is built from blocks, and the shell and input-type rules every block follows.
+#
+# CALL IT WITH `id: agent`. The block's outputs mirror the action's own names, so the
+# lane reads `steps.agent.outputs.execution_file` exactly as it did when the action was
+# a step of its own — and `steps.agent.outcome` means what it meant then: the action is the
+# last step, and the start stamp before it cannot fail.
+#
+# NOTHING TO TAKE BACK OUT OF THE TREE (RA-2697). Lanes call this block as
+# `$/actions/agent-run`, which the runner downloads into its action cache at the
+# commit that defined the lane, before the first step. It is never read from the workspace,
+# so no lane puts a copy there for the agent to see, and the `restore-paths` step that used
+# to take that copy back out is gone with the loading it undid.
+#
+# SECRETS ARRIVE AS INPUTS. A composite action cannot read `secrets` (RA-1540 is what
+# writing one cost), so the lane hands in the OAuth token and the App token. Nothing
+# here exports an input to the environment except where a step names it, which is the
+# same exposure the action had when its `env:` read the secret directly.
+#
+# THE STARTING MAP AND THE FAILURES-ONLY SWITCH ARE NOT HERE (RA-2694). Both are this
+# project's, and the project-setup hook (`.github/actions/project-setup`) does them before
+# `agent-setup`: it writes the map, and exports the switch through `$GITHUB_ENV`, which the
+# agent step inherits exactly as it read the value its own `env:` used to set.
+name: Agent lane — run the agent
+description: >-
+  Run claude-code-action with the lane's prompt and flags, after stamping when the agent
+  started.
+
+inputs:
+  prompt:
+    description: The agent's instructions.
+    required: true
+  claude_args:
+    description: The flag block. The lane passes the SAME value to agent-finish, so the cost row cannot disagree.
+    required: true
+  claude-token:
+    description: The Claude OAuth token (the lane's secret, passed in — a composite action cannot read secrets).
+    required: true
+  github-token:
+    description: The minted App token. The agent authenticates as the App, never the default token.
+    required: true
+  prompt-cache-ttl:
+    description: >-
+      `CLAUDE_CODE_PROMPT_CACHE_TTL` for this lane, or empty to leave the CLI default.
+      The value is decided by the lane, where `cache-ttl-check.mjs` can join it to the arm.
+    required: false
+    default: ""
+  full-transcript:
+    description: >-
+      'true' prints the agent's whole transcript into the job log — `show_full_output`
+      on the action (RA-2651). The lane decides; the default keeps the action's hidden
+      output. It changes only what is printed, never the model's input, turns or spend.
+    required: false
+    default: "false"
+
+outputs:
+  execution_file:
+    description: claude-code-action's `execution_file` output, for agent-finish.
+    value: ${{ steps.agent.outputs.execution_file }}
+  started-at:
+    description: When the agent step was about to start (UTC, ISO 8601), for agent-finish's quality window.
+    value: ${{ steps.started.outputs.at }}
+
+runs:
+  using: composite
+  steps:
+    # THE WINDOW'S LOWER BOUND for the opt-in quality column (RA-1627): stamped just before
+    # the agent starts, so nothing the agent opens can predate it. Read from the runner
+    # clock rather than `gh run view` — that would need an `actions: read` grant on every
+    # caller for a timestamp the job already has. UNCONDITIONAL here, where the spine gated
+    # it on the quality label: the stamp is an output nobody reads unless agent-finish is
+    # given a label, and a block that runs the agent should not need to know about one.
+    - name: Record when the agent started
+      id: started
+      shell: bash -e {0}
+      run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+    # PINNED EXACTLY (plan 0001, decision 14). `@v1` moves under every adopter between two
+    # Kanon releases, so the CLI an adopter runs, and the flags Kanon's tests check against
+    # it, would be whatever the tag pointed at that day. An exact version fixes the CLI per
+    # Kanon release, and Dependabot proposes each bump as a Kanon PR. This is the release
+    # `@v1` resolved to when the block moved.
+    - uses: anthropics/claude-code-action@v1.0.239
+      id: agent
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}
+        # Empty leaves the CLI default, which is what an unpinned arm wants — Actions
+        # treats an empty env value as set-but-blank, and the CLI reads blank as absent.
+        CLAUDE_CODE_PROMPT_CACHE_TTL: ${{ inputs.prompt-cache-ttl }}
+      with:
+        github_token: ${{ inputs.github-token }}
+        # Permit bot-initiated runs (robustness — an issue may be labeled by a bot).
+        # The label is the gate; the output is a PR a human must merge (the merge gate).
+        allowed_bots: "*"
+        prompt: ${{ inputs.prompt }}
+        claude_args: ${{ inputs.claude_args }}
+        # The string 'true'/'false' the spine's boolean arrived as — the same value the
+        # action was handed when this step sat in the spine and read the boolean itself.
+        show_full_output: ${{ inputs.full-transcript }}

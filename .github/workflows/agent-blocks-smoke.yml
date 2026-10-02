@@ -1,0 +1,107 @@
+# Runs the agent-lane blocks through `$/` on fixtures, with no model call (plan 0001 §4).
+#
+# WHY A SMOKE RUN AND NOT ONLY UNIT TESTS. The unit tests parse each `action.yml` and run its
+# `run:` bodies under the runner's shell, but only the runner decides whether a composite
+# action loads: whether a `$/` reference resolves, whether the nested calls inside
+# `agent-finish` resolve, whether an expression in a description or message fails template
+# validation (RA-1540). Each of those has failed only on a runner before. `$/` resolves to
+# this repository at the running commit, so every PR runs its own version of the blocks.
+#
+# WHAT IT CANNOT PROVE. `agent-run` makes the model call, and a smoke run must not spend
+# anything, so its step never runs. The runner still resolves and downloads
+# it with every other reference during `Set up job`. The model call itself is proven by the
+# reference adopter's live run after each upgrade.
+#
+# On merge_group (K-MERGE-7) it runs the same steps under the same job name, so it can be a
+# required check without stalling the queue. It reads nothing from the pull request.
+#
+# Read-only. The telemetry block uploads its row as an artifact, which the workflow token
+# can do with `contents: read`.
+name: Agent blocks smoke
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-blocks-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Agent blocks smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # For the fixtures only. The blocks come from `$/`, never from this checkout.
+      - uses: actions/checkout@v7
+
+      - name: Place an unreachable-model result where the agent step writes it
+        run: cp tests/fixtures/agent-blocks/unreachable.json "$RUNNER_TEMP/claude-execution-output.json"
+
+      - name: Classify it
+        id: classify
+        uses: $/actions/agent-classify
+        with:
+          arm: smoke
+          non-fatal: "true"
+
+      - name: Check the classifier read it
+        env:
+          KIND: ${{ steps.classify.outputs.kind }}
+          RETRY: ${{ steps.classify.outputs.retry }}
+        run: |
+          echo "kind=$KIND retry=$RETRY"
+          test "$KIND" = unavailable
+          test "$RETRY" = unreachable
+
+      - name: Set up, without the push probe
+        uses: $/actions/agent-setup
+        with:
+          arm: smoke
+          app-slug: smoke
+          push-probe: "false"
+
+      # Never runs: it would call the model. Resolved and downloaded during `Set up job`.
+      # A run id is never 0. The literal `false` says the same, but actionlint rejects a
+      # constant condition.
+      - name: Run the agent (resolved, never run)
+        id: agent
+        if: github.run_id == '0'
+        uses: $/actions/agent-run
+        with:
+          prompt: never sent
+          claude_args: --max-turns 1
+          claude-token: unused
+          github-token: unused
+
+      - name: Place a finished result where the agent step writes it
+        run: cp tests/fixtures/agent-blocks/finished.json "$RUNNER_TEMP/claude-execution-output.json"
+
+      # As a lane calls it, except that the job status is a literal: this job is green, and
+      # 'failure' is the value that makes the block classify.
+      - name: Finish
+        id: finish
+        if: always()
+        uses: $/actions/agent-finish
+        with:
+          arm: smoke
+          agent: smoke
+          job-status: failure
+          claude_args: --model claude-opus-5 --max-turns 20
+          execution_file: ${{ runner.temp }}/claude-execution-output.json
+
+      - name: Check the finish block classified the run and wrote its telemetry row
+        env:
+          KIND: ${{ steps.finish.outputs.kind }}
+          OUTCOME: ${{ steps.finish.outcome }}
+        run: |
+          echo "outcome=$OUTCOME kind=$KIND"
+          test "$OUTCOME" = success
+          test "$KIND" = ok
+          jq -e '.agent == "smoke" and .outcome == "ok" and .num_turns == 20' qa-agent-telemetry.json

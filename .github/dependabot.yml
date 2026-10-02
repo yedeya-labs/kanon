@@ -1,0 +1,17 @@
+# Dependabot for Kanon's own actions (plan 0001, decision 14).
+#
+# `/` covers .github/workflows. Each composite action under actions/ is its own directory,
+# so it is listed by glob. That includes the exact pin of claude-code-action in
+# actions/agent-run: the pin fixes the CLI per Kanon release, and this is what proposes
+# each bump, as an ordinary Kanon PR that runs the smoke workflow and the tests.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /actions/*
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]

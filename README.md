@@ -46,6 +46,13 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 | [PR-title check](actions/pr-title/README.md) | `uses: yedeya-labs/kanon/actions/pr-title@v0.4.0` |
 | [DCO sign-off check](actions/dco/README.md) | `uses: yedeya-labs/kanon/actions/dco@v0.4.0` |
 | [Release workflow](docs/release.md) | `uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.4.0` |
+| [Agent lane: set up](actions/agent-setup/README.md) | `uses: yedeya-labs/kanon/actions/agent-setup@vX.Y.Z` |
+| [Agent lane: run the agent](actions/agent-run/README.md) | `uses: yedeya-labs/kanon/actions/agent-run@vX.Y.Z` |
+| [Agent lane: finish](actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@vX.Y.Z` |
+| [Agent lane: classify a red run](actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@vX.Y.Z` |
+| [Agent telemetry](actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@vX.Y.Z` |
+
+The agent-lane blocks are the first pieces of the agent lanes to move ([plan 0001](docs/plans/0001-move-the-agent-lanes.md), step 1). Use the first release that contains them. The lanes built from them follow in later releases.
 
 ## Status
 
@@ -63,8 +70,8 @@ See the [roadmap](ROADMAP.md) for what comes next.
 |---|---|
 | [`rulebook/`](rulebook/) | The rules. This is Kanon's specification. |
 | [`docs/decisions/`](docs/decisions/) | Architecture decision records: why Kanon is shaped the way it is. |
-| [`actions/`](actions/) | Kanon's checks, each a versioned composite action. |
-| [`.github/workflows/`](.github/workflows/) | Kanon's own CI, and the reusable release workflow. |
+| [`actions/`](actions/) | Kanon's checks and the agent-lane blocks, each a versioned composite action. |
+| [`.github/workflows/`](.github/workflows/) | Kanon's own CI, including a smoke run of the agent-lane blocks, and the reusable release workflow. |
 | [`tests/`](tests/) | Kanon's own tests, run on every pull request. |
 
 ## Contributing

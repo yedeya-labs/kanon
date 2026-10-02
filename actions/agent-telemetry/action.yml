@@ -1,0 +1,245 @@
+# Record one agent run's cost, turns and token usage (RA-1485).
+#
+# Drops in after any `anthropics/claude-code-action` step:
+#
+#   - uses: $/actions/agent-telemetry   # the self-reference (RA-2697), never `./`
+#     if: always()                      # a failed agent run is the one you most want measured
+#     with:
+#       agent: reviewer
+#       execution_file: ${{ steps.agent.outputs.execution_file }}
+#       claude_args: ${{ ... the same block passed to the action ... }}
+#       pr_number: ${{ env.PR_NUMBER }}
+#
+# THIS ACTION WRITES NOTHING TO THE STORE (RA-1514). It summarizes the run and uploads
+# the row as an artifact; `agent-telemetry-collect.yml` is the single credentialed
+# writer of `COST#` rows. An earlier version of this action pushed to the store itself,
+# from the arms that already held the QA OIDC role; RA-1514 moved every write to the
+# collector. Nothing in this file describes that design any more — this note exists so
+# the change is legible, not to correct text still present.
+#
+# NEVER FAILS THE CALLER, and the swallow is NOT here (RA-1553). An observer that reddens
+# a good agent run is worse than no observer — the reference adopter's observability doc (§8) records that
+# as a decision, and on `agent-review` (~140 runs/day) it is the most expensive place in
+# the repo for a false red.
+#
+# The two SCRIPT steps below swallow their own errors. `actions/upload-artifact` cannot,
+# and whether a composite action's step may even carry `continue-on-error` was not
+# something this repo had exercised — the class of unverified construct that took the
+# pipeline down for 75 minutes in RA-1540. So the swallow lives on each CALLER's
+# telemetry step as `continue-on-error: true`, which is where the contract is stated
+# anyway: never fail the CALLER. SINCE RA-2666 ONE CALLER IS ITSELF A COMPOSITE ACTION,
+# `agent-finish`, and its telemetry step's flag is load-bearing: the action metadata
+# schema allows `continue-on-error` on a composite step and the runner applies it
+# (`ApplyContinueOnError` in its CompositeActionHandler). The spine also sets the flag on
+# its call to `agent-finish`, so the placement this header trusts still holds one level up.
+#
+# `tests/unit/agent-telemetry.test.ts` fails if a caller drops it.
+# NO `${{ }}` EXPRESSIONS ANYWHERE IN THIS FILE THAT NAME `vars` OR `secrets` (RA-1540).
+#
+# Neither context exists inside a composite action — only the calling workflow can read
+# them, which is exactly why the three qa_* values arrive here as INPUTS. That part was
+# right. What was not: GitHub validates `${{ }}` inside `description:` and inside message
+# strings too, so DOCUMENTING the call by writing an expression around vars.QA_DYNAMO_TABLE
+# in prose failed template validation for the whole file.
+#
+# The blast radius is why this warrants a comment rather than a memory: the telemetry step
+# is `if: always()` by design, so a file that cannot LOAD reds every agent job in the repo —
+# including runs whose agent finished cleanly, which then post no verdict. That is what
+# happened for ~30 minutes after RA-1507 merged.
+#
+# `tests/unit/agent-telemetry.test.ts` now fails on any such expression.
+name: Agent telemetry
+description: Normalize a claude-code-action execution file into a telemetry row, summarize it, and upload it for the collector to store.
+
+inputs:
+  agent:
+    description: Which agent this run was (reviewer, implementer, explorer, …). Names the row.
+    required: true
+  execution_file:
+    description: The claude-code-action step's `execution_file` output.
+    required: false
+    default: ""
+  claude_args:
+    description: >-
+      The same `claude_args` block passed to the agent step. The ONLY source for
+      the effort level and the config fingerprint — nothing in the execution file
+      reports which effort a run used, and an unset --effort (inheriting xhigh) is
+      itself the measurement RA-780 needs.
+    required: false
+    default: ""
+  pr_number:
+    description: PR under review, when there is one. Its diff size is read here and stored as the denominator.
+    required: false
+    default: ""
+  issue_number:
+    description: >-
+      The issue this run was dispatched for, on the `issues`-triggered lanes
+      (`agent-implement`, `agent-triage`). Stored so a run can be tied back to the
+      work it was spent on — `pr_number` cannot stand in, because those lanes have
+      no PR. The dispatch sweep reads it to avoid charging a re-dispatch attempt to
+      a run that never reached the model (RA-1517). Set, the row also records the
+      issue's size and the lines this run committed (RA-2137).
+    required: false
+    default: ""
+  outcome_label:
+    description: >-
+      The agent's OWN result, in its own vocabulary — the reviewer's verdict
+      (APPROVE / REQUEST_CHANGES), the explorer's clean/dirty, the audit's
+      complete/partial. Pass what the calling job already computed; do not
+      re-derive it here, where a failed read would record "no result".
+    required: false
+    default: ""
+  artifacts_filed:
+    description: >-
+      Issues or findings this run produced — or, on the triage arm, the `agent:triage`
+      PRs it opened (RA-1627), where a bail is a measured 0. The other half of the
+      quality signal.
+    required: false
+    default: ""
+  severities:
+    description: >-
+      Compact severity tally for what was filed, e.g. `critical:0,high:1,medium:2`.
+      The column that makes a cost saving falsifiable: spend down with high-severity
+      recall down is a regression, and no cost metric can show that on its own.
+    required: false
+    default: ""
+  retention_days:
+    description: >-
+      How long the telemetry artifact survives for the collector to find it. The
+      collector sweeps a 90-minute window hourly, so this only has to outlast a
+      collector outage; the default is generous on purpose and costs nothing
+      measurable at ~2 KB per run.
+    required: false
+    default: "7"
+
+runs:
+  using: composite
+  steps:
+    # The denominator. A cost without a diff size cannot be compared to another
+    # cost — a 1,000-line review costing more than a 20-line one is not a finding.
+    # Read with the DEFAULT token: this needs no App identity, and a failure here
+    # must degrade the row rather than fail the job.
+    - name: Read the reviewed diff's size
+      id: diff
+      if: inputs.pr_number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr_number }}
+      run: |
+        # `gh` prints its error BODY to stdout, so a 403 arrives as a non-empty
+        # string that passes an emptiness test. Keep the exit status and let the
+        # numeric guard hold — an absent size is recorded as null, never as 0,
+        # because "unknown diff" and "empty diff" normalise differently.
+        if OUT="$(gh pr view "$PR" --repo "$REPO" --json additions,deletions,changedFiles 2>/dev/null)"; then
+          for f in additions deletions changedFiles; do
+            v="$(printf '%s' "$OUT" | jq -r --arg f "$f" '.[$f] // empty')"
+            case "$v" in ''|*[!0-9]*) v="" ;; esac
+            echo "$f=$v" >> "$GITHUB_OUTPUT"
+          done
+        else
+          echo "::notice title=agent-telemetry::could not read PR #$PR's diff size; the row records it as unknown"
+          printf 'additions=\ndeletions=\nchangedFiles=\n' >> "$GITHUB_OUTPUT"
+        fi
+
+    # THE ISSUE-SIDE SIZE (RA-2137) — what the issue-triggered arms were ASKED to do, as a
+    # candidate size control for arms that have no PR and so no diff size. Only on a row
+    # that names an issue; the normalizer measures the body, this step only fetches it.
+    #
+    # THE EVENT PAYLOAD FIRST, `gh issue view` SECOND, and the order is not a preference.
+    # (1) The payload is the body AT DISPATCH — the request as it stood before a token was
+    # spent — where a read at telemetry time sees any edit made during the run. (2) The
+    # default token cannot read issues on the lanes that carry `issue_number`: they grant
+    # `contents: read` alone and this repo is private, so the API read 403s there. The
+    # dispatch sweep re-dispatches by re-adding the label, so every sweep- or label-started
+    # run is an `issues` event carrying the body; the API read is for a manual
+    # `workflow_dispatch`, and succeeds only where a caller grants `issues: read`. A failed
+    # read leaves the size ABSENT — "unknown request" and "empty request" are different.
+    - name: Read the issue's size
+      id: issue
+      if: inputs.issue_number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        ISSUE: ${{ inputs.issue_number }}
+      run: |
+        f="$RUNNER_TEMP/agent-telemetry-issue-body.txt"
+        rm -f "$f"
+        case "$ISSUE" in ''|*[!0-9]*) echo "::notice title=agent-telemetry::issue_number '$ISSUE' is not a number; the row records no issue size"; exit 0 ;; esac
+        if [ -f "${GITHUB_EVENT_PATH:-}" ] \
+           && jq -e --argjson n "$ISSUE" '.issue.number == $n' "$GITHUB_EVENT_PATH" >/dev/null 2>&1; then
+          jq -j '.issue.body // ""' "$GITHUB_EVENT_PATH" > "$f"
+          echo "source=event" >> "$GITHUB_OUTPUT"
+        elif OUT="$(gh issue view "$ISSUE" --repo "$REPO" --json body 2>/dev/null)" \
+             && printf '%s' "$OUT" | jq -e 'has("body")' >/dev/null 2>&1; then
+          printf '%s' "$OUT" | jq -j '.body // ""' > "$f"
+          echo "source=api" >> "$GITHUB_OUTPUT"
+        else
+          echo "::notice title=agent-telemetry::could not read issue #$ISSUE's body; the row records its size as unknown"
+          exit 0
+        fi
+        echo "body_file=$f" >> "$GITHUB_OUTPUT"
+
+    - name: Normalize and summarize
+      id: row
+      shell: bash
+      env:
+        TELEMETRY_PR: ${{ inputs.pr_number }}
+        TELEMETRY_ADDITIONS: ${{ steps.diff.outputs.additions }}
+        TELEMETRY_DELETIONS: ${{ steps.diff.outputs.deletions }}
+        TELEMETRY_CHANGED_FILES: ${{ steps.diff.outputs.changedFiles }}
+        TELEMETRY_CLAUDE_ARGS: ${{ inputs.claude_args }}
+        TELEMETRY_ISSUE_NUMBER: ${{ inputs.issue_number }}
+        TELEMETRY_ISSUE_BODY_FILE: ${{ steps.issue.outputs.body_file }}
+        # The run's own diff (RA-2137), measured from the checkout's reflog — an OUTCOME,
+        # never a size control; see `producedLines` in the normalizer. Issue arms only.
+        TELEMETRY_MEASURE_PRODUCED: ${{ inputs.issue_number != '' && '1' || '' }}
+        TELEMETRY_OUTCOME_LABEL: ${{ inputs.outcome_label }}
+        TELEMETRY_ARTIFACTS_FILED: ${{ inputs.artifacts_filed }}
+        TELEMETRY_SEVERITIES: ${{ inputs.severities }}
+      run: |
+        node "${{ github.action_path }}/agent-telemetry.mjs" \
+          --agent "${{ inputs.agent }}" \
+          --execution-file "${{ inputs.execution_file }}" \
+          --out qa-agent-telemetry.json \
+          || echo "::warning title=agent-telemetry::the normalizer itself failed; this run records as not-reached"
+        if [ -f qa-agent-telemetry.json ]; then
+          echo "written=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "written=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    # UPLOAD, DO NOT PUSH (RA-1514). The first version of this action pushed to the
+    # L1 store directly, which meant only jobs holding AWS credentials could record a
+    # row — and `agent-review`, ~80% of fleet spend, was on the wrong side of that.
+    #
+    # Granting the other ten `environment: qa` + `id-token: write` was the obvious
+    # alternative and is the worse one: the QA CI role's trust is scoped to the SUBJECT
+    # `repo:<owner>/<repo>:environment:qa` (in the adopter's infrastructure code), so the grant
+    # is not "may write telemetry" but "may assume the QA CI role" — with no per-workflow
+    # narrowing available. Combined with RA-1520 (`agent-review` executes PR-authored
+    # code from `.github/scripts/**`, which is outside the base pin), that would put a
+    # permanent store inside a PR-authored script's blast radius.
+    #
+    # So every arm uploads an artifact and NONE needs credentials for telemetry;
+    # `agent-telemetry-collect.yml` is the single writer of `COST#` rows, on the default
+    # branch, with no PR-authored code in it.
+    #
+    # Stated precisely, because the looser version was wrong: three arms (explore,
+    # code-audit, overseer) still hold `id-token: write` + `environment: qa` for reasons
+    # that predate telemetry — the first two push their own REPORTS, the third READS the
+    # store. What changed is that telemetry stopped being a reason to grant it, so the
+    # other ten never gain it.
+    - name: Upload the telemetry row for the collector
+      if: steps.row.outputs.written == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        # The collector matches on this prefix. Run id AND attempt: a re-run is a
+        # different run of the same agent and must not overwrite the first one's
+        # artifact before it has been collected.
+        name: agent-telemetry-${{ inputs.agent }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: qa-agent-telemetry.json
+        retention-days: ${{ inputs.retention_days }}
+        if-no-files-found: error

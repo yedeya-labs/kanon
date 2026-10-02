@@ -1,0 +1,184 @@
+# Building block 3 of 4 of an agent lane: FINISH (RA-2666) — explain a red run, count what
+# the run opened, and record what it cost. See `agent-setup` for why the spine is built
+# from blocks, and the shell and input-type rules every block follows.
+#
+# CALL IT WITH `id: finish`, `if: always()` AND `continue-on-error: true`.
+#   • `always()` because a run that FAILED is the one you most want explained and
+#     measured, and a step with no `if:` runs only on success.
+#   • `continue-on-error` because nothing in here may red a good agent run
+#     (the reference adopter's observability doc, §8) — including this file failing to load. Every step inside
+#     already exits 0 or swallows its own failure; the call site's flag also covers the
+#     load, which no step in here can.
+#
+# `failure()` IN HERE WOULD ASK THE WRONG QUESTION. Inside a composite action the status
+# functions read the ACTION's own status, not the job's (the runner's FailureFunction:
+# "Decide based on 'action_status' for composite MAIN steps"). The agent failed in an
+# earlier step of the JOB, so `failure()` here would be false and the classifier would
+# never run. The lane passes `job.status` in as `job-status`, and the classifier keys on
+# it; `always()` on the observers is kept so a cancelled job is still measured, as before.
+#
+# THE RA-2519 RETRY BREADCRUMBS ARE NOT IN HERE, and cannot be. The recoveries read them by
+# NAME from the run's jobs API (`RETRY_STEPS` in `scripts/qa/lane-retry.mjs`), and that
+# API lists a composite action as ONE step — the ones inside it are invisible to it. So
+# they stay job-level steps of the lane, reading this block's `retry` output.
+name: Agent lane — finish
+description: >-
+  Classify a red agent run, count the PRs it opened when the lane asks, and record the
+  run's cost row. Never fails the caller.
+
+inputs:
+  arm:
+    description: Human name for this arm, passed to agent-classify on a red run.
+    required: true
+  agent:
+    description: Telemetry agent name — the `agent` column in the run row.
+    required: true
+  job-status:
+    description: >-
+      The lane's `job.status` when this block starts. 'failure' runs the classifier —
+      the job-level `failure()` this block cannot evaluate itself (see the header).
+    required: true
+  claude_args:
+    description: The SAME flag block agent-run was given, so the row records the configuration that ran.
+    required: true
+  execution_file:
+    description: agent-run's `execution_file` output.
+    required: false
+    default: ""
+  issue-number:
+    description: The issue the run was dispatched for; recorded on the row (RA-1517).
+    required: false
+    default: ""
+  pr-number:
+    description: The PR the run was dispatched for; recorded on the row.
+    required: false
+    default: ""
+  quality-pr-label:
+    description: >-
+      OPT-IN quality column (RA-1627): the label on the PR this lane's agent opens. Set,
+      `artifacts_filed` counts the PRs carrying it that reference `issue-number` and were
+      opened after `started-at`. Empty adds no column.
+    required: false
+    default: ""
+  started-at:
+    description: agent-run's `started-at` output — the quality window's lower bound.
+    required: false
+    default: ""
+  github-token:
+    description: The minted App token, for the quality read (see that step).
+    required: false
+    default: ""
+  classify:
+    description: >-
+      'true' (the default) explains a red run with the `agent-classify` block below. 'false'
+      for a lane that calls that block in a step of its own (RA-2608, RA-2691): the reviewer
+      classifies only when no verdict was posted, which this block cannot know, and reads
+      its `retry` output from its own call. Leaving this on would print a second annotation.
+    required: false
+    default: "true"
+  outcome-label:
+    description: >-
+      The lane's own result column for the row (`outcome_label` on agent-telemetry) — the
+      reviewer's verdict (RA-1504). Computed by the lane from GitHub, never by the agent.
+      Empty adds no column.
+    required: false
+    default: ""
+  artifacts-filed:
+    description: >-
+      The lane's own count for the `artifacts_filed` column, for a lane that derives it in
+      a step of its own (the reviewer's filed follow-ups, RA-1504). The opt-in count above,
+      when `quality-pr-label` is set, takes precedence. Empty adds no column.
+    required: false
+    default: ""
+  severities:
+    description: >-
+      The lane's own severity tally for the row (`severities` on agent-telemetry, RA-1504).
+      Empty adds no column.
+    required: false
+    default: ""
+
+outputs:
+  kind:
+    description: agent-classify's `kind` for a red run, empty otherwise.
+    value: ${{ steps.classify.outputs.kind }}
+  retry:
+    description: agent-classify's retry class (`unreachable` / `api_error`), empty otherwise.
+    value: ${{ steps.classify.outputs.retry }}
+
+runs:
+  using: composite
+  steps:
+    # WHY A RED RUN WENT RED (RA-1408). Every agent workflow runs `claude-code-action` and
+    # only `agent-review.yml` read its result JSON, so a quota cap in an arm was a bare
+    # red with nothing to read. A cap and a real failure want opposite responses (wait
+    # vs re-run) and are trivially distinguishable from data the action already writes.
+    # Only on a failed job, so it only speaks when there is something to explain; the
+    # script always exits 0, so explaining a red run cannot create one.
+    #
+    # THROUGH THE `agent-classify` BLOCK (RA-2691), which holds the classifier and its script
+    # so that the lanes classifying outside this block call the same one. `id: classify`
+    # stays on the call, so the `kind` and `retry` outputs below read exactly what they read
+    # when the step was inline. A `$/` reference, like this block's own (RA-2697): the runner
+    # resolves nested references during `Set up job`, so it comes from the action cache at
+    # the same commit as this block, never from the workspace.
+    - name: Say whether the model was unreachable or the run genuinely failed
+      id: classify
+      if: inputs.classify == 'true' && inputs.job-status == 'failure'
+      uses: $/actions/agent-classify
+      with:
+        arm: ${{ inputs.arm }}
+
+    # WHAT THIS RUN OPENED (RA-1627), for a lane that opts in with `quality-pr-label`.
+    # Derived from GitHub, never from the agent — asking the agent to report it would
+    # change the prompt, and so the `config_fingerprint` every cost comparison keys on.
+    #
+    # THE APP TOKEN, NOT THE DEFAULT ONE. The job's default token has only what its
+    # caller granted, so a default-token read here would need `pull-requests: read`
+    # granted in EVERY caller — including lanes that never opt in. The App opened the PR
+    # being counted, so it can read it. Its token lives an hour: a run longer than that
+    # reads nothing, and the column is left ABSENT, never 0 — `agent-quality-prs.mjs` returns
+    # null on a failed read (triage's longest real run is 26m).
+    - name: Read what this run opened, for the telemetry row
+      id: quality
+      if: always() && inputs.quality-pr-label != ''
+      # An observer must never red a good agent run (the reference adopter's observability doc, §8).
+      continue-on-error: true
+      shell: bash -e {0}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        LABEL: ${{ inputs.quality-pr-label }}
+        SINCE: ${{ inputs.started-at }}
+        ISSUE: ${{ inputs.issue-number }}
+      run: |
+        # No start stamp (the agent never started) or no issue to scope by: leave the
+        # column unset rather than count a window that is not this run's.
+        if [ -z "$SINCE" ] || [ -z "$ISSUE" ]; then
+          echo "::warning title=quality::no agent start or no issue number; leaving artifacts_filed unset rather than guessing a scope"
+          exit 0
+        fi
+        # THROUGH `$GITHUB_ACTION_PATH`, NOT THE WORKSPACE (RA-2697). The runner downloads the
+        # whole repository at the lane's defining commit for a `$/` reference, so the script
+        # beside this block's directory is that commit's copy — where `.github/scripts/` in
+        # the workspace is whatever the lane checked out, and whatever its agent left there.
+        node "$GITHUB_ACTION_PATH/agent-quality-prs.mjs" --label "$LABEL" --opened-since "$SINCE" --issue "$ISSUE"
+
+    # Record what this run cost (RA-1485). `always()` because a run that FAILED is the one
+    # you most want measured — a telemetry step that runs only on success measures
+    # exactly the population with nothing to explain.
+    - uses: $/actions/agent-telemetry
+      if: always()
+      # NEVER FAILS THE CALLER — see the contract and its reasoning in the action header
+      # and the reference adopter's observability doc, §8 (RA-1553). Guarded by tests/unit/agent-telemetry.test.ts.
+      continue-on-error: true
+      with:
+        agent: ${{ inputs.agent }}
+        issue_number: ${{ inputs.issue-number }}
+        pr_number: ${{ inputs.pr-number }}
+        # Empty unless the lane opted in above, or counted its own; the action omits an
+        # empty column. Three columns a lane computes itself pass straight through (RA-2608).
+        outcome_label: ${{ inputs.outcome-label }}
+        artifacts_filed: ${{ steps.quality.outputs.artifacts_filed || inputs.artifacts-filed }}
+        severities: ${{ inputs.severities }}
+        execution_file: ${{ inputs.execution_file }}
+        claude_args: ${{ inputs.claude_args }}

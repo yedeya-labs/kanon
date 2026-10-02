@@ -1,0 +1,81 @@
+# Building block 4 of an agent lane: CLASSIFY (RA-2691) — say why a red agent run went red:
+# the model was unreachable, it ran out of turns or dollars, or it genuinely failed. See
+# `agent-setup` for why the spine is built from blocks, and the shell and input-type rules
+# every block follows.
+#
+# WHY A BLOCK OF ITS OWN. `agent-finish` calls it, so every lane on the spine or on the
+# blocks gets it as before. But six steps classify a run outside `agent-finish`: the
+# reviewer's (after its own reconcile), the Explorer's, the Overseer's, the code audit's
+# and both digests'. Those lanes need the classifier without the rest of `agent-finish`
+# (step P1 of Kanon's plan for moving the lanes, RA-2691).
+#
+# THE SCRIPT LIVES IN THIS DIRECTORY, and runs from `$GITHUB_ACTION_PATH`, never from
+# `.github/scripts/` in the checked-out tree. Every caller references this block as
+# `$/actions/agent-classify` (RA-2697), so `$GITHUB_ACTION_PATH` is the runner's
+# action cache at the commit that defined the lane, never the workspace. The reviewer
+# checks out the PR under review, and a script read from the tree would be the PR's copy,
+# which is why the reviewer used to extract a base copy of it by hand (RA-1520/RA-1542) and
+# then loaded and digested the block directories (RA-2608) — both gone with `$/`.
+#
+# THE CALLER GATES IT. The block has no `if:` of its own, because the right gate differs:
+# `failure()` on a lane whose agent failure reds the job, the agent step's outcome on the two
+# digests (whose job stays green), `job-status` inside `agent-finish` (where `failure()`
+# reads the block's status, not the job's), and "no verdict was posted" on the reviewer.
+#
+# IT NEVER REDS A RUN BY ITSELF. The script always exits 0: it explains a red run, and must
+# not be the thing that makes one.
+name: Agent lane — classify
+description: >-
+  Explain a red agent run from the result file claude-code-action writes: whether the model
+  was unreachable, ran out of turns or dollars, or genuinely failed. Outputs the kind and
+  the retry class.
+
+inputs:
+  arm:
+    description: Human name for this arm, used in the annotation's title and body.
+    required: true
+  recover:
+    description: >-
+      The command that recovers this run, printed in the annotation where a re-run is the
+      advice. Empty prints none. Only the reviewer has a per-PR dispatch to suggest.
+    required: false
+    default: ""
+  non-fatal:
+    description: >-
+      'true' for an agent step whose failure leaves the job GREEN (the two digests). The
+      annotation is then a warning and says the job is not red because of it, so it is not
+      read as the cause of a red job.
+    required: false
+    default: "false"
+
+outputs:
+  kind:
+    description: >-
+      The classifier's verdict: `unavailable`, `exhausted`, `failed`, `ok` or
+      `not-reached`.
+    value: ${{ steps.classify.outputs.kind }}
+  retry:
+    description: >-
+      The retry class the RA-2519 breadcrumbs read: `unreachable` or `api_error` when waiting
+      would help, empty otherwise.
+    value: ${{ steps.classify.outputs.retry }}
+
+runs:
+  using: composite
+  steps:
+    # WHY A RED RUN WENT RED (RA-1408). A cap and a real failure want opposite responses (wait
+    # vs re-run), and the result JSON the action already writes tells them apart. Every
+    # input goes through `env:`, never spliced into the script text, because a lane may build
+    # `arm` or `recover` from event data: a quote or `$(…)` in either must stay data.
+    - name: Say whether the model was unreachable or the run genuinely failed
+      id: classify
+      shell: bash -e {0}
+      env:
+        ARM: ${{ inputs.arm }}
+        RECOVER: ${{ inputs.recover }}
+        NON_FATAL: ${{ inputs.non-fatal }}
+      run: |
+        set -- --arm "$ARM"
+        if [ -n "$RECOVER" ]; then set -- "$@" --recover "$RECOVER"; fi
+        if [ "$NON_FATAL" = "true" ]; then set -- "$@" --non-fatal; fi
+        node "$GITHUB_ACTION_PATH/classify-agent-result.mjs" "$@"
