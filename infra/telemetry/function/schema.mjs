@@ -1,0 +1,1 @@
+../../../actions/agent-telemetry/schema.mjs

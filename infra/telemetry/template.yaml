@@ -1,0 +1,235 @@
+# The hosted telemetry store (plan 0002 §3 to §5, §7, §9, §10): one DynamoDB table, written
+# only by a validating function behind an IAM-authenticated URL, with a writer and a reader role
+# per registered repository.
+#
+# THIS FILE IS NOT DEPLOYED AS IT IS. The register (who is opted in) is private (§5), so
+# `render.mjs` reads it and adds each repository's roles to this template. `docs/telemetry.md`
+# has the Owner's commands. Intrinsics are written in their long form (`Ref:`, `Fn::GetAtt:`)
+# so the file parses as plain YAML, for the render script and for the unit test that checks it.
+#
+# COST (§9): on-demand DynamoDB, one 128 MB function with no schedule, a 30-day log group. No
+# NAT, no VPC, no always-on compute, no customer-managed key, no alarm. A rejected or failed
+# write turns the collector red, and that red run is the page (`K-OBS-4`); a collector that
+# stops running is not paged, as the reference adopter decided.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Kanon's hosted telemetry store (plan 0002).
+
+Parameters:
+  OwnerPrincipalArn:
+    Type: String
+    Description: The Owner's role (the SSO role's ARN, with its path). It alone may assume the importer, backfill and verify paths, and erase rows.
+    AllowedPattern: '^arn:aws:iam::\d{12}:role/.+$'
+  CreateOidcProvider:
+    Type: String
+    Description: Create GitHub's OIDC provider. Set false when the account already has one.
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  EnableImporter:
+    Type: String
+    Description: The importer role (plan 0002, section 7, step S5). Deleted when the import is done.
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+  EnableBackfill:
+    Type: String
+    Description: The backfill role (plan 0002, section 7, step S7a). Deleted when the backfill is done.
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+  EnableVerify:
+    Type: String
+    Description: Let the Owner assume the writer and reader roles, for verify.mjs only.
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+  ReservedConcurrency:
+    Type: Number
+    Description: The function's reserved concurrency (plan 0002, section 4). 0 sets none, for an account whose concurrency quota can't spare it.
+    MinValue: 0
+    Default: 2
+
+# Kept in Frankfurt by the account's SCP (§5), and by this template too.
+Rules:
+  Frankfurt:
+    Assertions:
+      - Assert:
+          Fn::Equals: [{ Ref: AWS::Region }, eu-central-1]
+        AssertDescription: The telemetry store is deployed to eu-central-1 only (ADR 0007, rule 4).
+
+Conditions:
+  CreateOidc: { 'Fn::Equals': [{ Ref: CreateOidcProvider }, 'true'] }
+  ImporterOn: { 'Fn::Equals': [{ Ref: EnableImporter }, 'true'] }
+  BackfillOn: { 'Fn::Equals': [{ Ref: EnableBackfill }, 'true'] }
+  VerifyOn: { 'Fn::Equals': [{ Ref: EnableVerify }, 'true'] }
+  HasReservedConcurrency: { 'Fn::Not': [{ 'Fn::Equals': [{ Ref: ReservedConcurrency }, 0] }] }
+
+Resources:
+  # Its lifecycle is independent of the stack (K-OBS-17): retained on delete and on replace,
+  # and protected from deletion. Its ARN is written out, not referenced, everywhere else, so the
+  # table's resource policy can name the function's role without a cycle.
+  Table:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: kanon-telemetry
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      DeletionProtectionEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      # The function is the only writer by construction (plan 0002, section 4): every write is denied to every
+      # principal but the function's role and the Owner's erase procedure (§10).
+      ResourcePolicy:
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Sid: OnlyTheIngestFunctionWrites
+              Effect: Deny
+              Principal: '*'
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:BatchWriteItem
+              Resource:
+                Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry
+              Condition:
+                ArnNotEquals:
+                  aws:PrincipalArn:
+                    - { 'Fn::GetAtt': [IngestRole, Arn] }
+                    - { Ref: OwnerPrincipalArn }
+
+  IngestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: kanon-telemetry-ingest
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-rows-and-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: dynamodb:PutItem
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: { 'Fn::GetAtt': [IngestLogGroup, Arn] }
+
+  # Keys and field names only (the function never logs a value), kept 30 days (§10).
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/kanon-telemetry-ingest
+      RetentionInDays: 30
+
+  IngestFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: kanon-telemetry-ingest
+      Description: Validates telemetry rows and writes them (plan 0002, section 4).
+      Runtime: nodejs24.x
+      Architectures: [arm64]
+      Handler: index.handler
+      # A local directory: `aws cloudformation package` zips it. render.mjs makes it absolute.
+      Code: function
+      MemorySize: 128
+      Timeout: 10
+      Role: { 'Fn::GetAtt': [IngestRole, Arn] }
+      ReservedConcurrentExecutions:
+        Fn::If: [HasReservedConcurrency, { Ref: ReservedConcurrency }, { Ref: AWS::NoValue }]
+      LoggingConfig:
+        LogGroup: { Ref: IngestLogGroup }
+        LogFormat: Text
+      Environment:
+        Variables:
+          TABLE_NAME: kanon-telemetry
+          ACCOUNT_ID: { Ref: AWS::AccountId }
+          # Set by render.mjs from the register.
+          WRITER_KEYS: ''
+          IMPORTER_ROLE: { 'Fn::If': [ImporterOn, kanon-telemetry-importer, ''] }
+          BACKFILL_ROLE: { 'Fn::If': [BackfillOn, kanon-telemetry-backfill, ''] }
+
+  IngestUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: { 'Fn::GetAtt': [IngestFunction, Arn] }
+      AuthType: AWS_IAM
+
+  OidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidc
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  # §7: may name an adopter key and backdate up to 13 months. Owner-only; deleted after S5.
+  ImporterRole:
+    Type: AWS::IAM::Role
+    Condition: ImporterOn
+    Properties:
+      RoleName: kanon-telemetry-importer
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: { 'Fn::Sub': 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root' } }
+            Action: sts:AssumeRole
+            Condition:
+              ArnEquals: { aws:PrincipalArn: { Ref: OwnerPrincipalArn } }
+      Policies:
+        - PolicyName: invoke-ingest-url
+          PolicyDocument: &invokeIngestUrl
+            # A function URL call needs both actions since October 2025. InvokeFunction is held
+            # to URL calls, so no caller can invoke the function with a forged request context.
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunctionUrl
+                Resource: { 'Fn::GetAtt': [IngestFunction, Arn] }
+                Condition:
+                  StringEquals: { lambda:FunctionUrlAuthType: AWS_IAM }
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: { 'Fn::GetAtt': [IngestFunction, Arn] }
+                Condition:
+                  Bool: { lambda:InvokedViaFunctionUrl: 'true' }
+
+  # §7, S7a: may name an adopter key, for work-item rows only, in the normal window.
+  BackfillRole:
+    Type: AWS::IAM::Role
+    Condition: BackfillOn
+    Properties:
+      RoleName: kanon-telemetry-backfill
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: { 'Fn::Sub': 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root' } }
+            Action: sts:AssumeRole
+            Condition:
+              ArnEquals: { aws:PrincipalArn: { Ref: OwnerPrincipalArn } }
+      Policies:
+        - PolicyName: invoke-ingest-url
+          PolicyDocument: *invokeIngestUrl
+
+  # render.mjs adds, per registered repository: WriterRole<id>, ReaderRole<id> and
+  # WriterUrlPermission<id>, from the shapes it holds.
+
+Outputs:
+  TableName:
+    Value: { Ref: Table }
+  IngestUrl:
+    Value: { 'Fn::GetAtt': [IngestUrl, FunctionUrl] }

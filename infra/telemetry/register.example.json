@@ -1,0 +1,12 @@
+{
+  "owner_principal_arn": "arn:aws:iam::<account id>:role/aws-reserved/sso.amazonaws.com/eu-central-1/AWSReservedSSO_<permission set>_<suffix>",
+  "create_oidc_provider": true,
+  "reserved_concurrency": 0,
+  "repositories": [
+    {
+      "key": "k3f9c2a71",
+      "repository": "yedeya-labs/kanon",
+      "readers": ["ref:refs/heads/main"]
+    }
+  ]
+}
