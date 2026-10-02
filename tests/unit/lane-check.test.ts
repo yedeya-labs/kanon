@@ -254,7 +254,7 @@ describe('the lane-check action', () => {
       jobs: Record<string, { steps?: { uses?: string; run?: string }[] }>;
     };
     const steps = smoke.jobs.smoke?.steps ?? [];
-    expect(steps.map((s) => s.uses).filter(Boolean)).toEqual(['actions/checkout@v7', '$/actions/lane-check']);
+    expect(steps.map((s) => s.uses).filter(Boolean)).toEqual(['actions/checkout@v7', '$/actions/kanon-path', '$/actions/lane-check']);
     expect(steps.some((s) => s.run?.includes('cp -R tests/fixtures/lane-check/adopter/. .'))).toBe(true);
   });
 });

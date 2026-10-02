@@ -62,10 +62,32 @@ permissions:
   contents: read # the App token carries the real write scope; keep the default token minimal
 
 jobs:
-  implement:
-    # Only `agent:implement` issues (or a manual dispatch). This is the lane's admission
-    # rule and stays here: the spine has no opinion about which issues belong to it.
+  # Its own job so that the gate runs before the spine's job starts its database and mints
+  # the App token, and so that the lane's admission rule decides first: an unrelated label
+  # starts no runner at all.
+  filter:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      member: ${{ steps.gate.outputs.member }}
+    steps:
+      # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
+      # this lane acts only when the event's actor is a member or a registered agent App.
+      # `scripts/lane-gate.mjs` says who the actor is for each event; a refusal leaves
+      # `member=false`, a notice and a step-summary line, and every later step and job skips.
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+  implement:
+    # Only what the `filter` job admitted: the lane's admission rule sits on that job (the
+    # spine has no opinion about which issues belong to it), and the membership gate in it.
+    needs: filter
+    if: needs.filter.outputs.member == 'true'
     uses: $/.github/workflows/agent-lane.yml
     with:
       agent: implementer

@@ -13,6 +13,7 @@ const CLIS: Array<[string, string[]]> = [
   ['brief-revise-recovery', []],
   ['dispatch-sweep', []],
   ['implement-crash', []],
+  ['lane-gate', []],
   ['lead-reconcile', ['--project', '1']],
   ['merge-gate', []],
   ['rebase-lane', []],

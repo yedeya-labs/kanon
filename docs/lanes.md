@@ -16,6 +16,22 @@ Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called 
 
 **Grant a lane's job-level permissions too.** The implement lane's crash recovery runs on the workflow token and writes issues, reads pull requests and starts the split lane, so its caller grants `contents: read`, `issues: write`, `pull-requests: read` and `actions: write`.
 
+## Only members start a lane
+
+Every lane starts real work only when the actor of its triggering event is a member: GitHub's `author_association` of `OWNER`, `MEMBER` or `COLLABORATOR`, or one of your agent Apps listed in the App register (`K-AGENT-45`). The check is the first step of the lane's first job, [`scripts/lane-gate.mjs`](../scripts/lane-gate.mjs), before any token is minted, so it runs on a private repository exactly as on a public one (`K-PRIN-20`).
+
+| Event | The actor | How it is checked |
+|---|---|---|
+| A review | the reviewer | the review's `author_association` |
+| A label | whoever applied it | their permission on the repository: triage or more |
+| A merge (`pull_request: closed`) | whoever merged it | the same |
+| A dispatch | whoever ran it, re-runs included | the same; only write access can dispatch, so this refuses only an unregistered App |
+| Anything else | none | refused: no lane acts on it |
+
+A login ending in `[bot]` is judged by the App register alone, read from your default branch, never from the pull request. A refused event leaves the lane's later steps and jobs skipped, with a notice and a step-summary line naming who was refused and why; it does not turn the run red. A failed API call or a malformed register does.
+
+**Every lane carries the gate, including the lanes that move later** (review, verify-acs, lead, lead-split and rebase). [`tests/unit/lane-gate.test.ts`](../tests/unit/lane-gate.test.ts) fails for a lane in Kanon without it, or with a step or job that can run past a refusal, and for a lane whose triggers it doesn't list.
+
 ## The caller
 
 A caller holds `name`, `on`, `permissions` and one job, and nothing else:

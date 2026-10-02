@@ -211,7 +211,7 @@ Decisions waiting for the Stakeholder are shown to them in the weekly digest (`K
 
 **Why.** Security was already inside many rules, but no principle tied them together, so a new lane had nothing to be checked against as a whole. It became urgent once agents run on a public repository, Kanon's own first: there, issues, pull requests and comments come from strangers. An agent with a write token that follows a stranger's text is working for the stranger, a secret a fork's code can read is the fork's, and an action pinned to a branch runs whatever its owner pushes next.
 
-**Enforced by.** Each rule's own line. Three are checked on Kanon's own workflows and actions by [`tests/unit/workflow-security.test.ts`](../tests/unit/workflow-security.test.ts): no `pull_request_target` checkout of the head, no unpinned third-party action, no `secrets: inherit`. The membership filter on the lanes is prose only, and `K-AGENT-45` names the lanes that lack it.
+**Enforced by.** Each rule's own line. Three are checked on Kanon's own workflows and actions by [`tests/unit/workflow-security.test.ts`](../tests/unit/workflow-security.test.ts): no `pull_request_target` checkout of the head, no unpinned third-party action, no `secrets: inherit`. The membership gate on every lane is checked by [`tests/unit/lane-gate.test.ts`](../tests/unit/lane-gate.test.ts) (`K-AGENT-45`).
 
 **Class.** framework
 
