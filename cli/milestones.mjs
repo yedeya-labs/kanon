@@ -12,12 +12,12 @@
 //   A closed one has been completed by someone, and a bucket never completes. Either is
 //   reported, left unchanged, and makes the command exit 1, so a bootstrap script notices.
 //
-// The names come from the backstop's own constants, so there is one copy of them (K-WORK-13).
+// The list comes from the backstop's own constant, so there is one copy of it (K-WORK-13).
 import { spawn } from 'node:child_process';
-import { DEFAULT_MILESTONE, PIPELINE_MILESTONE } from '../scripts/issue-triage-defaults.mjs';
+import { BUCKET_MILESTONES } from '../scripts/issue-triage-defaults.mjs';
 
-/** The two buckets, in the order K-WORK-4 names them. */
-export const BUCKETS = [DEFAULT_MILESTONE, PIPELINE_MILESTONE];
+/** The two buckets, in the order K-WORK-4 names them: the backstop's own list. */
+export const BUCKETS = BUCKET_MILESTONES;
 
 export const USAGE = `Usage: kanon milestones --repo <owner>/<repo>
 
