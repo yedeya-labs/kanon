@@ -16,6 +16,10 @@ Signed-off-by: Your Name <you@example.com>
 
 AI-assisted changes are welcome. The **human** who submits them signs off, and so certifies the DCO and takes responsibility for the change. The AI may be credited with a `Co-Authored-By:` trailer, but never signs off: the DCO check fails a commit whose only sign-off is an AI or bot identity.
 
+### The repository's own agents
+
+The one exception is a commit authored by one of the repository's **own** agent Apps, the ones listed in its App register (`docs/qa/agent-identities.md`). When the Owner records a standing delegation in `docs/qa/sign-off-delegation.md`, such a commit carries the sign-off of the person it names, who takes responsibility for it ([`K-AGENT-44`](rulebook/03-agents.md)). The DCO check reads both files from the base branch, so a pull request can't add itself to either. Without a record, an agent's commit fails the check like any other. Contributors' commits, AI-assisted or not, are unaffected: you sign off your own.
+
 ## How changes land
 
 - **Titles.** Every pull request title is a conventional commit with one of Kanon's fixed types, and never ends in `(#n)` ([`K-SHIP-4`](rulebook/06-shipping.md)). CI checks it.

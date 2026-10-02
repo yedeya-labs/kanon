@@ -9,6 +9,17 @@ Fails a pull request unless **every commit in it** carries a `Signed-off-by:` tr
 
 On failure it lists each offending commit by short SHA and subject, with the reason, and prints the fix.
 
+## The repository's own agents
+
+An adopter may delegate sign-off for its own agents' commits to one named person ([`K-AGENT-44`](../../rulebook/03-agents.md)). Whether a standing delegation meets the DCO's certification is the adopter's own judgement; Kanon never makes it for them.
+
+- **The record** is `docs/qa/sign-off-delegation.md`: one table, `| Delegate | Email | Delegated on |`, with exactly one row ([`K-LAYOUT-14`](../../rulebook/11-repository-layout.md)).
+- **An agent's commit** is one whose author is an App in the App register, `docs/qa/agent-identities.md` ([`K-LAYOUT-6`](../../rulebook/11-repository-layout.md)): the login `<slug>[bot]`, or the noreply email `<id>+<slug>[bot]@users.noreply.github.com`, with `<slug>` in the register. It must carry the delegate's `Signed-off-by:` (name exactly, email ignoring case). Nobody else's sign-off counts for it, the author's included.
+- **Every other commit is unchanged,** and the delegate's sign-off on a person's commit counts for nothing.
+- **Both files are read from the base branch** over the API, never from the pull request ([`K-MERGE-17`](../../rulebook/04-review-and-merge.md)), so a PR that adds its own App to the register, or names its own delegate, is still judged by base. The change takes effect for the pull requests after it merges.
+- **No record, or a malformed one, delegates nothing.** An agent's commit is then checked like any other, and fails on its bot sign-off. The log says which file was missing or what was wrong with it.
+- **The files are read only when a commit has a bot author,** so a pull request of people's commits costs no extra call. A read that fails for any reason but "not found" fails the check.
+
 ## Exemptions
 
 The list is fixed ([ADR 0002](../../docs/decisions/0002-standardise-dont-parameterise.md)):
@@ -50,7 +61,7 @@ jobs:
 <!-- x-release-please-end -->
 
 - **No checkout needed.** The action reads the pull request's commits through the REST API with the workflow token, and carries its own script, read from its own directory at the version you pinned.
-- **`pull-requests: read`** lets the token list the commits. **`contents: read`** is also needed on a private repository.
+- **`pull-requests: read`** lets the token list the commits. **`contents: read`** is also needed on a private repository, for the commits and for the register and delegation files on the base branch.
 - **No inputs.** The pull request number, repository, base branch and token reach the script only through environment variables, never through the shell.
 - **With a merge queue** (`K-MERGE-7`), a required check must also run on `merge_group`, or queued PRs wait until they time out. A merge group carries no pull request, so add `merge_group:` under `on:`, gate this step with `if: github.event_name == 'pull_request'`, and add a step before it that passes with `if: github.event_name == 'merge_group'`. Keep the job's `name:` literal and the job itself unconditional, so the check reports under the same name on both events. Skipping the sign-off check on the queue is safe because a PR can only be queued once this check has passed on it, and a push to a queued PR takes it out of the queue. Kanon's own [`dco.yml`](../../.github/workflows/dco.yml) is the worked example.
 - **At most 250 commits.** That is all the API lists for a pull request. The check fails closed on a longer one rather than pass the commits it couldn't read.

@@ -23,6 +23,7 @@ What a file *contains* is still the project's (its specs, its signals, its escal
 | `docs/qa/capability-ledger.md` | The capability ledger | `K-LAYOUT-7` |
 | `docs/qa/escalation-paths.md` | The escalation paths and the bail list | `K-LAYOUT-8` |
 | `docs/qa/adoption.md` | The adoption record | `K-LAYOUT-10` |
+| `docs/qa/sign-off-delegation.md` | The sign-off delegation, when the adopter records one | `K-LAYOUT-14` |
 | `.github/dependabot.yml` | Holds the entry that proposes Kanon upgrades | `K-ADOPT-11` |
 
 Every markdown file directly inside `docs/qa/` is pipeline governance: changing one changes what an agent does or what a merge requires, so it is on the pipeline's own escalation path (`K-MERGE-4`). Files under `docs/qa/specs/` are not: specs are a project's deliverable (`K-MERGE-4`).
@@ -184,6 +185,24 @@ The pipeline's own paths escalate whatever the list says (`K-MERGE-4`), so the f
 **Why.** Bootstrap, the plan's fallbacks and the installed mechanisms change what the rest of the rulebook means on this repository. If they aren't written down in one place, every reader has to reconstruct them.
 
 **Enforced by.** Prose only; a guard is planned (`K-ADOPT-6`).
+
+**Class.** framework
+
+### `K-LAYOUT-14` The sign-off delegation names one person, one email and one date
+
+**Rule.** An adopter that delegates sign-off for its own agents (`K-AGENT-44`) records it in `docs/qa/sign-off-delegation.md`, which holds exactly one table, outside any fenced block, with this header and exactly one row:
+
+```markdown
+| Delegate | Email | Delegated on |
+|---|---|---|
+| Ada Lovelace | ada@example.com | 2026-10-02 |
+```
+
+The name and email are the person's, written exactly as their sign-off writes them: the name matches exactly and the email ignoring case. The date is `YYYY-MM-DD`. Prose may surround the table, such as the delegation's wording. The delegate is a person: a name or email that marks an AI or a bot (an `anthropic.com` address, or `[bot]`) makes the record malformed. A repository that delegates nothing has no file.
+
+**Why.** The `dco` check reads the record to decide what an agent's commit needs, so its shape has to be something a machine reads one way. One table, one row, one date leaves nothing to interpret: two delegates, a missing date or a free-text email are each a malformed record, not a guess. A malformed record delegates nothing, so a mistake in it fails an agent's commits rather than passing them.
+
+**Enforced by.** The [`dco` action](../actions/dco/README.md)'s parser, which reports a malformed record by name and then treats it as absent; [`tests/unit/dco.test.ts`](../tests/unit/dco.test.ts) pins each malformed shape.
 
 **Class.** framework
 

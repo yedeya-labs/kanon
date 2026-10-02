@@ -8,6 +8,10 @@
 # The script is read from this action's own directory ($GITHUB_ACTION_PATH), at the ref
 # the adopter pinned, so the action and its script can never drift apart.
 #
+# The repository's own agents (K-AGENT-44): a commit authored by an App in the App register
+# needs the sign-off of the person named in docs/qa/sign-off-delegation.md. Both files are
+# read from the base branch over the API, never from the pull request (K-MERGE-17).
+#
 # Everything reaches the script through the environment, never interpolated into a shell
 # line. There are no inputs (ADR 0002): the exemptions are fixed, and listed with their
 # reasons in dco.mjs's header: merge commits, and GitHub-signed commits by Dependabot and
