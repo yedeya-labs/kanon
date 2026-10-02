@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/yedeya-labs/kanon/compare/v0.8.1...v0.9.0) (2026-10-02)
+
+
+### Features
+
+* **lanes:** gate every lane on membership before it mints a token ([#61](https://github.com/yedeya-labs/kanon/issues/61)) ([64e0a15](https://github.com/yedeya-labs/kanon/commit/64e0a1545ab64dc3f342d2b2a499221ff6e3d8b9))
+
 ## [0.8.1](https://github.com/yedeya-labs/kanon/compare/v0.8.0...v0.8.1) (2026-10-02)
 
 

@@ -12,7 +12,7 @@ Call it with `id: finish`, `if: always()` and `continue-on-error: true`, and han
 - id: finish
   if: always()
   continue-on-error: true
-  uses: yedeya-labs/kanon/actions/agent-finish@v0.8.1
+  uses: yedeya-labs/kanon/actions/agent-finish@v0.9.0
   with:
     arm: lead agent
     agent: lead
