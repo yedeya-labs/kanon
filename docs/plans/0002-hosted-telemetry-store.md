@@ -209,7 +209,7 @@ The table is guidance for reading the data, not a field. The store records facts
 
 CloudFormation needs only the AWS CLI. AWS keeps the state. `DeletionPolicy: Retain` and deletion protection on the table make its lifecycle independent of the stack, which `K-OBS-17` requires. The Lambda code is packaged with `aws cloudformation package` from a Kanon release tag. The template lives at `infra/telemetry/` and is parsed by a unit test, like the actions.
 
-**The register is not public.** The list of opted-in repositories, their keys, and their reader environments is a parameter file the Owner keeps outside the public tree. Publishing it would tell everyone who opted in. Kanon's public tree holds the template and an example register naming only Kanon. **Rows carry the opaque key, never the repository name,** so the table alone doesn't say whose rows it holds.
+**The register is not public.** The list of opted-in repositories, their keys, and their reader environments is a parameter file the Owner keeps outside the public tree. Publishing it would tell everyone who opted in. Kanon's public tree holds the template and an example register naming only Kanon. **Rows carry the opaque key, never the repository name,** so the table alone doesn't say whose rows it holds. **It also holds, per key, the adopter's time from install to first review** (plan 0003 §4, group 9), which describes one adopter and so never enters the public tree; only its distribution across adopters is published, under the three-adopter rule (§6).
 
 **Behind #19's interface.** The store is defined by four operations, and the AWS stack is their first implementation:
 
@@ -335,7 +335,7 @@ The dispatch sweep keeps its three-field projection.
 - **Deletion on request,** done by the Owner with an erase script:
   1. remove the adopter from the register and redeploy, which deletes both its roles, so writes and reads stop at once;
   2. delete every partition `<key>#<lane>`, one per lane in the enum, **and `<key>#work`** (plan 0003). The lane list is closed, so this is complete without a scan;
-  3. record the date and the key, not the repository, in the private register.
+  3. remove the key's time from install to first review from the private register (plan 0003), and record the date and the key, not the repository, in it.
 - **Backups.** Point-in-time recovery keeps 35 days. So the promise is: **deleted from the table at once, and from backups within 35 days.** The alternative, no point-in-time recovery, would make an operator mistake unrecoverable for every adopter's history. The ingest logs hold keys and field names only, and expire in 30 days.
 
 ## Measurements
