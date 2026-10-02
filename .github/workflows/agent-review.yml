@@ -1573,7 +1573,7 @@ jobs:
         if: steps.claim.outputs.proceed == 'true'
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.REVIEWER_APP_ID }}
+          client-id: ${{ secrets.REVIEWER_APP_ID }}
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
 
       # `continue-on-error` + an EXPLICIT outcome step below (RA-1351), the shape RA-846

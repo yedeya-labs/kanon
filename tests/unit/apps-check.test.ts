@@ -294,7 +294,7 @@ describe('the apps-check workflow', () => {
     const mint = check.steps[0]!;
     expect(mint.uses).toBe(pinned);
     expect(mint.with).toEqual({
-      'app-id': "${{ secrets[format('{0}_APP_ID', matrix.app.secret)] }}",
+      'client-id': "${{ secrets[format('{0}_APP_ID', matrix.app.secret)] }}",
       'private-key': "${{ secrets[format('{0}_APP_PRIVATE_KEY', matrix.app.secret)] }}",
       owner: '${{ github.repository_owner }}',
     });

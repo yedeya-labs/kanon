@@ -290,7 +290,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
+          client-id: ${{ secrets.IMPLEMENTER_APP_ID }}
           private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
           permission-issues: write
       - name: Free the WIP slot a crashed run would otherwise hold

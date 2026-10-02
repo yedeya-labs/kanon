@@ -706,7 +706,7 @@ jobs:
         id: round-app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.LEAD_APP_ID }}
+          client-id: ${{ secrets.LEAD_APP_ID }}
           private-key: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
 
       - name: Record the round when the agent pushed and left no marker (RA-1981)

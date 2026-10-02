@@ -171,7 +171,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.REVIEWER_APP_ID }}
+          client-id: ${{ secrets.REVIEWER_APP_ID }}
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
 
       # NO PROJECT SETUP (RA-2660, RA-2694). This arm never installed and has no database: the

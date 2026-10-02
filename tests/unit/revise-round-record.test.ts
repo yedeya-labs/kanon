@@ -212,7 +212,7 @@ for (const lane of LANES) {
       // secret the lane hands the spine, rather than a literal, so the two cannot drift
       // apart (RA-2592 mutation-check: this was unguarded before the move, too).
       const lane_ = wf.jobs.revise as unknown as { secrets: Record<string, string> };
-      expect((mint as { with?: Record<string, string> }).with?.['app-id']).toBe(lane_.secrets['app-id']);
+      expect((mint as { with?: Record<string, string> }).with?.['client-id']).toBe(lane_.secrets['app-id']);
       expect((mint as { with?: Record<string, string> }).with?.['private-key']).toBe(lane_.secrets['app-private-key']);
     });
 
