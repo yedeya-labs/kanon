@@ -19,9 +19,7 @@ import { parse } from 'yaml';
  * headroom; leaving `agent-implement-revise.yml` behind would move the same stall
  * one step later, onto the round that already has a PR to lose.
  *
- * KANON HOLDS THE REVISE LANE (plan 0001, step 2); the implement lane is still the reference
- * adopter's until step 3. So this pins the revise lane's half, and the adopter's copy of this
- * test holds the two to each other against a checkout of Kanon at the pinned tag.
+ * KANON HOLDS BOTH LANES since plan 0001's step 3, so this holds them to each other here.
  *
  * ⚠️ 300 IS HEADROOM, NOT A MEASURED REQUIREMENT — runs die AT the cap, so the
  * distance to completion is unobserved. This test pins what was agreed; it does
@@ -30,7 +28,7 @@ import { parse } from 'yaml';
  */
 const read = (f: string) => readFileSync(join(process.cwd(), '.github/workflows', f), 'utf8');
 
-const LANES = ['agent-implement-revise.yml'] as const;
+const LANES = ['agent-implement.yml', 'agent-implement-revise.yml'] as const;
 const EXPECTED_CAP = 300;
 
 /** Every `--max-turns N` the file passes to `claude_args`, as numbers. */
@@ -46,6 +44,11 @@ describe('RA-2207 — the implement lane turn cap', () => {
 
   it.each(LANES)('%s sets every --max-turns to the agreed cap', (lane) => {
     for (const n of caps(read(lane))) expect(n).toBe(EXPECTED_CAP);
+  });
+
+  it('both lanes agree — a revise round needs the headroom its first round needed', () => {
+    const [implement, revise] = LANES.map((l) => new Set(caps(read(l)))) as [Set<number>, Set<number>];
+    expect([...implement]).toEqual([...revise]);
   });
 
   /**
@@ -87,9 +90,12 @@ describe('RA-2207 — the implement lane turn cap', () => {
 const EXPECTED_CEILING = 180;
 const yaml = (f: string) => parse(read(f)) as { jobs: Record<string, Record<string, unknown> & { with?: Record<string, unknown>; uses?: string }> };
 const ceilingOf: Record<(typeof LANES)[number], () => unknown> = {
+  'agent-implement.yml': () => yaml('agent-implement.yml').jobs.implement?.with?.['timeout-minutes'],
   'agent-implement-revise.yml': () => yaml('agent-implement-revise.yml').jobs.revise?.with?.['timeout-minutes'],
 };
 const RATIONALE: Record<(typeof LANES)[number], { anchor: string; says: RegExp[] }> = {
+  // Why not higher: the ceiling must still bound a hang.
+  'agent-implement.yml': { anchor: '# 180 RATHER THAN MORE', says: [/RA-1336/, /bound a hang/] },
   // Why it matches the first lane: one cap, one ceiling.
   'agent-implement-revise.yml': { anchor: '# WALL-CLOCK CEILING — 180 since RA-2212', says: [/matching `agent-implement\.yml`/, /turn cap/] },
 };
@@ -97,6 +103,10 @@ const RATIONALE: Record<(typeof LANES)[number], { anchor: string; says: RegExp[]
 describe('RA-2249 — the implement lanes wall-clock ceiling', () => {
   it.each(LANES)('%s resolves its ceiling to the agreed value', (lane) => {
     expect(ceilingOf[lane](), `${lane}: ceiling missing or changed`).toBe(EXPECTED_CEILING);
+  });
+
+  it('both lanes agree — the ceiling is a function of the cap, and the caps agree', () => {
+    expect(ceilingOf['agent-implement.yml']()).toBe(ceilingOf['agent-implement-revise.yml']());
   });
 
   it.each(LANES)('%s records WHY its ceiling is what it is', (lane) => {
@@ -114,7 +124,7 @@ describe('RA-2249 — the implement lanes wall-clock ceiling', () => {
       .filter((f) => f.endsWith('.yml'))
       .flatMap((f) => Object.entries(yaml(f).jobs ?? {}).map(([job, def]) => ({ where: `${f}:${job}`, def })))
       .filter(({ def }) => typeof def.uses === 'string' && def.uses.endsWith('/agent-lane.yml'));
-    expect(callers.map((c) => c.where)).toEqual(expect.arrayContaining(['agent-triage.yml:triage-fix', 'agent-implement-revise.yml:revise', 'agent-lead-revise.yml:revise']));
+    expect(callers.map((c) => c.where)).toEqual(expect.arrayContaining(['agent-triage.yml:triage-fix', 'agent-implement.yml:implement', 'agent-implement-revise.yml:revise', 'agent-lead-revise.yml:revise']));
     const silent = callers.filter(({ def }) => def.with?.['timeout-minutes'] === undefined).map((c) => c.where);
     expect(silent, 'these callers inherit the spine default — pass timeout-minutes explicitly').toEqual([]);
   });

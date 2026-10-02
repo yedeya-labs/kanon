@@ -61,14 +61,15 @@ const red = (change: (t: Tree) => void, message: string | RegExp, env: Record<st
 
 const TRIAGE = '.github/workflows/agent-triage.yml';
 const IMPL = '.github/workflows/agent-implement-revise.yml';
+const REGISTER = 'docs/qa/agent-identities.md';
 type Caller = { on?: unknown; concurrency?: unknown; env?: unknown; permissions?: Record<string, string>; jobs: Record<string, Record<string, unknown>> };
 const job = (doc: Record<string, unknown>) => Object.values((doc as Caller).jobs)[0]!;
 
 describe.skipIf(!hasYq)('lane-check', () => {
-  it('passes the fixture adopter whole, and counts its three callers', () => {
+  it('passes the fixture adopter whole, and counts its four callers', () => {
     const r = check(adopter());
     expect(r.status, r.out).toBe(0);
-    expect(r.out).toContain('3 lane caller(s) pass');
+    expect(r.out).toContain('4 lane caller(s) pass');
   });
 
   describe('a caller holds only its triggers, permissions and one job', () => {
@@ -115,6 +116,13 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => t.edit(IMPL, (d) => { (d as Caller).permissions = { contents: 'read', 'pull-requests': 'read' }; }), 'grants issues: none; the Kanon lane agent-implement-revise needs issues: read'));
     it('refuses read where the lane needs write', () =>
       red((t) => t.edit('.github/workflows/agent-lead-revise.yml', (d) => { (d as Caller).permissions!['pull-requests'] = 'read'; }), 'needs pull-requests: write'));
+    // A job-level grant inside a called workflow is held to the caller's ceiling too, so the
+    // implement lane's crash recovery (issues, pull requests and actions, on the default
+    // token) is part of what its caller must grant.
+    it('counts a grant the lane makes on one of its jobs, not only at its top level', () =>
+      red((t) => t.edit('.github/workflows/agent-implement.yml', (d) => { delete (d as Caller).permissions!.actions; }), 'grants actions: none; the Kanon lane agent-implement needs actions: write'));
+    it('takes the wider of a top-level and a job-level grant of one scope', () =>
+      red((t) => t.edit('.github/workflows/agent-implement.yml', (d) => { (d as Caller).permissions!.issues = 'read'; }), 'needs issues: write'));
     it('reads the calling job\'s own grant over the workflow\'s', () => {
       const t = adopter();
       t.edit(IMPL, (d) => {
@@ -163,7 +171,23 @@ describe.skipIf(!hasYq)('lane-check', () => {
       expect(r.out).toContain('3 lane caller(s) pass');
     });
     it('refuses a repository with no lane caller at all', () =>
-      red((t) => { for (const f of ['agent-triage', 'agent-implement-revise', 'agent-lead-revise']) t.rm(`.github/workflows/${f}.yml`); }, 'no workflow calls a Kanon lane'));
+      red((t) => { for (const f of ['agent-triage', 'agent-implement', 'agent-implement-revise', 'agent-lead-revise']) t.rm(`.github/workflows/${f}.yml`); }, 'no workflow calls a Kanon lane'));
+  });
+
+  describe('a lane that runs as another role (§8)', () => {
+    // The merge-reconcile lane runs as the Reviewer, whom the fixture's register does not list.
+    const MERGE = '.github/workflows/agent-merge-reconcile.yml';
+    const addCaller = (t: Tree) => t.write(MERGE, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-merge-reconcile.yml'), 'utf8'));
+    it('refuses its caller while the register has no row for that role', () =>
+      red(addCaller, 'lists the role Reviewer 0 times'));
+    it('accepts it once the role has a row', () => {
+      const t = adopter();
+      addCaller(t);
+      t.write(REGISTER, `${t.read(REGISTER)}| Reviewer | \`example-reviewer\` | Read | Read & write | Read & write | No access |\n`);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('5 lane caller(s) pass');
+    });
   });
 
   describe('the project-setup hook (§5)', () => {

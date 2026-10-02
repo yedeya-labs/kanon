@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
@@ -48,10 +49,13 @@ type Spine = {
   permissions?: unknown;
 };
 
-export const readSpine = (): Spine => parse(readFileSync(join(process.cwd(), SPINE), 'utf8')) as Spine;
+// Kanon's root, not the working directory: the library's tests run inside the fixture
+// adopter (tests/library/helpers/in-adopter.ts) and read Kanon's lanes through this too.
+const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+export const readSpine = (): Spine => parse(readFileSync(join(ROOT, SPINE), 'utf8')) as Spine;
 
 /** A block's parsed `action.yml`, by repo-relative path — the reader `expandLaneBlocks` takes. */
-export const readAction = (path: string) => parse(readFileSync(join(process.cwd(), path), 'utf8'));
+export const readAction = (path: string) => parse(readFileSync(join(ROOT, path), 'utf8'));
 
 type Block = {
   inputs?: Record<string, { default?: string; required?: boolean }>;

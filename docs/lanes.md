@@ -7,10 +7,14 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Lane | File | Role (App) | Caller's triggers |
 |---|---|---|---|
 | Triage and fix | `agent-triage.yml` | Implementer | `issues: [labeled]`; `workflow_dispatch` with `issue_number` |
+| Implement | `agent-implement.yml` | Implementer | `issues: [labeled]`; `workflow_dispatch` with `issue_number` |
 | Implement, revise | `agent-implement-revise.yml` | Implementer | `pull_request_review: [submitted]`; `pull_request: [labeled]`; `workflow_dispatch` with `pr_number` and `reset` |
 | Lead, revise | `agent-lead-revise.yml` | Lead | `pull_request_review: [submitted]`; `pull_request: [labeled]`; `workflow_dispatch` with `pr_number` and `reset` |
+| Merge reconcile | `agent-merge-reconcile.yml` | Reviewer | `pull_request: [closed]`; `pull_request_review: [submitted]`; `workflow_dispatch` with `pr_number` |
 
-Each lane calls the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly. The other lanes move in later steps of plan 0001.
+Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile calls the blocks itself and installs nothing, so it never calls your hook. The other lanes move in later steps of plan 0001.
+
+**Grant a lane's job-level permissions too.** The implement lane's crash recovery runs on the workflow token and writes issues, reads pull requests and starts the split lane, so its caller grants `contents: read`, `issues: write`, `pull-requests: read` and `actions: write`.
 
 ## The caller
 
@@ -62,13 +66,17 @@ jobs:
 - **No `concurrency:`.** Each lane holds its own concurrency group. The same group on the caller would have the caller wait for itself.
 - **One version.** Every Kanon reference in your repository pins the same exact version, and Dependabot proposes upgrades (`K-ADOPT-11`).
 
+## Kanon's scripts
+
+The lanes run Kanon's pipeline library (`scripts/`) from the runner's action cache, at the version you pinned, never from your checkout: a step finds it with [`kanon-path`](../actions/kanon-path/README.md) and runs `node "$KANON/scripts/<name>.mjs"`. The scripts read your repository's files at the paths in [chapter 11](../rulebook/11-repository-layout.md), relative to the working directory, so they run in your checkout. A workflow of your own that runs one of them does the same. Your own lint and tests read the library from a checkout of Kanon at the pinned tag, until it is published as a package.
+
 ## The project-setup hook
 
 `.github/actions/project-setup/action.yml` is a composite action you write ([plan 0001 §5](plans/0001-move-the-agent-lanes.md)). Every lane that checks out calls it after the checkout and before the agent, with these inputs, all strings: `lane`, `install`, `database`, `browsers`, `issue-number`, `app-slug` and `github-token`. It installs your toolchain and dependencies, and, when `database` is `'true'`, sets up your schema against Kanon's standard database (`DATABASE_URL=postgres://kanon:kanon@localhost:5432/kanon`, `pgvector/pgvector:pg17`). It is read from the checked-out tree, so on a lane that checks out a pull request it is that branch's copy.
 
 ## The App register
 
-The revise lanes find their own App's login in the App register, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks.
+The revise lanes find their own App's login in the App register, and the scripts the lanes run read every role's login from it, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks.
 
 ## Checking it
 

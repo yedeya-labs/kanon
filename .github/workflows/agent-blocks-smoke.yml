@@ -41,6 +41,26 @@ jobs:
       # For the fixtures only. The blocks come from `$/`, never from this checkout.
       - uses: actions/checkout@v7
 
+      # A lane runs Kanon's scripts from the action cache, never from the checkout (plan 0001
+      # §3). This finds the tree `$/` downloaded and runs one script from it against a fixture
+      # adopter, in that adopter's directory, as the merge-reconcile lane runs it.
+      - name: Find Kanon's scripts
+        id: kanon
+        uses: $/actions/kanon-path
+
+      - name: Check the path is Kanon's, outside the workspace, and runs a script from there
+        env:
+          OUTPUT: ${{ steps.kanon.outputs.path }}
+        run: |
+          echo "KANON=$KANON"
+          test "$OUTPUT" = "$KANON"
+          case "$KANON" in "$GITHUB_WORKSPACE"|"$GITHUB_WORKSPACE"/*) echo "::error::$KANON is inside the workspace"; exit 1 ;; esac
+          test -f "$KANON/scripts/implement-crash.mjs"
+          cd tests/fixtures/kanon-path
+          node "$KANON/scripts/playbook-excerpt.mjs" --out "$RUNNER_TEMP/excerpt.md"
+          grep -q '^## Capturing follow-ups' "$RUNNER_TEMP/excerpt.md"
+          if grep -q '^## Reviewing an open PR' "$RUNNER_TEMP/excerpt.md"; then echo "::error::the excerpt kept a section it drops"; exit 1; fi
+
       - name: Place an unreachable-model result where the agent step writes it
         run: cp tests/fixtures/agent-blocks/unreachable.json "$RUNNER_TEMP/claude-execution-output.json"
 

@@ -320,8 +320,17 @@ describe('plan 0001 step 2: the agent lanes smoke run', () => {
   it('grants each lane exactly the permissions the lane declares, and the workflow reads contents only', () => {
     expect(wf.permissions).toEqual({ contents: 'read' });
     for (const [, j] of callers) {
-      const lane = load(String(j.uses).replace('$/.github/workflows/', '')).wf;
-      expect(j.permissions, String(j.uses)).toEqual(lane.permissions);
+      const lane = load(String(j.uses).replace('$/.github/workflows/', '')).wf as {
+        permissions?: Record<string, string>; jobs?: Record<string, { permissions?: Record<string, string> }>;
+      };
+      // What the lane declares at its top level and on each job: a job-level grant in a
+      // called workflow is held to this ceiling too (the implement lane's crash recovery).
+      const rank = (v?: string) => (v === 'write' ? 2 : v === 'read' ? 1 : 0);
+      const want: Record<string, string> = {};
+      for (const p of [lane.permissions, ...Object.values(lane.jobs ?? {}).map((x) => x.permissions)]) {
+        for (const [k, v] of Object.entries(p ?? {})) if (rank(v) > rank(want[k])) want[k] = v;
+      }
+      expect(j.permissions, String(j.uses)).toEqual(want);
     }
   });
 

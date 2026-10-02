@@ -17,7 +17,9 @@ import { type WorkflowStep } from './helpers/workflow-step.js';
  * retry breadcrumbs, and the rule that nothing in them names a project.
  */
 const WF = '.github/workflows';
-const LANES = ['agent-triage.yml', 'agent-implement-revise.yml', 'agent-lead-revise.yml'] as const;
+const LANES = ['agent-triage.yml', 'agent-implement.yml', 'agent-implement-revise.yml', 'agent-lead-revise.yml', 'agent-merge-reconcile.yml'] as const;
+/** The lanes that hand their body to the spine; merge-reconcile calls the blocks itself. */
+const SPINE_LANES = LANES.filter((f) => f !== 'agent-merge-reconcile.yml');
 type Job = {
   uses?: string;
   with?: Record<string, unknown>;
@@ -41,8 +43,10 @@ const spineCalls = (file: string) => Object.entries(lane(file).jobs).filter(([, 
 /** The role each lane runs as, and so the fixed secret names it takes (plan 0001 §8). */
 const ROLE: Record<(typeof LANES)[number], string> = {
   'agent-triage.yml': 'IMPLEMENTER',
+  'agent-implement.yml': 'IMPLEMENTER',
   'agent-implement-revise.yml': 'IMPLEMENTER',
   'agent-lead-revise.yml': 'LEAD',
+  'agent-merge-reconcile.yml': 'REVIEWER',
 };
 
 describe('plan 0001 §3: each lane is a reusable workflow, called with its inputs and its secrets', () => {
@@ -67,7 +71,7 @@ describe('plan 0001 §3: each lane is a reusable workflow, called with its input
     }
   });
 
-  it.each(LANES)('%s hands its body to the spine through `$/`, with its own secrets mapped explicitly', (file) => {
+  it.each(SPINE_LANES)('%s hands its body to the spine through `$/`, with its own secrets mapped explicitly', (file) => {
     const calls = spineCalls(file);
     expect(calls).toHaveLength(1);
     const [, job] = calls[0]!;
@@ -124,7 +128,7 @@ describe('every arm passes the flags its run is measured and bounded by', () => 
 
   it('finds one arm per lane', () => {
     expect(arms.map((a) => a.file)).toEqual([...LANES]);
-    expect(arms.map((a) => a.agent)).toEqual(['triage-fix', 'implementer-revise', 'lead-revise']);
+    expect(arms.map((a) => a.agent)).toEqual(['triage-fix', 'implementer', 'implementer-revise', 'lead-revise', 'merge-reconcile']);
   });
 
   it.each(['--model', '--effort', '--max-turns', '--max-budget-usd', '--allowedTools'])('every arm passes %s', (name) => {
@@ -138,20 +142,27 @@ describe('every arm passes the flags its run is measured and bounded by', () => 
     }
   });
 
-  it('no arm pins the 5-minute prompt cache: each runs tests or idles past it (RA-2058)', () => {
-    for (const file of LANES) {
+  it('no spine lane pins the 5-minute prompt cache: each runs tests or idles past it (RA-2058)', () => {
+    for (const file of SPINE_LANES) {
       for (const [, job] of spineCalls(file)) expect(job.with?.['prompt-cache-ttl'], file).toBeUndefined();
     }
   });
 
-  it('no arm sets an --autocompact window: that experiment is the implement lane\'s alone (RA-1949)', () => {
-    expect(arms.filter((a) => /--autocompact/.test(a.args)).map((a) => a.file)).toEqual([]);
+  it('merge-reconcile pins it, deliberately: every run ends well inside 5 minutes (RA-2058)', () => {
+    const run = lane('agent-merge-reconcile.yml').jobs.reconcile!.steps!.find((st) => laneBlockOf(st) === 'agent-run');
+    expect(run?.with?.['prompt-cache-ttl']).toBe('5m');
+  });
+
+  it('only the implement lane sets an --autocompact window: that experiment is its alone (RA-1949)', () => {
+    expect(arms.filter((a) => /--autocompact/.test(a.args)).map((a) => a.file)).toEqual(['agent-implement.yml']);
   });
 
   it('every arm sets its own timeout, never the spine default', () => {
-    for (const file of LANES) {
+    for (const file of SPINE_LANES) {
       for (const [, job] of spineCalls(file)) expect(job.with?.['timeout-minutes'], file).toEqual(expect.any(Number));
     }
+    // A lane on its own jobs bounds each of them itself.
+    for (const job of Object.values(lane('agent-merge-reconcile.yml').jobs)) expect((job as { 'timeout-minutes'?: number })['timeout-minutes']).toEqual(expect.any(Number));
   });
 });
 
@@ -226,6 +237,12 @@ describe('plan 0001 §5: nothing in the spine or a lane names a project', () => 
   const withoutPrompts = (file: string) => {
     const doc = lane(file);
     for (const job of Object.values(doc.jobs)) if (job.with) delete job.with.prompt;
+    for (const job of Object.values(doc.jobs)) for (const st of job.steps ?? []) if (st.with) delete (st.with as Record<string, unknown>).prompt;
+    // The implement lane's crash recovery runs Kanon's own script on Node 24 (`engines`),
+    // which is Kanon's requirement, not a project's.
+    for (const job of Object.values(doc.jobs)) for (const st of job.steps ?? []) {
+      if (String(st.uses ?? '').startsWith('actions/setup-node') && st.with?.['node-version'] === '24') delete st.with['node-version'];
+    }
     return JSON.stringify(doc, null, 1).split('\n');
   };
 

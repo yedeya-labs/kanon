@@ -53,8 +53,9 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 | [Agent lane: finish](actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@v0.7.0` |
 | [Agent lane: classify a red run](actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@v0.7.0` |
 | [Agent telemetry](actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@v0.7.0` |
-| [Agent lanes: triage, implement-revise, lead-revise](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.7.0` in a job |
+| [Agent lanes: triage, implement, implement-revise, lead-revise, merge-reconcile](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.7.0` in a job |
 | [Lane check](actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@v0.7.0` |
+| [Kanon's scripts from a workflow step](actions/kanon-path/README.md) | `uses: yedeya-labs/kanon/actions/kanon-path@v0.7.0` |
 
 <!-- x-release-please-end -->
 
@@ -88,6 +89,7 @@ See the [roadmap](ROADMAP.md) for what comes next.
 | [`docs/decisions/`](docs/decisions/) | Architecture decision records: why Kanon is shaped the way it is. |
 | [`cli/`](cli/) | The `kanon` command: so far, [`kanon apps`](docs/apps.md). |
 | [`actions/`](actions/) | Kanon's checks, the lane check and the agent-lane blocks, each a versioned composite action. |
+| [`scripts/`](scripts/) | The pipeline library: the scripts the lanes run, through [`kanon-path`](actions/kanon-path/README.md). |
 | [`.github/workflows/`](.github/workflows/) | Kanon's agent lanes and the shared lane workflow they call, the reusable release workflow, and Kanon's own CI, including smoke runs of the blocks and the lanes. |
 | [`tests/`](tests/) | Kanon's own tests, run on every pull request. |
 

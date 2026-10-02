@@ -110,7 +110,10 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
     done
   fi
 
-  # The permissions ceiling: the calling job must grant at least what the lane declares.
+  # The permissions ceiling: the calling job must grant at least what the lane declares, at
+  # its top level or on any one of its jobs. A job-level grant in a called workflow is still
+  # held to the caller's ceiling, so the implement lane's crash recovery, which writes issues
+  # on the default token, needs the caller to grant that too.
   perms="$(jq -c 'if (.jobs | to_entries[0].value.permissions) != null then .jobs | to_entries[0].value.permissions else .permissions end' <<<"$doc")"
   if [ "$(jq -r 'type' <<<"$perms")" != object ]; then
     fail "$f" "grants no explicit permissions; the calling job's \`permissions:\` is the lane's ceiling (plan 0001 §3)"
@@ -120,7 +123,9 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
       have="$(jq -r --arg s "$scope" '.[$s] // "none"' <<<"$perms")"
       [ "$(level "$have")" -ge "$(level "$need")" ] \
         || fail "$f" "grants $scope: $have; the Kanon lane $lane needs $scope: $need"
-    done < <(jq -r '.permissions // {} | to_entries[] | [.key, .value] | @tsv' <<<"$lane_doc")
+    done < <(jq -r 'def lv: if . == "write" then 2 elif . == "read" then 1 else 0 end;
+      [(.permissions | objects), (.jobs // {} | .[] | .permissions | objects)]
+      | map(to_entries[]) | group_by(.key) | .[] | max_by(.value | lv) | [.key, .value] | @tsv' <<<"$lane_doc")
   fi
 done
 

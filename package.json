@@ -8,7 +8,7 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.library.json",
     "test": "vitest run",
     "check:pr-title": "node actions/pr-title/pr-title.mjs"
   },
