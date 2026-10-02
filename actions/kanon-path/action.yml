@@ -1,0 +1,41 @@
+# Where Kanon is, for a lane step that runs one of Kanon's scripts (plan 0001 §3).
+#
+# A reusable workflow can't read its own repository by path: a `run:` step reads the
+# caller's checkout. But a `uses:` reference is downloaded, whole, into the runner's action
+# cache during `Set up job`, and `$GITHUB_ACTION_PATH` is where this action landed there. Two
+# levels up is the root of the Kanon tree it came from: the commit of the tag the caller
+# pinned when it is called as `$/actions/kanon-path` from a Kanon lane, or as
+# `yedeya-labs/kanon/actions/kanon-path@vX.Y.Z` from an adopter's own workflow. So a lane step
+# runs `node "$KANON/scripts/<name>.mjs"` at that version, outside the workspace, and a PR
+# branch cannot change the script it runs.
+#
+# Lanes never import the pipeline library from `node_modules`: on a PR lane the install is
+# the PR's.
+#
+# The path is both this action's `path` output and `KANON` in the job's environment, for
+# every later step. It fails if the tree it finds has no `scripts/` directory, so a wrong
+# path is a named error here rather than a "module not found" later.
+name: Kanon path
+description: Puts the absolute path of the Kanon tree this action came from in the `path` output and in `KANON` for later steps.
+author: yedeya-labs
+
+outputs:
+  path:
+    description: The absolute path of Kanon's root, in the runner's action cache.
+    value: ${{ steps.path.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Find Kanon's root
+      id: path
+      shell: bash
+      run: |
+        set -euo pipefail
+        root="$(cd "$GITHUB_ACTION_PATH/../.." && pwd -P)"
+        if [ ! -d "$root/scripts" ]; then
+          echo "::error title=kanon-path::$root has no scripts/ directory, so it is not a Kanon tree"
+          exit 1
+        fi
+        echo "path=$root" >> "$GITHUB_OUTPUT"
+        echo "KANON=$root" >> "$GITHUB_ENV"

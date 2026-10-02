@@ -3,7 +3,7 @@
 Fails unless the repository's Kanon lane callers, project-setup hook, App register and Dependabot entry follow the lane rules in [docs/lanes.md](../../docs/lanes.md) ([plan 0001 §6](../../docs/plans/0001-move-the-agent-lanes.md)). It holds only the permanent rules:
 
 - **Each caller** (a workflow with a job that calls `yedeya-labs/kanon/.github/workflows/<lane>.yml`) holds only `name`, `on`, `permissions` and one job, and no `concurrency`.
-- **That job** holds only `uses`, `with`, `secrets` and `permissions`. It passes only its own inputs through by the same name, maps exactly the secrets the lane declares, each to one repository secret (never `secrets: inherit`), and grants at least the permissions the lane declares.
+- **That job** holds only `uses`, `with`, `secrets` and `permissions`. It passes only its own inputs through by the same name, maps exactly the secrets the lane declares, each to one repository secret (never `secrets: inherit`), and grants at least the permissions the lane declares, at its top level or on any of its jobs.
 - **Every Kanon reference** under `.github/` pins one exact version, and it is the version this check runs at.
 - **The project-setup hook** exists at `.github/actions/project-setup/action.yml`, is a composite action, and declares every input Kanon's lanes pass it.
 - **The App register** (`docs/qa/agent-identities.md`) has one row, with an App slug in backticks, for every role a caller's lane runs as.

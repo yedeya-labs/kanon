@@ -1,0 +1,27 @@
+# A trigger-only caller of Kanon's merge-reconcile lane, as an adopter writes it (plan 0001 §3).
+name: Merge Reconcile
+
+on:
+  pull_request:
+    types: [closed]
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Merged PR number to reconcile
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  reconcile:
+    uses: yedeya-labs/kanon/.github/workflows/agent-merge-reconcile.yml@v1.2.3
+    with:
+      pr_number: ${{ inputs.pr_number }}
+    secrets:
+      REVIEWER_APP_ID: ${{ secrets.REVIEWER_APP_ID }}
+      REVIEWER_APP_PRIVATE_KEY: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

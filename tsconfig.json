@@ -12,5 +12,8 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["actions", "cli", "tests", "*.config.ts", "*.config.js"]
+  "include": ["actions", "cli", "scripts", "tests", "*.config.ts", "*.config.js"],
+  // The pipeline library's tests were moved from the reference adopter, which does not check
+  // indexed access, so they are checked without it in tsconfig.library.json (ADR 0009).
+  "exclude": ["tests/library"]
 }

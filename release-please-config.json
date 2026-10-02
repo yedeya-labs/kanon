@@ -18,6 +18,7 @@
         "actions/agent-setup/README.md",
         "actions/agent-telemetry/README.md",
         "actions/dco/README.md",
+        "actions/kanon-path/README.md",
         "actions/lane-check/README.md",
         "actions/pr-title/README.md",
         "docs/apps.md",

@@ -1,0 +1,270 @@
+# QA pipeline — Agent 2 (the Implementer), IMPLEMENTER mode, event-driven. A Kanon lane (plan
+# 0001, step 3).
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers (`issues: [labeled]` and a `workflow_dispatch` taking `issue_number`), the
+# `permissions:` ceiling, and one job that `uses:` this file at an exact Kanon tag, passes
+# `issue_number` through, and maps the three secrets below by name (never
+# `secrets: inherit`). Everything else is here: the `github` context in a called workflow
+# is the caller's, so the admission rule, the concurrency group and the crash recovery read
+# the triggering event exactly as they did when this file held the triggers itself.
+#
+# The Implementer's second mode: build a FEATURE or resolve a SPEC-DELTA from a
+# human-authored issue (often drafted in a Claude session). Distinct from his
+# bug-fix mode (agent-triage.yml) — different trigger, different gate: there is
+# nothing to "reproduce", so the issue's acceptance criteria (or the referenced
+# L2 spec) is the specification, and he builds to it test-first.
+#
+# Trigger: an issue is labeled `agent:implement`.
+# Identity: the Implementer's GitHub App (the same identity as the triage lane).
+# Output: a PR labeled `review:please` so the Reviewer reviews it; a human merges.
+# See docs/qa/triage-fix-playbook.md ("Implementer mode") and docs/qa/agent-identities.md.
+#
+# THE SPINE LIVES IN `agent-lane.yml` (RA-2092) — token, identity assertion, checkout,
+# install, database, the action, red-run classification and telemetry. What is left
+# here is what makes this lane THIS lane: when it fires, which issues it admits, and
+# what the Implementer is told. A change to the spine is one edit there, not eleven here.
+#
+# INERT until: (1) the caller + the docs/qa playbooks are on the default branch,
+# (2) the GitHub Apps exist + are installed, and (3) these secrets are set (plan 0001 §8):
+#   IMPLEMENTER_APP_ID, IMPLEMENTER_APP_PRIVATE_KEY   (the Implementer's App)
+#   CLAUDE_CODE_OAUTH_TOKEN                            (Claude subscription; `claude setup-token`)
+name: Implement (Implementer)
+
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` input, passed through. Not required here: on the
+    # `issues` trigger the caller has no inputs, and passes an empty string.
+    inputs:
+      issue_number:
+        description: Issue number to implement
+        required: false
+        type: string
+        default: ""
+    secrets:
+      IMPLEMENTER_APP_ID:
+        required: true
+      IMPLEMENTER_APP_PRIVATE_KEY:
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+concurrency:
+  # Scope by the just-added label (see agent-triage.yml for why issue-only would let
+  # sibling label events cancel the legitimate run).
+  group: qa-implement-${{ github.event.issue.number || inputs.issue_number }}-${{ github.event.label.name || 'dispatch' }}
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
+# ceiling, and must grant at least this and the crash recovery's job-level grants below, or
+# the run fails to start; `lane-check` fails a caller that grants less.
+permissions:
+  contents: read # the App token carries the real write scope; keep the default token minimal
+
+jobs:
+  implement:
+    # Only `agent:implement` issues (or a manual dispatch). This is the lane's admission
+    # rule and stays here: the spine has no opinion about which issues belong to it.
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement'
+    uses: $/.github/workflows/agent-lane.yml
+    with:
+      agent: implementer
+      arm: implementer agent
+      # WALL-CLOCK CEILING — 180 since RA-2212, raised from 120 when the turn cap doubled.
+      #
+      # THE TURN CAP MUST STAY THE BINDING CONSTRAINT. RA-2207's whole argument is that an
+      # exhausted run is a RECOGNISABLE zero-value outcome — `terminal_reason: max_turns`,
+      # a classify annotation naming it a budget problem — which RA-1781's decomposition path
+      # then acts on. A run that dies on the job timeout instead is a different, quieter
+      # signal, and raising the cap moves probability mass into exactly the tail where the
+      # two ceilings compete.
+      #
+      # The measurement: a 151-turn capped run took 39m (run 35569254755), which puts 300
+      # turns near 78m against the old 120m — ~1.5x, where 150 turns had ~3x. And the
+      # extrapolation is OPTIMISTIC, not conservative: this arm's shape is 80 turns /
+      # 9.2M input, so late turns carry far more context than early ones.
+      #
+      # 180 RATHER THAN MORE, because the ceiling still has to bound a hang — RA-1336 set
+      # one at all because a wedged agent burned six hours on Actions' 360m default. Half
+      # the default keeps that bound meaningful while letting the cap bind first.
+      timeout-minutes: 180
+      # THE SLUG ASSERTION, FAILURES-ONLY OUTPUT AND STARTING MAP ARE THE PROJECT-SETUP
+      # HOOK'S (RA-2694), keyed on this lane's `agent` name: the minted App must match the
+      # constant the dispatch sweep classifies this agent's comments on (RA-918); test and
+      # lint output is failures-only (RA-2456 part 1 — this arm re-reads its whole context
+      # every turn, so a page of passing output is paid for ~90 times; measured on
+      # `COST#implementer`); and the issue, its cited spec clauses and the files it names
+      # are written for the agent before it starts (RA-2456 part 2). The prompt's first
+      # instruction points at that file. See the adopter's `.github/actions/project-setup/action.yml`.
+      # THE ISSUE THIS RUN WAS DISPATCHED FOR (RA-1517). This lane fires on `issues`, so the
+      # row has no `pr_number` to identify it by, and the dispatch sweep cannot otherwise
+      # ask whether the run its marker comment triggered ever reached the model.
+      # `|| inputs.issue_number` so a DISPATCHED run is scoped too (RA-2306, mirroring
+      # triage's RA-2291): a `workflow_dispatch` payload has no `event.issue`, and the
+      # required `issue_number` input names the issue, so this is not a guess. Only a
+      # run with neither records absent. A dispatched run that never reached the model
+      # now counts toward that issue's `unreached` in the sweep, as a label-fired one did.
+      issue-number: ${{ github.event.issue.number || inputs.issue_number }}
+      # THE WHOLE TRANSCRIPT IN THE LOG (RA-2651). Four runs on 2026-09-29/30 ended
+      # `completed` at 128-181 turns with no push and no comment. Two had committed code
+      # on the runner, and the other two committed nothing. Token expiry, permission
+      # denials and the caps were ruled out, and nothing retained shows why the agent
+      # stopped. This keeps the evidence for the next one. No cost change: it only
+      # alters what is printed.
+      full-transcript: true
+      # TURN CAP — 300 since RA-2207, raised from 150. NOT A NUMBER TO TIDY.
+      #
+      # Both halves of project RA-1019's Issue C2 exhausted 150 and produced nothing:
+      # RA-1694 (contract) three times at ~$70 notional, RA-2167 (C1B, expand) once at
+      # $17.80 — and C1B is PURELY ADDITIVE, so the seam was not the problem. Two
+      # independent halves of one piece of work landing on exactly 150 is evidence
+      # about the CEILING, not about either half.
+      #
+      # A CAP IS A CEILING, NOT SPEND (RA-846): an unused turn costs nothing. RA-1781's
+      # telemetry sizes what this actually touches — a SUCCESSFUL implement run's
+      # median is 42 turns, and 3 of 25 runs (~12%) cap. So this changes nothing for
+      # the ~88% finishing near the median; it only affects the ~12% that today
+      # return zero value for $18-24 of consumed capacity (subscription pool, not a
+      # bill — RA-1781).
+      #
+      # ⚠️ 300 IS HEADROOM, NOT A MEASURED REQUIREMENT. Runs die AT the cap, so the
+      # distance to completion is unobserved. If a run caps at 300 the same reasoning
+      # does NOT justify 600 — the evidence has shifted back to the work being
+      # indivisible, and RA-1781's decomposition path is the answer.
+      #
+      # ⚠️ THIS COMMENT LIVES ABOVE `claude_args:`, NOT INSIDE IT. That key is a YAML
+      # LITERAL BLOCK, so a `#` line indented under it is CONTENT — it would be passed
+      # to the CLI as arguments. The first draft of RA-2207 did exactly that and
+      # `tests/unit/agent-telemetry.test.ts` caught it, because the telemetry step's
+      # copy of these args then no longer matched the agent's.
+      #
+      # Both lanes must agree: `tests/unit/implement-turn-cap.test.ts`. The SECOND
+      # copy this warned about is gone — the spine takes `claude_args` once and hands
+      # it to both the action and the telemetry row, so they cannot disagree (RA-2092).
+      claude_args: |
+        --model claude-opus-5
+        --effort high
+        --max-turns 300
+        --max-budget-usd 120
+        --fallback-model claude-opus-5-5
+        --allowedTools Read,Edit,Write,Bash,Grep,Glob
+        --exclude-dynamic-system-prompt-sections
+        --autocompact 300000
+      prompt: |
+        You are the Implementer (Agent 2) in IMPLEMENTER mode — building a
+        feature or resolving a spec-delta. START with `.agent/starting-map.md` if it
+        exists: it already holds this issue's body and comments, the text of every
+        spec clause it cites, and which of the files it names exist. Do not re-fetch
+        the issue with `gh` or search for those files; fetch only what the map says is
+        missing or truncated. Then read docs/qa/triage-fix-playbook.md
+        (especially the "Implementer mode" section) and docs/agentic-qa-pipeline.md,
+        then implement issue #${{ github.event.issue.number || inputs.issue_number }} of this repo.
+
+        THE ISSUE IS YOUR SPEC. Build to its ACCEPTANCE CRITERIA; for a spec-delta,
+        the referenced L2 spec in docs/qa/specs/ IS the acceptance criteria. If the
+        criteria are too vague/ambiguous to build safely, do NOT guess — comment with
+        exactly what needs clarifying, keep the `agent:implement` label, and STOP.
+
+        TEST-FIRST: write the test(s) FROM the acceptance criteria / spec, confirm
+        RED, implement until GREEN, then run the relevant tiers (db is provisioned via
+        db:init — test:unit / test:integration / test:e2e). Runner output is
+        failures-only here (AGENT_QUIET): passing tests print nothing, so do not
+        add --reporter=verbose, and run any `npm run build` as
+        `(set -o pipefail; npm run build 2>&1 | tail -n 40)` so its exit code
+        survives the pipe. When a criterion declares an invariant ID a spec in
+        docs/qa/specs/ defines (e.g. `[PAY-12]`), put that
+        ID in the title of the test that ASSERTS it — `it('[PAY-12] …')` — because the
+        title is the only thing spec-coverage and phase 5 read. Only for IDs a spec
+        declares, and never on a test that does not assert that clause: a title
+        citing an ID it does not assert turns "unverified" into a false "passed".
+        A newly-cited ID trips two checks by design: record it with
+        `npm run spec:coverage -- --write-locked` (lint names it otherwise), and if
+        the spec quotes its coverage row (payments.md's implementation-state block),
+        re-measure that sentence from the tool.
+
+        SCOPE-FIRST BAIL — still post a plan-comment, keep the label, and STOP for: a
+        DATA migration (backfilling / transforming existing rows), any AUTH /
+        credential / security change, or DESTRUCTIVE schema (dropping / renaming /
+        narrowing a column or table). You MAY do ADDITIVE schema and unique-index /
+        constraint changes (a new column, a partial unique index, etc.) — but only
+        with the ritual below.
+
+        SCHEMA + RLS (FAIL CLOSED): if you change the schema, run `db:push` THEN
+        `db:setup` (push can drop RLS; setup re-applies it), then RUN THE RLS /
+        tenant-isolation CONFORMANCE TESTS in tests/. If those do NOT pass, do NOT
+        open a PR — comment with the failure and STOP. Tenant isolation must never
+        regress. Tenant-scope any new unique index `(tenant_id, …)` per convention.
+
+        ORACLE INTEGRITY: if a spec-delta is because the CODE is wrong, fix the code.
+        If the SPEC is wrong (over-claims), PROPOSE the spec edit in your PR — never
+        self-promote a `[seed]` invariant to `[confirmed]`; any new feature invariants
+        you add land as `[seed]` for a human to promote.
+
+        OUTPUT: open ONE PR (implementation + tests) that closes the issue, with the
+        agent-fix PR template, labeled `agent:implement` AND `review:please` (so the Reviewer
+        reviews it). State the acceptance criteria you built to, the approach, the
+        BLAST RADIUS honestly, and — for any schema change — the `db:push` + `db:setup`
+        deploy steps and the RLS-conformance result. NEVER merge (a human merges).
+        If this issue is a FOLLOW-UP whose parent PR is still OPEN (its body says
+        "Surfaced by PR #N" and #N isn't merged), branch off that PR's head and open
+        yours with `--base <its branch>` so it STACKS — don't diverge off main. See
+        the playbook's "Follow-ups: branch off the open parent" rule.
+
+        ALWAYS leave a comment before you finish — never end with no output. If you're
+        running low on budget, post your progress and what remains.
+    secrets:
+      app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
+      app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  # A CRASHED RUN MUST NOT HOLD A WIP SLOT FOR 48 HOURS (RA-2118).
+  #
+  # Three project-RA-27 runs died inside `claude-code-action` on 2026-09-19 with no comment
+  # and no PR. They kept `agent:implement`, so `lead-reconcile`'s `occupiesSlot` counted
+  # them in flight, the shared `QA_LEAD_GLOBAL_WIP` was spent, and six of seven projects
+  # were handed nothing until the daily sweep's 48h staleness reclaimed the slots.
+  #
+  # `scripts/implement-crash.mjs` decides; this job only gathers and acts. It frees the
+  # slot ONLY for a project member whose run reached the model and produced nothing, and
+  # at most `MAX_CRASH_RETRIES` times per issue before handing it to a human — the cap is
+  # what stops an hourly tick turning a deterministic crash into ~$2 an hour forever.
+  #
+  # THE DEFAULT TOKEN, NOT AN APP'S. Its comment reads as `github-actions`, which the
+  # dispatch sweep and this script both treat as a bot and never as the implementer — an
+  # Implementer-authored marker would read as "the agent spoke" and park the issue. And its
+  # label removal starts no workflow, which is right: the re-dispatch is the next tick's.
+  #
+  # AN EXHAUSTED RUN IS SPLIT, NOT RETRIED (RA-1781). A project member whose run hit its
+  # turn or budget cap is labelled `qa:needs-split` — or `qa:needs-info` if it is itself
+  # a split child — and the script then starts `agent-lead-split.yml` by
+  # `workflow_dispatch`, because the label it adds on this token raises no event.
+  crash-recovery:
+    needs: implement
+    if: failure() && needs.implement.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # checkout, for the App register the script reads its logins from
+      issues: write # the crash marker and the label edit
+      pull-requests: read # does an open PR already close this issue?
+      # Read: this run's start time, to tell "spoke during this run" from before it.
+      # Write: `gh workflow run agent-lead-split.yml` on an exhausted project member
+      # (RA-1781) — the one event the default token may raise that starts a workflow.
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      # The script is Kanon's, read from the action cache at the tag the caller pinned
+      # (plan 0001 §3); the checkout above is the adopter's, for its App register.
+      - uses: $/actions/kanon-path
+      - name: Free the WIP slot a crashed run would otherwise hold
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
+          RUN_ID: ${{ github.run_id }}
+          KIND: ${{ needs.implement.outputs.kind }}
+          APPLY: "1"
+        run: node "$KANON/scripts/implement-crash.mjs"

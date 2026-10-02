@@ -132,8 +132,8 @@ describe('every job that calls a block calls it from Kanon, and carries nothing 
     [`${FIXTURE}:${JOB}`, job.steps],
   ];
 
-  it('finds the spine, the blocks smoke and the fixture, so this is not vacuous', () => {
-    expect(jobs.map(([w]) => w).sort()).toEqual(['agent-blocks-smoke.yml:smoke', 'agent-lane.yml:run', `${FIXTURE}:${JOB}`].sort());
+  it('finds the spine, the merge-reconcile lane, the blocks smoke and the fixture, so this is not vacuous', () => {
+    expect(jobs.map(([w]) => w).sort()).toEqual(['agent-blocks-smoke.yml:smoke', 'agent-lane.yml:run', 'agent-merge-reconcile.yml:reconcile', `${FIXTURE}:${JOB}`].sort());
   });
 
   it.each(jobs.filter(([w]) => !w.startsWith('agent-blocks-smoke')))('%s', (_where, steps) => {

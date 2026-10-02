@@ -1,0 +1,8 @@
+// The pipeline library's tests (plan 0001, step 3), moved from the reference adopter, which does
+// not check indexed access. Everything else is Kanon's own settings (tsconfig.json).
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noUncheckedIndexedAccess": false },
+  "include": ["scripts", "tests/library", "tests/unit/helpers"],
+  "exclude": []
+}

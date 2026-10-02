@@ -9,8 +9,8 @@ import { blockInputsFor, blockOf, effectiveSteps, readBlock, spineJobFor } from 
  *
  * Silent implementer runs (`completed`, no push, no comment) could not be diagnosed,
  * because `claude-code-action` hides its output and the execution file is deleted with
- * the runner. The fix is one switch on the spine. Kanon holds the spine and the revise lane
- * (plan 0001, step 2); the implement lane's half stays in the reference adopter until step 3. Two ways it goes wrong silently: the
+ * the runner. The fix is one switch on the spine, which both implement lanes set. Two ways it
+ * goes wrong silently: the
  * implement lane stops setting it (the next silent run is undiagnosable again), or the
  * spine stops passing it through (the input exists and does nothing).
  */
@@ -24,6 +24,10 @@ const jobs = (file: string) => (parse(read(join(WF, file))) as { jobs: Record<st
 const agentStep = (job: Job) => job.steps?.find((s) => s.uses?.startsWith('anthropics/claude-code-action'));
 
 describe('the implementer transcript reaches the job log', () => {
+  it('the implement lane opts in', () => {
+    expect(jobs('agent-implement.yml').implement!.with?.['full-transcript']).toBe(true);
+  });
+
   it('the revise lane opts in too, because it stops silently the same way', () => {
     expect(jobs('agent-implement-revise.yml').revise!.with?.['full-transcript']).toBe(true);
   });
@@ -42,7 +46,7 @@ describe('the implementer transcript reaches the job log', () => {
     expect(readBlock('agent-run').inputs?.['full-transcript']?.default).toBe('false');
   });
 
-  it('reaches the action ON for the Implementer\'s revise lane only, of Kanon\'s lanes', () => {
+  it('reaches the action ON for the Implementer\'s two lanes only, of Kanon\'s lanes', () => {
     // What the action is actually handed, per lane: the block input the call evaluates
     // to. 'true' for the implement and revise lanes, which both stopped silently
     // (RA-2651), and 'false' for every other spine caller.
@@ -51,6 +55,7 @@ describe('the implementer transcript reaches the job log', () => {
       const step = agentStep({ steps: steps as Step[] });
       return blockInputsFor(blockOf(step as never)!.call, inputs)['full-transcript'];
     };
+    expect(handed('agent-implement.yml', 'implement')).toBe('true');
     expect(handed('agent-implement-revise.yml', 'revise')).toBe('true');
     for (const [file, job] of [['agent-triage.yml', 'triage-fix'], ['agent-lead-revise.yml', 'revise']]) {
       expect(handed(file!, job!), `${file} prints a transcript it never opted into`).toBe('false');

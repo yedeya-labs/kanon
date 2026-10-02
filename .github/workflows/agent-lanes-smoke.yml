@@ -1,5 +1,5 @@
 # Calls Kanon's lane workflows, and runs `lane-check` on a fixture adopter, with no model call
-# (plan 0001 §4, step 2).
+# (plan 0001 §4, steps 2 and 3).
 #
 # WHAT IT PROVES. GitHub resolves and validates every reusable workflow a run calls before it
 # starts a job: each lane through `$/`, the spine each lane calls through `$/`, the inputs
@@ -12,7 +12,9 @@
 # smoke run has no App and must not spend anything. So each lane is called with events that
 # its own admission rules turn away: on pull_request, merge_group and push no lane admits
 # the event, and the implement-revise filter, which runs on everything but a label event,
-# skips before its first API call. The jobs that would mint and run are skipped. The model
+# skips before its first API call. The merge-reconcile filter admits only a merged pull
+# request, and the implement lane's crash recovery runs only after its agent job failed. The
+# jobs that would mint and run are skipped. The model
 # call is proven by the reference adopter's live run after each upgrade.
 #
 # The secrets are mapped by their fixed names to a secret that does not exist: nothing that
@@ -52,6 +54,30 @@ jobs:
       IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
+  implement:
+    # The ceiling covers the crash recovery's job-level grants, which GitHub checks against
+    # this job's grant before the run starts, although the job never runs here.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      actions: write
+    uses: $/.github/workflows/agent-implement.yml
+    secrets:
+      IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
+
+  merge-reconcile:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: $/.github/workflows/agent-merge-reconcile.yml
+    secrets:
+      REVIEWER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      REVIEWER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
+
   lead-revise:
     permissions:
       contents: read
@@ -65,7 +91,7 @@ jobs:
 
   smoke:
     name: Agent lanes smoke
-    needs: [triage, implement-revise, lead-revise]
+    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -75,7 +101,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"'
-          echo "$RESULTS" | jq -e 'to_entries | length == 3 and all(.value.result == "success" or .value.result == "skipped")'
+          echo "$RESULTS" | jq -e 'to_entries | length == 5 and all(.value.result == "success" or .value.result == "skipped")'
 
       # For the fixture adopter only. lane-check itself comes from `$/`.
       - uses: actions/checkout@v7
