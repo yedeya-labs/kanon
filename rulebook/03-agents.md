@@ -21,6 +21,8 @@ Every Kanon project has the same roles. A person may hold several human roles at
 | **Releaser** | bot, not an agent | Open and merge its own release PRs. | Touch any file outside the release file set. | Contents and Pull requests write; a ruleset bypass limited to release PRs. |
 | **Intake** | App, not an agent | File a report from the running application as an issue carrying exactly one intake label. | Read, decide, run in a workflow, apply any other label, or trigger an agent. | Issues write only. |
 
+The agent rows' GitHub permissions have a machine-readable twin, [`agent-permissions.json`](agent-permissions.json), which [`kanon apps`](../docs/apps.md) builds each App's manifest from (`K-ADOPT-8`). Change the table and the file in the same commit: a test fails when they disagree (`K-PRIN-2`).
+
 ### `K-AGENT-1` Run every agent role under its own GitHub App identity
 
 **Rule.** Each agent role runs under its own GitHub App, with its own installation token. No agent step uses the default workflow token or a person's token.

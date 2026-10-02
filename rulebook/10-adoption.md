@@ -28,13 +28,13 @@ Every path this chapter mentions is fixed in [11 Repository layout](11-repositor
 9. **Production approval.** A required reviewer on the production environment where the plan provides it, otherwise the fallback (`K-SHIP-9`).
 10. **Chat channel.** Which service carries announcements, digests and cost alerts, and how it is wired, is the project's decision. Record it, or record "none yet".
 11. **The first tracking issue.** File it with its mandate as the body (`K-PROJ-15`), its kind label and a bucket milestone, in one call (`K-WORK-2`, `K-WORK-23`).
-12. **Agent identities.** The Owner creates one GitHub App per role, with the permissions in `K-ADOPT-8`, stores the keys as Actions secrets (`K-AGENT-6`), and lists every App in the App register (`K-AGENT-3`).
+12. **Agent identities.** The Owner creates one GitHub App per role, with the permissions in `K-ADOPT-8`, stores the keys as Actions secrets (`K-AGENT-6`), and lists every App in the App register (`K-AGENT-3`). [`kanon apps`](../docs/apps.md) does this from App manifests, and the Owner clicks **Create** and **Install** for each App.
 13. **Kanon's code, as it becomes available.** Install each guard, lane and store, pinned to an exact Kanon version with Dependabot proposing upgrades (`K-ADOPT-11`), and mark it installed in the adoption record's mechanism list (`K-ADOPT-9`).
 14. **End bootstrap** (`K-ADOPT-6`): the Reviewer's App is installed and the required approving review is switched on. Record the date. Then drop the installer credential's Administration permission.
 
 **Why.** Without a checklist, an installer has to derive the setup from every rule's "Enforced by" line, which describes a mechanism rather than a step. The order matters. The layout has to exist before anything cites it. The escalation file has to exist before a brief names what it touches. And the required review can't be switched on before there is a Reviewer to give one.
 
-**Enforced by.** Prose only. The installer that runs these steps is planned.
+**Enforced by.** Prose only. The installer that runs these steps is planned; its first piece, [`kanon apps`](../docs/apps.md), runs step 12.
 
 **Class.** framework
 
@@ -136,7 +136,7 @@ Creating GitHub Apps and their keys is done by the Owner in GitHub's interface, 
 
 **Why.** The roles table is the one home for what each role may do (`K-PRIN-2`), and this rule only adds the platform's own requirements. A rollup missing one of the two check sources reads as "fewer checks", not as an error, so the Merger's two read scopes are load-bearing.
 
-**Enforced by.** The run-time scope probe in every lane (`K-AGENT-5`).
+**Enforced by.** [`kanon apps`](../docs/apps.md) builds each App's manifest from [`agent-permissions.json`](agent-permissions.json), the roles table's machine-readable twin, and a test fails when the twin and the table disagree. On an App created by hand, or changed after it was created, only the run-time scope probe in every lane (`K-AGENT-5`) checks it.
 
 **Class.** framework
 
