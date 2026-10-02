@@ -5,7 +5,8 @@ Step 12 of the adoption checklist (`K-ADOPT-1`) gives every agent role its own G
 ## What you need
 
 - **Node 24 or later.** The command uses Node's built-ins only, so nothing is installed.
-- **`gh`, signed in as the Owner**: an admin of the repository, who can set its Actions secrets. The command stores the secrets with your own `gh`, and checks it can before it opens any page.
+- **`gh`, signed in as the Owner**: an admin of the repository, who can set its Actions secrets. The command stores the secrets with your own `gh`.
+- **A token that can write secrets.** Whatever token `gh` uses needs **Secrets: read and write** on the repository; for a fine-grained token that is the repository permission *Secrets*, set to *Read and write*. Reading is not enough. **A `GH_TOKEN` in the environment takes precedence over the login `gh` has stored**, so a stale or narrower `GH_TOKEN` is the token that counts, whoever `gh auth status` says you are. Before it opens any page, the command sets a throwaway secret, `KANON_APPS_PREFLIGHT`, and deletes it again. If either step fails, it stops with `gh`'s own error and creates nothing, and it deletes the throwaway secret even when setting it failed.
 - **A browser on the same machine.** GitHub sends you back to a listener on `127.0.0.1` once the App is created.
 - **A checkout of the repository**, where the command writes the App register. Run it from there, or pass `--dir`.
 
@@ -39,6 +40,6 @@ For each role, in turn:
 ## Limits
 
 - **Key rotation stays manual.** GitHub has no API that makes a new private key for an existing App, so the command can't rotate one. It prints the steps at the end of every run: generate a key on the App's settings page, `gh secret set <ROLE>_APP_PRIVATE_KEY -R <org>/<repo> < key.pem`, delete the file, then delete the old key.
-- **A lost key can't be recovered.** If `gh secret set` fails after the App is created, the key existed only in memory. The command says so and prints how to generate a new one by hand.
+- **A lost key can't be recovered.** The pre-check makes this unlikely, but if `gh secret set` still fails after the App is created, the key existed only in memory. The command says so and prints how to generate a new one by hand.
 - **It creates new Apps only.** It doesn't change an existing App's permissions, rename a secret, or move an App to another repository. Sharing one App across repositories is the adopter's deliberate choice, recorded in the register (`K-AGENT-3`).
 - **Agent roles only.** Intake and the Releaser aren't agents. Kanon's release workflow runs under the workflow's own token, and an Intake App's credentials belong to the running application, not to Actions secrets.
