@@ -231,7 +231,7 @@ describe('the criteria run shares the agent’s job, workspace and database (RA-
     expect(steps[call('agent-setup')]!.with).toEqual({ arm: 'acceptance-criteria agent', 'app-slug': '' });
     expect(hookCall().with).toEqual({ lane: 'verify-acs', install: 'true', database: 'true', browsers: 'true' });
     const mint = steps[idx((s) => s.id === 'app-token')]!;
-    expect(mint.with?.['app-id']).toBe('${{ secrets.EXPLORER_APP_ID }}');
+    expect(mint.with?.['client-id']).toBe('${{ secrets.EXPLORER_APP_ID }}');
     expect(mint.with?.['private-key']).toBe('${{ secrets.EXPLORER_APP_PRIVATE_KEY }}');
     expect(steps[call('agent-run')]!.with?.['github-token']).toBe('${{ steps.app-token.outputs.token }}');
   });

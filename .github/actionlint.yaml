@@ -1,0 +1,12 @@
+# actionlint configuration. CI runs actionlint through .github/scripts/actionlint.sh (#77).
+#
+# actionlint 1.7.12, the latest release, bundles metadata for
+# actions/create-github-app-token@v3 from before v3.1.0, which added the `client-id` input
+# and made `app-id` optional and deprecated. Kanon's mint steps pass `client-id`, so without
+# these two entries actionlint reports every one of them twice. Drop them when a released
+# actionlint knows `client-id`; tests/unit/app-token-input.test.ts still requires it.
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"\.'
+      - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"\.'
