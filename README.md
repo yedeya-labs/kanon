@@ -51,8 +51,10 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 | [Agent lane: finish](actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@vX.Y.Z` |
 | [Agent lane: classify a red run](actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@vX.Y.Z` |
 | [Agent telemetry](actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@vX.Y.Z` |
+| [Agent lanes: triage, implement-revise, lead-revise](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@vX.Y.Z` in a job |
+| [Lane check](actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@vX.Y.Z` |
 
-The agent-lane blocks are the first pieces of the agent lanes to move ([plan 0001](docs/plans/0001-move-the-agent-lanes.md), step 1). Use the first release that contains them. The lanes built from them follow in later releases.
+The agent-lane blocks moved first ([plan 0001](docs/plans/0001-move-the-agent-lanes.md), step 1), then the shared lane workflow and the three lanes that run no workspace script (step 2). The other lanes follow in later releases.
 
 ## Status
 
@@ -70,8 +72,8 @@ See the [roadmap](ROADMAP.md) for what comes next.
 |---|---|
 | [`rulebook/`](rulebook/) | The rules. This is Kanon's specification. |
 | [`docs/decisions/`](docs/decisions/) | Architecture decision records: why Kanon is shaped the way it is. |
-| [`actions/`](actions/) | Kanon's checks and the agent-lane blocks, each a versioned composite action. |
-| [`.github/workflows/`](.github/workflows/) | Kanon's own CI, including a smoke run of the agent-lane blocks, and the reusable release workflow. |
+| [`actions/`](actions/) | Kanon's checks, the lane check and the agent-lane blocks, each a versioned composite action. |
+| [`.github/workflows/`](.github/workflows/) | Kanon's agent lanes and the shared lane workflow they call, the reusable release workflow, and Kanon's own CI, including smoke runs of the blocks and the lanes. |
 | [`tests/`](tests/) | Kanon's own tests, run on every pull request. |
 
 ## Contributing
