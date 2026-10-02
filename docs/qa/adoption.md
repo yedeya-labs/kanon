@@ -69,14 +69,14 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | `kanon apps`, and the test that the roles table and `agent-permissions.json` agree | `K-ADOPT-1`, `K-ADOPT-8`, `K-SELF-5` | installed 2026-10-02 |
 | The Reviewer App's permission grants | `K-AGENT-7`, `K-AGENT-46` | installed 2026-10-02 |
 | The review lane, called by `review.yml` at a released version: the membership gate, the per-role token and slug assertion, the scope probe, the judging-input restore, the filter job and incremental scope, the trigger label, the verdict check, the outcome step, the shared classifier, and the telemetry row | `K-AGENT-1`, `K-AGENT-2`, `K-AGENT-5`, `K-AGENT-22`, `K-AGENT-25`, `K-AGENT-28`, `K-AGENT-42`, `K-AGENT-43`, `K-AGENT-45`, `K-LAYOUT-9`, `K-MERGE-14`, `K-MERGE-17`, `K-PRIN-9` | installed 2026-10-02 |
-| The Reviewer, through its playbook, including its review of briefs and specs | `K-AGENT-20`, `K-SPEC-5`, `K-SPEC-9`, `K-SPEC-10`, `K-PROJ-6`, `K-PROJ-7`, `K-PROJ-18` | installed 2026-10-02 |
+| The Reviewer, through its playbook and instructions, including its review of briefs and specs and the follow-ups it files | `K-PRIN-3`, `K-WORK-15`, `K-SPEC-11`, `K-AGENT-20`, `K-SPEC-5`, `K-SPEC-9`, `K-SPEC-10`, `K-PROJ-6`, `K-PROJ-7`, `K-PROJ-18` | installed 2026-10-02 |
 | Unit tests on Kanon's own lanes: every arm's flags, the implement lanes' turn cap and ceiling, and blocks that use Node built-ins only | `K-AGENT-37`, `K-OBS-12`, `K-SELF-8` | installed 2026-10-02 |
 | The brief guard's test against the shipped template, and the closed list of pre-standard briefs | `K-PRIN-11`, `K-PROJ-4`, `K-PROJ-10`, `K-LAYOUT-11` | installed 2026-10-02 |
 | `tests/unit/adoption-record.test.ts`, on this record | `K-LAYOUT-10`, `K-ADOPT-9` | installed 2026-10-02 |
 | The other agent lanes and their App tokens (Implementer, Lead, Explorer, Merger, Overseer), with their crash handlers, round caps, split and conflict lanes and quiet-runner settings | `K-AGENT-2`, `K-AGENT-14`, `K-AGENT-18`, `K-AGENT-30`, `K-AGENT-33`, `K-AGENT-34`, `K-AGENT-41`, `K-MERGE-16` | not yet installed |
 | Re-delivery and retry logic that reads run history for the head | `K-PRIN-13` | not yet installed |
 | The merge gate: the Merger's verdict function, its merge step, its escalation markers and post-merge checks | `K-PRIN-4`, `K-PRIN-5`, `K-PRIN-10`, `K-MERGE-1`, `K-MERGE-3`, `K-MERGE-4`, `K-MERGE-5`, `K-MERGE-9`, `K-MERGE-10`, `K-MERGE-11`, `K-MERGE-12`, `K-AGENT-4`, `K-AGENT-13`, `K-AGENT-26`, `K-LAYOUT-8` | not yet installed |
-| A ruleset bypass list naming only the release bot (today it holds the repository admin role, for pull requests only) | `K-MERGE-5`, `K-MERGE-8` | not yet installed |
+| A ruleset bypass list naming only the release bot. Today it holds the repository admin role, for pull requests only. The Owner decided that it stays until the Releaser App exists ([#49](https://github.com/yedeya-labs/kanon/issues/49)), and is then replaced by a bypass for the Releaser only | `K-MERGE-5`, `K-MERGE-8` | not yet installed |
 | The red-test check on agent-authored pull requests | `K-PRIN-4`, `K-MERGE-13`, `K-AGENT-15` | not yet installed |
 | The watching agent (Overseer): read-only permissions, tool allow-list and prompt | `K-PRIN-6`, `K-AGENT-35`, `K-SELF-9`, `K-SELF-11` | not yet installed |
 | The Explorer: exploration and sweep workflows on an isolated stage, its run-report writer and its filing gate | `K-AGENT-9`, `K-AGENT-10`, `K-AGENT-11`, `K-SPEC-8`, `K-OBS-7` | not yet installed |
@@ -105,13 +105,14 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | Planned guards the rules name but Kanon hasn't built | `K-PRIN-2`, `K-PRIN-18`, `K-WORK-22`, `K-SPEC-9`, `K-SPEC-10`, `K-MERGE-8`, `K-PROJ-14`, `K-PROJ-18`, `K-OBS-16`, `K-OBS-17`, `K-SELF-14`, `K-ADOPT-6`, `K-ADOPT-10`, `K-ADOPT-11`, `K-LAYOUT-10` | not yet installed |
 | A sign-off delegation record (`docs/qa/sign-off-delegation.md`); there is none yet | `K-AGENT-44`, `K-LAYOUT-14` | not yet installed |
 
-These rules' lines are prose only with a note, and name nothing to install: `K-PRIN-1`, `K-PRIN-3`, `K-PRIN-7`, `K-PRIN-20`, `K-WORK-15`, `K-SPEC-11`, `K-AGENT-3`, `K-PROJ-8`, `K-PROJ-15`, `K-OBS-4`, `K-SELF-7`, `K-LAYOUT-1`, `K-LAYOUT-6`.
+These rules' lines are prose only with a note, and name nothing to install: `K-PRIN-1`, `K-PRIN-7`, `K-PRIN-20`, `K-AGENT-3`, `K-PROJ-8`, `K-PROJ-15`, `K-OBS-4`, `K-SELF-7`, `K-LAYOUT-1`, `K-LAYOUT-6`.
 
 **Not yet installed, and why:**
 
 - **The Implementer and the Lead** wait for the steps ADR 0011 stages after step 5 of plan 0001.
 - **No sign-off delegation is recorded** (`K-AGENT-44`), so an agent's commit can't pass Kanon's own DCO check yet.
 - **No hosted telemetry yet:** the store is plan 0002, in progress.
+- **The admin bypass on the `main` ruleset** stays until the Releaser App exists (#49), by the Owner's decision. It is then replaced by a bypass for the Releaser only, which installs `K-MERGE-8`'s bypass list.
 - **No agent ever merges on Kanon** (ADR 0011), so the merge gate and the Merger are not planned here.
 
 ## Choices
