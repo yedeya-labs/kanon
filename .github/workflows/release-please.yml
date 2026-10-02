@@ -1,12 +1,11 @@
-# Kanon's releases (K-SHIP-7), through its own reusable release workflow, by local path.
-# The local path runs the workflow as it is on main, so Kanon is always the first
-# repository to release with a change to it. Adopters call the same workflow pinned to an
+# Kanon's releases (K-SHIP-7), through its own reusable release workflow, by `$/`.
+# `$/` resolves to the commit being released, so Kanon is always the first repository to
+# release with a change to it. Adopters call the same workflow pinned to an
 # exact version instead: see docs/release.md.
 #
-# THE ONE `./` REFERENCE LEFT (plan 0001 §4). Every other Kanon-internal reference is `$/`,
-# and `tests/unit/self-pinning.test.ts` holds that. This call stays `./` until a job-level
-# `$/` call to a reusable workflow has been proven on a pull request: this workflow runs
-# only on main, so a `$/` that failed to resolve here would first fail a release.
+# It was the last `./` reference (plan 0001 §4) until a job-level `$/` call to a reusable
+# workflow ran green on main: the agent lanes smoke, at the merge of the shared lane
+# workflow (#35).
 #
 # The writes are granted here, on the calling job only: a reusable workflow can use no
 # more than its caller grants.
@@ -24,4 +23,4 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: ./.github/workflows/release.yml
+    uses: $/.github/workflows/release.yml
