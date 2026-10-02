@@ -129,7 +129,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
     // implement lane's crash recovery (issues, pull requests and actions, on the default
     // token) is part of what its caller must grant.
     it('counts a grant the lane makes on one of its jobs, not only at its top level', () =>
-      red((t) => t.edit('.github/workflows/agent-implement.yml', (d) => { delete (d as Caller).permissions!.actions; }), 'grants actions: none; the Kanon lane agent-implement needs actions: write'));
+      red((t) => t.edit('.github/workflows/agent-implement.yml', (d) => { delete (d as Caller).permissions!.actions; }), 'grants actions: none; the Kanon lane agent-implement needs actions: read'));
     it('takes the wider of a top-level and a job-level grant of one scope', () =>
       red((t) => t.edit('.github/workflows/agent-implement.yml', (d) => { (d as Caller).permissions!.issues = 'read'; }), 'needs issues: write'));
     it('reads the calling job\'s own grant over the workflow\'s', () => {

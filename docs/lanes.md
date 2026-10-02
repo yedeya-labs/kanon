@@ -24,7 +24,7 @@ Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called 
 - **It reads your CI from `.github/workflows/ci.yml`.** A review label added while CI is still running defers to CI's completion, and the lane asks Actions about the runs of that file for the head. Your caller's `workflow_run` names that workflow.
 - **It never reviews under the pull request's own instructions** (`K-MERGE-17`). Before any of the PR's code runs, it restores every input on the rule's list from your default branch: `AGENTS.md`, `CLAUDE.md`, `.claude/`, every markdown file directly inside `docs/qa/`, your project-setup hook, and every markdown document those link to or import. The PR's own copies are set aside under `.qa-pr/`, so the Reviewer still reads them as part of the diff, and a push that touches one re-opens an approved review. The specs under `docs/qa/specs/` come from the PR. Your own tests that read one of those files should read the `.qa-pr/` copy when there is one, or they will fail in the Reviewer's tree on a PR that changes it.
 
-**Grant a lane's job-level permissions too.** The implement lane's crash recovery runs on the workflow token and writes issues, reads pull requests and starts the split lane, so its caller grants `contents: read`, `issues: write`, `pull-requests: read` and `actions: write`. The rebase lane's filter reads pull requests and its earlier runs' jobs on the workflow token, so its caller grants `contents: read`, `actions: read` and `pull-requests: read`; the split lane's gate edits the issue's labels, so its caller grants `issues: write` and `pull-requests: read`.
+**Grant a lane's job-level permissions too.** The implement lane's crash recovery writes issues, reads pull requests and reads its own run on the workflow token, so its caller grants `contents: read`, `issues: write`, `pull-requests: read` and `actions: read`. The rebase lane's filter reads pull requests and its earlier runs' jobs on the workflow token, so its caller grants `contents: read`, `actions: read` and `pull-requests: read`; the split lane's gate edits the issue's labels, so its caller grants `issues: write` and `pull-requests: read`.
 
 ## Only members start a lane
 
@@ -45,7 +45,7 @@ A login ending in `[bot]` is judged by the App register alone, read from your de
 
 **Every lane carries the gate.** [`tests/unit/lane-gate.test.ts`](../tests/unit/lane-gate.test.ts) fails for a lane in Kanon without it, or with a step or job that can run past a refusal, and for a lane whose triggers it doesn't list.
 
-**A dispatch made with the workflow token is refused.** Its actor is `github-actions[bot]`, which is not in your App register. The implement lane's crash recovery starts the split lane that way today, so that path is refused, visibly, and the issue keeps `qa:needs-split` with no split PR. If you run the Lead's reconciler, it re-delivers the label on the Lead's App token once the stall window passes; otherwise re-apply the label yourself.
+**A dispatch made with the workflow token is refused.** Its actor is `github-actions[bot]`, which is not in your App register. So no lane starts another that way. When an implement run hits its turn or budget cap, its crash recovery adds `qa:needs-split` with the Implementer's App token, narrowed to Issues write, and that label's own event starts the split lane through the gate as a registered App. Its comment stays on the workflow token, so it never reads as the Implementer's.
 
 ## The caller
 

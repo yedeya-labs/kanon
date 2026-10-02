@@ -65,7 +65,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: read
-      actions: write
+      actions: read
     uses: $/.github/workflows/agent-implement.yml
     secrets:
       IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}

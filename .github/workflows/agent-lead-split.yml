@@ -41,12 +41,12 @@
 # one that arrives anyway.
 #
 # ── HOW IT STARTS ───────────────────────────────────────────────────────────
-# `issues: labeled` with `qa:needs-split` — a human, or the dispatch sweep on the
-# Lead App token. The crash job adds its label on the DEFAULT token, which raises no
-# event, so it starts this workflow by `workflow_dispatch` instead. THE MEMBERSHIP GATE
-# REFUSES THAT DISPATCH: its actor is `github-actions[bot]`, a bot outside the App
-# register (K-AGENT-45). Until that path changes, such an issue is split by the
-# reconciler's re-delivery below, on the Lead's token, after the stall window. Both can arrive for
+# `issues: labeled` with `qa:needs-split` — a human, the dispatch sweep on the Lead App
+# token, or the implement lane's crash job on the Implementer's App token. The crash job
+# used to add its label on the DEFAULT token, which raises no event, and start this
+# workflow by `workflow_dispatch` instead; the membership gate refuses that dispatch, whose
+# actor is `github-actions[bot]` (K-AGENT-45), so it now labels as the App (plan 0001
+# decision 21). A dispatch by hand still works. Both can arrive for
 # one issue; the per-issue concurrency group (on the JOB, so a label event that only
 # reaches a skipped job never joins it and cannot displace a pending run) holds the
 # second until the first finishes, and the gate then finds its open PR and skips.

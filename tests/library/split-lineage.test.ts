@@ -193,7 +193,7 @@ describe('the split lane’s wiring', () => {
   const gateAt = steps.findIndex((s) => s.id === 'gate');
   const agent = steps.find((s) => s.id === 'agent');
 
-  it('starts on the label and on a dispatch — the crash job’s default-token label raises no event', () => {
+  it('starts on the label and on a dispatch — the crash job labels as the Implementer (decision 21)', () => {
     // A Kanon lane is called, never triggered: the caller holds `issues: [labeled]` and the
     // dispatch, and the filter job admits the one label or a dispatch.
     expect(Object.keys(wf.on)).toEqual(['workflow_call']);
