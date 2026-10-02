@@ -1,0 +1,80 @@
+# Checks every agent App in the register against its installation (#39, K-AGENT-5).
+#
+# The register (docs/qa/agent-identities.md, K-LAYOUT-6) is a claim, and a person's token
+# can't list an organisation's installations. Each App can read its own, so for every role
+# the register lists, this mints that role's token and checks, with cli/apps-check.mjs:
+# the minted slug is the register's, the installation covers this repository (a warning
+# when it covers others, or all), and its permissions are exactly the role's in
+# rulebook/agent-permissions.json. Each role's job writes a summary table.
+#
+# Run by hand, after creating or changing an App; it is not a required check:
+#   gh workflow run apps-check.yml -R <org>/<repo>
+#
+# Permissions: nothing at the top. Reading the register needs `contents: read` on that one
+# job. The check jobs grant nothing: the App token carries its own permissions, and it is
+# what checks out the script. Each job names the two secrets of its own role, looked up by
+# the register's role, so no job sees another role's key and none inherits secrets.
+name: apps-check
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  register:
+    name: Read the App register
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      roles: ${{ steps.roles.outputs.roles }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - id: roles
+        run: node cli/apps-check.mjs roles >> "$GITHUB_OUTPUT"
+
+  check:
+    name: ${{ matrix.app.role }}
+    needs: register
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.register.outputs.roles) }}
+    steps:
+      # Scoped to the owner, not the repository, so an installation that misses this
+      # repository still mints, and the check below can say so.
+      - name: Mint the role's App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets[format('{0}_APP_ID', matrix.app.secret)] }}
+          private-key: ${{ secrets[format('{0}_APP_PRIVATE_KEY', matrix.app.secret)] }}
+          owner: ${{ github.repository_owner }}
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Check the installation
+        env:
+          ROLE: ${{ matrix.app.key }}
+          REGISTER_SLUG: ${{ matrix.app.slug }}
+          REPOSITORY: ${{ github.repository }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
+          TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_ID: ${{ secrets[format('{0}_APP_ID', matrix.app.secret)] }}
+          APP_PRIVATE_KEY: ${{ secrets[format('{0}_APP_PRIVATE_KEY', matrix.app.secret)] }}
+        run: node cli/apps-check.mjs check

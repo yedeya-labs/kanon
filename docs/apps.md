@@ -37,6 +37,14 @@ For each role, in turn:
 5. **You click "Install".** Your browser opens the App's install page. Choose the organisation, then **Only select repositories**, pick the repository alone, and click **Install**. The command waits until the installation exists, then checks it covers this repository. It fails if the repository is missing, and warns if the installation covers all repositories or any other one (`K-ADOPT-8`: one App per role per repository).
 6. **The register.** It writes the role's row in `docs/qa/agent-identities.md`, creating the file if it doesn't exist, and prints the diff. **Commit it**: the command doesn't.
 
+## Checking the installations later
+
+A person's token often can't list an organisation's App installations, but each App can read its own. Kanon's `apps-check` workflow ([`.github/workflows/apps-check.yml`](../.github/workflows/apps-check.yml)) does that for every agent role the register lists: it mints the role's token from `<ROLE>_APP_ID` and `<ROLE>_APP_PRIVATE_KEY`, then, with [`cli/apps-check.mjs`](../cli/apps-check.mjs), fails if the minted slug isn't the register's, if the installation doesn't cover the repository, or if its permissions differ from the role's in `rulebook/agent-permissions.json`, and warns if it covers other repositories or all of them. Each role's job writes a summary table. It runs by hand and is not a required check:
+
+```sh
+gh workflow run apps-check.yml -R <org>/<repo>
+```
+
 ## Limits
 
 - **Key rotation stays manual.** GitHub has no API that makes a new private key for an existing App, so the command can't rotate one. It prints the steps at the end of every run: generate a key on the App's settings page, `gh secret set <ROLE>_APP_PRIVATE_KEY -R <org>/<repo> < key.pem`, delete the file, then delete the old key.
