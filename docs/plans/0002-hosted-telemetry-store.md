@@ -185,7 +185,7 @@ The table is guidance for reading the data, not a field. The store records facts
 - **One Lambda function** (Node 24, `node:` built-ins and the schema module) with a **function URL, auth type `AWS_IAM`**. Its resource policy allows only the writer roles.
 - **The collector sends** up to 25 rows per `POST`, signed with SigV4 by the runner's `curl --aws-sigv4`. No SDK, no new dependency.
 - **The function reads the caller's role** from the request context (`requestContext.authorizer.iam.userArn`), maps it to the adopter's key, and builds the key itself: `pk = <key>#<lane>`, `sk = <recorded_at as YYYYMMDDTHHMMSSZ>#<run id>-<attempt>-<pr or issue number, or 0>`. **The row can't name a partition**, so a writer can only ever write its own.
-- **A work-item row** (plan 0003) gets `pk = <key>#work` and `sk = <closed_at as YYYYMMDDTHHMMSSZ>#pr-<pr number>`. Its `closed_at` must be in the past and at most 13 months old. A work item is rewritten whole when a later revert, linked fix or follow-up changes it, and the rewrite has the same key, so it overwrites.
+- **A work-item row** (plan 0003) gets `pk = <key>#work` and `sk = pr-<pr number, zero-padded to ten digits>`. The key holds no date, so a PR closed, reopened and closed again overwrites its one row instead of leaving a second (plan 0003 §3.1). Its `closed_at` must be in the past and at most 13 months old. A work item is rewritten whole when a later revert, linked fix or follow-up close changes it, and the rewrite has the same key, so it overwrites.
 - **It checks** `recorded_at` is between 8 days ago and 10 minutes ahead, which is artifact retention plus slack, so a collector can't backdate rows. This applies to both row kinds: a work-item row's `recorded_at` is when it was derived, not when its PR closed.
 - **It writes with `PutItem`.** A re-sent row has the same key and overwrites identically, as today.
 - **It answers per row,** and the collector turns red on any rejection, which keeps today's paging contract.
@@ -217,7 +217,7 @@ CloudFormation needs only the AWS CLI. AWS keeps the state. `DeletionPolicy: Ret
 |---|---|---|
 | `put(rows)` | the collector | `POST` to the ingest function |
 | `query(lane, from, to)` | the adopter's own readers | a Kanon read helper over `aws dynamodb query` with the reader role |
-| `query('work', from, to)` (plan 0003) | the adopter's own readers, and its metrics report | the same helper on the `<key>#work` partition, by `closed_at` |
+| `query('work', from, to)` (plan 0003) | the adopter's own readers, and its metrics report | the same helper, reading the `<key>#work` partition and filtering on `closed_at`; the partition is small (plan 0003 §8) |
 | `erase(adopter)` | the Owner | §10 |
 | `aggregate()` | the Owner | §6 |
 
