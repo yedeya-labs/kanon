@@ -25,4 +25,5 @@ The one exception is a commit authored by one of the repository's **own** agent 
 - **Titles.** Every pull request title is a conventional commit with one of Kanon's fixed types, and never ends in `(#n)` ([`K-SHIP-4`](rulebook/06-shipping.md)). CI checks it.
 - **Merging.** Pull requests are squash-merged, with the title as the commit subject and the body as its message.
 - **Tests.** Kanon's own tests must pass. A change to a check comes with a test that fails without it.
+- **Changes to the checks that judge a PR.** Kanon's required DCO and PR-title checks run Kanon's last release, not the copy in your pull request, so a pull request can't weaken the check that passes it ([#47](https://github.com/yedeya-labs/kanon/issues/47), [ADR 0011](docs/decisions/0011-kanon-runs-its-own-lanes.md)). A change to `actions/dco` or `actions/pr-title` is therefore judged by the released version, and takes effect one release later, when Dependabot bumps the pin. Your copy still runs on your pull request, in the "Judging actions smoke" check, so a broken change still fails CI.
 - **Security.** Don't open a public issue for a security problem. See [SECURITY.md](SECURITY.md).

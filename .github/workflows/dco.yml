@@ -1,13 +1,16 @@
-# Kanon's DCO check (ADR 0010), dogfooded: this repository runs its own action through
-# `$/`, GitHub's self-reference, so every Kanon PR exercises the action exactly as an
-# adopter's would.
+# Kanon's DCO check (ADR 0010), run the way an adopter runs it: pinned to an exact Kanon
+# release (K-ADOPT-11), which Dependabot bumps.
 #
-# The action reads the PR's commits through the API, and `$/` resolves to this repository
-# at the running commit without a checkout (plan 0001 §4), so nothing is checked out.
-# `pull-requests: read` lets the workflow token list the
-# commits; `contents: read` is what a private repository also needs for them. A
-# `pull_request` run gets a read-only token and no secrets, so running the PR's own
-# version of the check is safe.
+# The check that judges a PR runs Kanon's LAST release, never this PR's copy through `$/`
+# (#47). Through `$/` a PR that weakened the check would be judged by the weakened check
+# and pass itself. This is ADR 0011's bootstrap applied to a check's code, as K-MERGE-17
+# applies it to a check's inputs: the stable release judges the next one. A change to
+# actions/dco therefore judges PRs one release after it merges. This PR's own copy still
+# runs, as a test rather than as the judge, in judging-actions-smoke.yml.
+#
+# The action reads the PR's commits through the API, so nothing is checked out.
+# `pull-requests: read` lets the workflow token list the commits; `contents: read` is
+# what a private repository also needs for them.
 #
 # On merge_group (K-MERGE-7) the check passes without checking anything, under the same
 # job name, because a required check must report on the queue's branch or the queue
@@ -38,5 +41,5 @@ jobs:
       - name: Already checked on the pull request
         if: github.event_name == 'merge_group'
         run: echo "Merge group. Each queued PR's commits passed this check before it could be queued."
-      - uses: $/actions/dco
+      - uses: yedeya-labs/kanon/actions/dco@v0.7.0
         if: github.event_name == 'pull_request'

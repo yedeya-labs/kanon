@@ -1,0 +1,53 @@
+# Runs this PR's own copy of the actions that judge it, as a test, not as the judge (#47).
+#
+# The required "Signed-off commits" and "Conventional title" checks run Kanon's last
+# release (dco.yml, pr-title.yml), so a PR can't weaken the check that judges it. That
+# leaves the PR's own `actions/dco` and `actions/pr-title` untested by a runner: their
+# unit tests run the scripts, but only the runner decides whether a composite action
+# loads and passes its inputs as it should. This workflow runs both through `$/`, which
+# resolves to this repository at the running commit, so a broken change still turns CI
+# red on its own PR.
+#
+# It is not a required check, so it runs on pull requests only and never in the merge
+# queue. It adds a test; the released checks remain the only judges.
+#
+# Read-only. The DCO action lists the PR's commits with the workflow token.
+name: Judging actions smoke
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: judging-actions-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Judging actions smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: This PR's DCO action passes this PR's commits
+        uses: $/actions/dco
+
+      - name: This PR's PR-title action passes this PR's title
+        uses: $/actions/pr-title
+
+      - name: This PR's PR-title action fails a title that isn't conventional
+        id: bad-title
+        uses: $/actions/pr-title
+        continue-on-error: true
+        with:
+          title: Not a conventional title
+
+      - name: Check it failed
+        env:
+          OUTCOME: ${{ steps.bad-title.outcome }}
+        run: |
+          echo "outcome=$OUTCOME"
+          test "$OUTCOME" = failure
