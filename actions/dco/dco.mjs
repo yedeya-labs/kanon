@@ -48,13 +48,16 @@
 // agent commit is recognised by its author: the login `<slug>[bot]`, or the noreply email
 // `<id>+<slug>[bot]@users.noreply.github.com`, with `<slug>` in the register. Every other
 // commit is checked exactly as above.
-// - Both files are read from the pull request's BASE branch over the API, never from the
-//   PR (K-MERGE-17), so a PR can't add its own App to the register or name its own
-//   delegate. They are read only when some commit has a bot author, so a PR of human
-//   commits costs no extra call.
+// - Both files are read from the repository's DEFAULT branch over the API (`repos/{o}/{r}`
+//   -> `default_branch`), never from the PR and never from the PR's base (K-MERGE-17). Only
+//   merged, reviewed changes reach the default branch. A PR's base is not enough: on a
+//   stacked PR it is another PR's branch, whose author can write a register row or a
+//   delegation record there. They are read only when some commit has a bot author, so a PR
+//   of human commits costs no extra call.
 // - A missing or malformed record, or a register that lists no App, delegates nothing:
 //   agent commits are then judged like any other, and fail on their bot sign-off. A read
-//   that errors fails the check (K-PRIN-10).
+//   that errors, including the read of the default branch's name, fails the check
+//   (K-PRIN-10).
 // - The delegate must be a person: a record naming an AI or bot identity is malformed.
 //
 // Usage (the action's form):
@@ -67,7 +70,7 @@ import { pathToFileURL } from 'node:url';
 /** Bot accounts whose GitHub-created commits need no sign-off. Fixed (ADR 0002). */
 export const EXEMPT_BOTS = /** @type {const} */ (['dependabot[bot]', 'github-actions[bot]']);
 
-/** The App register (K-LAYOUT-6) and the sign-off delegation (K-LAYOUT-14), read from base. */
+/** The App register (K-LAYOUT-6) and the sign-off delegation (K-LAYOUT-14), read from the default branch. */
 export const REGISTER_PATH = 'docs/qa/agent-identities.md';
 export const DELEGATION_PATH = 'docs/qa/sign-off-delegation.md';
 
@@ -97,7 +100,7 @@ export function isAutomated(who) {
 /**
  * @typedef {{ name: string, email: string }} Person
  * @typedef {{ slugs: string[], delegate: (Person & { date: string }) | null }} Trust
- *   What the base branch says: the register's App slugs, and the delegate, if one is recorded.
+ *   What the default branch says: the register's App slugs, and the delegate, if one is recorded.
  */
 
 /** No register and no delegation: every commit is checked as a person's. */
@@ -196,7 +199,7 @@ export function parseDelegation(text) {
 
 /**
  * Whether a commit's author looks like a GitHub App at all, by login or noreply email.
- * Such a commit is the only kind for which the base branch's files are read.
+ * Such a commit is the only kind for which the default branch's files are read.
  * @param {Commit} c
  */
 export function hasBotAuthor(c) {
@@ -299,7 +302,7 @@ export function isExemptBot(c) {
 
 /**
  * @param {Commit} c
- * @param {Trust} trust What the base branch says (NO_TRUST when it says nothing).
+ * @param {Trust} trust What the default branch says (NO_TRUST when it says nothing).
  * @returns {{ ok: true, skipped?: 'merge' | 'bot', delegated?: string } | { ok: false, reason: string }}
  */
 export function checkCommit(c, trust = NO_TRUST) {
@@ -317,7 +320,7 @@ export function checkCommit(c, trust = NO_TRUST) {
   }
   const result = checkAsPerson(c);
   if (slug !== null && !result.ok) {
-    return { ok: false, reason: `${result.reason}. It is by the repository's own App ${slug}, and the base branch records no sign-off delegation (${DELEGATION_PATH})` };
+    return { ok: false, reason: `${result.reason}. It is by the repository's own App ${slug}, and the default branch records no sign-off delegation (${DELEGATION_PATH})` };
   }
   return result;
 }
@@ -361,11 +364,10 @@ const apiHeaders = (/** @type {string} */ token, accept = 'application/vnd.githu
 });
 
 /**
- * Reads every commit of a pull request, its commit count and its base branch, through the
- * REST API.
+ * Reads every commit of a pull request and its commit count through the REST API.
  * @param {{ api: string, repository: string, number: string, token: string }} where
  * @param {typeof fetch} fetchImpl
- * @returns {Promise<{ commits: Commit[], expected: number, base: string | null }>}
+ * @returns {Promise<{ commits: Commit[], expected: number }>}
  */
 export async function fetchCommits({ api, repository, number, token }, fetchImpl = fetch) {
   const headers = apiHeaders(token);
@@ -382,8 +384,23 @@ export async function fetchCommits({ api, repository, number, token }, fetchImpl
     commits.push(...batch);
     if (batch.length < 100) break;
   }
-  const base = typeof pr.base?.ref === 'string' && pr.base.ref !== '' ? pr.base.ref : null;
-  return { commits, expected: pr.commits, base };
+  return { commits, expected: pr.commits };
+}
+
+/**
+ * The repository's default branch (`GET /repos/{owner}/{repo}` -> `default_branch`). Throws
+ * when it can't be read or names no branch, so the check fails closed (K-PRIN-10).
+ * @param {{ api: string, repository: string, token: string }} where
+ * @param {typeof fetch} fetchImpl
+ * @returns {Promise<string>}
+ */
+export async function fetchDefaultBranch({ api, repository, token }, fetchImpl = fetch) {
+  const res = await fetchImpl(`${api}/repos/${repository}`, { headers: apiHeaders(token) });
+  if (!res.ok) throw new Error(`GET /repos/${repository} returned HTTP ${res.status}`);
+  const repo = await res.json();
+  const branch = repo?.default_branch;
+  if (typeof branch !== 'string' || branch === '') throw new Error(`GET /repos/${repository} names no default_branch`);
+  return branch;
 }
 
 /**
@@ -402,7 +419,7 @@ export async function fetchFile({ api, repository, token, ref, path }, fetchImpl
 }
 
 /**
- * What the base branch says about the repository's own agents: the register's slugs and the
+ * What the default branch says about the repository's own agents: the register's slugs and the
  * delegate. A missing or malformed file contributes nothing, and each such file is reported
  * in `notes`, so a delegation that didn't take is visible in the log.
  * @param {{ api: string, repository: string, token: string, ref: string }} where
@@ -460,11 +477,14 @@ export async function main(env, fetchImpl = fetch, out = console) {
 
   let trust = NO_TRUST;
   if (commits.some((c) => c.parents.length <= 1 && !isExemptBot(c) && hasBotAuthor(c))) {
-    // Only base's copy counts (K-MERGE-17). Without a base to read, fail closed rather than
-    // judge an agent commit with no register (K-PRIN-10).
-    const ref = fetched.base ?? env.BASE_REF ?? '';
-    if (ref === '') {
-      out.error("A commit has a bot author, and the pull request's base branch is unknown, so the App register can't be read.");
+    // Only the default branch's copy counts (K-MERGE-17): not the PR's, and not its base's,
+    // which on a stacked PR is another PR's branch. Without it, fail closed rather than judge
+    // an agent commit with no register (K-PRIN-10).
+    let ref;
+    try {
+      ref = await fetchDefaultBranch({ api, repository, token }, fetchImpl);
+    } catch (e) {
+      out.error(`A commit has a bot author, and the repository's default branch can't be read, so the App register can't be read: ${e instanceof Error ? e.message : String(e)}.`);
       return 1;
     }
     try {

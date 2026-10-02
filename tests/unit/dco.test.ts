@@ -461,14 +461,27 @@ describe('K-LAYOUT-14 the delegation record and the App register parse strictly'
   });
 });
 
-/** A fake API serving the PR, and each file by `<ref>:<path>`, recording every contents read. */
-const repoFetch = (commits: Commit[], files: Record<string, string>, opts: { status?: number } = {}) => {
+/**
+ * A fake API serving the repository, the PR, and each file by `<ref>:<path>`, recording every
+ * contents read. `base` is the PR's base branch and `defaultBranch` the repository's; they
+ * differ on a stacked PR. `repoStatus`/`repoBody` replace the repository read's answer.
+ */
+const repoFetch = (
+  commits: Commit[],
+  files: Record<string, string>,
+  opts: { status?: number; base?: string; defaultBranch?: string; repoStatus?: number; repoBody?: unknown } = {},
+) => {
   const reads: string[] = [];
   const impl = (async (url: string | URL | Request) => {
     const u = new URL(String(url));
+    if (u.pathname === '/repos/o/r') {
+      const body = opts.repoBody ?? { full_name: 'o/r', default_branch: opts.defaultBranch ?? 'main' };
+      return new Response(JSON.stringify(body), { status: opts.repoStatus ?? 200 });
+    }
     const pr = u.pathname.match(/^\/repos\/o\/r\/pulls\/7(\/commits)?$/);
     if (pr) {
-      const body = pr[1] ? (u.searchParams.get('page') === '1' ? commits : []) : { commits: commits.length, base: { ref: 'main', sha: 'b0b0' }, head: { ref: 'feat/x', sha: '0001abc' } };
+      const base = { ref: opts.base ?? 'main', sha: 'b0b0' };
+      const body = pr[1] ? (u.searchParams.get('page') === '1' ? commits : []) : { commits: commits.length, base, head: { ref: 'feat/x', sha: '0001abc' } };
       return new Response(JSON.stringify(body), { status: 200 });
     }
     const file = u.pathname.match(/^\/repos\/o\/r\/contents\/(.+)$/);
@@ -485,8 +498,8 @@ const repoFetch = (commits: Commit[], files: Record<string, string>, opts: { sta
 };
 const BASE_FILES = { [`main:${REGISTER_PATH}`]: REGISTER, [`main:${DELEGATION_PATH}`]: record() };
 
-describe('K-AGENT-44 the action reads the register and the record from the base branch', () => {
-  it('passes a PR whose agent commit is signed off by the delegate base names', async () => {
+describe('K-AGENT-44 the action reads the register and the record from the default branch', () => {
+  it('passes a PR whose agent commit is signed off by the delegate the default branch names', async () => {
     const { impl, reads } = repoFetch([agentCommit(`fix: one\n\n${sob()}`)], BASE_FILES);
     const { out, sink } = capture();
     expect(await main(env, impl, sink)).toBe(0);
@@ -542,10 +555,65 @@ describe('K-AGENT-44 the action reads the register and the record from the base 
     expect(reads).toEqual([]);
   });
 
-  it('fails closed when base cannot be read', async () => {
+  it('fails closed when the files on the default branch cannot be read', async () => {
     const { impl } = repoFetch([agentCommit(`fix: one\n\n${sob()}`)], BASE_FILES, { status: 500 });
     const { out, sink } = capture();
     expect(await main(env, impl, sink)).toBe(1);
     expect(out.errors.join('\n')).toContain('Could not read the App register or the sign-off delegation from main');
+  });
+
+  it('fails closed when the default branch cannot be read', async () => {
+    const { impl, reads } = repoFetch([agentCommit(`fix: one\n\n${sob()}`)], BASE_FILES, { repoStatus: 500 });
+    const { out, sink } = capture();
+    expect(await main(env, impl, sink)).toBe(1);
+    expect(out.errors.join('\n')).toContain("the repository's default branch can't be read");
+    expect(reads).toEqual([]);
+  });
+
+  it('fails closed when the repository names no default branch', async () => {
+    const { impl, reads } = repoFetch([agentCommit(`fix: one\n\n${sob()}`)], BASE_FILES, { repoBody: { full_name: 'o/r' } });
+    const { out, sink } = capture();
+    expect(await main(env, impl, sink)).toBe(1);
+    expect(out.errors.join('\n')).toContain('names no default_branch');
+    expect(reads).toEqual([]);
+  });
+});
+
+describe("K-MERGE-17 a stacked PR is judged by the default branch, not by its base", () => {
+  // The PR is stacked on feat/parent, another PR's branch, whose author wrote its own App into
+  // the register and named itself the delegate there. The default branch says neither.
+  const PARENT = 'feat/parent';
+  const MALLORY = { name: 'Mallory Doe', email: 'mallory@example.com' };
+  const parentRegister = `${REGISTER}| Merger | \`intruder-app\` | Read & write | Read & write | Read & write | No access |\n`;
+  const stacked = { base: PARENT, defaultBranch: 'main' };
+  const stackedEnv = { ...env, BASE_REF: PARENT };
+  const files = {
+    ...BASE_FILES,
+    [`${PARENT}:${REGISTER_PATH}`]: parentRegister,
+    [`${PARENT}:${DELEGATION_PATH}`]: record(MALLORY),
+  };
+
+  it('ignores a delegate that only the base names', async () => {
+    const { impl, reads } = repoFetch([agentCommit(`fix: one\n\n${sob(MALLORY)}`)], files, stacked);
+    const { out, sink } = capture();
+    expect(await main(stackedEnv, impl, sink)).toBe(1);
+    expect(out.errors.join('\n')).toContain("needs the delegate's sign-off \"Ada Lovelace");
+    expect(reads).toEqual([`main:${REGISTER_PATH}`, `main:${DELEGATION_PATH}`]);
+  });
+
+  it('ignores an App that only the base registers', async () => {
+    const { impl, reads } = repoFetch([agentCommit(`fix: one\n\n${sob()}`, 'intruder-app')], files, stacked);
+    const { out, sink } = capture();
+    expect(await main(stackedEnv, impl, sink)).toBe(1);
+    expect(out.errors.join('\n')).toContain('not by its author');
+    expect(reads.every((r) => r.startsWith('main:'))).toBe(true);
+  });
+
+  it("passes the delegate's sign-off the default branch names, whatever the base says", async () => {
+    const { impl, reads } = repoFetch([agentCommit(`fix: one\n\n${sob()}`)], files, stacked);
+    const { out, sink } = capture();
+    expect(await main(stackedEnv, impl, sink)).toBe(0);
+    expect(reads).toEqual([`main:${REGISTER_PATH}`, `main:${DELEGATION_PATH}`]);
+    expect(out.logs.join('\n')).toContain("for an agent's commit by Ada Lovelace");
   });
 });
