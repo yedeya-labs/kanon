@@ -68,15 +68,24 @@ export function readOpenedPrs({ label, since, issue }, run = gh) {
 
 const isMain = process.argv[1] && process.argv[1].endsWith("agent-quality-prs.mjs");
 if (isMain) {
-  const a = process.argv.slice(2);
-  const arg = (name) => { const i = a.indexOf(`--${name}`); return i >= 0 ? a[i + 1] ?? "" : ""; };
-  // `severities` is NOT emitted: a fix PR carries no `sev:*`, and borrowing the parent
-  // issue's would put the severity of the INPUT in a column that means the severity of
-  // the OUTPUT on every other arm.
-  const opened = REPO ? readOpenedPrs({ label: arg("label"), since: arg("opened-since"), issue: arg("issue") }) : null;
-  if (opened) {
-    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `artifacts_filed=${opened.count}\n`);
-    console.log(`artifacts_filed=${opened.count}`);
+  try {
+    const a = process.argv.slice(2);
+    const arg = (name) => { const i = a.indexOf(`--${name}`); return i >= 0 ? a[i + 1] ?? "" : ""; };
+    // `severities` is NOT emitted: a fix PR carries no `sev:*`, and borrowing the parent
+    // issue's would put the severity of the INPUT in a column that means the severity of
+    // the OUTPUT on every other arm.
+    const opened = REPO ? readOpenedPrs({ label: arg("label"), since: arg("opened-since"), issue: arg("issue") }) : null;
+    if (opened) {
+      if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `artifacts_filed=${opened.count}\n`);
+      console.log(`artifacts_filed=${opened.count}`);
+    }
+    process.exit(0);
+  } catch (err) {
+    // AN EXCEPTION IN KANON'S OWN CODE (plan 0002 §2.6). The step still fails, as it did before
+    // this catch existed, and the telemetry row records Kanon's code for it. The message stays
+    // in this log; only the code reaches the row.
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, "kanon-error=unhandled\n");
+    console.error(err);
+    process.exit(1);
   }
-  process.exit(0);
 }

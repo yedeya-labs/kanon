@@ -430,7 +430,9 @@ describe('RA-2697 — the agent-lane blocks come from the action cache, never th
   it('hands the reviewer App token to no block that runs after the agent', () => {
     const finish = reviewSteps().find((s) => laneBlockOf(s) === 'agent-finish');
     expect(finish).toBeDefined();
-    expect(JSON.stringify(finish!.with ?? {})).not.toMatch(/app-token/);
+    // The token is the mint step's OUTPUT. Its `outcome`, which the version-2 telemetry row
+    // reads for `failed_stage` (plan 0002 §2.6), is a step status and carries no token.
+    expect(JSON.stringify(finish!.with ?? {}).replace(/steps\.app-token\.outcome/g, '')).not.toMatch(/app-token/);
   });
 
   it('calls agent-setup before any PR code, and runs the PR’s setup in the hook, unprivileged (RA-2694)', () => {

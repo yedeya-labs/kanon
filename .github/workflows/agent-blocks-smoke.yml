@@ -115,6 +115,10 @@ jobs:
           job-status: failure
           claude_args: --model claude-opus-5 --max-turns 20
           execution_file: ${{ runner.temp }}/claude-execution-output.json
+          # A smoke row is marked by its tag, never by a lane of its own: version 2 has no
+          # `smoke` lane (plan 0002 §2.4), and every read filters on `tag = run`.
+          lane: review
+          tag: smoke
 
       - name: Check the finish block classified the run and wrote its telemetry row
         env:
@@ -125,3 +129,6 @@ jobs:
           test "$OUTCOME" = success
           test "$KIND" = ok
           jq -e '.agent == "smoke" and .outcome == "ok" and .num_turns == 20' qa-agent-telemetry.json
+          # The version-2 row beside it, validated before it was written (plan 0002 §8, S1).
+          jq -c '{kanon_version, tag, lane, reason}' kanon-telemetry.json
+          jq -e '.schema_version == 2 and .row_kind == "run" and .tag == "smoke" and .lane == "review" and .reason == "none" and .num_turns == 20 and (has("failed_stage") | not)' kanon-telemetry.json

@@ -53,6 +53,13 @@ inputs:
     required: false
     default: "false"
 
+outputs:
+  kanon-error:
+    description: >-
+      `push_probe_denied` when the push probe failed: a code from Kanon's error list for the
+      telemetry row (plan 0002 §2.6). Empty otherwise.
+    value: ${{ steps.push-probe.outputs.kanon-error }}
+
 runs:
   using: composite
   steps:
@@ -76,6 +83,7 @@ runs:
     # of that job: `agent-finish` then explains it (`not-reached`) and the cost row is
     # still written, exactly as when the probe was a step of the lane's own job.
     - name: "Probe that the App can push (contents: write)"
+      id: push-probe
       if: inputs.push-probe == 'true'
       shell: bash -e {0}
       # No `GH_TOKEN`: `git push` authenticates with the credential checkout persisted,
@@ -88,6 +96,7 @@ runs:
         if ! git push --dry-run origin "HEAD:refs/heads/${MINTED_SLUG}-permission-probe" 2>/tmp/push.err; then
           echo "::error title=agent-lane::$MINTED_SLUG cannot push. The $ARM needs Contents: Read & write and Pull requests: Read & write on the App, AND the installation re-authorized to accept them — a permission change does not take effect until it is accepted. See docs/qa/agent-identities.md footnote 3."
           sed -n '1,5p' /tmp/push.err
+          echo "kanon-error=push_probe_denied" >> "$GITHUB_OUTPUT"
           exit 1
         fi
         echo "push capability confirmed (dry run — nothing was created)"

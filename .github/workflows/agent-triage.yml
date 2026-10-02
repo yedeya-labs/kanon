@@ -98,6 +98,7 @@ jobs:
     uses: $/.github/workflows/agent-lane.yml
     with:
       agent: triage-fix
+      lane: triage
       arm: triage/fix agent
       # The longest real run observed is 26m, so 80m is ~3x headroom. A timeout that
       # truncates honest work is worse than one that never fires.

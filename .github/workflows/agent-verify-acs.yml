@@ -211,6 +211,7 @@ jobs:
       # tag's code against a newer brief's criteria would judge the release by
       # acceptance criteria it never had.
       - uses: actions/checkout@v7
+        id: checkout
         with:
           ref: ${{ steps.resolve.outputs.ref || github.ref }}
           fetch-depth: 0
@@ -270,6 +271,7 @@ jobs:
         run: |
           if ! git checkout "$SHA" -- .github/actions/project-setup; then
             echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and $SHA, the commit that defined it, has none."
+            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
@@ -278,6 +280,7 @@ jobs:
       # here before, now the hook's. Against the ref under test: the install and the schema
       # are the tag's own. Chromium's installer is read from `github.sha`, as it was.
       - uses: ./.github/actions/project-setup
+        id: project
         with:
           lane: verify-acs
           install: "true"
@@ -288,6 +291,7 @@ jobs:
       # lane makes none — so its App token is still minted where it always was, immediately
       # before the agent, after the criteria run.
       - uses: $/actions/agent-setup
+        id: setup
         with:
           arm: acceptance-criteria agent
           app-slug: ""
@@ -472,3 +476,12 @@ jobs:
           execution_file: ${{ steps.agent.outputs.execution_file }}
           started-at: ${{ steps.agent.outputs.started-at }}
           github-token: ${{ steps.app-token.outputs.token }}
+          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
+          # step OUTCOME, never a step's name or log.
+          lane: verify-acs
+          token-outcome: ${{ steps.app-token.outcome }}
+          checkout-outcome: ${{ steps.checkout.outcome }}
+          hook-outcome: ${{ steps.hook.outcome != 'success' && steps.hook.outcome || steps.project.outcome }}
+          setup-outcome: ${{ steps.setup.outcome }}
+          agent-outcome: ${{ steps.agent.outcome }}
+          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}

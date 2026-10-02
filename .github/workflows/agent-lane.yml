@@ -73,7 +73,7 @@
 # `DATABASE_URL` IS WRITTEN TO `$GITHUB_ENV`, NOT DECLARED AS JOB `env:`, because a job
 # `env:` key always exists: the best a template can do is set it to "", and "" is not
 # unset — a migrator or a test that reads `DATABASE_URL ?? <default>` keeps the empty
-# string. The step is FIRST, so every later step sees what a
+# string. The step comes before every step that reads it, so each sees what a
 # job-level `env:` gave it.
 name: Agent lane
 
@@ -84,6 +84,13 @@ on:
         description: Telemetry agent name — the `agent` column in the run row.
         required: true
         type: string
+      lane:
+        description: >-
+          Kanon's lane name for the version-2 telemetry row (plan 0002 §2; `LANES` in
+          `actions/agent-telemetry/schema.mjs`). Empty writes only the version-1 row.
+        required: false
+        type: string
+        default: ""
       arm:
         description: Human name for this arm, used by classify-agent-result on a red run.
         required: true
@@ -261,8 +268,16 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     steps:
-      # FIRST, so every later step sees it exactly as a job-level `env:` gave it — and a
-      # lane with no database sees it UNSET rather than empty (see the header).
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1): a cancelled
+      # job that ran at least its `timeout-minutes` timed out. Nothing else in the job's
+      # contexts says when it started.
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      # Before every step that reads the environment, so each sees it exactly as a job-level
+      # `env:` gave it — and a lane with no database sees it UNSET rather than empty (see the
+      # header).
       - name: Point the job at its database
         if: inputs.database
         run: |
@@ -281,6 +296,7 @@ jobs:
           private-key: ${{ secrets.app-private-key }}
 
       - uses: actions/checkout@v7
+        id: checkout
         with:
           token: ${{ steps.app-token.outputs.token }}
           # Empty is checkout's own default (the triggering commit), so a lane that sets
@@ -303,6 +319,7 @@ jobs:
         run: |
           if [ ! -f .github/actions/project-setup/action.yml ]; then
             echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
+            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -312,6 +329,7 @@ jobs:
       # before `agent-setup`. The App token is passed for the hook's issue reads; the
       # Claude token never is.
       - uses: ./.github/actions/project-setup
+        id: project
         with:
           lane: ${{ inputs.agent }}
           install: "true"
@@ -322,6 +340,7 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
 
       - uses: $/actions/agent-setup
+        id: setup
         with:
           arm: ${{ inputs.arm }}
           app-slug: ${{ steps.app-token.outputs.app-slug }}
@@ -372,6 +391,18 @@ jobs:
           quality-pr-label: ${{ inputs.quality-pr-label }}
           started-at: ${{ steps.agent.outputs.started-at }}
           github-token: ${{ steps.app-token.outputs.token }}
+          # THE VERSION-2 ROW (plan 0002 §2.6). Each stage's step OUTCOME, so the row can say
+          # where a red run failed. The hook's is the presence check's when that failed, else
+          # the hook's own: an outcome only, never the adopter's step names.
+          lane: ${{ inputs.lane }}
+          token-outcome: ${{ steps.app-token.outcome }}
+          checkout-outcome: ${{ steps.checkout.outcome }}
+          hook-outcome: ${{ steps.hook.outcome != 'success' && steps.hook.outcome || steps.project.outcome }}
+          setup-outcome: ${{ steps.setup.outcome }}
+          agent-outcome: ${{ steps.agent.outcome }}
+          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: ${{ inputs.timeout-minutes }}
 
       # THE RA-2519 BREADCRUMBS. A PR lane's recovery (`reviseRecovery` in the pipeline
       # library's `lead-reconcile.mjs` for the implementer, `brief-revise-recovery.mjs` for

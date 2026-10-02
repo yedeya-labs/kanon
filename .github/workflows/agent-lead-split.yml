@@ -164,6 +164,7 @@ jobs:
       # Re-checkout on the App token, so the push authenticates as the Lead — the default
       # token's pushes raise no events, and the PR must reach the Reviewer.
       - uses: actions/checkout@v7
+        id: checkout
         if: steps.gate.outputs.act == 'split'
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -187,10 +188,12 @@ jobs:
         run: |
           if [ ! -f .github/actions/project-setup/action.yml ]; then
             echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
+            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/project-setup
+        id: project
         if: steps.gate.outputs.act == 'split'
         with:
           lane: lead-split
@@ -206,6 +209,7 @@ jobs:
       # moved into the spine by RA-2609 and into this block by RA-2666. It still follows the App-token checkout, whose
       # persisted credential it pushes with, and precedes the agent.
       - uses: $/actions/agent-setup
+        id: setup
         if: steps.gate.outputs.act == 'split'
         with:
           arm: lead split agent
@@ -371,3 +375,12 @@ jobs:
           issue-number: ${{ github.event.issue.number || inputs.issue }}
           started-at: ${{ steps.agent.outputs.started-at }}
           github-token: ${{ steps.app-token.outputs.token }}
+          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
+          # step OUTCOME, never a step's name or log.
+          lane: lead-split
+          token-outcome: ${{ steps.app-token.outcome }}
+          checkout-outcome: ${{ steps.checkout.outcome }}
+          hook-outcome: ${{ steps.hook.outcome != 'success' && steps.hook.outcome || steps.project.outcome }}
+          setup-outcome: ${{ steps.setup.outcome }}
+          agent-outcome: ${{ steps.agent.outcome }}
+          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}

@@ -97,6 +97,55 @@ inputs:
     required: false
     default: ""
 
+  # THE VERSION-2 ROW'S INPUTS (plan 0002 §2). `lane` turns it on; the rest say where a red
+  # run failed and whose code failed, as outcomes and codes only (§2.6).
+  lane:
+    description: >-
+      Kanon's lane name (`LANES` in agent-telemetry's `schema.mjs`). Set, the run also writes
+      the version-2 row. Empty writes only the version-1 row.
+    required: false
+    default: ""
+  tag:
+    description: "`run` (the default), `smoke` or `test` (plan 0002 §2.4)."
+    required: false
+    default: run
+  token-outcome:
+    description: The App-token mint step's `outcome`.
+    required: false
+    default: ""
+  checkout-outcome:
+    description: The checkout step's `outcome`.
+    required: false
+    default: ""
+  hook-outcome:
+    description: >-
+      The project-setup hook's `outcome`, including the presence check before it. An outcome
+      only: the hook's own step names are the adopter's content and never reach the row.
+    required: false
+    default: ""
+  setup-outcome:
+    description: The `agent-setup` block's `outcome` (the push probe).
+    required: false
+    default: ""
+  agent-outcome:
+    description: The `agent-run` block's `outcome`.
+    required: false
+    default: ""
+  kanon-error:
+    description: >-
+      A code from Kanon's error list that an earlier Kanon step wrote as its `kanon-error`
+      output. Empty when none did.
+    required: false
+    default: ""
+  job-started-at:
+    description: When the lane's job started (UTC, ISO 8601), for the row's `timed_out`.
+    required: false
+    default: ""
+  timeout-minutes:
+    description: The lane job's `timeout-minutes`, for the row's `timed_out`.
+    required: false
+    default: ""
+
 outputs:
   kind:
     description: agent-classify's `kind` for a red run, empty otherwise.
@@ -182,3 +231,18 @@ runs:
         severities: ${{ inputs.severities }}
         execution_file: ${{ inputs.execution_file }}
         claude_args: ${{ inputs.claude_args }}
+        lane: ${{ inputs.lane }}
+        tag: ${{ inputs.tag }}
+        # `finish` is this block's own stage: the quality read, the one step in here that can
+        # fail. Skipped when the lane didn't opt in, which never counts as this stage failing.
+        stage_outcomes: >-
+          token=${{ inputs.token-outcome }}
+          checkout=${{ inputs.checkout-outcome }}
+          hook=${{ inputs.hook-outcome }}
+          setup=${{ inputs.setup-outcome }}
+          agent=${{ inputs.agent-outcome }}
+          finish=${{ steps.quality.outcome }}
+        kanon_error: ${{ inputs.kanon-error || steps.quality.outputs.kanon-error }}
+        job_status: ${{ inputs.job-status }}
+        job_started_at: ${{ inputs.job-started-at }}
+        timeout_minutes: ${{ inputs.timeout-minutes }}

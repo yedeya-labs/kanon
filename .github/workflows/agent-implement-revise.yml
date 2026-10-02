@@ -557,6 +557,7 @@ jobs:
     uses: $/.github/workflows/agent-lane.yml
     with:
       agent: implementer-revise
+      lane: implement-revise
       arm: implementer (revise) agent
       timeout-minutes: 180
       # The PR's own branch, with history: the agent pushes to it and merges `main` into

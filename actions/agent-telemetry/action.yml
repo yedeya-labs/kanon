@@ -103,6 +103,47 @@ inputs:
       recall down is a regression, and no cost metric can show that on its own.
     required: false
     default: ""
+  lane:
+    description: >-
+      Kanon's lane name for this run (`review`, `implement`, `lead-split`, …; the list is
+      `LANES` in `schema.mjs`). Set, the action also writes the version-2 row (plan 0002 §2)
+      and uploads it as a second artifact, `kanon-telemetry-<lane>-<run id>-<attempt>`. Empty
+      writes only the version-1 row, as before.
+    required: false
+    default: ""
+  tag:
+    description: >-
+      `run` for a real run (the default), `smoke` for a smoke workflow's row, `test` for a
+      check run against the store itself (plan 0002 §2.4). Every read and aggregate filters
+      on `run`.
+    required: false
+    default: run
+  stage_outcomes:
+    description: >-
+      The lane's stage outcomes, as `stage=outcome` pairs separated by spaces: `token`,
+      `checkout`, `hook`, `setup`, `agent` and `finish`, each a step's `outcome`. The row's
+      `failed_stage` is the first that was not success (plan 0002 §2.6). Outcomes only:
+      never a step's name or log, so a hook failure is recorded as `hook` and nothing else.
+    required: false
+    default: ""
+  kanon_error:
+    description: >-
+      A code from Kanon's own error list (`KANON_ERRORS` in `schema.mjs`), when one of
+      Kanon's steps failed and said why. Empty when nothing of Kanon's failed.
+    required: false
+    default: ""
+  job_status:
+    description: The lane's `job.status` when telemetry runs (`success`, `failure` or `cancelled`).
+    required: false
+    default: ""
+  job_started_at:
+    description: When the lane's job started (UTC, ISO 8601), for `timed_out`.
+    required: false
+    default: ""
+  timeout_minutes:
+    description: The lane job's `timeout-minutes`, for `timed_out`.
+    required: false
+    default: ""
   retention_days:
     description: >-
       How long the telemetry artifact survives for the collector to find it. The
@@ -199,16 +240,34 @@ runs:
         TELEMETRY_OUTCOME_LABEL: ${{ inputs.outcome_label }}
         TELEMETRY_ARTIFACTS_FILED: ${{ inputs.artifacts_filed }}
         TELEMETRY_SEVERITIES: ${{ inputs.severities }}
+        # The version-2 row's inputs (plan 0002 §2). `github.action_ref` is the Kanon release
+        # the caller pinned; an untagged ref records `dev`.
+        TELEMETRY_LANE: ${{ inputs.lane }}
+        TELEMETRY_TAG: ${{ inputs.tag }}
+        TELEMETRY_KANON_REF: ${{ github.action_ref }}
+        TELEMETRY_STAGE_OUTCOMES: ${{ inputs.stage_outcomes }}
+        TELEMETRY_KANON_ERROR: ${{ inputs.kanon_error }}
+        TELEMETRY_JOB_STATUS: ${{ inputs.job_status }}
+        TELEMETRY_JOB_STARTED_AT: ${{ inputs.job_started_at }}
+        TELEMETRY_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
       run: |
+        rm -f kanon-telemetry.json
         node "${{ github.action_path }}/agent-telemetry.mjs" \
           --agent "${{ inputs.agent }}" \
           --execution-file "${{ inputs.execution_file }}" \
           --out qa-agent-telemetry.json \
+          --out-v2 kanon-telemetry.json \
           || echo "::warning title=agent-telemetry::the normalizer itself failed; this run records as not-reached"
         if [ -f qa-agent-telemetry.json ]; then
           echo "written=true" >> "$GITHUB_OUTPUT"
         else
           echo "written=false" >> "$GITHUB_OUTPUT"
+        fi
+        # The version-2 row exists only when the lane named itself and the row validated.
+        if [ -f kanon-telemetry.json ]; then
+          echo "v2=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "v2=false" >> "$GITHUB_OUTPUT"
         fi
 
     # UPLOAD, DO NOT PUSH (RA-1514). The first version of this action pushed to the
@@ -241,5 +300,18 @@ runs:
         # artifact before it has been collected.
         name: agent-telemetry-${{ inputs.agent }}-${{ github.run_id }}-${{ github.run_attempt }}
         path: qa-agent-telemetry.json
+        retention-days: ${{ inputs.retention_days }}
+        if-no-files-found: error
+
+    # THE VERSION-2 ROW, IN A SECOND ARTIFACT (plan 0002 §8, S1). A prefix the existing
+    # collector never matches: it takes `agent-telemetry-*` only, so this artifact can't change
+    # what it pushes. The version-1 artifact above is unchanged until the collector moves into
+    # Kanon (S7).
+    - name: Upload the version-2 telemetry row
+      if: steps.row.outputs.v2 == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: kanon-telemetry-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: kanon-telemetry.json
         retention-days: ${{ inputs.retention_days }}
         if-no-files-found: error

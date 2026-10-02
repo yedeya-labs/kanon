@@ -1214,6 +1214,7 @@ jobs:
       # resolved the head SHA; check out exactly that — which also pins the review to
       # the commit the checks ran against rather than a merge preview of it.
       - uses: actions/checkout@v7
+        id: checkout
         if: steps.claim.outputs.proceed == 'true'
         with:
           ref: ${{ needs.filter.outputs.head_sha }}
@@ -1333,6 +1334,7 @@ jobs:
       # token is minted deliberately LATE, after every step that runs the PR's code (RA-1542),
       # and does not exist yet.
       - uses: $/actions/agent-setup
+        id: setup
         if: steps.claim.outputs.proceed == 'true'
         with:
           arm: review agent
@@ -1463,6 +1465,7 @@ jobs:
         run: |
           if [ ! -f .github/actions/project-setup/action.yml ]; then
             echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
+            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -2233,6 +2236,15 @@ jobs:
             --max-budget-usd 30
             --allowedTools Read,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
+          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
+          # step OUTCOME, never a step's name or log.
+          lane: review
+          token-outcome: ${{ steps.app-token.outcome }}
+          checkout-outcome: ${{ steps.checkout.outcome }}
+          hook-outcome: ${{ steps.hook.outcome != 'success' && steps.hook.outcome || steps.project.outcome }}
+          setup-outcome: ${{ steps.setup.outcome }}
+          agent-outcome: ${{ steps.agent.outcome }}
+          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
       - name: Upload reviewer transcript
         if: always() && steps.claim.outputs.proceed == 'true'
         uses: actions/upload-artifact@v7

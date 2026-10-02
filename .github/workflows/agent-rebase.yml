@@ -214,6 +214,7 @@ jobs:
           client-id: ${{ secrets.IMPLEMENTER_APP_ID }}
           private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v7
+        id: checkout
         with:
           token: ${{ steps.app-token.outputs.token }}
           # The agent merges `main` into a branch, so it needs both, not a shallow tip.
@@ -278,10 +279,12 @@ jobs:
         run: |
           if [ ! -f .github/actions/project-setup/action.yml ]; then
             echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
+            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/project-setup
+        id: project
         with:
           lane: rebase-lane
           install: "true"
@@ -290,6 +293,7 @@ jobs:
           app-slug: ${{ steps.app-token.outputs.app-slug }}
           github-token: ${{ steps.app-token.outputs.token }}
       - uses: $/actions/agent-setup
+        id: setup
         with:
           arm: rebase lane
           app-slug: ${{ steps.app-token.outputs.app-slug }}
@@ -414,6 +418,15 @@ jobs:
             --fallback-model claude-opus-5-5
             --allowedTools Read,Edit,Write,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
+          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
+          # step OUTCOME, never a step's name or log.
+          lane: rebase
+          token-outcome: ${{ steps.app-token.outcome }}
+          checkout-outcome: ${{ steps.checkout.outcome }}
+          hook-outcome: ${{ steps.hook.outcome != 'success' && steps.hook.outcome || steps.project.outcome }}
+          setup-outcome: ${{ steps.setup.outcome }}
+          agent-outcome: ${{ steps.agent.outcome }}
+          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
 
       # BREADCRUMBS FOR THE RETRY (RA-2519). A run that died of its CAUSE (the model was
       # unreachable, or its API failed mid-run) is retried once, after a cool-down, by
