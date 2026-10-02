@@ -1,0 +1,71 @@
+# Agent lanes
+
+Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-move-the-agent-lanes.md), decision 1). An adopter writes, per lane, a short **caller** that holds the lane's triggers, and one **project-setup hook** that holds everything specific to its project. Kanon holds the rest: the admission rules, the round caps, the prompts and the model settings.
+
+## Which lanes are available
+
+| Lane | File | Role (App) | Caller's triggers |
+|---|---|---|---|
+| Triage and fix | `agent-triage.yml` | Implementer | `issues: [labeled]`; `workflow_dispatch` with `issue_number` |
+| Implement, revise | `agent-implement-revise.yml` | Implementer | `pull_request_review: [submitted]`; `pull_request: [labeled]`; `workflow_dispatch` with `pr_number` and `reset` |
+| Lead, revise | `agent-lead-revise.yml` | Lead | `pull_request_review: [submitted]`; `pull_request: [labeled]`; `workflow_dispatch` with `pr_number` and `reset` |
+
+Each lane calls the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly. The other lanes move in later steps of plan 0001.
+
+## The caller
+
+A caller holds `name`, `on`, `permissions` and one job, and nothing else:
+
+```yaml
+name: Implement — revise
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR to revise
+        required: true
+      reset:
+        description: Clear the round cap for this run.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  revise:
+    uses: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@vX.Y.Z
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      reset: ${{ inputs.reset }}
+    secrets:
+      IMPLEMENTER_APP_ID: ${{ secrets.IMPLEMENTER_APP_ID }}
+      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+- **Triggers are yours.** A reusable workflow can't declare its caller's events. The `github` context in a called workflow is the caller's, so the lane reads the triggering event exactly as it would in your own file.
+- **Inputs pass through, by name.** `with:` passes your `workflow_dispatch` inputs as `${{ inputs.<name> }}`, and nothing else. On the other triggers they arrive empty, which the lane expects.
+- **`permissions:` is the ceiling.** Each lane declares the permissions it needs, and a called workflow can only narrow what its caller grants. Grant at least what the lane declares, or the run fails to start.
+- **Secrets are mapped explicitly, by their fixed names** ([plan 0001 §8](plans/0001-move-the-agent-lanes.md)): `<ROLE>_APP_ID`, `<ROLE>_APP_PRIVATE_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`. Never `secrets: inherit`, which would hand every secret in your repository to Kanon's code.
+- **No `concurrency:`.** Each lane holds its own concurrency group. The same group on the caller would have the caller wait for itself.
+- **One version.** Every Kanon reference in your repository pins the same exact version, and Dependabot proposes upgrades (`K-ADOPT-11`).
+
+## The project-setup hook
+
+`.github/actions/project-setup/action.yml` is a composite action you write ([plan 0001 §5](plans/0001-move-the-agent-lanes.md)). Every lane that checks out calls it after the checkout and before the agent, with these inputs, all strings: `lane`, `install`, `database`, `browsers`, `issue-number`, `app-slug` and `github-token`. It installs your toolchain and dependencies, and, when `database` is `'true'`, sets up your schema against Kanon's standard database (`DATABASE_URL=postgres://kanon:kanon@localhost:5432/kanon`, `pgvector/pgvector:pg17`). It is read from the checked-out tree, so on a lane that checks out a pull request it is that branch's copy.
+
+## The App register
+
+The revise lanes find their own App's login in the App register, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks.
+
+## Checking it
+
+Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook; on a role missing from the App register; and on a missing Dependabot entry.

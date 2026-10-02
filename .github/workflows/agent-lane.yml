@@ -1,0 +1,397 @@
+# The shared spine of an agent lane (RA-2092).
+#
+# Every lane that dispatches an agent does the same eight things — mint an App token,
+# check out, provision a database, run the project's setup, run `claude-code-action`,
+# explain a red run, and record what it cost. Only the PROMPT and the IDENTITY differ — plus a few CAPABILITY SWITCHES a lane
+# sets for what it genuinely lacks or needs (`database`, `browsers`, `ref`/`fetch-depth`,
+# and `push-probe` for a lane whose whole output is a pushed branch, which is OFF by
+# default: a lane converted without it silently loses its early 403). Each switch is the
+# same step for every lane that sets it. Before this, that spine was copied into
+# eleven files, so a fix to it was eleven edits and eleven chances to miss one — RA-1544
+# and RA-1562 are both that shape.
+#
+# WHAT STAYS IN THE CALLER, and why it is not an oversight:
+#   • triggers, `concurrency`, and the job `if` — a reusable workflow cannot declare
+#     its caller's events, and the `if` is the lane's admission rule, not the spine's.
+#   • the prompt — 21% of these files and up to 473 lines. A workflow input is the right
+#     home for a paragraph, not for a document; keeping it beside the trigger also keeps
+#     "what fires this" and "what it is told" readable together.
+#
+# BUILT FROM THREE BLOCKS (RA-2666). The steps are the composite actions `agent-setup`,
+# `agent-run` and `agent-finish`, Kanon's `actions/agent-*` (called as `$/actions/agent-*`,
+# so at the commit of the release the caller pinned), joined by the few steps
+# no block holds: the App-token mint and the checkout (no block needed to before RA-2697,
+# when a `./` block could not load before the checkout existed; they stay lane steps
+# because this change moves no step), the database service (a composite action cannot declare
+# `services:`), and the RA-2519 breadcrumbs (the jobs API cannot see a step inside a
+# composite action, and the recoveries read those by name).
+#
+# AND ONE HOOK THAT IS THE PROJECT'S, NOT THE SPINE'S (RA-2694; Kanon plan 0001 §5). Every
+# value specific to the project — its toolchain and install, its schema setup against the
+# database, its browser, its per-lane output and identity checks — lives in
+# `.github/actions/project-setup`, which this job calls after the checkout and before
+# `agent-setup`, with the lane's `agent` name and its `database` and `browsers` switches.
+# Nothing in this file or the blocks names one of those values, and
+# `tests/unit/lane-workflows.test.ts` fails when one comes back. The hook is read
+# from the CHECKED-OUT tree, never loaded from another commit: on a lane that sets `ref` it
+# is the branch's own, and a branch cut before it existed fails the presence check below,
+# by name — rebase it. A lane whose own steps must
+# sit between the stages — a gate before the agent, a record after it — calls the blocks
+# directly instead of this file; the reference adopter's pipeline doc says which to use when.
+# `agent-finish` calls a fourth block, `agent-classify` (RA-2691), which the lanes that
+# classify a run outside `agent-finish` call directly.
+#
+# THE BLOCKS ARE `$/` REFERENCES, THE HOOK IS `./` (RA-2697; Kanon plan 0001 §2). A `uses:`
+# starting with `$/` is GitHub's self-reference: it resolves to this repository at the
+# commit that defined this workflow, and the runner downloads it into its action cache
+# during `Set up job`, nested references included. So the blocks are never read from the
+# workspace — not before the agent, not for their post steps — and a lane that checks out
+# a PR branch cut before they existed loses nothing. That retired three steps this file
+# carried: a load of the blocks from `github.sha` into the checked-out tree, a reload after
+# the agent, and a restore of the telemetry action from the default branch (RA-1588). The
+# hook is the project's own code, which a Kanon lane cannot `$/` into, so it stays a `./`
+# reference read from the checkout, and keeps its presence check and its put-back.
+#
+# `claude_args` IS ONE INPUT USED TWICE, and that is a fix rather than a convenience.
+# Each lane passed it separately to `claude-code-action` and to `agent-telemetry`, which
+# must agree or the row records a model the run did not use. Nothing enforced that.
+#
+# THE DATABASE IS CONDITIONAL, AND THAT CORRECTS WHAT THIS HEADER SAID (RA-2592). It read
+# "GitHub evaluates `services:` before inputs are in scope", and that is not what the
+# platform documents: the context-availability table lists `inputs` for
+# `jobs.<job_id>.services`, and the workflow-syntax reference says a service whose
+# `image` is an empty string "will not start" — its own example is exactly this shape.
+# So a lane with no database (`lead-revise`) passes `database: false` and gets no
+# container, no schema setup and no `DATABASE_URL`, which is what it had before it was
+# converted — rather than a second copy of this file.
+#
+# THE DATABASE IS KANON'S STANDARD (RA-2694, the plan's decision 12): `pgvector/pgvector:pg17`
+# with user, password and database all `kanon`, on port 5432, and the `DATABASE_URL` that
+# names it. The project's hook derives its own app role's URL from that value and runs its
+# schema setup against it, so the host, port and name are written here and nowhere else.
+#
+# `DATABASE_URL` IS WRITTEN TO `$GITHUB_ENV`, NOT DECLARED AS JOB `env:`, because a job
+# `env:` key always exists: the best a template can do is set it to "", and "" is not
+# unset — a migrator or a test that reads `DATABASE_URL ?? <default>` keeps the empty
+# string. The step is FIRST, so every later step sees what a
+# job-level `env:` gave it.
+name: Agent lane
+
+on:
+  workflow_call:
+    inputs:
+      agent:
+        description: Telemetry agent name — the `agent` column in the run row.
+        required: true
+        type: string
+      arm:
+        description: Human name for this arm, used by classify-agent-result on a red run.
+        required: true
+        type: string
+      prompt:
+        description: The agent's instructions. Interpolate issue numbers in the caller.
+        required: true
+        type: string
+      claude_args:
+        description: Passed to BOTH claude-code-action and the telemetry row, so they cannot disagree.
+        required: true
+        type: string
+      timeout-minutes:
+        description: >-
+          Bounds a hang (RA-1336). Size at ~3x this lane's longest real run — EXCEPT where a
+          turn cap is the constraint that should bind, in which case size above what the
+          cap can take (RA-2212): the implement lanes run 180 for that reason, not because
+          3x their longest run is 180.
+        required: false
+        type: number
+        default: 120
+      prompt-cache-ttl:
+        description: >-
+          `CLAUDE_CODE_PROMPT_CACHE_TTL` for this lane, or empty to leave the default.
+          AN INPUT RATHER THAN A SPINE CONSTANT (RA-2188): four arms pin `5m` and the rest
+          do not, so it is a per-lane decision. It also has to be readable from the
+          CALLER — `cache-ttl-check.mjs` joins the pin to the arm name, and a `uses:` job
+          accepts only `with:` and `secrets:`, never `env:`, so an env line on the spine
+          would name no arm and the four pinned arms would read as unpinned.
+        required: false
+        type: string
+        default: ""
+      full-transcript:
+        description: >-
+          Print the agent's whole transcript into the job log (`show_full_output` on
+          `claude-code-action`, RA-2651). Off, the log carries only the init and result
+          events, and the execution file that holds the rest is deleted with the runner,
+          so a run that ends `completed` with no push and no comment cannot be
+          diagnosed afterwards. The log, not an artifact, because Actions masks
+          registered secrets in logs and does not mask artifact files. It changes only
+          what is printed: the model's input, turns and spend are identical either way.
+          OPT-IN PER LANE; the default keeps the action's hidden output.
+        required: false
+        type: boolean
+        default: false
+      issue-number:
+        description: >-
+          The issue this run was dispatched for; recorded on the row (RA-1517), and passed to
+          the project-setup hook.
+        required: false
+        type: string
+        default: ""
+      pr-number:
+        description: >-
+          The PR this run was dispatched for; recorded on the row. A PR lane (revise) has
+          no issue to identify its run by, so without this the row carries neither.
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: >-
+          What to check out — a revise lane's PR head branch. Empty checks out the
+          triggering commit, as a lane that opens a new branch wants. The blocks never
+          come from it: they are `$/` references, read from the commit that defined this
+          workflow (see the header). The project-setup hook does, so a branch cut before
+          the hook existed fails its presence check, by name.
+        required: false
+        type: string
+        default: ""
+      fetch-depth:
+        description: >-
+          `actions/checkout`'s depth. 1 (the default) for a lane that branches from the
+          checked-out commit; 0 for a lane that must see a PR branch's history against
+          `main` — a revise lane rebases and diffs. See RA-1742 for why 1 is the default.
+        required: false
+        type: number
+        default: 1
+      database:
+        description: >-
+          Provision the standard test database (the service and `DATABASE_URL`), and tell
+          the project-setup hook to run the project's schema setup against it. Default on:
+          a lane that writes code must prove RLS conformance. Off for a lane that edits
+          prose — see the header for why this is honoured rather than approximated.
+        required: false
+        type: boolean
+        default: true
+      browsers:
+        description: >-
+          Tell the project-setup hook to install a browser. Default on, for a lane that may
+          run the E2E tier; off for one that never had it, so converting it adds no install
+          minute.
+        required: false
+        type: boolean
+        default: true
+      push-probe:
+        description: >-
+          Prove the minted App can push (`git push --dry-run`) after the project's setup
+          and before a single turn is paid for. Default off. On for a lane
+          whose whole output is a pushed branch, where a missing `contents: write` grant
+          would otherwise surface as a 403 at the END of a long run — or not at all, read
+          as "the agent had nothing to say". A capability switch like `database`, not a
+          hook: the step is the same for every lane that sets it, and the App slug and
+          the arm name are what make its message the lane's own.
+        required: false
+        type: boolean
+        default: false
+      quality-pr-label:
+        description: >-
+          OPT-IN quality column (RA-1627). The label on the PR this lane's agent opens, e.g.
+          `agent:triage`. Set, the run's `artifacts_filed` counts the PRs carrying it that
+          reference `issue-number` and were opened after the agent started — so a run that
+          opened none records 0, not absent. Empty (the default) adds no column: a lane
+          whose PRs another arm also labels, or that has no measured question, must not
+          gain a count it cannot earn.
+        required: false
+        type: string
+        default: ""
+    outputs:
+      # THE CLASSIFIER'S VERDICT ON A RED RUN (RA-2118) — `unavailable` / `exhausted` /
+      # `failed` / `not-reached`, empty on a green run. A caller branches on it after the
+      # fact: `agent-implement.yml` frees a crashed run's WIP slot only for a run that
+      # reached the model and did not finish. Job outputs survive a failed job.
+      kind:
+        description: classify-agent-result.mjs's `kind` for a red run, empty otherwise.
+        value: ${{ jobs.run.outputs.kind }}
+      # THE AGENT STEP'S OWN OUTCOME (RA-2592) — `success` / `failure` / `skipped`, the value
+      # `steps.agent.outcome` had inside the job. A revise lane's round record reads it to
+      # say how the run ended, and that step runs in the CALLER now: it names the lane's
+      # login and marker, which a spine must not. Empty when the job was cancelled before
+      # it set outputs; the round record already prints `unknown` for that.
+      outcome:
+        description: The agent step's outcome, readable from the caller after the job.
+        value: ${{ jobs.run.outputs.outcome }}
+    secrets:
+      app-id:
+        required: true
+      app-private-key:
+        required: true
+      claude-token:
+        required: true
+
+# NO `permissions:` BLOCK, DELIBERATELY (RA-2592). A called workflow's block can only
+# NARROW its caller's grant, and without one the job gets exactly what the calling job
+# was given — so each lane's default-token scope is decided where its trigger is, and
+# converting a lane leaves it unchanged. That is load-bearing: the telemetry action reads
+# a PR lane's diff size with the DEFAULT token, and the `contents: read` that stood here
+# stripped the revise lanes' `pull-requests: read`, so every revise row would have lost
+# the denominator cost comparisons normalise by, silently (telemetry never reds a run).
+# Declaring `pull-requests: read` here instead would fail every caller that does not
+# grant it — the issue lanes grant `contents: read` alone, which is also minimal.
+# The App token still carries every write.
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      kind: ${{ steps.finish.outputs.kind }}
+      # `agent` is the agent-run block, whose only step that can fail is the action, so its
+      # outcome is the action's — see that block's header.
+      outcome: ${{ steps.agent.outcome }}
+    services:
+      postgres:
+        # An empty image starts no service — the documented conditional-service form.
+        image: ${{ inputs.database && 'pgvector/pgvector:pg17' || '' }}
+        env:
+          POSTGRES_USER: kanon
+          POSTGRES_PASSWORD: kanon
+          POSTGRES_DB: kanon
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kanon"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      # FIRST, so every later step sees it exactly as a job-level `env:` gave it — and a
+      # lane with no database sees it UNSET rather than empty (see the header).
+      - name: Point the job at its database
+        if: inputs.database
+        run: |
+          echo "DATABASE_URL=postgres://kanon:kanon@localhost:5432/kanon" >> "$GITHUB_ENV"
+
+      # Mint the App token FIRST so checkout persists IT (not the read-only default
+      # GITHUB_TOKEN) as the git credential — otherwise the agent's `git push` 403s
+      # ("Write access not granted"), since the default token is `contents: read` here.
+      # A LANE STEP, NOT A BLOCK'S: it was forced while the blocks were `./` references,
+      # which cannot load before the checkout below, and it stays one (see the header).
+      - name: Mint App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          # Empty is checkout's own default (the triggering commit), so a lane that sets
+          # neither input checks out exactly what it did before these existed.
+          ref: ${{ inputs.ref }}
+          fetch-depth: ${{ inputs.fetch-depth }}
+          # NO `fetch-depth: 0` (RA-1742). RA-1652 added it so a `npm run lint` the agent ran
+          # on its own initiative would see the same brief corpus `ci.yml` did. That
+          # corpus no longer exists: a brief carries no coordinate and the guard does not
+          # read `docs/projects/**`, so the two environments cannot disagree about a tree
+          # neither reads.
+
+      # THE PROJECT-SETUP HOOK MUST BE THERE, AND SAY SO BY NAME IF IT IS NOT (RA-2694). A
+      # missing local action fails with the runner's own "can't find action.yml", which
+      # names neither the cause nor the fix. The hook is read from the checked-out tree, so
+      # the one tree that lacks it is a branch cut before it existed. The commit it is read
+      # from is recorded for the step that puts it back after the agent.
+      - name: Check the project-setup hook is present
+        id: hook
+        run: |
+          if [ ! -f .github/actions/project-setup/action.yml ]; then
+            echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
+            exit 1
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # The project's own setup — everything this spine and its blocks deliberately do not
+      # name (see the header). After the checkout, because it is read from the tree, and
+      # before `agent-setup`. The App token is passed for the hook's issue reads; the
+      # Claude token never is.
+      - uses: ./.github/actions/project-setup
+        with:
+          lane: ${{ inputs.agent }}
+          install: "true"
+          database: ${{ inputs.database }}
+          browsers: ${{ inputs.browsers }}
+          issue-number: ${{ inputs.issue-number }}
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - uses: $/actions/agent-setup
+        with:
+          arm: ${{ inputs.arm }}
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
+          push-probe: ${{ inputs.push-probe }}
+
+      - uses: $/actions/agent-run
+        id: agent
+        with:
+          prompt: ${{ inputs.prompt }}
+          claude_args: ${{ inputs.claude_args }}
+          claude-token: ${{ secrets.claude-token }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          prompt-cache-ttl: ${{ inputs.prompt-cache-ttl }}
+          full-transcript: ${{ inputs.full-transcript }}
+
+      # THE HOOK GOES BACK, FROM THE COMMIT IT WAS READ FROM (RA-2694). Its toolchain step
+      # has a post step, and the runner re-reads a `./` action's file from the workspace for
+      # it (a `$/` block's comes from the action cache, which is why the blocks need no such
+      # step since RA-2697), so an agent that moved or deleted the hook would red a good run at
+      # the very end. It was read from the checked-out tree, not from `github.sha`, so that is
+      # where it comes back from — a no-op whenever the agent left it alone.
+      - name: Put the project-setup hook back for its post steps
+        if: always() && steps.hook.outputs.sha != ''
+        env:
+          SHA: ${{ steps.hook.outputs.sha }}
+        run: |
+          if git checkout "$SHA" -- .github/actions/project-setup 2>/dev/null; then
+            echo "project-setup hook put back from $SHA"
+          else
+            echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
+          fi
+
+      # Explain a red run, count what it opened, record what it cost. `always()` and
+      # `continue-on-error` for the reasons in the block's header; `job-status` because the
+      # block cannot see the job's `failure()` from inside itself.
+      - uses: $/actions/agent-finish
+        id: finish
+        if: always()
+        continue-on-error: true
+        with:
+          arm: ${{ inputs.arm }}
+          agent: ${{ inputs.agent }}
+          job-status: ${{ job.status }}
+          claude_args: ${{ inputs.claude_args }}
+          execution_file: ${{ steps.agent.outputs.execution_file }}
+          issue-number: ${{ inputs.issue-number }}
+          pr-number: ${{ inputs.pr-number }}
+          quality-pr-label: ${{ inputs.quality-pr-label }}
+          started-at: ${{ steps.agent.outputs.started-at }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      # THE RA-2519 BREADCRUMBS. A PR lane's recovery (`reviseRecovery` in the pipeline
+      # library's `lead-reconcile.mjs` for the implementer, `brief-revise-recovery.mjs` for
+      # the Lead) finds a run that died of its CAUSE — the model unreachable, or its API
+      # failing mid-run — by one of these steps having RUN, read by NAME from the run's
+      # jobs (`RETRY_STEPS` in the library's `lane-retry.mjs`). So the names are the
+      # protocol and must not be reworded; `tests/unit/lane-workflows.test.ts` holds them to it.
+      #
+      # IN THE LANE, NOT THE FINISH BLOCK, because the jobs API lists a composite action as
+      # ONE step: a breadcrumb inside the block would never be seen by name. They read the
+      # classifier's verdict through the block's `retry` output.
+      #
+      # A lane no recovery reads (implement, triage) carries them too; nothing reads them
+      # there, and they cost a skipped step on a green run. So the text must not PROMISE a
+      # retry: on an issue lane none comes, and a human reading the log would wait for it
+      # instead of re-dispatching. It says which lanes retry, and what to do on the others;
+      # the caller's header names its own retrier.
+      - name: "Retryable once the cause clears: the model was unreachable (RA-2519)"
+        if: failure() && steps.finish.outputs.retry == 'unreachable'
+        run: echo "The model was never reached. The revise lanes are retried once for this head after the cool-down (RA-2519); any other lane is NOT retried automatically — re-dispatch it once the cause clears."
+      - name: "Retryable once the cause clears: the model API failed mid-run (RA-2519)"
+        if: failure() && steps.finish.outputs.retry == 'api_error'
+        run: echo "The model API failed part-way through. The revise lanes are retried once for this head after the cool-down (RA-2519); any other lane is NOT retried automatically — re-dispatch it once the cause clears."

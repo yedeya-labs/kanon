@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# lane-check: the permanent rules for an adopter's Kanon lane callers (plan 0001 §6).
+#
+# Run from the root of the adopter's checkout. Reads Kanon's own lane files from KANON_ROOT
+# (the action's directory, ../.., which is Kanon at the tag the adopter pinned), so every
+# rule about what a lane declares is read from the lane itself and never restated here.
+#
+# Parses YAML with `yq` (mikefarah v4, preinstalled on GitHub's hosted runners; decision 6)
+# into JSON, and checks it with `jq`. Prints one `::error` per violation and exits 1 if
+# there is any; exits 2 when it cannot run at all.
+#
+# ENV  KANON_ROOT   Kanon's tree (default: this script's ../..)
+#      ACTION_REF   the ref this action was called at; when it is an exact version, every
+#                   Kanon reference in the adopter's .github/ must name the same one
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KANON_ROOT="${KANON_ROOT:-$HERE/../..}"
+ACTION_REF="${ACTION_REF:-}"
+SPINE=agent-lane
+HOOK=.github/actions/project-setup/action.yml
+REGISTER=docs/qa/agent-identities.md
+
+die() { echo "::error title=lane-check::$*"; exit 2; }
+command -v yq >/dev/null 2>&1 || die "needs yq (mikefarah v4) on PATH; GitHub's hosted runners have it"
+command -v jq >/dev/null 2>&1 || die "needs jq on PATH"
+[ -d .github/workflows ] || die "run it from the root of the adopter's checkout: there is no .github/workflows here"
+[ -f "$KANON_ROOT/.github/workflows/$SPINE.yml" ] || die "Kanon's lanes are not at $KANON_ROOT"
+
+ERRORS=0
+fail() { # file, message
+  echo "::error file=$1,title=lane-check::$2"
+  ERRORS=$((ERRORS + 1))
+}
+json() { yq -o=json '.' "$1" 2>/dev/null; }
+
+# ── Every Kanon reference under .github/ names one exact version ────────────────────────
+# Comments are skipped: a commented-out example is not a pin.
+REFS="$(find .github -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 \
+  | xargs -0 grep -hE 'yedeya-labs/kanon/' 2>/dev/null \
+  | grep -vE '^[[:space:]]*#' \
+  | grep -oE 'yedeya-labs/kanon/[^@[:space:]]+@[^[:space:]"'"'"']+' || true)"
+TAGS="$(printf '%s\n' "$REFS" | sed -nE 's/.*@//p' | sort -u)"
+for tag in $TAGS; do
+  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || fail .github "a Kanon reference pins '$tag', not an exact version vX.Y.Z (K-ADOPT-11)"
+done
+if [ "$(printf '%s\n' "$TAGS" | grep -c .)" -gt 1 ]; then
+  fail .github "Kanon references pin $(printf '%s\n' "$TAGS" | grep . | paste -sd, -): every caller, action and lane must pin one version"
+fi
+if [[ "$ACTION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ -n "$TAGS" ] && [ "$TAGS" != "$ACTION_REF" ]; then
+  fail .github "lane-check runs at $ACTION_REF, but the Kanon references pin $(printf '%s\n' "$TAGS" | paste -sd, -)"
+fi
+
+# ── The callers ─────────────────────────────────────────────────────────────────────────
+level() { case "$1" in write) echo 2 ;; read) echo 1 ;; *) echo 0 ;; esac; }
+CALLERS=0
+ROLES=""
+for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+  [ -f "$f" ] || continue
+  doc="$(json "$f")" || { fail "$f" "is not valid YAML"; continue; }
+  lanes="$(jq -r '[.jobs // {} | .[] | .uses // empty | strings
+    | capture("^yedeya-labs/kanon/\\.github/workflows/(?<lane>[A-Za-z0-9_.-]+)\\.ya?ml@").lane] | .[]' <<<"$doc")"
+  # The spine is called by lanes that have not moved yet; it is not a lane, and its
+  # callers are not trigger-only. Only a call to a LANE makes a file a caller.
+  lane="$(printf '%s\n' "$lanes" | grep -vx "$SPINE" | grep . | head -1 || true)"
+  [ -n "$lane" ] || continue
+  CALLERS=$((CALLERS + 1))
+  lane_file="$KANON_ROOT/.github/workflows/$lane.yml"
+  if [ ! -f "$lane_file" ]; then
+    fail "$f" "calls Kanon lane '$lane', which this Kanon version does not ship"
+    continue
+  fi
+  lane_doc="$(json "$lane_file")" || die "Kanon's $lane.yml does not parse"
+
+  # Only `on`, `permissions` and one job (and a `name`). No `concurrency`: the lane holds
+  # its own group, and the same group on the caller would deadlock the two (decision 11).
+  extra="$(jq -r 'keys - ["name","on","permissions","jobs"] | join(", ")' <<<"$doc")"
+  [ -z "$extra" ] || fail "$f" "a lane caller holds only name, on, permissions and one job; it also has: $extra"
+  njobs="$(jq '.jobs | length' <<<"$doc")"
+  [ "$njobs" = 1 ] || fail "$f" "a lane caller has exactly one job, not $njobs"
+  job="$(jq -c '.jobs | to_entries[0].value' <<<"$doc")"
+  extra="$(jq -r 'keys - ["name","uses","with","secrets","permissions"] | join(", ")' <<<"$job")"
+  [ -z "$extra" ] || fail "$f" "the calling job holds only uses, with, secrets and permissions; it also has: $extra"
+
+  # `with:` only passes the caller's own inputs through, by the same name.
+  declared="$(jq -c '.on.workflow_call.inputs // {} | keys' <<<"$lane_doc")"
+  while IFS=$'\t' read -r k v; do
+    [ -n "$k" ] || continue
+    jq -e --arg k "$k" 'index($k) != null' <<<"$declared" >/dev/null \
+      || fail "$f" "passes \`$k\`, which the Kanon lane $lane does not declare"
+    [[ "$v" =~ ^\$\{\{[[:space:]]*inputs\.${k}[[:space:]]*\}\}$ ]] \
+      || fail "$f" "passes \`$k: $v\`; a caller only passes its own input through, as \`\${{ inputs.$k }}\` (ADR 0002)"
+  done < <(jq -r '.with // {} | to_entries[] | [.key, (.value | tostring)] | @tsv' <<<"$job")
+
+  # Secrets: exactly the lane's, by their fixed names, each mapped explicitly.
+  if [ "$(jq -r '.secrets | type' <<<"$job")" != object ]; then
+    fail "$f" "maps no secrets explicitly (\`secrets: inherit\` would hand every secret to Kanon's code; plan 0001 decision 7)"
+  else
+    want="$(jq -r '.on.workflow_call.secrets // {} | keys | sort | join(",")' <<<"$lane_doc")"
+    got="$(jq -r '.secrets | keys | sort | join(",")' <<<"$job")"
+    [ "$want" = "$got" ] || fail "$f" "maps secrets [$got]; the Kanon lane $lane takes exactly [$want]"
+    while IFS=$'\t' read -r k v; do
+      [ -n "$k" ] || continue
+      [[ "$v" =~ ^\$\{\{[[:space:]]*secrets\.[A-Za-z0-9_]+[[:space:]]*\}\}$ ]] \
+        || fail "$f" "maps \`$k\` to \`$v\`; map each one to a single repository secret"
+    done < <(jq -r '.secrets | to_entries[] | [.key, (.value | tostring)] | @tsv' <<<"$job")
+    for s in $(jq -r '.on.workflow_call.secrets // {} | keys[] | select(endswith("_APP_ID")) | sub("_APP_ID$"; "")' <<<"$lane_doc"); do
+      ROLES="$ROLES $(printf '%s' "${s:0:1}")$(printf '%s' "${s:1}" | tr '[:upper:]' '[:lower:]')"
+    done
+  fi
+
+  # The permissions ceiling: the calling job must grant at least what the lane declares.
+  perms="$(jq -c 'if (.jobs | to_entries[0].value.permissions) != null then .jobs | to_entries[0].value.permissions else .permissions end' <<<"$doc")"
+  if [ "$(jq -r 'type' <<<"$perms")" != object ]; then
+    fail "$f" "grants no explicit permissions; the calling job's \`permissions:\` is the lane's ceiling (plan 0001 §3)"
+  else
+    while IFS=$'\t' read -r scope need; do
+      [ -n "$scope" ] || continue
+      have="$(jq -r --arg s "$scope" '.[$s] // "none"' <<<"$perms")"
+      [ "$(level "$have")" -ge "$(level "$need")" ] \
+        || fail "$f" "grants $scope: $have; the Kanon lane $lane needs $scope: $need"
+    done < <(jq -r '.permissions // {} | to_entries[] | [.key, .value] | @tsv' <<<"$lane_doc")
+  fi
+done
+
+[ "$CALLERS" -gt 0 ] || fail .github/workflows "no workflow calls a Kanon lane (yedeya-labs/kanon/.github/workflows/<lane>.yml@vX.Y.Z)"
+
+# ── The project-setup hook ──────────────────────────────────────────────────────────────
+if [ ! -f "$HOOK" ]; then
+  fail "$HOOK" "the project-setup hook is missing; every lane that checks out calls it (plan 0001 §5)"
+else
+  hook="$(json "$HOOK")" || fail "$HOOK" "is not valid YAML"
+  spine="$(json "$KANON_ROOT/.github/workflows/$SPINE.yml")"
+  # The inputs Kanon passes the hook are read from the spine's own call to it.
+  for k in $(jq -r '[.jobs[].steps[]? | select(.uses == "./.github/actions/project-setup") | .with // {} | keys[]] | unique | .[]' <<<"$spine"); do
+    jq -e --arg k "$k" '.inputs // {} | has($k)' <<<"$hook" >/dev/null \
+      || fail "$HOOK" "does not declare the input \`$k\`, which Kanon's lanes pass it"
+  done
+  [ "$(jq -r '.runs.using // ""' <<<"$hook")" = composite ] || fail "$HOOK" "must be a composite action"
+fi
+
+# ── App slugs: every role a caller's lane runs as has one row in the register ──────────
+for role in $(printf '%s\n' $ROLES | sort -u); do
+  if [ ! -f "$REGISTER" ]; then
+    fail "$REGISTER" "the App register is missing (K-LAYOUT-6); the lanes read the $role's App slug from it"
+    break
+  fi
+  if ! out="$(awk -v role="$role" -f "$HERE/app-register.awk" "$REGISTER" 2>&1)"; then
+    fail "$REGISTER" "$out"
+  fi
+done
+
+# ── The Dependabot entry that proposes Kanon upgrades (K-ADOPT-11) ─────────────────────
+DEP=.github/dependabot.yml
+if [ ! -f "$DEP" ]; then
+  fail "$DEP" "is missing; it holds the entry that proposes Kanon upgrades (K-ADOPT-11)"
+else
+  dep="$(json "$DEP")" || fail "$DEP" "is not valid YAML"
+  ok="$(jq -r '
+    [ .updates[]? | select(."package-ecosystem" == "github-actions")
+      | select(((.directory // "") == "/") or ((.directories // []) | index("/") != null))
+      | select(((.groups // {}) | to_entries | any(.value.patterns // [] | index("yedeya-labs/kanon*") != null)))
+      | select((."commit-message".prefix // "") == "ci")
+      | select((.allow == null) or (.allow | any((."dependency-name" // "") | startswith("yedeya-labs/kanon"))))
+      | select((.cooldown == null) or ((.cooldown.exclude // []) | index("yedeya-labs/kanon*") != null))
+    ] | length' <<<"$dep")"
+  [ "${ok:-0}" -gt 0 ] || fail "$DEP" "has no github-actions entry for \`/\` that groups yedeya-labs/kanon*, prefixes its commits \`ci\`, and leaves Kanon out of any cooldown (K-ADOPT-11)"
+fi
+
+if [ "$ERRORS" -gt 0 ]; then
+  echo "lane-check: $ERRORS problem(s) in $CALLERS lane caller(s)"
+  exit 1
+fi
+echo "lane-check: $CALLERS lane caller(s) pass"

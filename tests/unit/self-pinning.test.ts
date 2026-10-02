@@ -19,7 +19,14 @@ const files = [
 // The one exception, with its reason in the file: the release caller calls the reusable
 // release workflow at job level, which runs only on main, so a `$/` that failed there would
 // first fail a release. It moves to `$/` once a job-level `$/` call is proven on a PR.
-const EXEMPT = new Set(['.github/workflows/release-please.yml: ./.github/workflows/release.yml']);
+//
+// And the hook (plan 0001 §5): the spine calls the ADOPTER's project-setup hook, which is the
+// adopter's code in the adopter's checkout. `./` is exactly right for it, and the only form
+// that reaches it.
+const EXEMPT = new Set([
+  '.github/workflows/agent-lane.yml: ./.github/actions/project-setup',
+  '.github/workflows/release-please.yml: ./.github/workflows/release.yml',
+]);
 
 type Node = { uses?: unknown; steps?: Node[]; jobs?: Record<string, Node>; runs?: { steps?: Node[] } };
 const usesOf = (file: string): string[] => {

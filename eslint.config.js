@@ -11,10 +11,11 @@ export default tseslint.config(
     },
   },
   {
-    // The agent-lane blocks' scripts were moved from the reference adopter, which doesn't
-    // type-check its scripts, so each opts out with a described `@ts-nocheck` until it is
-    // typed (ADR 0009: a move changes no line it doesn't have to).
-    files: ['actions/agent-*/*.mjs'],
+    // The agent-lane blocks' scripts and the lane resolver the tests use were moved from the
+    // reference adopter, which doesn't type-check its scripts, so each opts out with a
+    // described `@ts-nocheck` until it is typed (ADR 0009: a move changes no line it doesn't
+    // have to).
+    files: ['actions/agent-*/*.mjs', 'tests/unit/helpers/agent-lanes.mjs'],
     rules: { '@typescript-eslint/ban-ts-comment': ['error', { 'ts-nocheck': 'allow-with-description' }] },
   },
 );

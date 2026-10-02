@@ -1,0 +1,775 @@
+# QA pipeline — Agent 2 (the Implementer), MODE: revise. RA-1077. A Kanon lane (plan 0001,
+# step 2).
+#
+# Re-invokes the implementer on HIS OWN open PR when the Reviewer requests changes.
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:`
+# this file at an exact Kanon tag, passes `pr_number` and `reset` through, and maps the
+# three secrets by name (never `secrets: inherit`). The `github` context in a called
+# workflow is the caller's, so every `github.event` read below sees the triggering event
+# exactly as it did when this file held the triggers itself.
+#
+# ── THE GAP THIS CLOSES ─────────────────────────────────────────────────────
+# `agent-implement.yml` fires on `issues: [labeled]` and `workflow_dispatch`.
+# Nothing re-invoked it on a review, so a CHANGES_REQUESTED on an implementer's
+# PR sat until a human dispatched by hand.
+#
+# Found on the pilot: PR RA-1057 was reviewed at 12:57 and did not move for six
+# hours, while THREE detectors each reported the project healthy —
+# `agent-implement` never fired (no trigger), the reconciler said "WIP cap
+# reached (1/1)" hourly, and the dispatch sweep saw `has-pr` and correctly
+# treated it as not-actionable. Three correct components describing a deadlocked
+# project as a normal one.
+#
+# Same "nothing re-fires" shape as RA-378 and RA-912, and the exact gap RA-966/RA-968
+# closed for THE LEAD. Briefs got a revise mode; code did not.
+#
+# ── WHY A CODE PR IS NOT A BRIEF ────────────────────────────────────────────
+# The brief case is prose: the only signal is the review. A code PR also has CI,
+# and a RED CHECK is a different instruction from a review comment — fixing the
+# review while the build is broken produces a second red PR. So this acts on a
+# changes-request and hands the agent BOTH signals, telling it which to read
+# first.
+name: Implement (Implementer) — revise
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#   pull_request_review: [submitted]
+#   pull_request: [labeled]       — the re-delivery path, below
+#   workflow_dispatch             — inputs `pr_number` (required) and `reset` (boolean, default false)
+#
+# THE RE-DELIVERY PATH (RA-1524). `pull_request_review` fires ONCE and is gone; if
+# this workflow does not run for it — a cap, an outage, a queue drop — nothing
+# re-fires the implementer and the PR parks on an unanswered changes-request. The
+# reconciler sees that hourly (`isReviewBlocked`, RA-1081) and previously could only
+# print a note asking a human to check.
+#
+# A LABEL, NOT A DISPATCH, for the same reason as everywhere else in this pipeline:
+# the Lead holds `Actions: No access` for write deliberately (the App register's
+# footnote), and RA-1281 is what reaching for `gh workflow run` anyway cost. The Explorer's
+# remedy was to gain a label trigger; this is the same move for the implementer.
+#
+# `agent:revise` is its OWN marker rather than a churn of `agent:implement`, which
+# `agent-review.yml` accepts as a review trigger — churning that would fire a review
+# as a side effect of asking for a revision.
+on:
+  workflow_call:
+    inputs:
+      # The caller's `workflow_dispatch` inputs, passed through. Empty on the other two
+      # triggers, which carry no inputs, so neither is required here. `reset` is a STRING:
+      # a boolean `workflow_call` input refuses the empty value those triggers pass
+      # ("Unexpected value ''"), and the filter compares it against 'true' either way.
+      pr_number:
+        description: PR to revise
+        required: false
+        type: string
+        default: ""
+      reset:
+        description: >-
+          Clear the round cap for this run. Use when the developer has resolved
+          the disagreement the cap escalated — that is a new instruction, not a
+          third iteration of the same argument. Authorises exactly one revision.
+        required: false
+        type: string
+        default: "false"
+    secrets:
+      IMPLEMENTER_APP_ID:
+        required: true
+      IMPLEMENTER_APP_PRIVATE_KEY:
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+concurrency:
+  # Never two revisions of one PR at once: both would read the same review and
+  # push conflicting commits to the same branch.
+  group: agent-implement-revise-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
+# ceiling and must grant at least this, or the run fails to start; `lane-check` fails a
+# caller that grants less.
+permissions:
+  contents: read
+  pull-requests: read
+  # `gh pr view --json comments` and the round count read Issues. A permissions
+  # block sets every unlisted scope to `none`, and without this the filter's reads
+  # return empty on this private repo — which reads as "no prior rounds" and would
+  # let the cap never fire. Third occurrence of that shape in this repo (RA-957).
+  issues: read
+
+jobs:
+  # SERVICE CONTAINERS START BEFORE A JOB'S FIRST STEP, and this trigger is
+  # repo-wide. With the filter in the same job as the database, every review in the
+  # repo provisioned Postgres in order to decide it had nothing to do — measured
+  # over the last 60 PRs, 91 review submissions, of which ~54% would skip.
+  #
+  # So the cheap decision lives in its own job with no services, and the expensive
+  # job is gated on its output. Same split as agent-explore.yml's gate/explore.
+  filter:
+    # THE MARKER GATE IS ON THE JOB, NOT ONLY IN THE SCRIPT (RA-1592 review).
+    #
+    # An in-script skip exits 0, so the RUN concludes `success` — and
+    # `reviseRecovery`'s only bound is "does a run exist for this head SHA". Every
+    # implement PR gets `agent:implement` + `review:please` at open and
+    # `agent:reviewer` on the first review, all on the SAME head the first
+    # changes-request lands on. So the trigger this workflow gained would have
+    # manufactured a run on exactly the head the recovery exists for, and suppressed
+    # it — the lane it could not recover being the one it was built for (RA-1057).
+    #
+    # A false job-level `if` concludes the run `skipped`, which `reviseRunsFor`
+    # discards. Verified shape, not assumed: `agent-review.yml` produces it from the
+    # same construct — 14 of its last 30 runs are `skipped`.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.label.name == 'agent:revise'
+    runs-on: ubuntu-latest
+    # Bounds a hang (RA-1336). Actions' default cap is 360m, so a wedged agent
+    # burned six hours and left its issue looking mid-flight. Sized at ~3x the
+    # longest real run measured on this workflow, so it never truncates work.
+    timeout-minutes: 10
+    outputs:
+      act: ${{ steps.filter.outputs.act }}
+      pr: ${{ steps.filter.outputs.pr }}
+      branch: ${{ steps.filter.outputs.branch }}
+      round: ${{ steps.filter.outputs.round }}
+      reset: ${{ steps.filter.outputs.reset }}
+      # What the round record reads at the end of the run (RA-1981): the head and the
+      # implementer's marker count BEFORE the agent ran, so "did it push" and "did it
+      # leave a marker" are comparisons rather than guesses.
+      head_sha: ${{ steps.filter.outputs.head_sha }}
+      marked: ${{ steps.filter.outputs.marked }}
+      # The login the register gave, which the round record filters on.
+      login: ${{ steps.filter.outputs.login }}
+      mandate: ${{ steps.mandate.outputs.text }}
+    steps:
+      - name: Should this review be acted on?
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # The login is the App register's (see `read_login`), read once per run.
+          # `gh pr view --json author` returns `app/<slug>`; the reviews API
+          # returns `<slug>[bot]`; `gh issue view --json comments` returns the
+          # bare slug. RA-1007 was exactly this, and cost two days of inert runs.
+          ROLE: Implementer
+          REGISTER_AWK: |
+            # Reads the App register (docs/qa/agent-identities.md, K-LAYOUT-6) and prints the App slug of
+            # one role, given as `-v role=<Role>`. Fails, with the reason on stderr, unless there is
+            # exactly one table headed `Role | App slug` outside a fenced block, exactly one row for the
+            # role, and the slug is in backticks (optionally bold) and spelled as GitHub derives slugs.
+            # The revise lanes carry this program verbatim in their filter steps, and
+            # tests/unit/lane-check.test.ts holds every copy to this file.
+            function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+            function unbold(s) {
+              s = trim(s)
+              if (s ~ /^\*\*.*\*\*$/ || s ~ /^__.*__$/) s = trim(substr(s, 3, length(s) - 4))
+              return s
+            }
+            /^[ \t]*(```|~~~)/ { fenced = !fenced; intable = 0; next }
+            fenced { next }
+            /^[ \t]*\|/ {
+              split($0, c, "|")
+              if (!intable) {
+                if (trim(c[2]) == "Role" && trim(c[3]) == "App slug") { tables++; intable = 1 }
+                next
+              }
+              if (trim(c[2]) ~ /^:?-+:?$/) next
+              if (unbold(c[2]) == role) {
+                rows++
+                slug = unbold(c[3])
+                slug = (slug ~ /^`[^`]*`$/) ? substr(slug, 2, length(slug) - 2) : ""
+              }
+              next
+            }
+            { intable = 0 }
+            END {
+              if (tables != 1) { print "docs/qa/agent-identities.md has " tables + 0 " tables headed | Role | App slug |, not one" > "/dev/stderr"; exit 1 }
+              if (rows != 1) { print "docs/qa/agent-identities.md lists the role " role " " rows + 0 " times, not once" > "/dev/stderr"; exit 1 }
+              if (slug !~ /^[a-z0-9]+(-[a-z0-9]+)*$/) { print "docs/qa/agent-identities.md gives the role " role " no App slug in backticks" > "/dev/stderr"; exit 1 }
+              print slug
+            }
+          PR: ${{ github.event.pull_request.number || inputs.pr_number }}
+          STATE: ${{ github.event.review.state }}
+          IS_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+          # A label event carries no review payload, so the standing verdict is read
+          # from the PR instead of trusted from the event (RA-1524).
+          IS_LABEL: ${{ github.event_name == 'pull_request' }}
+          LABEL_ADDED: ${{ github.event.label.name }}
+          REVISE_LABEL: agent:revise
+          RESET: ${{ inputs.reset }}
+        run: |
+          set -euo pipefail
+          skip() { echo "act=false" >> "$GITHUB_OUTPUT"; echo "→ skipped ($1)"; echo "Skipped: $1" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+
+          # A COMMENT verdict carrying an approve (RA-378) is not a revision request,
+          # and neither is an APPROVE. Only an explicit changes-request is.
+          #
+          # THREE ENTRY POINTS, ONE QUESTION (RA-1524). A `pull_request_review` carries
+          # the verdict in its payload; a dispatch asserts it by hand; a `labeled`
+          # event carries neither, so the verdict is READ FROM THE PR — which is
+          # stricter than the event, not looser: it asks whether a changes-request is
+          # STANDING on the current head, so a label churn cannot re-fire against a
+          # review the implementer has already answered with a push.
+          if [ "${IS_LABEL:-}" = "true" ]; then
+            # REDUNDANT IN PRODUCTION and deliberately kept: the job-level `if` above
+            # already admits only the marker, and it must, because only a job gate
+            # produces the `skipped` conclusion the reconciler reads. This is what
+            # keeps the STEP correct if that gate is ever loosened, and it is the
+            # path the step-level test exercises.
+            #
+            # Checked BEFORE the first API call, because every label event on the PR
+            # reaches this step and most of them are not the marker.
+            [ "${LABEL_ADDED:-}" = "${REVISE_LABEL:-agent:revise}" ] || skip "label '${LABEL_ADDED:-}' is not ${REVISE_LABEL:-agent:revise}"
+          elif [ "$IS_DISPATCH" != "true" ] && [ "$STATE" != "changes_requested" ]; then
+            skip "review state is '$STATE', not changes_requested"
+          fi
+
+          META="$(gh pr view "$PR" --repo "$REPO" --json author,state,headRefName,baseRefName,headRefOid,labels)"
+          AUTHOR="$(printf '%s' "$META" | jq -r '.author.login')"
+          PRSTATE="$(printf '%s' "$META" | jq -r '.state')"
+          LABELS="$(printf '%s' "$META" | jq -r '[.labels[].name] | join(",")')"
+          HEAD_SHA="$(printf '%s' "$META" | jq -r '.headRefOid // ""')"
+          BASE_REF="$(printf '%s' "$META" | jq -r '.baseRefName // ""')"
+
+          # ── CONTENT, NOT SHA (RA-1841) ───────────────────────────────────────────
+          #
+          # Both reads below used to ask whether the HEAD SHA had moved. GitHub's
+          # "Update branch" button moves it while changing nothing a reviewer read,
+          # and on PR RA-1822 that cost both halves at once: the standing
+          # changes-request was DISCARDED (no verdict sits on the new head) and the
+          # discarded round still COUNTED (`REQUESTED` was SHA-independent), so at 3
+          # requests and 0 markers the cap stopped a PR the implementer had never once
+          # been dispatched on. Its three heads are the same patch — one hunk header
+          # and three context lines of base churn apart.
+          #
+          # The signal is the PR's EFFECTIVE PATCH at a commit, normalised so base
+          # churn cannot move it: `index` blob oids, hunk headers and context lines
+          # are dropped, leaving the +/- lines and the file headers. That is what
+          # `git patch-id` is for and it is not reachable here — this job has NO
+          # CHECKOUT on purpose, so an unrelated review costs Actions seconds rather
+          # than a minted token and a clone. The diff comes over the compare API
+          # instead, three-dot so GitHub resolves the merge base and a commit the base
+          # has since moved past still yields the patch as it was reviewed.
+          #
+          # FAILS TOWARD OVER-COUNTING. If the diff cannot be read — a deleted commit,
+          # a compare truncated at 300 files, a 404 — the fingerprint degrades to the
+          # SHA itself, which is exactly the pre-RA-1841 behaviour: every head distinct,
+          # every changes-request its own round. The cap is deliberately biased that
+          # way (RA-969, RA-1099) and nothing here may LOWER it on a guess.
+          FP_CACHE="$(mktemp -d)"
+
+          # THE LOGIN COMES FROM THE APP REGISTER, NOT FROM THIS FILE (plan 0001 §5,
+          # `K-LAYOUT-6`). A Kanon lane cannot name an adopter's App, so the role's slug is
+          # read from `docs/qa/agent-identities.md` on the DEFAULT branch, over the API (this
+          # job has no checkout): a PR cannot choose the login it is judged by. Read only
+          # after every check the event alone decides, so a review this lane ignores costs
+          # no read. A missing register, row or slug FAILS the job by name: an unknown login
+          # would otherwise read as "not the author" and skip every review, silently.
+          # `REGISTER_AWK` is `actions/lane-check/app-register.awk`, verbatim.
+          read_login() {
+            local text err
+            err="$(mktemp)"
+            text="$(gh api "repos/$REPO/contents/docs/qa/agent-identities.md" -H "Accept: application/vnd.github.raw" 2>"$err")" \
+              || { echo "::error title=App register::could not read docs/qa/agent-identities.md from the default branch of $REPO: $(cat "$err")"; exit 1; }
+            ROLE_LOGIN="$(printf '%s\n' "$text" | awk -v role="$1" "$REGISTER_AWK" 2>"$err")" \
+              || { echo "::error title=App register::$(cat "$err")"; exit 1; }
+          }
+          hash_stdin() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
+          fingerprint() {
+            local sha="$1" cache diff_text
+            [ -n "$sha" ] || { printf 'sha:unknown'; return; }
+            cache="$FP_CACHE/$sha"
+            if [ ! -f "$cache" ]; then
+              if diff_text="$(gh api "repos/$REPO/compare/$BASE_REF...$sha" \
+                                -H "Accept: application/vnd.github.v3.diff" 2>/dev/null)" \
+                 && [ -n "$diff_text" ]; then
+                printf '%s\n' "$diff_text" \
+                  | awk '/^(index |@@| )/ { next } NF == 0 { next } { print }' \
+                  | hash_stdin > "$cache"
+              else
+                printf 'sha:%s\n' "$sha" > "$cache"
+              fi
+            fi
+            cat "$cache"
+          }
+
+          if [ "${IS_LABEL:-}" = "true" ]; then
+            # A label event carries no review payload, so the standing verdict is READ
+            # FROM THE PR — and it is read against the head's CONTENT, so a rebase that
+            # answered nothing cannot discard it while a push that answered it still
+            # does. `last` wins, as before: an APPROVE over the same content supersedes
+            # an earlier changes-request.
+            HEAD_FP="$(fingerprint "$HEAD_SHA")"
+            DECIDING="$(gh pr view "$PR" --repo "$REPO" --json reviews \
+              --jq '.reviews[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED") | "\(.commit.oid // "")\t\(.state)"')"
+            VERDICT=""
+            while IFS=$'\t' read -r R_SHA R_STATE; do
+              [ -n "$R_STATE" ] || continue
+              # A review carrying no commit decides nothing, exactly as the `.commit.oid
+              # == $HEAD_SHA` jq it replaces: two unknowns are not a match.
+              if [ -n "$R_SHA" ] \
+                 && { [ "$R_SHA" = "$HEAD_SHA" ] || [ "$(fingerprint "$R_SHA")" = "$HEAD_FP" ]; }; then
+                VERDICT="$R_STATE"
+              fi
+            done <<< "$DECIDING"
+            [ "$VERDICT" = "CHANGES_REQUESTED" ] \
+              || skip "no changes-request stands on ${HEAD_SHA:0:7} (deciding verdict: '${VERDICT:-none}')"
+          fi
+
+          [ "$PRSTATE" = "OPEN" ] || skip "PR #$PR is $PRSTATE"
+
+          read_login "$ROLE"
+          IMPL_LOGIN="$ROLE_LOGIN"
+
+          # NORMALISE: one identity, three spellings across three endpoints (RA-1007).
+          AUTHOR_SLUG="${AUTHOR#app/}"
+          AUTHOR_SLUG="${AUTHOR_SLUG%\[bot\]}"
+          [ "$AUTHOR_SLUG" = "$IMPL_LOGIN" ] || skip "PR #$PR is authored by '$AUTHOR' (slug '$AUTHOR_SLUG'), not $IMPL_LOGIN"
+
+          # Scoped to the label that CLAIMS this pipeline produced it. A human PR
+          # never claimed an implementer wrote it, so there is nothing here to fix.
+          case ",$LABELS," in
+            *,agent:implement,*|*,agent:triage,*) ;;
+            *) skip "PR #$PR carries neither agent:implement nor agent:triage (labels: ${LABELS:-none})" ;;
+          esac
+
+          # Bound the loop from the Implementer's own marker comments — no stored state, and
+          # it survives a re-run because the world already contains the evidence.
+          # THE IMPLEMENTER'S OWN markers, not anyone's. The comment claimed this and the
+          # jq did not: a human quoting the marker while discussing the cap — or
+          # this PR's own review doing so — would count as a round and stop the loop
+          # early. `gh issue view --json comments` returns the BARE slug, which is
+          # the third of the three spellings RA-1007 is about.
+          # `gh` has NO --arg passthrough — it would read `--arg` as the jq
+          # expression — so the login is interpolated into the filter instead. It
+          # comes from `env:`, not from the event, so there is nothing to inject.
+          # ── COUNTED SO THE AGENT CANNOT EVADE IT (RA-969, RA-1099) ────────────
+          #
+          # The marker count is author-filtered and correct as far as it goes, and it
+          # goes only as far as the agent cooperates. Two ways it under-counts, and
+          # both leave the cap unable to bind:
+          #
+          #   • the round pushed and ended without the marker at all — max-turns, a
+          #     failed `gh`, the model not doing the last step (RA-969);
+          #   • the marker landed somewhere this query cannot see. `--json comments`
+          #     is the GraphQL IssueComment connection: TOP-LEVEL comments only, no
+          #     review bodies and no thread replies — and the prompt's own wording
+          #     routes two exits to a "reply" (RA-1099).
+          #
+          # So the floor is the REVIEWER's count — which no agent behaviour changed
+          # when RA-969 wrote this, and which RA-1841 below qualifies: the floor is now the
+          # reviewer's DISTINCT FAULTED PATCHES, a number the agent moves by pushing
+          # content. A run that pushed and died without a marker is covered by the
+          # workflow's own round record (RA-1981) — see the note below and the step at
+          # the end of the `revise` job.
+          # Each CHANGES_REQUESTED is one round that was asked for. The triggering
+          # review is one of them, hence -1. Larger wins, which is `dispatch-sweep`'s
+          # login-OR-marker shape and its safety direction — biased toward
+          # over-counting, because stopping early costs a dispatch and stopping late
+          # costs an unbounded review->revise loop between two Opus agents.
+          #
+          # ── ONE ROUND IS ONE PATCH FAULTED, NOT ONE REVIEW (RA-1841) ─────────
+          #
+          # The -1 encodes "the triggering review is one of them" — i.e. every counted
+          # request is assumed to be a round the implementer was GIVEN. A raw count
+          # assumes it; it does not check it. On PR RA-1822 three changes-requests landed
+          # on three heads carrying one patch, so MARKED=0 / REQUESTED=3 reached the cap
+          # having dispatched the implementer zero times.
+          #
+          # So `REQUESTED` is the number of DISTINCT reviewed patches faulted. A round is
+          # then a thing the implementer did: new content, or a marker. Three requests
+          # against one unchanged patch are one round; three against three patches are
+          # still three, so the loop RA-969/RA-1099 closed stays closed. A round he spent
+          # DISAGREEING changes no content and is invisible here — and visible to
+          # MARKED, which is why the two counts are kept and the larger still wins.
+          #
+          # A RUN THAT PUSHED IS A ROUND EVEN IF THE AGENT DID NOT SURVIVE IT (RA-1981).
+          # MARKED alone only sees a round the agent lived to report: a run that pushes
+          # content-free (a `main` merge to clear a red check) and then crashes before
+          # commenting raised NEITHER count, the push re-fired a review, and repeated
+          # requests on that one patch never reached the cap — the automatic
+          # review -> revise -> push loop, unbounded. So the WORKFLOW now leaves the
+          # marker when the agent did not: `Record the round …` at the end of the
+          # `revise` job, which fires exactly when the head moved during the run and
+          # no new implementer marker appeared. A run that pushed nothing is not
+          # recorded — it re-fires no review, so there is no loop to bound, and a
+          # quota-capped run must not spend the developer's two rounds.
+          MARKED="$(gh pr view "$PR" --repo "$REPO" --json comments \
+            --jq "[.comments[] | select(((.author.login // \"\") | sub(\"^app/\";\"\") | sub(\"\\\\[bot\\\\]\$\";\"\")) == \"$IMPL_LOGIN\") | select(.body | contains(\"<!-- qa:implement-revise -->\"))] | length")"
+          CR_HEADS="$(gh pr view "$PR" --repo "$REPO" --json reviews \
+            --jq '[.reviews[] | select(.state == "CHANGES_REQUESTED")] | to_entries[] | "\(.key)\t\(.value.commit.oid // "")"')"
+          RAW=0
+          FPS=""
+          while IFS=$'\t' read -r R_IDX R_SHA; do
+            [ -n "$R_IDX" ] || continue
+            RAW=$((RAW + 1))
+            # A review with no commit on it is its own round: an unknown head must not
+            # collapse into another unknown head and silently lower the count.
+            if [ -n "$R_SHA" ]; then FP="$(fingerprint "$R_SHA")"; else FP="unknown:$R_IDX"; fi
+            FPS="$FPS$FP"$'\n'
+          done <<< "$CR_HEADS"
+          REQUESTED="$(printf '%s' "$FPS" | awk 'NF' | sort -u | wc -l | tr -d ' ')"
+          ROUNDS=$(( REQUESTED > 0 && REQUESTED - 1 > MARKED ? REQUESTED - 1 : MARKED ))
+          echo "rounds=$ROUNDS (markers=$MARKED, changes-requested=$REQUESTED distinct of $RAW)"
+
+          # `reset` is honoured only on a manual dispatch — a review event cannot set
+          # an input, so an automatic path can never clear its own cap (RA-1023).
+          if [ "$IS_DISPATCH" = "true" ] && [ "$RESET" = "true" ] && [ "$ROUNDS" -ge 2 ]; then
+            echo "::notice title=agent-implement-revise::Round cap CLEARED by explicit dispatch for PR #$PR ($ROUNDS prior revisions)."
+            echo "Round cap cleared by explicit dispatch — $ROUNDS prior revisions, one revision authorised." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$ROUNDS" -ge 2 ]; then
+            echo "::warning title=agent-implement-revise::PR #$PR has been through $ROUNDS revise round(s) — counted as the larger of the implementer's markers and the distinct patches faulted — and changes are still requested. Stopping — a disagreement that survives two rounds belongs with the developer, not another iteration. Re-dispatch with reset=true once it is resolved (RA-1023)."
+            skip "round cap reached ($ROUNDS)"
+          fi
+
+          echo "act=true" >> "$GITHUB_OUTPUT"
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+          echo "branch=$(printf '%s' "$META" | jq -r '.headRefName')" >> "$GITHUB_OUTPUT"
+          echo "round=$((ROUNDS + 1))" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "marked=$MARKED" >> "$GITHUB_OUTPUT"
+          echo "login=$IMPL_LOGIN" >> "$GITHUB_OUTPUT"
+          # The mandate branches on this. A gate that opens without telling the
+          # agent WHY sends him to re-read the review he already answered twice.
+          if [ "$IS_DISPATCH" = "true" ] && [ "$RESET" = "true" ]; then
+            echo "reset=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "reset=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "→ revising #$PR (round $((ROUNDS + 1)))"
+
+      # THE GATE IS ONLY HALF OF IT (RA-1023, RA-1024). A reset run that receives the
+      # ordinary "the Reviewer requested changes" instructions is sent to re-read the
+      # review it already answered twice, and spends the one authorised revision
+      # doing it. That defect took four review rounds to get right in
+      # agent-lead-revise.yml, and this file reintroduced it by copying the
+      # skeleton without what the skeleton had learned.
+      - name: Compose the mandate
+        id: mandate
+        if: steps.filter.outputs.act == 'true'
+        env:
+          RESET: ${{ steps.filter.outputs.reset }}
+          PR: ${{ steps.filter.outputs.pr }}
+          ROUND: ${{ steps.filter.outputs.round }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          {
+            echo "text<<MANDATE_EOF"
+            if [ "$RESET" = "true" ]; then
+              cat <<EOF
+          THIS RUN IS APPLYING A DEVELOPER DECISION, NOT ITERATING ON A REVIEW. The
+          round cap was cleared explicitly because the developer RESOLVED the
+          disagreement the cap escalated. That is a new instruction, not a third
+          iteration of the same argument — do not re-litigate it, and do not re-read
+          the review as though it were unanswered.
+
+          READ THE DEVELOPER'S DECISION FIRST. It is a PR ISSUE COMMENT — not a
+          review body, and not review line-comments:
+            gh pr view $PR --repo $REPO --json comments \
+              --jq '.comments[-8:][] | "--- \(.author.login):\n\(.body)"'
+
+          CHECK THE BUILD FIRST, even here. A red check is a different instruction
+          from a decision, and applying a decision on top of a broken build produces
+          a red PR and burns the one revision this reset authorised:
+            gh pr checks $PR --repo $REPO
+          If a required check is RED, fix that before applying the decision.
+
+          Apply it. If it contradicts a review finding you previously accepted, the
+          developer's decision wins and you say so in your comment.
+
+          The standing review may still hold findings the decision does not settle:
+            gh pr view $PR --repo $REPO --json reviews \
+              --jq '[.reviews[] | select(.state == "CHANGES_REQUESTED")] | last | .body'
+            The LATEST CHANGES-REQUEST, not merely the latest review (RA-1210). Reviews
+            accumulate, and the last is frequently not the one you were fired for: the
+            reviewer may post a COMMENT after his verdict — the playbook no longer
+            permits one as a verdict (RA-2299), but a standalone inline comment still
+            makes one, and 19 of his last 96 reviews were COMMENTED — or an APPROVE may
+            sit on an earlier commit. Revising against the wrong review answers findings
+            nobody raised and leaves the real ones untouched.
+            NOT the same as pinning to the review that TRIGGERED this run, which is what
+            RA-971 asks for and would need the event's review id threaded through. This is
+            the reachable approximation: identical unless a NEWER changes-request lands
+            between the trigger and the read, in which case reading the newer one is the
+            better answer anyway.
+          CHECK WHAT YOU GET BACK before acting on it — a reset below the cap is
+          permitted, so that can return an APPROVE or nothing at all (RA-971). If it is
+          not an unanswered changes-request, ignore it and work from the decision.
+          EOF
+            else
+              cat <<EOF
+          The Reviewer has reviewed your PR and requested changes. This is round $ROUND of
+          at most 2.
+
+          READ TWO THINGS, IN THIS ORDER.
+
+          1. THE CHECKS, because a red build changes what the review means:
+               gh pr checks $PR --repo $REPO
+             If a required check is RED, fix that FIRST. A review addressed on top of
+             a broken build produces a second red PR and a second round.
+
+          2. THE REVIEW, in full, and the line comments:
+               gh pr view $PR --repo $REPO --json reviews \
+                 --jq '[.reviews[] | select(.state == "CHANGES_REQUESTED")] | last | .body'
+               gh api repos/$REPO/pulls/$PR/comments
+          EOF
+            fi
+            echo "MANDATE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+
+  # THE SPINE LIVES IN `agent-lane.yml` (RA-2592, extending RA-2092) — token, checkout at the
+  # PR head, install, database, the action, red-run classification, the RA-2519 retry
+  # breadcrumbs, the telemetry-action restore and the cost row. What stays here is what
+  # makes this lane THIS lane: the trigger, the filter that admits a review, the mandate,
+  # the prompt, and the round record — which names the Implementer's login and marker.
+  revise:
+    needs: filter
+    if: needs.filter.outputs.act == 'true'
+    # Bounds a hang (RA-1336). Actions' default cap is 360m, so a wedged agent
+    # burned six hours and left its issue looking mid-flight.
+    #
+    # NO LONGER SIZED AT ~3x THE LONGEST RUN, which is what the line here used to say
+    # and what every other agent job still does. The implement lanes are sized against
+    # the TURN CAP instead (RA-2212): the cap must be what binds, so an exhausted run is
+    # the legible `max_turns` outcome RA-2207 reasons about rather than a quieter death
+    # on wall clock.
+    #
+    # WALL-CLOCK CEILING — 180 since RA-2212, matching `agent-implement.yml`. The ceiling
+    # is a function of the turn cap and both lanes carry the same cap, so different
+    # ceilings for one cap would be an asymmetry with no reason behind it — and per
+    # this pair's own guard, the lane that keeps the old number is the one nobody
+    # re-reads. This lane's median is 30 turns, so it is far less exposed; it moves
+    # for consistency rather than because it was measured to need it.
+    uses: $/.github/workflows/agent-lane.yml
+    with:
+      agent: implementer-revise
+      arm: implementer (revise) agent
+      timeout-minutes: 180
+      # The PR's own branch, with history: the agent pushes to it and merges `main` into
+      # it to clear a red check. The spine's blocks, the telemetry action among them, are
+      # `$/` references (RA-2697), so a branch cut before any of them existed still runs them.
+      ref: ${{ needs.filter.outputs.branch }}
+      fetch-depth: 0
+      # This lane never installed Chromium; converting it adds no install minute. The
+      # database stays (the default): RLS is dropped by a schema re-create, which is
+      # what the adopter's test setup exists to catch — the integration tier is meaningless
+      # without it. Only reached when there is work, never for a skip.
+      browsers: false
+      # Failures-only test and lint output (RA-2456) is the project-setup hook's, keyed on
+      # this lane's `agent` name (RA-2694) — the switch this lane set as a bare environment
+      # value before it was converted. See vitest.config.ts.
+      # The whole transcript in the job log (RA-2651), as the implement lane does. A revise
+      # run on PR RA-2677 ended `completed` at 123 turns with no push and no comment, the
+      # same silent stop as the implement arm, and left nothing to diagnose it from.
+      full-transcript: true
+      pr-number: ${{ needs.filter.outputs.pr }}
+      # The retry breadcrumbs (RA-2519) are the spine's. The reader that acts on them for
+      # this lane is `reviseRecovery` in the pipeline library's `lead-reconcile.mjs`.
+      prompt: |
+        You are the Implementer (Agent 2), in REVISE mode on PR
+        #${{ needs.filter.outputs.pr }}.
+
+        ${{ needs.filter.outputs.mandate }}
+
+        You are ALREADY ON THE PR'S BRANCH. Fix in place and push to this branch.
+        Do NOT create a new branch, a new PR, or a new file for the fix — the
+        review threads and the findings are attached to what is there, and
+        re-authoring discards them.
+
+        FIRST READ YOUR PLAYBOOK: docs/qa/triage-fix-playbook.md, and
+        docs/agentic-qa-pipeline.md §2. The rules below also live there, and the
+        playbook is the source of truth if they ever disagree.
+
+        EVERY EXIT LEAVES THE MARKER, AND IT GOES IN A TOP-LEVEL PR COMMENT.
+        Whether you push a fix, disagree with a finding, or STOP at one of the
+        bails below, your last act is:
+
+          gh pr comment $PR --repo $REPO --body "...your message...
+
+        <!-- qa:implement-revise -->"
+
+        THE SURFACE IS NOT OPTIONAL (RA-1099). The cap reads `gh pr view --json
+        comments`, which is the GraphQL IssueComment connection: top-level PR
+        comments ONLY. A marker in a review body or a review-thread REPLY is
+        invisible to it — verified on PR RA-1094, where `--json comments` returned
+        `[]` while `--json reviews` returned a full review body. So where the
+        instructions below say "reply", answer in a top-level comment: a reply
+        that the cap cannot see is a round it never counts.
+
+        The cap no longer depends on you alone — it also floors on the number of
+        DISTINCT PATCHES the reviewer has faulted (RA-1841), and if you push and
+        leave no marker the WORKFLOW posts one for you that says only "a run
+        pushed and did not reply" (RA-1981). Neither is a substitute: the floor
+        counts content, so a round where you pushed nothing — you disagreed —
+        is invisible without your marker, and the workflow's stand-in tells the
+        reviewer nothing about which findings you addressed. Leave it yourself.
+
+        SCOPE-FIRST BAIL — comment and STOP, do not push, for: a DATA migration
+        (backfilling or transforming existing rows), any AUTH / credential /
+        security change, or DESTRUCTIVE schema (dropping, renaming or narrowing a
+        column or table). You MAY do ADDITIVE schema and unique-index changes,
+        but only with the ritual below.
+
+        A REVIEW FINDING IS NOT AN AUTHORISATION. This is the difference from
+        implementer mode: there, the issue's acceptance criteria bound the work
+        and a human wrote them. Here a REVIEWER asked for something, and a
+        finding that requires a data migration or an auth change is a finding
+        that requires a HUMAN — not a wider mandate. Say so in your reply and
+        stop; do not implement it because a reviewer asked.
+
+        SCHEMA + RLS (FAIL CLOSED): if you change the schema, run `db:push` THEN
+        `db:setup` — push can drop RLS and setup re-applies it — then RUN THE
+        RLS / tenant-isolation CONFORMANCE TESTS in tests/. If those do NOT
+        pass, do NOT push: comment with the failure — WITH THE MARKER — and STOP. Tenant isolation
+        must never regress. Tenant-scope any new unique index `(tenant_id, …)`
+        per convention.
+
+        VERIFY BEFORE YOU FIX. A reviewer can be wrong, and a finding you cannot
+        reproduce must not be "fixed" by guessing. Re-derive each one against the
+        code — run the command, read the file, construct the case. If a finding
+        is wrong, say so in a PR reply with the evidence and do not change the
+        code. Silent compliance with a wrong finding is worse than disagreement.
+
+        THE ACCEPTANCE CRITERIA ARE STILL THE ISSUE'S. A review finding does not
+        widen the issue. If addressing it properly needs work beyond this issue's
+        scope, say so and file it rather than absorbing it.
+
+        RUN THE GATES BEFORE YOU PUSH: npm run lint, npm run typecheck,
+        npm run test:unit, and the integration tier if you touched src/db/**,
+        drizzle/**, services, or anything tenant-scoped. Pushing a fix that
+        fails a gate costs a whole review round to discover. Their output is
+        failures-only here (AGENT_QUIET): passing tests print nothing, so do
+        not add --reporter=verbose, and run any `npm run build` as
+        `(set -o pipefail; npm run build 2>&1 | tail -n 40)` so its exit code
+        survives the pipe.
+
+        WHEN YOU ARE DONE, comment on the PR with what you changed, what you
+        verified, and anything you DISAGREED with and why. The comment must
+        contain the marker <!-- qa:implement-revise --> on its own line — it is
+        how the round cap counts, and it must be present even if you changed
+        nothing, or the cap silently resets and the loop is unbounded.
+
+        You have no authority beyond this branch: no merging, no closing issues,
+        no labelling, no promoting a `[seed]` invariant to `[confirmed]`.
+      # TURN CAP — 300 since RA-2207, raised from 150. NOT A NUMBER TO TIDY.
+      #
+      # Both halves of project RA-1019's Issue C2 exhausted 150 and produced nothing:
+      # RA-1694 (contract) three times at ~$70 notional, RA-2167 (C1B, expand) once at
+      # $17.80 — and C1B is PURELY ADDITIVE, so the seam was not the problem. Two
+      # independent halves of one piece of work landing on exactly 150 is evidence
+      # about the CEILING, not about either half.
+      #
+      # A CAP IS A CEILING, NOT SPEND (RA-846): an unused turn costs nothing. RA-1781's
+      # telemetry sizes what this actually touches — a SUCCESSFUL implement run's
+      # median is 42 turns, and 3 of 25 runs (~12%) cap. So this changes nothing for
+      # the ~88% finishing near the median; it only affects the ~12% that today
+      # return zero value for $18-24 of consumed capacity (subscription pool, not a
+      # bill — RA-1781).
+      #
+      # ⚠️ 300 IS HEADROOM, NOT A MEASURED REQUIREMENT. Runs die AT the cap, so the
+      # distance to completion is unobserved. If a run caps at 300 the same reasoning
+      # does NOT justify 600 — the evidence has shifted back to the work being
+      # indivisible, and RA-1781's decomposition path is the answer.
+      #
+      # ⚠️ THIS COMMENT LIVES ABOVE `claude_args:`, NOT INSIDE IT. That key is a YAML
+      # LITERAL BLOCK, so a `#` line indented under it is CONTENT — it would be passed
+      # to the CLI as arguments. The first draft of RA-2207 did exactly that and
+      # `tests/unit/agent-telemetry.test.ts` caught it, because the telemetry step's
+      # copy of these args then no longer matched the agent's.
+      #
+      # Both lanes must agree and both copies of the args must match:
+      # `tests/unit/implement-turn-cap.test.ts` + the telemetry drift test.
+      claude_args: |
+        --model claude-opus-5
+        --effort high
+        --max-turns 300
+        --max-budget-usd 120
+        --fallback-model claude-opus-5-5
+        --allowedTools Read,Edit,Write,Bash,Grep,Glob
+        --exclude-dynamic-system-prompt-sections
+    secrets:
+      app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
+      app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  # ── A RUN THAT PUSHED IS A ROUND (RA-1981) ─────────────────────────────────────
+  #
+  # The cap is `max(distinct patches faulted − 1, MARKED)`, and MARKED counts a
+  # marker the AGENT writes as its last act. A run that dies first — max-turns, a
+  # crash, a timeout, a cancel — leaves none, and if it pushed a change the patch
+  # fingerprint normalises away (merging `main` to clear a red check, which the
+  # mandate tells it to look at first), it advanced neither count. The push fires a
+  # re-review, the re-review re-fires this workflow, and the cap never binds: an
+  # automatic loop between two Opus agents, the thing RA-969/RA-1099 closed.
+  #
+  # So the WORKFLOW leaves the marker when the agent did not, under the same App
+  # identity the round count filters on — and only when the run PUSHED: a run that
+  # changed nothing fires no review and cannot loop, and counting a quota-capped
+  # run that never started would spend the developer's two rounds on an outage.
+  # Both halves are comparisons against the filter's own reads (`head_sha`,
+  # `marked`), so this adds no state.
+  #
+  # The comment says what it is. The marker is also what a human reads on the PR,
+  # and a stand-in presented as the implementer's reply would be a lie about the
+  # review; nothing else reads `<!-- qa:implement-revise -->` (verified: only the
+  # two revise workflows' round counts and their tests do).
+  #
+  # A JOB OF ITS OWN SINCE RA-2592, because it names this lane's login and marker, which
+  # the spine must not, and a reusable workflow takes no steps from its caller. It reads
+  # the agent step's outcome through the spine's `outcome` output — job outputs survive
+  # a failed job — and runs on `always()` exactly as the step did. A fresh token as
+  # before: the spine's expired with its job, and it could not outlive a 180-minute run.
+  record-round:
+    needs: [filter, revise]
+    if: always() && needs.filter.outputs.act == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mint a fresh implementer token for the round record
+        id: round-app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
+          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+
+      - name: Record the round when the agent pushed and left no marker (RA-1981)
+        env:
+          GH_TOKEN: ${{ steps.round-app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.filter.outputs.pr }}
+          IMPL_LOGIN: ${{ needs.filter.outputs.login }}
+          MARKER: "<!-- qa:implement-revise -->"
+          BEFORE_SHA: ${{ needs.filter.outputs.head_sha }}
+          BEFORE_MARKED: ${{ needs.filter.outputs.marked }}
+          OUTCOME: ${{ needs.revise.outputs.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # FAILS LOUD. A swallowed read here is the gap reopening silently.
+          STATE="$(gh pr view "$PR" --repo "$REPO" --json headRefOid,comments)" || {
+            echo "::error title=revise round record::Could not read PR #$PR, so whether this run spent a round is UNRECORDED — the cap may under-count it (RA-1981)."
+            exit 1
+          }
+          AFTER_SHA="$(printf '%s' "$STATE" | jq -r '.headRefOid // ""')"
+          # An unknown starting head counts as moved: the cap is biased toward
+          # over-counting (RA-969), and nothing here may lower it on a guess.
+          if [ -n "${BEFORE_SHA:-}" ] && [ "$AFTER_SHA" = "$BEFORE_SHA" ]; then
+            echo "head unchanged at ${AFTER_SHA:0:7} — this run pushed nothing, fires no review, and spends no round"
+            exit 0
+          fi
+          NOW_MARKED="$(printf '%s' "$STATE" | jq --arg login "$IMPL_LOGIN" --arg m "$MARKER" \
+            '[.comments[] | select(((.author.login // "") | sub("^app/";"") | sub("\\[bot\\]$";"")) == $login) | select((.body // "") | contains($m))] | length')"
+          if [ "$NOW_MARKED" -gt "${BEFORE_MARKED:-0}" ]; then
+            echo "the implementer left its own marker ($BEFORE_MARKED -> $NOW_MARKED) — nothing to record"
+            exit 0
+          fi
+          gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s\n' \
+            "⚠️ **A revise run pushed to this branch and ended without replying** (agent step: \`${OUTCOME:-unknown}\`; head \`${BEFORE_SHA:0:7}\` → \`${AFTER_SHA:0:7}\`; $RUN_URL)." \
+            "" \
+            "This comment is the **workflow** recording that a revise round was spent, so the round cap still advances (RA-1981). It is **not** the implementer's answer to the review and says nothing about which findings were addressed — read the diff and the run." \
+            "" \
+            "$MARKER")"
+          echo "::notice title=revise round record::PR #$PR: the run pushed (${BEFORE_SHA:0:7} -> ${AFTER_SHA:0:7}) and left no marker, so the workflow recorded the round (RA-1981)."

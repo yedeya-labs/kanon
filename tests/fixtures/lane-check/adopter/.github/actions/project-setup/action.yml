@@ -1,0 +1,34 @@
+# A project-setup hook (plan 0001 §5) for a project with no database: Node and its install.
+name: Project setup
+description: The fixture adopter's setup for an agent lane.
+inputs:
+  lane:
+    description: The lane's telemetry agent name.
+    required: true
+  install:
+    description: "'true' runs npm ci."
+    default: "true"
+  database:
+    description: "'true' sets up the project's schema."
+    default: "false"
+  browsers:
+    description: "'true' installs a browser."
+    default: "false"
+  issue-number:
+    description: The issue the run was dispatched for.
+    default: ""
+  app-slug:
+    description: The minted App's slug.
+    default: ""
+  github-token:
+    description: The minted App token.
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 24
+    - if: inputs.install == 'true'
+      shell: bash
+      run: npm ci

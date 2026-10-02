@@ -1,0 +1,152 @@
+# QA pipeline — Agent 2 (Triage/Fix), event-driven. A Kanon lane (plan 0001, step 2).
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers (`issues: [labeled]` and a `workflow_dispatch` taking `issue_number`), the
+# `permissions:` ceiling, and one job that `uses:` this file at an exact Kanon tag, passes
+# `issue_number` through, and maps the three secrets below by name (never
+# `secrets: inherit`). Everything else is here: the `github` context in a called workflow
+# is the caller's, so the admission rule and the concurrency group read the triggering
+# event exactly as they did when this file held the triggers itself.
+#
+# THE SPINE LIVES IN `agent-lane.yml` (RA-2092) — token, checkout, install, database, the
+# action, red-run classification and telemetry. What is left here is what makes this lane
+# THIS lane: when it fires, which issues it admits, and what the Implementer is told.
+#
+# Trigger: a bug issue is labeled `qa:needs-triage` (the Explorer's output).
+# Identity: the Implementer's GitHub App (its token authors the branch/PR/comments).
+# See docs/qa/triage-fix-playbook.md and docs/qa/agent-identities.md.
+#
+# INERT until: (1) the caller + the docs/qa playbooks are on the default branch,
+# (2) the GitHub Apps exist + are installed, and (3) these secrets are set (plan 0001 §8):
+#   IMPLEMENTER_APP_ID, IMPLEMENTER_APP_PRIVATE_KEY   (the Implementer's App)
+#   CLAUDE_CODE_OAUTH_TOKEN                            (Claude subscription; `claude setup-token`)
+# Auth starts on the Claude subscription; graduate to API-key billing later — see the
+# note at the claude-code-action step.
+name: Triage & Fix (Implementer)
+
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` input, passed through. Not required here: on the
+    # `issues` trigger the caller has no inputs, and passes an empty string.
+    inputs:
+      issue_number:
+        description: Issue number to triage
+        required: false
+        type: string
+        default: ""
+    secrets:
+      IMPLEMENTER_APP_ID:
+        required: true
+      IMPLEMENTER_APP_PRIVATE_KEY:
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+concurrency:
+  # Scope by the JUST-ADDED label, not just the issue: creating an issue with N
+  # labels fires N simultaneous `labeled` events, and an issue-only group would
+  # let them cancel each other — including the legitimate qa:needs-triage run.
+  group: qa-triage-${{ github.event.issue.number || inputs.issue_number }}-${{ github.event.label.name || 'dispatch' }}
+  cancel-in-progress: false
+
+# NO `issues: read` / `actions: read` HERE SINCE RA-2092 (RA-2223). They were for the quality
+# columns, whose step this lane never had — and both halves of the comment that justified
+# them had become false: there is no `run:` step in this file at all now, so
+# `permissions-guard.mjs` (which inspects `run:` steps) requires nothing of it. Its quality
+# column (RA-1627) is read by the spine with the App token, so it needs neither scope.
+#
+# They were also INERT at the time: `agent-lane.yml` then declared `contents: read`,
+# which narrowed them away before they reached the job that runs the steps. Since RA-2592
+# the spine declares no block and inherits this one whole — so a scope granted here now
+# DOES reach the spine, and that is the reason not to grant one nothing uses: it would
+# read as a deliberate capability. A spine step that needs a default-token scope needs it
+# granted by every caller that switches that step on.
+#
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
+# ceiling and must grant at least this, or the run fails to start; `lane-check` fails a
+# caller that grants less.
+permissions:
+  contents: read # the App token carries the real write scope; keep the default token minimal
+
+jobs:
+  triage-fix:
+    # Only `qa:needs-triage` issues (or a manual dispatch). The lane's admission rule
+    # stays here: the spine has no opinion about which issues belong to it.
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'qa:needs-triage'
+    uses: $/.github/workflows/agent-lane.yml
+    with:
+      agent: triage-fix
+      arm: triage/fix agent
+      # The longest real run observed is 26m, so 80m is ~3x headroom. A timeout that
+      # truncates honest work is worse than one that never fires.
+      timeout-minutes: 80
+      # NO SLUG ASSERTION FOR THIS LANE, and that is the pre-existing state rather than a
+      # conversion loss: this lane never asserted its minted slug (the project-setup hook
+      # asserts it for the `implementer` lane only, RA-2694). It shares the Implementer's
+      # identity with the implement lane, which does assert it, so the constant is
+      # checked once per App rather than once per lane.
+      # `|| inputs.issue_number` so a dispatched run is scoped too: without it the row
+      # carried no issue and the quality column below had nothing to scope by.
+      issue-number: ${{ github.event.issue.number || inputs.issue_number }}
+      # artifacts_filed counts this run's `agent:triage` PR (RA-1627); `severities` stays
+      # absent — a fix PR carries no `sev:*`, and the parent issue's is the INPUT's.
+      quality-pr-label: agent:triage
+      claude_args: |
+        --model claude-opus-5
+        --effort high
+        --max-turns 100
+        --max-budget-usd 40
+        --fallback-model claude-opus-5-5
+        --allowedTools Read,Edit,Write,Bash,Grep,Glob
+        --exclude-dynamic-system-prompt-sections
+      prompt: |
+        You are the Implementer (Agent 2) of the QA pipeline. First read
+        docs/qa/triage-fix-playbook.md and docs/agentic-qa-pipeline.md, then
+        triage issue #${{ github.event.issue.number || inputs.issue_number }} of this repo.
+
+        SCOPE FIRST. If the fix is large or risky — a schema + DATA migration, a
+        security / auth / credential change, a cross-cutting refactor, or you can't
+        determine a clearly-safe fix — do NOT attempt it. Post a triage comment
+        (root cause, reproduction status, a proposed approach, and WHY it needs
+        human design), KEEP the `qa:needs-triage` label, and STOP. Only do the full
+        fix below for small, safe, mechanical changes.
+
+        Otherwise — Gate B: reproduce the bug independently BEFORE any fix (for a
+        code-level/static finding, "reproduce" = confirm the code path + a test
+        that demonstrates it, not a runtime repro). If you cannot reproduce, comment
+        with what you tried, apply `qa:cannot-reproduce`, REMOVE `qa:needs-triage`,
+        and stop. If the finding is NOT a real bug (expected behavior, or an
+        overstated premise), apply `qa:false-positive`, explain, REMOVE
+        `qa:needs-triage`, and stop.
+
+        REMOVING THE LABEL ON THOSE TWO IS NOT TIDINESS, IT IS THE HAND-OFF (RA-1380).
+        `qa:needs-triage` is the membership query for a dispatch-sweep lane that
+        exists to find bugs whose triage never ran (RA-1336). A terminal verdict is
+        triage ANSWERED, so leaving the label parks a settled issue in a queue for
+        unanswered ones: it classifies `awaiting-human` forever, emits a daily
+        warning no human action clears, and — because one human reply flips it to
+        `answered` — can re-fire this whole 80-minute job on a closed question.
+        Contrast the SCOPE-FIRST bail above, which keeps the label ON PURPOSE: that
+        is a real hand-off and belongs in the lane. Answered leaves; waiting stays.
+
+        If you reproduce it: **apply
+        `qa:reproduced`** (an outcome label, so precision-per-signal is trackable),
+        write a FAILING test (confirm red), fix until green, run the relevant tiers
+        (db is provisioned via db:init — test:unit / test:integration / test:e2e),
+        then open a PR (fix + test) with the agent-fix template, labeled
+        `agent:triage`, that closes the issue; set `qa:fix-proposed`. Surface any
+        schema change + its db:push/db:setup deploy steps. NEVER merge.
+        If this issue is a FOLLOW-UP whose parent PR is still OPEN (its body says
+        "Surfaced by PR #N" and #N isn't merged), branch off that PR's head and open
+        yours with `--base <its branch>` so it STACKS — don't diverge off main. See
+        the playbook's "Follow-ups: branch off the open parent" rule.
+
+        (Outcome labels apply on EVERY path — incl. a scope-first bailout where you
+        confirmed the bug is real: apply `qa:reproduced` even when you hand it back.)
+
+        ALWAYS leave a comment before you finish — never end with no output. If
+        you're running low on budget, post your progress and what remains.
+    secrets:
+      app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
+      app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

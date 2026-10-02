@@ -292,6 +292,44 @@ describe('plan 0001 §4 the agent blocks smoke run', () => {
   });
 });
 
+describe('plan 0001 step 2: the agent lanes smoke run', () => {
+  const { wf } = load('agent-lanes-smoke.yml');
+  const jobs = Object.entries(wf.jobs);
+  const callers = jobs.filter(([, j]) => j.uses);
+
+  it('runs on pull requests and in the merge queue, under one literal job name (K-MERGE-7)', () => {
+    expect(Object.keys(wf.on)).toEqual(expect.arrayContaining(['pull_request', 'merge_group']));
+    const named = jobs.filter(([, j]) => j.name);
+    expect(named.map(([, j]) => j.name)).toEqual(['Agent lanes smoke']);
+    expect(named[0]?.[1].strategy).toBeUndefined();
+  });
+
+  it('calls every Kanon lane through `$/`, with no inputs, and never inherits secrets', () => {
+    const lanes = readdirSync(new URL('../../.github/workflows/', import.meta.url))
+      .filter((n) => /^agent-.*\.yml$/.test(n) && !['agent-lane.yml', 'agent-lanes-smoke.yml', 'agent-blocks-smoke.yml'].includes(n));
+    expect(callers.map(([, j]) => j.uses).sort()).toEqual(lanes.map((n) => `$/.github/workflows/${n}`).sort());
+    for (const [, j] of callers) {
+      expect((j as { with?: unknown }).with).toBeUndefined();
+      expect((j as { secrets?: unknown }).secrets).toEqual(expect.any(Object));
+    }
+  });
+
+  it('grants each lane exactly the permissions the lane declares, and the workflow reads contents only', () => {
+    expect(wf.permissions).toEqual({ contents: 'read' });
+    for (const [, j] of callers) {
+      const lane = load(String(j.uses).replace('$/.github/workflows/', '')).wf;
+      expect(j.permissions, String(j.uses)).toEqual(lane.permissions);
+    }
+  });
+
+  it('passes only when every lane resolved and turned the event away without failing', () => {
+    const smoke = wf.jobs.smoke;
+    expect(smoke?.if).toBe('always()');
+    expect([(smoke as { needs?: string[] }).needs].flat().sort()).toEqual(callers.map(([k]) => k).sort());
+    expect(smoke?.steps[0]?.run).toContain('all(.value.result == "success" or .value.result == "skipped")');
+  });
+});
+
 describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Dependabot bumps it', () => {
   const run = parse(readFileSync(new URL('../../actions/agent-run/action.yml', import.meta.url), 'utf8')) as {
     runs: { steps: Step[] };

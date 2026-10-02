@@ -1,0 +1,138 @@
+# FIXTURE, NOT A WORKFLOW (RA-2669). It lives under `tests/fixtures/` so GitHub never runs it
+# and no corpus scan counts it; in Kanon, `tests/unit/direct-block-lane.test.ts` expands it
+# through the real blocks with the lane resolver. (The reference adopter's copy of that test
+# also points its scanners at it.) Nothing in CI runs actionlint on it: it was checked by hand from the repo root when
+# written (`actionlint tests/fixtures/agent-direct-lane.yml`, which validated the block calls'
+# inputs against the real `action.yml`s). Since RA-2697 its block calls are remote — `$/`, and
+# Kanon's `yedeya-labs/kanon/actions/agent-*@<tag>` since RA-2704 — so actionlint no longer reads
+# their `action.yml`s; `expandLaneBlocks`, which refuses an undeclared input, still does.
+#
+# THE BLOCKS ARE KANON'S (RA-2704), as on every lane: read from the action cache at the pinned
+# release, so the fixture carries no load, reload or restore step. The project-setup hook is
+# the one `./` reference. Its tag is the fixture's own; the scanners read the blocks from the
+# Kanon checkout whatever it says.
+#
+# WHAT IT STANDS FOR: the shape the next five lanes take (RA-2658, RA-2659, RA-2660, RA-2661, RA-2608)
+# — a lane that keeps its own job and calls `agent-setup`, `agent-run` and `agent-finish`
+# around steps of its own, instead of handing its whole job to `agent-lane.yml`. Every
+# scanner must see its arm, its flags, its TTL pin and its telemetry exactly as it sees a
+# spine lane's. The lane-author checklist it follows is the reference adopter's pipeline doc.
+name: Direct-block lane (fixture)
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue the fixture lane works
+        required: true
+
+# A lane with its own job declares its own default-token scope, and the blocks' steps run
+# under it — which is why `permissions-guard.mjs` reads them as this job's steps.
+permissions:
+  contents: read
+  issues: read # the lane's own gate reads the issue with the default token
+
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # The lane's first two steps, never a block's — as on every lane, though a `$/` block
+      # could load before the checkout (RA-2697): the order is the spine's, and P3 moves no step.
+      - name: Mint App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.QA_FIXTURE_APP_ID }}
+          private-key: ${{ secrets.QA_FIXTURE_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      # THE PROJECT-SETUP HOOK (RA-2694): the presence check copied verbatim from
+      # `agent-lane.yml`, then the hook, after the checkout and before `agent-setup`.
+      - name: Check the project-setup hook is present
+        id: hook
+        run: |
+          if [ ! -f .github/actions/project-setup/action.yml ]; then
+            echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
+            exit 1
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/project-setup
+        with:
+          lane: implementer
+          install: "true"
+          database: "false"
+          browsers: "false"
+          issue-number: ${{ inputs.issue_number }}
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - uses: $/actions/agent-setup
+        with:
+          arm: direct-block fixture
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
+
+      # A step of the lane's OWN between the stages — the reason a lane calls the blocks
+      # directly rather than handing its job to the spine.
+      - name: Gate on the issue being open, before a turn is paid for
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issue_number }}
+        run: test "$(gh issue view "$ISSUE" --json state --jq .state)" = OPEN
+
+      - uses: $/actions/agent-run
+        id: agent
+        with:
+          prompt: Work the fixture issue.
+          claude_args: |
+            --model claude-opus-5
+            --effort high
+            --max-turns 20
+            --max-budget-usd 8
+            --allowedTools Read,Bash,Grep,Glob
+            --exclude-dynamic-system-prompt-sections
+          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          prompt-cache-ttl: 5m
+
+      # …and one after it, in the same workspace.
+      - name: Record how the agent ended, before the finish block
+        if: always()
+        env:
+          OUTCOME: ${{ steps.agent.outcome }}
+        run: echo "agent outcome $OUTCOME"
+
+      # COPIED VERBATIM FROM `agent-lane.yml` too (RA-2694): the hook back for its post steps.
+      - name: Put the project-setup hook back for its post steps
+        if: always() && steps.hook.outputs.sha != ''
+        env:
+          SHA: ${{ steps.hook.outputs.sha }}
+        run: |
+          if git checkout "$SHA" -- .github/actions/project-setup 2>/dev/null; then
+            echo "project-setup hook put back from $SHA"
+          else
+            echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
+          fi
+
+      - uses: $/actions/agent-finish
+        id: finish
+        if: always()
+        continue-on-error: true
+        with:
+          arm: direct-block fixture
+          agent: direct-fixture
+          job-status: ${{ job.status }}
+          claude_args: |
+            --model claude-opus-5
+            --effort high
+            --max-turns 20
+            --max-budget-usd 8
+            --allowedTools Read,Bash,Grep,Glob
+            --exclude-dynamic-system-prompt-sections
+          execution_file: ${{ steps.agent.outputs.execution_file }}
+          issue-number: ${{ inputs.issue_number }}
+          started-at: ${{ steps.agent.outputs.started-at }}
+          github-token: ${{ steps.app-token.outputs.token }}

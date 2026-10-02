@@ -1,0 +1,24 @@
+# A trigger-only caller of Kanon's triage lane, as an adopter writes it (plan 0001 §3).
+name: Triage & Fix
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to triage
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  triage:
+    uses: yedeya-labs/kanon/.github/workflows/agent-triage.yml@v1.2.3
+    with:
+      issue_number: ${{ inputs.issue_number }}
+    secrets:
+      IMPLEMENTER_APP_ID: ${{ secrets.IMPLEMENTER_APP_ID }}
+      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
