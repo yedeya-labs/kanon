@@ -202,6 +202,8 @@ describe('the decomposition contract is stated the same way everywhere (RA-967)'
     it('adopts every issue the example writes into its `Closes` span', () => {
       const span = /\*\*Closes\s[^*]*/.exec(example)?.[0];
       if (!span) { expect(item.closes).toEqual([]); return; }
+      // A span that names no `#N` adopts nothing, so the loop below would pass on it.
+      expect(span).toMatch(/#\d+/);
       // Deliberately wider than the parser's leading-run read: every reference the
       // span shows must be one the parser took. An example whose span holds a number
       // the parser drops is teaching an adoption that will not happen.

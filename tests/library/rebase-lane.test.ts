@@ -352,6 +352,12 @@ describe('which job of a run is this PR’s (RA-2519, plan 0001 step 5)', () => 
     expect(isResolveJob('rebase / filter', 55)).toBe(false);
     expect(isResolveJob('xresolve (55)', 55)).toBe(false);
   });
+  it('is what the CLI reads each PR’s retry evidence with', () => {
+    // The decision is pure and takes its reader as an argument, so only the CLI's wiring
+    // says which predicate runs: a bare `name === …` there would pass every test above.
+    expect(readFileSync(join(ROOT, 'scripts/rebase-lane.mjs'), 'utf8'))
+      .toMatch(/evidenceOf: \(runId, pr\) => readRetry\(runId, \{ job: \(name\) => isResolveJob\(name, pr\.number\) \}\)/);
+  });
   it('the lane’s matrix job is the one it names', () => {
     const wf = parse(readFileSync(join(ROOT, '.github/workflows/agent-rebase.yml'), 'utf8'));
     expect(wf.jobs.resolve.strategy.matrix.pr).toBeDefined();
