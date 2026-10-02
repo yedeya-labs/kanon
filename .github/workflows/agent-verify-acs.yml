@@ -1,0 +1,474 @@
+# QA pipeline — Agent 1 (Explorer), MODE: targeted-invariant. RA-1068. A Kanon lane (plan
+# 0001, step 4).
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:`
+# this file at an exact Kanon tag, passes `project` and `ref` through, and maps the three
+# secrets by name (never `secrets: inherit`). The `github` context in a called workflow is
+# the caller's, so the resolve step and the hook load read the triggering event, and
+# `github.sha`, exactly as they did when this file held the triggers itself.
+#
+# NOT A JUDGING LANE (`K-MERGE-17`, "Not covered"). It runs the code under test, the
+# project's hook and its tests by design, so it reads them from the ref it verifies.
+#
+# INERT until: the caller is on the default branch + the Explorer's App installed + secrets
+# (plan 0001 §8):
+#   EXPLORER_APP_ID, EXPLORER_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+#
+# Verifies ONE PROJECT'S acceptance criteria, per invariant ID, rather than
+# sweeping a tier. Phase 5 of the reconciler (RA-1063) is what calls it.
+#
+# ── SAME SHAPE AS THE EXPLORER'S SWEEP, DELIBERATELY ───────────────────────────────
+# `agent-explore.yml` runs a deterministic Playwright sweep to JSON and then has
+# the Explorer read the artifact and file issues. This does the same with a different
+# producer: `verify-acs.mjs` resolves the project's ACs to citing tests, runs
+# them, and writes the JSON. A script that filed its own issues would be a second
+# mechanism for something the pipeline already does one way.
+#
+# ── ITS OWN JOB, ON THE AGENT-LANE BLOCKS (RA-2661) ───────────────────────────
+# The criteria run and the agent share one workspace and one database: the agent
+# reads the artifact the run wrote, against the data the run left. A reusable
+# workflow owns its whole job and takes no steps from its caller, so this lane does
+# not hand its job to `agent-lane.yml`. It keeps its own job and calls the spine's
+# blocks — `agent-setup`, `agent-run`, `agent-finish` — around its own steps, in the
+# order they always ran relative to the agent (the reference adopter's pipeline doc, §6).
+#
+# ── IT RUNS LOCALLY, AND THAT IS A DECISION, NOT AN OVERSIGHT ───────────────
+# RA-1063 records it: option (c). The Explorer has never touched a deployed environment —
+# `playwright.config.ts` builds and serves the app in CI — and giving a QA agent
+# write access to staging needs a disposable tenant, credentials and a
+# blast-radius rule that do not exist. So the ACs are verified against a build of
+# the DEPLOYED TAG, and the deployment itself is asserted separately.
+#
+# WHAT THAT MEANS, SAID HERE RATHER THAN BURIED: this verifies the CODE at the
+# tag, not the DEPLOYMENT. A failed migration, a drifted env var, a config
+# difference — none are visible to it. The report says so, and phase 5's retro
+# must repeat it.
+name: Verify ACs (Explorer) — targeted
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#
+#   workflow_dispatch:
+#     inputs:
+#       project:
+#         description: Project tracking-issue number (the brief is docs/projects/<n>.md)
+#         required: true
+#       ref:
+#         description: >-
+#           Tag or SHA to verify. Phase 5 passes the release that contains the
+#           project's merges. Defaults to the checked-out default branch, which
+#           verifies code that may not be deployed — the report says which it did.
+#         required: false
+#         default: ''
+#
+# LABEL TRIGGER (RA-1281). Phase 5 used to reach the Explorer with `gh workflow run`, which
+# needs `actions: write` — and `docs/qa/agent-identities.md`'s footnote 2 gives
+# the Lead `Actions: No access` on purpose, reasoning that "label churn achieves the
+# same with strictly less authority". For this agent that route did not exist: the Explorer
+# was `workflow_dispatch`-only, so there was no label to churn, and the dispatch
+# failed 403 and held the project.
+#
+# Re-applying `qa:verify` is now the churn. VERIFIED before building it, the way that
+# footnote's own discipline requires: the QA issue body carries both inputs the
+# dispatch passed — "Verify project #961" and "The work is deployed in `v0.48.9`" —
+# so the label route can express everything the higher-authority route did.
+#   issues:
+#     types: [labeled]
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` inputs, passed through. Empty on the label trigger,
+    # which carries no inputs, so neither is required here.
+    inputs:
+      project:
+        description: Project tracking-issue number (the brief is docs/projects/<n>.md)
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: Tag or SHA to verify; empty for the default branch
+        required: false
+        type: string
+        default: ""
+    secrets:
+      EXPLORER_APP_ID:
+        required: true
+      EXPLORER_APP_PRIVATE_KEY:
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+concurrency:
+  # `inputs.project` is empty on a label event and this is evaluated before any step
+  # runs, so it cannot use the resolved value. The issue number is the stable stand-in:
+  # one QA issue per project, which is what `readWorld` relies on to find it at all.
+  group: agent-verify-acs-${{ inputs.project || github.event.issue.number }}
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
+# ceiling and must grant at least this, or the run fails to start; `lane-check` fails a
+# caller that grants less.
+permissions:
+  contents: read
+  # REQUIRED NOW, and its absence would be silent. The resolve step below reads the QA
+  # issue with the DEFAULT token to recover `project` and `ref`; a permissions block
+  # sets every unlisted scope to `none`, so without this `gh issue view` 403s, `gh`
+  # prints the error body to stdout, the regex finds no project, and the job gates
+  # itself off while staying green — the exact shape of RA-956/RA-1090.
+  #
+  # This grant used to carry a comment saying it was NOT load-bearing — "granted so a
+  # future read-only `run:` step does not silently get an empty result … nothing in
+  # this file depends on it yet". That future step is the one below; the note is kept
+  # here rather than deleted because it is why the scope was already present.
+  issues: read
+
+jobs:
+  # Its own job so that the gate runs before the verify job starts its database and mints
+  # the App token, and so that the lane's admission rule decides first: an unrelated label
+  # starts no runner at all. `qa:verify` is the QA issue's own marker — the label
+  # `readWorld` finds it by — so re-applying it is both the trigger and the "verify again"
+  # signal; a label event fires on EVERY label, so this must not start for the other dozen.
+  filter:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'qa:verify'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      member: ${{ steps.gate.outputs.member }}
+    steps:
+      # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
+      # this lane acts only when the event's actor is a member or a registered agent App.
+      # `scripts/lane-gate.mjs` says who the actor is for each event; a refusal leaves
+      # `member=false`, a notice and a step-summary line, and every later step and job skips.
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+  verify:
+    needs: filter
+    if: needs.filter.outputs.member == 'true'
+    runs-on: ubuntu-latest
+    # Bounds a hang (RA-1336). Actions' default cap is 360m, so a wedged agent
+    # burned six hours and left its issue looking mid-flight. Sized at ~3x the
+    # longest real run measured on this workflow, so it never truncates work.
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: kanon
+          POSTGRES_PASSWORD: kanon
+          POSTGRES_DB: kanon
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kanon"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # Kanon's standard test database (RA-2694). The project-setup hook derives the app
+      # role's URL from this one and writes it to the environment before `db:init`.
+      DATABASE_URL: postgres://kanon:kanon@localhost:5432/kanon
+    steps:
+      # BEFORE CHECKOUT, because `ref` decides what gets checked out. On a dispatch the
+      # inputs are authoritative; on a label event they are recovered from the QA issue
+      # body, which states both — "Verify project #961 on staging" and "The work is
+      # deployed in `v0.48.9`".
+      #
+      # Failing loudly on an unresolvable project is deliberate: the alternative is a
+      # job that runs `verify-acs.mjs ""` and reports nothing, which reads as "the
+      # project has no criteria" — a green run that verified nothing, which is the one
+      # outcome phase 5 exists to prevent.
+      - name: Resolve the project and ref
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_PROJECT: ${{ inputs.project }}
+          DISPATCH_REF: ${{ inputs.ref }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          if [ -n "$DISPATCH_PROJECT" ]; then
+            PROJECT="$DISPATCH_PROJECT"; REF="$DISPATCH_REF"
+          else
+            BODY="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
+            PROJECT="$(printf '%s' "$BODY" | sed -n 's/.*[Vv]erify project #\([0-9][0-9]*\).*/\1/p' | head -1)"
+            REF="$(printf '%s' "$BODY" | sed -n 's/.*deployed in `\([^`]*\)`.*/\1/p' | head -1)"
+          fi
+          if [ -z "$PROJECT" ]; then
+            echo "::error title=agent-verify-acs::Could not resolve the project from issue #$ISSUE. A QA issue's body must say \"Verify project #<n>\"; without it there is nothing to verify and a green run would claim otherwise."
+            exit 1
+          fi
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Verifying project #$PROJECT at \`${REF:-the default branch}\`." >> "$GITHUB_STEP_SUMMARY"
+
+      # The BRIEF must come from the ref under test, not from HEAD: verifying a
+      # tag's code against a newer brief's criteria would judge the release by
+      # acceptance criteria it never had.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.resolve.outputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Say what is being verified, before verifying it
+        env:
+          REQUESTED: ${{ steps.resolve.outputs.ref }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+          {
+            echo "| Verifying | |"
+            echo "|---|---|"
+            echo "| requested ref | \`${REQUESTED:-（default branch）}\` |"
+            echo "| resolved to | \`${TAG:-$SHA}\` |"
+            # An explicit branch. `${TAG:-x}` is NOT an else for `${TAG:+y}` — it
+            # returns $TAG when TAG is set, so the two together printed the tag
+            # twice, garbling the one line that says whether this is what staging
+            # runs.
+            if [ -n "$TAG" ]; then
+              echo "| tagged release | \`$TAG\` |"
+            else
+              echo "| tagged release | **no** — this is not a released commit, so it is not what staging runs |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # THE AGENT-LANE BLOCKS, CALLED DIRECTLY (RA-2661). This lane cannot hand its job to
+      # `agent-lane.yml`: the criteria run below must share the agent's workspace and
+      # database, and a reusable workflow takes no steps from its caller. So it keeps its
+      # own job and calls `agent-setup`, `agent-run` and `agent-finish` around its own
+      # steps (the reference adopter's pipeline doc, §6). They are `$/` references (RA-2697): read
+      # from the commit that defined this workflow, never from the release tag checked out
+      # above, so nothing loads them into the tag's tree and nothing takes them out again.
+      #
+      # THE PROJECT-SETUP HOOK, FROM THE COMMIT THAT DEFINED THIS LANE (RA-2694, RA-2697). Every
+      # other lane reads the hook from its checkout, but this one checks out the ref under
+      # test — usually a release tag, and a tag cut before the hook existed has none, which
+      # would make every verification of an older release fail. So the hook is loaded from
+      # `github.sha` (`fetch-depth: 0` makes it readable whatever was checked out), taken
+      # back out before the criteria run, and put back after the agent for its post steps.
+      # The commit is recorded for that last step, as the spine's presence check records the
+      # one it read from.
+      #
+      # THIS LOAD OUTLIVES THE BLOCKS' (RA-2697), and it is the hook's own, not a copy of
+      # theirs. The blocks moved to `$/` because they are the pipeline's code; the hook is the
+      # project's, so it stays a `./` reference, and the only tree a `./` reference can read
+      # is the workspace. A `$/` hook would load from the action cache with no step here at
+      # all, but only while this lane lives in the repository that holds the hook: once Kanon
+      # ships the lane (plan 0001 step 4), `$/` names Kanon, and an older tag would be back to
+      # having no hook. Loading it from the defining commit works in both places: in a called
+      # workflow `github.sha` is the CALLER's commit, which is the adopter's, with its hook.
+      - name: Load the project-setup hook from the commit that defined this lane
+        id: hook
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          if ! git checkout "$SHA" -- .github/actions/project-setup; then
+            echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and $SHA, the commit that defined it, has none."
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # The toolchain, `npm ci`, `db:init` and Chromium — the four setup steps this lane ran
+      # here before, now the hook's. Against the ref under test: the install and the schema
+      # are the tag's own. Chromium's installer is read from `github.sha`, as it was.
+      - uses: ./.github/actions/project-setup
+        with:
+          lane: verify-acs
+          install: "true"
+          database: "true"
+          browsers: "true"
+
+      # `app-slug` IS EMPTY ON PURPOSE: the block reads it only for the push probe, and this
+      # lane makes none — so its App token is still minted where it always was, immediately
+      # before the agent, after the criteria run.
+      - uses: $/actions/agent-setup
+        with:
+          arm: acceptance-criteria agent
+          app-slug: ""
+
+      # THE CRITERIA RUN SEES THE REF UNDER TEST, BYTE FOR BYTE. The load above put the
+      # defining commit's copy of the hook into the tree, and a project's criteria can be
+      # cited by tests that READ `.github/actions/` — a pipeline project's are. Left in
+      # place, those tests would judge the tag against `main`'s hook (or, at a tag cut
+      # before the hook existed, against files the tag never had). So the tree goes back to
+      # exactly what was checked out before anything is verified, and stays that way for
+      # the agent: the blocks are `$/` references, which never touch the tree (RA-2697).
+      - name: Put the ref under test back exactly as it is, before the criteria run
+        run: git restore --source=HEAD --staged --worktree -- .github/actions/project-setup
+
+      # The script is Kanon's, read from the action cache at the tag the caller pinned (plan
+      # 0001 §3); the brief and the tests it runs are the ref's, from the checkout above.
+      - uses: $/actions/kanon-path
+
+      # Deterministic producer -> JSON. `continue-on-error` because a FAILING
+      # acceptance criterion is the finding, not a broken job: the whole point is
+      # to report it, and a hard exit here would leave the Explorer nothing to read.
+      - name: Resolve and run the project's acceptance criteria
+        id: verify
+        continue-on-error: true
+        env:
+          PROJECT: ${{ steps.resolve.outputs.project }}
+        run: |
+          set -uo pipefail
+          node "$KANON/scripts/verify-acs.mjs" "$PROJECT" --run --json=qa-verify-acs.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # NOT swallowed. No artifact means the producer died before writing one, and
+      # that is a broken job — reporting "nothing to verify" would be the exact
+      # silent-absence this phase exists to avoid, on the artifact that closes a
+      # project.
+      - name: The artifact must exist
+        run: |
+          set -euo pipefail
+          if [ ! -f qa-verify-acs.json ]; then
+            echo "::error title=agent-verify-acs::verify-acs.mjs wrote no artifact — it failed before reporting. This is NOT 'no criteria to verify'."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: qa-verify-acs-${{ steps.resolve.outputs.project }}
+          path: qa-verify-acs.json
+          if-no-files-found: error
+
+      - name: Mint explorer App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.EXPLORER_APP_ID }}
+          private-key: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
+
+      - uses: $/actions/agent-run
+        id: agent
+        with:
+          prompt: |
+            You are the Explorer (Agent 1), in TARGETED-INVARIANT mode for
+            project #${{ steps.resolve.outputs.project }}. First read docs/qa/explorer-playbook.md.
+
+            Kanon's `scripts/verify-acs.mjs` has ALREADY RUN. Its results are in
+            `qa-verify-acs.json`. Do NOT run it yourself and do NOT run the tier sweep.
+
+            Read that file. Each entry is one acceptance criterion with a status:
+
+              passed            its citing tests ran and passed
+              failed            a citing test ran and FAILED
+              not-run           a citing test exists but produced no test result here
+                                (not executed, or it could not start — e.g. no database)
+              unverifiable      no test cites it at all
+              mentioned         the brief mentions the ID but did not declare it
+              not-an-invariant  no spec declares the ID — a typo or a deletion
+
+            FILE ONE FINDING PER FAILED CRITERION, and nothing for any other status.
+            `unverifiable` and `not-run` are NOT findings against the project — they
+            are gaps in evidence, and the report already states them. Filing them as
+            bugs would send an implementer after work nobody asked for.
+
+            Each finding's body MUST end with this line, and nothing after it:
+
+                <!-- qa:project ${{ steps.resolve.outputs.project }} -->
+
+            That is what makes it a project issue the reconciler will pick up and
+            dispatch (RA-1066). Position matters: the marker must be the LAST non-empty
+            line, because a document that merely QUOTES it is not a member.
+
+            Each finding's body MUST ALSO contain, verbatim and with its parentheses,
+            the text `(targeted-invariant mode)` — the environment field below carries
+            it. `lead-reconcile.mjs` reads it to know the finding is this project's own
+            work (a failed acceptance criterion), which holds the project open; the
+            general sweep uses the same `signal:*` label, so without it the finding is
+            read as carried out (RA-1783).
+
+            Before filing, SEARCH open issues for the same criterion and comment on
+            the match instead of filing a duplicate. Dedup on the invariant ID: the
+            dedup signature is `<ID>::spec-violation::<citing test file>`.
+
+            Follow the playbook's "Targeted-invariant mode" section for the body: the
+            area/route field is the invariant ID and its citing test file, the evidence
+            is the failing test's name and assertion from the report, and the
+            environment is "local build of `<ref>` (targeted-invariant mode) — NOT
+            staging". Never write `staging`: nothing here touched a deployment.
+
+            Labels: bug, agent:explorer, qa:needs-triage, signal:spec-violation, and a
+            sev:* you can justify from the evidence. Milestone: Product Backlog — never Production Ready,
+            which is a launch gate and not a bucket (AGENTS.md).
+
+            COMMENT ON THE QA ISSUE WHEN YOU FINISH, and the comment MUST contain
+            this line on its own:
+
+                <!-- qa:verified -->
+
+            That marker is how the reconciler counts verification rounds. It must be
+            present even when everything passed and even when you filed nothing —
+            without it the two-round bound never binds and you are dispatched again
+            every hour, forever (RA-1088). Find the QA issue with:
+              gh issue list --repo ${{ github.repository }} --label qa:verify --state open \
+                --search "\"qa:project ${{ steps.resolve.outputs.project }}\"" --json number,body \
+                --jq "[.[] | select(.body | test(\"<!-- qa:project ${{ steps.resolve.outputs.project }} -->\"))] | .[0].number // empty"
+
+            CLOSE THAT ISSUE ONLY IF EVERY CRITERION PASSED. A `failed`,
+            `unverifiable` or `not-run` criterion means the project is not verified;
+            leave it open, and the reconciler will re-dispatch you when a finding is
+            fixed and deployed.
+
+            SAY WHAT YOU EXAMINED, not only what you filed. Your final message must
+            report: the ref verified and whether it was a tagged release, the count
+            in every status above, and what you filed or deduped. A run that files
+            nothing because everything passed and a run that files nothing because
+            nothing was verifiable are DIFFERENT outcomes and must not read alike.
+
+            DO NOT edit code. DO NOT promote a `[seed]` invariant to `[confirmed]` —
+            promotion is a human act, and no agent on a project performs one.
+          claude_args: |
+            --model claude-opus-5
+            --effort high
+            --max-turns 60
+            --max-budget-usd 25
+            --fallback-model claude-opus-5-5
+            --allowedTools Read,Bash,Grep,Glob
+            --exclude-dynamic-system-prompt-sections
+          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      # THE HOOK GOES BACK (RA-2694), for its toolchain's post step — copied verbatim from
+      # `agent-lane.yml`, which says why.
+      - name: Put the project-setup hook back for its post steps
+        if: always() && steps.hook.outputs.sha != ''
+        env:
+          SHA: ${{ steps.hook.outputs.sha }}
+        run: |
+          if git checkout "$SHA" -- .github/actions/project-setup 2>/dev/null; then
+            echo "project-setup hook put back from $SHA"
+          else
+            echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
+          fi
+
+      # Explain a red run (RA-1408) and record what it cost (RA-1485), in the finish block.
+      # `always()` because a run that FAILED is the one you most want explained and
+      # measured; `continue-on-error` because nothing here may red a good agent run
+      # (docs/observability.md §8). The classifier speaks only when `job-status` is
+      # `failure` — the job-level `failure()` the block cannot evaluate from inside itself.
+      # The SAME `claude_args` as the run, so the cost row records the configuration that ran.
+      - uses: $/actions/agent-finish
+        id: finish
+        if: always()
+        continue-on-error: true
+        with:
+          arm: acceptance-criteria agent
+          agent: verify-acs
+          job-status: ${{ job.status }}
+          claude_args: |
+            --model claude-opus-5
+            --effort high
+            --max-turns 60
+            --max-budget-usd 25
+            --fallback-model claude-opus-5-5
+            --allowedTools Read,Bash,Grep,Glob
+            --exclude-dynamic-system-prompt-sections
+          execution_file: ${{ steps.agent.outputs.execution_file }}
+          started-at: ${{ steps.agent.outputs.started-at }}
+          github-token: ${{ steps.app-token.outputs.token }}

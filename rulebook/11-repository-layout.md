@@ -168,7 +168,7 @@ The pipeline's own paths escalate whatever the list says (`K-MERGE-4`), so the f
 
 **Why.** A PR must not be able to rewrite the instructions of the agent that judges it. One root file named for each runtime, with one including the other, keeps a single home for the project's instructions.
 
-**Enforced by.** The base-branch restore step in the review workflow (`K-MERGE-17`, `K-AGENT-22`).
+**Enforced by.** The review lane's restore step, which reads them from the default branch with the rest of `K-MERGE-17`'s list (`K-AGENT-22`).
 
 **Class.** split. The paths and the restore are framework. **The project supplies:** the content of `AGENTS.md` and `.claude/`.
 

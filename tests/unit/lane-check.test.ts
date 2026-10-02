@@ -190,6 +190,38 @@ describe.skipIf(!hasYq)('lane-check', () => {
     });
   });
 
+  describe('the review and verify-acs lanes (step 4)', () => {
+    const REVIEW = '.github/workflows/agent-review.yml';
+    const VERIFY = '.github/workflows/agent-verify-acs.yml';
+    const extra = (t: Tree, f: string) => t.write(f, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra', f.split('/').pop()!), 'utf8'));
+    const roles = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Reviewer | \`example-reviewer\` | Read | Read & write | Read & write | No access |\n| Explorer | \`example-explorer\` | Read | Read & write | Read | No access |\n`);
+    it('accepts both callers, with the roles they run as registered', () => {
+      const t = adopter();
+      extra(t, REVIEW);
+      extra(t, VERIFY);
+      roles(t);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('6 lane caller(s) pass');
+    });
+    it('refuses a review caller with no run-name, which the review-run evidence reads', () =>
+      red((t) => { extra(t, REVIEW); roles(t); t.edit(REVIEW, (d) => { delete d['run-name']; }); }, 'its run-name must end with'));
+    it('refuses a review caller whose run-name does not end with the head SHA', () =>
+      red((t) => {
+        extra(t, REVIEW);
+        roles(t);
+        t.edit(REVIEW, (d) => { d['run-name'] = '${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }} review'; });
+      }, 'its run-name must end with'));
+    it('accepts a run-name on a caller whose lane asks for none', () => {
+      const t = adopter();
+      t.edit(TRIAGE, (d) => { d['run-name'] = 'Triage ${{ github.event.issue.number }}'; });
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
+    it('refuses the verify-acs caller while the register has no Explorer', () =>
+      red((t) => { extra(t, VERIFY); }, 'lists the role Explorer 0 times'));
+  });
+
   describe('the project-setup hook (§5)', () => {
     const HOOK = '.github/actions/project-setup/action.yml';
     it('refuses a missing hook', () => red((t) => t.rm(HOOK), 'the project-setup hook is missing'));

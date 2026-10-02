@@ -26,6 +26,8 @@ const files = [
 // an exact version matches. The PR's own copies run as a test, in judging-actions-smoke.yml.
 const EXEMPT = new Set([
   '.github/workflows/agent-lane.yml: ./.github/actions/project-setup',
+  '.github/workflows/agent-review.yml: ./.github/actions/project-setup',
+  '.github/workflows/agent-verify-acs.yml: ./.github/actions/project-setup',
   '.github/workflows/dco.yml: yedeya-labs/kanon/actions/dco@vX.Y.Z',
   '.github/workflows/pr-title.yml: yedeya-labs/kanon/actions/pr-title@vX.Y.Z',
 ]);
@@ -48,7 +50,7 @@ describe('plan 0001 §4: Kanon references itself only through `$/`', () => {
     expect(all.filter((x) => x.uses.startsWith('$/actions/agent-')).length).toBeGreaterThanOrEqual(2);
   });
 
-  it('has no `uses:` naming `./` or `yedeya-labs/kanon/`, apart from the three exemptions', () => {
+  it('has no `uses:` naming `./` or `yedeya-labs/kanon/`, apart from the exemptions', () => {
     const bad = all
       .filter((x) => x.uses.startsWith('./') || x.uses.startsWith('yedeya-labs/kanon/'))
       .map((x) => form(`${x.file}: ${x.uses}`));
