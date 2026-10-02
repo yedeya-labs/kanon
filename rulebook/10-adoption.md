@@ -23,7 +23,7 @@ Every path this chapter mentions is fixed in [11 Repository layout](11-repositor
    - a `.gitignore` covering runner environment files and test artifacts (`K-WS-4`).
 5. **Repository settings.** Squash merge only, with the PR title as the subject and the PR body as the message (`K-SHIP-3`). This is a repository setting available on every plan, separate from the ruleset in step 8: apply it even where the plan offers no rulesets. A merge commit on the main branch can't be parsed by the release tool.
 6. **Labels.** Create the whole taxonomy with its colours and descriptions, and delete GitHub's default labels that aren't in it (`K-WORK-12`).
-7. **Milestones.** Create the two buckets, *Product Backlog* and *Development Automation*, with no due date (`K-WORK-4`). Adoption needs no roadmap milestone and no launch gate. Creating one is the Stakeholder's decision, made when they choose (`K-WORK-5`, `K-WORK-6`).
+7. **Milestones.** Create the two buckets, *Product Backlog* and *Development Automation*, with no due date (`K-WORK-4`). `kanon milestones --repo <owner>/<repo>` creates whichever is missing. It reports a milestone with a bucket's name that has a due date or is closed, and leaves it unchanged. Adoption needs no roadmap milestone and no launch gate. Creating one is the Stakeholder's decision, made when they choose (`K-WORK-5`, `K-WORK-6`).
 8. **Rules on the main branch.** A ruleset that requires a pull request, blocks force-pushes and deletion, and allows squash only. Turn on the merge queue where the plan provides it, and otherwise apply the fallback (`K-MERGE-7`). Leave the required approving review **off** until bootstrap ends (`K-ADOPT-6`).
 9. **Production approval.** A required reviewer on the production environment where the plan provides it, otherwise the fallback (`K-SHIP-9`).
 10. **Chat channel.** Which service carries announcements, digests and cost alerts, and how it is wired, is the project's decision. Record it, or record "none yet".
@@ -34,7 +34,7 @@ Every path this chapter mentions is fixed in [11 Repository layout](11-repositor
 
 **Why.** Without a checklist, an installer has to derive the setup from every rule's "Enforced by" line, which describes a mechanism rather than a step. The order matters. The layout has to exist before anything cites it. The escalation file has to exist before a brief names what it touches. And the required review can't be switched on before there is a Reviewer to give one.
 
-**Enforced by.** Prose only. The installer that runs these steps is planned; its first piece, [`kanon apps`](../docs/apps.md), runs step 12.
+**Enforced by.** Prose only. The installer that runs these steps is planned. Its first pieces are `kanon milestones`, which runs step 7, and [`kanon apps`](../docs/apps.md), which runs step 12.
 
 **Class.** framework
 
