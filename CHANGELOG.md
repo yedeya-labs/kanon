@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/yedeya-labs/kanon/compare/v0.9.0...v0.9.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **library:** name merge-reconcile's called filter job, and drop a stale exemption ([#65](https://github.com/yedeya-labs/kanon/issues/65)) ([2388d69](https://github.com/yedeya-labs/kanon/commit/2388d6927582d45a26cf1aca9e61f628809fcff5))
+* read DCO inputs from the default branch, and let the brief guard accept measurement items ([#64](https://github.com/yedeya-labs/kanon/issues/64)) ([717b624](https://github.com/yedeya-labs/kanon/commit/717b6243976c83ad707d7d66d115601082d8d1ce))
+
 ## [0.9.0](https://github.com/yedeya-labs/kanon/compare/v0.8.1...v0.9.0) (2026-10-02)
 
 
