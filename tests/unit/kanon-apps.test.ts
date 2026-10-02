@@ -52,6 +52,8 @@ type Scenario = {
   conversion?: Record<string, unknown>;
   /** gh's exit status for `gh secret set <name>`. */
   setStatus?: Record<string, number>;
+  /** gh's exit status for `gh secret delete <name>`. */
+  deleteStatus?: Record<string, number>;
 };
 
 let stdout: ReturnType<typeof vi.spyOn>;
@@ -103,7 +105,8 @@ const run = async (s: Scenario = {}): Promise<Run> => {
     },
     gh: async (args, input) => {
       r.gh.push({ args, input });
-      const status = args[1] === 'set' ? (s.setStatus?.[args[2] ?? ''] ?? 0) : 0;
+      const by = args[1] === 'set' ? s.setStatus : args[1] === 'delete' ? s.deleteStatus : undefined;
+      const status = by?.[args[2] ?? ''] ?? 0;
       return { status, stdout: '', stderr: status ? 'HTTP 403: Resource not accessible' : '' };
     },
     // The fake browser.
@@ -199,12 +202,13 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     expect(r.manifest?.redirect_url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/);
     expect(r.callbackStatus).toBe(200);
     expect(r.gh.map((c) => c.args.join(' '))).toEqual([
-      `secret list -R ${ORG}/${REPO}`,
+      `secret set KANON_APPS_PREFLIGHT -R ${ORG}/${REPO}`,
+      `secret delete KANON_APPS_PREFLIGHT -R ${ORG}/${REPO}`,
       `secret set REVIEWER_APP_ID -R ${ORG}/${REPO}`,
       `secret set REVIEWER_APP_PRIVATE_KEY -R ${ORG}/${REPO}`,
     ]);
-    expect(r.gh[1]?.input).toBe('4242');
-    expect(r.gh[2]?.input).toBe(PEM);
+    expect(r.gh[2]?.input).toBe('4242');
+    expect(r.gh[3]?.input).toBe(PEM);
     // The installation token is revoked once the repository list is read.
     expect(r.api).toContain('DELETE /installation/token');
     expect(r.output).toContain('Key rotation stays manual');
@@ -214,7 +218,7 @@ describe('kanon apps, end to end with GitHub mocked', () => {
   it('the private key never reaches disk, stdout, stderr or an argument', async () => {
     const r = await run();
     expect(r.status, r.output).toBe(0);
-    expect(r.gh[2]?.input).toBe(PEM); // so the absence checks below are not vacuous
+    expect(r.gh[3]?.input).toBe(PEM); // so the absence checks below are not vacuous
     for (const where of [r.output, ...r.gh.map((c) => c.args.join(' '))]) {
       expect(where).not.toContain('PRIVATE KEY');
       for (const line of KEY_LINES) expect(where).not.toContain(line);
@@ -255,7 +259,7 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     expect(r.callbackStatus).toBe(400);
     expect(r.output).toMatch(/state that does not match/);
     expect(r.api).toEqual([]);
-    expect(r.gh.filter((c) => c.args[1] === 'set')).toEqual([]);
+    expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT')).toEqual([]);
     expect(r.writes).toEqual([]);
     rmSync(r.dir, { recursive: true, force: true });
   });
@@ -300,17 +304,70 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     rmSync(r.dir, { recursive: true, force: true });
   });
 
-  it('creates nothing when gh cannot read the repository secrets', async () => {
+  // The live failure behind this (#39): the token could read Actions secrets but not write
+  // them, so `gh secret list` passed, the App was created, and its key was lost.
+  type Gh = { status: number | null; stdout: string; stderr: string };
+  const preflightRun = async (reply: (args: string[]) => Gh | Promise<Gh>) => {
+    const calls: string[] = [];
     const out: string[] = [];
+    let opened = 0;
     const status = await apps(['--org', ORG, '--repo', REPO, '--roles', 'reviewer'], {
-      gh: async () => ({ status: 1, stdout: '', stderr: 'HTTP 403' }),
+      gh: async (args) => {
+        calls.push(args.join(' '));
+        return reply(args);
+      },
       open: () => {
-        throw new Error('no browser should open');
+        opened++;
+      },
+      github: async () => {
+        throw new Error('no GitHub call before the pre-check passes');
       },
       err: (l) => out.push(l),
+      out: (l) => out.push(l),
     });
-    expect(status).toBe(1);
-    expect(out.join('\n')).toMatch(/No App was created/);
+    return { status, calls, output: out.join('\n'), opened };
+  };
+  const ok: Gh = { status: 0, stdout: '', stderr: '' };
+  const SET = `secret set KANON_APPS_PREFLIGHT -R ${ORG}/${REPO}`;
+  const DELETE = `secret delete KANON_APPS_PREFLIGHT -R ${ORG}/${REPO}`;
+
+  it('refuses before opening a page when gh can list the secrets but not set one', async () => {
+    const r = await preflightRun((args) =>
+      args[1] === 'set' ? { status: 1, stdout: '', stderr: 'failed to set secret: HTTP 403: Resource not accessible by personal access token' } : ok,
+    );
+    expect(r.status).toBe(1);
+    expect(r.opened).toBe(0);
+    expect(r.output).toContain(`gh cannot set an Actions secret on ${ORG}/${REPO} (failed to set secret: HTTP 403: Resource not accessible by personal access token).`);
+    expect(r.output).toMatch(/Secrets: read and write/);
+    expect(r.output).toMatch(/GH_TOKEN/);
+    expect(r.output).toMatch(/No App was created/);
+    // The throwaway secret is deleted even though setting it failed.
+    expect(r.calls).toEqual([SET, DELETE]);
+  });
+
+  it('deletes the throwaway secret when gh throws while setting it', async () => {
+    const r = await preflightRun((args) => {
+      if (args[1] === 'set') throw new Error('spawn gh ENOENT');
+      return ok;
+    });
+    expect(r.status).toBe(1);
+    expect(r.opened).toBe(0);
+    expect(r.output).toMatch(/gh cannot set an Actions secret .*\(spawn gh ENOENT\)/);
+    expect(r.calls).toEqual([SET, DELETE]);
+  });
+
+  it('refuses, and says how to clean up, when gh can set the throwaway secret but not delete it', async () => {
+    const r = await preflightRun((args) => (args[1] === 'delete' ? { status: 1, stdout: '', stderr: 'HTTP 403' } : ok));
+    expect(r.status).toBe(1);
+    expect(r.opened).toBe(0);
+    expect(r.output).toContain(`cannot delete it (HTTP 403). Delete it by hand: gh secret delete KANON_APPS_PREFLIGHT -R ${ORG}/${REPO}`);
+    expect(r.calls).toEqual([SET, DELETE]);
+  });
+
+  it('names the exit status when gh says nothing', async () => {
+    const r = await preflightRun((args) => (args[1] === 'set' ? { status: 4, stdout: '', stderr: '' } : ok));
+    expect(r.status).toBe(1);
+    expect(r.output).toContain('(exit 4)');
   });
 
   it('refuses an unknown role, and a name for a role it was not asked for', async () => {
@@ -404,5 +461,21 @@ describe('the register row (K-LAYOUT-6)', () => {
   it('ignores a table inside a fenced block', () => {
     const fenced = `\`\`\`text\n${FIXTURE}\`\`\`\n\n${FIXTURE}`;
     expect(slugOf(write(fenced, 'Reviewer', 'r').text, 'Reviewer').stdout.trim()).toBe('r');
+  });
+});
+
+describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
+  const OWN = join(ROOT, 'docs/qa/agent-identities.md');
+
+  it('is exactly what kanon apps writes for the Reviewer it created', () => {
+    const { text } = writeRegisterRow(null, { role: 'Reviewer', slug: 'kanon-reviewer', permissions: loadRoles().reviewer!.permissions });
+    expect(readFileSync(OWN, 'utf8')).toBe(text);
+  });
+
+  it('gives the lanes the Reviewer slug', () => {
+    const r = spawnSync('awk', ['-v', 'role=Reviewer', '-f', AWK, OWN], { encoding: 'utf8' });
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('kanon-reviewer\n');
   });
 });

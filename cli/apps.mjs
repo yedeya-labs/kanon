@@ -47,7 +47,10 @@ Options:
   --dir <path>           the repository's checkout, for the register (default: here)
   -h, --help             this text
 
-Needs \`gh\`, signed in as someone who can set the repository's Actions secrets.`;
+Needs \`gh\`, with a token that can set the repository's Actions secrets (Secrets: read and
+write). A GH_TOKEN in the environment wins over gh's stored login. The command proves it
+can by setting and deleting a throwaway secret, KANON_APPS_PREFLIGHT, before it opens
+any page.`;
 
 /**
  * @typedef {{
@@ -409,6 +412,40 @@ const createApp = async ({ org, repo, role, name, spec, dir, deps }) => {
   return { slug, warnings: inst.warnings };
 };
 
+/** The throwaway secret the pre-check sets and deletes. */
+export const PREFLIGHT_SECRET = 'KANON_APPS_PREFLIGHT';
+
+/**
+ * Proves `gh` can write the repository's Actions secrets: sets a throwaway secret, then
+ * deletes it. The delete runs even when the set failed or threw, so nothing stays behind.
+ * Returns null when both worked, or the lines that explain the refusal.
+ * @param {Deps} deps @param {string} org @param {string} repo
+ * @returns {Promise<string[] | null>}
+ */
+export const preflight = async (deps, org, repo) => {
+  const where = `${org}/${repo}`;
+  /** @param {{ status: number | null, stderr: string }} r */
+  const cause = (r) => r.stderr.trim() || `exit ${r.status}`;
+  const fix =
+    'The token gh uses needs Secrets: read and write on the repository; a GH_TOKEN in the environment wins over the stored login. No App was created.';
+  /** @type {{ status: number | null, stdout: string, stderr: string }} */
+  let set;
+  try {
+    set = await deps.gh(['secret', 'set', PREFLIGHT_SECRET, '-R', where], 'kanon apps pre-check; safe to delete');
+  } catch (e) {
+    set = { status: null, stdout: '', stderr: String(/** @type {Error} */ (e).message) };
+  }
+  const del = await deps.gh(['secret', 'delete', PREFLIGHT_SECRET, '-R', where]);
+  if (set.status !== 0) return [`gh cannot set an Actions secret on ${where} (${cause(set)}).`, fix];
+  if (del.status !== 0) {
+    return [
+      `gh set the throwaway secret ${PREFLIGHT_SECRET} on ${where} but cannot delete it (${cause(del)}). Delete it by hand: gh secret delete ${PREFLIGHT_SECRET} -R ${where}`,
+      fix,
+    ];
+  }
+  return null;
+};
+
 /**
  * `kanon apps`. Returns the exit code.
  * @param {string[]} argv @param {Partial<Deps>} [overrides]
@@ -432,11 +469,11 @@ export const apps = async (argv, overrides = {}) => {
   const { org, repo } = opts;
 
   // Fail before any App exists if the key could not be stored: an App whose key has nowhere
-  // to go is one more App to delete by hand.
-  const probe = await deps.gh(['secret', 'list', '-R', `${org}/${repo}`]);
-  if (probe.status !== 0) {
-    deps.err(`kanon apps: gh cannot read ${org}/${repo}'s Actions secrets (${probe.stderr.trim() || `exit ${probe.status}`}).`);
-    deps.err('Sign gh in as someone who can set them (an admin of the repository), and try again. No App was created.');
+  // to go is one more App to delete by hand. Reading the secrets proves nothing about
+  // writing them (a token can hold Secrets: read alone), so the probe writes one.
+  const refusal = await preflight(deps, org, repo);
+  if (refusal) {
+    for (const l of refusal) deps.err(`kanon apps: ${l}`);
     return 1;
   }
 
