@@ -224,8 +224,9 @@ describe('the partition comes from the caller\'s role, never the request', () =>
 describe('the request limits (§4)', () => {
   it('only POST', async () => expect((await call(event([runRow()], { method: 'GET' }))).status).toBe(405));
   it('at most 25 rows, at least one, as an array', async () => {
-    expect((await call(event(Array.from({ length: MAX_ROWS }, (_, i) => runRow({ run_id: i + 1 }))))).status).toBe(200);
-    expect((await call(event(Array.from({ length: MAX_ROWS + 1 }, (_, i) => runRow({ run_id: i + 1 }))))).status).toBe(400);
+    expect(MAX_ROWS).toBe(25);
+    expect((await call(event(Array.from({ length: 25 }, (_, i) => runRow({ run_id: i + 1 }))))).status).toBe(200);
+    expect((await call(event(Array.from({ length: 26 }, (_, i) => runRow({ run_id: i + 1 }))))).status).toBe(400);
     expect((await call(event([]))).status).toBe(400);
     expect((await call(event(runRow()))).status).toBe(400);
     expect((await call(event(null, { raw: '{not json' }))).status).toBe(400);

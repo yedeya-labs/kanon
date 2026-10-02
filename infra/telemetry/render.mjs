@@ -49,16 +49,14 @@ export function registerProblems(register) {
   }
   const repos = register.repositories;
   if (!Array.isArray(repos) || repos.length === 0) return [...out, 'repositories is empty'];
-  const keys = new Set();
   const ids = new Set();
   const names = new Set();
   repos.forEach((r, i) => {
     const at = `repositories[${i}]`;
     if (typeof r?.key !== 'string' || !KEY.test(r.key)) out.push(`${at}.key is not a key`);
     else {
-      if (keys.has(r.key)) out.push(`${at}.key is a duplicate`);
-      if (ids.has(logicalId(r.key))) out.push(`${at}.key collides with another once punctuation is removed`);
-      keys.add(r.key);
+      // Roles' logical ids drop the punctuation, so `k-1` and `k1` are one key here.
+      if (ids.has(logicalId(r.key))) out.push(`${at}.key duplicates another key`);
       ids.add(logicalId(r.key));
     }
     if (typeof r?.repository !== 'string' || !REPOSITORY.test(r.repository)) out.push(`${at}.repository is not owner/name`);

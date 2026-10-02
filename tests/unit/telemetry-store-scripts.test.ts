@@ -112,6 +112,33 @@ describe('verify.mjs runs S3\'s falsifiers', () => {
     ]);
   });
 
+  it('fails each store check on the wrong answer, not just on any answer', async () => {
+    const f = fakeAws();
+    const wrongField = async () => ({ status: 422, json: { results: [{ status: 'rejected', errors: [{ field: 'recorded_at', problem: 'window' }] }] } });
+    const r = await runChecks('kk', 'kanon', { ...deps(f), post: wrongField });
+    expect(r.filter((x) => !x.pass).map((x) => x.name)).toEqual([
+      'a valid row gets 200',
+      'a row with an extra field gets 422 naming that field',
+      'a row naming a partition gets 422',
+      "the stored row's expires_at is 30 days out",
+    ]);
+    const accepted = async () => ({ status: 202, json: { results: [{ status: 'stored' }] } });
+    const r2 = await runChecks('kk', 'kanon', { ...deps(f), post: accepted });
+    expect(r2[0]).toEqual({ name: 'a valid row gets 200', pass: false, why: 'status 202' });
+  });
+
+  it('counts only AccessDeniedException as denied, not any error', async () => {
+    const f = fakeAws();
+    const missing = (args: string[], creds?: Creds) => ['query', 'put-item'].includes(args[1]!)
+      ? { code: 254, stdout: '', stderr: 'An error occurred (ResourceNotFoundException) when calling the Query operation' }
+      : f.aws(args, creds);
+    const r = await runChecks('kk', 'kanon', { ...deps(f), aws: missing });
+    expect(r.filter((x) => !x.pass)).toEqual([
+      { name: 'the reader querying another key gets AccessDeniedException', pass: false, why: 'ResourceNotFoundException' },
+      { name: 'a direct PutItem with the writer role is denied', pass: false, why: 'ResourceNotFoundException' },
+    ]);
+  });
+
   it('stops with one FAIL when the roles can\'t be assumed, and never reports a credential', async () => {
     const r = await runChecks('kk', 'kanon', deps(fakeAws({ noVerify: true })));
     expect(r).toHaveLength(1);
