@@ -184,7 +184,7 @@ The pipeline's own paths escalate whatever the list says (`K-MERGE-4`), so the f
 
 **Why.** Bootstrap, the plan's fallbacks and the installed mechanisms change what the rest of the rulebook means on this repository. If they aren't written down in one place, every reader has to reconstruct them.
 
-**Enforced by.** Prose only; a guard is planned (`K-ADOPT-6`).
+**Enforced by.** On Kanon's own record, [`tests/unit/adoption-record.test.ts`](../tests/unit/adoption-record.test.ts): it fails when a heading is missing or out of order, a role is unnamed, the bootstrap line has no date, or a mechanism is marked anything but `installed YYYY-MM-DD` or `not yet installed`. For an adopter, prose only; a guard is planned (`K-ADOPT-6`).
 
 **Class.** framework
 
