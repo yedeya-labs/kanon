@@ -1,11 +1,12 @@
-# Kanon's PR-title check (K-SHIP-4), dogfooded: this repository runs its own action through
-# `$/`, GitHub's self-reference, so every Kanon PR exercises the action exactly as an
-# adopter's would. `$/` resolves to this repository at the running commit, downloaded into
-# the runner's action cache, so no checkout is needed (plan 0001 §4).
+# Kanon's PR-title check (K-SHIP-4), run the way an adopter runs it: pinned to an exact
+# Kanon release (K-ADOPT-11), which Dependabot bumps. No checkout is needed.
 #
-# The self-reference runs the action as it is in the PR, so a PR that changes the check is
-# checked by its own version. That is the point of dogfooding, and it is safe here:
-# `pull_request` runs get a read-only token and no secrets.
+# The check that judges a PR runs Kanon's LAST release, never this PR's copy through `$/`
+# (#47). Through `$/` a PR that weakened the check would be judged by the weakened check
+# and pass itself. This is ADR 0011's bootstrap applied to a check's code, as K-MERGE-17
+# applies it to a check's inputs. A change to actions/pr-title therefore judges PRs one
+# release after it merges. This PR's own copy still runs, as a test rather than as the
+# judge, in judging-actions-smoke.yml.
 #
 # On merge_group (K-MERGE-7) the check passes without checking anything, under the same
 # job name, because a required check must report on the queue's branch or the queue
@@ -39,5 +40,5 @@ jobs:
       - name: Already checked on the pull request
         if: github.event_name == 'merge_group'
         run: echo "Merge group. Each queued PR's title passed this check before it could be queued."
-      - uses: $/actions/pr-title
+      - uses: yedeya-labs/kanon/actions/pr-title@v0.7.0
         if: github.event_name == 'pull_request'

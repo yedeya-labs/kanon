@@ -16,12 +16,21 @@ const files = [
   ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => join('.github/workflows', f)),
 ];
 
-// The one exception is the hook (plan 0001 §5). The spine calls the ADOPTER's project-setup
+// The first exception is the hook (plan 0001 §5). The spine calls the ADOPTER's project-setup
 // hook, which is the adopter's code in the adopter's checkout. `./` is exactly right for it,
 // and the only form that reaches it.
+//
+// The other two are the checks that judge a Kanon PR (#47). They run Kanon's LAST release, so a
+// PR can't weaken the check that passes it: ADR 0011's bootstrap, applied to a check's code.
+// Their version is whatever Dependabot last proposed, so it is compared as `vX.Y.Z`, and only
+// an exact version matches. The PR's own copies run as a test, in judging-actions-smoke.yml.
 const EXEMPT = new Set([
   '.github/workflows/agent-lane.yml: ./.github/actions/project-setup',
+  '.github/workflows/dco.yml: yedeya-labs/kanon/actions/dco@vX.Y.Z',
+  '.github/workflows/pr-title.yml: yedeya-labs/kanon/actions/pr-title@vX.Y.Z',
 ]);
+/** An exact release, written as the form, so the exemption survives each Dependabot bump. */
+const form = (entry: string): string => entry.replace(/^(.*: yedeya-labs\/kanon\/[^@]+)@v\d+\.\d+\.\d+$/, '$1@vX.Y.Z');
 
 type Node = { uses?: unknown; steps?: Node[]; jobs?: Record<string, Node>; runs?: { steps?: Node[] } };
 const usesOf = (file: string): string[] => {
@@ -39,11 +48,11 @@ describe('plan 0001 §4: Kanon references itself only through `$/`', () => {
     expect(all.filter((x) => x.uses.startsWith('$/actions/agent-')).length).toBeGreaterThanOrEqual(2);
   });
 
-  it('has no `uses:` naming `./` or `yedeya-labs/kanon/`, apart from the one exemption', () => {
+  it('has no `uses:` naming `./` or `yedeya-labs/kanon/`, apart from the three exemptions', () => {
     const bad = all
       .filter((x) => x.uses.startsWith('./') || x.uses.startsWith('yedeya-labs/kanon/'))
-      .map((x) => `${x.file}: ${x.uses}`);
-    expect(bad).toEqual([...EXEMPT]);
+      .map((x) => form(`${x.file}: ${x.uses}`));
+    expect(bad.sort()).toEqual([...EXEMPT].sort());
   });
 
   it('has no such line in comments or examples either, which get copied', () => {
@@ -54,7 +63,7 @@ describe('plan 0001 §4: Kanon references itself only through `$/`', () => {
       // A `uses:` key, live or commented out (`#   - uses: …`), not prose quoting one.
       .filter(({ line }) => /^\s*(#\s*)?(-\s*)?uses:\s*["']?(\.\/|yedeya-labs\/kanon\/)/.test(line))
       .map(({ at, line }) => `${at}: ${line.trim()}`));
-    expect(hits.map((h) => h.replace(/:\d+: (- )?uses: /, ': '))).toEqual([...EXEMPT]);
+    expect(hits.map((h) => form(h.replace(/:\d+: (- )?uses: /, ': '))).sort()).toEqual([...EXEMPT].sort());
   });
 
   it('names every `$/` target that exists in this tree', () => {

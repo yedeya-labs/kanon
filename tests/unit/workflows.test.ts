@@ -47,6 +47,16 @@ const expectPassesOnMergeGroup = (wf: Workflow, action: string) => {
   expect(steps.filter((s) => s.if !== ON_PULL_REQUEST && s.if !== ON_MERGE_GROUP)).toEqual([]);
 };
 
+// #47: a check that judges a PR runs Kanon's last release, an exact version Dependabot bumps,
+// never the PR's own copy through `$/`. Returns the one released reference to `action` in
+// the workflow, and fails unless there is exactly one.
+const RELEASED = (action: string) => new RegExp(`^yedeya-labs/kanon/actions/${action}@v\\d+\\.\\d+\\.\\d+$`);
+const judge = (wf: Workflow, action: string): string => {
+  const refs = stepsOf(wf).map((s) => s.uses ?? '').filter((u) => RELEASED(action).test(u));
+  expect(refs).toHaveLength(1);
+  return refs[0]!;
+};
+
 describe('CI runs lint, type-check and unit tests on every pull request', () => {
   const { wf } = load('ci.yml');
   const runs = stepsOf(wf).map((s) => s.run ?? '');
@@ -68,7 +78,7 @@ describe('CI runs lint, type-check and unit tests on every pull request', () => 
   });
 });
 
-describe('K-SHIP-4 Kanon dogfoods its PR-title action', () => {
+describe('K-SHIP-4 Kanon runs its PR-title action from its last release', () => {
   const { wf, text } = load('pr-title.yml');
 
   it('runs on pull requests, including title edits, and on merge_group', () => {
@@ -77,12 +87,12 @@ describe('K-SHIP-4 Kanon dogfoods its PR-title action', () => {
   });
 
   it('checks the title on pull requests only, and passes on merge_group', () => {
-    expectPassesOnMergeGroup(wf, '$/actions/pr-title');
+    expectPassesOnMergeGroup(wf, judge(wf, 'pr-title'));
   });
 
-  it('uses the action through the self-reference, which needs no checkout (plan 0001 §4)', () => {
+  it('uses the released action, never the PR copy, and needs no checkout (#47)', () => {
     const uses = stepsOf(wf).map((s) => s.uses);
-    expect(uses).toContain('$/actions/pr-title');
+    expect(uses).toContain(judge(wf, 'pr-title'));
     expect(uses.filter((u) => u?.startsWith('actions/checkout@'))).toEqual([]);
   });
 
@@ -92,7 +102,7 @@ describe('K-SHIP-4 Kanon dogfoods its PR-title action', () => {
   });
 });
 
-describe('ADR 0010 Kanon dogfoods its DCO action', () => {
+describe('ADR 0010 Kanon runs its DCO action from its last release', () => {
   const { wf } = load('dco.yml');
 
   it('runs on pull requests opened, pushed to and reopened, and on merge_group', () => {
@@ -100,12 +110,12 @@ describe('ADR 0010 Kanon dogfoods its DCO action', () => {
   });
 
   it('checks the commits on pull requests only, and passes on merge_group', () => {
-    expectPassesOnMergeGroup(wf, '$/actions/dco');
+    expectPassesOnMergeGroup(wf, judge(wf, 'dco'));
   });
 
-  it('uses the action through the self-reference, which needs no checkout (plan 0001 §4)', () => {
+  it('uses the released action, never the PR copy, and needs no checkout (#47)', () => {
     const uses = stepsOf(wf).map((s) => s.uses);
-    expect(uses).toContain('$/actions/dco');
+    expect(uses).toContain(judge(wf, 'dco'));
     expect(uses.filter((u) => u?.startsWith('actions/checkout@'))).toEqual([]);
   });
 
@@ -256,6 +266,69 @@ describe('K-MERGE-7 every required check reports on pull requests and in the mer
   });
 });
 
+// #47, ADR 0011's bootstrap applied to a check's code: a required check that judges the PR
+// runs Kanon's last release, so a PR can't weaken the check that passes it. The smoke runs
+// are required too, but they test the PR's own code, so `$/` is their point.
+const JUDGES: Record<string, string> = { 'Signed-off commits': 'dco', 'Conventional title': 'pr-title' };
+const SMOKES = ['Agent blocks smoke', 'Agent lanes smoke'];
+
+describe('#47 no required check judges a PR with the PR\'s own copy of its action', () => {
+  const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
+  const jobs = names.flatMap((file) => Object.values(load(file).wf.jobs).map((job) => ({ file, job })));
+  const usesOf = (job: Job): string[] =>
+    [job.uses, ...(job.steps ?? []).map((s) => s.uses)].filter((u): u is string => typeof u === 'string');
+
+  it('accounts for every required check as a judge, a smoke or CI', () => {
+    expect([...Object.keys(JUDGES), ...SMOKES, 'Lint, type-check and unit tests'].sort()).toEqual([...REQUIRED_CHECKS].sort());
+  });
+
+  it.each(Object.entries(JUDGES))('%s calls its action at a released version, never through `$/`', (check, action) => {
+    const { job } = jobs.find(({ job: j }) => j.name === check)!;
+    const uses = usesOf(job);
+    expect(uses.filter((u) => RELEASED(action).test(u))).toHaveLength(1);
+    expect(uses.filter((u) => u.startsWith('$/'))).toEqual([]);
+  });
+
+  it('no required check other than a smoke run calls anything through `$/`', () => {
+    const bad = jobs
+      .filter(({ job }) => REQUIRED_CHECKS.includes(job.name ?? '') && !SMOKES.includes(job.name ?? ''))
+      .flatMap(({ file, job }) => usesOf(job).filter((u) => u.startsWith('$/')).map((u) => `${file}: ${u}`));
+    expect(bad).toEqual([]);
+  });
+});
+
+describe('#47 the PR\'s own copy of each judging action still runs, as a test', () => {
+  const { wf } = load('judging-actions-smoke.yml');
+  const jobs = Object.values(wf.jobs);
+  const steps = stepsOf(wf);
+
+  it('runs on pull requests, including title edits, and is not a required check', () => {
+    expect(wf.on.pull_request).toMatchObject({ types: expect.arrayContaining(['opened', 'edited', 'synchronize']) });
+    expect(jobs).toHaveLength(1);
+    expect(REQUIRED_CHECKS).not.toContain(jobs[0]?.name);
+  });
+
+  it('calls each judging action through `$/`, so the PR runs its own version', () => {
+    for (const action of Object.values(JUDGES)) expect(steps.map((s) => s.uses), action).toContain(`$/actions/${action}`);
+  });
+
+  it('checks that the PR-title action fails a bad title, not only that it passes a good one', () => {
+    const bad = steps.find((s) => s.id === 'bad-title');
+    expect(bad?.uses).toBe('$/actions/pr-title');
+    expect(bad?.with?.title).toBe('Not a conventional title');
+    expect(bad?.['continue-on-error']).toBe(true);
+    const check = steps.at(-1);
+    expect(check?.env).toEqual({ OUTCOME: '${{ steps.bad-title.outcome }}' });
+    expect(check?.run).toContain('test "$OUTCOME" = failure');
+    expect(check?.['continue-on-error']).toBeUndefined();
+  });
+
+  it('reads contents and pull requests only', () => {
+    expect(wf.permissions).toEqual({ contents: 'read', 'pull-requests': 'read' });
+    for (const job of jobs) expect(job.permissions).toBeUndefined();
+  });
+});
+
 describe('plan 0001 §4 the agent blocks smoke run', () => {
   const { wf } = load('agent-blocks-smoke.yml');
   const jobs = Object.values(wf.jobs);
@@ -338,7 +411,13 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
     runs: { steps: Step[] };
   };
   const dependabot = parse(readFileSync(new URL('../../.github/dependabot.yml', import.meta.url), 'utf8')) as {
-    updates: { 'package-ecosystem': string; directories?: string[] }[];
+    updates: {
+      'package-ecosystem': string;
+      directories?: string[];
+      groups?: Record<string, { patterns?: string[] }>;
+      cooldown?: { exclude?: string[] };
+      'commit-message'?: Record<string, unknown>;
+    }[];
   };
 
   it('names an exact version of claude-code-action in agent-run, never a moving tag', () => {
@@ -350,5 +429,17 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
   it('has Dependabot watch the workflows and every action directory', () => {
     const actions = dependabot.updates.find((u) => u['package-ecosystem'] === 'github-actions');
     expect(actions?.directories).toEqual(expect.arrayContaining(['/', '/actions/*']));
+  });
+
+  it('proposes each Kanon release to the judging checks in a group of its own, with no cooldown (#47, K-ADOPT-11)', () => {
+    const actions = dependabot.updates.find((u) => u['package-ecosystem'] === 'github-actions');
+    // Dependabot puts a dependency in the FIRST group whose patterns match it, so Kanon's
+    // group comes before the catch-all.
+    const groups = Object.entries(actions?.groups ?? {});
+    expect(groups[0]?.[1].patterns).toEqual(['yedeya-labs/kanon*']);
+    // A cooldown, if one is ever set, holds back every dependency it doesn't exclude.
+    if (actions?.cooldown) expect(actions.cooldown.exclude).toContain('yedeya-labs/kanon*');
+    // Titled `ci(deps): …`, so the PR passes K-SHIP-4.
+    expect(actions?.['commit-message']).toEqual({ prefix: 'ci', include: 'scope' });
   });
 });

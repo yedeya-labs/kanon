@@ -4,6 +4,14 @@
 # so it is listed by glob. That includes the exact pin of claude-code-action in
 # actions/agent-run: the pin fixes the CLI per Kanon release, and this is what proposes
 # each bump, as an ordinary Kanon PR that runs the smoke workflow and the tests.
+#
+# Kanon itself is a dependency here too (#47): the DCO and PR-title checks that judge a PR
+# run Kanon's last release, `yedeya-labs/kanon/actions/…@vX.Y.Z`, and this entry proposes
+# each new release to them, as K-ADOPT-11 has it for any adopter: Kanon's own references in
+# a group of their own, and never held back by a cooldown. Kanon is first-party, so a
+# cooldown would only delay the release that judges the next PR. No entry sets a cooldown
+# today; one added later must exclude `yedeya-labs/kanon*`, which
+# tests/unit/workflows.test.ts pins.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -12,6 +20,12 @@ updates:
       - /actions/*
     schedule:
       interval: weekly
+    commit-message:
+      prefix: ci
+      include: scope
     groups:
+      # First, so Kanon's references land in this group and not in the catch-all below.
+      kanon:
+        patterns: ["yedeya-labs/kanon*"]
       github-actions:
         patterns: ["*"]
