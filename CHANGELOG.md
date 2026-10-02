@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/yedeya-labs/kanon/compare/v0.7.0...v0.8.0) (2026-10-02)
+
+
+### Features
+
+* **lanes:** move the pipeline library, kanon-path, and the implement and merge-reconcile lanes into Kanon ([#51](https://github.com/yedeya-labs/kanon/issues/51)) ([ce55a9b](https://github.com/yedeya-labs/kanon/commit/ce55a9ba956dbbe04dde4e3c01317e4cbdf43054))
+
+
+### CI
+
+* run the checks that judge a Kanon PR from the last release ([#52](https://github.com/yedeya-labs/kanon/issues/52)) ([c197455](https://github.com/yedeya-labs/kanon/commit/c1974552586bd367029477f0b34e203ee4ca6b0d))
+
 ## [0.7.0](https://github.com/yedeya-labs/kanon/compare/v0.6.1...v0.7.0) (2026-10-02)
 
 
