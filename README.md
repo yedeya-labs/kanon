@@ -59,6 +59,16 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 
 <!-- x-release-please-end -->
 
+**Create the bucket milestones with `kanon milestones`** (step 7 of the checklist). It creates *Product Backlog* and *Development Automation*, with no due date, when no milestone has that name, and reports one that has a due date or is closed without changing it. Running it again creates nothing:
+
+<!-- x-release-please-start-version -->
+
+```sh
+npx --yes --package github:yedeya-labs/kanon#v0.11.0 kanon milestones --repo <owner>/<repo>
+```
+
+<!-- x-release-please-end -->
+
 **Create the agent Apps with [`kanon apps`](docs/apps.md)** (step 12 of the checklist). It builds each role's App from a manifest with exactly that role's permissions, stores the App's id and key as Actions secrets with your own `gh`, and writes the App register row. You click **Create** and **Install** in GitHub for each App; the command never creates one itself. Run it straight from a Kanon release tag, inside your repository's checkout:
 
 <!-- x-release-please-start-version -->
@@ -88,7 +98,7 @@ See the [roadmap](ROADMAP.md) for what comes next.
 |---|---|
 | [`rulebook/`](rulebook/) | The rules. This is Kanon's specification. |
 | [`docs/decisions/`](docs/decisions/) | Architecture decision records: why Kanon is shaped the way it is. |
-| [`cli/`](cli/) | The `kanon` command: so far, [`kanon apps`](docs/apps.md). |
+| [`cli/`](cli/) | The `kanon` command: so far, `kanon milestones` and [`kanon apps`](docs/apps.md). |
 | [`actions/`](actions/) | Kanon's checks, the lane check and the agent-lane blocks, each a versioned composite action. |
 | [`scripts/`](scripts/) | The pipeline library: the scripts the lanes run, through [`kanon-path`](actions/kanon-path/README.md). |
 | [`.github/workflows/`](.github/workflows/) | Kanon's agent lanes and the shared lane workflow they call, the reusable release workflow, and Kanon's own CI, including smoke runs of the blocks and the lanes. |
