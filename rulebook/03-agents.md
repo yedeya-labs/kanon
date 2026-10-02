@@ -459,6 +459,18 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Class.** framework
 
+## Signing off
+
+### `K-AGENT-44` An agent's commits carry the sign-off of the one person the adopter delegated
+
+**Rule.** On a repository that requires a sign-off on every commit (Kanon's `dco` check), the adopter may record a standing delegation naming one person (`K-LAYOUT-14`). A commit authored by an App in the App register (`K-LAYOUT-6`) must then carry exactly that person's `Signed-off-by:`, with no human step per commit. Every other commit is unchanged: a person signs off as its author, and a sign-off by an AI or a bot never counts. The sign-off is always a person's name. Whether a standing delegation meets the Developer Certificate of Origin's certification is the adopter's own judgement, and recording one is the adopter's deliberate act: Kanon never grants it, and never records one for an adopter.
+
+**Why.** The sign-off exists to stop contributions arriving from outside the repository with nobody certifying them. The repository's own agents are a different case: they act for the adopter, under Apps the Owner created (`K-AGENT-6`). Without a delegation an agent's commit can never pass the check, because its only possible author is a bot, so the Implementer and the Lead couldn't run on any repository that requires one, Kanon's own included. Naming one person, in a file a pull request can't change for itself (`K-MERGE-17`), keeps a human accountable for every agent commit without making that human touch each one.
+
+**Enforced by.** The [`dco` action](../actions/dco/README.md). It recognises an agent's commit by its author (the login `<slug>[bot]`, or the noreply email `<id>+<slug>[bot]@users.noreply.github.com`, with the slug in the register), and reads the register and the record from the pull request's **base** branch, never from the PR. With no record, or a malformed one, an agent's commit is checked like any other, and fails on its bot sign-off. [`tests/unit/dco.test.ts`](../tests/unit/dco.test.ts) pins each case.
+
+**Class.** split. The rule, the record's path and format, and the check are framework. **The project supplies:** whether to delegate at all, and to whom.
+
 ## Examples from the reference adopter
 
 - **Bail list** (`K-AGENT-13`): data migrations, auth and credential changes, security changes and destructive schema changes; additive schema and unique-index changes were allowed once conformance tests failed closed on them.

@@ -186,6 +186,7 @@ The merge is pinned to the head commit the verdict read. If the head has moved, 
 | The project's agent instructions | `AGENTS.md` and `CLAUDE.md` (`K-LAYOUT-9`) | Tell the judge what not to check. Both are listed: `CLAUDE.md` imports `AGENTS.md`, so pinning one and not the other leaves the same gap by another route. |
 | The agent configuration | `.claude/` | Change the judge's settings, permissions, hooks, skills, commands or subagents. |
 | The identity register | `docs/qa/agent-identities.md` (`K-LAYOUT-6`) | Add an account to the repository's own agents, or change what a listed App may do. |
+| The sign-off delegation | `docs/qa/sign-off-delegation.md` (`K-LAYOUT-14`) | Name its own author as the person who signs off for the repository's agents (`K-AGENT-44`). |
 | The other pipeline documents | every other markdown file directly inside `docs/qa/` (`K-LAYOUT-1`) | Rewrite a playbook, the escalation paths and bail list (`K-LAYOUT-8`) or the capability ledger. |
 | The project-setup hook | `.github/actions/project-setup` (plan 0001 §5) | Run before the agent, and change the tree or the tools it judges with. |
 | Anything the inputs above delegate to | wherever they point | Reopen the gap one document over, through a file the judge was told to trust. |
@@ -198,7 +199,7 @@ The PR's own copy of each input is kept aside, so a change to one is still revie
 
 **Why.** A PR that edits the inputs of its own review can weaken that review, and then only the human merge is left to catch it. The reference adopter closed this one file at a time: the agent runtime restored `.claude/`, a script then restored the agent documents, and later the review read the register from base. Each gap was found separately, after it existed. One list closes the whole class, and a new input is added to the list rather than found by an incident.
 
-**Enforced by.** Prose only; the mechanism lands at step 4 of [plan 0001](../docs/plans/0001-move-the-agent-lanes.md), when the review lane moves. That lane gets one base-restore step driven by this list, which replaces the adopter's per-file restores, and a test fails when the list and the step disagree. Until then, the reference adopter's review lane restores part of the list file by file (`K-AGENT-22`).
+**Enforced by.** For the identity register and the sign-off delegation as the `dco` check reads them, the check itself: it reads both from base over the API (`K-AGENT-44`). Otherwise prose only; the mechanism lands at step 4 of [plan 0001](../docs/plans/0001-move-the-agent-lanes.md), when the review lane moves. That lane gets one base-restore step driven by this list, which replaces the adopter's per-file restores, and a test fails when the list and the step disagree. Until then, the reference adopter's review lane restores part of the list file by file (`K-AGENT-22`).
 
 **Class.** framework
 

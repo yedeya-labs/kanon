@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  agentSlug,
   checkCommit,
+  DELEGATION_PATH,
   EXEMPT_BOTS,
   fetchCommits,
   isAutomated,
   main,
   offending,
+  parseDelegation,
+  parseRegister,
+  REGISTER_PATH,
   signOffs,
   trailers,
 } from '../../actions/dco/dco.mjs';
@@ -335,5 +340,212 @@ describe('ADR 0010 reading the pull request through the API', () => {
     expect(printed).toContain('git commit --amend -s');
     expect(printed).toContain('git rebase --signoff origin/main');
     expect(printed).toContain('force');
+  });
+});
+
+// K-AGENT-44: delegated sign-off for the repository's own agents.
+const IMPL = 'example-implementer';
+const REGISTER = [
+  '# Agent identities',
+  '',
+  '| Role | App slug | Contents | Issues | Pull requests | Workflows |',
+  '|---|---|---|---|---|---|',
+  `| Implementer | \`${IMPL}\` | Read & write | Read & write | Read & write | Read & write |`,
+  '| Lead | **`example-lead`** | Read & write | Read & write | Read & write | No access |',
+  '',
+].join('\n');
+const record = (who: { name: string; email: string } = ADA, date = '2026-10-02') =>
+  ['# Sign-off delegation', '', '| Delegate | Email | Delegated on |', '|---|---|---|', `| ${who.name} | ${who.email} | ${date} |`, ''].join('\n');
+const DELEGATE = { ...ADA, date: '2026-10-02' };
+const TRUST = { slugs: [IMPL, 'example-lead'], delegate: DELEGATE };
+const BOB = { name: 'Bob', email: 'bob@example.com' };
+
+/** A commit the Implementer's App authored, as GitHub records one pushed with its token. */
+const agentCommit = (message: string, slug = IMPL, over: Partial<Commit> = {}): Commit => {
+  const c = commit(message, {}, { name: `${slug}[bot]`, email: `4242+${slug}[bot]@users.noreply.github.com` });
+  return { ...c, author: { login: `${slug}[bot]`, type: 'Bot' }, committer: { login: `${slug}[bot]` }, ...over };
+};
+
+describe('K-AGENT-44 an agent commit carries the delegate\'s sign-off', () => {
+  it('passes an agent commit signed off by the delegate', () => {
+    expect(checkCommit(agentCommit(`fix: one\n\n${sob()}`), TRUST)).toEqual({ ok: true, delegated: IMPL });
+  });
+
+  it('passes it with a Claude Co-Authored-By beside the sign-off, and the email in another case', () => {
+    const msg = `fix: one\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n${sob({ name: ADA.name, email: 'ADA@example.com' })}`;
+    expect(checkCommit(agentCommit(msg), TRUST).ok).toBe(true);
+  });
+
+  it.each([
+    ['another person', BOB],
+    ['the App itself', { name: `${IMPL}[bot]`, email: `4242+${IMPL}[bot]@users.noreply.github.com` }],
+    ['Claude', { name: 'Claude', email: 'noreply@anthropic.com' }],
+    ["the delegate's name with another email", { name: ADA.name, email: 'ada@elsewhere.com' }],
+  ])('fails an agent commit signed off by %s', (_, who) => {
+    const result = checkCommit(agentCommit(`fix: one\n\n${sob(who)}`), TRUST);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.reason).toContain(`needs the delegate's sign-off "Ada Lovelace <ada@example.com>"`);
+  });
+
+  it('fails an unsigned agent commit', () => {
+    expect(checkCommit(agentCommit('fix: one\n\nNo trailers.'), TRUST).ok).toBe(false);
+  });
+
+  it('fails an agent commit, even signed off by the delegate, when no delegation is recorded', () => {
+    const result = checkCommit(agentCommit(`fix: one\n\n${sob()}`), { ...TRUST, delegate: null });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.reason).toContain('records no sign-off delegation');
+  });
+
+  it('recognises an agent commit by its noreply email when GitHub linked no login', () => {
+    const c = agentCommit(`fix: one\n\n${sob()}`, IMPL, { author: null });
+    expect(agentSlug(c, TRUST.slugs)).toBe(IMPL);
+    expect(checkCommit(c, TRUST)).toEqual({ ok: true, delegated: IMPL });
+  });
+
+  it('recognises an agent commit by its login when the email is not the noreply one', () => {
+    const c = agentCommit(`fix: one\n\n${sob()}`);
+    c.commit.author = { name: 'Implementer', email: 'implementer@example.com' };
+    expect(agentSlug(c, TRUST.slugs)).toBe(IMPL);
+  });
+
+  it("does not delegate for an App that isn't in the register", () => {
+    const c = agentCommit(`fix: one\n\n${sob()}`, 'stranger-app');
+    expect(agentSlug(c, TRUST.slugs)).toBeNull();
+    const result = checkCommit(c, TRUST);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.reason).toContain('not by its author');
+  });
+
+  it('leaves a human commit unchanged: signed by its author passes, signed by the delegate fails', () => {
+    expect(checkCommit(commit(`fix: one\n\n${sob(BOB)}`, {}, BOB), TRUST)).toEqual({ ok: true });
+    const result = checkCommit(commit(`fix: one\n\n${sob()}`, {}, BOB), TRUST);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.reason).toContain('not by its author');
+  });
+
+  it('leaves the exemptions unchanged', () => {
+    expect(checkCommit(botCommit('dependabot[bot]', 'build(deps): bump x'), TRUST)).toEqual({ ok: true, skipped: 'bot' });
+  });
+});
+
+describe('K-LAYOUT-14 the delegation record and the App register parse strictly', () => {
+  it('reads the delegate, the email and the date', () => {
+    expect(parseDelegation(record())).toEqual({ delegate: DELEGATE });
+  });
+
+  it.each([
+    ['no table', '# Sign-off delegation\n\nAda Lovelace delegates.\n', 'has 0 tables'],
+    ['two tables', `${record()}\n${record(BOB)}`, 'has 2 tables'],
+    ['two delegates', `${record()}| Bob | bob@example.com | 2026-10-02 |\n`, 'names 2 delegates'],
+    ['no name', record({ name: '', email: ADA.email }), "no delegate's name"],
+    ['a bad email', record({ name: ADA.name, email: 'ada' }), 'no valid email'],
+    ['a bad date', record(ADA, '2026-02-30'), 'no date as YYYY-MM-DD'],
+    ['a free-text date', record(ADA, 'October 2026'), 'no date as YYYY-MM-DD'],
+    ['an AI delegate', record({ name: 'Claude', email: 'noreply@anthropic.com' }), 'only a person'],
+    ['a bot delegate', record({ name: 'helper[bot]', email: 'h@example.com' }), 'only a person'],
+    ['the table only inside a fence', `\`\`\`\n${record()}\`\`\`\n`, 'has 0 tables'],
+  ])('rejects a record with %s', (_, text, problem) => {
+    const got = parseDelegation(text);
+    expect('problem' in got && got.problem).toContain(problem);
+  });
+
+  it('reads every App slug in the register, bold or not', () => {
+    expect(parseRegister(REGISTER)).toEqual({ slugs: [IMPL, 'example-lead'] });
+  });
+
+  it('rejects a register with no table, or a slug out of backticks', () => {
+    expect(parseRegister('# Agent identities\n\nNone installed.\n')).toEqual({ problem: `${REGISTER_PATH} has 0 tables headed | Role | App slug |, not one` });
+    const bare = parseRegister(REGISTER.replace(`\`${IMPL}\``, IMPL));
+    expect('problem' in bare && bare.problem).toContain('gives the role Implementer no App slug');
+  });
+});
+
+/** A fake API serving the PR, and each file by `<ref>:<path>`, recording every contents read. */
+const repoFetch = (commits: Commit[], files: Record<string, string>, opts: { status?: number } = {}) => {
+  const reads: string[] = [];
+  const impl = (async (url: string | URL | Request) => {
+    const u = new URL(String(url));
+    const pr = u.pathname.match(/^\/repos\/o\/r\/pulls\/7(\/commits)?$/);
+    if (pr) {
+      const body = pr[1] ? (u.searchParams.get('page') === '1' ? commits : []) : { commits: commits.length, base: { ref: 'main', sha: 'b0b0' }, head: { ref: 'feat/x', sha: '0001abc' } };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }
+    const file = u.pathname.match(/^\/repos\/o\/r\/contents\/(.+)$/);
+    if (file) {
+      const key = `${u.searchParams.get('ref')}:${file[1]}`;
+      reads.push(key);
+      if (opts.status) return new Response('boom', { status: opts.status });
+      const text = files[key];
+      return text === undefined ? new Response('not found', { status: 404 }) : new Response(text, { status: 200 });
+    }
+    return new Response('not found', { status: 404 });
+  }) as typeof fetch;
+  return { impl, reads };
+};
+const BASE_FILES = { [`main:${REGISTER_PATH}`]: REGISTER, [`main:${DELEGATION_PATH}`]: record() };
+
+describe('K-AGENT-44 the action reads the register and the record from the base branch', () => {
+  it('passes a PR whose agent commit is signed off by the delegate base names', async () => {
+    const { impl, reads } = repoFetch([agentCommit(`fix: one\n\n${sob()}`)], BASE_FILES);
+    const { out, sink } = capture();
+    expect(await main(env, impl, sink)).toBe(0);
+    expect(reads).toEqual([`main:${REGISTER_PATH}`, `main:${DELEGATION_PATH}`]);
+    expect(out.logs.join('\n')).toContain('for an agent\'s commit by Ada Lovelace');
+  });
+
+  it('fails an agent commit signed off by someone else', async () => {
+    const { impl } = repoFetch([agentCommit(`fix: one\n\n${sob(BOB)}`)], BASE_FILES);
+    const { out, sink } = capture();
+    expect(await main(env, impl, sink)).toBe(1);
+    expect(out.errors.join('\n')).toContain("needs the delegate's sign-off");
+  });
+
+  it('fails an agent commit when base has no record, and says so', async () => {
+    const { impl } = repoFetch([agentCommit(`fix: one\n\n${sob()}`)], { [`main:${REGISTER_PATH}`]: REGISTER });
+    const { out, sink } = capture();
+    expect(await main(env, impl, sink)).toBe(1);
+    expect(out.logs.join('\n')).toContain(`${DELEGATION_PATH} doesn't exist on main`);
+    expect(out.errors.join('\n')).toContain('records no sign-off delegation');
+  });
+
+  it('fails an agent commit when base has a malformed record, and names the problem', async () => {
+    const { impl } = repoFetch([agentCommit(`fix: one\n\n${sob()}`)], { ...BASE_FILES, [`main:${DELEGATION_PATH}`]: record(ADA, 'soon') });
+    const { out, sink } = capture();
+    expect(await main(env, impl, sink)).toBe(1);
+    expect(out.logs.join('\n')).toContain('no date as YYYY-MM-DD');
+  });
+
+  it('judges a PR that names its own delegate by base, not by the PR', async () => {
+    // The PR edits the record to name Bob, and its agent commit is signed off by Bob.
+    const files = { ...BASE_FILES, [`feat/x:${DELEGATION_PATH}`]: record(BOB), [`0001abc:${DELEGATION_PATH}`]: record(BOB) };
+    const { impl, reads } = repoFetch([commit(`docs: delegate to Bob\n\n${sob()}`), agentCommit(`fix: one\n\n${sob(BOB)}`)], files);
+    const { sink } = capture();
+    expect(await main(env, impl, sink)).toBe(1);
+    expect(reads.every((r) => r.startsWith('main:'))).toBe(true);
+  });
+
+  it('judges a PR that adds its own App to the register by base, not by the PR', async () => {
+    const headRegister = `${REGISTER}| Merger | \`intruder-app\` | Read & write | Read & write | Read & write | No access |\n`;
+    const files = { ...BASE_FILES, [`feat/x:${REGISTER_PATH}`]: headRegister };
+    const { impl, reads } = repoFetch([agentCommit(`fix: one\n\n${sob()}`, 'intruder-app')], files);
+    const { out, sink } = capture();
+    expect(await main(env, impl, sink)).toBe(1);
+    expect(out.errors.join('\n')).toContain('not by its author');
+    expect(reads.every((r) => r.startsWith('main:'))).toBe(true);
+  });
+
+  it('reads nothing from base for a PR of human commits', async () => {
+    const { impl, reads } = repoFetch([commit(`feat: x\n\n${sob()}`)], BASE_FILES);
+    const { sink } = capture();
+    expect(await main(env, impl, sink)).toBe(0);
+    expect(reads).toEqual([]);
+  });
+
+  it('fails closed when base cannot be read', async () => {
+    const { impl } = repoFetch([agentCommit(`fix: one\n\n${sob()}`)], BASE_FILES, { status: 500 });
+    const { out, sink } = capture();
+    expect(await main(env, impl, sink)).toBe(1);
+    expect(out.errors.join('\n')).toContain('Could not read the App register or the sign-off delegation from main');
   });
 });
