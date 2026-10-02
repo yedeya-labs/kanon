@@ -58,7 +58,7 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 
 <!-- x-release-please-end -->
 
-**Create the agent Apps with [`kanon apps`](docs/apps.md)** (step 12 of the checklist). It builds each role's App from a manifest with exactly that role's permissions, stores the App's id and key as Actions secrets with your own `gh`, and writes the App register row. You click **Create** and **Install** in GitHub for each App; the command never creates one itself. Until the npm package is published, run it from a release tag, inside your repository's checkout:
+**Create the agent Apps with [`kanon apps`](docs/apps.md)** (step 12 of the checklist). It builds each role's App from a manifest with exactly that role's permissions, stores the App's id and key as Actions secrets with your own `gh`, and writes the App register row. You click **Create** and **Install** in GitHub for each App; the command never creates one itself. Run it straight from a Kanon release tag, inside your repository's checkout:
 
 <!-- x-release-please-start-version -->
 
