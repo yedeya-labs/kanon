@@ -22,12 +22,13 @@
 // token; `main()` only gathers its inputs and performs its verdict.
 //
 // Env: GH_TOKEN (the workflow's default token — see the workflow for why not the App's),
+//      LABEL_TOKEN (the Implementer's App token, for the `qa:needs-split` label alone),
 //      GITHUB_REPOSITORY, ISSUE, RUN_ID, KIND (the classifier's verdict), APPLY.
 
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { AGENT_LOGIN, linkedPrIndex, norm } from './dispatch-sweep.mjs';
-import { SPLIT_LABEL, SPLIT_WORKFLOW, exhaustedRoute, projectOf } from './split-lineage.mjs';
+import { SPLIT_LABEL, exhaustedRoute, projectOf } from './split-lineage.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const IMPLEMENT = 'agent:implement';
@@ -136,8 +137,53 @@ export function renderComment({ act, why, label = STOP_LABEL }, { runUrl, kind }
   ].join('\n');
 }
 
-function gh(args) {
-  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+/**
+ * What `main` does with a verdict, in order, and on which token: `workflow` is the job's
+ * default token, `app` the Implementer's. PURE, so the order and the token of every call
+ * are testable without one.
+ *
+ * ONE CALL RIDES THE APP TOKEN: adding `qa:needs-split`. A label the default token adds
+ * raises no event, so the split lane would never hear of it; the App's label raises
+ * `issues: labeled`, which starts `agent-lead-split.yml` through its membership gate as a
+ * registered App (`K-AGENT-45`). This replaced a `gh workflow run` on the default token,
+ * which the gate refuses: its actor is `github-actions[bot]`, outside the App register
+ * (plan 0001 decision 21, the Owner's option (a)). The Implementer already holds Issues
+ * write; no App holds the Actions write a dispatch would need.
+ *
+ * EVERYTHING ELSE STAYS ON THE DEFAULT TOKEN, deliberately: the crash marker must read as
+ * `github-actions` (`CRASH_AUTHOR`), never as the Implementer, or it would read as "the
+ * agent spoke" and park the issue; and the other edits need no event.
+ *
+ * @param {{act: string, label?: string}} verdict
+ * @param {string} issue
+ * @param {string} body the comment
+ * @returns {{args: string[], token: 'workflow'|'app'}[]}
+ */
+export function plan(verdict, issue, body) {
+  const on = (token, ...args) => ({ args: [...args, '--repo', REPO], token });
+  if (verdict.act === 'none') return [];
+  if (verdict.act === 'stop') {
+    // The stop label FIRST: if the removal then failed the issue is still parked for a
+    // human rather than left carrying neither label and invisible to every lane. The split
+    // lane's own gate skips an issue still carrying `agent:implement`; it reads the labels
+    // a runner and a checkout later, well after the removal below.
+    return [
+      on(verdict.label === SPLIT_LABEL ? 'app' : 'workflow', 'issue', 'edit', issue, '--add-label', verdict.label),
+      on('workflow', 'issue', 'edit', issue, '--remove-label', IMPLEMENT),
+      on('workflow', 'issue', 'comment', issue, '--body', body),
+    ];
+  }
+  // The comment FIRST, because it is what records the attempt — the order the sweep's
+  // `redispatch()` uses and for its reason: an uncounted retry is an uncapped one.
+  return [
+    on('workflow', 'issue', 'comment', issue, '--body', body),
+    on('workflow', 'issue', 'edit', issue, '--remove-label', IMPLEMENT),
+  ];
+}
+
+function gh(args, token) {
+  const env = token ? { ...process.env, GH_TOKEN: token } : process.env;
+  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env });
 }
 const ghJson = (args) => JSON.parse(gh(args));
 
@@ -171,25 +217,15 @@ function main() {
   console.log(`#${issue}: ${verdict.act} — ${verdict.why}`);
   if (verdict.act === 'none' || !apply) return;
   const body = renderComment(verdict, { runUrl: `https://github.com/${REPO}/actions/runs/${runId}`, kind });
-  if (verdict.act === 'stop') {
-    // The stop label FIRST: if the removal then failed the issue is still parked for a
-    // human rather than left carrying neither label and invisible to every lane.
-    gh(['issue', 'edit', issue, '--repo', REPO, '--add-label', verdict.label]);
-    gh(['issue', 'edit', issue, '--repo', REPO, '--remove-label', IMPLEMENT]);
-    gh(['issue', 'comment', issue, '--repo', REPO, '--body', body]);
-    // START THE SPLIT LANE EXPLICITLY. A label this job adds rides the DEFAULT token, and
-    // an event the default token raises triggers no workflow — so `agent-lead-split.yml`'s
-    // `issues: labeled` trigger would never see it. `workflow_dispatch` is the one event
-    // the default token may raise (with `actions: write`, granted on this job alone).
-    if (verdict.label === SPLIT_LABEL) {
-      gh(['workflow', 'run', SPLIT_WORKFLOW, '--repo', REPO, '-f', `issue=${issue}`]);
-    }
-  } else {
-    // The comment FIRST, because it is what records the attempt — the order the sweep's
-    // `redispatch()` uses and for its reason: an uncounted retry is an uncapped one.
-    gh(['issue', 'comment', issue, '--repo', REPO, '--body', body]);
-    gh(['issue', 'edit', issue, '--repo', REPO, '--remove-label', IMPLEMENT]);
+  const calls = plan(verdict, issue, body);
+  // NO APP TOKEN, NO SPLIT: fail before the first edit, by name, rather than add the label
+  // on the default token, where it would start nothing and look done.
+  const appToken = process.env.LABEL_TOKEN ?? '';
+  if (calls.some((c) => c.token === 'app') && !appToken) {
+    console.log(`::error title=implement-crash::#${issue} must be split, and the split lane starts only on a \`${SPLIT_LABEL}\` label added by an App; LABEL_TOKEN (the Implementer's App token) is not set, so nothing was changed`);
+    process.exit(1);
   }
+  for (const c of calls) gh(c.args, c.token === 'app' ? appToken : undefined);
   console.log(`::warning title=implement-crash::#${issue} ${verdict.act === 'retry' ? 'released for re-dispatch' : `handed on (${verdict.label})`} — ${verdict.why}`);
 }
 

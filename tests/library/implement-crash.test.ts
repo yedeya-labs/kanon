@@ -1,12 +1,15 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { laneBlockOf, readBlock, readSpine } from '../unit/helpers/spine.js';
 import {
   CRASH_AUTHOR, CRASH_MARKER, MAX_CRASH_RETRIES, STOP_LABEL,
-  agentSpokeSince, decide, priorCrashes, projectOf, renderComment,
+  agentSpokeSince, decide, plan, priorCrashes, projectOf, renderComment,
 } from '../../scripts/implement-crash.mjs';
+import { writeStub } from '../unit/helpers/stub-bin.js';
 import { SPLIT_LABEL, splitMarker } from '../../scripts/split-lineage.mjs';
 import { AGENT_LOGIN } from '../../scripts/dispatch-sweep.mjs';
 import { ROOT } from './helpers/adopter.js';
@@ -145,6 +148,73 @@ describe('the inputs', () => {
   });
 });
 
+describe('which token each edit rides (plan 0001 decision 21)', () => {
+  const issue = '4242';
+  it('an exhausted project member: the split label as the App, everything else as the workflow', () => {
+    const calls = plan({ act: 'stop', label: SPLIT_LABEL }, issue, 'body');
+    expect(calls.map((c) => [c.args.slice(0, 2).join(' '), c.args.includes('--add-label') ? 'add' : c.args.includes('--remove-label') ? 'remove' : 'comment', c.token])).toEqual([
+      ['issue edit', 'add', 'app'],
+      ['issue edit', 'remove', 'workflow'],
+      ['issue comment', 'comment', 'workflow'],
+    ]);
+    expect(calls[0]!.args).toContain(SPLIT_LABEL);
+  });
+  it('a stop to a human, and a retry: nothing rides the App', () => {
+    expect(plan({ act: 'stop', label: STOP_LABEL }, issue, 'b').map((c) => c.token)).toEqual(['workflow', 'workflow', 'workflow']);
+    expect(plan({ act: 'retry' }, issue, 'b').map((c) => c.token)).toEqual(['workflow', 'workflow']);
+    expect(plan({ act: 'none' }, issue, 'b')).toEqual([]);
+  });
+
+  // THE SCRIPT, RUN: a stub `gh` records the token of every call it receives.
+  const run = (env: Record<string, string>) => {
+    const dir = mkdtempSync(join(tmpdir(), 'implement-crash-'));
+    const log = join(dir, 'calls');
+    writeFileSync(log, '');
+    const view = JSON.stringify({ state: 'OPEN', labels: [{ name: IMPL }], comments: [], body: 'work\n\n<!-- qa:project 27 -->' });
+    writeStub(join(dir, 'gh'), [
+      '#!/usr/bin/env bash',
+      `printf '%s|%s\\n' "$GH_TOKEN" "$*" >> '${log}'`,
+      'case "$1 $2" in',
+      `  "api "*) echo '{"run_started_at":"2026-10-02T00:00:00Z"}' ;;`,
+      `  "issue view") printf '%s' '${view}' ;;`,
+      `  "pr list") echo '[]' ;;`,
+      'esac',
+      '',
+    ].join('\n'));
+    const r = spawnSync('node', [join(ROOT, 'scripts/implement-crash.mjs')], {
+      encoding: 'utf8', timeout: 30_000,
+      env: {
+        ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: 'example-org/example-repo',
+        ISSUE: '4242', RUN_ID: '7', KIND: 'exhausted', APPLY: '1', GH_TOKEN: 'workflow-token', ...env,
+      },
+    });
+    const calls = readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => {
+      const [token, ...rest] = l.split('|');
+      return { token, args: rest.join('|') };
+    });
+    return { status: r.status, out: r.stdout + r.stderr, calls };
+  };
+
+  it('labels with the App token, comments with the workflow token, and never dispatches', () => {
+    const r = run({ LABEL_TOKEN: 'app-token' });
+    expect(r.status, r.out).toBe(0);
+    const writes = r.calls.filter((c) => /^issue (edit|comment)|^workflow/.test(c.args));
+    expect(writes.map((c) => `${c.token} ${c.args.split(' --repo')[0]!.split(' --body')[0]}`)).toEqual([
+      `app-token issue edit 4242 --add-label ${SPLIT_LABEL}`,
+      `workflow-token issue edit 4242 --remove-label ${IMPL}`,
+      'workflow-token issue comment 4242',
+    ]);
+    expect(r.calls.some((c) => /^workflow /.test(c.args))).toBe(false);
+  });
+
+  it('changes nothing, by name, when the App token is missing — never a label that starts nothing', () => {
+    const r = run({ LABEL_TOKEN: '' });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('LABEL_TOKEN');
+    expect(r.calls.filter((c) => /^issue (edit|comment)|^workflow/.test(c.args))).toEqual([]);
+  });
+});
+
 describe('the wiring', () => {
   const wf = parse(readFileSync(join(ROOT, '.github/workflows/agent-implement.yml'), 'utf8')) as {
     jobs: Record<string, { needs?: string; if?: string; permissions?: Record<string, string>; steps?: Array<{ run?: string; uses?: string; env?: Record<string, string> }> }>;
@@ -162,13 +232,24 @@ describe('the wiring', () => {
     const steps = job?.steps ?? [];
     expect(steps.slice(0, steps.indexOf(step!)).some((s) => s.uses === '$/actions/kanon-path')).toBe(true);
     expect(step?.env?.KIND).toContain('needs.implement.outputs.kind');
-    expect(step?.env?.GH_TOKEN, 'the default token — its comments read as a bot, never as the Implementer').toContain('github.token');
+    expect(step?.env?.GH_TOKEN, 'the default token — its comments read as a bot, never as the Implementer').toBe('${{ github.token }}');
     expect(job?.permissions?.issues).toBe('write');
-    // RA-1781: the split lane is started by `gh workflow run`, because a label this job
-    // adds rides the default token and raises no event.
-    expect(job?.permissions?.actions).toBe('write');
+    // Decision 21: the split lane is started by the Implementer's label, never by a
+    // dispatch, so the default token needs no Actions write — only the run's start time.
+    expect(job?.permissions?.actions).toBe('read');
+    // The App token is minted in this job, narrowed to Issues write, and handed to the
+    // script as LABEL_TOKEN — never as GH_TOKEN, which would put the comment on it.
+    const mint = steps.find((s) => (s.uses ?? '').startsWith('actions/create-github-app-token')) as
+      { id?: string; with?: Record<string, string> } | undefined;
+    expect(mint?.with?.['app-id']).toBe('${{ secrets.IMPLEMENTER_APP_ID }}');
+    expect(mint?.with?.['permission-issues']).toBe('write');
+    expect(Object.keys(mint?.with ?? {}).filter((k) => k.startsWith('permission-'))).toEqual(['permission-issues']);
+    expect(steps.indexOf(mint as never)).toBeLessThan(steps.indexOf(step!));
+    // After the checkout, so the checkout never persists the App's token as git's credential.
+    expect(steps.findIndex((s) => (s.uses ?? '').startsWith('actions/checkout'))).toBeLessThan(steps.indexOf(mint as never));
+    expect(step?.env?.LABEL_TOKEN).toBe(`\${{ steps.${mint?.id}.outputs.token }}`);
     const src = readFileSync(join(ROOT, 'scripts/implement-crash.mjs'), 'utf8');
-    expect(src).toMatch(/if \(verdict\.label === SPLIT_LABEL\) \{\s*gh\(\['workflow', 'run', SPLIT_WORKFLOW/);
+    expect(src).not.toMatch(/'workflow', 'run'/);
     // `main` hands `decide` the BODY — without it every split child reads as a first
     // exhaustion and is split again, which is the recursion the lineage marker bounds.
     expect(src).toMatch(/crashes: priorCrashes\(comments\),\s*body: view\.body,/);

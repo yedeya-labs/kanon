@@ -16,7 +16,9 @@
 # request, and the implement lane's crash recovery runs only after its agent job failed. The
 # review lane's filter starts only on a CI completion, a review label or a dispatch, and
 # refuses any other pull_request event at its membership gate; verify-acs starts only on
-# `qa:verify` or a dispatch. The jobs that would mint and run are skipped. The model
+# `qa:verify` or a dispatch. The brief lane starts only on a dispatch, the split lane only
+# on `qa:needs-split` or a dispatch, and the rebase lane only on a CI completion, its
+# schedule or a dispatch. The jobs that would mint and run are skipped. The model
 # call is proven by the reference adopter's live run after each upgrade.
 #
 # The secrets are mapped by their fixed names to a secret that does not exist: nothing that
@@ -63,7 +65,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: read
-      actions: write
+      actions: read
     uses: $/.github/workflows/agent-implement.yml
     secrets:
       IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -113,9 +115,41 @@ jobs:
       EXPLORER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
+  lead:
+    permissions:
+      contents: read
+    uses: $/.github/workflows/agent-lead.yml
+    secrets:
+      LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
+
+  lead-split:
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: $/.github/workflows/agent-lead-split.yml
+    secrets:
+      LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
+
+  rebase:
+    # The ceiling covers the filter's job-level grants, as for the implement lane.
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    uses: $/.github/workflows/agent-rebase.yml
+    secrets:
+      IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
+
   smoke:
     name: Agent lanes smoke
-    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs]
+    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs, lead, lead-split, rebase]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -125,7 +159,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"'
-          echo "$RESULTS" | jq -e 'to_entries | length == 7 and all(.value.result == "success" or .value.result == "skipped")'
+          echo "$RESULTS" | jq -e 'to_entries | length == 10 and all(.value.result == "success" or .value.result == "skipped")'
 
       # For the fixture adopter only. lane-check itself comes from `$/`.
       - uses: actions/checkout@v7

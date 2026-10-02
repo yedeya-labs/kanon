@@ -258,8 +258,11 @@ jobs:
   #
   # AN EXHAUSTED RUN IS SPLIT, NOT RETRIED (RA-1781). A project member whose run hit its
   # turn or budget cap is labelled `qa:needs-split` — or `qa:needs-info` if it is itself
-  # a split child — and the script then starts `agent-lead-split.yml` by
-  # `workflow_dispatch`, because the label it adds on this token raises no event.
+  # a split child. That ONE label rides the Implementer's App token, narrowed to Issues
+  # write, so its `labeled` event starts `agent-lead-split.yml`, whose membership gate
+  # admits a registered App. It used to be a `gh workflow run` on the default token, which
+  # that gate refuses as `github-actions[bot]` (plan 0001 decision 21, the Owner's option
+  # (a)). The comment and every other edit stay on the default token.
   crash-recovery:
     needs: implement
     if: failure() && needs.implement.result == 'failure'
@@ -269,10 +272,9 @@ jobs:
       contents: read # checkout, for the App register the script reads its logins from
       issues: write # the crash marker and the label edit
       pull-requests: read # does an open PR already close this issue?
-      # Read: this run's start time, to tell "spoke during this run" from before it.
-      # Write: `gh workflow run agent-lead-split.yml` on an exhausted project member
-      # (RA-1781) — the one event the default token may raise that starts a workflow.
-      actions: write
+      # This run's start time, to tell "spoke during this run" from before it. Read only:
+      # the split lane is started by the App's label, not by a dispatch (decision 21).
+      actions: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -281,9 +283,20 @@ jobs:
       # The script is Kanon's, read from the action cache at the tag the caller pinned
       # (plan 0001 §3); the checkout above is the adopter's, for its App register.
       - uses: $/actions/kanon-path
+      # The Implementer's token, for the `qa:needs-split` label alone (decision 21), narrowed
+      # to the one permission that label needs (`K-AGENT-46`). Minted on every crash run: the
+      # route is the script's decision, and a mint costs nothing it could skip.
+      - name: Mint the Implementer's token for the split label
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
+          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          permission-issues: write
       - name: Free the WIP slot a crashed run would otherwise hold
         env:
           GH_TOKEN: ${{ github.token }}
+          LABEL_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
           RUN_ID: ${{ github.run_id }}

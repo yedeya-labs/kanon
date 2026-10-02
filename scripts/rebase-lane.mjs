@@ -227,6 +227,22 @@ export const PR_FIELDS = `number,author,state,isDraft,labels,headRefOid,headRefN
 const gh = (args) => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const ghJson = (args) => JSON.parse(gh(args));
 
+/**
+ * Is this job, by the name the jobs API gives it, the lane's matrix job for PR `n`?
+ *
+ * TWO SPELLINGS. The lane's own file names it `resolve (<n>)`. Called from an adopter's
+ * caller, as a Kanon lane is (plan 0001 step 5), the API prefixes the caller's job:
+ * `<caller job> / resolve (<n>)`. Reading only the first would find no breadcrumb in any
+ * Kanon run, so a head whose attempt died of its cause would never be retried, silently.
+ *
+ * @param {string} name
+ * @param {number|string} n
+ */
+export function isResolveJob(name, n) {
+  const own = `resolve (${n})`;
+  return name === own || name.endsWith(` / ${own}`);
+}
+
 /** Render for a human. Says what it examined, not only what it found. */
 export function report({ resolve, noted }) {
   const lines = ['## Rebase lane — conflicting pipeline PRs\n'];
@@ -273,7 +289,7 @@ function main() {
     attemptsOf: (pr) => { const b = bodies(pr); return b === null ? null : attemptsIn(b, pr.headRefOid); },
     // The matrix job for THIS PR only: one run resolves every PR a `main` merge
     // conflicted, and another PR's capped job must not license this one's retry.
-    evidenceOf: (runId, pr) => readRetry(runId, { job: (name) => name === `resolve (${pr.number})` }),
+    evidenceOf: (runId, pr) => readRetry(runId, { job: (name) => isResolveJob(name, pr.number) }),
   });
   const text = report(decision);
   console.error(text);

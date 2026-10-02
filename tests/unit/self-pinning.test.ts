@@ -31,6 +31,8 @@ const files = [
 // it runs the release too; it then reads the lanes at the version the caller pins.
 const EXEMPT = new Set([
   '.github/workflows/agent-lane.yml: ./.github/actions/project-setup',
+  '.github/workflows/agent-lead-split.yml: ./.github/actions/project-setup',
+  '.github/workflows/agent-rebase.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-review.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-verify-acs.yml: ./.github/actions/project-setup',
   '.github/workflows/dco.yml: yedeya-labs/kanon/actions/dco@vX.Y.Z',

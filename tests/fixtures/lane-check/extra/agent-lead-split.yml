@@ -1,0 +1,26 @@
+# A trigger-only caller of Kanon's split lane, as an adopter writes it (plan 0001 §3).
+name: Lead — split
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: The oversized issue to split (it must carry qa:needs-split)
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  split:
+    uses: yedeya-labs/kanon/.github/workflows/agent-lead-split.yml@v1.2.3
+    with:
+      issue: ${{ inputs.issue }}
+    secrets:
+      LEAD_APP_ID: ${{ secrets.LEAD_APP_ID }}
+      LEAD_APP_PRIVATE_KEY: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

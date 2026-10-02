@@ -32,12 +32,15 @@ const LANES = readdirSync(WORKFLOWS)
   .sort();
 
 /** The triggers each lane's caller holds (docs/lanes.md), as the event the gate sees. */
-type Trigger = 'review' | 'issue-label' | 'pr-label' | 'merged' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened';
+type Trigger = 'review' | 'issue-label' | 'pr-label' | 'merged' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'schedule';
 const TRIGGERS: Record<string, Trigger[]> = {
   'agent-implement-revise.yml': ['review', 'pr-label', 'dispatch'],
   'agent-implement.yml': ['issue-label', 'dispatch'],
   'agent-lead-revise.yml': ['review', 'pr-label', 'dispatch'],
+  'agent-lead-split.yml': ['issue-label', 'dispatch'],
+  'agent-lead.yml': ['dispatch'],
   'agent-merge-reconcile.yml': ['merged', 'review', 'dispatch'],
+  'agent-rebase.yml': ['ci-finished', 'schedule', 'dispatch'],
   'agent-review.yml': ['ci-finished', 'pr-target-label', 'pr-target-opened', 'dispatch'],
   'agent-triage.yml': ['issue-label', 'dispatch'],
   'agent-verify-acs.yml': ['issue-label', 'dispatch'],
@@ -94,6 +97,16 @@ const gateProblems = (wf: Workflow): string[] => {
     }
   }
   for (const [id] of rest) if (!gatedJobs.has(id)) problems.push(`job ${id} can run without the gate admitting`);
+
+  // A refusal leaves every output of the gate's job EMPTY, and an empty output passes any
+  // `!=` test: `needs.filter.outputs.prs != '[]'` is true on a refused event. So a job that
+  // tests one of that job's outputs with `!=` must also require the verdict itself.
+  for (const [id, j] of rest) {
+    const cond = String(j.if ?? '');
+    const negated = new RegExp(`needs\\.${gate.jobId}\\.outputs\\.[\\w-]+\\s*!=`).test(cond);
+    const verdict = new RegExp(`needs\\.${gate.jobId}\\.outputs\\.member\\s*==\\s*'true'\\s*&&`).test(cond);
+    if (negated && !verdict) problems.push(`job ${id} tests an output of ${gate.jobId} with != without requiring its member verdict first`);
+  }
   return problems;
 };
 
@@ -128,6 +141,12 @@ describe('every lane carries the membership gate (K-AGENT-45)', () => {
       const wf = lane('agent-triage.yml');
       wf.jobs['triage-fix']!.if = "github.event.label.name == 'qa:needs-triage'";
       expect(gateProblems(wf)).toEqual(['job triage-fix can run without the gate admitting']);
+    });
+    it('a job that reads an empty, refused output as a value', () => {
+      // The rebase lane's matrix job: `'' != '[]'` is true when the gate refused.
+      const wf = lane('agent-rebase.yml');
+      wf.jobs.resolve!.if = "needs.filter.outputs.prs != '[]'";
+      expect(gateProblems(wf)).toEqual(['job resolve tests an output of filter with != without requiring its member verdict first']);
     });
     it('a job reading a gated job it does not need', () => {
       const wf = lane('agent-implement.yml');
@@ -183,6 +202,8 @@ const eventFor = (trigger: Trigger, actor: Actor): { name: string; payload: obje
       return { name: 'pull_request_target', payload: { action: 'labeled', sender: user }, env: {} };
     case 'pr-target-opened':
       return { name: 'pull_request_target', payload: { action: 'opened', sender: user }, env: {} };
+    case 'schedule':
+      return { name: 'schedule', payload: { schedule: '50 5 * * *' }, env: { GITHUB_ACTOR: actor.login } };
   }
 };
 
@@ -321,6 +342,10 @@ describe('who the actor is', () => {
   it('a dispatch: whoever ran it, re-runs included', () => {
     expect(triggeringActor('workflow_dispatch', {}, env)).toEqual({ actor: { login: 'the-rerunner', source: 'user who ran it' } });
     expect(triggeringActor('workflow_dispatch', {}, { GITHUB_ACTOR: 'the-actor' })).toEqual({ actor: { login: 'the-actor', source: 'user who ran it' } });
+  });
+  it('a schedule: the user GitHub runs it as, whoever last changed it', () => {
+    expect(triggeringActor('schedule', { schedule: '50 5 * * *' }, env)).toEqual({ actor: { login: 'the-actor', source: 'user who last changed the schedule' } });
+    expect(triggeringActor('schedule', {}, {})).toHaveProperty('refuse');
   });
   it('anything else is refused, as is an event with no actor', () => {
     for (const name of ['push', 'merge_group', 'workflow_run', 'issue_comment', '']) expect(triggeringActor(name, {}, env)).toHaveProperty('refuse');

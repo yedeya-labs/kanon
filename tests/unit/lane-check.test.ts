@@ -129,7 +129,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
     // implement lane's crash recovery (issues, pull requests and actions, on the default
     // token) is part of what its caller must grant.
     it('counts a grant the lane makes on one of its jobs, not only at its top level', () =>
-      red((t) => t.edit('.github/workflows/agent-implement.yml', (d) => { delete (d as Caller).permissions!.actions; }), 'grants actions: none; the Kanon lane agent-implement needs actions: write'));
+      red((t) => t.edit('.github/workflows/agent-implement.yml', (d) => { delete (d as Caller).permissions!.actions; }), 'grants actions: none; the Kanon lane agent-implement needs actions: read'));
     it('takes the wider of a top-level and a job-level grant of one scope', () =>
       red((t) => t.edit('.github/workflows/agent-implement.yml', (d) => { (d as Caller).permissions!.issues = 'read'; }), 'needs issues: write'));
     it('reads the calling job\'s own grant over the workflow\'s', () => {
@@ -229,6 +229,23 @@ describe.skipIf(!hasYq)('lane-check', () => {
     });
     it('refuses the verify-acs caller while the register has no Explorer', () =>
       red((t) => { extra(t, VERIFY); }, 'lists the role Explorer 0 times'));
+  });
+
+  describe('the lead, lead-split and rebase lanes (step 5)', () => {
+    const LANES = ['agent-lead', 'agent-lead-split', 'agent-rebase'].map((f) => `.github/workflows/${f}.yml`);
+    const extra = (t: Tree, f: string) => t.write(f, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra', f.split('/').pop()!), 'utf8'));
+    const REBASE = LANES[2]!;
+    it('accepts all three callers, run as the Lead and the Implementer the register lists', () => {
+      const t = adopter();
+      for (const f of LANES) extra(t, f);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('7 lane caller(s) pass');
+    });
+    it('refuses a rebase caller that does not grant the filter job’s read of runs', () =>
+      red((t) => { extra(t, REBASE); t.edit(REBASE, (d) => { delete (d as Caller).permissions!.actions; }); }, 'needs actions: read'));
+    it('refuses a split caller that grants the gate’s label edit only read', () =>
+      red((t) => { extra(t, LANES[1]!); t.edit(LANES[1]!, (d) => { (d as Caller).permissions!.issues = 'read'; }); }, 'needs issues: write'));
   });
 
   describe('the project-setup hook (§5)', () => {

@@ -1,0 +1,30 @@
+# A trigger-only caller of Kanon's rebase lane, as an adopter writes it (plan 0001 §3).
+name: Rebase lane
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "50 5 * * *"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: A single PR to consider (blank = every open PR)
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  rebase:
+    uses: yedeya-labs/kanon/.github/workflows/agent-rebase.yml@v1.2.3
+    with:
+      pr_number: ${{ inputs.pr_number }}
+    secrets:
+      IMPLEMENTER_APP_ID: ${{ secrets.IMPLEMENTER_APP_ID }}
+      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

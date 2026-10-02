@@ -1,0 +1,26 @@
+# A trigger-only caller of Kanon's brief lane, as an adopter writes it (plan 0001 §3).
+name: Lead — brief
+
+on:
+  workflow_dispatch:
+    inputs:
+      mandate:
+        description: What to plan — one paragraph, in your own words
+        required: true
+      context:
+        description: Issue numbers this covers, comma-separated (optional)
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  brief:
+    uses: yedeya-labs/kanon/.github/workflows/agent-lead.yml@v1.2.3
+    with:
+      mandate: ${{ inputs.mandate }}
+      context: ${{ inputs.context }}
+    secrets:
+      LEAD_APP_ID: ${{ secrets.LEAD_APP_ID }}
+      LEAD_APP_PRIVATE_KEY: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
