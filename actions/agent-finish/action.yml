@@ -98,7 +98,7 @@ inputs:
     default: ""
 
   # THE VERSION-2 ROW'S INPUTS (plan 0002 §2). `lane` turns it on; the rest say where a red
-  # run failed and whose code failed, as outcomes and codes only (§2.6).
+  # run failed and whose code failed, as step conclusions and codes only (§2.6).
   lane:
     description: >-
       Kanon's lane name (`LANES` in agent-telemetry's `schema.mjs`). Set, the run also writes
