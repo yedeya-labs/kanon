@@ -26,6 +26,12 @@
 //                            dispatch, so this cannot refuse a human today; it is checked
 //                            anyway so that every path through every lane asks one question,
 //                            and so that a dispatch by an App outside the register is refused.
+//   schedule                 the user GitHub runs it as, `GITHUB_ACTOR`: whoever last changed
+//                            the cron in the caller on the default branch, or changed the
+//                            default branch itself. It has no other actor, and that user is
+//                            the one GitHub holds to the schedule. Checked the same way, so a
+//                            schedule set by someone who has since lost access is refused,
+//                            not run on their behalf. The rebase lane's daily floor runs on it.
 //   anything else            refused: no lane acts on another event, and a lane that starts
 //                            to must decide who its actor is here first.
 //
@@ -107,6 +113,8 @@ export function triggeringActor(eventName, event, env) {
       return found(env.GITHUB_TRIGGERING_ACTOR || env.GITHUB_ACTOR, 'user who ran it');
     case 'workflow_run':
       return found(event.workflow_run?.triggering_actor?.login || event.workflow_run?.actor?.login, 'user whose push the finished workflow ran on');
+    case 'schedule':
+      return found(env.GITHUB_ACTOR, 'user who last changed the schedule');
     default:
       return { refuse: `no lane acts on a ${eventName || 'nameless'} event` };
   }

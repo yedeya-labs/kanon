@@ -1,0 +1,432 @@
+# QA pipeline — Agent 2 (the Implementer), MODE: resolve-conflict. RA-2150. A Kanon lane
+# (plan 0001, step 5).
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:`
+# this file at an exact Kanon tag, passes `pr_number` through, and maps the three secrets
+# by name (never `secrets: inherit`). The `github` context in a called workflow is the
+# caller's, so the filter reads the finished CI run exactly as it did when this file held
+# the triggers itself.
+#
+# Resolves the merge conflict on a pipeline PR, so that CI and revise — both
+# `pull_request`-triggered, and undispatched while a PR conflicts — and the review that
+# follows CI can resume. (Review's LABEL trigger is `pull_request_target` since RA-2299 and
+# does fire on a conflicting PR, but its run defers without CI on the head; RA-2302.)
+#
+# ── WHY NOT A LABEL, AND WHY NOT A SCRIPT ───────────────────────────────────
+# Both were tried and both are recorded in Kanon's `scripts/rebase-lane.mjs` header. In
+# short: GitHub dispatches no `pull_request` event for a conflicting PR (RA-1722), so the
+# label churn every other re-delivery here uses cannot reach these PRs at all; and
+# `git merge` has already auto-resolved everything resolvable, so what remains is by
+# definition a judgement and a script cannot make it (RA-2164's review measured this).
+#
+# ── THE TRIGGER IS THE EVENT THAT CREATES THE CONDITION ─────────────────────
+# A merge to `main` is the only thing that makes an already-open PR conflict, and CI
+# completing on `main` is how this repo observes one (`agent-merge.yml` measured that
+# trigger at 12-37x/day). The cron is a FLOOR: the only states it adds are ones no
+# `main` merge caused, such as a human clearing `needs:human`.
+#
+# ── COST ────────────────────────────────────────────────────────────────────
+# The FILTER job is a `gh pr list` and exits in seconds; it opens no database
+# connection, so its schedule wakes no database. An agent session runs
+# only when a PR actually conflicts AND has not been attempted on that head — measured
+# population: 2 PRs have ever reached the un-startable state. `MAX_PER_RUN` caps a bad
+# day at three sessions.
+#
+# INERT until: the caller is on the default branch + the Implementer's App installed + these
+# secrets (plan 0001 §8):
+#   IMPLEMENTER_APP_ID, IMPLEMENTER_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+name: Rebase lane (Implementer)
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#   workflow_run: CI, [completed], branches [main]
+#   schedule: "50 5 * * *"   — the daily floor; clear of every other agent cron
+#   workflow_dispatch        — input `pr_number` (optional: a single PR; blank = every open PR)
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` input, passed through. Empty on the other triggers,
+    # and blank means every open PR, so it is not required here.
+    inputs:
+      pr_number:
+        description: A single PR to consider (blank = every open PR)
+        required: false
+        type: string
+        default: ""
+    secrets:
+      IMPLEMENTER_APP_ID:
+        required: true
+      IMPLEMENTER_APP_PRIVATE_KEY:
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+concurrency:
+  # One global lane, never cancelled: cancelling mid-resolution leaves a branch with a
+  # half-finished merge and an attempt marker already posted.
+  group: qa-rebase-lane
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
+# ceiling and must grant at least this and the jobs' own blocks below, or the run fails to
+# start; `lane-check` fails a caller that grants less.
+permissions:
+  contents: read # the App token carries the real write scope
+
+jobs:
+  # CHEAP GATE, on the default token. A `main` merge that conflicts with nothing — the
+  # overwhelmingly common case — costs one `gh pr list` and stops here, before any App
+  # token, database or agent session exists.
+  filter:
+    # A CANCELLED CI run on `main` is a superseded one and the push that superseded it
+    # fires its own. A skipped job bills ~no Actions minutes, which matters because a
+    # third of `main`'s CI runs are cancelled.
+    #
+    # AND ONLY THE CALLER'S THREE TRIGGERS. When this file held its triggers, no other event
+    # could reach it; as a called workflow it runs on whatever its caller is called on, so
+    # the job names them (Kanon's smoke calls it on pull requests, which must not reach the
+    # PR-listing script with a token).
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion != 'cancelled')
+      || github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A JOB BLOCK REPLACES THE WORKFLOW BLOCK WHOLESALE — it does not merge into it —
+    # so the workflow-level `contents: read` above leaves every other scope at `none`
+    # for this job unless it is restated here. `scripts/rebase-lane.mjs` reads PRs on
+    # `github.token`, and a missing scope does NOT error: `gh` prints the 403 body to
+    # STDOUT, so the value reads as DATA and the matrix below would be fed an error
+    # message (RA-956, RA-1013, RA-1087, RA-1090). The reference adopter's `permissions-guard.mjs`
+    # catches exactly this, and caught it here.
+    # `actions: read` for the RA-2519 retry: `rebase-lane.mjs` reads a failed attempt's
+    # jobs (`repos/{repo}/actions/runs/{id}/jobs`) to learn whether it died of its cause.
+    # Denied, the read is "unknown" and nothing is retried — the pre-RA-2519 behaviour —
+    # so a missing scope here fails quiet, which is why it is stated rather than assumed.
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      member: ${{ steps.gate.outputs.member }}
+      prs: ${{ steps.decide.outputs.prs }}
+    steps:
+      # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
+      # this lane acts only when the event's actor is a member or a registered agent App.
+      # `scripts/lane-gate.mjs` says who the actor is for each event — on a finished CI run,
+      # whoever pushed the commit it ran on; on the schedule, whoever last changed it — and
+      # a refusal leaves `member=false`, a notice and a step-summary line, and every later
+      # step and job skips.
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.member == 'true'
+      - uses: actions/setup-node@v7
+        if: steps.gate.outputs.member == 'true'
+        with:
+          node-version: "24"
+
+      - name: Which conflicting PRs is this lane's to resolve?
+        id: decide
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # stdout is the machine half (a JSON array of PR numbers), stderr the report.
+          PRS="$(node "$KANON/scripts/rebase-lane.mjs" ${PR:+--pr "$PR"})"
+          # NOT SWALLOWED. `set -e` plus the assignment fails the step on a denied read,
+          # and an empty answer is not an empty array — reading one as "nothing to do"
+          # would leave every conflicting PR unresolved, silently and green.
+          if [ -z "$PRS" ]; then
+            echo "::error title=agent-rebase::the lane printed no decision at all. Refusing to read that as \"no PR conflicts\"."
+            exit 1
+          fi
+          # AND IT MUST BE AN ARRAY. The failure this guards is the one above's sibling:
+          # a denied scope makes `gh` print a 403 BODY to stdout, which is non-empty, so
+          # the emptiness check passes and `fromJson` downstream receives prose. Assert
+          # the shape rather than trusting that a value arrived.
+          if ! printf '%s' "$PRS" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "::error title=agent-rebase::the lane printed something that is not a JSON array: $PRS"
+            exit 1
+          fi
+          echo "prs=$PRS" >> "$GITHUB_OUTPUT"
+
+  resolve:
+    needs: filter
+    # The gate's verdict FIRST: a refused event leaves `prs` empty, and `'' != '[]'` is
+    # true, so without it the matrix would be handed nothing to parse.
+    if: needs.filter.outputs.member == 'true' && needs.filter.outputs.prs != '[]'
+    strategy:
+      # ONE AT A TIME. Each is a full agent session, and a `main` merge that conflicts
+      # with several PRs at once is exactly when a bad resolution would be repeated
+      # before anyone read the first.
+      max-parallel: 1
+      # `fail-fast: false` — one PR whose conflict the agent cannot settle must not
+      # cancel the resolution of an unrelated one.
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJson(needs.filter.outputs.prs) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # THE DEFAULT TOKEN'S SCOPE FOR THE FINISH BLOCK (RA-2659). `agent-finish` hands
+    # `pr-number` to `agent-telemetry`, which reads the PR's diff size with `github.token`.
+    # Under the workflow-level `contents: read` alone that read 403s and the row records
+    # the size as unknown — silently, since the step swallows it. The App token carries
+    # every write this job makes; this grants the default token one read and nothing else.
+    # `tests/unit/direct-block-lane.test.ts` holds every block-calling job that passes a PR to it.
+    permissions:
+      contents: read
+      pull-requests: read
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: kanon
+          POSTGRES_PASSWORD: kanon
+          POSTGRES_DB: kanon
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kanon"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # Kanon's standard test database (RA-2694). The project-setup hook derives the app
+      # role's URL from this one and writes it to the environment before `db:init`.
+      DATABASE_URL: postgres://kanon:kanon@localhost:5432/kanon
+      PR_NUMBER: ${{ matrix.pr }}
+    steps:
+      # The token FIRST so checkout persists it as the git credential — the resolution
+      # is a push, and the default token is `contents: read` here.
+      - name: Mint triage-fix App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
+          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          # The agent merges `main` into a branch, so it needs both, not a shallow tip.
+          fetch-depth: 0
+
+      # THIS LANE CALLS THE AGENT-LANE BLOCKS DIRECTLY (RA-2659), not the reusable spine,
+      # because "Record the attempt" below must run INSIDE this matrix job, between the
+      # checkout and the agent — a reusable workflow takes no steps from its caller, and
+      # the record cannot move to an earlier job (see that step). So the job keeps its own
+      # matrix, service, slug assertion and record, and calls `agent-setup`, `agent-run` and
+      # `agent-finish` around them (`docs/agentic-qa-pipeline.md` §6). As `$/` references
+      # (RA-2697), so they come from Kanon at the tag the caller pinned and never from the
+      # tree the agent merges `main` into: nothing loads them, and nothing puts them back.
+
+      # The scripts are Kanon's, read from the action cache at the tag the caller pinned (plan
+      # 0001 §3), never from the tree the agent merges `main` into.
+      - uses: $/actions/kanon-path
+
+      # A renamed App would make `ineligible()`'s author check match nothing — the
+      # guard that keeps this lane off human branches — and it would fail SILENTLY,
+      # which is this pipeline's recurring shape. Same assertion as agent-implement.yml.
+      # THE LANE'S OWN STEP, not the project-setup hook's (RA-2659, RA-2694): the hook checks
+      # the same constant for the implement lane but with the sweep's error text, and this
+      # annotation is what a red run says about THIS lane's author check. It also has to
+      # come before the record below, which the hook does not.
+      - name: Assert the minted App is the one this lane expects
+        env:
+          MINTED_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          EXPECTED=$(node -e "import(process.env.KANON + '/scripts/rebase-lane.mjs').then(m => console.log(m.IMPLEMENTER_LOGIN))")
+          if [ "$MINTED_SLUG" != "$EXPECTED" ]; then
+            echo "::error title=agent-rebase::App slug mismatch — minted '$MINTED_SLUG', this lane expects '$EXPECTED'. The author check in \`ineligible()\` would match nothing, which is what keeps this lane off human branches. Rename the App, or correct the Implementer row's App slug in docs/qa/agent-identities.md, which IMPLEMENTER_LOGIN is read from (RA-2701)."
+            exit 1
+          fi
+
+      # BEFORE THE AGENT, DELIBERATELY. A crashed or capped session writes nothing, so a
+      # marker only a SUCCESSFUL run left would re-hand the same commit forever. This is
+      # RA-1408's "a run that FAILED is a run" (bar one retry of an attempt that died of its
+      # cause, RA-2519), written as a comment because this lane's
+      # runs carry `main`'s SHA rather than the PR's (RA-1717) and run evidence cannot see
+      # them. It doubles as the thing a human reading the PR sees while the agent works.
+      - name: Record the attempt on the PR before making it
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SHA="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
+          # The run id rides along (RA-2519): a head whose only attempt died of its cause
+          # (the model unreachable, or its API failing mid-run) is retried once after a
+          # cool-down, and the filter reads THIS run's jobs to know how it ended.
+          node -e "import(process.env.KANON + '/scripts/rebase-lane.mjs').then(m => console.log(m.attemptComment(process.argv[1], process.argv[2])))" "$SHA" "$GITHUB_RUN_ID" \
+            | gh pr comment "$PR_NUMBER" --body-file -
+
+      # THE PROJECT-SETUP HOOK (RA-2694): the toolchain, `npm ci` and `db:init`, which this
+      # job ran as the block's install and a step of its own. AFTER the record, as before:
+      # the attempt is posted before anything slower than a checkout can fail. The presence
+      # check is copied verbatim from `agent-lane.yml`.
+      - name: Check the project-setup hook is present
+        id: hook
+        run: |
+          if [ ! -f .github/actions/project-setup/action.yml ]; then
+            echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
+            exit 1
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/project-setup
+        with:
+          lane: rebase-lane
+          install: "true"
+          database: "true"
+          browsers: "false"
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
+          github-token: ${{ steps.app-token.outputs.token }}
+      - uses: $/actions/agent-setup
+        with:
+          arm: rebase lane
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
+
+      - uses: $/actions/agent-run
+        id: agent
+        with:
+          prompt: |
+            You are the Implementer (Agent 2) in RESOLVE-CONFLICT mode. PR
+            #${{ env.PR_NUMBER }} of this repo conflicts with `main`. Until it stops
+            conflicting GitHub dispatches NO `pull_request` events for it, so it gets no
+            CI, no review and no revise — nothing downstream can act (RA-1722). Your job is
+            to make it mergeable again without changing what it does.
+
+            Read docs/qa/triage-fix-playbook.md first, then:
+
+            WHAT TO DO. Check out the PR's branch, merge `origin/main` into it (a MERGE,
+            never a rebase — a rebase force-pushes, which detaches the Reviewer's review from
+            the commits it cites), resolve every conflict, verify, commit and push.
+
+            RESOLVE, DO NOT REDECIDE. Both sides are already-reviewed intent. A
+            resolution keeps BOTH: `main`'s change and this PR's change, combined so each
+            still does what it was written to do. If you find yourself deleting one
+            side's behaviour to make the file compile, stop and re-read — that is the
+            failure this mode is most likely to produce, and nobody downstream can see it
+            because the diff you push is a merge commit that reviewers skim.
+
+            SOME FILES ARE NOT RESOLVED BY CHOOSING A SIDE. These are the cases a script
+            could not do and you can:
+              · `drizzle/NNNN_*.sql` + `drizzle/meta/_journal.json` — both branches claimed
+                the same migration number. RENUMBER this PR's migration to follow
+                `main`'s, rename the file to match, regenerate the snapshot, and keep
+                BOTH entries in the journal in timestamp order. Never drop a migration.
+              · `docs/qa/specs/_id-registry.json` — clause ids come from the allocator.
+                Take `main`'s registry, then re-run `node "$KANON/scripts/spec-ids.mjs" --apply`
+                so this PR's new clauses get ids that do not collide, and update every
+                reference to an id you had to change.
+              · `docs/qa/specs/_locked-floor.json` — GENERATED. Do not hand-merge it:
+                take either side and run `node "$KANON/scripts/spec-coverage.mjs" --write-locked`.
+              · `CHANGELOG.md` — release-please's. Take `main`'s and drop your side's
+                entry; the release PR regenerates it from the commits.
+              · `package-lock.json` — take `main`'s and re-run `npm install` so the lock
+                is derived rather than merged.
+
+            VERIFY BEFORE YOU PUSH, and verify the MERGED tree, not your side of it:
+            `npm run lint`, `npm run typecheck`, `npm test`. If the PR touched the schema,
+            also run `db:push` THEN `db:setup` and the RLS/tenant-isolation conformance
+            tests — a resolution that drops an RLS policy is the worst outcome available
+            here. Do not push a tree whose gates you have not run.
+
+            WHEN TO STOP AND ASK — and this is the ONLY thing that reaches the developer.
+            If the conflict encodes a PRODUCT decision rather than a code one — two
+            changes to the same rule that cannot both hold, where reading the code cannot
+            tell you which is wanted — do NOT guess and do NOT split the difference.
+            `git merge --abort`, comment on the PR saying exactly which two intents
+            collide and what you would need to know, apply the `needs:human` label, and
+            STOP. A wrong guess here ships a behaviour nobody chose. Everything else — an
+            awkward merge, a test you must update, a rename on both sides — is yours.
+
+            IF YOU CANNOT RESOLVE IT for any other reason, the same shape applies minus
+            the label: abort, comment with what defeated you, STOP. Never push a tree
+            with conflict markers in it, and never push one whose tests you did not run.
+
+            NEVER: merge the PR (a human merges), force-push, close anything,
+            touch a branch other than this PR's, or edit `.github/workflows/**` as part of
+            a resolution unless that is where the conflict actually is.
+
+            OUTPUT: a comment on PR #${{ env.PR_NUMBER }} saying what conflicted, how you
+            resolved each one, which gates you ran and their results. The push re-runs CI
+            and dismisses the Reviewer's approval, so he re-reviews your resolution — say
+            plainly what you want him to look at hardest. ALWAYS leave a comment, even if
+            you did nothing.
+          claude_args: |
+            --model claude-opus-5
+            --effort high
+            --max-turns 120
+            --max-budget-usd 50
+            --fallback-model claude-opus-5-5
+            --allowedTools Read,Edit,Write,Bash,Grep,Glob
+            --exclude-dynamic-system-prompt-sections
+          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      # THE HOOK GOES BACK (RA-2694), for its toolchain's post step — copied verbatim from
+      # `agent-lane.yml`, which says why.
+      - name: Put the project-setup hook back for its post steps
+        if: always() && steps.hook.outputs.sha != ''
+        env:
+          SHA: ${{ steps.hook.outputs.sha }}
+        run: |
+          if git checkout "$SHA" -- .github/actions/project-setup 2>/dev/null; then
+            echo "project-setup hook put back from $SHA"
+          else
+            echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
+          fi
+
+      # Explain a red run (`classify-agent-result.mjs --arm 'rebase lane'`) and record what
+      # it cost. `always()` and `continue-on-error` for the reasons in the block's header;
+      # `job-status` because the block cannot see the job's `failure()` from inside itself.
+      - uses: $/actions/agent-finish
+        id: finish
+        if: always()
+        continue-on-error: true
+        with:
+          arm: rebase lane
+          # ITS OWN NAME, not `implementer`. Every lane this repo measures carries a
+          # distinct one (`implementer-revise`, `lead-revise`, `merge-reconcile`), and
+          # folding a conflict resolution into the implementer's row would pollute the
+          # one population RA-1485 exists to size — a resolution and a feature build cost
+          # very different things.
+          agent: rebase-lane
+          job-status: ${{ job.status }}
+          pr-number: ${{ env.PR_NUMBER }}
+          execution_file: ${{ steps.agent.outputs.execution_file }}
+          started-at: ${{ steps.agent.outputs.started-at }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          claude_args: |
+            --model claude-opus-5
+            --effort high
+            --max-turns 120
+            --max-budget-usd 50
+            --fallback-model claude-opus-5-5
+            --allowedTools Read,Edit,Write,Bash,Grep,Glob
+            --exclude-dynamic-system-prompt-sections
+
+      # BREADCRUMBS FOR THE RETRY (RA-2519). A run that died of its CAUSE (the model was
+      # unreachable, or its API failed mid-run) is retried once, after a cool-down, by
+      # `scripts/rebase-lane.mjs`. That reader cannot see this run's annotations (`Checks: read`),
+      # but it can see which of these steps RAN — the jobs API reports `success` or
+      # `skipped` under `Actions: read`. The names are the protocol: they must match
+      # `RETRY_STEPS` in `scripts/lane-retry.mjs`, which `tests/unit/lane-workflows.test.ts`
+      # asserts. Both do nothing but say so. JOB-LEVEL STEPS, after the finish block whose
+      # classifier they read: the jobs API lists a composite action as ONE step, so a
+      # breadcrumb inside it could never be read by its name.
+      - name: "Retryable once the cause clears: the model was unreachable (RA-2519)"
+        if: failure() && steps.finish.outputs.retry == 'unreachable'
+        run: echo "The model was never reached. Kanon's scripts/rebase-lane.mjs retries this head once, after the cool-down (RA-2519)."
+      - name: "Retryable once the cause clears: the model API failed mid-run (RA-2519)"
+        if: failure() && steps.finish.outputs.retry == 'api_error'
+        run: echo "The model API failed part-way through. Kanon's scripts/rebase-lane.mjs retries this head once, after the cool-down (RA-2519)."

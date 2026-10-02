@@ -1,0 +1,361 @@
+# QA pipeline — Agent 5 (the Lead), BRIEF mode. RA-951. A Kanon lane (plan 0001, step 5).
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# trigger (a `workflow_dispatch` taking `mandate` and `context`), the `permissions:`
+# ceiling, and one job that `uses:` this file at an exact Kanon tag, passes both inputs
+# through, and maps the three secrets below by name (never `secrets: inherit`).
+#
+# Takes a MANDATE and produces a PROJECT BRIEF as a PR. That is nearly all it does: it
+# creates no issues and does not dispatch, merge or close anything. The ONE label it
+# applies is `review:please`, on its own PR, so the Reviewer reviews the brief (see the prompt
+# below). RA-954 corrected this in `agentic-lead-engineer.md` and `agent-identities.md`
+# and left this copy saying "does not label"; RA-959 is that miss.
+#
+# WHY THIS MODE FIRST. docs/agentic-lead-engineer.md §5.3 gives the Lead two modes;
+# `reconcile` (labelling issues in dependency order, the App-token event cascade,
+# WIP limits, a tick budget) is materially larger and is deliberately NOT built
+# here. A brief a human dispatches by hand already proves the format; the
+# reconciler only makes it unattended. The brief is also the artifact everything
+# else consumes — and it is the developer's SINGLE GATE per project (§5.3), which
+# is theoretical until one exists.
+#
+# WHY THE PROMPT NAMES DECISIONS AND NOT SECTIONS. RA-949 records that the brief
+# TEMPLATE must be derived from a real brief rather than imagined — designing a
+# format before seeing one is the failure behind every Tier-1 review finding in the
+# RA-946 session. So this prompt lists the DECISIONS a brief must resolve, each
+# traceable to an existing repo rule, and lets the shape fall out. Whatever the
+# first brief looks like is what RA-949 then standardises.
+#
+# NOT A GATE, AND NOT AUTHORITY. The output is a PR a human reads and approves.
+# Approving a brief is not the same act as promoting a `[seed]` invariant (§6.1) —
+# the invariants this brief proposes stay `[seed]` until separately promoted, and
+# a `[seed]` → `[confirmed]` transition is outside the green zone by design (§3).
+#
+# SETUP: the Lead's App needs `Contents: Read & write` and
+# `Pull requests: Read & write` — a deliberate widening of the minimal set it
+# holds for agent-dispatch-sweep.yml, recorded with its reason in
+# docs/qa/agent-identities.md footnote ³. The push probe (the spine's `push-probe`,
+# switched on below) fails LOUDLY if `contents: write` is missing, because a 403 on
+# push is the likeliest first-run failure
+# and a silent one would be indistinguishable from "the agent had nothing to say" —
+# `silent-absence` (RA-946), in the newest component. `pull_requests: write` is NOT probed
+# — it cannot be, without creating a PR — and the run verifies it by doing it; the probe
+# step says so, and RA-959 is this comment having claimed the guard covered both.
+#
+# INERT until: the caller is on the default branch + the Lead's App installed + these
+# secrets (plan 0001 §8):
+#   LEAD_APP_ID, LEAD_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+name: Lead — brief
+
+# THE CALLER'S TRIGGER — this lane's contract with it:
+#   workflow_dispatch   — inputs `mandate` (required) and `context` (optional)
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` inputs, passed through. Not required here, like
+    # every lane input: the caller's form requires the mandate, and a called workflow's
+    # required input would refuse the empty value a mis-wired caller passes with a less
+    # readable error than the agent's own "STOP and say so".
+    inputs:
+      mandate:
+        description: What to plan — one paragraph, in your own words
+        required: false
+        type: string
+        default: ""
+      context:
+        description: "Issue numbers this covers, comma-separated (optional)"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      LEAD_APP_ID:
+        required: true
+      LEAD_APP_PRIVATE_KEY:
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+concurrency:
+  group: agent-lead-brief
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
+# ceiling and must grant at least this, or the run fails to start; `lane-check` fails a
+# caller that grants less.
+permissions:
+  contents: read # the App token carries the real scope; keep the default token minimal
+
+jobs:
+  # THE MEMBERSHIP GATE (K-AGENT-45, kanon#46), in a job of its own so that it decides
+  # before the spine's job mints the App token. Only someone with write access can
+  # dispatch, so it refuses no human today; it refuses a dispatch by an App outside the
+  # register, and it keeps every path through every lane asking the one question.
+  #
+  # ONLY ON A DISPATCH, the caller's one trigger. When this file held its trigger no other
+  # event could reach it; as a called workflow it runs on whatever its caller is called on.
+  filter:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      member: ${{ steps.gate.outputs.member }}
+    steps:
+      # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
+      # this lane acts only when the event's actor is a member or a registered agent App.
+      # `scripts/lane-gate.mjs` says who the actor is for each event; a refusal leaves
+      # `member=false`, a notice and a step-summary line, and every later step and job skips.
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+  # THE SPINE LIVES IN `agent-lane.yml` (RA-2609, extending RA-2092 and RA-2592) — token,
+  # checkout, the push probe, install, the action, red-run classification, the RA-2519
+  # breadcrumbs and the cost row. What stays here is what makes this lane THIS lane:
+  # the trigger, the workflow-level concurrency, the default-token scope, the App
+  # identity and the prompt. There was never an admission filter and there is none now:
+  # the job above is the membership gate alone.
+  brief:
+    needs: filter
+    if: needs.filter.outputs.member == 'true'
+    uses: $/.github/workflows/agent-lane.yml
+    with:
+      agent: lead
+      arm: lead agent
+      # Bounds a hang (RA-1336). Actions' default cap is 360m, so a wedged agent
+      # burned six hours and left its issue looking mid-flight. Sized at ~3x the
+      # longest real run measured on this workflow, so it never truncates work.
+      timeout-minutes: 100
+      # The whole history, exactly as this lane's own checkout has had it since RA-954 —
+      # converting a lane must not change what its agent can see. It predates the RA-1652
+      # depth the spine's checkout comment retires, so that comment's reasoning does not
+      # decide it; whether a brief still needs it is a separate question, not a side
+      # effect of moving the lane.
+      fetch-depth: 0
+      # A brief is prose: this lane never had a database or a browser, and converting it
+      # must not add either (the same reasoning as `agent-lead-revise.yml`).
+      database: false
+      browsers: false
+      # A missing grant must be a red run with a readable message, never a 403
+      # discovered 90 turns in after the reasoning has been paid for. The probe and why
+      # it probes rather than asks live in the spine; this lane is the one it was built
+      # for (RA-951), and `pull_requests: write` is still verified only by doing it.
+      push-probe: true
+      prompt: |
+        You are the Lead (Agent 5), in BRIEF mode. You produce ONE
+        artifact — a project brief — as a pull request. You do NOT label, dispatch,
+        implement, merge or close anything. Read docs/agentic-lead-engineer.md §5
+        and §12, AGENTS.md, and docs/agentic-qa-pipeline.md before you start.
+
+        THE MANDATE:
+        ${{ inputs.mandate }}
+
+        RELATED ISSUES (may be empty): ${{ inputs.context }}
+
+        WHAT A BRIEF IS FOR. It is the developer's SINGLE GATE on this project.
+        Everything downstream — which issues exist, what the implementer builds,
+        what the reviewer checks — follows from it, and the developer will not be
+        consulted again until something escalates. So the brief's job is to make
+        every decision that would otherwise interrupt them mid-flight VISIBLE NOW.
+
+        THERE IS A TEMPLATE, DERIVED FROM SIX REAL BRIEFS AND THEN NARROWED BY
+        WHAT THEY COST (RA-949, RA-1742). Read docs/projects/_template.md and
+        docs/agentic-lead-engineer.md §5.7 before you write: §5.7 gives the eight
+        required sections and the reason behind each, and `npm run lint` fails on a
+        brief that omits one. Section numbering, wording and order are yours — the
+        guard matches by meaning, and combining two sections is fine where they are
+        the same story. What is NOT yours is omitting one: an omitted section reads
+        exactly like a section with nothing to say, which is silent-absence on the
+        developer's only gate. Write "none, because…" instead.
+
+        A BRIEF DECIDES AND DECOMPOSES. IT DOES NOT MEASURE. Two rules, both
+        enforced by `brief-guard.mjs`, and both are the point of the artifact rather
+        than a style preference:
+
+        1. NO `file:line` COORDINATES, anywhere in the brief, IN ANY FORM — a full
+           `path.ts:120`, a range, and a bare `:120` continuing a file you named on
+           an earlier line, which is how most of them get written in wrapped prose.
+           Cite the `[PREFIX-N]` invariant that states the behaviour, or the command
+           that re-derives the fact. A name and a command survive the next refactor;
+           a coordinate is true of one commit and silently wrong of every later one.
+           Six briefs accumulated 328 of them, 20 post-approval edits and 4,769 lines
+           of guard machinery chasing them — that is what this rule deletes. (A clock
+           time is not a coordinate: `:00` is exempt, and for any other one, drop the
+           backticks.)
+        2. ACCEPTANCE CRITERIA LIVE ONLY IN THE SPEC LAYER. A criterion is a
+           `[PREFIX-N]` id LEADING its bullet under an `Acceptance criteria` line,
+           and the brief never restates it in prose beside the id. Allocate a new id
+           with `node "$KANON/scripts/spec-ids.mjs" --apply` and seed the clause in the
+           area's spec — that is your job (§6.1), and lint does NOT require the
+           clause to exist yet. A DELIVERABLE gets a clause too: a criterion nothing
+           can cite is one `verify-acs.mjs` reads as no criterion at all.
+
+        AIM AT ~300 LINES, against the ~1,150-line mean the old standard produced.
+        Nothing enforces it. Past it, ask which paragraph is a measurement that
+        belongs in a command or a criterion that belongs in a spec clause.
+
+        AND YOUR BRIEF IS IMMUTABLE ONCE THE DEVELOPER APPROVES IT. It is a decision
+        record, not a wiki: after the merge, a correction is an issue or a spec edit.
+        Write it so it does not need one.
+
+        Run `node "$KANON/scripts/brief-guard.mjs"` yourself before you open the PR. It is
+        the same parser the reconciler uses, so a brief it accepts is one the tick can
+        file — and eight of its checks are conditions that would otherwise stop a tick
+        hours after the developer merged you.
+
+        THE DECOMPOSITION IS THE MACHINE-READ PART, and its heading is the one
+        heading you may not embellish. Under a `## Decomposition` heading — SECTION
+        NUMBERING IS FINE, `## 3. Decomposition` parses, and numbering is better when
+        the brief cross-references its own sections, but `## 3. Decomposition — the
+        five issues` parses as NO DECOMPOSITION AT ALL and the tick then files nothing
+        while the project reports healthy — one `###` sub-heading per issue:
+
+            ### Issue B — Short imperative title
+            **Milestone:** Production Ready · **Labels:** `sev:critical` · **Closes #897**
+            **Depends on:** Issue A (why it must land first) and Issue C (and why)
+
+            Acceptance criteria:
+
+            - `[AREA-7]` — the invariant this issue takes on, id LEADING the bullet.
+
+            …rationale, and what is NOT in this issue…
+
+        The MILESTONE is required, from the AGENTS.md routing table: a tick
+        refuses to file without one, because filing bare lets the
+        default-milestone backstop route the issue to Product Backlog, which reads
+        as correctly triaged and stops showing up in the query that finds
+        mistakes.
+
+        **Labels:** is optional but MACHINE-CONSUMED: whatever you list is applied
+        to the issue at creation. Use real repo labels — `sev:critical`,
+        `follow-up`, `pipeline-improvement` — separated by `·`. A label written
+        next to prose with no separator is welded to it, is not a label, and the
+        tick REFUSES TO FILE rather than quietly losing it, so keep rationale off
+        the label run itself.
+
+        **Closes #N** ADOPTS an existing issue instead of filing a new one, and it
+        is read ONLY from this metadata line — the `**Milestone:** …` line, after
+        the labels, separated by `·` (RA-1300/RA-1310). Written anywhere else in the
+        item it is not adopted, and the tick now STOPS and names it rather than
+        filing a duplicate (RA-1303): with no adoption the item files a second issue
+        for work already tracked, the implementer's PR closes the new one, and the
+        original stays open forever, because the file phase dedups by title and
+        never re-files. Only the LEADING run of references counts, so
+        `**Closes #897; supersedes PR #869**` adopts 897 and not 869.
+
+        If you need to MENTION a closure without adopting it — "this does NOT close
+        #326" — write it mid-sentence rather than opening a line, a sentence or a
+        bold span with the word, and it will not be flagged.
+
+        Everything below the metadata lines is the ISSUE BODY and is filed
+        verbatim, so write the acceptance criteria there as you want the
+        implementer to read them — they are what he builds to. Leave a blank line
+        after the metadata. **Depends on:** is optional and cites other issues by their
+        letter; the dispatcher holds an issue until its dependencies close. Where
+        there is no dependency, list order is the order. A per-dependency reason in
+        parentheses is fine and no longer costs you a dependency (RA-1300/RA-1310), but
+        everything after the last `Issue X` is prose and cites nothing — that is
+        deliberate, so an incidental "Issue F" in a rationale cannot become a
+        permanent dependency on nothing.
+
+        This shape was DERIVED from the first real brief, not imposed — everything
+        else about the format stays yours (RA-949). If it reads badly for your
+        project, say so in the brief and write it the way it should be; the parser
+        is the thing that gets fixed, not the brief.
+
+        THE PR BODY SPELLS `Closes #N` DIFFERENTLY FROM THE BRIEF FILE (RA-1634), and
+        getting this wrong closes issues you did not deliver. In the FILE, the bold
+        metadata form above is required. In the PR BODY it is a live closing keyword:
+        this repo squash-merges with the body as the commit message, and a commit
+        message is plain text where backticks are NOT syntax — so wrapping the whole
+        phrase in one code span hides it from GitHub's linker while leaving it live in
+        the merge. That is how PR RA-1029 closed two issues from a line written to
+        explain the bug. In the PR body, backtick the REFERENCE and not the phrase, so
+        the keyword and the number are not adjacent. §5.7 states both halves.
+
+        DECISIONS YOUR BRIEF MUST RESOLVE — each has a rule behind it:
+
+        1. SCOPE. What this project is, and explicitly WHAT IT IS NOT. The boundary
+           is the half that gets forgotten.
+        2. THE REAL PROBLEM. Read the code before you plan. If the issues describe
+           symptoms of one root cause, say so and plan the root-cause fix — a
+           systemic fix beats N point-fixes (agentic-qa-pipeline.md §2.4). If they
+           genuinely are separate, say that instead.
+        3. DECOMPOSITION into issues, each CITING its ACCEPTANCE CRITERIA as
+           `[PREFIX-N]` ids with a stable allocation (RA-913,
+           Kanon's scripts/spec-ids.mjs). Those invariants ARE the acceptance criteria
+           (§6) and since RA-1742 they are the ONLY form one may take — including for
+           a deliverable ("add a CSV export"), which gets a `[seed]` clause of its
+           own rather than a sentence nothing can verify.
+        4. SEQUENCING, on the `**Depends on:**` line and not in a section of its
+           own — the reconciler reads that line and holds an issue until its
+           dependencies close, so the parenthetical reason IS the rationale.
+        5. AWS COST delta. AGENTS.md requires agreement BEFORE spend. If there is
+           none, say "no AWS cost" and why — an empty section reads as "not
+           considered".
+        6. OBSERVABILITY: add or skip, WITH A REASON. AGENTS.md requires the
+           decision be surfaced either way. A deliberate skip is a fine answer; an
+           absent one is not.
+        7. BLAST RADIUS — what will need a human. Name every item on
+           agent-implement.yml's SCOPE-FIRST BAIL list that this project will touch:
+           data migration, auth/credential/security changes, destructive schema.
+           These currently surface mid-PR and interrupt the developer; naming them
+           here is the point of the brief.
+        8. MILESTONE for each issue, from the AGENTS.md routing table.
+        9. RECONCILIATION GAPS, AS ISSUES (RA-932). `npm run spec:coverage` already
+           reports which areas have a spec and which `[confirmed]` invariants no
+           test enforces. If it names a gap in an area you touch, closing it is
+           ISSUE A of this project — not a survey paragraph, and not an
+           afterthought. An AC citing an invariant nothing checks is not
+           falsifiable.
+
+        DEFINITION OF DONE IS NOT A SECTION. It is the same for every project and
+        already executable: every filed issue closed, the merges on staging, and
+        `verify-acs.mjs` resolving each cited id to a test that passes there.
+        `lead-reconcile.mjs` phases 4-6 are the definition. What is specific to your
+        project belongs in SCOPE.
+
+        STATE WHAT YOU DID NOT EXAMINE. A brief that is silent on an area reads
+        identically to one that checked it and found nothing — that is
+        `silent-absence`, this pipeline's most common failure class (§12.7). If you
+        could not read something, or ran short of budget, say so explicitly.
+
+        EVIDENCE, NOT ASSERTION — AND RE-RUNNABLE, NOT DATED. Every claim about
+        the code carries either the `[PREFIX-N]` invariant that states it or the
+        command that re-derives it; every count carries the command that produces
+        it. A figure nobody can re-measure cannot be checked later (§12.7), and a
+        coordinate is worse than unmeasurable — it looks checkable and is wrong the
+        moment the file above it changes. Where you are inferring rather than
+        verifying, mark it. There is NO measured-against header line any more:
+        `citation-guard` does not read `docs/projects/**`, because there is nothing
+        in a brief for it to resolve (RA-1742).
+
+        YOU DO NOT PROMOTE. Any invariant you propose lands as `[seed]`. Approving
+        this brief is the developer agreeing to the PLAN; confirming the behaviour
+        is a separate act, later (§6.1). Never write `[confirmed]`.
+
+        OUTPUT: write docs/projects/<n>.md where <n> is the TRACKING ISSUE NUMBER.
+        It must be numeric — the reconciler keys the whole project off it (it
+        finds the project's issues by a `<!-- qa:project <n> -->` marker on the LAST line of the body, RA-1066), so a slug-named brief can
+        never be reconciled and would sit in the directory while every tick
+        reported "no project to reconcile". If you were given no tracking issue,
+        STOP and say so rather than inventing a name. Open ONE PR labelled
+        `review:please` so the Reviewer reviews it. Do NOT milestone the PR (AGENTS.md:
+        issues only). Do NOT create the issues you propose — the brief proposes
+        them; a human approves before anything is filed. NEVER merge.
+
+        ALWAYS leave the PR open with a comment summarising the decisions that need
+        the developer, even if you run short of budget. Never end with no output.
+      claude_args: |
+        --model claude-opus-5
+        --effort high
+        --max-turns 120
+        --max-budget-usd 50
+        --fallback-model claude-opus-5-5
+        --allowedTools Read,Edit,Write,Bash,Grep,Glob
+        --exclude-dynamic-system-prompt-sections
+    secrets:
+      app-id: ${{ secrets.LEAD_APP_ID }}
+      app-private-key: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
+      claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
