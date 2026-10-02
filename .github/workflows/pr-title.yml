@@ -1,7 +1,9 @@
-# Kanon's PR-title check (K-SHIP-4), dogfooded: this repository runs its own action by
-# local path, so every Kanon PR exercises the action exactly as an adopter's would.
+# Kanon's PR-title check (K-SHIP-4), dogfooded: this repository runs its own action through
+# `$/`, GitHub's self-reference, so every Kanon PR exercises the action exactly as an
+# adopter's would. `$/` resolves to this repository at the running commit, downloaded into
+# the runner's action cache, so no checkout is needed (plan 0001 §4).
 #
-# The local path runs the action as it is in the PR, so a PR that changes the check is
+# The self-reference runs the action as it is in the PR, so a PR that changes the check is
 # checked by its own version. That is the point of dogfooding, and it is safe here:
 # `pull_request` runs get a read-only token and no secrets.
 #
@@ -37,7 +39,5 @@ jobs:
       - name: Already checked on the pull request
         if: github.event_name == 'merge_group'
         run: echo "Merge group. Each queued PR's title passed this check before it could be queued."
-      - uses: actions/checkout@v7
-        if: github.event_name == 'pull_request'
-      - uses: ./actions/pr-title
+      - uses: $/actions/pr-title
         if: github.event_name == 'pull_request'

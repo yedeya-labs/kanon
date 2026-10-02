@@ -1,8 +1,10 @@
-# Kanon's DCO check (ADR 0010), dogfooded: this repository runs its own action by local
-# path, so every Kanon PR exercises the action exactly as an adopter's would.
+# Kanon's DCO check (ADR 0010), dogfooded: this repository runs its own action through
+# `$/`, GitHub's self-reference, so every Kanon PR exercises the action exactly as an
+# adopter's would.
 #
-# The action reads the PR's commits through the API, so the checkout is only there to
-# make the local path resolve. `pull-requests: read` lets the workflow token list the
+# The action reads the PR's commits through the API, and `$/` resolves to this repository
+# at the running commit without a checkout (plan 0001 §4), so nothing is checked out.
+# `pull-requests: read` lets the workflow token list the
 # commits; `contents: read` is what a private repository also needs for them. A
 # `pull_request` run gets a read-only token and no secrets, so running the PR's own
 # version of the check is safe.
@@ -36,7 +38,5 @@ jobs:
       - name: Already checked on the pull request
         if: github.event_name == 'merge_group'
         run: echo "Merge group. Each queued PR's commits passed this check before it could be queued."
-      - uses: actions/checkout@v7
-        if: github.event_name == 'pull_request'
-      - uses: ./actions/dco
+      - uses: $/actions/dco
         if: github.event_name == 'pull_request'

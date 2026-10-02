@@ -39,7 +39,7 @@ const ON_MERGE_GROUP = "github.event_name == 'merge_group'";
 const expectPassesOnMergeGroup = (wf: Workflow, action: string) => {
   const steps = stepsOf(wf);
   const real = steps.filter((s) => s.uses === action || s.uses?.startsWith('actions/checkout@'));
-  expect(real.map((s) => s.uses)).toEqual(['actions/checkout@v7', action]);
+  expect(real.map((s) => s.uses)).toEqual([action]);
   for (const s of real) expect(s.if).toBe(ON_PULL_REQUEST);
   const passes = steps.filter((s) => s.if === ON_MERGE_GROUP);
   expect(passes).toHaveLength(1);
@@ -77,15 +77,13 @@ describe('K-SHIP-4 Kanon dogfoods its PR-title action', () => {
   });
 
   it('checks the title on pull requests only, and passes on merge_group', () => {
-    expectPassesOnMergeGroup(wf, './actions/pr-title');
+    expectPassesOnMergeGroup(wf, '$/actions/pr-title');
   });
 
-  it('uses the action by local path, after checking the repository out', () => {
+  it('uses the action through the self-reference, which needs no checkout (plan 0001 §4)', () => {
     const uses = stepsOf(wf).map((s) => s.uses);
-    expect(uses).toContain('./actions/pr-title');
-    const checkout = uses.findIndex((u) => u?.startsWith('actions/checkout@'));
-    expect(checkout).toBeGreaterThanOrEqual(0);
-    expect(uses.indexOf('./actions/pr-title')).toBeGreaterThan(checkout);
+    expect(uses).toContain('$/actions/pr-title');
+    expect(uses.filter((u) => u?.startsWith('actions/checkout@'))).toEqual([]);
   });
 
   it('reads contents only, and never interpolates the title itself', () => {
@@ -102,15 +100,13 @@ describe('ADR 0010 Kanon dogfoods its DCO action', () => {
   });
 
   it('checks the commits on pull requests only, and passes on merge_group', () => {
-    expectPassesOnMergeGroup(wf, './actions/dco');
+    expectPassesOnMergeGroup(wf, '$/actions/dco');
   });
 
-  it('uses the action by local path, after checking the repository out', () => {
+  it('uses the action through the self-reference, which needs no checkout (plan 0001 §4)', () => {
     const uses = stepsOf(wf).map((s) => s.uses);
-    expect(uses).toContain('./actions/dco');
-    const checkout = uses.findIndex((u) => u?.startsWith('actions/checkout@'));
-    expect(checkout).toBeGreaterThanOrEqual(0);
-    expect(uses.indexOf('./actions/dco')).toBeGreaterThan(checkout);
+    expect(uses).toContain('$/actions/dco');
+    expect(uses.filter((u) => u?.startsWith('actions/checkout@'))).toEqual([]);
   });
 
   it('reads contents and pull requests only, and grants nothing per job', () => {
@@ -253,5 +249,64 @@ describe('K-MERGE-7 every required check reports on pull requests and in the mer
     expect(job.if).toBeUndefined();
     expect(job.strategy).toBeUndefined();
     expect(job.name).not.toContain('${{');
+  });
+});
+
+describe('plan 0001 §4 the agent blocks smoke run', () => {
+  const { wf } = load('agent-blocks-smoke.yml');
+  const jobs = Object.values(wf.jobs);
+  const steps = stepsOf(wf);
+  const block = (name: string) => steps.find((s) => s.uses === `$/actions/${name}`);
+
+  it('runs on pull requests and in the merge queue, under one literal job name (K-MERGE-7)', () => {
+    expect(Object.keys(wf.on)).toEqual(expect.arrayContaining(['pull_request', 'merge_group']));
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.name).toBe('Agent blocks smoke');
+    expect(jobs[0]?.if).toBeUndefined();
+    expect(jobs[0]?.strategy).toBeUndefined();
+    // No step reads the pull request, so every step runs on both events.
+    for (const s of steps) expect(s.if ?? '').not.toContain('event_name');
+  });
+
+  it('calls every block through `$/`, so each PR runs its own version', () => {
+    for (const name of ['agent-setup', 'agent-run', 'agent-finish', 'agent-classify']) {
+      expect(block(name), name).toBeDefined();
+    }
+  });
+
+  it('never runs the agent, so it never calls the model', () => {
+    expect(block('agent-run')?.if).toBe("github.run_id == '0'");
+  });
+
+  it('checks what the classify and finish blocks produced, and lets neither fail quietly', () => {
+    const checks = steps.filter((s) => s.run?.includes('test "$KIND"'));
+    expect(checks).toHaveLength(2);
+    expect(steps.filter((s) => s['continue-on-error'] !== undefined)).toEqual([]);
+    expect(block('agent-finish')?.with?.['job-status']).toBe('failure');
+  });
+
+  it('reads contents only', () => {
+    expect(wf.permissions).toEqual({ contents: 'read' });
+    for (const job of jobs) expect(job.permissions).toBeUndefined();
+  });
+});
+
+describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Dependabot bumps it', () => {
+  const run = parse(readFileSync(new URL('../../actions/agent-run/action.yml', import.meta.url), 'utf8')) as {
+    runs: { steps: Step[] };
+  };
+  const dependabot = parse(readFileSync(new URL('../../.github/dependabot.yml', import.meta.url), 'utf8')) as {
+    updates: { 'package-ecosystem': string; directories?: string[] }[];
+  };
+
+  it('names an exact version of claude-code-action in agent-run, never a moving tag', () => {
+    const agent = run.runs.steps.filter((s) => s.uses?.startsWith('anthropics/claude-code-action@'));
+    expect(agent).toHaveLength(1);
+    expect(agent[0]?.uses).toMatch(/^anthropics\/claude-code-action@v\d+\.\d+\.\d+$/);
+  });
+
+  it('has Dependabot watch the workflows and every action directory', () => {
+    const actions = dependabot.updates.find((u) => u['package-ecosystem'] === 'github-actions');
+    expect(actions?.directories).toEqual(expect.arrayContaining(['/', '/actions/*']));
   });
 });

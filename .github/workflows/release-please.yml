@@ -3,6 +3,11 @@
 # repository to release with a change to it. Adopters call the same workflow pinned to an
 # exact version instead: see docs/release.md.
 #
+# THE ONE `./` REFERENCE LEFT (plan 0001 §4). Every other Kanon-internal reference is `$/`,
+# and `tests/unit/self-pinning.test.ts` holds that. This call stays `./` until a job-level
+# `$/` call to a reusable workflow has been proven on a pull request: this workflow runs
+# only on main, so a `$/` that failed to resolve here would first fail a release.
+#
 # The writes are granted here, on the calling job only: a reusable workflow can use no
 # more than its caller grants.
 name: Release

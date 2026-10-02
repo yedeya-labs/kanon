@@ -1,0 +1,93 @@
+# Building block 1 of 4 of an agent lane: SET UP (RA-2666).
+#
+# The spine (`.github/workflows/agent-lane.yml`) is built from three composite actions —
+# this one, `agent-run` and `agent-finish`, which calls the fourth, `agent-classify` — so a lane whose own steps must sit BETWEEN
+# the spine's stages (a gate before the agent, a record after it, in the same workspace)
+# can use the same blocks directly instead of hand-copying the spine. A reusable workflow
+# owns its whole job and takes no steps from its caller; composite actions are the form
+# for steps interleaved inside one job. When a lane uses the reusable spine and when it
+# uses the blocks directly is recorded in the reference adopter's pipeline doc, §6.
+#
+# WHAT THIS BLOCK DOES NOT DO. The App-token mint and the checkout are the lane's first
+# two steps, not this block's, and the project-setup hook runs between them and this.
+# That order was forced while the blocks were `uses: ./…` references, which resolve
+# against the CHECKED-OUT workspace. Since RA-2697 no lane calls them by `./`: inside Kanon
+# they are `$/actions/<block>`, GitHub's self-reference, and an adopter's lane names them as
+# `yedeya-labs/kanon/actions/<block>@vX.Y.Z`. Either resolves to Kanon at the commit the
+# lane pinned, downloaded into the runner's action cache before the first step, so it
+# needs no checkout and is never read from the workspace — and Kanon's smoke workflow runs
+# a changed block through `$/` on its own PR. The
+# order stays as it is because P3 of Kanon's plan changes no lane's steps; the hook, which
+# is the project's code, is still a `./` reference read from the checkout.
+#
+# NOTHING SPECIFIC TO THIS PROJECT LIVES HERE (RA-2694). The App-slug assertion, the
+# toolchain and its cache, and the install were this block's until the project-setup hook
+# (`.github/actions/project-setup`) took them, with every other project literal the lanes
+# carried. A lane runs the hook after its checkout and before this block, so the push
+# probe below now follows the install; it still runs before a single turn is paid for.
+#
+# `shell: bash -e {0}` ON EVERY STEP, and that is fidelity, not style. A composite `run`
+# step must name its shell, and `bash` would mean `bash --noprofile --norc -eo pipefail`
+# — adding `pipefail` these steps never ran under. `bash -e {0}` is exactly what a
+# workflow `run:` with no `shell:` gets, which is what these steps were before the split.
+#
+# INPUTS ARE STRINGS. A composite action has no boolean type: a switch arrives as
+# 'true' / 'false', and a bare `if: inputs.push-probe` would be TRUE for 'false'. So every
+# switch below compares against 'true'.
+name: Agent lane — set up
+description: >-
+  After the lane has minted its App token, checked out and run the project-setup hook,
+  optionally prove the App can push.
+
+inputs:
+  arm:
+    description: Human name for this arm, used in the error messages.
+    required: true
+  app-slug:
+    description: The minted App's slug (actions/create-github-app-token's `app-slug` output).
+    required: true
+  push-probe:
+    description: >-
+      'true' proves the App can push (`git push --dry-run`) before a single turn is paid
+      for. Must follow the App-token checkout, whose persisted credential it pushes with.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # PROBE THE CAPABILITY, DO NOT ASK THE API ABOUT IT (RA-951, moved into the spine by
+    # RA-2609 from `agent-lead.yml`, which is still the lane the probe was written for).
+    #
+    # The first version read `/installation/repositories` -> `.permissions`, which is the
+    # COLLABORATOR set (admin/maintain/push/triage/pull) and never contains `contents` or
+    # `pull_requests` — so it failed closed on every dispatch and the lane could not
+    # reach the agent at all. `git push --dry-run` is a real test rather than a claim:
+    # pushing negotiates over `receive-pack`, which requires write, so a missing grant
+    # 403s here — in seconds, after the App-token checkout and before any reasoning is
+    # paid for. It creates nothing.
+    #
+    # `pull_requests: write` cannot be probed without creating a PR, so it is NOT
+    # checked here and the run verifies it by doing it: if that grant is missing, the
+    # branch will have been pushed and the PR will not exist, which is recoverable by
+    # opening it by hand.
+    #
+    # IN THE AGENT'S OWN JOB, NOT A JOB BEFORE IT, because a red probe must stay a red run
+    # of that job: `agent-finish` then explains it (`not-reached`) and the cost row is
+    # still written, exactly as when the probe was a step of the lane's own job.
+    - name: "Probe that the App can push (contents: write)"
+      if: inputs.push-probe == 'true'
+      shell: bash -e {0}
+      # No `GH_TOKEN`: `git push` authenticates with the credential checkout persisted,
+      # which is why this step must follow the App-token checkout, not what env says.
+      env:
+        MINTED_SLUG: ${{ inputs.app-slug }}
+        ARM: ${{ inputs.arm }}
+      run: |
+        set -uo pipefail
+        if ! git push --dry-run origin "HEAD:refs/heads/${MINTED_SLUG}-permission-probe" 2>/tmp/push.err; then
+          echo "::error title=agent-lane::$MINTED_SLUG cannot push. The $ARM needs Contents: Read & write and Pull requests: Read & write on the App, AND the installation re-authorized to accept them — a permission change does not take effect until it is accepted. See docs/qa/agent-identities.md footnote 3."
+          sed -n '1,5p' /tmp/push.err
+          exit 1
+        fi
+        echo "push capability confirmed (dry run — nothing was created)"
