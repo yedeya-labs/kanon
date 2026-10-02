@@ -29,7 +29,10 @@ The block has no `if:` of its own, because the right gate depends on the lane. G
 | Output | Meaning |
 |---|---|
 | `kind` | `unavailable`, `exhausted`, `failed`, `ok` or `not-reached`. |
+| `code` | The reason code beside the kind, from a fixed list: `none` (ok), `model_never_ran` or `no_model_ran` (unavailable), `turn_cap` or `budget_cap` (exhausted), `did_not_finish` (failed), `no_result_file` (not-reached). |
 | `retry` | `unreachable` or `api_error` when waiting would help, empty otherwise. |
+
+- **The code, not the sentence, is what telemetry stores** (`K-OBS-16`). The sentence names the model and the numbers, so it stays in the annotation and the step summary.
 
 - **It never fails the run.** The script always exits 0: it explains a red run and must not cause one.
 - **It reads `$RUNNER_TEMP/claude-execution-output.json`,** where `claude-code-action` writes its result.

@@ -97,6 +97,42 @@ inputs:
     required: false
     default: ""
 
+  # THE VERSION-2 ROW'S INPUTS (plan 0002 §2). `lane` turns it on; the rest say where a red
+  # run failed and whose code failed, as step conclusions and codes only (§2.6).
+  lane:
+    description: >-
+      Kanon's lane name (`LANES` in agent-telemetry's `schema.mjs`). Set, the run also writes
+      the version-2 row. Empty writes only the version-1 row.
+    required: false
+    default: ""
+  tag:
+    description: "`run` (the default), `smoke` or `test` (plan 0002 §2.4)."
+    required: false
+    default: run
+  stages:
+    description: >-
+      The lane's stages IN THE ORDER IT RUNS THEM, as `stage=conclusion` pairs separated by
+      spaces (`token`, `checkout`, `hook`, `setup`, `agent`), each a step's `conclusion`. A
+      step the lane runs on past concludes `success`, so a tolerated stage is never the row's
+      `failed_stage`. Conclusions only: the hook's own step names are the adopter's content and
+      never reach the row. This block adds its own stage, `finish`, last.
+    required: false
+    default: ""
+  kanon-error:
+    description: >-
+      A code from Kanon's error list that an earlier Kanon step wrote as its `kanon-error`
+      output. Empty when none did.
+    required: false
+    default: ""
+  job-started-at:
+    description: When the lane's job started (UTC, ISO 8601), for the row's `timed_out`.
+    required: false
+    default: ""
+  timeout-minutes:
+    description: The lane job's `timeout-minutes`, for the row's `timed_out`.
+    required: false
+    default: ""
+
 outputs:
   kind:
     description: agent-classify's `kind` for a red run, empty otherwise.
@@ -182,3 +218,13 @@ runs:
         severities: ${{ inputs.severities }}
         execution_file: ${{ inputs.execution_file }}
         claude_args: ${{ inputs.claude_args }}
+        lane: ${{ inputs.lane }}
+        tag: ${{ inputs.tag }}
+        # The lane's own stages, in its own order, then `finish`, this block's quality read.
+        # That step is `continue-on-error`, so its conclusion is never `failure`: a failed
+        # quality read doesn't end a run, and is recorded through its `kanon-error` instead.
+        stages: ${{ inputs.stages }} finish=${{ steps.quality.conclusion }}
+        kanon_error: ${{ inputs.kanon-error || steps.quality.outputs.kanon-error }}
+        job_status: ${{ inputs.job-status }}
+        job_started_at: ${{ inputs.job-started-at }}
+        timeout_minutes: ${{ inputs.timeout-minutes }}

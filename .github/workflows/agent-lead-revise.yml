@@ -607,6 +607,7 @@ jobs:
     uses: $/.github/workflows/agent-lane.yml
     with:
       agent: lead-revise
+      lane: lead-revise
       arm: lead (revise) agent
       # Bounds a hang (RA-1336). Actions' default cap is 360m, so a wedged agent
       # burned six hours and left its issue looking mid-flight. Sized at ~3x the

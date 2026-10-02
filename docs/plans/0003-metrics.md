@@ -395,7 +395,7 @@ S1 hasn't shipped, so no version 2 row exists yet, and these join version 2 itse
 | `tool_errors` | count | `tool_result` blocks with `is_error: true` |
 | `compactions` | count | the CLI's compaction-boundary system events |
 | `job_status` | enum `success`, `failure`, `cancelled` | `job.status`, which the lane passes to `agent-finish` |
-| `timed_out` | bool | `job_status` is `cancelled` and the job ran at least its `timeout-minutes`, which the lane passes too |
+| `timed_out` | bool | `job_status` is `cancelled` and the job ran at least its own `timeout-minutes` less a 3-minute margin, from a start stamp that is the job's first step; the lane passes both. The margin covers the setup before that first step, which GitHub's timeout counts and the stamp doesn't (plan 0002 §2.1) |
 
 Whether the execution file carries every tool and compaction event is checked in S1 against a real run. If it doesn't, those fields stay absent, never zero.
 

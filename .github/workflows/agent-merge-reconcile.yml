@@ -152,11 +152,18 @@ jobs:
     env:
       PR_NUMBER: ${{ needs.filter.outputs.pr }}
     steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
+      # it is as close to the job's start as a step can be.
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # The merged default branch — so the agent can grep whether a fold-in landed.
       # Checked out with the DEFAULT token, before the App token is minted, as it always
       # was: this arm only reads the tree and files issues through `gh`, so the persisted
       # git credential stays read-only and the App token reaches the agent as `gh`'s alone.
       - uses: actions/checkout@v7
+        id: checkout
         with:
           ref: ${{ github.event.repository.default_branch }}
 
@@ -183,6 +190,7 @@ jobs:
       # push probe (this arm never pushes) — both as before, so this call runs no step; it
       # stays so the lane calls the same three blocks as every other.
       - uses: $/actions/agent-setup
+        id: setup
         with:
           arm: merge-reconcile agent
           app-slug: ${{ steps.app-token.outputs.app-slug }}
@@ -324,3 +332,14 @@ jobs:
             --fallback-model claude-opus-5-5
             --allowedTools Read,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
+          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
+          # step CONCLUSION in the lane's own order, never a step's name or log.
+          lane: merge-reconcile
+          stages: >-
+            checkout=${{ steps.checkout.conclusion }}
+            token=${{ steps.app-token.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "30"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
+          kanon-error: ${{ steps.setup.outputs.kanon-error }}

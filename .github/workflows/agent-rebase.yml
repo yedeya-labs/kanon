@@ -205,6 +205,12 @@ jobs:
       DATABASE_URL: postgres://kanon:kanon@localhost:5432/kanon
       PR_NUMBER: ${{ matrix.pr }}
     steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
+      # it is as close to the job's start as a step can be.
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # The token FIRST so checkout persists it as the git credential — the resolution
       # is a push, and the default token is `contents: read` here.
       - name: Mint triage-fix App token
@@ -214,6 +220,7 @@ jobs:
           client-id: ${{ secrets.IMPLEMENTER_APP_ID }}
           private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v7
+        id: checkout
         with:
           token: ${{ steps.app-token.outputs.token }}
           # The agent merges `main` into a branch, so it needs both, not a shallow tip.
@@ -278,10 +285,12 @@ jobs:
         run: |
           if [ ! -f .github/actions/project-setup/action.yml ]; then
             echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
+            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/project-setup
+        id: project
         with:
           lane: rebase-lane
           install: "true"
@@ -290,6 +299,7 @@ jobs:
           app-slug: ${{ steps.app-token.outputs.app-slug }}
           github-token: ${{ steps.app-token.outputs.token }}
       - uses: $/actions/agent-setup
+        id: setup
         with:
           arm: rebase lane
           app-slug: ${{ steps.app-token.outputs.app-slug }}
@@ -414,6 +424,18 @@ jobs:
             --fallback-model claude-opus-5-5
             --allowedTools Read,Edit,Write,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
+          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
+          # step CONCLUSION in the lane's own order, never a step's name or log.
+          lane: rebase
+          stages: >-
+            token=${{ steps.app-token.conclusion }}
+            checkout=${{ steps.checkout.conclusion }}
+            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.project.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "90"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
+          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
 
       # BREADCRUMBS FOR THE RETRY (RA-2519). A run that died of its CAUSE (the model was
       # unreachable, or its API failed mid-run) is retried once, after a cool-down, by

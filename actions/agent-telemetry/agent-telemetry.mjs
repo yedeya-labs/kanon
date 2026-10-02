@@ -55,6 +55,7 @@ import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 // The classifier lives in the `agent-classify` block's directory (RA-2691), so the block can
 // run it from its own path; this imports the same file.
 import { classifyResult, parseObjects, readConfiguredModel, readResult } from "../agent-classify/classify-agent-result.mjs";
+import { LANE_ROLES, STAGES, TERMINAL_REASONS, describeErrors, validate } from "./schema.mjs";
 
 const SCHEMA = 1;
 
@@ -555,6 +556,10 @@ function readContext(args, env) {
 }
 
 export function run(args, env) {
+  return collect(args, env).row;
+}
+
+function collect(args, env) {
   const ctx = readContext(args, env);
   const path = args.execution_file && args.execution_file !== "true" ? args.execution_file : null;
 
@@ -598,17 +603,264 @@ export function run(args, env) {
   ctx.configured_model = configuredModel || null;
   const model = configuredModel || parseModelArg(ctx.claude_args) || "";
   ctx.execution_file_form = form;
-  return buildRow(result, ctx, classifyResult(result, model));
+  const classification = classifyResult(result, model);
+  return { row: buildRow(result, ctx, classification), classification, path };
+}
+
+// ================================================= the version-2 row (plan 0002 §2)
+//
+// A SECOND ROW, BUILT FROM THE FIRST, IN A SECOND ARTIFACT. The version-1 row above is
+// unchanged, because the reference adopter's collector still reads it (`agent-telemetry-*`).
+// The version-2 row is what the hosted store accepts: flat, every string an enum or a strict
+// pattern, a reason CODE instead of the classifier's sentence, and no field `K-OBS-16` keeps
+// out (`workflow`, `job`, `commit`, `agent`, `model_arg`, the per-model array). It is written
+// only when `schema.mjs`'s `validate` accepts it, and its artifact is named
+// `kanon-telemetry-<lane>-<run id>-<attempt>`, a prefix the old collector never matches.
+//
+// ABSENT MEANS UNKNOWN, as on the version-1 row: a null there is a missing key here, never 0.
+
+/** The Kanon release the lane ran at: `github.action_ref` as `X.Y.Z`, or `dev` (§2.6). */
+export function kanonVersion(ref) {
+  const m = /^v?(\d+\.\d+\.\d+)$/.exec(String(ref ?? "").trim());
+  return m ? m[1] : "dev";
+}
+
+/**
+ * The lane's stages as `stage=conclusion` pairs, IN THE ORDER THE LANE RUNS THEM, separated by
+ * spaces or commas. Lanes differ: the spine mints its token before the checkout, the review
+ * lane mints it last, after the PR's setup. So the order is the lane's to give, and this keeps
+ * it. Names outside Kanon's stages, and a stage named twice, are dropped.
+ * @returns {[string, string][]}
+ */
+export function parseStages(text) {
+  const out = [];
+  for (const pair of String(text ?? "").split(/[\s,]+/)) {
+    const i = pair.indexOf("=");
+    if (i < 1) continue;
+    const stage = pair.slice(0, i);
+    const value = pair.slice(i + 1);
+    if (STAGES.includes(stage) && value && !out.some(([s]) => s === stage)) out.push([stage, value]);
+  }
+  return out;
+}
+
+/**
+ * THE FIRST LANE STAGE THAT ENDED THE RUN (§2.6), for a run that failed or was not reached;
+ * undefined for any other outcome, which the schema requires.
+ *
+ * CONCLUSIONS, NOT OUTCOMES. A step's `outcome` is `failure` even when the lane marked it
+ * `continue-on-error` and ran on past it; its `conclusion` is then `success`. A stage the lane
+ * tolerated didn't end the run, so it must never be its `failed_stage`: the review lane runs
+ * on past a PR whose own project setup is broken, and an agent failure after that is the
+ * agent's, not the adopter's setup. The lanes pass conclusions.
+ *
+ * Only conclusions come in, never a step's name or log, so a failure in the adopter's
+ * project-setup hook is recorded as `hook` and nothing else. In the lane's own order:
+ *   1. the first stage that failed or was cancelled;
+ *   2. otherwise the first stage before `finish` that was SKIPPED: a step outside the
+ *      stages failed and the lane never reached it;
+ *   3. otherwise `agent`, when the lane reported it: every stage got through and the agent
+ *      still left no usable result, so the agent is where it ended.
+ * A lane that reported no stages gets none, and its row fails validation rather than being
+ * guessed.
+ */
+export function failedStage(stages, outcome) {
+  if (outcome !== "failed" && outcome !== "not-reached") return undefined;
+  const hit = stages.find(([, v]) => v === "failure" || v === "cancelled");
+  if (hit) return hit[0];
+  const skipped = stages.find(([s, v]) => s !== "finish" && v === "skipped");
+  if (skipped) return skipped[0];
+  return stages.some(([s]) => s === "agent") ? "agent" : undefined;
+}
+
+/**
+ * Tool and compaction counts from the execution file (plan 0003 §5.1). The file carries the
+ * transcript only when it holds the assistant's messages; a file of just the `init` and
+ * `result` events carries none, and then all three are ABSENT, never 0.
+ */
+export function transcriptCounts(objects) {
+  if (!objects.some((o) => o?.type === "assistant")) return {};
+  const blocks = (o) => (Array.isArray(o?.message?.content) ? o.message.content : []);
+  let toolCalls = 0;
+  let toolErrors = 0;
+  let compactions = 0;
+  for (const o of objects) {
+    if (o?.type === "assistant") toolCalls += blocks(o).filter((b) => b?.type === "tool_use").length;
+    if (o?.type === "user") toolErrors += blocks(o).filter((b) => b?.type === "tool_result" && b.is_error === true).length;
+    if (o?.type === "system" && o.subtype === "compact_boundary") compactions += 1;
+  }
+  return { tool_calls: toolCalls, tool_errors: toolErrors, compactions };
+}
+
+/** `critical:0,high:1,…` into the four counts. A severity the tally doesn't name stays absent. */
+export function parseSeverities(text) {
+  const out = {};
+  for (const part of String(text ?? "").split(",")) {
+    const m = /^\s*(critical|high|medium|low)\s*:\s*(\d+)\s*$/.exec(part);
+    if (m) out[`severities_${m[1]}`] = Number(m[2]);
+  }
+  return out;
+}
+
+/** The Reviewer's verdict label as the schema's enum, or undefined for any other label. */
+export function verdictOf(label) {
+  const l = String(label ?? "").trim().toUpperCase();
+  if (l === "APPROVED" || l === "APPROVE") return "approved";
+  if (l === "CHANGES_REQUESTED" || l === "REQUEST_CHANGES") return "changes_requested";
+  return undefined;
+}
+
+/**
+ * How close to its limit a cancel must come to count as the timeout. The lane's start stamp is
+ * its first STEP, which runs after "Set up job" and the service containers: 16 s after the
+ * job started on a measured review run, and longer when a container image has to be pulled.
+ * GitHub counts `timeout-minutes` from the job's start, so a job cancelled at its limit reads,
+ * from the stamp, as a little short of it. Three minutes covers that; a cancel earlier than
+ * that is not the timeout.
+ */
+export const TIMEOUT_SLACK_MS = 3 * 60_000;
+
+/**
+ * Whether the job was cancelled by its own timeout (plan 0003 §5.1): cancelled, at or within
+ * `TIMEOUT_SLACK_MS` of its `timeout-minutes`. False for a job that wasn't cancelled, or was
+ * cancelled clearly before its limit. Undefined when a cancelled job's start or timeout is
+ * unknown.
+ */
+export function timedOut(jobStatus, startedAt, timeoutMinutes, now) {
+  if (!jobStatus) return undefined;
+  if (jobStatus !== "cancelled") return false;
+  const start = Date.parse(startedAt ?? "");
+  const limit = Number(timeoutMinutes);
+  const end = Date.parse(now ?? "");
+  if (Number.isNaN(start) || Number.isNaN(end) || !(limit > 0)) return undefined;
+  return end - start >= limit * 60_000 - TIMEOUT_SLACK_MS;
+}
+
+const intOf = (v) => {
+  if (v === undefined || v === null || v === "") return undefined;
+  const n = Number(v);
+  return Number.isInteger(n) ? n : undefined;
+};
+
+/**
+ * The version-2 row, from the version-1 row, its classification and the lane's inputs.
+ * Every value that is null or unknown is left out.
+ */
+export function buildRowV2(row, classification, extra) {
+  const lane = extra.lane;
+  const usage = row.usage ?? {};
+  const sub = row.subagents ?? {};
+  const terminal = row.terminal_reason == null
+    ? undefined
+    : (TERMINAL_REASONS.includes(row.terminal_reason) ? row.terminal_reason : "other");
+  const v2 = {
+    schema_version: 2,
+    row_kind: "run",
+    tag: extra.tag || "run",
+    recorded_at: row.recorded_at,
+    run_id: intOf(row.run_id),
+    run_attempt: intOf(row.run_attempt),
+    trigger: row.trigger ?? undefined,
+    pr_number: row.pr_number ?? undefined,
+    issue_number: row.issue_number ?? undefined,
+    role: Object.hasOwn(LANE_ROLES, lane) ? LANE_ROLES[lane] : undefined,
+    lane,
+    outcome: row.outcome,
+    reason: classification.code,
+    execution_file_form: row.execution_file_form ?? undefined,
+    terminal_reason: terminal,
+    is_error: row.is_error ?? undefined,
+    api_error_status: row.api_error_status ?? undefined,
+    verdict: verdictOf(row.outcome_label),
+    kanon_version: kanonVersion(extra.kanon_ref),
+    failed_stage: failedStage(extra.stages ?? [], row.outcome),
+    kanon_error: extra.kanon_error || undefined,
+    model: row.model ?? undefined,
+    configured_model: row.configured_model ?? undefined,
+    effort: row.effort ?? undefined,
+    max_turns: row.max_turns ?? undefined,
+    autocompact: row.autocompact ?? undefined,
+    config_fingerprint: row.config_fingerprint ?? undefined,
+    total_cost_usd: row.total_cost_usd ?? undefined,
+    num_turns: row.num_turns ?? undefined,
+    duration_ms: row.duration_ms ?? undefined,
+    duration_api_ms: row.duration_api_ms ?? undefined,
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    total_input_tokens: usage.total_input_tokens,
+    thinking_tokens: usage.thinking_tokens,
+    cache_read_tokens: usage.cache_read_input_tokens,
+    cache_write_tokens: usage.cache_creation_input_tokens,
+    cache_write_1h_tokens: usage.cache_creation_1h_tokens,
+    cache_write_5m_tokens: usage.cache_creation_5m_tokens,
+    permission_denials: row.permission_denials ?? undefined,
+    subagents_spawned: sub.spawned,
+    subagents_completed: sub.completed,
+    subagents_failed: sub.failed,
+    subagents_max_depth: sub.max_depth,
+    ...(extra.transcript ?? {}),
+    job_status: extra.job_status || undefined,
+    timed_out: timedOut(extra.job_status, extra.job_started_at, extra.timeout_minutes, row.recorded_at),
+    changed_lines: row.changed_lines ?? undefined,
+    changed_files: row.changed_files ?? undefined,
+    issue_body_chars: row.issue_body_chars ?? undefined,
+    issue_paths_named: row.issue_paths_named ?? undefined,
+    produced_lines: row.produced_lines ?? undefined,
+    artifacts_filed: row.artifacts_filed ?? undefined,
+    ...parseSeverities(row.severities),
+  };
+  return Object.fromEntries(Object.entries(v2).filter(([, v]) => v !== undefined && v !== null));
+}
+
+function readExtra(args, env, path) {
+  let objects = [];
+  if (path) {
+    try { objects = parseObjects(readFileSync(path, "utf8")); } catch { objects = []; }
+  }
+  return {
+    tag: args.tag ?? env.TELEMETRY_TAG ?? "run",
+    lane: args.lane ?? env.TELEMETRY_LANE ?? "",
+    kanon_ref: args.kanon_ref ?? env.TELEMETRY_KANON_REF ?? "",
+    stages: parseStages(args.stages ?? env.TELEMETRY_STAGES),
+    kanon_error: args.kanon_error ?? env.TELEMETRY_KANON_ERROR ?? "",
+    job_status: args.job_status ?? env.TELEMETRY_JOB_STATUS ?? "",
+    job_started_at: args.job_started_at ?? env.TELEMETRY_JOB_STARTED_AT ?? "",
+    timeout_minutes: args.timeout_minutes ?? env.TELEMETRY_TIMEOUT_MINUTES ?? "",
+    transcript: transcriptCounts(objects),
+  };
+}
+
+/**
+ * Both rows: the version-1 row exactly as `run` returns it, and the version-2 row with its
+ * validation. `v2` is null when the lane passed no `lane`, which an adopter's own lane that
+ * predates it doesn't; `errors` lists what made a built row invalid, by field name only.
+ */
+export function runBoth(args, env) {
+  const { row, classification, path } = collect(args, env);
+  const extra = readExtra(args, env, path);
+  if (!extra.lane) return { row, v2: null, errors: [] };
+  const v2 = buildRowV2(row, classification, extra);
+  const verdict = validate(v2);
+  return { row, v2, errors: verdict.ok ? [] : verdict.errors };
 }
 
 // --------------------------------------------------------------------- main
 const isMain = process.argv[1] && process.argv[1].endsWith("agent-telemetry.mjs");
 if (isMain) {
   const args = parseArgs(process.argv.slice(2));
-  const row = run(args, process.env);
+  const { row, v2, errors } = runBoth(args, process.env);
   const json = JSON.stringify(row, null, 2);
 
   if (args.out && args.out !== "true") writeFileSync(args.out, json);
+  // THE VERSION-2 ROW IS WRITTEN ONLY WHEN IT VALIDATES. Nothing is stripped to make it
+  // pass: an invalid row is left out whole, and the warning names its fields, never values.
+  if (v2 && errors.length === 0 && args.out_v2 && args.out_v2 !== "true") {
+    writeFileSync(args.out_v2, JSON.stringify(v2, null, 2));
+  } else if (v2 && errors.length) {
+    console.log(`::warning title=agent-telemetry::the version-2 row did not validate, so it is not uploaded: ${describeErrors(errors)}`);
+  } else if (!v2) {
+    console.log("::notice title=agent-telemetry::no `lane` input, so no version-2 row is written");
+  }
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, renderSummary(row));
   }

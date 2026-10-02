@@ -174,13 +174,26 @@ These rules decide what leaves an adopter's project, where it is kept, and who m
 - the repository, and the issue or PR number;
 - the agent **role**, never a GitHub username or account;
 - the lane, model, token counts, cost and duration;
-- the outcome, and a bail or failure reason chosen from a fixed list of codes.
+- the outcome, and a bail or failure reason chosen from a fixed list of codes;
+- the run's identity: its run id and attempt, its trigger, and when it was recorded;
+- its configuration: effort, turn cap, compaction window and configuration fingerprint;
+- work-size and output counts;
+- the verdict, and diagnostic codes: terminal reason, API status, error flag and execution-file form;
+- attribution codes: the Kanon version, the failed stage, and a Kanon error code from Kanon's own list.
+
+A work-item row, which describes one pull request, may also contain:
+- **work amounts:** counts of lines, files, directories, files per area, tests, acceptance criteria, cited spec ids, blocking issues and commits, and a boolean per escalation category from Kanon's closed list;
+- **times of platform events,** and the durations between them;
+- **actor classes:** a role, `human` or `other_bot`, never a login, name or account id;
+- **label-derived enums and counts:** the item's origin, follow-up severities and fates, and check conclusions;
+- **Kanon's own codes:** the Merger's escalation reasons and guard ids;
+- **linked numbers:** the issues it closes, and the PRs that revert or fix it.
 
 It never contains code, prompts, issue or PR text, file paths, error messages or any other free text.
 
-**Why.** Telemetry is the one thing that may leave an adopter's project, so it must be safe to leave by construction, not by review. Free text is how content leaks: a bail reason or an error message can quote code, and a file path reveals a project's structure. Without usernames, the rows hold no personal data, which keeps hosted telemetry almost entirely outside data-protection law.
+**Why.** Telemetry is the one thing that may leave an adopter's project, so it must be safe to leave by construction, not by review. Free text is how content leaks: a bail reason or an error message can quote code, and a file path reveals a project's structure. Without usernames, the rows hold no personal data, which keeps hosted telemetry almost entirely outside data-protection law. The longer allowed list holds only metadata: numbers, times, and values from closed lists that Kanon defines. Cost work needs it to compare like with like, and the work-item row to say what the spend bought ([plan 0002](../docs/plans/0002-hosted-telemetry-store.md), decision 2; [plan 0003](../docs/plans/0003-metrics.md) §5.3).
 
-**Enforced by.** Prose only; a guard is planned. The collector will validate each row against the fixed schema and refuse any field outside it, or any reason that isn't a known code.
+**Enforced by.** The schema module, `actions/agent-telemetry/schema.mjs`. It lists every field each row kind may carry, with its type, enum or pattern, and its `validate` rejects a whole row with any field outside the list, any value outside its enum or pattern, or a reason code that doesn't match the outcome, naming fields and never values. The lane writes its row only when it validates, and the unit tests fail when a fixture's row doesn't, or when a field, a sentence or a code outside the list gets through. The hosted store's ingest function will run the same check.
 
 **Class.** framework
 

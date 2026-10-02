@@ -96,6 +96,12 @@ const configuredModelRan = (usage, model) => {
  *   the first, in the same breath as `unavailable` was corrected for asserting a cause
  *   it could not observe.
  *
+ * EVERY RETURN CARRIES A REASON `code` BESIDE ITS SENTENCE (plan 0002 §2.3): one code per
+ * sentence template, from the closed list in `agent-telemetry/schema.mjs` (`REASON_OUTCOME`),
+ * each valid only with its kind. The code is what the telemetry row stores. The sentence,
+ * which carries model ids and numbers, stays in the annotation and the step summary and
+ * never leaves the run (ADR 0007, `K-OBS-16`).
+ *
  * There is no `unknown` return. `renderNotice` keeps an arm for it as a fall-through
  * for an unexpected caller, but every path above returns one of the five.
  */
@@ -109,7 +115,7 @@ export function classifyResult(result, model = '') {
     // from a failure" there points a reader at the agent when the real failure is
     // several steps up and already red — the noise `agent-review.yml:1814` fixed one
     // PR earlier for the same reason.
-    return { kind: 'not-reached', why: 'the agent produced no result file' };
+    return { kind: 'not-reached', code: 'no_result_file', why: 'the agent produced no result file' };
   }
   const turns = Number(result.num_turns);
   const cost = Number(result.total_cost_usd);
@@ -123,6 +129,7 @@ export function classifyResult(result, model = '') {
     const ran = Object.keys(result.modelUsage ?? {});
     return {
       kind: 'unavailable',
+      code: model ? 'model_never_ran' : 'no_model_ran',
       why: model
         ? `\`${model}\` never ran (modelUsage: ${ran.length ? ran.join(', ') : 'empty'}, `
           + `num_turns ${Number.isFinite(turns) ? turns : '?'}, `
@@ -145,6 +152,7 @@ export function classifyResult(result, model = '') {
   if (result.terminal_reason === 'max_turns') {
     return {
       kind: 'exhausted',
+      code: 'turn_cap',
       why: `it stopped at its turn cap (num_turns ${Number.isFinite(turns) ? turns : '?'}, `
         + `total_cost_usd ${Number.isFinite(cost) ? cost.toFixed(2) : '?'})`,
     };
@@ -160,6 +168,7 @@ export function classifyResult(result, model = '') {
   if (result.terminal_reason === 'budget_exhausted' || result.subtype === 'error_max_budget_usd') {
     return {
       kind: 'exhausted',
+      code: 'budget_cap',
       why: `it stopped at its dollar cap, --max-budget-usd (total_cost_usd `
         + `${Number.isFinite(cost) ? cost.toFixed(2) : '?'}, num_turns ${Number.isFinite(turns) ? turns : '?'})`,
     };
@@ -167,11 +176,12 @@ export function classifyResult(result, model = '') {
   if (errored) {
     return {
       kind: 'failed',
+      code: 'did_not_finish',
       why: `the agent ran and did not finish (num_turns ${Number.isFinite(turns) ? turns : '?'}, `
         + `total_cost_usd ${Number.isFinite(cost) ? cost.toFixed(2) : '?'})`,
     };
   }
-  return { kind: 'ok', why: `num_turns ${Number.isFinite(turns) ? turns : '?'}` };
+  return { kind: 'ok', code: 'none', why: `num_turns ${Number.isFinite(turns) ? turns : '?'}` };
 }
 
 /**
@@ -439,14 +449,15 @@ function cli() {
 
   const result = readResult(file);
   const model = readConfiguredModel(file);
-  const { kind, why } = classifyResult(result, model);
+  const { kind, code, why } = classifyResult(result, model);
   const { level, title, body } = renderNotice(kind, why, { arm, recover, nonFatal });
 
   console.log(`::${level} title=${title}::${body}`);
   if (process.env.GITHUB_OUTPUT) {
     // `retry` is read by the PR lanes' breadcrumb steps (scripts/qa/lane-retry.mjs):
     // empty when waiting would not help.
-    appendFileSync(process.env.GITHUB_OUTPUT, `kind=${kind}\nretry=${retryClass(result, model) ?? ''}\n`);
+    // `code` is the reason code the telemetry row stores; the sentence is only for people.
+    appendFileSync(process.env.GITHUB_OUTPUT, `kind=${kind}\ncode=${code}\nretry=${retryClass(result, model) ?? ''}\n`);
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
     const icon = {

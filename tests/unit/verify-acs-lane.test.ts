@@ -76,9 +76,9 @@ describe('what it verifies, and at which ref', () => {
     // BOTH triggers (RA-1281).
     const checkout = steps.find((s) => s.uses?.startsWith('actions/checkout'))!;
     expect(String(checkout.with?.ref)).toContain('steps.resolve.outputs.ref');
-    const names = steps.map((s) => s.id ?? s.uses ?? '');
-    expect(names.indexOf('resolve')).toBeGreaterThanOrEqual(0);
-    expect(names.indexOf('resolve')).toBeLessThan(names.findIndex((n) => n.startsWith('actions/checkout')));
+    const resolve = steps.findIndex((s) => s.id === 'resolve');
+    expect(resolve).toBeGreaterThanOrEqual(0);
+    expect(resolve).toBeLessThan(steps.findIndex((s) => s.uses?.startsWith('actions/checkout')));
   });
 
   it('prints the tag ONCE when there is one, and says so when there is not', () => {

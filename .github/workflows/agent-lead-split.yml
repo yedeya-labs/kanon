@@ -133,6 +133,12 @@ jobs:
     # the brief lane's 100 minutes is the ceiling of the same agent doing more.
     timeout-minutes: 60
     steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
+      # it is as close to the job's start as a step can be.
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # Checked out on the default token first: the gate needs the script and the brief
       # file, and a skipped or refused run must cost no minted token.
       - uses: actions/checkout@v7
@@ -164,6 +170,7 @@ jobs:
       # Re-checkout on the App token, so the push authenticates as the Lead — the default
       # token's pushes raise no events, and the PR must reach the Reviewer.
       - uses: actions/checkout@v7
+        id: checkout
         if: steps.gate.outputs.act == 'split'
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -187,10 +194,12 @@ jobs:
         run: |
           if [ ! -f .github/actions/project-setup/action.yml ]; then
             echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
+            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/project-setup
+        id: project
         if: steps.gate.outputs.act == 'split'
         with:
           lane: lead-split
@@ -206,6 +215,7 @@ jobs:
       # moved into the spine by RA-2609 and into this block by RA-2666. It still follows the App-token checkout, whose
       # persisted credential it pushes with, and precedes the agent.
       - uses: $/actions/agent-setup
+        id: setup
         if: steps.gate.outputs.act == 'split'
         with:
           arm: lead split agent
@@ -371,3 +381,15 @@ jobs:
           issue-number: ${{ github.event.issue.number || inputs.issue }}
           started-at: ${{ steps.agent.outputs.started-at }}
           github-token: ${{ steps.app-token.outputs.token }}
+          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
+          # step CONCLUSION in the lane's own order, never a step's name or log.
+          lane: lead-split
+          stages: >-
+            token=${{ steps.app-token.conclusion }}
+            checkout=${{ steps.checkout.conclusion }}
+            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.project.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "60"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
+          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}

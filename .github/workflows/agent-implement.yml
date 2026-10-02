@@ -91,6 +91,7 @@ jobs:
     uses: $/.github/workflows/agent-lane.yml
     with:
       agent: implementer
+      lane: implement
       arm: implementer agent
       # WALL-CLOCK CEILING — 180 since RA-2212, raised from 120 when the turn cap doubled.
       #
