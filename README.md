@@ -1,6 +1,6 @@
 # Kanon
 
-[![CI](https://github.com/yedeya-labs/kanon/actions/workflows/ci.yml/badge.svg)](https://github.com/yedeya-labs/kanon/actions/workflows/ci.yml)
+[![CI](https://github.com/yedeya-labs/kanon/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/yedeya-labs/kanon/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/yedeya-labs/kanon?sort=semver)](https://github.com/yedeya-labs/kanon/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
