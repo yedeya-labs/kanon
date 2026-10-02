@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1](https://github.com/yedeya-labs/kanon/compare/v0.6.0...v0.6.1) (2026-10-02)
+
+
+### Documentation
+
+* **plans:** add fault attribution to the telemetry schema ([#42](https://github.com/yedeya-labs/kanon/issues/42)) ([60e4edf](https://github.com/yedeya-labs/kanon/commit/60e4edf763299c7da673d3415387c0caf870e842))
+* record self-hosting and the base-rules rule, plan `kanon apps`, and keep version references current ([#40](https://github.com/yedeya-labs/kanon/issues/40)) ([d4010df](https://github.com/yedeya-labs/kanon/commit/d4010df17661e52efd382024f8f6d24d1f538fa6))
+
 ## [0.6.0](https://github.com/yedeya-labs/kanon/compare/v0.5.1...v0.6.0) (2026-10-02)
 
 
