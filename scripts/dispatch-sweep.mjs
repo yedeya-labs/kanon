@@ -940,8 +940,11 @@ const REPORT_ORDER = ['never-ran', 'answered', 'too-big', 'awaiting-human', 'hum
  * The step-summary text, pure so it can be asserted on (RA-1260). Takes the breaker's
  * decision rather than computing it, so the table and the acting loop read ONE answer —
  * and a dry run, which returns before acting, still previews what the breaker will do.
+ *
+ * @param {any[]} verdicts
+ * @param {{ apply?: any, breaker?: { tripped: boolean, reason: string }, costLine?: string }} [opts]
  */
-export function renderReport(verdicts, { apply = APPLY, breaker = { tripped: false, reason: '' } } = {}) {
+export function renderReport(verdicts, { apply = APPLY, breaker = { tripped: false, reason: '' }, costLine = '' } = {}) {
   const rows = [...verdicts].sort((a, b) => REPORT_ORDER.indexOf(a.state) - REPORT_ORDER.indexOf(b.state));
 
   // Per-lane counts in the heading, because "12 open issues" across two lanes hides
@@ -957,6 +960,9 @@ export function renderReport(verdicts, { apply = APPLY, breaker = { tripped: fal
     '',
     apply ? '' : '**Dry run.** Pass `--apply` to act.',
     '',
+    // Directly under the heading, because a skipped read changes what every Attempts
+    // cell below means: none of them is discounted (RA-2706).
+    ...(costLine ? [costLine, ''] : []),
     // The breaker's verdict on the persistent surface, not only as an annotation (which
     // does not survive into the summary). Worded for both modes: in a dry run it is the
     // preview of what `--apply` would withhold.
@@ -981,8 +987,8 @@ export function renderReport(verdicts, { apply = APPLY, breaker = { tripped: fal
   return { text: lines.join('\n'), rows };
 }
 
-function report(verdicts, breaker) {
-  const { text, rows } = renderReport(verdicts, { apply: APPLY, breaker });
+function report(verdicts, breaker, costLine) {
+  const { text, rows } = renderReport(verdicts, { apply: APPLY, breaker, costLine });
   console.log(text);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${text}\n`);
 
@@ -1233,11 +1239,64 @@ export function unreachedWindowStart(now = Date.now(), days = UNREACHED_WINDOW_D
  *  exists in the function. */
 export const COST_PROJECTION = ['sk', 'issue_number', 'outcome', 'run_id'];
 
-/** The store rows for a lane, or [] if the store cannot be read. */
-function readCostRows(lane, now = Date.now()) {
-  const table = process.env.QA_DYNAMO_TABLE;
-  const region = process.env.QA_AWS_REGION;
-  if (!table || !region || !lane.telemetryAgent) return [];
+/** Why the store cannot be read this run, or null if it can be tried (RA-2706).
+ *
+ *  THE READ FAILED SILENTLY FOR ITS WHOLE LIFE. The job lacked `environment: qa`, so
+ *  `vars.QA_AWS_REGION` reached the AWS step empty, that step is `continue-on-error`,
+ *  and `readCostRows` failed closed — every scheduled run charged every dispatch while
+ *  its summary looked like a normal sweep. Fail-closed stays (it is the safe
+ *  direction); what changes is that the run now SAYS it failed closed (`K-PRIN-8`).
+ *
+ *  `QA_AWS_AUTH` is the AWS step's `outcome` — not `conclusion`, which
+ *  `continue-on-error` turns into `success`. Unset (a local run) is not a failure: the
+ *  caller may hold credentials of their own, and the query itself reports if not.
+ *
+ *  @param {Record<string, string|undefined>} [env] */
+export function costReadPrecondition(env = process.env) {
+  if (env.QA_AWS_AUTH && env.QA_AWS_AUTH !== 'success') {
+    return `the AWS credentials step did not succeed (outcome: ${env.QA_AWS_AUTH})`;
+  }
+  if (!env.QA_DYNAMO_TABLE) return 'QA_DYNAMO_TABLE is unset';
+  if (!env.QA_AWS_REGION) return 'QA_AWS_REGION is unset';
+  return null;
+}
+
+/** The one summary line saying whether the store was read (RA-2706), from each lane's
+ *  `readCostRows` result. Per lane, because the lanes are read independently: one
+ *  lane's failed query must not report the other lane's successful read as lost. A
+ *  failed read costs more than the charge — the same rows feed RA-1781's `too-big`
+ *  detection — so the line names both effects.
+ *
+ *  @param {Map<string, { rows: unknown[], error: string|null }>} reads */
+export function costReadLine(reads) {
+  const failed = [...reads].filter(([, r]) => r.error);
+  const read = [...reads].filter(([, r]) => !r.error).map(([k, r]) => `${r.rows.length} \`${k}\``);
+  if (!failed.length) return `Cost rows read (RA-1517): ${read.join(' · ') || 'no lane queried'}.`;
+  const why = [...new Set(failed.map(([, r]) => r.error))].join('; ');
+  const scope = read.length ? ` for ${failed.map(([k]) => `\`${k}\``).join(', ')}` : '';
+  return `**Cost rows NOT read${scope}: ${why}; every dispatch charged and no run-cap exhaustion seen.**`
+    + (read.length ? ` Read: ${read.join(' · ')}.` : '');
+}
+
+/** Surfaces a NOT-read line as an annotation too, so it shows on the run page. */
+function warnCostRead(line) {
+  if (line.startsWith('**Cost rows NOT read')) warn(line.replace(/\*\*/g, ''));
+}
+
+/** A lane's store rows, and why they could not be read. FAILS CLOSED — `rows` is []
+ *  on any failure, which charges every dispatch (RA-1517) — and SAYS SO through
+ *  `error` (RA-2706). Each lane is read independently of the others.
+ *
+ *  @param {{ telemetryAgent?: string, key: string }} lane
+ *  @param {number} [now]
+ *  @param {Record<string, string|undefined>} [env]
+ *  @returns {{ rows: Array<{ts: string|null, issue_number: string|null, outcome: string|null, run_id: string|null}>, error: string|null }} */
+export function readCostRows(lane, now = Date.now(), env = process.env) {
+  const table = env.QA_DYNAMO_TABLE;
+  const region = env.QA_AWS_REGION;
+  if (!lane.telemetryAgent) return { rows: [], error: 'the lane names no telemetry agent' };
+  const skipped = costReadPrecondition(env);
+  if (skipped) return { rows: [], error: skipped };
   const since = unreachedWindowStart(now);
   try {
     const raw = execFileSync('aws', [
@@ -1257,15 +1316,16 @@ function readCostRows(lane, now = Date.now()) {
       '--projection-expression', COST_PROJECTION.join(', '),
       '--output', 'json',
     ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
-    return (JSON.parse(raw).Items ?? []).map((it) => ({
+    const rows = (JSON.parse(raw).Items ?? []).map((it) => ({
       ts: it.sk?.S ?? null,
       issue_number: it.issue_number?.N ?? null,
       outcome: it.outcome?.S ?? null,
       run_id: it.run_id?.S ?? null,
     }));
-  } catch {
-    // Fails closed — see `unreachedByIssue`.
-    return [];
+    return { rows, error: null };
+  } catch (err) {
+    // Fails closed — see `unreachedByIssue` — and says so (RA-2706).
+    return { rows: [], error: `the store query failed (${ghCause(err) || 'no stderr'})` };
   }
 }
 
@@ -1287,6 +1347,14 @@ function main() {
   const total = byLane.reduce((n, { issues }) => n + issues.length, 0);
   if (total === 0) {
     console.log(`No open issues in any lane (${LANES.map((l) => `\`${l.label}\``).join(', ')}).`);
+    // Nothing to charge, so no query — but a broken AWS step is still a fact about
+    // the NEXT run, and a quiet day must not hide it (RA-2706).
+    const reason = costReadPrecondition();
+    if (reason) {
+      const line = costReadLine(new Map(LANES.map((l) => [l.key, { rows: [], error: reason }])));
+      warnCostRead(line);
+      if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${line}\n`);
+    }
     return;
   }
   // ONE PR fetch for every lane — the index is keyed by issue number and a triage
@@ -1299,7 +1367,12 @@ function main() {
   // exclude the dispatches whose run never reached the model (RA-1517).
   const triggeredBySweep = makeSweepTriggerCheck();
   // ONE READ PER LANE, shared by both derivations below (RA-1781 added the second).
-  const rowsPerLane = new Map(byLane.map(({ lane }) => [lane.key, readCostRows(lane)]));
+  // Whether the read happened is REPORTED, not only absorbed (RA-2706): the summary
+  // carries `costReadLine`, and a skipped or failed read is also a ::warning::.
+  const reads = new Map(byLane.map(({ lane }) => [lane.key, readCostRows(lane)]));
+  const rowsPerLane = new Map([...reads].map(([k, r]) => [k, r.rows]));
+  const costLine = costReadLine(reads);
+  warnCostRead(costLine);
   const exhaustedPerLane = new Map(byLane.map(({ lane, issues }) =>
     [lane.key, lane.decomposes ? exhaustedAtByIssue(rowsPerLane.get(lane.key), issues.map((i) => i.number)) : new Map()]));
   const unreachedPerLane = new Map(byLane.map(({ lane, issues }) => {
@@ -1333,7 +1406,7 @@ function main() {
   // than what it classified, and a dry run previews the breaker instead of returning
   // ahead of it. `breakerTripped` is pure; only the acting loop below is gated on APPLY.
   const breaker = breakerTripped(verdicts);
-  report(verdicts, breaker);
+  report(verdicts, breaker, costLine);
 
   if (!APPLY) return;
 
