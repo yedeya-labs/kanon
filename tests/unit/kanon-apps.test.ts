@@ -463,3 +463,19 @@ describe('the register row (K-LAYOUT-6)', () => {
     expect(slugOf(write(fenced, 'Reviewer', 'r').text, 'Reviewer').stdout.trim()).toBe('r');
   });
 });
+
+describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
+  const OWN = join(ROOT, 'docs/qa/agent-identities.md');
+
+  it('is exactly what kanon apps writes for the Reviewer it created', () => {
+    const { text } = writeRegisterRow(null, { role: 'Reviewer', slug: 'kanon-reviewer', permissions: loadRoles().reviewer!.permissions });
+    expect(readFileSync(OWN, 'utf8')).toBe(text);
+  });
+
+  it('gives the lanes the Reviewer slug', () => {
+    const r = spawnSync('awk', ['-v', 'role=Reviewer', '-f', AWK, OWN], { encoding: 'utf8' });
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('kanon-reviewer\n');
+  });
+});
