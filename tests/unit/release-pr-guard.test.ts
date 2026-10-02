@@ -117,8 +117,9 @@ describe('#73 the release workflow refuses a release PR that changes more than v
     expect(result.stderr).not.toContain('agent-implement-revise.yml@v0.9.1');
     expect(result.stderr).not.toContain('lane-check@v0.9.1');
     expect(result.stderr).not.toMatch(/^README\.md: /m);
-    expect(result.stderr).not.toContain('CHANGELOG.md');
-    expect(result.stderr).not.toContain('package.json');
+    expect(result.stderr).not.toMatch(/^CHANGELOG\.md: /m);
+    expect(result.stderr).not.toMatch(/^package(-lock)?\.json: /m);
+    expect(result.stderr).not.toMatch(/^\.release-please-manifest\.json: /m);
   });
 
   it("passes 0.11.0's release PR, which changed only version strings", () => {

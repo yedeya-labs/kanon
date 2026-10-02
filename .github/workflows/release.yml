@@ -300,7 +300,7 @@ jobs:
             const marker = `<!-- kanon-release-pr-guard ${pr.head.sha} -->`;
             const body =
               `${marker}\n**This release PR is stale: merging it would revert changes on \`${pr.base.ref}\`.** ` +
-              'Outside the changelog and the version files, a release PR may change only the version strings in its `extra-files`, and this one changes more:\n\n' +
+              'Outside the changelog, the manifest, `package.json` and `package-lock.json`, a release PR may change only version strings, and this one changes more:\n\n' +
               '````diff\n' + shown.join('\n') + more + '\n````\n\n' +
               `Don't merge it. Close it and delete its branch, \`${pr.head.ref}\`, and the next push to \`${pr.base.ref}\` opens a fresh one; or re-run the Release workflow on \`${pr.base.ref}\` and check that this comment doesn't come back.`;
             console.log(`::error title=Release PR is stale::Release PR #${pr.number} would revert changes on ${pr.base.ref}: ${problems.length} line(s) beyond version strings.`);
