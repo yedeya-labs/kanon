@@ -229,8 +229,9 @@ describe('no workflow interpolates github.event into a run line', () => {
 
 // The ruleset on main (id 24259403) requires these checks by name. A merge queue waits
 // for each one on the queue's branch, so each must report there under the same name it
-// reports under on the pull request (K-MERGE-7).
-const REQUIRED_CHECKS = ['Lint, type-check and unit tests', 'Conventional title', 'Signed-off commits'];
+// reports under on the pull request (K-MERGE-7). The agent blocks smoke run joins them
+// once the ruleset names it (plan 0001 §4).
+const REQUIRED_CHECKS = ['Lint, type-check and unit tests', 'Conventional title', 'Signed-off commits', 'Agent blocks smoke'];
 
 describe('K-MERGE-7 every required check reports on pull requests and in the merge queue, under one name', () => {
   const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
