@@ -65,7 +65,7 @@ Everything else is a number, a boolean, or a value from a closed list (`outcome`
 | The Overseer agent | weekly | any partition, ad hoc, through `aws dynamodb query` in its prompt |
 | The weekly and project digests | — | **nothing.** They mention cost rows in comments only. |
 
-The partition list comes from `qa-store.mjs`, which scans the workflows for `agent:` names. One reader may already read nothing: the dispatch sweep assumes the QA role without declaring `environment: qa`, which the role's trust requires. Its read is non-fatal by design. **Not run:** its "Configure AWS credentials" step log would settle it. Either way, the new reader trust must name that job's subject (§6).
+The partition list comes from `qa-store.mjs`, which scans the workflows for `agent:` names. One reader read nothing: the dispatch sweep's store read did not run, because its job assumed the QA role without declaring `environment: qa`, which the role's trust requires (RA-2706). The read is non-fatal by design, so nothing failed. RA-2714 added the declaration, and Kanon [#60](https://github.com/yedeya-labs/kanon/pull/60) ported its reporting of a skipped read. The new reader trust must name that job's subject (§6).
 
 ## 2. The schema (decision 1)
 

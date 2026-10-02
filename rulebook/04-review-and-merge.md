@@ -179,7 +179,7 @@ The merge is pinned to the head commit the verdict read. If the head has moved, 
 
 ### `K-MERGE-17` A pull request never chooses the rules it is judged by
 
-**Rule.** A lane that judges a PR, rather than runs it, reads every trust-relevant input from the PR's **base** branch, never from the PR. The Reviewer is such a lane, and so is the Merger's verdict. The inputs are this one list:
+**Rule.** A lane that judges a PR, rather than runs it, reads every trust-relevant input from the repository's **default** branch, never from the PR and never from the PR's base. The Reviewer is such a lane, and so is the Merger's verdict. The inputs are this one list:
 
 | Input | Path | What a PR could do with its own copy |
 |---|---|---|
@@ -191,15 +191,17 @@ The merge is pinned to the head commit the verdict read. If the head has moved, 
 | The project-setup hook | `.github/actions/project-setup` (plan 0001 §5) | Run before the agent, and change the tree or the tools it judges with. |
 | Anything the inputs above delegate to | wherever they point | Reopen the gap one document over, through a file the judge was told to trust. |
 
-The PR's own copy of each input is kept aside, so a change to one is still reviewed as part of the diff. An input the PR adds that base lacks is not used. If base's copy can't be read, the lane refuses to judge; it never falls back to the PR's copy.
+The PR's own copy of each input is kept aside, so a change to one is still reviewed as part of the diff. An input the PR adds that the default branch lacks is not used. If the default branch's copy can't be read, the lane refuses to judge; it never falls back to the PR's copy, or to the base's.
 
-**One exception: the specs.** The spec corpus under `docs/qa/specs/` is read from the PR (`K-SPEC-1`). A behaviour change ships its spec update in the same PR (`K-SPEC-10`), so base's copy would flag a correct change as wrong. A spec change is judged as part of the diff, not used as the rules.
+**Why the default branch, not the base.** Usually they are the same branch, but not always. A stacked PR's base is another PR's branch, and that PR's author can write to it: they can add a register row or a delegation record there, and the PR stacked on top would then be judged by it. Only merged, reviewed changes reach the default branch.
+
+**One exception: the specs.** The spec corpus under `docs/qa/specs/` is read from the PR (`K-SPEC-1`). A behaviour change ships its spec update in the same PR (`K-SPEC-10`), so the default branch's copy would flag a correct change as wrong. A spec change is judged as part of the diff, not used as the rules.
 
 **Not covered.** A lane whose job is to run the PR's own code, such as one that verifies acceptance criteria by running the PR's hook and tests, reads them from the PR by design. The lane code itself (workflows, actions and pipeline scripts) comes from a pinned Kanon release (`K-ADOPT-11`), so an adopter's PR can't change it. Kanon's own PRs can, so Kanon calls its lanes at its previous release ([ADR 0011](../docs/decisions/0011-kanon-runs-its-own-lanes.md)). The same holds for the code of Kanon's own required checks: its DCO and PR-title checks run the last release, never the PR's copy, and the PR's copy runs beside them as a test that isn't required ([#47](https://github.com/yedeya-labs/kanon/issues/47)).
 
 **Why.** A PR that edits the inputs of its own review can weaken that review, and then only the human merge is left to catch it. The reference adopter closed this one file at a time: the agent runtime restored `.claude/`, a script then restored the agent documents, and later the review read the register from base. Each gap was found separately, after it existed. One list closes the whole class, and a new input is added to the list rather than found by an incident.
 
-**Enforced by.** For the identity register and the sign-off delegation as the `dco` check reads them, the check itself: it reads both from base over the API (`K-AGENT-44`). Otherwise prose only; the mechanism lands at step 4 of [plan 0001](../docs/plans/0001-move-the-agent-lanes.md), when the review lane moves. That lane gets one base-restore step driven by this list, which replaces the adopter's per-file restores, and a test fails when the list and the step disagree. Until then, the reference adopter's review lane restores part of the list file by file (`K-AGENT-22`).
+**Enforced by.** For the identity register and the sign-off delegation as the `dco` check reads them, the check itself: it reads both from the default branch over the API (`K-AGENT-44`), and its tests fail when it reads them from the base. Otherwise prose only; the mechanism lands at step 4 of [plan 0001](../docs/plans/0001-move-the-agent-lanes.md), when the review lane moves. That lane gets one base-restore step driven by this list, which replaces the adopter's per-file restores, and a test fails when the list and the step disagree. Until then, the reference adopter's review lane restores part of the list file by file (`K-AGENT-22`).
 
 **Class.** framework
 

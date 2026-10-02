@@ -168,7 +168,7 @@ This chapter governs projects: work too large for one issue, planned by the Lead
 
 **Why.** A number is not behaviour. Forcing it into a `[seed]` clause bends the spec corpus into a to-do list, and a clause that says "the cost is measured" is satisfied by any number at all. A measurement item keeps the evidence rule (`K-PRIN-14`) and leaves the spec layer to behaviour.
 
-**Enforced by.** Prose only until the brief guard is installed; it then accepts an item whose bullets are all measurement lines, and refuses one with neither ids nor measurements.
+**Enforced by.** The brief guard (`scripts/brief-guard.mjs`): it accepts an item with no acceptance criteria when it carries `**Measures:**` lines, refuses a measurement line that names no command, and refuses an item with neither ids nor measurements. A test runs the guard on the brief template, whose example measurement item it must accept ([#55](https://github.com/yedeya-labs/kanon/issues/55)).
 
 **Class.** framework
 

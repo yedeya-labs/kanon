@@ -164,7 +164,7 @@ The pipeline's own paths escalate whatever the list says (`K-MERGE-4`), so the f
 
 ### `K-LAYOUT-9` The agent instruction files carry only the project's content
 
-**Rule.** The agent instruction files are `AGENTS.md` at the repository root (the project's own instructions), `CLAUDE.md` at the root containing the line `@AGENTS.md`, and the `.claude/` directory. They carry what is specific to the project: its stack, its commands, its landmines. They point to Kanon for Kanon's rules and never copy them (`K-ADOPT-10`). A lane that judges a PR reads them from the base branch, with the rest of `K-MERGE-17`'s list.
+**Rule.** The agent instruction files are `AGENTS.md` at the repository root (the project's own instructions), `CLAUDE.md` at the root containing the line `@AGENTS.md`, and the `.claude/` directory. They carry what is specific to the project: its stack, its commands, its landmines. They point to Kanon for Kanon's rules and never copy them (`K-ADOPT-10`). A lane that judges a PR reads them from the default branch, with the rest of `K-MERGE-17`'s list.
 
 **Why.** A PR must not be able to rewrite the instructions of the agent that judges it. One root file named for each runtime, with one including the other, keeps a single home for the project's instructions.
 

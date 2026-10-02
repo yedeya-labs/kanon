@@ -10,7 +10,8 @@
 #
 # The repository's own agents (K-AGENT-44): a commit authored by an App in the App register
 # needs the sign-off of the person named in docs/qa/sign-off-delegation.md. Both files are
-# read from the base branch over the API, never from the pull request (K-MERGE-17).
+# read from the repository's default branch over the API, never from the pull request or
+# its base (K-MERGE-17).
 #
 # Everything reaches the script through the environment, never interpolated into a shell
 # line. There are no inputs (ADR 0002): the exemptions are fixed, and listed with their
