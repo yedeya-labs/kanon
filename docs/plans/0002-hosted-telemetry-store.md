@@ -10,7 +10,7 @@
 
 **Where it ends.**
 - **One store in a new Kanon AWS account, in Frankfurt.** A DynamoDB table, written only by a small validating function.
-- **One fixed schema, version 2.** Fifty fields, every string an enum or a strict pattern, and a reason code instead of a sentence. The function rejects any row with a field outside the list.
+- **One fixed schema, version 2.** Fifty-three fields, every string an enum or a strict pattern, and a reason code instead of a sentence. The function rejects any row with a field outside the list.
 - **Per-repository roles through GitHub OIDC.** No stored secrets. A writer role can only call the function, and the function takes the partition from the role, never from the row. A reader role can only query its own partitions.
 - **The reference adopter's history moves in once,** cleaned, through the same function.
 
@@ -71,7 +71,7 @@ The partition list comes from `qa-store.mjs`, which scans the workflows for `age
 
 ### 2.1 The fixed field list
 
-**Version 2. Fifty fields. Each is optional unless marked required. No nesting.** Field names are the reference adopter's stored attribute names wherever one exists, so its readers keep their column names.
+**Version 2. Fifty-three fields. Each is optional unless marked required. No nesting.** Field names are the reference adopter's stored attribute names wherever one exists, so its readers keep their column names.
 
 | Group | Fields | Type |
 |---|---|---|
@@ -79,6 +79,7 @@ The partition list comes from `qa-store.mjs`, which scans the workflows for `age
 | **Run** | `run_id`, `run_attempt` (both required); `trigger`; `pr_number`, `issue_number` | integers; GitHub event name from GitHub's documented list |
 | **Who** | `role` (required): `explorer`, `implementer`, `reviewer`, `merger`, `lead`, `overseer`; `lane` (required): Kanon's lane names | enums |
 | **Outcome** | `outcome` (required): `ok`, `unavailable`, `exhausted`, `failed`, `not-reached`; `reason` (required, §2.3); `execution_file_form`: `ok`, `no-path`, `absent`, `unparseable`, `no-result-event`; `terminal_reason`; `is_error`; `api_error_status`; `verdict`: `approved`, `changes_requested` | enums; boolean; integer 100 to 599 |
+| **Attribution** (§2.6) | `kanon_version` (required): the Kanon release the lane ran at; `failed_stage`: `checkout`, `token`, `hook`, `setup`, `agent`, `finish`; `kanon_error`: a code from Kanon's own list | `^\d+\.\d+\.\d+$` or `dev`; enum; enum |
 | **Configuration** | `model`, `configured_model`; `effort`: `low`, `medium`, `high`, `xhigh`, `max`; `max_turns`; `autocompact`; `config_fingerprint` | model id pattern `^[a-z0-9][a-z0-9.-]{0,63}(\[1m\])?$`; enum; integer; `auto` or `^\d+[km]?$`; `^[0-9a-f]{12}$` |
 | **Cost** | `total_cost_usd`; `num_turns`, `duration_ms`, `duration_api_ms` | number 0 to 1,000; integers |
 | **Tokens** | `input_tokens`, `output_tokens`, `total_input_tokens`, `thinking_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cache_write_1h_tokens`, `cache_write_5m_tokens` | integers |
@@ -128,6 +129,24 @@ Smoke and test rows are stored, which proves the path end to end, but they expir
 3. **By the ingest function** (§4), which is the enforcement. A row with any field not in its version's list, a value of the wrong type, a string outside its enum or pattern, or a reason that doesn't match its outcome, is **rejected whole**, with HTTP 422 and the offending field **names**. The function never echoes values, so a bad row can't leak into a log.
 
 Nothing strips unknown fields quietly. A row is stored as validated, or not at all.
+
+### 2.6 Fault attribution
+
+**Why these three fields exist.** The Owner wants to find Kanon's own bugs in adopters' runs and fix them before an adopter has to report one (#41). To do that, a failed row has to say *where* it failed and *whose code* failed, without carrying anything the adopter wrote.
+
+- **`kanon_version`** is the release the caller pinned, read from `github.action_ref`. A run at an untagged ref, which only happens in Kanon's own CI, records `dev`. Failures that start at one version, at several adopters, point to a Kanon regression.
+- **`failed_stage`** is the first lane stage whose outcome was not success: `checkout`, `token` (minting the App token), `hook` (the adopter's project-setup hook), `setup` (the push and scope probes), `agent` (the model run) or `finish`. The spine passes each stage's step outcome to `agent-finish`, which runs `always()`. Lanes not on the spine pass the same outcomes themselves. It is **required when `outcome` is `not-reached` or `failed`, and absent otherwise**; the store checks the pairing, like the reason codes. **A hook failure is recorded only as `hook`**, never by the adopter's own step names, which are their content.
+- **`kanon_error`** is a code from a closed list that Kanon defines, written by Kanon's own scripts when they fail, for example `register_row_missing` or `scope_probe_denied`. It is absent when nothing of Kanon's failed. `unhandled` is the catch-all for an exception in Kanon's own code. The codes are Kanon's, so they say nothing about the adopter. A unit test fails when a script emits a code that isn't in the list, or when the list holds a code no script emits.
+
+**How the three combine with the platform codes:**
+
+| Pattern | Most likely cause |
+|---|---|
+| The same `failed_stage` and `kanon_error` at several adopters, on one `kanon_version`, often starting at a release | A Kanon bug |
+| A failure at one adopter only, typically at `failed_stage: hook` | The adopter's setup |
+| `api_error_status` 429 or 5xx, or `reason: model_never_ran` | The platform, so neither Kanon nor the adopter |
+
+The table is guidance for reading the data, not a field. The store records facts and never stores a verdict about fault. Turning these patterns into Kanon issues is a later step with its own cost (#41).
 
 ## 3. Write authentication (decision 3)
 
@@ -246,7 +265,7 @@ The dispatch sweep keeps its three-field projection.
 
 | Step | Where | What | Falsifiable check |
 |---|---|---|---|
-| **S1** | Kanon vN | The schema module (§2.5). `agent-classify` returns a code beside its sentence. `agent-telemetry` gains `tag` and `lane` inputs and uploads a **second** artifact, `kanon-telemetry-<lane>-<run id>-<attempt>`, holding the version-2 row. `K-OBS-16` is amended (decision 2). | Every fixture's version-2 row validates. **Mutations:** a row with one extra field, a `reason` sentence, or `reason: turn_cap` with `outcome: ok` each fails `validate`. The reference adopter's collector still matches only `agent-telemetry-*`, so after its Dependabot bump its next sweep pushes the same number of rows as the one before. |
+| **S1** | Kanon vN | The schema module (§2.5). `agent-classify` returns a code beside its sentence. `agent-telemetry` gains `tag` and `lane` inputs, the spine passes each stage's outcome for `failed_stage`, and Kanon's scripts write their `kanon_error` codes; `agent-telemetry` uploads a **second** artifact, `kanon-telemetry-<lane>-<run id>-<attempt>`, holding the version-2 row. `K-OBS-16` is amended (decision 2). | Every fixture's version-2 row validates. **Mutations:** a row with one extra field, a `reason` sentence, or `reason: turn_cap` with `outcome: ok`, a `not-reached` row without `failed_stage`, or a `kanon_error` outside the list each fails `validate`. A lane whose hook fails records `failed_stage: hook` and nothing else from the hook. The reference adopter's collector still matches only `agent-telemetry-*`, so after its Dependabot bump its next sweep pushes the same number of rows as the one before. |
 | **S2** | Owner | Create the `kanon` account, the region SCP and the $1 budget. | `aws organizations list-accounts` lists it; a `describe` call in `us-east-1` from inside it is denied by the SCP; the budget exists. |
 | **S3** | Kanon PR; Owner deploys | The template (§4, §5): table, function, URL, OIDC provider, table resource policy, and roles for Kanon, the reference adopter and the importer. A verify script ships with it. | The Owner runs the verify script, which sends `tag: test` rows: a valid row gets 200; a row with an extra field gets 422 naming that field; a row naming a partition gets 422; the reader role querying another adopter's key gets `AccessDeniedException`; a direct `PutItem` with the writer role is denied; the stored row's `expires_at` is 30 days out. |
 | **S4** | adopter | **Prepare in the adopter** (ADR 0009 §4). Its collector also sends each `kanon-telemetry-*` row to the function, after its existing push. Its job gets the `kanon-telemetry` environment and the writer role, and keeps the QA role for the old push. | For one week, the hosted store's `tag = run` rows per lane equal the adopter's new `COST#` rows per agent over the same window, and the collector logged no rejections. |
@@ -255,6 +274,7 @@ The dispatch sweep keeps its three-field projection.
 | **S7** | Kanon vN+k, adopter | Move the collector into Kanon as the reusable workflow `telemetry-collect.yml`, sending only version 2 (ADR 0009 §2: one step, no second live copy). The adopter's caller keeps the schedule. Its QA role and the `COST#` push go. Kanon installs its own caller. The next release stops uploading the version-1 artifact. | The adopter's table gets no `COST#` row dated after the switch. Kanon's collector is green, and Kanon's smoke rows appear with `tag: smoke` and nothing else. |
 | **S8** | gate | **The store is live before step 6 of plan 0001.** At step 6, Kolophon's register entry, roles and collector caller go in with its other callers. | Kolophon's first review run's row is in the hosted store with `tag: run`, and in no other store. |
 | **S9** | Kanon | **Kanon writes `run` rows from #22,** when the Reviewer runs on Kanon's PRs. Nothing new is needed; S7 installed the collector. | The first review of a Kanon PR has its row in the hosted store. |
+| **S10** | Kanon account, later | **Kanon files its own bugs (#41).** A scheduled job reads the aggregates and files a Kanon issue for a new combination of `failed_stage`, `kanon_error` and `kanon_version`, or a rise in failures after a release. The issue holds counts and codes only. It needs a few weeks of data first, and the Owner approves its thresholds, cadence and cost separately (the cost-discussion rule). | A seeded `test` combination files exactly one Kanon issue, and a second run updates that issue instead of filing another. |
 
 **Why this order.**
 - **The row changes first, in Kanon, and is invisible to the adopter.** A second artifact under a new prefix can't disturb a collector that matches the old one.
@@ -383,8 +403,8 @@ Repeat with `AWSLambda` and `AmazonCloudWatch`.
 
 ## Decisions for the Owner
 
-1. **Accepted by the Owner, 2026-10-02.** **The schema** (§2): version 2, fifty flat fields, every string an enum or a strict pattern, `tag` required, rows rejected whole.
-2. **Accepted by the Owner, 2026-10-02.** **Amend `K-OBS-16`'s allowed list.** It is a closed list, and it doesn't name fields the cost work needs and that hold no content: the run id and attempt, the trigger, the time, the configuration (effort, turn cap, compaction, fingerprint), work-size and output counts, the verdict, and the diagnostic codes (terminal reason, API status, error flag, execution-file form). The amendment adds these four groups to the rule, with ADR 0007 noted, in S1. Without it, version 2 breaks the rule it exists to enforce.
+1. **Accepted by the Owner, 2026-10-02.** **The schema** (§2): version 2, fifty-three flat fields (the three attribution fields added by the Owner the same day, §2.6), every string an enum or a strict pattern, `tag` required, rows rejected whole.
+2. **Accepted by the Owner, 2026-10-02.** **Amend `K-OBS-16`'s allowed list.** It is a closed list, and it doesn't name fields the cost work needs and that hold no content: the run id and attempt, the trigger, the time, the configuration (effort, turn cap, compaction, fingerprint), work-size and output counts, the verdict, and the diagnostic codes (terminal reason, API status, error flag, execution-file form), plus the attribution codes (Kanon version, failed stage, Kanon error code, §2.6). The amendment adds these five groups to the rule, with ADR 0007 noted, in S1. Without it, version 2 breaks the rule it exists to enforce.
 3. **Accepted by the Owner, 2026-10-02.** **Write auth** (§3): a writer and a reader role per repository; the writer trusted only for the `kanon-telemetry` environment.
 4. **Accepted by the Owner, 2026-10-02.** **Ingest** (§4): a validating function behind an IAM-authenticated URL, with the table's resource policy making it the only writer. Option B.
 5. **Decided by the Owner, 2026-10-02:** a new `kanon` member account, a region SCP, CloudFormation, and a private register (§5). CloudFormation was chosen over the reference adopter's stack tool because the same template is what every adopter deploys for its own stores (`K-OBS-17`, `K-OBS-18`), so it must need nothing beyond the AWS CLI.
