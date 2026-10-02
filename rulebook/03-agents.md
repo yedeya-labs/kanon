@@ -235,9 +235,9 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 ### `K-AGENT-22` Take agent instructions and configuration from the base branch only
 
-**Rule.** The Reviewer's instructions, and everything they delegate to, come from the base branch, never from the PR under review; it refuses to review if the PR's install step changed a pinned file. Trigger the Reviewer only through paths that run the base branch's copy of its workflow. Treat any change to agent configuration as inert until merged, and plan trials of it as "merge, then observe the next run". Write agent hook commands as pinned direct invocations with their configuration on the command line, never as repository scripts a PR could change.
+**Rule.** The Reviewer reads its instructions and configuration from the base branch, never from the PR under review. `K-MERGE-17` holds the list of what that covers, for every lane that judges a PR; this rule adds what is specific to the Reviewer. It refuses to review if the PR's install step changed a pinned file. Trigger the Reviewer only through paths that run the base branch's copy of its workflow. Treat any change to agent configuration as inert until merged, and plan trials of it as "merge, then observe the next run". Write agent hook commands as pinned direct invocations with their configuration on the command line, never as repository scripts a PR could change.
 
-**Why.** A PR must not be able to rewrite the gate that judges it. The agent runtime restores its configuration from the base branch on PR runs, but hooks resolve files from the PR head, so a hook that calls a repository script runs the PR's version of it.
+**Why.** A PR must not be able to rewrite the gate that judges it (`K-MERGE-17`). The agent runtime restores its configuration from the base branch on PR runs, but hooks resolve files from the PR head, so a hook that calls a repository script runs the PR's version of it.
 
 **Enforced by.** The review workflow restores its instruction files from base and verifies their digests before starting, and is triggered only by events that run the base copy.
 
