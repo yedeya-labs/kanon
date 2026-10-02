@@ -1,0 +1,23 @@
+# Proves whether a top-level `concurrency:` inside a called workflow is honoured (plan 0001,
+# decision 11). See `lane-concurrency-probe.yml` for the question and how a run answers it.
+#
+# HOW TO RUN IT. Dispatch it twice within a minute, or push twice to `smoke/lane-concurrency`,
+# and compare the two runs' `hold` jobs: queued means the second started after the first
+# ended. It is not a required check and runs on nothing else, because it waits 90 seconds
+# on purpose and its answer is about the platform, not about a change to Kanon.
+#
+# It also calls a reusable workflow at job level through `$/`, which no other Kanon
+# workflow did before the lanes (the release caller still uses `./`).
+name: Lane concurrency smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [smoke/lane-concurrency]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    uses: $/.github/workflows/lane-concurrency-probe.yml

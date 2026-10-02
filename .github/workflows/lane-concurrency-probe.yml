@@ -1,0 +1,31 @@
+# The called half of the lane concurrency smoke (plan 0001, decision 11).
+#
+# A Kanon lane is a reusable workflow, and nine of the reference adopter's ten lanes carry
+# a workflow-level `concurrency:`. GitHub documents `concurrency` on a CALLING job, and says
+# nothing about a top-level `concurrency:` inside a CALLED workflow. This file is that
+# shape and nothing else: a top-level group, `cancel-in-progress: false`, and one job that
+# holds the group long enough for a second run to arrive. `lane-concurrency-smoke.yml`
+# calls it. Two runs of the caller must queue: the second run's `hold` job starts only
+# after the first one's ends. If they overlap, the key is ignored in a called workflow, and
+# the lanes' concurrency belongs on the calling job instead.
+#
+# The group is fixed, so every run of the smoke contends for it, whatever triggered it.
+name: Lane concurrency probe
+
+on:
+  workflow_call:
+
+concurrency:
+  group: kanon-lane-concurrency-probe
+  cancel-in-progress: false
+
+jobs:
+  hold:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Hold the concurrency group
+        run: |
+          echo "started $(date -u +%FT%TZ)"
+          sleep 90
+          echo "ended $(date -u +%FT%TZ)"
