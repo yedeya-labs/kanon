@@ -1,0 +1,29 @@
+{
+  "$comment": "The GitHub App permissions of each agent role, in the keys and values of GitHub's App manifest (`default_permissions`). The roles table in 03-agents.md is the rule; this file is its machine-readable twin, read by `kanon apps` to build each App's manifest, and tests/unit/agent-permissions.test.ts fails when the two disagree (K-PRIN-2). Each role holds its row of the roles table plus Metadata: read, which K-ADOPT-8 adds to every App. Change the table and this file in the same commit.",
+  "roles": {
+    "explorer": {
+      "role": "Explorer",
+      "permissions": { "contents": "read", "issues": "write", "pull_requests": "read", "metadata": "read" }
+    },
+    "implementer": {
+      "role": "Implementer",
+      "permissions": { "contents": "write", "issues": "write", "pull_requests": "write", "workflows": "write", "metadata": "read" }
+    },
+    "reviewer": {
+      "role": "Reviewer",
+      "permissions": { "contents": "write", "issues": "write", "pull_requests": "write", "metadata": "read" }
+    },
+    "merger": {
+      "role": "Merger",
+      "permissions": { "contents": "write", "issues": "write", "pull_requests": "write", "actions": "write", "checks": "read", "statuses": "read", "metadata": "read" }
+    },
+    "lead": {
+      "role": "Lead",
+      "permissions": { "contents": "write", "issues": "write", "pull_requests": "write", "actions": "read", "metadata": "read" }
+    },
+    "overseer": {
+      "role": "Overseer",
+      "permissions": { "contents": "read", "issues": "write", "pull_requests": "read", "metadata": "read" }
+    }
+  }
+}

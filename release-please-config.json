@@ -20,6 +20,7 @@
         "actions/dco/README.md",
         "actions/lane-check/README.md",
         "actions/pr-title/README.md",
+        "docs/apps.md",
         "docs/lanes.md",
         "docs/release.md"
       ],

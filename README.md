@@ -58,6 +58,16 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 
 <!-- x-release-please-end -->
 
+**Create the agent Apps with [`kanon apps`](docs/apps.md)** (step 12 of the checklist). It builds each role's App from a manifest with exactly that role's permissions, stores the App's id and key as Actions secrets with your own `gh`, and writes the App register row. You click **Create** and **Install** in GitHub for each App; the command never creates one itself. Until the npm package is published, run it from a release tag, inside your repository's checkout:
+
+<!-- x-release-please-start-version -->
+
+```sh
+npx --yes --package github:yedeya-labs/kanon#v0.6.1 kanon apps --org <org> --repo <repo> --roles reviewer
+```
+
+<!-- x-release-please-end -->
+
 The agent-lane blocks moved first ([plan 0001](docs/plans/0001-move-the-agent-lanes.md), step 1), then the shared lane workflow and the three lanes that run no workspace script (step 2). The other lanes follow in later releases.
 
 ## Status
@@ -76,6 +86,7 @@ See the [roadmap](ROADMAP.md) for what comes next.
 |---|---|
 | [`rulebook/`](rulebook/) | The rules. This is Kanon's specification. |
 | [`docs/decisions/`](docs/decisions/) | Architecture decision records: why Kanon is shaped the way it is. |
+| [`cli/`](cli/) | The `kanon` command: so far, [`kanon apps`](docs/apps.md). |
 | [`actions/`](actions/) | Kanon's checks, the lane check and the agent-lane blocks, each a versioned composite action. |
 | [`.github/workflows/`](.github/workflows/) | Kanon's agent lanes and the shared lane workflow they call, the reusable release workflow, and Kanon's own CI, including smoke runs of the blocks and the lanes. |
 | [`tests/`](tests/) | Kanon's own tests, run on every pull request. |

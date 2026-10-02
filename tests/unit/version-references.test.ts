@@ -26,7 +26,9 @@ const extraFiles = config.packages['.']?.['extra-files'] ?? [];
 
 const HISTORY = /^(CHANGELOG\.md|docs\/(decisions|plans)\/)/;
 const FORM_ONLY = /^rulebook\//;
-const REF = /yedeya-labs\/kanon\/[^\s`'"@]+@([^\s`'")|]+)/g;
+// `uses:` paths pin with `@`; the `npx` line that runs `kanon apps` (docs/apps.md) pins the
+// git package with `#`.
+const REF = /yedeya-labs\/kanon(?:\/[^\s`'"@]+@|#)([^\s`'")|]+)/g;
 const SEMVER = /\d+\.\d+\.\d+/g;
 const INLINE = /x-release-please-version/;
 const START = /x-release-please-start-version/;
@@ -83,7 +85,7 @@ describe('K-ADOPT-11 the version references an adopter copies stay current', () 
     for (const { lines } of withRefs) {
       for (const l of lines.filter((x) => x.covered)) {
         const after = l.text.replace(/\d+\.\d+\.\d+/, next);
-        const expected = l.refs.length > 0 ? l.text.replaceAll(`@v${version}`, `@v${next}`) : l.text;
+        const expected = l.refs.length > 0 ? l.text.replace(new RegExp(`([@#])v${version.replaceAll('.', '\\.')}`, 'g'), `$1v${next}`) : l.text;
         expect(after, l.at).toBe(expected);
         expect((l.text.match(SEMVER) ?? []).length, l.at).toBeLessThanOrEqual(1);
       }

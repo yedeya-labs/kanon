@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["actions", "tests", "*.config.ts", "*.config.js"]
+  "include": ["actions", "cli", "tests", "*.config.ts", "*.config.js"]
 }

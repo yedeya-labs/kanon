@@ -20,5 +20,8 @@
     "typescript-eslint": "8.71.0",
     "vitest": "5.0.2",
     "yaml": "2.9.1"
+  },
+  "bin": {
+    "kanon": "cli/kanon.mjs"
   }
 }
