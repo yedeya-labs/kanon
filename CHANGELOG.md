@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.12.0](https://github.com/yedeya-labs/kanon/compare/v0.11.0...v0.12.0) (2026-10-02)
+
+
+### Features
+
+* **cli:** create the bucket milestones with `kanon milestones` ([#87](https://github.com/yedeya-labs/kanon/issues/87)) ([9724f50](https://github.com/yedeya-labs/kanon/commit/9724f502ca16f429213a7f052935e73982fa2d71))
+
+
+### Bug Fixes
+
+* **lanes:** judge the project-setup hook by its outcome only, and run actionlint in CI ([#83](https://github.com/yedeya-labs/kanon/issues/83)) ([a818d31](https://github.com/yedeya-labs/kanon/commit/a818d310c613ccc42dc5936cde03661aacf5467e))
+* **lanes:** mint App tokens with `client-id`, not the deprecated `app-id` ([#84](https://github.com/yedeya-labs/kanon/issues/84)) ([796f6e3](https://github.com/yedeya-labs/kanon/commit/796f6e3320bac93c156e94050dfce825d3091a6f))
+* **release:** refuse a release PR that changes more than version strings ([#82](https://github.com/yedeya-labs/kanon/issues/82)) ([4b427ce](https://github.com/yedeya-labs/kanon/commit/4b427ce330d6994c0b992c508b3ee92955569fa6))
+
+
+### Documentation
+
+* **plans:** amend plan 0002 for the work-item row and the new run fields ([#80](https://github.com/yedeya-labs/kanon/issues/80)) ([b927fe9](https://github.com/yedeya-labs/kanon/commit/b927fe90fe1f2afab6668460a465353270d7ff9a))
+* **plans:** plan the metrics: cost, efficiency, accuracy and the work-item row ([#76](https://github.com/yedeya-labs/kanon/issues/76)) ([86533be](https://github.com/yedeya-labs/kanon/commit/86533beabc3f7908bc2e9160b63d944635b265a1))
+
 ## [0.11.0](https://github.com/yedeya-labs/kanon/compare/v0.10.0...v0.11.0) (2026-10-02)
 
 
