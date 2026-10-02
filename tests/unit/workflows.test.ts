@@ -231,7 +231,7 @@ describe('no workflow interpolates github.event into a run line', () => {
 // for each one on the queue's branch, so each must report there under the same name it
 // reports under on the pull request (K-MERGE-7). The agent blocks smoke run joins them
 // once the ruleset names it (plan 0001 §4).
-const REQUIRED_CHECKS = ['Lint, type-check and unit tests', 'Conventional title', 'Signed-off commits', 'Agent blocks smoke'];
+const REQUIRED_CHECKS = ['Lint, type-check and unit tests', 'Conventional title', 'Signed-off commits', 'Agent blocks smoke', 'Agent lanes smoke'];
 
 describe('K-MERGE-7 every required check reports on pull requests and in the merge queue, under one name', () => {
   const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
@@ -246,8 +246,11 @@ describe('K-MERGE-7 every required check reports on pull requests and in the mer
     const { on, job } = matches[0]!;
     expect(Object.keys(on)).toEqual(expect.arrayContaining(['pull_request', 'merge_group']));
     // The same literal name under both events: a job-level `if` would skip it on one of
-    // them, and an expression or a matrix would change the name the check reports.
-    expect(job.if).toBeUndefined();
+    // them, and an expression or a matrix would change the name the check reports. The one
+    // `if` allowed is `always()`, which skips on no event. A summary job that `needs` others
+    // must carry it: without it, a failed dependency SKIPS the summary, and a skipped
+    // required check counts as passing.
+    expect(job.if === undefined || job.if === 'always()').toBe(true);
     expect(job.strategy).toBeUndefined();
     expect(job.name).not.toContain('${{');
   });
