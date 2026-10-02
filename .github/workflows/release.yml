@@ -18,8 +18,9 @@
 #      convenience, not the supported form.
 #   5. Guard (#73). Fails, and comments on the release PR, when the open release PR
 #      changes anything but version strings outside the changelog, the manifest,
-#      package.json and package-lock.json. In its `extra-files` only a line whose sole
-#      change is a version may differ. Release PRs run no CI and merge through the admin
+#      package.json and package-lock.json. In its `extra-files`, and in any other file it
+#      modifies, only a line whose sole change is a version may differ, and it may add,
+#      remove or rename no file. Release PRs run no CI and merge through the admin
 #      bypass, so on 0.10.0 a release PR built from stale `extra-files` reverted #67's
 #      documentation (db99870) and nothing noticed.
 #
@@ -277,8 +278,14 @@ jobs:
             const problems = [];
             for (const file of pages(`repos/${repo}/pulls/${pr.number}/files?per_page=100`)) {
               if (versionFiles.has(file.filename)) continue;
-              if (!extraFiles.has(file.filename)) problems.push(`${file.filename}: ${file.status}, and it is not a release file`);
-              else if (file.status !== 'modified') problems.push(`${file.filename}: ${file.status}`);
+              // Any other modified file is held to the same version-only rule as the
+              // `extra-files`, so a release type's own version files (pyproject.toml,
+              // Cargo.toml, pom.xml, ...) pass without Kanon naming each one, and the workflow
+              // stays language-agnostic. A file added, removed or renamed is never a version
+              // string's change.
+              if (file.status !== 'modified') {
+                problems.push(`${file.filename}: ${file.status}${extraFiles.has(file.filename) ? '' : ', and it is not in extra-files'}`);
+              }
               else if (typeof file.patch !== 'string') problems.push(`${file.filename}: its diff is too large for GitHub to return, so it can't be checked`);
               else for (const line of offending(file.patch)) problems.push(`${file.filename}: ${line}`);
             }

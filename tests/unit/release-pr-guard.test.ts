@@ -136,7 +136,9 @@ describe('#73 the release workflow refuses a release PR that changes more than v
   });
 
   it.each<[string, PrFile, string]>([
-    ['a file outside the release files', { filename: 'src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n-a\n+b' }, 'src/app.ts: modified, and it is not a release file'],
+    ['a file outside the release files that changes more than a version', { filename: 'src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n-a 1.0.0\n+b 1.1.0' }, 'src/app.ts: -a 1.0.0'],
+    ['a file added outside the release files', { filename: 'src/new.ts', status: 'added', patch: '@@ -0,0 +1 @@\n+x' }, 'src/new.ts: added, and it is not in extra-files'],
+    ['a file outside the release files whose patch GitHub omits', { filename: 'Cargo.lock', status: 'modified' }, "Cargo.lock: its diff is too large for GitHub to return, so it can't be checked"],
     ['an extra file deleted', { filename: 'docs/lanes.md', status: 'removed' }, 'docs/lanes.md: removed'],
     ['an extra file whose patch GitHub omits', { filename: 'docs/lanes.md', status: 'modified' }, "docs/lanes.md: its diff is too large for GitHub to return, so it can't be checked"],
     ['a removed line with no partner', { filename: 'docs/lanes.md', status: 'modified', patch: '@@ -1,2 +1,1 @@\n keep\n-gone' }, 'docs/lanes.md: -gone'],
@@ -163,9 +165,19 @@ describe('#73 the release workflow refuses a release PR that changes more than v
     expect(result.status).toBe(0);
   });
 
-  it("treats version.txt as a version file only for the `simple` release type, which keeps its version there", () => {
-    const file: PrFile = { filename: 'version.txt', status: 'modified', patch: '@@ -1 +1 @@\n-0.9.1\n+0.10.0' };
-    expect(runGuard(responses({ files: [file] })).stderr).toContain('version.txt: modified, and it is not a release file');
+  it("passes another release type's own version file when only its version changed, so the workflow stays language-agnostic", () => {
+    const files: PrFile[] = [
+      { filename: 'pyproject.toml', status: 'modified', patch: '@@ -1,3 +1,3 @@\n [project]\n-version = "0.9.1"\n+version = "0.10.0"\n name = "widget"' },
+      { filename: 'Cargo.toml', status: 'modified', patch: '@@ -2 +2 @@\n-version = "0.9.1"\n+version = "0.10.0"' },
+    ];
+    const result = runGuard(responses({ files }));
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+  });
+
+  it("skips version.txt whatever it holds only for the `simple` release type, which keeps its version there", () => {
+    const file: PrFile = { filename: 'version.txt', status: 'added', patch: '@@ -0,0 +1 @@\n+0.10.0' };
+    expect(runGuard(responses({ files: [file] })).stderr).toContain('version.txt: added, and it is not in extra-files');
     const simple = JSON.parse(config) as { packages: Record<string, Record<string, unknown>> };
     simple.packages['.']!['release-type'] = 'simple';
     const answers = responses({ files: [file] });
