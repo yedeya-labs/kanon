@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/yedeya-labs/kanon/compare/v0.5.0...v0.5.1) (2026-10-02)
+
+
+### CI
+
+* require the agent blocks smoke check ([#30](https://github.com/yedeya-labs/kanon/issues/30)) ([4a063e0](https://github.com/yedeya-labs/kanon/commit/4a063e0a880a0d63c5b3e92f733fc074dcca82ba))
+
 ## [0.5.0](https://github.com/yedeya-labs/kanon/compare/v0.4.4...v0.5.0) (2026-10-02)
 
 
