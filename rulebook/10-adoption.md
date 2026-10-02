@@ -148,7 +148,7 @@ Creating GitHub Apps and their keys is done by the Owner in GitHub's interface, 
 
 **Why.** A Kanon adopted from the rulebook alone enforces nothing: every guard, the Reviewer and the Merger are code or Apps. That is survivable while it is visible. What is not survivable is a repository that believes a guard protects it when none is installed, which is silent absence (`K-PRIN-8`) on the whole pipeline.
 
-**Enforced by.** Prose only.
+**Enforced by.** On Kanon's own record, [`tests/unit/adoption-record.test.ts`](../tests/unit/adoption-record.test.ts): it reads every rule's "Enforced by" line and fails when a rule whose line names anything is missing from the mechanism list. Whether each status is true is prose only. For an adopter, prose only.
 
 **Class.** framework
 
