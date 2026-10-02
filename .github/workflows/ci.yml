@@ -12,6 +12,11 @@
 # passes it. Released lane-check also reads the lanes at that release, which is the version
 # the caller pins, and fails unless every Kanon reference in .github/ names that one version.
 #
+# It runs actionlint over .github/ through .github/scripts/actionlint.sh (#77), a pinned,
+# checksum-verified binary behind a shim that reads `$/` as `./`, which actionlint can't parse
+# yet. The shim is what makes it check each `$/` call's inputs against the action's own
+# `action.yml`; without it, those calls are parse errors and their inputs go unchecked.
+#
 # Read-only on purpose. This workflow needs nothing but the code, so it gets nothing else.
 name: CI
 
@@ -41,6 +46,21 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - name: Restore the pinned actionlint
+        id: actionlint-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/kanon-actionlint
+          key: actionlint-1.7.12-${{ runner.os }}-${{ runner.arch }}
+      - name: actionlint (workflows and action inputs)
+        id: actionlint
+        run: bash .github/scripts/actionlint.sh
+      - name: Save the pinned actionlint
+        if: ${{ !cancelled() && steps.actionlint-cache.outputs.cache-hit != 'true' && steps.actionlint.outcome != 'skipped' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/kanon-actionlint
+          key: ${{ steps.actionlint-cache.outputs.cache-primary-key }}
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test

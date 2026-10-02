@@ -5,9 +5,10 @@
 # when asked, its dependencies. That is all it does.
 #
 # `database` is accepted and ignored: Kanon has no schema to set up. The review lane passes
-# 'true' on every run and starts Postgres for it regardless; reporting no `database` output
-# means the lane judges this hook by its outcome alone. `browsers`, `issue-number`,
-# `app-slug` and `github-token` are declared because the lanes pass them, and unused.
+# 'true' on every run and starts Postgres for it regardless. Like every hook, it declares no
+# outputs: the contract defines none, and the lanes judge a hook by its outcome alone (#77).
+# `browsers`, `issue-number`, `app-slug` and `github-token` are declared because the lanes
+# pass them, and unused.
 #
 # It is read from the checked-out tree, but the review lane restores it from the default
 # branch first (K-MERGE-17), so a PR can't change the setup its own review runs.

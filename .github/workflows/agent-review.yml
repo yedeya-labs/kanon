@@ -1475,18 +1475,16 @@ jobs:
           install: "true"
           database: "true"
           browsers: "false"
-      - name: Note a PR whose install or database setup failed
-        # A hook that reports its database step (`outputs.database`, as the reference adopter's
-        # does) is held to it; one that reports nothing is judged by its outcome alone, since
-        # Kanon's hook contract names inputs, not outputs.
-        if: steps.claim.outputs.proceed == 'true' && (steps.project.outcome != 'success' || (steps.project.outputs.database != '' && steps.project.outputs.database != 'success'))
+      - name: Note a PR whose project setup failed
+        # Judged by the hook's outcome alone (#77). The hook contract (plan 0001 §5) defines
+        # the hook's inputs and no outputs, so the lane reads none: it can't assume an
+        # adopter's hook installs anything in particular, or has a database at all (#18).
+        if: steps.claim.outputs.proceed == 'true' && steps.project.outcome != 'success'
         env:
           SETUP: ${{ steps.project.outcome }}
-          INSTALL: ${{ steps.project.outputs.install }}
-          DBINIT: ${{ steps.project.outputs.database }}
         run: |
-          echo "::warning title=review without a database::project setup: $SETUP, npm ci: ${INSTALL:-skipped}, npm run db:init: ${DBINIT:-skipped}. Reviewing anyway — the PR's own code failed to set up (or the PR predates the project-setup hook, RA-2694), which CI reports as a red check the reviewer reads; only a DB-backed re-run is unavailable to him (RA-1723)."
-          printf '%s\n' "**Reviewing without a working install/database** (project setup: \`$SETUP\`, npm ci: \`${INSTALL:-skipped}\`, db:init: \`${DBINIT:-skipped}\`) — RA-1723." >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning title=review without a working setup::project setup: $SETUP. Reviewing anyway — the PR's own code failed to set up (or the PR predates the project-setup hook, RA-2694), which CI reports as a red check the reviewer reads; only a re-run of a test tier is unavailable to him (RA-1723)."
+          printf '%s\n' "**Reviewing without a working project setup** (project setup: \`$SETUP\`) — RA-1723." >> "$GITHUB_STEP_SUMMARY"
 
       # PUT THE SCOPE WHERE THE REVIEWER CAN READ IT — IF IT IS STILL WHAT WAS WRITTEN (RA-2455).
       #

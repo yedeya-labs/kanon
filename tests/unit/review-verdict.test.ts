@@ -705,14 +705,10 @@ describe('a PR that cannot install or migrate still gets a verdict (RA-1723)', (
     expect(project?.with).toMatchObject({ lane: 'reviewer', install: 'true', database: 'true', browsers: 'false' });
   });
 
-  it('notes a failed or skipped setup, from the hook\'s own outcomes', () => {
-    const note = steps.find((s) => (s as { name?: string }).name === 'Note a PR whose install or database setup failed') as { if?: string; env?: Record<string, string> };
-    expect(note.if).toBe("steps.claim.outputs.proceed == 'true' && (steps.project.outcome != 'success' || (steps.project.outputs.database != '' && steps.project.outputs.database != 'success'))");
-    expect(note.env).toEqual({
-      SETUP: '${{ steps.project.outcome }}',
-      INSTALL: '${{ steps.project.outputs.install }}',
-      DBINIT: '${{ steps.project.outputs.database }}',
-    });
+  it("notes a failed or skipped setup from the hook's outcome alone, reading none of its outputs (#77)", () => {
+    const note = steps.find((s) => (s as { name?: string }).name === 'Note a PR whose project setup failed') as { if?: string; env?: Record<string, string> };
+    expect(note.if).toBe("steps.claim.outputs.proceed == 'true' && steps.project.outcome != 'success'");
+    expect(note.env).toEqual({ SETUP: '${{ steps.project.outcome }}' });
   });
 
   it('does not gate the pin check, the token or the agent on either succeeding', () => {

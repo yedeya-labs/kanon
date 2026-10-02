@@ -105,6 +105,8 @@ The lanes run Kanon's pipeline library (`scripts/`) from the runner's action cac
 
 `.github/actions/project-setup/action.yml` is a composite action you write ([plan 0001 §5](plans/0001-move-the-agent-lanes.md)). Every lane that checks out calls it after the checkout and before the agent, with these inputs, all strings: `lane`, `install`, `database`, `browsers`, `issue-number`, `app-slug` and `github-token`. It installs your toolchain and dependencies, and, when `database` is `'true'`, sets up your schema against Kanon's standard database (`DATABASE_URL=postgres://kanon:kanon@localhost:5432/kanon`, `pgvector/pgvector:pg17`). It is read from the checked-out tree, so on a lane that checks out a pull request it is that branch's copy, except on the review lane, which restores your default branch's copy first (`K-MERGE-17`). The verify-acs lane loads it from your caller's commit, because the release it verifies may predate it.
 
+The contract defines no outputs, and no lane reads any: a lane judges your hook only by whether it succeeded. The review lane still reviews a pull request whose setup failed, and notes it on the run ([#77](https://github.com/yedeya-labs/kanon/issues/77)).
+
 ## The App register
 
 The revise lanes find their own App's login in the App register, and the scripts the lanes run read every role's login from it, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks.
