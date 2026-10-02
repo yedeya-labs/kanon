@@ -22,7 +22,7 @@ type Job = {
   concurrency?: unknown;
   steps: Step[];
 };
-type Workflow = { on: Record<string, unknown>; permissions?: Record<string, string>; jobs: Record<string, Job> };
+type Workflow = { name?: string; on: Record<string, unknown>; permissions?: Record<string, string>; jobs: Record<string, Job> };
 
 const load = (name: string): { text: string; wf: Workflow } => {
   const text = readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), 'utf8');
@@ -237,6 +237,51 @@ describe('no workflow interpolates github.event into a run line', () => {
   });
 });
 
+// ADR 0011, plan 0001 step 4b: Kanon runs its own review lane, from its last release.
+describe('step 4b: Kanon reviews its own pull requests, through the lane at its last release', () => {
+  const { wf } = load('review.yml');
+  const jobs = Object.values(wf.jobs);
+  const job = jobs[0] as Job & { with?: Record<string, string>; secrets?: unknown };
+
+  it('calls the review lane at an exact release, never through `$/`, from its one job', () => {
+    expect(jobs).toHaveLength(1);
+    expect(job.uses).toMatch(/^yedeya-labs\/kanon\/\.github\/workflows\/agent-review\.yml@v\d+\.\d+\.\d+$/);
+  });
+
+  it('is started by CI finishing, a review label or a dispatch, and CI is the workflow it names', () => {
+    expect(Object.keys(wf.on).sort()).toEqual(['pull_request_target', 'workflow_dispatch', 'workflow_run']);
+    expect(wf.on.workflow_run).toEqual({ workflows: [load('ci.yml').wf.name], types: ['completed'] });
+    expect(wf.on.pull_request_target).toEqual({ types: ['opened', 'labeled'] });
+  });
+
+  it('passes only the dispatch input, and maps the three secrets by name, never inheriting', () => {
+    expect(job.with).toEqual({ pr_number: '${{ inputs.pr_number }}' });
+    expect(job.secrets).toEqual({
+      REVIEWER_APP_ID: '${{ secrets.REVIEWER_APP_ID }}',
+      REVIEWER_APP_PRIVATE_KEY: '${{ secrets.REVIEWER_APP_PRIVATE_KEY }}',
+      CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
+    });
+  });
+
+  it('has CI run lane-check at a released version, never the PR\'s own copy', () => {
+    const ci = load('ci.yml').wf;
+    judge(ci, 'lane-check');
+    expect(stepsOf(ci).filter((s) => s.uses?.includes('lane-check') && !RELEASED('lane-check').test(s.uses))).toEqual([]);
+  });
+
+  it('pins one Kanon version across every workflow that names one (K-ADOPT-11)', () => {
+    const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
+    const versions = names.flatMap((n) => {
+      const w = load(n).wf;
+      return [...Object.values(w.jobs).map((j) => j.uses), ...stepsOf(w).map((st) => st.uses)]
+        .filter((u): u is string => typeof u === 'string' && u.startsWith('yedeya-labs/kanon/'))
+        .map((u) => u.replace(/^.*@/, ''));
+    });
+    expect(versions.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(versions).size).toBe(1);
+  });
+});
+
 // The ruleset on main (id 24259403) requires these checks by name. A merge queue waits
 // for each one on the queue's branch, so each must report there under the same name it
 // reports under on the pull request (K-MERGE-7). The agent blocks smoke run joins them
@@ -437,7 +482,7 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
 
   it('has Dependabot watch the workflows and every action directory', () => {
     const actions = dependabot.updates.find((u) => u['package-ecosystem'] === 'github-actions');
-    expect(actions?.directories).toEqual(expect.arrayContaining(['/', '/actions/*']));
+    expect(actions?.directories).toEqual(expect.arrayContaining(['/', '/actions/*', '/.github/actions/*']));
   });
 
   it('proposes each Kanon release to the judging checks in a group of its own, with no cooldown (#47, K-ADOPT-11)', () => {

@@ -1,0 +1,47 @@
+# Kanon's own project-setup hook (plan 0001 §5), for the lanes Kanon runs on itself (ADR 0011).
+#
+# Every lane that checks out calls it after the checkout and before the agent. Kanon is a
+# Node project with no database and no app, so this installs Node at Kanon's version and,
+# when asked, its dependencies. That is all it does.
+#
+# `database` is accepted and ignored: Kanon has no schema to set up. The review lane passes
+# 'true' on every run and starts Postgres for it regardless; reporting no `database` output
+# means the lane judges this hook by its outcome alone. `browsers`, `issue-number`,
+# `app-slug` and `github-token` are declared because the lanes pass them, and unused.
+#
+# It is read from the checked-out tree, but the review lane restores it from the default
+# branch first (K-MERGE-17), so a PR can't change the setup its own review runs.
+name: Project setup
+description: Kanon's setup for an agent lane — Node and npm ci, no database.
+inputs:
+  lane:
+    description: The lane's telemetry agent name.
+    required: true
+  install:
+    description: "'true' runs npm ci."
+    default: "true"
+  database:
+    description: "Ignored: Kanon has no database."
+    default: "false"
+  browsers:
+    description: "Ignored: Kanon has no app to drive."
+    default: "false"
+  issue-number:
+    description: The issue the run was dispatched for. Unused.
+    default: ""
+  app-slug:
+    description: The minted App's slug. Unused.
+    default: ""
+  github-token:
+    description: The minted App token. Unused.
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version-file: .nvmrc
+        cache: npm
+    - if: inputs.install == 'true'
+      shell: bash
+      run: npm ci

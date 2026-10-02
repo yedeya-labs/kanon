@@ -1,0 +1,50 @@
+# Kanon reviews its own pull requests (ADR 0011, plan 0001 step 4b).
+#
+# A trigger-only caller of Kanon's review lane, written exactly as an adopter writes one
+# (docs/lanes.md). It is named `review.yml` because `agent-review.yml` is the lane itself.
+#
+# IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap). Through `$/` a PR's own
+# lane code would review that same PR, so a PR that weakened the Reviewer would be reviewed
+# by the weakened Reviewer. At the released tag, a change to the lane is first exercised one
+# release later. Dependabot's `kanon` group proposes each new release here, beside the DCO
+# and PR-title checks, and `lane-check` (in CI) holds every Kanon reference to one version.
+#
+# Only members' PRs are reviewed (#24, K-AGENT-45): the lane's first step is its membership
+# gate, and this caller passes nothing that reaches it. `pr_number` is the only input, and
+# only someone with write access can dispatch.
+#
+# The secrets: REVIEWER_APP_ID and REVIEWER_APP_PRIVATE_KEY (the `kanon-reviewer` App, in
+# docs/qa/agent-identities.md) and CLAUDE_CODE_OAUTH_TOKEN, mapped by name, never inherited.
+name: Review
+
+# The lane's runs are found by their title, so it ends with the head SHA (the lane says so,
+# and lane-check holds this line to it).
+run-name: Review ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  pull_request_target:
+    types: [opened, labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to review
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+  issues: read
+
+jobs:
+  review:
+    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.10.0
+    with:
+      pr_number: ${{ inputs.pr_number }}
+    secrets:
+      REVIEWER_APP_ID: ${{ secrets.REVIEWER_APP_ID }}
+      REVIEWER_APP_PRIVATE_KEY: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
