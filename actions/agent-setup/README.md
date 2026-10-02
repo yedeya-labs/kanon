@@ -33,6 +33,10 @@ A lane is built from four composite actions, so that a lane with steps of its ow
 | `app-slug` | yes | The minted App's slug, from `actions/create-github-app-token`. |
 | `push-probe` | no | `"true"` runs `git push --dry-run` with the checkout's credential. It creates nothing. Default `"false"`. |
 
+| Output | Meaning |
+|---|---|
+| `kanon-error` | `push_probe_denied` when the push probe failed, for the telemetry row. Empty otherwise. |
+
 - **Order.** Mint the App token, check out with it, run the project-setup hook, then call this block. The probe pushes with the credential the checkout persisted.
 - **Inputs are strings.** A composite action has no boolean type, so a switch is `"true"` or `"false"`.
 - Pin an exact Kanon version, and let Dependabot propose upgrades (`K-ADOPT-11`).

@@ -32,6 +32,16 @@ Turns `claude-code-action`'s result file into one telemetry row (cost, turns, to
 | `pr_number` | no | The pull request under review. Its diff size is read and stored. |
 | `issue_number` | no | The issue the run was for. Its size, and the lines the run committed, are stored. |
 | `outcome_label`, `artifacts_filed`, `severities` | no | The lane's own result columns. Empty adds no column. |
-| `retention_days` | no | How long the artifact is kept for the collector. Default 7. |
+| `lane` | no | Kanon's lane name (`LANES` in [`schema.mjs`](schema.mjs)). Set, the action also writes the version-2 row. |
+| `tag` | no | `run` (the default), `smoke` or `test`. Every read and aggregate keeps only `run`. |
+| `stage_outcomes` | no | The lane's stage outcomes as `stage=outcome` pairs (`token`, `checkout`, `hook`, `setup`, `agent`, `finish`). The row's `failed_stage` is the first that was not success. |
+| `kanon_error` | no | A code from Kanon's error list, when one of Kanon's steps failed and wrote one. |
+| `job_status`, `job_started_at`, `timeout_minutes` | no | The job's status, start and timeout, for `job_status` and `timed_out`. |
+| `retention_days` | no | How long the artifacts are kept for the collector. Default 7. |
 
-The artifact is named `agent-telemetry-<agent>-<run id>-<attempt>`.
+## Two rows, two artifacts
+
+- **Version 1,** `agent-telemetry-<agent>-<run id>-<attempt>`. Unchanged, because an existing collector reads it. It keeps the classifier's sentence and the free-text columns, so it stays inside the adopter.
+- **Version 2,** `kanon-telemetry-<lane>-<run id>-<attempt>`, written only when the lane passes `lane` and the row passes `validate` in [`schema.mjs`](schema.mjs). It is the row a telemetry store accepts (`K-OBS-16`): flat, every string from a closed list or a strict pattern, a reason code instead of a sentence, and nothing the adopter wrote. An invalid row is not uploaded, and the warning names its fields, never their values. `kanon_version` is the release in `github.action_ref`, or `dev` at an untagged ref.
+
+[`schema.mjs`](schema.mjs) holds both row kinds' field lists (the run row's 59 fields and the work-item row's 84), with their types, and `validate(row)`. It uses only Node's built-ins, so a collector or a store can run the same file at the same tag.

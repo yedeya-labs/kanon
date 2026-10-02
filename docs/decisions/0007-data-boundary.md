@@ -24,6 +24,8 @@ Written as rules `K-OBS-16`, `K-OBS-17` and `K-OBS-18` in [chapter 08](../../rul
 4. **Hosted telemetry is kept in the EU, in Frankfurt (`eu-central-1`), for thirteen months**, and an adopter's data is deleted on request.
 5. **Each adopter sees only their own data.** Anything shared across adopters, including published cost figures, is aggregated and anonymised.
 
+**Amended 2026-10-02.** Rule 1's allowed list is longer in `K-OBS-16`: it also names the run's identity, configuration, work-size and output counts, the verdict and diagnostic codes, and attribution codes, and six groups of metadata for the work-item row. Each is a number, a time, or a value from a closed list. The "never" list is unchanged. See [plan 0002](../plans/0002-hosted-telemetry-store.md), decision 2, and [plan 0003](../plans/0003-metrics.md) §5.3.
+
 ## Why
 
 - **Telemetry must be safe to leave a project by construction, not by review.** Free text is how content leaks: a bail reason or an error message can quote code, and a file path reveals a project's structure. A fixed schema with reason codes closes that route.
