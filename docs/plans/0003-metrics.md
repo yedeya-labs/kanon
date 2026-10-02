@@ -1,6 +1,6 @@
 # Plan 0003: metrics: cost, efficiency, accuracy, and the work-item row
 
-- **Status:** proposed, 2026-10-02. The Owner's six decisions of 2026-10-02 are recorded as decided (§0). Everything else waits for the Owner's answers in [Decisions for the Owner](#decisions-for-the-owner), and nothing is built before the cost in §8 is approved.
+- **Status:** accepted, 2026-10-02. The Owner's six decisions are recorded as decided (§0), and the Owner accepted decisions 7 to 20 the same day, including the cost in §8.
 - **Tracks:** #32 and #41. **Governed by:** [ADR 0007](../decisions/0007-data-boundary.md) (the data boundary), `K-OBS-14` (claims are measured, size-controlled, with intervals), `K-OBS-16` to `K-OBS-18`, `K-PRIN-14`, and [plan 0002](0002-hosted-telemetry-store.md), whose store this plan extends.
 - **Measured on** the reference adopter's main branch and Kanon's, on 2026-10-02. The commands are in [Measurements](#measurements). The reference adopter's repository is private, and the token this plan ran with can't read its pull requests or reviews. Every number that needs them is marked **not run**, with the command the Owner runs.
 
@@ -456,9 +456,9 @@ A section of the public page, always present:
 - **The band version, the window, the sample sizes and the intervals,** for every number.
 - **How to reproduce it.** The aggregate script's command and the release it ran at (`K-PRIN-14`).
 
-### 6.4 Where it is hosted: a proposal
+### 6.4 Where it is hosted
 
-The Owner decides. It is a cost item.
+The Owner decided this as a cost item (decision 18).
 
 | Option | Public page | Per-adopter view | Month |
 |---|---|---|---|
@@ -466,7 +466,7 @@ The Owner decides. It is a cost item.
 | B. Static page in the Kanon account | S3 and CloudFront | the same CLI report | about $0.10 to $0.50 |
 | C. A hosted dashboard | a BI service on the store | sign-in per adopter | from about $24 per author seat, plus per-reader charges |
 
-**Recommended: A.** It costs nothing, needs no sign-in system, and keeps per-adopter data on the adopter's side of the reader role. A public page that updates by PR also gives each published number a reviewed commit. B adds a cost and nothing a reader would notice. C adds an identity system for per-adopter views that Kanon doesn't otherwise need. The C price is quoted from memory, **not run** against the vendor's price list.
+**Chosen: A** (decision 18). It costs nothing, needs no sign-in system, and keeps per-adopter data on the adopter's side of the reader role. A public page that updates by PR also gives each published number a reviewed commit. B adds a cost and nothing a reader would notice. C adds an identity system for per-adopter views that Kanon doesn't otherwise need. The C price is quoted from memory, **not run** against the vendor's price list.
 
 ## 7. Order of moves
 
@@ -478,7 +478,7 @@ The Owner decides. It is a cost item.
 | **M4** | Kanon, **after plan 0002's S7** | The work-item step in the collector workflow. | A PR merged in Kanon has its row in the store within one sweep. A revert of it rewrites that row with `revert_pr` set. **Mutation:** a row carrying any login fails `validate`, because no field accepts one. |
 | **M5** | Owner, with the importer role (plan 0002 S5) | Backfill the reference adopter's and Kanon's work items from 2026-09-04, derived from GitHub by the same step. | Rows per month = PRs closed per month, by the command in [Measurements](#measurements). |
 | **M6** | Kanon | The report module: the indicators, minimum samples, intervals and the band validity check. `kanon metrics report` for adopters; the Overseer's weekly job runs it. | A band with 9 items prints "not enough data (9)". A fixture where cost falls with the band replaces the banded view with the pooled one and a warning. **Mutation:** removing the minimum-sample check fails a test. |
-| **M7** | Owner, then Kanon | The aggregate script and the public page (§6), if the Owner chooses option A. | The generator test of §6.3. The first published numbers carry their command. |
+| **M7** | Owner, then Kanon | The aggregate script and the public page on GitHub Pages (§6, option A). | The generator test of §6.3. The first published numbers carry their command. |
 | **M8** | Kanon, with plan 0002's S10 | Group 9's Kanon-side measures: the dispute form, #41's time to fix, upgrade lag. | A seeded dispute and a seeded #41 issue each appear in the health view. |
 
 **Why this order.**
@@ -625,17 +625,17 @@ gh pr list -R $RA_REPO --state closed --limit 1000 --search 'closed:2026-09-01..
 4. **Decided by the Owner, 2026-10-02:** three adopters before a cross-adopter figure; "measured on Kanon's own projects" until then (§0, §6.3).
 5. **Decided by the Owner, 2026-10-02:** the three headline indicators always shown together, by band (§0, §2.1).
 6. **Decided by the Owner, 2026-10-02:** all nine groups captured from the start, with human wait time (§0, §3.3).
-7. **The indicator definitions** (§2). Two refine the Owner's proposal: efficiency's headline is **yield**, with rounds and lead time as its breakdown, because only yield says what the spend bought; and accuracy adds the **human-correction rate** beside first-review approval, because approval alone rewards a lenient Reviewer. **Recommended: accept.**
-8. **Escaped defects from explicit links only** (§3.5): reverts by their generated text, and linked fixes by a bug issue's cross-reference plus a shared code file. SZZ is a dry-run diagnostic, never stored or published. **Recommended: accept.** The reference adopter's history shows both alternatives near 100% noise.
-9. **Ask for the link:** an optional "Introduced by" PR-number field in the bug issue form, and a line in the triage playbook asking the Implementer to name the cause when it finds it (§3.5, M3). Without it, escape rates stay a lower bound with a large gap. **Recommended: yes.** It is a rulebook change to the bug intake, in its own PR.
-10. **Band version 1** (§3.6): the net merged diff, thresholds at 200, 500 and 1,200 lines, a spread bump, risk as a separate split, a validity check every window, and reports always on the newest version. **Recommended: accept.**
-11. **Minimum samples, intervals and the A/B margins** (§2, §6.1): medians from 10 items, p90 from 30, proportions from 20, escape rates by band from 50; order-statistic, bootstrap and Wilson intervals; a configuration is a win only if yield falls by less than 5 points and the 30-day escape rate rises by less than 2. **Recommended: accept as starting values,** and revisit after three months of data.
-12. **The work-item row** (§3, §5): a second row kind in the same table and schema module, at `<key>#work`, rewritten whole when its story changes, expiring 13 months after `closed_at`. **Recommended: accept.**
-13. **Human-authored PRs are collected too,** with no cost, as a comparison cohort for accuracy (§1.2, §2.4). In the reference adopter they are 206 of 336 PRs. **Recommended: yes.** They cost nothing extra to collect, and without them the agents' escape rate has nothing beside it.
-14. **Escalation categories:** each entry in `docs/qa/escalation-paths.md` gains a category from Kanon's closed list (§3.7). A change to `K-MERGE-4` and `K-LAYOUT-8`'s format. **Recommended: yes,** in M3.
-15. **Disputed rules** are recorded through a "Dispute a rule" issue form in Kanon's repository, with a rule-id field (§4). **Recommended: yes.** It is the one group 9 measure with no existing source.
-16. **`guard_failures` as a validated list of `<guard>:<count>` pairs,** not a field per guard (§3.3). Kanon's guard list grows with its releases, and a field per guard would need a new schema version for each new guard. Every name is still checked against Kanon's list, so the list can't carry text. **Recommended: accept.**
-17. **Plan 0002 is amended in a follow-up PR after this plan is accepted, and before S1 is built** (§5). The run fields join version 2. **Recommended: yes.**
-18. **Dashboard hosting:** option A, a static public page on GitHub Pages and a per-adopter report in the adopter's own CI, at $0 (§6.4). **Recommended: A.**
-19. **Cross-adopter figures,** once a cell has three adopters: items pooled, intervals by a bootstrap over adopters, and the largest adopter's share of the cell printed beside it. **Recommended: accept.** With three adopters of very different sizes, an equal-weight mean of adopters would let the smallest swing the figure.
-20. **Cost** (§8): about $0.03 a month more on the store, inside plan 0002's $1 ceiling, which stays; at worst about $6 a month more on the reference adopter's Actions bill, measured in M4. **Recommended: approve.** This is the gate for M4 and M5.
+7. **Accepted by the Owner, 2026-10-02.** **The indicator definitions** (§2). Two refine the Owner's proposal: efficiency's headline is **yield**, with rounds and lead time as its breakdown, because only yield says what the spend bought; and accuracy adds the **human-correction rate** beside first-review approval, because approval alone rewards a lenient Reviewer.
+8. **Accepted by the Owner, 2026-10-02.** **Escaped defects from explicit links only** (§3.5): reverts by their generated text, and linked fixes by a bug issue's cross-reference plus a shared code file. SZZ is a dry-run diagnostic, never stored or published. The reference adopter's history shows both alternatives near 100% noise.
+9. **Accepted by the Owner, 2026-10-02.** **Ask for the link:** an optional "Introduced by" PR-number field in the bug issue form, and a line in the triage playbook asking the Implementer to name the cause when it finds it (§3.5, M3). Without it, escape rates stay a lower bound with a large gap. It is a rulebook change to the bug intake, in its own PR.
+10. **Accepted by the Owner, 2026-10-02.** **Band version 1** (§3.6): the net merged diff, thresholds at 200, 500 and 1,200 lines, a spread bump, risk as a separate split, a validity check every window, and reports always on the newest version.
+11. **Accepted by the Owner, 2026-10-02.** **Minimum samples, intervals and the A/B margins** (§2, §6.1): medians from 10 items, p90 from 30, proportions from 20, escape rates by band from 50; order-statistic, bootstrap and Wilson intervals; a configuration is a win only if yield falls by less than 5 points and the 30-day escape rate rises by less than 2. These are starting values, revisited after three months of data.
+12. **Accepted by the Owner, 2026-10-02.** **The work-item row** (§3, §5): a second row kind in the same table and schema module, at `<key>#work`, rewritten whole when its story changes, expiring 13 months after `closed_at`.
+13. **Accepted by the Owner, 2026-10-02.** **Human-authored PRs are collected too,** with no cost, as a comparison cohort for accuracy (§1.2, §2.4). In the reference adopter they are 206 of 336 PRs. They cost nothing extra to collect, and without them the agents' escape rate has nothing beside it.
+14. **Accepted by the Owner, 2026-10-02.** **Escalation categories:** each entry in `docs/qa/escalation-paths.md` gains a category from Kanon's closed list (§3.7). A change to `K-MERGE-4` and `K-LAYOUT-8`'s format, made in M3.
+15. **Accepted by the Owner, 2026-10-02.** **Disputed rules** are recorded through a "Dispute a rule" issue form in Kanon's repository, with a rule-id field (§4). It is the one group 9 measure with no existing source.
+16. **Accepted by the Owner, 2026-10-02.** **`guard_failures` as a validated list of `<guard>:<count>` pairs,** not a field per guard (§3.3). Kanon's guard list grows with its releases, and a field per guard would need a new schema version for each new guard. Every name is still checked against Kanon's list, so the list can't carry text.
+17. **Accepted by the Owner, 2026-10-02.** **Plan 0002 is amended in a follow-up PR after this plan is accepted, and before S1 is built** (§5). The run fields join version 2.
+18. **Accepted by the Owner, 2026-10-02.** **Dashboard hosting:** option A, a static public page on GitHub Pages and a per-adopter report in the adopter's own CI, at $0 (§6.4).
+19. **Accepted by the Owner, 2026-10-02.** **Cross-adopter figures,** once a cell has three adopters: items pooled, intervals by a bootstrap over adopters, and the largest adopter's share of the cell printed beside it. With three adopters of very different sizes, an equal-weight mean of adopters would let the smallest swing the figure.
+20. **Accepted by the Owner, 2026-10-02.** **Cost** (§8): about $0.03 a month more on the store, inside plan 0002's $1 ceiling, which stays; at worst about $6 a month more on the reference adopter's Actions bill, measured in M4. This was the gate for M4 and M5, and it is met.
