@@ -18,7 +18,7 @@ A lane is built from four composite actions, so that a lane with steps of its ow
 <!-- x-release-please-start-version -->
 
 ```yaml
-- uses: yedeya-labs/kanon/actions/agent-setup@v0.10.0
+- uses: yedeya-labs/kanon/actions/agent-setup@v0.11.0
   with:
     arm: lead agent
     app-slug: ${{ steps.app-token.outputs.app-slug }}

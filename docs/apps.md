@@ -17,7 +17,7 @@ Kanon isn't on npm. Run the command straight from a tagged Kanon release, from t
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.10.0 kanon apps --org <org> --repo <repo> --roles reviewer
+npx --yes --package github:yedeya-labs/kanon#v0.11.0 kanon apps --org <org> --repo <repo> --roles reviewer
 ```
 
 <!-- x-release-please-end -->

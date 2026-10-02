@@ -13,7 +13,7 @@ The block has no `if:` of its own, because the right gate depends on the lane. G
 ```yaml
 - id: classify
   if: failure()
-  uses: yedeya-labs/kanon/actions/agent-classify@v0.10.0
+  uses: yedeya-labs/kanon/actions/agent-classify@v0.11.0
   with:
     arm: review agent
 ```

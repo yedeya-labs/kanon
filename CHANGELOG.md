@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.11.0](https://github.com/yedeya-labs/kanon/compare/v0.10.0...v0.11.0) (2026-10-02)
+
+
+### Features
+
+* **lanes:** move the lead, lead-split and rebase lanes into Kanon ([#71](https://github.com/yedeya-labs/kanon/issues/71)) ([d744dd9](https://github.com/yedeya-labs/kanon/commit/d744dd9082d873a3cc1a98b652c42e5b28548034))
+
+
+### Documentation
+
+* **qa:** add Kanon's reviewer playbook and severity rubric ([#74](https://github.com/yedeya-labs/kanon/issues/74)) ([4449b23](https://github.com/yedeya-labs/kanon/commit/4449b238b58a9f2d90fb890bad94b86b979626a0))
+
+
+### CI
+
+* review Kanon's own pull requests with the released review lane ([#70](https://github.com/yedeya-labs/kanon/issues/70)) ([ef2c35f](https://github.com/yedeya-labs/kanon/commit/ef2c35fe0070d449afa95cc30662dceb6b14ae52))
+
 ## [0.10.0](https://github.com/yedeya-labs/kanon/compare/v0.9.1...v0.10.0) (2026-10-02)
 
 
