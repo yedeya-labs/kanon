@@ -233,10 +233,13 @@ describe("Kanon's guards on a project with no package.json, run with only node a
 
 describe('citation-shift on the Python adopter, with only node and git on PATH (kanon#20)', () => {
   /** Commit the fixture, move `place` down two lines, and run citation-shift against that diff. */
-  const shift = (...args: string[]) => {
+  const shift = (...args: string[]) => shiftWith(undefined, ...args);
+  const shiftWith = (declare: ((dir: string) => void) | undefined, ...args: string[]) => {
     const dir = checkout();
     try {
+      declare?.(dir);
       const git = (...a: string[]) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: dir, encoding: 'utf8' });
+      git('add', '-A');
       git('commit', '-qm', 'base');
       edit(dir, 'src/orders/core.py', (s) => `"""Orders."""\n\n${s}`);
       const r = spawnSync('node', [join(ROOT, 'scripts/citation-shift.mjs'), '--base', 'HEAD', ...args], {
@@ -256,6 +259,23 @@ describe('citation-shift on the Python adopter, with only node and git on PATH (
     expect(r.status, r.out).toBe(1);
     expect(r.out).toContain('docs/design.md:3  `src/orders/core.py:4-6`  ->  `src/orders/core.py:6-8`');
     expect(r.out).toContain('tests/test_core.py:1  src/orders/core.py:4-6  ->  src/orders/core.py:6-8');
+  });
+
+  it("skips the comments of the adopter's declared pipeline code, which quote old coordinates on purpose (kanon#54)", () => {
+    expect(shift().out).not.toContain('scripts/pipeline/triage.py');
+    // Undeclared, the same comment is a claim like any other, and is red.
+    const undeclared = shiftWith((dir) => edit(dir, 'docs/qa/escalation-paths.md', (s) => s.replace(/^- `scripts\/pipeline\/`.*\n/m, '')));
+    expect(undeclared.status, undeclared.out).toBe(1);
+    expect(undeclared.out).toContain('scripts/pipeline/triage.py:3  src/orders/core.py:4-6  ->  src/orders/core.py:6-8');
+  });
+
+  it('fails by name when the escalation file is missing or malformed (kanon#54)', () => {
+    const missing = shiftWith((dir) => rmSync(join(dir, 'docs/qa/escalation-paths.md')));
+    expect(missing.status, missing.out).toBe(1);
+    expect(missing.out).toMatch(/docs\/qa\/escalation-paths\.md doesn't exist/);
+    const malformed = shiftWith((dir) => edit(dir, 'docs/qa/escalation-paths.md', (s) => s.replace('## Pipeline code', '## Pipeline')));
+    expect(malformed.status, malformed.out).toBe(1);
+    expect(malformed.out).toMatch(/docs\/qa\/escalation-paths\.md has no `## Pipeline code` heading/);
   });
 
   it('--fix re-points both', () => {

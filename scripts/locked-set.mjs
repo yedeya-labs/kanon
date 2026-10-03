@@ -6,10 +6,10 @@
  *  never that many". That record used to be `LOCKED_FLOOR`, a single integer in
  *  `scripts/spec-coverage.mjs`. Moving it here fixes two separate defects:
  *
- *  RA-1398 — `merge-gate.mjs`'s `ESCALATE_PATHS` matches `^scripts/qa/`, so EVERY
+ *  RA-1398 — the reference adopter's escalation paths matched `^scripts/qa/`, so EVERY
  *  lock-adding PR tripped `escalating-path` and the Merger declined it. On RA-888 the lock
  *  was reverted to get the PR merged, and the Locked ladder moved by zero. `docs/qa/
- *  specs/**` is deliberately outside `ESCALATE_PATHS` — the specs are the pilot's
+ *  specs/**` is deliberately outside the escalation paths — the specs are the pilot's
  *  deliverable — so a lock PR now edits only its spec, its test and this file, and
  *  never touches the QA pipeline. The *meaning* stays in `spec-coverage.mjs`: a PR
  *  editing that script for any other reason still escalates, which is the property

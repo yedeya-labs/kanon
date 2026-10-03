@@ -8,23 +8,18 @@
  * at ~$1 a run. That earns it a place as a LOCAL, ADVISORY second opinion — but only
  * where a missed bug is expensive, because $1 on every docs tweak is not.
  *
- * ── WHICH PATHS: FOUR OF THE MERGER'S AREAS, NOT A COPY ────────────────────────────
- * "Where a missed bug is expensive" starts from `ESCALATE_PATHS` in `merge-gate.mjs`, the
- * set the Merger refuses to merge without a human, and narrows it to FOUR areas (the
- * developer's call, 2026-09-24): payments, auth, schema/migrations, and the QA pipeline
- * (`.github/workflows/agent-*`, the spine's blocks, `.github/scripts/**`, `scripts/qa/**`). The rest of the
- * merge gate's set is still a human's to merge, but not worth ~$1 a branch here: the
- * rest of `.github/**` (mostly CI, deploy and release workflows), the `docs/qa/*.md`
- * playbooks, and `sst.config.ts`. `.github/scripts/**` is taken whole, as decided, so
- * the few deploy/release helpers in it are reviewed too; the QA pipeline's workflows
- * that are not named `agent-*` (`label-guard.yml`, say) are not.
+ * ── WHICH PATHS: THE PROJECT'S, FROM ITS ESCALATION FILE ───────────────────────────
+ * "Where a missed bug is expensive" is what the project declares in
+ * `docs/qa/escalation-paths.md` (`K-LAYOUT-8`, kanon#54): its high-risk paths under
+ * `## Escalation paths` and its own pipeline code under `## Pipeline code`, plus Kanon's
+ * agent workflows (`.github/workflows/agent-*`) and the project-setup hook. The rest of
+ * the Merger's set is still a human's to merge, but not worth ~$1 a branch here: the rest of
+ * `.github/**` (mostly CI, deploy and release workflows) and the `docs/qa/*.md` playbooks.
  *
- * The areas are chosen BY NAME from `ESCALATE_PATHS` rather than restated as patterns, so
- * a path added to one of them is reviewed here the same day. The one pattern of its own
- * is `QA_PIPELINE_UNDER_GITHUB`: the merge gate escalates `.github/**` as a single rule,
- * and the pipeline half of it cannot be picked out by area. A reviewed area name that
- * no longer exists in `ESCALATE_PATHS` throws at import, so renaming an area in the
- * merge gate cannot silently drop it from the review.
+ * Until kanon#54 this chose four of the reference adopter's areas by name from a list in
+ * `merge-gate.mjs`. The list was that adopter's, so it left the library, and the areas are
+ * now every path the project itself calls high-risk: a project that wants one reviewed
+ * declares it, and one it declares is reviewed the same day.
  *
  * ── WHAT IT ANSWERS ─────────────────────────────────────────────────────────────
  * A verdict with a reason, never a boolean — `run`, or `skip` with the rule that
@@ -49,7 +44,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { ESCALATE_PATHS } from './merge-gate.mjs';
+import { readEscalationFile } from './lib/escalation-paths.mjs';
 
 /**
  * True when running under CI. Only the exact value `true` counts — which is what GitHub
@@ -62,67 +57,34 @@ export function inCi(env) {
 }
 
 /**
- * The `ESCALATE_PATHS` areas `/ship` reviews, by their label there. Four subjects —
- * schema/migrations is two merge-gate rules, and the QA pipeline is `scripts/qa/**` plus
- * the part of `.github/**` below.
+ * The pipeline's files under `.github/` that are reviewed: Kanon's agent workflows, which
+ * call its lanes, and the project-setup hook, which runs before every agent. The rest of
+ * `.github/` (CI, deploy and release workflows) is a human's to merge but not reviewed here.
  */
-export const REVIEWED_AREAS = ['payments', 'auth', 'database migrations', 'the schema and RLS', 'the QA pipeline'];
+export const AGENT_PIPELINE_UNDER_GITHUB = /^\.github\/(?:workflows\/agent-[^/]+|actions\/project-setup\/.+)$/;
 
 /**
- * The merge gate's `.github/**` rule, labelled with this area. Only its QA-pipeline half
- * is reviewed.
+ * Each changed file that falls in a reviewed area, with the reason the project gives for it.
+ * @param {string[]} files
+ * @param {import('./lib/escalation-paths.mjs').EscalationFile} escalation
  */
-export const GITHUB_AREA = 'the CI/agent pipeline';
-
-/**
- * The QA pipeline's files under `.github/`: the agent workflows and their scripts. This
- * cannot be derived from `ESCALATE_PATHS`, whose single `^\.github\/` rule also covers
- * CI, deploy and release workflows. It is applied only to a file that rule already
- * matched, so it narrows the merge gate's set and never widens it.
- *
- * AND THE SPINE'S BLOCKS (RA-2666). `agent-lane.yml`'s steps moved into the composite
- * actions `agent-setup`, `agent-run` and `agent-finish` (`LANE_BLOCKS` in
- * `lib/agent-lanes.mjs`, which the unit test holds this to). They were reviewed here as
- * part of an `agent-*` workflow, and a move must not take them out of review. Only the
- * blocks: the rest of `.github/actions/` stays where the 2026-09-24 decision left it.
- * `agent-classify` joined them in RA-2691, carrying the classifier out of `.github/scripts/`,
- * where it was reviewed — so the move keeps it in review. And the project-setup hook
- * (RA-2694), which took the install, `db:init` and the per-lane switches out of the blocks
- * and the spine: the same move, kept in review the same way.
- *
- * SINCE RA-2704 THE BLOCKS ARE KANON'S, so they left this tree and this pattern: they are
- * reviewed in Kanon, and a change to which release runs is a change to the `uses:` lines of
- * the `agent-*` workflows, which this pattern still reviews. The hook stays.
- */
-export const QA_PIPELINE_UNDER_GITHUB = /^\.github\/(?:workflows\/agent-[^/]+|scripts\/.+|actions\/project-setup\/.+)$/;
-
-const knownAreas = new Set(ESCALATE_PATHS.map(([, area]) => area));
-for (const area of [...REVIEWED_AREAS, GITHUB_AREA]) {
-  if (!knownAreas.has(area)) {
-    throw new Error(`ship-review-scope: area "${area}" is not in merge-gate.mjs's ESCALATE_PATHS. It was renamed or removed, so /ship would stop reviewing it silently.`);
-  }
-}
-
-const reviewed = (file, area) =>
-  REVIEWED_AREAS.includes(area) || (area === GITHUB_AREA && QA_PIPELINE_UNDER_GITHUB.test(file));
-
-/** Each changed file that falls in a reviewed area, with the area it belongs to. */
-export function sensitiveHits(files) {
+export function sensitiveHits(files, escalation) {
   const hits = [];
   for (const file of files) {
-    const hit = ESCALATE_PATHS.find(([re, area]) => re.test(file) && reviewed(file, area));
-    // A `.github/` hit is reported as the area it was admitted for, not the whole rule's.
-    if (hit) hits.push({ file, area: hit[1] === GITHUB_AREA ? 'the QA pipeline' : hit[1] });
+    const path = escalation.paths.find(({ pattern }) => pattern.test(file));
+    const code = escalation.pipeline.find(({ dir }) => file.startsWith(dir));
+    const area = path?.reason ?? code?.reason ?? (AGENT_PIPELINE_UNDER_GITHUB.test(file) ? 'the agent pipeline' : null);
+    if (area) hits.push({ file, area });
   }
   return hits;
 }
 
 /**
  * @param {string[]} files  changed paths, `<base>...HEAD`
- * @param {{ env?: Record<string, string|undefined>, skip?: string|null }} opts
+ * @param {{ env?: Record<string, string|undefined>, skip?: string|null, escalation: import('./lib/escalation-paths.mjs').EscalationFile }} opts
  */
-export function reviewScope(files, { env = process.env, skip = null } = {}) {
-  const hits = sensitiveHits(files);
+export function reviewScope(files, { env = process.env, skip = null, escalation }) {
+  const hits = sensitiveHits(files, escalation);
   const docsOnly = hits.length > 0 && hits.every(({ file }) => /\.md$/i.test(file));
   const base = { hits, docsOnly };
   if (inCi(env)) {
@@ -132,7 +94,7 @@ export function reviewScope(files, { env = process.env, skip = null } = {}) {
     return { ...base, action: 'skip', rule: 'no-diff', why: 'no committed changes against the base — commit first, a range review cannot see the working tree' };
   }
   if (hits.length === 0) {
-    return { ...base, action: 'skip', rule: 'no-sensitive-path', why: 'touches none of the reviewed areas (payments, auth, schema/migrations, the QA pipeline)' };
+    return { ...base, action: 'skip', rule: 'no-sensitive-path', why: `touches none of the reviewed areas (the paths and pipeline code in docs/qa/escalation-paths.md, and the agent workflows)` };
   }
   if (skip !== null) {
     const reason = String(skip).trim();
@@ -180,8 +142,11 @@ function main(argv = process.argv.slice(2)) {
   // CI is decided BEFORE git is touched. A CI checkout is shallow (`actions/checkout`
   // defaults to fetch-depth 1), so the three-dot range has no merge base and the git
   // call throws — which would turn the documented `skip (ci)` into an exit 1 (RA-2332).
-  const files = inCi(process.env) ? [] : parseNames(execFileSync('git', diffArgs(base), { encoding: 'utf8' }));
-  const verdict = reviewScope(files, { skip });
+  const ci = inCi(process.env);
+  const files = ci ? [] : parseNames(execFileSync('git', diffArgs(base), { encoding: 'utf8' }));
+  // The escalation file is read only when the verdict can depend on it, and a missing or
+  // malformed one stops the run by name (kanon#54).
+  const verdict = reviewScope(files, { skip, escalation: ci ? { paths: [], pipeline: [] } : readEscalationFile() });
 
   console.log(summaryLine(verdict, base));
   for (const { file, area } of verdict.hits) console.log(`  ${file}  (${area})`);

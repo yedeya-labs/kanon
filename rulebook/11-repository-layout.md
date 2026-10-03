@@ -21,7 +21,7 @@ What a file *contains* is still the project's (its specs, its signals, its escal
 | `docs/observability.md` | The observability document | `K-LAYOUT-5` |
 | `docs/qa/agent-identities.md` | The App register | `K-LAYOUT-6` |
 | `docs/qa/capability-ledger.md` | The capability ledger | `K-LAYOUT-7` |
-| `docs/qa/escalation-paths.md` | The escalation paths and the bail list | `K-LAYOUT-8` |
+| `docs/qa/escalation-paths.md` | The escalation paths, the pipeline code and the bail list | `K-LAYOUT-8` |
 | `docs/qa/adoption.md` | The adoption record | `K-LAYOUT-10` |
 | `docs/qa/sign-off-delegation.md` | The sign-off delegation, when the adopter records one | `K-LAYOUT-14` |
 | `.github/dependabot.yml` | Holds the entry that proposes Kanon upgrades | `K-ADOPT-11` |
@@ -147,20 +147,34 @@ Watermark: <version>
 
 **Class.** framework
 
-### `K-LAYOUT-8` The escalation paths and the bail list have one home
+### `K-LAYOUT-8` The escalation paths, the pipeline code and the bail list have one home
 
-**Rule.** `docs/qa/escalation-paths.md` holds both project-supplied lists that decide when a human is needed, under two fixed headings:
+**Rule.** `docs/qa/escalation-paths.md` holds the project-supplied lists that decide when a human is needed, under three fixed headings:
 
-- `## Escalation paths`: one bullet per path pattern, as a regular expression over repository-relative paths in backticks, then an em dash, then the reason. The Merger escalates any PR touching a match (`K-MERGE-4`).
+- `## Escalation paths`: one bullet per path pattern: a regular expression over repository-relative paths in backticks, then an em dash, then the reason. A pattern written `/…/i` matches regardless of case. The Merger escalates any PR touching a match (`K-MERGE-4`).
+- `## Pipeline code`: one bullet per directory holding the project's own pipeline scripts, as a repository-relative path ending in `/` in backticks, then an em dash, then the reason. These escalate as the pipeline itself does (`K-MERGE-4`). The label guard reads them for labels the pipeline applies, and `citation-shift` doesn't read their comments as claims about the code, because a guard's comments quote old coordinates on purpose.
 - `## Bail list`: one bullet per kind of change the Implementer stops on and hands off with a plan (`K-AGENT-13`).
 
-The pipeline's own paths escalate whatever the list says (`K-MERGE-4`), so the file lists only the project's high-risk paths. It must be filled in before the first brief is written, because a brief's blast-radius section names the items it touches (`K-PROJ-6`). The file is itself on the escalation path (`K-LAYOUT-1`).
+```markdown
+## Escalation paths
 
-**Why.** A list with no fixed home gets invented inside each brief that needs it, so every brief carries its own version. The two lists answer one question ("does this need a human?") from two sides, so they share a file.
+- `^migrations/` — database migrations
+- `/^src/.*payments?/i` — payments
 
-**Enforced by.** Prose only until the Merger is installed; its verdict function then reads this file.
+## Pipeline code
 
-**Class.** split. The path, headings and bullet format are framework. **The project supplies:** the paths and the bail items.
+- `scripts/pipeline/` — the project's own pipeline scripts
+```
+
+The pipeline's own paths escalate whatever the file says: every file under `.github/` and every markdown file directly inside `docs/qa/` (`K-MERGE-4`). So the file lists only what Kanon can't know: the project's high-risk paths and where it keeps its own pipeline code. Prose may sit between the bullets. A section with no bullets says the project has none. Each heading appears exactly once outside a fenced block. Each entry is a `- ` bullet at the start of its line. A missing file, a missing or doubled heading, a bullet that isn't an entry, a list item in any other form (indented, `+` or numbered), a pattern that isn't a regular expression or carries a flag other than `i`, and a directory that isn't one plain directory each fail by name, with the file and the line, rather than being read as an empty list.
+
+It must be filled in before the first brief is written, because a brief's blast-radius section names the items it touches (`K-PROJ-6`). The file is itself on the escalation path (`K-LAYOUT-1`), so a pull request that changes it goes to a human. The Merger, which judges a pull request, reads it from the default branch (`K-MERGE-17`); a check that runs on a pull request reads the pull request's copy, and a change to it is what that human reviews.
+
+**Why.** A list with no fixed home gets invented inside each brief that needs it, so every brief carries its own version. The lists answer one question ("does this need a human?") from different sides, so they share a file. Until it existed, the library carried one project's answers as constants: its migrations directory, its infrastructure file and its pipeline scripts directory escalated on every repository, and the guards looked for labels and skipped comments in a directory most projects don't have.
+
+**Enforced by.** The parser in [`scripts/lib/escalation-paths.mjs`](../scripts/lib/escalation-paths.mjs), which every reader shares: the Merger's verdict ([`scripts/merge-gate.mjs`](../scripts/merge-gate.mjs)), which reads the file from the default branch, and the label guard, `citation-shift` and `/ship`'s local review scope, which read the checked-out tree. [`tests/library/escalation-paths.test.ts`](../tests/library/escalation-paths.test.ts) pins each malformed shape and the default-branch read.
+
+**Class.** split. The path, headings and bullet formats are framework. **The project supplies:** the paths, the pipeline code and the bail items.
 
 ### `K-LAYOUT-9` The agent instruction files carry only the project's content
 

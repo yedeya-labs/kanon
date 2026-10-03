@@ -1,0 +1,256 @@
+// The escalation file, `docs/qa/escalation-paths.md` (`K-LAYOUT-8`), read by the guards that
+// need to know where the adopter's high-risk paths and its own pipeline code are (kanon#54).
+//
+// WHY A FILE THE ADOPTER OWNS. These used to be constants in the library, copied from the
+// reference adopter: the Merger escalated `sst.config.ts`, `drizzle/` and `scripts/qa/` on every
+// repository, the label guard scanned `scripts/qa/`, and `citation-shift` skipped it. Which
+// paths are high-risk, and where a project keeps its own pipeline scripts, is the project's
+// content; where it is written down, and in what shape, is Kanon's (ADR 0002).
+//
+// TWO FIXED HEADINGS, both required:
+//
+//   ## Escalation paths
+//   - `^migrations/` — database migrations
+//   - `/^src/.*payments?/i` — payments
+//
+//   ## Pipeline code
+//   - `scripts/pipeline/` — the project's own pipeline scripts
+//
+// An escalation path is a regular expression over repository-relative paths, in backticks,
+// optionally written `/…/i` to match without regard to case. A pipeline-code entry is a
+// repository-relative directory ending in `/`. Each bullet is followed by an em dash and the
+// reason. Prose between the bullets is allowed. A list item that isn't an entry is not: an
+// indented, `+` or numbered item, or a bullet that doesn't parse, would otherwise be read as
+// prose and its path silently dropped, which for the Merger is a PR merged with no human.
+// Neither is a heading that is missing or appears twice. CRLF line endings read as LF. A section with no bullets is a declaration
+// that the project has none.
+//
+// THE PIPELINE'S OWN PATHS ARE KANON'S, NOT THE FILE'S (`K-MERGE-4`). Every file under
+// `.github/` and every markdown file directly inside `docs/qa/` escalates whatever the file
+// says, and so does every pipeline-code directory it declares.
+//
+// FAILS BY NAME. Every reader throws `DeclarationError`, whose message names the file and,
+// for a malformed entry, the line, so a guard that can't read the declaration fails saying
+// which declaration and why, rather than running on an empty one.
+//
+// WHERE IT IS READ FROM. A guard that runs as a CI check reads the checked-out tree: the
+// file is directly inside `docs/qa/`, so a pull request that edits it escalates to a human
+// (`K-MERGE-4`). The Merger's verdict judges a pull request, so it reads the file from the
+// repository's default branch (`K-MERGE-17`), never from the pull request or its base.
+
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { fencedLines } from '../spec-lib.mjs';
+
+/** The file's fixed path (`K-LAYOUT-1`, `K-LAYOUT-8`). */
+export const ESCALATION_FILE = 'docs/qa/escalation-paths.md';
+
+/** The two headings this module reads, exactly as the file spells them. */
+export const PATHS_HEADING = '## Escalation paths';
+export const PIPELINE_HEADING = '## Pipeline code';
+
+/**
+ * The pipeline's own paths, which escalate on every repository whatever the file says
+ * (`K-MERGE-4`): every workflow and every other file under `.github/`, and the pipeline
+ * documents directly inside `docs/qa/`. `docs/qa/specs/` is deliberately not here: specs are
+ * the project's deliverable, reviewed against its brief.
+ * @type {ReadonlyArray<readonly [RegExp, string]>}
+ */
+export const PIPELINE_ESCALATIONS = Object.freeze([
+  Object.freeze(/** @type {const} */ ([/^\.github\//, 'the CI and agent pipeline'])),
+  Object.freeze(/** @type {const} */ ([/^docs\/qa\/[^/]+\.md$/, 'the pipeline documents, which are agent instructions'])),
+]);
+
+/** A missing or malformed escalation file. Its message names the file. */
+export class DeclarationError extends Error {
+  /** @param {string} message */
+  constructor(message) {
+    super(message);
+    this.name = 'DeclarationError';
+  }
+}
+
+/**
+ * @typedef {{ pattern: RegExp, reason: string }} EscalationPath
+ * @typedef {{ dir: string, reason: string }} PipelineDir
+ * @typedef {{ paths: EscalationPath[], pipeline: PipelineDir[] }} EscalationFile
+ */
+
+/** A bullet: `- ` or `* ` at the start of the line, then a code span, an em dash and the reason. */
+const BULLET = /^[-*]\s+(.*)$/;
+/** Anything Markdown reads as a list item: indented, `-`, `*`, `+`, or numbered. */
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
+const ENTRY = /^`([^`]+)`\s+—\s+(\S.*)$/;
+
+/**
+ * The body lines of one `##` section, with their 1-based line numbers. Throws when the heading
+ * is missing or appears more than once outside a fenced block.
+ * @param {string[]} lines
+ * @param {Set<number>} fenced
+ * @param {string} heading
+ * @returns {{ line: number, text: string }[]}
+ */
+function section(lines, fenced, heading) {
+  const at = lines.flatMap((l, i) => (!fenced.has(i) && l.trimEnd() === heading ? [i] : []));
+  if (at.length === 0) throw new DeclarationError(`${ESCALATION_FILE} has no \`${heading}\` heading (K-LAYOUT-8)`);
+  if (at.length > 1) {
+    throw new DeclarationError(`${ESCALATION_FILE} has the \`${heading}\` heading ${at.length} times, on lines ${at.map((i) => i + 1).join(', ')} (K-LAYOUT-8)`);
+  }
+  const start = /** @type {number} */ (at[0]) + 1;
+  const out = [];
+  for (let i = start; i < lines.length; i += 1) {
+    const text = /** @type {string} */ (lines[i]);
+    if (!fenced.has(i) && /^#{1,2}\s/.test(text)) break;
+    if (!fenced.has(i)) out.push({ line: i + 1, text });
+  }
+  return out;
+}
+
+/**
+ * The bullets of a section, each split into its code span and its reason.
+ * @param {{ line: number, text: string }[]} body
+ * @param {string} heading
+ * @returns {{ line: number, value: string, reason: string }[]}
+ */
+function entries(body, heading) {
+  return body.flatMap(({ line, text }) => {
+    const bullet = BULLET.exec(text);
+    if (!bullet) {
+      if (!LIST_ITEM.test(text)) return [];
+      throw new DeclarationError(
+        `${ESCALATION_FILE}:${line}, under \`${heading}\`, is a list item the file doesn't use: write each entry as \`- \` at the start of the line (K-LAYOUT-8)`,
+      );
+    }
+    const entry = ENTRY.exec(/** @type {string} */ (bullet[1]).trim());
+    if (!entry) {
+      throw new DeclarationError(
+        `${ESCALATION_FILE}:${line}, under \`${heading}\`, isn't an entry: write a pattern in backticks, an em dash, then the reason (K-LAYOUT-8)`,
+      );
+    }
+    return [{ line, value: /** @type {string} */ (entry[1]), reason: /** @type {string} */ (entry[2]).trim() }];
+  });
+}
+
+/**
+ * One escalation pattern: a regular expression, or `/…/i` for one that ignores case.
+ * @param {string} value
+ * @param {number} line
+ */
+function pattern(value, line) {
+  const flagged = /^\/(.+)\/([A-Za-z]+)$/.exec(value);
+  if (flagged && flagged[2] !== 'i') {
+    throw new DeclarationError(`${ESCALATION_FILE}:${line}: \`${value}\` has the flags \`${flagged[2]}\`, and only \`/…/i\` is allowed (K-LAYOUT-8)`);
+  }
+  const literal = /^\/(.+)\/(i?)$/.exec(value);
+  const source = literal ? /** @type {string} */ (literal[1]) : value;
+  try {
+    return new RegExp(source, literal?.[2] ?? '');
+  } catch (e) {
+    throw new DeclarationError(`${ESCALATION_FILE}:${line}: \`${value}\` isn't a regular expression (${/** @type {Error} */ (e).message}) (K-LAYOUT-8)`);
+  }
+}
+
+/**
+ * One pipeline-code directory: repository-relative, ending in `/`, with no glob, no `..` and
+ * no leading `/` or `./`, so it means one directory and only one.
+ * @param {string} value
+ * @param {number} line
+ */
+function directory(value, line) {
+  const ok =
+    value.endsWith('/') &&
+    !/^\.?\//.test(value) &&
+    !/[*?[\]{}\\\s]/.test(value) &&
+    !value.split('/').some((part) => part === '..' || part === '.');
+  if (!ok) {
+    throw new DeclarationError(
+      `${ESCALATION_FILE}:${line}: \`${value}\` isn't a pipeline-code directory: write a repository-relative directory ending in \`/\`, with no pattern characters (K-LAYOUT-8)`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Parses the escalation file. Throws `DeclarationError` naming the file and line of the first
+ * thing it can't read.
+ * @param {string} text
+ * @returns {EscalationFile}
+ */
+export function parseEscalationFile(text) {
+  const lines = text.split(/\r?\n/);
+  const fenced = fencedLines(lines);
+  if (fenced.unclosed !== -1) {
+    throw new DeclarationError(`${ESCALATION_FILE}:${fenced.unclosed + 1} opens a code fence that never closes (K-LAYOUT-8)`);
+  }
+  const paths = entries(section(lines, fenced, PATHS_HEADING), PATHS_HEADING).map(({ line, value, reason }) => ({
+    pattern: pattern(value, line),
+    reason,
+  }));
+  const pipeline = entries(section(lines, fenced, PIPELINE_HEADING), PIPELINE_HEADING).map(({ line, value, reason }) => ({
+    dir: directory(value, line),
+    reason,
+  }));
+  return { paths, pipeline };
+}
+
+/**
+ * Reads and parses the escalation file from a checked-out tree.
+ * @param {string} [root] the repository root
+ * @returns {EscalationFile}
+ */
+export function readEscalationFile(root = process.cwd()) {
+  let text;
+  try {
+    text = readFileSync(join(root, ESCALATION_FILE), 'utf8');
+  } catch (e) {
+    const code = /** @type {NodeJS.ErrnoException} */ (e).code;
+    throw new DeclarationError(
+      code === 'ENOENT'
+        ? `${ESCALATION_FILE} doesn't exist. Every adopter keeps one, with \`${PATHS_HEADING}\` and \`${PIPELINE_HEADING}\` headings (K-LAYOUT-8)`
+        : `${ESCALATION_FILE} couldn't be read: ${/** @type {Error} */ (e).message}`,
+    );
+  }
+  return parseEscalationFile(text);
+}
+
+/**
+ * Reads and parses the escalation file from the repository's default branch, for a lane that
+ * judges a pull request (`K-MERGE-17`). `readFile` returns the file's text at a ref, or `null`
+ * when it doesn't exist there, and throws on any other failure.
+ * @param {string} defaultBranch
+ * @param {(path: string, ref: string) => string | null} readFile
+ * @returns {EscalationFile}
+ */
+export function readEscalationFileAt(defaultBranch, readFile) {
+  if (!defaultBranch) throw new DeclarationError(`no default branch to read ${ESCALATION_FILE} from (K-MERGE-17)`);
+  let text;
+  try {
+    text = readFile(ESCALATION_FILE, defaultBranch);
+  } catch (e) {
+    throw new DeclarationError(`${ESCALATION_FILE} couldn't be read from \`${defaultBranch}\`: ${/** @type {Error} */ (e).message}`);
+  }
+  if (text === null) {
+    throw new DeclarationError(
+      `${ESCALATION_FILE} doesn't exist on \`${defaultBranch}\`. Every adopter keeps one, with \`${PATHS_HEADING}\` and \`${PIPELINE_HEADING}\` headings (K-LAYOUT-8)`,
+    );
+  }
+  return parseEscalationFile(text);
+}
+
+/** Escapes a directory for use inside a regular expression. @param {string} s */
+const escape = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+
+/**
+ * Every path that escalates, as `[pattern, reason]` pairs: the pipeline's own paths, then the
+ * project's pipeline code, then its high-risk paths.
+ * @param {EscalationFile} file
+ * @returns {Array<readonly [RegExp, string]>}
+ */
+export function escalatingPaths(file) {
+  return [
+    ...PIPELINE_ESCALATIONS,
+    ...file.pipeline.map(({ dir, reason }) => /** @type {const} */ ([new RegExp(`^${escape(dir)}`), reason])),
+    ...file.paths.map(({ pattern: re, reason }) => /** @type {const} */ ([re, reason])),
+  ];
+}
