@@ -51,7 +51,7 @@
 // the FILE: the run names it once, with the count and the total, because the citations the
 // anchor cannot judge at all (11 of the 16 in RA-2208 named no identifier, or named one
 // declared above the drift) are stale for the same reason and nothing else will say so.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 // STATUSES only — `spec-lib` does its `readdirSync` inside `specFiles()`, not at module
@@ -95,7 +95,7 @@ const BARE_PATH = new RegExp(String.raw`\x60([\w./[\]-]+\.${SOURCE_EXT})\x60`, '
 //
 // Measured when adopted: 21 in `docs/`, all in the oracle. Eighteen are in
 // `docs/qa/specs/auth.md` and name `node_modules/better-auth/…` — a dependency's build
-// output, outside the tracked tree by design — which is what `EXTERNAL` below is for; a
+// output, outside the tracked tree by design — which is what `isExternal` below is for; a
 // nineteenth there named the same kind of file by basename alone and is qualified in the
 // change that added this. The other three are in `superadmin.md`, one of which named
 // `page.tsx` bare — 67 files match — and is qualified likewise.
@@ -104,15 +104,52 @@ const LINE_AFTER = new RegExp(String.raw`\x60([\w./[\]-]+\.${SOURCE_EXT})\x60\s*
 /**
  * A coordinate into a dependency, which this guard cannot and should not judge (RA-2224).
  *
- * `node_modules/` is not in `git ls-files`, so resolving one reports "no such file in the
- * repository" — correct about the index and wrong about the claim: `auth.md` cites
- * Better Auth's shipped `.mjs` deliberately, as evidence of a default we accept. Those
- * coordinates move when the DEPENDENCY is bumped, which is a different event with a
- * different owner. So they are COUNTED AND NAMED as external in the all-clear rather
- * than failed or silently dropped — the RA-945 rule is that the run says what it did not
- * check, not that it checks everything.
+ * A dependency tree is not in `git ls-files`, so resolving a coordinate into one reports
+ * "no such file in the repository" — correct about the index and wrong about the claim:
+ * the reference adopter's `auth.md` cites Better Auth's shipped `.mjs` deliberately, as
+ * evidence of a default it accepts. Those coordinates move when the DEPENDENCY is bumped,
+ * which is a different event with a different owner. So they are COUNTED AND NAMED as
+ * external in the all-clear rather than failed or silently dropped — the RA-945 rule is
+ * that the run says what it did not check, not that it checks everything.
+ *
+ * WHAT COUNTS AS A DEPENDENCY: a path NO tracked file can resolve to (exactly, or by the
+ * basename suffix `resolvePath` accepts) AND that the adopter's git ignores (#108). Until
+ * #108 this was `/^node_modules\//`, Node's tree alone; once the guard read Python, Go and
+ * the rest (#16), a `.venv/…/site-packages/…` coordinate failed as missing on every other
+ * stack. The ignore file is where every stack already names the trees it doesn't track,
+ * so reading it keeps the rule fixed and stack-neutral without a list of folder names to
+ * maintain. "Untracked" alone is not enough: a mistyped repo path is untracked too, and
+ * counting it external would turn a real failure into a silent pass (`K-PRIN-8`). A typo
+ * is not ignored, so it still fails; a tracked file is judged wherever it lives.
+ *
+ * @param {string} file the cited path
+ * @param {string[]} tracked
+ * @param {(path: string) => boolean} ignored whether git ignores the path
  */
-export const EXTERNAL = /^node_modules\//;
+export const isExternal = (file, tracked, ignored) =>
+  !tracked.some((f) => f === file || f.endsWith(`/${file}`)) && ignored(file);
+
+/**
+ * `ignored` as the adopter's git answers it, from the working directory. `isExternal`
+ * asks only about an untracked path, so the index never changes the answer. The path need
+ * not exist: CI checks out the index, which holds no `.venv/`, and git matches a pattern
+ * such as `.venv/` against the path's parent directories anyway.
+ * Only an answer of "ignored" (exit 0) makes a path external. Anything else, including
+ * git's error for a path outside the repository (`../x.py`), leaves the coordinate to be
+ * judged, so it fails as "no such file": an error never turns into a pass.
+ *
+ * @returns {(path: string) => boolean}
+ */
+export const gitIgnored = () => {
+  const seen = new Map();
+  return (path) => {
+    if (!seen.has(path)) {
+      const r = spawnSync('git', ['check-ignore', '-q', '--', path], { stdio: 'ignore' });
+      seen.set(path, r.status === 0);
+    }
+    return seen.get(path);
+  };
+};
 // Every coordinate on one line, in order, each carrying the file it resolves against:
 // a bare `:NNN` belongs to the nearest full citation BEFORE it on the same line, which
 // is what the shorthand means. One with nothing before it names no file: it is dropped,
@@ -606,7 +643,8 @@ export const isOracleSpec = (path) => path.startsWith('docs/qa/specs/');
  * @param {string[]} docs
  * @param {(path: string) => string} readFile
  * @param {string[]} tracked
- * @param {{bareNeedsFile?: (doc: string) => boolean}} [options]
+ * @param {{bareNeedsFile?: (doc: string) => boolean, ignored?: (path: string) => boolean}} [options]
+ *   `ignored`: whether git ignores a path, for `isExternal`. Without it, nothing is external.
  * @returns {{findings: Finding[], checked: number, anchored: number, viaEnclosing: number,
  *            viaEnclosingAt: string[], discarded: number, discardedLineZero: number,
  *            discardedBy: Record<string, number>, external: number,
@@ -614,6 +652,7 @@ export const isOracleSpec = (path) => path.startsWith('docs/qa/specs/');
  */
 export const auditCitations = (docs, readFile, tracked, options = {}) => {
   const bareNeedsFile = options.bareNeedsFile ?? isOracleSpec;
+  const ignored = options.ignored ?? (() => false);
   const findings = [];
   const discardedBy = {};
   // Per TARGET file (the cited `.ts`, not the citing doc): every shift measured into it,
@@ -640,7 +679,7 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
   // Of `discarded`, the bare `:0`s — named separately because a file MAY have been named
   // on their line, so "no file named on the line" would be false about them (RA-1221).
   let discardedLineZero = 0;
-  // Coordinates into a dependency (`EXTERNAL`) — counted and named, never judged (RA-2224).
+  // Coordinates into a dependency (`isExternal`) — counted and named, never judged (RA-2224).
   let external = 0;
   const externalBy = {};
 
@@ -681,7 +720,7 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
         // A FULL citation naming line 0 — a typo, never a coordinate (RA-1221). Checked
         // AFTER its anchors become inheritable, so a continuation behind it still answers
         // for the identifier it introduced; BEFORE the external test, so a
-        // `node_modules/…:0` typo is reported rather than counted as external; and before
+        // `.venv/…:0` typo is reported rather than counted as external; and before
         // anything is resolved, so it cannot reach the range or anchor test a 0 would pass
         // vacuously (RA-1220 review).
         if (m.lineZero) {
@@ -694,7 +733,7 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
           });
           continue;
         }
-        if (m.file && EXTERNAL.test(m.file)) {
+        if (m.file && isExternal(m.file, tracked, ignored)) {
           external += 1;
           externalBy[doc] = (externalBy[doc] ?? 0) + 1;
           continue;
@@ -931,7 +970,7 @@ const main = () => {
     );
   }
 
-  absorb(auditCitations(md, read, tracked));
+  absorb(auditCitations(md, read, tracked, { ignored: gitIgnored() }));
   const audited = md.length;
 
   if (findings.length) {
@@ -1033,7 +1072,7 @@ const main = () => {
   if (external) {
     const byDoc = Object.entries(externalBy).sort((a, b) => b[1] - a[1]);
     console.log(
-      `  ${external} coordinate(s) into node_modules/ not checked (a dependency's build, outside the repository): ` +
+      `  ${external} coordinate(s) into an untracked, git-ignored path not checked (a dependency, outside the repository): ` +
         `${byDoc.map(([d, n]) => `${d} (${n})`).join(', ')}`,
     );
   }

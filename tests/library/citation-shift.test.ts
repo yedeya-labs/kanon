@@ -157,9 +157,14 @@ describe('what it deliberately leaves alone', () => {
     expect(run({ 'docs/a.md': 'Elsewhere (`other.ts:12`).' }, INSERT_3_AFTER_5).moved).toEqual([]);
   });
 
-  it('a coordinate into node_modules', () => {
+  it('a coordinate into an untracked dependency, which citation-guard counts as external (#108)', () => {
+    const d = INSERT_3_AFTER_5.replaceAll('src/wizard.tsx', '.venv/lib/site-packages/x/wizard.py');
+    expect(run({ 'docs/a.md': 'Dep (`.venv/lib/site-packages/x/wizard.py:12`).' }, d, []).moved).toEqual([]);
+  });
+
+  it('a tracked file under a dependency-looking folder is the repository\'s own, and shifts (#108)', () => {
     const d = INSERT_3_AFTER_5.replaceAll('src/wizard.tsx', 'node_modules/x/wizard.mjs');
-    expect(run({ 'docs/a.md': 'Dep (`node_modules/x/wizard.mjs:12`).' }, d, ['node_modules/x/wizard.mjs']).moved).toEqual([]);
+    expect(run({ 'docs/a.md': 'Dep (`node_modules/x/wizard.mjs:12`).' }, d, ['node_modules/x/wizard.mjs']).moved).toHaveLength(1);
   });
 
   it('a coordinate into a MOVED file — no line map exists, so it is skipped and counted, never flagged (RA-2294 review)', () => {

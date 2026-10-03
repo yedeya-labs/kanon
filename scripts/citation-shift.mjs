@@ -85,7 +85,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { EXTERNAL, PROJECTS_TREE, coordinatesIn, isOracleSpec, resolvePath } from './citation-guard.mjs';
+import { PROJECTS_TREE, coordinatesIn, isOracleSpec, resolvePath } from './citation-guard.mjs';
 import { QA_TOOLING_IMPORT } from './spec-lib.mjs';
 
 /**
@@ -234,7 +234,8 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
   const baseSet = new Set(trackedBase);
 
   const resolved = (c, tracked, count = false) => {
-    if (!c.file || EXTERNAL.test(c.file)) return null;
+    // A dependency coordinate (`isExternal`) is untracked, so it resolves to nothing here.
+    if (!c.file) return null;
     const r = resolvePath(c.file, tracked, null);
     if (r.error && count && r.error.startsWith('ambiguous') && tracked.some((f) => changed.has(f) && f.endsWith(`/${c.file}`))) ambiguous += 1;
     return r.error ? null : r.path;

@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
-import { auditCitations, codeSpans, resolvePath, tokensOf, clauseAt, enclosingDeclarations, anchorsFor, coordinatesIn, codeOnly, isOracleSpec, namesIdentifier, topLevelDeclarations, declarationShift, strongNames, BLOCK_MIN, discardedPhrase } from '../../scripts/citation-guard.mjs';
+import { auditCitations, codeSpans, resolvePath, tokensOf, clauseAt, enclosingDeclarations, anchorsFor, coordinatesIn, codeOnly, isOracleSpec, namesIdentifier, topLevelDeclarations, declarationShift, strongNames, BLOCK_MIN, discardedPhrase, gitIgnored } from '../../scripts/citation-guard.mjs';
 import { STATUSES } from '../../scripts/spec-lib.mjs';
 import { ROOT } from './helpers/adopter.js';
 
@@ -28,6 +28,13 @@ const audit = (docs: Record<string, string>, files: Record<string, string>) =>
     (p: string) => ({ ...docs, ...files })[p],
     [...Object.keys(docs), ...Object.keys(files)],
   );
+/** `audit`, with git's ignore rules given as a predicate: by default, the usual dependency trees. */
+const auditIgnoring = (
+  docs: Record<string, string>,
+  files: Record<string, string>,
+  ignored = (p: string) => /^(node_modules|\.venv)\//.test(p),
+) =>
+  auditCitations(Object.keys(docs), (p: string) => ({ ...docs, ...files })[p], [...Object.keys(docs), ...Object.keys(files)], { ignored });
 
 describe('a coordinate that moved is caught (RA-658)', () => {
   it('flags a citation whose range no longer names what the sentence does', () => {
@@ -511,7 +518,7 @@ describe('a FULL citation naming line 0 is a finding, not a silent discard (RA-1
   });
 
   it('reports a line-0 typo into node_modules/ rather than counting it as external', () => {
-    const r = audit({ 'docs/x.md': 'The default is `node_modules/next/dist/x.js:0`.' }, files);
+    const r = auditIgnoring({ 'docs/x.md': 'The default is `node_modules/next/dist/x.js:0`.' }, files);
     expect(r.findings.map((f) => f.problem).join('\n')).toMatch(/names line 0/);
     expect(r.external).toBe(0);
   });
@@ -941,12 +948,62 @@ describe('a line number written OUTSIDE the backticks is a coordinate (RA-2224)'
     expect(cs.map((c) => [c.file, c.a])).toEqual([['a.ts', 1], ['a.ts', 5]]);
   });
 
-  it('counts a node_modules coordinate as EXTERNAL — never failed, never silently dropped', () => {
-    const r = audit(doc('Better Auth defaults it (`node_modules/better-auth/x.mjs` L117-124, `node_modules/y.mjs:4`).'), {});
+  it('counts a coordinate into an untracked, ignored dependency as EXTERNAL — never failed, never silently dropped', () => {
+    const r = auditIgnoring(doc('Better Auth defaults it (`node_modules/better-auth/x.mjs` L117-124, `node_modules/y.mjs:4`).'), {});
     expect(r.findings).toEqual([]);
     expect(r.external).toBe(2);
     expect(r.externalBy).toEqual({ 'docs/x.md': 2 });
     expect(r.checked).toBe(0);
+  });
+});
+
+/**
+ * #108 — what counts as a dependency is what git ignores and doesn't track, not a folder
+ * name, so every stack's dependency tree is external and a typo still fails.
+ */
+describe('isExternal: an untracked, git-ignored path, on any stack (#108)', () => {
+  it('counts a Python venv coordinate as external', () => {
+    const r = auditIgnoring(doc('Requests retries it (`.venv/lib/python3.12/site-packages/requests/api.py:59`).'), {});
+    expect(r.findings).toEqual([]);
+    expect(r.external).toBe(1);
+  });
+
+  it('still fails a mistyped repository path, which is untracked but not ignored (K-PRIN-8)', () => {
+    const r = auditIgnoring(doc('`provisionTenant` (`src/oders/a.ts:4`).'), { 'src/orders/a.ts': 'x\n'.repeat(9) });
+    expect(r.external).toBe(0);
+    expect(r.findings.map((f) => f.problem)).toEqual(['no such file in the repository']);
+  });
+
+  it('judges a TRACKED file under an ignored folder, exactly or by basename: the repository holds it', () => {
+    const files = { '.venv/vendored.py': 'x\n'.repeat(3) };
+    const r = auditIgnoring(doc('Vendored (`.venv/vendored.py:40`) and by name (`vendored.py:41`).'), files, () => true);
+    expect(r.external).toBe(0);
+    expect(r.findings).toHaveLength(2);
+  });
+
+  it('counts nothing as external when no ignore rule is given', () => {
+    const r = audit(doc('Dep (`node_modules/y.mjs:4`).'), {});
+    expect(r.external).toBe(0);
+    expect(r.findings).toHaveLength(1);
+  });
+
+  it('gitIgnored reads the working directory\'s ignore rules, for paths that need not exist', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ignored-'));
+    const cwd = process.cwd();
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      writeFileSync(join(dir, '.gitignore'), '.venv/\nnode_modules\n');
+      process.chdir(dir);
+      const ignored = gitIgnored();
+      expect(ignored('.venv/lib/python3.12/site-packages/requests/api.py')).toBe(true);
+      expect(ignored('node_modules/y.mjs')).toBe(true);
+      expect(ignored('src/orders/a.ts')).toBe(false);
+      // git's error for a path outside the repository is not "ignored", so it is judged.
+      expect(ignored('../elsewhere/x.py')).toBe(false);
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
 });
