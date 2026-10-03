@@ -469,6 +469,9 @@ describe('a 403 is not an empty file list (RA-1090, RA-1097)', () => {
       // `gh` prints a 403 body to stdout and the filter reads "CI has not registered",
       // which defers the review forever instead of erroring.
       actions: 'read',
+      // kanon#81 — the membership gate reads the PR's issue events on CI's completion, to
+      // judge whoever applied the review label.
+      issues: 'read',
     });
     // `checks` and `statuses` are GONE with the read that needed them (RA-1413). They
     // existed only for `statusCheckRollup`, which merges CHECK RUNS with STATUS

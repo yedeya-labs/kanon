@@ -37,7 +37,8 @@ Every lane starts real work only when the actor of its triggering event is a mem
 | A merge (`pull_request: closed`) | whoever merged it | the same |
 | A dispatch | whoever ran it, re-runs included | the same; only write access can dispatch, so this refuses only an unregistered App |
 | A pull request opened (`pull_request_target`) | whoever opened it | the same |
-| A finished workflow (`workflow_run`) | whoever pushed the commit it ran on | the same; the review lane refuses a fork's head separately |
+| A finished workflow (`workflow_run`) | whoever pushed the commit it ran on | the same |
+| A finished CI run, on the review lane | whoever last applied a review label (`review:please`, `agent:triage` or `agent:implement`) that the head's open pull request carries now, read from its issue events | the same. With no such pull request or label, refused. A label added while CI runs waits for CI, so this is that label's actor, not the pusher, who on a dependency bot's PR is the bot ([#81](https://github.com/yedeya-labs/kanon/issues/81)). A fork's head is refused separately |
 | A schedule | the user GitHub runs it as: whoever last changed the cron, or the default branch | the same, so a schedule set by someone who has since lost access is refused |
 | Anything else | none | refused: no lane acts on it |
 
