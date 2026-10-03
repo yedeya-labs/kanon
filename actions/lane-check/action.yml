@@ -10,6 +10,7 @@
 #   - every Kanon reference under `.github/` pins one exact version, the one this runs at;
 #   - the hook exists at its fixed path and declares every input Kanon passes it;
 #   - every role a caller's lane runs as has one row, with a slug, in the App register;
+#   - the test-database declaration, when there is one, declares one kind Kanon knows;
 #   - `.github/dependabot.yml` has the entry that proposes Kanon upgrades.
 #
 # What a lane declares (its inputs, secrets and permissions, and the hook's inputs) is read

@@ -25,6 +25,7 @@ What a file *contains* is still the project's (its specs, its signals, its escal
 | `docs/qa/adoption.md` | The adoption record | `K-LAYOUT-10` |
 | `docs/qa/sign-off-delegation.md` | The sign-off delegation, when the adopter records one | `K-LAYOUT-14` |
 | `docs/qa/exemptions.md` | What a guard exempts by name: pre-standard briefs and path mentions | `K-LAYOUT-15` |
+| `docs/qa/test-database.md` | The test-database declaration, when the lanes need a database | `K-LAYOUT-16` |
 | `.github/dependabot.yml` | Holds the entry that proposes Kanon upgrades | `K-ADOPT-11` |
 
 Every markdown file directly inside `docs/qa/` is pipeline governance: changing one changes what an agent does or what a merge requires, so it is on the pipeline's own escalation path (`K-MERGE-4`). Files under `docs/qa/specs/` are not: specs are a project's deliverable (`K-MERGE-4`).
@@ -247,6 +248,38 @@ Prose may sit around the entries, and a section with no entries says nothing is 
 **Enforced by.** The parser in [`scripts/lib/exemptions.mjs`](../scripts/lib/exemptions.mjs), read by the brief guard and the doc-path guard from the checked-out tree. [`tests/library/exemptions.test.ts`](../tests/library/exemptions.test.ts) pins each malformed shape, and [`tests/unit/stack-neutral.test.ts`](../tests/unit/stack-neutral.test.ts) runs both guards on a fixture adopter with a missing, a malformed and a stale declaration.
 
 **Class.** split. The path, the headings and the entry formats are framework. **The project supplies:** its pre-standard briefs and its path mentions.
+
+### `K-LAYOUT-16` The test-database declaration names one kind, and no file means no database
+
+**Rule.** A project whose lanes run tests against a database declares it in `docs/qa/test-database.md`, on one line of its own, at column zero, outside any fenced block:
+
+```text
+**Test database:** `hook`
+```
+
+The kind is one of:
+
+- `hook`: the project-setup hook provides the database. When a lane passes it `database: 'true'`, the hook starts the database, whatever its engine, and writes its connection string to `$GITHUB_ENV` as `DATABASE_URL`.
+- `none`: the project has no database. No file means the same.
+
+Prose may surround the line. The file is malformed if it has no such line, has two, or names any other kind, an engine included. The lanes fail on a malformed file by name, rather than starting nothing.
+
+The contract is the whole of what Kanon fixes:
+- The database is ready when the project-setup hook has finished, before the agent starts.
+- The lanes and their agents find it in `DATABASE_URL`.
+- A lane that runs no tests (one that edits only prose) tells the hook `database: 'false'`, whatever is declared.
+
+Kanon starts no database and names no engine, image or port.
+
+**Why.** A database the lanes start for every project makes one project's stack every project's cost. Projects with no database paid for a container nothing used, and a project on another engine couldn't use the switch at all. So the project decides, in one file.
+
+The Owner chose the contract over a Kanon-maintained standard database (2026-10-03). A standard, even an opt-in one, is a rule naming an engine, and Kanon is opinionated about process, never about the stack. The reference adopter's database setup is a worked example in the [`test-database`](../actions/test-database/README.md) block's README instead.
+
+The file sits directly inside `docs/qa/`, so it is pipeline governance (`K-MERGE-4`), and the review lane reads it from the default branch (`K-MERGE-17`). So a pull request can't change the database its own review runs on.
+
+**Enforced by.** [`lane-check`](../actions/lane-check/README.md), which fails on a malformed declaration, and the lanes' [`test-database`](../actions/test-database/README.md) block, which reads it with the same program before the hook runs.
+
+**Class.** split. The path, the line, the kinds and the contract are framework. **The project supplies:** which kind, and, for `hook`, the database.
 
 ## The brief
 

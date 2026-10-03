@@ -99,12 +99,12 @@ permissions:
   issues: read
 
 jobs:
-  # SERVICE CONTAINERS START BEFORE A JOB'S FIRST STEP, and this trigger is
+  # THE CHEAP DECISION RUNS BEFORE THE JOB THAT SETS UP, and this trigger is
   # repo-wide. With the filter in the same job as the database, every review in the
-  # repo provisioned Postgres in order to decide it had nothing to do — measured
+  # repo provisioned a database in order to decide it had nothing to do — measured
   # over the last 60 PRs, 91 review submissions, of which ~54% would skip.
   #
-  # So the cheap decision lives in its own job with no services, and the expensive
+  # So the cheap decision lives in its own job that sets up nothing, and the expensive
   # job is gated on its output. Same split as agent-explore.yml's gate/explore.
   filter:
     # THE MARKER GATE IS ON THE JOB, NOT ONLY IN THE SCRIPT (RA-1592 review).

@@ -181,24 +181,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    services:
-      postgres:
-        image: pgvector/pgvector:pg17
-        env:
-          POSTGRES_USER: kanon
-          POSTGRES_PASSWORD: kanon
-          POSTGRES_DB: kanon
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U kanon"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     env:
-      # Kanon's standard test database (RA-2694). The project-setup hook derives the app
-      # role's URL from this one and writes it to the environment before `db:init`.
-      DATABASE_URL: postgres://kanon:kanon@localhost:5432/kanon
       PR_NUMBER: ${{ matrix.pr }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
@@ -286,12 +269,16 @@ jobs:
             exit 1
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # THE PROJECT'S DATABASE, AS IT DECLARES IT (kanon#18; `agent-lane.yml`'s header), from
+      # the branch checked out, as the hook is. Before the hook, which starts it.
+      - uses: $/actions/test-database
+        id: database
       - uses: ./.github/actions/project-setup
         id: project
         with:
           lane: rebase-lane
           install: "true"
-          database: "true"
+          database: ${{ steps.database.outputs.database }}
           browsers: "false"
           app-slug: ${{ steps.app-token.outputs.app-slug }}
           github-token: ${{ steps.app-token.outputs.token }}

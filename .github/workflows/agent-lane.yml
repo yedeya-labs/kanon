@@ -1,7 +1,7 @@
 # The shared spine of an agent lane (RA-2092).
 #
 # Every lane that dispatches an agent does the same eight things — mint an App token,
-# check out, provision a database, run the project's setup, run `claude-code-action`,
+# check out, start the project's database, run the project's setup, run `claude-code-action`,
 # explain a red run, and record what it cost. Only the PROMPT and the IDENTITY differ — plus a few CAPABILITY SWITCHES a lane
 # sets for what it genuinely lacks or needs (`database`, `browsers`, `ref`/`fetch-depth`,
 # and `push-probe` for a lane whose whole output is a pushed branch, which is OFF by
@@ -22,8 +22,7 @@
 # so at the commit of the release the caller pinned), joined by the few steps
 # no block holds: the App-token mint and the checkout (no block needed to before RA-2697,
 # when a `./` block could not load before the checkout existed; they stay lane steps
-# because this change moves no step), the database service (a composite action cannot declare
-# `services:`), and the RA-2519 breadcrumbs (the jobs API cannot see a step inside a
+# because this change moves no step), and the RA-2519 breadcrumbs (the jobs API cannot see a step inside a
 # composite action, and the recoveries read those by name).
 #
 # AND ONE HOOK THAT IS THE PROJECT'S, NOT THE SPINE'S (RA-2694; Kanon plan 0001 §5). Every
@@ -56,25 +55,18 @@
 # Each lane passed it separately to `claude-code-action` and to `agent-telemetry`, which
 # must agree or the row records a model the run did not use. Nothing enforced that.
 #
-# THE DATABASE IS CONDITIONAL, AND THAT CORRECTS WHAT THIS HEADER SAID (RA-2592). It read
-# "GitHub evaluates `services:` before inputs are in scope", and that is not what the
-# platform documents: the context-availability table lists `inputs` for
-# `jobs.<job_id>.services`, and the workflow-syntax reference says a service whose
-# `image` is an empty string "will not start" — its own example is exactly this shape.
-# So a lane with no database (`lead-revise`) passes `database: false` and gets no
-# container, no schema setup and no `DATABASE_URL`, which is what it had before it was
-# converted — rather than a second copy of this file.
+# THE DATABASE IS THE PROJECT'S, AND ITS HOOK STARTS IT (kanon#18, K-LAYOUT-16). The project
+# says in `docs/qa/test-database.md` whether its lanes need one: no file (or `none`), or `hook`,
+# when its project-setup hook starts the database and writes `DATABASE_URL`. Kanon names no
+# engine (the Owner, 2026-10-03). `$/actions/test-database` reads the declaration after the
+# checkout and says what to pass the hook's `database` input. It was a job service until #18,
+# and a service cannot read the checkout: `services:` sees only inputs, `vars`, `needs`,
+# `matrix` and `github` (RA-2592 used that to switch it off by `database: false`, with an
+# empty `image`). With no declaration the hook gets `database: 'false'` and `DATABASE_URL`
+# stays unset.
 #
-# THE DATABASE IS KANON'S STANDARD (RA-2694, the plan's decision 12): `pgvector/pgvector:pg17`
-# with user, password and database all `kanon`, on port 5432, and the `DATABASE_URL` that
-# names it. The project's hook derives its own app role's URL from that value and runs its
-# schema setup against it, so the host, port and name are written here and nowhere else.
-#
-# `DATABASE_URL` IS WRITTEN TO `$GITHUB_ENV`, NOT DECLARED AS JOB `env:`, because a job
-# `env:` key always exists: the best a template can do is set it to "", and "" is not
-# unset — a migrator or a test that reads `DATABASE_URL ?? <default>` keeps the empty
-# string. The step comes before every step that reads it, so each sees what a
-# job-level `env:` gave it.
+# `database` IS STILL THE LANE'S SWITCH: a lane that edits prose (`lead-revise`) passes
+# `database: false` and starts nothing, whatever the project declares.
 name: Agent lane
 
 on:
@@ -170,10 +162,12 @@ on:
         default: 1
       database:
         description: >-
-          Provision the standard test database (the service and `DATABASE_URL`), and tell
-          the project-setup hook to run the project's schema setup against it. Default on:
-          a lane that writes code must prove RLS conformance. Off for a lane that edits
-          prose — see the header for why this is honoured rather than approximated.
+          This lane runs the project's tests, so it reads the test-database declaration
+          (`docs/qa/test-database.md`, kanon#18) and passes the project-setup hook
+          `database: 'true'` when the project declares one, for the hook to start it and
+          set up its schema. A project that declares none gets none either way. Default
+          on: a lane that writes code runs the project's tests. Off for a lane that edits
+          prose, which gets none whatever the project declares.
         required: false
         type: boolean
         default: true
@@ -252,21 +246,6 @@ jobs:
       # `agent` is the agent-run block, whose only step that can fail is the action, so its
       # outcome is the action's — see that block's header.
       outcome: ${{ steps.agent.outcome }}
-    services:
-      postgres:
-        # An empty image starts no service — the documented conditional-service form.
-        image: ${{ inputs.database && 'pgvector/pgvector:pg17' || '' }}
-        env:
-          POSTGRES_USER: kanon
-          POSTGRES_PASSWORD: kanon
-          POSTGRES_DB: kanon
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U kanon"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1): a cancelled
       # job that ran at least its `timeout-minutes` timed out. Nothing else in the job's
@@ -274,14 +253,6 @@ jobs:
       - name: Record when the job started
         id: job
         run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-
-      # Before every step that reads the environment, so each sees it exactly as a job-level
-      # `env:` gave it — and a lane with no database sees it UNSET rather than empty (see the
-      # header).
-      - name: Point the job at its database
-        if: inputs.database
-        run: |
-          echo "DATABASE_URL=postgres://kanon:kanon@localhost:5432/kanon" >> "$GITHUB_ENV"
 
       # Mint the App token FIRST so checkout persists IT (not the read-only default
       # GITHUB_TOKEN) as the git credential — otherwise the agent's `git push` 403s
@@ -332,6 +303,14 @@ jobs:
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # THE PROJECT'S DATABASE, AS IT DECLARES IT (kanon#18; see the header). After the checkout,
+      # because the declaration is read from the tree, and before the hook, which is told by
+      # this block's answer whether to start the database and set up its schema.
+      - uses: $/actions/test-database
+        id: database
+        with:
+          wanted: ${{ inputs.database }}
+
       # The project's own setup — everything this spine and its blocks deliberately do not
       # name (see the header). After the checkout, because it is read from the tree, and
       # before `agent-setup`. The App token is passed for the hook's issue reads; the
@@ -341,7 +320,7 @@ jobs:
         with:
           lane: ${{ inputs.agent }}
           install: "true"
-          database: ${{ inputs.database }}
+          database: ${{ steps.database.outputs.database }}
           browsers: ${{ inputs.browsers }}
           issue-number: ${{ inputs.issue-number }}
           app-slug: ${{ steps.app-token.outputs.app-slug }}
@@ -403,13 +382,14 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           # THE VERSION-2 ROW (plan 0002 §2.6). Each stage's step CONCLUSION, in the order this
           # spine runs them, so the row can say where a red run failed. The hook's is the
-          # presence check's when that failed, else the hook's own: a conclusion only, never
-          # the adopter's step names.
+          # presence check's when that failed, else the test database's when that failed (its
+          # declaration is the project's), else the hook's own: a conclusion only, never the
+          # adopter's step names.
           lane: ${{ inputs.lane }}
           stages: >-
             token=${{ steps.app-token.conclusion }}
             checkout=${{ steps.checkout.conclusion }}
-            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.project.conclusion }}
+            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.database.conclusion != 'success' && steps.database.conclusion || steps.project.conclusion }}
             setup=${{ steps.setup.conclusion }}
             agent=${{ steps.agent.conclusion }}
           kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}

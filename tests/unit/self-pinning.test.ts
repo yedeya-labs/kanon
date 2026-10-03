@@ -33,6 +33,9 @@ const files = [
 // The smoke run's python fixture hook is the first exception again, on a fixture (kanon#110):
 // the project-setup hook of the fixture adopter in Kanon's own checkout, run to show that a
 // hook with no `KANON` and no Node leaves a guard running on Kanon's Node.
+//
+// The test-database smoke runs the worked example's hook the same way (kanon#18): copied over
+// the workspace, then called as a lane calls a hook, to show the `hook` contract on a runner.
 const EXEMPT = new Set([
   '.github/workflows/agent-blocks-smoke.yml: ./tests/fixtures/python-adopter/.github/actions/project-setup',
   '.github/workflows/agent-lane.yml: ./.github/actions/project-setup',
@@ -44,6 +47,7 @@ const EXEMPT = new Set([
   '.github/workflows/pr-title.yml: yedeya-labs/kanon/actions/pr-title@vX.Y.Z',
   '.github/workflows/review.yml: yedeya-labs/kanon/.github/workflows/agent-review.yml@vX.Y.Z',
   '.github/workflows/ci.yml: yedeya-labs/kanon/actions/lane-check@vX.Y.Z',
+  '.github/workflows/test-database-smoke.yml: ./.github/actions/project-setup',
 ]);
 /** An exact release, written as the form, so the exemption survives each Dependabot bump. */
 const form = (entry: string): string => entry.replace(/^(.*: yedeya-labs\/kanon\/[^@]+)@v\d+\.\d+\.\d+$/, '$1@vX.Y.Z');

@@ -16,7 +16,7 @@
 # Reviewing after CI settles DELETES that state instead of compensating for it.
 # It also costs nothing: a round used to be `max(CI, review)` plus a SECOND full
 # review run to convert the comment, which is the same wall-clock as `CI + review`
-# for twice the Postgres containers and agent turns.
+# for twice the database containers and agent turns.
 # Gate: the PR carries `agent:triage` (a Triage/Fix bug-fix), `agent:implement` (an
 # the Implementer feature / spec-delta build), or `review:please` (any PR — bot- or
 # human-authored — flagged for review). The Reviewer is the generic code reviewer.
@@ -1141,24 +1141,7 @@ jobs:
       # …and `actions: read`, because the step reads its OWN run's startedAt to bound
       # the marker query to this run rather than to every review of the PR.
       actions: read
-    services:
-      postgres:
-        image: pgvector/pgvector:pg17
-        env:
-          POSTGRES_USER: kanon
-          POSTGRES_PASSWORD: kanon
-          POSTGRES_DB: kanon
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U kanon"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     env:
-      # Kanon's standard test database (RA-2694). The project-setup hook derives the app
-      # role's URL from this one and writes it to the environment before `db:init`.
-      DATABASE_URL: postgres://kanon:kanon@localhost:5432/kanon
       PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || needs.filter.outputs.pr }}
       # The Reviewer's login, from the App register on the default branch (`filter`).
       REVIEWER_LOGIN: ${{ needs.filter.outputs.login }}
@@ -1532,19 +1515,29 @@ jobs:
             exit 1
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # THE PROJECT'S DATABASE, AS IT DECLARES IT (kanon#18; `agent-lane.yml`'s header). The
+      # declaration is a markdown file directly inside `docs/qa/`, so it is the default
+      # branch's copy, restored above with the hook (K-MERGE-17): a PR can't change the
+      # database its own review runs on. After the claim, so a declined run starts none, and
+      # tolerated like the hook: a review without a database is still a review (#77).
+      - uses: $/actions/test-database
+        id: database
+        if: steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success'
+        continue-on-error: true
       - uses: ./.github/actions/project-setup
         id: project
-        if: steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success'
+        if: steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success' && steps.database.outcome == 'success'
         continue-on-error: true
         with:
           lane: reviewer
           install: "true"
-          database: "true"
+          database: ${{ steps.database.outputs.database }}
           browsers: "false"
       - name: Note a PR whose project setup failed
         # Judged by the hook's outcome alone (#77). The hook contract (plan 0001 §5) defines
         # the hook's inputs and no outputs, so the lane reads none: it can't assume an
-        # adopter's hook installs anything in particular, or has a database at all (#18).
+        # adopter's hook installs anything in particular, or has a database at all (#18). A
+        # malformed database declaration skips the hook, and lands here as `skipped`.
         if: steps.claim.outputs.proceed == 'true' && steps.project.outcome != 'success'
         env:
           SETUP: ${{ steps.project.outcome }}

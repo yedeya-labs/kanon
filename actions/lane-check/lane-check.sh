@@ -20,6 +20,7 @@ ACTION_REF="${ACTION_REF:-}"
 SPINE=agent-lane
 HOOK=.github/actions/project-setup/action.yml
 REGISTER=docs/qa/agent-identities.md
+DATABASE=docs/qa/test-database.md
 
 die() { echo "::error title=lane-check::$*"; exit 2; }
 command -v yq >/dev/null 2>&1 || die "needs yq (mikefarah v4) on PATH; GitHub's hosted runners have it"
@@ -156,6 +157,15 @@ else
       || fail "$HOOK" "does not declare the input \`$k\`, which Kanon's lanes pass it"
   done
   [ "$(jq -r '.runs.using // ""' <<<"$hook")" = composite ] || fail "$HOOK" "must be a composite action"
+fi
+
+# ── The test-database declaration (K-LAYOUT-16, kanon#18) ─────────────────────────────
+# Read by the same program the lanes' test-database block reads it with, so a declaration
+# this passes is one the lanes start. No file declares no database, which is valid.
+if [ -f "$DATABASE" ]; then
+  if ! out="$(awk -f "$KANON_ROOT/actions/test-database/declaration.awk" "$DATABASE" 2>&1)"; then
+    fail "$DATABASE" "$out (K-LAYOUT-16)"
+  fi
 fi
 
 # ── App slugs: every role a caller's lane runs as has one row in the register ──────────
