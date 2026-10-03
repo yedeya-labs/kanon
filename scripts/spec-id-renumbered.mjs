@@ -77,6 +77,12 @@ export const trailProblems = (renumbered, known) => {
  */
 export const renumberFindings = (renumbered, files) => {
   const keys = new Set(Object.keys(renumbered));
+  // ONCE PER RUN, not once per line (#105). Each `idPattern()` call stats every spec to
+  // validate its cache, and calling it per line made one run over a real corpus take
+  // 8–23 s. The swept files are the reference corpus, which holds no spec, so nothing
+  // this loop reads can change the pattern; a spec edited while it runs is not this
+  // run's concern (`matchAll` copies the regex, so sharing it across lines is safe).
+  const ids = idPattern();
   const unacknowledged = [];
   const markers = [];
   let references = 0;
@@ -86,7 +92,7 @@ export const renumberFindings = (renumbered, files) => {
     const refs = [];
     const marked = new Map();
     lines.forEach((l, i) => {
-      for (const m of l.matchAll(idPattern())) {
+      for (const m of l.matchAll(ids)) {
         const id = `${m[1]}-${m[2]}`;
         if (keys.has(id)) refs.push({ id, line: i + 1 });
       }
