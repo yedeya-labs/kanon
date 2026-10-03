@@ -172,6 +172,11 @@ jobs:
 
         ALWAYS leave a comment before you finish — never end with no output. If
         you're running low on budget, post your progress and what remains.
+      # The App token's permissions, narrowed to what this lane's agent uses (`K-AGENT-46`).
+      permission-contents: write
+      permission-issues: write
+      permission-pull-requests: write
+      permission-workflows: write
     secrets:
       app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
       app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}

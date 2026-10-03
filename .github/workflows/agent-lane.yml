@@ -202,6 +202,31 @@ on:
         required: false
         type: string
         default: ""
+      permission-contents:
+        description: The minted token's `contents` permission (`read` or `write`), or empty for none. See `Mint App token`.
+        required: false
+        type: string
+        default: ""
+      permission-issues:
+        description: The minted token's `issues` permission (`read` or `write`), or empty for none. See `Mint App token`.
+        required: false
+        type: string
+        default: ""
+      permission-pull-requests:
+        description: The minted token's `pull_requests` permission (`read` or `write`), or empty for none. See `Mint App token`.
+        required: false
+        type: string
+        default: ""
+      permission-workflows:
+        description: The minted token's `workflows` permission (`read` or `write`), or empty for none. See `Mint App token`.
+        required: false
+        type: string
+        default: ""
+      permission-actions:
+        description: The minted token's `actions` permission (`read` or `write`), or empty for none. See `Mint App token`.
+        required: false
+        type: string
+        default: ""
     outputs:
       # THE CLASSIFIER'S VERDICT ON A RED RUN (RA-2118) — `unavailable` / `exhausted` /
       # `failed` / `not-reached`, empty on a green run. A caller branches on it after the
@@ -265,6 +290,15 @@ jobs:
         with:
           client-id: ${{ secrets.app-id }}
           private-key: ${{ secrets.app-private-key }}
+          # NARROWED TO WHAT THE CALLING LANE'S AGENT USES (#48, `K-AGENT-46`), below the App's
+          # grant. An empty input requests nothing, and a token with every input empty would
+          # carry the App's whole grant, so every lane passes its set and
+          # `app-token-permissions.test.ts` holds each one to it.
+          permission-contents: ${{ inputs.permission-contents }}
+          permission-issues: ${{ inputs.permission-issues }}
+          permission-pull-requests: ${{ inputs.permission-pull-requests }}
+          permission-workflows: ${{ inputs.permission-workflows }}
+          permission-actions: ${{ inputs.permission-actions }}
 
       - uses: actions/checkout@v7
         id: checkout

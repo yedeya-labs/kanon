@@ -198,6 +198,11 @@ jobs:
         with:
           client-id: ${{ secrets.IMPLEMENTER_APP_ID }}
           private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          # Narrowed to what this step uses (#48, `K-AGENT-46`): it pushes the merge (which may carry the default branch's workflow changes, so `workflows`), and comments and labels the pull request.
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-workflows: write
       - uses: actions/checkout@v7
         id: checkout
         with:

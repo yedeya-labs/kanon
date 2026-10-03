@@ -357,6 +357,10 @@ jobs:
         --fallback-model claude-opus-5-5
         --allowedTools Read,Edit,Write,Bash,Grep,Glob
         --exclude-dynamic-system-prompt-sections
+      # The App token's permissions, narrowed to what this lane's agent uses (`K-AGENT-46`).
+      permission-contents: write
+      permission-issues: write
+      permission-pull-requests: write
     secrets:
       app-id: ${{ secrets.LEAD_APP_ID }}
       app-private-key: ${{ secrets.LEAD_APP_PRIVATE_KEY }}

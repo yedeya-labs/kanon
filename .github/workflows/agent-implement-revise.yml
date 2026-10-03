@@ -700,6 +700,11 @@ jobs:
         --fallback-model claude-opus-5-5
         --allowedTools Read,Edit,Write,Bash,Grep,Glob
         --exclude-dynamic-system-prompt-sections
+      # The App token's permissions, narrowed to what this lane's agent uses (`K-AGENT-46`).
+      permission-contents: write
+      permission-issues: write
+      permission-pull-requests: write
+      permission-workflows: write
     secrets:
       app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
       app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
@@ -744,6 +749,9 @@ jobs:
         with:
           client-id: ${{ secrets.IMPLEMENTER_APP_ID }}
           private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          # Narrowed to what this step uses (#48, `K-AGENT-46`): it reads the pull request and comments the round marker on it; GitHub accepts a pull request comment on either permission, so both.
+          permission-issues: write
+          permission-pull-requests: write
 
       - name: Record the round when the agent pushed and left no marker (RA-1981)
         env:

@@ -493,7 +493,7 @@ These rules apply `K-PRIN-19` to the lanes and the workflows around them.
 
 **Why.** A token's reach is the blast radius of whatever reads it: a prompt-injected agent, a compromised dependency, a leaked log. The App's grant bounds the role, but a lane that only comments needs no push, and a step that holds a write it never uses gives an attacker one for free.
 
-**Enforced by.** The App grants and the run-time scope probe bound each App to its role (`K-ADOPT-8`, `K-AGENT-5`), and [`tests/unit/workflows.test.ts`](../tests/unit/workflows.test.ts) pins the `permissions:` block of Kanon's own checks. Narrowing a token below its App's grant is prose only: Kanon's lanes mint each token at the App's full grant today.
+**Enforced by.** The App grants and the run-time scope probe bound each App to its role (`K-ADOPT-8`, `K-AGENT-5`), and [`tests/unit/workflows.test.ts`](../tests/unit/workflows.test.ts) pins the `permissions:` block of Kanon's own checks. Every step in Kanon's lanes that mints an App token narrows it with `permission-*` inputs to what that step uses, and [`tests/unit/app-token-permissions.test.ts`](../tests/unit/app-token-permissions.test.ts) holds each step, and each lane that calls the spine, to its list and its list to the role's grant, and fails for a minting step without a list. For an adopter's own workflows, narrowing is prose only.
 
 **Class.** framework
 

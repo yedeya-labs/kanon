@@ -347,6 +347,10 @@ jobs:
         with:
           client-id: ${{ secrets.EXPLORER_APP_ID }}
           private-key: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
+          # Narrowed to what this step uses (#48, `K-AGENT-46`): it reads the tree and pull requests, and files or comments on issues.
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: read
 
       - uses: $/actions/agent-run
         id: agent
