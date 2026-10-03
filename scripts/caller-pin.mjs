@@ -8,12 +8,17 @@
 // that the default branch never approved. A dispatch with `--ref <branch>` and a schedule on a
 // non-default branch run that branch's caller too.
 //
+// ONLY BETWEEN VERSIONS THAT HAVE IT. The gate runs as `$KANON/scripts/lane-gate.mjs`, which is
+// Kanon at the version the RUNNING caller pins. A caller pinning a release from before this check
+// runs a gate without it, so this holds a stacked base to the default branch's pin only when the
+// base's pin includes the check. Enforcing it from outside the lane is kanon#114.
+//
 // THE CHECK. The caller's path and the ref it ran from are `GITHUB_WORKFLOW_REF`
 // (`owner/repo/<path>@<ref>`); in a called workflow it names the CALLER, as `GITHUB_WORKFLOW_SHA`
 // names the caller's commit. When that ref is a branch other than the default, read the caller at
 // that commit and at the default branch, and compare every Kanon reference in each
 // (`yedeya-labs/kanon/<path>@<ref>`). Any difference refuses, and so does a caller the default
-// branch doesn't have. The default branch's own runs read nothing.
+// branch doesn't have. A tag is checked the same way. The default branch's own runs read nothing.
 //
 // NOT CHECKED: a `pull_request` or `pull_request_review` run, whose ref is `refs/pull/<n>/merge`.
 // There GitHub runs the pull request's own merge of the caller, which is a wider question than a
@@ -26,7 +31,11 @@
 
 /** Every Kanon reference in a workflow, sorted and de-duplicated. @param {string} text @returns {string[]} */
 export function kanonRefsOf(text) {
-  const refs = [...text.matchAll(/^[ \t-]*uses:[ \t]*['"]?(yedeya-labs\/kanon\/[^@\s'"#]+@[^\s'"#]+)/gm)].map((m) => m[1] ?? '');
+  // GitHub resolves a `uses:` owner and repository case-insensitively, so the match is too, and
+  // the owner/repository part is lowercased before comparing: `Yedeya-Labs/kanon/…@<other>` is a
+  // Kanon reference, not a way past the check.
+  const refs = [...text.matchAll(/^[ \t-]*uses:[ \t]*['"]?(yedeya-labs\/kanon)(\/[^@\s'"#]+@[^\s'"#]+)/gim)]
+    .map((m) => `${(m[1] ?? '').toLowerCase()}${m[2] ?? ''}`);
   return [...new Set(refs)].sort();
 }
 
@@ -53,13 +62,16 @@ export function parseWorkflowRef(workflowRef, repo) {
  * @returns {{ ok: true, reason: string } | { ok: false, reason: string }}
  */
 export function checkCallerPin({ workflowRef, workflowSha, repo, defaultBranch }, readFile) {
-  if (!workflowRef) return { ok: true, reason: 'no caller ref to check (not on a runner)' };
+  // The runner always sets it, so a missing one is refused rather than read as clear (`K-PRIN-10`).
+  if (!workflowRef) return { ok: false, reason: 'GITHUB_WORKFLOW_REF is not set, so the caller and its pin are unknown' };
   const caller = parseWorkflowRef(workflowRef, repo);
   if (!caller) return { ok: false, reason: `the caller \`${workflowRef}\` is not a workflow of ${repo}` };
-  if (!caller.ref.startsWith('refs/heads/')) return { ok: true, reason: `the caller ran from \`${caller.ref}\`, not a branch` };
+  // The ONE exemption: a pull request's merge ref, where the pull request's own caller runs.
+  if (/^refs\/pull\/\d+\/merge$/.test(caller.ref)) return { ok: true, reason: `the caller ran from \`${caller.ref}\`, a pull request's merge` };
   if (!defaultBranch) return { ok: false, reason: 'the event names no default branch to compare the caller with' };
-  const branch = caller.ref.slice('refs/heads/'.length);
-  if (branch === defaultBranch) return { ok: true, reason: 'the caller ran from the default branch' };
+  if (caller.ref === `refs/heads/${defaultBranch}`) return { ok: true, reason: 'the caller ran from the default branch' };
+  // A branch or a tag (a dispatch with `--ref v1.2.0` runs that tag's caller), named without its prefix.
+  const branch = caller.ref.replace(/^refs\/(heads|tags)\//, '');
 
   const theirs = readFile(caller.path, workflowSha || caller.ref);
   if (theirs === null) return { ok: false, reason: `\`${caller.path}\` could not be found at \`${branch}\`` };

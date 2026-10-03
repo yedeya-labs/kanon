@@ -242,7 +242,8 @@ const runGate = (file: string, trigger: Trigger, actor: Actor, extra: Record<str
   writeStub(join(dir, 'gh'), GH_STUB);
   const ev = eventFor(trigger, actor);
   const eventPath = join(dir, 'event.json');
-  writeFileSync(eventPath, JSON.stringify({ ...ev.payload, ...payload }));
+  // Every real payload names the repository's default branch; a test drops it by overriding.
+  writeFileSync(eventPath, JSON.stringify({ ...ev.payload, repository: { default_branch: 'main' }, ...payload }));
   return runWorkflowStep(step, {
     dir,
     env: {
@@ -255,6 +256,11 @@ const runGate = (file: string, trigger: Trigger, actor: Actor, extra: Record<str
       GITHUB_EVENT_PATH: eventPath,
       GITHUB_ACTOR: '',
       GITHUB_TRIGGERING_ACTOR: '',
+      // The runner always names the caller; here it ran from the default branch, so the pin
+      // check (kanon#69) takes its real default-branch path. Set here, never inherited: on a
+      // runner `process.env` names CI's own workflow, in another repository.
+      GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/caller.yml@refs/heads/main`,
+      GITHUB_WORKFLOW_SHA: 'e'.repeat(40),
       ...ev.env,
       STUB_REGISTER: REGISTER_FIXTURE,
       STUB_PERMS: JSON.stringify(PERMS),
@@ -549,6 +555,36 @@ describe('the caller pin check (kanon#69)', () => {
     expect(r.outputs.member).toBe('false');
   });
 
+  it('checks a tag the same way: a dispatch with `--ref v1.2.0` runs that tag’s caller', () => {
+    const tag = { GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/review.yml@refs/tags/v1.2.0`, GITHUB_WORKFLOW_SHA: 'f'.repeat(40) };
+    const r = gate({ ...tag, STUB_CALLER_BRANCH: caller('v0.9.0'), STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('ran from `v1.2.0`');
+    expect(r.calls).toContain(`?ref=${'f'.repeat(40)}`);
+    expect(gate({ ...tag, STUB_CALLER_BRANCH: caller('v0.10.0'), STUB_CALLER_MAIN: caller('v0.10.0') }).outputs.member).toBe('true');
+  });
+
+  it('refuses when the runner names no caller, rather than reading it as clear', () => {
+    const r = gate({ GITHUB_WORKFLOW_REF: '' });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('GITHUB_WORKFLOW_REF is not set');
+  });
+
+  it('refuses a caller of another repository', () => {
+    const r = gate({ GITHUB_WORKFLOW_REF: 'yedeya-labs/kanon/.github/workflows/ci.yml@refs/pull/112/merge' });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('is not a workflow of example-org/example-repo');
+  });
+
+  it('matches the Kanon owner and repository case-insensitively, as GitHub resolves them', () => {
+    const sneaky = `${caller('v0.10.0')}  other:\n    uses: Yedeya-Labs/Kanon/.github/workflows/agent-triage.yml@v0.9.0\n`;
+    const r = gate({ ...STACKED, STUB_CALLER_BRANCH: sneaky, STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('agent-triage.yml@v0.9.0');
+    const same = `${caller('v0.10.0')}`.replace('yedeya-labs/kanon', 'YEDEYA-LABS/kanon');
+    expect(gate({ ...STACKED, STUB_CALLER_BRANCH: same, STUB_CALLER_MAIN: caller('v0.10.0') }).outputs.member).toBe('true');
+  });
+
   it('refuses a caller that cannot be read at the commit that ran', () => {
     const r = gate({ ...STACKED, STUB_CALLER_MAIN: caller('v0.10.0') });
     expect(r.status, r.output).toBe(0);
@@ -557,7 +593,7 @@ describe('the caller pin check (kanon#69)', () => {
   });
 
   it('refuses when the event names no default branch, rather than guessing', () => {
-    const r = gate({ ...STACKED, STUB_CALLER_BRANCH: caller('v0.10.0'), STUB_CALLER_MAIN: caller('v0.10.0') }, {});
+    const r = gate({ ...STACKED, STUB_CALLER_BRANCH: caller('v0.10.0'), STUB_CALLER_MAIN: caller('v0.10.0') }, { repository: {} });
     expect(r.outputs.member).toBe('false');
     expect(r.summary).toContain('no default branch');
   });
