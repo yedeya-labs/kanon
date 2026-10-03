@@ -1,0 +1,36 @@
+# A project-setup hook (plan 0001 §5) for a Python project with no database: Python and its
+# install. There is no package.json and no Node toolchain of the project's own here:
+# the Node that Kanon's lanes and checks run on is Kanon's runtime, which they set up themselves.
+name: Project setup
+description: The Python fixture adopter's setup for an agent lane.
+inputs:
+  lane:
+    description: The lane's telemetry agent name.
+    required: true
+  install:
+    description: "'true' installs the project and its test dependencies."
+    default: "true"
+  database:
+    description: "Ignored: the project has no database."
+    default: "false"
+  browsers:
+    description: "Ignored: the project has no app to drive."
+    default: "false"
+  issue-number:
+    description: The issue the run was dispatched for.
+    default: ""
+  app-slug:
+    description: The minted App's slug.
+    default: ""
+  github-token:
+    description: The minted App token.
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+    - if: inputs.install == 'true'
+      shell: bash
+      run: python -m pip install -e ".[test]"

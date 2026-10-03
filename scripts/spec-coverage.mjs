@@ -732,7 +732,7 @@ export const failures = ({ dangling, missingFiles, locked, baseline = lockedBase
   if (gained.length) out.push(
     `${gained.length} invariant(s) are newly locked and unrecorded: ${gained.join(', ')}, so ` +
     `that many citation(s) could now be deleted anywhere in the repo without failing lint. ` +
-    `Run \`npm run spec:coverage -- --write-locked\` and commit ${LOCKED_SET} — the diff is ` +
+    `Re-run spec-coverage with \`--write-locked\` and commit ${LOCKED_SET} — the diff is ` +
     `the acknowledgement.`);
   return out;
 };
@@ -782,7 +782,7 @@ function main() {
   // QUIET IN `lint` (RA-1196). The full report is a working document — 137 `[confirmed]`
   // entries — and printing it on every lint run buries the one line that matters and
   // trains people to scroll past the whole thing. `--quiet` prints the verdict; the
-  // report is what `npm run spec:coverage` is for.
+  // report is what a run without `--quiet` is for.
   if (QUIET) {
     const problems = failures({ dangling, missingFiles, locked });
     if (problems.length) {
@@ -791,7 +791,7 @@ function main() {
       return;
     }
     const mentionedQ = mentionsWithoutTitle(known, citationOptOut(invariants));
-    console.log(`spec-coverage: ${locked.length} locked (floor ${LOCKED_FLOOR}), ${dangling.length} dangling, ${mentionedQ.size} mentioned but not cited in a title. \`npm run spec:coverage\` for the full ladder.`);
+    console.log(`spec-coverage: ${locked.length} locked (floor ${LOCKED_FLOOR}), ${dangling.length} dangling, ${mentionedQ.size} mentioned but not cited in a title. Run it without \`--quiet\` for the full ladder.`);
     return;
   }
 
@@ -849,7 +849,7 @@ function main() {
   // This module was invoked by nothing — not `lint`, not `ci.yml`, not any `agent-*`
   // workflow — and had no `process.exit` or `exitCode` anywhere, so it could not have
   // failed even if something had run it. The only path to a human was somebody typing
-  // `npm run spec:coverage` from memory, which means the number moved in one direction
+  // spec-coverage from memory, which means the number moved in one direction
   // between manual runs and nothing said when.
   //
   // Fatal on the two REAL errors, both clean today (checked before wiring it into

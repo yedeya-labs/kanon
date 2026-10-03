@@ -59,7 +59,18 @@ import { pathToFileURL } from 'node:url';
 // matters: this guard runs correctly in a tree that has no spec directory at all.
 import { STATUSES } from './spec-lib.mjs';
 
-const CITATION = /`([\w./-]+\.(?:ts|tsx|mjs|cjs|js|json|yml|yaml|sql|sh)):(\d+)(?:-(\d+))?`/g;
+/**
+ * The extensions a coordinate may name: the reference adopter's, and the source files of the
+ * common languages besides, because an adopter's stack is its own (#15, #16). A coordinate
+ * into a file whose extension is missing here is not read at all, so without them a Python
+ * project's `core.py:12` would pass every run unchecked. The existence, range and anchor
+ * checks are language-neutral. `declarationShift` reads JavaScript declarations only; it
+ * finds none in another language, so there it never accuses.
+ */
+export const SOURCE_EXT =
+  '(?:ts|tsx|mjs|cjs|js|json|yml|yaml|sql|sh|py|go|rs|java|kt|kts|rb|php|cs|swift|scala|ex|exs|toml)';
+
+const CITATION = new RegExp(String.raw`\x60([\w./-]+\.${SOURCE_EXT}):(\d+)(?:-(\d+))?\x60`, 'g');
 // THE CONTINUATION SHORTHAND, which the docs use constantly and the first version of
 // this guard could not see: a full citation, then bare `:NNN` for further coordinates
 // in the same file — "`storefront.ts:752`, `:945`, `:1333`". 73 of the 238 coordinates
@@ -74,7 +85,7 @@ const BARE = /`:(\d+)(?:-(\d+))?`/g;
 // A file named WITHOUT a line — `tests/unit/order-status-writers.test.ts` followed by
 // `` (`:123`, `:212`) ``. Both coordinates are correct and both were dropped, because
 // an antecedent had to carry a `:NNN` of its own (RA-1212).
-const BARE_PATH = /`([\w./[\]-]+\.(?:ts|tsx|mjs|cjs|js|json|yml|yaml|sql|sh))`/g;
+const BARE_PATH = new RegExp(String.raw`\x60([\w./[\]-]+\.${SOURCE_EXT})\x60`, 'g');
 // THE LINE NUMBER WRITTEN OUTSIDE THE BACKTICKS — `` `tenancy.ts` L179-214 `` (RA-2224).
 // Before this it was not a citation at all: `BARE_PATH` took the path as an antecedent
 // and the numbers were dropped without being counted, so `[SUPER-10]` — a `[confirmed]`
@@ -88,7 +99,7 @@ const BARE_PATH = /`([\w./[\]-]+\.(?:ts|tsx|mjs|cjs|js|json|yml|yaml|sql|sh))`/g
 // nineteenth there named the same kind of file by basename alone and is qualified in the
 // change that added this. The other three are in `superadmin.md`, one of which named
 // `page.tsx` bare — 67 files match — and is qualified likewise.
-const LINE_AFTER = /`([\w./[\]-]+\.(?:ts|tsx|mjs|cjs|js|json|yml|yaml|sql|sh))`\s*L(\d+)(?:-(\d+))?\b/g;
+const LINE_AFTER = new RegExp(String.raw`\x60([\w./[\]-]+\.${SOURCE_EXT})\x60\s*L(\d+)(?:-(\d+))?\b`, 'g');
 
 /**
  * A coordinate into a dependency, which this guard cannot and should not judge (RA-2224).
@@ -245,7 +256,7 @@ const STATUS_TAG = new RegExp(`^\\[(${STATUSES.join('|')})\\]$`);
 const looksLikeCode = (s) =>
   !/\s{2,}/.test(s) &&
   (/[.(){}[\]<>=]/.test(s) || /[a-z][A-Z]/.test(s) || /_/.test(s)) &&
-  !/^[\w./-]+\.(ts|tsx|mjs|cjs|js|json|yml|yaml|sql|sh):\d+(-\d+)?$/.test(s) &&
+  !new RegExp(String.raw`^[\w./-]+\.${SOURCE_EXT}:\d+(-\d+)?$`).test(s) &&
   // The clause's OWN prefix is not evidence about the code. Every clause line opens
   // with `[AREA-N]` `[seed|confirmed]`, so without this every citation on a clause
   // inherits two anchors that can never appear in a source file — and then reports
@@ -260,7 +271,7 @@ const looksLikeCode = (s) =>
   // coordinate answer for the OTHER file's path, which no line of the wizard contains.
   // The `:NNN` form is already excluded above; this is the same rule for a path cited
   // without one, which the sentence-splitting cannot separate.
-  !/^[\w./[\]-]+\.(ts|tsx|mjs|cjs|js|json|yml|yaml|sql|sh|md)(:\d+(-\d+)?)?$/.test(s);
+  !new RegExp(String.raw`^[\w./[\]-]+\.(?:${SOURCE_EXT}|md)(:\d+(-\d+)?)?$`).test(s);
 
 /** Split a markdown line into sentences, keeping the citation's own sentence. */
 const sentenceAround = (line, index) => {
