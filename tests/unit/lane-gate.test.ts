@@ -178,11 +178,26 @@ if [ "\${1:-}" = "api" ] && [[ "\${2:-}" =~ /collaborators/([^/]+)/permission$ ]
   if [ -n "$expr" ]; then printf '%s' "$payload" | jq -c "$expr"; else printf '%s' "$payload"; fi
   exit 0
 fi
+# kanon#81: the review lane's CI completion asks who applied the review label.
+if [ "\${1:-}" = "api" ] && [[ "$*" == *"/commits/"*"/pulls"* ]]; then
+  [ -z "\${STUB_PULLS_FAILS:-}" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
+  printf '%s' "\${STUB_PULLS:-[]}"; exit 0
+fi
+if [ "\${1:-}" = "api" ] && [[ "$*" == *"/issues/"*"/events"* ]]; then
+  printf '%s' "\${STUB_EVENTS:-[[]]}"; exit 0
+fi
 echo "unexpected gh call: $*" >&2
 exit 3
 `;
 
 type Actor = { login: string; association?: string };
+const CI_SHA = 'c'.repeat(40);
+/** The open PR whose head CI ran on, carrying `labels`, as `commits/<sha>/pulls` answers. */
+const pullsWith = (labels: string[], state = 'open') =>
+  JSON.stringify([{ number: 7, state, head: { sha: CI_SHA }, labels: labels.map((name) => ({ name })) }]);
+/** The PR's issue events, slurped into pages as `gh api --paginate --slurp` prints them. */
+const eventsOf = (...events: [string, string, string?][]) =>
+  JSON.stringify([events.map(([actor, label, kind = 'labeled']) => ({ event: kind, label: { name: label }, actor: { login: actor } }))]);
 const eventFor = (trigger: Trigger, actor: Actor): { name: string; payload: object; env: Record<string, string> } => {
   const user = { login: actor.login };
   switch (trigger) {
@@ -197,7 +212,7 @@ const eventFor = (trigger: Trigger, actor: Actor): { name: string; payload: obje
     case 'dispatch':
       return { name: 'workflow_dispatch', payload: {}, env: { GITHUB_ACTOR: 'someone-else', GITHUB_TRIGGERING_ACTOR: actor.login } };
     case 'ci-finished':
-      return { name: 'workflow_run', payload: { action: 'completed', workflow_run: { triggering_actor: user, actor: { login: 'someone-else' } }, sender: { login: 'someone-else' } }, env: {} };
+      return { name: 'workflow_run', payload: { action: 'completed', workflow_run: { head_sha: CI_SHA, triggering_actor: user, actor: { login: 'someone-else' } }, sender: { login: 'someone-else' } }, env: {} };
     case 'pr-target-label':
       return { name: 'pull_request_target', payload: { action: 'labeled', sender: user }, env: {} };
     case 'pr-target-opened':
@@ -231,6 +246,10 @@ const runGate = (file: string, trigger: Trigger, actor: Actor, extra: Record<str
       ...ev.env,
       STUB_REGISTER: REGISTER_FIXTURE,
       STUB_PERMS: JSON.stringify(PERMS),
+      // On the review lane's CI completion the actor is the review label's applier
+      // (kanon#81), so the generic cases have the actor apply it.
+      STUB_PULLS: pullsWith(['review:please']),
+      STUB_EVENTS: eventsOf([actor.login, 'review:please']),
       ...extra,
     },
   });
@@ -378,5 +397,77 @@ describe('what a member is', () => {
     }
     expect(decide({ login: 'u', source: 's' }, { registeredApps: noLookup, permissionOf: lookup({ pull: true }) }).member).toBe(false);
     expect(decide({ login: 'u', source: 's' }, { registeredApps: noLookup, permissionOf: () => ({}) }).member).toBe(false);
+  });
+});
+
+/**
+ * kanon#81: on CI's completion the review lane judges whoever applied the review label, not
+ * the pusher. A member labels a Dependabot PR while its CI runs; the lane defers to CI's
+ * completion, whose pusher is `dependabot[bot]`, which is not the repository's App.
+ */
+describe('the review lane on CI completion judges the review label’s applier (kanon#81)', () => {
+  const DEPENDABOT: Actor = { login: 'dependabot[bot]' };
+  const gate = (extra: Record<string, string>, pusher: Actor = DEPENDABOT) =>
+    runGate('agent-review.yml', 'ci-finished', pusher, extra);
+
+  it('reviews a Dependabot PR a member labelled before CI finished', () => {
+    const r = gate({ STUB_EVENTS: eventsOf(['a-member', 'review:please']) });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('true');
+    expect(r.outputs.actor).toBe('a-member');
+    expect(r.summary).toContain('applied the review label on #7');
+  });
+
+  it('refuses a PR whose review label a non-member applied, whoever pushed', () => {
+    const r = gate({ STUB_EVENTS: eventsOf(['a-stranger', 'review:please']) }, MEMBER);
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('a-stranger');
+  });
+
+  it('judges the latest applier of a review label on the PR now, and no other label', () => {
+    // A member re-applied it after a stranger; a stranger's later `sev:low` is not a review label;
+    // and a label that was applied and then removed does not count.
+    const r = gate({
+      STUB_PULLS: pullsWith(['review:please', 'sev:low']),
+      STUB_EVENTS: eventsOf(['a-stranger', 'review:please'], ['a-member', 'review:please'],
+        ['a-stranger', 'sev:low'], ['a-stranger', 'agent:triage'], ['a-stranger', 'agent:triage', 'unlabeled']),
+    });
+    expect(r.outputs.member, r.output).toBe('true');
+    expect(r.outputs.actor).toBe('a-member');
+  });
+
+  it('admits the Implementer App that opened its PR with `agent:implement`', () => {
+    const r = gate({ STUB_PULLS: pullsWith(['agent:implement']),
+      STUB_EVENTS: eventsOf([`${IMPLEMENTER_LOGIN}[bot]`, 'agent:implement']) });
+    expect(r.outputs.member, r.output).toBe('true');
+  });
+
+  it('refuses, visibly, a PR with no review label, a closed PR and a commit no PR has', () => {
+    const cases = [
+      ['no label', pullsWith(['sev:low']), 'carries no review label'],
+      ['closed', pullsWith(['review:please'], 'closed'), 'no open pull request'],
+      ['no PR', '[]', 'no open pull request'],
+    ] as const;
+    for (const [name, pulls, why] of cases) {
+      const r = gate({ STUB_PULLS: pulls, STUB_EVENTS: eventsOf(['a-member', 'review:please']) }, MEMBER);
+      expect(r.status, `${name}: ${r.output}`).toBe(0);
+      expect(r.outputs.member, name).toBe('false');
+      expect(r.summary, name).toContain('Membership gate: refused.');
+      expect(r.summary, name).toContain(why);
+    }
+  });
+
+  it('fails the job by name when the read fails, rather than falling back to the pusher', () => {
+    const r = gate({ STUB_PULLS_FAILS: '1' }, MEMBER);
+    expect(r.status).toBe(1);
+    expect(r.output).toContain('::error title=Membership gate::could not read who applied the review label');
+    expect(r.outputs.member).toBeUndefined();
+  });
+
+  it('leaves the rebase lane judging the pusher of the default branch', () => {
+    const r = runGate('agent-rebase.yml', 'ci-finished', MEMBER, { STUB_EVENTS: eventsOf(['a-stranger', 'review:please']) });
+    expect(r.outputs.member, r.output).toBe('true');
+    expect(r.outputs.actor).toBe('a-member');
   });
 });

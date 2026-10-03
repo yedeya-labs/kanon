@@ -19,7 +19,17 @@
 //                            branch's copy of its caller, with the same payload.
 //   workflow_run             whoever pushed the commit the finished workflow ran on,
 //                            `workflow_run.triggering_actor` (else `workflow_run.actor`),
-//                            checked the same way. The review lane fires on CI finishing; a
+//                            checked the same way. The rebase lane fires on CI finishing on
+//                            the default branch, where the pusher is who acted.
+//   workflow_run, review     THE REVIEW LANE sets `LANE_GATE_WORKFLOW_RUN=review-label` and
+//                            is judged by whoever applied the review label on the PR, not the
+//                            pusher (kanon#81). Its CI completion is a deferred label: a label
+//                            added while CI runs waits for it, and on a dependency bot's PR the
+//                            pusher is that bot, which is not the repository's App, so the
+//                            member's request was refused. The PR is the first open one whose
+//                            head is the commit (the lane's filter picks the same), and the
+//                            actor is the user on the latest `labeled` event among the review
+//                            labels on it now. No such PR, or no review label: refused. A
 //                            fork's head is refused separately, by the lane's own filter.
 //   workflow_dispatch        whoever ran it, `GITHUB_TRIGGERING_ACTOR` (else `GITHUB_ACTOR`),
 //                            checked the same way. Only someone with write access can
@@ -79,7 +89,7 @@ const MEMBER_PERMISSIONS = ['admin', 'maintain', 'push', 'triage'];
  *   sender?: User,
  *   review?: { user?: User, author_association?: string },
  *   pull_request?: { merged_by?: User },
- *   workflow_run?: { triggering_actor?: User, actor?: User },
+ *   workflow_run?: { triggering_actor?: User, actor?: User, head_sha?: string },
  *   schedule?: string,
  * }} GitHubEvent
  */
@@ -119,6 +129,36 @@ export function triggeringActor(eventName, event, env) {
     default:
       return { refuse: `no lane acts on a ${eventName || 'nameless'} event` };
   }
+}
+
+/** The labels that ask the review lane for a review (its filter reads the same three). */
+export const REVIEW_LABELS = ['review:please', 'agent:triage', 'agent:implement'];
+
+/**
+ * @typedef {{ number?: number, state?: string, head?: { sha?: string }, labels?: { name?: string }[] }} PullRef
+ * @typedef {{ event?: string, label?: { name?: string }, actor?: User }} IssueEvent
+ */
+
+/**
+ * On a review lane's `workflow_run`, the actor is whoever applied the review label (kanon#81).
+ *
+ * @param {string | undefined} sha `workflow_run.head_sha`
+ * @param {() => PullRef[]} pullsFor the open-or-closed PRs whose head is that commit
+ * @param {(n: number) => IssueEvent[]} eventsOf the PR's issue events, oldest first
+ * @returns {ActorResult}
+ */
+export function reviewLabeller(sha, pullsFor, eventsOf) {
+  if (!sha) return { refuse: 'the workflow_run event names no head commit' };
+  const pr = pullsFor().find((p) => p.state === 'open');
+  if (!pr?.number) return { refuse: `no open pull request has ${sha.slice(0, 7)} as its head` };
+  const onIt = new Set((pr.labels ?? []).map((l) => l.name).filter((n) => n !== undefined && REVIEW_LABELS.includes(n)));
+  if (onIt.size === 0) return { refuse: `pull request #${pr.number} carries no review label (${REVIEW_LABELS.join(', ')})` };
+  const login = eventsOf(pr.number)
+    .filter((e) => e.event === 'labeled' && onIt.has(e.label?.name ?? ''))
+    .at(-1)?.actor?.login;
+  return login
+    ? { actor: { login, source: `user who applied the review label on #${pr.number}` } }
+    : { refuse: `pull request #${pr.number}'s timeline names no one who applied its review label` };
 }
 
 /**
@@ -184,7 +224,25 @@ export function main(env = process.env) {
     summary(`**Membership gate: refused.** ${line} This lane acts only on members' work (K-AGENT-45).`);
   };
 
-  const who = triggeringActor(eventName, event, env);
+  // A pure read of the payload, except on the review lane's `workflow_run`, which asks the API
+  // who applied the review label. A failed read fails the step by name, as the lookups below do.
+  /** @type {ActorResult} */
+  let who;
+  if (eventName === 'workflow_run' && env.LANE_GATE_WORKFLOW_RUN === 'review-label') {
+    const wr = event.workflow_run ?? {};
+    try {
+      who = reviewLabeller(
+        wr.head_sha,
+        () => JSON.parse(ghApi([`repos/${repo}/commits/${wr.head_sha}/pulls`])),
+        (n) => JSON.parse(ghApi(['--paginate', '--slurp', `repos/${repo}/issues/${n}/events?per_page=100`])).flat(),
+      );
+    } catch (e) {
+      console.log(`::error title=Membership gate::could not read who applied the review label for ${wr.head_sha ?? 'the head'} on ${repo}: ${stderrOf(e)}`);
+      return 1;
+    }
+  } else {
+    who = triggeringActor(eventName, event, env);
+  }
   if ('refuse' in who) {
     output('actor', '');
     refuse(`Refused because ${who.refuse}.`);

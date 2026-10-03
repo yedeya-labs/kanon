@@ -314,6 +314,10 @@ jobs:
       # a scope no mutation test can prove is load-bearing (RA-965), and a comment
       # justifying a read that no longer happens is the RA-1043 drift class this file's
       # own header counts three of.
+      # `issues: read` for the membership gate on CI's completion (kanon#81): it reads the
+      # PR's issue events to find who applied the review label. An ADDITION, like the
+      # others: without it the read 403s and the gate fails the job by name.
+      issues: read
     outputs:
       member: ${{ steps.gate.outputs.member }}
       # The Reviewer's login, from the App register on the default branch (`K-LAYOUT-6`).
@@ -339,14 +343,19 @@ jobs:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
       # this lane acts only when the event's actor is a member or a registered agent App.
       # `scripts/lane-gate.mjs` says who the actor is for each event — on a CI completion,
-      # whoever pushed the commit CI ran on; on a label or a newly opened PR, the sender —
+      # whoever applied the PR's review label; on a label or a newly opened PR, the sender —
       # and a refusal leaves `member=false`, a notice and a step-summary line, and every
       # later step and job skips.
       - uses: $/actions/kanon-path
+      # ON CI'S COMPLETION THE ACTOR IS WHOEVER APPLIED THE REVIEW LABEL (kanon#81), not the
+      # pusher: a label added while CI runs waits for CI, and on a dependency bot's PR the
+      # pusher is that bot. `LANE_GATE_WORKFLOW_RUN` tells the gate this lane's rule; it
+      # reads the PR's issue events for the label, so this job holds `issues: read`.
       - name: Is the actor a member?
         id: gate
         env:
           GH_TOKEN: ${{ github.token }}
+          LANE_GATE_WORKFLOW_RUN: review-label
         run: node "$KANON/scripts/lane-gate.mjs"
       - name: Read the Reviewer's login from the App register
         id: login
