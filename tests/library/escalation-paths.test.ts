@@ -14,6 +14,7 @@ import {
 import { IMPLEMENTER_LOGIN, mergeVerdict, readEscalations } from '../../scripts/merge-gate.mjs';
 import { reviewScope, sensitiveHits } from '../../scripts/ship-review-scope.mjs';
 import { KANON_SCAN, appliedLabels, scanDirs } from '../../scripts/label-guard.mjs';
+import { JUDGING_INPUTS } from '../../scripts/judging-inputs.mjs';
 
 /**
  * kanon#54: the adopter's high-risk paths and its own pipeline code are declared in
@@ -136,7 +137,7 @@ describe('reading the escalation file', () => {
       if (args[1] === 'repos/o/r') return 'trunk\n';
       return contents();
     };
-    expect(readEscalations('o/r', run(() => FILE('- `^a/` — a\n', '')))[2]?.[1]).toBe('a');
+    expect(readEscalations('o/r', run(() => FILE('- `^a/` — a\n', '')))[PIPELINE_ESCALATIONS.length]?.[1]).toBe('a');
     expect(calls[1]?.[1]).toBe(`repos/o/r/contents/${ESCALATION_FILE}?ref=trunk`);
     const fail = (stderr: string) => () => {
       throw Object.assign(new Error('gh failed'), { stderr });
@@ -156,6 +157,16 @@ describe('reading the escalation file', () => {
   });
 });
 
+describe("the pipeline's own escalations cover every judging input (kanon#138)", () => {
+  // `K-MERGE-4` escalates the pipeline itself, and `K-MERGE-17`'s judging inputs are what every
+  // later lane reads from the default branch. A row added there that nothing here escalates would
+  // let the Merger merge, with no human, a change to what judges the next PR.
+  it.each(JUDGING_INPUTS.flatMap((row) => row.patterns.map((p) => [row.input, p] as const)))('%s: %s', (_input, pattern) => {
+    const sample = pattern.endsWith('/') ? `${pattern}x.md` : pattern.replace('*', 'x');
+    expect(PIPELINE_ESCALATIONS.some(([re]) => re.test(sample)), sample).toBe(true);
+  });
+});
+
 describe('the escalating paths', () => {
   const paths = escalatingPaths(readEscalationFile());
   const reasonFor = (f: string) => paths.find(([re]) => re.test(f))?.[1] ?? null;
@@ -164,13 +175,17 @@ describe('the escalating paths', () => {
     expect(paths.slice(0, PIPELINE_ESCALATIONS.length)).toEqual([...PIPELINE_ESCALATIONS]);
     expect(reasonFor('.github/workflows/ci.yml')).toBe('the CI and agent pipeline');
     expect(reasonFor('docs/qa/reviewer-playbook.md')).toBe('the pipeline documents, which are agent instructions');
+    expect(reasonFor('AGENTS.md')).toBe('the agent instructions');
+    expect(reasonFor('CLAUDE.md')).toBe('the agent instructions');
+    expect(reasonFor('.claude/settings.json')).toBe('the agent configuration');
+    expect(reasonFor('.claude/agents/reviewer.md')).toBe('the agent configuration');
     expect(reasonFor('scripts/pipeline/file-follow-up.mjs')).toBe("the project's own pipeline scripts");
     expect(reasonFor('migrations/0001.sql')).toBe('database migrations');
     expect(reasonFor('src/server/session.ts')).toBe('auth');
   });
 
   it("escalate nothing the adopter didn't declare, and never a spec", () => {
-    for (const f of ['docs/qa/specs/kiosk.md', 'scripts/qa/x.mjs', 'drizzle/0001.sql', 'sst.config.ts', 'scripts/pipelines/x.mjs', 'src/lib/authors.ts']) {
+    for (const f of ['docs/qa/specs/kiosk.md', 'docs/AGENTS.md', 'AGENTS.md.bak', 'MY-CLAUDE.md', 'src/.claude/x', '.claudeignore', 'scripts/qa/x.mjs', 'drizzle/0001.sql', 'sst.config.ts', 'scripts/pipelines/x.mjs', 'src/lib/authors.ts']) {
       expect(reasonFor(f), f).toBeNull();
     }
   });
@@ -199,6 +214,12 @@ describe("the Merger's verdict takes the escalating paths as an argument (kanon#
     expect(mergeVerdict(pr(['migrations/0001.sql']), { escalations })).toMatchObject({ action: 'escalate', rule: 'escalating-path' });
     expect(mergeVerdict(pr(['scripts/pipeline/x.mjs']), { escalations })).toMatchObject({ rule: 'escalating-path' });
     expect(mergeVerdict(pr(['sst.config.ts']), { escalations }).rule).not.toBe('escalating-path');
+  });
+
+  it('escalates a pull request that changes only the agent instructions or configuration (kanon#138)', () => {
+    for (const f of ['AGENTS.md', 'CLAUDE.md', '.claude/settings.json']) {
+      expect(mergeVerdict(pr([f]), { escalations }), f).toMatchObject({ action: 'escalate', rule: 'escalating-path' });
+    }
   });
 
   it('refuses to decide with no escalating paths, rather than merge with none applied', () => {

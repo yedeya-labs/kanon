@@ -48,8 +48,9 @@
 
 /**
  * Paths that must never be merged without a human are not written here (kanon#54). The
- * pipeline's own paths are Kanon's (`PIPELINE_ESCALATIONS`: `.github/**` and the
- * `docs/qa/*.md` playbooks), and the project's pipeline code and high-risk paths are the
+ * pipeline's own paths are Kanon's (`PIPELINE_ESCALATIONS`: `.github/**`, the `docs/qa/*.md`
+ * playbooks, and the agent instructions and configuration, `AGENTS.md`, `CLAUDE.md` and
+ * `.claude/`), and the project's pipeline code and high-risk paths are the
  * adopter's, declared in `docs/qa/escalation-paths.md` (`K-LAYOUT-8`). `main` reads that file
  * from the default branch (`K-MERGE-17`) and hands `escalatingPaths` of it to `mergeVerdict`,
  * so a pull request can't add or remove an escalation path for itself.

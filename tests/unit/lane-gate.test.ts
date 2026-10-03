@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { decide, triggeringActor } from '../../scripts/lane-gate.mjs';
-import { kanonRefsOf, parseWorkflowRef } from '../../scripts/caller-pin.mjs';
+import { checkCallerPin, kanonRefsOf, localCallsOf, parseWorkflowRef } from '../../scripts/caller-pin.mjs';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { GH_REGISTER_ARM, IMPLEMENTER_LOGIN, LEAD_LOGIN, REGISTER_FIXTURE } from './helpers/register.js';
@@ -191,9 +191,12 @@ fi
 if [ "\${1:-}" = "api" ] && [[ "\${2:-}" == */contents/.github/workflows/*"?ref="* ]]; then
   printf '%s\n' "$2" >> "\${STUB_CALLS:-/dev/null}"
   [ -z "\${STUB_CALLER_FAILS:-}" ] || { echo "HTTP 500: Server Error" >&2; exit 1; }
-  case "\${2##*ref=}" in
-    main) body="\${STUB_CALLER_MAIN:-}" ;;
-    *)    body="\${STUB_CALLER_BRANCH:-}" ;;
+  # kanon#118: a local wrapper the caller calls, at the branch's commit and at main.
+  case "\${2##*/workflows/}" in
+    lanes.yml?ref=main) body="\${STUB_WRAPPER_MAIN:-}" ;;
+    lanes.yml?*)        body="\${STUB_WRAPPER_BRANCH:-}" ;;
+    *?ref=main)         body="\${STUB_CALLER_MAIN:-}" ;;
+    *)                   body="\${STUB_CALLER_BRANCH:-}" ;;
   esac
   [ -n "$body" ] || { echo "HTTP 404: Not Found" >&2; exit 1; }
   printf '%s\n' "$body"; exit 0
@@ -627,6 +630,72 @@ describe('the caller pin check (kanon#69)', () => {
     expect(r.outputs.member).toBe('false');
     expect(r.summary).toContain('Membership gate: refused.');
     expect(readFileSync(calls, 'utf8')).toBe('');
+  });
+
+  it('follows a local wrapper to the pin it holds (kanon#118)', () => {
+    const wrapper = 'name: Lanes\non: workflow_call\njobs:\n  review:\n    uses: ./.github/workflows/lanes.yml\n';
+    const r = gate({ ...STACKED, STUB_CALLER_BRANCH: wrapper, STUB_CALLER_MAIN: wrapper,
+      STUB_WRAPPER_BRANCH: caller('v0.9.0'), STUB_WRAPPER_MAIN: caller('v0.10.0') });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('@v0.9.0');
+    expect(r.calls).toContain(`contents/.github/workflows/lanes.yml?ref=${'f'.repeat(40)}`);
+    expect(r.calls).toContain('contents/.github/workflows/lanes.yml?ref=main');
+    const same = gate({ ...STACKED, STUB_CALLER_BRANCH: wrapper, STUB_CALLER_MAIN: wrapper,
+      STUB_WRAPPER_BRANCH: caller('v0.10.0'), STUB_WRAPPER_MAIN: caller('v0.10.0') });
+    expect(same.outputs.member).toBe('true');
+  });
+
+  it('refuses a caller whose pin it cannot find on either side, rather than reading no pins as equal (kanon#118)', () => {
+    const remote = 'name: Lanes\non: [workflow_dispatch]\njobs:\n  review:\n    uses: some-org/shared/.github/workflows/lanes.yml@v1\n';
+    const r = gate({ ...STACKED, STUB_CALLER_BRANCH: remote, STUB_CALLER_MAIN: remote });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('no pin to compare');
+  });
+
+  describe('checkCallerPin through wrappers (kanon#118)', () => {
+    const files = (tree: Record<string, Record<string, string>>) => (path: string, ref: string) => tree[ref]?.[path] ?? null;
+    const run = { workflowRef: `${REPO}/.github/workflows/review.yml@refs/heads/feature-a`, workflowSha: 'sha', repo: REPO, defaultBranch: 'main' };
+    const calls = (to: string) => `jobs:\n  a:\n    uses: ${to}\n`;
+    const W = '.github/workflows/';
+
+    it('follows `./` and `$/` calls to any depth, and compares every pin it reaches', () => {
+      const side = (v: string) => ({
+        [`${W}review.yml`]: calls(`./${W}lanes.yml`),
+        [`${W}lanes.yml`]: `${calls(`$/${W}inner.yml`)}  b:\n    uses: ./${W}review.yml\n`,
+        [`${W}inner.yml`]: caller(v),
+      });
+      expect(checkCallerPin(run, files({ sha: side('v0.10.0'), main: side('v0.10.0') })).ok).toBe(true);
+      const differ = checkCallerPin(run, files({ sha: side('v0.9.0'), main: side('v0.10.0') }));
+      expect(differ.ok).toBe(false);
+      expect(differ.reason).toContain('@v0.9.0');
+    });
+
+    it('refuses by name a wrapper missing on either side', () => {
+      const branch = { [`${W}review.yml`]: calls(`./${W}lanes.yml`), [`${W}lanes.yml`]: caller('v0.10.0') };
+      const noWrapper = checkCallerPin(run, files({ sha: { [`${W}review.yml`]: calls(`./${W}lanes.yml`) }, main: branch }));
+      expect(noWrapper).toEqual({ ok: false, reason: expect.stringContaining('`.github/workflows/lanes.yml`, which the caller') });
+      const noDefault = checkCallerPin(run, files({ sha: branch, main: { [`${W}review.yml`]: calls(`./${W}lanes.yml`) } }));
+      expect(noDefault).toEqual({ ok: false, reason: expect.stringContaining('the default branch `main` has no `.github/workflows/lanes.yml`') });
+    });
+
+    it('refuses when neither side holds a Kanon reference', () => {
+      const none = { [`${W}review.yml`]: calls('some-org/shared/.github/workflows/lanes.yml@v1') };
+      expect(checkCallerPin(run, files({ sha: none, main: none }))).toEqual({ ok: false, reason: expect.stringContaining('no pin to compare') });
+    });
+
+    it('reads only workflow calls of this repository as wrappers', () => {
+      expect(localCallsOf([
+        'jobs:',
+        '  a:',
+        `    uses: ./${W}lanes.yml`,
+        `    uses: '$/${W}inner.yml' # quoted`,
+        `    uses: ./${W}lanes.yml`,
+        '    steps:',
+        '      - uses: ./.github/actions/project-setup',
+        `      # uses: ./${W}commented.yml`,
+        `    uses: other/repo/${W}x.yml@v1`,
+      ].join('\n'))).toEqual([`${W}inner.yml`, `${W}lanes.yml`]);
+    });
   });
 
   it('reads every Kanon reference, and only real ones', () => {

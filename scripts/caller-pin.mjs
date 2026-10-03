@@ -27,6 +27,16 @@
 // consequence: on a pull request that bumps the pin (Dependabot's, for one) those lanes refuse,
 // visibly, until it merges. Reviews are unaffected: they run from the base.
 //
+// THROUGH A WRAPPER (kanon#118). In a called workflow `GITHUB_WORKFLOW_REF` names the TOP-LEVEL
+// workflow of the run, which need not hold the pin: an adopter's caller can call a local
+// reusable workflow (`uses: ./.github/workflows/lanes.yml`, or `$/…`, GitHub's self-reference)
+// that calls the lane. So each side's pins are every Kanon reference in the caller AND in every
+// workflow of this repository it calls, followed to any depth, at that side's ref. A workflow it
+// calls that can't be found is refused by name. And when neither side holds a Kanon reference at
+// all, nothing was compared, so it refuses rather than reporting that the two pins agree
+// (`K-PRIN-10`): the lane was reached through something this check can't read, such as another
+// repository's workflow, and a run from the default branch is the way to run it.
+//
 // A FAILED READ THROWS, so the gate fails its step by name rather than guessing.
 //
 // NODE BUILTINS ONLY, like the gate that calls it.
@@ -39,6 +49,44 @@ export function kanonRefsOf(text) {
   const refs = [...text.matchAll(/^[ \t-]*uses:[ \t]*['"]?(yedeya-labs\/kanon)(\/[^@\s'"#]+@[^\s'"#]+)/gim)]
     .map((m) => `${(m[1] ?? '').toLowerCase()}${m[2] ?? ''}`);
   return [...new Set(refs)].sort();
+}
+
+/**
+ * The workflows of this repository a workflow calls: `uses: ./.github/workflows/<file>` and
+ * `uses: $/.github/workflows/<file>`, sorted and de-duplicated. A step's local action
+ * (`./.github/actions/…`) is not a workflow, and is not followed.
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function localCallsOf(text) {
+  const paths = [...text.matchAll(/^[ \t-]*uses:[ \t]*['"]?(?:\.|\$)\/(\.github\/workflows\/[^@\s'"#]+)/gim)].map((m) => m[1] ?? '');
+  return [...new Set(paths)].sort();
+}
+
+/**
+ * Every Kanon reference a caller reaches at one ref: its own, and those of every workflow of this
+ * repository it calls, to any depth (kanon#118).
+ * @param {string} path the caller
+ * @param {string} ref
+ * @param {(path: string, ref: string) => string | null} readFile
+ * @returns {{ refs: string[], missing: null } | { refs: null, missing: string }} `missing` names the first file that isn't there
+ */
+export function pinsReachedFrom(path, ref, readFile) {
+  /** @type {Set<string>} */
+  const refs = new Set();
+  /** @type {Set<string>} */
+  const seen = new Set();
+  const queue = [path];
+  while (queue.length) {
+    const next = /** @type {string} */ (queue.shift());
+    if (seen.has(next)) continue;
+    seen.add(next);
+    const text = readFile(next, ref);
+    if (text === null) return { refs: null, missing: next };
+    for (const r of kanonRefsOf(text)) refs.add(r);
+    queue.push(...localCallsOf(text));
+  }
+  return { refs: [...refs].sort(), missing: null };
 }
 
 /**
@@ -74,14 +122,26 @@ export function checkCallerPin({ workflowRef, workflowSha, repo, defaultBranch }
   // Where it ran, for the messages: a branch or tag by name, a merge ref as `pull/<n>/merge`.
   const branch = caller.ref.replace(/^refs\/(heads|tags)\//, '').replace(/^refs\//, '');
 
-  const theirs = readFile(caller.path, workflowSha || caller.ref);
-  if (theirs === null) return { ok: false, reason: `\`${caller.path}\` could not be found at \`${branch}\`` };
-  const ours = readFile(caller.path, defaultBranch);
-  if (ours === null) {
+  const theirs = pinsReachedFrom(caller.path, workflowSha || caller.ref, readFile);
+  if (theirs.missing === caller.path) return { ok: false, reason: `\`${caller.path}\` could not be found at \`${branch}\`` };
+  if (theirs.missing !== null) {
+    return { ok: false, reason: `\`${theirs.missing}\`, which the caller \`${caller.path}\` calls, could not be found at \`${branch}\`` };
+  }
+  const ours = pinsReachedFrom(caller.path, defaultBranch, readFile);
+  if (ours.missing === caller.path) {
     return { ok: false, reason: `the caller \`${caller.path}\` ran from \`${branch}\`, and the default branch \`${defaultBranch}\` has no such caller` };
   }
-  const a = kanonRefsOf(theirs);
-  const b = kanonRefsOf(ours);
+  if (ours.missing !== null) {
+    return { ok: false, reason: `the default branch \`${defaultBranch}\` has no \`${ours.missing}\`, which its caller \`${caller.path}\` calls` };
+  }
+  const a = theirs.refs;
+  const b = ours.refs;
+  if (!a.length && !b.length) {
+    return {
+      ok: false,
+      reason: `the caller \`${caller.path}\` ran from \`${branch}\`, and neither it nor any workflow of this repository it calls holds a Kanon reference, so there is no pin to compare (kanon#118)`,
+    };
+  }
   if (a.length === b.length && a.every((r, i) => r === b[i])) {
     return { ok: true, reason: `the caller on \`${branch}\` pins what \`${defaultBranch}\` pins` };
   }
