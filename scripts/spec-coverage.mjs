@@ -732,7 +732,7 @@ export const failures = ({ dangling, missingFiles, locked, baseline = lockedBase
   if (gained.length) out.push(
     `${gained.length} invariant(s) are newly locked and unrecorded: ${gained.join(', ')}, so ` +
     `that many citation(s) could now be deleted anywhere in the repo without failing lint. ` +
-    `Run \`npm run spec:coverage -- --write-locked\` and commit ${LOCKED_SET} — the diff is ` +
+    `Re-run spec-coverage with \`--write-locked\` and commit ${LOCKED_SET} — the diff is ` +
     `the acknowledgement.`);
   return out;
 };
@@ -791,7 +791,7 @@ function main() {
       return;
     }
     const mentionedQ = mentionsWithoutTitle(known, citationOptOut(invariants));
-    console.log(`spec-coverage: ${locked.length} locked (floor ${LOCKED_FLOOR}), ${dangling.length} dangling, ${mentionedQ.size} mentioned but not cited in a title. \`npm run spec:coverage\` for the full ladder.`);
+    console.log(`spec-coverage: ${locked.length} locked (floor ${LOCKED_FLOOR}), ${dangling.length} dangling, ${mentionedQ.size} mentioned but not cited in a title. Run it without \`--quiet\` for the full ladder.`);
     return;
   }
 

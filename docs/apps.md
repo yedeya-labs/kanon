@@ -12,7 +12,7 @@ Step 12 of the adoption checklist (`K-ADOPT-1`) gives every agent role its own G
 
 ## Run it
 
-Kanon isn't on npm. Run the command straight from a tagged Kanon release, from the adopter's checkout. `npx` fetches the tag from GitHub, and the `--package` flag is needed: without it, `npx` reads `kanon` as an argument rather than the command.
+Kanon isn't on npm. Run the command straight from a tagged Kanon release, from the adopter's checkout. It needs Node on the machine that runs it, which is Kanon's runtime, and nothing in the repository: an adopter written in any language runs it the same way, with no `package.json`. `npx` fetches the tag from GitHub, and the `--package` flag is needed: without it, `npx` reads `kanon` as an argument rather than the command.
 
 <!-- x-release-please-start-version -->
 

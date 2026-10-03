@@ -170,7 +170,7 @@ Creating GitHub Apps and their keys is done by the Owner in GitHub's interface, 
 |---|---|---|
 | Check | A composite action under `actions/` | `uses: yedeya-labs/kanon/actions/<name>@vX.Y.Z` in a step |
 | Lane | A reusable workflow, such as the [release workflow](../docs/release.md) | `uses: yedeya-labs/kanon/.github/workflows/<name>.yml@vX.Y.Z` in a job |
-| Guard | An npm package | an exact version in `package.json` |
+| Guard | A script under `scripts/`, run on Kanon's own runtime (Node) from the runner's action cache | `uses: yedeya-labs/kanon/actions/kanon-path@vX.Y.Z` in a step, then `run: node "$KANON/scripts/<guard>.mjs"` |
 | Skill | A Claude Code plugin | an exact plugin version |
 
 Every reference pins an **exact version** (`vX.Y.Z`), never a branch, a commit without a tag, or the moving major tag (`v0`). Upgrades arrive as Dependabot pull requests: `.github/dependabot.yml` has an entry that allows only Kanon's dependencies (`yedeya-labs/kanon*`), groups them into one PR, and titles it with the `ci` prefix and a scope, so it reads `ci(deps): ...` and passes `K-SHIP-4`. The entry **exempts Kanon from Dependabot's cooldown** (`cooldown.exclude: ["yedeya-labs/kanon*"]`), and keeps the default cooldown for every third-party dependency. The upgrade PR is reviewed and merged like any other.

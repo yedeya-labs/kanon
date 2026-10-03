@@ -99,7 +99,7 @@ jobs:
 
 ## Kanon's scripts
 
-The lanes run Kanon's pipeline library (`scripts/`) from the runner's action cache, at the version you pinned, never from your checkout: a step finds it with [`kanon-path`](../actions/kanon-path/README.md) and runs `node "$KANON/scripts/<name>.mjs"`. The scripts read your repository's files at the paths in [chapter 11](../rulebook/11-repository-layout.md), relative to the working directory, so they run in your checkout. A workflow of your own that runs one of them does the same. Your own lint and tests read the library from a checkout of Kanon at the pinned tag, until it is published as a package.
+The lanes run Kanon's pipeline library (`scripts/`) from the runner's action cache, at the version you pinned, never from your checkout: a step finds it with [`kanon-path`](../actions/kanon-path/README.md) and runs `node "$KANON/scripts/<name>.mjs"`. The scripts read your repository's files at the paths in [chapter 11](../rulebook/11-repository-layout.md), relative to the working directory, so they run in your checkout. A workflow of your own that runs one of them does the same, which is how Kanon's guards reach your CI: `kanon-path` at the pinned tag, then `node "$KANON/scripts/<guard>.mjs"`, with Dependabot proposing the upgrades. The scripts use only Node's built-in modules, so neither your repository nor the step needs a `package.json`, an install or a package manager, whatever your project's language. Node is Kanon's runtime, not your project's. Pin the version Kanon's scripts need (`engines` in Kanon's own manifest, 24 today) with `actions/setup-node` and `node-version: "24"` before the step, as Kanon's lanes do, rather than relying on whichever Node the runner image carries.
 
 ## The project-setup hook
 
