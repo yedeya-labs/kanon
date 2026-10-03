@@ -179,6 +179,25 @@ describe.skipIf(!hasYq)('lane-check', () => {
       expect(r.status, r.out).toBe(0);
       expect(r.out).toContain('3 lane caller(s) pass');
     });
+    // The release caller exactly as docs/release.md gives it, retagged to the fixture's pin,
+    // so the doc and this check can't drift apart (kanon#152).
+    const releaseCaller = () => {
+      const doc = readFileSync(join(ROOT, 'docs/release.md'), 'utf8');
+      const block = /### 1\. A thin caller[\s\S]*?```yaml\n([\s\S]*?)```/.exec(doc)?.[1];
+      if (!block?.includes('yedeya-labs/kanon/.github/workflows/release.yml@')) throw new Error("docs/release.md's thin caller has moved; update this test");
+      return block.replace(/@v\d+\.\d+\.\d+/g, '@v1.2.3');
+    };
+    it('holds the release caller docs/release.md gives to no caller rule: it is not a lane', () => {
+      const t = adopter();
+      t.write('.github/workflows/release.yml', releaseCaller());
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('4 lane caller(s) pass');
+    });
+    it('still pins the release caller to the one version', () =>
+      red((t) => t.write('.github/workflows/release.yml', releaseCaller().replace('@v1.2.3', '@v1.2.4')), 'pin v1.2.3,v1.2.4'));
+    it('still refuses a lane caller beside it that maps no secrets', () =>
+      red((t) => { t.write('.github/workflows/release.yml', releaseCaller()); t.edit(TRIAGE, (d) => { delete job(d).secrets; }); }, 'agent-triage.yml,title=lane-check::maps no secrets explicitly'));
     it('refuses a repository with no lane caller at all', () =>
       red((t) => { for (const f of ['agent-triage', 'agent-implement', 'agent-implement-revise', 'agent-lead-revise']) t.rm(`.github/workflows/${f}.yml`); }, 'no workflow calls a Kanon lane'));
   });

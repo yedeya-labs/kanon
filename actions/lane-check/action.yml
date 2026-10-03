@@ -4,7 +4,8 @@
 # the adopter is a trigger-only caller per lane and the project-setup hook. This checks those:
 #   - each caller holds only `name`, `on`, `permissions` and one job, and no `concurrency`
 #     (the lane holds its own group, and the same group on the caller would deadlock them);
-#   - that job `uses:` a Kanon lane, passes only its own inputs through by the same name,
+#   - that job `uses:` a Kanon lane (an `agent-*` workflow; a call to Kanon's release
+#     workflow is no lane caller, kanon#152), passes only its own inputs through by the same name,
 #     maps exactly the lane's secrets explicitly (never `secrets: inherit`), and grants at
 #     least the permissions the lane declares (top level or any of its jobs);
 #   - every Kanon reference under `.github/` pins one exact version, the one this runs at;
