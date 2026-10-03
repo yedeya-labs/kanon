@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.18.0](https://github.com/yedeya-labs/kanon/compare/v0.17.0...v0.18.0) (2026-10-03)
+
+
+### Features
+
+* **guards:** escalate agent instruction changes, and check a wrapped caller's pin ([#149](https://github.com/yedeya-labs/kanon/issues/149)) ([cb2de9a](https://github.com/yedeya-labs/kanon/commit/cb2de9afa0741f7b1b2b48cc2c47eb203024c30c))
+
+
+### Bug Fixes
+
+* **guards:** cite Kanon's rules in brief-guard's messages, not the reference adopter's documents ([#145](https://github.com/yedeya-labs/kanon/issues/145)) ([4b5c307](https://github.com/yedeya-labs/kanon/commit/4b5c307dff8d0b9e7ec60d6d686005e1d7709d4b))
+* **spec:** read a bare pytest or Go test file name in a spec as the file it names ([#147](https://github.com/yedeya-labs/kanon/issues/147)) ([90edeeb](https://github.com/yedeya-labs/kanon/commit/90edeebc8fbd86d3e51edb0a5b71869a234ea1f1))
+* **spec:** read only the titles of tests pytest collects and go test runs ([#148](https://github.com/yedeya-labs/kanon/issues/148)) ([20b0ea6](https://github.com/yedeya-labs/kanon/commit/20b0ea6517f94392894ca5519e4d939795b7d662))
+* **tests:** catch an account id in an ECR hostname in the public-tree guard ([#144](https://github.com/yedeya-labs/kanon/issues/144)) ([1ea29d1](https://github.com/yedeya-labs/kanon/commit/1ea29d10439410a426dc56a17f3055bde1787136))
+
 ## [0.17.0](https://github.com/yedeya-labs/kanon/compare/v0.16.0...v0.17.0) (2026-10-03)
 
 
