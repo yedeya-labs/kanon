@@ -764,6 +764,15 @@ export const failures = ({ dangling, missingFiles, locked, baseline = lockedBase
 };
 const claimsIn = (inv) => [...new Set([...inv.raw.matchAll(CLAIM)].map((m) => m[1]).filter(isTestFile))];
 
+/** Whether a claim names a test file that exists (kanon#127). A path is checked from the
+ *  repository root. A BARE name, with no `/`, is how a spec names a pytest or Go test file,
+ *  whose row decides by the name alone wherever the file is (`test_core.py`, `core_test.go`),
+ *  so it exists if a test file of that name exists anywhere the scanner reads. The JavaScript
+ *  row never reaches here with a bare name: its `isTest` needs the `tests/` or `e2e/` prefix.
+ *  @param {Set<string>} testBasenames the base names of `testFiles()` */
+export const claimExists = (claim, testBasenames) =>
+  existsSync(claim) || (!claim.includes('/') && testBasenames.has(claim));
+
 function main() {
   const invariants = parseAll();
   const cited = citations();
@@ -781,8 +790,9 @@ function main() {
   const claimedAll = bare.filter((i) => claimsIn(i).length > 0);
   const claimed = claimedAll.filter((i) => !unlockableIds.has(i.id));
   const unlockable = claimedAll.filter((i) => unlockableIds.has(i.id));
+  const testBasenames = new Set(testFiles().map((f) => f.slice(f.lastIndexOf('/') + 1)));
   const missingFiles = invariants
-    .flatMap((i) => claimsIn(i).filter((f) => !existsSync(f)).map((f) => ({ id: i.id, file: i.file, claim: f })));
+    .flatMap((i) => claimsIn(i).filter((f) => !claimExists(f, testBasenames)).map((f) => ({ id: i.id, file: i.file, claim: f })));
 
   if (WRITE_LOCKED) {
     writeFileSync(LOCKED_SET, serialiseLockedSet(locked.map((i) => i.id)));
