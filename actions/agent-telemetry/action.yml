@@ -148,7 +148,7 @@ inputs:
     default: ""
   retention_days:
     description: >-
-      How long the telemetry artifact survives for the collector to find it. The
+      How long the version-1 (`agent-telemetry-*`) artifact survives for the collector to find it. The
       collector sweeps a 90-minute window hourly, so this only has to outlast a
       collector outage; the default is generous on purpose and costs nothing
       measurable at ~2 KB per run.
@@ -309,11 +309,17 @@ runs:
     # collector never matches: it takes `agent-telemetry-*` only, so this artifact can't change
     # what it pushes. The version-1 artifact above is unchanged until the collector moves into
     # Kanon (S7).
+    #
+    # KEPT 90 DAYS, NOT `retention_days` (plan 0002 S1a, decision 16). A lane's version-2 rows
+    # wait in its run artifacts until the store imports them (S8), which can be months after
+    # the lane started writing them, and no lane passes `retention_days`. So the number is fixed
+    # rather than an input (ADR 0002): a row is a few KB, and 90 is GitHub's ceiling for a
+    # public repository. The version-1 artifact above keeps the input's 7.
     - name: Upload the version-2 telemetry row
       if: steps.row.outputs.v2 == 'true'
       uses: actions/upload-artifact@v7
       with:
         name: kanon-telemetry-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
         path: kanon-telemetry.json
-        retention-days: ${{ inputs.retention_days }}
+        retention-days: 90
         if-no-files-found: error

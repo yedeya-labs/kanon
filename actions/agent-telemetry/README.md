@@ -37,11 +37,11 @@ Turns `claude-code-action`'s result file into one telemetry row (cost, turns, to
 | `stages` | no | The lane's stages in the order it runs them, as `stage=conclusion` pairs (`token`, `checkout`, `hook`, `setup`, `agent`, `finish`). The row's `failed_stage` is the first that ended the run. A step the lane runs on past concludes `success`, so it is never blamed. |
 | `kanon_error` | no | A code from Kanon's error list, when one of Kanon's steps failed and wrote one. |
 | `job_status`, `job_started_at`, `timeout_minutes` | no | The job's status, start and timeout, for `job_status` and `timed_out`. A cancel within three minutes of the limit counts as the timeout, because the start stamp is the job's first step, not its start. |
-| `retention_days` | no | How long the artifacts are kept for the collector. Default 7. |
+| `retention_days` | no | How long the version-1 artifact is kept for the collector. Default 7. The version-2 artifact is always kept 90 days, below. |
 
 ## Two rows, two artifacts
 
 - **Version 1,** `agent-telemetry-<agent>-<run id>-<attempt>`. Unchanged, because an existing collector reads it. It keeps the classifier's sentence and the free-text columns, so it stays inside the adopter.
-- **Version 2,** `kanon-telemetry-<lane>-<run id>-<attempt>`, written only when the lane passes `lane` and the row passes `validate` in [`schema.mjs`](schema.mjs). It is the row a telemetry store accepts (`K-OBS-16`): flat, every string from a closed list or a strict pattern, a reason code instead of a sentence, and nothing the adopter wrote. An invalid row is not uploaded, and the warning names its fields, never their values. `kanon_version` is the release in `github.action_ref`, or `dev` at an untagged ref.
+- **Version 2,** `kanon-telemetry-<lane>-<run id>-<attempt>`, kept 90 days whatever `retention_days` says, so a store can import rows written long before it existed (plan 0002's S1a). Written only when the lane passes `lane` and the row passes `validate` in [`schema.mjs`](schema.mjs). It is the row a telemetry store accepts (`K-OBS-16`): flat, every string from a closed list or a strict pattern, a reason code instead of a sentence, and nothing the adopter wrote. An invalid row is not uploaded, and the warning names its fields, never their values. `kanon_version` is the release in `github.action_ref`, or `dev` at an untagged ref.
 
 [`schema.mjs`](schema.mjs) holds both row kinds' field lists (the run row's 59 fields and the work-item row's 84), with their types, and `validate(row)`. It uses only Node's built-ins, so a collector or a store can run the same file at the same tag.

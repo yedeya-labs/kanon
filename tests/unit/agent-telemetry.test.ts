@@ -744,3 +744,45 @@ describe('RA-2137 — produced_lines, the run\'s own diff', () => {
     expect(runTelemetry({ agent: 'reviewer', execution_file: exec }, { ...env, TELEMETRY_MEASURE_PRODUCED: '' }).produced_lines).toBeNull();
   });
 });
+
+describe('plan 0002 S1a — the version-2 artifact is kept 90 days, whatever the caller passes (#123)', () => {
+  type Step = { name?: string; uses?: string; with?: Record<string, unknown> };
+  const action = parse(readFileSync('actions/agent-telemetry/action.yml', 'utf8')) as {
+    inputs: Record<string, { default?: string }>;
+    runs: { steps: Step[] };
+  };
+  const upload = (prefix: string) => {
+    const found = action.runs.steps.filter(
+      (s) => s.uses?.startsWith('actions/upload-artifact@') && String(s.with?.name ?? '').startsWith(prefix),
+    );
+    // Exactly one, so a second upload of the same prefix can't escape the check.
+    expect(found).toHaveLength(1);
+    return found[0]!;
+  };
+
+  /**
+   * What `retention-days` evaluates to for a caller's inputs. Only `${{ inputs.<name> }}` is
+   * resolved (falling back to the input's default, as Actions does); any other expression
+   * throws, so a retention read from somewhere this test can't see fails rather than passes.
+   */
+  const retention = (step: Step, inputs: Record<string, string>) =>
+    String(step.with?.['retention-days']).replace(/\$\{\{\s*([^}]*?)\s*\}\}/g, (_, expr: string) => {
+      const name = /^inputs\.(\w+)$/.exec(expr)?.[1];
+      if (name === undefined) throw new Error(`unresolvable expression in retention-days: ${expr}`);
+      return inputs[name] ?? action.inputs[name]?.default ?? '';
+    });
+
+  it('keeps the version-2 artifact 90 days when the caller passes nothing', () => {
+    expect(retention(upload('kanon-telemetry-'), {})).toBe('90');
+  });
+
+  it('keeps it 90 days when a lane passes `retention_days: 3`, and the version-1 artifact 3', () => {
+    expect(retention(upload('kanon-telemetry-'), { retention_days: '3' })).toBe('90');
+    expect(retention(upload('agent-telemetry-'), { retention_days: '3' })).toBe('3');
+  });
+
+  it('leaves the version-1 artifact on the input, which still defaults to 7', () => {
+    expect(action.inputs.retention_days?.default).toBe('7');
+    expect(retention(upload('agent-telemetry-'), {})).toBe('7');
+  });
+});
