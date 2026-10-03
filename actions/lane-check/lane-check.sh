@@ -66,7 +66,7 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
   lanes="$(jq -r '[.jobs // {} | .[] | .uses // empty | strings
     | capture("^yedeya-labs/kanon/\\.github/workflows/(?<lane>[A-Za-z0-9_.-]+)\\.ya?ml@").lane] | .[]' <<<"$doc")"
   # Only a call to a LANE makes a file a caller, and a lane is an `agent-*` workflow. Kanon's
-  # other reusable workflows (the release workflow) are not lanes: they take
+  # other reusable workflows (the release workflow, apps-check) are not lanes: they take
   # their own secrets, or none, and their callers are held to no caller rule here, only to
   # the pin above (kanon#152). The spine is called by lanes that have not moved yet; it is
   # not a lane either, and its callers are not trigger-only.

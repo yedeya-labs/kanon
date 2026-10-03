@@ -179,17 +179,25 @@ describe.skipIf(!hasYq)('lane-check', () => {
       expect(r.status, r.out).toBe(0);
       expect(r.out).toContain('3 lane caller(s) pass');
     });
-    // The release caller exactly as docs/release.md gives it, retagged to the fixture's pin,
-    // so the doc and this check can't drift apart (kanon#152).
-    const releaseCaller = () => {
-      const doc = readFileSync(join(ROOT, 'docs/release.md'), 'utf8');
-      const block = /### 1\. A thin caller[\s\S]*?```yaml\n([\s\S]*?)```/.exec(doc)?.[1];
-      if (!block?.includes('yedeya-labs/kanon/.github/workflows/release.yml@')) throw new Error("docs/release.md's thin caller has moved; update this test");
+    // A caller of one of Kanon's other reusable workflows exactly as its doc gives it,
+    // retagged to the fixture's pin, so the doc and this check can't drift apart (kanon#152).
+    const docCaller = (doc: string, workflow: string) => {
+      const marker = `yedeya-labs/kanon/.github/workflows/${workflow}.yml@`;
+      const block = [...readFileSync(join(ROOT, doc), 'utf8').matchAll(/```yaml\n([\s\S]*?)```/g)].map((m) => m[1]!).find((b) => b.includes(marker));
+      if (!block) throw new Error(`${doc} gives no caller of ${workflow}.yml; update this test`);
       return block.replace(/@v\d+\.\d+\.\d+/g, '@v1.2.3');
     };
+    const releaseCaller = () => docCaller('docs/release.md', 'release');
     it('holds the release caller docs/release.md gives to no caller rule: it is not a lane', () => {
       const t = adopter();
       t.write('.github/workflows/release.yml', releaseCaller());
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('4 lane caller(s) pass');
+    });
+    it('holds the apps-check caller docs/apps.md gives to no caller rule either (kanon#154)', () => {
+      const t = adopter();
+      t.write('.github/workflows/apps-check.yml', docCaller('docs/apps.md', 'apps-check'));
       const r = check(t);
       expect(r.status, r.out).toBe(0);
       expect(r.out).toContain('4 lane caller(s) pass');

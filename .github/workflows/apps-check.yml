@@ -7,17 +7,53 @@
 # when it covers others, or all), and its permissions are exactly the role's in
 # rulebook/agent-permissions.json. Each role's job writes a summary table.
 #
-# Run by hand, after creating or changing an App; it is not a required check:
-#   gh workflow run apps-check.yml -R <org>/<repo>
+# Run by hand, after creating or changing an App; it is not a required check. Kanon runs it
+# on itself:
+#   gh workflow run apps-check.yml -R yedeya-labs/kanon
+# and an adopter calls it from a thin caller of its own, pinned to an exact version
+# (K-ADOPT-11, kanon#154; docs/apps.md gives the caller), then runs that by hand.
+#
+# THE SCRIPT IS KANON'S, THE REGISTER IS THE REPOSITORY'S. `kanon-path` puts the Kanon tree
+# this workflow came from (the caller's pinned tag) on the runner, with Kanon's Node, so the
+# check and the role permissions it compares against are the pinned version's. Only the
+# register job checks out the repository, for its register.
 #
 # Permissions: nothing at the top. Reading the register needs `contents: read` on that one
-# job. The check jobs grant nothing: the App token carries its own permissions, and it is
-# what checks out the script. Each job names the two secrets of its own role, looked up by
-# the register's role, so no job sees another role's key and none inherits secrets.
+# job. The check jobs grant nothing: the App token carries its own permissions. Each job
+# names the two secrets of its own role, looked up by the register's role, so no job reads
+# another role's key and none inherits secrets. Called, it takes each role's two secrets by
+# their fixed names, all optional: a caller maps the roles its register lists, and a role
+# the register lists whose secrets are not mapped fails at the mint.
 name: apps-check
 
 on:
   workflow_dispatch:
+  workflow_call:
+    secrets:
+      EXPLORER_APP_ID:
+        required: false
+      EXPLORER_APP_PRIVATE_KEY:
+        required: false
+      IMPLEMENTER_APP_ID:
+        required: false
+      IMPLEMENTER_APP_PRIVATE_KEY:
+        required: false
+      REVIEWER_APP_ID:
+        required: false
+      REVIEWER_APP_PRIVATE_KEY:
+        required: false
+      MERGER_APP_ID:
+        required: false
+      MERGER_APP_PRIVATE_KEY:
+        required: false
+      LEAD_APP_ID:
+        required: false
+      LEAD_APP_PRIVATE_KEY:
+        required: false
+      OVERSEER_APP_ID:
+        required: false
+      OVERSEER_APP_PRIVATE_KEY:
+        required: false
 
 permissions: {}
 
@@ -34,11 +70,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
+      - uses: $/actions/kanon-path
       - id: roles
-        run: node cli/apps-check.mjs roles >> "$GITHUB_OUTPUT"
+        run: node "$KANON/cli/apps-check.mjs" roles >> "$GITHUB_OUTPUT"
 
   check:
     name: ${{ matrix.app.role }}
@@ -60,13 +94,7 @@ jobs:
           client-id: ${{ secrets[format('{0}_APP_ID', matrix.app.secret)] }}
           private-key: ${{ secrets[format('{0}_APP_PRIVATE_KEY', matrix.app.secret)] }}
           owner: ${{ github.repository_owner }}
-      - uses: actions/checkout@v7
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
+      - uses: $/actions/kanon-path
       - name: Check the installation
         env:
           ROLE: ${{ matrix.app.key }}
@@ -77,4 +105,4 @@ jobs:
           TOKEN: ${{ steps.app-token.outputs.token }}
           APP_ID: ${{ secrets[format('{0}_APP_ID', matrix.app.secret)] }}
           APP_PRIVATE_KEY: ${{ secrets[format('{0}_APP_PRIVATE_KEY', matrix.app.secret)] }}
-        run: node cli/apps-check.mjs check
+        run: node "$KANON/cli/apps-check.mjs" check

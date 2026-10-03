@@ -39,13 +39,41 @@ For each role, in turn:
 
 ## Checking the installations later
 
-**This check runs on Kanon's own repository only, for now.** `apps-check.yml` has no `workflow_call`, so an adopter can't call it yet ([#154](https://github.com/yedeya-labs/kanon/issues/154)). On your repository, the run-time scope probe in every lane (`K-AGENT-5`) is the check.
+A person's token often can't list an organisation's App installations, but each App can read its own. Kanon's `apps-check` workflow ([`.github/workflows/apps-check.yml`](../.github/workflows/apps-check.yml)) does that for every agent role the register lists: it mints the role's token from `<ROLE>_APP_ID` and `<ROLE>_APP_PRIVATE_KEY`, then, with [`cli/apps-check.mjs`](../cli/apps-check.mjs), fails if the minted slug isn't the register's, if the installation doesn't cover the repository, or if its permissions differ from the role's in `rulebook/agent-permissions.json`, and warns if it covers other repositories or all of them. Each role's job writes a summary table. It runs by hand and is not a required check.
 
-A person's token often can't list an organisation's App installations, but each App can read its own. Kanon's `apps-check` workflow ([`.github/workflows/apps-check.yml`](../.github/workflows/apps-check.yml)) does that for every agent role the register lists: it mints the role's token from `<ROLE>_APP_ID` and `<ROLE>_APP_PRIVATE_KEY`, then, with [`cli/apps-check.mjs`](../cli/apps-check.mjs), fails if the minted slug isn't the register's, if the installation doesn't cover the repository, or if its permissions differ from the role's in `rulebook/agent-permissions.json`, and warns if it covers other repositories or all of them. Each role's job writes a summary table. It runs by hand and is not a required check:
+It is a reusable workflow. Add a thin caller, `.github/workflows/apps-check.yml`, pinned to the same **exact version** as your lanes (`K-ADOPT-11`), and map the two secrets of each role your register lists:
+
+<!-- x-release-please-start-version -->
+
+```yaml
+name: apps-check
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  apps:
+    permissions:
+      contents: read
+    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@v0.18.0
+    secrets:
+      REVIEWER_APP_ID: ${{ secrets.REVIEWER_APP_ID }}
+      REVIEWER_APP_PRIVATE_KEY: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+```
+
+<!-- x-release-please-end -->
+
+Then run it:
 
 ```sh
 gh workflow run apps-check.yml -R <org>/<repo>
 ```
+
+- **Map secrets by name, never `secrets: inherit`.** The workflow takes each role's two secrets by their fixed names (`EXPLORER_`, `IMPLEMENTER_`, `REVIEWER_`, `MERGER_`, `LEAD_`, `OVERSEER_`), all optional, and each role's job reads only its own two. A role the register lists whose secrets you didn't map fails at the mint, by name.
+- **`contents: read` is the ceiling.** Only the job that reads your register uses it; the check jobs run on the App tokens alone.
+- **The check is the pinned version's.** It runs Kanon's script and compares against Kanon's role permissions at the tag you pinned, and reads only your register from your checkout. `lane-check` reads this caller as no lane caller, and holds it to the one pin.
 
 ## Limits
 
