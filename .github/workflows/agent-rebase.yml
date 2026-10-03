@@ -300,7 +300,8 @@ jobs:
             CI, no review and no revise — nothing downstream can act (RA-1722). Your job is
             to make it mergeable again without changing what it does.
 
-            Read docs/qa/triage-fix-playbook.md first, then:
+            Read docs/qa/triage-fix-playbook.md and the project's stack document,
+            docs/qa/stack.md, first, then:
 
             WHAT TO DO. Check out the PR's branch, merge `origin/main` into it (a MERGE,
             never a rebase — a rebase force-pushes, which detaches the Reviewer's review from
@@ -315,10 +316,9 @@ jobs:
 
             SOME FILES ARE NOT RESOLVED BY CHOOSING A SIDE. These are the cases a script
             could not do and you can:
-              · `drizzle/NNNN_*.sql` + `drizzle/meta/_journal.json` — both branches claimed
-                the same migration number. RENUMBER this PR's migration to follow
-                `main`'s, rename the file to match, regenerate the snapshot, and keep
-                BOTH entries in the journal in timestamp order. Never drop a migration.
+              · every file the stack document's `## Generated files` section names —
+                a lockfile, a migration sequence — resolve exactly as it says, so the
+                file is derived rather than merged. Never drop a migration.
               · `docs/qa/specs/_id-registry.json` — clause ids come from the allocator.
                 Take `main`'s registry, then re-run `node "$KANON/scripts/spec-ids.mjs" --apply`
                 so this PR's new clauses get ids that do not collide, and update every
@@ -327,14 +327,13 @@ jobs:
                 take either side and run `node "$KANON/scripts/spec-coverage.mjs" --write-locked`.
               · `CHANGELOG.md` — release-please's. Take `main`'s and drop your side's
                 entry; the release PR regenerates it from the commits.
-              · `package-lock.json` — take `main`'s and re-run `npm install` so the lock
-                is derived rather than merged.
 
             VERIFY BEFORE YOU PUSH, and verify the MERGED tree, not your side of it:
-            `npm run lint`, `npm run typecheck`, `npm test`. If the PR touched the schema,
-            also run `db:push` THEN `db:setup` and the RLS/tenant-isolation conformance
-            tests — a resolution that drops an RLS policy is the worst outcome available
-            here. Do not push a tree whose gates you have not run.
+            every command the stack document's `## Gates` section lists. If the PR
+            touched the schema, also follow its `## Schema changes` section and run the
+            checks its `## Data isolation` section names — a resolution that loses an
+            isolation rule is the worst outcome available here. Do not push a tree whose
+            gates you have not run.
 
             WHEN TO STOP AND ASK — and this is the ONLY thing that reaches the developer.
             If the conflict encodes a PRODUCT decision rather than a code one — two

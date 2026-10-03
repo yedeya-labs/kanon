@@ -26,6 +26,9 @@ What a file *contains* is still the project's (its specs, its signals, its escal
 | `docs/qa/sign-off-delegation.md` | The sign-off delegation, when the adopter records one | `K-LAYOUT-14` |
 | `docs/qa/exemptions.md` | What a guard exempts by name: pre-standard briefs and path mentions | `K-LAYOUT-15` |
 | `docs/qa/test-database.md` | The test-database declaration, when the lanes need a database | `K-LAYOUT-16` |
+| `docs/qa/stack.md` | The stack document: the project's gates, schema procedure, isolation rules and generated files | `K-LAYOUT-17` |
+| `docs/qa/triage-fix-playbook.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md`, `docs/qa/lead-playbook.md` | The Implementer's, Reviewer's, Explorer's and Lead's playbooks | `K-LAYOUT-17` |
+| `.agent/starting-map.md` | The starting map the project-setup hook writes for an issue (`K-AGENT-41`) | `K-LAYOUT-17` |
 | `.github/dependabot.yml` | Holds the entry that proposes Kanon upgrades | `K-ADOPT-11` |
 
 Every markdown file directly inside `docs/qa/` is pipeline governance: changing one changes what an agent does or what a merge requires, so it is on the pipeline's own escalation path (`K-MERGE-4`). Files under `docs/qa/specs/` are not: specs are a project's deliverable (`K-MERGE-4`).
@@ -280,6 +283,26 @@ The file sits directly inside `docs/qa/`, so it is pipeline governance (`K-MERGE
 **Enforced by.** [`lane-check`](../actions/lane-check/README.md), which fails on a malformed declaration, and the lanes' [`test-database`](../actions/test-database/README.md) block, which reads it with the same program before the hook runs.
 
 **Class.** split. The path, the line, the kinds and the contract are framework. **The project supplies:** which kind, and, for `hook`, the database.
+
+### `K-LAYOUT-17` The lanes read the project's stack and playbooks at fixed paths
+
+**Rule.** A lane's prompt states the process and never the project's stack. What the stack decides, the prompt reads from a file the project owns, at a fixed path:
+
+- **`docs/qa/stack.md`, the stack document.** It holds four sections, each a `##` heading exactly as written here, once, outside any fenced block:
+  - `## Gates`: the commands an agent runs before it pushes, in order, and each further test tier with the paths that call for it. Whatever the agent should know about their output goes here too.
+  - `## Schema changes`: what to run after changing the schema, and the deploy steps a pull request states for one. A project with no schema says so.
+  - `## Data isolation`: the rules a change must never regress, and the checks that prove they hold. The Reviewer scrutinises every pull request against this section. A project with nothing to isolate says so.
+  - `## Generated files`: each file that is derived rather than written, such as a lockfile or a migration sequence, and how to re-derive it after a merge conflict.
+- **The playbooks**: `docs/qa/triage-fix-playbook.md` (the Implementer's), `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` and `docs/qa/lead-playbook.md`. A playbook may link to the project's other documents: the review lane restores what it links to with it (`K-MERGE-17`).
+- **`.agent/starting-map.md`**, which the project-setup hook writes when a lane passes it an issue number (`K-AGENT-41`), and which the prompt tells the agent to read first if it exists.
+
+The prompt names a section by its heading, and a command, a database or a setting only by the section that holds it, and a milestone only by the rule that names it (`K-WORK-4`, `K-WORK-5`, `K-WORK-10`). Kanon's own literals stay in the prompt: the buckets' names (`K-WORK-4`), Kanon's paths, and Kanon's scripts, run as `node "$KANON/scripts/<name>.mjs"`.
+
+**Why.** A prompt written for one project's stack makes that stack every project's: a Python project's Implementer was told to run one package manager's lint script and to re-apply row-level security it doesn't have. The facts were true, but they belonged to the project, so they move to a file the project owns and the prompt keeps only the process that holds on every stack. Fixed headings let the prompt send the agent to one section rather than to a whole document, and let a check tell a missing section from one with nothing to say. The files sit directly inside `docs/qa/`, so they are pipeline governance (`K-MERGE-4`), and the review lane reads them from the default branch (`K-MERGE-17`).
+
+**Enforced by.** [`lane-check`](../actions/lane-check/README.md), which fails when a document a called lane's prompt reads is missing, or the stack document lacks a section or repeats one; and `tests/unit/lane-workflows.test.ts`, which fails when a Kanon lane, its prompts included, names a known stack literal.
+
+**Class.** split. The paths and the headings are framework. **The project supplies:** what each says.
 
 ## The brief
 

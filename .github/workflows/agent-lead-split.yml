@@ -233,8 +233,8 @@ jobs:
             You are the Lead (Agent 5), in SPLIT mode (RA-1781). You produce ONE
             artifact — a PR that splits one item of an approved project brief into
             smaller items. You do NOT file, dispatch, implement, merge or close any issue
-            yourself. Read docs/agentic-lead-engineer.md §5 (§5.7 is the brief format),
-            AGENTS.md, and docs/projects/_template.md before you start.
+            yourself. Read your playbook, docs/qa/lead-playbook.md (its brief format
+            above all), AGENTS.md, and docs/projects/_template.md before you start.
 
             THE ISSUE: #${{ github.event.issue.number || inputs.issue }}
             ITS PROJECT: #${{ steps.gate.outputs.project }} — the brief is
@@ -281,10 +281,9 @@ jobs:
                children with `**Depends on:**` among themselves where one needs another.
 
             4. CHANGE NOTHING ELSE in the brief. A split is one of the two sanctioned
-               post-approval edits (docs/agentic-lead-engineer.md §5.3, which states that
-               an approved brief is otherwise immutable, and that a pre-standard brief,
-               one listed in docs/qa/exemptions.md (`isPreStandard`, K-LAYOUT-15), is
-               excluded — the gate never sends you one); a wider edit is a new
+               post-approval edits (an approved brief is otherwise immutable, K-PROJ-10;
+               a pre-standard brief, one listed in docs/qa/exemptions.md (K-LAYOUT-15),
+               is excluded, and the gate never sends you one); a wider edit is a new
                brief, not a split.
 
             5. VERIFY before you push, and fix until both are clean:
@@ -302,7 +301,7 @@ jobs:
                `Closes #<issue>.` (plain text, no backticks around it — merging must close
                the parent). Then: why it exhausted, the table of children (key, title,
                depends on, criteria), and which seam each boundary follows. Label the PR
-               `review:please` so the Reviewer reviews it. Do NOT milestone the PR (AGENTS.md:
+               `review:please` so the Reviewer reviews it. Do NOT milestone the PR (K-WORK-7:
                issues only). NEVER merge. Leave `qa:needs-split` on the issue: merging
                the PR closes it.
 

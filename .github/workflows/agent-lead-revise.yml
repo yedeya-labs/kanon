@@ -543,7 +543,7 @@ jobs:
 
           - Every answered decision becomes a RECORDED ANSWER in the brief's
             decisions section — an answer, not a question.
-          - CARRY THE CONSEQUENCES. An answer that changes a milestone, an AWS cost,
+          - CARRY THE CONSEQUENCES. An answer that changes a milestone, a cost,
             an issue's Closes list, a dependency or an acceptance criterion must be
             written into THAT section too. A decision recorded only in the decisions
             section is one the implementer never reads, and the issues are filed from
@@ -652,7 +652,7 @@ jobs:
 
         YOUR AUTHORITY IS UNCHANGED. You revise a brief and nothing else: no
         merging, no issue creation, no labelling, and never a `[seed]` ->
-        `[confirmed]` promotion (§6.1 — approving a brief is agreeing to the plan;
+        `[confirmed]` promotion (K-SPEC-8 — approving a brief is agreeing to the plan;
         confirming behaviour is a separate act by a human, later).
 
         ALWAYS leave a PR comment before you finish, and start it with exactly:

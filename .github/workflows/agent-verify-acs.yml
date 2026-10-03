@@ -401,8 +401,8 @@ jobs:
             staging". Never write `staging`: nothing here touched a deployment.
 
             Labels: bug, agent:explorer, qa:needs-triage, signal:spec-violation, and a
-            sev:* you can justify from the evidence. Milestone: Product Backlog — never Production Ready,
-            which is a launch gate and not a bucket (AGENTS.md).
+            sev:* you can justify from the evidence. Milestone: Product Backlog — never a
+            roadmap milestone such as the launch gate, which is not a bucket (K-WORK-5).
 
             COMMENT ON THE QA ISSUE WHEN YOU FINISH, and the comment MUST contain
             this line on its own:

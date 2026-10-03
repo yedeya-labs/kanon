@@ -280,11 +280,11 @@ describe('the split lane’s wiring', () => {
   });
 
   it('the prompt names the rule that allows the edit (the Reviewer, RA-2407)', () => {
-    // The rule's own text is the adopter's document (`§5.3`), checked in the adopter;
-    // the lane's half is that the prompt points there and at no older section.
+    // The rule is Kanon's (K-PROJ-10) since kanon#36, not a section of the adopter's
+    // document; the lane's half is that the prompt names it and no section number.
     const prompt = agent?.with?.prompt ?? '';
-    expect(prompt).toContain('docs/agentic-lead-engineer.md §5.3');
-    expect(prompt).not.toContain('§5.7 says');
+    expect(prompt).toContain('an approved brief is otherwise immutable, K-PROJ-10');
+    expect(prompt).not.toMatch(/§\d/);
   });
 
   it('the sweep and the crash job both route through the shared function', () => {

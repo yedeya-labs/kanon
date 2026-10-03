@@ -581,7 +581,7 @@ jobs:
           # AFTER the `could not read PR` fail-open, and `decide` ends in `exit 0`. So
           # the one path where nothing about the PR is known was also the one path that
           # skipped the check on whether its code is ours — and then handed the review
-          # job a `head_sha` from the workflow_run payload to check out and `npm ci`.
+          # job a `head_sha` from the workflow_run payload to check out and install.
           # The fail-safe and the gate were each right and ran in the wrong order.
           #
           # The fix is not to reorder the same read. A gate whose input can fail needs
@@ -627,7 +627,7 @@ jobs:
           # `workflow_run` changed this job's security context, and the change is not
           # visible in the diff that made it. Under `pull_request`, GitHub WITHHOLDS
           # secrets from a fork PR; under `workflow_run` it does not — while the job
-          # still checks out the PR head and runs `npm ci` on it, which executes
+          # still checks out the PR head and runs the project's install on it, which executes
           # lifecycle scripts from the checked-out `package.json`. Those run as the
           # runner user in a job whose later steps receive QA_REVIEWER_APP_PRIVATE_KEY
           # (an installation token with Contents+PullRequests write) and
@@ -950,8 +950,8 @@ jobs:
           #     created. Everything under docs/qa is an agent instruction or the oracle.
           #   THE REST OF `K-MERGE-17`'S LIST, read from the default branch over the API
           #     by `scripts/judging-inputs.mjs` — the same list, closed over delegation,
-          #     that the review job restores. The reference adopter named its delegated
-          #     documents here (`docs/agentic-*.md`) after one of them, carrying the GREEN
+          #     that the review job restores. The reference adopter added its delegated
+          #     documents to this list by name only after one of them, carrying the GREEN
           #     ZONE — the rule deciding what the Merger merges unattended — went unread on
           #     an approved PR, which is RA-860's outcome exactly, one door over. One list
           #     means a new input is guarded here the day it is added there.
@@ -1581,7 +1581,7 @@ jobs:
               fi
               mode=incremental
             else
-              echo "::warning title=review scope::The incremental context changed after it was written — only the PR's install/db:init ran in between. Reviewing in full rather than on a diff the PR may have edited (RA-2455)."
+              echo "::warning title=review scope::The incremental context changed after it was written — only the PR's project setup ran in between. Reviewing in full rather than on a diff the PR may have edited (RA-2455)."
             fi
           fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
@@ -1621,7 +1621,7 @@ jobs:
           MANIFEST="$(node "$KANON_PATH/scripts/judging-inputs.mjs" manifest)"
           ACTUAL="$(printf '%s\n' "$MANIFEST" | sha256sum | cut -d' ' -f1)"
           if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "::error title=pin tampered::The judging inputs changed AFTER the restore — only the PR's install/db:init steps ran in between. Refusing to review on inputs this PR may have supplied (K-MERGE-17, RA-1542). Current manifest:" >&2
+            echo "::error title=pin tampered::The judging inputs changed AFTER the restore — only the PR's project-setup steps ran in between. Refusing to review on inputs this PR may have supplied (K-MERGE-17, RA-1542). Current manifest:" >&2
             printf '%s\n' "$MANIFEST" >&2
             exit 1
           fi
@@ -1654,7 +1654,8 @@ jobs:
         with:
           prompt: |
             You are the Reviewer (Agent 3) of the QA pipeline — the generic
-            code reviewer. First read docs/qa/reviewer-playbook.md, then review PR
+            code reviewer. First read docs/qa/reviewer-playbook.md and the project's
+            stack document, docs/qa/stack.md, then review PR
             #${{ env.PR_NUMBER }} of this repo. On a re-review (the PR was pushed to),
             re-check the new commits against your prior findings AND for anything they
             introduced.
@@ -1709,9 +1710,9 @@ jobs:
             (is the fix real, is the test genuinely red→green?). A feature / spec-delta
             PR (`agent:implement`) is reviewed against the linked issue's acceptance
             criteria and any L2 spec. A general PR (`review:please`) gets a general
-            code-quality review. In ALL cases apply EXTRA scrutiny to
-            tenant-isolation/RLS (esp. any schema / `db:push`+`db:setup` change — confirm
-            the RLS conformance tests pass) and production-only RSC.
+            code-quality review. In ALL cases apply EXTRA scrutiny to what the stack
+            document's `## Data isolation` section names (esp. any schema change —
+            confirm the checks it names pass), and to anything the playbook singles out.
 
             Verify blast radius yourself (grep usages) rather than trusting the PR's
             framing. Do NOT run the E2E tier — CI runs it as a REQUIRED check; read its
@@ -1719,7 +1720,8 @@ jobs:
             a build, test, or any command in the background and then wait for it: this CI
             run is one-shot with NO next turn, so a backgrounded task means your verdict
             is never posted (the recurring RA-356/RA-378 crash-equivalent). If you sanity-run
-            a FAST tier (unit/integration — db:init has run), run it as a single
+            a FAST tier the stack document's `## Gates` names (the project's database,
+            if it declares one, is set up), run it as a single
             FOREGROUND blocking command, and never report a subset as full verification.
             When the PR changes a behavior / message / error string, grep the OLD string
             repo-wide INCLUDING `tests/` before trusting nothing else asserts on it.
@@ -1758,7 +1760,7 @@ jobs:
             claim about REACHABILITY AND IMPACT, which lives in the diff and its
             callers — the code you just read — not in the issue prose a later reader
             gets. Use the rubric in docs/qa/explorer-playbook.md: `sev:critical` = data
-            loss / security / tenant-isolation / outage; `sev:high` = core flow broken,
+            loss / security / data isolation / outage; `sev:high` = core flow broken,
             no workaround; `sev:medium` = degraded, workaround exists; `sev:low` =
             cosmetic. Judge the REACHABLE impact, not the title's shape — RA-585
             ("a public/student caller can select gateway:'fake'" — register or pay for
@@ -1772,15 +1774,15 @@ jobs:
             goes to "Development Automation", as RA-602/RA-571 did. Everything else goes
             to "Product Backlog" — at ANY severity. A `sev:critical` or `sev:high`
             product follow-up is LAUNCH-GATING: ALSO pass `--label gate-candidate`, and
-            leave it on "Product Backlog". Never set the "Production Ready" gate
-            yourself — only the developer places work on a roadmap milestone (RA-1616).
-            Gate hygiene (AGENTS.md): if the work has a workaround it is `sev:medium`
+            leave it on "Product Backlog". Never set a roadmap milestone, the launch
+            gate included, yourself — only the developer places work on one (RA-1616).
+            Gate hygiene (K-WORK-10): if the work has a workaround it is `sev:medium`
             and NOT a candidate — do not inflate the severity.
 
             FILE IT IN ONE CALL: pass `--label` AND `--milestone` in the SAME
             `gh issue create`, never `create` then `edit`. A bare `create` opens the
-            issue with no milestone and races the `issue-default-milestone.yml`
-            default.
+            issue with no milestone and races the milestone backstop's default
+            (K-WORK-1).
 
             Body = the finding (what/why/file refs) +
             "Surfaced by PR #${{ env.PR_NUMBER }} review", and list any filed issues in

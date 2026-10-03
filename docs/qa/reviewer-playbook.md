@@ -6,9 +6,9 @@ The rules live in the [rulebook](../../rulebook/README.md), and this playbook on
 
 ## What the lane's prompt asks that Kanon doesn't have
 
-The prompt was written for an adopter with an app and a database. On Kanon:
+From [#36](https://github.com/yedeya-labs/kanon/issues/36) on, the prompt is written for any adopter, and reads the stack from Kanon's [stack document](stack.md) (`K-LAYOUT-17`). Kanon's review caller pins its last release, though (ADR 0011). Until that pin reaches a release with #36, the prompt that judges Kanon's PRs still names row-level security, tenant isolation, `db:init` and server-rendering checks, and none of them applies here. On Kanon:
 
-- **No app, no database, no E2E tier.** The tenant-isolation, row-level security and server-rendering checks have nothing to apply to. Kanon's tiers are `npm run lint`, `npm run typecheck` and `npm test`. Taking the stack out of the prompts is [#36](https://github.com/yedeya-labs/kanon/issues/36).
+- **No app, no database, no E2E tier.** The stack document says so, and lists Kanon's gates.
 - **No launch gate.** Kanon has only the two buckets, and no roadmap milestone. Never create one.
 - **No issue-opened backstop.** Nothing adds `qa:needs-severity` or `gate-candidate` after you, and nothing defaults a milestone. The labels and milestone you file with are final.
 
@@ -24,7 +24,7 @@ Every finding cites the rule it rests on.
 6. **Security.** Check every workflow and action change against `K-PRIN-19` and its rules: untrusted content is data (`K-AGENT-45`), each token holds only what its lane uses (`K-AGENT-46`), secrets are passed by name and never reach a fork's run (`K-AGENT-47`), and `pull_request_target` never checks out the head (`K-AGENT-48`). Third-party actions are pinned to a tag or a full SHA (`K-ADOPT-12`). [`tests/unit/workflow-security.test.ts`](../../tests/unit/workflow-security.test.ts) reads only the workflow's own steps, so read what a called action does inside, and any `workflow_run` route, yourself.
 7. **Every lane carries the membership gate.** It is the first step of every lane's first job, before any token is minted (`K-AGENT-45`, [`tests/unit/lane-gate.test.ts`](../../tests/unit/lane-gate.test.ts)). A new lane or trigger without it is a finding, and so is an event type the gate admits by default.
 8. **Plans and ADRs agree with the change.** A PR that carries out a plan step matches that step's row in [`docs/plans/`](../plans/). A PR that departs from an accepted ADR in [`docs/decisions/`](../decisions/) changes or supersedes it in the same PR. A premise that stopped being true is recorded next to its rule (`K-PRIN-16`).
-9. **No stack opinion.** Kanon is opinionated about process, never about the adopter's stack ([#15](https://github.com/yedeya-labs/kanon/issues/15)). A new rule, lane, guard or doc that requires a language, database or cloud is a finding. Node is allowed only for Kanon's own tooling, in CI. Existing assumptions are tracked in #16 to #20 and #36; a PR adds no new one.
+9. **No stack opinion.** Kanon is opinionated about process, never about the adopter's stack ([#15](https://github.com/yedeya-labs/kanon/issues/15)). A new rule, lane, guard or doc that requires a language, database or cloud is a finding. Node is allowed only for Kanon's own tooling, in CI. A lane prompt names the project's commands, database and documents only through its stack document and playbooks (`K-LAYOUT-17`); a PR adds no new assumption.
 
 ## What escalates to the Owner
 

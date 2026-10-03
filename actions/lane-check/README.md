@@ -7,6 +7,7 @@ Fails unless the repository's Kanon lane callers, project-setup hook, App regist
 - **Every Kanon reference** under `.github/` pins one exact version, and it is the version this check runs at.
 - **The project-setup hook** exists at `.github/actions/project-setup/action.yml`, is a composite action, and declares every input Kanon's lanes pass it.
 - **The App register** (`docs/qa/agent-identities.md`) has one row, with an App slug in backticks, for every role a caller's lane runs as.
+- **The project documents a called lane reads** exist, and the stack document has each of its four sections once (`K-LAYOUT-17`). Which documents a lane reads is read from the lane itself.
 - **The test-database declaration** (`docs/qa/test-database.md`), when there is one, has exactly one `**Test database:**` line declaring `none` or `hook`, never an engine (`K-LAYOUT-16`). No file is valid: it declares no database.
 - **`.github/dependabot.yml`** has a `github-actions` entry for `/` that groups `yedeya-labs/kanon*`, prefixes its commits `ci`, and leaves Kanon out of any cooldown.
 

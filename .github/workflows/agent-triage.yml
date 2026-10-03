@@ -124,7 +124,8 @@ jobs:
         --exclude-dynamic-system-prompt-sections
       prompt: |
         You are the Implementer (Agent 2) of the QA pipeline. First read
-        docs/qa/triage-fix-playbook.md and docs/agentic-qa-pipeline.md, then
+        docs/qa/triage-fix-playbook.md and the project's stack document,
+        docs/qa/stack.md, then
         triage issue #${{ github.event.issue.number || inputs.issue_number }} of this repo.
 
         SCOPE FIRST. If the fix is large or risky — a schema + DATA migration, a
@@ -154,11 +155,13 @@ jobs:
 
         If you reproduce it: **apply
         `qa:reproduced`** (an outcome label, so precision-per-signal is trackable),
-        write a FAILING test (confirm red), fix until green, run the relevant tiers
-        (db is provisioned via db:init — test:unit / test:integration / test:e2e),
+        write a FAILING test (confirm red), fix until green, run the gates and tiers
+        the stack document's `## Gates` section names (the project's database, if it
+        declares one, is already set up),
         then open a PR (fix + test) with the agent-fix template, labeled
         `agent:triage`, that closes the issue; set `qa:fix-proposed`. Surface any
-        schema change + its db:push/db:setup deploy steps. NEVER merge.
+        schema change, with the deploy steps the stack document's `## Schema
+        changes` section names. NEVER merge.
         If this issue is a FOLLOW-UP whose parent PR is still OPEN (its body says
         "Surfaced by PR #N" and #N isn't merged), branch off that PR's head and open
         yours with `--base <its branch>` so it STACKS — don't diverge off main. See

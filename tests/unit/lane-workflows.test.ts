@@ -261,15 +261,23 @@ describe('every PR lane leaves the breadcrumbs (RA-2519)', () => {
 });
 
 describe('plan 0001 §5: nothing in the spine or a lane names a project', () => {
-  // The P2 grep, kept: every project literal lives in the adopter's project-setup hook.
-  // Over the parsed workflow, less its PROMPTS: a prompt is the agent's instructions, and
-  // the moved prompts still describe the reference adopter's stack in prose (its database
-  // commands, its quiet test output). That is recorded for the Owner, not hidden here.
-  const LITERALS = /node-version|npm ci|db:init|AGENT_QUIET|starting-map|expect-slug|5433/;
-  const withoutPrompts = (file: string) => {
+  // The P2 grep, kept: every project literal lives in the adopter's own files — its
+  // project-setup hook, its stack document (`docs/qa/stack.md`), its playbooks (K-LAYOUT-17).
+  // Over the WHOLE parsed workflow, PROMPTS INCLUDED (kanon#36): a prompt states the process,
+  // and names the project's commands, database, settings and milestones only by the section
+  // of the project's file that holds them. Comments are not read: the parse drops them.
+  const LITERALS = new RegExp([
+    // The reference adopter's toolchain and setup (P2).
+    'node-version', 'npm ci', '\\bnpm (run|test|install)\\b', '\\bnpx\\b', 'package-lock', 'AGENT_QUIET', '--reporter',
+    // Its database commands and concepts.
+    'db:(init|push|setup)', '\\bRLS\\b', '[Tt]enant', 'drizzle', '5433',
+    // Its hook's own steps; the starting map's fixed PATH is Kanon's (K-LAYOUT-17), a script is not.
+    'starting-map(?!\\.md)', 'expect-slug',
+    // Its roadmap milestones (the buckets' names are Kanon's, K-WORK-4), cloud, and documents.
+    'Production Ready', 'AI Capabilities', 'Development Ready', '\\bAWS\\b', 'docs/agentic-', 'payments\\.md',
+  ].join('|'));
+  const parsed = (file: string) => {
     const doc = lane(file);
-    for (const job of Object.values(doc.jobs)) if (job.with) delete job.with.prompt;
-    for (const job of Object.values(doc.jobs)) for (const st of job.steps ?? []) if (st.with) delete (st.with as Record<string, unknown>).prompt;
     // The implement lane's crash recovery runs Kanon's own script on Node 24 (`engines`),
     // which is Kanon's requirement, not a project's.
     for (const job of Object.values(doc.jobs)) for (const st of job.steps ?? []) {
@@ -278,8 +286,13 @@ describe('plan 0001 §5: nothing in the spine or a lane names a project', () => 
     return JSON.stringify(doc, null, 1).split('\n');
   };
 
-  it.each(['agent-lane.yml', ...LANES])('%s', (file) => {
-    expect(withoutPrompts(file).filter((l) => LITERALS.test(l))).toEqual([]);
+  it.each(['agent-lane.yml', ...LANES, 'agent-review.yml', 'agent-verify-acs.yml'])('%s', (file) => {
+    expect(parsed(file).filter((l) => LITERALS.test(l))).toEqual([]);
+  });
+
+  it('reads the prompts: the scan still sees a prompt line (kanon#36)', () => {
+    // Guards the exclusion's removal itself: were prompts dropped again, this would fail.
+    expect(parsed('agent-implement.yml').some((l) => l.includes('TEST-FIRST'))).toBe(true);
   });
 
   it('the spine passes the hook exactly what Kanon documents (§5), from the checked-out tree', () => {
