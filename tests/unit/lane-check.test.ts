@@ -202,6 +202,16 @@ describe.skipIf(!hasYq)('lane-check', () => {
       expect(r.status, r.out).toBe(0);
       expect(r.out).toContain('4 lane caller(s) pass');
     });
+    it.each([
+      ['docs/release.md', 'release'],
+      ['docs/apps.md', 'apps-check'],
+    ])('still refuses `secrets: inherit` on the %s caller of Kanon\'s %s workflow (decision 7)', (doc, wf) => {
+      red((t) => {
+        const f = `.github/workflows/${wf}.yml`;
+        t.write(f, docCaller(doc, wf));
+        t.edit(f, (d) => { job(d).secrets = 'inherit'; });
+      }, new RegExp(`${wf}\\.yml,title=lane-check::the job \`[a-z]+\` calls Kanon's ${wf} workflow with \`secrets: inherit\``));
+    });
     it('still pins the release caller to the one version', () =>
       red((t) => t.write('.github/workflows/release.yml', releaseCaller().replace('@v1.2.3', '@v1.2.4')), 'pin v1.2.3,v1.2.4'));
     it('still refuses a lane caller beside it that maps no secrets', () =>

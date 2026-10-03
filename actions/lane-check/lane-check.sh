@@ -7,8 +7,8 @@
 #
 # Parses YAML with `yq` (mikefarah v4, preinstalled on GitHub's hosted runners; decision 6)
 # into JSON, and checks it with `jq`. Reads the escalation and exemptions files with Kanon's
-# own library, on Node (the action puts Kanon's Node on the PATH first). Prints one `::error` per violation and exits 1 if
-# there is any; exits 2 when it cannot run at all.
+# own library, on Node (the action puts Kanon's Node on the PATH first). Prints one
+# `::error` per violation and exits 1 if there is any; exits 2 when it cannot run at all.
 #
 # ENV  KANON_ROOT   Kanon's tree (default: this script's ../..)
 #      ACTION_REF   the ref this action was called at; when it is an exact version, every
@@ -26,7 +26,6 @@ DATABASE=docs/qa/test-database.md
 die() { echo "::error title=lane-check::$*"; exit 2; }
 command -v yq >/dev/null 2>&1 || die "needs yq (mikefarah v4) on PATH; GitHub's hosted runners have it"
 command -v jq >/dev/null 2>&1 || die "needs jq on PATH"
-command -v node >/dev/null 2>&1 || die "needs node on PATH; the action puts Kanon's own there"
 [ -d .github/workflows ] || die "run it from the root of the adopter's checkout: there is no .github/workflows here"
 [ -f "$KANON_ROOT/.github/workflows/$SPINE.yml" ] || die "Kanon's lanes are not at $KANON_ROOT"
 
@@ -67,10 +66,22 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
     | capture("^yedeya-labs/kanon/\\.github/workflows/(?<lane>[A-Za-z0-9_.-]+)\\.ya?ml@").lane] | .[]' <<<"$doc")"
   # Only a call to a LANE makes a file a caller, and a lane is an `agent-*` workflow. Kanon's
   # other reusable workflows (the release workflow, apps-check) are not lanes: they take
-  # their own secrets, or none, and their callers are held to no caller rule here, only to
-  # the pin above (kanon#152). The spine is called by lanes that have not moved yet; it is
+  # their own secrets, or none, and their callers are held to no lane caller rule, only to
+  # the pin above and the secrets rule just below (kanon#152). The spine is called by lanes that have not moved yet; it is
   # not a lane either, and its callers are not trigger-only.
   lane="$(printf '%s\n' "$lanes" | grep -E '^agent-' | grep -vx "$SPINE" | head -1 || true)"
+  # Not a lane, but still Kanon's code: a job that calls any other Kanon workflow maps the
+  # secrets it passes by name, or passes none, and never `secrets: inherit` (plan 0001
+  # decision 7, K-AGENT-47). A lane caller is held to the same below, with its lane's names.
+  while IFS=$'\t' read -r name wf value; do
+    [ -n "$name" ] || continue
+    fail "$f" "the job \`$name\` calls Kanon's $wf workflow with \`secrets: $value\`; map each secret it takes by name, or pass none (\`secrets: inherit\` would hand every secret to Kanon's code; plan 0001 decision 7)"
+  done < <(jq -r '.jobs // {} | to_entries[]
+    | (.value.uses // "" | tostring | capture("^yedeya-labs/kanon/\\.github/workflows/(?<w>[A-Za-z0-9_.-]+)\\.ya?ml@").w) as $w
+    | select($w | startswith("agent-") | not)
+    | select(.value | has("secrets"))
+    | select((.value.secrets | type) != "object")
+    | [.key, $w, (.value.secrets | tostring)] | @tsv' <<<"$doc")
   [ -n "$lane" ] || continue
   CALLERS=$((CALLERS + 1))
   lane_file="$KANON_ROOT/.github/workflows/$lane.yml"
@@ -210,6 +221,7 @@ fi
 for d in escalation-paths exemptions; do
   f="docs/qa/$d.md"
   [ -f "$f" ] || continue
+  command -v node >/dev/null 2>&1 || die "needs node on PATH to read $f; the action puts Kanon's own there"
   if ! out="$(node "$HERE/declarations.mjs" "$d" 2>&1)"; then
     fail "$f" "$(printf '%s' "$out" | head -1)"
   fi
