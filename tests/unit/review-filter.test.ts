@@ -90,6 +90,7 @@ type Opts = {
   // The default branch's tree, which `judging-inputs.mjs select` reads over the API.
   treeFails?: boolean;
   reviewsFail?: boolean;    // kanon#88: the PR's reviews read failed
+  reviews?: unknown[];      // kanon#88: the PR's reviews verbatim, in place of `lastReviewed`
 };
 
 const runDecide = ({
@@ -115,6 +116,7 @@ const runDecide = ({
   actor = 'a-member',
   treeFails = false,
   reviewsFail = false,
+  reviews: reviewsOverride,
 }: Opts) => {
   // The payload agrees with the API read unless a test deliberately splits them.
   const headRepo =
@@ -142,7 +144,8 @@ const runDecide = ({
       : [{ headSha, status: ciPending ? 'in_progress' : 'completed', conclusion: ciPending ? null : 'success', databaseId: 42 }],
   );
   const reviews = JSON.stringify(
-    lastReviewed === null ? [] : [{ user: { login: 'example-reviewer[bot]' }, commit_id: lastReviewed, state: 'APPROVED' }],
+    reviewsOverride ??
+    (lastReviewed === null ? [] : [{ user: { login: 'example-reviewer[bot]' }, commit_id: lastReviewed, state: 'APPROVED' }]),
   );
   // Order matters: `/commits/<sha>/pulls` also matches `*commits*`.
   writeStub(join(dir, 'gh'),
@@ -1179,6 +1182,33 @@ describe('an already-reviewed head is not reviewed again, whatever the PR contai
       lastReviewed: HEAD, pushed: ['docs/a.md'], prFiles: ['docs/a.md'] });
     expect(again.review).toBe('true');
     expect(again.explicit).toBe('true');
+  });
+
+  // The Reviewer's finding on #104: GitHub files a verdict posted after a push under the NEW
+  // head, and the job stamps what it read (RA-1680, `K-AGENT-26`). Keyed on `commit_id`, that
+  // verdict would mark a head nobody read as reviewed.
+  const BOT = { login: 'example-reviewer[bot]' };
+  it('reads the stamp, not commit_id: a verdict filed under the head but read on the last commit', () => {
+    const r = runDecide({ pushed: ['docs/a.md'], prFiles: ['docs/a.md'], reviews: [
+      { user: BOT, state: 'APPROVED', commit_id: HEAD, body: `ok\n\n<!-- reviewed: sha=${LAST} run=1 -->` }] });
+    expect(r.review).toBe('true');
+    expect(evidenceOf(r.stdout).LAST_REVIEWED).toBe(LAST);
+  });
+
+  it('and a verdict stamped with the head skips it, whatever it was filed under', () => {
+    const r = runDecide({ pushed: ['docs/a.md'], prFiles: ['docs/a.md'], reviews: [
+      { user: BOT, state: 'CHANGES_REQUESTED', commit_id: LAST, body: `x\n<!-- reviewed: sha=${HEAD.toUpperCase()} -->` }] });
+    expect(r.review).toBe('false');
+    expect(r.stdout).toContain('already reviewed');
+  });
+
+  it('counts verdicts only: a later COMMENTED review on the head does not mark it reviewed', () => {
+    const r = runDecide({ pushed: ['src/a.ts'], prFiles: ['src/a.ts'], reviews: [
+      { user: BOT, state: 'APPROVED', commit_id: LAST, body: `<!-- reviewed: sha=${LAST} -->` },
+      { user: BOT, state: 'COMMENTED', commit_id: HEAD, body: `<!-- reviewed: sha=${HEAD} -->` }] });
+    expect(r.review).toBe('true');
+    expect(evidenceOf(r.stdout).LAST_REVIEWED).toBe(LAST);
+    expect(r.calls, 'the compare base is the commit the verdict read').toContain(`compare/${LAST}...${HEAD}`);
   });
 
   it('acts on a failed reviews read where it always did, after the skip marker', () => {

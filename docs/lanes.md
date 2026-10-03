@@ -32,7 +32,7 @@ One commit gets one verdict. The lane skips a head the Reviewer has already revi
 
 - **Push.** A new commit is reviewed when CI finishes on it. This is how a fix gets its review, so there is nothing to re-request.
 - **A person re-applies `review:please`** after the verdict, to ask for another look at the same commit (for example after editing the PR body). The lane treats a label applied by a person as an explicit request. A label applied before the verdict landed is answered by that verdict.
-- **Tooling dispatches the lane:** `gh workflow run <your review caller> -f pr_number=N`. A dispatch reviews regardless of labels, and its run records who asked.
+- **Tooling dispatches the lane:** `gh workflow run <your review caller> -f pr_number=N`. A dispatch reviews regardless of labels, and its run records who asked. Like a label, it is answered by a verdict on the head that lands while it waits, so dispatch after the verdict, not during the review.
 
 **Tooling must not churn the label.** Removing and re-applying `review:please` through a person's token is indistinguishable from that person asking. A churn that lands after the verdict spends a second full review on the same commit, and one that lands before it is wasted. A script that acts for a person dispatches instead, or waits for the push to do the asking. Apps can re-apply the label (the recovery in `K-MERGE-14` does), because a label applied by an App is never an explicit request.
 

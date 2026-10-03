@@ -810,8 +810,19 @@ jobs:
           # last REVIEWED commit is the better basis anyway: across two pushes the old
           # one compared only the second, so a code push followed by a docs push read
           # as docs-only and the code was never reviewed.
+          #
+          # THE COMMIT THE LAST VERDICT READ, NOT THE ONE GITHUB FILED IT UNDER (`K-AGENT-26`).
+          # A verdict posted after a push is filed under the new head, and the job stamps the
+          # commit it actually read (RA-1680). Keyed on `commit_id`, that verdict would
+          # satisfy `already reviewed` for a head nobody read. So: the stamp, else
+          # `commit_id`, over APPROVED/CHANGES_REQUESTED only — the selection the `claim`
+          # step uses. It is also the base of the `compare` below, for the same reason.
           LAST="$(printf '%s' "$REVIEWS" \
-            | jq -r --arg login "${REVIEWER_LOGIN}[bot]" '[.[] | select(.user.login == $login)] | last | .commit_id // ""')"
+            | jq -r --arg login "${REVIEWER_LOGIN}[bot]" '
+                def stamped: [(.body // "") | scan("<!--[ ]*reviewed:[ ]*sha=([[:xdigit:]]{7,40})")] | (.[-1] // [])[0];
+                [.[] | select(.user.login == $login)
+                     | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")]
+                | last | if . == null then "" else ((stamped // .commit_id // "") | ascii_downcase) end')"
           evidence LAST_REVIEWED "$LAST"
           [ -n "$LAST" ] && [ "$LAST" = "$HEAD" ] && decide false "already reviewed ${HEAD:0:7}"
 
