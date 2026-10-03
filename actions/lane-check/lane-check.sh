@@ -67,8 +67,8 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
   # Only a call to a LANE makes a file a caller, and a lane is an `agent-*` workflow. Kanon's
   # other reusable workflows (the release workflow, apps-check) are not lanes: they take
   # their own secrets, or none, and their callers are held to no lane caller rule, only to
-  # the pin above and the secrets rule just below (kanon#152). The spine is called by lanes that have not moved yet; it is
-  # not a lane either, and its callers are not trigger-only.
+  # the pin above and the secrets rule just below (kanon#152). The spine is called by lanes
+  # that have not moved yet; it is not a lane either, and its callers are not trigger-only.
   lane="$(printf '%s\n' "$lanes" | grep -E '^agent-' | grep -vx "$SPINE" | head -1 || true)"
   # Not a lane, but still Kanon's code: a job that calls any other Kanon workflow maps the
   # secrets it passes by name, or passes none, and never `secrets: inherit` (plan 0001

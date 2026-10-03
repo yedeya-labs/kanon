@@ -73,7 +73,7 @@ gh workflow run apps-check.yml -R <org>/<repo>
 
 - **Map secrets by name, never `secrets: inherit`.** The workflow takes each role's two secrets by their fixed names (`EXPLORER_`, `IMPLEMENTER_`, `REVIEWER_`, `MERGER_`, `LEAD_`, `OVERSEER_`), all optional, and each role's job reads only its own two. A role the register lists whose secrets you didn't map fails at the mint, by name.
 - **`contents: read` is the ceiling.** Only the job that reads your register uses it; the check jobs run on the App tokens alone.
-- **The check is the pinned version's.** It runs Kanon's script and compares against Kanon's role permissions at the tag you pinned, and reads only your register from your checkout. `lane-check` reads this caller as no lane caller, and holds it to the one pin.
+- **The check is the pinned version's.** It runs Kanon's script and compares against Kanon's role permissions at the tag you pinned, and reads only your register from your checkout. `lane-check` reads this caller as no lane caller, and holds it to the one pin and to mapping its secrets by name.
 
 ## Limits
 
