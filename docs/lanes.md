@@ -17,7 +17,7 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Lead, split | `agent-lead-split.yml` | Lead | `issues: [labeled]`; `workflow_dispatch` with `issue` |
 | Rebase (resolve a conflict) | `agent-rebase.yml` | Implementer | `workflow_run` of your `CI` workflow, `types: [completed]`, `branches` your default branch; `schedule` (a daily floor); `workflow_dispatch` with `pr_number` |
 
-**What each caller maps, grants and needs.** Every caller maps its role's two App secrets and `CLAUDE_CODE_OAUTH_TOKEN`, by name. It grants at least the permissions below, which are the most any of the lane's jobs declares, and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
+**What each caller maps, grants and needs.** Every caller maps its role's two App secrets and `CLAUDE_CODE_OAUTH_TOKEN`, by name. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
 
 <!-- lane-contract:table -->
 
