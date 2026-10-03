@@ -56,6 +56,8 @@ A login ending in `[bot]` is judged by the App register alone, read from your de
 
 **Every lane carries the gate.** [`tests/unit/lane-gate.test.ts`](../tests/unit/lane-gate.test.ts) fails for a lane in Kanon without it, or with a step or job that can run past a refusal, and for a lane whose triggers it doesn't list.
 
+**A lane runs the Kanon version your default branch pins** ([#69](https://github.com/yedeya-labs/kanon/issues/69), `K-MERGE-17`). On `pull_request_target`, GitHub runs the base branch's copy of your caller. On a stacked pull request that base is another pull request's branch, and its caller can pin another version. So when the caller ran from a branch other than the default, which also covers a dispatch with `--ref`, the gate reads that caller at the commit that ran and at your default branch, and compares every Kanon reference in them (each `uses:` of a `yedeya-labs/kanon` path, with its version). If they differ, or the default branch has no such caller, the lane is refused with a `Kanon pin: refused.` summary line. A run from the default branch reads nothing. A run on a pull request's merge ref (`pull_request`, `pull_request_review`) isn't checked: there the pull request's own caller runs.
+
 **A dispatch made with the workflow token is refused.** Its actor is `github-actions[bot]`, which is not in your App register. So no lane starts another that way. When an implement run hits its turn or budget cap, its crash recovery adds `qa:needs-split` with the Implementer's App token, narrowed to Issues write, and that label's own event starts the split lane through the gate as a registered App. Its comment stays on the workflow token, so it never reads as the Implementer's.
 
 ## The caller

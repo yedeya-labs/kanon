@@ -60,6 +60,10 @@
 // (`K-MERGE-17`). A missing register means no App is registered, so a bot is refused; a
 // malformed one, or any failed API call, fails the step by name rather than guessing.
 //
+// THE CALLER'S KANON PIN IS CHECKED TOO, for a member (kanon#69): a lane run from a branch
+// other than the default whose caller pins a different Kanon version than the default branch's
+// caller is refused the same way. See `caller-pin.mjs`.
+//
 // A REFUSAL IS VISIBLE: a notice and a line in the step summary naming who was refused and
 // why, and `member=false` in the step's outputs. The lane's later steps and jobs read
 // `member` and skip. It exits 0, so a refused event is a skipped lane, not a red run.
@@ -72,6 +76,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { parseAppRegister } from './app-register.mjs';
+import { checkCallerPin } from './caller-pin.mjs';
 
 /** The `author_association` values that make a member (`K-AGENT-45`). */
 export const MEMBER_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
@@ -91,6 +96,7 @@ const MEMBER_PERMISSIONS = ['admin', 'maintain', 'push', 'triage'];
  *   pull_request?: { merged_by?: User },
  *   workflow_run?: { triggering_actor?: User, actor?: User, head_sha?: string },
  *   schedule?: string,
+ *   repository?: { default_branch?: string },
  * }} GitHubEvent
  */
 
@@ -272,6 +278,26 @@ export function main(env = process.env) {
       },
     });
     if (verdict.member) {
+      // THE CALLER'S KANON PIN (kanon#69): a lane run from a branch other than the default runs
+      // the version the default branch pins, or not at all. Checked for members only, so a
+      // refused stranger costs no read. `scripts/caller-pin.mjs` says when and why.
+      const pin = checkCallerPin(
+        { workflowRef: env.GITHUB_WORKFLOW_REF, workflowSha: env.GITHUB_WORKFLOW_SHA, repo, defaultBranch: event.repository?.default_branch },
+        (path, ref) => {
+          try {
+            return ghApi([`repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`, '-H', 'Accept: application/vnd.github.raw']);
+          } catch (e) {
+            if (/\b404\b/.test(stderrOf(e))) return null;
+            throw new Error(`could not read the caller ${path} at ${ref} on ${repo}: ${stderrOf(e)}`);
+          }
+        },
+      );
+      if (!pin.ok) {
+        output('member', 'false');
+        console.log(`::notice title=Kanon pin::Refused because ${pin.reason}.`);
+        summary(`**Kanon pin: refused.** ${actor.login} is a member, but ${pin.reason}. Run it from the default branch, or merge the pin there first.`);
+        return 0;
+      }
       output('member', 'true');
       console.log(`→ ${actor.login}, the ${actor.source}, is a member: ${verdict.reason}`);
       summary(`Membership gate: ${actor.login}, the ${actor.source}, is a member (${verdict.reason}).`);
