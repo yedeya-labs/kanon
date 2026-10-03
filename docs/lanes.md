@@ -91,7 +91,7 @@ permissions:
 
 jobs:
   revise:
-    uses: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@v0.15.1
+    uses: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@v0.16.0
     with:
       pr_number: ${{ inputs.pr_number }}
       reset: ${{ inputs.reset }}

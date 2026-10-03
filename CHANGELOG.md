@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.16.0](https://github.com/yedeya-labs/kanon/compare/v0.15.1...v0.16.0) (2026-10-03)
+
+
+### Features
+
+* **spec:** recognise tests and their titles by a fixed per-language convention ([#125](https://github.com/yedeya-labs/kanon/issues/125)) ([3aef40c](https://github.com/yedeya-labs/kanon/commit/3aef40c52a3e859035050b95110d166b181cc75a))
+
+
+### Bug Fixes
+
+* **release:** refuse a release PR that moves a version backwards or to one it doesn't release ([#126](https://github.com/yedeya-labs/kanon/issues/126)) ([5b80abd](https://github.com/yedeya-labs/kanon/commit/5b80abdce2efc1cb436d7d52a18e8839df1537ae))
+
+
+### Documentation
+
+* **plans:** let step 6 go ahead without the telemetry store ([#122](https://github.com/yedeya-labs/kanon/issues/122)) ([3eb5613](https://github.com/yedeya-labs/kanon/commit/3eb5613ee908262524890f935d95a1d076cd6a26))
+
 ## [0.15.1](https://github.com/yedeya-labs/kanon/compare/v0.15.0...v0.15.1) (2026-10-03)
 
 
