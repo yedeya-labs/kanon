@@ -1,0 +1,62 @@
+diff --git a/.release-please-manifest.json b/.release-please-manifest.json
+index 0ee8c01..2537c1f 100644
+--- a/.release-please-manifest.json
++++ b/.release-please-manifest.json
+@@ -1,3 +1,3 @@
+ {
+-  ".": "0.3.0"
++  ".": "0.4.0"
+ }
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e9aa54d..602c314 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,17 @@
+ # Changelog
+ 
++## [0.4.0](https://github.com/yedeya-labs/kanon/compare/v0.3.0...v0.4.0) (2026-09-30)
++
++
++### Features
++
++* **actions:** check the DCO sign-off on every pull request commit ([#1](https://github.com/yedeya-labs/kanon/issues/1)) ([9d0b4df](https://github.com/yedeya-labs/kanon/commit/9d0b4dfeabc9f5609aa1065615a3bd313e641e36))
++
++
++### Documentation
++
++* Kanon is public; drop the private-repository setup steps ([#3](https://github.com/yedeya-labs/kanon/issues/3)) ([30a6291](https://github.com/yedeya-labs/kanon/commit/30a62912b8d32fa7a6fffbf68b0c69476f8e02ee))
++
+ ## [0.3.0](https://github.com/yedeya-labs/kanon/releases/tag/v0.3.0) (2026-09-30)
+ 
+ The first public release of Kanon, under the Apache-2.0 licence.
+diff --git a/package-lock.json b/package-lock.json
+index cbefc03..5c0a7ec 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "kanon",
+-  "version": "0.3.0",
++  "version": "0.4.0",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "kanon",
+-      "version": "0.3.0",
++      "version": "0.4.0",
+       "devDependencies": {
+         "@eslint/js": "10.0.1",
+         "@types/node": "24.19.0",
+diff --git a/package.json b/package.json
+index 9ef4099..cdc9153 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "kanon",
+-  "version": "0.3.0",
++  "version": "0.4.0",
+   "private": true,
+   "type": "module",
+   "engines": {

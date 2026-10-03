@@ -1,0 +1,256 @@
+diff --git a/.release-please-manifest.json b/.release-please-manifest.json
+index 76d5538..b28fea9 100644
+--- a/.release-please-manifest.json
++++ b/.release-please-manifest.json
+@@ -1,3 +1,3 @@
+ {
+-  ".": "0.9.0"
++  ".": "0.9.1"
+ }
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 9ea06b9..1391309 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,13 @@
+ # Changelog
+ 
++## [0.9.1](https://github.com/yedeya-labs/kanon/compare/v0.9.0...v0.9.1) (2026-10-02)
++
++
++### Bug Fixes
++
++* **library:** name merge-reconcile's called filter job, and drop a stale exemption ([#65](https://github.com/yedeya-labs/kanon/issues/65)) ([2388d69](https://github.com/yedeya-labs/kanon/commit/2388d6927582d45a26cf1aca9e61f628809fcff5))
++* read DCO inputs from the default branch, and let the brief guard accept measurement items ([#64](https://github.com/yedeya-labs/kanon/issues/64)) ([717b624](https://github.com/yedeya-labs/kanon/commit/717b6243976c83ad707d7d66d115601082d8d1ce))
++
+ ## [0.9.0](https://github.com/yedeya-labs/kanon/compare/v0.8.1...v0.9.0) (2026-10-02)
+ 
+ 
+diff --git a/README.md b/README.md
+index e2e8c8b..14e4d54 100644
+--- a/README.md
++++ b/README.md
+@@ -45,17 +45,17 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
+ 
+ | What | Use it as |
+ |---|---|
+-| [PR-title check](actions/pr-title/README.md) | `uses: yedeya-labs/kanon/actions/pr-title@v0.9.0` |
+-| [DCO sign-off check](actions/dco/README.md) | `uses: yedeya-labs/kanon/actions/dco@v0.9.0` |
+-| [Release workflow](docs/release.md) | `uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.9.0` |
+-| [Agent lane: set up](actions/agent-setup/README.md) | `uses: yedeya-labs/kanon/actions/agent-setup@v0.9.0` |
+-| [Agent lane: run the agent](actions/agent-run/README.md) | `uses: yedeya-labs/kanon/actions/agent-run@v0.9.0` |
+-| [Agent lane: finish](actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@v0.9.0` |
+-| [Agent lane: classify a red run](actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@v0.9.0` |
+-| [Agent telemetry](actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@v0.9.0` |
+-| [Agent lanes: triage, implement, implement-revise, lead-revise, merge-reconcile](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.9.0` in a job |
+-| [Lane check](actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@v0.9.0` |
+-| [Kanon's scripts from a workflow step](actions/kanon-path/README.md) | `uses: yedeya-labs/kanon/actions/kanon-path@v0.9.0` |
++| [PR-title check](actions/pr-title/README.md) | `uses: yedeya-labs/kanon/actions/pr-title@v0.9.1` |
++| [DCO sign-off check](actions/dco/README.md) | `uses: yedeya-labs/kanon/actions/dco@v0.9.1` |
++| [Release workflow](docs/release.md) | `uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.9.1` |
++| [Agent lane: set up](actions/agent-setup/README.md) | `uses: yedeya-labs/kanon/actions/agent-setup@v0.9.1` |
++| [Agent lane: run the agent](actions/agent-run/README.md) | `uses: yedeya-labs/kanon/actions/agent-run@v0.9.1` |
++| [Agent lane: finish](actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@v0.9.1` |
++| [Agent lane: classify a red run](actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@v0.9.1` |
++| [Agent telemetry](actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@v0.9.1` |
++| [Agent lanes: triage, implement, implement-revise, lead-revise, merge-reconcile](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.9.1` in a job |
++| [Lane check](actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@v0.9.1` |
++| [Kanon's scripts from a workflow step](actions/kanon-path/README.md) | `uses: yedeya-labs/kanon/actions/kanon-path@v0.9.1` |
+ 
+ <!-- x-release-please-end -->
+ 
+@@ -64,7 +64,7 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
+ <!-- x-release-please-start-version -->
+ 
+ ```sh
+-npx --yes --package github:yedeya-labs/kanon#v0.9.0 kanon apps --org <org> --repo <repo> --roles reviewer
++npx --yes --package github:yedeya-labs/kanon#v0.9.1 kanon apps --org <org> --repo <repo> --roles reviewer
+ ```
+ 
+ <!-- x-release-please-end -->
+diff --git a/actions/agent-classify/README.md b/actions/agent-classify/README.md
+index 63fcbc1..eb7c310 100644
+--- a/actions/agent-classify/README.md
++++ b/actions/agent-classify/README.md
+@@ -13,7 +13,7 @@ The block has no `if:` of its own, because the right gate depends on the lane. G
+ ```yaml
+ - id: classify
+   if: failure()
+-  uses: yedeya-labs/kanon/actions/agent-classify@v0.9.0
++  uses: yedeya-labs/kanon/actions/agent-classify@v0.9.1
+   with:
+     arm: review agent
+ ```
+diff --git a/actions/agent-finish/README.md b/actions/agent-finish/README.md
+index 97e4fe4..44c4f71 100644
+--- a/actions/agent-finish/README.md
++++ b/actions/agent-finish/README.md
+@@ -12,7 +12,7 @@ Call it with `id: finish`, `if: always()` and `continue-on-error: true`, and han
+ - id: finish
+   if: always()
+   continue-on-error: true
+-  uses: yedeya-labs/kanon/actions/agent-finish@v0.9.0
++  uses: yedeya-labs/kanon/actions/agent-finish@v0.9.1
+   with:
+     arm: lead agent
+     agent: lead
+diff --git a/actions/agent-run/README.md b/actions/agent-run/README.md
+index 10f8164..7064ff2 100644
+--- a/actions/agent-run/README.md
++++ b/actions/agent-run/README.md
+@@ -12,7 +12,7 @@ Call it with `id: agent`, so the lane reads `steps.agent.outputs.execution_file`
+ 
+ ```yaml
+ - id: agent
+-  uses: yedeya-labs/kanon/actions/agent-run@v0.9.0
++  uses: yedeya-labs/kanon/actions/agent-run@v0.9.1
+   with:
+     prompt: ${{ env.PROMPT }}
+     claude_args: ${{ env.CLAUDE_ARGS }}
+diff --git a/actions/agent-setup/README.md b/actions/agent-setup/README.md
+index a5ce8fb..ecd3f50 100644
+--- a/actions/agent-setup/README.md
++++ b/actions/agent-setup/README.md
+@@ -18,7 +18,7 @@ A lane is built from four composite actions, so that a lane with steps of its ow
+ <!-- x-release-please-start-version -->
+ 
+ ```yaml
+-- uses: yedeya-labs/kanon/actions/agent-setup@v0.9.0
++- uses: yedeya-labs/kanon/actions/agent-setup@v0.9.1
+   with:
+     arm: lead agent
+     app-slug: ${{ steps.app-token.outputs.app-slug }}
+diff --git a/actions/agent-telemetry/README.md b/actions/agent-telemetry/README.md
+index effa4d2..6a507b6 100644
+--- a/actions/agent-telemetry/README.md
++++ b/actions/agent-telemetry/README.md
+@@ -11,7 +11,7 @@ Turns `claude-code-action`'s result file into one telemetry row (cost, turns, to
+ ```yaml
+ - if: always()
+   continue-on-error: true
+-  uses: yedeya-labs/kanon/actions/agent-telemetry@v0.9.0
++  uses: yedeya-labs/kanon/actions/agent-telemetry@v0.9.1
+   with:
+     agent: reviewer
+     execution_file: ${{ steps.agent.outputs.execution_file }}
+diff --git a/actions/dco/README.md b/actions/dco/README.md
+index 1184184..2e71cb7 100644
+--- a/actions/dco/README.md
++++ b/actions/dco/README.md
+@@ -55,7 +55,7 @@ jobs:
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+     steps:
+-      - uses: yedeya-labs/kanon/actions/dco@v0.9.0
++      - uses: yedeya-labs/kanon/actions/dco@v0.9.1
+ ```
+ 
+ <!-- x-release-please-end -->
+diff --git a/actions/kanon-path/README.md b/actions/kanon-path/README.md
+index 9b30d76..19f2eb6 100644
+--- a/actions/kanon-path/README.md
++++ b/actions/kanon-path/README.md
+@@ -9,7 +9,7 @@ A `run:` step reads the checked-out repository, and a reusable workflow can't re
+ <!-- x-release-please-start-version -->
+ 
+ ```yaml
+-- uses: yedeya-labs/kanon/actions/kanon-path@v0.9.0
++- uses: yedeya-labs/kanon/actions/kanon-path@v0.9.1
+ - run: node "$KANON/scripts/playbook-excerpt.mjs"
+ ```
+ 
+diff --git a/actions/lane-check/README.md b/actions/lane-check/README.md
+index 93ab233..818b24b 100644
+--- a/actions/lane-check/README.md
++++ b/actions/lane-check/README.md
+@@ -32,7 +32,7 @@ jobs:
+     timeout-minutes: 5
+     steps:
+       - uses: actions/checkout@v7
+-      - uses: yedeya-labs/kanon/actions/lane-check@v0.9.0
++      - uses: yedeya-labs/kanon/actions/lane-check@v0.9.1
+ ```
+ 
+ <!-- x-release-please-end -->
+diff --git a/actions/pr-title/README.md b/actions/pr-title/README.md
+index 6e55613..63a36ba 100644
+--- a/actions/pr-title/README.md
++++ b/actions/pr-title/README.md
+@@ -32,7 +32,7 @@ jobs:
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+     steps:
+-      - uses: yedeya-labs/kanon/actions/pr-title@v0.9.0
++      - uses: yedeya-labs/kanon/actions/pr-title@v0.9.1
+ ```
+ 
+ <!-- x-release-please-end -->
+diff --git a/docs/apps.md b/docs/apps.md
+index d012c4b..0b5649d 100644
+--- a/docs/apps.md
++++ b/docs/apps.md
+@@ -17,7 +17,7 @@ Kanon isn't on npm. Run the command straight from a tagged Kanon release, from t
+ <!-- x-release-please-start-version -->
+ 
+ ```sh
+-npx --yes --package github:yedeya-labs/kanon#v0.9.0 kanon apps --org <org> --repo <repo> --roles reviewer
++npx --yes --package github:yedeya-labs/kanon#v0.9.1 kanon apps --org <org> --repo <repo> --roles reviewer
+ ```
+ 
+ <!-- x-release-please-end -->
+diff --git a/docs/lanes.md b/docs/lanes.md
+index bafb8b1..ea2d0fd 100644
+--- a/docs/lanes.md
++++ b/docs/lanes.md
+@@ -63,7 +63,7 @@ permissions:
+ 
+ jobs:
+   revise:
+-    uses: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@v0.9.0
++    uses: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@v0.9.1
+     with:
+       pr_number: ${{ inputs.pr_number }}
+       reset: ${{ inputs.reset }}
+diff --git a/docs/release.md b/docs/release.md
+index c1a81a2..de61a98 100644
+--- a/docs/release.md
++++ b/docs/release.md
+@@ -34,7 +34,7 @@ jobs:
+     permissions:
+       contents: write
+       pull-requests: write
+-    uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.9.0
++    uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.9.1
+ ```
+ 
+ <!-- x-release-please-end -->
+diff --git a/package-lock.json b/package-lock.json
+index 33b7246..b3bab57 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "kanon",
+-  "version": "0.9.0",
++  "version": "0.9.1",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "kanon",
+-      "version": "0.9.0",
++      "version": "0.9.1",
+       "devDependencies": {
+         "@eslint/js": "10.0.1",
+         "@types/node": "24.19.0",
+diff --git a/package.json b/package.json
+index a70801b..97edd54 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "kanon",
+-  "version": "0.9.0",
++  "version": "0.9.1",
+   "private": true,
+   "type": "module",
+   "engines": {

@@ -1,0 +1,57 @@
+diff --git a/.release-please-manifest.json b/.release-please-manifest.json
+index ec087f9..f1c1e58 100644
+--- a/.release-please-manifest.json
++++ b/.release-please-manifest.json
+@@ -1,3 +1,3 @@
+ {
+-  ".": "0.4.4"
++  ".": "0.5.0"
+ }
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 37e5419..0553896 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,12 @@
+ # Changelog
+ 
++## [0.5.0](https://github.com/yedeya-labs/kanon/compare/v0.4.4...v0.5.0) (2026-10-02)
++
++
++### Features
++
++* **actions:** move the agent-lane blocks into Kanon ([#26](https://github.com/yedeya-labs/kanon/issues/26)) ([d5a4e5e](https://github.com/yedeya-labs/kanon/commit/d5a4e5e2a36f7bdfd836e42ae6f56d592fcadff4))
++
+ ## [0.4.4](https://github.com/yedeya-labs/kanon/compare/v0.4.3...v0.4.4) (2026-10-01)
+ 
+ 
+diff --git a/package-lock.json b/package-lock.json
+index 24655dc..11bf2e0 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "kanon",
+-  "version": "0.4.4",
++  "version": "0.5.0",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "kanon",
+-      "version": "0.4.4",
++      "version": "0.5.0",
+       "devDependencies": {
+         "@eslint/js": "10.0.1",
+         "@types/node": "24.19.0",
+diff --git a/package.json b/package.json
+index c0e0965..0c5b9a6 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "kanon",
+-  "version": "0.4.4",
++  "version": "0.5.0",
+   "private": true,
+   "type": "module",
+   "engines": {

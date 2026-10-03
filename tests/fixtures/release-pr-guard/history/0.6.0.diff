@@ -1,0 +1,68 @@
+diff --git a/.release-please-manifest.json b/.release-please-manifest.json
+index 210d290..bcd0522 100644
+--- a/.release-please-manifest.json
++++ b/.release-please-manifest.json
+@@ -1,3 +1,3 @@
+ {
+-  ".": "0.5.1"
++  ".": "0.6.0"
+ }
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 8a502ef..a8e049f 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,23 @@
+ # Changelog
+ 
++## [0.6.0](https://github.com/yedeya-labs/kanon/compare/v0.5.1...v0.6.0) (2026-10-02)
++
++
++### Features
++
++* **lanes:** move the shared lane workflow and three lanes into Kanon, with lane-check ([#35](https://github.com/yedeya-labs/kanon/issues/35)) ([ae47159](https://github.com/yedeya-labs/kanon/commit/ae47159196db84d1d9e02062358f513da3a571f0))
++
++
++### Documentation
++
++* **plans:** plan the hosted telemetry store ([#33](https://github.com/yedeya-labs/kanon/issues/33)) ([ece3275](https://github.com/yedeya-labs/kanon/commit/ece3275eba9c24a1168f436504fa8f6453f975d2))
++
++
++### CI
++
++* **release:** call the reusable release workflow through `$/` ([#38](https://github.com/yedeya-labs/kanon/issues/38)) ([41cea9b](https://github.com/yedeya-labs/kanon/commit/41cea9b0e194443a90b355f5d0bce60bf1490055))
++* require the agent lanes smoke check ([#37](https://github.com/yedeya-labs/kanon/issues/37)) ([b40e2d5](https://github.com/yedeya-labs/kanon/commit/b40e2d5882ad6cf5196e9588e0ddcb1ee0ad3ebb))
++
+ ## [0.5.1](https://github.com/yedeya-labs/kanon/compare/v0.5.0...v0.5.1) (2026-10-02)
+ 
+ 
+diff --git a/package-lock.json b/package-lock.json
+index 32ffed8..b18b159 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "kanon",
+-  "version": "0.5.1",
++  "version": "0.6.0",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "kanon",
+-      "version": "0.5.1",
++      "version": "0.6.0",
+       "devDependencies": {
+         "@eslint/js": "10.0.1",
+         "@types/node": "24.19.0",
+diff --git a/package.json b/package.json
+index 3b16a5e..f06d80c 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "kanon",
+-  "version": "0.5.1",
++  "version": "0.6.0",
+   "private": true,
+   "type": "module",
+   "engines": {

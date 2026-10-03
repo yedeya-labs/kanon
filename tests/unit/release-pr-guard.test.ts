@@ -9,7 +9,7 @@
 // tests/fixtures/release-pr-guard/ are the real release commits: 0.10.0's, which reverted
 // docs/lanes.md and actions/lane-check/README.md, and 0.11.0's, which changed only versions.
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -40,6 +40,19 @@ const prFiles = (diff: string): PrFile[] =>
     });
 const stale = prFiles(read('tests/fixtures/release-pr-guard/0.10.0-stale.diff'));
 const clean = prFiles(read('tests/fixtures/release-pr-guard/0.11.0-clean.diff'));
+// #90: every other release commit Kanon has made (0.4.0 to 0.15.1, the squash commits of its
+// release PRs). Releases before 0.4.0 didn't come from a release PR.
+const HISTORY = readdirSync(new URL('../fixtures/release-pr-guard/history/', import.meta.url))
+  .filter((f) => f.endsWith('.diff'))
+  .map((f) => [f.replace(/\.diff$/, ''), prFiles(read(`tests/fixtures/release-pr-guard/history/${f}`))] as const);
+
+/** The manifest change of a release PR, which names the versions it releases. */
+const manifest = (...moves: Array<[string, string, string]>): PrFile => ({
+  filename: '.release-please-manifest.json',
+  status: 'modified',
+  patch: `@@ -1,${moves.length + 2} +1,${moves.length + 2} @@\n {\n${moves.map(([path, from]) => `-  "${path}": "${from}"`).join(',\n')}\n${moves.map(([path, , to]) => `+  "${path}": "${to}"`).join(',\n')}\n }`,
+});
+const MANIFEST_0_10 = manifest(['.', '0.9.1', '0.10.0']);
 
 const FAKE_GH = `#!/bin/sh
 echo "$*" >> "$FAKE_GH_DIR/calls.log"
@@ -153,21 +166,90 @@ describe('#73 the release workflow refuses a release PR that changes more than v
     expect(result.stderr).toContain(problem);
   });
 
-  it('passes a version-only line, a prerelease version, and the excluded version files whatever they hold', () => {
+  it('passes a version-only line moved to the release version, from a prerelease too, and the changelog whatever it holds', () => {
     const files: PrFile[] = [
-      { filename: 'docs/apps.md', status: 'modified', patch: '@@ -1,3 +1,3 @@\n a\n-npx kanon#v0.9.1 x 1.2.3-rc.1\n+npx kanon#v0.10.0 x 1.3.0\n b' },
+      MANIFEST_0_10,
+      { filename: 'docs/apps.md', status: 'modified', patch: '@@ -1,3 +1,3 @@\n a\n-npx kanon#v0.9.1 x 0.10.0-rc.1\n+npx kanon#v0.10.0 x 0.10.0\n b' },
       { filename: 'CHANGELOG.md', status: 'modified', patch: '@@ -1 +1,2 @@\n+## 0.10.0\n anything' },
-      { filename: 'package.json', status: 'modified', patch: '@@ -1 +1 @@\n-"scripts": {}\n+"other": 1' },
-      { filename: 'package-lock.json', status: 'modified' },
-      { filename: '.release-please-manifest.json', status: 'modified', patch: '@@ -1 +1 @@\n-x\n+y' },
+      { filename: 'package.json', status: 'modified', patch: '@@ -2,3 +2,3 @@\n   "name": "kanon",\n-  "version": "0.9.1",\n+  "version": "0.10.0",\n   "private": true,' },
+      { filename: 'package-lock.json', status: 'modified', patch: '@@ -3 +3 @@\n-  "version": "0.9.1",\n+  "version": "0.10.0",\n@@ -9 +9 @@\n-      "version": "0.9.1",\n+      "version": "0.10.0",' },
     ];
     const result = runGuard(responses({ files }));
     expect(result.stderr).toBe('');
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain('each to a version it releases (0.10.0)');
+  });
+
+  // #90: release-please rewrites these files from its own copy, so a stale copy reverts a
+  // dependency bump on main with a line whose only change is a version.
+  it.each<[string, PrFile, string]>([
+    ['a Cargo.toml dependency', { filename: 'Cargo.toml', status: 'modified', patch: '@@ -9 +9 @@\n-serde = "1.0.190"\n+serde = "1.0.188"' }, 'Cargo.toml: +serde = "1.0.188"   <- 1.0.190 goes back to 1.0.188'],
+    ['a pyproject.toml dependency', { filename: 'pyproject.toml', status: 'modified', patch: '@@ -7 +7 @@\n-  "requests>=2.31.0",\n+  "requests>=2.30.0",' }, 'pyproject.toml: +  "requests>=2.30.0",   <- 2.31.0 goes back to 2.30.0'],
+    ['a package.json dependency, now read rather than skipped', { filename: 'package.json', status: 'modified', patch: '@@ -12 +12 @@\n-    "vitest": "5.0.2",\n+    "vitest": "5.0.1",' }, 'package.json: +    "vitest": "5.0.1",   <- 5.0.2 goes back to 5.0.1'],
+    ['a package-lock.json nested version', { filename: 'package-lock.json', status: 'modified', patch: '@@ -40 +40 @@\n-      "version": "5.0.2",\n+      "version": "5.0.1",' }, 'package-lock.json: +      "version": "5.0.1",   <- 5.0.2 goes back to 5.0.1'],
+    ['a prerelease of the version it replaces', { filename: 'docs/apps.md', status: 'modified', patch: '@@ -1 +1 @@\n-pin 0.10.0\n+pin 0.10.0-rc.1' }, 'docs/apps.md: +pin 0.10.0-rc.1   <- 0.10.0 goes back to 0.10.0-rc.1'],
+    ['a dependency moved FORWARD to a version this release does not set', { filename: 'pyproject.toml', status: 'modified', patch: '@@ -7 +7 @@\n-  "requests>=2.30.0",\n+  "requests>=2.31.0",' }, 'pyproject.toml: +  "requests>=2.31.0",   <- 2.31.0 is not a version this release sets (0.10.0)'],
+  ])('fails %s whose version goes backwards or is not this release\'s (#90)', (_, file, problem) => {
+    const result = runGuard(responses({ files: [MANIFEST_0_10, file] }));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(problem);
+  });
+
+  it('holds the manifest itself to the rule: a package moved backwards fails (#90)', () => {
+    const result = runGuard(responses({ files: [manifest(['.', '0.10.0', '0.9.1'])] }));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('.release-please-manifest.json: +  ".": "0.9.1"   <- 0.10.0 goes back to 0.9.1');
+  });
+
+  it("fails when the manifest isn't changed, since then no version is this release's (#90)", () => {
+    const result = runGuard(responses({ files: [{ filename: 'docs/apps.md', status: 'modified', patch: '@@ -1 +1 @@\n-pin 0.9.1\n+pin 0.10.0' }] }));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(".release-please-manifest.json: no version is added to it, so the guard can't tell which versions this release sets");
+    expect(result.stderr).toContain('docs/apps.md: +pin 0.10.0   <- 0.10.0 is not a version this release sets (none)');
+  });
+
+  it('in a monorepo, takes every released package\'s version, and still refuses one moved backwards to a sibling\'s (#90)', () => {
+    const two = manifest(['packages/a', '1.0.0', '1.1.0'], ['packages/b', '2.0.0', '2.1.0']);
+    const sibling: PrFile = { filename: 'packages/a/package.json', status: 'modified', patch: '@@ -3,4 +3,4 @@\n-  "version": "1.0.0",\n-  "dependencies": { "b": "^2.0.0" }\n+  "version": "1.1.0",\n+  "dependencies": { "b": "^2.1.0" }' };
+    expect(runGuard(responses({ files: [two, sibling] })).status).toBe(0);
+    const back: PrFile = { filename: 'packages/a/package.json', status: 'modified', patch: '@@ -4 +4 @@\n-  "dependencies": { "b": "^2.2.0" }\n+  "dependencies": { "b": "^1.1.0" }' };
+    const result = runGuard(responses({ files: [two, back] }));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('<- 2.2.0 goes back to 1.1.0');
+  });
+
+  it.each<[string, string, number]>([
+    ['0.10.0-rc.2', '0.10.0-rc.10', 0],
+    ['0.10.0-rc.10', '0.10.0-rc.2', 1],
+    ['0.10.0-alpha', '0.10.0-beta', 0],
+    ['0.10.0-rc.1', '0.10.0-rc.1.1', 0],
+    ['0.10.0-1', '0.10.0-alpha', 0],
+    ['0.9.10', '0.10.0', 0],
+    ['0.10.0+build.2', '0.10.0+build.1', 0],
+    ['0.10.1+build.1', '0.10.0+build.2', 1],
+  ])('orders %s before %s by semver precedence (exit %i)', (from, to, status) => {
+    const result = runGuard(responses({ files: [manifest(['.', '0.9.0', to]), { filename: 'docs/apps.md', status: 'modified', patch: `@@ -1 +1 @@\n-pin ${from}\n+pin ${to}` }] }));
+    expect(result.status, result.stderr).toBe(status);
+  });
+
+  it.each(HISTORY.map(([v]) => v))("passes Kanon's %s release PR, as it merged (#90)", (version) => {
+    const files = HISTORY.find(([v]) => v === version)![1];
+    expect(files.map((f) => f.filename)).toContain('.release-please-manifest.json');
+    const result = runGuard(responses({ files }));
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`each to a version it releases (${version})`);
+  });
+
+  it('holds every release from 0.4.0 on, besides the two fixtures above', () => {
+    expect(HISTORY.map(([v]) => v).sort()).toEqual(
+      ['0.4.0', '0.4.1', '0.4.2', '0.4.3', '0.4.4', '0.5.0', '0.5.1', '0.6.0', '0.6.1', '0.7.0', '0.8.0', '0.8.1', '0.9.0', '0.9.1', '0.12.0', '0.13.0', '0.14.0', '0.15.0', '0.15.1'].sort(),
+    );
   });
 
   it("passes another release type's own version file when only its version changed, so the workflow stays language-agnostic", () => {
     const files: PrFile[] = [
+      MANIFEST_0_10,
       { filename: 'pyproject.toml', status: 'modified', patch: '@@ -1,3 +1,3 @@\n [project]\n-version = "0.9.1"\n+version = "0.10.0"\n name = "widget"' },
       { filename: 'Cargo.toml', status: 'modified', patch: '@@ -2 +2 @@\n-version = "0.9.1"\n+version = "0.10.0"' },
     ];
@@ -181,7 +263,7 @@ describe('#73 the release workflow refuses a release PR that changes more than v
     expect(runGuard(responses({ files: [file] })).stderr).toContain('version.txt: added, and it is not in extra-files');
     const simple = JSON.parse(config) as { packages: Record<string, Record<string, unknown>> };
     simple.packages['.']!['release-type'] = 'simple';
-    const answers = responses({ files: [file] });
+    const answers = responses({ files: [MANIFEST_0_10, file] });
     answers[`repos/${REPO}/contents/release-please-config.json?ref=${SHA}`] = {
       encoding: 'base64',
       content: Buffer.from(JSON.stringify(simple)).toString('base64'),
@@ -228,13 +310,13 @@ describe('#73 the release workflow refuses a release PR that changes more than v
     ]],
     ['simple', [{ filename: 'version.txt', status: 'modified', patch: '@@ -1 +1 @@\n-0.9.1\n+0.10.0 anything' }]],
   ])("passes a clean `%s` release PR, which touches that type's own version files", (type, files) => {
-    const result = withType(type, files);
+    const result = withType(type, [MANIFEST_0_10, ...files]);
     expect(result.stderr).toBe('');
     expect(result.status).toBe(0);
   });
 
-  it.each(['python', 'go', 'rust', 'simple'])(
-    "reads package.json like any other file for the `%s` release type, which doesn't own it",
+  it.each([...TYPES, undefined])(
+    'reads package.json like any other file for the `%s` release type, `node` and unset included (#90)',
     (type) => {
       const result = withType(type, [{ filename: 'package.json', status: 'modified', patch: '@@ -1 +1 @@\n-"scripts": {}\n+"other": 1' }]);
       expect(result.status).toBe(1);
@@ -269,7 +351,7 @@ describe('#73 the release workflow refuses a release PR that changes more than v
   it.each<[string, string | undefined]>([['node', 'node'], ['python', 'python'], ['unset (read as node)', undefined]])(
     'skips the root changelog.json release-please rewrites for the `%s` release type (#109)',
     (_, type) => {
-      const result = withType(type, [CHANGELOG_JSON]);
+      const result = withType(type, [MANIFEST_0_10, CHANGELOG_JSON]);
       expect(result.stderr).toBe('');
       expect(result.status).toBe(0);
     },
@@ -284,10 +366,10 @@ describe('#73 the release workflow refuses a release PR that changes more than v
   it.each(['node', 'python'])(
     'skips the ROOT changelog.json for a `%s` package that is not at the root, and reads one under its path (#109)',
     (type) => {
-      const root = atPath('packages/widget', type, [CHANGELOG_JSON]);
+      const root = atPath('packages/widget', type, [manifest(['packages/widget', '0.9.1', '0.10.0']), CHANGELOG_JSON]);
       expect(root.stderr).toBe('');
       expect(root.status).toBe(0);
-      const nested = atPath('packages/widget', type, [{ ...CHANGELOG_JSON, filename: 'packages/widget/changelog.json' }]);
+      const nested = atPath('packages/widget', type, [manifest(['packages/widget', '0.9.1', '0.10.0']), { ...CHANGELOG_JSON, filename: 'packages/widget/changelog.json' }]);
       expect(nested.status).toBe(1);
       expect(nested.stderr).toContain('packages/widget/changelog.json: +    {');
     },
@@ -313,15 +395,9 @@ describe('#73 the release workflow refuses a release PR that changes more than v
     expect(result.stderr).toContain('version.txt: -old');
   });
 
-  it("reads an unset release type as `node`, release-please's own default", () => {
-    const result = withType(undefined, [{ filename: 'package.json', status: 'modified', patch: '@@ -1 +1 @@\n-"scripts": {}\n+"other": 1' }]);
-    expect(result.stderr).toBe('');
-    expect(result.status).toBe(0);
-  });
-
   it("names the files it skipped for the release type in its comment, not node's", () => {
     const result = withType('simple', stale);
-    expect(result.comment).toContain('Outside `.release-please-manifest.json`, `CHANGELOG.md`, `version.txt`, a release PR may change only version strings');
+    expect(result.comment).toContain('Outside `CHANGELOG.md`, `version.txt`, a release PR may change only version strings, each to a version it releases and never backwards');
     expect(result.comment).not.toContain('package.json');
   });
 

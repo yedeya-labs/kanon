@@ -1,0 +1,57 @@
+diff --git a/.release-please-manifest.json b/.release-please-manifest.json
+index 2537c1f..218393f 100644
+--- a/.release-please-manifest.json
++++ b/.release-please-manifest.json
+@@ -1,3 +1,3 @@
+ {
+-  ".": "0.4.0"
++  ".": "0.4.1"
+ }
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 602c314..a967942 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,12 @@
+ # Changelog
+ 
++## [0.4.1](https://github.com/yedeya-labs/kanon/compare/v0.4.0...v0.4.1) (2026-09-30)
++
++
++### Documentation
++
++* give Kanon a public front page and contribution templates ([#6](https://github.com/yedeya-labs/kanon/issues/6)) ([6320c5d](https://github.com/yedeya-labs/kanon/commit/6320c5d814aa4a16b1eab70f18151d6a51490393))
++
+ ## [0.4.0](https://github.com/yedeya-labs/kanon/compare/v0.3.0...v0.4.0) (2026-09-30)
+ 
+ 
+diff --git a/package-lock.json b/package-lock.json
+index 5c0a7ec..80c44af 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "kanon",
+-  "version": "0.4.0",
++  "version": "0.4.1",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "kanon",
+-      "version": "0.4.0",
++      "version": "0.4.1",
+       "devDependencies": {
+         "@eslint/js": "10.0.1",
+         "@types/node": "24.19.0",
+diff --git a/package.json b/package.json
+index cdc9153..9b00dfa 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "kanon",
+-  "version": "0.4.0",
++  "version": "0.4.1",
+   "private": true,
+   "type": "module",
+   "engines": {
