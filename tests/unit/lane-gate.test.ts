@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { decide, triggeringActor } from '../../scripts/lane-gate.mjs';
+import { kanonRefsOf, parseWorkflowRef } from '../../scripts/caller-pin.mjs';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { GH_REGISTER_ARM, IMPLEMENTER_LOGIN, LEAD_LOGIN, REGISTER_FIXTURE } from './helpers/register.js';
@@ -186,6 +187,17 @@ fi
 if [ "\${1:-}" = "api" ] && [[ "$*" == *"/issues/"*"/events"* ]]; then
   printf '%s' "\${STUB_EVENTS:-[[]]}"; exit 0
 fi
+# kanon#69: the caller, at the branch's commit (STUB_CALLER_BRANCH) and at main (STUB_CALLER_MAIN).
+if [ "\${1:-}" = "api" ] && [[ "\${2:-}" == */contents/.github/workflows/*"?ref="* ]]; then
+  printf '%s\n' "$2" >> "\${STUB_CALLS:-/dev/null}"
+  [ -z "\${STUB_CALLER_FAILS:-}" ] || { echo "HTTP 500: Server Error" >&2; exit 1; }
+  case "\${2##*ref=}" in
+    main) body="\${STUB_CALLER_MAIN:-}" ;;
+    *)    body="\${STUB_CALLER_BRANCH:-}" ;;
+  esac
+  [ -n "$body" ] || { echo "HTTP 404: Not Found" >&2; exit 1; }
+  printf '%s\n' "$body"; exit 0
+fi
 echo "unexpected gh call: $*" >&2
 exit 3
 `;
@@ -222,7 +234,7 @@ const eventFor = (trigger: Trigger, actor: Actor): { name: string; payload: obje
   }
 };
 
-const runGate = (file: string, trigger: Trigger, actor: Actor, extra: Record<string, string> = {}) => {
+const runGate = (file: string, trigger: Trigger, actor: Actor, extra: Record<string, string> = {}, payload: object = {}) => {
   const wf = read(file);
   const { jobId, index } = gateOf(wf)!;
   const step = wf.jobs[jobId]!.steps![index]!;
@@ -230,7 +242,8 @@ const runGate = (file: string, trigger: Trigger, actor: Actor, extra: Record<str
   writeStub(join(dir, 'gh'), GH_STUB);
   const ev = eventFor(trigger, actor);
   const eventPath = join(dir, 'event.json');
-  writeFileSync(eventPath, JSON.stringify(ev.payload));
+  // Every real payload names the repository's default branch; a test drops it by overriding.
+  writeFileSync(eventPath, JSON.stringify({ ...ev.payload, repository: { default_branch: 'main' }, ...payload }));
   return runWorkflowStep(step, {
     dir,
     env: {
@@ -243,6 +256,11 @@ const runGate = (file: string, trigger: Trigger, actor: Actor, extra: Record<str
       GITHUB_EVENT_PATH: eventPath,
       GITHUB_ACTOR: '',
       GITHUB_TRIGGERING_ACTOR: '',
+      // The runner always names the caller; here it ran from the default branch, so the pin
+      // check (kanon#69) takes its real default-branch path. Set here, never inherited: on a
+      // runner `process.env` names CI's own workflow, in another repository.
+      GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/caller.yml@refs/heads/main`,
+      GITHUB_WORKFLOW_SHA: 'e'.repeat(40),
       ...ev.env,
       STUB_REGISTER: REGISTER_FIXTURE,
       STUB_PERMS: JSON.stringify(PERMS),
@@ -469,5 +487,167 @@ describe('the review lane on CI completion judges the review label’s applier (
     const r = runGate('agent-rebase.yml', 'ci-finished', MEMBER, { STUB_EVENTS: eventsOf(['a-stranger', 'review:please']) });
     expect(r.outputs.member, r.output).toBe('true');
     expect(r.outputs.actor).toBe('a-member');
+  });
+});
+
+/**
+ * kanon#69: a lane run from a branch other than the default (a stacked pull request's base on
+ * `pull_request_target`, a dispatch with `--ref`) runs the Kanon version the default branch's
+ * caller pins, or it refuses, visibly.
+ */
+const caller = (version: string, lane = 'agent-review.yml') =>
+  `name: Review\non: [workflow_dispatch]\njobs:\n  review:\n    uses: yedeya-labs/kanon/.github/workflows/${lane}@${version}\n`;
+const STACKED = {
+  GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/review.yml@refs/heads/feature-a`,
+  GITHUB_WORKFLOW_SHA: 'f'.repeat(40),
+};
+const REPOSITORY = { repository: { default_branch: 'main' } };
+
+describe.each(CASES)('%s on a %s, from a stacked base (kanon#69)', (file, trigger) => {
+  it('refuses a caller that pins another Kanon version than the default branch, visibly', () => {
+    const r = runGate(file, trigger, MEMBER, { ...STACKED, STUB_CALLER_BRANCH: caller('v0.9.0'), STUB_CALLER_MAIN: caller('v0.10.0') }, REPOSITORY);
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('Kanon pin: refused.');
+    expect(r.summary).toContain('@v0.9.0');
+    expect(r.summary).toContain('@v0.10.0');
+    expect(r.output).toContain('::notice title=Kanon pin::');
+  });
+  it('admits a caller that pins what the default branch pins', () => {
+    const r = runGate(file, trigger, MEMBER, { ...STACKED, STUB_CALLER_BRANCH: caller('v0.10.0'), STUB_CALLER_MAIN: caller('v0.10.0') }, REPOSITORY);
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('true');
+  });
+});
+
+describe('the caller pin check (kanon#69)', () => {
+  const file = 'agent-review.yml';
+  const gate = (extra: Record<string, string>, payload: object = REPOSITORY) => {
+    const calls = join(mkdtempSync(join(tmpdir(), 'pin-calls-')), 'calls');
+    writeFileSync(calls, '');
+    const r = runGate(file, 'pr-target-label', MEMBER, { STUB_CALLS: calls, ...extra }, payload);
+    return { ...r, calls: readFileSync(calls, 'utf8') };
+  };
+
+  it('reads the branch caller at the commit that ran, and the default branch by name', () => {
+    const r = gate({ ...STACKED, STUB_CALLER_BRANCH: caller('v0.10.0'), STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.calls).toContain(`contents/.github/workflows/review.yml?ref=${'f'.repeat(40)}`);
+    expect(r.calls).toContain('contents/.github/workflows/review.yml?ref=main');
+  });
+
+  it('reads nothing on the default branch', () => {
+    const r = gate({ GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/review.yml@refs/heads/main`, GITHUB_WORKFLOW_SHA: 'f'.repeat(40),
+      STUB_CALLER_BRANCH: caller('v0.9.0'), STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.outputs.member).toBe('true');
+    expect(r.calls).toBe('');
+  });
+
+  // The Owner's decision on #112: a pull request never chooses the Kanon version that acts on it.
+  const MERGE = { GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/review.yml@refs/pull/7/merge`, GITHUB_WORKFLOW_SHA: 'a'.repeat(40) };
+  it('refuses a pull request’s merge ref whose caller changes the pin — a Dependabot bump', () => {
+    const r = gate({ ...MERGE, STUB_CALLER_BRANCH: caller('v0.11.0'), STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('Kanon pin: refused.');
+    expect(r.summary).toContain('ran from `pull/7/merge`');
+    expect(r.calls).toContain(`?ref=${'a'.repeat(40)}`);
+  });
+  it('admits a pull request’s merge ref whose caller keeps the pin', () => {
+    const r = gate({ ...MERGE, STUB_CALLER_BRANCH: caller('v0.10.0'), STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.outputs.member, r.output).toBe('true');
+    expect(r.calls).toContain(`?ref=${'a'.repeat(40)}`);
+  });
+
+  it('refuses a caller the default branch does not have', () => {
+    const r = gate({ ...STACKED, STUB_CALLER_BRANCH: caller('v0.10.0') });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('has no such caller');
+  });
+
+  it('refuses a caller that calls a different lane at the same version', () => {
+    const r = gate({ ...STACKED, STUB_CALLER_BRANCH: caller('v0.10.0', 'agent-triage.yml'), STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.outputs.member).toBe('false');
+  });
+
+  it('checks a tag the same way: a dispatch with `--ref v1.2.0` runs that tag’s caller', () => {
+    const tag = { GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/review.yml@refs/tags/v1.2.0`, GITHUB_WORKFLOW_SHA: 'f'.repeat(40) };
+    const r = gate({ ...tag, STUB_CALLER_BRANCH: caller('v0.9.0'), STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('ran from `v1.2.0`');
+    expect(r.calls).toContain(`?ref=${'f'.repeat(40)}`);
+    expect(gate({ ...tag, STUB_CALLER_BRANCH: caller('v0.10.0'), STUB_CALLER_MAIN: caller('v0.10.0') }).outputs.member).toBe('true');
+  });
+
+  it('refuses when the runner names no caller, rather than reading it as clear', () => {
+    const r = gate({ GITHUB_WORKFLOW_REF: '' });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('GITHUB_WORKFLOW_REF is not set');
+  });
+
+  it('refuses a caller of another repository', () => {
+    const r = gate({ GITHUB_WORKFLOW_REF: 'yedeya-labs/kanon/.github/workflows/ci.yml@refs/pull/112/merge' });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('is not a workflow of example-org/example-repo');
+  });
+
+  it('matches the Kanon owner and repository case-insensitively, as GitHub resolves them', () => {
+    const sneaky = `${caller('v0.10.0')}  other:\n    uses: Yedeya-Labs/Kanon/.github/workflows/agent-triage.yml@v0.9.0\n`;
+    const r = gate({ ...STACKED, STUB_CALLER_BRANCH: sneaky, STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('agent-triage.yml@v0.9.0');
+    const same = `${caller('v0.10.0')}`.replace('yedeya-labs/kanon', 'YEDEYA-LABS/kanon');
+    expect(gate({ ...STACKED, STUB_CALLER_BRANCH: same, STUB_CALLER_MAIN: caller('v0.10.0') }).outputs.member).toBe('true');
+  });
+
+  it('refuses a caller that cannot be read at the commit that ran', () => {
+    const r = gate({ ...STACKED, STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('could not be found at `feature-a`');
+  });
+
+  it('refuses when the event names no default branch, rather than guessing', () => {
+    const r = gate({ ...STACKED, STUB_CALLER_BRANCH: caller('v0.10.0'), STUB_CALLER_MAIN: caller('v0.10.0') }, { repository: {} });
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('no default branch');
+  });
+
+  it('fails the job by name when a read fails', () => {
+    const r = gate({ ...STACKED, STUB_CALLER_FAILS: '1' });
+    expect(r.status).toBe(1);
+    expect(r.output).toContain('::error title=Membership gate::could not read the caller');
+    expect(r.outputs.member).toBeUndefined();
+  });
+
+  it('never reads for a refused stranger', () => {
+    const calls = join(mkdtempSync(join(tmpdir(), 'pin-calls-')), 'calls');
+    writeFileSync(calls, '');
+    const r = runGate(file, 'pr-target-label', STRANGER, { ...STACKED, STUB_CALLS: calls,
+      STUB_CALLER_BRANCH: caller('v0.9.0'), STUB_CALLER_MAIN: caller('v0.10.0') }, REPOSITORY);
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('Membership gate: refused.');
+    expect(readFileSync(calls, 'utf8')).toBe('');
+  });
+
+  it('reads every Kanon reference, and only real ones', () => {
+    expect(kanonRefsOf([
+      'jobs:',
+      '  a:',
+      '    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.10.0',
+      '  b:',
+      "    uses: 'yedeya-labs/kanon/.github/workflows/agent-triage.yml@v0.10.0' # pinned",
+      '    steps:',
+      '      - uses: yedeya-labs/kanon/actions/lane-check@v0.10.0',
+      '      # uses: yedeya-labs/kanon/actions/dco@v0.1.0',
+      '      - uses: actions/checkout@v7',
+      '    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.10.0',
+    ].join('\n'))).toEqual([
+      'yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.10.0',
+      'yedeya-labs/kanon/.github/workflows/agent-triage.yml@v0.10.0',
+      'yedeya-labs/kanon/actions/lane-check@v0.10.0',
+    ]);
+    expect(parseWorkflowRef(`${REPO}/.github/workflows/review.yml@refs/heads/a@b`, REPO))
+      .toEqual({ path: '.github/workflows/review.yml', ref: 'refs/heads/a@b' });
+    expect(parseWorkflowRef('other/repo/.github/workflows/review.yml@refs/heads/x', REPO)).toBeNull();
   });
 });
