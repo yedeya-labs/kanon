@@ -104,7 +104,7 @@ This chapter governs projects: work too large for one issue, planned by the Lead
 
 **Why.** A brief that keeps changing after approval is no longer the thing the Maintainer approved. Splitting keeps an over-large item from stalling the project without reopening its decisions.
 
-**Enforced by.** The brief guard applies to every brief except a closed list of briefs written before the standard, and a test fails if that list grows.
+**Enforced by.** The brief guard applies to every brief except those the adopter lists as written before the standard, under `## Pre-standard briefs` in `docs/qa/exemptions.md` (`K-LAYOUT-15`). A pull request that adds one escalates to a human, because the file is directly inside `docs/qa/` (`K-MERGE-4`), and an entry for a brief that doesn't exist fails the guard.
 
 **Class.** framework
 
@@ -194,4 +194,4 @@ This chapter governs projects: work too large for one issue, planned by the Lead
 
 ## Examples from the reference adopter
 
-- **The closed list of pre-standard briefs** (`K-PROJ-10`). Six briefs were approved before the brief standard existed. They are exempt from the guard through a closed list, and a test forbids a seventh, because immutability outranks the coordinate rule for history.
+- **The closed list of pre-standard briefs** (`K-PROJ-10`). Six briefs were approved before the brief standard existed. They are exempt from the guard through a list the adopter keeps (`K-LAYOUT-15`), and its own test forbids a seventh, because immutability outranks the coordinate rule for history.

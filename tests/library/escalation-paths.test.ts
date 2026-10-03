@@ -82,7 +82,7 @@ describe('the escalation file parser', () => {
   });
 
   it('fails by name on a list item in any other form, rather than dropping its path as prose', () => {
-    for (const item of ['  - `^infra/` — infra', '+ `^infra/` — infra', '1. `^infra/` — infra', '2) `^infra/` — infra', '\t* `^infra/` — infra']) {
+    for (const item of ['  - `^infra/` — infra', '+ `^infra/` — infra', '1. `^infra/` — infra', '2) `^infra/` — infra', '\t* `^infra/` — infra', '> - `^infra/` — infra', '>> 1. `^infra/` — infra']) {
       fails(FILE(`${item}\n`, ''), /escalation-paths\.md:5, under `## Escalation paths`, is a list item the file doesn't use/);
       fails(FILE('', `${item.replace('^infra/', 'infra/')}\n`), /:8, under `## Pipeline code`, is a list item the file doesn't use/);
     }
@@ -90,8 +90,16 @@ describe('the escalation file parser', () => {
 
   it('fails by name on any flag but `i`, rather than reading the slashes as part of a pattern that never matches', () => {
     for (const value of ['/^infra\\//g', '/^infra//u', '/^infra//gi', '/^src/.*payments?/I']) {
-      fails(FILE(`- \`${value}\` — x\n`, ''), /:5: `.*` has the flags `[A-Za-z]+`, and only `\/…\/i` is allowed/);
+      fails(FILE(`- \`${value}\` — x\n`, ''), /:5: `.*` begins with `\/` but isn't `\/…\/` or `\/…\/i`/);
     }
+  });
+
+  it('fails by name on a root-anchored path, which no repository-relative path matches (#141)', () => {
+    for (const value of ['/terraform/main.tf', '/infra/Makefile', '/^infra\\//1']) {
+      fails(FILE(`- \`${value}\` — x\n`, ''), /begins with `\/` but isn't `\/…\/` or `\/…\/i`: patterns are over repository-relative paths/);
+    }
+    // The `/…/` and `/…/i` forms are still patterns.
+    expect(parseEscalationFile(FILE('- `/^infra//` — x\n', '')).paths[0]?.pattern.test('infra/a')).toBe(true);
   });
 });
 

@@ -1955,7 +1955,7 @@ export function reviewRecovery(world, { runsFor = reviewRunsFor, now = Date.now(
 // sends it straight to a human — so the only issue in a lineage that can is its root.
 //
 // PRE-STANDARD BRIEFS ARE STILL NEVER SPLIT. The churn re-runs the lane's GATE, not the
-// agent, and the gate refuses an item from one of the six pre-standard briefs (§5.3,
+// agent, and the gate refuses an item from a pre-standard brief (`isPreStandard`, `K-LAYOUT-15`; §5.3,
 // the developer's option (b) on RA-2407) and moves it to `qa:needs-info` itself. This
 // recovery deliberately does not second-guess that: the gate is the one place that
 // decides, and a re-delivery is exactly how a gate run that died gets to decide.

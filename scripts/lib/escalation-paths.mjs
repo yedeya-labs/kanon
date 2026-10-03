@@ -42,6 +42,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { fencedLines } from '../spec-lib.mjs';
+import { DeclarationError, bulletsOf, linesOf, sectionOf } from './declarations.mjs';
 
 /** The file's fixed path (`K-LAYOUT-1`, `K-LAYOUT-8`). */
 export const ESCALATION_FILE = 'docs/qa/escalation-paths.md';
@@ -62,14 +63,10 @@ export const PIPELINE_ESCALATIONS = Object.freeze([
   Object.freeze(/** @type {const} */ ([/^docs\/qa\/[^/]+\.md$/, 'the pipeline documents, which are agent instructions'])),
 ]);
 
-/** A missing or malformed escalation file. Its message names the file. */
-export class DeclarationError extends Error {
-  /** @param {string} message */
-  constructor(message) {
-    super(message);
-    this.name = 'DeclarationError';
-  }
-}
+export { DeclarationError };
+
+/** @type {import('./declarations.mjs').Declaration} */
+const FILE = { file: ESCALATION_FILE, rule: 'K-LAYOUT-8' };
 
 /**
  * @typedef {{ pattern: RegExp, reason: string }} EscalationPath
@@ -77,58 +74,23 @@ export class DeclarationError extends Error {
  * @typedef {{ paths: EscalationPath[], pipeline: PipelineDir[] }} EscalationFile
  */
 
-/** A bullet: `- ` or `* ` at the start of the line, then a code span, an em dash and the reason. */
-const BULLET = /^[-*]\s+(.*)$/;
-/** Anything Markdown reads as a list item: indented, `-`, `*`, `+`, or numbered. */
-const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
 const ENTRY = /^`([^`]+)`\s+—\s+(\S.*)$/;
 
 /**
- * The body lines of one `##` section, with their 1-based line numbers. Throws when the heading
- * is missing or appears more than once outside a fenced block.
- * @param {string[]} lines
- * @param {Set<number>} fenced
- * @param {string} heading
- * @returns {{ line: number, text: string }[]}
- */
-function section(lines, fenced, heading) {
-  const at = lines.flatMap((l, i) => (!fenced.has(i) && l.trimEnd() === heading ? [i] : []));
-  if (at.length === 0) throw new DeclarationError(`${ESCALATION_FILE} has no \`${heading}\` heading (K-LAYOUT-8)`);
-  if (at.length > 1) {
-    throw new DeclarationError(`${ESCALATION_FILE} has the \`${heading}\` heading ${at.length} times, on lines ${at.map((i) => i + 1).join(', ')} (K-LAYOUT-8)`);
-  }
-  const start = /** @type {number} */ (at[0]) + 1;
-  const out = [];
-  for (let i = start; i < lines.length; i += 1) {
-    const text = /** @type {string} */ (lines[i]);
-    if (!fenced.has(i) && /^#{1,2}\s/.test(text)) break;
-    if (!fenced.has(i)) out.push({ line: i + 1, text });
-  }
-  return out;
-}
-
-/**
  * The bullets of a section, each split into its code span and its reason.
- * @param {{ line: number, text: string }[]} body
+ * @param {import('./declarations.mjs').Line[]} body
  * @param {string} heading
  * @returns {{ line: number, value: string, reason: string }[]}
  */
 function entries(body, heading) {
-  return body.flatMap(({ line, text }) => {
-    const bullet = BULLET.exec(text);
-    if (!bullet) {
-      if (!LIST_ITEM.test(text)) return [];
-      throw new DeclarationError(
-        `${ESCALATION_FILE}:${line}, under \`${heading}\`, is a list item the file doesn't use: write each entry as \`- \` at the start of the line (K-LAYOUT-8)`,
-      );
-    }
-    const entry = ENTRY.exec(/** @type {string} */ (bullet[1]).trim());
+  return bulletsOf(FILE, body, heading).map(({ line, text }) => {
+    const entry = ENTRY.exec(text);
     if (!entry) {
       throw new DeclarationError(
         `${ESCALATION_FILE}:${line}, under \`${heading}\`, isn't an entry: write a pattern in backticks, an em dash, then the reason (K-LAYOUT-8)`,
       );
     }
-    return [{ line, value: /** @type {string} */ (entry[1]), reason: /** @type {string} */ (entry[2]).trim() }];
+    return { line, value: /** @type {string} */ (entry[1]), reason: /** @type {string} */ (entry[2]).trim() };
   });
 }
 
@@ -138,11 +100,15 @@ function entries(body, heading) {
  * @param {number} line
  */
 function pattern(value, line) {
-  const flagged = /^\/(.+)\/([A-Za-z]+)$/.exec(value);
-  if (flagged && flagged[2] !== 'i') {
-    throw new DeclarationError(`${ESCALATION_FILE}:${line}: \`${value}\` has the flags \`${flagged[2]}\`, and only \`/…/i\` is allowed (K-LAYOUT-8)`);
-  }
   const literal = /^\/(.+)\/(i?)$/.exec(value);
+  // A LEADING `/` IS ONLY EVER THE `/…/` FORM (#141). A repository-relative path never starts
+  // with `/`, so `/terraform/main.tf` (CODEOWNERS style) or `/…/g` read as a pattern would
+  // compile and match nothing, which for the Merger fails open.
+  if (!literal && value.startsWith('/')) {
+    throw new DeclarationError(
+      `${ESCALATION_FILE}:${line}: \`${value}\` begins with \`/\` but isn't \`/…/\` or \`/…/i\`: patterns are over repository-relative paths, with no leading \`/\`, and \`i\` is the only flag (K-LAYOUT-8)`,
+    );
+  }
   const source = literal ? /** @type {string} */ (literal[1]) : value;
   try {
     return new RegExp(source, literal?.[2] ?? '');
@@ -178,16 +144,16 @@ function directory(value, line) {
  * @returns {EscalationFile}
  */
 export function parseEscalationFile(text) {
-  const lines = text.split(/\r?\n/);
+  const lines = linesOf(text);
   const fenced = fencedLines(lines);
   if (fenced.unclosed !== -1) {
     throw new DeclarationError(`${ESCALATION_FILE}:${fenced.unclosed + 1} opens a code fence that never closes (K-LAYOUT-8)`);
   }
-  const paths = entries(section(lines, fenced, PATHS_HEADING), PATHS_HEADING).map(({ line, value, reason }) => ({
+  const paths = entries(sectionOf(FILE, lines, fenced, PATHS_HEADING), PATHS_HEADING).map(({ line, value, reason }) => ({
     pattern: pattern(value, line),
     reason,
   }));
-  const pipeline = entries(section(lines, fenced, PIPELINE_HEADING), PIPELINE_HEADING).map(({ line, value, reason }) => ({
+  const pipeline = entries(sectionOf(FILE, lines, fenced, PIPELINE_HEADING), PIPELINE_HEADING).map(({ line, value, reason }) => ({
     dir: directory(value, line),
     reason,
   }));

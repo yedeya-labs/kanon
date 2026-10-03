@@ -94,6 +94,7 @@ import { pathToFileURL } from 'node:url';
 import { BUCKET_MILESTONES, DEFAULT_MILESTONE } from './issue-triage-defaults.mjs';
 import { isDatedMilestone } from './lib/milestones.mjs';
 import { coordinatesIn } from './citation-guard.mjs';
+import { readExemptions } from './lib/exemptions.mjs';
 import { dependencyCycles, parseProposed } from './lead-reconcile.mjs';
 import { isAcDeclaration } from './verify-acs.mjs';
 
@@ -436,30 +437,36 @@ export const briefSections = (markdown) => {
 export const isBrief = (path) => /^docs\/projects\/\d+\.md$/.test(path);
 
 /**
- * THE SIX BRIEFS WRITTEN UNDER THE OLD STANDARD, AND WHY THEY ARE EXEMPT (RA-1742).
+ * BRIEFS WRITTEN UNDER THE OLD STANDARD, AND WHY THEY ARE EXEMPT (RA-1742).
  *
- * Rule 1 of the new contract — no `file:line` coordinate in a brief — and rule 3 — a
- * brief is IMMUTABLE after approval — conflict for the six documents already on `main`.
- * Stripping their 328 coordinates would be editing an approved brief, and 20 commits
- * have already done that once (four of them purely to keep lint green over `961.md`).
+ * Rule 1 of the brief contract — no `file:line` coordinate in a brief — and rule 3 — a
+ * brief is IMMUTABLE after approval — conflict for a brief approved before the standard
+ * existed. Stripping its coordinates would be editing an approved brief, and the reference
+ * adopter's 20 commits doing that once (four of them purely to keep lint green over one
+ * brief) are why the exemption exists.
  *
  * IMMUTABILITY WINS, and the reason is the same one RA-1445 gave: a brief's coordinates
  * are EVIDENCE about a commit that has passed. Re-deriving them against a later tree
  * does not correct the record, it falsifies it — a deletion project's brief cites the
- * code the project deleted, and there is no honest coordinate for that. So these six
- * stay byte-identical and are exempt from the two content rules below. They still carry
+ * code the project deleted, and there is no honest coordinate for that. So these briefs
+ * stay byte-identical and are exempt from the content rules below. They still carry
  * every required section, and the shape checks still run over them.
  *
- * THE LIST IS CLOSED. Nothing is ever added to it: a brief written from today satisfies
- * the standard or does not merge, and a seventh entry here would mean somebody wrote a
- * new brief under the old rules and grandfathered it. `brief-guard.test.ts` pins the set
- * exactly, so adding a number is a red test rather than a quiet exemption.
+ * WHICH BRIEFS IS THE ADOPTER'S TO SAY (kanon#54), under `## Pre-standard briefs` in
+ * `docs/qa/exemptions.md` (`K-LAYOUT-15`). Until #54 the reference adopter's six were a
+ * constant here, which meant nothing on any other repository. The list is still closed in
+ * practice: the file is directly inside `docs/qa/`, so a pull request that adds a brief to
+ * it escalates to a human (`K-MERGE-4`), and a brief written from today satisfies the
+ * standard or doesn't merge. A listed brief that no longer exists is a stale entry, and
+ * `main` fails on it.
  */
-export const PRE_STANDARD_BRIEFS = new Set(['284', '961', '1015', '1019', '1291', '1292']);
 
-/** @param {string} path a brief path, as `isBrief` spells it. */
-export const isPreStandard = (path) =>
-  PRE_STANDARD_BRIEFS.has(path.replace(/^.*\//, '').replace(/\.md$/, ''));
+/**
+ * Is this brief exempt from the content rules? Reads the exemptions file from the working
+ * tree, and throws `DeclarationError`, naming the file, when it is missing or malformed.
+ * @param {string} path a brief path, as `isBrief` spells it.
+ */
+export const isPreStandard = (path) => readExemptions().briefs.some((b) => b.brief === path);
 
 /**
  * A coordinate a brief may not carry.
@@ -540,8 +547,8 @@ export const measureBullets = (body) =>
 // ── Consistency checks a re-scope can break (RA-2147, RA-2153, RA-1748) ─────────────
 //
 // All three are pure and exported so each can be tested in isolation, and all three run
-// ONLY on briefs outside `PRE_STANDARD_BRIEFS` — those are immutable records (RA-1742), and
-// measured over the six the candidates DO fire (see the tests' corpus block): demanding an
+// ONLY on briefs that aren't pre-standard (`isPreStandard`) — those are immutable records
+// (RA-1742), and measured over the reference adopter's six the candidates DO fire: demanding an
 // edit to an approved brief to keep lint green is the post-approval churn RA-1742 ended.
 
 /**
@@ -748,8 +755,8 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
     //
     // PRE-STANDARD BRIEFS ARE EXEMPT, and the reason is this check's own definition rather
     // than a concession. It is a MERGE gate: it exists so a question is answered before the
-    // brief merges and the reconciler files from it within the minute. The six briefs in
-    // `PRE_STANDARD_BRIEFS` merged long ago, so there is nothing left to gate — an open
+    // brief merges and the reconciler files from it within the minute. A pre-standard
+    // brief (`isPreStandard`) merged long ago, so there is nothing left to gate — an open
     // marker in one is a record of what was true then, which is exactly what RA-1742 ruled
     // immutable. Firing here would demand an edit to an approved brief purely to keep lint
     // green, and RA-1742 counted twenty such commits, four of them over `961.md` alone.
@@ -805,7 +812,7 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
   // coordinates, 20 post-approval edits and three batches of corrective work. The
   // artifact that CAN carry a falsifiable claim already exists one layer up.
   //
-  // The six pre-standard briefs are exempt and `isPreStandard` says why: their
+  // The pre-standard briefs are exempt and `isPreStandard` says why: their
   // coordinates are evidence about a commit that has passed, and immutability wins.
   if (!isPreStandard(path)) {
     markdown.split('\n').forEach((line, i) => {
@@ -1085,26 +1092,45 @@ const main = () => {
     if ('error' in read) throw read.error;
     return /** @type {Milestone[]} */ (read.value);
   };
-  const findings = briefs.flatMap((f) => checkBrief(f, readFileSync(f, 'utf8'), { milestones }));
+  // THE EXEMPTIONS FILE (kanon#54), read before any brief so a missing or malformed one is
+  // reported once, by name, rather than as a throw from inside the first brief's check.
+  let exemptions;
+  try {
+    exemptions = readExemptions();
+  } catch (e) {
+    console.error(`brief-guard: ${e.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  // A STALE ENTRY FAILS. An exemption for a brief that isn't there exempts nothing today and
+  // would exempt whatever is written at that path tomorrow.
+  const stale = exemptions.briefs.filter((b) => !briefs.includes(b.brief));
+  const findings = [
+    ...stale.map((b) => ({
+      at: `docs/qa/exemptions.md:${b.line}`,
+      problem: `\`${b.brief}\` is listed as a pre-standard brief, but there is no such brief. Remove the entry`,
+    })),
+    ...briefs.flatMap((f) => checkBrief(f, readFileSync(f, 'utf8'), { milestones })),
+  ];
   if (findings.length) {
     console.error(`brief-guard: ${findings.length} problem(s) in ${briefs.length} project brief(s):\n`);
     for (const f of findings) console.error(`  ${f.at}\n    ${f.problem}`);
     console.error(
-      '\nThe required shape and the reason for each section are in ' +
-        '`docs/agentic-lead-engineer.md` §5.7, and `docs/projects/_template.md` is a brief ' +
-        'that satisfies all of it.',
+      "\nThe required shape and the reason for each section are in Kanon's rulebook " +
+        '(`K-PROJ-4`, `K-LAYOUT-12`, `K-LAYOUT-13`), and `docs/projects/_template.md` is a brief ' +
+        'that satisfies all of it. A pre-standard brief is listed in `docs/qa/exemptions.md` (`K-LAYOUT-15`).',
     );
     process.exitCode = 1;
     return;
   }
-  // NAMES THE EXEMPT ONES (RA-945). The two content rules do not run over the six
+  // NAMES THE EXEMPT ONES (RA-945). The content rules do not run over the
   // pre-standard briefs, and a count that did not say so would read as though this
   // guard had checked every brief for a coordinate. It has not, and `isPreStandard`
   // holds the reason.
   const exempt = briefs.filter(isPreStandard);
   console.log(
     `brief-guard: ${briefs.length} brief(s) carry all ${REQUIRED_SECTIONS.length} required ` +
-      'sections, price their AWS delta, state an observability decision, and decompose into ' +
+      'sections, price their cost delta, state an observability decision, and decompose into ' +
       'issues the reconciler can file.' +
       (exempt.length
         ? `\n  ${exempt.length} of them predate the RA-1742 standard (${exempt.join(', ')}) and were NOT ` +

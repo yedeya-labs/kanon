@@ -128,6 +128,10 @@ describe("Kanon's guards on a project with no package.json, run with only node a
     // `[ORD-1]` is in the summary line of a pytest docstring (kanon#20). Before #20 the
     // coverage tool read only JavaScript under `tests/` and `e2e/`, and this said 0 of 1.
     ['spec-coverage', /\*\*Locked\*\* — a test names the invariant's ID: \*\*1 of 1\*\*/],
+    // The exemption is the fixture's own, from its `docs/qa/exemptions.md`. Before #54 the
+    // reference adopter's seven were in the library, and this guard failed "stale exemption"
+    // on every one of them here.
+    ['doc-path-guard', /resolve; 1 deliberately illustrative or historical mention\(s\) exempted by name/],
   ])('%s passes the Python adopter', (name, says) => {
     const r = guard(name);
     expect(r.status, r.out).toBe(0);
@@ -178,6 +182,32 @@ describe("Kanon's guards on a project with no package.json, run with only node a
       expect(r.status, r.out).toBe(1);
       expect(r.out).toMatch(/names milestone “Launch”, which isn't a bucket \(Product Backlog, Development Automation\), and the repository's milestones couldn't be read/);
     });
+  });
+
+  it("doc-path-guard is red on a mention its exemptions file doesn't list, and on a stale entry (kanon#54)", () => {
+    const unlisted = guard('doc-path-guard', (dir) => edit(dir, 'docs/design.md', (s) => `${s}\nSee \`docs/missing.md\`.\n`));
+    expect(unlisted.status, unlisted.out).toBe(1);
+    expect(unlisted.out).toMatch(/docs\/missing\.md — a path this text cites as real/);
+    const stale = guard('doc-path-guard', (dir) => edit(dir, 'docs/design.md', (s) => s.replace('`docs/TODO.md`', 'a TODO file')));
+    expect(stale.status, stale.out).toBe(1);
+    expect(stale.out).toMatch(/stale exemption — docs\/design\.md no longer names docs\/TODO\.md.*docs\/qa\/exemptions\.md:13/);
+  });
+
+  it.each(['brief-guard', 'doc-path-guard'])('%s fails by name when the exemptions file is missing or malformed (kanon#54)', (name) => {
+    const missing = guard(name, (dir) => rmSync(join(dir, 'docs/qa/exemptions.md')));
+    expect(missing.status, missing.out).toBe(1);
+    // Reported by the guard, once, before any brief or document is read: not a crash.
+    expect(missing.out).toMatch(new RegExp(`^${name}: docs/qa/exemptions\\.md doesn't exist`, 'm'));
+    expect(missing.out).not.toMatch(/\n\s+at /);
+    const malformed = guard(name, (dir) => edit(dir, 'docs/qa/exemptions.md', (s) => s.replace('## Path mentions', '## Mentions')));
+    expect(malformed.status, malformed.out).toBe(1);
+    expect(malformed.out).toMatch(/docs\/qa\/exemptions\.md has no `## Path mentions` heading/);
+  });
+
+  it('brief-guard is red on a pre-standard entry for a brief that does not exist (kanon#54)', () => {
+    const r = guard('brief-guard', (dir) => edit(dir, 'docs/qa/exemptions.md', (s) => s.replace('None: every brief here was written to the standard.', '- `docs/projects/7.md` — an old brief')));
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toMatch(/docs\/qa\/exemptions\.md:7\n\s+`docs\/projects\/7\.md` is listed as a pre-standard brief, but there is no such brief/);
   });
 
   it('spec-guard is red when a clause id is used twice', () => {

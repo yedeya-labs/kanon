@@ -914,9 +914,10 @@ const blocksIn = (shiftsByFile, citationsByFile) => {
  * the orphaned-sha finding, ~120 lines whose only consumer was the brief corpus, plus
  * the `fetch-depth: 0` those three workflows carried solely to feed it.
  *
- * The six briefs on `main` keep their coordinates and stay byte-identical, which is why
- * this is an exclusion rather than a re-derivation: they are evidence about commits that
- * have passed. `brief-guard.mjs`'s `PRE_STANDARD_BRIEFS` is the one list of them.
+ * Pre-standard briefs keep their coordinates and stay byte-identical, which is why this
+ * is an exclusion rather than a re-derivation: they are evidence about commits that have
+ * passed. The adopter lists them in `docs/qa/exemptions.md` (`K-LAYOUT-15`), and
+ * `brief-guard.mjs`'s `isPreStandard` is the one reader of that list.
  */
 export const PROJECTS_TREE = 'docs/projects/';
 
@@ -932,8 +933,8 @@ const main = () => {
   // `docs/projects/**` IS NOT READ, and the run says so rather than being quietly
   // narrower than its own all-clear implies (RA-945). A brief carries no coordinates
   // since RA-1742 — see the note above `PROJECTS_TREE` — so there is nothing here to
-  // resolve, and the six pre-standard briefs' coordinates are evidence about commits
-  // that have passed.
+  // resolve, and the pre-standard briefs' coordinates (`isPreStandard`, `K-LAYOUT-15`)
+  // are evidence about commits that have passed.
   const all = tracked.filter((f) => f.startsWith('docs/') && f.endsWith('.md'));
   const md = all.filter((f) => !f.startsWith(PROJECTS_TREE));
   const briefsSkipped = all.length - md.length;

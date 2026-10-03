@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -116,9 +116,17 @@ describe('splitGate', () => {
     expect(v.why).toMatch(/predates the RA-1742 standard/);
     // The gate asks brief-guard's own list, not a copy of it.
     expect(readFileSync(join(ROOT, 'scripts/split-lineage.mjs'), 'utf8'))
-      .toMatch(/preStandard: project != null && \(await import\('\.\/brief-guard\.mjs'\)\)\.isPreStandard\(`docs\/projects\/\$\{project\}\.md`\)/);
-    for (const n of ['1019', '1292']) expect(isPreStandard(`docs/projects/${n}.md`), n).toBe(true);
+      .toMatch(/const \{ isPreStandard \} = await import\('\.\/brief-guard\.mjs'\);\n(?:.*\n){1,2}.*isPreStandard\(`docs\/projects\/\$\{project\}\.md`\)/);
+    expect(isPreStandard('docs/projects/2.md')).toBe(true);
     expect(isPreStandard('docs/projects/2040.md')).toBe(false);
+  });
+
+  it("refuses, naming why, when the exemptions file can't be read (kanon#54)", () => {
+    const v = splitGate({ ...ok, preStandardUnread: 'docs/qa/exemptions.md doesn\'t exist' });
+    expect(v.act).toBe('refuse');
+    expect(v.why).toMatch(/can't be decided \(docs\/qa\/exemptions\.md doesn't exist\)/);
+    // Only once the issue is the lane's at all: a closed issue is still a skip.
+    expect(splitGate({ ...ok, state: 'CLOSED', preStandardUnread: 'x' }).act).toBe('skip');
   });
 
   it('refuses a split child, a non-member and a project with no brief — to a human', () => {
@@ -136,12 +144,12 @@ describe('the gate, run as a CLI — module evaluation is part of the contract (
   // A pure `splitGate` test cannot see a module-evaluation deadlock: the first option-(b)
   // push exited 13 with no verdict for EVERY project member and stayed green.
   //
-  // IN A COPY OF THE FIXTURE ADOPTER, with a post-standard brief (2040) and one of
-  // brief-guard's pre-standard ones (1019): the gate reads `docs/projects/<n>.md` from its
+  // IN A COPY OF THE FIXTURE ADOPTER, with a post-standard brief (2040) and the one its
+  // exemptions file declares pre-standard (2): the gate reads `docs/projects/<n>.md` from its
   // working directory, as the lane runs it in the adopter's checkout.
   const adopter = mkdtempSync(join(tmpdir(), 'split-adopter-'));
   cpSync(ADOPTER, adopter, { recursive: true });
-  for (const n of [2040, 1019]) writeFileSync(join(adopter, `docs/projects/${n}.md`), `# Project ${n} (fixture)\n`);
+  for (const n of [2040, 2]) writeFileSync(join(adopter, `docs/projects/${n}.md`), `# Project ${n} (fixture)\n`);
   const run = (project: number) => {
     const dir = mkdtempSync(join(tmpdir(), 'split-gate-'));
     const out = join(dir, 'out');
@@ -168,10 +176,23 @@ describe('the gate, run as a CLI — module evaluation is part of the contract (
   });
 
   it('refuses a pre-standard member to a human, exit 0 — never a split', () => {
-    const r = run(1019);
+    const r = run(2);
     expect(r.status, r.stdout).toBe(0);
     expect(r.outputs).toContain('act=refuse');
     expect(r.stdout).toMatch(/predates the RA-1742 standard/);
+  });
+
+  it("refuses to a human, by name and with no stack trace, when the exemptions file is missing (kanon#54)", () => {
+    rmSync(join(adopter, 'docs/qa/exemptions.md'));
+    try {
+      const r = run(2040);
+      expect(r.status, r.stdout).toBe(0);
+      expect(r.outputs).toContain('act=refuse');
+      expect(r.stdout).toMatch(/can't be decided \(docs\/qa\/exemptions\.md doesn't exist/);
+      expect(r.stdout).not.toMatch(/\n\s+at /);
+    } finally {
+      cpSync(join(ADOPTER, 'docs/qa/exemptions.md'), join(adopter, 'docs/qa/exemptions.md'));
+    }
   });
 
   it('refuses a project with no brief, exit 0', () => {

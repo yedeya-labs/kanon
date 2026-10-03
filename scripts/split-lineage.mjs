@@ -122,12 +122,14 @@ export function exhaustedRoute({ project, body }) {
  * @param {number|null} i.project
  * @param {string} i.body
  * @param {boolean} i.briefExists  `docs/projects/<project>.md` is on the default branch
- * @param {boolean} [i.preStandard] that brief is one of `brief-guard.mjs`'s six
- *   pre-standard briefs, which stay byte-identical (§5.3)
+ * @param {boolean} [i.preStandard] that brief is pre-standard (`isPreStandard`, from the
+ *   adopter's `docs/qa/exemptions.md`, `K-LAYOUT-15`), and stays byte-identical (§5.3)
+ * @param {string|null} [i.preStandardUnread] why the exemptions file couldn't be read, when
+ *   it couldn't: the brief MIGHT be pre-standard, so it is refused to a human, never split
  * @param {number|null} i.openPr   an open PR already on `splitBranch(issue)`
  * @returns {{act: 'split'|'skip'|'refuse', why: string}}
  */
-export function splitGate({ state, labels, project, body, briefExists, preStandard = false, openPr }) {
+export function splitGate({ state, labels, project, body, briefExists, preStandard = false, preStandardUnread = null, openPr }) {
   if (state !== 'OPEN') return { act: 'skip', why: 'the issue is closed' };
   if (!labels.includes(SPLIT_LABEL)) return { act: 'skip', why: `the issue does not carry \`${SPLIT_LABEL}\`` };
   // Someone chose to RE-RUN it instead: a split PR and an implementer PR that both close
@@ -136,7 +138,11 @@ export function splitGate({ state, labels, project, body, briefExists, preStanda
   const route = exhaustedRoute({ project, body });
   if (route.label !== SPLIT_LABEL) return { act: 'refuse', why: route.why };
   if (!briefExists) return { act: 'refuse', why: `project #${project} has no brief on the default branch (\`docs/projects/${project}.md\`), so there is nothing to split — a human decomposes it` };
-  // THE SIX PRE-STANDARD BRIEFS STAY BYTE-IDENTICAL (docs/agentic-lead-engineer.md §5.3;
+  // AN UNREADABLE EXEMPTIONS FILE IS A REFUSAL, NOT A CRASH (kanon#54). Whether the brief may
+  // be edited is unknown, so the lane doesn't edit it, and the issue leaves the split label
+  // with the file's problem named, rather than sitting there with no verdict.
+  if (preStandardUnread) return { act: 'refuse', why: `whether project #${project}'s brief is pre-standard can't be decided (${preStandardUnread}), so the split lane does not edit it — fix the file, or split this item by hand` };
+  // PRE-STANDARD BRIEFS STAY BYTE-IDENTICAL (`isPreStandard`, `K-LAYOUT-15`; §5.3;
   // the developer's ruling on RA-2407). A split is the second sanctioned post-approval
   // edit for a post-standard brief only, so an oversized item in one of these goes to a
   // human, who splits it by hand as RA-1966 did for RA-1019.
@@ -160,6 +166,25 @@ export function projectOf(body) {
   return m ? Number(m[1]) : null;
 }
 
+/**
+ * Is the project's brief pre-standard? A missing or malformed exemptions file is returned as
+ * `preStandardUnread`, its one-line reason, for `splitGate` to refuse on (kanon#54).
+ * @param {number|null} project
+ */
+async function preStandardOf(project) {
+  if (project == null) return { preStandard: false, preStandardUnread: null };
+  // Imported HERE, not at the top: `brief-guard.mjs` imports `lead-reconcile.mjs`,
+  // which imports this module, and a static import would close that cycle — so would
+  // awaiting `gate` at top level (see the CLI line below).
+  const { isPreStandard } = await import('./brief-guard.mjs');
+  try {
+    return { preStandard: isPreStandard(`docs/projects/${project}.md`), preStandardUnread: null };
+  } catch (e) {
+    if (e?.name !== 'DeclarationError') throw e;
+    return { preStandard: false, preStandardUnread: e.message };
+  }
+}
+
 /** The workflow's pre-filter: decide, act on a refusal, and publish the verdict. */
 async function gate() {
   const issue = String(process.env.ISSUE ?? '');
@@ -179,10 +204,7 @@ async function gate() {
     project,
     body: view.body,
     briefExists: project != null && existsSync(`docs/projects/${project}.md`),
-    // Imported HERE, not at the top: `brief-guard.mjs` imports `lead-reconcile.mjs`,
-    // which imports this module, and a static import would close that cycle — so would
-    // awaiting `gate` at top level (see the CLI line below).
-    preStandard: project != null && (await import('./brief-guard.mjs')).isPreStandard(`docs/projects/${project}.md`),
+    ...(await preStandardOf(project)),
     openPr: prs[0]?.number ?? null,
   });
   console.log(`#${issue}: ${verdict.act} — ${verdict.why}`);
