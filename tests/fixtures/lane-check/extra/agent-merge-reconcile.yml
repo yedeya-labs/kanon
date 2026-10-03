@@ -1,5 +1,5 @@
 # A trigger-only caller of Kanon's merge-reconcile lane, as an adopter writes it (plan 0001 §3).
-name: Merge Reconcile
+name: Merge Reconcile (Reviewer)
 
 on:
   pull_request:

@@ -17,6 +17,25 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Lead, split | `agent-lead-split.yml` | Lead | `issues: [labeled]`; `workflow_dispatch` with `issue` |
 | Rebase (resolve a conflict) | `agent-rebase.yml` | Implementer | `workflow_run` of your `CI` workflow, `types: [completed]`, `branches` your default branch; `schedule` (a daily floor); `workflow_dispatch` with `pr_number` |
 
+**What each caller maps, grants and needs.** Every caller maps its role's two App secrets and `CLAUDE_CODE_OAUTH_TOKEN`, by name. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
+
+<!-- lane-contract:table -->
+
+| Lane | App secrets | Grant at least | Reads |
+|---|---|---|---|
+| `agent-triage.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-implement.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-implement-revise.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-lead-revise.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: write` | none |
+| `agent-merge-reconcile.yml` | `REVIEWER_APP_ID`, `REVIEWER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read` | `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` |
+| `agent-review.yml` | `REVIEWER_APP_ID`, `REVIEWER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: write`, `actions: read` | `docs/qa/stack.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` |
+| `agent-verify-acs.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read` | `docs/qa/explorer-playbook.md` |
+| `agent-lead.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/lead-playbook.md` |
+| `agent-lead-split.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read` | `docs/qa/lead-playbook.md` |
+| `agent-rebase.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+
+<!-- /lane-contract:table -->
+
 Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile calls the blocks itself and installs nothing, so it never calls your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own.
 
 **The review lane** has three things the others don't:
@@ -24,7 +43,7 @@ Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called 
 - **It reads your CI from `.github/workflows/ci.yml`.** A review label added while CI is still running defers to CI's completion, and the lane asks Actions about the runs of that file for the head. Your caller's `workflow_run` names that workflow.
 - **It never reviews under the pull request's own instructions** (`K-MERGE-17`). Before any of the PR's code runs, it restores every input on the rule's list from your default branch: `AGENTS.md`, `CLAUDE.md`, `.claude/`, every markdown file directly inside `docs/qa/`, your project-setup hook, and every markdown document those link to or import. The PR's own copies are set aside under `.qa-pr/`, so the Reviewer still reads them as part of the diff, and a push that touches one re-opens an approved review. The specs under `docs/qa/specs/` come from the PR. Your own tests that read one of those files should read the `.qa-pr/` copy when there is one, or they will fail in the Reviewer's tree on a PR that changes it.
 
-**Grant a lane's job-level permissions too.** The implement lane's crash recovery writes issues, reads pull requests and reads its own run on the workflow token, so its caller grants `contents: read`, `issues: write`, `pull-requests: read` and `actions: read`. The rebase lane's filter reads pull requests and its earlier runs' jobs on the workflow token, so its caller grants `contents: read`, `actions: read` and `pull-requests: read`; the split lane's gate edits the issue's labels, so its caller grants `issues: write` and `pull-requests: read`.
+**Why a caller grants more than `contents: read`.** "Grant at least" includes the permissions a lane's jobs use on the workflow token, not only the lane's top level. The implement lane's crash recovery writes issues, reads pull requests and reads its own run. The rebase lane's filter reads pull requests and its earlier runs' jobs. The split lane's gate edits the issue's labels. The review lane reads CI's runs for the head, and comments on a pull request opened without a review label.
 
 ## Asking the review lane again
 
@@ -107,7 +126,7 @@ jobs:
 - **Triggers are yours.** A reusable workflow can't declare its caller's events. The `github` context in a called workflow is the caller's, so the lane reads the triggering event exactly as it would in your own file.
 - **Inputs pass through, by name.** `with:` passes your `workflow_dispatch` inputs as `${{ inputs.<name> }}`, and nothing else. On the other triggers they arrive empty, which the lane expects.
 - **`permissions:` is the ceiling.** Each lane declares the permissions it needs, and a called workflow can only narrow what its caller grants. Grant at least what the lane declares, or the run fails to start.
-- **Secrets are mapped explicitly, by their fixed names** ([plan 0001 §8](plans/0001-move-the-agent-lanes.md)): `<ROLE>_APP_ID`, `<ROLE>_APP_PRIVATE_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`. Never `secrets: inherit`, which would hand every secret in your repository to Kanon's code.
+- **Secrets are mapped explicitly, by their fixed names** ([plan 0001 §8](plans/0001-move-the-agent-lanes.md)): `<ROLE>_APP_ID`, `<ROLE>_APP_PRIVATE_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`. Never `secrets: inherit`, which would hand every secret in your repository to Kanon's code. [`kanon apps`](apps.md) stores the two App secrets. `CLAUDE_CODE_OAUTH_TOKEN` is the token of the Claude subscription the agents run on. Make it with `claude setup-token`, signed in to that subscription, and store it yourself with `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R <owner>/<repo>`, pasting it on standard input.
 - **No `concurrency:`.** Each lane holds its own concurrency group. The same group on the caller would have the caller wait for itself.
 - **One version.** Every Kanon reference in your repository pins the same exact version, and Dependabot proposes upgrades (`K-ADOPT-11`).
 
@@ -117,6 +136,58 @@ Some strings are read by another program by their exact text: the Merger's comme
 
 The old spellings are read until a measurement says nothing live carries them. [`scripts/protocol-census.mjs`](../scripts/protocol-census.mjs), run in your checkout with `GITHUB_REPOSITORY` set, lists every caller, open pull request (its comments, its checks and the failed runs on its head), open issue and branch that still carries one, and exits 0 only when there are none. When it exits 0 in every adopter Kanon knows of, a release drops the old spellings.
 
+## Your first lane: the Reviewer
+
+Install the review lane first. Its App is the one that ends bootstrap, on a plan with rulesets (`K-ADOPT-3`, `K-ADOPT-6`), and it needs no other lane. On one branch, add:
+
+1. **The project-setup hook** (below), and `docs/qa/test-database.md` if your tests need a database.
+2. **The documents the review lane reads**: `docs/qa/stack.md`, `docs/qa/reviewer-playbook.md` and `docs/qa/explorer-playbook.md`, with the sections `K-LAYOUT-17` names.
+3. **The caller**:
+
+<!-- x-release-please-start-version -->
+
+```yaml
+name: Review (Reviewer)
+
+run-name: Review ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  pull_request_target:
+    types: [opened, labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to review
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+  issues: read
+
+jobs:
+  review:
+    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.18.0
+    with:
+      pr_number: ${{ inputs.pr_number }}
+    secrets:
+      REVIEWER_APP_ID: ${{ secrets.REVIEWER_APP_ID }}
+      REVIEWER_APP_PRIVATE_KEY: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+<!-- x-release-please-end -->
+
+4. **[`lane-check`](../actions/lane-check/README.md) in CI**, and the Dependabot entry it asks for.
+5. **The Reviewer's App:** run [`kanon apps --roles reviewer`](apps.md) from that branch's checkout, and commit the register row it writes. `lane-check` fails a caller whose role has no row in the App register, so create the App before you push, or the branch is red until you do. If you must push first, a row for the role with the slug `kanon apps` will give it (`<repo>-reviewer`) passes `lane-check`. `kanon apps` rewrites an existing row for its role in place, so mark that row as a placeholder and never merge it.
+6. **`CLAUDE_CODE_OAUTH_TOKEN`**, as above.
+
+Then merge. **The first review comes on the next pull request, not this one.** Both automatic triggers run the default branch's copy of the caller (`pull_request_target` runs the base's, `workflow_run` the default branch's), so a pull request that adds the caller is never reviewed by it. In bootstrap, a human merges that one (`K-ADOPT-4`). Then apply `review:please` to any open pull request whose CI has finished, or dispatch the lane (`gh workflow run <your caller> -f pr_number=N`), and the Reviewer's App posts a verdict.
+
 ## Kanon's scripts
 
 The lanes run Kanon's pipeline library (`scripts/`) from the runner's action cache, at the version you pinned, never from your checkout: a step finds it with [`kanon-path`](../actions/kanon-path/README.md) and runs `node "$KANON/scripts/<name>.mjs"`. The scripts read your repository's files at the paths in [chapter 11](../rulebook/11-repository-layout.md), relative to the working directory, so they run in your checkout. A workflow of your own that runs one of them does the same, which is how Kanon's guards reach your CI: `kanon-path` at the pinned tag, then `node "$KANON/scripts/<guard>.mjs"`, with Dependabot proposing the upgrades. The scripts use only Node's built-in modules, so neither your repository nor the step needs a `package.json`, an install or a package manager, whatever your project's language. Node is Kanon's runtime, not your project's, and `kanon-path` sets it up: the version in `engines` in Kanon's own manifest, pinned, rather than whichever Node the runner image carries. Its [README](../actions/kanon-path/README.md) says where to call it relative to your own toolchain.
@@ -124,6 +195,8 @@ The lanes run Kanon's pipeline library (`scripts/`) from the runner's action cac
 ## The project-setup hook
 
 `.github/actions/project-setup/action.yml` is a composite action you write ([plan 0001 §5](plans/0001-move-the-agent-lanes.md)). Every lane that checks out calls it after the checkout and before the agent, with these inputs, all strings: `lane`, `install`, `database`, `browsers`, `issue-number`, `app-slug` and `github-token`. It installs your toolchain and dependencies, and, when `database` is `'true'`, sets up your schema against the database in `DATABASE_URL`. It is read from the checked-out tree, so on a lane that checks out a pull request it is that branch's copy, except on the review lane, which restores your default branch's copy first (`K-MERGE-17`). The verify-acs lane loads it from your caller's commit, because the release it verifies may predate it.
+
+**The starting map.** When a lane passes an `issue-number`, your hook may write `.agent/starting-map.md` (`K-AGENT-41`). The implement lane's prompt reads it first if it exists, and nothing fails without it. Kanon's [`scripts/starting-map.mjs`](../scripts/starting-map.mjs) `--issue <n>` writes one from the issue and the spec clauses it cites.
 
 The contract defines no outputs, and no lane reads any: a lane judges your hook only by whether it succeeded. The review lane still reviews a pull request whose setup failed, and notes it on the run ([#77](https://github.com/yedeya-labs/kanon/issues/77)).
 

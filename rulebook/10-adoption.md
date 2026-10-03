@@ -54,17 +54,17 @@ Every path this chapter mentions is fixed in [11 Repository layout](11-repositor
 
 **Rule.** GitHub's plans decide which of Kanon's platform features exist:
 
-| Feature | Public repo, free organisation | Private repo, Team plan | Private repo, Enterprise Cloud |
-|---|---|---|---|
-| Rulesets, branch protection | yes | yes | yes |
-| Merge queue | yes | **no** | yes |
-| Required reviewers on an environment | yes | **no** | yes |
+| Feature | Public repo, free organisation | Private repo, free organisation | Private repo, Team plan | Private repo, Enterprise Cloud |
+|---|---|---|---|---|
+| Rulesets, branch protection | yes | **no** | yes | yes |
+| Merge queue | yes | **no** | **no** | yes |
+| Required reviewers on an environment | yes | **no** | **no** | yes |
 
 Use each feature wherever the plan provides it. Where it doesn't, use the fixed fallback, and record in the adoption record which one is in use:
 
 - **Merge queue.** Without one, leave "require branches to be up to date" **off**, and let the release commit's full CI run catch a stale base before anything deploys (`K-MERGE-7`, `K-SHIP-8`).
 - **Production approval.** Without environment reviewers, production promotion is a manually triggered workflow that only the Maintainer may run (`K-SHIP-9`).
-- **Rulesets.** There is no fallback. A private repository on a plan without rulesets stays in bootstrap and can't leave it (`K-ADOPT-6`).
+- **Rulesets.** There is no fallback. A private repository on a plan without rulesets, such as a free organisation's, stays in bootstrap and can't leave it (`K-ADOPT-6`). Its Reviewer still reviews, but nothing can require the approval, so installing the Reviewer doesn't end bootstrap there.
 
 Whether to pay for a plan, or make a repository public, is the project's decision. Kanon only says what each choice provides.
 

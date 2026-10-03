@@ -24,7 +24,7 @@ npx --yes --package github:yedeya-labs/kanon#v0.18.0 kanon apps --org <org> --re
 
 Or, from a Kanon checkout: `node cli/kanon.mjs apps --org <org> --repo <repo> --roles reviewer --dir <path to the adopter's checkout>`.
 
-`--roles` takes one role or several, comma-separated: `explorer`, `implementer`, `reviewer`, `merger`, `lead`, `overseer`. Create the **Reviewer first**: it is the App that ends bootstrap (`K-ADOPT-6`). Each App is named `<repo>-<role>` unless you pass `--name <role>=<name>`. App names are unique across all of GitHub, so if the name is taken, change it on GitHub's page before you click **Create**; the command reads back the slug GitHub gives it.
+`--roles` takes one role or several, comma-separated: `explorer`, `implementer`, `reviewer`, `merger`, `lead`, `overseer`. Create the **Reviewer first**: it is the App that ends bootstrap (`K-ADOPT-6`), on a plan with rulesets (`K-ADOPT-3`). Run it from the branch that adds the role's lane caller ([`docs/lanes.md`](lanes.md#your-first-lane-the-reviewer)), because `lane-check` fails a caller whose role has no register row. Each App is named `<repo>-<role>` unless you pass `--name <role>=<name>`. App names are unique across all of GitHub, so if the name is taken, change it on GitHub's page before you click **Create**; the command reads back the slug GitHub gives it.
 
 ## What happens, and what you click
 
@@ -35,9 +35,11 @@ For each role, in turn:
 3. **The key.** GitHub redirects back to the local listener with a one-time code. The command refuses a redirect whose `state` doesn't match the one it sent, then exchanges the code for the App's id and private key.
 4. **The secrets.** It sets `<ROLE>_APP_ID` and `<ROLE>_APP_PRIVATE_KEY` (for example `REVIEWER_APP_ID`) on the repository with `gh secret set`. The key goes to `gh` on standard input, and is never written to disk, printed, or passed as an argument.
 5. **You click "Install".** Your browser opens the App's install page. Choose the organisation, then **Only select repositories**, pick the repository alone, and click **Install**. The command waits until the installation exists, then checks it covers this repository. It fails if the repository is missing, and warns if the installation covers all repositories or any other one (`K-ADOPT-8`: one App per role per repository).
-6. **The register.** It writes the role's row in `docs/qa/agent-identities.md`, creating the file if it doesn't exist, and prints the diff. **Commit it**: the command doesn't.
+6. **The register.** It writes the role's row in `docs/qa/agent-identities.md`, creating the file if it doesn't exist, and prints the diff. A row the register already has for the role is rewritten in place, with the slug GitHub gave the App, so a placeholder row is replaced rather than doubled. A line that says only "none installed" is removed when the first row is added. **Commit it**: the command doesn't.
 
 ## Checking the installations later
+
+**This check runs on Kanon's own repository only, for now.** `apps-check.yml` has no `workflow_call`, so an adopter can't call it yet ([#154](https://github.com/yedeya-labs/kanon/issues/154)). On your repository, the run-time scope probe in every lane (`K-AGENT-5`) is the check.
 
 A person's token often can't list an organisation's App installations, but each App can read its own. Kanon's `apps-check` workflow ([`.github/workflows/apps-check.yml`](../.github/workflows/apps-check.yml)) does that for every agent role the register lists: it mints the role's token from `<ROLE>_APP_ID` and `<ROLE>_APP_PRIVATE_KEY`, then, with [`cli/apps-check.mjs`](../cli/apps-check.mjs), fails if the minted slug isn't the register's, if the installation doesn't cover the repository, or if its permissions differ from the role's in `rulebook/agent-permissions.json`, and warns if it covers other repositories or all of them. Each role's job writes a summary table. It runs by hand and is not a required check:
 
