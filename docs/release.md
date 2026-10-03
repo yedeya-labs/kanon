@@ -47,6 +47,7 @@ jobs:
 
 - **Grant the writes on the calling job only.** A reusable workflow can use no more than its caller grants, and nothing else in the file needs them.
 - **`contents: write` is also what lets the guard read your merge settings.** GitHub returns those fields to a workflow token only when it can push; with `metadata` or `contents: read` they come back empty. If they are unreadable, the guard fails and says so, rather than passing.
+- **With `lane-check`.** Until [#152](https://github.com/yedeya-labs/kanon/issues/152) is fixed, [`lane-check`](../actions/lane-check/README.md) fails this caller, because it reads every call to a Kanon workflow as a lane caller and this one maps no secrets. There is no verified workaround yet: keep the caller as shown.
 - **Upgrades.** The Dependabot entry in the [`pr-title` README](../actions/pr-title/README.md#upgrades-dependabot) also updates this `uses:` line: Dependabot's `github-actions` ecosystem covers reusable workflows. Keep one entry.
 
 ### 2. Your release configuration
