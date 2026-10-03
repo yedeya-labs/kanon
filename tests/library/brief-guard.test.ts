@@ -133,7 +133,7 @@ describe('required sections', () => {
   it.each([
     ['The real problem', 'the real problem / the measurement'],
     ['Scope', 'scope'],
-    ['AWS cost', 'cost'],
+    ['cost', 'cost'],
     ['Observability', 'observability'],
     ['Blast radius', 'blast radius'],
     ['Decisions', 'decisions'],
@@ -228,7 +228,7 @@ describe('a section must state something', () => {
   });
 });
 
-describe('the AWS cost section', () => {
+describe('the cost section', () => {
   it('accepts a dollar figure — `$0` is a figure and the commonest answer', () => {
     expect(problems(withSection('AWS cost', `${PAD} The delta is $0.`))).toEqual([]);
   });
