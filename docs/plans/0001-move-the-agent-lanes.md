@@ -1,6 +1,6 @@
 # Plan 0001: move the agent lanes into Kanon
 
-- **Status:** proposed, revised 2026-10-01. Steps P1 to 5a are done. **Step 6 was paused by the Owner on 2026-10-03,** and the remaining lanes are planned in [plan 0004](0004-move-the-remaining-lanes.md).
+- **Status:** proposed, revised 2026-10-01. Steps P1 to 5a are done for the lanes they name. Step 5's check, "the adopter holds no `agent-*` lane logic", holds for the ten lanes this plan moves; eight more lanes, this plan's "later" row, are still in the adopter. **Step 6 was paused by the Owner on 2026-10-03,** and the remaining lanes are planned in [plan 0004](0004-move-the-remaining-lanes.md).
   - The Owner agreed questions 1 to 6 and 8 in principle, and decisions 2, 3, 5 and 8.
   - The Owner **rejected decision 1** (adopter-written lanes around Kanon's blocks). This revision plans the replacement direction, which the Owner decided: **Kanon ships each lane as a reusable workflow; the adopter writes a trigger-only caller and one project-setup hook.**
 - **Governed by:** [ADR 0009](../decisions/0009-move-dont-rewrite.md) (move, don't rewrite), [ADR 0002](../decisions/0002-standardise-dont-parameterise.md), `K-ADOPT-11`, and [chapter 11](../../rulebook/11-repository-layout.md).
