@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { RETRY_STEPS } from '../../scripts/lib/protocol-spellings.mjs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -188,14 +189,8 @@ describe('every arm passes the flags its run is measured and bounded by', () => 
 /**
  * The retry breadcrumbs (RA-2519). A PR lane's recovery reads a run's jobs by STEP NAME to
  * find a run that died of its cause, so the names are a protocol, and these are the names
- * the recovery reads. Moved from the reference adopter's `lane-retry` test, whose reader
- * stays there with the pipeline library until step 3.
+ * the recovery reads: the current spelling, the one every lane writes (#53).
  */
-const RETRY_STEPS = Object.freeze({
-  unreachable: 'Retryable once the cause clears: the model was unreachable (RA-2519)',
-  api_error: 'Retryable once the cause clears: the model API failed mid-run (RA-2519)',
-});
-
 describe('every PR lane leaves the breadcrumbs (RA-2519)', () => {
   const lanes: [string, string][] = [
     ['agent-implement-revise.yml', 'revise'],

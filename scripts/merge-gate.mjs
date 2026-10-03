@@ -63,9 +63,11 @@ export { PIPELINE_ESCALATIONS } from './lib/escalation-paths.mjs';
 
 /**
  * The two workflows the Merger must not wait on, because they are him and the review
- * that woke him. Named by `workflowName`; see the note at the check inspection.
+ * that woke him. Named by `workflowName`; see the note at the check inspection. They are
+ * the adopter's caller names, so they live with the other protocol strings, old spellings
+ * included (#53, `lib/protocol-spellings.mjs`).
  */
-export const SELF_CHECKS = ['Review (Thomas)', 'Merge (Joshua)'];
+export { SELF_CHECKS, REVIEW_EVENT_CHECKS, ESCALATION_HEADER } from './lib/protocol-spellings.mjs';
 
 /**
  * The JOBS of other workflows that start on the same `pull_request_review` event the Merger
@@ -102,10 +104,6 @@ export const SELF_CHECKS = ['Review (Thomas)', 'Merge (Joshua)'];
  * Excluding them cannot merge over a commit one of them pushes: `apply` merges with
  * `--match-head-commit`, so a head that moved after the read refuses the merge.
  */
-export const REVIEW_EVENT_CHECKS = [
-  { workflow: 'Implement (Oholiab) — revise', job: 'revise / filter' },
-  { workflow: 'Merge Reconcile (Thomas)', job: 'reconcile / filter' },
-];
 const isReviewEventRacer = (c) =>
   REVIEW_EVENT_CHECKS.some((r) => r.workflow === c.workflowName && r.job === c.name);
 
@@ -239,9 +237,9 @@ export const LAPSES_WITH_HEAD = new Set([
   'checks-cancelled', 'checks-failed', 'undeclared-closes', 'closes-unverifiable', 'merge-state',
 ]);
 
-/** The first line of every escalation comment the Merger posts. Exported so `readPr` can tell
- *  an ESCALATION marker from a recover or release marker, which share the marker shape. */
-export const ESCALATION_HEADER = '🚦 **Joshua — not merging.**';
+// The first line of every escalation comment the Merger posts, `ESCALATION_HEADER`, is
+// exported above from `lib/protocol-spellings.mjs` (#53), so `readPr` can tell an ESCALATION
+// marker from a recover or release marker, which share the marker shape, in either spelling.
 
 /**
  * How long an `UNSTABLE` merge state may disagree with a fully-settled rollup before it
@@ -963,6 +961,9 @@ import { CONFLICT_JSON, CONFLICT_WHY, conflictState } from './conflict-state.mjs
 import { marker as rebaseMarker } from './rebase-lane.mjs';
 import { appLogin } from './app-register.mjs';
 import { escalatingPaths, readEscalationFileAt } from './lib/escalation-paths.mjs';
+import {
+  ESCALATION_HEADER, REVIEW_EVENT_CHECKS, SELF_CHECKS, isEscalation, mergerMarker, mergerMarkerSpellings, mergerMarkersIn,
+} from './lib/protocol-spellings.mjs';
 
 const gh = (args, opts = {}) => execFileSync('gh', args, { encoding: 'utf8', ...opts });
 
@@ -1128,9 +1129,8 @@ function holdOn(number, repo, gh) {
       .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
     const slug = (s) => String(s ?? '').replace(/^app\//, '').replace(/\[bot\]$/, '');
     const escalations = comments
-      .filter((c) => slug(c.login) === MERGER_LOGIN && String(c.body).includes(ESCALATION_HEADER))
-      .flatMap((c) => [...String(c.body).matchAll(/<!-- joshua:([a-z-]+):([0-9a-f]{7,40}) -->/g)])
-      .map((m) => ({ rule: m[1], sha: m[2] }));
+      .filter((c) => slug(c.login) === MERGER_LOGIN && isEscalation(c.body))
+      .flatMap((c) => mergerMarkersIn(c.body));
     return { labeledBy, escalations };
   } catch {
     return null;
@@ -1175,11 +1175,13 @@ function rebaseAttemptedOn(meta, repo, gh) {
  * Keyed on the head SHA and not the PR, because a new commit is a new question: a
  * push that removes the `.github/` file SHOULD be re-evaluated and re-announced.
  */
-const marker = (rule, sha) => `<!-- joshua:${rule}:${sha.slice(0, 12)} -->`;
+const marker = mergerMarker;
 
-const alreadySaid = (number, repo, mark) => {
+// A marker in an old spelling (#53) says the same thing, so it counts as said.
+const alreadySaid = (number, repo, rule, sha) => {
   try {
-    return gh(['api', `repos/${repo}/issues/${number}/comments?per_page=100`, '--jq', '.[].body']).includes(mark);
+    const bodies = gh(['api', `repos/${repo}/issues/${number}/comments?per_page=100`, '--jq', '.[].body']);
+    return mergerMarkerSpellings(rule, sha).some((m) => bodies.includes(m));
   } catch {
     // Fail LOUD, not silent: if the check cannot run, say the thing again rather
     // than swallowing an escalation nobody would ever see.
@@ -1288,7 +1290,7 @@ export function apply(pr, verdict, repo, { dryRun = true } = {}) {
     // A quiet escalation still refuses; it just does not announce itself again.
     if (verdict.quiet) return say(`escalated already, staying quiet on #${pr.number}: ${verdict.why}`);
     const mark = marker(verdict.rule, pr.headSha);
-    if (alreadySaid(pr.number, repo, mark)) {
+    if (alreadySaid(pr.number, repo, verdict.rule, pr.headSha)) {
       // THE MARKER DEDUPES THE COMMENT, NEVER THE LABEL. Returning before `--add-label`
       // meant a label that had been lifted (RA-2097/RA-2238) or removed stayed off while the
       // escalation it stood for still held on this very commit — refused every sweep, with
@@ -1318,7 +1320,7 @@ export function apply(pr, verdict, repo, { dryRun = true } = {}) {
   }
   if (verdict.action === 'recover') {
     const mark = marker(verdict.rule, pr.headSha);
-    if (alreadySaid(pr.number, repo, mark)) return say(`already re-dispatched for #${pr.number} on this commit`);
+    if (alreadySaid(pr.number, repo, verdict.rule, pr.headSha)) return say(`already re-dispatched for #${pr.number} on this commit`);
     say(`re-dispatch the reviewer for #${pr.number}: ${verdict.rule}`);
     if (!dryRun) {
       gh(['workflow', 'run', 'agent-review.yml', '--repo', repo, '-f', `pr_number=${pr.number}`]);
@@ -1336,7 +1338,7 @@ export function apply(pr, verdict, repo, { dryRun = true } = {}) {
     const mark = marker(verdict.rule, pr.headSha);
     say(`lift needs:human on #${pr.number}: ${verdict.rule}`);
     if (!dryRun) {
-      if (!alreadySaid(pr.number, repo, mark)) {
+      if (!alreadySaid(pr.number, repo, verdict.rule, pr.headSha)) {
         gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body',
             `🔓 **the Merger — lifting \`needs:human\`.**\n\nRule: \`${verdict.rule}\`\nWhy: ${verdict.why}\n\nTo hold this PR on purpose, re-apply \`needs:human\` by hand — the Merger never lifts a label a person applied.\n\n${mark}`]);
       }

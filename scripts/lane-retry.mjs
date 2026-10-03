@@ -40,28 +40,19 @@
 // with no `npm ci` (RA-1957).
 
 import { execFileSync } from 'node:child_process';
+import { RETRY_STEPS, RETRY_STEP_NAMES } from './lib/protocol-spellings.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 
-/** The step a lane's workflow runs when its classify step reported a retryable failure,
- *  per classification. The names ARE the protocol: a rename here without the workflow
- *  (or the reverse) would read every capped run as a genuine failure, silently. */
-export const RETRY_STEPS = Object.freeze({
-  unreachable: 'Retryable once the cause clears: the model was unreachable (#2519)',
-  api_error: 'Retryable once the cause clears: the model API failed mid-run (#2519)',
-});
-
 /**
- * THE SAME TWO STEPS AS KANON'S SPINE NAMES THEM (RA-2709). The spine moved to Kanon at its
- * step 2, and Kanon writes this repo's issue references as `RA-N`, so a run of a lane on the
- * spine (implement, triage, both revise lanes, the lead) leaves `(RA-2519)` where this
- * repo's own direct lanes (review, rebase) still leave `(#2519)`. Both spellings are read,
- * per classification: a run from before the switch, or a lane not yet moved, must still be
- * retried. `RETRY_STEPS` stays the local spelling, which the direct lanes are held to.
+ * The step a lane's workflow runs when its classify step reported a retryable failure,
+ * per classification, and every spelling a reader accepts (#53). The names ARE the
+ * protocol: a rename here without the workflow (or the reverse) would read every capped
+ * run as a genuine failure, silently. `RETRY_STEPS` is the spelling Kanon's lanes write;
+ * `RETRY_STEP_NAMES` adds the two older ones, `(RA-2519)` and `(#2519)`, so a run from
+ * before the rename is still retried.
  */
-export const RETRY_STEP_NAMES = Object.freeze(Object.fromEntries(
-  Object.entries(RETRY_STEPS).map(([k, v]) => [k, Object.freeze([v, v.replace('(#2519)', '(RA-2519)')])]),
-));
+export { RETRY_STEPS, RETRY_STEP_NAMES };
 
 /** Hours after a retryable failure before its head may be retried. The subscription's
  *  session window is five hours; anything shorter risks spending the one retry inside

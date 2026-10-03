@@ -2256,10 +2256,10 @@ jobs:
       # cannot see annotations (`Checks: read`), but it can see which of these steps
       # RAN under `Actions: read`. The names must match `RETRY_STEPS` in
       # .kanon/scripts/lane-retry.mjs, which `workflow-retry-breadcrumbs` asserts.
-      - name: "Retryable once the cause clears: the model was unreachable (RA-2519)"
+      - name: "Retryable once the cause clears: the model was unreachable"
         if: failure() && steps.claim.outputs.proceed == 'true' && steps.classify.outputs.retry == 'unreachable'
         run: echo "The model was never reached. reviewRecovery retries this head once, after the cool-down (RA-2519)."
-      - name: "Retryable once the cause clears: the model API failed mid-run (RA-2519)"
+      - name: "Retryable once the cause clears: the model API failed mid-run"
         if: failure() && steps.claim.outputs.proceed == 'true' && steps.classify.outputs.retry == 'api_error'
         run: echo "The model API failed part-way through. reviewRecovery retries this head once, after the cool-down (RA-2519)."
 

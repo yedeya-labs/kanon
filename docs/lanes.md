@@ -67,7 +67,7 @@ A caller holds `name`, `on`, `permissions` and one job, and nothing else (and `r
 <!-- x-release-please-start-version -->
 
 ```yaml
-name: Implement — revise
+name: Implement (Implementer) — revise
 
 on:
   pull_request_review:
@@ -103,12 +103,19 @@ jobs:
 
 <!-- x-release-please-end -->
 
+- **Four callers have fixed names** ([#53](https://github.com/yedeya-labs/kanon/issues/53)). GitHub reports a called lane's checks under its caller's `name:`, and the merge gate tells its own checks, and the review event's, from the rest by that name. Name the review lane's caller `Review (Reviewer)`, the merge-reconcile lane's `Merge Reconcile (Reviewer)`, the implement-revise lane's `Implement (Implementer) — revise` and your Merger's workflow `Merge (Merger)`, and give the revise and merge-reconcile callers' one job the ids `revise` and `reconcile`. Under another name the Merger waits on itself.
 - **Triggers are yours.** A reusable workflow can't declare its caller's events. The `github` context in a called workflow is the caller's, so the lane reads the triggering event exactly as it would in your own file.
 - **Inputs pass through, by name.** `with:` passes your `workflow_dispatch` inputs as `${{ inputs.<name> }}`, and nothing else. On the other triggers they arrive empty, which the lane expects.
 - **`permissions:` is the ceiling.** Each lane declares the permissions it needs, and a called workflow can only narrow what its caller grants. Grant at least what the lane declares, or the run fails to start.
 - **Secrets are mapped explicitly, by their fixed names** ([plan 0001 §8](plans/0001-move-the-agent-lanes.md)): `<ROLE>_APP_ID`, `<ROLE>_APP_PRIVATE_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`. Never `secrets: inherit`, which would hand every secret in your repository to Kanon's code.
 - **No `concurrency:`.** Each lane holds its own concurrency group. The same group on the caller would have the caller wait for itself.
 - **One version.** Every Kanon reference in your repository pins the same exact version, and Dependabot proposes upgrades (`K-ADOPT-11`).
+
+## Old spellings
+
+Some strings are read by another program by their exact text: the Merger's comment marker (`<!-- merger:<rule>:<sha> -->`) and escalation header, the split lane's branch (`lead/split-<n>`), the Lead's adoption sentence, the four caller names above, and the retry steps' names. Kanon writes them with role names. Until [#53](https://github.com/yedeya-labs/kanon/issues/53) they carried the reference adopter's agent names, caller names and issue numbers, and a pull request, branch, issue or run from then still carries them, so the readers accept both spellings. [`scripts/lib/protocol-spellings.mjs`](../scripts/lib/protocol-spellings.mjs) holds both.
+
+The old spellings are read until a measurement says nothing live carries them. [`scripts/protocol-census.mjs`](../scripts/protocol-census.mjs), run in your checkout with `GITHUB_REPOSITORY` set, lists every caller, open pull request (its comments, its checks and the failed runs on its head), open issue and branch that still carries one, and exits 0 only when there are none. When it exits 0 in every adopter Kanon knows of, a release drops the old spellings.
 
 ## Kanon's scripts
 

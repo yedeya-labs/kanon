@@ -28,6 +28,7 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { splitBranch, splitBranches } from './lib/protocol-spellings.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 
@@ -80,8 +81,10 @@ export function childrenMissingMarker(diff) {
 }
 
 /** The branch the split lane pushes to — one per parent, so a second run for the same
- *  issue finds the first one's PR instead of opening a rival. */
-export const splitBranch = (issue) => `bezalel/split-${issue}`;
+ *  issue finds the first one's PR instead of opening a rival. `splitBranches` adds the
+ *  branch's old spelling, which a split opened before #53 is still on: a reader asks
+ *  about every one, a writer pushes to `splitBranch`. */
+export { splitBranch, splitBranches };
 
 /**
  * Where an issue whose implementer run EXHAUSTED its cap goes. Pure.
@@ -197,7 +200,8 @@ async function gate() {
   const view = ghJson(['issue', 'view', issue, '--repo', REPO, '--json', 'state,labels,body']);
   const project = projectOf(view.body);
   const branch = splitBranch(issue);
-  const prs = ghJson(['pr', 'list', '--repo', REPO, '--state', 'open', '--head', branch, '--json', 'number']);
+  const prs = splitBranches(issue).flatMap((head) =>
+    ghJson(['pr', 'list', '--repo', REPO, '--state', 'open', '--head', head, '--json', 'number']));
   const verdict = splitGate({
     state: view.state,
     labels: (view.labels ?? []).map((l) => l.name),

@@ -171,12 +171,15 @@ describe('which failures the classifier calls retryable (RA-2519)', () => {
  * text. The jobs API names that job `revise / run`, and the reader filters these lanes'
  * jobs by nothing, so the name change is invisible to it.
  */
-describe('both spellings of a breadcrumb are read (RA-2709)', () => {
-  // Kanon's spine names them `(RA-2519)`; this repo's own direct lanes, and every run from
-  // before the switch, `(RA-2519)`. A reader of one spelling would read the other's capped
-  // runs as genuine failures: no retry, silently.
+describe('every spelling of a breadcrumb is read (RA-2709, #53)', () => {
+  // Kanon's lanes write the bare name since #53; runs from before it carry `(RA-2519)`
+  // (Kanon's spine) or `(#2519)` (the reference adopter's own lanes). A reader of one
+  // spelling would read the others' capped runs as genuine failures: no retry, silently.
+  // The old spellings are written out, so dropping one before the census says so is red.
   it.each(Object.entries(RETRY_STEP_NAMES))('%s', (cls, names) => {
-    expect(names).toEqual([RETRY_STEPS[cls as keyof typeof RETRY_STEPS], RETRY_STEPS[cls as keyof typeof RETRY_STEPS].replace('(#2519)', '(RA-2519)')]);
+    const current = RETRY_STEPS[cls as keyof typeof RETRY_STEPS];
+    expect(current).not.toMatch(/\(/);
+    expect(names).toEqual([current, `${current} (RA-2519)`, `${current} (#2519)`]);
     for (const name of names) {
       const payload = { jobs: [{ name: 'revise / revise / run', steps: [{ name, conclusion: 'success', completed_at: ago(6) }] }] };
       expect(retryEvidenceIn(payload), name).toEqual({ classification: cls, at: ago(6) });

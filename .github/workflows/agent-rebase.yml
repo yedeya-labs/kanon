@@ -431,9 +431,9 @@ jobs:
       # asserts. Both do nothing but say so. JOB-LEVEL STEPS, after the finish block whose
       # classifier they read: the jobs API lists a composite action as ONE step, so a
       # breadcrumb inside it could never be read by its name.
-      - name: "Retryable once the cause clears: the model was unreachable (RA-2519)"
+      - name: "Retryable once the cause clears: the model was unreachable"
         if: failure() && steps.finish.outputs.retry == 'unreachable'
         run: echo "The model was never reached. Kanon's scripts/rebase-lane.mjs retries this head once, after the cool-down (RA-2519)."
-      - name: "Retryable once the cause clears: the model API failed mid-run (RA-2519)"
+      - name: "Retryable once the cause clears: the model API failed mid-run"
         if: failure() && steps.finish.outputs.retry == 'api_error'
         run: echo "The model API failed part-way through. Kanon's scripts/rebase-lane.mjs retries this head once, after the cool-down (RA-2519)."

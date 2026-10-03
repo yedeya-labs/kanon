@@ -412,9 +412,9 @@ jobs:
       # retry: on an issue lane none comes, and a human reading the log would wait for it
       # instead of re-dispatching. It says which lanes retry, and what to do on the others;
       # the caller's header names its own retrier.
-      - name: "Retryable once the cause clears: the model was unreachable (RA-2519)"
+      - name: "Retryable once the cause clears: the model was unreachable"
         if: failure() && steps.finish.outputs.retry == 'unreachable'
         run: echo "The model was never reached. The revise lanes are retried once for this head after the cool-down (RA-2519); any other lane is NOT retried automatically — re-dispatch it once the cause clears."
-      - name: "Retryable once the cause clears: the model API failed mid-run (RA-2519)"
+      - name: "Retryable once the cause clears: the model API failed mid-run"
         if: failure() && steps.finish.outputs.retry == 'api_error'
         run: echo "The model API failed part-way through. The revise lanes are retried once for this head after the cool-down (RA-2519); any other lane is NOT retried automatically — re-dispatch it once the cause clears."
