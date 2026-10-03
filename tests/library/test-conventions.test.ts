@@ -91,6 +91,53 @@ describe('Python: the title is the summary line of a test function’s docstring
     expect(m.split('\n')).toHaveLength(src.split('\n').length);
   });
 
+  it('reads only the test functions pytest collects (kanon#128)', () => {
+    const collected = [
+      'def helper():',
+      '    def test_inner():',
+      '        """[ORD-1] nested in a function"""',
+      '',
+      'class Helper:',
+      '    def test_x(self):',
+      '        """[ORD-2] a method of a class not named Test…"""',
+      '    def make(',
+      'self):',
+      '        pass',
+      '    def test_y(self):',
+      '        """[ORD-9] still in Helper, after a continuation less indented than it"""',
+      '',
+      'class TestOuter:',
+      '    class TestInner:',
+      '        def test_deep(self):',
+      '            """[ORD-3] nested only in Test classes"""',
+      '    class Fixtures:',
+      '        def test_fixture(self):',
+      '            """[ORD-4] in a non-Test class inside a Test class"""',
+      '    def test_after(',
+      'self,',
+      '    ):',
+      '        """[ORD-5] after a signature whose continuation is less indented"""',
+      '',
+      'if True:',
+      '    def test_guarded():',
+      '        """[ORD-6] module level, bound inside an if"""',
+      '',
+      'def builder():',
+      '    class TestLocal:',
+      '        def test_local(self):',
+      '            """[ORD-7] a Test class local to a function"""',
+      '',
+      'def test_top():',
+      '    """[ORD-8] module level, after all of the above"""',
+    ].join('\n');
+    expect(pythonTitles(collected).split('\n')).toEqual([
+      '[ORD-3] nested only in Test classes',
+      '[ORD-5] after a signature whose continuation is less indented',
+      '[ORD-6] module level, bound inside an if',
+      '[ORD-8] module level, after all of the above',
+    ]);
+  });
+
   it('a string prefix ending an identifier is not a prefix', () => {
     // `elif"…"` is not valid Python, but `if"x"` is: the `f` belongs to `if`.
     expect(pythonMentions('if"[ORD-1]": pass').includes('[ORD-1]')).toBe(false);
@@ -119,6 +166,29 @@ describe('Go: the title is a subtest’s name, the literal first argument of t.R
 
   it('reads literal subtest names only', () => {
     expect(goTitles(src).split('\n')).toEqual(['[ORD-1] placing twice records once', '[ORD-2] a raw string name']);
+  });
+
+  it('reads only subtests in the test functions `go test -run` runs (kanon#128)', () => {
+    const run = [
+      'func BenchmarkPlace(b *testing.B) {',
+      '\tb.Run("[ORD-3] a sub-benchmark", func(b *testing.B) {})',
+      '}',
+      'func FuzzPlace(f *testing.F) {',
+      '\tf.Fuzz(func(t *testing.T, s string) { t.Run("[ORD-4] in a fuzz target", nil) })',
+      '}',
+      'func helper(t *testing.T) {',
+      '\tt.Run("[ORD-5] in a helper", nil)',
+      '}',
+      'func TestNested(t *testing.T) {',
+      '\tif false {}',
+      '\tt.Run("[ORD-1] outer", func(t *testing.T) {',
+      '\t\tif true { t.Run("[ORD-2] inner, after a nested block", nil) }',
+      '\t\t_ = "}"',
+      '\t})',
+      '}',
+      'func Benchmark2(b *testing.B) { b.Run("[ORD-6] after a test", nil) }',
+    ].join('\n');
+    expect(goTitles(run).split('\n')).toEqual(['[ORD-1] outer', '[ORD-2] inner, after a nested block']);
   });
 
   it('mentions keep comments and blank strings', () => {
