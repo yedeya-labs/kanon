@@ -26,6 +26,16 @@ Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called 
 
 **Grant a lane's job-level permissions too.** The implement lane's crash recovery writes issues, reads pull requests and reads its own run on the workflow token, so its caller grants `contents: read`, `issues: write`, `pull-requests: read` and `actions: read`. The rebase lane's filter reads pull requests and its earlier runs' jobs on the workflow token, so its caller grants `contents: read`, `actions: read` and `pull-requests: read`; the split lane's gate edits the issue's labels, so its caller grants `issues: write` and `pull-requests: read`.
 
+## Asking the review lane again
+
+One commit gets one verdict. The lane skips a head the Reviewer has already reviewed, and a run that waited behind another review of the same head stands down when that review posts ([#88](https://github.com/yedeya-labs/kanon/issues/88)). A new verdict on an unchanged commit comes only from a request made *after* the last one:
+
+- **Push.** A new commit is reviewed when CI finishes on it. This is how a fix gets its review, so there is nothing to re-request.
+- **A person re-applies `review:please`** after the verdict, to ask for another look at the same commit (for example after editing the PR body). The lane treats a label applied by a person as an explicit request. A label applied before the verdict landed is answered by that verdict.
+- **Tooling dispatches the lane:** `gh workflow run <your review caller> -f pr_number=N`. A dispatch reviews regardless of labels, and its run records who asked.
+
+**Tooling must not churn the label.** Removing and re-applying `review:please` through a person's token is indistinguishable from that person asking. A churn that lands after the verdict spends a second full review on the same commit, and one that lands before it is wasted. A script that acts for a person dispatches instead, or waits for the push to do the asking. Apps can re-apply the label (the recovery in `K-MERGE-14` does), because a label applied by an App is never an explicit request.
+
 ## Only members start a lane
 
 Every lane starts real work only when the actor of its triggering event is a member: GitHub's `author_association` of `OWNER`, `MEMBER` or `COLLABORATOR`, or one of your agent Apps listed in the App register (`K-AGENT-45`). The check is the first step of the lane's first job, [`scripts/lane-gate.mjs`](../scripts/lane-gate.mjs), before any token is minted, so it runs on a private repository exactly as on a public one (`K-PRIN-20`).

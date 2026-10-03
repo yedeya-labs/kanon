@@ -547,9 +547,37 @@ esac
     expect(r.stdout).toMatch(/head moved/);
   });
 
-  it('never stands down an EXPLICIT human request, even over a sibling verdict', () => {
-    const r = claimRun({ explicit: 'true', reviews: [at('APPROVED', '2026-09-21T15:13:55Z')] });
+  // kanon#88: the two sequences measured on 2026-10-02, replayed. An explicit request used
+  // to bypass this step, so a person re-labelling while a review ran got a second verdict.
+  it('answers an explicit request with the verdict posted after it — kanon PR #76 at 46d7984', () => {
+    // CI's completion started a review at 18:34:05; `review:please` was re-applied at
+    // 18:34:26 and started this run at 18:34:29; the first run APPROVED at 18:36:33. This
+    // run, queued behind it, used to REQUEST CHANGES on the same commit at 18:39:55.
+    const r = claimRun({ explicit: 'true', startedAt: '2026-10-02T18:34:29Z',
+      reviews: [at('APPROVED', '2026-10-02T18:36:33Z')] });
+    expect(r.proceed).toBe('false');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/answer it/);
+  });
+
+  it('reviews an explicit request made AFTER the verdict — a person asking again', () => {
+    const r = claimRun({ explicit: 'true', startedAt: '2026-10-02T18:50:00Z',
+      reviews: [at('APPROVED', '2026-10-02T18:36:33Z')] });
     expect(r.proceed).toBe('true');
+  });
+
+  it('declines an explicit request whose head moved — kanon PR #80, b9be2f1 then 623b92a', () => {
+    // Run 37048367931 was a re-label on `b9be2f1`; `623b92a` was pushed while it queued,
+    // and it APPROVED at 18:38:39 under the new head before CI's own review of it landed.
+    const r = claimRun({ explicit: 'true', headNow: OLD });
+    expect(r.proceed).toBe('false');
+    expect(r.stdout).toMatch(/head moved/);
+  });
+
+  it('declines the third run on kanon PR #80 at 623b92a, re-labelled before two verdicts landed', () => {
+    const r = claimRun({ explicit: 'true', startedAt: '2026-10-02T18:37:51Z', reviews: [
+      at('APPROVED', '2026-10-02T18:38:39Z'), at('APPROVED', '2026-10-02T18:39:40Z')] });
+    expect(r.proceed).toBe('false');
   });
 
   it('reviews when any read fails — this is de-duplication, not a gate', () => {

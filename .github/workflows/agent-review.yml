@@ -321,10 +321,10 @@ jobs:
       review: ${{ steps.decide.outputs.review }}
       pr: ${{ steps.decide.outputs.pr }}
       head_sha: ${{ steps.decide.outputs.head_sha }}
-      # Whether this review answers an EXPLICIT request that a sibling's verdict does
-      # not satisfy — today only a human re-applying a review label (RA-1351). Read by the
-      # review job's `claim` step, which otherwise declines a head a sibling run
-      # reviewed while this one waited (RA-2026).
+      # Whether this review answers an EXPLICIT request — today only a human re-applying
+      # a review label (RA-1351), which outranks the `already reviewed` skip. The review
+      # job's `claim` step reads it only to word its decline: a verdict posted after the
+      # request answers it like any sibling's (kanon#88).
       explicit: ${{ steps.decide.outputs.explicit }}
     steps:
       # First-open / re-open / label / dispatch → always review. On a push
@@ -787,6 +787,34 @@ jobs:
             && decide true "\`$LABEL\` applied by \`$SENDER\`, a human — an explicit request for another look, which outranks the already-reviewed skip (RA-1351)"
 
 
+          # ONE COMMIT, ONE VERDICT, ON EVERY KIND OF PR (kanon#88).
+          #
+          # The `already reviewed <sha>` skip used to sit BELOW the docs-only-PR and
+          # brief-PR arms, which decide `true` and exit, so on a PR made only of docs it
+          # was never reached: every event for an already-reviewed head reviewed it
+          # again. Those arms answer "is a docs-only PUSH worth reading?", a question
+          # that only exists for a head nobody has reviewed. Measured on kanon PR #80,
+          # head `623b92a`: its CI completion decided `review=true (docs-only PR …)`.
+          # Read here, after the explicit-request arm (which is the one thing that may
+          # re-review a reviewed head) and before every arm that could skip past it.
+          #
+          # A FAILED READ IS NOT ACTED ON HERE. It falls through to the read-failure
+          # arm at the old position, so it still never pre-empts a skip marker.
+          REVIEWS_READ=failed
+          REVIEWS="$(gh api "repos/$REPO/pulls/$PR/reviews?per_page=100" 2>/dev/null)" \
+            && printf '%s' "$REVIEWS" | jq -e 'type == "array"' >/dev/null 2>&1 \
+            && REVIEWS_READ=ok
+          [ "$REVIEWS_READ" = "ok" ] || REVIEWS='[]'
+          # WHAT CHANGED SINCE THE REVIEWER LAST LOOKED — not what this push changed.
+          # A `workflow_run` payload has no before/after to diff, and anchoring to the
+          # last REVIEWED commit is the better basis anyway: across two pushes the old
+          # one compared only the second, so a code push followed by a docs push read
+          # as docs-only and the code was never reviewed.
+          LAST="$(printf '%s' "$REVIEWS" \
+            | jq -r --arg login "${REVIEWER_LOGIN}[bot]" '[.[] | select(.user.login == $login)] | last | .commit_id // ""')"
+          evidence LAST_REVIEWED "$LAST"
+          [ -n "$LAST" ] && [ "$LAST" = "$HEAD" ] && decide false "already reviewed ${HEAD:0:7}"
+
           # A read failure here must NOT read as "no marker": that is the same defect as
           # RA-1113, where a swallowed 403 made `[skip-review]` inert for the life of the
           # job. Failing towards review is right — a redundant review is waste, a
@@ -854,19 +882,11 @@ jobs:
           # developer's merge of that file the single gate for the whole project. A
           # push that only changes it is precisely the push that must be reviewed.
           printf '%s\n' "$PR_FILES" | grep -qE '^docs/projects/' && decide true "brief PR — the brief IS the deliverable, so a docs-only push is the one that must be reviewed"
-          # WHAT CHANGED SINCE THE REVIEWER LAST LOOKED — not what this push changed.
-          # A `workflow_run` payload has no before/after to diff, and anchoring to the
-          # last REVIEWED commit is the better basis anyway: across two pushes the old
-          # one compared only the second, so a code push followed by a docs push read
-          # as docs-only and the code was never reviewed.
-          REVIEWS="$(gh api "repos/$REPO/pulls/$PR/reviews?per_page=100" 2>/dev/null)" \
+          # The reviews were read above, before the docs arms (kanon#88); a failed read
+          # is acted on HERE, where it always was, so it never pre-empts a skip marker.
+          [ "$REVIEWS_READ" = "ok" ] \
             || read_failed REVIEWS "could not read this PR's reviews — review to be safe"
-          printf '%s' "$REVIEWS" | jq -e 'type == "array"' >/dev/null 2>&1 || REVIEWS='[]'
-          LAST="$(printf '%s' "$REVIEWS" \
-            | jq -r --arg login "${REVIEWER_LOGIN}[bot]" '[.[] | select(.user.login == $login)] | last | .commit_id // ""')"
-          evidence LAST_REVIEWED "$LAST"
           [ -z "$LAST" ] && decide true "no prior Reviewer review on this PR"
-          [ "$LAST" = "$HEAD" ] && decide false "already reviewed ${HEAD:0:7}"
 
           FILES="$(gh api "repos/$REPO/compare/$LAST...$HEAD" --jq '.files[].filename' 2>/dev/null)" \
             || read_failed FILES "could not read the changed-file list — review to be safe"
@@ -1155,8 +1175,25 @@ jobs:
       # ONLY A VERDICT SUBMITTED SINCE THIS RUN STARTED counts. One from before is what
       # the run was dispatched past on purpose — RA-1351's human re-label re-reviews an
       # unchanged commit, and `filter` already decided that — so it is not a sibling.
-      # And an EXPLICIT human request is never declined: the verdict that landed while
-      # it waited was formed before the request was made.
+      #
+      # AN EXPLICIT REQUEST IS ANSWERED BY THE FIRST VERDICT AFTER IT (kanon#88). This
+      # step used to wave an explicit human request straight through, on the reasoning
+      # that a verdict landing while it waited "was formed before the request was made".
+      # That bought two verdicts on one commit every time a person re-labelled while a
+      # review was already running. Measured on kanon PR #76, head `46d7984`: CI's
+      # completion started a review at 18:34:05, `review:please` was re-applied at
+      # 18:34:26, the first run APPROVED at 18:36:33, and the second — queued behind it
+      # by the job-level group, then passed by this step — REQUESTED CHANGES at 18:39:55
+      # on the same commit. PR #80 got three APPROVEDs on `623b92a` the same way, one of
+      # them from an explicit run whose head had MOVED, because the bypass skipped the
+      # moved-head check too. A request is a question about a commit; a verdict on that
+      # commit posted after the question is its answer, whichever run posted it. So an
+      # explicit request now goes through both checks below like any other run: a person
+      # who wants another look asks again AFTER the verdict, and that run started after
+      # it, so no sibling counts. `docs/lanes.md` says how tooling should ask.
+      #
+      # RESIDUE: the window is this run's start, a few seconds after the label event
+      # that created it. A verdict landing inside those seconds is not counted.
       #
       # A MOVED HEAD DECLINES TOO. The push that moved it fires its own review; a review
       # of the old head posted now is filed by GitHub under the NEW one (RA-1680) — the
@@ -1181,9 +1218,6 @@ jobs:
             printf '%s\n' "**proceed=$1** — $2" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           }
-          [ "$EXPLICIT" = "true" ] \
-            && proceed true "an explicit human request (RA-1351) — a verdict that landed while it waited does not answer it"
-
           NOW="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha' 2>/dev/null)" || NOW=""
           case "$NOW" in
             [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
@@ -1211,8 +1245,11 @@ jobs:
           case "$SIBLINGS" in
             ''|*[!0-9]*) proceed true "could not read PR #$PR_NUMBER's reviews — reviewing to be safe" ;;
           esac
-          [ "$SIBLINGS" -gt 0 ] \
-            && proceed false "$SIBLINGS verdict(s) on ${HEAD_SHA:0:7} were posted by a sibling run since this one started at $SINCE — standing down rather than posting a second (RA-2026)"
+          if [ "$SIBLINGS" -gt 0 ]; then
+            [ "$EXPLICIT" = "true" ] \
+              && proceed false "$SIBLINGS verdict(s) on ${HEAD_SHA:0:7} were posted since this explicit request at $SINCE, and they answer it — ask again after that verdict for another look (kanon#88)"
+            proceed false "$SIBLINGS verdict(s) on ${HEAD_SHA:0:7} were posted by a sibling run since this one started at $SINCE — standing down rather than posting a second (RA-2026)"
+          fi
           proceed true "no verdict on ${HEAD_SHA:0:7} since $SINCE"
 
       # `workflow_run` runs in the context of the DEFAULT branch, so a bare checkout
