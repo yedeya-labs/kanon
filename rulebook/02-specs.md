@@ -65,8 +65,8 @@ Where the title is depends on the test's language, and Kanon fixes it per langua
 | Language | Test files | The title that carries the id |
 |---|---|---|
 | JavaScript and TypeScript | under `tests/` or `e2e/` | the title argument: `it('[ORD-1] …')` |
-| Python | `test_*.py` or `*_test.py` | the first line of the test function's docstring: `"""[ORD-1] …"""` |
-| Go | `*_test.go` | a subtest's name: `t.Run("[ORD-1] …", …)` |
+| Python | `test_*.py` or `*_test.py` | the first line of the docstring of a test function pytest collects (a module-level `test…` function, or a `test…` method of a `Test…` class): `"""[ORD-1] …"""` |
+| Go | `*_test.go` | the name of a subtest in a `Test…` function: `t.Run("[ORD-1] …", …)` |
 
 Kanon reads no test in a language outside the table.
 

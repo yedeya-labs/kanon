@@ -159,22 +159,64 @@ const headerEnd = (/** @type {string} */ code, /** @type {number} */ k) => {
   return -1;
 };
 
-const PY_TEST_DEF = /^[ \t]*(?:async[ \t]+)?def[ \t]+(test\w*)/gm;
 const PY_DEF = /^[ \t]*(?:async[ \t]+)?(?:def|class)[ \t]+\w+/gm;
+const PY_SCOPE = /^([ \t]*)(?:async[ \t]+)?(def|class)[ \t]+(\w+)/;
 
 /**
- * Python's titles: the SUMMARY LINE of each test function's docstring, its first non-empty
- * line. A test function is what pytest collects, `def test…` at any depth (a module function
- * or a method of a `Test…` class). A pytest name is an identifier and cannot hold `[ORD-1]`,
- * so the docstring's summary is the title a reader sees; the rest of the docstring is the
- * body, and an id there is a mention, as an id in a JavaScript docblock is.
+ * The `def test…` headers pytest COLLECTS, by its defaults (`python_functions = test*`,
+ * `python_classes = Test*`): a `test*` function at module level, or a `test*` method of a
+ * `Test*` class that is itself at module level or nested only in `Test*` classes (kanon#128).
+ * A `def test…` nested in a function, or in a class not named `Test…`, is never collected,
+ * so its docstring is not a title. Scope is read by indentation, on lines that start outside
+ * any bracket, so a signature split over several lines can't open or close a scope. A block
+ * that isn't a `def` or `class` (`if`, `with`, …) doesn't make a scope: pytest collects a
+ * module-level name wherever it was bound. Each entry is the offset just past the name.
+ * What it does not read: a `Test*` class with an `__init__` (pytest skips it with a
+ * warning), and an adopter's own `python_functions` or `python_classes` setting.
+ * @param {string} code the file with strings and comments blanked
+ * @returns {number[]}
+ */
+const pytestCollected = (code) => {
+  /** @type {{ indent: number, kind: string, name: string }[]} */
+  const scopes = [];
+  const out = [];
+  let depth = 0;
+  let offset = 0;
+  for (const line of code.split('\n')) {
+    if (depth === 0 && line.trim()) {
+      const indent = /^[ \t]*/.exec(line)?.[0].length ?? 0;
+      while (scopes.length && (scopes.at(-1)?.indent ?? 0) >= indent) scopes.pop();
+      const m = PY_SCOPE.exec(line);
+      if (m) {
+        const kind = m[2] ?? '', name = m[3] ?? '';
+        const collectable = scopes.every((sc) => sc.kind === 'class' && /^Test/.test(sc.name));
+        if (kind === 'def' && /^test/.test(name) && collectable) out.push(offset + m[0].length);
+        scopes.push({ indent, kind, name });
+      }
+    }
+    for (const c of line) {
+      if (c === '(' || c === '[' || c === '{') depth++;
+      else if ((c === ')' || c === ']' || c === '}') && depth > 0) depth--;
+    }
+    offset += line.length + 1;
+  }
+  return out;
+};
+
+/**
+ * Python's titles: the SUMMARY LINE of each collected test function's docstring, its first
+ * non-empty line. A test function is one pytest collects (`pytestCollected`), so a title in
+ * a function pytest never runs can't lock a clause or pass a criterion (`K-SPEC-6`). A pytest
+ * name is an identifier and cannot hold `[ORD-1]`, so the docstring's summary is the title a
+ * reader sees; the rest of the docstring is the body, and an id there is a mention, as an id
+ * in a JavaScript docblock is.
  * @param {string} text
  */
 export function pythonTitles(text) {
   const s = scanPython(text);
   const out = [];
-  for (const m of s.code.matchAll(PY_TEST_DEF)) {
-    const end = headerEnd(s.code, (m.index ?? 0) + m[0].length);
+  for (const at of pytestCollected(s.code)) {
+    const end = headerEnd(s.code, at);
     if (end < 0) continue;
     const doc = literalFrom(s, end);
     const summary = doc?.body.split('\n').map((l) => l.trim()).find(Boolean);
@@ -204,19 +246,48 @@ export function pythonMentions(text) {
   return out;
 }
 
+/** A top-level test function `go test -run` selects: `func TestX(t *testing.T)`. */
+const GO_TEST_FUNC = /^func[ \t]+(Test[A-Z_0-9]\w*|Test)[ \t]*\(\s*\w+\s+\*testing\.T\s*\)/gm;
+
+/** The offsets of the body of each `GO_TEST_FUNC` in `code`, from its `{` to its `}`. */
+const goTestBodies = (/** @type {string} */ code) => {
+  /** @type {[number, number][]} */
+  const out = [];
+  for (const m of code.matchAll(GO_TEST_FUNC)) {
+    const open = code.indexOf('{', (m.index ?? 0) + m[0].length);
+    if (open < 0) continue;
+    let depth = 0, i = open;
+    for (; i < code.length; i++) {
+      if (code[i] === '{') depth++;
+      else if (code[i] === '}' && --depth === 0) break;
+    }
+    out.push([open, i]);
+  }
+  return out;
+};
+
 /**
  * Go's titles: the NAME OF EACH SUBTEST, the first argument of `t.Run("[ORD-1] …", …)` when
  * it is a string literal. A Go test function's name is an identifier and cannot hold
  * `[ORD-1]`, so a test that locks a clause does it in a subtest, which is also the name
  * `go test -v` prints. A computed name (`t.Run(tc.name, …)`) is not read, as an interpolated
  * JavaScript title is not.
+ *
+ * Only a `.Run(` inside the body of a test function `goTestFunctions` names is read, because
+ * those are the functions `RUNNERS.go` runs (kanon#128). A `b.Run` in a `Benchmark…`, a
+ * subtest in a `Fuzz…` or `Example…`, and one in a helper function are not titles: the first
+ * three never run without `-bench` or `-fuzz`, and a helper's runs only if a test calls it,
+ * which this reader can't see. Read as nothing checked, the fail-safe side (`K-SPEC-6`).
  * @param {string} text
  */
 export function goTitles(text) {
   const s = scanGo(text);
+  const bodies = goTestBodies(s.code);
   const out = [];
   for (const m of s.code.matchAll(/\.Run\(/g)) {
-    const lit = literalFrom(s, (m.index ?? 0) + m[0].length);
+    const at = m.index ?? 0;
+    if (!bodies.some(([open, close]) => at > open && at < close)) continue;
+    const lit = literalFrom(s, at + m[0].length);
     if (lit) out.push(lit.body);
   }
   return out.join('\n');
@@ -227,7 +298,7 @@ export const goMentions = (text) => scanGo(text).uncommented;
 
 /** The top-level test functions a Go test file declares, for `go test -run`. @param {string} text */
 export const goTestFunctions = (text) =>
-  [...scanGo(text).code.matchAll(/^func[ \t]+(Test[A-Z_0-9]\w*|Test)[ \t]*\(\s*\w+\s+\*testing\.T\s*\)/gm)].map((m) => m[1] ?? '');
+  [...scanGo(text).code.matchAll(GO_TEST_FUNC)].map((m) => m[1] ?? '');
 
 const JS_EXT = ['ts', 'tsx', 'mjs', 'js'];
 
