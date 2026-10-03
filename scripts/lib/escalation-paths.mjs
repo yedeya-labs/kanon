@@ -26,8 +26,9 @@
 // that the project has none.
 //
 // THE PIPELINE'S OWN PATHS ARE KANON'S, NOT THE FILE'S (`K-MERGE-4`). Every file under
-// `.github/` and every markdown file directly inside `docs/qa/` escalates whatever the file
-// says, and so does every pipeline-code directory it declares.
+// `.github/`, every markdown file directly inside `docs/qa/`, `AGENTS.md`, `CLAUDE.md` and every
+// file under `.claude/` escalates whatever the file says, and so does every pipeline-code
+// directory it declares.
 //
 // FAILS BY NAME. Every reader throws `DeclarationError`, whose message names the file and,
 // for a malformed entry, the line, so a guard that can't read the declaration fails saying
@@ -53,14 +54,19 @@ export const PIPELINE_HEADING = '## Pipeline code';
 
 /**
  * The pipeline's own paths, which escalate on every repository whatever the file says
- * (`K-MERGE-4`): every workflow and every other file under `.github/`, and the pipeline
- * documents directly inside `docs/qa/`. `docs/qa/specs/` is deliberately not here: specs are
- * the project's deliverable, reviewed against its brief.
+ * (`K-MERGE-4`): every workflow and every other file under `.github/`, the pipeline documents
+ * directly inside `docs/qa/`, and the agent instructions and agent configuration every lane
+ * reads, `AGENTS.md`, `CLAUDE.md` and `.claude/` (`K-LAYOUT-9`, kanon#138). Together they cover
+ * every path row of `K-MERGE-17`'s judging-inputs table (`scripts/judging-inputs.mjs`), and a
+ * parity test fails if a row is added that none of them escalates. `docs/qa/specs/` is
+ * deliberately not here: specs are the project's deliverable, reviewed against its brief.
  * @type {ReadonlyArray<readonly [RegExp, string]>}
  */
 export const PIPELINE_ESCALATIONS = Object.freeze([
   Object.freeze(/** @type {const} */ ([/^\.github\//, 'the CI and agent pipeline'])),
   Object.freeze(/** @type {const} */ ([/^docs\/qa\/[^/]+\.md$/, 'the pipeline documents, which are agent instructions'])),
+  Object.freeze(/** @type {const} */ ([/^(?:AGENTS|CLAUDE)\.md$/, 'the agent instructions'])),
+  Object.freeze(/** @type {const} */ ([/^\.claude\//, 'the agent configuration'])),
 ]);
 
 export { DeclarationError };
