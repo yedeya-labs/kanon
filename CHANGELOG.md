@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.15.0](https://github.com/yedeya-labs/kanon/compare/v0.14.0...v0.15.0) (2026-10-03)
+
+
+### Features
+
+* **guards:** run Kanon's guards on a project with no package.json ([#106](https://github.com/yedeya-labs/kanon/issues/106)) ([acca437](https://github.com/yedeya-labs/kanon/commit/acca4371e012cd497ff31c828a37b6456804e283))
+* **lanes:** set up Kanon's pinned Node in `kanon-path`, and give every agent step `KANON` ([#113](https://github.com/yedeya-labs/kanon/issues/113)) ([e650162](https://github.com/yedeya-labs/kanon/commit/e6501623d9b5290f2b07da577d39cfb8b129946c))
+* **release:** choose the release type by the adopter's language, with `simple` as the default ([#107](https://github.com/yedeya-labs/kanon/issues/107)) ([9c5c3a7](https://github.com/yedeya-labs/kanon/commit/9c5c3a73adcaf573d3be8b205c23a0f42271c3bc))
+
+
+### Bug Fixes
+
+* **lanes:** refuse a lane whose caller, run from another branch, pins another Kanon version ([#112](https://github.com/yedeya-labs/kanon/issues/112)) ([d0e821a](https://github.com/yedeya-labs/kanon/commit/d0e821a95d3a8dfa927adc554dcc5a4453712613))
+* **review:** give one commit one verdict, and answer an explicit request with the verdict after it ([#104](https://github.com/yedeya-labs/kanon/issues/104)) ([e9c95be](https://github.com/yedeya-labs/kanon/commit/e9c95beb8da1aac57f63818f613dfc629a5b758f))
+* **review:** judge whoever applied the review label on CI's completion, not the pusher ([#111](https://github.com/yedeya-labs/kanon/issues/111)) ([1208a04](https://github.com/yedeya-labs/kanon/commit/1208a04107166f63cf30c4034673c95cbb48a959))
+* **telemetry:** make verify.mjs exercise the table's write deny with a probe role ([#116](https://github.com/yedeya-labs/kanon/issues/116)) ([29de990](https://github.com/yedeya-labs/kanon/commit/29de990b30cb546b1371ab14c61748bc75451573))
+
+
+### Documentation
+
+* **plans:** record the Owner's decisions on the backfill role, verify mode and concurrency ([#102](https://github.com/yedeya-labs/kanon/issues/102)) ([f1b7757](https://github.com/yedeya-labs/kanon/commit/f1b7757a15e6aa50a737b9ba452de6517b7e6567))
+
 ## [0.14.0](https://github.com/yedeya-labs/kanon/compare/v0.13.0...v0.14.0) (2026-10-02)
 
 
