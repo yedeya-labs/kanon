@@ -59,6 +59,22 @@ describe('the exemptions file parser', () => {
     fails(`${FILE('', '')}\`\`\`\n`, /opens a code fence that never closes/);
   });
 
+  it('reads a CRLF file as it reads an LF one, rather than as no entries', () => {
+    const lf = FILE('- `docs/projects/12.md` — r\n', `${TABLE}| \`docs/a.md\` | \`docs/TODO.md\` | history |\n`);
+    expect(parseExemptions(lf.replace(/\n/g, '\r\n'))).toEqual(parseExemptions(lf));
+    expect(parseExemptions(lf.replace(/\n/g, '\r\n')).briefs).toHaveLength(1);
+  });
+
+  it('fails by name on a pre-standard entry in any other list form, rather than dropping it as prose', () => {
+    for (const item of ['+ `docs/projects/12.md` — r', '1. `docs/projects/12.md` — r', '  - `docs/projects/12.md` — r', '> - `docs/projects/12.md` — r']) {
+      fails(FILE(`${item}\n`, ''), /exemptions\.md:5, under `## Pre-standard briefs`, is a list item the file doesn't use/);
+    }
+  });
+
+  it('fails by name on a list item under the path mentions, whose entries are table rows', () => {
+    fails(FILE('', '- `docs/a.md` `docs/b.md` — r\n'), /exemptions\.md:8, under `## Path mentions`, is a list item/);
+  });
+
   it('fails on an entry listed twice', () => {
     fails(FILE('- `docs/projects/1.md` — a\n- `docs/projects/1.md` — b\n', ''), /exemptions\.md:6 repeats the entry on line 5/);
     fails(FILE('', `${TABLE}| \`a.md\` | \`b.md\` | x |\n| \`a.md\` | \`b.md\` | y |\n`), /:11 repeats the entry on line 10/);

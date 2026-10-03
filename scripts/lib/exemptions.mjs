@@ -30,6 +30,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { fencedLines } from '../spec-lib.mjs';
+import { DeclarationError, LIST_ITEM, bulletsOf, linesOf, sectionOf } from './declarations.mjs';
 
 /** The file's fixed path (`K-LAYOUT-1`, `K-LAYOUT-15`). */
 export const EXEMPTIONS_FILE = 'docs/qa/exemptions.md';
@@ -40,14 +41,10 @@ export const MENTIONS_HEADING = '## Path mentions';
 /** The path-mentions table's header row, exactly. */
 const MENTIONS_HEADER = ['File', 'Path', 'Reason'];
 
-/** A missing or malformed exemptions file. Its message names the file. */
-export class DeclarationError extends Error {
-  /** @param {string} message */
-  constructor(message) {
-    super(message);
-    this.name = 'DeclarationError';
-  }
-}
+export { DeclarationError };
+
+/** @type {import('./declarations.mjs').Declaration} */
+const FILE = { file: EXEMPTIONS_FILE, rule: 'K-LAYOUT-15' };
 
 /**
  * @typedef {{ brief: string, reason: string, line: number }} BriefExemption
@@ -57,26 +54,6 @@ export class DeclarationError extends Error {
 
 /** @param {string} message */
 const fail = (message) => new DeclarationError(`${message} (K-LAYOUT-15)`);
-
-/**
- * The body lines of one `##` section, outside fenced blocks, with their 1-based numbers.
- * @param {string[]} lines
- * @param {Set<number>} fenced
- * @param {string} heading
- */
-function section(lines, fenced, heading) {
-  const at = lines.flatMap((l, i) => (!fenced.has(i) && l.trimEnd() === heading ? [i] : []));
-  if (at.length === 0) throw fail(`${EXEMPTIONS_FILE} has no \`${heading}\` heading`);
-  if (at.length > 1) throw fail(`${EXEMPTIONS_FILE} has the \`${heading}\` heading ${at.length} times, on lines ${at.map((i) => i + 1).join(', ')}`);
-  /** @type {{ line: number, text: string }[]} */
-  const out = [];
-  for (let i = /** @type {number} */ (at[0]) + 1; i < lines.length; i += 1) {
-    const text = /** @type {string} */ (lines[i]);
-    if (!fenced.has(i) && /^#{1,2}\s/.test(text)) break;
-    if (!fenced.has(i)) out.push({ line: i + 1, text });
-  }
-  return out;
-}
 
 /** A single code span, and nothing else. @param {string} cell */
 const span = (cell) => /^`([^`]+)`$/.exec(cell.trim())?.[1] ?? null;
@@ -88,14 +65,12 @@ const span = (cell) => /^`([^`]+)`$/.exec(cell.trim())?.[1] ?? null;
  * @returns {BriefExemption[]}
  */
 function briefs(body) {
-  return body.flatMap(({ line, text }) => {
-    const bullet = /^[-*]\s+(.*)$/.exec(text);
-    if (!bullet) return [];
-    const entry = /^`(docs\/projects\/\d+\.md)`\s+—\s+(\S.*)$/.exec(/** @type {string} */ (bullet[1]).trim());
+  return bulletsOf(FILE, body, BRIEFS_HEADING).map(({ line, text }) => {
+    const entry = /^`(docs\/projects\/\d+\.md)`\s+—\s+(\S.*)$/.exec(text);
     if (!entry) {
       throw fail(`${EXEMPTIONS_FILE}:${line}, under \`${BRIEFS_HEADING}\`, isn't an entry: write the brief's path (\`docs/projects/<n>.md\`) in backticks, an em dash, then the reason`);
     }
-    return [{ brief: /** @type {string} */ (entry[1]), reason: /** @type {string} */ (entry[2]).trim(), line }];
+    return { brief: /** @type {string} */ (entry[1]), reason: /** @type {string} */ (entry[2]).trim(), line };
   });
 }
 
@@ -106,6 +81,9 @@ function briefs(body) {
  * @returns {MentionExemption[]}
  */
 function mentions(body) {
+  // A list item here is an entry in the wrong shape, never prose: entries are table rows.
+  const item = body.find(({ text }) => LIST_ITEM.test(text));
+  if (item) throw fail(`${EXEMPTIONS_FILE}:${item.line}, under \`${MENTIONS_HEADING}\`, is a list item: each mention is a row of the \`| File | Path | Reason |\` table`);
   const rows = body.filter(({ text }) => /^\s*\|/.test(text));
   if (rows.length === 0) return [];
   const cells = (/** @type {string} */ text) => text.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
@@ -135,10 +113,10 @@ function mentions(body) {
  * @returns {Exemptions}
  */
 export function parseExemptions(text) {
-  const lines = text.split('\n');
+  const lines = linesOf(text);
   const fenced = fencedLines(lines);
   if (fenced.unclosed !== -1) throw fail(`${EXEMPTIONS_FILE}:${fenced.unclosed + 1} opens a code fence that never closes`);
-  const out = { briefs: briefs(section(lines, fenced, BRIEFS_HEADING)), mentions: mentions(section(lines, fenced, MENTIONS_HEADING)) };
+  const out = { briefs: briefs(sectionOf(FILE, lines, fenced, BRIEFS_HEADING)), mentions: mentions(sectionOf(FILE, lines, fenced, MENTIONS_HEADING)) };
   /** @type {Map<string, number>} */
   const seen = new Map();
   for (const e of [...out.briefs.map((b) => ({ key: b.brief, line: b.line })), ...out.mentions.map((m) => ({ key: `${m.file} → ${m.path}`, line: m.line }))]) {
