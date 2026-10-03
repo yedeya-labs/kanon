@@ -9,8 +9,8 @@ On each push to the main branch it:
 3. **Explains a failed release-please run.** When GitHub refused to let the workflow open the release PR, it says so and names the two settings that allow it, organisation first.
 4. **Moves the major tag** (`v0`, later `v1`, ...) to the released commit. Pin the exact version anyway: the major tag is a convenience.
 5. **Refuses a stale release PR** ([#73](https://github.com/yedeya-labs/kanon/issues/73)). It checks the diff of every open release PR (a branch named `release-please--…` in your repository) against its merge base with your default branch, which is what a squash merge applies. It fails, with a comment on the PR, when the PR changes anything but version strings:
-   - your changelog, the manifest, `package.json` and `package-lock.json` (and `version.txt` for the `simple` release type) are left out;
-   - in your `extra-files`, and in any other file the PR modifies (your release type's own version file, such as `pyproject.toml` or `Cargo.toml`), only a line whose sole change is a version may differ;
+   - your changelog and the manifest are left out, with the files your release type owns: `version.txt` (or your `version-file`) for `simple`, `package.json` and `package-lock.json` for `node`, `changelog.json` for `python`;
+   - in your `extra-files`, and in any other file the PR modifies (your release type's own version file, such as `pyproject.toml`, `__init__.py`, `Cargo.toml` or `Cargo.lock`), only a line whose sole change is a version may differ;
    - a file the PR adds, removes or renames fails it.
 
 It takes no inputs and no secrets ([ADR 0002](decisions/0002-standardise-dont-parameterise.md)). The file names are fixed, the branch is your default branch, and what really differs per repository (release type, package name) already lives in your own release configuration. The workflow's header comment gives the reasoning for each candidate input.
@@ -58,7 +58,7 @@ Two files at the repository root. The changelog sections are Kanon's type table 
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "packages": {
     ".": {
-      "release-type": "node",
+      "release-type": "simple",
       "package-name": "your-project",
       "changelog-path": "CHANGELOG.md",
       "initial-version": "0.1.0",
@@ -92,7 +92,27 @@ Two files at the repository root. The changelog sections are Kanon's type table 
 }
 ```
 
-The manifest starts at `0.0.0` and `initial-version` makes the first release `0.1.0`. After that, release-please owns the manifest. `release-type` and `package-name` are yours (`node` also bumps `package.json`; `simple` suits a repository without one). Kanon's own copy is [`release-please-config.json`](../release-please-config.json).
+`version.txt`, for the `simple` type
+
+```text
+0.0.0
+```
+
+The manifest starts at `0.0.0` and `initial-version` makes the first release `0.1.0`. After that, release-please owns the manifest. `package-name` is yours.
+
+**`release-type` is your language's, and `simple` is the default.** Kanon has no opinion about your stack, so pick the release-please type that keeps the version where your project already keeps it:
+
+| Your project | `release-type` | Where the version lives |
+|---|---|---|
+| Any language, or none of the below | `simple` | `version.txt`, which you create with `0.0.0` (release-please updates it and never creates it; `version-file` renames it) |
+| Node | `node` | `package.json` and `package-lock.json` |
+| Python | `python` | `pyproject.toml`, `setup.py` or `setup.cfg`, and the package's `__init__.py` |
+| Go | `go` | nowhere but the tag and the manifest (Go modules are versioned by tag) |
+| Rust | `rust` | `Cargo.toml` and `Cargo.lock` |
+
+Leave `release-type` out and release-please reads it as `node`, which needs a `package.json`; write it out. Other release-please types work too, and the stale-release-PR guard holds every file they change to the version-only rule. Kanon's own copy is [`release-please-config.json`](../release-please-config.json), with `node`, because Kanon is a Node project.
+
+**If you test your release configuration, pin what holds across releases**: the first release is `0.1.0`, the manifest has one entry, it holds a version, and it agrees with the file your release type keeps the version in (`version.txt`, `package.json`, `pyproject.toml`, `Cargo.toml`; with `go`, nothing besides the tag). Never pin the manifest's current value: the first release PR changes it, and that PR runs no CI (see below).
 
 ### 3. One-time settings
 
@@ -119,7 +139,7 @@ All are accepted while Kanon has no release App, and all go away when one exists
 - **The release PR runs no CI.** It is opened with the workflow's own token, and a PR opened with that token triggers no workflows. It changes only the changelog, the version, the manifest and any `extra-files` you list (Kanon lists the documents holding its `uses:` lines, so they always name the latest release), but a test that pins one of those can still go red on `main` after the release PR merges. Kanon's own did once, on its first release: a test had pinned the manifest's starting value.
 - **The stale-release-PR guard covers the release PR's diff, at the moment the workflow runs.** On 0.10.0, release-please rebuilt the release PR from stale copies of `docs/lanes.md` and `actions/lane-check/README.md`, and merging it (`db99870`) reverted the review lane's documentation that #67 had just merged. The guard reads the PR's diff after every push, so a PR in that state fails the Release run and gets a comment saying what it would revert. What it doesn't cover:
   - **It can't stop the merge.** The release PR is merged through the admin bypass, which skips required checks, so read the Release run and the PR's comments before you merge it.
-  - **It doesn't read the changelog, the manifest, `package.json` or `package-lock.json`** (or `version.txt` for `simple`), whatever they hold, and elsewhere it accepts any line whose only change is a version string, even a version that wasn't this release's.
+  - **It doesn't read the changelog, the manifest, or the files your release type owns** (`version.txt` for `simple`, `package.json` and `package-lock.json` for `node`, `changelog.json` for `python`), whatever they hold, and elsewhere it accepts any line whose only change is a version string, even a version that wasn't this release's.
   - **A diff too large for GitHub's API to return** (it omits a file's patch above a size limit) fails the guard rather than passing unchecked.
 - **With a merge queue, the release PR can't be queued**, because its required checks never report, so an admin merges it directly through the ruleset's pull-request bypass (`gh pr merge <n> --squash --admin`, or "Merge without waiting for requirements to be met" in the web UI). A bypass actor's merge skips the queue as well as the checks, which `K-MERGE-8` already allows for the release bot's PRs. This is confirmed on Kanon: with the queue on, release 0.4.2 was merged through the admin bypass on 2026-09-30. Closing and reopening the release PR as a person also works: the reopen triggers the PR's workflows, and once they pass it can be queued like any other.
 - **Releases pool into a release PR that a human merges.** During bootstrap a merge doesn't produce a release by itself, which falls short of `K-SHIP-7`'s "every merge produces a release".
