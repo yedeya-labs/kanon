@@ -257,6 +257,30 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => t.edit(HOOK, (d) => { (d.runs as Record<string, unknown>).using = 'node24'; }), 'must be a composite action'));
   });
 
+  describe('the test-database declaration (K-LAYOUT-16, kanon#18)', () => {
+    const DB = 'docs/qa/test-database.md';
+    const STANDARD = readFileSync(join(ROOT, 'tests/fixtures/test-database/postgres', DB), 'utf8');
+    it('accepts no declaration: the project has no database', () => {
+      const t = adopter();
+      t.rm(DB);
+      expect(check(t).status).toBe(0);
+    });
+    it.each(['none', 'hook'])('accepts `%s`', (kind) => {
+      const t = adopter();
+      t.write(DB, STANDARD.replace('`hook`', `\`${kind}\``));
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
+    it('refuses a kind Kanon does not know, with the block\'s own reason', () =>
+      red((t) => t.write(DB, STANDARD.replace('`hook`', '`mysql`')), /test-database\.md,title=lane-check::declares `mysql`, which is not a kind Kanon knows.*\(K-LAYOUT-16\)/));
+    it('refuses an engine named as the kind: the hook starts it, Kanon names none (K-LAYOUT-16)', () =>
+      red((t) => t.write(DB, STANDARD.replace('`hook`', '`postgres`')), /declares `postgres`, which is not a kind Kanon knows.*Kanon names no engine/));
+    it('refuses a declaration file that declares nothing', () =>
+      red((t) => t.write(DB, '# Test database\n'), /has no `\*\*Test database:\*\* `<kind>`` line/));
+    it('refuses two declarations', () =>
+      red((t) => t.write(DB, `${STANDARD}**Test database:** \`none\`\n`), /has 2 `\*\*Test database:\*\*` lines/));
+  });
+
   describe('the App register has a slug for every role a caller\'s lane runs as (K-LAYOUT-6)', () => {
     const REG = 'docs/qa/agent-identities.md';
     it('refuses a missing register', () => red((t) => t.rm(REG), 'the App register is missing'));

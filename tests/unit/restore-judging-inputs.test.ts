@@ -401,6 +401,7 @@ describe('RA-2697 — the agent-lane blocks come from the action cache, never th
     ]);
     expect(job.filter((s) => s.uses && !laneBlockOf(s) && !/^actions\//.test(s.uses)).map((s) => s.uses)).toEqual([
       '$/actions/kanon-path',
+      '$/actions/test-database',
       './.github/actions/project-setup',
     ]);
   });
@@ -448,7 +449,11 @@ describe('RA-2697 — the agent-lane blocks come from the action cache, never th
     expect(at).toBeLessThan(check);
     expect(scope).toBeGreaterThan(at);
     expect(check).toBeGreaterThan(scope);
-    expect(hook).toBe(check + 1);
+    // Between the presence check and the hook, only the project's declared database, which
+    // runs no PR code: its declaration is the default branch's (K-MERGE-17, kanon#18).
+    expect(hook).toBe(check + 2);
+    expect(job[check + 1]!.uses).toBe('$/actions/test-database');
+    expect(job[check + 1]!.with).toBeUndefined();
     // The hook is handed NO token: not the reviewer App's, which does not exist yet, not the
     // default one, and never the Claude token.
     expect(JSON.stringify(job[hook]!.with ?? {})).not.toMatch(/token|secrets\./i);

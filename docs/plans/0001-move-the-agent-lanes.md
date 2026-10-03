@@ -172,6 +172,8 @@ If the file is missing, the lane fails with a named error. That happens on PR br
 - Kanon writes `DATABASE_URL=postgres://kanon:kanon@localhost:5432/kanon`.
 - The adopter's hook runs its own schema setup against it.
 
+*Since [#18](https://github.com/yedeya-labs/kanon/issues/18):* Kanon no longer fixes a test database (the Owner, 2026-10-03). A project declares `hook` in `docs/qa/test-database.md`, and its project-setup hook starts its database and writes `DATABASE_URL`. Otherwise it declares nothing, and gets none (`K-LAYOUT-16`). The standard above is now the worked example in the `test-database` block's README. An adopter adds its declaration before, or with, the upgrade, and rebases its open pull requests, because a lane that checks out a branch reads that branch's copy.
+
 **What the reference adopter migrates in P2.** It runs the project's database name as user, password and database, on port 5433.
 1. The hook writes `DATABASE_URL_APP` with the standard host, port and database name. The app role's name stays the adopter's: its `setup.sql` creates the role, and its setup script sets the role's password from that URL.
 2. Confirm that nothing CI runs hard-codes the old database name or port. Its migrator, setup script and `env.ts` only *default* to them when `DATABASE_URL` is unset, and the standard sets it.

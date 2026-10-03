@@ -155,24 +155,6 @@ jobs:
     # burned six hours and left its issue looking mid-flight. Sized at ~3x the
     # longest real run measured on this workflow, so it never truncates work.
     timeout-minutes: 45
-    services:
-      postgres:
-        image: pgvector/pgvector:pg17
-        env:
-          POSTGRES_USER: kanon
-          POSTGRES_PASSWORD: kanon
-          POSTGRES_DB: kanon
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U kanon"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-    env:
-      # Kanon's standard test database (RA-2694). The project-setup hook derives the app
-      # role's URL from this one and writes it to the environment before `db:init`.
-      DATABASE_URL: postgres://kanon:kanon@localhost:5432/kanon
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
       # it is as close to the job's start as a step can be.
@@ -290,6 +272,14 @@ jobs:
           fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
+      # THE PROJECT'S DATABASE, AS IT DECLARES IT (kanon#18; `agent-lane.yml`'s header). Read
+      # from the commit that defined this lane, as the hook is, and for the same reason: the
+      # tag under test may predate the declaration. Before the hook, which starts it.
+      - uses: $/actions/test-database
+        id: database
+        with:
+          from: ${{ steps.hook.outputs.sha }}
+
       # The toolchain, `npm ci`, `db:init` and Chromium — the four setup steps this lane ran
       # here before, now the hook's. Against the ref under test: the install and the schema
       # are the tag's own. Chromium's installer is read from `github.sha`, as it was.
@@ -298,7 +288,7 @@ jobs:
         with:
           lane: verify-acs
           install: "true"
-          database: "true"
+          database: ${{ steps.database.outputs.database }}
           browsers: "true"
 
       # `app-slug` IS EMPTY ON PURPOSE: the block reads it only for the push probe, and this

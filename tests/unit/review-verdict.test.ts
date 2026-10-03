@@ -730,9 +730,14 @@ describe('a PR that cannot install or migrate still gets a verdict (RA-1723)', (
     expect(project?.uses).toBe('./.github/actions/project-setup');
     expect(project?.['continue-on-error'], 'the project-setup hook').toBe(true);
     expect(hook?.['continue-on-error'], 'the check that it is present').toBe(true);
-    expect(project?.if).toBe("steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success'");
+    expect(project?.if).toBe("steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success' && steps.database.outcome == 'success'");
+    // …and the project's declared database (kanon#18) is tolerated the same way.
+    const database = steps.find((s) => s.id === 'database');
+    expect(database?.uses).toBe('$/actions/test-database');
+    expect(database?.['continue-on-error'], 'the test database').toBe(true);
+    expect(database?.if).toBe("steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success'");
     // …and it still installs and migrates, with the database the reviewer may re-run a tier on.
-    expect(project?.with).toMatchObject({ lane: 'reviewer', install: 'true', database: 'true', browsers: 'false' });
+    expect(project?.with).toMatchObject({ lane: 'reviewer', install: 'true', database: '${{ steps.database.outputs.database }}', browsers: 'false' });
   });
 
   it("notes a failed or skipped setup from the hook's outcome alone, reading none of its outputs (#77)", () => {

@@ -202,9 +202,9 @@ describe('the criteria run shares the agent’s job, workspace and database (RA-
   it('is one job that runs its own steps, never a caller of the spine', () => {
     expect(Object.keys(wf.jobs)).toEqual(['filter', 'verify']);
     expect(wf.jobs.verify!.uses).toBeUndefined();
-    expect(wf.jobs.verify!.services?.postgres).toBeDefined();
-    expect(wf.jobs.verify!.env?.DATABASE_URL).toBe('postgres://kanon:kanon@localhost:5432/kanon');
-    expect(wf.jobs.verify!.env?.DATABASE_URL_APP).toBeUndefined();
+    // The database is the project's declaration (kanon#18), started by a step, never a service.
+    expect(wf.jobs.verify!.services).toBeUndefined();
+    expect(wf.jobs.verify!.env?.DATABASE_URL).toBeUndefined();
     expect(steps.filter((s) => laneBlockOf(s)).map((s) => laneBlockOf(s))).toEqual([...STAGE_BLOCKS]);
   });
 
@@ -229,7 +229,7 @@ describe('the criteria run shares the agent’s job, workspace and database (RA-
 
   it('keeps the App identity where it was: minted after the criteria run, immediately before the agent', () => {
     expect(steps[call('agent-setup')]!.with).toEqual({ arm: 'acceptance-criteria agent', 'app-slug': '' });
-    expect(hookCall().with).toEqual({ lane: 'verify-acs', install: 'true', database: 'true', browsers: 'true' });
+    expect(hookCall().with).toEqual({ lane: 'verify-acs', install: 'true', database: '${{ steps.database.outputs.database }}', browsers: 'true' });
     const mint = steps[idx((s) => s.id === 'app-token')]!;
     expect(mint.with?.['client-id']).toBe('${{ secrets.EXPLORER_APP_ID }}');
     expect(mint.with?.['private-key']).toBe('${{ secrets.EXPLORER_APP_PRIVATE_KEY }}');

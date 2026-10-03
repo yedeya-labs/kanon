@@ -1,0 +1,57 @@
+# A worked example (kanon#18): a project-setup hook that provides its own test database.
+#
+# The project declares `**Test database:** `hook`` in docs/qa/test-database.md, so the lanes
+# pass this hook `database: 'true'` and start nothing themselves. This hook then starts Postgres
+# with pgvector, with the values the reference adopter's lanes used before #18, in a step,
+# waits until it is ready, and writes `DATABASE_URL` to $GITHUB_ENV, all before it returns:
+# that is Kanon's whole contract. A real hook would set up its schema against `DATABASE_URL`
+# next. The test-database smoke runs this file on a runner; the block's README shows its step.
+name: Project setup
+description: The worked example's setup for an agent lane, with its own Postgres.
+inputs:
+  lane:
+    description: The lane's telemetry agent name.
+    required: true
+  install:
+    description: Unused here.
+    default: "true"
+  database:
+    description: "'true' starts the project's Postgres and writes DATABASE_URL."
+    default: "false"
+  browsers:
+    description: Unused here.
+    default: "false"
+  issue-number:
+    description: Unused here.
+    default: ""
+  app-slug:
+    description: Unused here.
+    default: ""
+  github-token:
+    description: Unused here.
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Start the project's Postgres
+      if: inputs.database == 'true'
+      shell: bash
+      run: |
+        docker rm -f test-database >/dev/null 2>&1 || true
+        docker run -d --name test-database \
+          -e POSTGRES_USER=kanon -e POSTGRES_PASSWORD=kanon -e POSTGRES_DB=kanon \
+          -p 5432:5432 \
+          --health-cmd "pg_isready -U kanon" --health-interval 5s --health-timeout 3s --health-retries 10 \
+          pgvector/pgvector:pg17 >/dev/null
+        for _ in $(seq 60); do
+          status="$(docker inspect -f '{{.State.Health.Status}}' test-database 2>/dev/null || echo gone)"
+          [ "$status" = healthy ] && break
+          [ "$status" = unhealthy ] || [ "$status" = gone ] && break
+          sleep 2
+        done
+        if [ "$status" != healthy ]; then
+          echo "::error::the project's Postgres is $status"
+          docker logs test-database 2>&1 | tail -40
+          exit 1
+        fi
+        echo "DATABASE_URL=postgres://kanon:kanon@localhost:5432/kanon" >> "$GITHUB_ENV"

@@ -514,24 +514,23 @@ describe('the mandate a reset run receives (RA-1023, RA-1024)', () => {
 });
 
 describe('the job can run the gates its prompt orders', () => {
-  it('provisions Postgres, and tells the project-setup hook to set up its schema', () => {
+  it('starts the project\'s declared database, and tells the project-setup hook to set up its schema', () => {
     // The prompt orders the integration tier when the fix touches src/db/**. Without
     // these it fails on connect — and a tier that cannot run is not a gate.
     // `agent-implement.yml` and `agent-triage.yml` both provision exactly this; the
     // revise job revises THEIR PRs and needs the same ground.
     // Resolved for THIS lane (RA-2592): the spine can turn all three off, so asserting the
     // spine has them would pass for a lane that opted out.
-    // Kanon's standard database since RA-2694: the spine writes `DATABASE_URL`, and the
-    // project-setup hook derives the project's own URL from it and sets up its schema.
-    // That half is the hook's, so it is tested in the adopter, against its own hook; here,
-    // the lane switches the database on and the spine hands the hook that switch.
-    expect(revise.services.postgres?.image).toMatch(/pgvector/);
-    const runs = revise.steps.map((s) => s.run ?? '');
-    const env = runs.find((r) => r.includes('GITHUB_ENV') && r.includes('DATABASE_URL='));
-    expect(env).toMatch(/DATABASE_URL=postgres:\/\/kanon:kanon@localhost:5432\/kanon/);
+    // The database is the project's declaration since kanon#18: the test-database block
+    // starts what the project declares, and the project-setup hook sets up its schema. Both
+    // halves are tested where they live (`test-database.test.ts`, and the adopter's own
+    // hook); here, the lane switches the database on and the spine hands the block that
+    // switch, and the hook the block's answer.
     expect(revise.inputs.database).toBe(true);
+    const db = revise.laneSteps.find((s) => s.uses === '$/actions/test-database');
+    expect(db?.with?.wanted).toBe('${{ inputs.database }}');
     const hook = revise.laneSteps.find((s) => s.uses === './.github/actions/project-setup');
-    expect(hook?.with?.database).toBe('${{ inputs.database }}');
+    expect(hook?.with?.database).toBe('${{ steps.database.outputs.database }}');
   });
 });
 
@@ -597,8 +596,8 @@ describe('the cheap decision does not provision a database (RA-1079 r2)', () => 
     expect(wf.jobs.filter.env?.DATABASE_URL).toBeUndefined();
   });
 
-  it('the revise job has them, and runs only when there is work', () => {
-    expect(revise.services.postgres).toBeDefined();
+  it('the revise job has it, and runs only when there is work', () => {
+    expect(revise.laneSteps.some((s) => s.uses === '$/actions/test-database')).toBe(true);
     expect(wf.jobs.revise.needs).toBe('filter');
     expect(wf.jobs.revise.if).toContain("needs.filter.outputs.act == 'true'");
   });

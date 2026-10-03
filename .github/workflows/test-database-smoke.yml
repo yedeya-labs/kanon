@@ -1,0 +1,135 @@
+# Runs the test-database block through `$/`, and the worked example's hook, on a runner (kanon#18).
+#
+# WHY A RUNNER. The unit tests read the declaration and hold every lane to the block, but only a
+# runner shows the contract holding: nothing started without a declaration, and with `hook`, the
+# project's own hook starting its database from a step, healthy and reachable at `DATABASE_URL`
+# before it returns. That is the evidence that a step stands in for the job service the lanes
+# declared before #18: `services:` is fixed when the job starts and cannot read a file in the
+# checkout.
+#
+# On merge_group (K-MERGE-7) it runs the same steps under the same job name, so it can be a
+# required check without stalling the queue. It reads nothing from the pull request but the
+# fixtures. Read-only.
+name: Test database smoke
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-database-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The workspace root BECOMES the Python fixture adopter, because the block reads the
+  # declaration where a lane's checkout puts it, at the root. Kanon itself is checked out
+  # beside it, for the fixtures only: the block comes from `$/`.
+  test-database:
+    name: Test database smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: kanon
+
+      - name: Make the workspace the Python fixture adopter
+        run: |
+          cp -R kanon/tests/fixtures/python-adopter/. .
+          test -f pyproject.toml
+          test ! -e docs/qa/test-database.md
+
+      - name: The Python adopter declares nothing
+        id: none
+        uses: $/actions/test-database
+
+      - name: Check nothing started, and the hook is told so
+        env:
+          KIND: ${{ steps.none.outputs.kind }}
+          DATABASE: ${{ steps.none.outputs.database }}
+        run: |
+          echo "kind=$KIND database=$DATABASE containers=$(docker ps -q | wc -l)"
+          test "$KIND" = none
+          test "$DATABASE" = false
+          test -z "$(docker ps -q)"
+          if [ -n "${DATABASE_URL+set}" ]; then echo "::error::DATABASE_URL is set with no declaration"; exit 1; fi
+
+      - name: Declare a kind Kanon does not know
+        run: printf '# Test database\n\n**Test database:** `mysql`\n' > docs/qa/test-database.md
+
+      - name: A malformed declaration fails the block, by name
+        id: malformed
+        continue-on-error: true
+        uses: $/actions/test-database
+
+      - name: Check it failed and started nothing
+        env:
+          OUTCOME: ${{ steps.malformed.outcome }}
+        run: |
+          test "$OUTCOME" = failure
+          test -z "$(docker ps -q)"
+
+      - name: A lane that wants no database reads nothing, even that
+        id: unwanted
+        uses: $/actions/test-database
+        with:
+          wanted: "false"
+
+      - name: Check it started nothing
+        env:
+          DATABASE: ${{ steps.unwanted.outputs.database }}
+        run: |
+          test "$DATABASE" = false
+          test -z "$(docker ps -q)"
+
+      - name: Declare an engine, which is the hook's to start, not Kanon's
+        run: printf '# Test database\n\n**Test database:** `postgres`\n' > docs/qa/test-database.md
+
+      - name: An engine named in the declaration fails the block, by name
+        id: engine
+        continue-on-error: true
+        uses: $/actions/test-database
+
+      - name: Check it failed and started nothing
+        env:
+          OUTCOME: ${{ steps.engine.outcome }}
+        run: |
+          test "$OUTCOME" = failure
+          test -z "$(docker ps -q)"
+
+      # The worked example: the declaration says `hook`, and the hook starts Postgres. As a lane
+      # runs them: the block, then the hook with the block's answer.
+      - name: Become the worked example, whose hook provides its database
+        run: cp -R kanon/tests/fixtures/test-database/postgres/. .
+
+      - name: Read its declaration
+        id: hook
+        uses: $/actions/test-database
+
+      - name: Check the block started nothing itself
+        env:
+          KIND: ${{ steps.hook.outputs.kind }}
+          DATABASE: ${{ steps.hook.outputs.database }}
+        run: |
+          test "$KIND" = hook
+          test "$DATABASE" = true
+          test -z "$(docker ps -q)"
+
+      - name: Run the worked example's hook with the block's answer
+        uses: ./.github/actions/project-setup
+        with:
+          lane: smoke
+          install: "false"
+          database: ${{ steps.hook.outputs.database }}
+
+      - name: Check the hook's database is ready and reachable at DATABASE_URL
+        run: |
+          set -euo pipefail
+          echo "DATABASE_URL=$DATABASE_URL"
+          test "$(docker inspect -f '{{.State.Health.Status}}' test-database)" = healthy
+          psql "$DATABASE_URL" -qtAc "create extension if not exists vector; select extname from pg_extension where extname = 'vector'" | grep -qx vector

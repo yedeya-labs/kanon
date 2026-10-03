@@ -1,0 +1,59 @@
+# The lane's test database, as the project declares it (kanon#18, K-LAYOUT-16).
+#
+# A PROJECT DECLARES ITS DATABASE; KANON NAMES NO ENGINE. Before #18 every lane that could run
+# tests started the same database as a job service, so a project with none (Kanon itself, Kolophon)
+# paid for a container nothing used, and a project on another engine could not use the switch
+# at all. Now the project says, in `docs/qa/test-database.md`, whether its lanes need one:
+#   - no file, or `none`: nothing is started, `DATABASE_URL` stays unset, and the hook is told
+#     `database: 'false'`;
+#   - `hook`: the project-setup hook starts its database, whatever the engine, and writes
+#     `DATABASE_URL` to `$GITHUB_ENV`. The hook is told `database: 'true'`.
+# The contract is that and only that: the database is ready when the hook has finished,
+# before `agent-setup`, and a lane's agent and tests find it in `DATABASE_URL`. The Owner chose
+# the contract over a Kanon-maintained standard (2026-10-03, option (b) on #18's review), so
+# this block starts nothing itself. The reference adopter's database is a worked example in
+# this block's README, and a runnable one in `tests/fixtures/test-database/postgres`.
+#
+# NOT A JOB SERVICE. `services:` is fixed when the job starts and reads only the caller's
+# inputs, `vars`, `needs`, `matrix` and `github`, never a file in the checkout, and a reusable
+# workflow can't take one from its caller. A container started from a step of the hook is the
+# same container a service is, and it is the project's.
+#
+# `wanted` is the lane's own switch: a lane that edits only prose passes 'false' and starts
+# nothing whatever the project declares, and its declaration is not read.
+#
+# `from` reads the declaration at a commit instead of from the working tree, for the verify-acs
+# lane, whose checkout is a release tag that may predate the file; it reads the declaration
+# where it reads the hook, from the commit that defined the lane.
+name: Kanon test database
+description: Reads the project's test-database declaration (docs/qa/test-database.md) and says whether the project-setup hook should provide the database.
+author: yedeya-labs
+
+inputs:
+  wanted:
+    description: "'true' when this lane runs the project's tests and so needs its database."
+    required: false
+    default: "true"
+  from:
+    description: A commit to read the declaration from, instead of the working tree.
+    required: false
+    default: ""
+
+outputs:
+  database:
+    description: "'true' when the lane wants a database and the project declares one: the value the lane passes the hook's `database` input."
+    value: ${{ steps.declaration.outputs.database }}
+  kind:
+    description: "What the project declares: `none` or `hook`. Empty when the lane does not want a database."
+    value: ${{ steps.declaration.outputs.kind }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read the project's test-database declaration
+      id: declaration
+      shell: bash
+      env:
+        WANTED: ${{ inputs.wanted }}
+        FROM: ${{ inputs.from }}
+      run: bash "$GITHUB_ACTION_PATH/declaration.sh"
