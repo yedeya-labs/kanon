@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { OTHER_KEY, runChecks, testRow } from '../../infra/telemetry/verify.mjs';
+import { DENIED_WRITES, OTHER_KEY, PROBE_PK, runChecks, testRow } from '../../infra/telemetry/verify.mjs';
 import { erase, partitionsOf } from '../../infra/telemetry/erase.mjs';
 import { handle, SHORT_RETENTION_MS } from '../../infra/telemetry/function/index.mjs';
 import { validate, LANES } from '../../actions/agent-telemetry/schema.mjs';
@@ -17,7 +17,13 @@ type Run = { code: number, stdout: string, stderr: string };
 type Creds = { accessKeyId: string, secretAccessKey: string, sessionToken: string };
 
 /** A fake account: the stack, two assumable roles, the function, and a table. */
-function fakeAws(over: { brokenHandler?: boolean, readerSeesAll?: boolean, writerMayPut?: boolean, noVerify?: boolean } = {}) {
+function fakeAws(over: {
+  brokenHandler?: boolean, readerSeesAll?: boolean, writerMayPut?: boolean, noVerify?: boolean,
+  // kanon#101: the writes the table's resource policy denies (all four when it is deployed as
+  // written; `[]` is a table with no resource policy), and a stack without the probe role.
+  tableDenies?: string[], noProbe?: boolean,
+} = {}) {
+  const tableDenies = over.tableDenies ?? DENIED_WRITES;
   const table = new Map<string, Record<string, { S?: string, N?: string }>>();
   const deniedRun = (op: string): Run => ({ code: 254, stdout: '', stderr: `An error occurred (AccessDeniedException) when calling the ${op} operation` });
   const ok = (v: unknown): Run => ({ code: 0, stdout: JSON.stringify(v), stderr: '' });
@@ -29,7 +35,9 @@ function fakeAws(over: { brokenHandler?: boolean, readerSeesAll?: boolean, write
     if (svc === 'cloudformation') return ok({ Stacks: [{ Outputs: [{ OutputKey: 'IngestUrl', OutputValue: 'https://u.example/' }, { OutputKey: 'TableName', OutputValue: 'kanon-telemetry' }] }] });
     if (svc === 'sts' && op === 'assume-role') {
       if (over.noVerify) return { code: 254, stdout: '', stderr: 'AccessDenied' };
-      const kind = arg(args, '--role-arn').endsWith('-writer') ? 'writer' : 'reader';
+      const role = arg(args, '--role-arn');
+      if (role.endsWith('-verify-probe') && over.noProbe) return { code: 254, stdout: '', stderr: 'AccessDenied' };
+      const kind = role.endsWith('-writer') ? 'writer' : role.endsWith('-verify-probe') ? 'probe' : 'reader';
       return ok({ Credentials: { AccessKeyId: kind, SecretAccessKey: SECRET, SessionToken: 'tok' } });
     }
     if (op === 'query') {
@@ -37,7 +45,16 @@ function fakeAws(over: { brokenHandler?: boolean, readerSeesAll?: boolean, write
       if (roleOf(creds) === 'reader' && !pk.startsWith('kk#') && !over.readerSeesAll) return deniedRun('Query');
       return ok({ Items: [...table.values()].filter((i) => i.pk!.S === pk) });
     }
-    if (op === 'put-item') return over.writerMayPut ? ok({}) : deniedRun('PutItem');
+    // IAM's order for a write: the table's explicit deny first, then the caller's own grants.
+    // The writer holds no DynamoDB action (unless `writerMayPut`); the probe holds all four.
+    const write = WRITE_OPS[op ?? ''];
+    if (write) {
+      const message = (why: string) => ({ code: 254, stdout: '', stderr:
+        `An error occurred (AccessDeniedException) when calling the ${write} operation: User: arn:aws:sts::${ACCOUNT}:assumed-role/x/kanon-verify is not authorized to perform: dynamodb:${write} on resource: arn:aws:dynamodb:eu-central-1:${ACCOUNT}:table/kanon-telemetry ${why}` });
+      if (tableDenies.includes(write)) return message('with an explicit deny in a resource-based policy');
+      const allowed = roleOf(creds) === 'probe' || (roleOf(creds) === 'writer' && write === 'PutItem' && over.writerMayPut);
+      return allowed ? ok({}) : message(`because no identity-based policy allows the dynamodb:${write} action`);
+    }
     if (op === 'get-item') {
       const k = JSON.parse(arg(args, '--key'));
       const item = table.get(`${k.pk.S}|${k.sk.S}`);
@@ -64,6 +81,8 @@ function fakeAws(over: { brokenHandler?: boolean, readerSeesAll?: boolean, write
   return { aws, post, table };
 }
 
+const PROBE_CHECK = "every write by a role allowed them is denied by the table's resource policy";
+const WRITE_OPS: Record<string, string> = { 'put-item': 'PutItem', 'update-item': 'UpdateItem', 'delete-item': 'DeleteItem', 'batch-write-item': 'BatchWriteItem' };
 const NOW = Date.parse('2026-10-02T12:00:00Z');
 let n = 100;
 const deps = (f: ReturnType<typeof fakeAws>) => ({ aws: f.aws, post: f.post, now: () => NOW, runId: () => n++ });
@@ -74,7 +93,7 @@ describe('verify.mjs runs S3\'s falsifiers', () => {
     expect(testRow(NOW, 1).tag).toBe('test');
   });
 
-  it('passes all six against a store that behaves', async () => {
+  it('passes all seven against a store that behaves', async () => {
     const results = await runChecks('kk', 'kanon', deps(fakeAws()));
     expect(results.map((r) => [r.name, r.pass])).toEqual([
       ['a valid row gets 200', true],
@@ -83,7 +102,58 @@ describe('verify.mjs runs S3\'s falsifiers', () => {
       ['the reader querying another key gets AccessDeniedException', true],
       ['a direct PutItem with the writer role is denied', true],
       ["the stored row's expires_at is 30 days out", true],
+      [PROBE_CHECK, true],
     ]);
+  });
+
+  // kanon#101: check 5 passes on the writer's identity policy alone, so a table with no
+  // resource policy used to pass every check.
+  it('fails exactly the probe check when the table has no resource policy', async () => {
+    const r = await runChecks('kk', 'kanon', deps(fakeAws({ tableDenies: [] })));
+    expect(r.filter((x) => !x.pass)).toEqual([{ name: PROBE_CHECK, pass: false,
+      why: 'PutItem: no error; UpdateItem: no error; DeleteItem: no error; BatchWriteItem: no error' }]);
+  });
+
+  it('fails it, naming the write, when the deny leaves one write out', async () => {
+    for (const missing of DENIED_WRITES) {
+      const r = await runChecks('kk', 'kanon', deps(fakeAws({ tableDenies: DENIED_WRITES.filter((w) => w !== missing) })));
+      expect(r.filter((x) => !x.pass), missing).toEqual([{ name: PROBE_CHECK, pass: false, why: `${missing}: no error` }]);
+    }
+  });
+
+  it('does not count a denial that is not the table\'s: the probe must be refused by the resource policy', async () => {
+    const f = fakeAws();
+    const identityOnly = (args: string[], creds?: Creds) => creds?.accessKeyId === 'probe' && args[0] === 'dynamodb'
+      ? { code: 254, stdout: '', stderr: 'An error occurred (AccessDeniedException) when calling the PutItem operation: User: x is not authorized to perform: dynamodb:PutItem on resource: y because no identity-based policy allows the dynamodb:PutItem action' }
+      : f.aws(args, creds);
+    const r = await runChecks('kk', 'kanon', { ...deps(f), aws: identityOnly });
+    expect(r.filter((x) => !x.pass)).toEqual([{ name: PROBE_CHECK, pass: false,
+      why: DENIED_WRITES.map((w) => `${w}: denied, but not by a resource-based policy`).join('; ') }]);
+  });
+
+  it('aims every probe write at a partition no register holds, expiring within the hour', async () => {
+    const f = fakeAws({ tableDenies: [] });
+    const seen: string[][] = [];
+    await runChecks('kk', 'kanon', { ...deps(f), aws: (args: string[], creds?: Creds) => {
+      if (creds?.accessKeyId === 'probe') seen.push(args);
+      return f.aws(args, creds);
+    } });
+    expect(seen.map((a) => a[1])).toEqual(['put-item', 'update-item', 'delete-item', 'batch-write-item']);
+    for (const a of seen) {
+      const text = a.join(' ');
+      expect(text).toContain(PROBE_PK);
+      expect(text).not.toContain('kk#');
+      expect(a).toContain('--region');
+    }
+    const expiry = Number(JSON.parse(seen[0]![seen[0]!.indexOf('--item') + 1]!).expires_at.N);
+    expect(expiry - NOW / 1000).toBe(3600);
+  });
+
+  it('fails the probe check alone when the stack has no probe role', async () => {
+    const r = await runChecks('kk', 'kanon', deps(fakeAws({ noProbe: true })));
+    expect(r.filter((x) => !x.pass).map((x) => [x.name, x.why])).toEqual([[PROBE_CHECK,
+      'assume-role failed for kanon-telemetry-verify-probe: is the stack deployed with --verify?']]);
+    expect(r).toHaveLength(7);
   });
 
   it('fails the reader check when the reader can read another key', async () => {
@@ -92,8 +162,9 @@ describe('verify.mjs runs S3\'s falsifiers', () => {
   });
 
   it('fails the PutItem check when the writer can write the table', async () => {
-    const r = await runChecks('kk', 'kanon', deps(fakeAws({ writerMayPut: true })));
-    expect(r.filter((x) => !x.pass).map((x) => x.name)).toEqual(['a direct PutItem with the writer role is denied']);
+    // Only with no deny on the table as well: the writer is not one of its exceptions.
+    const r = await runChecks('kk', 'kanon', deps(fakeAws({ writerMayPut: true, tableDenies: [] })));
+    expect(r.filter((x) => !x.pass).map((x) => x.name)).toEqual(['a direct PutItem with the writer role is denied', PROBE_CHECK]);
   });
 
   it('fails the expiry check when the stored expiry is off', async () => {
@@ -136,6 +207,7 @@ describe('verify.mjs runs S3\'s falsifiers', () => {
     expect(r.filter((x) => !x.pass)).toEqual([
       { name: 'the reader querying another key gets AccessDeniedException', pass: false, why: 'ResourceNotFoundException' },
       { name: 'a direct PutItem with the writer role is denied', pass: false, why: 'ResourceNotFoundException' },
+      { name: PROBE_CHECK, pass: false, why: 'PutItem: ResourceNotFoundException' },
     ]);
   });
 
