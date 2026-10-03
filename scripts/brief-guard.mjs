@@ -92,6 +92,7 @@ import { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { BUCKET_MILESTONES, DEFAULT_MILESTONE } from './issue-triage-defaults.mjs';
+import { isDatedMilestone } from './lib/milestones.mjs';
 import { coordinatesIn } from './citation-guard.mjs';
 import { dependencyCycles, parseProposed } from './lead-reconcile.mjs';
 import { isAcDeclaration } from './verify-acs.mjs';
@@ -101,7 +102,7 @@ import { isAcDeclaration } from './verify-acs.mjs';
  * whose names are fixed (`K-WORK-4`), or a roadmap milestone of this repository, which is
  * the Stakeholder's to name (`K-WORK-5`). The buckets are imported from the backstop that
  * writes them, so there is one copy. A roadmap milestone is not a list anyone keeps: it is a
- * milestone with a due date (`K-WORK-3`, `isRoadmapMilestone`'s rule), read from the
+ * milestone with a due date (`K-WORK-3`, the shared `isDatedMilestone`), read from the
  * repository only when a brief names something other than a bucket. Until #54 this was the
  * reference adopter's routing table, with its launch gate and its AI epic written in.
  *
@@ -144,7 +145,7 @@ export function milestoneProblem(milestone, milestones) {
   }
   const found = all.find((m) => m.title === milestone);
   if (!found) return `isn't a bucket (${buckets}) or a milestone of this repository (K-WORK-4, K-LAYOUT-12)`;
-  if (!(found.due_on ?? found.dueOn)) {
+  if (!isDatedMilestone(found)) {
     return `has no due date, so it isn't a roadmap milestone, and it isn't a bucket (${buckets}) either (K-WORK-3, K-WORK-4)`;
   }
   return null;
@@ -697,13 +698,9 @@ export const briefCorpus = (tracked, present) => {
 /**
  * @param {string} path
  * @param {string} markdown
- * @returns {{at: string, problem: string}[]}
- */
-/**
- * @param {string} path
- * @param {string} markdown
  * @param {{ milestones?: () => Milestone[] }} [world] the repository's milestones, read only
  *   when an item names something other than a bucket. Absent, such a name is a finding.
+ * @returns {{at: string, problem: string}[]}
  */
 export function checkBrief(path, markdown, { milestones = () => { throw new Error('no milestone list was read'); } } = {}) {
   const findings = [];

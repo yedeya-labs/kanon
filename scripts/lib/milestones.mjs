@@ -48,5 +48,12 @@
  * label-guard's Explorer check (RA-1633) alike, because nothing mechanical can
  * tell an undated roadmap milestone from a bucket without naming one.
  */
-export const isRoadmapMilestone = (m) =>
-  Boolean(m?.due_on ?? m?.dueOn) && (m?.state ?? 'open') !== 'closed';
+export const isRoadmapMilestone = (m) => isDatedMilestone(m) && (m?.state ?? 'open') !== 'closed';
+
+/**
+ * Was this ever a roadmap milestone — does it carry a due date, open or met? The half of the
+ * rule a brief needs (kanon#54): a brief that named a gate while it was open is a record, and
+ * must not turn red when the gate is met, so `brief-guard` accepts a closed one that
+ * `isRoadmapMilestone` excludes. One definition of "dated", shared by both.
+ */
+export const isDatedMilestone = (m) => Boolean(m?.due_on ?? m?.dueOn);
