@@ -155,3 +155,61 @@ describe('interpretRun', () => {
     expect(interpretRun('vitest', report, 'tests/unit/a.test.ts')).toBeUndefined();
   });
 });
+
+describe('runTests in the other languages of the table (kanon#20)', () => {
+  type Call = { cmd: string; args: string[]; opts: { cwd?: string; env?: NodeJS.ProcessEnv } };
+  const runWith = (files: string[], answer: (c: Call) => { write?: string; stdout?: string; exit?: 'fail' | 'enoent' }, read: (f: string) => string = () => '') => {
+    const calls: Call[] = [];
+    const exec = (cmd: string, args: string[], opts: Call['opts']) => {
+      const call = { cmd, args, opts };
+      calls.push(call);
+      const a = answer(call);
+      if (a.exit === 'enoent') throw Object.assign(new Error(`spawn ${cmd} ENOENT`), { code: 'ENOENT' });
+      const out = args.find((x) => x.startsWith('--junitxml='))?.slice('--junitxml='.length);
+      if (a.write !== undefined && out) writeFileSync(out, a.write);
+      if (a.exit === 'fail') throw Object.assign(new Error('exit 1'), { status: 1, stdout: a.stdout ?? '' });
+      return a.stdout ?? '';
+    };
+    const outDir = mkdtempSync(join(tmpdir(), 'verify-acs-lang-'));
+    return { results: runTests(files, { exec: exec as never, outDir, cwd: '/repo', read }), calls };
+  };
+
+  it('pytest: runs the one file through `python -m pytest`, never npx, and reads its JUnit report', () => {
+    const f = 'tests/test_core.py';
+    const passing = '<testsuites><testsuite><testcase name="test_once"/></testsuite></testsuites>';
+    const { results, calls } = runWith([f], () => ({ write: passing }));
+    expect(calls.map((c) => [c.cmd, ...c.args.slice(0, 3)])).toEqual([['python', '-m', 'pytest', f]]);
+    expect(results.get(f)).toBe(true);
+    const failing = '<testsuites><testsuite><testcase name="test_once"><failure>x</failure></testcase></testsuite></testsuites>';
+    expect(runWith([f], () => ({ write: failing, exit: 'fail' })).results.get(f)).toBe(false);
+  });
+
+  it('pytest: no pytest installed (no report) and no python (ENOENT) are not-run', () => {
+    const f = 'tests/test_core.py';
+    expect(runWith([f], () => ({ exit: 'fail' })).results.has(f)).toBe(false);
+    expect(runWith([f], () => ({ exit: 'enoent' })).results.has(f)).toBe(false);
+  });
+
+  it('go: runs the file’s package restricted to the test functions the file declares, and reads stdout', () => {
+    const f = 'internal/orders/core_test.go';
+    const src = 'package orders\nfunc TestPlace(t *testing.T) {}\nfunc TestRefund(t *testing.T) {}\n';
+    const pass = [{ Action: 'pass', Test: 'TestPlace' }, { Action: 'pass', Test: 'TestRefund' }].map((e) => JSON.stringify(e)).join('\n');
+    const { results, calls } = runWith([f], () => ({ stdout: pass }), () => src);
+    expect(calls.map((c) => [c.cmd, ...c.args])).toEqual([['go', 'test', '-json', '-run', '^(TestPlace|TestRefund)$', './internal/orders']]);
+    expect(results.get(f)).toBe(true);
+    const fail = JSON.stringify({ Action: 'fail', Test: 'TestPlace' });
+    expect(runWith([f], () => ({ stdout: fail, exit: 'fail' }), () => src).results.get(f)).toBe(false);
+  });
+
+  it('go: a file that declares no test function runs nothing, and is not-run', () => {
+    const f = 'internal/orders/helpers_test.go';
+    const { results, calls } = runWith([f], () => ({ stdout: '' }), () => 'package orders\nfunc helper() {}\n');
+    expect(calls).toHaveLength(0);
+    expect(results.has(f)).toBe(false);
+  });
+
+  it('JavaScript runs the adopter’s installed Vitest and Playwright, never npx', () => {
+    const { calls } = runWith(['tests/unit/a.test.ts', 'e2e/a.spec.ts'], () => ({}));
+    expect(calls.map((c) => c.cmd)).toEqual(['node_modules/.bin/vitest', 'node_modules/.bin/playwright']);
+  });
+});

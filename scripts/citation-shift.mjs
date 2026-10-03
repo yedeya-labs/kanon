@@ -85,8 +85,9 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { PROJECTS_TREE, coordinatesIn, isOracleSpec, resolvePath } from './citation-guard.mjs';
+import { PROJECTS_TREE, SOURCE_EXT, coordinatesIn, isOracleSpec, resolvePath } from './citation-guard.mjs';
 import { QA_TOOLING_IMPORT } from './spec-lib.mjs';
+import { TABLE_EXT, conventionFor } from './lib/test-conventions.mjs';
 
 /**
  * @typedef {{os: number, oc: number, ns: number, nc: number, removed: string[], added: string[]}} Hunk
@@ -97,7 +98,9 @@ import { QA_TOOLING_IMPORT } from './spec-lib.mjs';
 
 /** Where a CODE COMMENT can carry a coordinate worth mapping (RA-2293). */
 export const CODE_TREES = ['e2e/', 'tests/', 'src/', 'scripts/'];
-const CODE_EXT = /\.(?:ts|tsx|mjs|cjs|js)$/;
+// The languages of the per-language table (`scripts/lib/test-conventions.mjs`, kanon#20),
+// whose comment syntax this file knows, plus `cjs`, which is JavaScript too.
+const CODE_EXT = new RegExp(`\\.(?:${TABLE_EXT}|cjs)$`);
 
 /**
  * Is this code file read for comment coordinates? Everything under `CODE_TREES` EXCEPT
@@ -117,7 +120,8 @@ export const readsCodeComments = (path, text) =>
 // A coordinate in a code comment is written with or without backticks — the corpus has
 // both (`// checkout (storefront.ts:1155, RA-253)`) — so the path is matched on its own,
 // bounded so it cannot start inside a longer token.
-const CODE_COORD = /(?<![\w./[\]@-])([\w./[\]-]+\.(?:ts|tsx|mjs|cjs|js|json|yml|yaml|sql|sh)):(\d+)(?:-(\d+))?(?![\w-])/g;
+// The extensions are `citation-guard`'s, so a comment can point into any file a doc can.
+const CODE_COORD = new RegExp(String.raw`(?<![\w./[\]@-])([\w./[\]-]+\.${SOURCE_EXT}):(\d+)(?:-(\d+))?(?![\w-])`, 'g');
 
 /**
  * The coordinates in the COMMENT part of one line of code: a line that opens a comment
@@ -127,10 +131,20 @@ const CODE_COORD = /(?<![\w./[\]@-])([\w./[\]-]+\.(?:ts|tsx|mjs|cjs|js|json|yml|
  *
  * A bare `:NNN` continuation is NOT read here, unlike in docs: in code it is as often a
  * port or a time as a line.
+ *
+ * `syntax` is the file's comment syntax from the per-language table: `slash` for
+ * JavaScript and Go, `hash` for Python's `# …` (kanon#20). A Python docstring is a string
+ * literal, so a coordinate in one is not read, as one in a JavaScript string is not.
+ *
+ * @param {string} line
+ * @param {'slash' | 'hash'} [syntax]
  */
-export const commentCoordinates = (line) => {
+export const commentCoordinates = (line, syntax = 'slash') => {
   let from = -1;
-  if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) from = 0;
+  if (syntax === 'hash') {
+    const m = /(?:^|\s)#/.exec(line);
+    if (m) from = m.index;
+  } else if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) from = 0;
   else {
     const m = /(?:^|[\s{;,)])(\/\/|\/\*)/.exec(line);
     if (m) from = m.index;
@@ -246,7 +260,9 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
     const oracle = isOracleSpec(doc);
     // A full citation naming line 0 is a typo `citation-guard` reports, not a coordinate:
     // mapping it would "move" `:0-5` to `:0-7` and `--fix` would write the new typo (RA-1221).
-    const extract = kind === 'doc' ? (l) => coordinatesIn(l, oracle).filter((c) => !c.lineZero) : commentCoordinates;
+    const extract = kind === 'doc'
+      ? (l) => coordinatesIn(l, oracle).filter((c) => !c.lineZero)
+      : (l) => commentCoordinates(l, conventionFor(doc)?.comment ?? 'slash');
     const lines = readHead(doc).split('\n');
     const docHunks = diff.get(doc) ?? [];
     // For each head line: the base-side coordinates it may have carried through unchanged.
@@ -346,7 +362,7 @@ const main = () => {
   const readHead = head ? (p) => git(['show', `${head}:${p}`]) : (p) => readFileSync(p, 'utf8');
   // Code files are read only when they contain something coordinate-shaped at all — a
   // `git grep` prefilter, so the replay (`--head`) does not `git show` every source file.
-  const grep = tryGit(['grep', '-l', '-E', '\\.(ts|tsx|mjs|cjs|js|json|yml|yaml|sql|sh):[0-9]', ...(head ? [head] : []), '--', ...CODE_TREES]) ?? '';
+  const grep = tryGit(['grep', '-l', '-E', `\\.${SOURCE_EXT.replace('(?:', '(')}:[0-9]`, ...(head ? [head] : []), '--', ...CODE_TREES]) ?? '';
   const code = grep.split('\n').filter(Boolean).map((l) => (head ? l.slice(head.length + 1) : l))
     .filter((f) => readsCodeComments(f, readHead(f)));
   const r = shiftedCoordinates({ docs, code, readHead, trackedHead, trackedBase, diff });

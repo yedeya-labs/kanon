@@ -60,7 +60,17 @@ This chapter governs the spec layer: the numbered behavioural invariants that sa
 
 **Rule.** Name the invariant id in the title of the test that asserts it, and never cite an id the test does not assert. Count an acceptance criterion as verified only when a citing test ran and passed. "No citing test" is unverifiable and "didn't run" is not-run; neither is a pass or a finding.
 
-**Why.** The title is the only thing the coverage and verification tools read, so a false citation turns "unverifiable" into a false pass. Evidence gaps must not become verdicts in either direction.
+Where the title is depends on the test's language, and Kanon fixes it per language ([ADR 0012](../docs/decisions/0012-test-conventions-by-language.md)):
+
+| Language | Test files | The title that carries the id |
+|---|---|---|
+| JavaScript and TypeScript | under `tests/` or `e2e/` | the title argument: `it('[ORD-1] …')` |
+| Python | `test_*.py` or `*_test.py` | the first line of the test function's docstring: `"""[ORD-1] …"""` |
+| Go | `*_test.go` | a subtest's name: `t.Run("[ORD-1] …", …)` |
+
+Kanon reads no test in a language outside the table.
+
+**Why.** The title is the only thing the coverage and verification tools read, so a false citation turns "unverifiable" into a false pass. Evidence gaps must not become verdicts in either direction. A fixed convention per language keeps the tools from depending on a setting. The language of each file picks its row, so a project with two languages needs nothing extra. A language outside the table reads as "nothing checked", never as a pass.
 
 **Enforced by.** The coverage and acceptance-criteria tools read test titles and report the three states separately. Citation honesty is prose only.
 

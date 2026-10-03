@@ -245,6 +245,22 @@ describe('code comments are read too (RA-2293)', () => {
     expect(readsCodeComments('docs/a.md', '')).toBe(false);
     expect(readsCodeComments('drizzle/0001.sql', '')).toBe(false);
   });
+
+  it('reads Python and Go source by their own comment syntax (kanon#20)', () => {
+    expect(readsCodeComments('src/orders/core.py', '')).toBe(true);
+    expect(readsCodeComments('tests/test_core.py', '')).toBe(true);
+    expect(readsCodeComments('src/orders/core.go', '')).toBe(true);
+    // A `#` comment, whole-line or trailing, and a coordinate into any language a doc can cite.
+    expect(commentCoordinates('# the entry point is src/orders/core.py:4-6', 'hash').map((c: { text: string }) => c.text)).toEqual(['src/orders/core.py:4-6']);
+    expect(commentCoordinates('x = 1  # see core.go:12', 'hash').map((c: { text: string }) => c.text)).toEqual(['core.go:12']);
+    // Code and strings are not comments: a dict lookup, and a Python line with no `#`.
+    expect(commentCoordinates('path = "core.py:4"', 'hash')).toEqual([]);
+    // `//` is not a Python comment, and `#` is not a JavaScript one.
+    expect(commentCoordinates('x // core.py:4', 'hash')).toEqual([]);
+    expect(commentCoordinates('# core.py:4')).toEqual([]);
+    // Go uses the JavaScript syntax.
+    expect(commentCoordinates('\tplace() // see core.go:12').map((c: { text: string }) => c.text)).toEqual(['core.go:12']);
+  });
 });
 
 describe('the CLI reads code comments end to end (RA-2293)', () => {
