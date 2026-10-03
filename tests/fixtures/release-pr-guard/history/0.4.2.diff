@@ -1,0 +1,62 @@
+diff --git a/.release-please-manifest.json b/.release-please-manifest.json
+index 218393f..4cff5b9 100644
+--- a/.release-please-manifest.json
++++ b/.release-please-manifest.json
+@@ -1,3 +1,3 @@
+ {
+-  ".": "0.4.1"
++  ".": "0.4.2"
+ }
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index a967942..e403a85 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,17 @@
+ # Changelog
+ 
++## [0.4.2](https://github.com/yedeya-labs/kanon/compare/v0.4.1...v0.4.2) (2026-09-30)
++
++
++### Tests
++
++* fail ordering assertions when the earlier step is missing ([#8](https://github.com/yedeya-labs/kanon/issues/8)) ([05c3aec](https://github.com/yedeya-labs/kanon/commit/05c3aec8d3aab310c1a3b22e529e85190f2f9920))
++
++
++### CI
++
++* run every required check on merge_group for the merge queue ([#9](https://github.com/yedeya-labs/kanon/issues/9)) ([bd115f3](https://github.com/yedeya-labs/kanon/commit/bd115f34e0b3453d37f246110cac46f23cf6c0a4))
++
+ ## [0.4.1](https://github.com/yedeya-labs/kanon/compare/v0.4.0...v0.4.1) (2026-09-30)
+ 
+ 
+diff --git a/package-lock.json b/package-lock.json
+index 80c44af..4d6c262 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "kanon",
+-  "version": "0.4.1",
++  "version": "0.4.2",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "kanon",
+-      "version": "0.4.1",
++      "version": "0.4.2",
+       "devDependencies": {
+         "@eslint/js": "10.0.1",
+         "@types/node": "24.19.0",
+diff --git a/package.json b/package.json
+index 9b00dfa..e5976db 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "kanon",
+-  "version": "0.4.1",
++  "version": "0.4.2",
+   "private": true,
+   "type": "module",
+   "engines": {

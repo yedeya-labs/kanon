@@ -1,0 +1,57 @@
+diff --git a/.release-please-manifest.json b/.release-please-manifest.json
+index 4cff5b9..b81fe00 100644
+--- a/.release-please-manifest.json
++++ b/.release-please-manifest.json
+@@ -1,3 +1,3 @@
+ {
+-  ".": "0.4.2"
++  ".": "0.4.3"
+ }
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e403a85..d419775 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,12 @@
+ # Changelog
+ 
++## [0.4.3](https://github.com/yedeya-labs/kanon/compare/v0.4.2...v0.4.3) (2026-09-30)
++
++
++### Documentation
++
++* **release:** confirm release PRs merge through the admin bypass with the queue on ([#11](https://github.com/yedeya-labs/kanon/issues/11)) ([27762cd](https://github.com/yedeya-labs/kanon/commit/27762cd275c1a878f199969e6723e68f5e4f9882))
++
+ ## [0.4.2](https://github.com/yedeya-labs/kanon/compare/v0.4.1...v0.4.2) (2026-09-30)
+ 
+ 
+diff --git a/package-lock.json b/package-lock.json
+index 4d6c262..8a32435 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "kanon",
+-  "version": "0.4.2",
++  "version": "0.4.3",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "kanon",
+-      "version": "0.4.2",
++      "version": "0.4.3",
+       "devDependencies": {
+         "@eslint/js": "10.0.1",
+         "@types/node": "24.19.0",
+diff --git a/package.json b/package.json
+index e5976db..d678b24 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "kanon",
+-  "version": "0.4.2",
++  "version": "0.4.3",
+   "private": true,
+   "type": "module",
+   "engines": {
