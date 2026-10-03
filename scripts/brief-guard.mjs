@@ -91,24 +91,65 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import {
-  DEFAULT_MILESTONE,
-  GATE_MILESTONE,
-  PIPELINE_MILESTONE,
-} from './issue-triage-defaults.mjs';
+import { BUCKET_MILESTONES, DEFAULT_MILESTONE } from './issue-triage-defaults.mjs';
+import { isDatedMilestone } from './lib/milestones.mjs';
 import { coordinatesIn } from './citation-guard.mjs';
 import { dependencyCycles, parseProposed } from './lead-reconcile.mjs';
 import { isAcDeclaration } from './verify-acs.mjs';
 
-/** AGENTS.md's routing table, its three named constants plus the AI epic. IMPORTED
- *  rather than retyped: AGENTS.md is explicit that a rule with a drifted copy is worse
- *  than either alone, and `issue-triage-defaults.mjs` is the copy that executes. */
-export const ROUTING_MILESTONES = [
-  DEFAULT_MILESTONE,
-  GATE_MILESTONE,
-  PIPELINE_MILESTONE,
-  'AI Capabilities',
-];
+/**
+ * WHICH MILESTONE AN ITEM MAY NAME (`K-LAYOUT-12`, kanon#54): one of Kanon's two buckets,
+ * whose names are fixed (`K-WORK-4`), or a roadmap milestone of this repository, which is
+ * the Stakeholder's to name (`K-WORK-5`). The buckets are imported from the backstop that
+ * writes them, so there is one copy. A roadmap milestone is not a list anyone keeps: it is a
+ * milestone with a due date (`K-WORK-3`, the shared `isDatedMilestone`), read from the
+ * repository only when a brief names something other than a bucket. Until #54 this was the
+ * reference adopter's routing table, with its launch gate and its AI epic written in.
+ *
+ * A closed roadmap milestone still counts. A brief that named it when it was open is a record
+ * of a decision (`K-PROJ-10`), and the brief must not turn red when the gate is met.
+ *
+ * @typedef {{ title: string, due_on?: string | null, dueOn?: string | null, state?: string }} Milestone
+ */
+export const ROUTING_BUCKETS = BUCKET_MILESTONES;
+
+/**
+ * The repository's milestones, open and closed, through `gh` (`{owner}/{repo}` is the
+ * current checkout's, or `GH_REPO`'s). Throws when they can't be read.
+ * @returns {Milestone[]}
+ */
+export const liveMilestones = () =>
+  execFileSync('gh', ['api', '--paginate', 'repos/{owner}/{repo}/milestones?state=all&per_page=100', '--jq', '.[] | {title, due_on, state}'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+
+/**
+ * Why `milestone` can't be named by an item, or `null` when it can.
+ * @param {string} milestone
+ * @param {() => Milestone[]} milestones read only when `milestone` isn't a bucket
+ * @returns {string | null}
+ */
+export function milestoneProblem(milestone, milestones) {
+  if (ROUTING_BUCKETS.includes(milestone)) return null;
+  const buckets = ROUTING_BUCKETS.join(', ');
+  let all;
+  try {
+    all = milestones();
+  } catch (e) {
+    const why = String(e?.stderr || e?.message || e).trim().split('\n')[0];
+    return `isn't a bucket (${buckets}), and the repository's milestones couldn't be read to check it is a roadmap milestone (${why})`;
+  }
+  const found = all.find((m) => m.title === milestone);
+  if (!found) return `isn't a bucket (${buckets}) or a milestone of this repository (K-WORK-4, K-LAYOUT-12)`;
+  if (!isDatedMilestone(found)) {
+    return `has no due date, so it isn't a roadmap milestone, and it isn't a bucket (${buckets}) either (K-WORK-3, K-WORK-4)`;
+  }
+  return null;
+}
 
 /**
  * A required section is matched by MEANING, not by its exact heading.
@@ -657,9 +698,11 @@ export const briefCorpus = (tracked, present) => {
 /**
  * @param {string} path
  * @param {string} markdown
+ * @param {{ milestones?: () => Milestone[] }} [world] the repository's milestones, read only
+ *   when an item names something other than a bucket. Absent, such a name is a finding.
  * @returns {{at: string, problem: string}[]}
  */
-export function checkBrief(path, markdown) {
+export function checkBrief(path, markdown, { milestones = () => { throw new Error('no milestone list was read'); } } = {}) {
   const findings = [];
   const at = (line) => `${path}${line ? `:${line}` : ''}`;
   const sections = briefSections(markdown);
@@ -828,8 +871,9 @@ export function checkBrief(path, markdown) {
     const label = `“${p.title}”`;
     if (!p.milestone) {
       findings.push({ at: at(0), problem: `${label} carries no **Milestone:** — the tick refuses to file, and filing bare lets the backstop route it to ${DEFAULT_MILESTONE}, which reads as correctly triaged` });
-    } else if (!ROUTING_MILESTONES.includes(p.milestone)) {
-      findings.push({ at: at(0), problem: `${label} names milestone “${p.milestone}”, which is not in AGENTS.md's routing table (${ROUTING_MILESTONES.join(', ')})` });
+    } else {
+      const why = milestoneProblem(p.milestone, milestones);
+      if (why) findings.push({ at: at(0), problem: `${label} names milestone “${p.milestone}”, which ${why}` });
     }
     if (!p.body || p.body.replace(/[-\s]/g, '') === '') {
       findings.push({ at: at(0), problem: `${label} would be filed with an EMPTY body — its acceptance criteria did not survive the parse, and filing is not undoable` });
@@ -1031,7 +1075,17 @@ const main = () => {
     return;
   }
 
-  const findings = briefs.flatMap((f) => checkBrief(f, readFileSync(f, 'utf8')));
+  // READ ONCE, AND ONLY IF ASKED: a corpus that names only buckets never calls `gh`.
+  /** @type {{ value?: Milestone[], error?: unknown }} */
+  const read = {};
+  const milestones = () => {
+    if (!('value' in read) && !('error' in read)) {
+      try { read.value = liveMilestones(); } catch (e) { read.error = e; }
+    }
+    if ('error' in read) throw read.error;
+    return /** @type {Milestone[]} */ (read.value);
+  };
+  const findings = briefs.flatMap((f) => checkBrief(f, readFileSync(f, 'utf8'), { milestones }));
   if (findings.length) {
     console.error(`brief-guard: ${findings.length} problem(s) in ${briefs.length} project brief(s):\n`);
     for (const f of findings) console.error(`  ${f.at}\n    ${f.problem}`);

@@ -2913,7 +2913,7 @@ export function report(world, { phase, actions, stopped, reviewNotes = [] }) {
   if (phase === 'brief-unparseable') {
     warn(`brief ${world.briefPath} has no parseable Decomposition list — nothing to file`);
     lines.push(`**The brief has no parseable decomposition** — ${world.proposed.reason ?? 'no issues found'}. Nothing was filed, and this is NOT "complete": a project on which nothing was ever filed must never report done.\n`,
-      'The reconciler needs one machine-readable thing from a brief — a `## Decomposition` section (numbered is fine — `## 3. Decomposition` parses) containing, per issue:\n\n```\n### Issue B — Short title\n**Milestone:** Production Ready · **Labels:** `sev:critical`\n**Depends on:** Issue A (why)\n```\n\nEverything else about the format is free (RA-949). This shape is *derived* from the first real brief rather than imposed, so if a later brief reads better another way, fix this parser — not the brief.\n');
+      'The reconciler needs one machine-readable thing from a brief — a `## Decomposition` section (numbered is fine — `## 3. Decomposition` parses) containing, per issue:\n\n```\n### Issue B — Short title\n**Milestone:** Product Backlog · **Labels:** `sev:critical`\n**Depends on:** Issue A (why)\n```\n\nEverything else about the format is free (RA-949). This shape is *derived* from the first real brief rather than imposed, so if a later brief reads better another way, fix this parser — not the brief.\n');
   }
   if (world.unmilestoned?.length) {
     warn(`${world.unmilestoned.length} proposed issue(s) name no milestone`);
