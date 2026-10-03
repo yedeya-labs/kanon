@@ -3,6 +3,7 @@ import {
   CONVENTIONS, RUNNERS, conventionFor, goMentions, goTestFunctions, goTitles, interpretGoJson, interpretJunit,
   isTestFile, pythonMentions, pythonTitles, runnerFor,
 } from '../../scripts/lib/test-conventions.mjs';
+import { auditPaths } from '../../scripts/doc-path-guard.mjs';
 
 /**
  * The per-language test conventions (kanon#20, ADR 0012): which files are tests, where a
@@ -108,6 +109,7 @@ describe('Go: the title is a subtest’s name, the literal first argument of t.R
     '\tfixture := "t.Run(\\"[ORD-8] inside a string\\", nil)"',
     '\t_ = fixture',
     '\tcmd.Run()',
+    '\tt.Log("[ORD-6] a log line in a call, not a subtest")',
     '}',
     '',
     'func TestMain(m *testing.M) {}',
@@ -150,5 +152,22 @@ describe('the runners’ reports', () => {
     expect(interpretGoJson([ev({ Action: 'build-fail', ImportPath: 'x' }), ev({ Action: 'fail', Package: 'x' })].join('\n'))).toBe(false);
     expect(interpretGoJson('not json\n')).toBeUndefined();
     expect(interpretGoJson([ev({ Action: 'skip', Test: 'TestPlace' })].join('\n'))).toBeUndefined();
+  });
+});
+
+describe('doc-path-guard reads Python and Go source as it reads JavaScript (kanon#20)', () => {
+  it.each([
+    ['src/orders/core.py', '# The design is in docs/missing.md.\n'],
+    ['internal/orders/core.go', '// The design is in docs/missing.md.\n'],
+    ['src/orders/core.ts', '// The design is in docs/missing.md.\n'],
+  ])('%s: a path to a file that does not exist is a finding', (file, text) => {
+    const r = auditPaths([file], () => text, [file]);
+    expect(r.findings).toEqual([{ at: `${file}:1`, path: 'docs/missing.md', rule: 'text' }]);
+  });
+
+  it('and a cited Python script that exists is not', () => {
+    const r = auditPaths(['README.md'], () => 'Run `scripts/seed.py`.\n', ['README.md', 'scripts/seed.py']);
+    expect(r.findings).toEqual([]);
+    expect(auditPaths(['README.md'], () => 'Run `scripts/seed.py`.\n', ['README.md']).findings).toHaveLength(1);
   });
 });

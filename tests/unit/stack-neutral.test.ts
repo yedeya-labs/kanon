@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -166,6 +166,22 @@ describe("Kanon's guards on a project with no package.json, run with only node a
     const r = guard('spec-coverage', (dir) => edit(dir, 'tests/test_core.py', (s) => s.replace('"""[ORD-1] Placing', '"""Placing')));
     expect(r.status, r.out).toBe(1);
     expect(r.out).toMatch(/lost their citation: ORD-1/);
+  });
+
+  it("spec-coverage doesn't count a test in a directory git ignores, such as a virtualenv", () => {
+    const r = guard('spec-coverage', (dir) => {
+      edit(dir, 'tests/test_core.py', (s) => s.replace('"""[ORD-1] Placing', '"""Placing'));
+      writeFileSync(join(dir, '.gitignore'), 'venv/\n');
+      mkdirSync(join(dir, 'venv/lib/site'), { recursive: true });
+      writeFileSync(join(dir, 'venv/lib/site/test_vendored.py'), 'def test_vendored():\n    """[ORD-1] a vendored test"""\n');
+    });
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toMatch(/lost their citation: ORD-1/);
+  });
+
+  it('spec-coverage reads a clause that names a pytest file as Claimed', () => {
+    const r = guard('spec-coverage', (dir) => edit(dir, 'docs/qa/specs/orders.md', (s) => `${s}- \`[ORD-2]\` \`[seed]\` A refund is recorded once. *(Confirmed by \`tests/test_core.py\`.)*\n`));
+    expect(r.out).toMatch(/\*\*Claimed\*\* — the spec names a test file, but no test cites the ID: \*\*1\*\*/);
   });
 
   it('citation-guard is red when a coordinate into a Python file points past its end', () => {
