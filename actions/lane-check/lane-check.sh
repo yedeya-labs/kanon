@@ -6,7 +6,8 @@
 # rule about what a lane declares is read from the lane itself and never restated here.
 #
 # Parses YAML with `yq` (mikefarah v4, preinstalled on GitHub's hosted runners; decision 6)
-# into JSON, and checks it with `jq`. Prints one `::error` per violation and exits 1 if
+# into JSON, and checks it with `jq`. Reads the escalation and exemptions files with Kanon's
+# own library, on Node (the action puts Kanon's Node on the PATH first). Prints one `::error` per violation and exits 1 if
 # there is any; exits 2 when it cannot run at all.
 #
 # ENV  KANON_ROOT   Kanon's tree (default: this script's ../..)
@@ -25,6 +26,7 @@ DATABASE=docs/qa/test-database.md
 die() { echo "::error title=lane-check::$*"; exit 2; }
 command -v yq >/dev/null 2>&1 || die "needs yq (mikefarah v4) on PATH; GitHub's hosted runners have it"
 command -v jq >/dev/null 2>&1 || die "needs jq on PATH"
+command -v node >/dev/null 2>&1 || die "needs node on PATH; the action puts Kanon's own there"
 [ -d .github/workflows ] || die "run it from the root of the adopter's checkout: there is no .github/workflows here"
 [ -f "$KANON_ROOT/.github/workflows/$SPINE.yml" ] || die "Kanon's lanes are not at $KANON_ROOT"
 
@@ -200,6 +202,18 @@ if [ -f "$DATABASE" ]; then
     fail "$DATABASE" "$out (K-LAYOUT-16)"
   fi
 fi
+
+# ── The escalation and exemptions files (K-LAYOUT-8, K-LAYOUT-15; kanon#153) ─────────────
+# Read by the library's own readers from this Kanon tree, so a file this passes is one the
+# guards and the Merger accept. A missing file is the reader's to fail (both rules say so),
+# so only a file that exists is read here.
+for d in escalation-paths exemptions; do
+  f="docs/qa/$d.md"
+  [ -f "$f" ] || continue
+  if ! out="$(node "$HERE/declarations.mjs" "$d" 2>&1)"; then
+    fail "$f" "$(printf '%s' "$out" | head -1)"
+  fi
+done
 
 # ── App slugs: every role a caller's lane runs as has one row in the register ──────────
 for role in $(printf '%s\n' $ROLES | sort -u); do

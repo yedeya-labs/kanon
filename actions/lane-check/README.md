@@ -10,6 +10,7 @@ Fails unless the repository's Kanon lane callers, project-setup hook, App regist
 - **The App register** (`docs/qa/agent-identities.md`) has one row, with an App slug in backticks, for every role a caller's lane runs as.
 - **The project documents a called lane reads** exist, and the stack document has each of its four sections once (`K-LAYOUT-17`). Which documents a lane reads is read from the lane itself.
 - **The test-database declaration** (`docs/qa/test-database.md`), when there is one, has exactly one `**Test database:**` line declaring `none` or `hook`, never an engine (`K-LAYOUT-16`). No file is valid: it declares no database.
+- **The escalation and exemptions files** (`docs/qa/escalation-paths.md`, `K-LAYOUT-8`, and `docs/qa/exemptions.md`, `K-LAYOUT-15`), when they exist, parse with the same readers the guards and the Merger use, at your pinned version, and a malformed one fails by name with the reader's own message ([#153](https://github.com/yedeya-labs/kanon/issues/153)). A missing one is failed by the guard or lane that reads it, not here.
 - **`.github/dependabot.yml`** has a `github-actions` entry for `/` that groups `yedeya-labs/kanon*`, prefixes its commits `ci`, and leaves Kanon out of any cooldown.
 
 What a lane declares, and what the hook must accept, is read from Kanon's own files at the version you pinned, so the check and the lanes can't disagree.
@@ -41,7 +42,7 @@ jobs:
 <!-- x-release-please-end -->
 
 - **Check out first.** It reads your repository's files.
-- **`yq` and `jq`.** It parses YAML with `yq` (mikefarah v4) and checks it with `jq`. GitHub's hosted runners have both; a self-hosted runner must provide them.
+- **`yq` and `jq`.** It parses YAML with `yq` (mikefarah v4) and checks it with `jq`. GitHub's hosted runners have both; a self-hosted runner must provide them. Node is Kanon's own: the action's first step puts the Node major Kanon declares on the `PATH`, as every lane does.
 - **No inputs.** Everything it checks is a fixed path or is read from the lanes ([ADR 0002](../../docs/decisions/0002-standardise-dont-parameterise.md)).
 - Pin the same exact Kanon version as your lanes, and let Dependabot propose upgrades (`K-ADOPT-11`).
 - **It reads every call to a Kanon workflow as a lane caller, the [release workflow](../../docs/release.md)'s included,** and fails one that maps no secrets ([#152](https://github.com/yedeya-labs/kanon/issues/152)). So until that is fixed, it fails the release caller [`docs/release.md`](../../docs/release.md) gives. An empty `secrets: {}` on the release job passes this check, but `actionlint` rejects an empty `secrets` section, and it is not known whether GitHub accepts one; don't add it to a workflow that releases.

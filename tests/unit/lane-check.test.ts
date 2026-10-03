@@ -327,6 +327,28 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => t.write(DB, `${STANDARD}**Test database:** \`none\`\n`), /has 2 `\*\*Test database:\*\*` lines/));
   });
 
+  describe('the escalation and exemptions files, read by the library\'s own readers (kanon#153)', () => {
+    const ESC = 'docs/qa/escalation-paths.md';
+    const EXE = 'docs/qa/exemptions.md';
+    // The fixture adopter carries both, well formed, so the whole-fixture case above passes them.
+    const ESC_OK = readFileSync(join(FIXTURE, ESC), 'utf8');
+    const EXE_OK = readFileSync(join(FIXTURE, EXE), 'utf8');
+    it('leaves a missing file to the guard or lane that reads it', () => {
+      const t = adopter();
+      t.rm(ESC);
+      t.rm(EXE);
+      expect(check(t).status).toBe(0);
+    });
+    it('refuses an escalation file written before `## Pipeline code`, with the reader\'s own message', () =>
+      red((t) => t.write(ESC, ESC_OK.replace(/## Pipeline code[\s\S]*?(?=## Bail list)/, '')), /escalation-paths\.md,title=lane-check::docs\/qa\/escalation-paths\.md has no `## Pipeline code` heading \(K-LAYOUT-8\)/));
+    it('refuses an escalation pattern that is not a regular expression', () =>
+      red((t) => t.write(ESC, ESC_OK.replace('`^migrations/`', '`^migrations/(`')), /escalation-paths\.md,title=lane-check::docs\/qa\/escalation-paths\.md:5/));
+    it('refuses an exemptions file without `## Path mentions`', () =>
+      red((t) => t.write(EXE, EXE_OK.replace(/## Path mentions[\s\S]*/, '')), /exemptions\.md,title=lane-check::docs\/qa\/exemptions\.md has no `## Path mentions` heading/));
+    it('refuses an exemptions entry listed twice', () =>
+      red((t) => t.write(EXE, EXE_OK.replace('## Path mentions', '- `docs/projects/1.md` — old\n- `docs/projects/1.md` — old\n\n## Path mentions')), /exemptions\.md,title=lane-check::docs\/qa\/exemptions\.md:6 repeats the entry/));
+  });
+
   describe('the App register has a slug for every role a caller\'s lane runs as (K-LAYOUT-6)', () => {
     const REG = 'docs/qa/agent-identities.md';
     it('refuses a missing register', () => red((t) => t.rm(REG), 'the App register is missing'));
@@ -372,9 +394,13 @@ describe('the lane-check action', () => {
 
   it('runs its script from its own directory, at the version it was called at', () => {
     expect(action.runs.using).toBe('composite');
-    expect(action.runs.steps).toHaveLength(1);
-    expect(action.runs.steps[0]?.run).toBe('bash "$GITHUB_ACTION_PATH/lane-check.sh"');
-    expect(action.runs.steps[0]?.env).toEqual({ ACTION_REF: '${{ github.action_ref }}' });
+    expect(action.runs.steps).toHaveLength(2);
+    expect(action.runs.steps[1]?.run).toBe('bash "$GITHUB_ACTION_PATH/lane-check.sh"');
+    expect(action.runs.steps[1]?.env).toEqual({ ACTION_REF: '${{ github.action_ref }}' });
+  });
+
+  it("puts Kanon's own Node on the PATH first, for the library's readers (kanon#110, kanon#153)", () => {
+    expect((action.runs.steps[0] as { uses?: string }).uses).toBe('$/actions/kanon-path');
   });
 
   it('the agents smoke runs it on the fixture adopter, through `$/`', () => {
