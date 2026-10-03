@@ -144,3 +144,16 @@ describe('K-LAYOUT-17 names every playbook section a lane prompt sends the agent
     expect(body).toContain(`\`## ${section}\``);
   });
 });
+
+describe("docs/lanes.md's review caller is the one lane-check passes", () => {
+  // tests/unit/lane-check.test.ts runs lane-check over the fixture caller, so a docs caller
+  // equal to it (bar the version) is one an adopter can copy and see go green.
+  const unpin = (text: string): unknown => parse(text.replace(/(yedeya-labs\/kanon\/[^@\s]+)@v\d+\.\d+\.\d+/g, '$1@vX'));
+
+  it('matches tests/fixtures/lane-check/extra/agent-review.yml', () => {
+    const blocks = [...read('docs/lanes.md').matchAll(/```yaml\n([\s\S]*?)```/g)].map((m) => m[1]!);
+    const docs = blocks.filter((b) => b.includes('agent-review.yml@'));
+    expect(docs).toHaveLength(1);
+    expect(unpin(docs[0]!)).toEqual(unpin(read('tests/fixtures/lane-check/extra/agent-review.yml')));
+  });
+});

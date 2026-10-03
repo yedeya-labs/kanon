@@ -1,6 +1,6 @@
 # A trigger-only caller of Kanon's review lane, as an adopter writes it (plan 0001 §3). Its
 # `run-name` ends with the head SHA, which the review-run evidence reads (the lane says so).
-name: Review
+name: Review (Reviewer)
 
 run-name: Review ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}
 
