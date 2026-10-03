@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.17.0](https://github.com/yedeya-labs/kanon/compare/v0.16.0...v0.17.0) (2026-10-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **lanes:** take the reference adopter's stack out of the lane prompts ([#140](https://github.com/yedeya-labs/kanon/issues/140))
+* **lanes:** start only the test database the project declares ([#139](https://github.com/yedeya-labs/kanon/issues/139))
+* **guards:** read the brief and doc-path exemptions from the adopter's exemptions file ([#137](https://github.com/yedeya-labs/kanon/issues/137))
+* **guards:** read the adopter's escalation paths and pipeline code from its escalation file ([#135](https://github.com/yedeya-labs/kanon/issues/135))
+* **guards:** take roadmap milestones from the repository, not the reference adopter's names ([#136](https://github.com/yedeya-labs/kanon/issues/136))
+
+### Features
+
+* **guards:** read the adopter's escalation paths and pipeline code from its escalation file ([#135](https://github.com/yedeya-labs/kanon/issues/135)) ([610b111](https://github.com/yedeya-labs/kanon/commit/610b111430eba95041df177e34caa663abb61a04))
+* **guards:** read the brief and doc-path exemptions from the adopter's exemptions file ([#137](https://github.com/yedeya-labs/kanon/issues/137)) ([b95d2c4](https://github.com/yedeya-labs/kanon/commit/b95d2c442372d431b0cb80f910d7602c29fc8423))
+* **guards:** take roadmap milestones from the repository, not the reference adopter's names ([#136](https://github.com/yedeya-labs/kanon/issues/136)) ([781c391](https://github.com/yedeya-labs/kanon/commit/781c3916fedc09afd267d0fd119439aa05784387))
+* **lanes:** start only the test database the project declares ([#139](https://github.com/yedeya-labs/kanon/issues/139)) ([4774799](https://github.com/yedeya-labs/kanon/commit/477479924f4a64689c1c703b5a176c20ee7d42eb))
+* **lanes:** take the reference adopter's stack out of the lane prompts ([#140](https://github.com/yedeya-labs/kanon/issues/140)) ([5900e22](https://github.com/yedeya-labs/kanon/commit/5900e2278affd0d361fd2b8c2d09ac4643d76338))
+
+
+### Bug Fixes
+
+* **release:** pass a package's first release, whose manifest entry is new ([#134](https://github.com/yedeya-labs/kanon/issues/134)) ([715d507](https://github.com/yedeya-labs/kanon/commit/715d507250c43f666cfeb6f1f8b8b66cac3fcacb))
+* **telemetry:** keep the version-2 telemetry artifact 90 days ([#133](https://github.com/yedeya-labs/kanon/issues/133)) ([e79b5a6](https://github.com/yedeya-labs/kanon/commit/e79b5a6988ad2f20ff09cd5ceed61c355f5a3781))
+* **tests:** don't read a commit hash's digits as an AWS account id ([#131](https://github.com/yedeya-labs/kanon/issues/131)) ([beb0d98](https://github.com/yedeya-labs/kanon/commit/beb0d980e5c45440054f713948ff3e982c2edbef))
+
 ## [0.16.0](https://github.com/yedeya-labs/kanon/compare/v0.15.1...v0.16.0) (2026-10-03)
 
 
