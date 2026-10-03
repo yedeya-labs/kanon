@@ -66,22 +66,47 @@ f="$FAKE_GH_DIR/$(printf %s "$path" | tr -c 'A-Za-z0-9._-' '_').json"
 if [ -n "$slurp" ]; then printf '['; cat "$f"; printf ']'; else cat "$f"; fi
 `;
 
-type Pr = { number: number; head: { ref: string; sha: string; repo: { full_name: string } }; base: { ref: string } };
+type Pr = { number: number; head: { ref: string; sha: string; repo: { full_name: string } }; base: { ref: string; sha: string } };
+const BASE_SHA = 'c0ffee00';
+const MERGE_BASE = 'ba5eba11';
 const releasePr = (number = 68, ref = BRANCH, owner = REPO): Pr => ({
   number,
   head: { ref, sha: SHA, repo: { full_name: owner } },
-  base: { ref: 'main' },
+  base: { ref: 'main', sha: BASE_SHA },
 });
 
-const responses = (opts: { prs?: Pr[]; files?: PrFile[]; comments?: Array<{ body: string }> }): Record<string, unknown> => ({
-  [`repos/${REPO}/pulls?state=open&per_page=100`]: opts.prs ?? [releasePr()],
-  [`repos/${REPO}/contents/release-please-config.json?ref=${SHA}`]: {
-    encoding: 'base64',
-    content: Buffer.from(config).toString('base64'),
-  },
-  [`repos/${REPO}/pulls/68/files?per_page=100`]: opts.files ?? [],
-  [`repos/${REPO}/issues/68/comments?per_page=100`]: opts.comments ?? [],
-});
+/**
+ * The manifest at the merge base and at the head, rebuilt from its patch: the context and `-`
+ * lines, and the context and `+` lines. Every manifest patch here is one hunk over the whole
+ * file, which the rebuilt JSON parsing confirms.
+ */
+const manifestSides = (patch: string) => {
+  const base: string[] = [];
+  const head: string[] = [];
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('@@') || line.startsWith('\\')) continue;
+    if (!line.startsWith('+')) base.push(line.slice(1));
+    if (!line.startsWith('-')) head.push(line.slice(1));
+  }
+  return { base: `${base.join('\n')}\n`, head: `${head.join('\n')}\n` };
+};
+const contents = (text: string) => ({ encoding: 'base64', content: Buffer.from(text).toString('base64') });
+
+const responses = (opts: { prs?: Pr[]; files?: PrFile[]; comments?: Array<{ body: string }>; manifest?: { base: string; head: string } }): Record<string, unknown> => {
+  const patch = opts.files?.find((f) => f.filename === '.release-please-manifest.json')?.patch;
+  const sides = opts.manifest ?? (patch === undefined ? undefined : manifestSides(patch));
+  return {
+    [`repos/${REPO}/pulls?state=open&per_page=100`]: opts.prs ?? [releasePr()],
+    [`repos/${REPO}/contents/release-please-config.json?ref=${SHA}`]: contents(config),
+    [`repos/${REPO}/pulls/68/files?per_page=100`]: opts.files ?? [],
+    [`repos/${REPO}/issues/68/comments?per_page=100`]: opts.comments ?? [],
+    ...(sides && {
+      [`repos/${REPO}/compare/${BASE_SHA}...${SHA}?per_page=1`]: { merge_base_commit: { sha: MERGE_BASE } },
+      [`repos/${REPO}/contents/.release-please-manifest.json?ref=${MERGE_BASE}`]: contents(sides.base),
+      [`repos/${REPO}/contents/.release-please-manifest.json?ref=${SHA}`]: contents(sides.head),
+    }),
+  };
+};
 
 const runGuard = (answers: Record<string, unknown>) => {
   const dir = mkdtempSync(join(tmpdir(), 'kanon-release-pr-guard-'));
@@ -198,7 +223,7 @@ describe('#73 the release workflow refuses a release PR that changes more than v
   it('holds the manifest itself to the rule: a package moved backwards fails (#90)', () => {
     const result = runGuard(responses({ files: [manifest(['.', '0.10.0', '0.9.1'])] }));
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('.release-please-manifest.json: +  ".": "0.9.1"   <- 0.10.0 goes back to 0.9.1');
+    expect(result.stderr).toContain('.release-please-manifest.json: ".": 0.10.0 goes back to 0.9.1');
   });
 
   it("fails when the manifest isn't changed, since then no version is this release's (#90)", () => {
@@ -216,6 +241,84 @@ describe('#73 the release workflow refuses a release PR that changes more than v
     const result = runGuard(responses({ files: [two, back] }));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('<- 2.2.0 goes back to 1.1.0');
+  });
+
+  // #129: a monorepo's first release of a package with no manifest entry. release-please's
+  // ReleasePleaseManifest updater sets `parsed[path] = version` and re-serialises, so the new
+  // key lands at the end with no `-` partner and the line before gains a comma.
+  const FIRST_RELEASE: PrFile = {
+    filename: '.release-please-manifest.json',
+    status: 'modified',
+    patch: '@@ -1,3 +1,4 @@\n {\n-  "packages/a": "1.1.0"\n+  "packages/a": "1.1.0",\n+  "packages/new": "0.1.0"\n }',
+  };
+  const NEW_PACKAGE_JSON: PrFile = { filename: 'packages/new/package.json', status: 'modified', patch: '@@ -3 +3 @@\n-  "version": "0.0.0",\n+  "version": "0.1.0",' };
+  /** A manifest change given as the whole file on each side. */
+  const sides = (base: Record<string, unknown>, head: Record<string, unknown>) => ({
+    base: `${JSON.stringify(base, null, 2)}\n`,
+    head: `${JSON.stringify(head, null, 2)}\n`,
+  });
+
+  it("passes a package's first release, whose manifest entry is new (#129)", () => {
+    const result = runGuard(responses({ files: [FIRST_RELEASE, NEW_PACKAGE_JSON] }));
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('each to a version it releases (0.1.0)');
+  });
+
+  it('passes a first release beside a sibling bumped in the same PR, and takes both versions (#129)', () => {
+    const files: PrFile[] = [
+      { filename: '.release-please-manifest.json', status: 'modified', patch: '@@ -1,3 +1,4 @@\n {\n-  "packages/a": "1.0.0"\n+  "packages/a": "1.1.0",\n+  "packages/new": "0.1.0"\n }' },
+      { filename: 'packages/a/package.json', status: 'modified', patch: '@@ -3 +3 @@\n-  "version": "1.0.0",\n+  "version": "1.1.0",' },
+      NEW_PACKAGE_JSON,
+    ];
+    const result = runGuard(responses({ files }));
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('each to a version it releases (1.1.0, 0.1.0)');
+  });
+
+  it('reads the manifest at the merge base and the head, which is what the diff compares (#129)', () => {
+    const result = runGuard(responses({ files: [FIRST_RELEASE] }));
+    expect(result.calls).toContain(`api repos/${REPO}/compare/${BASE_SHA}...${SHA}?per_page=1`);
+    expect(result.calls).toContain(`api repos/${REPO}/contents/.release-please-manifest.json?ref=${MERGE_BASE}`);
+    expect(result.calls).toContain(`api repos/${REPO}/contents/.release-please-manifest.json?ref=${SHA}`);
+  });
+
+  it.each<[string, PrFile[], { base: string; head: string } | undefined, string]>([
+    ['a stale line beside the first release', [FIRST_RELEASE, { filename: 'packages/a/package.json', status: 'modified', patch: '@@ -9 +9 @@\n-    "vitest": "5.0.2",\n+    "vitest": "5.0.1",' }], undefined,
+      'packages/a/package.json: +    "vitest": "5.0.1",   <- 5.0.2 goes back to 5.0.1'],
+    ['a line moved to a version only the new package has, backwards', [FIRST_RELEASE, { filename: 'packages/a/package.json', status: 'modified', patch: '@@ -4 +4 @@\n-  "dependencies": { "new": "^0.2.0" }\n+  "dependencies": { "new": "^0.1.0" }' }], undefined,
+      '<- 0.2.0 goes back to 0.1.0'],
+    ['a line moved to a version nobody releases', [FIRST_RELEASE, { filename: 'packages/a/package.json', status: 'modified', patch: '@@ -4 +4 @@\n-  "dependencies": { "c": "^3.0.0" }\n+  "dependencies": { "c": "^3.1.0" }' }], undefined,
+      '<- 3.1.0 is not a version this release sets (0.1.0)'],
+    ['a new entry that is not a version', [FIRST_RELEASE], sides({ 'packages/a': '1.1.0' }, { 'packages/a': '1.1.0', 'packages/new': 'latest' }),
+      '.release-please-manifest.json: "packages/new": "latest" is not a version'],
+    ['a new entry that only holds a version', [FIRST_RELEASE], sides({ 'packages/a': '1.1.0' }, { 'packages/a': '1.1.0', 'packages/new': '^0.1.0' }),
+      '.release-please-manifest.json: "packages/new": "^0.1.0" is not a version'],
+    ['a new entry with more after its version', [FIRST_RELEASE], sides({ 'packages/a': '1.1.0' }, { 'packages/a': '1.1.0', 'packages/new': '0.1.0 or later' }),
+      '.release-please-manifest.json: "packages/new": "0.1.0 or later" is not a version'],
+    ['a manifest the PR removes, which is never read as JSON', [{ filename: '.release-please-manifest.json', status: 'removed' }, NEW_PACKAGE_JSON], undefined,
+      '.release-please-manifest.json: removed, and it is not in extra-files'],
+    ['a new entry that is not a string', [FIRST_RELEASE], sides({ 'packages/a': '1.1.0' }, { 'packages/a': '1.1.0', 'packages/new': { version: '0.1.0' } }),
+      '.release-please-manifest.json: "packages/new": {"version":"0.1.0"} is not a version'],
+    ['an existing entry moved backwards beside a first release', [FIRST_RELEASE], sides({ 'packages/a': '1.1.0' }, { 'packages/a': '1.0.0', 'packages/new': '0.1.0' }),
+      '.release-please-manifest.json: "packages/a": 1.1.0 goes back to 1.0.0'],
+    ['an entry removed', [FIRST_RELEASE], sides({ 'packages/a': '1.1.0', 'packages/old': '2.0.0' }, { 'packages/a': '1.1.0', 'packages/new': '0.1.0' }),
+      `.release-please-manifest.json: "packages/old" is removed, and a release never removes a package's entry`],
+    ['a manifest that changes no value', [FIRST_RELEASE], sides({ 'packages/a': '1.1.0' }, { 'packages/a': '1.1.0' }),
+      ".release-please-manifest.json: no version is added to it, so the guard can't tell which versions this release sets"],
+  ])('still fails %s (#129)', (_, files, manifest, problem) => {
+    const result = runGuard(responses({ files, manifest }));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(problem);
+  });
+
+  it('fails closed when the manifest at the merge base cannot be read (#129)', () => {
+    const answers = responses({ files: [FIRST_RELEASE, NEW_PACKAGE_JSON] });
+    delete answers[`repos/${REPO}/contents/.release-please-manifest.json?ref=${MERGE_BASE}`];
+    const result = runGuard(answers);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain('changes only version strings');
   });
 
   it.each<[string, string, number]>([
