@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.19.0](https://github.com/yedeya-labs/kanon/compare/v0.18.0...v0.19.0) (2026-10-03)
+
+
+### Features
+
+* **lanes:** write protocol strings with role names, and narrow each lane's App token ([#155](https://github.com/yedeya-labs/kanon/issues/155)) ([efdcd0a](https://github.com/yedeya-labs/kanon/commit/efdcd0a0bf7895059bdaf998ddf73e98fd725dbb))
+
+
+### Bug Fixes
+
+* **lane-check:** pass the release caller, parse the declaration files, and let an adopter run apps-check ([#172](https://github.com/yedeya-labs/kanon/issues/172)) ([6226585](https://github.com/yedeya-labs/kanon/commit/6226585889ee0d6a9491747c204c1785d6c844a6))
+
+
+### Documentation
+
+* **adoption:** close the gaps a first adopter hit setting up the review lane ([#156](https://github.com/yedeya-labs/kanon/issues/156)) ([a449ec1](https://github.com/yedeya-labs/kanon/commit/a449ec1e150d20f7e441497b0f13ec4f5215115c))
+* **plans:** plan the move of the remaining lanes, and record step 6 as paused ([#194](https://github.com/yedeya-labs/kanon/issues/194)) ([d1ee46f](https://github.com/yedeya-labs/kanon/commit/d1ee46fb40fa51273ac1f16c63bb2ad13d096b11))
+
 ## [0.18.0](https://github.com/yedeya-labs/kanon/compare/v0.17.0...v0.18.0) (2026-10-03)
 
 
