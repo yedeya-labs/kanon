@@ -30,10 +30,12 @@
 //      (`src/server/services/foo.ts:42` in a prompt's example), so those roots are out too.
 //      What is left is the RA-914 shape exactly: a design doc, a script, a workflow.
 //
-// Illustrative and historical mentions that survive the narrowing are EXEMPTED BY NAME
-// below, one (file, path) pair each with its reason, and an exemption that no longer
-// matches anything fails the run — a list that only grows is how a guard narrows to
-// nothing (the stale-exemption rule `mutation-refresh-convention` and RA-998's guard follow).
+// Illustrative and historical mentions that survive the narrowing are EXEMPTED BY NAME, one
+// (file, path) pair each with its reason, under `## Path mentions` in `docs/qa/exemptions.md`
+// (`K-LAYOUT-15`, kanon#54), and an exemption that no longer matches anything fails the run — a
+// list that only grows is how a guard narrows to nothing (the stale-exemption rule
+// `mutation-refresh-convention` and RA-998's guard follow). Until #54 the list was the reference
+// adopter's, written in this file, so the guard failed "stale exemption" on every other repository.
 //
 //   3. A HEADING ANCHOR in a markdown link — `[x](./y.md#some-heading)` or `[x](#h)` —
 //      names a heading (or an explicit `<a id|name="…">`) that exists in the target
@@ -56,6 +58,7 @@ import { pathToFileURL } from 'node:url';
 // `fencedLines` only — spec-lib reads no file at module load, so this adds no spec dependency.
 import { fencedLines } from './spec-lib.mjs';
 import { TABLE_EXT } from './lib/test-conventions.mjs';
+import { EXEMPTIONS_FILE, readExemptions } from './lib/exemptions.mjs';
 
 /** A markdown inline link or image target: `](target)` or `](target "title")`. */
 const LINK = /\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
@@ -76,24 +79,9 @@ const TEST_TREES = ['tests/', 'e2e/'];
  *  files as they were when it shipped. Rule 1 still reads them. */
 const DATED_TREES = ['docs/projects/', 'CHANGELOG.md'];
 
-/**
- * Mentions that name a path which does not exist ON PURPOSE. Keyed on the exact
- * (citing file, cited path) pair, so an exemption cannot spread to a second file or a
- * second path.
- */
-export const EXEMPTIONS = [
-  { file: 'docs/deferred-features.md', path: 'docs/TODO.md', reason: 'names the TODO file retired 2026-06-20, as history' },
-  { file: 'docs/fe-gap-analysis.md', path: 'docs/TODO.md', reason: 'dated gap analysis recording where its action items were tracked at the time' },
-  { file: 'docs/legacy-service-api.md', path: 'docs/api.md', reason: 'the LEGACY CakePHP repo\'s doc, not this repository\'s' },
-  { file: 'docs/qa/capability-ledger.md', path: 'docs/configuration.md', reason: 'a file:line in the claude-code-action repository, quoted as evidence' },
-  { file: 'docs/qa/capability-ledger.md', path: 'docs/security.md', reason: 'a file:line in the claude-code-action repository, quoted as evidence' },
-  { file: 'docs/agentic-qa-pipeline.md', path: 'docs/a.md', reason: 'the same illustrative cite, in the doc describing that telemetry field' },
-  { file: '.github/ISSUE_TEMPLATE/agent-implement.md', path: 'docs/qa/specs/____.md', reason: 'a blank the issue author fills in' },
-];
-
-/** This file names every exempted path in the list above, so rule 2 does not read it.
- *  Rule 1 reads only `.md` files, so the exclusion hides no link. */
-export const SELF = 'scripts/qa/doc-path-guard.mjs';
+/** The exemptions file names every exempted path, so rule 2 does not read it. Rule 1 still
+ *  reads its links. */
+export const SELF = EXEMPTIONS_FILE;
 
 const isExternal = (t) => /^[a-z][a-z0-9+.-]*:/i.test(t) || t.startsWith('//');
 
@@ -152,10 +140,12 @@ export const anchorsOf = (src) => {
  * @param {string[]} files the files to read (repo-relative)
  * @param {(path: string) => string} readFile
  * @param {string[]} tracked every tracked path — what a citation must resolve to
+ * @param {{file: string, path: string}[]} exemptions the declared path mentions, `readExemptions().mentions`
  * @returns {{findings: {at: string, path: string, rule: 'link'|'text'|'fence'|'anchor'}[], links: number,
  *            mentions: number, anchors: number, exemptionsUsed: Set<number>}}
  */
-export const auditPaths = (files, readFile, tracked) => {
+export const auditPaths = (files, readFile, tracked, exemptions) => {
+  if (!Array.isArray(exemptions)) throw new TypeError('auditPaths needs the declared path-mention exemptions');
   const known = new Set(tracked);
   const dirs = new Set();
   for (const f of tracked) for (let d = posix.dirname(f); d !== '.'; d = posix.dirname(d)) dirs.add(d);
@@ -220,7 +210,7 @@ export const auditPaths = (files, readFile, tracked) => {
         mentions += 1;
         const path = m[1];
         if (known.has(path)) continue;
-        const k = EXEMPTIONS.findIndex((e) => e.file === file && e.path === path);
+        const k = exemptions.findIndex((e) => e.file === file && e.path === path);
         if (k !== -1) { exemptionsUsed.add(k); continue; }
         findings.push({ at, path, rule: 'text' });
       }
@@ -238,9 +228,17 @@ const main = () => {
     process.exitCode = 1;
     return;
   }
+  let exemptions;
+  try {
+    exemptions = readExemptions().mentions;
+  } catch (e) {
+    console.error(`doc-path-guard: ${e.message}`);
+    process.exitCode = 1;
+    return;
+  }
   const files = tracked.filter((f) => !f.startsWith('node_modules/') && (f.endsWith('.md') || CODE.test(f)));
-  const r = auditPaths(files, (p) => readFileSync(p, 'utf8'), tracked);
-  const stale = EXEMPTIONS.filter((_, k) => !r.exemptionsUsed.has(k));
+  const r = auditPaths(files, (p) => readFileSync(p, 'utf8'), tracked, exemptions);
+  const stale = exemptions.filter((_, k) => !r.exemptionsUsed.has(k));
   if (r.findings.length || stale.length) {
     if (r.findings.length) {
       console.error(`doc-path-guard: ${r.findings.length} cited path(s) name no file in the repository:\n`);
@@ -251,11 +249,11 @@ const main = () => {
       console.error(
         '\nA citation to a file that does not exist makes the reason it gives unauditable (RA-919). Fix the\n' +
           'path, drop the citation, or — if the mention is deliberately illustrative or historical — add\n' +
-          'one (file, path) entry with its reason to EXEMPTIONS in scripts/doc-path-guard.mjs.',
+          'one (file, path) row with its reason under `## Path mentions` in docs/qa/exemptions.md.',
       );
     }
     for (const e of stale) {
-      console.error(`doc-path-guard: stale exemption — ${e.file} no longer names ${e.path}, or it now exists. Remove the entry.`);
+      console.error(`doc-path-guard: stale exemption — ${e.file} no longer names ${e.path}, or it now exists. Remove the row at ${EXEMPTIONS_FILE}:${e.line}.`);
     }
     process.exitCode = 1;
     return;
@@ -268,7 +266,7 @@ const main = () => {
   }
   console.log(
     `doc-path-guard: ${r.links} markdown link(s), ${r.anchors} heading anchor(s) and ${r.mentions} path mention(s) resolve; ` +
-      `${EXEMPTIONS.length} deliberately illustrative or historical mention(s) exempted by name.`,
+      `${exemptions.length} deliberately illustrative or historical mention(s) exempted by name.`,
   );
 };
 

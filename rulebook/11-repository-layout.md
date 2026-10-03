@@ -24,6 +24,7 @@ What a file *contains* is still the project's (its specs, its signals, its escal
 | `docs/qa/escalation-paths.md` | The escalation paths, the pipeline code and the bail list | `K-LAYOUT-8` |
 | `docs/qa/adoption.md` | The adoption record | `K-LAYOUT-10` |
 | `docs/qa/sign-off-delegation.md` | The sign-off delegation, when the adopter records one | `K-LAYOUT-14` |
+| `docs/qa/exemptions.md` | What a guard exempts by name: pre-standard briefs and path mentions | `K-LAYOUT-15` |
 | `.github/dependabot.yml` | Holds the entry that proposes Kanon upgrades | `K-ADOPT-11` |
 
 Every markdown file directly inside `docs/qa/` is pipeline governance: changing one changes what an agent does or what a merge requires, so it is on the pipeline's own escalation path (`K-MERGE-4`). Files under `docs/qa/specs/` are not: specs are a project's deliverable (`K-MERGE-4`).
@@ -219,6 +220,33 @@ The name and email are the person's, written exactly as their sign-off writes th
 **Enforced by.** The [`dco` action](../actions/dco/README.md)'s parser, which reports a malformed record by name and then treats it as absent; [`tests/unit/dco.test.ts`](../tests/unit/dco.test.ts) pins each malformed shape.
 
 **Class.** framework
+
+### `K-LAYOUT-15` The exemptions file names every file a guard exempts, with its reason
+
+**Rule.** `docs/qa/exemptions.md` holds what a guard exempts by name on this repository, under two fixed headings:
+
+- `## Pre-standard briefs`: one bullet per brief approved before the brief standard, as its path (`docs/projects/<n>.md`) in backticks, then an em dash, then the reason. The brief guard's content rules don't run over these briefs; its shape checks still do (`K-PROJ-10`).
+- `## Path mentions`: one table, with the header `| File | Path | Reason |`, and a row per mention of a path that doesn't exist on purpose: the citing file and the cited path, each in backticks, and the reason. The doc-path guard doesn't report that path in that file.
+
+```markdown
+## Pre-standard briefs
+
+- `docs/projects/12.md` — approved before the brief standard; an immutable record
+
+## Path mentions
+
+| File | Path | Reason |
+|---|---|---|
+| `docs/history.md` | `docs/TODO.md` | names the retired TODO file, as history |
+```
+
+Prose may sit around the entries, and a section with no entries says nothing is exempt. A repository with nothing exempt still keeps the file, with both headings. A missing file, a missing or doubled heading, an entry that doesn't parse, and an entry listed twice each fail the guard that reads the file, by name, with the file and the line. An entry that no longer matches anything (a brief that doesn't exist, a mention the file no longer makes) fails too.
+
+**Why.** An exemption is the project's own history: which briefs predate the standard, which documents quote a path that is gone. Written into the guard, it was one project's list on every repository, and on any other one the doc-path guard failed every run on exemptions that matched nothing. Keeping it directly inside `docs/qa/` puts it on the escalation path (`K-MERGE-4`), so a pull request can't exempt itself without a human seeing the entry. Failing on a stale entry keeps the list from only ever growing, which is how a guard narrows to nothing.
+
+**Enforced by.** The parser in [`scripts/lib/exemptions.mjs`](../scripts/lib/exemptions.mjs), read by the brief guard and the doc-path guard from the checked-out tree. [`tests/library/exemptions.test.ts`](../tests/library/exemptions.test.ts) pins each malformed shape, and [`tests/unit/stack-neutral.test.ts`](../tests/unit/stack-neutral.test.ts) runs both guards on a fixture adopter with a missing, a malformed and a stale declaration.
+
+**Class.** split. The path, the headings and the entry formats are framework. **The project supplies:** its pre-standard briefs and its path mentions.
 
 ## The brief
 

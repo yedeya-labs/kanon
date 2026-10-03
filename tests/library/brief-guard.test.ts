@@ -560,20 +560,22 @@ describe('an acceptance criterion is a spec id, never restated prose (RA-1742)',
   });
 });
 
-describe('the six pre-standard briefs are exempt, and the list is closed (RA-1742)', () => {
+describe('a pre-standard brief is exempt, and the adopter declares which (RA-1742, kanon#54)', () => {
 
-  it('exempts them from the two content rules and nothing else', () => {
+  it('exempts it from the content rules and nothing else', () => {
     const withCoordinate = withSection('The real problem', `${PAD} It is at \`src/x.ts:12\`.`);
     expect(problems(withCoordinate).length).toBeGreaterThan(0);
-    expect(checkBrief('docs/projects/961.md', withCoordinate)).toEqual([]);
+    expect(checkBrief('docs/projects/2.md', withCoordinate)).toEqual([]);
     // Still held to every SHAPE check — exemption is about claims, not structure.
-    expect(checkBrief('docs/projects/961.md', withoutSection('Scope')).map((f) => f.problem).join('\n'))
+    expect(checkBrief('docs/projects/2.md', withoutSection('Scope')).map((f) => f.problem).join('\n'))
       .toContain('no **scope** section');
   });
 
-  it('exempts by number, so a new brief is bound the day it is written', () => {
-    expect(isPreStandard('docs/projects/961.md')).toBe(true);
-    expect(isPreStandard('docs/projects/9999.md')).toBe(false);
+  it("exempts exactly the briefs in the adopter's exemptions file, so a new brief is bound the day it is written", () => {
+    expect(isPreStandard('docs/projects/2.md')).toBe(true);
+    expect(isPreStandard('docs/projects/1.md')).toBe(false);
+    // The reference adopter's six are its own: nothing in the library exempts them.
+    expect(isPreStandard('docs/projects/961.md')).toBe(false);
     expect(isPreStandard('docs/projects/_template.md')).toBe(false);
   });
 });
