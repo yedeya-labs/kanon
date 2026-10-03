@@ -190,6 +190,7 @@ The table is guidance for reading the data, not a field. The store records facts
 - **It writes with `PutItem`.** A re-sent row has the same key and overwrites identically, as today.
 - **It answers per row,** and the collector turns red on any rejection, which keeps today's paging contract.
 - **Hard limits:** reserved concurrency of 2, and a body of at most 256 KB. An adopter writing garbage can fill only its own partition, slowly.
+  - **Until the account's Lambda concurrency quota is raised** (decision 15), the function deploys with **no** reservation: the account's quota of 10 cannot spare one, and the quota itself still caps the function. Once the Owner's free quota increase is granted, the register's `reserved_concurrency` goes back to 2.
 - **The table's resource policy denies `PutItem`, `UpdateItem`, `DeleteItem` and `BatchWriteItem` to every principal except the function's role and the Owner's erase procedure (§10).** So the function is the only writer by construction, not by convention.
 
 ## 5. Account, IaC and the interface (decision 5)
@@ -435,3 +436,6 @@ Repeat with `AWSLambda` and `AmazonCloudWatch`.
 10. **Approved by the Owner, 2026-10-02:** about $0.05 a month, under a $1 monthly ceiling with a free budget alert, and no alarm (§9). This was the gate for S2, and it is met.
 11. **Accepted by the Owner, 2026-10-02.** **Retention** (§10): 13 months by TTL, 30 days for smoke and test rows; point-in-time recovery on, so deletion completes within 35 days. Also: say "within 35 days" wherever deletion on request is promised.
 12. **Decided by the Owner, 2026-10-02:** deploys of the hosted store stay manual at the start. The Owner runs `aws cloudformation deploy`, and no deploy role exists until the stack changes often enough to need one. **This applies to Kanon's own operation only.** For an adopter's own stores, Kanon prescribes *what* is deployed (the template, and `K-OBS-17`'s lifecycle rule), never *how*: the adopter's deployment pipeline is part of its stack.
+13. **Accepted by the Owner, 2026-10-03:** the **backfill role** (§7, S7a). It ships behind `EnableBackfill`, off by default; it may name any registered adopter's key, accepts `row_kind: work_item` rows only within the normal `recorded_at` window, is assumable only by the Owner, and is removed when the backfill is done.
+14. **Accepted by the Owner, 2026-10-03:** **`EnableVerify`**. While on, the Owner's role may assume every writer and reader role so `verify.mjs` can run S3's checks as them. Off by default; the runbook redeploys without it right after `verify`.
+15. **Decided by the Owner, 2026-10-03:** the first deploy runs **without reserved concurrency** (§4), because the account's quota of 10 cannot spare one. The Owner requests the free quota increase (`L-B99A9384`) and sets the reservation to 2 when it is granted.
