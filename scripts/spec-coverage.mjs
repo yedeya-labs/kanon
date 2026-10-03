@@ -36,13 +36,36 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { QA_TOOLING_IMPORT, idPattern, loadPrefixes, parseAll } from './spec-lib.mjs';
 import { LOCKED_SET, byId, readLockedSet, serialiseLockedSet } from './locked-set.mjs';
+import { conventionFor, isTestFile } from './lib/test-conventions.mjs';
+import { execFileSync } from 'node:child_process';
 
+/** Where the JavaScript row's tests live. Other languages name a test file by its name
+ *  (`test_*.py`, `*_test.go`) wherever it is, so the table, not this list, decides. */
 export const TEST_DIRS = ['tests', 'e2e'];
 
-/** Every test source file the scanner reads. Exported so the AST oracle (RA-1255)
+/** Every test source file the scanner reads, in every language of the per-language table
+ *  (`scripts/lib/test-conventions.mjs`, kanon#20). Exported so the AST oracle (RA-1255)
  *  checks `titlesIn` over the SAME file set the report is computed from — a check
- *  against a different set would be a different question. */
-export const testFiles = () => TEST_DIRS.flatMap((d) => walk(d));
+ *  against a different set would be a different question.
+ *
+ *  The tree is read through git — tracked files and untracked ones it does not ignore — so a
+ *  virtualenv or a vendored module, which `.gitignore` already names, is never read as the
+ *  project's tests. Outside a git repository it walks the tree instead. */
+export const testFiles = () => sourceFiles().filter(isTestFile);
+
+const sourceFiles = () => {
+  try {
+    return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1e9 })
+      .split('\0').filter(Boolean).filter((f) => existsSync(f));
+  } catch {
+    return walk('.').map((f) => f.replace(/^\.\//, ''));
+  }
+};
+
+/** A test file's titles, by its language's reader. */
+const titlesOf = (file, text) => conventionFor(file)?.titles?.(text) ?? titlesIn(text);
+/** A test file minus its string literals, comments kept, by its language's reader. */
+const mentionsOf = (file, text) => conventionFor(file)?.mentions?.(text) ?? outsideStrings(text);
 
 // The ID tooling's own tests cite REAL ids — `[STORE-14]` to prove `idPattern()`
 // matches it, `[STORE-500]` to prove the high-water rule rejects it. Scanned
@@ -85,8 +108,9 @@ function walk(dir, out = []) {
     let stat;
     // A broken symlink under tests/ must be skipped, not thrown on.
     try { stat = statSync(p); } catch { continue; }
-    if (stat.isDirectory()) walk(p, out);
-    else if (/\.(ts|tsx|mjs|js)$/.test(e)) out.push(p);
+    // Dot-directories (`.git`, `.venv`) and `node_modules` hold no project test.
+    if (stat.isDirectory()) { if (!e.startsWith('.') && e !== 'node_modules') walk(p, out); }
+    else out.push(p);
   }
   return out;
 }
@@ -525,15 +549,15 @@ export const declaredUnlockable = (invariants) =>
 export function mentionsWithoutTitle(known, optedOut = new Set()) {
   const cited = citations();
   const found = new Map();
-  for (const dir of TEST_DIRS) {
-    for (const file of walk(dir)) {
+  {
+    for (const file of testFiles()) {
       const raw = readFileSync(file, 'utf8');
       if (QA_TOOLING_IMPORT.test(raw)) continue;
       // OUTSIDE STRINGS, because a mention inside one is FIXTURE DATA, and the advice
       // this section gives — "move the ID into the title" — is wrong for a fixture.
       // Without this the section listed the three ID-tooling tests, which is precisely
       // the noise RA-1214 spent two rounds removing from the coverage number itself.
-      const text = outsideStrings(raw);
+      const text = mentionsOf(file, raw);
       for (const m of text.matchAll(idPattern())) {
         const id = `${m[1]}-${m[2]}`;
         if (!known.has(id) || cited.has(id) || optedOut.has(id)) continue;
@@ -556,9 +580,9 @@ export function mentionsWithoutTitle(known, optedOut = new Set()) {
  *  same question per acceptance criterion that this asks per invariant. */
 export function citations() {
   const found = new Map();
-  for (const dir of TEST_DIRS) {
-    for (const file of walk(dir)) {
-      const text = titlesIn(readFileSync(file, 'utf8'));
+  {
+    for (const file of testFiles()) {
+      const text = titlesOf(file, readFileSync(file, 'utf8'));
       for (const m of text.matchAll(idPattern())) {
         const id = `${m[1]}-${m[2]}`;
         if (!found.has(id)) found.set(id, new Set());
@@ -571,7 +595,9 @@ export function citations() {
 
 // The spec's own back-link: "(Confirmed by `e2e/storefront.spec.ts`)". Reading it
 // costs nothing and turns a 0%-locked report into a useful one on day one.
-const CLAIM = /`((?:tests|e2e)\/[A-Za-z0-9._/-]+\.(?:ts|tsx))`/g;
+// Any backticked path that is a test file by the per-language table: `tests/test_core.py` and
+// `internal/orders/core_test.go` as well as `e2e/storefront.spec.ts`.
+const CLAIM = /`([A-Za-z0-9._/-]+\.[A-Za-z]+)`/g;
 /** The ratchet floor for `Locked`. A drop below it fails `lint`, AND SO DOES SLACK
  *  ABOVE IT (RA-1315). Deliberately not auto-updated — the bump is the acknowledgement.
  *
@@ -736,7 +762,7 @@ export const failures = ({ dangling, missingFiles, locked, baseline = lockedBase
     `the acknowledgement.`);
   return out;
 };
-const claimsIn = (inv) => [...new Set([...inv.raw.matchAll(CLAIM)].map((m) => m[1]))];
+const claimsIn = (inv) => [...new Set([...inv.raw.matchAll(CLAIM)].map((m) => m[1]).filter(isTestFile))];
 
 function main() {
   const invariants = parseAll();

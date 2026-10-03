@@ -119,13 +119,15 @@ describe.skipIf(!hasYq)("Kanon's lane check on a project with no package.json", 
 });
 
 describe("Kanon's guards on a project with no package.json, run with only node and git on PATH", () => {
-  // spec-coverage is not here: it finds tests by the JavaScript convention, which is #20.
   it.each([
     ['brief-guard', /1 brief\(s\) carry all 8 required sections/],
     ['spec-guard', /1 invariants, 1 unique IDs, registry consistent/],
     // The citation is into `src/orders/core.py`. Before #16 the guard read no Python
     // coordinate at all, and this line said "0 citation(s)".
     ['citation-guard', /1 citation\(s\) across \d+ docs resolve; 1 anchor-checked/],
+    // `[ORD-1]` is in the summary line of a pytest docstring (kanon#20). Before #20 the
+    // coverage tool read only JavaScript under `tests/` and `e2e/`, and this said 0 of 1.
+    ['spec-coverage', /\*\*Locked\*\* — a test names the invariant's ID: \*\*1 of 1\*\*/],
   ])('%s passes the Python adopter', (name, says) => {
     const r = guard(name);
     expect(r.status, r.out).toBe(0);
@@ -160,10 +162,51 @@ describe("Kanon's guards on a project with no package.json, run with only node a
     expect(typo.out).toMatch(/no such file in the repository/);
   });
 
+  it("spec-coverage is red when the pytest title loses its id, which the docstring's body does not hold", () => {
+    const r = guard('spec-coverage', (dir) => edit(dir, 'tests/test_core.py', (s) => s.replace('"""[ORD-1] Placing', '"""Placing')));
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toMatch(/lost their citation: ORD-1/);
+  });
+
   it('citation-guard is red when a coordinate into a Python file points past its end', () => {
     const r = guard('citation-guard', (dir) => edit(dir, 'docs/design.md', (s) => s.replace('core.py:4-6', 'core.py:40')));
     expect(r.status, r.out).toBe(1);
     expect(r.out).toContain('docs/design.md:3');
+  });
+});
+
+describe('citation-shift on the Python adopter, with only node and git on PATH (kanon#20)', () => {
+  /** Commit the fixture, move `place` down two lines, and run citation-shift against that diff. */
+  const shift = (...args: string[]) => {
+    const dir = checkout();
+    try {
+      const git = (...a: string[]) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: dir, encoding: 'utf8' });
+      git('commit', '-qm', 'base');
+      edit(dir, 'src/orders/core.py', (s) => `"""Orders."""\n\n${s}`);
+      const r = spawnSync('node', [join(ROOT, 'scripts/citation-shift.mjs'), '--base', 'HEAD', ...args], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { PATH: bareBin, HOME: dir, KANON: ROOT },
+      });
+      const after = (rel: string) => readFileSync(join(dir, rel), 'utf8');
+      return { status: r.status, out: `${r.stdout}${r.stderr}`, test: after('tests/test_core.py'), design: after('docs/design.md') };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('is red on the doc coordinate AND the `#` comment coordinate that the move left behind', () => {
+    const r = shift();
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('docs/design.md:3  `src/orders/core.py:4-6`  ->  `src/orders/core.py:6-8`');
+    expect(r.out).toContain('tests/test_core.py:1  src/orders/core.py:4-6  ->  src/orders/core.py:6-8');
+  });
+
+  it('--fix re-points both', () => {
+    const r = shift('--fix');
+    expect(r.status, r.out).toBe(0);
+    expect(r.test).toContain('at src/orders/core.py:6-8.');
+    expect(r.design).toContain('`src/orders/core.py:6-8`');
   });
 });
 
@@ -178,8 +221,9 @@ const ASSUMPTION = /\bnpm\b|\bnpx\b|\byarn\b|\bpnpm\b|package(?:-lock)?\.json|no
 const SHIPPED = /^(actions|cli|scripts)\/.*\.(mjs|js|sh|awk|yml|yaml)$|^rulebook\/.*\.md$|^ROADMAP\.md$/;
 const ALLOWED: Array<{ file: string; needle: string; why: string }> = [
   { file: 'scripts/doc-path-guard.mjs', needle: "!f.startsWith('node_modules/')", why: 'skips a Node dependency tree if one is tracked; on another stack it matches nothing' },
-  { file: 'scripts/verify-acs.mjs', needle: "['npx', 'vitest'", why: '#20: tests are found and run by the JavaScript convention until the per-language convention lands' },
-  { file: 'scripts/verify-acs.mjs', needle: "['npx', 'playwright'", why: '#20, as above' },
+  { file: 'scripts/spec-coverage.mjs', needle: "e !== 'node_modules'", why: "the walk outside a git repository skips a Node dependency tree, as git's ignore list would; on another stack it matches nothing" },
+  { file: 'scripts/lib/test-conventions.mjs', needle: "bin: 'node_modules/.bin/vitest'", why: "the JavaScript row's runner, as the project-setup hook installs it; a Python or Go project never reaches it (#20)" },
+  { file: 'scripts/lib/test-conventions.mjs', needle: "bin: 'node_modules/.bin/playwright'", why: '#20, as above' },
   { file: 'rulebook/10-adoption.md', needle: 'may have no `package.json` to hold a version', why: "K-ADOPT-11's Why for the guard row: the reason a guard is not a package" },
   { file: 'rulebook/00-principles.md', needle: 'guards need no `package.json`, package manager', why: 'states that the guards need none, and names the parts that still do (#20, #36)' },
 ];

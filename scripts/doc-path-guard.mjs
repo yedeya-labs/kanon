@@ -55,15 +55,18 @@ import { posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
 // `fencedLines` only — spec-lib reads no file at module load, so this adds no spec dependency.
 import { fencedLines } from './spec-lib.mjs';
+import { TABLE_EXT } from './lib/test-conventions.mjs';
 
 /** A markdown inline link or image target: `](target)` or `](target "title")`. */
 const LINK = /\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 
 /** Rule 2's path shape. The look-behind keeps it off the tail of a longer path or URL. */
-const TEXT_PATH = /(?<![\w./@~-])((?:docs|scripts|\.github)\/[\w./[\]-]*[\w\]]\.(?:md|mjs|cjs|js|ts|tsx|yml|yaml|sh|json))(?![\w/])/g;
+const TEXT_PATH = /(?<![\w./@~-])((?:docs|scripts|\.github)\/[\w./[\]-]*[\w\]]\.(?:md|mjs|cjs|js|ts|tsx|py|go|yml|yaml|sh|json))(?![\w/])/g;
 
-/** Source files rule 2 reads outside `docs/`. */
-const CODE = /\.(?:mjs|cjs|js|ts|tsx|yml|yaml|sh)$/;
+/** Source files rule 2 reads outside `docs/`: workflows, shell, and the languages of the
+ *  per-language table (`scripts/lib/test-conventions.mjs`, kanon#20), so a Python or Go
+ *  project's source is read as a JavaScript project's is. */
+const CODE = new RegExp(`\\.(?:${TABLE_EXT}|cjs|yml|yaml|sh)$`);
 
 /** Trees whose files are fixtures by construction, never read by rule 2 (see header). */
 const TEST_TREES = ['tests/', 'e2e/'];

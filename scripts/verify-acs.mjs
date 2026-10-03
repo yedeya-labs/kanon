@@ -41,6 +41,7 @@ import { pathToFileURL } from 'node:url';
 import { parseProposed } from './project-closure.mjs';
 import { citations } from './spec-coverage.mjs';
 import { parseSpec, specFiles } from './spec-lib.mjs';
+import { RUNNERS, interpretGoJson, interpretJunit, runnerFor } from './lib/test-conventions.mjs';
 
 /**
  * The acceptance-criteria IDs a brief's issues COMMIT TO.
@@ -170,15 +171,13 @@ export function verdicts(acs, cited, known) {
 
 
 /**
- * Which runner owns a test file. `tests/**` is vitest, `e2e/**` is Playwright, and
- * anything else is NEITHER — reported as such rather than guessed at, because a
- * file this tool cannot run is evidence it cannot read, and saying "passed" about
- * it would be the same rubber stamp `unverifiable` exists to prevent.
- *
- * @param {string} file
+ * Which runner owns a test file, by the per-language table (`scripts/lib/test-conventions.mjs`,
+ * kanon#20): `tests/**` JavaScript is Vitest, `e2e/**` is Playwright, a pytest file is pytest,
+ * a `_test.go` file is `go test`, and anything else is NEITHER — reported as such rather than
+ * guessed at, because a file this tool cannot run is evidence it cannot read, and saying
+ * "passed" about it would be the same rubber stamp `unverifiable` exists to prevent.
  */
-export const runnerFor = (file) =>
-  file.startsWith('tests/') ? 'vitest' : file.startsWith('e2e/') ? 'playwright' : 'unknown';
+export { runnerFor };
 
 /**
  * Fold execution results into the resolved criteria.
@@ -264,11 +263,14 @@ export const summarise = (rows) => ({
  * database fails BEFORE any file is collected, so the report holds no entry for the
  * file at all.
  *
- * @param {'vitest'|'playwright'} runner
- * @param {unknown} report  the parsed JSON, or null when there was none
+ * @param {'vitest'|'playwright'|'pytest'|'go'} runner
+ * @param {unknown} report  the parsed JSON for Vitest and Playwright, the report's raw text for
+ *   pytest (JUnit XML) and `go test -json` (one event per line), or null when there was none
  * @param {string} file     repo-relative test path
  */
 export function interpretRun(runner, report, file) {
+  if (runner === 'pytest') return typeof report === 'string' ? interpretJunit(report) : undefined;
+  if (runner === 'go') return typeof report === 'string' ? interpretGoJson(report) : undefined;
   if (!report || typeof report !== 'object') return undefined;
   if (runner === 'vitest') {
     const mine = (report.testResults ?? []).filter((t) => typeof t?.name === 'string' && (t.name === file || t.name.endsWith(`/${file}`)));
@@ -303,15 +305,17 @@ export function interpretRun(runner, report, file) {
  * not read as success, and it must not read as failure either.
  *
  * @param {string[]} files
- * @param {{cwd?: string, exec?: typeof execFileSync, outDir?: string}} [opts]
+ * @param {{cwd?: string, exec?: typeof execFileSync, outDir?: string, read?: (file: string) => string}} [opts]
  *   `exec` is injectable so the tests do not shell out. It receives the same
- *   (cmd, args, options) `execFileSync` would; the runner's JSON report is read back
- *   from the path named in the arguments (vitest) or the env (Playwright).
+ *   (cmd, args, options) `execFileSync` would; the runner's report is read back from the
+ *   path named in the arguments (Vitest, pytest) or the env (Playwright), or taken from
+ *   what `exec` returns, its standard output (`go test -json`). `read` gives a test file's
+ *   text, which `go test` needs to name the file's test functions.
  */
 // The default wraps `execFileSync` rather than aliasing it so the call site still reads
 // as a subprocess with a COMPUTED binary — which is what permissions-guard.mjs flags as
 // unreadable for its `gh` scan (RA-1379), and what this is.
-export function runTests(files, { cwd = process.cwd(), exec = (bin, args, opts) => execFileSync(bin, args, opts), outDir } = {}) {
+export function runTests(files, { cwd = process.cwd(), exec = (bin, args, opts) => execFileSync(bin, args, opts), outDir, read = (f) => readFileSync(join(cwd, f), 'utf8') } = {}) {
   const results = new Map();
   const byRunner = new Map();
   for (const f of files) {
@@ -323,7 +327,7 @@ export function runTests(files, { cwd = process.cwd(), exec = (bin, args, opts) 
 
   const dir = outDir ?? mkdtempSync(join(tmpdir(), 'verify-acs-'));
   try {
-    runEach(byRunner, dir, cwd, exec, results);
+    runEach(byRunner, dir, cwd, exec, read, results);
   } finally {
     // Only a directory this call made; a caller's outDir is theirs to keep.
     if (!outDir) rmSync(dir, { recursive: true, force: true });
@@ -331,7 +335,7 @@ export function runTests(files, { cwd = process.cwd(), exec = (bin, args, opts) 
   return results;
 }
 
-function runEach(byRunner, dir, cwd, exec, results) {
+function runEach(byRunner, dir, cwd, exec, read, results) {
   let n = 0;
   for (const [runner, group] of byRunner) {
     // PER FILE, not per batch. A batched run gives one exit code for many files,
@@ -340,19 +344,27 @@ function runEach(byRunner, dir, cwd, exec, results) {
     for (const file of group) {
       // A fresh path per file, so a report left by a previous file can never be read
       // as this one's.
-      const out = join(dir, `run-${n++}.json`);
-      const cmd = runner === 'vitest'
-        ? ['npx', 'vitest', 'run', file, '--reporter=json', `--outputFile=${out}`]
-        : ['npx', 'playwright', 'test', file, '--reporter=json'];
-      const env = runner === 'playwright' ? { ...process.env, PLAYWRIGHT_JSON_OUTPUT_NAME: out } : process.env;
+      const out = join(dir, `run-${n++}.${runner === 'pytest' ? 'xml' : 'json'}`);
+      // The command is the table's, run through the toolchain the project-setup hook
+      // installed — never `npx`, which would fetch a runner the adopter never chose (kanon#20).
+      let cmd;
+      try { cmd = RUNNERS[runner](file, out, () => read(file)); } catch { cmd = null; }
+      if (!cmd) continue;                                  // nothing to run: not-run
+      const env = cmd.env ? { ...process.env, ...cmd.env } : process.env;
+      let stdout = '';
       try {
-        exec(cmd[0], cmd.slice(1), { cwd, env, stdio: 'ignore', timeout: 15 * 60_000 });
-      } catch {
+        stdout = String(exec(cmd.bin, cmd.args, { cwd, env, stdio: cmd.report === 'stdout' ? ['ignore', 'pipe', 'ignore'] : 'ignore', encoding: 'utf8', timeout: 15 * 60_000, maxBuffer: 1e9 }) ?? '');
+      } catch (e) {
         // A non-zero exit is not yet an answer — read the report to find out whether
         // a test failed or nothing ran at all.
+        stdout = String(e?.stdout ?? '');
       }
+      if (cmd.report === 'stdout' && stdout) writeFileSync(out, stdout);
       let report = null;
-      try { report = JSON.parse(readFileSync(out, 'utf8')); } catch { /* none written: not-run */ }
+      try {
+        const raw = readFileSync(out, 'utf8');
+        report = runner === 'vitest' || runner === 'playwright' ? JSON.parse(raw) : raw;
+      } catch { /* none written: not-run */ }
       const verdict = interpretRun(runner, report, file);
       if (verdict !== undefined) results.set(file, verdict);
     }
