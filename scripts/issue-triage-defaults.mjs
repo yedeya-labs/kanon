@@ -57,13 +57,11 @@
 export const DEFAULT_MILESTONE = 'Product Backlog';
 /** Engineering-platform / QA-pipeline work (AGENTS.md row 3). */
 export const PIPELINE_MILESTONE = 'Development Automation';
-/**
- * The current launch gate — the one roadmap milestone a `gate-candidate` is a
- * candidate FOR. Named here so moving the gate stays a one-line change, and read
- * by the needs-severity comment and brief-guard. `decide()` never returns it:
- * placing work on the roadmap is the developer's call (RA-1616).
- */
-export const GATE_MILESTONE = 'Production Ready';
+// THE LAUNCH GATE IS NOT NAMED HERE (kanon#54). It is a roadmap milestone, so its name is
+// the Stakeholder's (`K-WORK-5`, `K-WORK-6`), and a constant would be one project's gate on
+// every repository. The needs-severity comment says "the launch gate"; which milestone that is
+// today is visible on the repository, and `decide()` never writes it anyway: placing work on
+// the roadmap is a person's call (RA-1616).
 
 /**
  * Every milestone `decide()` may write. Buckets only — undated, ongoing, and the
@@ -204,7 +202,7 @@ export function needsSeverityComment() {
     '',
     `\`sev:critical\` and \`sev:high\` on a reviewer follow-up mean *launch-gating*: **also apply**`,
     `\`${GATE_CANDIDATE_LABEL}\` (nothing re-runs to add it once this issue is open), and leave it on`,
-    `its bucket — the developer decides whether it joins the **${GATE_MILESTONE}** gate. QA-pipeline`,
+    `its bucket — a person decides whether it joins the launch gate. QA-pipeline`,
     `work is never a candidate, and the rest are not gating.`,
     '',
     'Severity is a judgment about **reachability and impact** — it lives in the diff and its',

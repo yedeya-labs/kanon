@@ -140,6 +140,46 @@ describe("Kanon's guards on a project with no package.json, run with only node a
     expect(r.out).toMatch(/what I did not examine/i);
   });
 
+  describe('brief-guard reads a roadmap milestone from the repository, not from the library (kanon#54)', () => {
+    const onLaunch = (dir: string) => edit(dir, 'docs/projects/1.md', (t) => t.replace('**Milestone:** Product Backlog', '**Milestone:** Launch'));
+    /** brief-guard with a `gh` on PATH that answers the milestone listing with `milestones`. */
+    const withGh = (milestones: string) => {
+      const dir = checkout();
+      const bin = mkdtempSync(join(tmpdir(), 'gh-stub-'));
+      try {
+        onLaunch(dir);
+        writeFileSync(join(bin, 'gh'), `#!/bin/sh\ncase "$*" in *milestones*) printf '%s\\n' '${milestones}' ;; *) exit 9 ;; esac\n`, { mode: 0o755 });
+        const r = spawnSync('node', [join(ROOT, 'scripts', 'brief-guard.mjs')], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: { PATH: `${bin}:${bareBin}`, HOME: dir, KANON: ROOT },
+        });
+        return { status: r.status, out: `${r.stdout}${r.stderr}` };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(bin, { recursive: true, force: true });
+      }
+    };
+
+    it('passes a brief that names a roadmap milestone the repository has', () => {
+      const r = withGh('{"title":"Launch","due_on":"2026-12-31T00:00:00Z","state":"open"}');
+      expect(r.status, r.out).toBe(0);
+    });
+
+    it('is red when the repository has no such roadmap milestone', () => {
+      const r = withGh('{"title":"Launch","due_on":null,"state":"open"}');
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toMatch(/names milestone “Launch”, which has no due date/);
+    });
+
+    it("is red, by name, when the repository's milestones can't be read", () => {
+      // The bare PATH has no `gh`.
+      const r = guard('brief-guard', onLaunch);
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toMatch(/names milestone “Launch”, which isn't a bucket \(Product Backlog, Development Automation\), and the repository's milestones couldn't be read/);
+    });
+  });
+
   it('spec-guard is red when a clause id is used twice', () => {
     const r = guard('spec-guard', (dir) => edit(dir, 'docs/qa/specs/orders.md', (s) => `${s}- \`[ORD-1]\` \`[seed]\` A second clause under the same id.\n`));
     expect(r.status, r.out).toBe(1);

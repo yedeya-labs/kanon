@@ -11,7 +11,7 @@ import {
   DECISION_ITEM,
   OPEN_DECISION,
   REQUIRED_SECTIONS,
-  ROUTING_MILESTONES,
+  ROUTING_BUCKETS,
   acBullets,
   measureBullets,
   briefCorpus,
@@ -61,7 +61,7 @@ Acceptance criteria:
 - \`[AREA-1]\` — the criterion this issue takes on.
 
 ### Issue B — Do the second thing
-**Milestone:** Production Ready · **Labels:** \`sev:high\`
+**Milestone:** Product Backlog · **Labels:** \`sev:high\`
 **Depends on:** Issue A (its schema change is what this reads)
 
 Acceptance criteria:
@@ -330,21 +330,45 @@ describe('the decomposition, read as the reconciler reads it', () => {
     expect(problems(noMilestone).join('\n')).toContain('carries no **Milestone:**');
   });
 
-  it('reports a milestone that is not on the routing table', () => {
-    const bogus = withSection(
-      'Decomposition',
-      SECTIONS[2][1].replace('Development Automation', 'Someday Maybe'),
-    );
-    expect(problems(bogus).join('\n')).toContain('is not in AGENTS.md');
+  /** The fixture with Issue A on `milestone`, checked against `list` as the repository's milestones. */
+  const onMilestone = (milestone: string, list?: () => { title: string; due_on: string | null; state: string }[]) =>
+    checkBrief(
+      'docs/projects/1.md',
+      withSection('Decomposition', SECTIONS[2][1].replace('Development Automation', milestone)),
+      list ? { milestones: list } : undefined,
+    ).map((f) => f.problem).join('\n');
+  const repo = [
+    { title: 'Launch', due_on: '2026-12-31T00:00:00Z', state: 'open' },
+    { title: 'Met gate', due_on: '2026-08-31T00:00:00Z', state: 'closed' },
+    { title: 'Someday', due_on: null, state: 'open' },
+  ];
+
+  it("accepts Kanon's two buckets without reading the repository (K-WORK-4)", () => {
+    expect(ROUTING_BUCKETS).toEqual(['Product Backlog', 'Development Automation']);
+    const never = () => {
+      throw new Error('read');
+    };
+    expect(onMilestone('Product Backlog', never)).toBe('');
+    expect(onMilestone('Development Automation', never)).toBe('');
   });
 
-  it('takes the routing table from the code that executes it, not a retyped copy', () => {
-    expect(ROUTING_MILESTONES).toEqual([
-      'Product Backlog',
-      'Production Ready',
-      'Development Automation',
-      'AI Capabilities',
-    ]);
+  it("accepts a roadmap milestone of this repository, open or met, and names none of its own (kanon#54)", () => {
+    expect(onMilestone('Launch', () => repo)).toBe('');
+    expect(onMilestone('Met gate', () => repo)).toBe('');
+    // The reference adopter's gate and epic are its own: on another repository they are typos.
+    expect(onMilestone('Production Ready', () => repo)).toContain("isn't a bucket (Product Backlog, Development Automation) or a milestone of this repository");
+    expect(onMilestone('AI Capabilities', () => repo)).toContain('or a milestone of this repository');
+  });
+
+  it('reports a milestone with no due date, which is neither a bucket nor a roadmap milestone', () => {
+    expect(onMilestone('Someday', () => repo)).toContain('has no due date, so it isn\'t a roadmap milestone');
+  });
+
+  it("reports, by name, a roadmap milestone it couldn't check", () => {
+    expect(onMilestone('Launch')).toContain("the repository's milestones couldn't be read to check it is a roadmap milestone (no milestone list was read)");
+    expect(onMilestone('Launch', () => {
+      throw Object.assign(new Error('gh failed'), { stderr: 'HTTP 403: Resource not accessible\nmore' });
+    })).toContain('(HTTP 403: Resource not accessible)');
   });
 
   it('reports an issue that would be filed with an empty body', () => {
@@ -776,7 +800,7 @@ Acceptance criteria:
 - \`[AREA-1]\` — the criterion this issue takes on.
 
 ### Issue B — Do the second thing
-**Milestone:** Production Ready · **Labels:** \`sev:high\`
+**Milestone:** Product Backlog · **Labels:** \`sev:high\`
 **Depends on:** ${depsB}
 
 Acceptance criteria:

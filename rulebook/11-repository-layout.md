@@ -230,7 +230,7 @@ The name and email are the person's, written exactly as their sign-off writes th
   **Milestone:** Product Backlog · **Labels:** `enhancement` · `sev:high` · **Closes #12**
   ```
 
-  `**Milestone:**` is required and names a milestone chosen by chapter 01's routing rules. `**Labels:**` lists labels in backticks, separated by `·`, with no prose between them. `**Closes #<n>**` appears only when the item adopts an existing issue, and is read only from this line.
+  `**Milestone:**` is required and names a milestone chosen by chapter 01's routing rules: one of the two buckets (`K-WORK-4`), or a roadmap milestone of the repository, which is one with a due date (`K-WORK-3`), open or met. `**Labels:**` lists labels in backticks, separated by `·`, with no prose between them. `**Closes #<n>**` appears only when the item adopts an existing issue, and is read only from this line.
 - **Dependencies** go on their own line, `**Depends on:** Issue A (reason), Issue B`. Only the leading run of `Issue <KEY>` references counts; a parenthetical reason is allowed after each; prose after the last reference cites nothing. Every key must be declared in the same decomposition, and the graph must be acyclic.
 - **A human-action item** carries the label `qa:human-action` on its metadata line (`K-PROJ-9`).
 - **Acceptance criteria** are bullets, each led by one spec id in backticks: `` - `[KIOSK-7]` — … `` (`K-SPEC-5`).
@@ -240,7 +240,7 @@ The name and email are the person's, written exactly as their sign-off writes th
 
 **Why.** Each of these is a place where the parser once read a brief differently from its author and failed quietly: a heading with a summary read as no decomposition, a label run with prose in it filed an issue with no labels, a closing reference in body prose filed a duplicate, and a dependency separated by the wrong punctuation was dropped, which made an item look ready before its prerequisite had landed. A fixed syntax, written down, is what lets an author get it right without reading the parser.
 
-**Enforced by.** The brief guard, which parses the decomposition the same way the reconciler does (`K-PROJ-9`).
+**Enforced by.** The brief guard, which parses the decomposition the same way the reconciler does (`K-PROJ-9`). It accepts a bucket by name, and reads the repository's milestones through `gh` only for any other name, so a brief that names a roadmap milestone needs `gh` with read access to the repository's issues; a name it can't check is a finding, never a pass.
 
 **Class.** framework
 
