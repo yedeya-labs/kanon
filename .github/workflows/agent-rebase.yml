@@ -126,10 +126,6 @@ jobs:
 
       - uses: actions/checkout@v7
         if: steps.gate.outputs.member == 'true'
-      - uses: actions/setup-node@v7
-        if: steps.gate.outputs.member == 'true'
-        with:
-          node-version: "24"
 
       - name: Which conflicting PRs is this lane's to resolve?
         id: decide
@@ -238,6 +234,7 @@ jobs:
       # The scripts are Kanon's, read from the action cache at the tag the caller pinned (plan
       # 0001 §3), never from the tree the agent merges `main` into.
       - uses: $/actions/kanon-path
+        id: kanon
 
       # A renamed App would make `ineligible()`'s author check match nothing — the
       # guard that keeps this lane off human branches — and it would fail SILENTLY,
@@ -306,6 +303,8 @@ jobs:
 
       - uses: $/actions/agent-run
         id: agent
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
         with:
           prompt: |
             You are the Implementer (Agent 2) in RESOLVE-CONFLICT mode. PR

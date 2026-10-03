@@ -1656,6 +1656,8 @@ jobs:
         id: agent
         if: steps.claim.outputs.proceed == 'true'
         continue-on-error: true
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
         with:
           prompt: |
             You are the Reviewer (Agent 3) of the QA pipeline — the generic

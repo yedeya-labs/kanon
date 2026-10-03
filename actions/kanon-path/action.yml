@@ -15,8 +15,22 @@
 # The path is both this action's `path` output and `KANON` in the job's environment, for
 # every later step. It fails if the tree it finds has no `scripts/` directory, so a wrong
 # path is a named error here rather than a "module not found" later.
+#
+# IT ALSO PUTS KANON'S NODE ON THE PATH (kanon#110). Kanon's scripts run on Node 24, the
+# `engines` major in its package.json, and a runner image's own Node is whatever the image
+# shipped. So this action installs Node 24 with `actions/setup-node`, pinned twice: the
+# action to an exact release, which Dependabot (`/actions/*`) proposes bumps of with no
+# adopter action, and Node to the major Kanon declares. A floating spec (`lts/*`, `latest`,
+# a range, no version at all) would let the runner's image choose, and
+# `tests/unit/kanon-path-node.test.ts` fails on one. No package-manager cache: the workspace
+# is the adopter's, which may have no lockfile, or no package.json at all.
+#
+# A lane that runs the adopter's own toolchain AFTER this action gets Kanon's Node on the
+# PATH ahead of the adopter's, so a lane calls it before the project-setup hook wherever the
+# adopter's code runs later, and reads the path from this step's output, not from `KANON`,
+# wherever the adopter's code has run since (it can rewrite `$GITHUB_ENV`).
 name: Kanon path
-description: Puts the absolute path of the Kanon tree this action came from in the `path` output and in `KANON` for later steps.
+description: Sets up Kanon's Node, and puts the absolute path of the Kanon tree this action came from in the `path` output and in `KANON` for later steps.
 author: yedeya-labs
 
 outputs:
@@ -27,6 +41,12 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Set up Kanon's Node
+      uses: actions/setup-node@v7.0.0
+      with:
+        node-version: "24"
+        package-manager-cache: false
+
     - name: Find Kanon's root
       id: path
       shell: bash
