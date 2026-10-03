@@ -11,7 +11,7 @@ import {
   readEscalationFile,
   readEscalationFileAt,
 } from '../../scripts/lib/escalation-paths.mjs';
-import { IMPLEMENTER_LOGIN, mergeVerdict } from '../../scripts/merge-gate.mjs';
+import { IMPLEMENTER_LOGIN, mergeVerdict, readEscalations } from '../../scripts/merge-gate.mjs';
 import { reviewScope, sensitiveHits } from '../../scripts/ship-review-scope.mjs';
 import { KANON_SCAN, appliedLabels, scanDirs } from '../../scripts/label-guard.mjs';
 
@@ -73,6 +73,26 @@ describe('the escalation file parser', () => {
     }
     fails(`${FILE('', '')}\`\`\`\n`, /opens a code fence that never closes/);
   });
+
+  it('reads a CRLF file as it reads an LF one, rather than as no entries', () => {
+    const lf = FILE('- `^migrations/` — database migrations\n', '- `scripts/pipeline/` — ours\n');
+    const crlf = parseEscalationFile(lf.replace(/\n/g, '\r\n'));
+    expect(crlf.paths.map((p) => [p.pattern.source, p.reason])).toEqual([['^migrations\\/', 'database migrations']]);
+    expect(crlf.pipeline).toEqual([{ dir: 'scripts/pipeline/', reason: 'ours' }]);
+  });
+
+  it('fails by name on a list item in any other form, rather than dropping its path as prose', () => {
+    for (const item of ['  - `^infra/` — infra', '+ `^infra/` — infra', '1. `^infra/` — infra', '2) `^infra/` — infra', '\t* `^infra/` — infra']) {
+      fails(FILE(`${item}\n`, ''), /escalation-paths\.md:5, under `## Escalation paths`, is a list item the file doesn't use/);
+      fails(FILE('', `${item.replace('^infra/', 'infra/')}\n`), /:8, under `## Pipeline code`, is a list item the file doesn't use/);
+    }
+  });
+
+  it('fails by name on any flag but `i`, rather than reading the slashes as part of a pattern that never matches', () => {
+    for (const value of ['/^infra\\//g', '/^infra//u', '/^infra//gi', '/^src/.*payments?/I']) {
+      fails(FILE(`- \`${value}\` — x\n`, ''), /:5: `.*` has the flags `[A-Za-z]+`, and only `\/…\/i` is allowed/);
+    }
+  });
 });
 
 describe('reading the escalation file', () => {
@@ -99,6 +119,22 @@ describe('reading the escalation file', () => {
     });
     expect(asked).toEqual([`${ESCALATION_FILE}@trunk`]);
     expect(file.paths).toHaveLength(1);
+  });
+
+  it("the Merger's reader asks `gh` for the default branch's copy, and reads a 404 as a missing file", () => {
+    const calls: string[][] = [];
+    const run = (contents: () => string) => (args: string[]) => {
+      calls.push(args);
+      if (args[1] === 'repos/o/r') return 'trunk\n';
+      return contents();
+    };
+    expect(readEscalations('o/r', run(() => FILE('- `^a/` — a\n', '')))[2]?.[1]).toBe('a');
+    expect(calls[1]?.[1]).toBe(`repos/o/r/contents/${ESCALATION_FILE}?ref=trunk`);
+    const fail = (stderr: string) => () => {
+      throw Object.assign(new Error('gh failed'), { stderr });
+    };
+    expect(() => readEscalations('o/r', run(fail('gh: Not Found (HTTP 404)')))).toThrow(/doesn't exist on `trunk`/);
+    expect(() => readEscalations('o/r', run(fail('gh: Server Error (HTTP 502)')))).toThrow(/couldn't be read from `trunk`: gh: Server Error \(HTTP 502\)/);
   });
 
   it('fails by name when the default branch has no file, a failed read, or no branch', () => {

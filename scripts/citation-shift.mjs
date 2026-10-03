@@ -107,9 +107,9 @@ const CODE_EXT = new RegExp(`\\.(?:${TABLE_EXT}|cjs)$`);
 /**
  * Is this code file read for comment coordinates? Everything under `CODE_TREES` EXCEPT
  * the QA tooling's own source (the directories the adopter declares under `## Pipeline
- * code`, kanon#54; until then the reference adopter's `scripts/qa/`, written here) and its
- * tests (a test that imports `scripts/qa/` — `QA_TOOLING_IMPORT`, the rule the spec-id
- * sweeps use). Their comments
+ * code`, kanon#54) and its tests (a test that imports `scripts/qa/` or Kanon's library —
+ * `QA_TOOLING_IMPORT`, the rule the spec-id sweeps use, which still names the reference
+ * adopter's directory; #54 tracks it). Their comments
  * quote OLD coordinates on purpose — `course-wizard.tsx:797-800` in `citation-guard.mjs`
  * and its test, `payments.ts:44-52` — as the guard's regression record, and RA-1384's
  * third criterion forbids retargeting them. Both halves are properties of the file,

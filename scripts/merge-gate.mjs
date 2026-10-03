@@ -1460,6 +1460,28 @@ export function summaryLines({ considered, dryRun, merged, escalated, waiting = 
   ];
 }
 
+/**
+ * The escalating paths, from the escalation file on the repository's default branch
+ * (`K-MERGE-17`, kanon#54). `run` is `gh`, injected so the reader is testable: a 404 on the
+ * contents read is "the file doesn't exist there", and any other failure is a read failure.
+ * Both throw `DeclarationError` by name, through `readEscalationFileAt`.
+ * @param {string} repo
+ * @param {(args: string[], opts?: object) => string} [run]
+ */
+export function readEscalations(repo, run = gh) {
+  return escalatingPaths(readEscalationFileAt(
+    run(['api', `repos/${repo}`, '--jq', '.default_branch']).trim(),
+    (path, ref) => {
+      try {
+        return run(['api', `repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`, '-H', 'Accept: application/vnd.github.raw'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) {
+        if (/\b404\b|Not Found/.test(String(e?.stderr ?? ''))) return null;
+        throw new Error(String(e?.stderr || e?.message || e).trim());
+      }
+    },
+  ));
+}
+
 async function main() {
   const repo = process.env.GITHUB_REPOSITORY;
   if (!repo) {
@@ -1470,24 +1492,14 @@ async function main() {
   const i = process.argv.indexOf('--pr');
   const explicit = i > -1 ? [process.argv[i + 1]] : null;
 
-  // No --pr: sweep every open PR. This is the heartbeat's mode, and it is what makes
-  // a missed event recoverable rather than terminal — the failure this pipeline
-  // produces over and over is a trigger that silently did not fire.
   // THE ESCALATION FILE, FROM THE DEFAULT BRANCH (`K-MERGE-17`, kanon#54). Read once, before
   // any PR, and a missing or malformed file ends the run by name: a sweep with no path rules
   // would merge PRs that touch the project's high-risk paths.
-  const escalations = escalatingPaths(readEscalationFileAt(
-    gh(['api', `repos/${repo}`, '--jq', '.default_branch']).trim(),
-    (path, ref) => {
-      try {
-        return gh(['api', `repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`, '-H', 'Accept: application/vnd.github.raw'], { stdio: ['ignore', 'pipe', 'pipe'] });
-      } catch (e) {
-        if (/\b404\b|Not Found/.test(String(e?.stderr ?? ''))) return null;
-        throw new Error(String(e?.stderr || e?.message || e).trim());
-      }
-    },
-  ));
+  const escalations = readEscalations(repo);
 
+  // No --pr: sweep every open PR. This is the heartbeat's mode, and it is what makes
+  // a missed event recoverable rather than terminal — the failure this pipeline
+  // produces over and over is a trigger that silently did not fire.
   const numbers = explicit ?? JSON.parse(
     gh(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', 'number']),
   ).map((p) => String(p.number));

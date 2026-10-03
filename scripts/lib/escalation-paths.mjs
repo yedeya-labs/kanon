@@ -10,17 +10,19 @@
 // TWO FIXED HEADINGS, both required:
 //
 //   ## Escalation paths
-//   - `^drizzle/` — database migrations
+//   - `^migrations/` — database migrations
 //   - `/^src/.*payments?/i` — payments
 //
 //   ## Pipeline code
-//   - `scripts/qa/` — the project's own QA pipeline scripts
+//   - `scripts/pipeline/` — the project's own pipeline scripts
 //
 // An escalation path is a regular expression over repository-relative paths, in backticks,
 // optionally written `/…/i` to match without regard to case. A pipeline-code entry is a
 // repository-relative directory ending in `/`. Each bullet is followed by an em dash and the
-// reason. Prose between the bullets is allowed; a bullet that doesn't parse is not, and neither
-// is a heading that is missing or appears twice. A section with no bullets is a declaration
+// reason. Prose between the bullets is allowed. A list item that isn't an entry is not: an
+// indented, `+` or numbered item, or a bullet that doesn't parse, would otherwise be read as
+// prose and its path silently dropped, which for the Merger is a PR merged with no human.
+// Neither is a heading that is missing or appears twice. CRLF line endings read as LF. A section with no bullets is a declaration
 // that the project has none.
 //
 // THE PIPELINE'S OWN PATHS ARE KANON'S, NOT THE FILE'S (`K-MERGE-4`). Every file under
@@ -75,8 +77,10 @@ export class DeclarationError extends Error {
  * @typedef {{ paths: EscalationPath[], pipeline: PipelineDir[] }} EscalationFile
  */
 
-/** A bullet: `- ` or `* `, then a code span, an em dash and the reason. */
+/** A bullet: `- ` or `* ` at the start of the line, then a code span, an em dash and the reason. */
 const BULLET = /^[-*]\s+(.*)$/;
+/** Anything Markdown reads as a list item: indented, `-`, `*`, `+`, or numbered. */
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
 const ENTRY = /^`([^`]+)`\s+—\s+(\S.*)$/;
 
 /**
@@ -112,7 +116,12 @@ function section(lines, fenced, heading) {
 function entries(body, heading) {
   return body.flatMap(({ line, text }) => {
     const bullet = BULLET.exec(text);
-    if (!bullet) return [];
+    if (!bullet) {
+      if (!LIST_ITEM.test(text)) return [];
+      throw new DeclarationError(
+        `${ESCALATION_FILE}:${line}, under \`${heading}\`, is a list item the file doesn't use: write each entry as \`- \` at the start of the line (K-LAYOUT-8)`,
+      );
+    }
     const entry = ENTRY.exec(/** @type {string} */ (bullet[1]).trim());
     if (!entry) {
       throw new DeclarationError(
@@ -129,6 +138,10 @@ function entries(body, heading) {
  * @param {number} line
  */
 function pattern(value, line) {
+  const flagged = /^\/(.+)\/([A-Za-z]+)$/.exec(value);
+  if (flagged && flagged[2] !== 'i') {
+    throw new DeclarationError(`${ESCALATION_FILE}:${line}: \`${value}\` has the flags \`${flagged[2]}\`, and only \`/…/i\` is allowed (K-LAYOUT-8)`);
+  }
   const literal = /^\/(.+)\/(i?)$/.exec(value);
   const source = literal ? /** @type {string} */ (literal[1]) : value;
   try {
@@ -165,7 +178,7 @@ function directory(value, line) {
  * @returns {EscalationFile}
  */
 export function parseEscalationFile(text) {
-  const lines = text.split('\n');
+  const lines = text.split(/\r?\n/);
   const fenced = fencedLines(lines);
   if (fenced.unclosed !== -1) {
     throw new DeclarationError(`${ESCALATION_FILE}:${fenced.unclosed + 1} opens a code fence that never closes (K-LAYOUT-8)`);

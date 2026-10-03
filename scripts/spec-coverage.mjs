@@ -703,7 +703,7 @@ const CLAIM = /`([A-Za-z0-9._/-]+\.[A-Za-z]+)`/g;
  *  together they say the mechanism was wrong in three separable ways, and each is now
  *  fixed somewhere else:
  *
- *    · THE NUMBER WAS IN AN ESCALATING PATH. `merge-gate.mjs` escalates `^scripts/qa/`,
+ *    · THE NUMBER WAS IN AN ESCALATING PATH. The reference adopter escalated `^scripts/qa/`,
  *      so every lock-adding PR needed a human merge, and on RA-888 the lock was reverted
  *      to get the PR merged. The baseline now lives in `docs/qa/specs/_locked-floor.json`
  *      (RA-1398), which is deliberately outside that rule. This file still escalates, for
