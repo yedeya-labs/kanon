@@ -19,7 +19,8 @@
 #   5. Guard (#73). Fails, and comments on the release PR, when the open release PR
 #      changes anything but version strings outside the changelog, the manifest and the
 #      files its release type owns (`node`: package.json and package-lock.json; `simple`:
-#      its version file, version.txt by default; `python`: changelog.json). The release type
+#      its version file, version.txt by default; `node` and `python`: the changelog.json at
+#      the repository root, when there is one). The release type
 #      is the adopter's, for its language; unset, it is release-please's default, `node`.
 #      In its `extra-files`, and in any other file it
 #      modifies, only a line whose sole change is a version may differ, and it may add,
@@ -225,12 +226,15 @@ jobs:
           const at = (pkg, file) => posix.normalize(file.startsWith('/') ? file.slice(1) : posix.join(pkg, file));
           // Per release type, the files the guard doesn't read, because release-please may
           // change more than a version on a line there: `node`'s package.json and lockfile, and
-          // the changelog.json `python` updates when one exists. `simple`'s version file is
-          // added below, because its config can rename it. Kept to the types docs/release.md
-          // offers; any other type gets the version-only rule everywhere.
+          // the machine-readable changelog.json that both `node` and `python` add an entry to
+          // when one exists. A leading `/` is the repository root, as in release-please's own
+          // paths: both strategies write `changelog.json` there, never under the package's
+          // path (#109). `simple`'s version file is added below, because its config can rename
+          // it. Kept to the types docs/release.md offers; any other type gets the version-only
+          // rule everywhere.
           const WHOLE_FILES = {
-            node: ['package.json', 'package-lock.json'],
-            python: ['changelog.json'],
+            node: ['package.json', 'package-lock.json', '/changelog.json'],
+            python: ['/changelog.json'],
             go: [],
             rust: [],
             simple: [],

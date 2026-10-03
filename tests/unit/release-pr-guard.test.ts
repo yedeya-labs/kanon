@@ -242,6 +242,57 @@ describe('#73 the release workflow refuses a release PR that changes more than v
     },
   );
 
+  // #109: release-please's `node` and `python` strategies both add an entry to a
+  // machine-readable `changelog.json` when one exists (`ChangelogJson` updater, `unshift`ing
+  // a whole object, so not a version-only change), and both write it at the repository root
+  // (`path: 'changelog.json'`, not `this.addPath(...)`), whatever the package's path.
+  const CHANGELOG_JSON: PrFile = {
+    filename: 'changelog.json',
+    status: 'modified',
+    patch: '@@ -1,2 +1,8 @@\n {\n-  "entries": [\n+  "entries": [\n+    {\n+      "version": "0.10.0",\n+      "language": "JAVASCRIPT",\n+      "changes": []\n+    },',
+  };
+  /** The fixture config with its one package moved to `path`, typed `type`. */
+  const atPath = (path: string, type: string | undefined, files: PrFile[]) => {
+    const typed = JSON.parse(config) as { packages: Record<string, Record<string, unknown>> };
+    const pkg = typed.packages['.']!;
+    if (type === undefined) delete pkg['release-type'];
+    else pkg['release-type'] = type;
+    typed.packages = { [path]: pkg };
+    const answers = responses({ files });
+    answers[`repos/${REPO}/contents/release-please-config.json?ref=${SHA}`] = {
+      encoding: 'base64',
+      content: Buffer.from(JSON.stringify(typed)).toString('base64'),
+    };
+    return runGuard(answers);
+  };
+
+  it.each<[string, string | undefined]>([['node', 'node'], ['python', 'python'], ['unset (read as node)', undefined]])(
+    'skips the root changelog.json release-please rewrites for the `%s` release type (#109)',
+    (_, type) => {
+      const result = withType(type, [CHANGELOG_JSON]);
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(0);
+    },
+  );
+
+  it.each(['go', 'rust', 'simple'])("reads changelog.json like any other file for the `%s` release type, which doesn't write it", (type) => {
+    const result = withType(type, [CHANGELOG_JSON]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('changelog.json: +    {');
+  });
+
+  it.each(['node', 'python'])(
+    'skips the ROOT changelog.json for a `%s` package that is not at the root, and reads one under its path (#109)',
+    (type) => {
+      const root = atPath('packages/widget', type, [CHANGELOG_JSON]);
+      expect(root.stderr).toBe('');
+      expect(root.status).toBe(0);
+      const nested = atPath('packages/widget', type, [{ ...CHANGELOG_JSON, filename: 'packages/widget/changelog.json' }]);
+      expect(nested.status).toBe(1);
+      expect(nested.stderr).toContain('packages/widget/changelog.json: +    {');
+    },
+  );
+
   it('skips the `simple` type\'s `version-file` when the config names one, and then reads version.txt like any other file', () => {
     const typed = JSON.parse(config) as { packages: Record<string, Record<string, unknown>> };
     typed.packages['.']!['release-type'] = 'simple';
