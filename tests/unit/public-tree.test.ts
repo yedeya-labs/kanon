@@ -16,9 +16,12 @@ const FORBIDDEN_WORD_HASHES = new Set([
 ]);
 
 // Patterns that reveal nothing themselves. An account id is twelve digits that aren't part of a
-// longer number, a dotted version, or a hex string: a commit hash in a changelog link
-// (`3eb5613ee908262524890f935d…`) can hold a run of twelve digits between hex letters.
-const AWS_ACCOUNT_ID = /(?<![\dA-Fa-f.])\d{12}(?![\dA-Fa-f.])/;
+// longer number, a dotted version, a hex string or a UUID: a commit hash in a changelog link
+// (`3eb5613ee908262524890f935d…`) can hold a run of twelve digits between hex letters, and a
+// UUID's last group is twelve hex characters that are sometimes all digits. Only a dot *before*
+// the run is excluded (`1.<id>`): a dot after it is how an ECR hostname carries the id
+// (`<id>.dkr.ecr.<region>.amazonaws.com`), the form a repository most often holds one in.
+const AWS_ACCOUNT_ID = /(?<![\dA-Fa-f.])(?<!-[\dA-Fa-f]{4}-)\d{12}(?![\dA-Fa-f])/;
 const FORBIDDEN_PATTERNS: Array<[string, RegExp]> = [
   ['an AWS account id', AWS_ACCOUNT_ID],
   ['a local home-directory path', /\/Users\/[a-z]/],
@@ -58,12 +61,23 @@ describe('the account-id pattern', () => {
     expect(AWS_ACCOUNT_ID.test(`/commit/${id}ab3f`)).toBe(false);
     expect(AWS_ACCOUNT_ID.test(`/commit/ab3f${id})`)).toBe(false);
     expect(AWS_ACCOUNT_ID.test(`/commit/AB3F${id}`)).toBe(false);
+    expect(AWS_ACCOUNT_ID.test(`/commit/${id}AB3F`)).toBe(false);
+  });
+
+  it("doesn't read a UUID's all-digit last group as an account id", () => {
+    expect(AWS_ACCOUNT_ID.test(`"6f1c2a9e-4b7d-4e2a-9c3f-${id}"`)).toBe(false);
+    expect(AWS_ACCOUNT_ID.test(`"6F1C2A9E-4B7D-4E2A-9C3F-${id}"`)).toBe(false);
   });
 
   it('still finds a bare account id, and one in an ARN', () => {
     expect(AWS_ACCOUNT_ID.test(`the account ${id} holds it`)).toBe(true);
     expect(AWS_ACCOUNT_ID.test(`arn:aws:iam::${id}:role/deploy`)).toBe(true);
     expect(AWS_ACCOUNT_ID.test(`"${id}"`)).toBe(true);
+  });
+
+  it('finds an account id in an ECR hostname, and one that ends a sentence', () => {
+    expect(AWS_ACCOUNT_ID.test(`${id}.dkr.ecr.us-east-1.amazonaws.com/app:latest`)).toBe(true);
+    expect(AWS_ACCOUNT_ID.test(`deploys to ${id}.`)).toBe(true);
   });
 
   it('leaves longer numbers and dotted versions alone', () => {
