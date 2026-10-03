@@ -309,6 +309,14 @@ jobs:
           # read `docs/projects/**`, so the two environments cannot disagree about a tree
           # neither reads.
 
+      # KANON'S NODE AND KANON'S PATH, FOR THE AGENT (kanon#110). The prompts tell the agent to
+      # run `node "$KANON/…"`, and nothing else in this job sets `KANON`: an adopter's hook
+      # that happens to export it is not a contract. Before the hook, so a toolchain the
+      # hook sets up still wins the PATH for the project's own commands; the agent step reads
+      # the path from this step's OUTPUT, which the hook cannot rewrite as it can `$GITHUB_ENV`.
+      - uses: $/actions/kanon-path
+        id: kanon
+
       # THE PROJECT-SETUP HOOK MUST BE THERE, AND SAY SO BY NAME IF IT IS NOT (RA-2694). A
       # missing local action fails with the runner's own "can't find action.yml", which
       # names neither the cause nor the fix. The hook is read from the checked-out tree, so
@@ -348,6 +356,8 @@ jobs:
 
       - uses: $/actions/agent-run
         id: agent
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
         with:
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ inputs.claude_args }}

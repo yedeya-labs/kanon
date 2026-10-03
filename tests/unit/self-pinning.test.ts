@@ -29,7 +29,12 @@ const files = [
 // reason. review.yml is the caller of the review lane: through `$/`, a PR's own lane code
 // would review that same PR. CI's lane-check judges that caller, and is a required check, so
 // it runs the release too; it then reads the lanes at the version the caller pins.
+//
+// The smoke run's python fixture hook is the first exception again, on a fixture (kanon#110):
+// the project-setup hook of the fixture adopter in Kanon's own checkout, run to show that a
+// hook with no `KANON` and no Node leaves a guard running on Kanon's Node.
 const EXEMPT = new Set([
+  '.github/workflows/agent-blocks-smoke.yml: ./tests/fixtures/python-adopter/.github/actions/project-setup',
   '.github/workflows/agent-lane.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-lead-split.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-rebase.yml: ./.github/actions/project-setup',

@@ -61,6 +61,33 @@ jobs:
           grep -q '^## Capturing follow-ups' "$RUNNER_TEMP/excerpt.md"
           if grep -q '^## Reviewing an open PR' "$RUNNER_TEMP/excerpt.md"; then echo "::error::the excerpt kept a section it drops"; exit 1; fi
 
+      # KANON'S NODE ON A PROJECT WITH NO NODE OF ITS OWN (kanon#110). The python fixture adopter
+      # has no package.json, and its project-setup hook sets up Python and exports no `KANON`
+      # (Kolophon's shape). After `kanon-path` and that hook, a guard runs from Kanon's tree on
+      # the Node `kanon-path` installed: the engines major, from the runner's tool cache, not
+      # the image's own `node`.
+      - name: Run the python fixture's project-setup hook
+        uses: ./tests/fixtures/python-adopter/.github/actions/project-setup
+        with:
+          lane: smoke
+          install: "false"
+
+      - name: Run Kanon's guards on the python fixture, on Kanon's pinned Node
+        working-directory: tests/fixtures/python-adopter
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+        run: |
+          set -euo pipefail
+          if [ -e package.json ]; then echo "::error::the python fixture has a package.json"; exit 1; fi
+          if grep -qw KANON .github/actions/project-setup/action.yml; then echo "::error::the python fixture's hook names KANON, so it proves nothing"; exit 1; fi
+          want="$(jq -r '.engines.node' "$GITHUB_WORKSPACE/package.json" | tr -dc '0-9.' | cut -d. -f1)"
+          bin="$(command -v node)"
+          echo "node=$bin $(node --version), want major $want"
+          case "$bin" in "$RUNNER_TOOL_CACHE"/node/"$want".*) ;; *) echo "::error::node is $bin, not Node $want from the tool cache"; exit 1 ;; esac
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "$want"
+          node "$KANON/scripts/spec-guard.mjs"
+          node "$KANON/scripts/brief-guard.mjs"
+
       - name: Place an unreachable-model result where the agent step writes it
         run: cp tests/fixtures/agent-blocks/unreachable.json "$RUNNER_TEMP/claude-execution-output.json"
 
@@ -94,6 +121,8 @@ jobs:
         id: agent
         if: github.run_id == '0'
         uses: $/actions/agent-run
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
         with:
           prompt: never sent
           claude_args: --max-turns 1

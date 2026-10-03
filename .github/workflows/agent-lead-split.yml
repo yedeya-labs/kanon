@@ -149,6 +149,7 @@ jobs:
       # The scripts are Kanon's, read from the action cache at the tag the caller pinned (plan
       # 0001 §3); the brief and the issue are the adopter's, from the checkout above.
       - uses: $/actions/kanon-path
+        id: kanon
 
       - name: Should this issue be split?
         id: gate
@@ -225,6 +226,8 @@ jobs:
       - uses: $/actions/agent-run
         id: agent
         if: steps.gate.outputs.act == 'split'
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
         with:
           claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ steps.app-token.outputs.token }}

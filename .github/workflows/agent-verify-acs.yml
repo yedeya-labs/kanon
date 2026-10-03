@@ -245,6 +245,14 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The scripts are Kanon's, read from the action cache at the tag the caller pinned (plan
+      # 0001 §3); the brief and the tests they run are the ref's, from the checkout above.
+      # BEFORE the hook, so the project's own toolchain still wins the PATH for its tests, and
+      # read from this step's OUTPUT after it, which the hook cannot rewrite as it can
+      # `$GITHUB_ENV` (kanon#110).
+      - uses: $/actions/kanon-path
+        id: kanon
+
       # THE AGENT-LANE BLOCKS, CALLED DIRECTLY (RA-2661). This lane cannot hand its job to
       # `agent-lane.yml`: the criteria run below must share the agent's workspace and
       # database, and a reusable workflow takes no steps from its caller. So it keeps its
@@ -312,10 +320,6 @@ jobs:
       - name: Put the ref under test back exactly as it is, before the criteria run
         run: git restore --source=HEAD --staged --worktree -- .github/actions/project-setup
 
-      # The script is Kanon's, read from the action cache at the tag the caller pinned (plan
-      # 0001 §3); the brief and the tests it runs are the ref's, from the checkout above.
-      - uses: $/actions/kanon-path
-
       # Deterministic producer -> JSON. `continue-on-error` because a FAILING
       # acceptance criterion is the finding, not a broken job: the whole point is
       # to report it, and a hard exit here would leave the Explorer nothing to read.
@@ -324,6 +328,7 @@ jobs:
         continue-on-error: true
         env:
           PROJECT: ${{ steps.resolve.outputs.project }}
+          KANON: ${{ steps.kanon.outputs.path }}
         run: |
           set -uo pipefail
           node "$KANON/scripts/verify-acs.mjs" "$PROJECT" --run --json=qa-verify-acs.json | tee -a "$GITHUB_STEP_SUMMARY"
@@ -355,6 +360,8 @@ jobs:
 
       - uses: $/actions/agent-run
         id: agent
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
         with:
           prompt: |
             You are the Explorer (Agent 1), in TARGETED-INVARIANT mode for

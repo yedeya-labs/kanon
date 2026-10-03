@@ -209,6 +209,7 @@ jobs:
       # The script is Kanon's, read from the action cache at the tag the caller pinned (plan
       # 0001 §3); the playbook is the adopter's, from the default-branch checkout above.
       - uses: $/actions/kanon-path
+        id: kanon
       - name: Extract the playbook sections merge-reconciliation uses
         continue-on-error: true
         run: node "$KANON/scripts/playbook-excerpt.mjs"
@@ -216,6 +217,8 @@ jobs:
       # Auth = Claude subscription (see agent-triage.yml for the graduate-to-API note).
       - uses: $/actions/agent-run
         id: agent
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
         with:
           claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ steps.app-token.outputs.token }}
