@@ -272,8 +272,26 @@ describe('the apps-check workflow', () => {
   const check = wf.jobs.check!;
   const register = wf.jobs.register!;
 
-  it('runs by hand only', () => {
-    expect(Object.keys(wf.on)).toEqual(['workflow_dispatch']);
+  it('runs by hand on Kanon, and is called by an adopter\'s thin caller (kanon#154)', () => {
+    expect(Object.keys(wf.on)).toEqual(['workflow_dispatch', 'workflow_call']);
+  });
+
+  it('takes exactly each agent role\'s two secrets, by their fixed names, all optional', () => {
+    const declared = (wf.on.workflow_call as { secrets: Record<string, { required: boolean }> }).secrets;
+    const want = Object.keys(loadRoles()).flatMap((k) => [`${k.toUpperCase()}_APP_ID`, `${k.toUpperCase()}_APP_PRIVATE_KEY`]);
+    expect(Object.keys(declared).sort()).toEqual(want.sort());
+    for (const v of Object.values(declared)) expect(v).toEqual({ required: false });
+    expect((wf.on.workflow_call as { inputs?: unknown }).inputs).toBeUndefined();
+  });
+
+  it('runs Kanon\'s script from the Kanon tree it came from, never from the checkout', () => {
+    for (const job of [register, check]) {
+      const steps = job.steps.map((s) => s.uses ?? s.run);
+      const at = steps.indexOf('$/actions/kanon-path');
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(steps.findIndex((x) => x?.includes('apps-check.mjs'))).toBeGreaterThan(at);
+    }
+    expect(check.steps.some((s) => s.uses?.startsWith('actions/checkout@'))).toBe(false);
   });
 
   it('grants nothing at the top or to the check jobs, and contents: read to the register job only', () => {
@@ -285,7 +303,7 @@ describe('the apps-check workflow', () => {
   it('runs the check once per registered role, without stopping at the first failure', () => {
     expect(check.needs).toBe('register');
     expect(check.strategy).toEqual({ 'fail-fast': false, matrix: { app: '${{ fromJSON(needs.register.outputs.roles) }}' } });
-    expect(register.steps.map((s) => s.run).filter(Boolean)).toEqual(['node cli/apps-check.mjs roles >> "$GITHUB_OUTPUT"']);
+    expect(register.steps.map((s) => s.run).filter(Boolean)).toEqual(['node "$KANON/cli/apps-check.mjs" roles >> "$GITHUB_OUTPUT"']);
   });
 
   it("mints with the create-github-app-token Kanon's lanes pin, from the role's own two secrets, scoped to the owner", () => {
@@ -308,12 +326,30 @@ describe('the apps-check workflow', () => {
   });
 
   it('keeps the logic in the script: one run line per job', () => {
-    expect(check.steps.map((s) => s.run).filter(Boolean)).toEqual(['node cli/apps-check.mjs check']);
+    expect(check.steps.map((s) => s.run).filter(Boolean)).toEqual(['node "$KANON/cli/apps-check.mjs" check']);
     const env = check.steps.at(-1)!.env!;
     expect(Object.keys(env).sort()).toEqual(['APP_ID', 'APP_PRIVATE_KEY', 'APP_SLUG', 'INSTALLATION_ID', 'REGISTER_SLUG', 'REPOSITORY', 'ROLE', 'TOKEN']);
     expect(env.APP_SLUG).toBe('${{ steps.app-token.outputs.app-slug }}');
     expect(env.INSTALLATION_ID).toBe('${{ steps.app-token.outputs.installation-id }}');
     expect(env.REGISTER_SLUG).toBe('${{ matrix.app.slug }}');
+  });
+
+  it("docs/apps.md's caller maps only secrets the workflow declares, by name, and grants only contents: read", () => {
+    const doc = readFileSync(join(ROOT, 'docs/apps.md'), 'utf8');
+    const block = [...doc.matchAll(/```yaml\n([\s\S]*?)```/g)].map((m) => m[1]!).find((b) => b.includes('/.github/workflows/apps-check.yml@'));
+    expect(block, 'docs/apps.md gives no apps-check caller').toBeDefined();
+    const caller = parse(block!) as { on: Record<string, unknown>; permissions: unknown; jobs: Record<string, { uses: string; permissions: unknown; secrets: Record<string, string> }> };
+    expect(Object.keys(caller.on)).toEqual(['workflow_dispatch']);
+    expect(caller.permissions).toEqual({});
+    const [job] = Object.values(caller.jobs);
+    expect(job!.uses).toMatch(/^yedeya-labs\/kanon\/\.github\/workflows\/apps-check\.yml@v\d+\.\d+\.\d+$/);
+    expect(job!.permissions).toEqual({ contents: 'read' });
+    const declared = Object.keys((wf.on.workflow_call as { secrets: Record<string, unknown> }).secrets);
+    expect(typeof job!.secrets).toBe('object');
+    for (const [k, v] of Object.entries(job!.secrets)) {
+      expect(declared).toContain(k);
+      expect(v).toBe(`\${{ secrets.${k} }}`);
+    }
   });
 
   it('never persists a checkout credential', () => {

@@ -4,22 +4,29 @@
 # the adopter is a trigger-only caller per lane and the project-setup hook. This checks those:
 #   - each caller holds only `name`, `on`, `permissions` and one job, and no `concurrency`
 #     (the lane holds its own group, and the same group on the caller would deadlock them);
-#   - that job `uses:` a Kanon lane, passes only its own inputs through by the same name,
-#     maps exactly the lane's secrets explicitly (never `secrets: inherit`), and grants at
-#     least the permissions the lane declares (top level or any of its jobs);
+#   - that job `uses:` a Kanon lane (an `agent-*` workflow; a call to Kanon's release
+#     workflow is no lane caller, kanon#152), passes only its own inputs through by the
+#     same name, maps exactly the lane's secrets explicitly (never `secrets: inherit`), and
+#     grants at least the permissions the lane declares (top level or any of its jobs);
+#   - a job that calls any other Kanon workflow maps its secrets by name or passes none,
+#     never `secrets: inherit`;
 #   - every Kanon reference under `.github/` pins one exact version, the one this runs at;
 #   - the hook exists at its fixed path and declares every input Kanon passes it;
 #   - every role a caller's lane runs as has one row, with a slug, in the App register;
 #   - the stack document and the playbooks a called lane's prompt reads exist, and the stack
 #     document has its four sections (K-LAYOUT-17);
 #   - the test-database declaration, when there is one, declares one kind Kanon knows;
+#   - the escalation and exemptions files, when there are any, parse with the library's own
+#     readers (K-LAYOUT-8, K-LAYOUT-15; kanon#153);
 #   - `.github/dependabot.yml` has the entry that proposes Kanon upgrades.
 #
 # What a lane declares (its inputs, secrets and permissions, and the hook's inputs) is read
 # from Kanon's own files at the pinned version, through $GITHUB_ACTION_PATH, never restated.
 #
 # Needs a checkout of the adopter's repository first, and `yq` (mikefarah v4) and `jq` on the
-# runner. GitHub's hosted runners have both (plan 0001, decision 6).
+# runner. GitHub's hosted runners have both (plan 0001, decision 6). Node is Kanon's own: the
+# first step is `kanon-path`, which puts the Node major Kanon declares on the PATH (kanon#110),
+# so the library's readers never run on whatever Node the runner's image shipped.
 name: Kanon lane check
 description: Fails unless the repository's Kanon lane callers, project-setup hook, App register and Dependabot entry follow Kanon's lane rules.
 author: yedeya-labs
@@ -27,6 +34,7 @@ author: yedeya-labs
 runs:
   using: composite
   steps:
+    - uses: $/actions/kanon-path
     - name: Check the lane callers
       shell: bash
       env:

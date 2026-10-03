@@ -50,7 +50,7 @@ const SPINE_CALLERS: Record<string, Perms> = {
 /** Minting steps outside the lanes, and why each is exempt. */
 const EXEMPT: Record<string, string> = {
   // A by-hand check of each App's installation, one role per matrix row: it reads the whole
-  // grant by the App's JWT, and its token only lists repositories and checks out Kanon.
+  // grant by the App's JWT, and its token only lists the repositories it is installed on.
   'apps-check.yml': 'not a lane',
 };
 const SPINE = 'agent-lane.yml';
