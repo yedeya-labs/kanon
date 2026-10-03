@@ -124,12 +124,14 @@ describe('K-LAYOUT-17 names every playbook section a lane prompt sends the agent
   const end = rule.indexOf('\n### ', start + 1);
   const body = rule.slice(start, end < 0 ? undefined : end);
 
-  /** `the playbook's "<name>"`, `Use the rubric in docs/qa/explorer-playbook.md`, and the
-   *  sections the excerpting step cuts out, in every lane. */
+  /** `the playbook's "<name>"`, `the "<name>" section` (or `"<a>" and "<b>" sections`),
+   *  `Use the rubric in docs/qa/explorer-playbook.md`, and the sections the excerpting step
+   *  cuts out, in every lane. Prompts break lines anywhere, so whitespace is folded first. */
   const named = [...EXCERPTED, ...LANES.flatMap((file) => {
-    const text = readFileSync(join(WORKFLOWS, file), 'utf8');
+    const text = readFileSync(join(WORKFLOWS, file), 'utf8').replace(/\s+/g, ' ');
     return [
       ...[...text.matchAll(/playbook's "([^"]+)"/g)].map((m) => m[1]!),
+      ...[...text.matchAll(/"([^"]+)"(?= (?:and "[^"]+" )?sections?\b)/g)].map((m) => m[1]!),
       ...(/rubric in docs\/qa\/explorer-playbook\.md/.test(text) ? ['Severity rubric'] : []),
     ];
   })];
@@ -138,6 +140,7 @@ describe('K-LAYOUT-17 names every playbook section a lane prompt sends the agent
     expect(named).toContain('Capturing follow-ups');
     expect(named).toContain('Severity rubric');
     expect(named).toContain('Follow-ups: branch off the open parent');
+    expect(named).toContain('Implementer mode');
   });
 
   it.each([...new Set(named)])('names "%s"', (section) => {
@@ -145,15 +148,30 @@ describe('K-LAYOUT-17 names every playbook section a lane prompt sends the agent
   });
 });
 
-describe("docs/lanes.md's review caller is the one lane-check passes", () => {
-  // tests/unit/lane-check.test.ts runs lane-check over the fixture caller, so a docs caller
-  // equal to it (bar the version) is one an adopter can copy and see go green.
+describe("docs/lanes.md's example callers are ones lane-check passes", () => {
+  // tests/unit/lane-check.test.ts runs lane-check over the fixture callers, so a docs caller
+  // equal to its fixture (bar the version) is one an adopter can copy and see go green.
   const unpin = (text: string): unknown => parse(text.replace(/(yedeya-labs\/kanon\/[^@\s]+)@v\d+\.\d+\.\d+/g, '$1@vX'));
+  const FIXTURES = ['tests/fixtures/lane-check/adopter/.github/workflows', 'tests/fixtures/lane-check/extra'];
+  const callers = [...read('docs/lanes.md').matchAll(/```yaml\n([\s\S]*?)```/g)]
+    .map((m) => m[1]!)
+    .map((text) => ({ text, lane: /yedeya-labs\/kanon\/\.github\/workflows\/(agent-[a-z-]+\.yml)@/.exec(text)?.[1] }))
+    .filter((c): c is { text: string; lane: string } => c.lane !== undefined);
 
-  it('matches tests/fixtures/lane-check/extra/agent-review.yml', () => {
-    const blocks = [...read('docs/lanes.md').matchAll(/```yaml\n([\s\S]*?)```/g)].map((m) => m[1]!);
-    const docs = blocks.filter((b) => b.includes('agent-review.yml@'));
-    expect(docs).toHaveLength(1);
-    expect(unpin(docs[0]!)).toEqual(unpin(read('tests/fixtures/lane-check/extra/agent-review.yml')));
+  it('finds the review and implement-revise callers, so the check below is not vacuous', () => {
+    expect(callers.map((c) => c.lane).sort()).toEqual(['agent-implement-revise.yml', 'agent-review.yml']);
+  });
+
+  it.each(callers.map((c) => [c.lane, c.text] as const))('%s matches its lane-check fixture', (file, text) => {
+    const fixture = FIXTURES.map((d) => join(d, file)).filter((p) => {
+      try {
+        read(p);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    expect(fixture).toHaveLength(1);
+    expect(unpin(text)).toEqual(unpin(read(fixture[0]!)));
   });
 });

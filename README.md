@@ -79,7 +79,7 @@ npx --yes --package github:yedeya-labs/kanon#v0.18.0 kanon apps --org <org> --re
 
 <!-- x-release-please-end -->
 
-Every lane in [`docs/lanes.md`](docs/lanes.md) ships at this version ([plan 0001](docs/plans/0001-move-the-agent-lanes.md), steps 1 to 5). **Start with the review lane:** it is the first an adopter installs, because its App is what ends bootstrap (`K-ADOPT-6`). [`docs/lanes.md`](docs/lanes.md#your-first-lane-the-reviewer) walks through it. The Merger's lane and the other non-model lanes follow in later releases.
+Every lane in [`docs/lanes.md`](docs/lanes.md) ships at this version ([plan 0001](docs/plans/0001-move-the-agent-lanes.md), steps 1 to 5). **Start with the review lane:** it is the first an adopter installs, because its App is what ends bootstrap (`K-ADOPT-6`), on a plan with rulesets (`K-ADOPT-3`). [`docs/lanes.md`](docs/lanes.md#your-first-lane-the-reviewer) walks through it. The Merger's lane and the other non-model lanes follow in later releases, and the store-coupled lanes (explore, overseer, code-audit and the digests) move with the telemetry store.
 
 ## Status
 
@@ -89,7 +89,7 @@ Every lane in [`docs/lanes.md`](docs/lanes.md) ships at this version ([plan 0001
 - **Released:** the checks and the release workflow above.
 - **Running on Kanon itself:** the Reviewer reviews Kanon's own pull requests, through the review lane at Kanon's last release, never the PR's own copy ([ADR 0011](docs/decisions/0011-kanon-runs-its-own-lanes.md)). It reviews members' PRs labelled `review:please`, and the Owner merges.
 - **Released lanes:** those of the Lead, the Implementer, the Reviewer and the Explorer's acceptance-criteria check, listed in [`docs/lanes.md`](docs/lanes.md).
-- **Being extracted:** the Merger's lane and the other non-model lanes. They are *moved* from the reference adopter unchanged, not rewritten ([ADR 0009](docs/decisions/0009-move-dont-rewrite.md)), so the loop you adopt is the one already running in production.
+- **Being extracted:** the Merger's lane and the other non-model lanes, then the store-coupled lanes (explore, overseer, code-audit and the digests), which move with the telemetry store. They are *moved* from the reference adopter unchanged, not rewritten ([ADR 0009](docs/decisions/0009-move-dont-rewrite.md)), so the loop you adopt is the one already running in production.
 
 See the [roadmap](ROADMAP.md) for what comes next.
 
