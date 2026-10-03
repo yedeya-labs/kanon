@@ -535,13 +535,27 @@ describe('the caller pin check (kanon#69)', () => {
     expect(r.calls).toContain('contents/.github/workflows/review.yml?ref=main');
   });
 
-  it('reads nothing on the default branch, or on a pull request’s merge ref', () => {
-    for (const ref of ['refs/heads/main', 'refs/pull/7/merge']) {
-      const r = gate({ GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/review.yml@${ref}`, GITHUB_WORKFLOW_SHA: 'f'.repeat(40),
-        STUB_CALLER_BRANCH: caller('v0.9.0'), STUB_CALLER_MAIN: caller('v0.10.0') });
-      expect(r.outputs.member, ref).toBe('true');
-      expect(r.calls, ref).toBe('');
-    }
+  it('reads nothing on the default branch', () => {
+    const r = gate({ GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/review.yml@refs/heads/main`, GITHUB_WORKFLOW_SHA: 'f'.repeat(40),
+      STUB_CALLER_BRANCH: caller('v0.9.0'), STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.outputs.member).toBe('true');
+    expect(r.calls).toBe('');
+  });
+
+  // The Owner's decision on #112: a pull request never chooses the Kanon version that acts on it.
+  const MERGE = { GITHUB_WORKFLOW_REF: `${REPO}/.github/workflows/review.yml@refs/pull/7/merge`, GITHUB_WORKFLOW_SHA: 'a'.repeat(40) };
+  it('refuses a pull request’s merge ref whose caller changes the pin — a Dependabot bump', () => {
+    const r = gate({ ...MERGE, STUB_CALLER_BRANCH: caller('v0.11.0'), STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('false');
+    expect(r.summary).toContain('Kanon pin: refused.');
+    expect(r.summary).toContain('ran from `pull/7/merge`');
+    expect(r.calls).toContain(`?ref=${'a'.repeat(40)}`);
+  });
+  it('admits a pull request’s merge ref whose caller keeps the pin', () => {
+    const r = gate({ ...MERGE, STUB_CALLER_BRANCH: caller('v0.10.0'), STUB_CALLER_MAIN: caller('v0.10.0') });
+    expect(r.outputs.member, r.output).toBe('true');
+    expect(r.calls).toContain(`?ref=${'a'.repeat(40)}`);
   });
 
   it('refuses a caller the default branch does not have', () => {

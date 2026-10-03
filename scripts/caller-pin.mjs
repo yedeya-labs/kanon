@@ -18,12 +18,14 @@
 // names the caller's commit. When that ref is a branch other than the default, read the caller at
 // that commit and at the default branch, and compare every Kanon reference in each
 // (`yedeya-labs/kanon/<path>@<ref>`). Any difference refuses, and so does a caller the default
-// branch doesn't have. A tag is checked the same way. The default branch's own runs read nothing.
+// branch doesn't have. A tag and a pull request's merge ref are checked the same way. The default
+// branch's own runs read nothing.
 //
-// NOT CHECKED: a `pull_request` or `pull_request_review` run, whose ref is `refs/pull/<n>/merge`.
-// There GitHub runs the pull request's own merge of the caller, which is a wider question than a
-// stacked base (any pull request can edit its caller), and a Dependabot pull request that bumps the
-// pin is exactly such a run. It is left to the Owner (see the pull request that added this).
+// A PULL REQUEST'S MERGE REF IS CHECKED TOO (the Owner's decision on #112). On `pull_request`
+// and `pull_request_review` GitHub runs the pull request's own merge of the caller, so a pull
+// request could choose the Kanon version that acts on it; it never may (`K-MERGE-17`). Accepted
+// consequence: on a pull request that bumps the pin (Dependabot's, for one) those lanes refuse,
+// visibly, until it merges. Reviews are unaffected: they run from the base.
 //
 // A FAILED READ THROWS, so the gate fails its step by name rather than guessing.
 //
@@ -66,12 +68,11 @@ export function checkCallerPin({ workflowRef, workflowSha, repo, defaultBranch }
   if (!workflowRef) return { ok: false, reason: 'GITHUB_WORKFLOW_REF is not set, so the caller and its pin are unknown' };
   const caller = parseWorkflowRef(workflowRef, repo);
   if (!caller) return { ok: false, reason: `the caller \`${workflowRef}\` is not a workflow of ${repo}` };
-  // The ONE exemption: a pull request's merge ref, where the pull request's own caller runs.
-  if (/^refs\/pull\/\d+\/merge$/.test(caller.ref)) return { ok: true, reason: `the caller ran from \`${caller.ref}\`, a pull request's merge` };
   if (!defaultBranch) return { ok: false, reason: 'the event names no default branch to compare the caller with' };
   if (caller.ref === `refs/heads/${defaultBranch}`) return { ok: true, reason: 'the caller ran from the default branch' };
   // A branch or a tag (a dispatch with `--ref v1.2.0` runs that tag's caller), named without its prefix.
-  const branch = caller.ref.replace(/^refs\/(heads|tags)\//, '');
+  // Where it ran, for the messages: a branch or tag by name, a merge ref as `pull/<n>/merge`.
+  const branch = caller.ref.replace(/^refs\/(heads|tags)\//, '').replace(/^refs\//, '');
 
   const theirs = readFile(caller.path, workflowSha || caller.ref);
   if (theirs === null) return { ok: false, reason: `\`${caller.path}\` could not be found at \`${branch}\`` };
