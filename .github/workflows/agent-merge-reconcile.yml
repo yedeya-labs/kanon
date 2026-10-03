@@ -276,9 +276,9 @@ jobs:
                `agent:reviewer`, PLUS a `sev:*` (RA-729) — you have the merged code in
                front of you, so judge the REACHABLE impact by the rubric in
                docs/qa/explorer-playbook.md: `sev:critical` = data loss / security /
-               tenant-isolation / outage; `sev:high` = core flow broken, no workaround;
+               data isolation / outage; `sev:high` = core flow broken, no workaround;
                `sev:medium` = degraded, workaround exists; `sev:low` = cosmetic.
-               A finding in a data migration (a hand-written `drizzle/*.sql`) has
+               A finding in a data migration (a hand-written migration) has
                already run on every migrated database and no later PR re-runs it, so
                rate it by the worst database state it could have left behind.
                Filing with no severity leaves the finding indistinguishable from a
@@ -288,13 +288,13 @@ jobs:
                itself) goes to "Development Automation", as RA-602/RA-571 did. Everything
                else goes to "Product Backlog" at ANY severity. A `sev:critical` /
                `sev:high` product follow-up is LAUNCH-GATING: ALSO pass
-               `--label gate-candidate` and leave it on "Product Backlog". Never set the
-               "Production Ready" gate yourself — only the developer places work on a
-               roadmap milestone (RA-1616). Gate hygiene is the constraint (AGENTS.md) —
+               `--label gate-candidate` and leave it on "Product Backlog". Never set a
+               roadmap milestone, the launch gate included, yourself — only the developer
+               places work on one (RA-1616). Gate hygiene is the constraint (K-WORK-10) —
                if there is a workaround it is `sev:medium` and not a candidate.
                Pass `--label` AND `--milestone` in the SAME `gh issue create`, never
-               `create` then `edit`: a bare create races the
-               `issue-default-milestone.yml` default.
+               `create` then `edit`: a bare create races the milestone backstop's
+               default (K-WORK-1).
                Body: the finding (what / why / file:line)
                + "Surfaced by PR #${{ env.PR_NUMBER }} review; merged without the fold-in —
                filed by merge-reconciliation." Title it as the WORK, not the symptom.

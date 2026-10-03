@@ -186,7 +186,9 @@ describe('the prompt withholds authority it must not have', () => {
     // prompt now POINTS at it — and still does not restate the section list, because a
     // twelfth copy of a rule is how the copies drift (AGENTS.md).
     expect(prompt).toMatch(/docs\/projects\/_template\.md/);
-    expect(prompt).toMatch(/§5\.7/);
+    // The format is the Lead's playbook's, at its fixed path (K-LAYOUT-17), not a section number.
+    expect(prompt).toMatch(/docs\/qa\/lead-playbook\.md/);
+    expect(prompt).not.toMatch(/§\d/);
     expect(prompt).toMatch(/brief-guard\.mjs/);
     expect(prompt).toMatch(/eight\s+required sections/);
   });
@@ -202,7 +204,7 @@ describe('the prompt withholds authority it must not have', () => {
 
 describe('the prompt names each decision with a rule behind it', () => {
   it.each([
-    ['AWS cost', /AWS COST delta/],
+    ['cost', /COST delta\. Spend is agreed BEFORE it is incurred \(K-PROJ-6\)/],
     ['observability add-or-skip', /OBSERVABILITY: add or skip, WITH A REASON/],
     ['blast radius / bail list', /SCOPE-FIRST BAIL/],
     ['milestone routing', /MILESTONE for each issue/],

@@ -257,6 +257,33 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => t.edit(HOOK, (d) => { (d.runs as Record<string, unknown>).using = 'node24'; }), 'must be a composite action'));
   });
 
+  describe('the project documents the lanes read (K-LAYOUT-17, kanon#36)', () => {
+    const STACK = 'docs/qa/stack.md';
+    it('refuses a missing stack document, naming the lanes that read it', () =>
+      red((t) => t.rm(STACK), /docs\/qa\/stack\.md,title=lane-check::is missing; the Kanon lane\(s\) [a-z-,]*agent-triage[a-z-,]* read it \(K-LAYOUT-17\)/));
+    it('refuses a missing playbook a called lane reads', () =>
+      red((t) => t.rm('docs/qa/triage-fix-playbook.md'), /triage-fix-playbook\.md,title=lane-check::is missing/));
+    it('requires a playbook only when a called lane reads it', () => {
+      const t = adopter();
+      t.rm('docs/qa/explorer-playbook.md');
+      expect(check(t).status).toBe(0);
+    });
+    it.each(['## Gates', '## Schema changes', '## Data isolation', '## Generated files'])('refuses a stack document without `%s`', (h) => {
+      red((t) => t.write(STACK, t.read(STACK).replace(`${h}\n`, '')), `has the heading \`${h}\` 0 times`);
+    });
+    it('refuses a section written twice', () =>
+      red((t) => t.write(STACK, `${t.read(STACK)}\n## Gates\n\nMore.\n`), 'has the heading `## Gates` 2 times'));
+    it.each([
+      ['trailing spaces', (x: string) => x.replace('## Gates\n', '## Gates  \n')],
+      ['CRLF line ends', (x: string) => x.replace(/\n/g, '\r\n')],
+      ['another case', (x: string) => x.replace('## Gates\n', '## gates\n')],
+    ])('names a near miss written with %s, which looks present', (_, change) => {
+      red((t) => t.write(STACK, change(t.read(STACK))), /has the heading `## Gates` 0 times \(1 more line\(s\) match it once trailing spaces, a CR and case are ignored: write it exactly\)/);
+    });
+    it('does not count a heading inside a fenced block', () =>
+      red((t) => t.write(STACK, t.read(STACK).replace('## Data isolation\n', '```\n## Data isolation\n```\n')), 'has the heading `## Data isolation` 0 times'));
+  });
+
   describe('the test-database declaration (K-LAYOUT-16, kanon#18)', () => {
     const DB = 'docs/qa/test-database.md';
     const STANDARD = readFileSync(join(ROOT, 'tests/fixtures/test-database/postgres', DB), 'utf8');

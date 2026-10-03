@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
  * that project, so a green run is a guard that read it rather than one that read nothing.
  * The SCAN half keeps what ships to an adopter (the actions, the CLI, the library and the
  * rulebook) from growing a new assumption about the adopter's package manager. The lanes
- * have their own literal check (`lane-workflows.test.ts`), and their prompts are #36.
+ * have their own literal check (`lane-workflows.test.ts`), which reads their prompts too (#36).
  */
 const ROOT = process.cwd();
 const FIXTURE = join(ROOT, 'tests/fixtures/python-adopter');
@@ -331,7 +331,7 @@ const ALLOWED: Array<{ file: string; needle: string; why: string }> = [
   { file: 'scripts/lib/test-conventions.mjs', needle: "bin: 'node_modules/.bin/vitest'", why: "the JavaScript row's runner, as the project-setup hook installs it; a Python or Go project never reaches it (#20)" },
   { file: 'scripts/lib/test-conventions.mjs', needle: "bin: 'node_modules/.bin/playwright'", why: '#20, as above' },
   { file: 'rulebook/10-adoption.md', needle: 'may have no `package.json` to hold a version', why: "K-ADOPT-11's Why for the guard row: the reason a guard is not a package" },
-  { file: 'rulebook/00-principles.md', needle: 'guards need no `package.json`, package manager', why: 'states that the guards need none, and names the parts that still do (#20, #36)' },
+  { file: 'rulebook/00-principles.md', needle: 'guards need no `package.json`, package manager', why: 'states that the guards need none, and that the lane prompts read the project\'s commands from its stack document' },
 ];
 
 const isComment = (file: string, line: string): boolean => {

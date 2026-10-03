@@ -57,6 +57,7 @@ fi
 level() { case "$1" in write) echo 2 ;; read) echo 1 ;; *) echo 0 ;; esac; }
 CALLERS=0
 ROLES=""
+DOCS=""
 for f in .github/workflows/*.yml .github/workflows/*.yaml; do
   [ -f "$f" ] || continue
   doc="$(json "$f")" || { fail "$f" "is not valid YAML"; continue; }
@@ -91,6 +92,11 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
       *) fail "$f" "its run-name must end with \` $want_title\`, as the last token: the Kanon lane $lane's runs are found by it" ;;
     esac
   fi
+  # The project documents this lane's prompt reads, at their fixed paths (K-LAYOUT-17).
+  # Read from the lane itself, so a lane that starts reading one makes it required here.
+  for d in $(grep -oE 'docs/qa/(stack|[a-z]+(-[a-z]+)*-playbook)\.md' "$lane_file" | sort -u); do
+    DOCS="$DOCS $d=$lane"
+  done
   njobs="$(jq '.jobs | length' <<<"$doc")"
   [ "$njobs" = 1 ] || fail "$f" "a lane caller has exactly one job, not $njobs"
   job="$(jq -c '.jobs | to_entries[0].value' <<<"$doc")"
@@ -158,6 +164,30 @@ else
   done
   [ "$(jq -r '.runs.using // ""' <<<"$hook")" = composite ] || fail "$HOOK" "must be a composite action"
 fi
+
+# ── The project documents the lanes read (K-LAYOUT-17) ────────────────────────────────
+# Each one a called lane's prompt names must exist; the stack document must also carry its
+# four sections, each once, outside a fenced block, because the prompts send the agent to a
+# section by its heading and a missing one reads as "nothing to do".
+STACK_HEADINGS=("## Gates" "## Schema changes" "## Data isolation" "## Generated files")
+for d in $(printf '%s\n' $DOCS | sed 's/=.*//' | sort -u); do
+  by="$(printf '%s\n' $DOCS | sed -n "s|^$d=||p" | sort -u | paste -sd, -)"
+  if [ ! -f "$d" ]; then
+    fail "$d" "is missing; the Kanon lane(s) $by read it (K-LAYOUT-17)"
+    continue
+  fi
+  [ "$d" = docs/qa/stack.md ] || continue
+  for h in "${STACK_HEADINGS[@]}"; do
+    n="$(awk -v h="$h" '/^[ \t]*(```|~~~)/ { f = !f; next } !f && $0 == h { n++ } END { print n + 0 }' "$d")"
+    if [ "$n" != 1 ]; then
+      # A near miss (trailing spaces, CRLF, a different case) looks present and matches nothing.
+      near="$(awk -v h="$h" '/^[ \t]*(```|~~~)/ { f = !f; next } { l = $0; sub(/[ \t\r]+$/, "", l) } !f && $0 != h && tolower(l) == tolower(h) { n++ } END { print n + 0 }' "$d")"
+      hint=""
+      [ "$near" = 0 ] || hint=" ($near more line(s) match it once trailing spaces, a CR and case are ignored: write it exactly)"
+      fail "$d" "has the heading \`$h\` $n times$hint; the stack document has it exactly once, and the lanes read that section (K-LAYOUT-17)"
+    fi
+  done
+done
 
 # ── The test-database declaration (K-LAYOUT-16, kanon#18) ─────────────────────────────
 # Read by the same program the lanes' test-database block reads it with, so a declaration

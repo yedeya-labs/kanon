@@ -180,8 +180,8 @@ jobs:
         spec clause it cites, and which of the files it names exist. Do not re-fetch
         the issue with `gh` or search for those files; fetch only what the map says is
         missing or truncated. Then read docs/qa/triage-fix-playbook.md
-        (especially the "Implementer mode" section) and docs/agentic-qa-pipeline.md,
-        then implement issue #${{ github.event.issue.number || inputs.issue_number }} of this repo.
+        (especially the "Implementer mode" section) and the project's stack
+        document, docs/qa/stack.md, then implement issue #${{ github.event.issue.number || inputs.issue_number }} of this repo.
 
         THE ISSUE IS YOUR SPEC. Build to its ACCEPTANCE CRITERIA; for a spec-delta,
         the referenced L2 spec in docs/qa/specs/ IS the acceptance criteria. If the
@@ -189,20 +189,20 @@ jobs:
         exactly what needs clarifying, keep the `agent:implement` label, and STOP.
 
         TEST-FIRST: write the test(s) FROM the acceptance criteria / spec, confirm
-        RED, implement until GREEN, then run the relevant tiers (db is provisioned via
-        db:init — test:unit / test:integration / test:e2e). Runner output is
-        failures-only here (AGENT_QUIET): passing tests print nothing, so do not
-        add --reporter=verbose, and run any `npm run build` as
-        `(set -o pipefail; npm run build 2>&1 | tail -n 40)` so its exit code
-        survives the pipe. When a criterion declares an invariant ID a spec in
-        docs/qa/specs/ defines (e.g. `[PAY-12]`), put that
-        ID in the title of the test that ASSERTS it — `it('[PAY-12] …')` — because the
+        RED, implement until GREEN, then run the gates and tiers the stack
+        document's `## Gates` section names (the project's database, if it declares
+        one, is already set up). Keep a gate's output to what you will read: run a
+        long one as `(set -o pipefail; <command> 2>&1 | tail -n 40)` so its exit
+        code survives the pipe. When a criterion declares an invariant ID a spec in
+        docs/qa/specs/ defines (e.g. `[PAY-12]`), put that ID in the title of the
+        test that ASSERTS it, as your language's convention writes a title (a test
+        name, a docstring's first line, a subtest name), because the
         title is the only thing spec-coverage and phase 5 read. Only for IDs a spec
         declares, and never on a test that does not assert that clause: a title
         citing an ID it does not assert turns "unverified" into a false "passed".
         A newly-cited ID trips two checks by design: record it with
-        `npm run spec:coverage -- --write-locked` (lint names it otherwise), and if
-        the spec quotes its coverage row (payments.md's implementation-state block),
+        `node "$KANON/scripts/spec-coverage.mjs" --write-locked` (the locked-set
+        ratchet names it otherwise), and if a spec quotes its own coverage,
         re-measure that sentence from the tool.
 
         SCOPE-FIRST BAIL — still post a plan-comment, keep the label, and STOP for: a
@@ -212,11 +212,11 @@ jobs:
         constraint changes (a new column, a partial unique index, etc.) — but only
         with the ritual below.
 
-        SCHEMA + RLS (FAIL CLOSED): if you change the schema, run `db:push` THEN
-        `db:setup` (push can drop RLS; setup re-applies it), then RUN THE RLS /
-        tenant-isolation CONFORMANCE TESTS in tests/. If those do NOT pass, do NOT
-        open a PR — comment with the failure and STOP. Tenant isolation must never
-        regress. Tenant-scope any new unique index `(tenant_id, …)` per convention.
+        SCHEMA CHANGES (FAIL CLOSED): if you change the schema, follow the stack
+        document's `## Schema changes` section exactly, then RUN THE CHECKS its
+        `## Data isolation` section names. If those do NOT pass, do NOT open a PR —
+        comment with the failure and STOP. Data isolation must never regress, and
+        every rule in that section holds for new schema.
 
         ORACLE INTEGRITY: if a spec-delta is because the CODE is wrong, fix the code.
         If the SPEC is wrong (over-claims), PROPOSE the spec edit in your PR — never
@@ -226,8 +226,9 @@ jobs:
         OUTPUT: open ONE PR (implementation + tests) that closes the issue, with the
         agent-fix PR template, labeled `agent:implement` AND `review:please` (so the Reviewer
         reviews it). State the acceptance criteria you built to, the approach, the
-        BLAST RADIUS honestly, and — for any schema change — the `db:push` + `db:setup`
-        deploy steps and the RLS-conformance result. NEVER merge (a human merges).
+        BLAST RADIUS honestly, and — for any schema change — the deploy steps the
+        stack document's `## Schema changes` section names and the result of the
+        data-isolation checks. NEVER merge (a human merges).
         If this issue is a FOLLOW-UP whose parent PR is still OPEN (its body says
         "Surfaced by PR #N" and #N isn't merged), branch off that PR's head and open
         yours with `--base <its branch>` so it STACKS — don't diverge off main. See

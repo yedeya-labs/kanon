@@ -380,11 +380,12 @@ describe('the prompt', () => {
     expect(flat).toMatch(/A REVIEW FINDING IS NOT AN AUTHORISATION/);
   });
 
-  it('fails closed on schema and RLS', () => {
-    // db:push drops RLS; db:setup re-applies it. Pushing a schema change without
-    // re-running the conformance tests is how tenant isolation regresses silently.
-    expect(flat).toMatch(/db:push` THEN `db:setup/);
-    expect(flat).toMatch(/tenant-isolation CONFORMANCE TESTS/);
+  it('fails closed on a schema change, by the project\'s own procedure and checks (kanon#36)', () => {
+    // A schema change that skips the project's procedure, or its isolation checks, is
+    // how data isolation regresses silently. Which commands those are is the project's
+    // (`docs/qa/stack.md`, K-LAYOUT-17); that the agent fails closed on them is Kanon's.
+    expect(flat).toMatch(/follow the stack document's `## Schema changes` section exactly/);
+    expect(flat).toMatch(/RUN THE CHECKS its `## Data isolation` section names/);
     expect(flat).toMatch(/do NOT push: comment with the failure — WITH THE MARKER — and STOP/);
   });
 

@@ -124,10 +124,14 @@ The contract defines no outputs, and no lane reads any: a lane judges your hook 
 
 A lane gets a database only when your project declares one, in `docs/qa/test-database.md` (`K-LAYOUT-16`). With no file, your hook gets `database: 'false'` and `DATABASE_URL` stays unset. Declare `hook`, and your hook gets `database: 'true'`: it starts your database, whatever the engine, and writes `DATABASE_URL` before it returns. Kanon starts none and names no engine. The [`test-database`](../actions/test-database/README.md) block reads the declaration. Its README has the format and a worked example, a hook that starts Postgres. Add the declaration before, or with, the upgrade that brings it, then rebase your open pull requests: a lane that checks out a branch reads that branch's copy.
 
+## The stack document and the playbooks
+
+The lanes' prompts state the process and never your stack. What your stack decides, they read from files you own, at fixed paths (`K-LAYOUT-17`): the **stack document**, `docs/qa/stack.md`, with its four sections (`## Gates`, `## Schema changes`, `## Data isolation`, `## Generated files`), and the **playbooks**, `docs/qa/triage-fix-playbook.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` and `docs/qa/lead-playbook.md`. The rule says what each section holds. `lane-check` fails when a lane you call reads a document you don't have, or the stack document lacks a section.
+
 ## The App register
 
 The revise lanes find their own App's login in the App register, and the scripts the lanes run read every role's login from it, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks.
 
 ## Checking it
 
-Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above or a review caller whose `run-name` doesn't end with the head SHA, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook; on a malformed test-database declaration; on a role missing from the App register; and on a missing Dependabot entry.
+Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above or a review caller whose `run-name` doesn't end with the head SHA, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook; on a missing stack document or playbook, or a stack document without its four sections; on a malformed test-database declaration; on a role missing from the App register; and on a missing Dependabot entry.

@@ -146,8 +146,8 @@ jobs:
       prompt: |
         You are the Lead (Agent 5), in BRIEF mode. You produce ONE
         artifact — a project brief — as a pull request. You do NOT label, dispatch,
-        implement, merge or close anything. Read docs/agentic-lead-engineer.md §5
-        and §12, AGENTS.md, and docs/agentic-qa-pipeline.md before you start.
+        implement, merge or close anything. Read your playbook,
+        docs/qa/lead-playbook.md, and AGENTS.md before you start.
 
         THE MANDATE:
         ${{ inputs.mandate }}
@@ -162,9 +162,9 @@ jobs:
 
         THERE IS A TEMPLATE, DERIVED FROM SIX REAL BRIEFS AND THEN NARROWED BY
         WHAT THEY COST (RA-949, RA-1742). Read docs/projects/_template.md and
-        docs/agentic-lead-engineer.md §5.7 before you write: §5.7 gives the eight
-        required sections and the reason behind each, and `npm run lint` fails on a
-        brief that omits one. Section numbering, wording and order are yours — the
+        your playbook's brief format before you write: it gives the eight
+        required sections and the reason behind each (K-PROJ-4), and
+        `node "$KANON/scripts/brief-guard.mjs"` fails on a brief that omits one. Section numbering, wording and order are yours — the
         guard matches by meaning, and combining two sections is fine where they are
         the same story. What is NOT yours is omitting one: an omitted section reads
         exactly like a section with nothing to say, which is silent-absence on the
@@ -188,7 +188,7 @@ jobs:
            `[PREFIX-N]` id LEADING its bullet under an `Acceptance criteria` line,
            and the brief never restates it in prose beside the id. Allocate a new id
            with `node "$KANON/scripts/spec-ids.mjs" --apply` and seed the clause in the
-           area's spec — that is your job (§6.1), and lint does NOT require the
+           area's spec — that is your job, and the brief guard does NOT require the
            clause to exist yet. A DELIVERABLE gets a clause too: a criterion nothing
            can cite is one `verify-acs.mjs` reads as no criterion at all.
 
@@ -213,7 +213,7 @@ jobs:
         while the project reports healthy — one `###` sub-heading per issue:
 
             ### Issue B — Short imperative title
-            **Milestone:** Production Ready · **Labels:** `sev:critical` · **Closes #897**
+            **Milestone:** Product Backlog · **Labels:** `sev:critical` · **Closes #897**
             **Depends on:** Issue A (why it must land first) and Issue C (and why)
 
             Acceptance criteria:
@@ -222,7 +222,7 @@ jobs:
 
             …rationale, and what is NOT in this issue…
 
-        The MILESTONE is required, from the AGENTS.md routing table: a tick
+        The MILESTONE is required, from chapter 01's routing rules (K-WORK-4): a tick
         refuses to file without one, because filing bare lets the
         default-milestone backstop route the issue to Product Backlog, which reads
         as correctly triaged and stops showing up in the query that finds
@@ -273,7 +273,8 @@ jobs:
         phrase in one code span hides it from GitHub's linker while leaving it live in
         the merge. That is how PR RA-1029 closed two issues from a line written to
         explain the bug. In the PR body, backtick the REFERENCE and not the phrase, so
-        the keyword and the number are not adjacent. §5.7 states both halves.
+        the keyword and the number are not adjacent. Your playbook's brief format
+        states both halves.
 
         DECISIONS YOUR BRIEF MUST RESOLVE — each has a rule behind it:
 
@@ -281,30 +282,30 @@ jobs:
            is the half that gets forgotten.
         2. THE REAL PROBLEM. Read the code before you plan. If the issues describe
            symptoms of one root cause, say so and plan the root-cause fix — a
-           systemic fix beats N point-fixes (agentic-qa-pipeline.md §2.4). If they
+           systemic fix beats N point-fixes. If they
            genuinely are separate, say that instead.
         3. DECOMPOSITION into issues, each CITING its ACCEPTANCE CRITERIA as
            `[PREFIX-N]` ids with a stable allocation (RA-913,
            Kanon's scripts/spec-ids.mjs). Those invariants ARE the acceptance criteria
-           (§6) and since RA-1742 they are the ONLY form one may take — including for
+           (K-SPEC-5) and since RA-1742 they are the ONLY form one may take — including for
            a deliverable ("add a CSV export"), which gets a `[seed]` clause of its
            own rather than a sentence nothing can verify.
         4. SEQUENCING, on the `**Depends on:**` line and not in a section of its
            own — the reconciler reads that line and holds an issue until its
            dependencies close, so the parenthetical reason IS the rationale.
-        5. AWS COST delta. AGENTS.md requires agreement BEFORE spend. If there is
-           none, say "no AWS cost" and why — an empty section reads as "not
+        5. COST delta. Spend is agreed BEFORE it is incurred (K-PROJ-6). If there
+           is none, say "no delta" and why — an empty section reads as "not
            considered".
-        6. OBSERVABILITY: add or skip, WITH A REASON. AGENTS.md requires the
-           decision be surfaced either way. A deliberate skip is a fine answer; an
+        6. OBSERVABILITY: add or skip, WITH A REASON. The decision is surfaced
+           either way (K-OBS-1). A deliberate skip is a fine answer; an
            absent one is not.
         7. BLAST RADIUS — what will need a human. Name every item on
            agent-implement.yml's SCOPE-FIRST BAIL list that this project will touch:
            data migration, auth/credential/security changes, destructive schema.
            These currently surface mid-PR and interrupt the developer; naming them
            here is the point of the brief.
-        8. MILESTONE for each issue, from the AGENTS.md routing table.
-        9. RECONCILIATION GAPS, AS ISSUES (RA-932). `npm run spec:coverage` already
+        8. MILESTONE for each issue, from chapter 01's routing rules (K-WORK-4).
+        9. RECONCILIATION GAPS, AS ISSUES (RA-932). `node "$KANON/scripts/spec-coverage.mjs"` already
            reports which areas have a spec and which `[confirmed]` invariants no
            test enforces. If it names a gap in an area you touch, closing it is
            ISSUE A of this project — not a survey paragraph, and not an
@@ -319,13 +320,13 @@ jobs:
 
         STATE WHAT YOU DID NOT EXAMINE. A brief that is silent on an area reads
         identically to one that checked it and found nothing — that is
-        `silent-absence`, this pipeline's most common failure class (§12.7). If you
+        `silent-absence`, this pipeline's most common failure class. If you
         could not read something, or ran short of budget, say so explicitly.
 
         EVIDENCE, NOT ASSERTION — AND RE-RUNNABLE, NOT DATED. Every claim about
         the code carries either the `[PREFIX-N]` invariant that states it or the
         command that re-derives it; every count carries the command that produces
-        it. A figure nobody can re-measure cannot be checked later (§12.7), and a
+        it. A figure nobody can re-measure cannot be checked later, and a
         coordinate is worse than unmeasurable — it looks checkable and is wrong the
         moment the file above it changes. Where you are inferring rather than
         verifying, mark it. There is NO measured-against header line any more:
@@ -334,7 +335,7 @@ jobs:
 
         YOU DO NOT PROMOTE. Any invariant you propose lands as `[seed]`. Approving
         this brief is the developer agreeing to the PLAN; confirming the behaviour
-        is a separate act, later (§6.1). Never write `[confirmed]`.
+        is a separate act, later (K-SPEC-8). Never write `[confirmed]`.
 
         OUTPUT: write docs/projects/<n>.md where <n> is the TRACKING ISSUE NUMBER.
         It must be numeric — the reconciler keys the whole project off it (it
@@ -342,7 +343,7 @@ jobs:
         never be reconciled and would sit in the directory while every tick
         reported "no project to reconcile". If you were given no tracking issue,
         STOP and say so rather than inventing a name. Open ONE PR labelled
-        `review:please` so the Reviewer reviews it. Do NOT milestone the PR (AGENTS.md:
+        `review:please` so the Reviewer reviews it. Do NOT milestone the PR (K-WORK-7:
         issues only). Do NOT create the issues you propose — the brief proposes
         them; a human approves before anything is filed. NEVER merge.
 

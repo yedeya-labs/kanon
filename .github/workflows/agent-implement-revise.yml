@@ -591,9 +591,10 @@ jobs:
         review threads and the findings are attached to what is there, and
         re-authoring discards them.
 
-        FIRST READ YOUR PLAYBOOK: docs/qa/triage-fix-playbook.md, and
-        docs/agentic-qa-pipeline.md §2. The rules below also live there, and the
-        playbook is the source of truth if they ever disagree.
+        FIRST READ YOUR PLAYBOOK: docs/qa/triage-fix-playbook.md, and the
+        project's stack document, docs/qa/stack.md, which says how this project
+        runs its gates and changes its schema. The rules below also live in the
+        playbook, and the playbook is the source of truth if they ever disagree.
 
         EVERY EXIT LEAVES THE MARKER, AND IT GOES IN A TOP-LEVEL PR COMMENT.
         Whether you push a fix, disagree with a finding, or STOP at one of the
@@ -632,12 +633,11 @@ jobs:
         that requires a HUMAN — not a wider mandate. Say so in your reply and
         stop; do not implement it because a reviewer asked.
 
-        SCHEMA + RLS (FAIL CLOSED): if you change the schema, run `db:push` THEN
-        `db:setup` — push can drop RLS and setup re-applies it — then RUN THE
-        RLS / tenant-isolation CONFORMANCE TESTS in tests/. If those do NOT
-        pass, do NOT push: comment with the failure — WITH THE MARKER — and STOP. Tenant isolation
-        must never regress. Tenant-scope any new unique index `(tenant_id, …)`
-        per convention.
+        SCHEMA CHANGES (FAIL CLOSED): if you change the schema, follow the stack
+        document's `## Schema changes` section exactly, then RUN THE CHECKS its
+        `## Data isolation` section names. If those do NOT pass, do NOT push:
+        comment with the failure — WITH THE MARKER — and STOP. Data isolation
+        must never regress, and every rule in that section holds for new schema.
 
         VERIFY BEFORE YOU FIX. A reviewer can be wrong, and a finding you cannot
         reproduce must not be "fixed" by guessing. Re-derive each one against the
@@ -649,14 +649,12 @@ jobs:
         widen the issue. If addressing it properly needs work beyond this issue's
         scope, say so and file it rather than absorbing it.
 
-        RUN THE GATES BEFORE YOU PUSH: npm run lint, npm run typecheck,
-        npm run test:unit, and the integration tier if you touched src/db/**,
-        drizzle/**, services, or anything tenant-scoped. Pushing a fix that
-        fails a gate costs a whole review round to discover. Their output is
-        failures-only here (AGENT_QUIET): passing tests print nothing, so do
-        not add --reporter=verbose, and run any `npm run build` as
-        `(set -o pipefail; npm run build 2>&1 | tail -n 40)` so its exit code
-        survives the pipe.
+        RUN THE GATES BEFORE YOU PUSH: every command the stack document's
+        `## Gates` section lists, and each further tier it names for the paths
+        you touched. Pushing a fix that fails a gate costs a whole review round
+        to discover. Keep a gate's output to what you will read: run a long one
+        as `(set -o pipefail; <command> 2>&1 | tail -n 40)` so its exit code
+        survives the pipe, and follow what the section says about its output.
 
         WHEN YOU ARE DONE, comment on the PR with what you changed, what you
         verified, and anything you DISAGREED with and why. The comment must

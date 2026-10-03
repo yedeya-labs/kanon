@@ -306,9 +306,12 @@ describe('the prompt carries the rules that keep a resolution honest', () => {
   it('carries the how-to for every file a script had to refuse', () => {
     // The inversion this design turns on: what a script must refuse, an agent is told
     // how to do. A path dropped from here silently becomes a guess.
-    for (const f of ['_journal.json', '_id-registry.json', '_locked-floor.json', 'CHANGELOG.md', 'package-lock.json']) {
+    for (const f of ['_id-registry.json', '_locked-floor.json', 'CHANGELOG.md']) {
       expect(prompt).toContain(f);
     }
+    // The project's own generated files (a lockfile, a migration sequence) are named by
+    // the project, in its stack document (K-LAYOUT-17, kanon#36), not by Kanon.
+    expect(prompt).toContain("every file the stack document's `## Generated files` section names");
     expect(prompt).toMatch(/spec-ids\.mjs"? --apply/);
     expect(prompt).toContain('--write-locked');
   });
@@ -316,8 +319,9 @@ describe('the prompt carries the rules that keep a resolution honest', () => {
   it('requires the gates to be run on the MERGED tree before pushing', () => {
     expect(prompt).toMatch(/VERIFY BEFORE YOU PUSH/);
     expect(prompt).toMatch(/not your side of it/);
-    expect(prompt).toMatch(/db:setup/);
-    expect(prompt).toMatch(/RLS/);
+    expect(prompt).toMatch(/every command the stack document's `## Gates` section lists/);
+    expect(prompt).toMatch(/`## Schema changes`/);
+    expect(prompt).toMatch(/`## Data isolation`/);
   });
 
   it('names the ONE thing that reaches the developer, and calls it the only one', () => {
