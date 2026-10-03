@@ -55,14 +55,7 @@ The installation test's `installer-needed` entries are the extraction's requirem
 
 Agent lanes, guards, checks, playbooks and scripts move here. Their shape follows what Phases 1 and 2 showed actually varies between projects. Each piece is installed on the second adopter first.
 
-**Decided: how each kind of code reaches a project** (`K-ADOPT-11`):
-
-| Kind | Delivered as | Why |
-|---|---|---|
-| **Checks** | **Composite actions** under [`actions/`](actions/) | A composite action reads its own script through its action path, at the ref the adopter pinned, so the check and its script can't drift apart. |
-| **Lanes** | **Reusable workflows** | A lane owns whole jobs, with their permissions and secrets, which is what a reusable workflow is. It has no clean way to check out its own repository at its own ref, so it doesn't suit a check that needs its own script. |
-| **Guards** | **An npm package** | Guards run inside the adopter's own test suite, against the adopter's files. |
-| **Skills** | **A Claude Code plugin** | The agent runtime loads skills, commands and agents from a plugin. |
+**Decided: how each kind of code reaches a project.** Checks ship as composite actions, lanes as reusable workflows, guards as scripts run through `kanon-path` on Kanon's own Node runtime, and skills as a Claude Code plugin. The table, with the reason for each form, is [`K-ADOPT-11`](rulebook/10-adoption.md#k-adopt-11-use-kanons-code-by-reference-pinned-to-an-exact-version-and-let-dependabot-propose-upgrades), the one home for it.
 
 Every kind is versioned by Kanon's releases (release-please, one version per merge to `main`), and an adopter pins an exact version and takes upgrades as Dependabot PRs.
 

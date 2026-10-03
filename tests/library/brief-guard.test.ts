@@ -110,7 +110,7 @@ describe('required sections', () => {
 
   it('requires none of the three RA-1742 cut, because each has a mechanical home', () => {
     // Sequencing → the `**Depends on:**` line the parser already reads and the
-    // reconciler already enforces. Reconciliation state → `npm run spec:coverage`, and
+    // reconciler already enforces. Reconciliation state → spec-coverage, and
     // a gap it finds is ISSUE A rather than a paragraph (RA-932 unchanged). Definition of
     // done → identical for every project and executable: `lead-reconcile.mjs` phases
     // 4-6. Pinned so that re-adding one is a deliberate act with this note in front of

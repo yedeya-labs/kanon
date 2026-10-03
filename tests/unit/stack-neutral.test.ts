@@ -158,14 +158,16 @@ describe("Kanon's guards on a project with no package.json, run with only node a
  * outlive what it excuses.
  */
 const ASSUMPTION = /\bnpm\b|\bnpx\b|\byarn\b|\bpnpm\b|package(?:-lock)?\.json|node_modules|\.nvmrc/;
-const SHIPPED = /^(actions|cli|scripts)\/.*\.(mjs|js|sh|awk|yml|yaml)$|^rulebook\/.*\.md$/;
+// ROADMAP.md too: it once restated K-ADOPT-11's table, and a copy is where "an npm package" survived.
+const SHIPPED = /^(actions|cli|scripts)\/.*\.(mjs|js|sh|awk|yml|yaml)$|^rulebook\/.*\.md$|^ROADMAP\.md$/;
 const ALLOWED: Array<{ file: string; needle: string; why: string }> = [
   { file: 'scripts/citation-guard.mjs', needle: 'export const EXTERNAL = /^node_modules', why: 'counts a coordinate into a Node dependency as external rather than failing it; on another stack it matches nothing' },
   { file: 'scripts/citation-guard.mjs', needle: 'coordinate(s) into node_modules/ not checked', why: "the same rule's report line" },
   { file: 'scripts/doc-path-guard.mjs', needle: "!f.startsWith('node_modules/')", why: 'skips a Node dependency tree if one is tracked; on another stack it matches nothing' },
   { file: 'scripts/verify-acs.mjs', needle: "['npx', 'vitest'", why: '#20: tests are found and run by the JavaScript convention until the per-language convention lands' },
   { file: 'scripts/verify-acs.mjs', needle: "['npx', 'playwright'", why: '#20, as above' },
-  { file: 'rulebook/00-principles.md', needle: 'needs no `package.json`, package manager', why: 'states that an adopter needs none' },
+  { file: 'rulebook/10-adoption.md', needle: 'may have no `package.json` to hold a version', why: "K-ADOPT-11's Why for the guard row: the reason a guard is not a package" },
+  { file: 'rulebook/00-principles.md', needle: 'guards need no `package.json`, package manager', why: 'states that the guards need none, and names the parts that still do (#20, #36)' },
 ];
 
 const isComment = (file: string, line: string): boolean => {
@@ -194,8 +196,8 @@ describe('what ships to an adopter names no package manager of the adopter', () 
   const tracked = spawnSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' }).stdout.split('\n').filter((f) => SHIPPED.test(f));
   const shipped = () => tracked.filter((f) => existsSync(join(ROOT, f))).map((file) => ({ file, text: readFileSync(join(ROOT, file), 'utf8') }));
 
-  it('reads the actions, the CLI, the library and the rulebook', () => {
-    for (const dir of ['actions/', 'cli/', 'scripts/', 'rulebook/']) expect(tracked.some((f) => f.startsWith(dir)), dir).toBe(true);
+  it('reads the actions, the CLI, the library, the rulebook and the roadmap', () => {
+    for (const dir of ['actions/', 'cli/', 'scripts/', 'rulebook/', 'ROADMAP.md']) expect(tracked.some((f) => f.startsWith(dir)), dir).toBe(true);
   });
 
   it('finds no unlisted line, and no listed entry that matches nothing', () => {
