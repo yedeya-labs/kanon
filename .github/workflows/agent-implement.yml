@@ -278,11 +278,9 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-      # The script is Kanon's, read from the action cache at the tag the caller pinned
-      # (plan 0001 §3); the checkout above is the adopter's, for its App register.
+      # The script is Kanon's, read from the action cache at the tag the caller pinned (plan
+      # 0001 §3), on the Node `kanon-path` sets up; the checkout above is the adopter's, for
+      # its App register.
       - uses: $/actions/kanon-path
       # The Implementer's token, for the `qa:needs-split` label alone (decision 21), narrowed
       # to the one permission that label needs (`K-AGENT-46`). Minted on every crash run: the

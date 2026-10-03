@@ -142,12 +142,10 @@ jobs:
       # Checked out on the default token first: the gate needs the script and the brief
       # file, and a skipped or refused run must cost no minted token.
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
 
       # The scripts are Kanon's, read from the action cache at the tag the caller pinned (plan
-      # 0001 §3); the brief and the issue are the adopter's, from the checkout above.
+      # 0001 §3), on the Node `kanon-path` sets up; the brief and the issue are the adopter's,
+      # from the checkout above.
       - uses: $/actions/kanon-path
         id: kanon
 
@@ -329,6 +327,8 @@ jobs:
           REPO: ${{ github.repository }}
           BRANCH: ${{ steps.gate.outputs.branch }}
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          # From the output, not `$GITHUB_ENV`: the hook and the agent have both run (kanon#110).
+          KANON: ${{ steps.kanon.outputs.path }}
         run: |
           set -euo pipefail
           n=$(gh pr list --repo "$REPO" --state open --head "$BRANCH" --json number --jq 'length')
