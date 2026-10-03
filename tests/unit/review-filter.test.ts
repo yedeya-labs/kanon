@@ -89,6 +89,8 @@ type Opts = {
   actor?: string;
   // The default branch's tree, which `judging-inputs.mjs select` reads over the API.
   treeFails?: boolean;
+  reviewsFail?: boolean;    // kanon#88: the PR's reviews read failed
+  reviews?: unknown[];      // kanon#88: the PR's reviews verbatim, in place of `lastReviewed`
 };
 
 const runDecide = ({
@@ -113,6 +115,8 @@ const runDecide = ({
   label = '',
   actor = 'a-member',
   treeFails = false,
+  reviewsFail = false,
+  reviews: reviewsOverride,
 }: Opts) => {
   // The payload agrees with the API read unless a test deliberately splits them.
   const headRepo =
@@ -140,7 +144,8 @@ const runDecide = ({
       : [{ headSha, status: ciPending ? 'in_progress' : 'completed', conclusion: ciPending ? null : 'success', databaseId: 42 }],
   );
   const reviews = JSON.stringify(
-    lastReviewed === null ? [] : [{ user: { login: 'example-reviewer[bot]' }, commit_id: lastReviewed, state: 'APPROVED' }],
+    reviewsOverride ??
+    (lastReviewed === null ? [] : [{ user: { login: 'example-reviewer[bot]' }, commit_id: lastReviewed, state: 'APPROVED' }]),
   );
   // Order matters: `/commits/<sha>/pulls` also matches `*commits*`.
   writeStub(join(dir, 'gh'),
@@ -153,7 +158,7 @@ case "$*" in
   "pr view"*)             ${prViewFails ? `printf '%s' '{"message":"Server Error","status":"500"}'; exit 1` : `printf '%s' ${JSON.stringify(meta)}`} ;;
   *"/commits/"*"/pulls"*) printf '%s\\n' ${JSON.stringify(prForSha)} ;;
   *"/pulls/"*"/files"*)   ${partialFiles ? `printf '%s\\n' ${list(partialFiles)}; exit 1` : `printf '%s\\n' ${list(prFiles)}`} ;;
-  *"/pulls/"*"/reviews"*) printf '%s' ${JSON.stringify(reviews)} ;;
+  *"/pulls/"*"/reviews"*) ${reviewsFail ? `printf '%s' '{"message":"Server Error","status":"500"}'; exit 1` : `printf '%s' ${JSON.stringify(reviews)}`} ;;
   *compare*)              printf '%s\\n' ${list(pushed)} ;;
   *commits*)              cat "${dir}/message" ;;
 esac
@@ -1043,10 +1048,9 @@ describe('a human re-applying the review label outranks the already-reviewed ski
   });
 
   it('marks that review EXPLICIT, and no other (RA-2026)', () => {
-    // The review job's `claim` step stands a queued run down when a sibling posted a
-    // verdict on the same head while it waited. A human's re-request is the one thing a
-    // sibling's verdict cannot answer — it was formed before the request was made — so
-    // this arm, and only this arm, tells the job so.
+    // Only this arm may re-review a head the Reviewer already reviewed, so only it is
+    // marked. The `claim` step reads the mark to word its decline: since kanon#88 a
+    // verdict posted after the request answers it, whichever run posted it.
     expect(relabel({ sender: 'a-member', label: 'review:please' }).explicit).toBe('true');
     expect(relabel({ event: 'pull_request_target', sender: 'a-member', label: 'review:please' }).explicit).toBe('true');
     const bot = runDecide({ event: 'workflow_run', prFiles: ['src/a.ts'], pushed: ['src/a.ts'], lastReviewed: null });
@@ -1148,5 +1152,73 @@ describe('the human-relabel arm must not pre-empt the CI-pending defer (RA-1400 
     });
     expect(r.review).toBe('true');
     expect(r.stdout).toMatch(/human/);
+  });
+});
+
+/**
+ * kanon#88 — one commit gets one verdict, on a docs-only PR too.
+ *
+ * The `already reviewed <sha>` skip sat below the docs-only-PR and brief-PR arms, which
+ * decide `true` and exit, so a PR made only of docs re-reviewed an already-reviewed head
+ * on every event. Kanon PR #80's CI completion on `623b92a` decided `review=true (docs-only
+ * PR …)`; the PR carries three APPROVEDs on that commit.
+ */
+describe('an already-reviewed head is not reviewed again, whatever the PR contains (kanon#88)', () => {
+  it('skips a reviewed head on a docs-only PR', () => {
+    const r = runDecide({ lastReviewed: HEAD, pushed: ['docs/plans/0002.md'], prFiles: ['docs/plans/0002.md'] });
+    expect(r.review).toBe('false');
+    expect(r.stdout).toContain('already reviewed');
+  });
+
+  it('skips a reviewed head on a brief PR', () => {
+    const r = runDecide({ lastReviewed: HEAD, pushed: ['docs/projects/x.md'], prFiles: ['docs/projects/x.md', 'src/a.ts'] });
+    expect(r.review).toBe('false');
+    expect(r.stdout).toContain('already reviewed');
+  });
+
+  it('still reviews a NEW head on a docs-only PR, and still lets a person ask again', () => {
+    expect(runDecide({ lastReviewed: LAST, pushed: ['docs/a.md'], prFiles: ['docs/a.md'] }).review).toBe('true');
+    const again = runDecide({ event: 'pull_request', action: 'labeled', sender: 'a-member', label: 'review:please',
+      lastReviewed: HEAD, pushed: ['docs/a.md'], prFiles: ['docs/a.md'] });
+    expect(again.review).toBe('true');
+    expect(again.explicit).toBe('true');
+  });
+
+  // The Reviewer's finding on #104: GitHub files a verdict posted after a push under the NEW
+  // head, and the job stamps what it read (RA-1680, `K-AGENT-26`). Keyed on `commit_id`, that
+  // verdict would mark a head nobody read as reviewed.
+  const BOT = { login: 'example-reviewer[bot]' };
+  it('reads the stamp, not commit_id: a verdict filed under the head but read on the last commit', () => {
+    const r = runDecide({ pushed: ['docs/a.md'], prFiles: ['docs/a.md'], reviews: [
+      { user: BOT, state: 'APPROVED', commit_id: HEAD, body: `ok\n\n<!-- reviewed: sha=${LAST} run=1 -->` }] });
+    expect(r.review).toBe('true');
+    expect(evidenceOf(r.stdout).LAST_REVIEWED).toBe(LAST);
+  });
+
+  it('and a verdict stamped with the head skips it, whatever it was filed under', () => {
+    const r = runDecide({ pushed: ['docs/a.md'], prFiles: ['docs/a.md'], reviews: [
+      { user: BOT, state: 'CHANGES_REQUESTED', commit_id: LAST, body: `x\n<!-- reviewed: sha=${HEAD.toUpperCase()} -->` }] });
+    expect(r.review).toBe('false');
+    expect(r.stdout).toContain('already reviewed');
+  });
+
+  it('counts verdicts only: a later COMMENTED review on the head does not mark it reviewed', () => {
+    const r = runDecide({ pushed: ['src/a.ts'], prFiles: ['src/a.ts'], reviews: [
+      { user: BOT, state: 'APPROVED', commit_id: LAST, body: `<!-- reviewed: sha=${LAST} -->` },
+      { user: BOT, state: 'COMMENTED', commit_id: HEAD, body: `<!-- reviewed: sha=${HEAD} -->` }] });
+    expect(r.review).toBe('true');
+    expect(evidenceOf(r.stdout).LAST_REVIEWED).toBe(LAST);
+    expect(r.calls, 'the compare base is the commit the verdict read').toContain(`compare/${LAST}...${HEAD}`);
+  });
+
+  it('acts on a failed reviews read where it always did, after the skip marker', () => {
+    // Reading the reviews earlier must not let a flaky read pre-empt `[skip-review]`.
+    const r = runDecide({ lastReviewed: HEAD, message: '[skip-review] docs', reviewsFail: true,
+      pushed: ['src/a.ts'], prFiles: ['src/a.ts'] });
+    expect(r.review).toBe('false');
+    expect(r.stdout).toContain('skip marker');
+    const flaky = runDecide({ lastReviewed: HEAD, reviewsFail: true, pushed: ['src/a.ts'], prFiles: ['src/a.ts'] });
+    expect(flaky.review, 'a failed read still reviews to be safe').toBe('true');
+    expect(flaky.stdout).toContain("could not read this PR's reviews");
   });
 });
