@@ -53,7 +53,7 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 | [Agent lane: finish](actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@v0.18.0` |
 | [Agent lane: classify a red run](actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@v0.18.0` |
 | [Agent telemetry](actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@v0.18.0` |
-| [Agent lanes: triage, implement, implement-revise, lead-revise, merge-reconcile](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.18.0` in a job |
+| [Agent lanes: review, triage, implement, implement-revise, lead, lead-revise, lead-split, merge-reconcile, rebase, verify-acs](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.18.0` in a job |
 | [Lane check](actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@v0.18.0` |
 | [Kanon's scripts from a workflow step](actions/kanon-path/README.md) | `uses: yedeya-labs/kanon/actions/kanon-path@v0.18.0` |
 
@@ -79,7 +79,7 @@ npx --yes --package github:yedeya-labs/kanon#v0.18.0 kanon apps --org <org> --re
 
 <!-- x-release-please-end -->
 
-The agent-lane blocks moved first ([plan 0001](docs/plans/0001-move-the-agent-lanes.md), step 1), then the shared lane workflow and the three lanes that run no workspace script (step 2). The other lanes follow in later releases.
+Every lane in [`docs/lanes.md`](docs/lanes.md) ships at this version ([plan 0001](docs/plans/0001-move-the-agent-lanes.md), steps 1 to 5). **Start with the review lane:** it is the first an adopter installs, because its App is what ends bootstrap (`K-ADOPT-6`). [`docs/lanes.md`](docs/lanes.md#your-first-lane-the-reviewer) walks through it. The Merger's lane and the other non-model lanes follow in later releases.
 
 ## Status
 
@@ -88,7 +88,8 @@ The agent-lane blocks moved first ([plan 0001](docs/plans/0001-move-the-agent-la
 - **Complete:** the [rulebook](rulebook/), about 200 rules, each with its reason.
 - **Released:** the checks and the release workflow above.
 - **Running on Kanon itself:** the Reviewer reviews Kanon's own pull requests, through the review lane at Kanon's last release, never the PR's own copy ([ADR 0011](docs/decisions/0011-kanon-runs-its-own-lanes.md)). It reviews members' PRs labelled `review:please`, and the Owner merges.
-- **Being extracted:** the agent lanes (Lead, Implementer, Reviewer, Merger). They are *moved* from the reference adopter unchanged, not rewritten ([ADR 0009](docs/decisions/0009-move-dont-rewrite.md)), so the loop you adopt is the one already running in production.
+- **Released lanes:** those of the Lead, the Implementer, the Reviewer and the Explorer's acceptance-criteria check, listed in [`docs/lanes.md`](docs/lanes.md).
+- **Being extracted:** the Merger's lane and the other non-model lanes. They are *moved* from the reference adopter unchanged, not rewritten ([ADR 0009](docs/decisions/0009-move-dont-rewrite.md)), so the loop you adopt is the one already running in production.
 
 See the [roadmap](ROADMAP.md) for what comes next.
 

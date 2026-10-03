@@ -17,6 +17,25 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Lead, split | `agent-lead-split.yml` | Lead | `issues: [labeled]`; `workflow_dispatch` with `issue` |
 | Rebase (resolve a conflict) | `agent-rebase.yml` | Implementer | `workflow_run` of your `CI` workflow, `types: [completed]`, `branches` your default branch; `schedule` (a daily floor); `workflow_dispatch` with `pr_number` |
 
+**What each caller maps, grants and needs.** Every caller maps its role's two App secrets and `CLAUDE_CODE_OAUTH_TOKEN`, by name. It grants at least the permissions below, which are the most any of the lane's jobs declares, and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
+
+<!-- lane-contract:table -->
+
+| Lane | App secrets | Grant at least | Reads |
+|---|---|---|---|
+| `agent-triage.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-implement.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-implement-revise.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-lead-revise.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: write` | none |
+| `agent-merge-reconcile.yml` | `REVIEWER_APP_ID`, `REVIEWER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read` | `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` |
+| `agent-review.yml` | `REVIEWER_APP_ID`, `REVIEWER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: write`, `actions: read` | `docs/qa/stack.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` |
+| `agent-verify-acs.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read` | `docs/qa/explorer-playbook.md` |
+| `agent-lead.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/lead-playbook.md` |
+| `agent-lead-split.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read` | `docs/qa/lead-playbook.md` |
+| `agent-rebase.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+
+<!-- /lane-contract:table -->
+
 Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile calls the blocks itself and installs nothing, so it never calls your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own.
 
 **The review lane** has three things the others don't:
@@ -24,7 +43,7 @@ Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called 
 - **It reads your CI from `.github/workflows/ci.yml`.** A review label added while CI is still running defers to CI's completion, and the lane asks Actions about the runs of that file for the head. Your caller's `workflow_run` names that workflow.
 - **It never reviews under the pull request's own instructions** (`K-MERGE-17`). Before any of the PR's code runs, it restores every input on the rule's list from your default branch: `AGENTS.md`, `CLAUDE.md`, `.claude/`, every markdown file directly inside `docs/qa/`, your project-setup hook, and every markdown document those link to or import. The PR's own copies are set aside under `.qa-pr/`, so the Reviewer still reads them as part of the diff, and a push that touches one re-opens an approved review. The specs under `docs/qa/specs/` come from the PR. Your own tests that read one of those files should read the `.qa-pr/` copy when there is one, or they will fail in the Reviewer's tree on a PR that changes it.
 
-**Grant a lane's job-level permissions too.** The implement lane's crash recovery writes issues, reads pull requests and reads its own run on the workflow token, so its caller grants `contents: read`, `issues: write`, `pull-requests: read` and `actions: read`. The rebase lane's filter reads pull requests and its earlier runs' jobs on the workflow token, so its caller grants `contents: read`, `actions: read` and `pull-requests: read`; the split lane's gate edits the issue's labels, so its caller grants `issues: write` and `pull-requests: read`.
+**Why a caller grants more than `contents: read`.** "Grant at least" includes the permissions a lane's jobs use on the workflow token, not only the lane's top level. The implement lane's crash recovery writes issues, reads pull requests and reads its own run. The rebase lane's filter reads pull requests and its earlier runs' jobs. The split lane's gate edits the issue's labels. The review lane reads CI's runs for the head, and comments on a pull request opened without a review label.
 
 ## Asking the review lane again
 
