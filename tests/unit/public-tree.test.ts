@@ -21,7 +21,7 @@ const FORBIDDEN_WORD_HASHES = new Set([
 // UUID's last group is twelve hex characters that are sometimes all digits. Only a dot *before*
 // the run is excluded (`1.<id>`): a dot after it is how an ECR hostname carries the id
 // (`<id>.dkr.ecr.<region>.amazonaws.com`), the form a repository most often holds one in.
-const AWS_ACCOUNT_ID = /(?<![\dA-Fa-f.])(?<!-[\dA-Fa-f]{4}-)\d{12}(?![\dA-Fa-f])/;
+const AWS_ACCOUNT_ID = /(?<![\dA-Fa-f.])(?<![\dA-Fa-f]{8}-[\dA-Fa-f]{4}-[\dA-Fa-f]{4}-[\dA-Fa-f]{4}-)\d{12}(?![\dA-Fa-f])/;
 const FORBIDDEN_PATTERNS: Array<[string, RegExp]> = [
   ['an AWS account id', AWS_ACCOUNT_ID],
   ['a local home-directory path', /\/Users\/[a-z]/],
@@ -78,6 +78,12 @@ describe('the account-id pattern', () => {
   it('finds an account id in an ECR hostname, and one that ends a sentence', () => {
     expect(AWS_ACCOUNT_ID.test(`${id}.dkr.ecr.us-east-1.amazonaws.com/app:latest`)).toBe(true);
     expect(AWS_ACCOUNT_ID.test(`deploys to ${id}.`)).toBe(true);
+  });
+
+  it('finds an account id after a hyphenated segment that is not a UUID', () => {
+    // The UUID exclusion matches the whole UUID prefix, not any `-hhhh-` before the digits (#146).
+    expect(AWS_ACCOUNT_ID.test(`stack-2024-${id}`)).toBe(true);
+    expect(AWS_ACCOUNT_ID.test(`-beef-${id}`)).toBe(true);
   });
 
   it('leaves longer numbers and dotted versions alone', () => {
