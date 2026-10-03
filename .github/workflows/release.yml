@@ -17,8 +17,11 @@
 #      released commit. Adopters still pin an exact version; the major tag is a
 #      convenience, not the supported form.
 #   5. Guard (#73). Fails, and comments on the release PR, when the open release PR
-#      changes anything but version strings outside the changelog, the manifest,
-#      package.json and package-lock.json. In its `extra-files`, and in any other file it
+#      changes anything but version strings outside the changelog, the manifest and the
+#      files its release type owns (`node`: package.json and package-lock.json; `simple`:
+#      its version file, version.txt by default; `python`: changelog.json). The release type
+#      is the adopter's, for its language; unset, it is release-please's default, `node`.
+#      In its `extra-files`, and in any other file it
 #      modifies, only a line whose sole change is a version may differ, and it may add,
 #      remove or rename no file. Release PRs run no CI and merge through the admin
 #      bypass, so on 0.10.0 a release PR built from stale `extra-files` reverted #67's
@@ -220,6 +223,18 @@ jobs:
           const SEMVER = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?/g;
           const blank = (line) => line.replace(SEMVER, '<version>');
           const at = (pkg, file) => posix.normalize(file.startsWith('/') ? file.slice(1) : posix.join(pkg, file));
+          // Per release type, the files the guard doesn't read, because release-please may
+          // change more than a version on a line there: `node`'s package.json and lockfile, and
+          // the changelog.json `python` updates when one exists. `simple`'s version file is
+          // added below, because its config can rename it. Kept to the types docs/release.md
+          // offers; any other type gets the version-only rule everywhere.
+          const WHOLE_FILES = {
+            node: ['package.json', 'package-lock.json'],
+            python: ['changelog.json'],
+            go: [],
+            rust: [],
+            simple: [],
+          };
 
           // The changed lines of one file's patch that are not a version-string change.
           const offending = (patch) => {
@@ -266,10 +281,15 @@ jobs:
             const extraFiles = new Set();
             for (const [path, pkg] of Object.entries(config.packages ?? {})) {
               versionFiles.add(at(path, pkg['changelog-path'] ?? config['changelog-path'] ?? 'CHANGELOG.md'));
-              versionFiles.add(at(path, 'package.json'));
-              versionFiles.add(at(path, 'package-lock.json'));
-              // The `simple` release type, which docs/release.md offers, keeps its version here.
-              if ((pkg['release-type'] ?? config['release-type']) === 'simple') versionFiles.add(at(path, 'version.txt'));
+              // The files release-please rewrites wholesale for the package's release type,
+              // which the version-only rule below can't judge. release-please's own default
+              // type is `node`, so an unset type is read as `node`. Every other release type's
+              // version files (pyproject.toml, Cargo.toml, Cargo.lock, __init__.py, ...) are
+              // held to the version-only rule, so Kanon names no language's files beyond these.
+              const type = pkg['release-type'] ?? config['release-type'] ?? 'node';
+              for (const file of WHOLE_FILES[type] ?? []) versionFiles.add(at(path, file));
+              // `simple` keeps its version in `version-file`, version.txt unless the config names another.
+              if (type === 'simple') versionFiles.add(at(path, pkg['version-file'] ?? config['version-file'] ?? 'version.txt'));
               for (const entry of [...(config['extra-files'] ?? []), ...(pkg['extra-files'] ?? [])]) {
                 extraFiles.add(at(path, typeof entry === 'string' ? entry : entry.path));
               }
@@ -300,7 +320,7 @@ jobs:
             const marker = `<!-- kanon-release-pr-guard ${pr.head.sha} -->`;
             const body =
               `${marker}\n**This release PR is stale: merging it would revert changes on \`${pr.base.ref}\`.** ` +
-              'Outside the changelog, the manifest, `package.json` and `package-lock.json`, a release PR may change only version strings, and this one changes more:\n\n' +
+              `Outside ${[...versionFiles].sort().map((f) => `\`${f}\``).join(', ')}, a release PR may change only version strings, and this one changes more:\n\n` +
               '````diff\n' + shown.join('\n') + more + '\n````\n\n' +
               `Don't merge it. Close it and delete its branch, \`${pr.head.ref}\`, and the next push to \`${pr.base.ref}\` opens a fresh one; or re-run the Release workflow on \`${pr.base.ref}\` and check that this comment doesn't come back.`;
             console.log(`::error title=Release PR is stale::Release PR #${pr.number} would revert changes on ${pr.base.ref}: ${problems.length} line(s) beyond version strings.`);
