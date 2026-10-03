@@ -39,7 +39,8 @@
 //     mechanical answer — whether a rewritten line still says what the sentence claims
 //     is a reading question — so these are LISTED as advisory, never fatal.
 //   • `docs/projects/**`, as in `citation-guard`: a brief carries no coordinate (RA-1742).
-//   • The QA tooling's own comments — `scripts/qa/**` and every test that imports it
+//   • The QA tooling's own comments — the adopter's declared pipeline code (`## Pipeline
+//     code` in `docs/qa/escalation-paths.md`, kanon#54) and every test that imports it
 //     (`readsCodeComments`). The two verbatim quotations of `course-wizard.tsx:797-800`
 //     in `tests/library/citation-guard.test.ts` and in `citation-guard.mjs`'s comments are a
 //     GUARD's regression record, not a claim about the wizard, and must never be
@@ -87,6 +88,7 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { PROJECTS_TREE, SOURCE_EXT, coordinatesIn, isOracleSpec, resolvePath } from './citation-guard.mjs';
 import { QA_TOOLING_IMPORT } from './spec-lib.mjs';
+import { DeclarationError, ESCALATION_FILE, parseEscalationFile, readEscalationFile } from './lib/escalation-paths.mjs';
 import { TABLE_EXT, conventionFor } from './lib/test-conventions.mjs';
 
 /**
@@ -104,18 +106,22 @@ const CODE_EXT = new RegExp(`\\.(?:${TABLE_EXT}|cjs)$`);
 
 /**
  * Is this code file read for comment coordinates? Everything under `CODE_TREES` EXCEPT
- * the QA tooling's own source (`scripts/qa/**`) and its tests (a test that imports
- * `scripts/qa/` — `QA_TOOLING_IMPORT`, the rule the spec-id sweeps use). Their comments
+ * the QA tooling's own source (the directories the adopter declares under `## Pipeline
+ * code`, kanon#54; until then the reference adopter's `scripts/qa/`, written here) and its
+ * tests (a test that imports `scripts/qa/` — `QA_TOOLING_IMPORT`, the rule the spec-id
+ * sweeps use). Their comments
  * quote OLD coordinates on purpose — `course-wizard.tsx:797-800` in `citation-guard.mjs`
  * and its test, `payments.ts:44-52` — as the guard's regression record, and RA-1384's
  * third criterion forbids retargeting them. Both halves are properties of the file,
  * not a list of names (RA-1214), so the next guard qualifies the day it is written.
  */
-export const readsCodeComments = (path, text) =>
-  CODE_TREES.some((t) => path.startsWith(t)) &&
+export const readsCodeComments = (path, text, pipelineDirs) => {
+  if (!Array.isArray(pipelineDirs)) throw new TypeError('readsCodeComments needs the declared pipeline-code directories');
+  return CODE_TREES.some((t) => path.startsWith(t)) &&
   CODE_EXT.test(path) &&
-  !path.startsWith('scripts/qa/') &&
+  !pipelineDirs.some((d) => path.startsWith(d)) &&
   !(/^(tests|e2e)\//.test(path) && QA_TOOLING_IMPORT.test(text));
+};
 
 // A coordinate in a code comment is written with or without backticks — the corpus has
 // both (`// checkout (storefront.ts:1155, RA-253)`) — so the path is matched on its own,
@@ -355,6 +361,24 @@ const main = () => {
     process.exitCode = 1;
     return;
   }
+  // THE ADOPTER'S PIPELINE CODE (kanon#54), whose comments are a guard's regression record.
+  // Read from the tree being checked, and a missing or malformed declaration stops the run
+  // by name rather than reading every pipeline comment as a claim.
+  let pipelineDirs;
+  try {
+    const declared = head
+      ? (() => {
+          const text = tryGit(['show', `${head}:${ESCALATION_FILE}`]);
+          if (text === null) throw new DeclarationError(`${ESCALATION_FILE} doesn't exist at \`${head}\` (K-LAYOUT-8)`);
+          return parseEscalationFile(text);
+        })()
+      : readEscalationFile();
+    pipelineDirs = declared.pipeline.map(({ dir }) => dir);
+  } catch (e) {
+    console.error(`citation-shift: ${e.message}`);
+    process.exitCode = 1;
+    return;
+  }
   const diff = parseDiff(git(['diff', '-U0', '--no-renames', '--no-color', base, ...(head ? [head] : [])]));
   const trackedHead = (head ? git(['ls-tree', '-r', '-z', '--name-only', head]) : git(['ls-files', '-z'])).split('\0').filter(Boolean);
   const trackedBase = git(['ls-tree', '-r', '-z', '--name-only', base]).split('\0').filter(Boolean);
@@ -364,7 +388,7 @@ const main = () => {
   // `git grep` prefilter, so the replay (`--head`) does not `git show` every source file.
   const grep = tryGit(['grep', '-l', '-E', `\\.${SOURCE_EXT.replace('(?:', '(')}:[0-9]`, ...(head ? [head] : []), '--', ...CODE_TREES]) ?? '';
   const code = grep.split('\n').filter(Boolean).map((l) => (head ? l.slice(head.length + 1) : l))
-    .filter((f) => readsCodeComments(f, readHead(f)));
+    .filter((f) => readsCodeComments(f, readHead(f), pipelineDirs));
   const r = shiftedCoordinates({ docs, code, readHead, trackedHead, trackedBase, diff });
 
   if (FIX && r.moved.length) {

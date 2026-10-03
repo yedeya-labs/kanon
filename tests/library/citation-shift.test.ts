@@ -233,23 +233,33 @@ describe('code comments are read too (RA-2293)', () => {
     expect(commentCoordinates('// @scope/pkg.ts:3')).toEqual([]);
   });
 
+  // The adopter's declared pipeline code (`## Pipeline code` in docs/qa/escalation-paths.md, kanon#54).
+  const PIPELINE = ['scripts/qa/'];
+
   it("excludes the QA tooling's own source and tests by what they ARE, not by name (RA-1384 criterion 3)", () => {
-    expect(readsCodeComments('src/server/services/payments.ts', '')).toBe(true);
-    expect(readsCodeComments('e2e/helpers.ts', '')).toBe(true);
-    expect(readsCodeComments('scripts/seed.ts', '')).toBe(true);
-    expect(readsCodeComments('scripts/qa/citation-guard.mjs', '')).toBe(false);
-    expect(readsCodeComments('tests/unit/any.test.ts', "import { x } from '../../scripts/qa/citation-guard.mjs';")).toBe(false);
+    expect(readsCodeComments('src/server/services/payments.ts', '', PIPELINE)).toBe(true);
+    expect(readsCodeComments('e2e/helpers.ts', '', PIPELINE)).toBe(true);
+    expect(readsCodeComments('scripts/seed.ts', '', PIPELINE)).toBe(true);
+    expect(readsCodeComments('scripts/qa/citation-guard.mjs', '', PIPELINE)).toBe(false);
+    expect(readsCodeComments('tests/unit/any.test.ts', "import { x } from '../../scripts/qa/citation-guard.mjs';", PIPELINE)).toBe(false);
     // An adopter imports the library from its checkout of Kanon after the move (plan 0001 §3).
-    expect(readsCodeComments('tests/unit/any.test.ts', "const m = await importKanon('../../.kanon/scripts/citation-guard.mjs');")).toBe(false);
-    expect(readsCodeComments('tests/unit/any.test.ts', "import { x } from '@/lib/x';")).toBe(true);
-    expect(readsCodeComments('docs/a.md', '')).toBe(false);
-    expect(readsCodeComments('drizzle/0001.sql', '')).toBe(false);
+    expect(readsCodeComments('tests/unit/any.test.ts', "const m = await importKanon('../../.kanon/scripts/citation-guard.mjs');", PIPELINE)).toBe(false);
+    expect(readsCodeComments('tests/unit/any.test.ts', "import { x } from '@/lib/x';", PIPELINE)).toBe(true);
+    expect(readsCodeComments('docs/a.md', '', PIPELINE)).toBe(false);
+    expect(readsCodeComments('drizzle/0001.sql', '', PIPELINE)).toBe(false);
+  });
+
+  it("excludes exactly the adopter's declared pipeline code, which is the adopter's to name (kanon#54)", () => {
+    expect(readsCodeComments('scripts/qa/citation-guard.mjs', '', [])).toBe(true);
+    expect(readsCodeComments('scripts/qa/citation-guard.mjs', '', ['scripts/pipeline/'])).toBe(true);
+    expect(readsCodeComments('scripts/pipeline/triage.py', '', ['scripts/pipeline/'])).toBe(false);
+    expect(() => readsCodeComments('scripts/seed.ts', '')).toThrow(/pipeline-code directories/);
   });
 
   it('reads Python and Go source by their own comment syntax (kanon#20)', () => {
-    expect(readsCodeComments('src/orders/core.py', '')).toBe(true);
-    expect(readsCodeComments('tests/test_core.py', '')).toBe(true);
-    expect(readsCodeComments('src/orders/core.go', '')).toBe(true);
+    expect(readsCodeComments('src/orders/core.py', '', [])).toBe(true);
+    expect(readsCodeComments('tests/test_core.py', '', [])).toBe(true);
+    expect(readsCodeComments('src/orders/core.go', '', [])).toBe(true);
     // A `#` comment, whole-line or trailing, and a coordinate into any language a doc can cite.
     expect(commentCoordinates('# the entry point is src/orders/core.py:4-6', 'hash').map((c: { text: string }) => c.text)).toEqual(['src/orders/core.py:4-6']);
     expect(commentCoordinates('x = 1  # see core.go:12', 'hash').map((c: { text: string }) => c.text)).toEqual(['core.go:12']);
@@ -273,6 +283,7 @@ describe('the CLI reads code comments end to end (RA-2293)', () => {
     sh('config', 'user.name', 't');
     w('src/wizard.tsx', Array.from({ length: 20 }, (_, i) => `line${i + 1}`).join('\n') + '\n');
     w('e2e/helpers.ts', '/**\n * bails at `wizard.tsx:12`\n */\nexport const x = 1;\n');
+    w('docs/qa/escalation-paths.md', '## Escalation paths\n\n## Pipeline code\n');
     sh('add', '.');
     sh('commit', '-qm', 'base');
     w('src/wizard.tsx', ['line1', 'line2', 'new-a', 'new-b', ...Array.from({ length: 18 }, (_, i) => `line${i + 3}`)].join('\n') + '\n');

@@ -1,0 +1,202 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import {
+  DeclarationError,
+  ESCALATION_FILE,
+  PIPELINE_ESCALATIONS,
+  escalatingPaths,
+  parseEscalationFile,
+  readEscalationFile,
+  readEscalationFileAt,
+} from '../../scripts/lib/escalation-paths.mjs';
+import { IMPLEMENTER_LOGIN, mergeVerdict } from '../../scripts/merge-gate.mjs';
+import { reviewScope, sensitiveHits } from '../../scripts/ship-review-scope.mjs';
+import { KANON_SCAN, appliedLabels, scanDirs } from '../../scripts/label-guard.mjs';
+
+/**
+ * kanon#54: the adopter's high-risk paths and its own pipeline code are declared in
+ * `docs/qa/escalation-paths.md` (`K-LAYOUT-8`), not written in the library. These tests run in
+ * the fixture adopter (`tests/fixtures/adopter`), whose escalation file declares `^migrations/`,
+ * an auth pattern and `scripts/pipeline/`.
+ */
+
+const FILE = (paths: string, pipeline: string) => `# Escalation paths\n\n## Escalation paths\n\n${paths}\n## Pipeline code\n\n${pipeline}\n## Bail list\n\n- anything\n`;
+
+const fails = (text: string, message: RegExp) => {
+  expect(() => parseEscalationFile(text)).toThrow(DeclarationError);
+  expect(() => parseEscalationFile(text)).toThrow(message);
+};
+
+describe('the escalation file parser', () => {
+  it('reads both sections, with the reason for each entry, and leaves prose alone', () => {
+    const file = parseEscalationFile(
+      FILE('- `^migrations/` — database migrations\n\nSome prose about them.\n* `/^src/.*payments?/i` — payments\n', '- `scripts/pipeline/` — our pipeline\n'),
+    );
+    expect(file.paths.map((p) => [p.pattern.source, p.pattern.flags, p.reason])).toEqual([
+      ['^migrations\\/', '', 'database migrations'],
+      ['^src\\/.*payments?', 'i', 'payments'],
+    ]);
+    expect(file.pipeline).toEqual([{ dir: 'scripts/pipeline/', reason: 'our pipeline' }]);
+  });
+
+  it('reads `/…/i` as a pattern that ignores case, and anything else as case-sensitive', () => {
+    const file = parseEscalationFile(FILE('- `/^src/.*Payments/i` — payments\n- `^Docs/` — docs\n', ''));
+    expect(file.paths[0]?.pattern.test('src/lib/payments.ts')).toBe(true);
+    expect(file.paths[1]?.pattern.test('docs/a.md')).toBe(false);
+  });
+
+  it('takes a section with no entries as a declaration that there are none', () => {
+    expect(parseEscalationFile(FILE('None.\n', ''))).toEqual({ paths: [], pipeline: [] });
+  });
+
+  it('ignores a heading or a bullet inside a fenced block', () => {
+    const text = FILE('```\n- not an entry\n## Pipeline code\n```\n- `^a/` — a\n', '');
+    expect(parseEscalationFile(text).paths).toHaveLength(1);
+  });
+
+  it('fails by name when a heading is missing or doubled', () => {
+    fails('## Escalation paths\n', /docs\/qa\/escalation-paths\.md has no `## Pipeline code` heading/);
+    fails('## Pipeline code\n', /has no `## Escalation paths` heading/);
+    fails(`${FILE('', '')}\n## Pipeline code\n`, /has the `## Pipeline code` heading 2 times, on lines 6, 13/);
+  });
+
+  it('fails by name, with the line, on an entry it cannot read', () => {
+    fails(FILE('- `^a/` - a hyphen, not an em dash\n', ''), /escalation-paths\.md:5, under `## Escalation paths`, isn't an entry/);
+    fails(FILE('- ^a/ — no backticks\n', ''), /:5, under `## Escalation paths`/);
+    fails(FILE('- `^a/` —\n', ''), /:5, under `## Escalation paths`/);
+    fails(FILE('- `^(a/` — unbalanced\n', ''), /:5: `\^\(a\/` isn't a regular expression/);
+    fails(FILE('', '- `scripts/pipeline` — no slash\n'), /`scripts\/pipeline` isn't a pipeline-code directory/);
+    for (const dir of ['/scripts/', './scripts/', 'scripts/*/', '../x/', 'a/../b/', 'a b/']) {
+      fails(FILE('', `- \`${dir}\` — x\n`), /isn't a pipeline-code directory/);
+    }
+    fails(`${FILE('', '')}\`\`\`\n`, /opens a code fence that never closes/);
+  });
+});
+
+describe('reading the escalation file', () => {
+  it("reads the fixture adopter's file from the working tree", () => {
+    const file = readEscalationFile();
+    expect(file.pipeline.map((p) => p.dir)).toEqual(['scripts/pipeline/']);
+    expect(file.paths.map((p) => p.reason)).toEqual(['database migrations', 'auth']);
+  });
+
+  it('fails by name when the tree has no escalation file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'escalation-'));
+    try {
+      expect(() => readEscalationFile(dir)).toThrow(/docs\/qa\/escalation-paths\.md doesn't exist\. Every adopter keeps one/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads it from the default branch it is given, never another ref (K-MERGE-17)', () => {
+    const asked: string[] = [];
+    const file = readEscalationFileAt('trunk', (path, ref) => {
+      asked.push(`${path}@${ref}`);
+      return ref === 'trunk' ? FILE('- `^a/` — a\n', '') : FILE('', '');
+    });
+    expect(asked).toEqual([`${ESCALATION_FILE}@trunk`]);
+    expect(file.paths).toHaveLength(1);
+  });
+
+  it('fails by name when the default branch has no file, a failed read, or no branch', () => {
+    expect(() => readEscalationFileAt('main', () => null)).toThrow(/doesn't exist on `main`/);
+    expect(() =>
+      readEscalationFileAt('main', () => {
+        throw new Error('HTTP 502');
+      }),
+    ).toThrow(/couldn't be read from `main`: HTTP 502/);
+    expect(() => readEscalationFileAt('', () => '')).toThrow(/no default branch to read docs\/qa\/escalation-paths\.md from/);
+  });
+});
+
+describe('the escalating paths', () => {
+  const paths = escalatingPaths(readEscalationFile());
+  const reasonFor = (f: string) => paths.find(([re]) => re.test(f))?.[1] ?? null;
+
+  it("are the pipeline's own paths, the declared pipeline code and the declared high-risk paths", () => {
+    expect(paths.slice(0, PIPELINE_ESCALATIONS.length)).toEqual([...PIPELINE_ESCALATIONS]);
+    expect(reasonFor('.github/workflows/ci.yml')).toBe('the CI and agent pipeline');
+    expect(reasonFor('docs/qa/reviewer-playbook.md')).toBe('the pipeline documents, which are agent instructions');
+    expect(reasonFor('scripts/pipeline/file-follow-up.mjs')).toBe("the project's own pipeline scripts");
+    expect(reasonFor('migrations/0001.sql')).toBe('database migrations');
+    expect(reasonFor('src/server/session.ts')).toBe('auth');
+  });
+
+  it("escalate nothing the adopter didn't declare, and never a spec", () => {
+    for (const f of ['docs/qa/specs/kiosk.md', 'scripts/qa/x.mjs', 'drizzle/0001.sql', 'sst.config.ts', 'scripts/pipelines/x.mjs', 'src/lib/authors.ts']) {
+      expect(reasonFor(f), f).toBeNull();
+    }
+  });
+});
+
+describe("the Merger's verdict takes the escalating paths as an argument (kanon#54)", () => {
+  const pr = (files: string[]) => ({
+    number: 1,
+    reviews: [],
+    rebaseAttempted: true,
+    closing: { mergeClosesUndeclared: [], unverifiable: false },
+    state: 'OPEN',
+    isDraft: false,
+    author: IMPLEMENTER_LOGIN,
+    labels: ['agent:implement'],
+    headSha: 'abc',
+    workflowRuns: [],
+    files,
+    checks: [],
+    mergeStateStatus: 'CLEAN',
+    mergeable: 'MERGEABLE',
+  });
+  const escalations = escalatingPaths(readEscalationFile());
+
+  it('escalates a declared path, and not one the adopter never declared', () => {
+    expect(mergeVerdict(pr(['migrations/0001.sql']), { escalations })).toMatchObject({ action: 'escalate', rule: 'escalating-path' });
+    expect(mergeVerdict(pr(['scripts/pipeline/x.mjs']), { escalations })).toMatchObject({ rule: 'escalating-path' });
+    expect(mergeVerdict(pr(['sst.config.ts']), { escalations }).rule).not.toBe('escalating-path');
+  });
+
+  it('refuses to decide with no escalating paths, rather than merge with none applied', () => {
+    expect(() => mergeVerdict(pr(['src/a.ts']))).toThrow(/needs the escalating paths/);
+    expect(() => mergeVerdict(pr(['src/a.ts']), { escalations: [] })).toThrow(/needs the escalating paths/);
+  });
+});
+
+describe("/ship's local review reviews what the project declares (kanon#54)", () => {
+  const escalation = readEscalationFile();
+
+  it('names the reason the project gives for each hit, plus the agent workflows', () => {
+    expect(sensitiveHits(['migrations/1.sql', 'scripts/pipeline/a.mjs', '.github/workflows/agent-lead.yml', '.github/workflows/ci.yml', 'README.md'], escalation)).toEqual([
+      { file: 'migrations/1.sql', area: 'database migrations' },
+      { file: 'scripts/pipeline/a.mjs', area: "the project's own pipeline scripts" },
+      { file: '.github/workflows/agent-lead.yml', area: 'the agent pipeline' },
+    ]);
+  });
+
+  it('skips a branch that touches none of them', () => {
+    expect(reviewScope(['README.md'], { env: {}, escalation })).toMatchObject({ action: 'skip', rule: 'no-sensitive-path' });
+    expect(reviewScope(['migrations/1.sql'], { env: {}, escalation })).toMatchObject({ action: 'run' });
+  });
+});
+
+describe("the label guard scans Kanon's directories and the declared pipeline code (kanon#54)", () => {
+  it("adds the fixture adopter's `scripts/pipeline` to Kanon's three", () => {
+    expect(scanDirs()).toEqual([...KANON_SCAN, 'scripts/pipeline']);
+    expect(appliedLabels().get('qa:needs-severity')).toEqual(new Set(['scripts/pipeline/file-follow-up.mjs']));
+  });
+
+  it("doesn't scan an undeclared directory, and fails by name without the file", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'label-guard-'));
+    try {
+      mkdirSync(join(dir, 'scripts/pipeline'), { recursive: true });
+      writeFileSync(join(dir, 'scripts/pipeline/a.mjs'), "export const L = 'qa:needs-severity';\n");
+      expect(() => scanDirs(dir)).toThrow(/docs\/qa\/escalation-paths\.md doesn't exist/);
+      mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+      writeFileSync(join(dir, ESCALATION_FILE), FILE('', ''));
+      expect(appliedLabels(undefined, dir).has('qa:needs-severity')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

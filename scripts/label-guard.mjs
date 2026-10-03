@@ -21,23 +21,33 @@ import { pathToFileURL } from 'node:url';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { readEscalationFile } from './lib/escalation-paths.mjs';
 import { isRoadmapMilestone } from './lib/milestones.mjs';
 
 const REPO = process.env.REPO ?? process.env.GITHUB_REPOSITORY;
 
 /** Where a label can be applied from. Prompts count: an agent told to apply a
  *  label it cannot apply fails mid-run, having already done the work. */
-// `.github/ISSUE_TEMPLATE` and `.github/scripts` were both outside this and both
-// attach labels (RA-1101): the issue forms declaratively via a `labels:` key, and the
-// scripts through `gh issue edit --add-label`. A label writer the guard cannot see is
+// `.github/ISSUE_TEMPLATE` was once outside this and attaches labels (RA-1101): the
+// issue forms declaratively via a `labels:` key. A label writer the guard cannot see is
 // exactly the RA-1089 defect it exists to catch, one directory over.
-export const SCAN = ['.github/workflows', '.github/ISSUE_TEMPLATE', '.github/scripts', 'scripts/qa', 'docs/qa'];
+//
+// KANON'S DIRECTORIES, AND THE ADOPTER'S OWN (kanon#54). These three are where every
+// adopter keeps its workflows, issue forms and pipeline documents (`K-LAYOUT-1`). Where it
+// keeps its own pipeline SCRIPTS is the adopter's to say, under `## Pipeline code` in
+// `docs/qa/escalation-paths.md` (`K-LAYOUT-8`); `scanDirs` adds them. Until #54 the
+// reference adopter's `scripts/qa` and `.github/scripts` were written here.
+export const KANON_SCAN = ['.github/workflows', '.github/ISSUE_TEMPLATE', 'docs/qa'];
 
-/** This file's own examples are not applications. The first run flagged `foo`,
- *  `x` and `later` from its own docstrings — a tool reporting its documentation as
- *  a defect, the same shape as `verify-acs.test.ts` counting as its own coverage
- *  (RA-1068). Excluded by NAME, so a rename cannot silently re-poison it. */
-const NOT_A_WRITER = ['scripts/qa/label-guard.mjs', 'tests/unit/label-guard.test.ts'];
+/**
+ * Every directory the guard scans: Kanon's, then the adopter's declared pipeline code.
+ * Throws `DeclarationError`, naming the file, when the declaration is missing or malformed.
+ * @param {string} [root]
+ */
+export const scanDirs = (root = process.cwd()) => [
+  ...KANON_SCAN,
+  ...readEscalationFile(root).pipeline.map(({ dir }) => dir.replace(/\/$/, '')),
+];
 
 /**
  * Comments removed. `# … the flag label and the comment` is PROSE ABOUT labels,
@@ -69,7 +79,8 @@ export const stripComments = (text) =>
  *
  * @param {string[]} dirs
  */
-export function appliedLabels(dirs = SCAN, root = process.cwd()) {
+export function appliedLabels(dirs = undefined, root = process.cwd()) {
+  dirs ??= scanDirs(root);
   const out = new Map();
   const add = (label, file) => {
     if (!out.has(label)) out.set(label, new Set());
@@ -79,7 +90,6 @@ export function appliedLabels(dirs = SCAN, root = process.cwd()) {
   for (const dir of dirs) {
     for (const file of walk(join(root, dir))) {
       const rel = file.slice(root.length + 1);
-      if (NOT_A_WRITER.includes(rel)) continue;
       const text = stripComments(readFileSync(file, 'utf8'));
 
       // `--label foo` / `--add-label foo`, quoted or bare, in YAML or JS.
@@ -238,7 +248,8 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  *
  * The titles come from the LIVE milestone list, so nothing here names one.
  */
-export function appliedMilestones(titles, dirs = SCAN, root = process.cwd()) {
+export function appliedMilestones(titles, dirs = undefined, root = process.cwd()) {
+  dirs ??= scanDirs(root);
   const out = new Map();
   for (const [rel, hits] of milestoneApplications(titles, dirs, root)) out.set(rel, new Set(hits.map((h) => h.title)));
   return out;
@@ -253,15 +264,15 @@ export function appliedMilestones(titles, dirs = SCAN, root = process.cwd()) {
  * "never put one on the milestone Production Ready" is prose and does not match, and
  * neither does a `### Milestone` heading with a title on the line below it.
  */
-export function milestoneApplications(titles, dirs = SCAN, root = process.cwd()) {
+export function milestoneApplications(titles, dirs = undefined, root = process.cwd()) {
   const out = new Map();
   if (!titles.length) return out;
+  dirs ??= scanDirs(root);
   const alt = titles.map(escapeRe).sort((a, b) => b.length - a.length).join('|');
   const re = new RegExp(`(?:--milestone(?:=|[ \\t]+)|\\bmilestone(?::[* \\t]*|[ \\t]+(?=["'\`*])\\**))["'\`]?(${alt})(?![\\w-])`, 'gi');
   for (const dir of dirs) {
     for (const file of walk(join(root, dir))) {
       const rel = file.slice(root.length + 1);
-      if (NOT_A_WRITER.includes(rel)) continue;
       const text = stripComments(readFileSync(file, 'utf8'));
       for (const m of text.matchAll(re)) {
         const title = titles.find((t) => t.toLowerCase() === m[1].toLowerCase());
@@ -481,8 +492,16 @@ const main = () => {
   };
   const fail = () => { status = Math.max(status, 1); };
 
+  // 0. Where to look: Kanon's directories and the adopter's declared pipeline code (kanon#54).
+  //    A missing or malformed declaration is the repository's defect, named, not a scan of less.
+  let dirs;
+  try { dirs = scanDirs(); } catch (err) {
+    console.error(`label-guard: ${err.message}`);
+    process.exit(1);
+  }
+
   // 1. Every label the automation applies exists (RA-1089).
-  const applied = appliedLabels();
+  const applied = appliedLabels(dirs);
   let live = null;
   try { live = liveLabels(); } catch (err) { unreadable("the repo's labels", err); }
   if (live) {
@@ -505,7 +524,7 @@ const main = () => {
   try { milestones = liveMilestones(); } catch (err) { unreadable("the repo's milestones", err); }
   if (milestones) {
     const roadmap = milestones.filter(isRoadmapMilestone).map((m) => m.title);
-    const writers = explorerRoadmapWriters(applied, milestoneApplications(milestones.map((m) => m.title)), milestones);
+    const writers = explorerRoadmapWriters(applied, milestoneApplications(milestones.map((m) => m.title), dirs), milestones);
     console.log(`\nRoadmap milestones (open, with a due date): ${roadmap.join(', ') || 'none'}.`);
     if (!writers.length) {
       console.log(`No filing instruction pairs \`${EXPLORER_LABEL}\` with one of them.`);

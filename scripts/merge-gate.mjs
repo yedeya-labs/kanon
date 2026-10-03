@@ -47,43 +47,18 @@
 // the rule that fired, and the caller writes it onto the PR.
 
 /**
- * Paths that must never be merged without a human.
+ * Paths that must never be merged without a human are not written here (kanon#54). The
+ * pipeline's own paths are Kanon's (`PIPELINE_ESCALATIONS`: `.github/**` and the
+ * `docs/qa/*.md` playbooks), and the project's pipeline code and high-risk paths are the
+ * adopter's, declared in `docs/qa/escalation-paths.md` (`K-LAYOUT-8`). `main` reads that file
+ * from the default branch (`K-MERGE-17`) and hands `escalatingPaths` of it to `mergeVerdict`,
+ * so a pull request can't add or remove an escalation path for itself.
  *
- * `.github/**`, `scripts/qa/**` and `docs/qa/**` are the pipeline modifying
- * ITSELF — the developer's rule, and not a hypothetical: 7 of 22 measured the Implementer
- * PRs touch them. The rest are the landmine surfaces `agent-implement.yml` already
- * makes the Implementer bail on, restated here because a bail is a prompt asking an agent
- * to refuse, and this is a mechanism that does not.
- *
- * Also read by `ship-review-scope.mjs` (RA-781), which reviews only four of these areas
- * (payments, auth, schema/migrations, and the QA pipeline's part of `.github/**` plus
- * `scripts/qa/**`), chosen by their LABEL here. Renaming one of those labels makes that
- * script throw at import rather than stop reviewing the area; narrowing a pattern narrows
- * `/ship`'s local review too.
+ * `docs/qa/specs/**` is deliberately never an escalation path: those specs are the project's
+ * DELIVERABLE, and escalating them made the Merger decline every PR the project he exists for
+ * produces (measured on RA-1057). A spec change is reviewed by the Reviewer against the brief.
  */
-export const ESCALATE_PATHS = [
-  [/^\.github\//, 'the CI/agent pipeline'],
-  [/^scripts\/qa\//, 'the QA pipeline'],
-  // The PLAYBOOKS only — `docs/qa/*.md` is what the agents are told to do, so editing
-  // one edits an agent. `docs/qa/specs/**` is deliberately NOT here: those specs are
-  // the pilot's actual DELIVERABLE, and escalating them made the Merger decline every PR
-  // the project he exists for produces (measured on RA-1057). A spec change is already
-  // reviewed by the Reviewer against the brief, which is the check that matters for it.
-  [/^docs\/qa\/[^/]+\.md$/, 'the QA playbooks, which are agent instructions'],
-  [/^sst\.config\.ts$/, 'infrastructure and AWS cost'],
-  // RA-2352: `sst.config.ts` imports pure modules from `infra/` (RA-1541 moved the paging
-  // rule there). Changing `alarmIdOf` renames every business-event alarm's logical id
-  // and changing `clauseOf` changes what pages — the same surface as the config.
-  [/^infra\//, 'infrastructure and AWS cost'],
-  [/^drizzle\//, 'database migrations'],
-  [/^src\/db\//, 'the schema and RLS'],
-  // CODE paths only. Matching any path containing the word escalated
-  // `docs/payment-state-machine.md` — a document ABOUT payments, not the payments
-  // code — and would have escalated `src/lib/authors.ts` too. The landmine is the
-  // implementation; a doc describing it is reviewed like any other doc.
-  [/^(src|drizzle)\/.*payments?/i, 'payments'],
-  [/^(src|drizzle)\/.*(auth|authn|authz|credentials?|sessions?)([^a-z]|$)/i, 'auth'],
-];
+export { PIPELINE_ESCALATIONS } from './lib/escalation-paths.mjs';
 
 /**
  * The two workflows the Merger must not wait on, because they are him and the review
@@ -473,11 +448,17 @@ export function checkPartition(checks) {
  * projects both via `CONFLICT_JSON`; this typedef is the only place a future caller
  * learns it must too.
  *
- * @param {{implementer?: string, reviewer?: string, now?: number}} [who]
+ * @param {{escalations: Array<readonly [RegExp, string]>, implementer?: string, reviewer?: string, now?: number}} who
  * `now` is injected for the `UNSTABLE` settle window, so the decision stays a function of
- * its arguments.
+ * its arguments. `escalations` is REQUIRED: `escalatingPaths` of the escalation file as the
+ * default branch has it (kanon#54). There is no default, because a default would be a list
+ * of paths the adopter never declared, and a missing list is a caller's bug that must throw
+ * rather than merge a PR no path rule was applied to.
  */
-export function mergeVerdict(pr, { implementer = IMPLEMENTER_LOGIN, reviewer = REVIEWER_LOGIN, now = Date.now() } = {}) {
+export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN, reviewer = REVIEWER_LOGIN, now = Date.now() } = /** @type {any} */ ({})) {
+  if (!Array.isArray(escalations) || escalations.length === 0) {
+    throw new Error('mergeVerdict needs the escalating paths (`escalatingPaths` of docs/qa/escalation-paths.md), and was given none');
+  }
   // `quiet` is on EVERY verdict, not only the ones that set it. A field present on
   // some branches of a union is one every caller has to narrow for, and the one that
   // forgets suppresses nothing — so the default is carried explicitly.
@@ -516,7 +497,7 @@ export function mergeVerdict(pr, { implementer = IMPLEMENTER_LOGIN, reviewer = R
   if (sev.length) return stop('escalating-label', `carries \`${sev.join('`, `')}\``);
 
   const touched = pr.files.flatMap((f) => {
-    const hit = ESCALATE_PATHS.find(([re]) => re.test(f));
+    const hit = escalations.find(([re]) => re.test(f));
     return hit ? [`\`${f}\` (${hit[1]})`] : [];
   });
 
@@ -980,6 +961,7 @@ import { evidenceSha, readTrailer } from './review-trailer.mjs';
 import { CONFLICT_JSON, CONFLICT_WHY, conflictState } from './conflict-state.mjs';
 import { marker as rebaseMarker } from './rebase-lane.mjs';
 import { appLogin } from './app-register.mjs';
+import { escalatingPaths, readEscalationFileAt } from './lib/escalation-paths.mjs';
 
 const gh = (args, opts = {}) => execFileSync('gh', args, { encoding: 'utf8', ...opts });
 
@@ -1005,7 +987,7 @@ export function readPr(number, repo, opts = {}) {
   // NOT `gh pr view --json files`. That connection is hard-capped at `files(first: 100)`
   // with no pagination and no truncation signal, so on a PR of more than 100 files any
   // `drizzle/`, `src/db/`, `.github/` or payments/auth file sorting past position 100 is
-  // invisible to ESCALATE_PATHS — and `mergeVerdict` returns `merge` while still
+  // invisible to the escalating paths — and `mergeVerdict` returns `merge` while still
   // reporting "no escalating path". The paginated REST endpoint is what
   // `agent-review.yml` already uses for the same list.
   //
@@ -1491,6 +1473,21 @@ async function main() {
   // No --pr: sweep every open PR. This is the heartbeat's mode, and it is what makes
   // a missed event recoverable rather than terminal — the failure this pipeline
   // produces over and over is a trigger that silently did not fire.
+  // THE ESCALATION FILE, FROM THE DEFAULT BRANCH (`K-MERGE-17`, kanon#54). Read once, before
+  // any PR, and a missing or malformed file ends the run by name: a sweep with no path rules
+  // would merge PRs that touch the project's high-risk paths.
+  const escalations = escalatingPaths(readEscalationFileAt(
+    gh(['api', `repos/${repo}`, '--jq', '.default_branch']).trim(),
+    (path, ref) => {
+      try {
+        return gh(['api', `repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`, '-H', 'Accept: application/vnd.github.raw'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) {
+        if (/\b404\b|Not Found/.test(String(e?.stderr ?? ''))) return null;
+        throw new Error(String(e?.stderr || e?.message || e).trim());
+      }
+    },
+  ));
+
   const numbers = explicit ?? JSON.parse(
     gh(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', 'number']),
   ).map((p) => String(p.number));
@@ -1498,7 +1495,7 @@ async function main() {
   const { merged, escalated, waiting, released, skips, failed } = sweep(numbers, {
     consider: (n) => {
       const pr = readPr(n, repo);
-      const verdict = mergeVerdict(pr);
+      const verdict = mergeVerdict(pr, { escalations });
       // Skips are the majority and are not findings. Printed at one line so a run is
       // still auditable, but never summarised as if something happened.
       console.log(`#${n} → ${verdict.action} (${verdict.rule}): ${verdict.why}`);

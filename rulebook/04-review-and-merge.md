@@ -49,9 +49,9 @@ The merge is pinned to the head commit the verdict read. If the head has moved, 
 
 **Why.** A PR can hollow out a required job while keeping its check name, and a merged bad pipeline script governs every later review, so the agent that merges must never be able to change what gates a merge. In the reference adopter a third of the implementer's PRs touched pipeline files. High-risk surfaces such as schema changes or payments code are where a wrong merge is most expensive, and an agent's willingness to stop is only a prompt, while escalation is a mechanism. Matching documents produced false escalations, and escalating specs made the merger decline every PR of the first planned project. Each over-broad entry interrupts a human and trains them to ignore the surface.
 
-**Enforced by.** The merger's verdict function refuses any PR whose diff touches an escalation path, matched by path patterns that include every workflow file, every file directly inside `docs/qa/` and the project's own list.
+**Enforced by.** The merger's verdict function refuses any PR whose diff touches an escalation path: every file under `.github/`, every markdown file directly inside `docs/qa/`, and the project's own pipeline code and high-risk paths, read from `docs/qa/escalation-paths.md` on the default branch (`K-LAYOUT-8`, `K-MERGE-17`). A missing or malformed file stops the sweep by name rather than merging with no project paths applied.
 
-**Class.** split. Escalating the pipeline, matching code rather than documents, and never escalating specs are framework. **The project supplies:** its list of high-risk paths, kept under `## Escalation paths` in `docs/qa/escalation-paths.md` (`K-LAYOUT-8`) and filled in before the first brief is written.
+**Class.** split. Escalating the pipeline, matching code rather than documents, and never escalating specs are framework. **The project supplies:** its own pipeline code and its high-risk paths, kept under `## Pipeline code` and `## Escalation paths` in `docs/qa/escalation-paths.md` (`K-LAYOUT-8`) and filled in before the first brief is written.
 
 ### `K-MERGE-5` Merge through the front door
 
