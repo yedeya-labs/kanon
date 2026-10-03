@@ -30,7 +30,7 @@ Every AWS command here is the Owner's to run. Agents run none (§5).
 - **Behind parameters, all off by default:**
   - `EnableImporter`: the importer role (§7, S5);
   - `EnableBackfill`: the backfill role (S7a);
-  - `EnableVerify`: lets the Owner assume the writer and reader roles, for `verify.mjs`.
+  - `EnableVerify`: lets the Owner assume the writer and reader roles, and creates `kanon-telemetry-verify-probe`, which only the Owner can assume and whose own policy allows the four writes the table denies. Both are for `verify.mjs`.
 
   `CreateOidcProvider` creates GitHub's OIDC provider, so set it to false if the account already has one.
 
@@ -92,7 +92,7 @@ The outputs name the URL and each repository's two roles.
 
 ## Verify
 
-Step S3's falsifiers. Deploy with `--verify`, which lets your role assume the writer and reader roles, run the script, then deploy without it:
+Step S3's falsifiers. Deploy with `--verify`, which lets your role assume the writer and reader roles and creates the write probe. Run the script, then deploy without it, which deletes the probe:
 
 ```sh
 node infra/telemetry/render.mjs --register "$REG" --out "$OUT" --verify
@@ -108,7 +108,10 @@ It sends `tag: test` rows, which expire in 30 days, and prints PASS or FAIL for 
 - a row naming a partition gets 422;
 - the reader querying another key gets `AccessDeniedException`;
 - a direct `PutItem` with the writer role is denied;
-- the stored row's `expires_at` is 30 days out.
+- the stored row's `expires_at` is 30 days out;
+- the probe's `PutItem`, `UpdateItem`, `DeleteItem` and `BatchWriteItem` are each denied, and IAM says the denial came from a resource-based policy ([#101](https://github.com/yedeya-labs/kanon/issues/101)).
+
+The writer holds no DynamoDB action, so IAM denies its `PutItem` before the table's policy is read. On its own, that check would pass against a table with no resource policy. The probe is allowed every write by its own policy, so only the table's deny can stop it. Its writes aim at `verify-probe#none`, a partition no register holds, and carry an expiry an hour out, so a write that lands (a FAIL) is removed by TTL.
 
 It exits 1 on any FAIL, and never prints a credential, a row or a response body.
 

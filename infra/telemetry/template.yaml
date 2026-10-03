@@ -36,7 +36,7 @@ Parameters:
     Default: 'false'
   EnableVerify:
     Type: String
-    Description: Let the Owner assume the writer and reader roles, for verify.mjs only.
+    Description: Let the Owner assume the writer and reader roles, and create the write probe, for verify.mjs only.
     AllowedValues: ['true', 'false']
     Default: 'false'
   ReservedConcurrency:
@@ -224,6 +224,37 @@ Resources:
       Policies:
         - PolicyName: invoke-ingest-url
           PolicyDocument: *invokeIngestUrl
+
+  # verify.mjs check 7 (kanon#101): a role whose OWN policy allows every write the table's
+  # resource policy denies, so a denied write proves that deny rather than missing IAM grants.
+  # The writer can't show it: it holds no DynamoDB action, so IAM refuses it first. Owner-only,
+  # and only while EnableVerify is on, like the Owner's way into the writer and reader roles.
+  VerifyProbeRole:
+    Type: AWS::IAM::Role
+    Condition: VerifyOn
+    Properties:
+      RoleName: kanon-telemetry-verify-probe
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: { 'Fn::Sub': 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root' } }
+            Action: sts:AssumeRole
+            Condition:
+              ArnEquals: { aws:PrincipalArn: { Ref: OwnerPrincipalArn } }
+      Policies:
+        - PolicyName: every-write-the-table-denies
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:BatchWriteItem
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry
 
   # render.mjs adds, per registered repository: WriterRole<id>, ReaderRole<id> and
   # WriterUrlPermission<id>, from the shapes it holds.

@@ -4,8 +4,9 @@
 //   node infra/telemetry/verify.mjs --key <key> [--profile kanon]
 //
 // The stack must be deployed with EnableVerify=true (render.mjs --verify), which lets the
-// Owner assume the key's writer and reader roles; redeploy without it afterwards. Every row it
-// sends is `tag: test`, so it expires in 30 days and no read or aggregate counts it (§2.4).
+// Owner assume the key's writer and reader roles and creates the write probe (check 7);
+// redeploy without it afterwards. Every row it sends is `tag: test`, so it expires in 30 days
+// and no read or aggregate counts it (§2.4).
 //
 // It prints PASS or FAIL per check and exits 1 on any FAIL. It never prints a credential, a
 // row, or a response body: only the check, and on a FAIL the status or error code it saw.
@@ -59,6 +60,13 @@ const json = (/** @type {string} */ s) => {
   }
 };
 const denied = (/** @type {Run} */ r) => r.code !== 0 && /AccessDenied/.test(r.stderr);
+/** Denied by a resource policy's explicit deny, as IAM's access-denied message says. */
+const deniedByTable = (/** @type {Run} */ r) => denied(r) && /explicit deny in a resource-based policy/.test(r.stderr);
+
+/** The four writes the table's resource policy denies to all but the function and the Owner (§4). */
+export const DENIED_WRITES = ['PutItem', 'UpdateItem', 'DeleteItem', 'BatchWriteItem'];
+/** The partition the probe aims at: no register holds it, so a write that lands is nobody's row. */
+export const PROBE_PK = 'verify-probe#none';
 const errorCode = (/** @type {Run} */ r) => r.code === 0 ? 'no error' : (/\(([A-Za-z]+)\)/.exec(r.stderr)?.[1] ?? `exit ${r.code}`);
 
 /**
@@ -83,8 +91,7 @@ export async function runChecks(key, profile, deps) {
     check('the stack and the Owner credentials are reachable', false, 'describe-stacks or get-caller-identity failed');
     return results;
   }
-  const assume = (/** @type {string} */ kind) => {
-    const arn = `arn:aws:iam::${who.Account}:role/kanon-telemetry-${key}-${kind}`;
+  const assume = (/** @type {string} */ kind, arn = `arn:aws:iam::${who.Account}:role/kanon-telemetry-${key}-${kind}`) => {
     const c = json(deps.aws(['sts', 'assume-role', '--role-arn', arn, '--role-session-name', 'kanon-verify', ...owner]).stdout)?.Credentials;
     return c ? { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken } : null;
   };
@@ -131,6 +138,34 @@ export async function runChecks(key, profile, deps) {
   const want = Math.floor((Date.parse(row.recorded_at) + SHORT_RETENTION_MS) / 1000);
   check("the stored row's expires_at is 30 days out", got.code === 0 && expires === want,
     got.code !== 0 ? errorCode(got) : Number.isFinite(expires) ? `off by ${expires - want} s` : 'no expires_at');
+
+  // 7. The table's resource policy denies every write (kanon#101). Check 5 can't show it: the
+  // writer holds no DynamoDB action, so IAM denies its PutItem before the table's policy is
+  // read, and a table with no resource policy passes check 5. The probe role (EnableVerify only)
+  // is ALLOWED all four writes by its own policy, so only the table's deny can stop it, and IAM's
+  // message must say so. Each write aims at a partition no register holds and carries an
+  // expiry an hour out, so a write that lands (a FAIL) is gone by TTL.
+  const probe = assume('verify-probe', `arn:aws:iam::${who.Account}:role/kanon-telemetry-verify-probe`);
+  const probeName = "every write by a role allowed them is denied by the table's resource policy";
+  if (!probe) {
+    check(probeName, false, 'assume-role failed for kanon-telemetry-verify-probe: is the stack deployed with --verify?');
+    return results;
+  }
+  const item = { pk: { S: PROBE_PK }, sk: { S: `verify-${deps.runId()}` }, expires_at: { N: String(Math.floor(now / 1000) + 3600) } };
+  const itemKey = JSON.stringify({ pk: item.pk, sk: item.sk });
+  /** @type {Record<string, string[]>} */
+  const calls = {
+    PutItem: ['put-item', '--table-name', table, '--item', JSON.stringify(item)],
+    UpdateItem: ['update-item', '--table-name', table, '--key', itemKey,
+      '--update-expression', 'SET expires_at = :e', '--expression-attribute-values', JSON.stringify({ ':e': item.expires_at })],
+    DeleteItem: ['delete-item', '--table-name', table, '--key', itemKey],
+    BatchWriteItem: ['batch-write-item', '--request-items', JSON.stringify({ [table]: [{ PutRequest: { Item: item } }] })],
+  };
+  const notDenied = DENIED_WRITES.flatMap((op) => {
+    const r = deps.aws(['dynamodb', ...(calls[op] ?? []), '--region', REGION], probe);
+    return deniedByTable(r) ? [] : [`${op}: ${denied(r) ? 'denied, but not by a resource-based policy' : errorCode(r)}`];
+  });
+  check(probeName, notDenied.length === 0, notDenied.join('; '));
   return results;
 }
 

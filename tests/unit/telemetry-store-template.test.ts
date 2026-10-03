@@ -162,6 +162,26 @@ describe('the roles (§3, §6, §7)', () => {
       expect(t.Condition).toEqual({ ArnEquals: { 'aws:PrincipalArn': { Ref: 'OwnerPrincipalArn' } } });
     }
   });
+  it('the write probe exists only while EnableVerify is on, for the Owner only, allowed exactly the denied writes (kanon#101)', () => {
+    const probe = R.VerifyProbeRole!;
+    expect(probe.Condition).toBe('VerifyOn');
+    expect(probe.Properties.RoleName).toBe('kanon-telemetry-verify-probe');
+    const [t, ...rest] = statements(probe.Properties.AssumeRolePolicyDocument);
+    expect(rest).toEqual([]);
+    expect(t.Condition).toEqual({ ArnEquals: { 'aws:PrincipalArn': { Ref: 'OwnerPrincipalArn' } } });
+    const [policy, ...others] = probe.Properties.Policies;
+    expect(others).toEqual([]);
+    const [allow, ...more] = statements(policy.PolicyDocument);
+    expect(more).toEqual([]);
+    expect(allow.Effect).toBe('Allow');
+    // The same four writes, on the same table, that the table's resource policy denies: so
+    // only that deny can refuse the probe, which is what verify.mjs check 7 needs.
+    const deny = statements(R.Table!.Properties.ResourcePolicy.PolicyDocument)[0];
+    expect([...allow.Action].sort()).toEqual([...deny.Action].sort());
+    expect(allow.Resource).toEqual(deny.Resource);
+    // And the deny's exceptions don't name it.
+    expect(JSON.stringify(deny.Condition)).not.toContain('VerifyProbeRole');
+  });
   it('the OIDC provider is created only when the parameter says so', () => {
     expect(R.OidcProvider!.Condition).toBe('CreateOidc');
     expect(template.Parameters.CreateOidcProvider.Default).toBe('true');
