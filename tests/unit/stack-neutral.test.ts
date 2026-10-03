@@ -144,6 +144,22 @@ describe("Kanon's guards on a project with no package.json, run with only node a
     expect(r.out).toMatch(/ORD-1/);
   });
 
+  it('citation-guard counts a coordinate into the Python venv as external, not missing (#108)', () => {
+    // `.venv/` is in the fixture's `.gitignore` and not in its index, as on any Python project.
+    const venv = (dir: string) =>
+      edit(dir, 'docs/design.md', (s) => `${s}\nRequests retries it (\`.venv/lib/python3.12/site-packages/requests/api.py:59\`).\n`);
+    const r = guard('citation-guard', venv);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toMatch(/1 coordinate\(s\) into an untracked, git-ignored path not checked/);
+    // A path the project's git does NOT ignore is not a dependency: the same line is a finding.
+    const typo = guard('citation-guard', (dir) => {
+      venv(dir);
+      edit(dir, '.gitignore', (s) => s.replace('.venv/\n', ''));
+    });
+    expect(typo.status, typo.out).toBe(1);
+    expect(typo.out).toMatch(/no such file in the repository/);
+  });
+
   it('citation-guard is red when a coordinate into a Python file points past its end', () => {
     const r = guard('citation-guard', (dir) => edit(dir, 'docs/design.md', (s) => s.replace('core.py:4-6', 'core.py:40')));
     expect(r.status, r.out).toBe(1);
@@ -161,8 +177,6 @@ const ASSUMPTION = /\bnpm\b|\bnpx\b|\byarn\b|\bpnpm\b|package(?:-lock)?\.json|no
 // ROADMAP.md too: it once restated K-ADOPT-11's table, and a copy is where "an npm package" survived.
 const SHIPPED = /^(actions|cli|scripts)\/.*\.(mjs|js|sh|awk|yml|yaml)$|^rulebook\/.*\.md$|^ROADMAP\.md$/;
 const ALLOWED: Array<{ file: string; needle: string; why: string }> = [
-  { file: 'scripts/citation-guard.mjs', needle: 'export const EXTERNAL = /^node_modules', why: 'counts a coordinate into a Node dependency as external rather than failing it; on another stack it matches nothing' },
-  { file: 'scripts/citation-guard.mjs', needle: 'coordinate(s) into node_modules/ not checked', why: "the same rule's report line" },
   { file: 'scripts/doc-path-guard.mjs', needle: "!f.startsWith('node_modules/')", why: 'skips a Node dependency tree if one is tracked; on another stack it matches nothing' },
   { file: 'scripts/verify-acs.mjs', needle: "['npx', 'vitest'", why: '#20: tests are found and run by the JavaScript convention until the per-language convention lands' },
   { file: 'scripts/verify-acs.mjs', needle: "['npx', 'playwright'", why: '#20, as above' },
