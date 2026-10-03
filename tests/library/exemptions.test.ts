@@ -31,6 +31,12 @@ describe('the exemptions file parser', () => {
     expect(parseExemptions(FILE('None.\n', 'None.\n'))).toEqual({ briefs: [], mentions: [] });
   });
 
+  it('stops each section at the next heading, so a later section is never read as entries', () => {
+    const later = '## Notes\n\n- `docs/projects/9.md` — not an entry here\n\n| File | Path | Reason |\n|---|---|---|\n| `a.md` | `b.md` | nor this |\n';
+    expect(parseExemptions(`${FILE('', '')}${later}`)).toEqual({ briefs: [], mentions: [] });
+    expect(parseExemptions(`# Exemptions\n\n## Pre-standard briefs\n\n${later}\n## Path mentions\n`)).toEqual({ briefs: [], mentions: [] });
+  });
+
   it('ignores a heading or an entry inside a fenced block', () => {
     expect(parseExemptions(FILE('```\n- `docs/projects/1.md` — x\n## Path mentions\n```\n', '')).briefs).toEqual([]);
   });
