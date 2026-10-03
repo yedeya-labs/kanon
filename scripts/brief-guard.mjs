@@ -171,37 +171,37 @@ export const REQUIRED_SECTIONS = [
     key: 'problem',
     label: 'the real problem / the measurement',
     match: /real problem|the measurement/i,
-    why: 'read the code before planning — N point-fixes for one root cause is the failure the brief exists to prevent (agentic-qa-pipeline.md §2.4)',
+    why: 'read the code before planning — N point-fixes for one root cause is the failure the brief exists to prevent (`K-PROJ-4`)',
   },
   {
     key: 'scope',
     label: 'scope',
     match: /\bscope\b/i,
-    why: 'and explicitly what it is NOT: the boundary is the half that gets forgotten',
+    why: 'and explicitly what it is NOT: the boundary is the half that gets forgotten (`K-PROJ-4`)',
   },
   {
     key: 'decomposition',
     label: 'decomposition',
     match: /decomposition/i,
-    why: 'the unit of dispatch — the only machine-read part of a brief',
+    why: 'the unit of dispatch — the only machine-read part of a brief (`K-PROJ-9`)',
   },
   {
     key: 'cost',
-    label: 'AWS cost',
+    label: 'cost',
     match: /\bcost\b/i,
-    why: 'AGENTS.md requires agreement BEFORE spend; an empty section reads as "not considered"',
+    why: 'agreement comes BEFORE spend; an empty section reads as "not considered" (`K-PROJ-6`, `K-OBS-9`)',
   },
   {
     key: 'observability',
     label: 'observability',
     match: /observability/i,
-    why: 'AGENTS.md requires the add-or-skip decision be surfaced, not made silently',
+    why: 'the add-or-skip decision is surfaced, not made silently (`K-PROJ-6`, `K-OBS-1`)',
   },
   {
     key: 'blast',
     label: 'blast radius',
     match: /blast radius/i,
-    why: "agent-implement.yml's SCOPE-FIRST BAIL list is otherwise discovered mid-PR, converting one up-front decision into N interrupts",
+    why: 'the escalation items a project touches are otherwise discovered mid-PR, converting one up-front decision into N interrupts (`K-PROJ-6`)',
   },
   {
     key: 'decisions',
@@ -211,13 +211,13 @@ export const REQUIRED_SECTIONS = [
     // developer must answer. A loose match would let a brief satisfy this section with
     // a design digression and never ask anything.
     match: /^(?:\d+[.)]\s*)?(?:the\s+)?decisions\b/i,
-    why: 'the questions that need the developer, in one place, because this merge is the only time they are asked',
+    why: 'the questions that need a human, in one place, because this merge is the only time they are asked (`K-PROJ-5`)',
   },
   {
     key: 'unexamined',
     label: 'what I did not examine',
     match: /did not examine|not examined/i,
-    why: 'a brief silent on an area reads identically to one that checked it — silent-absence (§12.7) on the developer\'s only gate',
+    why: "a brief silent on an area reads identically to one that checked it — silent absence (`K-PRIN-8`) on the Maintainer's only gate",
   },
 ];
 
@@ -250,6 +250,10 @@ export const MIN_SECTION_CHARS = 200;
  * vocabulary: a section that priced nothing and said nothing still fails, which is
  * mutation-checked. What the guard asserts is that the decision was STATED — whether it
  * is true is a reader's job, as the header says of every other check here.
+ *
+ * `no AWS cost` / `no new AWS spend` stay accepted so a brief written to the old wording
+ * still passes (kanon#142), but the finding no longer suggests them: `K-PROJ-6` names
+ * "no delta", which says the same thing on any cloud.
  */
 const COST_FIGURE = /\$\s?\d|\bno (?:new )?AWS (?:cost|spend)\b|\bno delta\b/i;
 
@@ -741,10 +745,10 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
       findings.push({
         at: at(matching[0].line),
         problem:
-          'the **AWS cost** section neither prices the change nor declares that there is ' +
-          'nothing to price. State a dollar delta — `$0` is a figure and the commonest ' +
-          'answer — or declare it in the heading or the body as "no delta" / "no AWS cost", ' +
-          'and say why. AGENTS.md requires agreement before spend, and a number nobody ' +
+          'the **cost** section neither prices the change nor declares that there is ' +
+          'nothing to price. State the delta as a figure — `$0` is a figure and the commonest ' +
+          'answer — or declare it in the heading or the body as "no delta", and say why. ' +
+          'Agreement comes before spend (`K-PROJ-6`, `K-OBS-9`), and a number nobody ' +
           'wrote cannot be agreed to',
       });
     }

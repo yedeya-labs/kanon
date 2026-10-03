@@ -108,6 +108,15 @@ describe('required sections', () => {
     for (const s of REQUIRED_SECTIONS) expect(s.why.length).toBeGreaterThan(20);
   });
 
+  it("cites each reason by Kanon's rule id, not by a document only the reference adopter has", () => {
+    // kanon#142: the reasons cited `AGENTS.md` and a pipeline design doc by section, which an
+    // adopter doesn't have. A rule id resolves in Kanon's rulebook, on every repository.
+    for (const s of REQUIRED_SECTIONS) {
+      expect(s.why, s.key).toMatch(/`K-[A-Z]+-\d+`/);
+      expect(s.why, s.key).not.toMatch(/AGENTS\.md|§|\.ya?ml\b|AWS/);
+    }
+  });
+
   it('requires none of the three RA-1742 cut, because each has a mechanical home', () => {
     // Sequencing → the `**Depends on:**` line the parser already reads and the
     // reconciler already enforces. Reconciliation state → spec-coverage, and
@@ -124,7 +133,7 @@ describe('required sections', () => {
   it.each([
     ['The real problem', 'the real problem / the measurement'],
     ['Scope', 'scope'],
-    ['AWS cost', 'AWS cost'],
+    ['cost', 'cost'],
     ['Observability', 'observability'],
     ['Blast radius', 'blast radius'],
     ['Decisions', 'decisions'],
@@ -219,7 +228,7 @@ describe('a section must state something', () => {
   });
 });
 
-describe('the AWS cost section', () => {
+describe('the cost section', () => {
   it('accepts a dollar figure — `$0` is a figure and the commonest answer', () => {
     expect(problems(withSection('AWS cost', `${PAD} The delta is $0.`))).toEqual([]);
   });
@@ -251,6 +260,11 @@ describe('the AWS cost section', () => {
     expect(
       problems(withSection('AWS cost', `${PAD} Cheap, probably. We can look at it later.`)).join('\n'),
     ).toContain('neither prices the change nor declares');
+    // Cloud-neutral, and pointing at the rule rather than the reference adopter's AGENTS.md.
+    const [message] = problems(withSection('AWS cost', `${PAD} Cheap, probably. We can look at it later.`));
+    expect(message).toContain('the **cost** section');
+    expect(message).toContain('`K-PROJ-6`');
+    expect(message).not.toMatch(/AWS|AGENTS\.md/);
   });
 });
 
