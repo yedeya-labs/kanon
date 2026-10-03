@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.1](https://github.com/yedeya-labs/kanon/compare/v0.15.0...v0.15.1) (2026-10-03)
+
+
+### Bug Fixes
+
+* **citation:** count a coordinate into an untracked, git-ignored dependency as external on any stack ([#119](https://github.com/yedeya-labs/kanon/issues/119)) ([b448e21](https://github.com/yedeya-labs/kanon/commit/b448e2149b572150a0dde31c825a55bd0dd585a0))
+* **release:** skip the root changelog.json for node as well as python in the release-PR guard ([#121](https://github.com/yedeya-labs/kanon/issues/121)) ([d21d622](https://github.com/yedeya-labs/kanon/commit/d21d62214d8ff4914268f69d5708f61f23b803da))
+
 ## [0.15.0](https://github.com/yedeya-labs/kanon/compare/v0.14.0...v0.15.0) (2026-10-03)
 
 
