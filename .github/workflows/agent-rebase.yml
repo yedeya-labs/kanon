@@ -198,6 +198,11 @@ jobs:
         with:
           client-id: ${{ secrets.IMPLEMENTER_APP_ID }}
           private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          # Narrowed to what this step uses (#48, `K-AGENT-46`): it pushes the merge (which may carry the default branch's workflow changes, so `workflows`), and comments and labels the pull request.
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-workflows: write
       - uses: actions/checkout@v7
         id: checkout
         with:
@@ -431,9 +436,9 @@ jobs:
       # asserts. Both do nothing but say so. JOB-LEVEL STEPS, after the finish block whose
       # classifier they read: the jobs API lists a composite action as ONE step, so a
       # breadcrumb inside it could never be read by its name.
-      - name: "Retryable once the cause clears: the model was unreachable (RA-2519)"
+      - name: "Retryable once the cause clears: the model was unreachable"
         if: failure() && steps.finish.outputs.retry == 'unreachable'
         run: echo "The model was never reached. Kanon's scripts/rebase-lane.mjs retries this head once, after the cool-down (RA-2519)."
-      - name: "Retryable once the cause clears: the model API failed mid-run (RA-2519)"
+      - name: "Retryable once the cause clears: the model API failed mid-run"
         if: failure() && steps.finish.outputs.retry == 'api_error'
         run: echo "The model API failed part-way through. Kanon's scripts/rebase-lane.mjs retries this head once, after the cool-down (RA-2519)."

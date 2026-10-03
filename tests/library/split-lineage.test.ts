@@ -7,7 +7,7 @@ import { ADOPTER, ROOT } from './helpers/adopter.js';
 import { parse } from 'yaml';
 const {
   HUMAN_LABEL, SPLIT_LABEL, SPLIT_WORKFLOW,
-  childrenMissingMarker, exhaustedRoute, projectOf, splitBranch, splitGate, splitMarker, splitOf,
+  childrenMissingMarker, exhaustedRoute, projectOf, splitBranch, splitBranches, splitGate, splitMarker, splitOf,
 } = await import('../../scripts/split-lineage.mjs');
 const { declaresMembership, parseProposed } = await import('../../scripts/lead-reconcile.mjs');
 import { writeStub } from '../unit/helpers/stub-bin.js';
@@ -136,7 +136,11 @@ describe('splitGate', () => {
   });
 
   it('branches are per issue, so a second run finds the first one’s PR', () => {
-    expect(splitBranch(1694)).toBe('bezalel/split-1694');
+    expect(splitBranch(1694)).toBe('lead/split-1694');
+  });
+
+  it('a split opened before the rename is still found, on its old branch (#53)', () => {
+    expect(splitBranches(1694)).toEqual(['lead/split-1694', 'bezalel/split-1694']);
   });
 });
 
@@ -150,7 +154,7 @@ describe('the gate, run as a CLI — module evaluation is part of the contract (
   const adopter = mkdtempSync(join(tmpdir(), 'split-adopter-'));
   cpSync(ADOPTER, adopter, { recursive: true });
   for (const n of [2040, 2]) writeFileSync(join(adopter, `docs/projects/${n}.md`), `# Project ${n} (fixture)\n`);
-  const run = (project: number) => {
+  const run = (project: number, openOn = '') => {
     const dir = mkdtempSync(join(tmpdir(), 'split-gate-'));
     const out = join(dir, 'out');
     writeFileSync(out, '');
@@ -159,7 +163,8 @@ describe('the gate, run as a CLI — module evaluation is part of the contract (
       '#!/usr/bin/env bash',
       'if [ "$1" = issue ] && [ "$2" = view ]; then',
       `  printf '%s' '{"state":"OPEN","labels":[{"name":"qa:needs-split"}],"body":"${body}"}'`,
-      'elif [ "$1" = pr ] && [ "$2" = list ]; then echo "[]"; else echo "unexpected: $*" >&2; exit 9; fi',
+      `elif [ "$1" = pr ] && [ "$2" = list ]; then case "$*" in *"--head ${openOn || 'none'} "*) echo '[{"number":77}]' ;; *) echo "[]" ;; esac`,
+      'else echo "unexpected: $*" >&2; exit 9; fi',
       '',
     ].join('\n'));
     const r = spawnSync('node', [join(ROOT, 'scripts/split-lineage.mjs'), 'gate'], {
@@ -173,6 +178,15 @@ describe('the gate, run as a CLI — module evaluation is part of the contract (
     const r = run(2040);
     expect(r.status, r.stdout).toBe(0);
     expect(r.outputs).toContain('act=split');
+  });
+
+  it.each(['lead/split-4242', 'bezalel/split-4242'])('skips an issue whose split PR is already open on %s (#53)', (branch) => {
+    const r = run(2040, branch);
+    expect(r.status, r.stdout).toBe(0);
+    expect(r.outputs).toContain('act=skip');
+    expect(r.stdout).toContain('split PR #77 is already open');
+    // The lane always pushes to the current spelling.
+    expect(r.outputs).toContain('branch=lead/split-4242');
   });
 
   it('refuses a pre-standard member to a human, exit 0 — never a split', () => {

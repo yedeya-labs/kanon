@@ -1634,6 +1634,10 @@ jobs:
         with:
           client-id: ${{ secrets.REVIEWER_APP_ID }}
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+          # Narrowed to what this step uses (#48, `K-AGENT-46`): it reviews, comments, labels and files follow-ups; `contents: write` stays because the role holds it so its approval satisfies the ruleset (03-agents.md).
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
 
       # `continue-on-error` + an EXPLICIT outcome step below (RA-1351), the shape RA-846
       # established on the audit arm. The durable artifact here is A REVIEW EVENT ON
@@ -2256,10 +2260,10 @@ jobs:
       # cannot see annotations (`Checks: read`), but it can see which of these steps
       # RAN under `Actions: read`. The names must match `RETRY_STEPS` in
       # .kanon/scripts/lane-retry.mjs, which `workflow-retry-breadcrumbs` asserts.
-      - name: "Retryable once the cause clears: the model was unreachable (RA-2519)"
+      - name: "Retryable once the cause clears: the model was unreachable"
         if: failure() && steps.claim.outputs.proceed == 'true' && steps.classify.outputs.retry == 'unreachable'
         run: echo "The model was never reached. reviewRecovery retries this head once, after the cool-down (RA-2519)."
-      - name: "Retryable once the cause clears: the model API failed mid-run (RA-2519)"
+      - name: "Retryable once the cause clears: the model API failed mid-run"
         if: failure() && steps.claim.outputs.proceed == 'true' && steps.classify.outputs.retry == 'api_error'
         run: echo "The model API failed part-way through. reviewRecovery retries this head once, after the cool-down (RA-2519)."
 

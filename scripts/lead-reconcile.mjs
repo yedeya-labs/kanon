@@ -51,7 +51,8 @@ import { CONFLICT_JSON, CONFLICT_WHY, ConflictFieldsUnread, blocksChurn, conflic
 import { STALE_HOURS, classify as classifyLane, makeCommentsReader } from './dispatch-sweep.mjs';
 // `qa:needs-split` (RA-1781): an item whose implementer run hit its cap, awaiting the Lead's
 // split PR. Never dispatched; does not park the project — see `split-lineage.mjs`.
-import { SPLIT_LABEL, SPLIT_WORKFLOW, splitBranch } from './split-lineage.mjs';
+import { SPLIT_LABEL, SPLIT_WORKFLOW, splitBranches } from './split-lineage.mjs';
+import { adoptedNote, adoptedNotes } from './lib/protocol-spellings.mjs';
 // THE BRIEF GRAMMAR AND THE CLOSURE RULE live in `project-closure.mjs`, shared with the
 // project digest so the two cannot disagree about what a project owes. Re-exported, so
 // every caller that imported them from here still does.
@@ -1935,7 +1936,7 @@ export function reviewRecovery(world, { runsFor = reviewRunsFor, now = Date.now(
 //
 // The split lane starts on an EVENT — `issues: labeled` with `qa:needs-split`, or the
 // crash job's `workflow_dispatch`. A run that never happens or dies (a cap, an outage,
-// a crash) leaves the issue labelled with no `bezalel/split-<n>` PR, and until this
+// a crash) leaves the issue labelled with no split PR (`splitBranch`), and until this
 // nothing re-fired it: the tick only told a human to. The same "nothing re-fires"
 // shape RA-1595 closed for the brief-revise lane and RA-1592 for the implementer.
 //
@@ -1981,9 +1982,10 @@ export function splitEvidenceRead(issue, { text = gh, json = ghJson } = {}) {
     const labeledAt = text(['api', '--paginate', `repos/${REPO}/issues/${issue}/events`, '--jq',
       `.[] | select(.event == "labeled" and .label.name == "${SPLIT_LABEL}") | .created_at`])
       .split('\n').map((l) => l.trim()).filter(Boolean);
-    const prs = json(['pr', 'list', '--repo', REPO, '--state', 'all', '--head', splitBranch(issue),
-      '--json', 'number,state,createdAt']);
-    return { labeledAt, prs: prs ?? [] };
+    // Every spelling of the branch (#53): a split opened before the rename is still a split.
+    const prs = splitBranches(issue).flatMap((head) => json(['pr', 'list', '--repo', REPO, '--state', 'all', '--head', head,
+      '--json', 'number,state,createdAt']) ?? []);
+    return { labeledAt, prs };
   } catch {
     return null;
   }
@@ -3176,10 +3178,10 @@ export function execute(world, actions, { run = gh } = {}) {
             .filter((l) => l.trim() !== `<!-- qa:project ${world.project} -->`)
             .join('\n')
             .trimEnd();
-          const note = `Adopted into project #${world.project} by Bezalel, from the decomposition item **${a.title}** in \`${world.briefPath}\`. The brief names this issue rather than proposing a new one, so the project tracks the work here instead of filing a duplicate (RA-976).`;
+          const note = `${adoptedNote(world.project)}, from the decomposition item **${a.title}** in \`${world.briefPath}\`. The brief names this issue rather than proposing a new one, so the project tracks the work here instead of filing a duplicate (RA-976).`;
           // The note may already be there from the tick that wrote the marker a human
           // later buried; re-stating it would stack a paragraph per repair.
-          const alreadyNoted = stripped.includes(`Adopted into project #${world.project} by Bezalel`);
+          const alreadyNoted = adoptedNotes(world.project).some((n) => stripped.includes(n));
           run(['issue', 'edit', String(a.number), '--repo', REPO, '--body', [
             stripped,
             ...(alreadyNoted ? [] : ['', note]),

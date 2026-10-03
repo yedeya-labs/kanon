@@ -180,6 +180,10 @@ jobs:
         with:
           client-id: ${{ secrets.REVIEWER_APP_ID }}
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+          # Narrowed to what this step uses (#48, `K-AGENT-46`): it reads the merged PR's reviews and the tree, and files follow-up issues; it never pushes or reviews.
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: read
 
       # NO PROJECT SETUP (RA-2660, RA-2694). This arm never installed and has no database: the
       # agent reads the tree and calls `gh`, and the only scripts it runs before or after

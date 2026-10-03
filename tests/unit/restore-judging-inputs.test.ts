@@ -420,8 +420,8 @@ describe('RA-2697 — the agent-lane blocks come from the action cache, never th
     expect(job.slice(pin, finish).map((s) => laneBlockOf(s) ?? s.name)).toEqual([
       'Re-verify the result file before the classifier reads it',
       'agent-classify',
-      'Retryable once the cause clears: the model was unreachable (RA-2519)',
-      'Retryable once the cause clears: the model API failed mid-run (RA-2519)',
+      'Retryable once the cause clears: the model was unreachable',
+      'Retryable once the cause clears: the model API failed mid-run',
     ]);
     expect(job.slice(pin + 1, finish).filter((s) => !laneBlockOf(s)).every((s) => /^echo /.test(String(s.run))),
       'nothing between the check and the blocks but echo steps').toBe(true);

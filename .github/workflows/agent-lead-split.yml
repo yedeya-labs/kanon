@@ -165,6 +165,10 @@ jobs:
         with:
           client-id: ${{ secrets.LEAD_APP_ID }}
           private-key: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
+          # Narrowed to what this step uses (#48, `K-AGENT-46`): it pushes the split branch, opens its pull request and comments on the issue; it reads no runs, so no `actions`.
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
 
       # Re-checkout on the App token, so the push authenticates as the Lead — the default
       # token's pushes raise no events, and the PR must reach the Reviewer.
