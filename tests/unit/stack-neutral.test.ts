@@ -254,6 +254,21 @@ describe("Kanon's guards on a project with no package.json, run with only node a
     expect(r.out).toMatch(/\*\*Claimed\*\* — the spec names a test file, but no test cites the ID: \*\*1\*\*/);
   });
 
+  it('spec-coverage reads a pytest file named by its bare name as Claimed, not as a missing file', () => {
+    // kanon#127: the Python and Go rows decide a test file by its name wherever it is, so a spec
+    // may name `tests/test_core.py` as `test_core.py`. Checked from the root, that read as missing.
+    const r = guard('spec-coverage', (dir) => edit(dir, 'docs/qa/specs/orders.md', (s) => `${s}- \`[ORD-2]\` \`[seed]\` A refund is recorded once. *(Confirmed by \`test_core.py\`.)*\n`));
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).not.toMatch(/name a file that does not exist/);
+    expect(r.out).toMatch(/\*\*Claimed\*\* — the spec names a test file, but no test cites the ID: \*\*1\*\*/);
+  });
+
+  it('spec-coverage still reports a bare test file name that no test file has', () => {
+    const r = guard('spec-coverage', (dir) => edit(dir, 'docs/qa/specs/orders.md', (s) => `${s}- \`[ORD-2]\` \`[seed]\` A refund is recorded once. *(Confirmed by \`test_refund.py\`.)*\n`));
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toMatch(/ORD-2.*claims `test_refund\.py`/);
+  });
+
   it('citation-guard is red when a coordinate into a Python file points past its end', () => {
     const r = guard('citation-guard', (dir) => edit(dir, 'docs/design.md', (s) => s.replace('core.py:4-6', 'core.py:40')));
     expect(r.status, r.out).toBe(1);
