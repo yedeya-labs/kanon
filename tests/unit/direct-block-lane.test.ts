@@ -120,17 +120,19 @@ describe('telemetry and classification — the lane is measured and explained as
  * bring back the hazard the load, reload and tamper machinery answered (plan 0001 §2), with
  * none of that machinery.
  */
+/** Every job in Kanon's workflows that calls a stage block itself, plus the fixture's. */
+const blockJobs: [string, WorkflowStep[]][] = [
+  ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).flatMap((f) => {
+    const d = parse(readFileSync(join('.github/workflows', f), 'utf8'));
+    return Object.entries<{ steps?: WorkflowStep[] }>(d?.jobs ?? {})
+      .filter(([, j]) => (j?.steps ?? []).some((s) => STAGE_BLOCKS.includes(String(laneBlockOf(s)))))
+      .map(([j, def]) => [`${f}:${j}`, def.steps!] as [string, WorkflowStep[]]);
+  }),
+  [`${FIXTURE}:${JOB}`, job.steps],
+];
+
 describe('every job that calls a block calls it from Kanon, and carries nothing to put it back', () => {
-  const dir = '.github/workflows';
-  const jobs: [string, WorkflowStep[]][] = [
-    ...readdirSync(dir).filter((f) => f.endsWith('.yml')).flatMap((f) => {
-      const d = parse(readFileSync(join(dir, f), 'utf8'));
-      return Object.entries<{ steps?: WorkflowStep[] }>(d?.jobs ?? {})
-        .filter(([, j]) => (j?.steps ?? []).some((s) => STAGE_BLOCKS.includes(String(laneBlockOf(s)))))
-        .map(([j, def]) => [`${f}:${j}`, def.steps!] as [string, WorkflowStep[]]);
-    }),
-    [`${FIXTURE}:${JOB}`, job.steps],
-  ];
+  const jobs = blockJobs;
 
   it('finds the spine, the direct-block lanes, the blocks smoke and the fixture, so this is not vacuous', () => {
     expect(jobs.map(([w]) => w).sort()).toEqual([
@@ -147,5 +149,77 @@ describe('every job that calls a block calls it from Kanon, and carries nothing 
     expect(steps.find((s) => s.id === 'blocks'), 'a load step is back').toBeUndefined();
     expect(steps.find((s) => laneBlockOf(s) === 'agent-run')!.with ?? {}).not.toHaveProperty('restore-paths');
     expect(steps.filter((s) => /\.github\/actions\/agent-/.test(String(s.run ?? ''))).map((s) => s.name)).toEqual([]);
+  });
+});
+
+/**
+ * RA-2685 — a direct lane with a gate of its own holds every block call to that gate.
+ *
+ * If a gated lane leaves a block call on its own, a declined run still mints, installs or
+ * runs the agent, or `agent-finish` writes a `not-reached` telemetry row for a run that
+ * never tried — polluting the cost series every comparison keys on. A lane-specific test
+ * held `agent-lead-split.yml` to this; nothing held the NEXT gated direct lane to it.
+ *
+ * THE GATE IS READ, NOT NAMED. A job's gate is the `if:` on its first gated
+ * `agent-setup`/`agent-run` call. Then: both calls carry every conjunct of it, and
+ * `agent-finish` is exactly `always() && <gate>`. With no gate, neither call carries an
+ * `if:` and `agent-finish` is exactly `always()`.
+ */
+describe('a gated direct lane holds every block call, agent-finish included, to its gate', () => {
+  const cond = (s: WorkflowStep | undefined): string | undefined => {
+    const raw = s?.if;
+    if (raw === undefined || raw === null) return undefined;
+    return String(raw).trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, '$1').trim();
+  };
+  const conjuncts = (c: string | undefined): string[] => (c ? c.split(/\s+&&\s+/).map((x) => x.trim()) : []);
+
+  /** The violations in one job's block calls; empty means it is held to its gate. */
+  const misGated = (steps: WorkflowStep[]): string[] => {
+    const at = (block: string) => steps.find((s) => laneBlockOf(s) === block);
+    const setup = cond(at('agent-setup'));
+    const run = cond(at('agent-run'));
+    const finish = cond(at('agent-finish'));
+    const gate = setup ?? run;
+    const out: string[] = [];
+    if (gate === undefined) {
+      if (finish !== 'always()') out.push(`ungated, so agent-finish must be exactly always(), not ${finish}`);
+      return out;
+    }
+    for (const [block, c] of [['agent-setup', setup], ['agent-run', run]] as const) {
+      const missing = conjuncts(gate).filter((g) => !conjuncts(c).includes(g));
+      if (missing.length) out.push(`${block} does not carry the gate: ${missing.join(' && ')}`);
+    }
+    if (finish !== `always() && ${gate}`) out.push(`agent-finish must be "always() && ${gate}", not ${finish}`);
+    return out;
+  };
+
+  // The blocks smoke is a harness, not a lane: its `agent-run` is held off with
+  // `github.run_id == '0'` so the smoke exercises setup and finish without spending a
+  // run. That is the one deliberate exception, and it is named rather than inferred.
+  const lanes = blockJobs.filter(([w]) => !w.startsWith('agent-blocks-smoke.yml:'));
+
+  it('finds gated lanes and ungated ones, so neither branch is vacuous', () => {
+    const gated = lanes.filter(([, steps]) => cond(steps.find((s) => laneBlockOf(s) === 'agent-setup')) !== undefined);
+    expect(gated.map(([w]) => w)).toEqual(expect.arrayContaining(['agent-lead-split.yml:split', 'agent-review.yml:review']));
+    expect(lanes.length - gated.length).toBeGreaterThan(0);
+  });
+
+  it.each(lanes)('%s', (_where, steps) => {
+    expect(misGated(steps)).toEqual([]);
+  });
+
+  it('reds a gated lane whose agent-finish dropped the gate, or whose agent-run did', () => {
+    const [, split] = lanes.find(([w]) => w === 'agent-lead-split.yml:split')!;
+    const swap = (block: string, ifValue: string | undefined) =>
+      split.map((s) => (laneBlockOf(s) === block ? { ...s, if: ifValue } : s));
+    expect(misGated(swap('agent-finish', 'always()'))).not.toEqual([]);
+    expect(misGated(swap('agent-run', undefined))).not.toEqual([]);
+    expect(misGated(swap('agent-setup', undefined))).not.toEqual([]);
+    // An ungated lane that gates its agent-run alone: setup still installs for a declined run.
+    expect(misGated(job.steps.map((s) => (laneBlockOf(s) === 'agent-run' ? { ...s, if: "x == 'y'" } : s))))
+      .not.toEqual([]);
+    // And an ungated lane that grows a condition on agent-finish alone.
+    expect(misGated(job.steps.map((s) => (laneBlockOf(s) === 'agent-finish' ? { ...s, if: "always() && x == 'y'" } : s))))
+      .not.toEqual([]);
   });
 });
