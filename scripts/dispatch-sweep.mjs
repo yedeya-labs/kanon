@@ -293,16 +293,15 @@ export function breakerTripped(verdicts, maxStops = MAX_STOPS_PER_RUN) {
   // human-opened PR is genuinely poor evidence that the implementer is down, so
   // excluding them looks like a strict improvement. Executed against this module, it
   // is not: on a real fleet outage of three issues where two happen to carry a PR, the
-  // exclusion drops the trip and STRIPS the labels the arm exists to protect. It
-  // trades a rare withheld stop, which leaves the label on until the fleet-wide
-  // condition clears — NOT merely until the next run (RA-1534). Recomputation per run is
-  // true of the mechanism, but the input persists: a long-lived `has-pr` issue with no
-  // agent comment holds `sawAgent === false` on every sweep for as long as that PR is
-  // open, so the withhold lasts as long as the condition does, with a `::warning::`
-  // each run. That is still the recoverable direction, but the honest statement of it
-  // is a duration, not one tick. Traded against a
-  // rare stripped one, which does not. Reachability is low either way; only one of the
-  // two directions is recoverable.
+  // exclusion drops the trip and STRIPS the labels the arm exists to protect. Keeping
+  // them trades a rare withheld stop, which recovers once the fleet-wide condition
+  // clears, against a rare stripped label, which does not recover at all.
+  // Reachability is low either way; only one of the two directions is recoverable.
+  //
+  // "Recovers" is a duration, not one tick (RA-1534). Recomputation per run is true of
+  // the mechanism, but the input persists: a long-lived `has-pr` issue with no agent
+  // comment holds `sawAgent === false` on every sweep for as long as that PR is open, so
+  // the withhold lasts as long as the condition does, with a `::warning::` each run.
   // A `too-big` verdict is evidence the model RAN, whatever the comments say (RA-1781), so
   // it counts against "the agent is down" exactly as an agent comment would.
   const noneSawAgent = verdicts.length > 1 && verdicts.every((v) => v.sawAgent === false && v.state !== 'too-big');
