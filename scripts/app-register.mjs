@@ -40,7 +40,8 @@
 // the same convention as `spec-lib`'s `SPEC_DIR`, and what every workflow and test runs
 // from. A caller that runs base-branch code against a PR's checkout (`incremental-review`)
 // passes the path of the BASE copy explicitly, because there the working tree's register
-// is the PR's and a PR must not choose the login it is judged by.
+// is the PR's and a PR must not choose the login it is judged by. The Merger's lane checks
+// out the default branch for the same reason (`agent-merge.yml`, kanon#210).
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';

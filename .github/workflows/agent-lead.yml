@@ -313,8 +313,9 @@ jobs:
            falsifiable.
 
         DEFINITION OF DONE IS NOT A SECTION. It is the same for every project and
-        already executable: every filed issue closed, the merges on staging, and
-        `verify-acs.mjs` resolving each cited id to a test that passes there.
+        already executable: every filed issue closed, the merges deployed to the
+        reference environment (K-PROJ-11), and `verify-acs.mjs` resolving each
+        cited id to a test that passes there.
         `lead-reconcile.mjs` phases 4-6 are the definition. What is specific to your
         project belongs in SCOPE.
 

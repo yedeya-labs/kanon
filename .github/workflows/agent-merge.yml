@@ -123,9 +123,9 @@ jobs:
   # cannot read a file, so this job reads it and the Merger's `if:` reads this job's outputs.
   #
   # FROM THE DEFAULT BRANCH, OVER THE API, AND WITH NO CHECKOUT: a PR cannot choose the
-  # logins this job gates it by. (`merge-gate.mjs` still reads its own copies from the Merger
-  # job's checkout, which on a review event is the PR's merge ref; the slug assertion there
-  # compares both reads.) It is the read the revise lanes do in `read_login`, with the same
+  # logins this job gates it by. (`merge-gate.mjs` reads its own copies from the Merger job's
+  # checkout, which that job pins to the default branch for the same reason, kanon#210; the
+  # slug assertion there compares both reads.) It is the read the revise lanes do in `read_login`, with the same
   # parser, `actions/lane-check/app-register.awk`, from this Kanon tree. A missing register, a
   # missing or repeated row, or a malformed slug FAILS this job, naming the role. An unknown
   # login would otherwise read as "not the Implementer's PR" and skip every review event in
@@ -287,10 +287,20 @@ jobs:
         run: node "$KANON/scripts/lane-gate.mjs"
 
       # The checkout is `merge-gate.mjs`'s working tree: it reads the App register from it for
-      # `MERGER_LOGIN` and `IMPLEMENTER_LOGIN`, and the escalation file from the default branch
-      # over the API (`K-MERGE-17`). Nothing in it runs.
+      # `MERGER_LOGIN`, `IMPLEMENTER_LOGIN` and `REVIEWER_LOGIN`, and the escalation file from
+      # the default branch over the API (`K-MERGE-17`). Nothing in it runs.
+      #
+      # THE DEFAULT BRANCH, NAMED (`K-MERGE-17`, kanon#210). Without a `ref` a review event
+      # checks out the PR's merge ref, so the register `mergeVerdict` judges by would be the
+      # PR's, or on a stacked PR its base branch's, which another PR's author can write: the
+      # Reviewer whose approval merges it would be whoever that branch names. The register is
+      # the only file `merge-gate.mjs` and its imports read from this tree; the PR's data comes
+      # over the API. On the schedule GitHub runs the default branch anyway, so an empty
+      # `default_branch` there still checks it out.
       - uses: actions/checkout@v7
         if: steps.gate.outputs.member == 'true'
+        with:
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Mint merger App token
         id: app-token
@@ -317,8 +327,9 @@ jobs:
       # the Merger answers his own comments and merges.
       #
       # TWO READS OF ONE ROW on a review, both checked: the actor guard's, which `logins` read
-      # from the default branch, and `merge-gate.mjs`'s `MERGER_LOGIN`, which it reads from this
-      # job's checkout. They differ only when the checkout's register does. The sweep has no
+      # from the default branch over the API, and `merge-gate.mjs`'s `MERGER_LOGIN`, which it
+      # reads from this job's checkout of the default branch. They differ only when the default
+      # branch moved between the two reads. The sweep has no
       # actor guard, so it checks the one read it makes, `MERGER_LOGIN`; a review that reaches
       # this step without the guard's login is an error, never a sweep.
       - name: Assert the minted App is the one this lane expects
@@ -336,7 +347,7 @@ jobs:
             exit 1
           fi
           if [ "$MINTED_SLUG" != "$EXPECTED" ] || { [ -n "$GUARD_SLUG" ] && [ "$MINTED_SLUG" != "$GUARD_SLUG" ]; }; then
-            echo "::error title=agent-merge::App slug mismatch — minted '$MINTED_SLUG', the actor guard expects '${GUARD_SLUG:-(none: not a review)}' (the default branch's register) and merge-gate.mjs expects '$EXPECTED' (MERGER_LOGIN, this checkout's register). Rename the App to produce the expected slug, or correct the Merger row's App slug in docs/qa/agent-identities.md, which both read (RA-2701, RA-2741). Leaving them disagreeing silently disables the self-event guard."
+            echo "::error title=agent-merge::App slug mismatch — minted '$MINTED_SLUG', the actor guard expects '${GUARD_SLUG:-(none: not a review)}' (the default branch's register) and merge-gate.mjs expects '$EXPECTED' (MERGER_LOGIN, this job's checkout of the default branch). Rename the App to produce the expected slug, or correct the Merger row's App slug in docs/qa/agent-identities.md, which both read (RA-2701, RA-2741). Leaving them disagreeing silently disables the self-event guard."
             exit 1
           fi
           echo "verified=true" >> "$GITHUB_OUTPUT"

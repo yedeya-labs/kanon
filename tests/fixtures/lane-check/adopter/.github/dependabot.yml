@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 3
+      exclude:
+        - "yedeya-labs/kanon*"
     commit-message:
       prefix: ci
       include: scope

@@ -195,7 +195,7 @@ export function needsSeverityComment() {
     '',
     '| label | means |',
     '|---|---|',
-    '| `sev:critical` | data loss, security, tenant-isolation breach, or outage |',
+    '| `sev:critical` | data loss, a security or isolation breach, or an outage |',
     '| `sev:high` | core flow broken, no workaround |',
     '| `sev:medium` | flow degraded, workaround exists |',
     '| `sev:low` | cosmetic / minor |',

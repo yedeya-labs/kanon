@@ -7,6 +7,7 @@ import { decide, triggeringActor } from '../../scripts/lane-gate.mjs';
 import { checkCallerPin, kanonRefsOf, localCallsOf, parseWorkflowRef } from '../../scripts/caller-pin.mjs';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
+import { runsUnadmitted } from './helpers/job-condition.js';
 import { GH_REGISTER_ARM, IMPLEMENTER_LOGIN, LEAD_LOGIN, REGISTER_FIXTURE } from './helpers/register.js';
 
 /**
@@ -83,8 +84,8 @@ const gatesOf = (wf: Workflow): { jobId: string; index: number }[] => {
  * (the Merger's review path starts `logins`, its sweep starts `merge` alone, plan 0004 step 7)
  * — one first in each job that can start without another gated job's verdict. Either way:
  * every gate is the gate step, unconditional, after `kanon-path` alone; every later step in a
- * gate's job skips on a refusal; and every job without a gate waits for a gated job and reads
- * its verdict in its `if:`.
+ * gate's job skips on a refusal; and every job without a gate waits for a gated job, reads
+ * its verdict in its `if:`, and cannot start unless a gate admitted (kanon#209).
  */
 const gateProblems = (wf: Workflow): string[] => {
   const problems: string[] = [];
@@ -130,29 +131,29 @@ const gateProblems = (wf: Workflow): string[] => {
     }
   }
   for (const [id] of rest) if (!gatedJobs.has(id)) problems.push(`job ${id} can run without the gate admitting`);
-  // A status function lets a job start when the job it needs was SKIPPED, so the gate there
-  // never ran. Such a job is gated only if its `if:` requires that job to have run (a
-  // non-empty output, or a `success` or `failure` result) and never admits it skipped;
-  // otherwise it holds a gate of its own (the Merger's sweep starts `merge` with `logins`
-  // skipped, plan 0004 step 7).
-  for (const [id, j] of rest) {
-    const cond = String(j.if ?? '');
-    if (!/\b(?:always|cancelled|failure)\(\)/.test(cond)) continue;
-    const admitsSkipped = /needs\.[\w-]+\.result\s*==\s*'skipped'/.test(cond);
-    const requiresRan = /needs\.[\w-]+\.(?:outputs\.[\w-]+\s*==\s*'[^']+'|result\s*==\s*'(?:success|failure)')/.test(cond);
-    if (admitsSkipped || !requiresRan) problems.push(`job ${id} can start with the job it needs skipped, and holds no gate of its own`);
-  }
 
-  // A refusal leaves every output of a gate's job EMPTY, and an empty output passes any `!=`
-  // test: `needs.filter.outputs.prs != '[]'` is true on a refused event. So a job that tests
-  // one of that job's outputs with `!=` must also require the verdict itself.
-  for (const gateJob of gateJobs) {
-    for (const [id, j] of Object.entries(wf.jobs).filter(([jid]) => jid !== gateJob)) {
-      const cond = String(j.if ?? '');
-      const negated = new RegExp(`needs\\.${gateJob}\\.outputs\\.[\\w-]+\\s*!=`).test(cond);
-      const verdict = new RegExp(`needs\\.${gateJob}\\.outputs\\.member\\s*==\\s*'true'\\s*&&`).test(cond);
-      if (negated && !verdict) problems.push(`job ${id} tests an output of ${gateJob} with != without requiring its member verdict first`);
-    }
+  // And its `if:` cannot hold unless a gate admitted (kanon#209). Reading a verdict is not
+  // requiring one: `needs.logins.outputs.member == 'true' || github.event_name == 'schedule'`
+  // reads it and still runs on every schedule. So each condition is EVALUATED over every world
+  // in which no gate admitted (`helpers/job-condition.ts`): a gate's job concluded success with
+  // `member` refused or empty, or was skipped, or failed, and every job behind it was skipped.
+  // That covers a status function letting a job start with the gate's job skipped (the Merger's
+  // sweep starts `merge` with `logins` skipped, so `merge` holds a gate of its own, plan 0004
+  // step 7), and an empty output passing a `!=` test (`needs.filter.outputs.prs != '[]'` is
+  // true on a refused event).
+  const ancestorsOf = (id: string, seen = new Set<string>()): string[] => {
+    for (const n of needsOf(wf.jobs[id] ?? {})) if (!seen.has(n)) { seen.add(n); ancestorsOf(n, seen); }
+    return [...seen];
+  };
+  const held = new Set<string>();
+  const pending = rest.filter(([id]) => gatedJobs.has(id));
+  while (pending.length) {
+    const next = pending.findIndex(([, j]) => needsOf(j).every((n) => gateJobs.has(n) || held.has(n) || !pending.some(([p]) => p === n)));
+    if (next < 0) throw new Error('a cycle in the lane\'s needs');
+    const [[id, j]] = pending.splice(next, 1) as [[string, Job]];
+    const world = runsUnadmitted(j.if, j.needs, ancestorsOf(id), gateJobs, held);
+    if (world === null) held.add(id);
+    else problems.push(`job ${id} runs with no gate admitting, when ${world}`);
   }
   return problems;
 };
@@ -193,15 +194,79 @@ describe('every lane carries the membership gate (K-AGENT-45)', () => {
       // The rebase lane's matrix job: `'' != '[]'` is true when the gate refused.
       const wf = lane('agent-rebase.yml');
       wf.jobs.resolve!.if = "needs.filter.outputs.prs != '[]'";
-      expect(gateProblems(wf)).toEqual(['job resolve tests an output of filter with != without requiring its member verdict first']);
+      expect(gateProblems(wf)).toEqual(['job resolve runs with no gate admitting, when filter success (member=false)']);
     });
-    it('a job that can start with its gated job skipped, and holds no gate of its own', () => {
-      // The Merger's sweep path: `merge` starts with `logins` skipped, so its own gate is the
-      // only one that runs.
+    /** The Merger lane with the `merge` job's own gate removed and its later steps ungated. */
+    const mergeWithoutItsGate = () => {
       const wf = lane('agent-merge.yml');
       wf.jobs.merge!.steps = wf.jobs.merge!.steps!.filter((st) => st.id !== 'gate' && st.uses !== '$/actions/kanon-path');
       for (const st of wf.jobs.merge!.steps) if (st.if === "steps.gate.outputs.member == 'true'") delete st.if;
-      expect(gateProblems(wf)).toContain('job merge can start with the job it needs skipped, and holds no gate of its own');
+      return wf;
+    };
+    it('a job that can start with its gated job skipped, and holds no gate of its own', () => {
+      // The Merger's sweep path: `merge` starts with `logins` skipped, so its own gate is the
+      // only one that runs.
+      const problems = gateProblems(mergeWithoutItsGate());
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toMatch(/^job merge runs with no gate admitting, when logins skipped; true: /);
+    });
+    // kanon#209: the verdict in one arm of an `||` is read, and is not required.
+    it('a job whose if: ORs the verdict with a trigger, behind a status function', () => {
+      const wf = mergeWithoutItsGate();
+      wf.jobs.merge!.if = "!cancelled() && (needs.logins.outputs.member == 'true' || github.event_name == 'schedule')";
+      expect(gateProblems(wf)).toEqual(["job merge runs with no gate admitting, when logins success (member=false); true: `github.event_name == 'schedule'`"]);
+    });
+    it('a job whose if: ORs the verdict with a trigger, with no status function', () => {
+      const wf = lane('agent-triage.yml');
+      wf.jobs['triage-fix']!.if = "needs.filter.outputs.member == 'true' || github.event_name == 'workflow_dispatch'";
+      expect(gateProblems(wf)).toEqual(["job triage-fix runs with no gate admitting, when filter success (member=false); true: `github.event_name == 'workflow_dispatch'`"]);
+    });
+    it('…but not one that ANDs the verdict with a trigger', () => {
+      const wf = lane('agent-triage.yml');
+      wf.jobs['triage-fix']!.if = "needs.filter.outputs.member == 'true' && github.event_name == 'workflow_dispatch'";
+      expect(gateProblems(wf)).toEqual([]);
+      wf.jobs['triage-fix']!.if = "always() && (github.event_name == 'workflow_dispatch' && needs.filter.outputs.member == 'true')";
+      expect(gateProblems(wf)).toEqual([]);
+      wf.jobs['triage-fix']!.if = "!cancelled() && !(needs.filter.outputs.member != 'true')";
+      expect(gateProblems(wf)).toEqual([]);
+    });
+    it('…nor one that GitHub’s implicit success() keeps from starting', () => {
+      // No status function, so `implement` must have succeeded, which this `if:` then refuses.
+      const wf = lane('agent-implement.yml');
+      wf.jobs['crash-recovery']!.if = "needs.implement.result != 'success'";
+      expect(gateProblems(wf)).toEqual([]);
+    });
+    it('a job that starts on the gate job’s own failure', () => {
+      const wf = lane('agent-triage.yml');
+      wf.jobs['triage-fix']!.if = "failure() || needs.filter.outputs.member == 'true'";
+      expect(gateProblems(wf)).toEqual(['job triage-fix runs with no gate admitting, when filter failure']);
+    });
+    it('a job behind a held job that starts on its failure or skip anyway', () => {
+      const wf = lane('agent-implement.yml');
+      wf.jobs['crash-recovery']!.if = "always() && needs.implement.result != 'success'";
+      expect(gateProblems(wf)).toEqual(['job crash-recovery runs with no gate admitting, when implement skipped; filter success (member=false)']);
+    });
+    it('a condition it cannot read fails by name, never passes', () => {
+      const wf = lane('agent-triage.yml');
+      wf.jobs['triage-fix']!.if = "needs.filter.outputs.member == 'true' || hashFiles('x') != ''";
+      expect(() => gateProblems(wf)).toThrow(/unmodelled function hashFiles/);
+      // …including one that reads the event, which would otherwise be a free clause.
+      wf.jobs['triage-fix']!.if = "needs.filter.outputs.member == 'true' && hashFiles(github.workspace) != ''";
+      expect(() => gateProblems(wf)).toThrow(/unmodelled function hashFiles/);
+    });
+    it('a job that reads the verdict as anything but its admission', () => {
+      // A gate's job that did not run, or failed, leaves `member` empty, not `false`.
+      const wf = lane('agent-triage.yml');
+      wf.jobs['triage-fix']!.if = "always() && needs.filter.outputs.member != 'false'";
+      expect(gateProblems(wf)).toEqual(['job triage-fix runs with no gate admitting, when filter success']);
+    });
+    it('a job behind a job that runs ungated is not held by it', () => {
+      const wf = lane('agent-implement.yml');
+      wf.jobs.implement!.if = "needs.filter.outputs.member == 'true' || github.event_name == 'workflow_dispatch'";
+      expect(gateProblems(wf)).toEqual([
+        "job implement runs with no gate admitting, when filter success (member=false); true: `github.event_name == 'workflow_dispatch'`",
+        'job crash-recovery runs with no gate admitting, when implement failure; filter success (member=false)',
+      ]);
     });
     it('a job reading a gated job it does not need', () => {
       const wf = lane('agent-implement.yml');

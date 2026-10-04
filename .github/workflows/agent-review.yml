@@ -1378,7 +1378,8 @@ jobs:
       # the PR's author a writer to this repository, and the merge is a human one.
       #
       # BEFORE ANY PR CODE RUNS, as it always ran. It runs no
-      # step here: the block now holds only the push probe, and the reviewer pushes nothing.
+      # step here: the push probe is off, and the commit-identity step needs an App slug (the
+      # reviewer pushes nothing).
       # The toolchain, the install and the database are the project-setup hook's (RA-2694),
       # which runs the PR's code and is called further down, after the scope step. The
       # minted identity is checked by no one here, so `app-slug` is empty: the reviewer App
