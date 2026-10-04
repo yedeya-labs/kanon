@@ -148,8 +148,11 @@ export const MARKER = '<!-- qa:dispatch-sweep -->';
  * @property {string} [settled] the state an issue carrying a `terminal` label reports
  * @property {boolean} [decomposes] an `exhausted` run in this lane means the ISSUE is too
  *   big, and it is stopped and routed to a split rather than re-dispatched (RA-1781)
+ * @property {{check: string, recovery: string}} [emptyCheck] the lane workflow's jobs that red
+ *   a green run which left nothing, and recover it — read to tell such a run apart (kanon#254)
  * @property {string} neverRan  prose for a re-dispatch of a never-ran issue
  * @property {string} answered  prose for a re-dispatch of an answered issue
+ * @property {string} [ranEmpty] prose for a re-dispatch of an issue whose last run left nothing
  */
 /** @type {Lane[]} */
 export const LANES = [
@@ -186,6 +189,12 @@ export const LANES = [
     // itself this is a no-op: the trigger label is already gone.
     terminal: [STOP_LABEL],
     settled: 'parked',
+    // A GREEN RUN THAT LEFT NOTHING (kanon#181, kanon#254). `agent-implement.yml`'s `check`
+    // job reds such a run, and its `recovery` job runs only when that check said `empty`.
+    // For an issue outside a project the recovery changes nothing (`implement-crash.mjs`'s
+    // `decide`, by the Owner's decision on kanon#252), so the sweep owns the retry, and it
+    // reads these two jobs to know the run was empty. See `runLeftNothing`.
+    emptyCheck: { check: 'empty-check', recovery: 'crash-recovery' },
     neverRan:
       'This issue has carried the trigger label with no output from the implementer. ' +
       'Per `agent-implement.yml` the agent always comments before finishing, so silence ' +
@@ -193,6 +202,10 @@ export const LANES = [
     answered:
       'The last word on this issue came from a human, and nothing re-fired the ' +
       'implementer. Re-dispatching so the answer is acted on.',
+    ranEmpty:
+      'The latest implementer run ended without a pull request, a pushed branch or a comment, ' +
+      'and `agent-implement.yml` failed it as `implement run left nothing`. Nothing else ' +
+      'retries an issue outside a project, so the sweep does (kanon#254).',
   },
   {
     key: 'triage',
@@ -596,6 +609,12 @@ export function makeCommentsReader({ json = ghJson, onPayload = () => {} } = {})
 // reported with an excerpt so the difference is obvious at a glance; a brittle
 // keyword match on the agent's prose would be worse than useless here.
 
+/** The states a run that left nothing lifts to `ran-empty` (kanon#254): the two the agent's
+ *  own earlier word produces. */
+export const EMPTY_LIFTS = ['in-flight', 'awaiting-human'];
+/** The states the sweep re-dispatches. */
+const DISPATCHABLE = ['never-ran', 'answered', 'ran-empty'];
+
 export function classify(issue, comments, hasPr, opts = {}) {
   const {
     maxRedispatch = MAX_REDISPATCH,
@@ -628,6 +647,11 @@ export function classify(issue, comments, hasPr, opts = {}) {
     // capped run is a re-run under way, and `too-big` must not stop it. Null when
     // unread, and then `main` passes no `exhaustedAt` either — see there.
     labeledAt = null,
+    // WHEN THIS ISSUE'S LATEST RUN ENDED GREEN WITH NOTHING TO SHOW, as epoch-ms, or null
+    // (kanon#254): the latest `COST#` row's stamp, when that row's run failed the lane's
+    // empty check (`runLeftNothing`). Null is the pre-#254 behaviour, and the bounded one:
+    // the issue reads as it did, and nothing is dispatched that was not before.
+    emptyAt = null,
     // Defaults to the implement lane so every existing caller — and every existing
     // test — keeps its exact meaning (RA-1336).
     lane = LANES[0],
@@ -791,9 +815,23 @@ export function classify(issue, comments, hasPr, opts = {}) {
     const route = exhaustedRoute({ project: projectOf(issue?.body), body: issue?.body });
     return { ...base, state: 'too-big', act: 'stop', stopLabel: route.label, why: route.why };
   }
-  // Only `never-ran` and `answered` are actionable. Everything else is either fine
-  // or a human's decision.
-  if (state !== 'never-ran' && state !== 'answered') return { ...base, state, act: null };
+  // RAN EMPTY — the latest run ended green with no PR, no branch and no comment, and the
+  // lane failed it for that (kanon#181, kanon#254). The agent spoke on an EARLIER run, so the
+  // conversation alone reads `in-flight` and then `awaiting-human`, which never re-dispatch:
+  // the issue would wait on a human for a question nobody asked. Only those two states are
+  // lifted. `has-pr`, `human-held` and `parked` are owned by a PR or a person; `never-ran`
+  // and `answered` already dispatch. Two things say a later run is under way or has spoken,
+  // and keep the conversation's reading: the implementer commenting after the empty run, or
+  // the trigger label applied after it. Bounded like every dispatch: the cooldown, and
+  // `MAX_REDISPATCH` before `stop()` hands it to a human.
+  if (Number.isFinite(emptyAt) && EMPTY_LIFTS.includes(state)
+    && !(Number.isFinite(labeledAt) && labeledAt > emptyAt)
+    && !agentComments.some((c) => Date.parse(c.createdAt) > emptyAt)) {
+    state = 'ran-empty';
+  }
+  // Only `never-ran`, `answered` and `ran-empty` are actionable. Everything else is either
+  // fine or a human's decision.
+  if (!DISPATCHABLE.includes(state)) return { ...base, state, act: null };
   if (redispatches >= maxRedispatch) return { ...base, state: 'exhausted', act: 'stop' };
   const coolingDown = lastSweep && hoursSince(lastSweep.createdAt, now) < cooldownHours;
   return { ...base, state, act: coolingDown ? null : 'dispatch' };
@@ -864,7 +902,7 @@ function redispatch(v) {
     `Re-dispatching \`${lane.label}\` (attempt ${v.redispatches + 1} of ${v.maxRedispatch}`
       + `${v.unreached ? `; ${v.unreached} earlier dispatch${v.unreached === 1 ? '' : 'es'} never reached the model and ${v.unreached === 1 ? 'is' : 'are'} not charged, RA-1517` : ''}) — **${v.state}**.`,
     '',
-    v.state === 'never-ran' ? lane.neverRan : lane.answered,
+    { 'never-ran': lane.neverRan, 'ran-empty': lane.ranEmpty }[v.state] ?? lane.answered,
     '',
     `_Filed by \`scripts/dispatch-sweep.mjs\` (RA-912, ${lane.key} lane RA-1336). If this is wrong, remove the \`${lane.label}\` label._`,
   ].join('\n');
@@ -945,7 +983,7 @@ export function actionCell(v, breaker = { tripped: false }) {
   return breaker.tripped && v.act === 'stop' ? 'stop (withheld)' : v.act;
 }
 
-const REPORT_ORDER = ['never-ran', 'answered', 'too-big', 'awaiting-human', 'human-held', 'exhausted', 'in-flight', 'has-pr', 'triage-settled', 'parked'];
+const REPORT_ORDER = ['never-ran', 'answered', 'ran-empty', 'too-big', 'awaiting-human', 'human-held', 'exhausted', 'in-flight', 'has-pr', 'triage-settled', 'parked'];
 
 /**
  * The step-summary text, pure so it can be asserted on (RA-1260). Takes the breaker's
@@ -1127,6 +1165,22 @@ export function unreachedByIssue(rows, issueNumbers, {
  * @returns {Map<number, number>}
  */
 export function exhaustedAtByIssue(rows, issueNumbers) {
+  const out = new Map();
+  for (const [n, { at, outcome }] of latestRunByIssue(rows, issueNumbers)) if (outcome === 'exhausted') out.set(n, at);
+  return out;
+}
+
+/**
+ * Each issue's LATEST `COST#` row — its stamp as epoch-ms, its `outcome` and its `run_id`.
+ * The one reading behind `exhaustedAtByIssue` (RA-1781) and the empty-run check (kanon#254),
+ * so the two cannot disagree about which run was the last. A row with no parseable stamp is
+ * skipped, so it can neither be the latest nor mask one.
+ *
+ * @param {Array<{ts?: string|null, issue_number?: string|number|null, outcome?: string|null, run_id?: string|null}>} rows
+ * @param {number[]} issueNumbers
+ * @returns {Map<number, {at: number, outcome: string|null|undefined, runId: string|null|undefined}>}
+ */
+export function latestRunByIssue(rows, issueNumbers) {
   const wanted = new Set(issueNumbers);
   const latest = new Map();
   for (const row of rows ?? []) {
@@ -1135,11 +1189,60 @@ export function exhaustedAtByIssue(rows, issueNumbers) {
     const at = parseCostStamp(row.ts);
     if (at === null) continue;
     const prev = latest.get(n);
-    if (!prev || at > prev.at) latest.set(n, { at, outcome: row.outcome });
+    if (!prev || at > prev.at) latest.set(n, { at, outcome: row.outcome, runId: row.run_id });
   }
-  const out = new Map();
-  for (const [n, { at, outcome }] of latest) if (outcome === 'exhausted') out.set(n, at);
-  return out;
+  return latest;
+}
+
+/**
+ * Did this run end green with nothing to show, by the lane's own verdict? Pure (kanon#254).
+ *
+ * `jobs` is the run's job list (`GET /actions/runs/{id}/jobs`). The lane's `check` job fails
+ * a green run that left no PR, branch or comment (kanon#181), and its `recovery` job runs on
+ * that run only when the check said `empty`: the implement job succeeded, or the check would
+ * not have run, so the recovery's other trigger (a red implement job) cannot be why. So BOTH
+ * are required — a red check alone may be a check that could not read the API, which says
+ * nothing about the run, exactly the case `agent-implement.yml` keys its recovery on the
+ * output to avoid. And the recovery must have a conclusion other than `skipped`: a job still
+ * queued or running has none yet, and has not shown which way its condition went.
+ *
+ * Job names are matched by suffix, because a called workflow's jobs are listed as
+ * `<caller job> / <job>`. Every unknown reads as NOT empty, which dispatches nothing new.
+ *
+ * @param {Array<{name?: string, status?: string, conclusion?: string|null}>|null|undefined} jobs
+ * @param {{emptyCheck?: {check: string, recovery: string}}} lane
+ */
+export function runLeftNothing(jobs, lane) {
+  const names = lane?.emptyCheck;
+  if (!names || !Array.isArray(jobs)) return false;
+  const job = (key) => jobs.find((j) => j?.name === key || String(j?.name ?? '').endsWith(` / ${key}`));
+  const check = job(names.check);
+  const recovery = job(names.recovery);
+  return check?.conclusion === 'failure'
+    && Boolean(recovery?.conclusion) && recovery.conclusion !== 'skipped';
+}
+
+/** Reads a run's jobs; `null` when they cannot be read, which `runLeftNothing` reads as not
+ *  empty. INJECTABLE, and memoised per run id for the life of one reader (kanon#254). Only
+ *  called for an issue the conversation leaves `in-flight` or `awaiting-human`, so the
+ *  common sweep pays nothing. Needs `actions: read`, which the sweep's token already holds
+ *  for `makeSweepTriggerCheck`. */
+export function makeRunJobsReader({ json = ghJson } = {}) {
+  const cache = new Map();
+  return (runId) => {
+    const id = String(runId ?? '');
+    if (!/^\d+$/.test(id)) return null;
+    if (!cache.has(id)) {
+      let jobs = null;
+      try {
+        jobs = json(['api', `repos/${REPO}/actions/runs/${id}/jobs?per_page=100`]).jobs ?? null;
+      } catch {
+        jobs = null;
+      }
+      cache.set(id, jobs);
+    }
+    return cache.get(id);
+  };
 }
 
 /** When `label` was last applied, from an issue's events, as epoch-ms — or null if it
@@ -1382,16 +1485,28 @@ function main() {
   // so the issue is re-dispatched as before RA-1781 (bounded by MAX_REDISPATCH) rather
   // than possibly stopped mid-way through a re-run a human started.
   const labeledAtFor = makeLabeledAtReader();
+  // A LATEST RUN THAT LEFT NOTHING (kanon#254), read only for an issue the conversation leaves
+  // `in-flight` or `awaiting-human`, and only in a lane with an empty check. Every unread
+  // fact — no row, unreadable jobs, unreadable events — keeps the conversation's reading.
+  const runJobs = makeRunJobsReader();
+  const latestPerLane = new Map(byLane.map(({ lane, issues }) =>
+    [lane.key, lane.emptyCheck ? latestRunByIssue(rowsPerLane.get(lane.key), issues.map((i) => i.number)) : new Map()]));
   const verdicts = byLane.flatMap(({ lane, issues }) =>
     issues.map((issue) => {
       const exhaustedAt = exhaustedPerLane.get(lane.key)?.get(issue.number) ?? null;
       const labeledAt = exhaustedAt == null ? null : labeledAtFor(issue.number, lane.label);
-      return classify(issue, commentsFor(issue.number), Boolean(isLinked(issue.number)), {
+      const opts = {
         lane,
         unreached: unreachedPerLane.get(lane.key)?.get(issue.number) ?? 0,
         exhaustedAt: labeledAt === undefined ? null : exhaustedAt,
         labeledAt: labeledAt ?? null,
-      });
+      };
+      const args = [issue, commentsFor(issue.number), Boolean(isLinked(issue.number))];
+      const v = classify(...args, opts);
+      const latest = latestPerLane.get(lane.key)?.get(issue.number);
+      if (!EMPTY_LIFTS.includes(v.state) || !latest || !runLeftNothing(runJobs(latest.runId), lane)) return v;
+      const relabeled = labeledAtFor(issue.number, lane.label);
+      return relabeled === undefined ? v : classify(...args, { ...opts, emptyAt: latest.at, labeledAt: relabeled });
     }));
 
   // Decided BEFORE the report (RA-1260), so the summary shows what the run will do rather
