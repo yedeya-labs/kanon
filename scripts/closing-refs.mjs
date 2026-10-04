@@ -154,9 +154,12 @@ export const mergeMessageRefs = (title, body, repo) =>
 
 /**
  * @param {{ body?: string, title?: string, willClose: number[], commitMessages?: string[],
- *           repo?: string, issuesReadable?: boolean, linksPopulated?: boolean }} input
+ *           repo?: string, issuesReadable?: boolean, linksPopulated?: boolean,
+ *           retargeted?: boolean | null }} input
+ *   `retargeted`: whether the PR's timeline records a base change — `null` when it was
+ *   not read. Only `true` is evidence of one (kanon#182).
  */
-export const analyse = ({ body, title = '', willClose, commitMessages = [], repo, issuesReadable = true, linksPopulated = true }) => {
+export const analyse = ({ body, title = '', willClose, commitMessages = [], repo, issuesReadable = true, linksPopulated = true, retargeted = null }) => {
   const zone = declarationZone(body);
   // In the declaration zone, code spans are NOT stripped: a backticked keyword
   // there is a claim the author believes, and GitHub's silence about it is the bug.
@@ -236,15 +239,13 @@ export const analyse = ({ body, title = '', willClose, commitMessages = [], repo
     // arm which caught RA-1029, the most expensive of the three defects this file exists
     // for, and it is why deferral cannot make this a check that never fires.
     //
-    // `droppedBySquash` IS AFFECTED, and naming it here as unaffected was wrong in both
-    // halves (RA-1672 review). It is `inCommits.filter((n) => !willClose.includes(n))`, so
-    // it reads `willClose` and on a deferred PR reports EVERY commit-message closing
-    // keyword rather than none; and it never fails the run in the first place — it is a
-    // `console.log` note, marked "Reported, never fatal". Harmless either way, because a
-    // commit keyword creates no closing link on any base, so the note it prints is true
-    // whichever set it is computed from. Recorded rather than quietly corrected: in a
-    // file whose whole premise is that its comments are load-bearing, an "unaffected and
-    // still fails" claim about the wrong arm is the defect this batch is about.
+    // `droppedBySquash` reads `willClose` too, and was the one arm left reading it bare
+    // (RA-1672 review, then kanon#165). On a deferred PR `willClose` is `[]` by
+    // construction, so it reported every commit-message keyword, including ones the body
+    // already declares, with advice to "declare it in the body". It is now computed
+    // against what the body declares as well as what the links close, so a declared
+    // reference is never reported as dropped on any base; a commit keyword the body does
+    // not declare is still reported on a stacked PR, where the note is as true as anywhere.
     linksDeferred: !linksPopulated,
     // Declared up top, but the PR link will not close it — backticks, a fence, or a
     // typo. It may still be closed by the MERGE COMMIT, which reads the same
@@ -262,8 +263,10 @@ export const analyse = ({ body, title = '', willClose, commitMessages = [], repo
     willCloseButNotDeclared: linksPopulated ? willClose.filter((n) => !declared.includes(n)) : [],
     // The subset of the above that is explained by a keyword below the zone.
     probableForwardRefs: linksPopulated ? forward : [],
-    // In a commit message and nowhere the merge will read.
-    droppedBySquash: inCommits.filter((n) => !willClose.includes(n)),
+    // In a commit message and nowhere the merge will read. A reference the body DECLARES
+    // is not dropped — the body is what the squash keeps — and that has to hold where
+    // `willClose` is empty for want of links rather than for want of a declaration.
+    droppedBySquash: inCommits.filter((n) => !willClose.includes(n) && !declared.includes(n)),
     // The second oracle. `closingIssuesReferences` predicts what the PR LINK
     // closes; this predicts what the merge COMMIT closes, and they disagree
     // whenever a keyword is inside a code span or split across a line break.
@@ -272,11 +275,17 @@ export const analyse = ({ body, title = '', willClose, commitMessages = [], repo
     // Supersedes trusting `willClose` alone — that field read `[1013]` on the PR
     // that closed RA-918 and RA-897.
     mergeClosesUndeclared: mergeWillClose.filter((n) => !declared.includes(n)),
+    // Evidence for the one measured cause of a plain declaration GitHub did not resolve.
+    // Carried, not judged here: `explain` names the retarget only when this is `true`.
+    retargeted,
   };
 };
 
 const gh = (args) => execFileSync('gh', args, { encoding: 'utf8' });
 
+// `baseRefName` is read by `linksArePopulated`, and a field this list does not request is
+// `undefined` rather than an error, so dropping it would quietly un-defer every stacked PR.
+// tests/library/closing-refs-read.test.ts asserts the request (kanon#165).
 export const readPr = (pr, repo) => {
   const meta = JSON.parse(gh(['pr', 'view', String(pr), '--repo', repo, '--json', 'title,body,closingIssuesReferences,commits,baseRefName']));
   return {
@@ -286,6 +295,8 @@ export const readPr = (pr, repo) => {
     willClose: meta.closingIssuesReferences.map((r) => r.number),
     commitMessages: meta.commits.map((c) => `${c.messageHeadline}\n${c.messageBody ?? ''}`),
     baseRefName: meta.baseRefName,
+    // Read here, with the rest of the PR, so the one read a caller makes carries it.
+    retargeted: baseRetargeted(pr, repo),
   };
 };
 
@@ -309,6 +320,36 @@ export const linksArePopulated = (baseRefName, defaultBranch) =>
   baseRefName === null || baseRefName === undefined
   || defaultBranch === null || defaultBranch === undefined
   || baseRefName === defaultBranch;
+
+/**
+ * Did this PR's base ever move? The evidence `explain` needs before it names a base
+ * retarget as the cause of a plain declaration GitHub resolved to nothing (kanon#182).
+ *
+ * The reference adopter saw that diagnosis printed twice for PRs whose base had always
+ * been the default branch, and its "re-save the body" remedy sent an author round a loop
+ * of re-saves that could not work. So the claim now needs a `BaseRefChangedEvent` on the
+ * PR's timeline.
+ *
+ * Counted from `nodes`, NOT `totalCount`: on a `timelineItems(itemTypes: …)` connection
+ * `totalCount` counts the whole timeline, filter or not (measured on kanon#240: five items,
+ * none a base change, `totalCount` 5). Reading it would report every PR as retargeted.
+ *
+ * @returns {boolean | null} `null` when the timeline could not be read.
+ */
+export const baseRetargeted = (pr, repo) => {
+  const [owner, name] = repo.split('/');
+  try {
+    const nodes = JSON.parse(gh([
+      'api', 'graphql',
+      '-f', 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){timelineItems(itemTypes:[BASE_REF_CHANGED_EVENT],first:1){nodes{__typename}}}}}',
+      '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `number=${pr}`,
+      '--jq', '.data.repository.pullRequest.timelineItems.nodes',
+    ]));
+    return Array.isArray(nodes) ? nodes.length > 0 : null;
+  } catch {
+    return null;
+  }
+};
 
 /** The repository's default branch — the only base for which GitHub populates
  *  `closingIssuesReferences` at all. Read rather than assumed to be `main`: getting
@@ -372,13 +413,31 @@ export const explain = (r, repo, pr = '<pr>') => {
 
   for (const n of r.declaredButWontClose) {
     if (r.plainlyDeclared.includes(n)) {
-      // THE RA-1111 CASE. The keyword is not in a code span, so the body parser saw
-      // exactly what a reader sees and GitHub still resolved nothing. Naming the
-      // retarget is not a guess: it is the only cause measured for this shape, twice.
-      problems.push(`#${n} is declared as closed by this PR and the PR LINK will not close it — and the keyword is NOT inside a code span, so a backtick is not the cause here.
-    The measured cause is a BASE RETARGET (RA-1111): GitHub parses closing references when a body is opened or edited, and NOT when a base moves. A stacked PR therefore loses every declaration at the moment its parent merges and GitHub retargets it to the default branch, with the body never touched.
+      // THE RA-1111 SHAPE. The keyword is not in a code span, so the body parser saw
+      // exactly what a reader sees and GitHub still resolved nothing.
+      const head = `#${n} is declared as closed by this PR and the PR LINK will not close it — and the keyword is NOT inside a code span, so a backtick is not the cause here.`;
+      const notAnIssue = `#${n} is not an ISSUE in this repository: a pull-request number, or an issue that was deleted or transferred, never appears in that field. ${line(n)}`;
+      if (r.retargeted === true) {
+        // A retarget is the only cause measured for this shape, twice, and this PR's
+        // timeline records one — so naming it is evidence, not a guess.
+        problems.push(`${head}
+    The measured cause is a BASE RETARGET (RA-1111), and this PR's base has moved: GitHub parses closing references when a body is opened or edited, and NOT when a base moves. A stacked PR therefore loses every declaration at the moment its parent merges and GitHub retargets it to the default branch, with the body never touched.
     Fix: re-save the body — any real change is enough, a trailing newline will do — then confirm with \`gh pr view ${pr} --json closingIssuesReferences\`. The same characters resolve on the second parse.
-    If it still does not resolve, #${n} is not an ISSUE in this repository: a pull-request number, or an issue that was deleted or transferred, never appears in that field. ${line(n)}`);
+    If it still does not resolve, ${notAnIssue}`);
+        continue;
+      }
+      // NO EVIDENCE OF A RETARGET (kanon#182). The reference adopter saw the retarget
+      // diagnosis printed twice on PRs whose base had always been the default branch; four
+      // and more re-saves each left the field `[]`. Prescribing that loop again is the
+      // confidently-wrong cause this function's docstring warns about, so say "unknown" and
+      // hand it to a person, who has remedies an edit does not.
+      const evidence = r.retargeted === false
+        ? "This PR's timeline records no base change, so the one measured cause, a base retarget, does not apply, and re-saving the body has been seen not to help here."
+        : "This PR's timeline could not be read, so a base retarget, the one measured cause, can't be confirmed. If you know the base moved, re-save the body; that re-parses it.";
+      problems.push(`${head}
+    The cause is UNKNOWN. ${evidence}
+    Route it to a human: link #${n} to this PR in its Development sidebar (a manual link is part of \`closingIssuesReferences\`), or close #${n} by hand when this PR merges.
+    Or ${notAnIssue}`);
       continue;
     }
     const alsoMerge = r.mergeWillClose.includes(n);

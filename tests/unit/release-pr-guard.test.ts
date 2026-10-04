@@ -97,6 +97,7 @@ const responses = (opts: { prs?: Pr[]; files?: PrFile[]; comments?: Array<{ body
   const sides = opts.manifest ?? (patch === undefined ? undefined : manifestSides(patch));
   return {
     [`repos/${REPO}/pulls?state=open&per_page=100`]: opts.prs ?? [releasePr()],
+    [`repos/${REPO}/git/ref/heads/${BRANCH}`]: { object: { sha: SHA } },
     [`repos/${REPO}/contents/release-please-config.json?ref=${SHA}`]: contents(config),
     [`repos/${REPO}/pulls/68/files?per_page=100`]: opts.files ?? [],
     [`repos/${REPO}/issues/68/comments?per_page=100`]: opts.comments ?? [],
@@ -119,7 +120,7 @@ const runGuard = (answers: Record<string, unknown>) => {
   writeFileSync(script, guard?.run ?? 'process.exit(99)');
   const result = spawnSync(process.execPath, [script], {
     encoding: 'utf8',
-    env: { PATH: `${dir}:${process.env.PATH ?? ''}`, FAKE_GH_DIR: dir, GITHUB_REPOSITORY: REPO },
+    env: { PATH: `${dir}:${process.env.PATH ?? ''}`, FAKE_GH_DIR: dir, GITHUB_REPOSITORY: REPO, RELEASE_PR_GUARD_WAIT_MS: '0' },
   });
   const calls = existsSync(join(dir, 'calls.log')) ? readFileSync(join(dir, 'calls.log'), 'utf8') : '';
   const posted = calls.split('\n').filter((c) => c.includes('-X POST'));
@@ -521,6 +522,41 @@ describe('#73 the release workflow refuses a release PR that changes more than v
   it('fails closed when the API cannot be read', () => {
     const result = runGuard({});
     expect(result.status).not.toBe(0);
+  });
+
+  // #86: release-please force-pushes the release branch earlier in the same job, and GitHub
+  // records a PR's new head asynchronously. So the PR list can name the head before the one
+  // an Owner is about to merge, and a guard that judged it would pass a stale PR unchecked.
+  describe('#86 judges the release branch\'s current head, not a lagging PR record', () => {
+    const OLD = 'deadbeef';
+    const lagging = (): Pr => ({ ...releasePr(), head: { ...releasePr().head, sha: OLD } });
+
+    it('fails closed, unjudged and without a comment, when the PR never records the branch head', () => {
+      const answers = { ...responses({ prs: [lagging()], files: clean }), [`repos/${REPO}/pulls/68`]: lagging() };
+      const result = runGuard(answers);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(`::error title=Release PR not at its branch head::Release PR #68 records head ${OLD}, but its branch ${BRANCH} is at ${SHA}`);
+      expect(result.calls.match(new RegExp(`api repos/${REPO}/pulls/68\\n`, 'g')), 'it re-reads the PR before giving up').toHaveLength(3);
+      expect(result.calls, 'the lagging head is never judged').not.toContain('pulls/68/files');
+      expect(result.calls).not.toContain(`ref=${OLD}`);
+      expect(result.posted).toEqual([]);
+    });
+
+    it('judges the branch head once a re-read of the PR records it', () => {
+      const answers = { ...responses({ prs: [lagging()], files: stale }), [`repos/${REPO}/pulls/68`]: releasePr() };
+      const result = runGuard(answers);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('::error title=Release PR is stale::Release PR #68');
+      expect(result.calls).toContain(`api repos/${REPO}/contents/release-please-config.json?ref=${SHA}`);
+      expect(result.comment).toContain(`<!-- kanon-release-pr-guard ${SHA} -->`);
+    });
+
+    it('does not re-read a PR that already records the branch head', () => {
+      const result = runGuard(responses({ files: clean }));
+      expect(result.status).toBe(0);
+      expect(result.calls).toContain(`api repos/${REPO}/git/ref/heads/${BRANCH}`);
+      expect(result.calls).not.toMatch(new RegExp(`api repos/${REPO}/pulls/68\\n`));
+    });
   });
 
   it('runs last, on the workflow token, with no expression in its script', () => {
