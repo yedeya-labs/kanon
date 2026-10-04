@@ -141,7 +141,7 @@ This chapter governs the issue: how it is labelled, which milestone it belongs t
 | | `qa:cannot-reproduce` | `5319e7` | The Implementer could not reproduce it |
 | | `qa:false-positive` | `e99695` | Not a real bug (feeds precision metrics) |
 | | `qa:fix-proposed` | `0052cc` | A fix PR is open and linked |
-| | `qa:needs-info` | `fbca04` | A human owes an answer; parks the issue's whole project |
+| | `qa:needs-info` | `fbca04` | A human owes an answer or parked the issue; parks its project and its implement lane |
 | | `qa:needs-severity` | `fbca04` | Reviewer follow-up filed with no severity; the filer must set one |
 | | `qa:needs-split` | `d4c5f9` | Implementer run hit its cap; the Lead proposes a split; never dispatched |
 | | `qa:human-action` | `c5def5` | Project item a human must do (not a PR); never dispatched, does not park the project |
@@ -165,6 +165,8 @@ This chapter governs the issue: how it is labelled, which milestone it belongs t
 | Project membership | `project:<n>` | `bfd4f2` | Project #n: mirrors the project marker; written by the Lead only |
 | Untrusted intake | `from-app` | `ffd200` | Filed from the running application; never dispatched |
 | Release tool | `autorelease: pending`, `autorelease: tagged` | `ededed` | Created and applied by the Releaser only |
+
+`qa:needs-info` is also the implement lane's park marker. A human who parks an issue by hand ("built by hand, do not re-dispatch") adds it and may keep `agent:implement`; neither the Lead nor the dispatch sweep dispatches an issue carrying it. The sweep's own stop applies the same label, so there is one marker for "a human has this", not two.
 
 Two families have no members at installation. A `signal:<name>` label is created with the project's signal list, and `project:<n>` is created by the Lead the first time it files for project `<n>`. `signal:spec-violation` is fixed, because the project reconciler reads it. The release tool's labels are created by the release tool.
 
