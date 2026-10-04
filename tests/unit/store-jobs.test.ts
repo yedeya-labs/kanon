@@ -185,3 +185,50 @@ describe('a re-run of the agent job alone never reads a deleted export (kanon#22
     })).toEqual(['a lane that exports the store runs one agent job, not 2 (agent, agent2)']);
   });
 });
+
+describe('a store job runs the block and nothing else (kanon#225)', () => {
+  it('a run: step in a store job turns the check red', () => {
+    expect(mutate((wf) => { job(wf, 'put').steps!.splice(1, 0, { run: 'node "$KANON/scripts/anything.mjs" "$(cat report.json)"' }); }))
+      .toEqual(['put: a store job runs step 2 (run: node "$KANON/scripts/anything.mjs" "$(ca), which is neither the qa-store block nor the download of the report it puts']);
+  });
+
+  it('a third-party action in a store job turns the check red', () => {
+    expect(mutate((wf) => { job(wf, 'export').steps!.unshift({ uses: 'some/third-party@v1' }); }))
+      .toEqual(['export: a store job runs step 1 (some/third-party@v1), which is neither the qa-store block nor the download of the report it puts']);
+    // A look-alike of the block, or of the download, is a third party too.
+    expect(mutate((wf) => { job(wf, 'put').steps!.push({ uses: 'evil/kanon/actions/qa-store@v1', with: { operation: 'put' } }); }))
+      .toEqual(['put: a store job runs step 3 (evil/kanon/actions/qa-store@v1), which is neither the qa-store block nor the download of the report it puts']);
+    expect(mutate((wf) => { job(wf, 'put').steps![0]!.uses = 'actions/download-artifact-evil@v7'; }))
+      .toEqual(['put: a store job runs step 1 (actions/download-artifact-evil@v7), which is neither the qa-store block nor the download of the report it puts']);
+  });
+
+  it('only a job that puts downloads an artifact', () => {
+    expect(mutate((wf) => { job(wf, 'export').steps!.unshift({ uses: 'actions/download-artifact@v7', with: { name: 'x' } }); }))
+      .toEqual(['export: a store job runs step 1 (actions/download-artifact@v7), which is neither the qa-store block nor the download of the report it puts']);
+  });
+
+  it('a step may not set env, shell or continue-on-error', () => {
+    expect(mutate((wf) => { job(wf, 'export').steps![0]!.env = { NODE_OPTIONS: '--require ./x.js' }; }))
+      .toEqual(["export: a store job's step 1 (store) carries 'env'"]);
+    expect(mutate((wf) => { (job(wf, 'put').steps![1] as Record<string, unknown>)['continue-on-error'] = true; }))
+      .toEqual(["put: a store job's step 2 ($/actions/qa-store) carries 'continue-on-error'"]);
+  });
+
+  it('a job may not set env, defaults, a container or services', () => {
+    for (const key of ['env', 'defaults', 'container', 'services']) {
+      expect(mutate((wf) => { (job(wf, 'put') as Record<string, unknown>)[key] = {}; })).toEqual([`put: a store job carries '${key}', which a store job never needs`]);
+    }
+  });
+
+  it('the delete job runs the block\'s delete-export alone', () => {
+    expect(mutate((wf) => { job(wf, 'delete-export').steps!.push({ run: 'echo hi' }); }))
+      .toEqual(["delete-export: the export's delete job runs step 2 (run: echo hi), which is not the qa-store block"]);
+    expect(mutate((wf) => { job(wf, 'delete-export').steps!.unshift({ uses: 'actions/download-artifact@v7' }); }))
+      .toEqual(["delete-export: the export's delete job runs step 1 (actions/download-artifact@v7), which is not the qa-store block"]);
+    expect(mutate((wf) => { (job(wf, 'delete-export') as Record<string, unknown>).env = { GH_TOKEN: 'x' }; }))
+      .toEqual(["delete-export: the export's delete job carries 'env', which a store job never needs"]);
+    // A store operation in the delete job makes it a store job too, which is red already.
+    expect(mutate((wf) => { job(wf, 'delete-export').steps!.push({ uses: '$/actions/qa-store', with: { operation: 'put', kind: 'audit' } }); }))
+      .toContain('delete-export: a store job also deletes the export');
+  });
+});

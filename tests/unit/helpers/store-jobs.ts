@@ -10,7 +10,13 @@ import { STORE_ENVIRONMENT } from '../../../actions/qa-store/qa-store.mjs';
  *
  * - **Store jobs** run `actions/qa-store` and nothing else of the lane's: each declares the
  *   `kanon-qa-store` environment, and no other name, and an explicit `permissions:` that grants
- *   `id-token: write`. The store's role trusts that environment's OIDC subject alone.
+ *   `id-token: write`. The store's role trusts that environment's OIDC subject alone. Their
+ *   steps are the block's, plus `actions/download-artifact` in a job that `put`s, to fetch the
+ *   report it writes; nothing else runs with the store's credentials (kanon#225). A step
+ *   carries only `uses`, `id`, `name`, `with`, `if` and `timeout-minutes`, and a job only the
+ *   keys in `STORE_JOB_KEYS`: no `env:` (a `NODE_OPTIONS` would run code inside the block), no
+ *   `container:`, `services:` or `defaults:`. The delete job is held to the same, with the
+ *   block's `delete-export` step alone.
  * - **The agent job** declares an explicit `permissions:` without `id-token`, and no
  *   `environment:`. Without its own block it would inherit the caller's `id-token: write`, as
  *   every job of `agent-lane.yml` inherits its caller's grant. The block must still grant every
@@ -30,7 +36,7 @@ import { STORE_ENVIRONMENT } from '../../../actions/qa-store/qa-store.mjs';
  *   agent job's `result`, so it turns that re-run red and says "Re-run all jobs".
  */
 
-type Step = { id?: string; uses?: string; with?: Record<string, unknown>; run?: string; if?: string; env?: Record<string, string> };
+type Step = { id?: string; name?: string; uses?: string; with?: Record<string, unknown>; run?: string; if?: string; env?: Record<string, string> };
 export type Job = {
   uses?: string;
   with?: Record<string, unknown>;
@@ -82,6 +88,35 @@ export function telemetryReads(actionText = readFileSync(`${ROOT}actions/agent-t
 const usesBlock = (s: Step | Job, name: string) => typeof s.uses === 'string' && new RegExp(`(^\\$/|^yedeya-labs/kanon/)actions/${name}(@|$)`).test(s.uses);
 const callsSpine = (j: Job) => typeof j.uses === 'string' && /(^\$\/|^yedeya-labs\/kanon\/)\.github\/workflows\/agent-lane\.yml(@|$)/.test(j.uses);
 const storeSteps = (j: Job) => (j.steps ?? []).filter((s) => usesBlock(s, 'qa-store'));
+
+/** The keys a store job, or the export's delete job, may carry (kanon#225). */
+export const STORE_JOB_KEYS = ['name', 'needs', 'if', 'runs-on', 'environment', 'permissions', 'outputs', 'steps', 'timeout-minutes', 'concurrency'];
+/** The keys a step of one may carry: no `env:`, `run:`, `shell:`, `working-directory:` or `continue-on-error:`. */
+export const STORE_STEP_KEYS = ['uses', 'id', 'name', 'with', 'if', 'timeout-minutes'];
+const downloadsArtifact = (s: Step) => typeof s.uses === 'string' && /^actions\/download-artifact@[^/\s]+$/.test(s.uses);
+const describeStep = (s: Step, i: number) => `step ${i + 1} (${s.name ?? s.id ?? s.uses ?? (s.run ? `run: ${s.run.split('\n')[0]!.slice(0, 40)}` : '?')})`;
+
+/**
+ * kanon#225: what a store job or the delete job runs besides the block. `delete` holds the delete
+ * job to its one step; a store job may also download the report it `put`s.
+ */
+function extraStepProblems(name: string, j: Job, kind: 'store' | 'delete'): string[] {
+  const out: string[] = [];
+  const what = kind === 'store' ? 'a store job' : "the export's delete job";
+  for (const key of Object.keys(j)) if (!STORE_JOB_KEYS.includes(key)) out.push(`${name}: ${what} carries '${key}', which a store job never needs`);
+  const puts = storeSteps(j).some((s) => s.with?.operation === 'put');
+  (j.steps ?? []).forEach((s, i) => {
+    // A delete-export step in a store job, or a store operation in the delete job, is already
+    // red: the job is then both (`a store job also deletes the export`).
+    const download = kind === 'store' && puts && downloadsArtifact(s);
+    if (!usesBlock(s, 'qa-store') && !download) {
+      out.push(`${name}: ${what} runs ${describeStep(s, i)}, which is ${kind === 'store' ? 'neither the qa-store block nor the download of the report it puts' : 'not the qa-store block'}`);
+      return;
+    }
+    for (const key of Object.keys(s)) if (!STORE_STEP_KEYS.includes(key)) out.push(`${name}: ${what}'s ${describeStep(s, i)} carries '${key}'`);
+  });
+  return out;
+}
 
 /** A job that runs a store operation through the hook. */
 export const isStoreJob = (j: Job) => storeSteps(j).some((s) => s.with?.operation !== 'delete-export');
@@ -151,6 +186,7 @@ export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemet
       if (isAgentJob(j)) out.push(`${name}: a store job runs the agent`);
       if (isDeleteJob(j)) out.push(`${name}: a store job also deletes the export`);
       if (p && rank(p.actions) === 2) out.push(`${name}: a store job grants actions: write`);
+      if (!isAgentJob(j) && !isDeleteJob(j)) out.push(...extraStepProblems(name, j, 'store'));
       continue;
     }
     if (isAgentJob(j)) {
@@ -173,6 +209,7 @@ export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemet
     const p = grants(j);
     if (JSON.stringify(p) !== JSON.stringify({ actions: 'write' })) out.push(`${name}: the export's delete job grants ${JSON.stringify(p)}, not exactly actions: write`);
     if (j.environment !== undefined) out.push(`${name}: the export's delete job declares an environment`);
+    out.push(...extraStepProblems(name, j, 'delete'));
   }
   out.push(...rerunProblems(jobs, exporters, agents.map(([n]) => n)));
   return out;
