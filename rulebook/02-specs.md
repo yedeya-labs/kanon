@@ -104,7 +104,7 @@ Kanon reads no test in a language outside the table.
 
 **Why.** Promotion turns an agent's plan into ground truth. Approving intent (a brief) and confirming behaviour are two separate human acts, and merging them lets an agent write its own oracle.
 
-**Enforced by.** Agent instructions and the Reviewer, which blocks a brief that writes `[confirmed]`. Prose only; a guard is planned (a merge-time diff check that escalates any `[seed]` to `[confirmed]` transition).
+**Enforced by.** The merge gate (`scripts/merge-gate.mjs`), which reads the diff of every changed spec and escalates a pull request that makes any invariant `[confirmed]`: a tag flipped in place, a clause moved between spec files with its tag flipped, or a new clause written as `[confirmed]` (`spec-promotion`). An edit or move that keeps `[confirmed]` is not escalated, and a spec diff it can't read escalates rather than merges. Its tests are in `tests/library/merge-gate.test.ts`. Agent instructions, and the Reviewer, which blocks a brief that writes `[confirmed]`, come first.
 
 **Class.** framework
 

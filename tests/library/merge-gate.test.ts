@@ -8,6 +8,7 @@ const { IMPLEMENTER_LOGIN: LANE_IMPLEMENTER, PIPELINE_LABELS: LANE_LABELS } = aw
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ESCALATE_PATHS } from './helpers/escalations.js';
 import { ROOT } from './helpers/adopter.js';
+const { specPromotions } = await import('../../scripts/lib/spec-promotions.mjs');
 /** A value of the untyped library, as the reference adopter's helper named it. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type LibraryValue = any;
@@ -372,14 +373,115 @@ describe('what a human decides', () => {
     // project he exists for produces, which is the whole value of RA-965 on that project.
     // A spec change is reviewed by the Reviewer against the brief, which is its real check.
     expect(mergeVerdict(pr({ files: ['docs/qa/reviewer-playbook.md'] })).rule).toBe('escalating-path');
-    expect(mergeVerdict(pr({ files: ['docs/qa/specs/payments.md'] })).action).toBe('merge');
+    expect(mergeVerdict(pr({ files: ['docs/qa/specs/payments.md'], specDiff: { promotions: [], unreadable: [] } })).action).toBe('merge');
   });
 
   it("merges the pilot's own PR RA-1057, measured against its real file list", () => {
     // The live shape, not a fixture: this exact PR was APPROVED on head and CLEAN, and
     // the first version of ESCALATE_PATHS declined it.
-    const v = mergeVerdict(pr({ files: ['docs/payment-state-machine.md', 'docs/qa/specs/payments.md'] }));
+    const v = mergeVerdict(pr({ files: ['docs/payment-state-machine.md', 'docs/qa/specs/payments.md'], specDiff: { promotions: [], unreadable: [] } }));
     expect(v.action).toBe('merge');
+  });
+});
+
+describe('only a human confirms an invariant (K-SPEC-9, kanon#193)', () => {
+  const SPEC = 'docs/qa/specs/payments.md';
+  const OTHER = 'docs/qa/specs/kiosk.md';
+  const diff = (file: string, patch: string | null, changes = 2) => ({ file, patch, changes });
+  const verdict = (...diffs: { file: string, patch: string | null, changes: number }[]) =>
+    mergeVerdict(pr({ files: ['src/a.ts', ...new Set(diffs.map((d) => d.file))], specDiff: specPromotions(diffs) }));
+
+  it('escalates a tag flipped in place', () => {
+    const v = verdict(diff(SPEC, '@@ -3,1 +3,1 @@\n-- `[PAY-4]` `[seed]` **Refunds settle.**\n+- `[PAY-4]` `[confirmed]` **Refunds settle.**'));
+    expect(v.action).toBe('escalate');
+    expect(v.rule).toBe('spec-promotion');
+    expect(v.why).toContain('`PAY-4` in `docs/qa/specs/payments.md` (was `[seed]`)');
+  });
+
+  it('escalates a clause moved to another spec with its tag flipped', () => {
+    const v = verdict(
+      diff(SPEC, '@@ -3,1 +2,0 @@\n-- `[PAY-4]` `[seed]` **Refunds settle.**', 1),
+      diff(OTHER, '@@ -9,0 +10,1 @@\n+- `[PAY-4]` `[confirmed]` **Refunds settle.**', 1),
+    );
+    expect(v.rule).toBe('spec-promotion');
+    expect(v.why).toContain(`\`PAY-4\` in \`${OTHER}\` (was \`[seed]\`)`);
+  });
+
+  it('escalates a new clause written directly as `[confirmed]`, bare or bulleted', () => {
+    expect(verdict(diff(SPEC, '@@ -9,0 +10,1 @@\n+- `[PAY-9]` `[confirmed]` **New.**', 1)).why).toContain('`PAY-9` in `docs/qa/specs/payments.md` (new)');
+    expect(verdict(diff(SPEC, '@@ -9,0 +10,1 @@\n+`[PAY-9]` `[confirmed]` `refund.input` validates.', 1)).rule).toBe('spec-promotion');
+  });
+
+  it('does not escalate an edit, or a move, that keeps `[confirmed]`', () => {
+    expect(verdict(diff(SPEC, '@@ -3,1 +3,1 @@\n-- `[PAY-4]` `[confirmed]` **Refunds settle.**\n+- `[PAY-4]` `[confirmed]` **Refunds settle in a day.**')).action).toBe('merge');
+    expect(verdict(
+      diff(SPEC, '@@ -3,1 +2,0 @@\n-- `[PAY-4]` `[confirmed]` **Refunds settle.**', 1),
+      diff(OTHER, '@@ -9,0 +10,1 @@\n+- `[PAY-4]` `[confirmed]` **Refunds settle.**', 1),
+    ).action).toBe('merge');
+  });
+
+  it('does not escalate a new `[seed]` clause, a demotion, or prose that names the tag', () => {
+    expect(verdict(diff(SPEC, '@@ -9,0 +10,2 @@\n+- `[PAY-9]` `[seed]` **New.**\n+Promoted `[PAY-3]` to `[confirmed]` last week.', 2)).action).toBe('merge');
+    expect(verdict(diff(SPEC, '@@ -3,1 +3,1 @@\n-- `[PAY-4]` `[confirmed]` **R.**\n+- `[PAY-4]` `[retired]` **R.**')).action).toBe('merge');
+    // The legend has no id; `spec-guard` refuses an invariant without one, so it can't merge.
+    expect(verdict(diff(SPEC, '@@ -1,0 +1,1 @@\n+- `[confirmed]` — a human has confirmed this is intended behaviour.', 1)).action).toBe('merge');
+  });
+
+  it('reads only the spec documents, not the registry beside them', () => {
+    expect(mergeVerdict(pr({ files: ['docs/qa/specs/_id-registry.json'] })).action).toBe('merge');
+  });
+
+  it('escalates when a changed spec\'s diff could not be read, never reading that as "no promotion"', () => {
+    expect(verdict(diff(SPEC, null, 4000)).rule).toBe('spec-diff-unreadable');
+    expect(mergeVerdict(pr({ files: [SPEC], specDiff: null })).rule).toBe('spec-diff-unreadable');
+    expect(mergeVerdict(pr({ files: [SPEC] })).rule).toBe('spec-diff-unreadable');
+    // A rename with no content change has no patch and nothing to read.
+    expect(verdict(diff(SPEC, null, 0)).action).toBe('merge');
+    // A PR that changes no spec is never asked.
+    expect(mergeVerdict(pr({ specDiff: null })).action).toBe('merge');
+  });
+
+  it('keeps a promotion sticky across a push, and lets an unreadable diff lapse with its head', () => {
+    expect(LAPSES_WITH_HEAD.has('spec-promotion')).toBe(false);
+    expect(LAPSES_WITH_HEAD.has('spec-diff-unreadable')).toBe(true);
+  });
+
+  /** `readPr` against a stubbed `gh` whose spec-patch listing prints `rows`, or fails. */
+  const readWith = (rows: string[] | 'fail') => {
+    const dir = mkdtempSync(join(tmpdir(), 'merge-gate-spec-'));
+    const meta = {
+      number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,
+      labels: [{ name: 'agent:implement' }], headRefOid: HEAD,
+      statusCheckRollup: [{ name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE', title: 't', body: 'Closes #1',
+      closingIssuesReferences: [{ number: 1 }], commits: [{ messageHeadline: 'x', messageBody: '' }],
+    };
+    const listing = rows === 'fail' ? 'exit 1' : `printf '%s\\n' ${rows.map((r) => `'${r}'`).join(' ')}`;
+    writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
+case "$*" in
+  "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"/files"*"@json"*)   ${listing} ;;
+  *"/files"*)           printf '%s\\n' 'src/a.ts' '${SPEC}' ;;
+  *"/reviews"*)         printf '%s' '[]' ;;
+  *"issues?per_page"*)  printf '%s' '0' ;;
+  "run list"*)          printf '%s' '[]' ;;
+esac
+`);
+    return readPr(1234, 'o/r', { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+  };
+
+  it('reads the patches through readPr when a spec changed, and only the specs', () => {
+    const row = JSON.stringify([SPEC, '@@ -3,1 +3,1 @@\n-- `[PAY-4]` `[seed]` **R.**\n+- `[PAY-4]` `[confirmed]` **R.**', 2]);
+    // A non-spec file with no patch is not the guard's to read, so it is not "unreadable".
+    const read = readWith([row, '["src/a.ts",null,5]']);
+    expect(read.specDiff).toEqual({ promotions: [{ id: 'PAY-4', file: SPEC, from: 'seed' }], unreadable: [] });
+    expect(mergeVerdict(read).rule).toBe('spec-promotion');
+  });
+
+  it('carries a failed patch read as null, which escalates', () => {
+    const read = readWith('fail');
+    expect(read.specDiff).toBeNull();
+    expect(mergeVerdict(read).rule).toBe('spec-diff-unreadable');
   });
 });
 
