@@ -6,7 +6,7 @@ The rules live in the [rulebook](../../rulebook/README.md), and this playbook on
 
 ## What the lane's prompt asks that Kanon doesn't have
 
-From [#36](https://github.com/yedeya-labs/kanon/issues/36) on, the prompt is written for any adopter, and reads the stack from Kanon's [stack document](stack.md) (`K-LAYOUT-17`). Kanon's review caller pins its last release, though (ADR 0011). Until that pin reaches a release with #36, the prompt that judges Kanon's PRs still names row-level security, tenant isolation, `db:init` and server-rendering checks, and none of them applies here. On Kanon:
+From [#36](https://github.com/yedeya-labs/kanon/issues/36) on, the prompt is written for any adopter, and reads the stack from Kanon's [stack document](stack.md) (`K-LAYOUT-17`). Kanon's review caller pins a release with #36 (ADR 0011), so the prompt that judges Kanon's PRs reads Kanon's own stack. What it still asks that Kanon doesn't have:
 
 - **No app, no database, no E2E tier.** The stack document says so, and lists Kanon's gates.
 - **No launch gate.** Kanon has only the two buckets, and no roadmap milestone. Never create one.

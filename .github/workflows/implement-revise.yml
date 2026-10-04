@@ -1,0 +1,49 @@
+# Kanon's Implementer answers a changes-request on its own pull request (ADR 0011, stage 2).
+#
+# A trigger-only caller of Kanon's implement-revise lane, written exactly as an adopter writes
+# one (docs/lanes.md). It is named `implement-revise.yml` because `agent-implement-revise.yml`
+# is the lane itself (K-LAYOUT-18's exception for Kanon's own tree).
+#
+# IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap), like implement.yml.
+#
+# Every review on every pull request starts it, and the lane's filter job decides: it acts
+# only on a changes-request standing on a pull request the Implementer opened, whose author it
+# reads from the App register on the default branch. Anything else concludes in that one cheap
+# job. So until the Implementer's App exists and has opened a pull request, every run skips.
+# `agent:revise` is the lane's re-delivery label; a member adds it by hand on Kanon, since no
+# reconciler runs here.
+#
+# The secrets: as implement.yml, mapped by name, never inherited.
+name: Implement — revise
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR to revise
+        required: true
+      reset:
+        description: Clear the round cap for this run (one revision, after the Owner resolved the disagreement).
+        type: boolean
+        default: false
+
+# The lane's own ceiling: its filter reads the pull request, its reviews and its comments.
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  revise:
+    uses: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@v0.23.0
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      reset: ${{ inputs.reset }}
+    secrets:
+      IMPLEMENTER_APP_ID: ${{ secrets.IMPLEMENTER_APP_ID }}
+      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

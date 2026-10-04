@@ -30,6 +30,10 @@ const files = [
 // would review that same PR. CI's lane-check judges that caller, and is a required check, so
 // it runs the release too; it then reads the lanes at the version the caller pins.
 //
+// implement.yml and implement-revise.yml call the Implementer's two lanes (ADR 0011, stage 2), at
+// the same release and for the same reason: through `$/`, a branch could change the lane that
+// builds or revises it.
+//
 // The smoke run's python fixture hook is the first exception again, on a fixture (kanon#110):
 // the project-setup hook of the fixture adopter in Kanon's own checkout, run to show that a
 // hook with no `KANON` and no Node leaves a guard running on Kanon's Node.
@@ -51,6 +55,8 @@ const EXEMPT = new Set([
   '.github/workflows/dco.yml: yedeya-labs/kanon/actions/dco@vX.Y.Z',
   '.github/workflows/pr-title.yml: yedeya-labs/kanon/actions/pr-title@vX.Y.Z',
   '.github/workflows/review.yml: yedeya-labs/kanon/.github/workflows/agent-review.yml@vX.Y.Z',
+  '.github/workflows/implement.yml: yedeya-labs/kanon/.github/workflows/agent-implement.yml@vX.Y.Z',
+  '.github/workflows/implement-revise.yml: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@vX.Y.Z',
   '.github/workflows/ci.yml: yedeya-labs/kanon/actions/lane-check@vX.Y.Z',
   '.github/workflows/test-database-smoke.yml: ./.github/actions/project-setup',
 ]);

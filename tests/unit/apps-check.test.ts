@@ -35,8 +35,9 @@ const withRegister = <T>(text: string, fn: (dir: string) => T): T => {
 const FIXTURE = readFileSync(join(ROOT, 'tests/fixtures/lane-check/adopter/docs/qa/agent-identities.md'), 'utf8');
 
 describe('registeredRoles reads the register with the lanes\' reader', () => {
-  it("lists Kanon's own Reviewer", () => {
+  it("lists Kanon's own Reviewer and Implementer", () => {
     expect(registeredRoles(join(ROOT, 'docs/qa/agent-identities.md'), ROLES)).toEqual([
+      { key: 'implementer', role: 'Implementer', slug: 'kanon-implementer', secret: 'IMPLEMENTER' },
       { key: 'reviewer', role: 'Reviewer', slug: 'kanon-reviewer', secret: 'REVIEWER' },
     ]);
   });
@@ -260,7 +261,7 @@ describe('main check, with GitHub mocked', () => {
   it('prints the roles for $GITHUB_OUTPUT', async () => {
     const out: string[] = [];
     expect(await main(['roles'], { env: { REGISTER_DIR: ROOT }, out: (l) => out.push(l) })).toBe(0);
-    expect(out).toEqual(['roles=[{"key":"reviewer","role":"Reviewer","slug":"kanon-reviewer","secret":"REVIEWER"}]']);
+    expect(out).toEqual(['roles=[{"key":"implementer","role":"Implementer","slug":"kanon-implementer","secret":"IMPLEMENTER"},{"key":"reviewer","role":"Reviewer","slug":"kanon-reviewer","secret":"REVIEWER"}]']);
   });
 });
 

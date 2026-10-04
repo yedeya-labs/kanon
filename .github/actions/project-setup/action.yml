@@ -2,15 +2,15 @@
 #
 # Every lane that checks out calls it after the checkout and before the agent. Kanon is a
 # Node project with no database and no app, so this installs Node at Kanon's version and,
-# when asked, its dependencies. That is all it does.
+# when asked, its dependencies. For the Implementer's two lanes it also makes the agent's
+# commits pass Kanon's own `dco` check (agent-commits.sh, K-AGENT-44): authored as the
+# minted App, and signed off by the delegate the record names.
 #
-# `database` is accepted and ignored: Kanon declares no test database (it has no
-# `docs/qa/test-database.md`, K-LAYOUT-16), so every lane will pass 'false' once Kanon's callers
-# pin a release with the test-database block (kanon#18); until then the released review lane
-# passes 'true' and starts Postgres for it. Like every hook, it declares no
-# outputs: the contract defines none, and the lanes judge a hook by its outcome alone (#77).
-# `browsers`, `issue-number`, `app-slug` and `github-token` are declared because the lanes
-# pass them, and unused.
+# `database` is accepted and ignored: Kanon declares `none` in `docs/qa/test-database.md`
+# (K-LAYOUT-16), so every lane passes 'false'. Like every hook, it declares no outputs: the
+# contract defines none, and the lanes judge a hook by its outcome alone (#77). `browsers`
+# and `issue-number` are declared because the lanes pass them, and unused; `app-slug` and
+# `github-token` are read by agent-commits.sh alone.
 #
 # It is read from the checked-out tree, but the review lane restores it from the default
 # branch first (K-MERGE-17), so a PR can't change the setup its own review runs.
@@ -33,10 +33,10 @@ inputs:
     description: The issue the run was dispatched for. Unused.
     default: ""
   app-slug:
-    description: The minted App's slug. Unused.
+    description: The minted App's slug, which the Implementer's lanes commit as.
     default: ""
   github-token:
-    description: The minted App token. Unused.
+    description: The minted App token, to read the App's bot account id.
     default: ""
 runs:
   using: composite
@@ -48,3 +48,10 @@ runs:
     - if: inputs.install == 'true'
       shell: bash
       run: npm ci
+    # After Node, because the delegation record is read with the `dco` action's parser.
+    - shell: bash
+      env:
+        LANE: ${{ inputs.lane }}
+        APP_SLUG: ${{ inputs.app-slug }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: bash "$GITHUB_ACTION_PATH/agent-commits.sh"
