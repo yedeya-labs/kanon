@@ -214,6 +214,10 @@ The contract defines no outputs, and no lane reads any: a lane judges your hook 
 
 A lane gets a database only when your project declares one, in `docs/qa/test-database.md` (`K-LAYOUT-16`). With no file, your hook gets `database: 'false'` and `DATABASE_URL` stays unset. Declare `hook`, and your hook gets `database: 'true'`: it starts your database, whatever the engine, and writes `DATABASE_URL` before it returns. Kanon starts none and names no engine. The [`test-database`](../actions/test-database/README.md) block reads the declaration. Its README has the format and a worked example, a hook that starts Postgres. Add the declaration before, or with, the upgrade that brings it, then rebase your open pull requests: a lane that checks out a branch reads that branch's copy.
 
+## The QA store
+
+The code audit, the Explorer, the Overseer and the dispatch sweep remember earlier runs in a QA store in your own account (`K-OBS-17`). They reach it only through a hook you write, `.github/actions/qa-store/action.yml`, with five operations, each run in a store job of its own in the `kanon-qa-store` environment, so no agent job holds the store's credentials. Kanon's AWS implementation provisions a store and is the hook's one `uses:` line. Without a hook, each lane runs without memory and says the store is absent. [The QA store](qa-store.md) has the contract, the setup and the AWS runbook.
+
 ## The stack document and the playbooks
 
 The lanes' prompts state the process and never your stack. What your stack decides, they read from files you own, at fixed paths (`K-LAYOUT-17`): the **stack document**, `docs/qa/stack.md`, with its four sections (`## Gates`, `## Schema changes`, `## Data isolation`, `## Generated files`), and the **playbooks**, `docs/qa/triage-fix-playbook.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` and `docs/qa/lead-playbook.md`. The rule says what each section holds. `lane-check` fails when a lane you call reads a document you don't have, or the stack document lacks a section.

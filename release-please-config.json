@@ -23,6 +23,7 @@
         "actions/pr-title/README.md",
         "docs/apps.md",
         "docs/lanes.md",
+        "docs/qa-store.md",
         "docs/release.md"
       ],
       "changelog-sections": [
