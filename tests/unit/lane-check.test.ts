@@ -370,6 +370,51 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => { extra(t, WEEKLY); t.edit(WEEKLY, (d) => { (job(d).with as Record<string, string>).dry_run = 'true'; }); }, 'passes `dry_run: true`'));
   });
 
+  describe('each caller has its lane\'s file name, and CI is ci.yml (K-LAYOUT-18, kanon#207)', () => {
+    const EXTRA = join(ROOT, 'tests/fixtures/lane-check/extra');
+    const fixture = (lane: string) => readFileSync(join(EXTRA, lane), 'utf8');
+    const reviewer = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Reviewer | \`example-reviewer\` | Read | Read & write | Read & write | No access |\n`);
+    /** A caller of `lane`, written at `.github/workflows/<file>` instead of its own name. */
+    const at = (t: Tree, file: string, lane: string) => t.write(`.github/workflows/${file}`, fixture(lane));
+
+    it('refuses a caller of the review lane named as Kanon names its own, `review.yml`', () =>
+      red((t) => { reviewer(t); at(t, 'review.yml', 'agent-review.yml'); },
+        'review.yml,title=lane-check::calls the Kanon lane agent-review, so it lives at .github/workflows/agent-review.yml'));
+    it('refuses a revise caller under another name: the reconciler lists that file\'s runs', () =>
+      red((t) => { const body = t.read(IMPL); t.rm(IMPL); t.write('.github/workflows/implement-revise.yml', body); },
+        'calls the Kanon lane agent-implement-revise, so it lives at .github/workflows/agent-implement-revise.yml'));
+    it('refuses the project digest under the reference adopter\'s old name: the health check watches agent-*.yml', () =>
+      red((t) => at(t, 'project-digest.yml', 'agent-project-digest.yml'),
+        'calls the Kanon lane agent-project-digest, so it lives at .github/workflows/agent-project-digest.yml'));
+    it('refuses the right name with the other extension', () =>
+      red((t) => { const body = t.read(TRIAGE); t.rm(TRIAGE); t.write('.github/workflows/agent-triage.yaml', body); },
+        'agent-triage.yaml,title=lane-check::calls the Kanon lane agent-triage, so it lives at .github/workflows/agent-triage.yml'));
+    it('exempts a caller whose lane\'s path holds the lane itself, as only Kanon\'s own repository does', () => {
+      const t = adopter();
+      reviewer(t);
+      at(t, 'review.yml', 'agent-review.yml');
+      t.write('.github/workflows/agent-review.yml', 'name: Review (Reviewer)\non:\n  workflow_call:\njobs:\n  review:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n');
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('5 lane caller(s) pass');
+    });
+    it('does not exempt a caller whose lane\'s path holds another caller', () =>
+      red((t) => { reviewer(t); at(t, 'review.yml', 'agent-review.yml'); at(t, 'agent-review.yml', 'agent-review.yml'); },
+        'review.yml,title=lane-check::calls the Kanon lane agent-review, so it lives at'));
+    it('refuses a review caller when the project has no ci.yml', () =>
+      red((t) => { reviewer(t); at(t, 'agent-review.yml', 'agent-review.yml'); t.rm('.github/workflows/ci.yml'); },
+        '.github/workflows/ci.yml,title=lane-check::is missing; the Kanon lane(s) agent-review read its runs by that file name (K-LAYOUT-18)'));
+    it('refuses a reconciler caller when the project has no ci.yml', () =>
+      red((t) => { at(t, 'agent-lead-reconcile.yml', 'agent-lead-reconcile.yml'); t.rm('.github/workflows/ci.yml'); },
+        'is missing; the Kanon lane(s) agent-lead-reconcile read its runs'));
+    it('asks for ci.yml only of a project that runs a lane reading it', () => {
+      const t = adopter();
+      t.rm('.github/workflows/ci.yml');
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
+  });
+
   describe('the project-setup hook (§5)', () => {
     const HOOK = '.github/actions/project-setup/action.yml';
     it('refuses a missing hook', () => red((t) => t.rm(HOOK), 'the project-setup hook is missing'));

@@ -79,6 +79,11 @@ name: Review (Reviewer)
 # `lane-check` holds the caller to the line below: its `run-name` must end with exactly
 # this expression, as the last token.
 # CALLER RUN-NAME ENDS WITH: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}
+#
+# `lane-check` also requires the workflow on the line below (K-LAYOUT-18, kanon#207): a review
+# label added while CI runs defers to CI's completion, and the filter asks Actions about that
+# file's runs for the head (`gh run list --workflow ci.yml`).
+# READS WORKFLOW: ci.yml
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
 #

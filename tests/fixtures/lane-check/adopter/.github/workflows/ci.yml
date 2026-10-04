@@ -1,0 +1,18 @@
+# The fixture adopter's own CI. Not a lane caller: the review lane and the reconciler read its
+# runs by this file name (K-LAYOUT-18).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: "true"
