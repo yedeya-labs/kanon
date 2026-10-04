@@ -794,7 +794,7 @@ function nextActionsCore(world, {
     'deploy-gate-declined': () => `\`${world.deploy?.tag}\` was released but its deploy job was SKIPPED: ${deployWorkflow(world)}'s gate found nothing to deploy in the range, so ${deployEnvironment(world)} was never touched${walked(world)}. The project is not closed on a deploy that did not happen`,
     // A REVERT IS NOT A DEPLOY (kanon#161). Ancestry credited a release whose tree no
     // longer held the work, because a reverted merge stays an ancestor of every later tag.
-    'deploy-reverted': () => `every containing release that deployed also contains a revert of this project's work: ${(world.deploy?.reverted ?? []).map((r) => `\`${String(r.sha).slice(0, 7)}\` reverted by \`${String(r.by).slice(0, 7)}\``).join(', ') || 'a closing merge'}, so ${deployEnvironment(world)} does not hold it — the newest examined is \`${world.deploy?.tag}\`${walked(world)}. A later release that re-lands the work (a revert of the revert) clears this; if it was re-landed another way, a human decides whether the project is done`,
+    'deploy-reverted': () => `every containing release that deployed also contains a revert of this project's work: ${(world.deploy?.reverted ?? []).map((r) => `\`${String(r.sha).slice(0, 7)}\` reverted by \`${String(r.by).slice(0, 7)}\``).join(', ') || 'a closing merge'}, so ${deployEnvironment(world)} does not hold it — the newest examined is \`${world.deploy?.tag}\`${walked(world)}. A later release that re-lands the work clears this, by a revert of the revert or by a later merged pull request that closes the same issue; if it was re-landed another way, a human decides whether the project is done`,
     'deploy-history-unreadable': () => `\`${world.deploy?.tag}\` deployed (${world.deploy?.url ?? 'no url'}), but the commits after this project's merges could not be read, so whether one of them reverts the work is UNKNOWN — refusing to treat unknown as deployed. A read failure is transient: the next tick re-issues it`,
     'deploy-unknown': () => `readDeploy returned a state this tick does not know how to act on — refusing to guess`,
   };
@@ -1298,7 +1298,21 @@ export function repoLabels({ json = ghJson } = {}) {
  * @param {object[]} issues
  * @param {{json?: (args: string[]) => any}} [io]
  */
-export function closingMergeShas(issues, { json = ghJson } = {}) {
+export function closingMergeShas(issues, io = {}) {
+  return closingMergesByIssue(issues, io).flatMap((i) => i.shas);
+}
+
+/**
+ * The same merges, kept per issue (kanon#264). The flat list cannot tell "two pull
+ * requests that each closed part of the work" from "the work, then its re-land", and
+ * presence needs that: see `relandedReverts`. Only closed issues with at least one
+ * merged closing pull request appear.
+ *
+ * @param {object[]} issues
+ * @param {{json?: (args: string[]) => any}} [io]
+ * @returns {{issue: number, shas: string[]}[]}
+ */
+export function closingMergesByIssue(issues, { json = ghJson } = {}) {
   // `closedByPullRequestsReferences` is GitHub's OWN join, the same reasoning as
   // RA-912's use of `closingIssuesReferences`: a `#N` regex over bodies cannot tell a
   // mention from a closure, and this field cannot drift from what GitHub did.
@@ -1312,7 +1326,7 @@ export function closingMergeShas(issues, { json = ghJson } = {}) {
     } catch {
       return [];
     }
-    return refs.flatMap((r) => {
+    const shas = refs.flatMap((r) => {
       try {
         const pr = json(['pr', 'view', String(r.number), '--repo', REPO, '--json', 'state,mergeCommit']);
         return pr.state === 'MERGED' && pr.mergeCommit?.oid ? [pr.mergeCommit.oid] : [];
@@ -1320,6 +1334,7 @@ export function closingMergeShas(issues, { json = ghJson } = {}) {
         return [];
       }
     });
+    return shas.length ? [{ issue: i.number, shas }] : [];
   });
 }
 
@@ -1421,6 +1436,31 @@ export function revertedMerges(shas, commits) {
 }
 
 /**
+ * The reverts in `reverted` that a re-land through a NEW pull request answers (kanon#264),
+ * removed. What is returned still holds the project at `reverted`.
+ *
+ * A reverted merge is re-landed for an issue when ANOTHER merge closing the SAME issue is
+ * not itself reverted and came after the revert: the revert is an ancestor of it. That is
+ * read from the ranges `presence` already fetched, at no extra call: the revert is in the
+ * tag (it was in the reverted merge's range), so it is missing from the other merge's
+ * range exactly when that merge's history holds it.
+ *
+ * A merge that landed BEFORE the revert re-lands nothing: two pull requests that each
+ * closed part of an issue, one of them reverted, is a partial revert and still holds. So
+ * does a merge closing a DIFFERENT issue, since issues are not interchangeable.
+ *
+ * @param {{sha: string, by: string}[]} reverted from `revertedMerges`
+ * @param {{issue: number, shas: string[]}[]} byIssue from `closingMergesByIssue`
+ * @param {Map<string, Set<string>>} after each closing merge's reverts in its range to the tag
+ * @returns {{sha: string, by: string}[]}
+ */
+export function relandedReverts(reverted, byIssue, after) {
+  const undone = new Set(reverted.map((r) => r.sha));
+  return reverted.filter((r) => !byIssue.some((i) => i.shas.includes(r.sha) && i.shas.some((n) =>
+    n !== r.sha && !undone.has(n) && after.has(n) && !after.get(n).has(r.by))));
+}
+
+/**
  * The deploy workflow's run for a release. Exact match on the title, never a substring
  * (RA-1056).
  *
@@ -1503,8 +1543,8 @@ export const DEPLOY_RUN_WINDOW = 200;
  *   declared?: () => import('./lib/reference-deploy.mjs').ReferenceDeploy}} [io]
  */
 export function readDeploy(issues, { json = ghJson, text = gh, declared = () => readReferenceDeployFrom(REPO) } = {}) {
-  const io = { json };
-  const shas = closingMergeShas(issues, io);
+  const byIssue = closingMergesByIssue(issues, { json });
+  const shas = byIssue.flatMap((i) => i.shas);
   if (!shas.length) return classifyDeploy({ shas, tag: null, run: null, deployJob: null });
   const deploy = declared();
   const named = (d) => ({ ...d, environment: deploy.environment, workflow: deploy.workflow, job: deploy.job });
@@ -1643,6 +1683,10 @@ export function readDeploy(issues, { json = ghJson, text = gh, declared = () => 
   // there matched only at the start of the whole message and dropped every PR-named revert,
   // whose `Reverts …#N` line is in the body (kanon#262 review). `revertTargets` does the
   // anchored parse.
+  //
+  // A revert answered by a LATER merged pull request closing the same issue does not hold
+  // the project (kanon#264): `relandedReverts` reads that from the same ranges, so it adds
+  // no call. Before it, work re-landed that way waited for a human on every tick.
   const REVERT_JQ = `.commits[] | select(.commit.message | test("${REVERT_PREFILTER}"; "i")) | {sha: .sha, message: .commit.message} | @json`;
   const prMerge = new Map();
   const mergeOf = (n) => {
@@ -1653,17 +1697,22 @@ export function readDeploy(issues, { json = ghJson, text = gh, declared = () => 
     let reverted;
     try {
       const reverts = new Map();
+      // Which reverts each merge's range holds, for `relandedReverts` (kanon#264).
+      const after = new Map();
       for (const sha of shas) {
         const out = text(['api', '--paginate', `repos/${REPO}/compare/${sha}...${tag}?per_page=100`, '--jq', REVERT_JQ]);
+        const seen = new Set();
+        after.set(sha, seen);
         for (const line of out.split('\n').filter((l) => l.trim())) {
           const c = JSON.parse(line);
           if (typeof c?.sha !== 'string' || typeof c?.message !== 'string') throw new Error(`not a commit: ${line}`);
+          seen.add(c.sha);
           if (reverts.has(c.sha)) continue;
           const t = revertTargets(c.message, REPO);
           reverts.set(c.sha, { sha: c.sha, targets: [...t.shas, ...t.prs.map(mergeOf).filter(Boolean)] });
         }
       }
-      reverted = revertedMerges(shas, [...reverts.values()]);
+      reverted = relandedReverts(revertedMerges(shas, [...reverts.values()]), byIssue, after);
     } catch {
       return { state: 'history-unreadable', tag, url: d.url };
     }
