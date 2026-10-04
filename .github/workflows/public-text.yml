@@ -1,0 +1,63 @@
+# Keeps the reference adopter's names out of the squash commit a pull request becomes (#239).
+#
+# The repository squash-merges with the PR's title and body as the commit message, so a name
+# in either reaches main's history even when no tracked file holds one, and the tree guard
+# (tests/unit/public-tree.test.ts) reads only tracked files. This check hashes every word of
+# the title and body against the same list, in .github/scripts/public-words.mjs, and never
+# prints the word it finds.
+#
+# `edited` re-runs it when the title or the body changes, which is also how a red run is
+# fixed. Fixing it is not enough on its own: GitHub keeps every earlier revision of a
+# description, readable by anyone, so the failure message says to delete those too.
+#
+# It judges the PR with the script at the PR's BASE commit, never the PR's own copy (#47): a
+# PR that dropped a hash from the list must not be judged by the shortened list. The PR's
+# copy is tested by tests/unit/public-text.test.ts. Until a base holds the script (the PR
+# that adds it) there is nothing to judge with, and the job says so and passes.
+#
+# The title and body are untrusted text. They reach the script through `env` only, never
+# interpolated into a `run:` line (K-AGENT-45).
+#
+# On merge_group (K-MERGE-7) it passes without checking anything, under the same job name,
+# so it can be made a required check. The gap pr-title.yml accepts applies here too: a
+# description edited while the PR is queued is treated as unchecked.
+name: Public PR text
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-text-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-text:
+    name: No reference-adopter names
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Already checked on the pull request
+        if: github.event_name == 'merge_group'
+        run: echo "Merge group. Each queued PR's title and body passed this check before it could be queued."
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Hash the title and body against the base's list
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [ ! -f .github/scripts/public-words.mjs ]; then
+            echo "The base commit has no .github/scripts/public-words.mjs yet, so there is nothing to judge with."
+            exit 0
+          fi
+          node .github/scripts/public-words.mjs
