@@ -10,12 +10,13 @@
 // the rolling audit issue, as a draft the adopter may file on Kanon by hand. Kanon is public, so
 // a direct filing would cross ADR 0007's data boundary. An instruction to the agent alone would
 // make that routing a judgement the agent could skip, so the agent's token reads only, and this
-// step, on a token that may write issues, does all the filing from what the agent wrote down.
+// step, in a job of its own on a token that may write issues, does all the filing from what the
+// agent wrote down.
 //
-// WHAT THIS DOES NOT DEFEND. It binds the agent's CLASSIFICATION, not an agent that subverts the
-// runner: this step runs in the agent's job, from the action cache, on the job's `node`, all of
-// which an agent with `Bash` can change before it runs (the lane's header says how, and what
-// the filing token can then reach: the adopter's own issues, as before the move, never Kanon).
+// IN A JOB OF ITS OWN. This runs in the lane's `file` job, on a fresh runner that runs no agent
+// and checks out nothing: the report is data downloaded from the agent's job, so a steered agent
+// can change what the report says, never how it is routed (the lane's header says so, and names
+// the one dependency, kanon#274).
 //
 // THE REPORT, `qa-overseer-audit.json`, written by the agent at the repository root:
 //
@@ -47,7 +48,8 @@
 // the anchor.
 //
 //   node "$KANON/scripts/overseer-file.mjs"
-//   env: GH_TOKEN (issues write), GITHUB_REPOSITORY, AGENT_OUTCOME (the agent step's outcome)
+//   env: GH_TOKEN (issues write), GITHUB_REPOSITORY, AGENT_OUTCOME (the agent step's outcome),
+//        REPORT_PATH (the downloaded report; default `qa-overseer-audit.json`)
 //
 // `node:` builtins only, like every script under scripts/ (`K-SELF-8`).
 
@@ -300,7 +302,7 @@ if (IS_CLI) {
   const gh = (args, input) => execFileSync('gh', args, { encoding: 'utf8', input, maxBuffer: 64 * 1024 * 1024 });
   process.exitCode = fileAudit({
     repo: process.env.GITHUB_REPOSITORY,
-    text: existsSync(REPORT) ? readFileSync(REPORT, 'utf8') : null,
+    text: (() => { const at = process.env.REPORT_PATH || REPORT; return existsSync(at) ? readFileSync(at, 'utf8') : null; })(),
     agentOutcome: String(process.env.AGENT_OUTCOME ?? ''),
     gh,
   });

@@ -98,7 +98,13 @@ describe('the store job and the overseer job (plan 0004 P9\'s check, applied at 
 });
 
 describe('who files what (decision 12)', () => {
-  it('the agent\'s token reads only, and the filing token is minted after the agent', () => {
+  const file = wf.jobs.file!;
+  const fileSteps = (file.steps ?? []) as Step[];
+  const mints = (j: LaneJob) => ((j.steps ?? []) as Step[]).filter((s) => s.uses?.startsWith('actions/create-github-app-token@'));
+  const writes = (s: Step) => Object.entries(s.with ?? {}).filter(([k, v]) => k.startsWith('permission-') && v === 'write').map(([k]) => k);
+
+  it('the agent job holds no token that writes: its one mint reads only, and its workflow token too', () => {
+    expect(mints(overseer).map((s) => s.id)).toEqual(['app-token']);
     expect(byId('app-token').with).toMatchObject({
       'client-id': '${{ secrets.OVERSEER_APP_ID }}',
       'permission-contents': 'read',
@@ -106,21 +112,54 @@ describe('who files what (decision 12)', () => {
       'permission-pull-requests': 'read',
       'permission-actions': 'read',
     });
+    expect(writes(byId('app-token'))).toEqual([]);
+    expect(Object.values(overseer.permissions as Record<string, string>)).not.toContain('write');
     expect(byId('agent').with?.['github-token']).toBe('${{ steps.app-token.outputs.token }}');
-    const file = byId('file-token');
-    expect(Object.entries(file.with ?? {}).filter(([k]) => k.startsWith('permission-'))).toEqual([['permission-issues', 'write'], ['permission-pull-requests', 'read']]);
-    expect(at((s) => s.id === 'agent')).toBeLessThan(at((s) => s.id === 'file-token'));
-    // Nothing between the agent and the filing step hands the agent the filing token.
-    for (const s of steps.slice(0, at((s) => s.id === 'file-token'))) expect(JSON.stringify(s)).not.toContain('file-token');
   });
 
-  it('files through overseer-file.mjs, on the filing token, whatever the agent concluded', () => {
-    const file = byId('file');
-    expect(file.name).toBe("Reconcile the agent's exit with what it durably produced"); // workflow-health.mjs names it
-    expect(file.run).toBe('node "$KANON/scripts/overseer-file.mjs"');
-    expect(file.if).toBe("always() && steps.file-token.outcome == 'success'");
-    expect(file.env).toMatchObject({ GH_TOKEN: '${{ steps.file-token.outputs.token }}', AGENT_OUTCOME: '${{ steps.agent.outcome }}' });
-    expect(file['continue-on-error']).toBeUndefined();
+  it('the file job runs no agent, checks out nothing, and holds the only writing token', () => {
+    expect(fileSteps.some((s) => /agent-(run|setup|finish)|claude-code-action/.test(s.uses ?? ''))).toBe(false);
+    expect(fileSteps.some((s) => s.uses?.startsWith('actions/checkout@'))).toBe(false);
+    expect(file.permissions).toEqual({});
+    expect(file.environment).toBeUndefined();
+    const mint = mints(file);
+    expect(mint.map((s) => s.id)).toEqual(['file-token']);
+    expect(Object.entries(mint[0]!.with ?? {}).filter(([k]) => k.startsWith('permission-'))).toEqual([['permission-issues', 'write'], ['permission-pull-requests', 'read']]);
+    // No other job mints a token that writes.
+    for (const [name, j] of Object.entries(wf.jobs)) if (name !== 'file') for (const m of mints(j)) expect(writes(m), `${name}#${m.id}`).toEqual([]);
+  });
+
+  it('the file job starts on the agent job\'s success, whatever the agent concluded (kanon#261)', () => {
+    expect(file.needs).toBe('overseer');
+    expect(file.if).toBe("${{ !cancelled() && needs.overseer.result == 'success' }}");
+    expect(byId('agent')['continue-on-error']).toBe(true);
+  });
+
+  it('hands the report over as an artifact: uploaded whatever happened, downloaded outside a workspace, deleted after', () => {
+    const upload = byId('report');
+    expect(upload.if).toBe('always()');
+    expect(upload.with).toMatchObject({ path: 'qa-overseer-audit.json', 'retention-days': 1, 'if-no-files-found': 'ignore' });
+    expect(at((s) => s.id === 'finish')).toBeLessThan(at((s) => s.id === 'report'));
+    const download = fileSteps.find((s) => s.uses?.startsWith('actions/download-artifact@'))!;
+    expect(download.with).toEqual({ name: upload.with?.name, path: '${{ runner.temp }}/report' });
+    expect(overseer.outputs).toMatchObject({ 'report-artifact-id': '${{ steps.report.outputs.artifact-id }}', 'agent-outcome': '${{ steps.agent.outcome }}' });
+    const del = wf.jobs['delete-report']!;
+    expect(del.if).toBe('always()');
+    expect([del.needs].flat()).toContain('file');
+    expect(del.steps).toEqual([{ uses: '$/actions/qa-store', with: { operation: 'delete-export', 'artifact-id': '${{ needs.overseer.outputs.report-artifact-id }}', 'export-attempt': '${{ needs.export.outputs.attempt }}', 'agent-result': '${{ needs.overseer.result }}' } }]);
+  });
+
+  it('files through overseer-file.mjs, on the filing token, from the downloaded report', () => {
+    const step = fileSteps.find((s) => s.id === 'file')!;
+    expect(step.name).toBe("Reconcile the agent's exit with what it durably produced"); // workflow-health.mjs names it
+    expect(step.run).toBe('node "$KANON/scripts/overseer-file.mjs"');
+    expect(step.if).toBeUndefined();
+    expect(step.env).toEqual({
+      GH_TOKEN: '${{ steps.file-token.outputs.token }}',
+      AGENT_OUTCOME: '${{ needs.overseer.outputs.agent-outcome }}',
+      REPORT_PATH: '${{ runner.temp }}/report/qa-overseer-audit.json',
+      KANON: '${{ steps.kanon.outputs.path }}',
+    });
   });
 
   it('tells the agent it files nothing, and how to say who can act', () => {

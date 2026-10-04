@@ -375,7 +375,7 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Why.** A component with zero blast radius needs no overseer of its own, which dissolves "who watches the watcher".
 
-**Enforced by.** Its App has read-only contents, and in Kanon's Overseer lane its agent's token reads only: a step after the agent files what it wrote down, on a token of its own (`K-SELF-11`). That step runs in the agent's job, so an agent that subverts the runner could still file on the adopter's repository with that token; the read-only agent token binds a mistaken agent, not a steered one. The restricting mechanism (revoking the Merger's authority when precision drifts) is prose only; a guard is planned.
+**Enforced by.** Its App has read-only contents, and in Kanon's Overseer lane its agent's token reads only: a job of its own, on a fresh runner that runs no agent, files what the agent wrote down, on a token of its own (`K-SELF-11`). Until kanon#274 is fixed, an agent that takes its App's private key from its job's action cache could mint a token of its own. The restricting mechanism (revoking the Merger's authority when precision drifts) is prose only; a guard is planned.
 
 **Class.** framework
 

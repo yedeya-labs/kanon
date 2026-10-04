@@ -29,20 +29,27 @@
 # completion without memory: the export holds only its manifest, which says the store is absent.
 #
 # ── WHO FILES WHAT (decision 12) ─────────────────────────────────────────────────────────
-# The agent's token reads only. It writes its audit and findings to `qa-overseer-audit.json`,
-# each finding naming its subject, and a step after it, on a token that may write issues, files
-# them by who can act: `scripts/overseer-file.mjs`. A finding the agent classes as
-# Kanon-actionable is never filed in the adopter's repository, and neither is one it classes
-# wrongly by subject: the step, not the agent, decides from the subject.
 #
-# WHAT THIS DOES NOT DEFEND. The filing step runs in the agent's job, after it. The agent has
-# `Bash`, and reads untrusted issue and review bodies, so a steered agent could rewrite what the
-# step runs before the filing token is used: `$KANON` is the runner's action cache, which the
-# job's user can write, and `$GITHUB_PATH` / `$GITHUB_ENV` (`NODE_OPTIONS`) change the `node`
-# it runs. So the routing binds the agent's classification, not an agent that subverts the
-# runner. The bound: the filing token is `issues: write` (and `pull-requests: read`) on the
-# adopter's own repository, which the agent held directly before this move, and nothing it holds
-# reaches Kanon. Filing from a job of its own, on a fresh runner, would close it.
+#   overseer (agent, read-only token) → uploads qa-overseer-audit.json
+#     → file (its own job, a fresh runner, no agent): downloads it, mints the filing token, files
+#     → delete-report, always
+#
+# The agent's token reads only. It writes its audit and findings to `qa-overseer-audit.json`,
+# each finding naming its subject, and the job uploads that file as an artifact kept one day. The
+# `file` job, on a fresh runner, downloads it, checks out nothing, mints the filing token and
+# runs `scripts/overseer-file.mjs` from its own action cache, which files each finding by who can
+# act on it. Nothing the agent can write runs there: not the workspace, not the action cache,
+# not `$GITHUB_PATH` or `$GITHUB_ENV`, which are per job. So a finding that only Kanon can act on
+# is never filed in the adopter's repository, whatever the agent intended, steered or not: the
+# file is data to that job, read by a parser that routes by subject. A job of its own deletes
+# the artifact after the filing, like the export.
+#
+# ONE DEPENDENCY: kanon#274. The agent job still mints its read-only token, and an agent with
+# `Bash` can reach an App's private key through that job's action cache. With the key, a steered
+# agent could mint a token of its own and file directly. Until #274 is fixed, the guarantee holds
+# against a mistaken agent and against one steered into rewriting the filing code, but not
+# against one that takes the key. The token it could mint reaches only what the Overseer's App
+# is granted, on the adopter's own repository; nothing in this lane reaches Kanon.
 #
 # INERT until: the caller is on the default branch + the Overseer's App installed, with a row in
 # the App register + these secrets (plan 0001 §8):
@@ -134,6 +141,9 @@ jobs:
       contents: read
       issues: read
       actions: read
+    outputs:
+      agent-outcome: ${{ steps.agent.outcome }}
+      report-artifact-id: ${{ steps.report.outputs.artifact-id }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1).
       - name: Record when the job started
@@ -406,8 +416,8 @@ jobs:
             --exclude-dynamic-system-prompt-sections
 
       # Record what this run cost (RA-1485). `always()` because a run that FAILED is the one you
-      # most want measured. `classify: "false"`: the job's red comes from the filing step below,
-      # after this block, so the last step explains it.
+      # most want measured. `classify: "false"`: a red here comes from a step before the agent,
+      # and the job's last step explains it; a lost audit reds the `file` job instead.
       - uses: $/actions/agent-finish
         id: finish
         if: always()
@@ -437,30 +447,18 @@ jobs:
           timeout-minutes: "60"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
           kanon-error: ${{ steps.setup.outputs.kanon-error }}
 
-      # THE FILING TOKEN, minted after the agent has finished, so the agent never holds it.
-      - name: Mint the Overseer's filing token
-        id: file-token
-        if: always() && steps.app-token.outcome == 'success'
-        uses: actions/create-github-app-token@v3
+      # THE REPORT, FOR THE FILE JOB: data, handed to a job the agent can't reach. One day; a job
+      # of its own deletes it after the filing. No report uploads nothing, and the file job says
+      # the audit was lost.
+      - name: Upload the report for the file job
+        id: report
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
-          client-id: ${{ secrets.OVERSEER_APP_ID }}
-          private-key: ${{ secrets.OVERSEER_APP_PRIVATE_KEY }}
-          permission-issues: write
-          # The interlock's count reads each linked pull request's state.
-          permission-pull-requests: read
-
-      # THE OUTCOME DECISION, and the filing (decision 12). No report, or an unparseable one,
-      # files nothing and reds the job: the whole audit was lost. An agent that exited non-zero
-      # after a valid report is a warning, and its audit is filed. `workflow-health.mjs` names
-      # this step when no audit has landed in over a week.
-      - name: Reconcile the agent's exit with what it durably produced
-        id: file
-        if: always() && steps.file-token.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ steps.file-token.outputs.token }}
-          AGENT_OUTCOME: ${{ steps.agent.outcome }}
-          KANON: ${{ steps.kanon.outputs.path }}
-        run: node "$KANON/scripts/overseer-file.mjs"
+          name: qa-overseer-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: qa-overseer-audit.json
+          retention-days: 1
+          if-no-files-found: ignore
 
       # WHY A RED RUN WENT RED (RA-1408): a quota cap and a real failure want opposite responses
       # (wait or re-run). `if: failure()` so it speaks only when there is something to explain.
@@ -469,6 +467,70 @@ jobs:
         uses: $/actions/agent-classify
         with:
           arm: Overseer agent
+
+  # THE FILING JOB (decision 12): a fresh runner, so nothing the agent wrote runs here. It checks
+  # out nothing, reads the report as data, and is the only job that holds a token that writes.
+  file:
+    needs: overseer
+    # AN EXPLICIT STATUS FUNCTION AND THE PARENT'S RESULT (kanon#261): the overseer job is green
+    # whatever the agent concluded, because the agent step continues on error.
+    if: ${{ !cancelled() && needs.overseer.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Nothing on the workflow token: the download reads this run's artifacts with the runner's
+    # own token, and every write is the filing App token's.
+    permissions: {}
+    steps:
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      - name: Download the agent's report
+        if: needs.overseer.outputs.report-artifact-id != ''
+        uses: actions/download-artifact@v7
+        with:
+          name: qa-overseer-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/report
+
+      # THE FILING TOKEN, minted in this job, which runs no agent.
+      - name: Mint the Overseer's filing token
+        id: file-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.OVERSEER_APP_ID }}
+          private-key: ${{ secrets.OVERSEER_APP_PRIVATE_KEY }}
+          permission-issues: write
+          # The interlock's count reads each linked pull request's state.
+          permission-pull-requests: read
+
+      # THE OUTCOME DECISION, and the filing. No report, or an unparseable one, files nothing and
+      # reds the job: the whole audit was lost. An agent that exited non-zero after a valid report
+      # is a warning, and its audit is filed. `workflow-health.mjs` names this step when no audit
+      # has landed in over a week.
+      - name: Reconcile the agent's exit with what it durably produced
+        id: file
+        env:
+          GH_TOKEN: ${{ steps.file-token.outputs.token }}
+          AGENT_OUTCOME: ${{ needs.overseer.outputs.agent-outcome }}
+          REPORT_PATH: ${{ runner.temp }}/report/qa-overseer-audit.json
+          KANON: ${{ steps.kanon.outputs.path }}
+        run: node "$KANON/scripts/overseer-file.mjs"
+
+  # THE REPORT'S DELETE JOB: the qa-store block's delete step, handed the report's artifact id. It
+  # holds the audit before it is filed. After the filing, whatever happened to it.
+  delete-report:
+    needs: [export, overseer, file]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - uses: $/actions/qa-store
+        with:
+          operation: delete-export
+          artifact-id: ${{ needs.overseer.outputs.report-artifact-id }}
+          export-attempt: ${{ needs.export.outputs.attempt }}
+          agent-result: ${{ needs.overseer.result }}
 
   # THE EXPORT'S DELETE JOB (plan 0004 §3.2): the export is the adopter's QA data, which anyone
   # who can read the repository could download while the artifact exists. After the overseer
