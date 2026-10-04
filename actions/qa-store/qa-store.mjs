@@ -71,6 +71,12 @@ export const FILES = {
   costRows: 'cost-rows.json',
 };
 
+/** The most a `cost-rows` answer may be as the block's `rows` output. A store job hands the rows
+ *  to the dispatch sweep's job as a job output, which GitHub caps at 1 MB per job, and the sweep's
+ *  store job holds two. A 14-day window is a few hundred rows of about 90 bytes, so this is far
+ *  above any real answer; past it the read is degraded, never truncated. */
+export const MAX_ROWS_OUTPUT = 400_000;
+
 /** The export's artifact is kept one day, and a job of its own deletes it (§3.2). */
 export const EXPORT_RETENTION_DAYS = 1;
 /** An export's window, in days, when the lane names none: the Overseer runs weekly. */
@@ -271,7 +277,11 @@ export function finish(env, now = Date.now()) {
 
   if (!present) {
     if (op === 'export') writeFileSync(join(dir, FILES.export, MANIFEST), `${JSON.stringify({ store: 'absent', kind, generated_at: new Date(now).toISOString(), files: [] })}\n`);
-    if (op === 'cost-rows') writeFileSync(join(dir, FILES.costRows), `${JSON.stringify({ rows: [], error: 'the QA store is absent' })}\n`);
+    if (op === 'cost-rows') {
+      const absent = JSON.stringify({ rows: [], error: 'the QA store is absent' });
+      writeFileSync(join(dir, FILES.costRows), `${absent}\n`);
+      outputs.rows = absent;
+    }
     return { outputs, line: absentLine(op), warnings };
   }
 
@@ -337,11 +347,18 @@ export function finish(env, now = Date.now()) {
       const said = result.error && !result.error.startsWith("the store's cost rows") ? result.error : null;
       result = { rows: [], error: said ?? 'the store hook failed' };
     }
+    // THE ANSWER IS ALSO THE `rows` OUTPUT, one line of JSON, for a lane whose reader runs in
+    // another job (the dispatch sweep, plan 0004 step 9). Too large for a job output is
+    // degraded, never truncated: a truncated list would read as runs that never happened.
+    if (!result.error && JSON.stringify(result).length > MAX_ROWS_OUTPUT) {
+      result = { rows: [], error: `${result.rows.length} cost rows are more than a job output holds (${MAX_ROWS_OUTPUT} bytes)` };
+    }
     if (result.error) {
       outputs.state = 'degraded';
       warnings.push(`cost rows for \`${kind}\` NOT read: ${result.error}.`);
     }
     writeFileSync(at, `${JSON.stringify(result)}\n`);
+    outputs.rows = JSON.stringify(result);
     const line = result.error
       ? `QA store \`cost-rows\` (${kind}): NOT read, ${result.error}.`
       : `QA store \`cost-rows\` (${kind}): ${result.rows.length} rows.`;

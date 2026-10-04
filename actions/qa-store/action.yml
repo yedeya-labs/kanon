@@ -108,6 +108,9 @@ outputs:
   commit:
     description: "`last-green`: the newest green full sweep's commit, or empty."
     value: ${{ steps.finish.outputs.commit }}
+  rows:
+    description: "`cost-rows`: the answer, `{rows, error}`, as one line of JSON, for a reader in another job. Its `error` is set when the store is absent or the read degraded."
+    value: ${{ steps.finish.outputs.rows }}
   dir:
     description: The job's store directory; `cost-rows.json` is in it.
     value: ${{ steps.prepare.outputs.dir }}

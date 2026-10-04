@@ -47,6 +47,7 @@ An attribute a row doesn't carry is absent, never `false` or 0. The block leaves
 
 - **A write that fails fails the store job.** That red run is the page (`K-OBS-6`).
 - **A read that fails is degraded, and fails open:** `last-green` returns no commit, so the Explorer sweeps; `export` holds only its manifest, saying it is degraded; `cost-rows` holds no rows and an error, so the sweep charges every dispatch. A `last-green` that isn't a bare 40-character SHA, an export that lacks a file or holds a malformed one, and a malformed `cost-rows.json` are degraded too.
+- **`cost-rows` is handed on as the block's `rows` output,** `{rows, error}` as one line of JSON, because the dispatch sweep reads it in a job of its own, with no credentials: its store job outputs each telemetry agent's `rows`. An answer too large for a job output (over 400,000 bytes, far above a 14-day window's few hundred rows) is degraded, never truncated.
 - **Without a hook,** every operation says the store is absent, in the job's summary, and does nothing: `last-green` returns no commit, `record-skip` and `put` are skipped, `export` holds only its manifest, and `cost-rows` holds no rows and the error `the QA store is absent`, on which the dispatch sweep reads run artifacts instead ([plan 0004 §3.3](plans/0004-move-the-remaining-lanes.md#33-the-dispatch-sweep-reads-the-store-and-run-artifacts-without-one)).
 
 ### Store jobs

@@ -168,15 +168,22 @@ export function agentJobProblems(name: string, j: Job, reads: TelemetryRead[] = 
   return out;
 }
 
-/** Everything wrong with a store-coupled lane's jobs. Empty when the lane has the plan's shape. */
-export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemetryReads()): string[] {
+/**
+ * Everything wrong with a store-coupled lane's jobs. Empty when the lane has the plan's shape.
+ *
+ * `agentless`: a lane that runs no model, the dispatch sweep (plan 0004 step 9). It must then
+ * have no agent job, and its script's job is held to the rule for every other job: its own
+ * `permissions:` without `id-token`, and no environment.
+ */
+export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemetryReads(), { agentless = false }: { agentless?: boolean } = {}): string[] {
   const out: string[] = [];
   const jobs = Object.entries(wf.jobs ?? {});
   const store = jobs.filter(([, j]) => isStoreJob(j));
   const agents = jobs.filter(([, j]) => isAgentJob(j) && !isStoreJob(j));
   const deletes = jobs.filter(([, j]) => isDeleteJob(j));
   if (store.length === 0) out.push('the lane has no store job');
-  if (agents.length === 0) out.push('the lane has no agent job');
+  if (agentless && agents.length) out.push(`a lane that runs no model has an agent job (${agents.map(([n]) => n).join(', ')})`);
+  if (!agentless && agents.length === 0) out.push('the lane has no agent job');
 
   for (const [name, j] of jobs) {
     const p = grants(j);

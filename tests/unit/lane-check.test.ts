@@ -370,6 +370,30 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => { extra(t); t.edit(TICK, (d) => { (job(d).with as Record<string, string>).budget = '${{ inputs.budget }}'; }); }, 'passes `budget`, which the Kanon lane agent-lead-reconcile does not declare'));
   });
 
+  describe('the dispatch-sweep lane (plan 0004 step 9)', () => {
+    const SWEEP = '.github/workflows/agent-dispatch-sweep.yml';
+    const extra = (t: Tree) => t.write(SWEEP, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-dispatch-sweep.yml'), 'utf8'));
+    it('accepts the caller, run as the Lead the register lists, under 40 lines and naming no cloud or environment', () => {
+      const t = adopter();
+      extra(t);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('5 lane caller(s) pass');
+      const text = readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-dispatch-sweep.yml'), 'utf8');
+      expect(text.trimEnd().split('\n').length).toBeLessThan(40);
+      expect(text).not.toMatch(/aws|environment:|role-to-assume|QA_DYNAMO/i);
+    });
+    it('refuses a caller that does not grant the store job its OIDC token: GitHub would not start the lane', () =>
+      red((t) => { extra(t); t.edit(SWEEP, (d) => { delete (d as Caller).permissions!['id-token']; }); }, 'needs id-token: write'));
+    it('refuses a caller that maps the Claude token: the sweep runs no model', () =>
+      red((t) => {
+        extra(t);
+        t.edit(SWEEP, (d) => { (job(d).secrets as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN = '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}'; });
+      }, 'the Kanon lane agent-dispatch-sweep takes exactly [LEAD_APP_ID,LEAD_APP_PRIVATE_KEY]'));
+    it('refuses a caller that passes apply as a setting', () =>
+      red((t) => { extra(t); t.edit(SWEEP, (d) => { (job(d).with as Record<string, string>).apply = 'true'; }); }, 'passes `apply: true`'));
+  });
+
   describe('the digest lanes (plan 0004 step 10)', () => {
     const DAILY = '.github/workflows/agent-project-digest.yml';
     const WEEKLY = '.github/workflows/agent-weekly-digest.yml';

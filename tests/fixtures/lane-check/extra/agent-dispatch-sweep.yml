@@ -1,0 +1,27 @@
+# A trigger-only caller of Kanon's dispatch-sweep lane, as an adopter writes it (plan 0004 step 9).
+# `id-token: write` is for the lane's store job alone, which reads the cost rows through the
+# store hook; GitHub refuses to start a called job that asks for more than its caller grants.
+name: Dispatch sweep (Lead)
+
+on:
+  schedule:
+    - cron: "40 4 * * *"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Actually re-dispatch (unchecked = dry run)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  sweep:
+    uses: yedeya-labs/kanon/.github/workflows/agent-dispatch-sweep.yml@v1.2.3
+    with:
+      apply: ${{ inputs.apply }}
+    secrets:
+      LEAD_APP_ID: ${{ secrets.LEAD_APP_ID }}
+      LEAD_APP_PRIVATE_KEY: ${{ secrets.LEAD_APP_PRIVATE_KEY }}

@@ -21,8 +21,9 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Daily project digest | `agent-project-digest.yml` | none | `schedule` (daily); `workflow_dispatch` with `dry_run` |
 | Weekly digest | `agent-weekly-digest.yml` | none | `schedule` (weekly); `workflow_dispatch` with `week_end` and `dry_run` |
 | Explore (the sweep) | `agent-explore.yml` | Explorer | `schedule` (daily); `workflow_dispatch` with `tier` |
+| Dispatch sweep | `agent-dispatch-sweep.yml` | Lead | `schedule` (daily); `workflow_dispatch` with `apply` |
 
-**What each caller maps, grants and needs.** Every caller maps its role's two App secrets, by name, and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger and the reconciler run no model, so their callers map only the two. The digests run as no App, so their callers map `CLAUDE_CODE_OAUTH_TOKEN` and `DIGEST_WEBHOOK`. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
+**What each caller maps, grants and needs.** Every caller maps its role's two App secrets, by name, and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger, the reconciler and the dispatch sweep run no model, so their callers map only the two. The digests run as no App, so their callers map `CLAUDE_CODE_OAUTH_TOKEN` and `DIGEST_WEBHOOK`. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
 
 <!-- lane-contract:table -->
 
@@ -43,10 +44,11 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | `agent-project-digest.yml` | `DIGEST_WEBHOOK` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read` | none |
 | `agent-weekly-digest.yml` | `DIGEST_WEBHOOK` | `contents: read`, `issues: read`, `pull-requests: read` | none |
 | `agent-explore.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: read`, `id-token: write` | `docs/qa/explorer-playbook.md` |
+| `agent-dispatch-sweep.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `id-token: write` | none |
 
 <!-- /lane-contract:table -->
 
-Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile and the two digests call the blocks themselves and install nothing, so they never call your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own. The Merger and the reconciler call no block and install nothing: each runs Kanon's scripts in your checkout, with its role's App token, and never calls your hook.
+Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile and the two digests call the blocks themselves and install nothing, so they never call your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own. The Merger and the reconciler call no block and install nothing: each runs Kanon's scripts in your checkout, with its role's App token, and never calls your hook. The dispatch sweep does the same, after a store job that calls only the `qa-store` block.
 
 **The review lane** has three things the others don't:
 - **Its caller sets `run-name`,** ending with `${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}`. A called workflow's `run-name` is ignored, and the review-run evidence finds a head's reviews by the last token of the run's title. `lane-check` holds the caller to it.
@@ -266,6 +268,20 @@ The Lead's reconcile lane drives an approved brief to done (`K-PROJ-*`): each ti
 - **Passes no budget.** A tick takes at most six chargeable actions across every open project, a constant of the lane.
 
 It needs the Lead's App, with `Actions: Read` on the installation (the tick probes it before the deploy phase), and your reference environment's deploy declaration (above).
+
+## The dispatch sweep
+
+The Lead's dispatch sweep reconciles the two lanes that a label starts, implement and triage (`agent:implement`, `qa:needs-triage`). An event that never arrived starts nothing, so once a day it re-derives each open labelled issue's state from GitHub: it re-dispatches an issue whose run never happened, or whose question a person answered, up to two attempts; stops one whose latest run hit its turn or budget cap; and reports what waits on a person. It runs no model. Its caller:
+
+- **Keeps two triggers:** a daily `schedule` (the reference adopter's is `40 4 * * *`), which applies, and a dispatch with `apply`, which without `apply` is a dry run.
+- **Grants `contents: read` and `id-token: write`.** The OIDC token is for the lane's store job alone, which reads the cost rows through your store hook in the `kanon-qa-store` environment. The sweep's own job declares no `id-token` and no environment. GitHub refuses to start a called job that asks for more than its caller grants, so the grant is needed with or without a store hook; without one, nothing uses it.
+
+**Its cost rows.** An attempt is charged per re-dispatch it made, so it reads 14 days of the two lanes' cost rows to discount a dispatch whose run never reached the model, and to find a run that hit its cap.
+- **With a store hook** ([The QA store](qa-store.md)), it reads them through the hook's `cost-rows` operation, and its summary says "Cost rows from the QA store" and "Cost rows read" with a count per lane.
+- **Without one**, it reads the lanes' run artifacts (each run of a Kanon lane uploads its telemetry row), and its summary says so. Your repository's artifact retention caps how far back that reaches, and when it is shorter than the 14 days the summary says how much of the window it covered. Settings, Actions, General, "Artifact and log retention" sets it.
+- **A read that fails** charges every dispatch, and the summary's line says why.
+
+It needs the Lead's App, with `Issues: write`, `Pull requests: read` and `Actions: read` on the installation. Until the App's secrets are set, the sweep skips with a warning instead of going red.
 
 ## The digests
 
