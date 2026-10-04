@@ -367,6 +367,28 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => t.write(EXE, EXE_OK.replace('## Path mentions', '- `docs/projects/1.md` — old\n- `docs/projects/1.md` — old\n\n## Path mentions')), /exemptions\.md,title=lane-check::docs\/qa\/exemptions\.md:6 repeats the entry/));
   });
 
+  describe("the adoption record's reference-deploy declaration, read by the library's reader (K-LAYOUT-10, plan 0004 P6)", () => {
+    const REC = 'docs/qa/adoption.md';
+    const DECLARED = '## Choices\n\n- **Reference environment:** `preview`\n- **Reference deploy workflow:** `deploy-preview.yml`\n- **Reference deploy job:** `ship`\n';
+    const passes = (body: string | null) => {
+      const t = adopter();
+      if (body !== null) t.write(REC, body);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    };
+    it('passes no record, a record that declares no reference environment, and a whole declaration', () => {
+      passes(null);
+      passes('# Adoption record\n\n## Choices\n\n- **Chat channel:** none yet.\n');
+      passes(`# Adoption record\n\n${DECLARED}`);
+    });
+    it('refuses a declaration missing its job, with the reader\'s own message', () =>
+      red((t) => t.write(REC, `# Adoption record\n\n${DECLARED.replace(/^- \*\*Reference deploy job.*\n/m, '')}`),
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md declares the reference environment's deploy without `Reference deploy job`: declare all three, or none \(K-LAYOUT-10\)/));
+    it('refuses a workflow written as a path', () =>
+      red((t) => t.write(REC, `# Adoption record\n\n${DECLARED.replace('`deploy-preview.yml`', '`.github/workflows/deploy-preview.yml`')}`),
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:6: `\.github\/workflows\/deploy-preview\.yml` isn't a workflow file name/));
+  });
+
   describe('the App register has a slug for every role a caller\'s lane runs as (K-LAYOUT-6)', () => {
     const REG = 'docs/qa/agent-identities.md';
     it('refuses a missing register', () => red((t) => t.rm(REG), 'the App register is missing'));

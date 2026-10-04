@@ -212,6 +212,18 @@ The lanes' prompts state the process and never your stack. What your stack decid
 
 The revise lanes find their own App's login in the App register, and the scripts the lanes run read every role's login from it, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks.
 
+## The reference environment's deploy
+
+A project closes only once its merges are deployed to your reference environment (`K-PROJ-11`), and the reconciler confirms that by the deploy job itself, not the workflow's conclusion. Declare which workflow deploys there, and which job's success is the deploy, under `## Choices` in your adoption record, `docs/qa/adoption.md` (`K-LAYOUT-10`):
+
+```markdown
+- **Reference environment:** `staging`
+- **Reference deploy workflow:** `deploy-staging.yml`
+- **Reference deploy job:** `deploy`
+```
+
+The reconciler reads it from your default branch, through [`scripts/lib/reference-deploy.mjs`](../scripts/lib/reference-deploy.mjs). Without it, the reconciler names the missing declaration when a project reaches its deploy phase, and that project can't close. A step of your own that needs the same names, such as a probe that your Lead's App can read Actions, prints one with `node "$KANON/scripts/reference-deploy.mjs" workflow` (or `job`, or `environment`), with `GITHUB_REPOSITORY` and a `gh` token in its environment. Add the declaration before, or with, the upgrade that brings it.
+
 ## Checking it
 
-Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above or a review caller whose `run-name` doesn't end with the head SHA, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook; on a missing stack document or playbook, or a stack document without its four sections; on a malformed test-database declaration; on a role missing from the App register; and on a missing Dependabot entry.
+Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above or a review caller whose `run-name` doesn't end with the head SHA, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook; on a missing stack document or playbook, or a stack document without its four sections; on a malformed test-database declaration, escalation file, exemptions file or reference-deploy declaration; on a role missing from the App register; and on a missing Dependabot entry.

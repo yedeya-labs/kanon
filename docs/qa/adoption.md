@@ -123,3 +123,4 @@ These rules' lines are prose only with a note, and name nothing to install: `K-P
 - **Chat channel:** not yet decided. None is configured.
 - **Who merges:** the Owner, always (ADR 0011).
 - **Which pull requests are reviewed:** members' only (ADR 0011).
+- **No reference environment.** Kanon deploys nothing: a release is a tag and a GitHub release. So this record declares none of `K-LAYOUT-10`'s reference-deploy bullets, and no project on Kanon can close by `K-PROJ-11` until it does. Kanon doesn't run the reconciler yet (see Mechanisms).

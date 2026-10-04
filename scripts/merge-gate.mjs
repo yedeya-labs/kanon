@@ -961,6 +961,7 @@ import { CONFLICT_JSON, CONFLICT_WHY, conflictState } from './conflict-state.mjs
 import { marker as rebaseMarker } from './rebase-lane.mjs';
 import { appLogin } from './app-register.mjs';
 import { escalatingPaths, readEscalationFileAt } from './lib/escalation-paths.mjs';
+import { defaultBranchFile } from './lib/declarations.mjs';
 import {
   ESCALATION_HEADER, REVIEW_EVENT_CHECKS, SELF_CHECKS, isEscalation, mergerMarker, mergerMarkerSpellings, mergerMarkersIn,
 } from './lib/protocol-spellings.mjs';
@@ -1472,17 +1473,8 @@ export function summaryLines({ considered, dryRun, merged, escalated, waiting = 
  * @param {(args: string[], opts?: object) => string} [run]
  */
 export function readEscalations(repo, run = gh) {
-  return escalatingPaths(readEscalationFileAt(
-    run(['api', `repos/${repo}`, '--jq', '.default_branch']).trim(),
-    (path, ref) => {
-      try {
-        return run(['api', `repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`, '-H', 'Accept: application/vnd.github.raw'], { stdio: ['ignore', 'pipe', 'pipe'] });
-      } catch (e) {
-        if (/\b404\b|Not Found/.test(String(e?.stderr ?? ''))) return null;
-        throw new Error(String(e?.stderr || e?.message || e).trim());
-      }
-    },
-  ));
+  const { branch, read } = defaultBranchFile(repo, run);
+  return escalatingPaths(readEscalationFileAt(branch, (path) => read(path)));
 }
 
 async function main() {

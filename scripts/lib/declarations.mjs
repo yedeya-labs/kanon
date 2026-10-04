@@ -8,6 +8,8 @@
 // a CRLF file, an indented, `+`, numbered or blockquoted list item. For a declaration that
 // narrows a guard, "no entry" fails open.
 
+import { execFileSync } from 'node:child_process';
+
 /** A missing or malformed declaration file. Its message names the file, and the line. */
 export class DeclarationError extends Error {
   /** @param {string} message */
@@ -73,4 +75,33 @@ export function bulletsOf(d, body, heading) {
       `${d.file}:${line}, under \`${heading}\`, is a list item the file doesn't use: write each entry as \`- \` at the start of the line (${d.rule})`,
     );
   });
+}
+
+/** `gh`, as every default-branch read runs it. @param {string[]} args @param {object} [opts] */
+const gh = (args, opts = {}) => execFileSync('gh', args, { encoding: 'utf8', ...opts });
+
+/**
+ * A reader for files on the repository's default branch, for a lane that judges, or decides,
+ * from a declaration a pull request mustn't choose (`K-MERGE-17`). `read` returns the file's
+ * text, or `null` when it doesn't exist there (a 404 on the contents read), and throws on any
+ * other failure. `branch` is empty when the repository names none; the caller fails on that by
+ * name. `run` is `gh`, injected so the reader is testable.
+ * @param {string} repo `owner/name`
+ * @param {(args: string[], opts?: object) => string} [run]
+ * @returns {{ branch: string, read: (path: string) => string | null }}
+ */
+export function defaultBranchFile(repo, run = gh) {
+  const branch = run(['api', `repos/${repo}`, '--jq', '.default_branch']).trim();
+  return {
+    branch,
+    read: (path) => {
+      try {
+        return run(['api', `repos/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`, '-H', 'Accept: application/vnd.github.raw'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) {
+        const err = /** @type {{ stderr?: unknown, message?: string }} */ (e);
+        if (/\b404\b|Not Found/.test(String(err?.stderr ?? ''))) return null;
+        throw new Error(String(err?.stderr || err?.message || e).trim());
+      }
+    },
+  };
 }

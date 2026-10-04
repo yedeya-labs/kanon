@@ -6,8 +6,8 @@
 # rule about what a lane declares is read from the lane itself and never restated here.
 #
 # Parses YAML with `yq` (mikefarah v4, preinstalled on GitHub's hosted runners; decision 6)
-# into JSON, and checks it with `jq`. Reads the escalation and exemptions files with Kanon's
-# own library, on Node (the action puts Kanon's Node on the PATH first). Prints one
+# into JSON, and checks it with `jq`. Reads the escalation and exemptions files, and the
+# adoption record's reference-deploy declaration, with Kanon's own library, on Node (the action puts Kanon's Node on the PATH first). Prints one
 # `::error` per violation and exits 1 if there is any; exits 2 when it cannot run at all.
 #
 # ENV  KANON_ROOT   Kanon's tree (default: this script's ../..)
@@ -214,11 +214,13 @@ if [ -f "$DATABASE" ]; then
   fi
 fi
 
-# ── The escalation and exemptions files (K-LAYOUT-8, K-LAYOUT-15; kanon#153) ─────────────
+# ── The escalation and exemptions files (K-LAYOUT-8, K-LAYOUT-15; kanon#153), and the ────
+# ── reference environment's deploy in the adoption record (K-LAYOUT-10, plan 0004 P6) ─────
 # Read by the library's own readers from this Kanon tree, so a file this passes is one the
-# guards and the Merger accept. A missing file is the reader's to fail (both rules say so),
-# so only a file that exists is read here.
-for d in escalation-paths exemptions; do
+# guards, the Merger and the reconciler accept. A missing file is the reader's to fail (each
+# rule says so), so only a file that exists is read here. A record that declares no reference
+# environment passes: the reconciler fails on it when a project reaches its deploy phase.
+for d in escalation-paths exemptions adoption; do
   f="docs/qa/$d.md"
   [ -f "$f" ] || continue
   command -v node >/dev/null 2>&1 || die "needs node on PATH to read $f; the action puts Kanon's own there"
