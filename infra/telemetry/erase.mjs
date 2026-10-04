@@ -10,10 +10,9 @@
 // and redeploy first (step 1), so nothing writes while it runs. It prints counts only.
 
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { PARTITIONS } from './function/index.mjs';
+import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 
 export const REGION = 'eu-central-1';
 export const TABLE = 'kanon-telemetry';
@@ -60,7 +59,7 @@ export function erase(key, { aws, profile, apply }) {
   });
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isCliEntry(import.meta.url)) {
   const { values } = parseArgs({
     options: { key: { type: 'string' }, profile: { type: 'string', default: 'kanon' }, apply: { type: 'boolean', default: false } },
   });

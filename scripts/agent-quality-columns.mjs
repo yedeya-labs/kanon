@@ -41,6 +41,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 import { appLogin } from "./app-register.mjs";
+import { isCliEntry } from "./lib/cli-entry.mjs";
 
 const args = (() => {
   const out = {};
@@ -148,7 +149,7 @@ function emit(name, value) {
   console.log(`${name}=${value}`);
 }
 
-const isMain = process.argv[1] && process.argv[1].endsWith("agent-quality-columns.mjs");
+const isMain = isCliEntry(import.meta.url);
 if (isMain) {
   if (!REPO) throw new Error("REPO / GITHUB_REPOSITORY is unset");
 

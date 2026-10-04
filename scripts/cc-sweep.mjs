@@ -38,10 +38,11 @@
  * changelog is newest-first and taking the tail would drop the versions being reported.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 export const CHANGELOG_URL = 'https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md';
 /** ~3.5 months of backlog at ~570 lines a month: the over-large-slice bound (`K-SELF-17`). */
@@ -201,7 +202,5 @@ async function main(argv) {
 }
 
 // The resolved path, so a symlinked checkout still runs the CLI (RA-944).
-const IS_CLI = (() => {
-  try { return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(realpathSync(/** @type {string} */ (process.argv[1]))).href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) process.exitCode = await main(process.argv.slice(2));

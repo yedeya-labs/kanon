@@ -52,7 +52,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -738,8 +738,6 @@ function main() {
   if (code) process.exitCode = code;
 }
 
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1]).href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) main();
 /* c8 ignore stop */

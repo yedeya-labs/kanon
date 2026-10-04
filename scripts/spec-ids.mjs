@@ -41,6 +41,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { claimedFloor, openPrClaims } from './spec-id-claims.mjs';
 import { DECL, REGISTRY, RENUMBERED, SPEC_DIR, loadPrefixes, loadRegistry, loadRenumbered, parseAll, parseSpec, specFiles } from './spec-lib.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
 const OFFLINE = process.argv.includes('--offline');
@@ -185,4 +186,4 @@ function run() {
 }
 
 // Importing for `allocate`/`report` (the unit tier does) must not allocate.
-if (process.argv[1] && process.argv[1].endsWith('spec-ids.mjs')) run();
+if (isCliEntry(import.meta.url)) run();

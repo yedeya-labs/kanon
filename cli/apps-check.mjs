@@ -25,6 +25,7 @@ import { appendFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appJwt, loadRoles, REGISTER_PATH } from './apps.mjs';
+import { isCliEntry } from '../scripts/lib/cli-entry.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const AWK = join(ROOT, 'actions/lane-check/app-register.awk');
@@ -215,7 +216,7 @@ export const main = async (argv, overrides = {}) => {
   }
 };
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isCliEntry(import.meta.url)) {
   process.exitCode = await main(process.argv.slice(2));
 }
 

@@ -10,6 +10,7 @@
 //
 // Needs Node 18 or later (checked on 18, 20 and 24), and no dependencies.
 
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 /** Types the release tool recognises, and whether each one deploys. */
@@ -66,6 +67,12 @@ export function main(title, out = console) {
   return 1;
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// The realpath idiom inline rather than `scripts/lib/cli-entry.mjs`'s `isCliEntry`, because
+// this action has no dependencies by design (see the header): run through a symlinked
+// path, a raw `argv[1]` comparison exits 0 having done nothing (kanon#191).
+const IS_CLI = (() => {
+  try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? '')).href; } catch { return false; }
+})();
+if (IS_CLI) {
   process.exitCode = main(process.env.PR_TITLE ?? process.argv[2] ?? '');
 }

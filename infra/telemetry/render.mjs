@@ -13,10 +13,11 @@
 // The roles carry the opaque key, and so does every row.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parse } from 'yaml';
+import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const TEMPLATE_PATH = join(HERE, 'template.yaml');
@@ -193,7 +194,7 @@ export function render(register, opts = {}) {
   return { template, parameters };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isCliEntry(import.meta.url)) {
   const { values } = parseArgs({
     options: {
       register: { type: 'string' },

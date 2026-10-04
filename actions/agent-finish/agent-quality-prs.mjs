@@ -19,6 +19,7 @@
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
+import { isCliEntry } from "../../scripts/lib/cli-entry.mjs";
 
 const REPO = process.env.REPO || process.env.GITHUB_REPOSITORY;
 const gh = (argv) => execFileSync("gh", argv, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
@@ -66,7 +67,7 @@ export function readOpenedPrs({ label, since, issue }, run = gh) {
   }
 }
 
-const isMain = process.argv[1] && process.argv[1].endsWith("agent-quality-prs.mjs");
+const isMain = isCliEntry(import.meta.url);
 if (isMain) {
   try {
     const a = process.argv.slice(2);

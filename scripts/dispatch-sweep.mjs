@@ -45,6 +45,7 @@ import { appLogin } from './app-register.mjs';
 import { queryCostRows } from '../infra/qa-store/aws/cost-rows.mjs';
 import { costRowsProblem } from '../actions/qa-store/qa-store.mjs';
 import { artifactRetentionNote, readArtifactCostRows } from './lib/telemetry-artifacts.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -1672,4 +1673,4 @@ function main() {
 }
 
 // Importing this module (the unit tier does) must not sweep anything.
-if (process.argv[1] && process.argv[1].endsWith('dispatch-sweep.mjs')) main();
+if (isCliEntry(import.meta.url)) main();

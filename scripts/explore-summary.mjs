@@ -41,7 +41,7 @@
 // usage error. Node's built-ins only.
 
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /** The summary's path, at the root of the checkout (decision 5): the lane reads nothing else. */
 export const SUMMARY_FILE = 'qa-explore-summary.json';
@@ -190,9 +190,7 @@ export function cli(argv) {
   };
 }
 
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1] ?? '').href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) {
   const { code, lines, outputs } = cli(process.argv.slice(2));
   for (const l of lines) (code === 2 ? process.stderr : process.stdout).write(`${l}\n`);

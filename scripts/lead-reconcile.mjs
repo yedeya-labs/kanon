@@ -27,7 +27,6 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 import { reviewAttempts, reviewRunsFor as readReviewRuns, whyNoChurn } from './review-run-evidence.mjs';
 import { churnBoundary, reviseDeliveries, startedAfter } from './revise-run-evidence.mjs';
 import { NO_RETRY_EVIDENCE, RETRY_COOL_DOWN_HOURS, describeRetry, makeRetryEvidenceReader, retryDecision } from './lane-retry.mjs';
@@ -63,6 +62,7 @@ import {
 } from './project-closure.mjs';
 import { appLogin } from './app-register.mjs';
 import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/reference-deploy.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 export {
   VERIFY, briefIssues, carriedOut, declaresMembership, dependsField, gatesClosure, inDecomposition, isPhase5Finding,
   isProjectWork, itemSatisfied, openGatingWork, parseProposed, satisfiedTitles,
@@ -4014,7 +4014,5 @@ function main() {
   return decisions.at(-1)?.decision ?? { phase: 'no-projects', actions: [] };
 }
 
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1]).href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) main();

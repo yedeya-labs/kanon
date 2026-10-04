@@ -53,6 +53,8 @@
  *   gh issue view <n> --json milestone,labels | node scripts/issue-triage-defaults.mjs
  */
 
+import { isCliEntry } from './lib/cli-entry.mjs';
+
 /** Product outputs and anything without an unambiguous home. */
 export const DEFAULT_MILESTONE = 'Product Backlog';
 /** Engineering-platform / QA-pipeline work (AGENTS.md row 3). */
@@ -235,6 +237,6 @@ async function main() {
   );
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+if (isCliEntry(import.meta.url)) {
   await main();
 }

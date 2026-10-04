@@ -41,6 +41,7 @@
 // closing keyword in a commit is reported — it reads as done and does nothing.
 
 import { execFileSync } from 'node:child_process';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /** GitHub's own closing-keyword set. Case-insensitive, keyword BEFORE the ref. */
 const KEYWORD = '(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)';
@@ -526,4 +527,4 @@ const main = () => {
   console.log('closing references agree with the declaration.');
 };
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (isCliEntry(import.meta.url)) main();

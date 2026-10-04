@@ -52,13 +52,13 @@
 // Usage: node scripts/brief-revise-recovery.mjs [--apply]
 
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
 import { AWAITING_REVIEW_HOURS } from './lead-reconcile.mjs';
 import { churnBoundary, reviseDeliveries } from './revise-run-evidence.mjs';
 import { NO_RETRY_EVIDENCE, RETRY_COOL_DOWN_HOURS, describeRetry, makeRetryEvidenceReader, retryDecision } from './lane-retry.mjs';
 import { readTrailer } from './review-trailer.mjs';
 import { CONFLICT_JSON, CONFLICT_WHY, blocksChurn, conflictState } from './conflict-state.mjs';
 import { appLogin } from './app-register.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -335,7 +335,5 @@ function main() {
   }
 }
 
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1]).href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) main();

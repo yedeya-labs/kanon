@@ -977,7 +977,6 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
 // Everything below touches GitHub. Nothing below decides anything.
 
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
 import { analyse } from './closing-refs.mjs';
 import { evidenceSha, readTrailer } from './review-trailer.mjs';
 import { CONFLICT_JSON, CONFLICT_WHY, conflictState } from './conflict-state.mjs';
@@ -989,6 +988,7 @@ import { isSpecFile, specPromotions } from './lib/spec-promotions.mjs';
 import {
   ESCALATION_HEADER, REVIEW_EVENT_CHECKS, SELF_CHECKS, isEscalation, mergerMarker, mergerMarkerSpellings, mergerMarkersIn,
 } from './lib/protocol-spellings.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 const gh = (args, opts = {}) => execFileSync('gh', args, { encoding: 'utf8', ...opts });
 
@@ -1570,9 +1570,7 @@ async function main() {
   }
 }
 
-// `process.argv[1]` is undefined when this module is imported by a test runner, and
-// `pathToFileURL(undefined)` throws — which is how RA-1071 turned an import into a
-// crash. Guarded, then guarded again in label-guard.mjs a day later.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Importing this module with no argv[1] must not crash (RA-1071); `isCliEntry` holds that.
+if (isCliEntry(import.meta.url)) {
   main().catch((e) => { console.error(e.message); process.exit(1); });
 }

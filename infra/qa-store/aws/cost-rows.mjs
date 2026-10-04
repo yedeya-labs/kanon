@@ -16,8 +16,8 @@
 
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { isCliEntry } from '../../../scripts/lib/cli-entry.mjs';
 
 /** Exactly the attributes the sweep reads (`dispatch-sweep.mjs`'s `COST_PROJECTION`). */
 export const COST_PROJECTION = ['sk', 'issue_number', 'outcome', 'run_id'];
@@ -63,7 +63,7 @@ const cause = (err) => {
   return text.split('\n').find((l) => l.trim()) ?? '';
 };
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isCliEntry(import.meta.url)) {
   const env = process.env;
   const out = join(env.DIR || '.', 'cost-rows.json');
   try {

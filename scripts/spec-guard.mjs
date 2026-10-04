@@ -18,6 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DECL, DECL_LIKE, REGISTRY, SPEC_DIR, fencedLines, loadRegistry, parseAll, parseSpec, prefixProblems, specFiles } from './spec-lib.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /** How long a repeated sentence must be before a repeat is evidence of a splice. */
 export const DUP_MIN_WORDS = 8;
@@ -204,7 +205,7 @@ for (const file of specFiles(dir)) {
 }
 
 // CLI. Importing this module (the unit tier does) must not exit the process.
-if (process.argv[1] && process.argv[1].endsWith('spec-guard.mjs')) {
+if (isCliEntry(import.meta.url)) {
   const { problems, invariants } = check();
   if (problems.length) {
     console.error(`spec-guard: ${problems.length} problem(s)\n`);

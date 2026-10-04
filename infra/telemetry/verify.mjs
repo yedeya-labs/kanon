@@ -13,11 +13,10 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomInt } from 'node:crypto';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { keysOf, SHORT_RETENTION_MS } from './function/index.mjs';
 import { sign } from './function/sigv4.mjs';
+import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 
 export const REGION = 'eu-central-1';
 export const STACK = 'kanon-telemetry';
@@ -192,7 +191,7 @@ async function post(url, body, creds) {
   return { status: res.status, json: json(await res.text()) };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isCliEntry(import.meta.url)) {
   const { values } = parseArgs({ options: { key: { type: 'string' }, profile: { type: 'string', default: 'kanon' } } });
   if (!values.key) {
     console.error('usage: verify.mjs --key <key> [--profile kanon]');
