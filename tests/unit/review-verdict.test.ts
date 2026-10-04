@@ -967,5 +967,7 @@ describe("the Reviewer's shell is an allow-list that runs no PR code (kanon#248)
     expect(prompt).toContain('YOUR SHELL IS AN ALLOW-LIST (kanon#248)');
     expect(prompt).toContain(`Write only to \`${TEMP}/qa-review-<name>.md\``);
     expect(prompt).toMatch(/A shell variable other than `\$HOME`\s+\(`\$RUNNER_TEMP` included\) is refused/);
+    // `gh pr checks` is allowed, and its `--watch` blocks until checks settle (K-AGENT-36).
+    expect(prompt).toMatch(/Never `gh pr checks\s+--watch` or `gh run watch`/);
   });
 });

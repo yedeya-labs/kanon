@@ -1724,7 +1724,8 @@ jobs:
               `merge-base`, `rev-parse`, `ls-files`, `cat-file`. The head's history and
               `origin/<base>` are already fetched; reach any other ref through `gh api`.
             - `gh`: `pr view|diff|checks|list|review|edit`, `issue view|list|create`,
-              `label list`, `run view|list`, `search`, and `api`.
+              `label list`, `run view|list`, `search`, and `api`. Never `gh pr checks
+              --watch` or `gh run watch`: they wait, and this run has no next turn.
             - Write only to `${{ runner.temp }}/qa-review-<name>.md`, with the Write
               tool or a heredoc: the verdict file above, and any follow-up body you pass
               to `gh issue create --body-file`.
