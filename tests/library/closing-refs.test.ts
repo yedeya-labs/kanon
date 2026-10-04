@@ -394,7 +394,7 @@ describe('a retargeted PR is not a backticked one (RA-1111)', () => {
    * declaration with no backtick in it, which sends the author to edit the one thing
    * that was already right.
    */
-  const retargeted = { body: 'Closes #957\n\nStacked on #1092; its parent has landed.', title: 'fix(qa): x', willClose: [] };
+  const retargeted = { body: 'Closes #957\n\nStacked on #1092; its parent has landed.', title: 'fix(qa): x', willClose: [], retargeted: true };
 
   it('separates a keyword GitHub could not see from one it simply did not re-read', () => {
     const r = analyse(retargeted);
@@ -431,6 +431,52 @@ describe('a retargeted PR is not a backticked one (RA-1111)', () => {
     // appear there — so "re-save the body" alone would loop an author forever.
     const [msg] = explain(analyse(retargeted), 'o/r', 1109);
     expect(msg).toMatch(/not an ISSUE in this repository/);
+  });
+});
+
+describe('a base retarget is claimed only when the base moved (kanon#182)', () => {
+  /**
+   * The reference adopter saw "the measured cause is a BASE RETARGET" printed twice on PRs
+   * whose base had always been the default branch, with no base change on the timeline. Its
+   * remedy, "re-save the body", was tried four and more times on each and the closing set
+   * stayed `[]`, so the advice sent the Reviewer and the Implementer round a loop. The red
+   * run was right; the diagnosis was not.
+   */
+  const plain = { body: 'Closes #957', title: 'fix(qa): x', willClose: [] };
+
+  it('says the cause is unknown and routes to a human when the timeline shows no base change', () => {
+    const [msg, ...rest] = explain(analyse({ ...plain, retargeted: false }), 'o/r', 2654);
+    expect(rest).toEqual([]);
+    expect(msg, 'the finding is still reported').toContain('the PR LINK will not close it');
+    expect(msg).toContain('The cause is UNKNOWN');
+    expect(msg, 'and why the retarget does not apply').toContain('records no base change');
+    expect(msg, 'a person can link it, or close it by hand').toMatch(/Development sidebar[\s\S]*close #957 by hand/);
+    expect(msg, 'no retarget is claimed').not.toContain('BASE RETARGET');
+    expect(msg, 'and no re-save is prescribed').not.toMatch(/Fix: re-save/);
+    expect(msg, 'the other cause is still offered').toMatch(/Or #957 is not an ISSUE in this repository/);
+  });
+
+  it('claims no retarget when the timeline could not be read, and says so', () => {
+    for (const r of [analyse({ ...plain, retargeted: null }), analyse(plain)]) {
+      const [msg] = explain(r, 'o/r', 2654);
+      expect(msg).toContain('The cause is UNKNOWN');
+      expect(msg).toContain('could not be read');
+      expect(msg).not.toContain('BASE RETARGET');
+      expect(msg).not.toMatch(/Fix: re-save/);
+    }
+  });
+
+  it('keeps the retarget advice when the timeline records a base change', () => {
+    const [msg] = explain(analyse({ ...plain, retargeted: true }), 'o/r', 1109);
+    expect(msg).toContain('BASE RETARGET');
+    expect(msg).toMatch(/Fix: re-save the body/);
+    expect(msg).not.toContain('UNKNOWN');
+  });
+
+  it('leaves a code-spanned keyword to the backtick advice, whatever the timeline says', () => {
+    const [msg] = explain(analyse({ body: 'Closes #1007, `closes #1010`', title: 't', willClose: [1007], retargeted: false }), 'o/r', 1);
+    expect(msg).toMatch(/unbacktick the keyword/i);
+    expect(msg).not.toContain('UNKNOWN');
   });
 });
 
