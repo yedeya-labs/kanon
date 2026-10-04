@@ -6,17 +6,17 @@ import { ROOT } from './helpers/adopter.js';
 
 /**
  * The digests' webhook (plan 0004, decision 7): the lanes pass the caller's `DIGEST_WEBHOOK`
- * secret under its own name, and the reference adopter's own workflows passed
- * `SLACK_RELEASE_WEBHOOK` until they called the lanes.
+ * secret under its own name, and nothing else is read. The transitional `SLACK_RELEASE_WEBHOOK`
+ * fallback is gone (kanon#216, Owner note 6).
  */
 describe('the webhook the digests post to', () => {
-  it('is the lane\'s fixed name first', () => {
+  it('is the lane\'s fixed name', () => {
     expect(digestWebhook({ DIGEST_WEBHOOK: 'https://hook/a', SLACK_RELEASE_WEBHOOK: 'https://hook/b' })).toBe('https://hook/a');
   });
 
-  it('falls back to the name the reference adopter passed before it called the lanes', () => {
-    expect(digestWebhook({ SLACK_RELEASE_WEBHOOK: 'https://hook/b' })).toBe('https://hook/b');
-    expect(digestWebhook({ DIGEST_WEBHOOK: '', SLACK_RELEASE_WEBHOOK: 'https://hook/b' })).toBe('https://hook/b');
+  it('no longer falls back to the old `SLACK_RELEASE_WEBHOOK` name', () => {
+    expect(digestWebhook({ SLACK_RELEASE_WEBHOOK: 'https://hook/b' })).toBe('');
+    expect(digestWebhook({ DIGEST_WEBHOOK: '', SLACK_RELEASE_WEBHOOK: 'https://hook/b' })).toBe('');
   });
 
   it('is empty when neither is set, so the digest posts nothing', () => {

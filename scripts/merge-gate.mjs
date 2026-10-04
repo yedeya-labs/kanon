@@ -58,6 +58,8 @@
  * `docs/qa/specs/**` is deliberately never an escalation path: those specs are the project's
  * DELIVERABLE, and escalating them made the Merger decline every PR the project he exists for
  * produces (measured on RA-1057). A spec change is reviewed by the Reviewer against the brief.
+ * What a spec edit can't do in the green zone is PROMOTE an invariant to `[confirmed]`
+ * (`K-SPEC-9`): that escalates as `spec-promotion`, below.
  */
 export { PIPELINE_ESCALATIONS } from './lib/escalation-paths.mjs';
 
@@ -235,6 +237,7 @@ export const startupFailuresIn = (runs = []) =>
 export const LAPSES_WITH_HEAD = new Set([
   'workflow-startup-failure', 'files-unreadable', 'never-started', 'contradictory-verdicts',
   'checks-cancelled', 'checks-failed', 'undeclared-closes', 'closes-unverifiable', 'merge-state',
+  'spec-diff-unreadable',
 ]);
 
 // The first line of every escalation comment the Merger posts, `ESCALATION_HEADER`, is
@@ -430,7 +433,11 @@ export function checkPartition(checks) {
  *   closing: {mergeClosesUndeclared: number[], unverifiable: boolean},
  *   workflowRuns: {name: string, conclusion: string|null}[]|null,
  *   hold?: {labeledBy: string, escalations: {rule: string, sha: string}[]}|null,
+ *   specDiff?: {promotions: {id: string, file: string, from: string|null}[], unreadable: string[]}|null,
  * }} pr
+ * `specDiff` is `specPromotions` of the changed spec files' patches, and is read only when a
+ * changed file is a spec (`isSpecFile`). Then anything but that shape, or a file it couldn't
+ * read, escalates as `spec-diff-unreadable`: a promotion nobody could look for is not "none".
  * `workflowRuns` IS REQUIRED TOO, and `null` is a value, not an omission (RA-2256): it
  * means the Actions listing could not be read, and anything that is not an array is
  * treated the same way — a `wait`, never "no startup failure".
@@ -604,6 +611,22 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
 
   if (touched.length) {
     return stop('escalating-path', `touches ${touched.join(', ')} — a human decides these`);
+  }
+
+  // ONLY A HUMAN CONFIRMS AN INVARIANT (`K-SPEC-9`). A spec edit is the project's deliverable
+  // and merges in the green zone, but the edit that makes a clause `[confirmed]` (a tag flipped
+  // in place, a clause moved with its tag flipped, or a new clause written as `[confirmed]`)
+  // is a promotion, and a promotion is the human's. An edit that keeps `[confirmed]` is not.
+  if (pr.files.some(isSpecFile)) {
+    const spec = pr.specDiff;
+    if (!spec || !Array.isArray(spec.promotions) || !Array.isArray(spec.unreadable) || spec.unreadable.length) {
+      const which = spec?.unreadable?.length ? `: \`${spec.unreadable.join('`, `')}\`` : '';
+      return stop('spec-diff-unreadable', `this PR changes a spec, and its diff could not be read${which}, so whether it promotes an invariant to \`[confirmed]\` is unknown (K-SPEC-9)`);
+    }
+    if (spec.promotions.length) {
+      const list = spec.promotions.map((p) => `\`${p.id}\` in \`${p.file}\` (${p.from ? `was \`[${p.from}]\`` : 'new'})`);
+      return stop('spec-promotion', `makes ${list.join(', ')} \`[confirmed]\`. Only a human confirms an invariant (K-SPEC-9)`);
+    }
   }
 
   // Nothing else to say, and the label is on: refuse without repeating myself. A
@@ -962,6 +985,7 @@ import { marker as rebaseMarker } from './rebase-lane.mjs';
 import { appLogin } from './app-register.mjs';
 import { escalatingPaths, readEscalationFileAt } from './lib/escalation-paths.mjs';
 import { defaultBranchFile } from './lib/declarations.mjs';
+import { isSpecFile, specPromotions } from './lib/spec-promotions.mjs';
 import {
   ESCALATION_HEADER, REVIEW_EVENT_CHECKS, SELF_CHECKS, isEscalation, mergerMarker, mergerMarkerSpellings, mergerMarkersIn,
 } from './lib/protocol-spellings.mjs';
@@ -1101,7 +1125,29 @@ export function readPr(number, repo, opts = {}) {
     // WHO APPLIED `needs:human`, AND WHAT THE MERGER SAID ABOUT IT (RA-2097, RA-2238). Read only
     // when the label is on, which is the only time `mergeVerdict` consults it.
     hold: meta.labels.some((l) => l.name === 'needs:human') ? holdOn(meta.number, repo, gh) : undefined,
+    // THE SPEC PATCHES, read only when a spec changed (K-SPEC-9). `null` on a failed read,
+    // which `mergeVerdict` escalates rather than reading as "no promotion".
+    specDiff: files.some(isSpecFile) ? specDiffOn(number, repo, gh) : undefined,
   };
+}
+
+/**
+ * The changed spec files' patches, as `specPromotions` reads them, or `null` when the listing
+ * could not be read. The REST files endpoint carries each file's `patch`, and omits it for a
+ * diff too large to show, which `specPromotions` reports as unreadable.
+ */
+function specDiffOn(number, repo, gh) {
+  try {
+    const rows = gh(['api', `repos/${repo}/pulls/${number}/files`, '--paginate', '--jq',
+      '.[] | [.filename, .patch, .changes] | @json'])
+      .split('\n').map((l) => l.trim()).filter(Boolean).map((l) => JSON.parse(l))
+      .filter(([file]) => isSpecFile(file))
+      .map(([file, patch, changes]) => ({ file, patch: patch ?? null, changes: Number(changes) || 0 }));
+    return specPromotions(rows);
+  } catch (e) {
+    console.log(`::warning title=merge-gate::#${number}: the spec diff could not be read, so this PR escalates (spec-diff-unreadable): ${String(e?.stderr || e?.message || e).trim().slice(0, 200)}`);
+    return null;
+  }
 }
 
 /**

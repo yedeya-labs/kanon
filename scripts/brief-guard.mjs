@@ -473,6 +473,35 @@ export const isBrief = (path) => /^docs\/projects\/\d+\.md$/.test(path);
 export const isPreStandard = (path) => readExemptions().briefs.some((b) => b.brief === path);
 
 /**
+ * EVERY CHECK A PRE-STANDARD BRIEF SKIPS, AS ONE LIST (kanon#190). `checkBrief` asks
+ * `runs(<key>)` at each gated check, and `brief-guard.test.ts` fails when the keys asked and
+ * the keys listed differ, so a new content rule cannot be exempted without an entry. The summary line is built from the same
+ * entries (`exemptSummary`), so it names every check the exemption skips and can't fall
+ * behind one again: it named three of six until kanon#190.
+ */
+export const PRE_STANDARD_SKIPS = Object.freeze([
+  { key: 'coordinates', label: 'a `file:line` coordinate' },
+  { key: 'criteria', label: 'an acceptance criterion in prose, or a measurement line with no command' },
+  { key: 'open-decision', label: 'an unanswered decision' },
+  { key: 'unparsed-decisions', label: 'a decisions section that parses to zero decisions while holding numbered lines' },
+  { key: 'predecessors', label: 'a blocking predecessor named in prose but missing from its **Depends on:** line' },
+  { key: 'criteria-gap', label: 'a gap in numbered criteria' },
+  { key: 'criterion-refs', label: 'a dangling `Issue X criterion N` reference' },
+]);
+
+/**
+ * The line the CLI prints about the pre-standard briefs, naming each check they skipped.
+ * @param {string[]} exempt the exempt brief paths
+ * @returns {string} '' when there are none
+ */
+export const exemptSummary = (exempt) =>
+  exempt.length
+    ? `${exempt.length} of them predate the RA-1742 standard (${exempt.join(', ')}) and were NOT checked for ` +
+      `${PRE_STANDARD_SKIPS.map((c) => c.label).join('; ')} ` +
+      '(RA-1732 — a merge gate cannot gate a brief that already merged) — they are immutable records.'
+    : '';
+
+/**
  * A coordinate a brief may not carry.
  *
  * THE DEFINITION IS `citation-guard`'s, IMPORTED (`coordinatesIn`), not retyped — it
@@ -619,6 +648,22 @@ export const danglingCriterionRefs = (markdown, proposed) => {
  * X is `Issue <KEY>`, or a bare declared key of two or more characters (`C1B`, as
  * `1019.md` writes it) — a bare single letter is too common a word to trust.
  *
+ * A SENTENCE THAT DENIES THE EDGE IS NOT ONE (kanon#169). The phrases match the positive
+ * form, so "this is not blocked on Issue B" used to read as an edge, and the guard's own
+ * remedy ("add Issue B to the line") made a correct brief wrong. `deniedEdge` skips a
+ * match when one of these holds, in either direction:
+ *
+ *   - `not`, `never`, `no longer` or an `n't` word is one of the two words just before it,
+ *     in the same clause ("is not blocked on", "isn't blocked by", "does not matter if X
+ *     has not landed");
+ *   - its sentence opens with `Not in this issue`, the template's out-of-scope boundary;
+ *   - its own clause ends and the next one is about a follow-up ("once X lands, a
+ *     follow-up may extend …"), so what waits is that follow-up, not this issue.
+ *
+ * The window is deliberately two words and stops at a clause boundary, so a negation
+ * elsewhere in the sentence ("Issue B is not optional; this is blocked on Issue B") does
+ * not hide a real edge.
+ *
  * @param {{key: string, body?: string, dependsOnKeys?: string[]}[]} proposed
  * @returns {{from: string, needs: string, phrase: string}[]}  `from` must depend on `needs`
  */
@@ -638,18 +683,45 @@ export const omittedPredecessors = (proposed) => {
   const deps = new Map(proposed.map((p) => [p.key, new Set(p.dependsOnKeys ?? [])]));
   const out = [];
   const need = (from, needs, phrase) => {
-    if (!keys.has(needs) || needs === from || deps.get(from)?.has(needs)) return;
+    // Both ends declared: the reverse form names the WAITING item, which may be undeclared.
+    if (!keys.has(from) || !keys.has(needs) || needs === from || deps.get(from)?.has(needs)) return;
     if (out.some((o) => o.from === from && o.needs === needs)) return;
     out.push({ from, needs, phrase });
   };
   for (const p of proposed) {
-    const text = (p.body ?? '').replace(/\s+/g, ' ');
-    for (const re of forward) {
-      for (const m of text.matchAll(re)) need(p.key, (m[1] ?? m[2]).toUpperCase(), m[0]);
+    // Paragraph by paragraph, so a sentence boundary is never guessed across a blank line.
+    for (const para of (p.body ?? '').split(/\n\s*\n/)) {
+      const text = para.replace(/\s+/g, ' ');
+      for (const re of forward) {
+        for (const m of text.matchAll(re)) {
+          if (!deniedEdge(text, m.index, m[0].length)) need(p.key, (m[1] ?? m[2]).toUpperCase(), m[0]);
+        }
+      }
+      for (const m of text.matchAll(reverse)) {
+        if (!deniedEdge(text, m.index, m[0].length)) need((m[1] ?? m[2]).toUpperCase(), p.key, m[0]);
+      }
     }
-    for (const m of text.matchAll(reverse)) need((m[1] ?? m[2]).toUpperCase(), p.key, m[0]);
   }
   return out;
+};
+
+/**
+ * Does the sentence around a predecessor phrase deny the edge rather than assert it?
+ * See `omittedPredecessors` for the three shapes and why the window is two words.
+ *
+ * @param {string} text  one paragraph, whitespace collapsed
+ * @param {number} start  where the phrase starts
+ * @param {number} length  the phrase's length
+ */
+export const deniedEdge = (text, start, length) => {
+  const before = text.slice(0, start);
+  const sentence = before.slice(before.search(/(?:^|[.!?]\s)[^.!?]*$/)).replace(/^[.!?]?\s*/, '');
+  if (/^Not in this issue\b/i.test(sentence)) return true;
+  const clause = sentence.slice(sentence.search(/[^,;:—–()]*$/));
+  const words = clause.trim().split(/\s+/).filter(Boolean).slice(-2).join(' ');
+  if (/\b(?:not|never|no longer)\b|n['’]t\b/i.test(words)) return true;
+  const after = text.slice(start + length);
+  return /^[^.!?;,]*,\s*(?:a|any|the) (?:later |separate )?follow-?ups?\b/i.test(after);
 };
 
 /**
@@ -717,6 +789,11 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
   const findings = [];
   const at = (line) => `${path}${line ? `:${line}` : ''}`;
   const sections = briefSections(markdown);
+  // Does a content rule run over this brief? Every one the exemption skips is asked by its
+  // key in `PRE_STANDARD_SKIPS`, which is what the summary line names. The key is for the
+  // reader and for `brief-guard.test.ts`, which fails when a `runs` key and the list differ.
+  const preStandard = isPreStandard(path);
+  const runs = (/** @type {string} */ _key) => !preStandard;
 
   for (const req of REQUIRED_SECTIONS) {
     const matching = sections.filter((s) => req.match.test(s.title));
@@ -768,10 +845,10 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
     // ⚠️ It does NOT mean the question went away. `1015.md`'s decision 7 flags RA-1001, which
     // is open, in Product Backlog, and tracked there — where a live question belongs. A
     // brief is a dated record; the issue is the thing with a state.
-    if (req.key === 'decisions' && !isPreStandard(path)) {
+    if (req.key === 'decisions') {
       for (const sec of matching) {
         // ZERO PARSED IS NOT "CHECKED" (RA-1748). See `unparsedDecisionLines`.
-        const unparsed = unparsedDecisionLines(sec.body);
+        const unparsed = runs('unparsed-decisions') ? unparsedDecisionLines(sec.body) : 0;
         if (unparsed) {
           findings.push({
             at: at(sec.line),
@@ -782,7 +859,7 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
               'after the number is read as prose. (A numbered list inside a ``` fence is ignored.)',
           });
         }
-        for (const d of decisionsIn(sec.body)) {
+        for (const d of runs('open-decision') ? decisionsIn(sec.body) : []) {
           if (!OPEN_DECISION.test(d.headline) || ANSWERED_DECISION.test(d.headline)) continue;
           const marker = (OPEN_DECISION.exec(d.headline) ?? [''])[0];
           findings.push({
@@ -818,7 +895,7 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
   //
   // The pre-standard briefs are exempt and `isPreStandard` says why: their
   // coordinates are evidence about a commit that has passed, and immutability wins.
-  if (!isPreStandard(path)) {
+  if (runs('coordinates')) {
     markdown.split('\n').forEach((line, i) => {
       const found = [
         ...coordinatesIn(line, true).map((c) => c.text),
@@ -906,7 +983,7 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
     // the command that produced it, so it carries `**Measures:**` bullets instead of
     // criteria. It is accepted when it has no criteria region and at least one such
     // bullet, each naming its command; an item with neither ids nor measurements is refused.
-    if (!isPreStandard(path)) {
+    if (runs('criteria')) {
       const bullets = acBullets(p.body);
       const measures = bullets === null ? measureBullets(p.body) : [];
       for (const m of measures.filter((x) => !x.wellFormed)) {
@@ -1006,35 +1083,33 @@ export function checkBrief(path, markdown, { milestones = () => { throw new Erro
   }
 
   // ── What a re-scope breaks (RA-2147, RA-2153) — see the helpers above ─────────────
-  if (!isPreStandard(path)) {
-    for (const o of omittedPredecessors(proposed)) {
-      findings.push({
-        at: at(0),
-        problem:
-          `Issue ${o.from}'s prose says it waits for Issue ${o.needs} (“${o.phrase}”), but its ` +
-          `**Depends on:** line does not name Issue ${o.needs}. The reconciler reads ONLY that line, ` +
-          'so it would dispatch the issue while every human-readable surface says it must wait. Add ' +
-          `Issue ${o.needs} to the line, or reword the prose if it is not a real edge`,
-      });
-    }
-    for (const p of proposed) {
-      const gap = criteriaOrdinalGap(p.body);
-      if (!gap) continue;
-      findings.push({
-        at: at(0),
-        problem:
-          `“${p.title}” numbers its criteria with a gap — criterion ${gap.expected} is written ` +
-          `${gap.found}. Markdown renders an ordered list from its FIRST number, so everything after ` +
-          'the gap displays one lower than every reference to it. Keep the slot occupied (a ' +
-          '"moved to …" placeholder) rather than closing it up or skipping it',
-      });
-    }
-    for (const d of danglingCriterionRefs(markdown, proposed)) {
-      findings.push({
-        at: at(0),
-        problem: `“${d.ref}” points at nothing — ${d.why}. A reader following it lands on a different criterion or none`,
-      });
-    }
+  for (const o of runs('predecessors') ? omittedPredecessors(proposed) : []) {
+    findings.push({
+      at: at(0),
+      problem:
+        `Issue ${o.from}'s prose says it waits for Issue ${o.needs} (“${o.phrase}”), but its ` +
+        `**Depends on:** line does not name Issue ${o.needs}. The reconciler reads ONLY that line, ` +
+        'so it would dispatch the issue while every human-readable surface says it must wait. Add ' +
+        `Issue ${o.needs} to the line, or reword the prose if it is not a real edge`,
+    });
+  }
+  for (const p of runs('criteria-gap') ? proposed : []) {
+    const gap = criteriaOrdinalGap(p.body);
+    if (!gap) continue;
+    findings.push({
+      at: at(0),
+      problem:
+        `“${p.title}” numbers its criteria with a gap — criterion ${gap.expected} is written ` +
+        `${gap.found}. Markdown renders an ordered list from its FIRST number, so everything after ` +
+        'the gap displays one lower than every reference to it. Keep the slot occupied (a ' +
+        '"moved to …" placeholder) rather than closing it up or skipping it',
+    });
+  }
+  for (const d of runs('criterion-refs') ? danglingCriterionRefs(markdown, proposed) : []) {
+    findings.push({
+      at: at(0),
+      problem: `“${d.ref}” points at nothing — ${d.why}. A reader following it lands on a different criterion or none`,
+    });
   }
   return findings;
 }
@@ -1136,11 +1211,7 @@ const main = () => {
     `brief-guard: ${briefs.length} brief(s) carry all ${REQUIRED_SECTIONS.length} required ` +
       'sections, price their cost delta, state an observability decision, and decompose into ' +
       'issues the reconciler can file.' +
-      (exempt.length
-        ? `\n  ${exempt.length} of them predate the RA-1742 standard (${exempt.join(', ')}) and were NOT ` +
-          'checked for coordinates, for prose acceptance criteria, or for an unanswered decision '
-          + '(RA-1732 — a merge gate cannot gate a brief that already merged) — they are immutable records.'
-        : ''),
+      (exempt.length ? `\n  ${exemptSummary(exempt)}` : ''),
   );
 };
 

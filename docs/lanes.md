@@ -245,7 +245,7 @@ The reconciler reads it from your default branch, through [`scripts/lib/referenc
 
 ## The Merger
 
-The merge lane merges a pull request with no person in the loop only inside the green zone (`K-MERGE-4`): an `agent:implement` or `agent:triage` pull request the Implementer authored, approved by the Reviewer on its current head, with every check green and no escalating path or label. It merges through the front door with the Merger's App, never as a ruleset bypass actor, and runs no model. Its caller:
+The merge lane merges a pull request with no person in the loop only inside the green zone (`K-MERGE-4`): an `agent:implement` or `agent:triage` pull request the Implementer authored, approved by the Reviewer on its current head, with every check green, no escalating path or label, and no invariant promoted to `[confirmed]` (`K-SPEC-9`). It merges through the front door with the Merger's App, never as a ruleset bypass actor, and runs no model. Its caller:
 
 - **Is named `Merge (Merger)`.** `lane-check` fails it under any other name, because the lane would wait on its own check.
 - **Keeps four triggers.** A review is what it acts on. CI completing on your default branch is its sweep, because a merge there changes every other open pull request's mergeability. The hourly `schedule` is a floor for the day nothing merges. A dispatch with `pr_number` and `apply` is the only dry run: without `apply`, it reports each verdict and changes nothing.
