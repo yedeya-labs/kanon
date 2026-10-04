@@ -1,7 +1,8 @@
 // lane-check's reader for the declaration files the guards, the Merger and the reconciler read
 // (kanon#153): `docs/qa/escalation-paths.md` (`K-LAYOUT-8`), `docs/qa/exemptions.md`
 // (`K-LAYOUT-15`), and the reference environment's deploy in the adoption record,
-// `docs/qa/adoption.md` (`K-LAYOUT-10`, plan 0004 P6).
+// `docs/qa/adoption.md` (`K-LAYOUT-10`, plan 0004 P6), with the weekly digest's audience beside
+// it (kanon#218).
 //
 // Each is read with the library's own reader, from this Kanon tree (the version the adopter
 // pinned), so a file this passes is one the readers accept, and a malformed one fails the
@@ -19,10 +20,16 @@
 
 import { readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import { readExemptions } from '../../scripts/lib/exemptions.mjs';
+import { readDigestAudience } from '../../scripts/lib/digest-audience.mjs';
 import { readReferenceDeploy } from '../../scripts/lib/reference-deploy.mjs';
 
 /** @type {Record<string, (root: string) => unknown>} */
-const READERS = { 'escalation-paths': readEscalationFile, exemptions: readExemptions, adoption: readReferenceDeploy };
+const READERS = {
+  'escalation-paths': readEscalationFile,
+  exemptions: readExemptions,
+  // Both of the record's declarations, so a malformed one of either fails by name.
+  adoption: (root) => [readReferenceDeploy(root), readDigestAudience(root)],
+};
 
 const which = process.argv[2] ?? '';
 const read = READERS[which];

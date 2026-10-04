@@ -62,7 +62,7 @@ import {
   FINDING_ANCHOR, GATING_SEVERITIES, SPEC_FINDING,
 } from './project-closure.mjs';
 import { appLogin } from './app-register.mjs';
-import { readReferenceDeployFrom } from './lib/reference-deploy.mjs';
+import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/reference-deploy.mjs';
 export {
   VERIFY, briefIssues, carriedOut, dependsField, gatesClosure, inDecomposition, isPhase5Finding,
   isProjectWork, itemSatisfied, openGatingWork, parseProposed, satisfiedTitles,
@@ -572,8 +572,9 @@ export function phaseOf(world) {
 
 /** The declared reference environment, deploy workflow and job, as a message names them
  *  (plan 0004 P6). A hand-built `deploy` object carries none of them, so each falls back to
- *  a description. */
-const deployEnvironment = (world) => envName(world.deploy?.environment);
+ *  a description. Before the deploy phase there is no `deploy`, so the environment's name
+ *  comes from `world.environment`, read from the record whenever it declares one (kanon#219). */
+const deployEnvironment = (world) => envName(world.deploy?.environment ?? world.environment);
 const deployWorkflow = (world) => (world.deploy?.workflow ? `\`${world.deploy.workflow}\`` : 'the reference deploy workflow');
 const deployJobName = (world) => (world.deploy?.job ? `\`${world.deploy.job}\`` : 'deploy');
 
@@ -2510,6 +2511,13 @@ export function isParkedOnHuman({
  */
 const PARKED_LANE_STATES = new Set(['awaiting-human', 'human-held']);
 
+/** The declared environment's name, read once per tick: every project names the same one. */
+let declaredEnvironmentRead;
+const declaredEnvironment = () => {
+  if (declaredEnvironmentRead === undefined) declaredEnvironmentRead = declaredEnvironmentFrom(REPO);
+  return declaredEnvironmentRead;
+};
+
 function readWorld(project) {
   const briefPath = `docs/projects/${project}.md`;
   const briefMerged = existsSync(briefPath);
@@ -2781,7 +2789,10 @@ function readWorld(project) {
     labelled = undefined;
   }
 
-  return { project, briefMerged, briefPath, proposed, filed, open, blocked, unmilestoned, all, deploy, qaIssue, trackingClosed, trackingReopened, projectHeld, searchHits: found.length, searchTitles: found.map((i) => i.title), knownLabels, labelled };
+  // The environment's name for the report, at any phase (kanon#219). Read softly: only the deploy
+  // phase, through `readDeploy`, may fail on a missing or malformed record (`K-PROJ-11`).
+  const environment = deploy?.environment ?? declaredEnvironment();
+  return { project, briefMerged, briefPath, proposed, filed, open, blocked, unmilestoned, all, deploy, environment, qaIssue, trackingClosed, trackingReopened, projectHeld, searchHits: found.length, searchTitles: found.map((i) => i.title), knownLabels, labelled };
 }
 
 // ---------------------------------------------------------------------------

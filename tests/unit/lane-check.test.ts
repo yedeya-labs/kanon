@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -389,18 +389,56 @@ describe.skipIf(!hasYq)('lane-check', () => {
     it('refuses the right name with the other extension', () =>
       red((t) => { const body = t.read(TRIAGE); t.rm(TRIAGE); t.write('.github/workflows/agent-triage.yaml', body); },
         'agent-triage.yaml,title=lane-check::calls the Kanon lane agent-triage, so it lives at .github/workflows/agent-triage.yml'));
-    it('exempts a caller whose lane\'s path holds the lane itself, as only Kanon\'s own repository does', () => {
+    /** A reusable workflow at the lane's path: the lane itself, as only Kanon's own tree holds it. */
+    const STUB_LANE = 'name: Review (Reviewer)\non:\n  workflow_call:\njobs:\n  review:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n';
+    /** The two files that make a checkout Kanon's own source tree. */
+    const kanonTree = (t: Tree) => {
+      mkdirSync(join(t.dir, 'actions/lane-check'), { recursive: true });
+      t.write('actions/lane-check/lane-check.sh', '#!/usr/bin/env bash\n');
+      t.write('.github/workflows/agent-lane.yml', 'name: Agent lane\non:\n  workflow_call:\njobs:\n  run:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n');
+    };
+    it('exempts a caller whose lane\'s path holds the lane itself, in Kanon\'s own tree', () => {
       const t = adopter();
       reviewer(t);
+      kanonTree(t);
       at(t, 'review.yml', 'agent-review.yml');
-      t.write('.github/workflows/agent-review.yml', 'name: Review (Reviewer)\non:\n  workflow_call:\njobs:\n  review:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n');
+      t.write('.github/workflows/agent-review.yml', STUB_LANE);
       const r = check(t);
       expect(r.status, r.out).toBe(0);
       expect(r.out).toContain('5 lane caller(s) pass');
     });
-    it('does not exempt a caller whose lane\'s path holds another caller', () =>
-      red((t) => { reviewer(t); at(t, 'review.yml', 'agent-review.yml'); at(t, 'agent-review.yml', 'agent-review.yml'); },
+    // kanon#217, part 1: the exemption was any reusable workflow at the lane's path.
+    it('does not exempt an adopter whose own reusable workflow has the lane\'s name', () =>
+      red((t) => { reviewer(t); at(t, 'review.yml', 'agent-review.yml'); t.write('.github/workflows/agent-review.yml', STUB_LANE); },
+        'review.yml,title=lane-check::calls the Kanon lane agent-review, so it lives at .github/workflows/agent-review.yml'));
+    it('needs both marks of Kanon\'s tree: lane-check\'s own script alone is not one', () =>
+      red((t) => {
+        reviewer(t);
+        kanonTree(t);
+        t.rm('.github/workflows/agent-lane.yml');
+        at(t, 'review.yml', 'agent-review.yml');
+        t.write('.github/workflows/agent-review.yml', STUB_LANE);
+      }, 'review.yml,title=lane-check::calls the Kanon lane agent-review, so it lives at'));
+    it('needs both marks of Kanon\'s tree: a reusable spine alone is not one', () =>
+      red((t) => {
+        reviewer(t);
+        kanonTree(t);
+        t.rm('actions/lane-check/lane-check.sh');
+        at(t, 'review.yml', 'agent-review.yml');
+        t.write('.github/workflows/agent-review.yml', STUB_LANE);
+      }, 'review.yml,title=lane-check::calls the Kanon lane agent-review, so it lives at'));
+    it('does not exempt a caller whose lane\'s path holds another caller, even in Kanon\'s tree', () =>
+      red((t) => { reviewer(t); kanonTree(t); at(t, 'review.yml', 'agent-review.yml'); at(t, 'agent-review.yml', 'agent-review.yml'); },
         'review.yml,title=lane-check::calls the Kanon lane agent-review, so it lives at'));
+    // kanon#217, part 2: a wrapper at the right path has its runs filed under its caller's name.
+    it.each([
+      ['as a key', (d: Record<string, unknown>) => { (d.on as Record<string, unknown>).workflow_call = null; }],
+      ['as the only event', (d: Record<string, unknown>) => { d.on = 'workflow_call'; }],
+      ['in a list', (d: Record<string, unknown>) => { d.on = ['workflow_dispatch', 'workflow_call']; }],
+    ])('refuses a caller that is itself a reusable workflow (%s)', (_how, wrap) => {
+      red((t) => { reviewer(t); at(t, 'agent-review.yml', 'agent-review.yml'); t.edit('.github/workflows/agent-review.yml', wrap); },
+        'agent-review.yml,title=lane-check::calls the Kanon lane agent-review but is itself a reusable workflow');
+    });
     it('refuses a review caller when the project has no ci.yml', () =>
       red((t) => { reviewer(t); at(t, 'agent-review.yml', 'agent-review.yml'); t.rm('.github/workflows/ci.yml'); },
         '.github/workflows/ci.yml,title=lane-check::is missing; the Kanon lane(s) agent-review read its runs by that file name (K-LAYOUT-18)'));
@@ -517,6 +555,23 @@ describe.skipIf(!hasYq)('lane-check', () => {
     it('refuses a workflow written as a path', () =>
       red((t) => t.write(REC, `# Adoption record\n\n${DECLARED.replace('`deploy-preview.yml`', '`.github/workflows/deploy-preview.yml`')}`),
         /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:6: `\.github\/workflows\/deploy-preview\.yml` isn't a workflow file name/));
+  });
+
+  describe("the adoption record's weekly digest audience (K-LAYOUT-10, kanon#218)", () => {
+    const REC = 'docs/qa/adoption.md';
+    const AUDIENCE = '- **Weekly digest audience:** a co-founder tracking runway\n';
+    it('passes a declared audience beside the reference deploy', () => {
+      const t = adopter();
+      t.write(REC, `# Adoption record\n\n## Choices\n\n${AUDIENCE}- **Reference environment:** \`preview\`\n- **Reference deploy workflow:** \`deploy-preview.yml\`\n- **Reference deploy job:** \`ship\`\n`);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
+    it('refuses one declared twice, by name', () =>
+      red((t) => t.write(REC, `# Adoption record\n\n## Choices\n\n${AUDIENCE}${AUDIENCE}`),
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:6 repeats `Weekly digest audience`, already declared on line 5 \(K-LAYOUT-10\)/));
+    it('refuses one outside `## Choices`, by name', () =>
+      red((t) => t.write(REC, `# Adoption record\n\n${AUDIENCE}\n## Choices\n`),
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:3 declares the weekly digest's audience outside `## Choices`/));
   });
 
   describe('the App register has a slug for every role a caller\'s lane runs as (K-LAYOUT-6)', () => {

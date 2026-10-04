@@ -116,6 +116,22 @@ jobs:
       - uses: $/actions/kanon-path
         id: kanon
 
+      # WHO THE DIGEST IS FOR (kanon#218, `K-LAYOUT-10`): the audience the adoption record on the
+      # default branch declares under `## Choices`, or Kanon's default when it declares none. A
+      # malformed record fails this step by name, before the agent: the digest must not be
+      # written for the wrong reader, and `lane-check` fails the same record on the pull request
+      # that broke it.
+      - name: Read the digest's audience from the adoption record
+        id: audience
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          audience="$(node "$KANON/scripts/digest-audience.mjs")"
+          echo "audience=$audience" >> "$GITHUB_OUTPUT"
+          echo "Written for: $audience" >> "$GITHUB_STEP_SUMMARY"
+
       # BEST-EFFORT, and the only best-effort step here. The numbers below are deterministic;
       # this writes the one or two sentences of plain-language framing that turn "180
       # commits" into something a reader outside the work can act on. If it fails, times out
@@ -135,9 +151,8 @@ jobs:
             **one or two sentences** summarising what the week's work was FOR, in
             plain language, to `narrative.txt` in the repo root.
 
-            The reader is a stakeholder who follows the project from outside the
-            day-to-day work. They are not a developer. They want to know what the
-            week bought them.
+            The reader is ${{ steps.audience.outputs.audience }}. They want to
+            know what the week bought them.
 
             RULES — these are what make it useful rather than noise:
             - Plain language. No commit scopes, no PR numbers, no file names, no
