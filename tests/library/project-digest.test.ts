@@ -18,9 +18,12 @@ const {
   holdReason,
   holdReasonOf,
   dispatchCommentsOf,
+  membersOf,
+  stopReason,
   HELD_MARKER,
 } = await import('../../scripts/project-digest.mjs');
 const { CONFLICT_SHORT } = await import('../../scripts/conflict-state.mjs');
+const { AGENT_LOGIN, classify: sweepClassify, LANES } = await import('../../scripts/dispatch-sweep.mjs');
 const reconciler = await import('../../scripts/lead-reconcile.mjs');
 const closure = await import('../../scripts/project-closure.mjs');
 const { carriedOut: reconcilerCarriedOut, openGatingWork, parseProposed, renderHoldComment } = await import('../../scripts/lead-reconcile.mjs');
@@ -56,8 +59,12 @@ const member = (over = {}) => ({
 });
 
 const NOW = new Date('2026-09-02T12:00:00Z');
-/** A comment the way the API returns it, oldest first. */
-const c = (body: string, createdAt = '2026-09-02T12:00:00Z') => ({ body, createdAt });
+/** The Implementer's login, as the API returns it — with the `[bot]` suffix. */
+const IMPL = `${AGENT_LOGIN}[bot]`;
+/** A comment the way the API returns it, oldest first — by default the Implementer's. */
+const c = (body: string, createdAt = '2026-09-02T12:00:00Z', login: string = IMPL) => ({ login, body, createdAt });
+/** A human's comment. */
+const h = (body: string, createdAt = '2026-09-02T12:00:00Z') => c(body, createdAt, 'maintainer');
 const BAIL = '## SCOPE-FIRST BAIL — credential change. Plan below; label kept; no PR opened.';
 
 describe('readBrief — the digest counts what the reconciler would file (cleanup round 5)', () => {
@@ -93,7 +100,7 @@ describe('readBrief — the digest counts what the reconciler would file (cleanu
 describe('ONE brief grammar, ONE closure rule — the digest and the reconciler share them', () => {
   // Identity, not equality: the same function object, so there is no second copy that
   // could drift, and the reconciler re-exports rather than re-defines.
-  it.each(['parseProposed', 'openGatingWork', 'carriedOut', 'itemSatisfied'] as const)(
+  it.each(['parseProposed', 'openGatingWork', 'carriedOut', 'itemSatisfied', 'declaresMembership'] as const)(
     '`%s` is the shared module\'s own function in the reconciler', (name) => {
       expect(typeof closure[name]).toBe('function');
       expect(reconciler[name]).toBe(closure[name]);
@@ -118,6 +125,32 @@ describe('ONE brief grammar, ONE closure rule — the digest and the reconciler 
     expect(src).not.toMatch(/\bfrom\s*['"]/);
     expect(src).not.toMatch(/\bimport\s*\(/);
     expect(src).not.toMatch(/\brequire\s*\(/);
+  });
+});
+
+describe('membersOf — membership by the reconciler\'s position rule (kanon#174)', () => {
+  const marker = '<!-- qa:project 12 -->';
+  const hit = (number: number, body: string) => ({ number, body });
+
+  it('counts an issue whose LAST non-empty line is the marker', () => {
+    expect(membersOf([hit(1, `Part of #12.\n\n${marker}\n\n`)], 12).map((i: { number: number }) => i.number)).toEqual([1]);
+  });
+
+  it('does not count a body that QUOTES the marker mid-body, which the reconciler does not either', () => {
+    const quote = hit(2, `The filer appends \`${marker}\` as the last line.\n${marker}\nMore prose after it.`);
+    expect(membersOf([quote], 12)).toEqual([]);
+    expect(reconciler.declaresMembership(quote.body, 12)).toBe(false);
+  });
+
+  it('does not count another project\'s marker, or a spacing variant the reconciler rejects', () => {
+    expect(membersOf([hit(3, '<!-- qa:project 120 -->'), hit(4, '<!--qa:project 12-->')], 12)).toEqual([]);
+  });
+
+  it('the I/O path selects members with it, and keeps no marker regex of its own', () => {
+    const src = readFileSync(join(ROOT, 'scripts/project-digest.mjs'), 'utf8');
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(code).toMatch(/const members = membersOf\(hits, b\.number\);/);
+    expect(code).not.toMatch(/<!--[^`'"]*qa:project/);
   });
 });
 
@@ -149,7 +182,7 @@ describe('classifyDispatch — the classification the digest must not get wrong'
   });
 
   it('reads an answered bail as awaiting a RE-DISPATCH, not another decision', () => {
-    const comments = [c(BAIL, '2026-08-30T20:10:00Z'), c('AUTHORISED — proceed.')];
+    const comments = [c(BAIL, '2026-08-30T20:10:00Z'), h('AUTHORISED — proceed.')];
     expect(d({ comments, hasPr: false, ageDays: 3 }).disposition).toBe('authorised');
   });
 
@@ -165,8 +198,70 @@ describe('classifyDispatch — the classification the digest must not get wrong'
     expect(d({ comments: [c(BAIL)], hasPr: true, ageDays: 99 }).disposition).toBe('building');
   });
 
-  it('counts a bail comment from any author, so a human restating one cannot flip it', () => {
-    expect(d({ comments: [c('quoting the scope-first bail above')], ageDays: 9 }).disposition).toBe('bail');
+  // kanon#179 — authorship decides, not the keyword.
+  it('an Implementer stop WITHOUT `SCOPE-FIRST BAIL` awaits a human, naming its heading — not a stall', () => {
+    const stop = '## Stopped: the data precondition is still unmet — no code change made\n\nDetails…';
+    const v = d({ comments: [c(stop, '2026-08-30T00:00:00Z')], ageDays: 3 });
+    expect(v.disposition).toBe('bail');
+    expect(v.reason).toBe('stopped: “Stopped: the data precondition is still unmet — no code change made”');
+    expect(v.waitedDays).toBe(3);
+  });
+
+  it('a fresh Implementer stop awaits a human too — the sweep\'s 48h is patience, not a run', () => {
+    expect(d({ comments: [c('Stopping without a PR — this is the dispatch the brief predicted')], ageDays: 0 }).disposition).toBe('bail');
+    // A human who spoke before the FIRST run was not answering it.
+    expect(d({ comments: [h('context for whoever builds this'), c('Stopped: needs data')], ageDays: 0 }).disposition).toBe('bail');
+  });
+
+  it('a member with NO Implementer comment is still a stall — a human quoting the bail phrase is not a bail', () => {
+    expect(d({ comments: [], ageDays: 9 }).disposition).toBe('stall');
+    expect(d({ comments: [h('quoting the scope-first bail above')], ageDays: 9 }).disposition).toBe('stall');
+    // The crash job's marker is the workflow's, not the Implementer's: still never ran.
+    expect(d({ comments: [c('<!-- qa:implement-crash -->', undefined, 'github-actions[bot]')], ageDays: 9 }).disposition).toBe('stall');
+  });
+
+  it('labels a stop `scope-first bail` only when it says so', () => {
+    expect(d({ comments: [c(BAIL)], ageDays: 1 }).reason).toBe('scope-first bail');
+    expect(stopReason('<!-- marker -->\n**Blocked** on <prod> & data')).toBe('stopped: “Blocked on &lt;prod&gt; &amp; data”');
+    expect(stopReason('')).toBe('stopped');
+  });
+
+  it('a human parked with `qa:needs-info` reads as awaiting an answer; a reply to the sweep as held', () => {
+    expect(d({ comments: [c(BAIL), h('built by hand')], labels: ['agent:implement', 'qa:needs-info'], ageDays: 2 }).disposition).toBe('needs-info');
+    const sweep = { login: 'example-lead[bot]', body: '<!-- qa:dispatch-sweep -->\nRe-dispatching.', createdAt: '2026-09-01T00:00:00Z' };
+    expect(d({ comments: [c(BAIL, '2026-08-30T00:00:00Z'), sweep, h('stop, this needs design', '2026-09-01T06:00:00Z')], ageDays: 2 }).disposition).toBe('human-held');
+  });
+
+  it('out of re-dispatches: an answered stop stays authorised, silence stays a stall', () => {
+    const sweep = (at: string) => ({ login: 'example-lead[bot]', body: '<!-- qa:dispatch-sweep -->', createdAt: at });
+    const spent = [sweep('2026-08-27T00:00:00Z'), sweep('2026-08-29T00:00:00Z')];
+    expect(d({ comments: [c(BAIL, '2026-08-25T00:00:00Z'), h('go', '2026-08-26T00:00:00Z'), ...spent], ageDays: 4 }).disposition).toBe('authorised');
+    expect(d({ comments: spent, ageDays: 4 }).disposition).toBe('stall');
+  });
+
+  it('the I/O path hands classifyDispatch the member\'s labels, so a park is seen', () => {
+    const src = readFileSync(join(ROOT, 'scripts/project-digest.mjs'), 'utf8');
+    expect(src).toMatch(/\.\.\.classifyDispatch\(\{ comments, labels, hasPr,/);
+  });
+
+  it('the digest and the dispatch sweep cannot disagree — one state per issue (parity)', () => {
+    // Every digest disposition is a function of the sweep's state for the same comments.
+    const expected: Record<string, string[]> = {
+      'never-ran': ['stall', 'dispatched'], 'answered': ['authorised'], 'awaiting-human': ['bail'],
+      'in-flight': ['bail', 'authorised'], 'human-held': ['human-held'], 'parked': ['needs-info'],
+      'exhausted': ['authorised', 'stall', 'dispatched'],
+    };
+    const shapes = [
+      [], [c(BAIL)], [c(BAIL, '2026-08-20T00:00:00Z')], [c(BAIL), h('go')], [h('hello')],
+      [c('Stopped.'), h('ok'), c('Stopped again.')],
+    ];
+    for (const comments of shapes) {
+      for (const labels of [['agent:implement'], ['agent:implement', 'qa:needs-info']]) {
+        const sweep = sweepClassify({ labels: labels.map((name) => ({ name })) }, comments, false, { now: NOW.getTime(), lane: LANES[0] });
+        expect(expected[sweep.state], `${sweep.state} for ${JSON.stringify(comments)}`)
+          .toContain(d({ comments, labels, ageDays: 2 }).disposition);
+      }
+    }
   });
 
   it("BAIL_RE matches agent-implement.yml's marker as the prompt spells it", () => {
@@ -180,20 +275,25 @@ describe('classifyDispatch — the classification the digest must not get wrong'
     // The failure this pins: keying off the FIRST bail made the second bail look
     // answered by the first one's reply, and the issue went silent while still
     // unambiguously awaiting a decision.
-    const comments = [c(BAIL, '2026-08-25T10:00:00Z'), c('AUTHORISED'), c(BAIL, '2026-08-30T20:10:00Z')];
+    const comments = [c(BAIL, '2026-08-25T10:00:00Z'), h('AUTHORISED'), c(BAIL, '2026-08-30T20:10:00Z')];
     expect(d({ comments, ageDays: 3 }).disposition).toBe('bail');
   });
 
   it('clears a bail only with a comment that is not itself a bail', () => {
     const twoBails = [c(BAIL, '2026-08-25T10:00:00Z'), c(BAIL, '2026-08-30T20:10:00Z')];
     expect(d({ comments: twoBails, ageDays: 3 }).disposition).toBe('bail');
-    expect(d({ comments: [...twoBails, c('go ahead')], ageDays: 3 }).disposition).toBe('authorised');
+    expect(d({ comments: [...twoBails, h('go ahead')], ageDays: 3 }).disposition).toBe('authorised');
   });
 
   it("reproduces RA-1305's real comment shape — implementer, human, implementer", () => {
     // The Implementer (bail) -> a person (authorisation) -> the Implementer (progress). Answered.
-    const comments = [c(BAIL, '2026-08-30T20:10:00Z'), c('AUTHORISED — proceed.'), c('Building now.')];
+    const comments = [c(BAIL, '2026-08-30T20:10:00Z'), h('AUTHORISED — proceed.'), c('Building now.')];
     expect(d({ comments, ageDays: 0 }).disposition).toBe('authorised');
+  });
+
+  it('a re-run that stops again after an answer awaits the reader once it is stale (kanon#179)', () => {
+    const comments = [c(BAIL, '2026-08-25T10:00:00Z'), h('go'), c('Stopped: still blocked', '2026-08-29T00:00:00Z')];
+    expect(d({ comments, ageDays: 4 })).toMatchObject({ disposition: 'bail', reason: 'stopped: “Stopped: still blocked”' });
   });
 
   // ---- RA-1443 review, finding 4 --------------------------------------------
@@ -206,7 +306,7 @@ describe('classifyDispatch — the classification the digest must not get wrong'
   });
 
   it('falls back to the silence age when the bail comment carries no timestamp', () => {
-    expect(d({ comments: [{ body: BAIL }], ageDays: 7 }).waitedDays).toBe(7);
+    expect(d({ comments: [{ login: IMPL, body: BAIL }], ageDays: 7 }).waitedDays).toBe(7);
   });
 
   it('never reports a negative wait', () => {
@@ -747,11 +847,12 @@ describe('classifyDispatch is fed the NEWEST comments, not the oldest hundred (R
    * for a member that is bailed and waiting on a human, which is the one thing the
    * digest exists to make visible.
    */
-  const bail = { body: 'SCOPE-FIRST BAIL — awaiting your decision', created_at: '2026-09-01T00:00:00Z' };
-  const chat = (n: number) => ({ body: `comment ${n}`, created_at: '2026-09-02T00:00:00Z' });
+  // The REST payload: `user.login` WITH the `[bot]` suffix, which `norm` strips.
+  const bail = { user: { login: IMPL }, body: 'SCOPE-FIRST BAIL — awaiting your decision', created_at: '2026-09-01T00:00:00Z' };
+  const chat = (n: number) => ({ user: { login: 'maintainer' }, body: `comment ${n}`, created_at: '2026-09-02T00:00:00Z' });
 
   /** Pages as the API serves them: ascending, `page=1` oldest. */
-  const apiOver = (pages: { body: string; created_at: string }[][]) => {
+  const apiOver = (pages: { user: { login: string }; body: string; created_at: string }[][]) => {
     const seen: number[] = [];
     const api = async (path: string) => {
       const page = Number(new URL(path, 'https://api.github.com').searchParams.get('page'));
@@ -781,6 +882,14 @@ describe('classifyDispatch is fed the NEWEST comments, not the oldest hundred (R
     const comments = await dispatchCommentsOf(api, 'o/r', 1305, 250);
     expect(seen).toEqual([3, 2]);
     expect(classifyDispatch({ comments, now: new Date('2026-09-04T00:00:00Z') }).disposition).toBe('authorised');
+  });
+
+  it('stops at the Implementer\'s last word even when it is not a bail (kanon#179)', async () => {
+    const stop = { ...bail, body: 'Stopped: needs a runbook only a human can run' };
+    const { api, seen } = apiOver([[chat(1)], [chat(2)], [stop]]);
+    const comments = await dispatchCommentsOf(api, 'o/r', 1305, 250);
+    expect(seen).toEqual([3]);
+    expect(classifyDispatch({ comments, now: new Date('2026-09-04T00:00:00Z') }).disposition).toBe('bail');
   });
 
   it('walks the whole issue when no page carries a bail, and reports the un-bailed state', async () => {
