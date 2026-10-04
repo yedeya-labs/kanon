@@ -151,8 +151,8 @@ jobs:
             **one or two sentences** summarising what the week's work was FOR, in
             plain language, to `narrative.txt` in the repo root.
 
-            The reader is ${{ steps.audience.outputs.audience }}. They are not a
-            developer. They want to know what the week bought them.
+            The reader is ${{ steps.audience.outputs.audience }}. They want to
+            know what the week bought them.
 
             RULES — these are what make it useful rather than noise:
             - Plain language. No commit scopes, no PR numbers, no file names, no

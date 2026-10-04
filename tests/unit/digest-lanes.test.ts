@@ -204,6 +204,10 @@ describe('the weekly prompt names no adopter’s audience or product (plan 0004 
     expect(steps[read]!.run).toContain('set -euo pipefail');
     expect(steps[read]!.env).toMatchObject({ GH_TOKEN: '${{ github.token }}', GITHUB_REPOSITORY: '${{ github.repository }}' });
     expect(String(narrative(WEEKLY).with?.prompt)).toContain('The reader is ${{ steps.audience.outputs.audience }}.');
+    // The declared audience alone says who reads it (the Owner, 2026-10-04): no sentence
+    // that presumes a non-technical reader. The plain-language rules stay.
+    expect(String(narrative(WEEKLY).with?.prompt)).not.toMatch(/not a\s+developer/i);
+    expect(String(narrative(WEEKLY).with?.prompt)).toMatch(/Plain language\./);
   });
 });
 
