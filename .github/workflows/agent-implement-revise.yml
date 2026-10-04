@@ -772,14 +772,26 @@ jobs:
             exit 1
           }
           AFTER_SHA="$(printf '%s' "$STATE" | jq -r '.headRefOid // ""')"
+          NOW_MARKED="$(printf '%s' "$STATE" | jq --arg login "$IMPL_LOGIN" --arg m "$MARKER" \
+            '[.comments[] | select(((.author.login // "") | sub("^app/";"") | sub("\\[bot\\]$";"")) == $login) | select((.body // "") | contains($m))] | length')"
           # An unknown starting head counts as moved: the cap is biased toward
           # over-counting (RA-969), and nothing here may lower it on a guess.
           if [ -n "${BEFORE_SHA:-}" ] && [ "$AFTER_SHA" = "$BEFORE_SHA" ]; then
+            # A GREEN RUN THAT LEFT NOTHING IS RED (kanon#181). The agent pushed nothing and
+            # left no marker, which the prompt requires even when it changes nothing — so
+            # the run is indistinguishable from one that never answered the review, and the
+            # PR parks on it. A run that disagreed, or bailed, leaves its marker and is not
+            # this. Red only: nothing here retries it, because a round that pushes nothing
+            # is uncounted and a retry would be unbounded. No comment either: this job's
+            # only write token is the implementer's, whose comment would read as the agent
+            # answering, and the default token is read-only on this lane's caller.
+            if [ "${OUTCOME:-}" = "success" ] && [ "$NOW_MARKED" -le "${BEFORE_MARKED:-0}" ]; then
+              echo "::error title=revise run left nothing::PR #$PR: the revise run ended \`success\` but pushed nothing (head still ${AFTER_SHA:0:7}) and left no \`$MARKER\` comment, so the review is unanswered (kanon#181). Re-dispatch it, or answer the review by hand: $RUN_URL"
+              exit 1
+            fi
             echo "head unchanged at ${AFTER_SHA:0:7} — this run pushed nothing, fires no review, and spends no round"
             exit 0
           fi
-          NOW_MARKED="$(printf '%s' "$STATE" | jq --arg login "$IMPL_LOGIN" --arg m "$MARKER" \
-            '[.comments[] | select(((.author.login // "") | sub("^app/";"") | sub("\\[bot\\]$";"")) == $login) | select((.body // "") | contains($m))] | length')"
           if [ "$NOW_MARKED" -gt "${BEFORE_MARKED:-0}" ]; then
             echo "the implementer left its own marker ($BEFORE_MARKED -> $NOW_MARKED) — nothing to record"
             exit 0

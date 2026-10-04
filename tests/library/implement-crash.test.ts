@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { laneBlockOf, readBlock, readSpine } from '../unit/helpers/spine.js';
 import {
-  CRASH_AUTHOR, CRASH_MARKER, MAX_CRASH_RETRIES, STOP_LABEL,
-  agentSpokeSince, decide, plan, priorCrashes, projectOf, renderComment,
+  CRASH_AUTHOR, CRASH_MARKER, EMPTY_KIND, MAX_CRASH_RETRIES, STOP_LABEL,
+  agentSpokeSince, branchPattern, decide, emptyRun, plan, priorCrashes, projectOf, renderComment,
 } from '../../scripts/implement-crash.mjs';
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { SPLIT_LABEL, splitMarker } from '../../scripts/split-lineage.mjs';
@@ -222,7 +222,7 @@ describe('the wiring', () => {
   const job = wf.jobs['crash-recovery'];
 
   it('runs after a FAILED implement job, with the classifier verdict', () => {
-    expect(job?.needs).toBe('implement');
+    expect([job?.needs].flat()).toEqual(expect.arrayContaining(['implement']));
     expect(job?.if).toMatch(/failure\(\)/);
     const step = job?.steps?.find((s) => (s.run ?? '').includes('implement-crash.mjs'));
     expect(step, 'the script is actually run').toBeTruthy();
@@ -278,5 +278,205 @@ describe('the wiring', () => {
     const inner = readBlock('agent-classify');
     const innerHop = /steps\.([\w-]+)\.outputs\.kind/.exec(String(inner.outputs?.kind?.value))?.[1];
     expect(inner.runs.steps.find((s) => s.id === innerHop)?.run).toContain('classify-agent-result.mjs');
+  });
+});
+
+/**
+ * kanon#181 — an implementer run that ends `success` with no branch, PR or comment.
+ *
+ * The Owner's ruling (2026-10-04): red the run, comment as `github-actions`, and reuse the
+ * crash retry above rather than a new sweep path. So the detection is asserted here, and
+ * then the SAME recovery is asserted to take an empty run exactly as it takes a crash.
+ */
+describe('emptyRun — a green run that left nothing (kanon#181)', () => {
+  const since = '2026-09-29T10:00:00Z';
+  const during = '2026-09-29T11:30:00Z';
+  const nothing = { issue: 181, branches: [] as { name: string; committedAt?: string }[], hasPr: false, spoke: false, since };
+
+  it('no PR, no branch, no comment is empty', () => {
+    expect(emptyRun(nothing).empty).toBe(true);
+  });
+
+  it('an open PR is output', () => {
+    expect(emptyRun({ ...nothing, hasPr: true }).empty).toBe(false);
+  });
+
+  it('a GENUINE BAIL is not empty — the agent said why it stopped', () => {
+    // Read through the same `agentSpokeSince` the script uses, from a real-shaped comment.
+    const bail = { login: `${AGENT_LOGIN}[bot]`, createdAt: during, body: 'SCOPE-FIRST BAIL: this needs a data migration. Plan: …' };
+    const spoke = agentSpokeSince([bail], since);
+    expect(spoke).toBe(true);
+    expect(emptyRun({ ...nothing, spoke })).toMatchObject({ empty: false, why: expect.stringMatching(/commented/) });
+    // …while a comment from before the run, or from another bot, is not this run's.
+    expect(emptyRun({ ...nothing, spoke: agentSpokeSince([{ ...bail, createdAt: '2026-09-28T00:00:00Z' }], since) }).empty).toBe(true);
+    expect(emptyRun({ ...nothing, spoke: agentSpokeSince([{ ...bail, login: CRASH_AUTHOR }], since) }).empty).toBe(true);
+  });
+
+  it('a branch of the issue\'s shape pushed during the run is output', () => {
+    expect(emptyRun({ ...nothing, branches: [{ name: 'feat/181-empty-runs', committedAt: during }] })).toMatchObject({ empty: false, why: expect.stringContaining('feat/181-empty-runs') });
+  });
+
+  it('a branch from an EARLIER run is not this run\'s output', () => {
+    expect(emptyRun({ ...nothing, branches: [{ name: 'feat/181-empty-runs', committedAt: '2026-09-28T00:00:00Z' }] }).empty).toBe(true);
+  });
+
+  it('another issue\'s branch is not this one\'s — the number is delimited', () => {
+    for (const name of ['feat/1810-other', 'feat/18-other', 'worktree-issue-181-x', 'Feat/181-x']) {
+      expect(emptyRun({ ...nothing, branches: [{ name, committedAt: during }] }).empty, name).toBe(true);
+    }
+    expect(branchPattern(181).test('fix/181-x')).toBe(true);
+  });
+
+  it('every unknown reads as output, never as empty', () => {
+    expect(emptyRun({ ...nothing, branches: [{ name: 'fix/181-x', committedAt: '' }] }).empty, 'an undated branch').toBe(false);
+    expect(emptyRun({ ...nothing, branches: [{ name: 'fix/181-x' }] }).empty, 'a branch with no date at all').toBe(false);
+    expect(emptyRun({ ...nothing, since: '' }).empty, 'no start time').toBe(false);
+  });
+});
+
+describe('an empty run takes the crash path — retry, marker and cap (kanon#181)', () => {
+  const empty = { ...crashed, kind: EMPTY_KIND };
+
+  it('a project member is released for re-dispatch, as a crash is', () => {
+    expect(decide(empty).act).toBe('retry');
+    expect(plan(decide(empty), '181', 'b').map((c) => [c.args.slice(0, 2).join(' '), c.token])).toEqual([
+      ['issue comment', 'workflow'],
+      ['issue edit', 'workflow'],
+    ]);
+  });
+
+  it('the cap is the crash cap, counted from the same markers', () => {
+    expect(decide({ ...empty, crashes: MAX_CRASH_RETRIES })).toMatchObject({ act: 'stop', label: STOP_LABEL });
+  });
+
+  it('a non-member is left to the sweep, with no comment to mask its `answered` reading', () => {
+    expect(decide({ ...empty, project: null }).act).toBe('none');
+  });
+
+  it('the comment says the run completed and left nothing — not that it crashed — and carries the marker', () => {
+    const body = renderComment(decide(empty), { runUrl: 'https://x/runs/1', kind: EMPTY_KIND });
+    expect(body.startsWith(CRASH_MARKER)).toBe(true);
+    expect(body).toContain('completed but left no PR, no pushed branch and no comment');
+    expect(body).not.toContain('crashed');
+    expect(body).toContain('`empty`');
+    const stop = renderComment({ act: 'stop', why: 'w', label: STOP_LABEL }, { runUrl: 'u', kind: EMPTY_KIND });
+    expect(stop).toContain('left no PR, no pushed branch and no comment, and retrying will not help');
+    // A crash still reads as a crash.
+    expect(renderComment({ act: 'retry', why: 'w' }, { runUrl: 'u', kind: 'failed' })).toContain('crashed and produced nothing');
+  });
+});
+
+describe('MODE=detect, run (kanon#181)', () => {
+  const SINCE = '2026-10-02T00:00:00Z';
+  const run = ({ comments = [] as unknown[], branches = [] as string[], dates = {} as Record<string, string>, prs = [] as unknown[], state = 'OPEN', mode = 'detect', kind = '' } = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'implement-empty-'));
+    const log = join(dir, 'calls');
+    const out = join(dir, 'output');
+    writeFileSync(log, '');
+    writeFileSync(out, '');
+    const view = JSON.stringify({ state, labels: [{ name: IMPL }], comments, body: 'work\n\n<!-- qa:project 27 -->' });
+    const dateCases = Object.entries(dates).map(([b, d]) => `  *"commits/${encodeURIComponent(b)} "*) echo '${d}' ;;`);
+    writeStub(join(dir, 'gh'), [
+      '#!/usr/bin/env bash',
+      `printf '%s|%s\\n' "$GH_TOKEN" "$*" >> '${log}'`,
+      'case "$* " in',
+      `  *"actions/runs/"*) echo '{"run_started_at":"${SINCE}"}' ;;`,
+      `  *"/branches"*) printf '%s\\n' ${branches.map((b) => `'${b}'`).join(' ')} ;;`,
+      ...dateCases,
+      `  *"commits/"*) exit 1 ;;`,
+      `  "issue view "*) printf '%s' '${view}' ;;`,
+      `  "pr list "*) printf '%s' '${JSON.stringify(prs)}' ;;`,
+      'esac',
+      '',
+    ].join('\n'));
+    const r = spawnSync('node', [join(ROOT, 'scripts/implement-crash.mjs')], {
+      encoding: 'utf8', timeout: 30_000,
+      env: {
+        ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: 'example-org/example-repo',
+        ISSUE: '181', RUN_ID: '7', MODE: mode, KIND: kind, APPLY: '1', GH_TOKEN: 'workflow-token', LABEL_TOKEN: 'app-token', GITHUB_OUTPUT: out,
+      },
+    });
+    const calls = readFileSync(log, 'utf8').trim().split('\n').filter(Boolean);
+    return { status: r.status, out: r.stdout + r.stderr, output: readFileSync(out, 'utf8'), calls };
+  };
+  const writes = (calls: string[]) => calls.filter((c) => /\|issue (edit|comment)/.test(c));
+
+  it('fails an empty run BY NAME, says so in its output, and changes nothing itself', () => {
+    const r = run({ branches: ['main', 'feat/1810-other'] });
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('::error title=implement run left nothing::#181');
+    expect(r.output).toBe('empty=true\n');
+    expect(writes(r.calls)).toEqual([]);
+  });
+
+  it('passes a run that left a genuine bail comment', () => {
+    const r = run({ comments: [{ author: { login: `${AGENT_LOGIN}[bot]` }, createdAt: '2026-10-02T01:00:00Z', body: 'Stopping: the acceptance criteria are ambiguous about X.' }] });
+    expect(r.status, r.out).toBe(0);
+    expect(r.output).toBe('');
+  });
+
+  it('passes a run that pushed its branch, and dates only the candidates', () => {
+    const r = run({ branches: ['main', 'feat/181-x'], dates: { 'feat/181-x': '2026-10-02T02:00:00Z' } });
+    expect(r.status, r.out).toBe(0);
+    expect(r.output).toBe('');
+    expect(r.calls.filter((c) => c.includes('commits/')).map((c) => c.split('|')[1]!.split(' ')[1])).toEqual(['repos/example-org/example-repo/commits/feat%2F181-x']);
+  });
+
+  it('fails a run whose only branch predates it', () => {
+    const r = run({ branches: ['feat/181-x'], dates: { 'feat/181-x': '2026-10-01T00:00:00Z' } });
+    expect(r.status, r.out).toBe(1);
+  });
+
+  it('passes a run that opened a PR', () => {
+    const r = run({ prs: [{ number: 9, headRefName: 'elsewhere', closingIssuesReferences: [{ number: 181 }] }] });
+    expect(r.status, r.out).toBe(0);
+  });
+
+  it('leaves a closed issue alone', () => {
+    expect(run({ state: 'CLOSED' }).status).toBe(0);
+  });
+
+  it('the recovery then retries it on the default token, as `github-actions` would comment', () => {
+    const r = run({ mode: '', kind: EMPTY_KIND });
+    // Without MODE the same stubbed issue is a crash-recovery run; with KIND=empty its
+    // comment and label removal ride the workflow token and the App token is never used.
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toContain('released for re-dispatch');
+    // The body spans lines of the call log; the comment is the only write that carries one.
+    expect(r.calls.join('\n')).toContain('completed but left no PR');
+    const w = writes(r.calls);
+    expect(w.map((c) => `${c.split('|')[0]} ${c.split('|')[1]!.split(' --')[0]}`)).toEqual([
+      'workflow-token issue comment 181',
+      'workflow-token issue edit 181',
+    ]);
+  });
+});
+
+describe('the empty-run wiring (kanon#181)', () => {
+  type Step = { id?: string; run?: string; uses?: string; env?: Record<string, string> };
+  type Job = { needs?: string | string[]; if?: string; outputs?: Record<string, string>; permissions?: Record<string, string>; steps?: Step[] };
+  const wf = parse(readFileSync(join(ROOT, '.github/workflows/agent-implement.yml'), 'utf8')) as { jobs: Record<string, Job> };
+  const check = wf.jobs['empty-check'];
+  const recovery = wf.jobs['crash-recovery'];
+
+  it('checks only a GREEN implement run, with Kanon\'s script in detect mode, on a read-only default token', () => {
+    expect(check?.needs).toBe('implement');
+    expect(check?.if).toBe("needs.implement.result == 'success'");
+    const step = check?.steps?.find((s) => (s.run ?? '').includes('implement-crash.mjs'));
+    expect(step?.run?.trim()).toBe('node "$KANON/scripts/implement-crash.mjs"');
+    expect(step?.env?.MODE).toBe('detect');
+    expect(step?.env?.GH_TOKEN).toBe('${{ github.token }}');
+    expect(check?.outputs?.empty).toBe(`\${{ steps.${step?.id}.outputs.empty }}`);
+    expect(Object.values(check?.permissions ?? {}).every((p) => p === 'read'), 'it decides; it changes nothing').toBe(true);
+    const steps = check?.steps ?? [];
+    expect(steps.slice(0, steps.indexOf(step!)).some((s) => s.uses === '$/actions/kanon-path')).toBe(true);
+  });
+
+  it('the recovery runs on an empty run\'s OUTPUT, not on the check job merely failing', () => {
+    expect([recovery?.needs].flat()).toEqual(['implement', 'empty-check']);
+    expect(recovery?.if?.replace(/\s+/g, ' ')).toBe("failure() && (needs.implement.result == 'failure' || needs.empty-check.outputs.empty == 'true')");
+    const step = recovery?.steps?.find((s) => (s.run ?? '').includes('implement-crash.mjs'));
+    expect(step?.env?.KIND).toBe("${{ needs.empty-check.outputs.empty == 'true' && 'empty' || needs.implement.outputs.kind }}");
+    expect(step?.env?.KIND).toContain(`'${EMPTY_KIND}'`);
   });
 });

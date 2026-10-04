@@ -86,7 +86,7 @@ for (const lane of LANES) {
   const idx = steps.findIndex((s) => s.name?.startsWith('Record the round'));
   const record = steps[idx]!;
   const run = ({ head = AFTER, comments = [] as { author: { login: string }; body: string }[],
-    marked = '0', before = BEFORE, readable = true } = {}) => {
+    marked = '0', before = BEFORE, readable = true, outcome = 'failure' } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'round-record-'));
     writeStub(join(dir, 'gh'), GH_STUB);
     const log = join(dir, 'comments.log');
@@ -98,7 +98,7 @@ for (const lane of LANES) {
         GH_TOKEN: 'x', REPO: 'example-org/example-repo', PR: '1822',
         ...Object.fromEntries(Object.entries(env).filter(([, v]) => !String(v).includes('${{'))),
         [lane.loginVar]: lane.login,
-        BEFORE_SHA: before, BEFORE_MARKED: marked, OUTCOME: 'failure',
+        BEFORE_SHA: before, BEFORE_MARKED: marked, OUTCOME: outcome,
         RUN_URL: 'https://github.com/example-org/example-repo/actions/runs/1',
         STUB_STATE: readable ? JSON.stringify({ headRefOid: head, comments }) : '',
         COMMENT_LOG: log,
@@ -181,6 +181,25 @@ for (const lane of LANES) {
     it('treats an unknown starting head as moved — the cap over-counts, never under', () => {
       const r = run({ before: '', head: AFTER });
       expect(r.posted).toHaveLength(1);
+    });
+
+    // kanon#181, the IMPLEMENTER's revise lane only: a GREEN run that pushed nothing and
+    // left no marker answered nothing, and is red by name. Never a comment, never a retry.
+    it.runIf(lane.name === 'implementer')('reds a GREEN run that pushed nothing and left no marker (kanon#181)', () => {
+      const r = run({ head: BEFORE, outcome: 'success' });
+      expect(r.status, r.output).toBe(1);
+      expect(r.output).toContain('::error title=revise run left nothing::PR #1822');
+      expect(r.posted).toEqual([]);
+    });
+
+    it.runIf(lane.name === 'implementer')('passes a GREEN run that pushed nothing but answered with its marker — a disagreement or a bail (kanon#181)', () => {
+      const r = run({ head: BEFORE, outcome: 'success', marked: '0', comments: [
+        { author: { login: `app/${lane.login}` }, body: `I disagree with finding 2: …\n${lane.marker}` },
+      ] });
+      expect(r.status, r.output).toBe(0);
+      expect(r.posted).toEqual([]);
+      // …and a crashed run that pushed nothing is still not this (the crash is already red).
+      expect(run({ head: BEFORE, outcome: 'failure' }).status).toBe(0);
     });
 
     it('fails LOUD when it cannot read the PR, rather than skipping the record', () => {

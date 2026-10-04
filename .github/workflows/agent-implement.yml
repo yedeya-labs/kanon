@@ -246,6 +246,47 @@ jobs:
       app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
+  # A RUN THAT ENDS GREEN WITH NOTHING TO SHOW IS RED (kanon#181).
+  #
+  # Four of seven consecutive implementer runs in the reference adopter ended `success`
+  # after 128-181 turns with no branch, no PR and no comment, well under every cap. The
+  # spine called them green, so the crash recovery below never ran, the issue kept its
+  # label, and nothing anywhere said the run had produced nothing.
+  #
+  # So after a GREEN implement job this reads what the run left: an open PR that closes
+  # the issue, a `<type>/<n>-` branch whose head was committed during the run, or an
+  # implementer comment since the run started. A run with none of them fails here BY NAME
+  # (`implement run left nothing`) and sets `empty`, and the crash recovery below takes it
+  # from there with `KIND=empty` — the same retry, marker and cap as a crash, posted as
+  # `github-actions`. A run that commented is never empty: a scope-first bail or a question
+  # is the agent explaining why it stopped, and the issue is parked on purpose.
+  #
+  # The default token, read-only: this job changes nothing, it only decides.
+  empty-check:
+    needs: implement
+    if: needs.implement.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      empty: ${{ steps.check.outputs.empty }}
+    permissions:
+      contents: read # checkout, for the App register the script reads the implementer's login from; and the branch list
+      issues: read # did the implementer comment during the run?
+      pull-requests: read # does an open PR already close this issue?
+      actions: read # this run's start time
+    steps:
+      - uses: actions/checkout@v7
+      - uses: $/actions/kanon-path
+      - name: Fail a run that left no PR, branch or comment
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
+          RUN_ID: ${{ github.run_id }}
+          MODE: detect
+        run: node "$KANON/scripts/implement-crash.mjs"
+
   # A CRASHED RUN MUST NOT HOLD A WIP SLOT FOR 48 HOURS (RA-2118).
   #
   # Three project-RA-27 runs died inside `claude-code-action` on 2026-09-19 with no comment
@@ -270,9 +311,16 @@ jobs:
   # admits a registered App. It used to be a `gh workflow run` on the default token, which
   # that gate refuses as `github-actions[bot]` (plan 0001 decision 21, the Owner's option
   # (a)). The comment and every other edit stay on the default token.
+  #
+  # A GREEN RUN THAT LEFT NOTHING IS RECOVERED THE SAME WAY (kanon#181): `empty-check`
+  # reds the run and sets `empty`, and this job then runs with `KIND=empty`. It keys on
+  # that OUTPUT, not on the check job's red alone: a check that failed to read the API
+  # says nothing about the run, and treating it as empty would retry work that exists.
   crash-recovery:
-    needs: implement
-    if: failure() && needs.implement.result == 'failure'
+    needs: [implement, empty-check]
+    if: >-
+      failure() && (needs.implement.result == 'failure'
+      || needs.empty-check.outputs.empty == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -305,6 +353,6 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
           RUN_ID: ${{ github.run_id }}
-          KIND: ${{ needs.implement.outputs.kind }}
+          KIND: ${{ needs.empty-check.outputs.empty == 'true' && 'empty' || needs.implement.outputs.kind }}
           APPLY: "1"
         run: node "$KANON/scripts/implement-crash.mjs"
