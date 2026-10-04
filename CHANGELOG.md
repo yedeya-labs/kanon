@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.23.0](https://github.com/yedeya-labs/kanon/compare/v0.22.0...v0.23.0) (2026-10-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **lanes:** declare the weekly digest's audience, narrow K-LAYOUT-18's exemption, and name the environment early ([#221](https://github.com/yedeya-labs/kanon/issues/221))
+
+### Features
+
+* **lanes:** declare the weekly digest's audience, narrow K-LAYOUT-18's exemption, and name the environment early ([#221](https://github.com/yedeya-labs/kanon/issues/221)) ([c4908d8](https://github.com/yedeya-labs/kanon/commit/c4908d8f29d80e06315cd800fd21820fb3f53121))
+
 ## [0.22.0](https://github.com/yedeya-labs/kanon/compare/v0.21.0...v0.22.0) (2026-10-04)
 
 
