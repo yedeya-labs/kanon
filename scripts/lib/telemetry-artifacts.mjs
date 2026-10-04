@@ -22,8 +22,17 @@
 // big. So any skipped artifact fails the lane's read CLOSED: `rows` is empty and `error` says how
 // many of how many were skipped, and why, by field name only (ADR 0007: a rejected row is never
 // echoed). That is exactly what an unreadable store does today, and the sweep already reports it.
-// The rows a lane's action uploads have already passed `validate`, so a skip is a version skew or
-// a damaged artifact, and it should be loud.
+// The rows a lane's action uploads have already passed `validate`, so among this repository's own
+// runs a skip is a version skew or a damaged artifact, and it should be loud.
+//
+// ONLY THIS REPOSITORY'S OWN RUNS ARE READ (`K-AGENT-45`, `K-PRIN-20`). The artifact listing holds
+// every run's artifacts, including `pull_request` runs from forks, which run the FORK's workflow
+// files and can upload anything under any name. A fork could upload a valid `exhausted` row as an
+// issue's latest and have the sweep stop it, or junk under a lane's name and fail the lane's read
+// closed for the whole window. The store has no such writer: only the credentialed collector
+// writes it. So an artifact counts only when its run's head repository is this repository and its
+// run id is the one its name carries; anything else is ignored, neither read nor skipped, and only
+// counted in `foreign` so a summary can say it was there.
 //
 // RETENTION IS THE REPOSITORY'S, NOT THE ROW'S. The upload asks for 90 days, but a repository (or
 // its organisation) can keep artifacts for less, and GitHub then caps the artifact. An artifact
@@ -48,6 +57,8 @@ export const WINDOW_DAYS = 14;
 export const MAX_PAGES = 50;
 
 const DAY = 86_400_000;
+/** The most a row file may inflate to; a row is about 1 KB. */
+const MAX_ROW_BYTES = 1024 * 1024;
 /** Artifact ids, which the listing is ordered by, can trail `created_at` by minutes. */
 const LISTING_SLACK = 3_600_000;
 
@@ -103,7 +114,7 @@ export function readZipEntry(buf, name) {
       if (size === 0xffffffff || start + size > buf.length) throw new Error('bad entry size');
       const data = buf.subarray(start, start + size);
       if (method === 0) return Buffer.from(data);
-      if (method === 8) return inflateRawSync(data);
+      if (method === 8) return inflateRawSync(data, { maxOutputLength: MAX_ROW_BYTES });
       throw new Error('unsupported compression');
     }
     at = next;
@@ -146,18 +157,24 @@ export const ghDownload = (repo) => (id) =>
  * is newest first. Stops at the first page whose newest artifact is older than the window (less
  * an hour's slack for ids that trail their timestamps), or at a short page.
  *
+ * Keeps only artifacts of this repository's own runs: the run's `head_repository_id` must equal its
+ * `repository_id`, and its id must be the run id in the artifact's name. A fork's run, or an
+ * artifact whose run can't be told, is counted in `foreign` and otherwise ignored.
+ *
  * Also measures the repository's retention: the shortest `expires_at - created_at` of any
- * version-2 artifact listed, in whole days, or null when none was.
+ * version-2 artifact listed (a fork's run keeps this repository's retention too), in whole days,
+ * or null when none was.
  *
  * @param {string} lane
  * @param {{ repo: string, from: number, api: Api, maxPages?: number }} opts
- * @returns {{ artifacts: LaneArtifact[], retentionDays: number | null }}
+ * @returns {{ artifacts: LaneArtifact[], foreign: number, retentionDays: number | null }}
  */
 export function listLaneArtifacts(lane, { repo, from, api, maxPages = MAX_PAGES }) {
   const pattern = laneArtifactPattern(lane);
   /** @type {LaneArtifact[]} */
   const artifacts = [];
   const seen = new Set();
+  let foreign = 0;
   let retention = Infinity;
   for (let page = 1; ; page += 1) {
     if (page > maxPages) throw new Error(`the artifact listing passed ${maxPages} pages before reaching the window's start`);
@@ -170,15 +187,18 @@ export function listLaneArtifacts(lane, { repo, from, api, maxPages = MAX_PAGES 
       if (Number.isFinite(createdAt)) newest = Math.max(newest, createdAt);
       const name = String(a?.name ?? '');
       if (!name.startsWith(ARTIFACT_PREFIX) || !Number.isFinite(createdAt)) continue;
-      if (Number.isFinite(expiresAt)) retention = Math.min(retention, expiresAt - createdAt);
+      const run = a?.workflow_run;
+      const own = Number.isInteger(run?.repository_id) && run.head_repository_id === run.repository_id;
       const m = pattern.exec(name);
+      if (m && createdAt >= from && !a.expired && !(own && run.id === Number(m[1]))) { foreign += 1; continue; }
+      if (Number.isFinite(expiresAt)) retention = Math.min(retention, expiresAt - createdAt);
       if (!m || a.expired || createdAt < from || seen.has(a.id)) continue;
       seen.add(a.id);
       artifacts.push({ id: a.id, name, runId: Number(m[1]), attempt: Number(m[2]), createdAt, expiresAt });
     }
     if (list.length < 100 || newest < from - LISTING_SLACK) break;
   }
-  return { artifacts, retentionDays: Number.isFinite(retention) ? Math.round(retention / DAY) : null };
+  return { artifacts, foreign, retentionDays: Number.isFinite(retention) ? Math.round(retention / DAY) : null };
 }
 
 // ------------------------------------------------------------------------- the read
@@ -186,7 +206,7 @@ export function listLaneArtifacts(lane, { repo, from, api, maxPages = MAX_PAGES 
 /**
  * @typedef {{ invalid: number, unreadable: number, mismatched: number }} Skipped
  * @typedef {{
- *   rows: Record<string, any>[], listed: number, skipped: Skipped, otherTags: number,
+ *   rows: Record<string, any>[], listed: number, foreign: number, skipped: Skipped, otherTags: number,
  *   invalidFields: string[], retentionDays: number | null,
  * }} RunRows
  */
@@ -208,7 +228,7 @@ export function listLaneArtifacts(lane, { repo, from, api, maxPages = MAX_PAGES 
  * @returns {RunRows}
  */
 export function queryRunRows(lane, from, to, { repo, api, download, maxPages }) {
-  const { artifacts, retentionDays } = listLaneArtifacts(lane, { repo, from, api, maxPages });
+  const { artifacts, foreign, retentionDays } = listLaneArtifacts(lane, { repo, from, api, maxPages });
   const after = costStamp(from);
   const until = Number.isFinite(to) ? costStamp(to) : null;
   /** @type {Record<string, any>[]} */
@@ -242,7 +262,7 @@ export function queryRunRows(lane, from, to, { repo, api, download, maxPages }) 
     if (stamp <= after || (until !== null && stamp > until)) continue;
     rows.push(row);
   }
-  return { rows, listed: artifacts.length, skipped, otherTags, invalidFields: [...fields].sort(), retentionDays };
+  return { rows, listed: artifacts.length, foreign, skipped, otherTags, invalidFields: [...fields].sort(), retentionDays };
 }
 
 /**
@@ -265,7 +285,7 @@ const skippedTotal = (s) => s.invalid + s.unreadable + s.mismatched;
 /**
  * @typedef {{
  *   rows: { ts: string, issue_number: string | null, outcome: string, run_id: string }[],
- *   error: string | null, listed: number, skipped: Skipped, retentionDays: number | null, days: number,
+ *   error: string | null, listed: number, foreign: number, skipped: Skipped, retentionDays: number | null, days: number,
  * }} CostRead
  */
 
@@ -284,16 +304,16 @@ export function readArtifactCostRows(lane, now = Date.now(), deps = {}) {
   const days = deps.days ?? WINDOW_DAYS;
   const empty = { invalid: 0, unreadable: 0, mismatched: 0 };
   const repo = deps.repo ?? process.env.GITHUB_REPOSITORY ?? '';
-  if (!repo) return { rows: [], error: 'GITHUB_REPOSITORY is unset', listed: 0, skipped: empty, retentionDays: null, days };
+  if (!repo) return { rows: [], error: 'GITHUB_REPOSITORY is unset', listed: 0, foreign: 0, skipped: empty, retentionDays: null, days };
   const api = deps.api ?? ghApi();
   const download = deps.download ?? ghDownload(repo);
   let read;
   try {
     read = queryRunRows(lane.key, now - days * DAY, Infinity, { repo, api, download, maxPages: deps.maxPages });
   } catch (err) {
-    return { rows: [], error: `the artifact listing failed (${causeOf(err)})`, listed: 0, skipped: empty, retentionDays: null, days };
+    return { rows: [], error: `the artifact listing failed (${causeOf(err)})`, listed: 0, foreign: 0, skipped: empty, retentionDays: null, days };
   }
-  const { listed, skipped, retentionDays } = read;
+  const { listed, foreign, skipped, retentionDays } = read;
   const bad = skippedTotal(skipped);
   if (bad) {
     const kinds = /** @type {const} */ (['invalid', 'unreadable', 'mismatched'])
@@ -302,10 +322,10 @@ export function readArtifactCostRows(lane, now = Date.now(), deps = {}) {
     return {
       rows: [],
       error: `${bad} of ${listed} \`${ARTIFACT_PREFIX}${lane.key}\` artifacts skipped (${kinds}${fields})`,
-      listed, skipped, retentionDays, days,
+      listed, foreign, skipped, retentionDays, days,
     };
   }
-  return { rows: read.rows.map(toCostRow), error: null, listed, skipped, retentionDays, days };
+  return { rows: read.rows.map(toCostRow), error: null, listed, foreign, skipped, retentionDays, days };
 }
 
 /**

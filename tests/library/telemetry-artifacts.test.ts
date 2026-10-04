@@ -81,7 +81,10 @@ function row(lane: string, runId: number, at: string, over: Record<string, unkno
   };
 }
 
-type Fake = { id: number; name: string; created_at: string; expires_at: string; expired?: boolean; zip: Buffer | (() => Buffer) };
+type Run = { id: number; repository_id: number; head_repository_id: number } | undefined;
+type Fake = { id: number; name: string; created_at: string; expires_at: string; expired?: boolean; workflow_run: Run; zip: Buffer | (() => Buffer) };
+const OWN = 1001;
+const FORK = 2002;
 
 /** An artifact holding `r`, named for its lane, run and attempt, created a few seconds after it. */
 function artifact(id: number, r: Record<string, unknown>, opts: Partial<Fake> = {}): Fake {
@@ -93,6 +96,8 @@ function artifact(id: number, r: Record<string, unknown>, opts: Partial<Fake> = 
     expires_at: new Date(created.getTime() + 90 * DAY).toISOString().replace(/\.\d{3}Z$/, 'Z'),
     zip: zipOf(ARTIFACT_FILE, JSON.stringify(r)),
     ...opts,
+    workflow_run: 'workflow_run' in opts ? opts.workflow_run
+      : { id: Number(/-(\d+)-\d+$/.exec(opts.name ?? `-${r.run_id}-1`)?.[1]), repository_id: OWN, head_repository_id: OWN },
   };
 }
 
@@ -111,7 +116,11 @@ function github(artifacts: Fake[]) {
       const page = Number(m[1]);
       return {
         total_count: sorted.length,
-        artifacts: sorted.slice((page - 1) * 100, page * 100).map((a) => ({ expired: false, id: a.id, name: a.name, created_at: a.created_at, expires_at: a.expires_at, ...(a.expired === undefined ? {} : { expired: a.expired }) })),
+        artifacts: sorted.slice((page - 1) * 100, page * 100).map((a) => ({
+          expired: false, id: a.id, name: a.name, created_at: a.created_at, expires_at: a.expires_at,
+          ...(a.expired === undefined ? {} : { expired: a.expired }),
+          ...(a.workflow_run === undefined ? {} : { workflow_run: a.workflow_run }),
+        })),
       };
     },
     download: (id: number) => {
@@ -145,6 +154,7 @@ describe('readZipEntry', () => {
     expect(String(readZipEntry(zipOf('a.json', '{"x":2}'), 'a.json'))).toBe('{"x":2}');
     expect(readZipEntry(zipOf('a.json', '{}'), ARTIFACT_FILE)).toBeNull();
     expect(() => readZipEntry(Buffer.from('not a zip at all, but long enough'), ARTIFACT_FILE)).toThrow(/not a zip/);
+    expect(() => readZipEntry(zipOf(ARTIFACT_FILE, ' '.repeat(2 * 1024 * 1024)), ARTIFACT_FILE), 'a row inflates to at most 1 MiB').toThrow();
   });
 });
 
@@ -277,6 +287,37 @@ describe('a skipped artifact is counted, never read as "no run" (P7\'s mutation)
     ]));
     expect(res).toMatchObject({ rows: [], skipped: { invalid: 0, unreadable: 0, mismatched: 3 } });
     expect(res.error).toBe('3 of 3 `kanon-telemetry-implement` artifacts skipped (3 mismatched)');
+  });
+});
+
+describe("only this repository's own runs are read (K-AGENT-45)", () => {
+  const real = row('implement', 37000000090, '2026-10-01T00:00:00.000Z', { issue_number: 5 });
+  // What a fork's `pull_request` run can upload: a row that passes `validate`, under a lane's name,
+  // claiming its issue's latest run hit the cap.
+  const forged = row('implement', 37000000091, '2026-10-02T00:00:00.000Z', { outcome: 'exhausted', issue_number: 5 });
+  const fromFork = { id: 37000000091, repository_id: OWN, head_repository_id: FORK };
+
+  it("a fork's valid row under a lane's name is ignored: not read, not skipped, only counted", () => {
+    const gh = github([artifact(90, real), artifact(91, forged, { workflow_run: fromFork })]);
+    const res = read(implement, gh);
+    expect(res.error).toBeNull();
+    expect(res.rows.map((r) => r.run_id)).toEqual(['37000000090']);
+    expect(res).toMatchObject({ listed: 1, foreign: 1, skipped: { invalid: 0, unreadable: 0, mismatched: 0 } });
+    expect(exhaustedAtByIssue(res.rows, [5]).size, 'the forged exhaustion stops nothing').toBe(0);
+    expect(gh.downloads, "the fork's artifact is never downloaded").toEqual([90]);
+  });
+
+  it("a fork's junk under a lane's name doesn't fail the lane's read", () => {
+    const res = read(implement, github([artifact(90, real), artifact(92, real, { name: 'kanon-telemetry-implement-37000000092-1', zip: Buffer.from('junk junk junk junk junk'), workflow_run: { ...fromFork, id: 37000000092 } })]));
+    expect(res).toMatchObject({ error: null, listed: 1, foreign: 1 });
+  });
+
+  it('an artifact whose run is another run than its name says, or that names no run, is ignored', () => {
+    const res = read(implement, github([
+      artifact(93, forged, { workflow_run: { id: 1, repository_id: OWN, head_repository_id: OWN } }),
+      artifact(94, forged, { name: 'kanon-telemetry-implement-37000000094-1', workflow_run: undefined }),
+    ]));
+    expect(res).toMatchObject({ rows: [], error: null, listed: 0, foreign: 2 });
   });
 });
 
