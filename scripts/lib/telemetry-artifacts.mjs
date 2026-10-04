@@ -162,8 +162,9 @@ export const ghDownload = (repo) => (id) =>
  * artifact whose run can't be told, is counted in `foreign` and otherwise ignored.
  *
  * Also measures the repository's retention: the shortest `expires_at - created_at` of any
- * version-2 artifact listed (a fork's run keeps this repository's retention too), in whole days,
- * or null when none was.
+ * version-2 artifact of this repository's own runs, in whole days, or null when none was. Only
+ * those: a fork's upload chooses its own `retention-days`, so it could make the note claim a
+ * shorter window than the repository keeps.
  *
  * @param {string} lane
  * @param {{ repo: string, from: number, api: Api, maxPages?: number }} opts
@@ -191,6 +192,7 @@ export function listLaneArtifacts(lane, { repo, from, api, maxPages = MAX_PAGES 
       const own = Number.isInteger(run?.repository_id) && run.head_repository_id === run.repository_id;
       const m = pattern.exec(name);
       if (m && createdAt >= from && !a.expired && !(own && run.id === Number(m[1]))) { foreign += 1; continue; }
+      if (!own) continue;
       if (Number.isFinite(expiresAt)) retention = Math.min(retention, expiresAt - createdAt);
       if (!m || a.expired || createdAt < from || seen.has(a.id)) continue;
       seen.add(a.id);

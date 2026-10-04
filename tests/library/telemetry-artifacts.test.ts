@@ -331,6 +331,13 @@ describe('retention shorter than the window is said, not hidden', () => {
     expect(artifactRetentionNote(res)).toBe('The repository keeps artifacts 5 days, so the artifact read covers 5 of the 14-day window.');
   });
 
+  it("a fork's artifact can't set the retention the read reports", () => {
+    const own = artifact(85, row('implement', 37000000085, '2026-10-03T00:00:00.000Z'));
+    const fork = artifact(86, row('review', 37000000086, '2026-10-03T00:00:00.000Z'), { workflow_run: { id: 37000000086, repository_id: OWN, head_repository_id: FORK } });
+    fork.expires_at = new Date(Date.parse(fork.created_at) + DAY).toISOString();
+    expect(read(implement, github([own, fork])).retentionDays).toBe(90);
+  });
+
   it('says nothing when retention covers the window, or when no artifact told it', () => {
     const res = read(implement, github([artifact(80, row('implement', 37000000080, '2026-10-03T00:00:00.000Z'))]));
     expect(res.retentionDays).toBe(90);
