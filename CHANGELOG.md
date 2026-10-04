@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.20.0](https://github.com/yedeya-labs/kanon/compare/v0.19.0...v0.20.0) (2026-10-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **lead:** read the reference environment's deploy from the adoption record ([#198](https://github.com/yedeya-labs/kanon/issues/198))
+
+### Features
+
+* **lead:** read the reference environment's deploy from the adoption record ([#198](https://github.com/yedeya-labs/kanon/issues/198)) ([162ce14](https://github.com/yedeya-labs/kanon/commit/162ce14ba30a73a60ee0dfcc90cb7548a04f546a))
+
+
+### Documentation
+
+* **plans:** record the Owner's decisions on plan 0004 ([#196](https://github.com/yedeya-labs/kanon/issues/196)) ([658749f](https://github.com/yedeya-labs/kanon/commit/658749fdec8ca0211cd1d399ceb3bd452355213c))
+
 ## [0.19.0](https://github.com/yedeya-labs/kanon/compare/v0.18.0...v0.19.0) (2026-10-03)
 
 
