@@ -122,16 +122,40 @@ const LINE_AFTER = new RegExp(String.raw`\x60([\w./[\]-]+\.${SOURCE_EXT})\x60\s*
  * counting it external would turn a real failure into a silent pass (`K-PRIN-8`). A typo
  * is not ignored, so it still fails; a tracked file is judged wherever it lives.
  *
+ * "Ignored" is not enough either (kanon#120). git calls an untracked path ignored whenever a
+ * pattern covers it, even inside a directory the repository tracks: GitHub's stock Python
+ * template ignores `lib/`, so with `src/pkg/lib/a.py` force-added, a typo `src/pkg/lib/aa.py`
+ * and `src/pkg/lib/nested/x.py` both read as ignored and would pass unjudged. So the
+ * SHALLOWEST ignored directory above the path must hold no tracked file: a dependency tree
+ * is one the repository keeps none of its own files in. `node_modules/` and `.venv/` hold
+ * none; `src/pkg/lib/` holds `a.py`, so a coordinate under it is the repository's and is
+ * judged. A path ignored only by a file pattern (no ignored directory above it) keeps the
+ * old rule. What this cannot see is an allow-list ignore file (`/*`, `!/src/`): there a
+ * typo in a top-level folder (`scr/…`) is an ignored directory with nothing tracked in it,
+ * exactly like `node_modules/`. That case is why the all-clear names every external PATH,
+ * not only a count per doc — a reader can see a typo there.
+ *
  * @param {string} file the cited path
  * @param {string[]} tracked
  * @param {(path: string) => boolean} ignored whether git ignores the path
  */
-export const isExternal = (file, tracked, ignored) =>
-  !tracked.some((f) => f === file || f.endsWith(`/${file}`)) && ignored(file);
+export const isExternal = (file, tracked, ignored) => {
+  if (tracked.some((f) => f === file || f.endsWith(`/${file}`))) return false;
+  if (!ignored(file)) return false;
+  const segments = file.split('/');
+  for (let k = 1; k < segments.length; k += 1) {
+    const dir = `${segments.slice(0, k).join('/')}/`;
+    if (ignored(dir)) return !tracked.some((f) => f.startsWith(dir));
+  }
+  return true;
+};
 
 /**
- * `ignored` as the adopter's git answers it, from the working directory. `isExternal`
- * asks only about an untracked path, so the index never changes the answer. The path need
+ * `ignored` as the adopter's git answers it, from the working directory, by the ignore
+ * rules alone (`--no-index`). `isExternal` asks about an untracked path and about the
+ * directories above it — and without `--no-index` git answers "not ignored" for a
+ * directory that holds a tracked file, which is precisely the directory kanon#120 needs
+ * to see as ignored. The path need
  * not exist: CI checks out the index, which holds no `.venv/`, and git matches a pattern
  * such as `.venv/` against the path's parent directories anyway.
  * Only an answer of "ignored" (exit 0) makes a path external. Anything else, including
@@ -144,7 +168,7 @@ export const gitIgnored = () => {
   const seen = new Map();
   return (path) => {
     if (!seen.has(path)) {
-      const r = spawnSync('git', ['check-ignore', '-q', '--', path], { stdio: 'ignore' });
+      const r = spawnSync('git', ['check-ignore', '-q', '--no-index', '--', path], { stdio: 'ignore' });
       seen.set(path, r.status === 0);
     }
     return seen.get(path);
@@ -648,7 +672,8 @@ export const isOracleSpec = (path) => path.startsWith('docs/qa/specs/');
  * @returns {{findings: Finding[], checked: number, anchored: number, viaEnclosing: number,
  *            viaEnclosingAt: string[], discarded: number, discardedLineZero: number,
  *            discardedBy: Record<string, number>, external: number,
- *            externalBy: Record<string, number>, blocks: Block[]}}
+ *            externalBy: Record<string, number>, externalPaths: Record<string, string[]>,
+ *            blocks: Block[]}}
  */
 export const auditCitations = (docs, readFile, tracked, options = {}) => {
   const bareNeedsFile = options.bareNeedsFile ?? isOracleSpec;
@@ -682,6 +707,9 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
   // Coordinates into a dependency (`isExternal`) — counted and named, never judged (RA-2224).
   let external = 0;
   const externalBy = {};
+  // …and WHICH paths, per doc, distinct and in order of first citation: a count alone
+  // hides a typo that an allow-list ignore file makes look like a dependency (kanon#120).
+  const externalPaths = {};
 
   for (const doc of docs) {
     const lines = readFile(doc).split('\n');
@@ -736,6 +764,8 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
         if (m.file && isExternal(m.file, tracked, ignored)) {
           external += 1;
           externalBy[doc] = (externalBy[doc] ?? 0) + 1;
+          const seenPaths = (externalPaths[doc] ??= []);
+          if (!seenPaths.includes(m.file)) seenPaths.push(m.file);
           continue;
         }
         checked += 1;
@@ -843,7 +873,7 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
   }
   return {
     findings, checked, anchored, viaEnclosing, viaEnclosingAt, discarded, discardedLineZero, discardedBy,
-    external, externalBy, blocks: blocksIn(shiftsByFile, citationsByFile),
+    external, externalBy, externalPaths, blocks: blocksIn(shiftsByFile, citationsByFile),
   };
 };
 
@@ -943,6 +973,7 @@ const main = () => {
   const blocks = [];
   const discardedBy = {};
   const externalBy = {};
+  const externalPaths = {};
   const viaEnclosingAt = [];
   let checked = 0;
   let anchored = 0;
@@ -962,6 +993,7 @@ const main = () => {
     external += r.external;
     for (const [d, n] of Object.entries(r.discardedBy)) discardedBy[d] = (discardedBy[d] ?? 0) + n;
     for (const [d, n] of Object.entries(r.externalBy)) externalBy[d] = (externalBy[d] ?? 0) + n;
+    for (const [d, ps] of Object.entries(r.externalPaths)) externalPaths[d] = [...new Set([...(externalPaths[d] ?? []), ...ps])];
   };
 
   if (briefsSkipped) {
@@ -1076,6 +1108,9 @@ const main = () => {
       `  ${external} coordinate(s) into an untracked, git-ignored path not checked (a dependency, outside the repository): ` +
         `${byDoc.map(([d, n]) => `${d} (${n})`).join(', ')}`,
     );
+    // The paths themselves, so a typo an allow-list ignore file hides is still in front of
+    // a reader (kanon#120): `scr/orders/a.ts` beside `node_modules/…` reads as one.
+    for (const [d] of byDoc) console.log(`    ${d}: ${externalPaths[d].join(', ')}`);
   }
 };
 

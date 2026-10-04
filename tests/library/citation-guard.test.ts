@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
@@ -985,6 +985,66 @@ describe('isExternal: an untracked, git-ignored path, on any stack (#108)', () =
     const r = audit(doc('Dep (`node_modules/y.mjs:4`).'), {});
     expect(r.external).toBe(0);
     expect(r.findings).toHaveLength(1);
+  });
+
+  it('names each external PATH per doc, distinct, not only a count (kanon#120)', () => {
+    const r = auditIgnoring(doc('Dep (`node_modules/y.mjs:4`, `node_modules/y.mjs:9`, `.venv/z.py:2`).'), {});
+    expect(r.external).toBe(3);
+    expect(r.externalPaths).toEqual({ 'docs/x.md': ['node_modules/y.mjs', '.venv/z.py'] });
+  });
+
+  // kanon#120: GitHub's stock Python template ignores `lib/` and `build/`. With a file under
+  // `src/pkg/lib/` tracked anyway, git calls every untracked path under it ignored.
+  const pythonTemplate = (p: string) => /(^|\/)(lib|build)\//.test(p) || /^(node_modules|\.venv)\//.test(p);
+  const ownLib = { 'src/pkg/lib/a.py': 'def a():\n    pass\n' };
+
+  it('judges a typo under an ignored directory the repository tracks files in (kanon#120)', () => {
+    const r = auditIgnoring(doc('`a` (`src/pkg/lib/aa.py:1`) and (`src/pkg/lib/nested/x.py:1`).'), ownLib, pythonTemplate);
+    expect(r.external).toBe(0);
+    expect(r.findings.map((f) => f.problem)).toEqual(['no such file in the repository', 'no such file in the repository']);
+  });
+
+  it('still counts a dependency external under the same ignore file (kanon#120)', () => {
+    const r = auditIgnoring(doc('Dep (`node_modules/better-auth/dist/x.mjs:4`) and (`.venv/lib/python3.12/site-packages/requests/api.py:59`).'), ownLib, pythonTemplate);
+    expect(r.findings).toEqual([]);
+    expect(r.external).toBe(2);
+  });
+
+  it('keeps a path ignored by a FILE pattern, with no ignored directory above it, external (kanon#120)', () => {
+    const generated = (p: string) => /\.generated\.ts$/.test(p);
+    const r = auditIgnoring(doc('Codegen (`src/api.generated.ts:4`).'), { 'src/orders/a.ts': 'x\n' }, generated);
+    expect(r.findings).toEqual([]);
+    expect(r.external).toBe(1);
+  });
+
+  it('an allow-list ignore file still hides a top-level typo — named, not judged (kanon#120, the residual)', () => {
+    const allowList = (p: string) => !p.startsWith('src/');
+    const r = auditIgnoring(doc('`a` (`scr/orders/a.ts:4`).'), { 'src/orders/a.ts': 'x\n'.repeat(9) }, allowList);
+    expect(r.external).toBe(1);
+    expect(r.externalPaths).toEqual({ 'docs/x.md': ['scr/orders/a.ts'] });
+  });
+
+  it('gitIgnored answers by the ignore rules alone, so a directory holding a tracked file reads as ignored (kanon#120)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ignored-lib-'));
+    const cwd = process.cwd();
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      writeFileSync(join(dir, '.gitignore'), 'lib/\nnode_modules/\n');
+      mkdirSync(join(dir, 'src/pkg/lib'), { recursive: true });
+      writeFileSync(join(dir, 'src/pkg/lib/a.py'), 'def a():\n    pass\n');
+      execFileSync('git', ['add', '.gitignore'], { cwd: dir });
+      execFileSync('git', ['add', '-f', 'src/pkg/lib/a.py'], { cwd: dir });
+      process.chdir(dir);
+      const ignored = gitIgnored();
+      expect(ignored('src/pkg/lib/')).toBe(true);
+      const tracked = ['.gitignore', 'src/pkg/lib/a.py'];
+      const r = auditCitations(['docs/x.md'], (p: string) => (p === 'docs/x.md' ? '`a` (`src/pkg/lib/aa.py:1`), dep (`node_modules/x.mjs:3`).' : readFileSync(join(dir, p), 'utf8')), ['docs/x.md', ...tracked], { ignored });
+      expect(r.externalPaths).toEqual({ 'docs/x.md': ['node_modules/x.mjs'] });
+      expect(r.findings.map((f) => [f.citation, f.problem])).toEqual([['`src/pkg/lib/aa.py:1`', 'no such file in the repository']]);
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('gitIgnored reads the working directory\'s ignore rules, for paths that need not exist', () => {
