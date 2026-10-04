@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.22.0](https://github.com/yedeya-labs/kanon/compare/v0.21.0...v0.22.0) (2026-10-04)
+
+
+### Features
+
+* **lanes:** move the project and weekly digests into Kanon, and fix each caller's file name ([#216](https://github.com/yedeya-labs/kanon/issues/216)) ([b12d9f2](https://github.com/yedeya-labs/kanon/commit/b12d9f22234f86400ebc54d7cc3351588c5a7f91))
+
+
+### Documentation
+
+* **plans:** read the dispatch sweep's cost rows from the store first, and record plan 0004's progress ([#211](https://github.com/yedeya-labs/kanon/issues/211)) ([fa0b47b](https://github.com/yedeya-labs/kanon/commit/fa0b47bbc1bda7f71495b3a935299158d72605ad))
+
 ## [0.21.0](https://github.com/yedeya-labs/kanon/compare/v0.20.0...v0.21.0) (2026-10-04)
 
 
