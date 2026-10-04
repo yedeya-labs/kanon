@@ -156,8 +156,9 @@ describe('the prompt', () => {
     expect(prompt).toContain(FINDING_ANCHOR);
     expect(flat).toMatch(/MUST ALSO contain, verbatim and with its parentheses, the text `\(targeted-invariant mode\)`/);
   });
-  it('never calls the environment staging', () => {
-    expect(flat).toMatch(/NOT staging/);
+  it('says the finding touched no deployment, and names no environment (kanon#54)', () => {
+    expect(flat).toMatch(/NOT a deployment/);
+    expect(flat).not.toMatch(/staging/i);
   });
 });
 

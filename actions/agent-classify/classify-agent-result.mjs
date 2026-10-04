@@ -454,7 +454,7 @@ function cli() {
 
   console.log(`::${level} title=${title}::${body}`);
   if (process.env.GITHUB_OUTPUT) {
-    // `retry` is read by the PR lanes' breadcrumb steps (scripts/qa/lane-retry.mjs):
+    // `retry` is read by the PR lanes' breadcrumb steps (scripts/lane-retry.mjs):
     // empty when waiting would not help.
     // `code` is the reason code the telemetry row stores; the sentence is only for people.
     appendFileSync(process.env.GITHUB_OUTPUT, `kind=${kind}\ncode=${code}\nretry=${retryClass(result, model) ?? ''}\n`);

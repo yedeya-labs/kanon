@@ -15,9 +15,11 @@
  * Dependency-free (Node 20+: global fetch) so it can be exercised locally,
  * exactly as CI runs it:
  *   GITHUB_TOKEN=$(gh auth token) GITHUB_REPOSITORY=<owner>/<repo> \
- *   STAGE=staging VERSION=0.1.6 DRY_RUN=1 node scripts/announce-deploy.mjs
+ *   STAGE=<your environment> VERSION=0.1.6 DRY_RUN=1 node scripts/announce-deploy.mjs
  *
- * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, STAGE, VERSION (deployed semver,
+ * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, STAGE (the environment deployed to, as the
+ * project names it; required, since kanon#54 — it defaulted to the reference adopter's
+ * name), VERSION (deployed semver,
  * leading v ok), SHA (optional, message footer), SLACK_RELEASE_WEBHOOK,
  * DRY_RUN (print instead of posting/updating the variable).
  */
@@ -25,15 +27,15 @@
 const {
   GITHUB_TOKEN,
   GITHUB_REPOSITORY: repo,
-  STAGE: stage = 'staging',
+  STAGE: stage,
   VERSION,
   SHA,
   SLACK_RELEASE_WEBHOOK: webhook,
   DRY_RUN,
 } = process.env;
 
-if (!GITHUB_TOKEN || !repo || !VERSION) {
-  console.error('Missing required env: GITHUB_TOKEN, GITHUB_REPOSITORY, VERSION');
+if (!GITHUB_TOKEN || !repo || !stage || !VERSION) {
+  console.error('Missing required env: GITHUB_TOKEN, GITHUB_REPOSITORY, STAGE, VERSION');
   process.exit(1);
 }
 if (!webhook && !DRY_RUN) {
