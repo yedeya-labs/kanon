@@ -17,7 +17,7 @@ Every Kanon project has the same roles. A person may hold several human roles at
 | **Reviewer** | agent | Review any PR carrying a review label; submit a real approve or request-changes; file follow-ups with a severity, on a bucket; review briefs. | Author the PR it reviews. Merge. Post a comment in place of a verdict in CI. Place work on a roadmap milestone. Dispatch its own follow-ups for implementation. Write its own commit stamp. | Contents write (so its approval satisfies the ruleset), Issues and Pull requests write. |
 | **Merger** | agent | Merge green-zone PRs through the front door; wait, recover, escalate or release; re-dispatch the Reviewer; lift a head-scoped escalation it applied itself once the head moves. | Be a ruleset bypass actor. Edit workflows. Judge correctness. Merge an escalating path or label. Use the default workflow token. Lift a label a person applied. | Contents, Issues and Pull requests write; Actions write; Checks and Commit statuses read; **no Workflows access**. |
 | **Lead** | agent | Author a brief as a PR on a manual mandate and revise it; file and dispatch the brief's issues under WIP caps once it merges; re-deliver a lost event by churning a recovery label; propose splitting an exhausted item; hold a project for a human. | Merge. Approve. Promote. Create issues from a brief before it merges. Re-label an issue already labelled. Start workflows directly. | Contents, Issues and Pull requests write; Actions read; **no Actions write, no Workflows access**. |
-| **Overseer** | agent | Read aggregates; file pipeline-improvement issues; keep one rolling audit issue; propose capability-ledger deltas; restrict another agent's authority. | Fix, merge, or close other work. Write repository files, the ledger included. Set a target on a backlog metric or propose "file less". Widen anyone's authority. | Contents read, Issues write, Pull requests read. |
+| **Overseer** | agent | Read aggregates; file pipeline-improvement issues; keep one rolling audit issue; propose capability-ledger deltas; restrict another agent's authority. | Fix, merge, or close other work. Write repository files, the ledger included. Set a target on a backlog metric or propose "file less". Widen anyone's authority. File a finding only Kanon can act on in the adopter's repository. | Contents read, Issues write, Pull requests read, Actions read. |
 | **Releaser** | bot, not an agent | Open and merge its own release PRs. | Touch any file outside the release file set. | Contents and Pull requests write; a ruleset bypass limited to release PRs. |
 | **Intake** | App, not an agent | File a report from the running application as an issue carrying exactly one intake label. | Read, decide, run in a workflow, apply any other label, or trigger an agent. | Issues write only. |
 
@@ -375,7 +375,7 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Why.** A component with zero blast radius needs no overseer of its own, which dissolves "who watches the watcher".
 
-**Enforced by.** Its App has read-only contents and its run has read-only tools. The restricting mechanism (revoking the Merger's authority when precision drifts) is prose only; a guard is planned.
+**Enforced by.** Its App has read-only contents, and in Kanon's Overseer lane its agent's token reads only: a step after the agent files what it wrote down, on a token of its own (`K-SELF-11`). The restricting mechanism (revoking the Merger's authority when precision drifts) is prose only; a guard is planned.
 
 **Class.** framework
 

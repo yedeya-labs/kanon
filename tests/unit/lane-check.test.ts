@@ -617,7 +617,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
 
   describe("the adoption record's reference-deploy declaration, read by the library's reader (K-LAYOUT-10, plan 0004 P6)", () => {
     const REC = 'docs/qa/adoption.md';
-    const DECLARED = '## Choices\n\n- **Reference environment:** `preview`\n- **Reference deploy workflow:** `deploy-preview.yml`\n- **Reference deploy job:** `ship`\n';
+    const DECLARED = '## Choices\n\n- **Overseer:** `not installed`\n- **Reference environment:** `preview`\n- **Reference deploy workflow:** `deploy-preview.yml`\n- **Reference deploy job:** `ship`\n';
     const passes = (body: string | null) => {
       const t = adopter();
       if (body !== null) t.write(REC, body);
@@ -626,7 +626,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
     };
     it('passes no record, a record that declares no reference environment, and a whole declaration', () => {
       passes(null);
-      passes('# Adoption record\n\n## Choices\n\n- **Chat channel:** none yet.\n');
+      passes('# Adoption record\n\n## Choices\n\n- **Chat channel:** none yet.\n- **Overseer:** `not installed`\n');
       passes(`# Adoption record\n\n${DECLARED}`);
     });
     it('refuses a declaration missing its job, with the reader\'s own message', () =>
@@ -634,7 +634,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
         /adoption\.md,title=lane-check::docs\/qa\/adoption\.md declares the reference environment's deploy without `Reference deploy job`: declare all three, or none \(K-LAYOUT-10\)/));
     it('refuses a workflow written as a path', () =>
       red((t) => t.write(REC, `# Adoption record\n\n${DECLARED.replace('`deploy-preview.yml`', '`.github/workflows/deploy-preview.yml`')}`),
-        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:6: `\.github\/workflows\/deploy-preview\.yml` isn't a workflow file name/));
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:7: `\.github\/workflows\/deploy-preview\.yml` isn't a workflow file name/));
   });
 
   describe("the adoption record's weekly digest audience (K-LAYOUT-10, kanon#218)", () => {
@@ -642,7 +642,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
     const AUDIENCE = '- **Weekly digest audience:** a co-founder tracking runway\n';
     it('passes a declared audience beside the reference deploy', () => {
       const t = adopter();
-      t.write(REC, `# Adoption record\n\n## Choices\n\n${AUDIENCE}- **Reference environment:** \`preview\`\n- **Reference deploy workflow:** \`deploy-preview.yml\`\n- **Reference deploy job:** \`ship\`\n`);
+      t.write(REC, `# Adoption record\n\n## Choices\n\n${AUDIENCE}- **Overseer:** \`not installed\`\n- **Reference environment:** \`preview\`\n- **Reference deploy workflow:** \`deploy-preview.yml\`\n- **Reference deploy job:** \`ship\`\n`);
       const r = check(t);
       expect(r.status, r.out).toBe(0);
     });
@@ -652,6 +652,53 @@ describe.skipIf(!hasYq)('lane-check', () => {
     it('refuses one outside `## Choices`, by name', () =>
       red((t) => t.write(REC, `# Adoption record\n\n${AUDIENCE}\n## Choices\n`),
         /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:3 declares the weekly digest's audience outside `## Choices`/));
+  });
+
+  describe('the Overseer lane, and the adoption record saying whether it is installed (plan 0004 step 13)', () => {
+    const OVERSEER = '.github/workflows/agent-overseer.yml';
+    const REC = 'docs/qa/adoption.md';
+    const record = (value: string | null) => `# Adoption record\n\n## Choices\n\n- **Chat channel:** none yet.\n${value === null ? '' : `- **Overseer:** \`${value}\`\n`}`;
+    const install = (t: Tree, value: string | null = 'installed') => {
+      t.write(OVERSEER, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-overseer.yml'), 'utf8'));
+      t.write(REGISTER, `${t.read(REGISTER)}| Overseer | \`example-overseer\` | Read | Read & write | Read | No access |\n`);
+      t.write('docs/qa/overseer-playbook.md', '# Overseer playbook\n\n## Liveness queries\n\n## Backlog dynamics\n\n## Capability review\n');
+      t.write('docs/qa/capability-ledger.md', '# Capability ledger\n');
+      t.write(REC, record(value));
+    };
+    it('accepts the caller, run as the Overseer the register lists, with a record that says it is installed', () => {
+      const t = adopter();
+      install(t);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('5 lane caller(s) pass');
+      const text = readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-overseer.yml'), 'utf8');
+      expect(text.trimEnd().split('\n').length).toBeLessThan(40);
+      expect(text).not.toMatch(/aws|environment:|role-to-assume|QA_DYNAMO/i);
+    });
+    it('accepts a record that says it is not installed, with no caller', () => {
+      const t = adopter();
+      t.write(REC, record('not installed'));
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
+    it('refuses a record that does not say whether the Overseer is installed', () =>
+      red((t) => t.write(REC, record(null)), /adoption\.md,title=lane-check::docs\/qa\/adoption\.md doesn't say whether the Overseer is installed/));
+    it('refuses a record that does not say, even beside a caller', () =>
+      red((t) => install(t, null), "doesn't say whether the Overseer is installed"));
+    it('refuses `installed` with no caller', () =>
+      red((t) => t.write(REC, record('installed')), 'says the Overseer is `installed`, but no workflow calls its lane'));
+    it('refuses `not installed` beside a caller', () =>
+      red((t) => install(t, 'not installed'), 'says the Overseer is `not installed`, but a workflow calls its lane'));
+    it('refuses a caller with no record at all', () =>
+      red((t) => { install(t); t.rm(REC); }, 'is missing, and a workflow calls the Overseer\'s lane'));
+    it('refuses a value it does not know, by line', () =>
+      red((t) => t.write(REC, record('yes')), /adoption\.md:6: `Overseer` is `yes`; write `installed` or `not installed`/));
+    it('refuses a caller that does not grant the store job its OIDC token', () =>
+      red((t) => { install(t); t.edit(OVERSEER, (d) => { delete (d as Caller).permissions!['id-token']; }); }, 'needs id-token: write'));
+    it('refuses a caller without the playbook or the capability ledger the prompt reads', () => {
+      red((t) => { install(t); t.rm('docs/qa/overseer-playbook.md'); }, 'is missing; the Kanon lane(s) agent-overseer');
+      red((t) => { install(t); t.rm('docs/qa/capability-ledger.md'); }, 'is missing; the Kanon lane(s) agent-overseer');
+    });
   });
 
   describe('the App register has a slug for every role a caller\'s lane runs as (K-LAYOUT-6)', () => {

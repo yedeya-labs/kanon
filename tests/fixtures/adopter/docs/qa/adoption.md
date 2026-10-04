@@ -30,3 +30,4 @@ A public repository in an organisation; no fallback is in use.
 - **Reference environment:** `preview`
 - **Reference deploy workflow:** `deploy-preview.yml`
 - **Reference deploy job:** `ship`
+- **Overseer:** `not installed`

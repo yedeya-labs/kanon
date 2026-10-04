@@ -53,6 +53,7 @@ const TRIGGERS: Record<string, Trigger[]> = {
   'agent-explore.yml': ['schedule', 'dispatch'],
   'agent-dispatch-sweep.yml': ['schedule', 'dispatch'],
   'agent-code-audit.yml': ['schedule', 'dispatch'],
+  'agent-overseer.yml': ['schedule', 'dispatch'],
 };
 
 /** The job holding the gate step, and the step's index in it. */

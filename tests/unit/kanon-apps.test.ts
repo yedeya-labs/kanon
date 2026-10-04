@@ -437,7 +437,7 @@ describe('the register row (K-LAYOUT-6)', () => {
     const custom = '| Role | App slug | What it does | Contents | Issues | Pull requests | Workflows | Actions |\n|---|---|---|---|---|---|---|---|\n| Reviewer | `old` | Reviews PRs | Read | Read | Read | No access | No access |\n';
     const { text } = write(custom, 'Reviewer', 'new-reviewer');
     expect(text).toContain('| Reviewer | `new-reviewer` | Reviews PRs | Read & write | Read & write | Read & write | No access | No access |');
-    expect(write(custom, 'Overseer', 'o').text).toContain('| Overseer | `o` |  | Read | Read & write | Read | No access | No access |');
+    expect(write(custom, 'Overseer', 'o').text).toContain('| Overseer | `o` |  | Read | Read & write | Read | No access | Read |');
   });
 
   it('creates the register when the file does not exist', () => {

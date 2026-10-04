@@ -23,7 +23,7 @@
     },
     "overseer": {
       "role": "Overseer",
-      "permissions": { "contents": "read", "issues": "write", "pull_requests": "read", "metadata": "read" }
+      "permissions": { "contents": "read", "issues": "write", "pull_requests": "read", "actions": "read", "metadata": "read" }
     }
   }
 }

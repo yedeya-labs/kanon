@@ -48,7 +48,7 @@ const ceiling = (wf: Lane): Perms => {
 
 /** The project documents a lane's prompt reads, found exactly as lane-check finds them. */
 const docsRead = (file: string): string[] =>
-  [...new Set(readFileSync(join(WORKFLOWS, file), 'utf8').match(/docs\/qa\/(stack|[a-z]+(-[a-z]+)*-playbook)\.md/g) ?? [])].sort();
+  [...new Set(readFileSync(join(WORKFLOWS, file), 'utf8').match(/docs\/qa\/(stack|capability-ledger|[a-z]+(-[a-z]+)*-playbook)\.md/g) ?? [])].sort();
 
 /** The text between an anchor pair. Throws when either anchor is missing or doubled. */
 const between = (text: string, open: string, close: string): string => {

@@ -108,11 +108,11 @@ This chapter governs how a Kanon pipeline keeps itself honest: the guards that c
 
 ### `K-SELF-11` Keep one rolling audit, and fix one audit's findings together
 
-**Rule.** The Overseer keeps exactly one open audit issue, closing its own previous one when it files the next. Issues filed from the same audit are fixed together, on one branch, as one squashed commit.
+**Rule.** The Overseer keeps exactly one open audit issue, closing its own previous one when it files the next. It files a finding in the adopter's repository only when the adopter can act on it. A finding only Kanon can act on (a lane's behaviour, a guard, a rule, Kanon's library) goes under the audit issue's `## Upstream` heading as a draft, never as an issue, and that heading is in every audit, empty or not. Issues filed from the same audit are fixed together, on one branch, as one squashed commit.
 
-**Why.** A rolling issue deduplicates for free and avoids issue spam. Closing its own superseded audit is the only thing the Overseer ever closes. Findings from one audit usually touch the same surfaces, so splitting them multiplies review rounds and conflicts for no gain.
+**Why.** A rolling issue deduplicates for free and avoids issue spam. Closing its own superseded audit is the only thing the Overseer ever closes. An issue the adopter can't act on is noise in its backlog, and filing it on Kanon directly would carry the adopter's data across ADR 0007's boundary, so a draft the adopter reviews and files by hand is the one channel. Findings from one audit usually touch the same surfaces, so splitting them multiplies review rounds and conflicts for no gain.
 
-**Enforced by.** The Overseer's prompt; batching is prose only.
+**Enforced by.** Kanon's Overseer lane: its agent's token reads only, and [`scripts/overseer-file.mjs`](../scripts/overseer-file.mjs) files what the agent wrote down, routing each finding by its subject and writing the `## Upstream` heading itself; [`tests/library/overseer-file.test.ts`](../tests/library/overseer-file.test.ts) holds the routing. Batching is prose only.
 
 **Class.** framework
 

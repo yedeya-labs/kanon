@@ -2,7 +2,8 @@
 // (kanon#153): `docs/qa/escalation-paths.md` (`K-LAYOUT-8`), `docs/qa/exemptions.md`
 // (`K-LAYOUT-15`), and the reference environment's deploy in the adoption record,
 // `docs/qa/adoption.md` (`K-LAYOUT-10`, plan 0004 P6), with the weekly digest's audience beside
-// it (kanon#218), and the code areas in the stack document, `docs/qa/stack.md`'s `## Code areas`
+// it (kanon#218), whether the Overseer is installed, held to the callers (plan 0004 step 13),
+// and the code areas in the stack document, `docs/qa/stack.md`'s `## Code areas`
 // (`K-LAYOUT-17`, kanon#54), which the guards and the code-audit lane read.
 //
 // Each is read with the library's own reader, from this Kanon tree (the version the adopter
@@ -11,6 +12,7 @@
 // the Merger next reads it.
 //
 //   node declarations.mjs <escalation-paths|exemptions|adoption|stack>
+//   node declarations.mjs overseer <true|false>   # whether a workflow calls the Overseer's lane
 //
 // Run from the root of the adopter's checkout. Exits 0 when the file parses, and 1 with the
 // reader's own message on standard error when it doesn't. lane-check calls it only for a file
@@ -24,6 +26,7 @@ import { readExemptions } from '../../scripts/lib/exemptions.mjs';
 import { readDigestAudience } from '../../scripts/lib/digest-audience.mjs';
 import { readReferenceDeploy } from '../../scripts/lib/reference-deploy.mjs';
 import { readCodeAreas } from '../../scripts/lib/code-areas.mjs';
+import { checkOverseerInstall } from '../../scripts/lib/overseer-install.mjs';
 
 /** @type {Record<string, (root: string) => unknown>} */
 const READERS = {
@@ -34,6 +37,9 @@ const READERS = {
   // Only `## Code areas`: the four required sections are checked by lane-check itself, and only
   // when a called lane reads the document. A stack document without the section declares none.
   stack: readCodeAreas,
+  // Called for every repository, record or not: a record must say whether the Overseer is
+  // installed, and a caller of its lane needs a record that says `installed`.
+  overseer: (root) => checkOverseerInstall({ root, caller: process.argv[3] === 'true' }),
 };
 
 const which = process.argv[2] ?? '';

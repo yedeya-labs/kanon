@@ -7,7 +7,7 @@
 #
 # Parses YAML with `yq` (mikefarah v4, preinstalled on GitHub's hosted runners; decision 6)
 # into JSON, and checks it with `jq`. Reads the escalation and exemptions files, and the
-# adoption record's reference-deploy declaration, with Kanon's own library, on Node (the action puts Kanon's Node on the PATH first). Prints one
+# adoption record's declarations, with Kanon's own library, on Node (the action puts Kanon's Node on the PATH first). Prints one
 # `::error` per violation and exits 1 if there is any; exits 2 when it cannot run at all.
 #
 # ENV  KANON_ROOT   Kanon's tree (default: this script's ../..)
@@ -69,6 +69,7 @@ if [ -f actions/lane-check/lane-check.sh ] && [ -f ".github/workflows/$SPINE.yml
   KANON_TREE=1
 fi
 CALLERS=0
+CALLED=""
 ROLES=""
 DOCS=""
 READS=""
@@ -98,6 +99,7 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
     | [.key, $w, (.value.secrets | tostring)] | @tsv' <<<"$doc")
   [ -n "$lane" ] || continue
   CALLERS=$((CALLERS + 1))
+  CALLED="$CALLED $lane"
   lane_file="$KANON_ROOT/.github/workflows/$lane.yml"
   if [ ! -f "$lane_file" ]; then
     fail "$f" "calls Kanon lane '$lane', which this Kanon version does not ship"
@@ -169,7 +171,7 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
   fi
   # The project documents this lane's prompt reads, at their fixed paths (K-LAYOUT-17).
   # Read from the lane itself, so a lane that starts reading one makes it required here.
-  for d in $(grep -oE 'docs/qa/(stack|[a-z]+(-[a-z]+)*-playbook)\.md' "$lane_file" | sort -u); do
+  for d in $(grep -oE 'docs/qa/(stack|capability-ledger|[a-z]+(-[a-z]+)*-playbook)\.md' "$lane_file" | sort -u); do
     DOCS="$DOCS $d=$lane"
   done
   njobs="$(jq '.jobs | length' <<<"$doc")"
@@ -305,6 +307,19 @@ for d in escalation-paths exemptions adoption stack; do
     fail "$f" "$(printf '%s' "$out" | head -1)"
   fi
 done
+
+# ── Whether the Overseer is installed (K-LAYOUT-10, plan 0004 step 13, decision 12) ────────
+# The Overseer is an optional lane, so the adoption record says whether it is installed, and
+# says what is true: `installed` with a caller of its lane, `not installed` without one. A
+# repository with neither a record nor that caller passes; a caller without a record fails.
+overseer=false
+case " $CALLED " in *" agent-overseer "*) overseer=true ;; esac
+if [ "$overseer" = true ] || [ -f docs/qa/adoption.md ]; then
+  command -v node >/dev/null 2>&1 || die "needs node on PATH to read docs/qa/adoption.md; the action puts Kanon's own there"
+  if ! out="$(node "$HERE/declarations.mjs" overseer "$overseer" 2>&1)"; then
+    fail docs/qa/adoption.md "$(printf '%s' "$out" | head -1)"
+  fi
+fi
 
 # ── App slugs: every role a caller's lane runs as has one row in the register ──────────
 for role in $(printf '%s\n' $ROLES | sort -u); do
