@@ -247,11 +247,8 @@ describe('agent-review.yml — wiring', () => {
     expect(at('scope')).toBeGreaterThan(at('restore'));
     // The register it reads is the default branch's commit the restore named.
     expect(byId('scope').env?.DEFAULT_SHA).toBe('${{ steps.restore.outputs.sha }}');
-    // The PR's code runs in the project-setup hook since RA-2694 (`id: project`), whose
-    // presence check (`id: hook`) reads the PR's tree first.
-    expect(at('scope')).toBeLessThan(at('hook'));
-    expect(at('scope')).toBeLessThan(at('project'));
-    expect(at('scope_place')).toBeGreaterThan(at('project'));
+    // No step runs the PR's code since kanon#185; the place step still re-checks the digest.
+    expect(at('scope_place')).toBeGreaterThan(at('scope'));
     expect(at('scope_place')).toBeLessThan(n.findIndex((v) => v === 'Re-verify the pin before the agent reads it'));
   });
 

@@ -391,7 +391,7 @@ describe('RA-848 — the review lane runs the restore, and tells the Reviewer so
 });
 
 describe('RA-2697 — the agent-lane blocks come from the action cache, never the PR’s tree', () => {
-  it('calls every block through `$/`, and the project-setup hook — the adopter’s code — as `./`', () => {
+  it('calls every block through `$/`, and nothing as `./`: the review job runs no adopter code (kanon#185)', () => {
     const job = reviewSteps();
     expect(job.filter((s) => laneBlockOf(s)).map((s) => s.uses)).toEqual([
       '$/actions/agent-setup',
@@ -401,8 +401,6 @@ describe('RA-2697 — the agent-lane blocks come from the action cache, never th
     ]);
     expect(job.filter((s) => s.uses && !laneBlockOf(s) && !/^actions\//.test(s.uses)).map((s) => s.uses)).toEqual([
       '$/actions/kanon-path',
-      '$/actions/test-database',
-      './.github/actions/project-setup',
     ]);
   });
 
@@ -436,30 +434,18 @@ describe('RA-2697 — the agent-lane blocks come from the action cache, never th
     expect(JSON.stringify(finish!.with ?? {}).replace(/steps\.app-token\.conclusion/g, '')).not.toMatch(/app-token/);
   });
 
-  it('calls agent-setup before any PR code, and runs the PR’s setup in the hook, unprivileged (RA-2694)', () => {
+  it('calls agent-setup with no identity, running nothing, and mints the token after the scope (RA-2694, kanon#185)', () => {
     const job = reviewSteps();
     const at = job.findIndex((s) => laneBlockOf(s) === 'agent-setup');
     const scope = job.findIndex((s) => s.id === 'scope');
-    const check = job.findIndex((s) => s.id === 'hook');
-    const hook = job.findIndex((s) => s.uses === './.github/actions/project-setup');
     const mint = job.findIndex((s) => s.id === 'app-token');
     expect(at).toBeGreaterThanOrEqual(0);
     expect(job[at]!.with).toEqual({ arm: 'review agent', 'app-slug': '' });
     expect(stepsAsRun([job[at]!]), 'agent-setup runs nothing on this lane').toEqual([]);
-    expect(at).toBeLessThan(check);
     expect(scope).toBeGreaterThan(at);
-    expect(check).toBeGreaterThan(scope);
-    // Between the presence check and the hook, only the project's declared database, which
-    // runs no PR code: its declaration is the default branch's (K-MERGE-17, kanon#18).
-    expect(hook).toBe(check + 2);
-    expect(job[check + 1]!.uses).toBe('$/actions/test-database');
-    expect(job[check + 1]!.with).toBeUndefined();
-    // The hook is handed NO token: not the reviewer App's, which does not exist yet, not the
-    // default one, and never the Claude token.
-    expect(JSON.stringify(job[hook]!.with ?? {})).not.toMatch(/token|secrets\./i);
-    expect(JSON.stringify(job[hook]!.env ?? {})).not.toMatch(/token|secrets\./i);
-    // …and its post steps run after the token action's own post step has revoked the token.
-    expect(mint).toBeGreaterThan(hook);
+    // No project-setup hook between them any more: the job runs none of the PR's code.
+    expect(job.some((s) => s.uses === './.github/actions/project-setup')).toBe(false);
+    expect(mint).toBeGreaterThan(scope);
     expect(job[mint]!.uses).toBe('actions/create-github-app-token@v3');
     expect(job[mint]!.with?.['skip-token-revoke']).toBeUndefined();
   });

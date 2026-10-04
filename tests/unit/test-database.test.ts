@@ -150,12 +150,11 @@ describe('every lane starts the database the project declares, from a step', () 
       'agent-lane.yml run',
       'agent-lead-split.yml split',
       'agent-rebase.yml resolve',
-      'agent-review.yml review',
       'agent-verify-acs.yml verify',
     ]);
   });
 
-  it.each(['agent-lane.yml run', 'agent-rebase.yml resolve', 'agent-review.yml review', 'agent-verify-acs.yml verify'])(
+  it.each(['agent-lane.yml run', 'agent-rebase.yml resolve', 'agent-verify-acs.yml verify'])(
     '%s runs the block before the hook and hands the hook its answer',
     (where) => {
       const { steps, at } = hookCalls.find((c) => c.where === where)!;

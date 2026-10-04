@@ -257,11 +257,11 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 ### `K-AGENT-24` Read mechanical results instead of re-deriving them, and never call a subset "full"
 
-**Rule.** Read the red-test result rather than re-deriving test sensitivity, and spend the review on whether each test asserts the invariant it claims. Read the slow end-to-end tier from its required check; never re-run it inside a review. Never report a subset of tests as full verification.
+**Rule.** Read the red-test result rather than re-deriving test sensitivity, and spend the review on whether each test asserts the invariant it claims. Read every test tier from its required check; the Reviewer runs none of the pull request's code, so it installs, builds and runs nothing from the tree it reviews. Never report a subset of tests as full verification.
 
-**Why.** The red-test check proves sensitivity, never meaningfulness, so meaningfulness is where the reviewer's attention pays. Re-running the slow tier caused reviews that never posted. A handful of tests once went out labelled "full check" while the real tier was red.
+**Why.** The red-test check proves sensitivity, never meaningfulness, so meaningfulness is where the reviewer's attention pays. Re-running the slow tier caused reviews that never posted. A handful of tests once went out labelled "full check" while the real tier was red. And the Reviewer holds the token whose approval merges the pull request, so the pull request's own code (an install script, a test) must never run beside it.
 
-**Enforced by.** Prose only.
+**Enforced by.** The review lane installs nothing and starts no database, and `tests/unit/review-verdict.test.ts` fails a review-job step that calls an action from the pull request's tree, runs a package manager or build tool, or hands an interpreter anything but Kanon's own scripts. That the agent runs none of it is prose, in its prompt.
 
 **Class.** framework
 

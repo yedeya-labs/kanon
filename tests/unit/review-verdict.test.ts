@@ -435,9 +435,14 @@ esac
       expect(clear, 'the clearing step exists').toBeGreaterThan(-1);
       expect(steps[clear]!.env!.VERDICT_FILE).toBe(path);
       expect(steps[clear]!.run).toMatch(/rm -f -- "\$VERDICT_FILE"/);
-      expect(clear, 'and runs after the PR\'s setup, before the agent')
-        .toBeGreaterThan(steps.findIndex((s) => s.id === 'project'));
-      expect(clear).toBeLessThan(steps.findIndex((s) => s.id === 'agent'));
+      // After the scope is placed, and before the pin re-check, which only the token
+      // step separates from the agent.
+      const placed = steps.findIndex((s) => s.id === 'scope_place');
+      const verify = steps.findIndex((s) => s.name === 'Re-verify the pin before the agent reads it');
+      expect(placed, 'the place step exists').toBeGreaterThan(-1);
+      expect(verify, 'the pin re-check exists').toBeGreaterThan(-1);
+      expect(clear).toBeGreaterThan(placed);
+      expect(clear).toBeLessThan(verify);
     });
   });
 
@@ -800,45 +805,65 @@ printf '%s' ${JSON.stringify(JSON.stringify(reviews))} | jq -r "$filter"`
 });
 
 /**
- * RA-1723 — the reviewer must survive a PR whose own install or migrations are broken.
+ * kanon#185 — the Reviewer runs none of the PR's code (the Owner, 2026-10-04).
  *
- * PR RA-1719 failed `db:init` for the reason CI did (a missing migration), the review job
- * died on that step, no verdict was posted, and the revise lane — which fires on a
- * CHANGES_REQUESTED — could never open. The PR sat red and unreviewed for a day.
+ * The review job checks out the PR's head and later holds the reviewer App token, whose
+ * approval the Merger acts on. It used to run the PR's install, migrations and seed there
+ * through the project-setup hook, so a PR's `postinstall` ran in the workspace the token
+ * and the agent later used. Test results come from CI's required checks instead. These
+ * hold the job's STRUCTURE to that: what a step may call, and what a `run:` may execute.
  */
-describe('a PR that cannot install or migrate still gets a verdict (RA-1723)', () => {
-  const steps = wf.jobs.review.steps as { id?: string; uses?: string; run?: string; if?: string; 'continue-on-error'?: boolean; with?: Record<string, unknown> }[];
+describe("the review job runs none of the PR's code (kanon#185)", () => {
+  type S = { id?: string; name?: string; uses?: string; run?: string; with?: Record<string, unknown> };
+  const steps = wf.jobs.review.steps as S[];
+  // The shell words that run a project's code, or fetch and run someone else's.
+  const RUNNERS = /(^|[\s;&|(`])(npm|npx|pnpm|yarn|bun|corepack|make|pip3?|poetry|uv|cargo|go|gradle|gradlew|mvn|bundle|composer|deno|tsx|ts-node|playwright|docker)(\s|$)/m;
+  // An interpreter, and the first thing it is handed.
+  const INTERPRETED = /(?:^|[\s;&|(`])(node|bash|sh|zsh|python3?|ruby|perl)\s+("[^"]*"|\S+)/gm;
+  const lines = (run: string) => run.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 
-  // SINCE RA-2694 BOTH RUN INSIDE THE PROJECT-SETUP HOOK, called as `id: project` after a
-  // presence check (`id: hook`): a PR cut before the hook existed has none, and is reviewed
-  // the same way as one whose install fails.
-  it('lets the PR-code setup fail without failing the job — the hook, and the check for it', () => {
-    const hook = steps.find((s) => s.id === 'hook');
-    const project = steps.find((s) => s.id === 'project');
-    expect(project?.uses).toBe('./.github/actions/project-setup');
-    expect(project?.['continue-on-error'], 'the project-setup hook').toBe(true);
-    expect(hook?.['continue-on-error'], 'the check that it is present').toBe(true);
-    expect(project?.if).toBe("steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success' && steps.database.outcome == 'success'");
-    // …and the project's declared database (kanon#18) is tolerated the same way.
-    const database = steps.find((s) => s.id === 'database');
-    expect(database?.uses).toBe('$/actions/test-database');
-    expect(database?.['continue-on-error'], 'the test database').toBe(true);
-    expect(database?.if).toBe("steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success'");
-    // …and it still installs and migrates, with the database the reviewer may re-run a tier on.
-    expect(project?.with).toMatchObject({ lane: 'reviewer', install: 'true', database: '${{ steps.database.outputs.database }}', browsers: 'false' });
+  it("calls only Kanon's blocks and pinned third-party actions — nothing from the PR's tree", () => {
+    const uses = steps.map((x) => x.uses).filter((u): u is string => typeof u === 'string');
+    expect(uses.length, 'the check is not vacuous').toBeGreaterThan(5);
+    // `./` on this job is the PR's head: the checkout above is `needs.filter.outputs.head_sha`.
+    expect(uses.filter((u) => u.startsWith('./'))).toEqual([]);
+    for (const u of uses) expect(u, u).toMatch(/^(\$\/actions\/[a-z-]+|[a-z0-9-]+\/[a-z0-9-]+@v\d+(\.\d+)*)$/);
+    // No database for a test tier that is no longer run, and no hook to hand one to.
+    expect(uses).not.toContain('$/actions/test-database');
+    expect(steps.some((x) => x.id === 'hook' || x.id === 'project' || x.id === 'database')).toBe(false);
   });
 
-  it("notes a failed or skipped setup from the hook's outcome alone, reading none of its outputs (#77)", () => {
-    const note = steps.find((s) => (s as { name?: string }).name === 'Note a PR whose project setup failed') as { if?: string; env?: Record<string, string> };
-    expect(note.if).toBe("steps.claim.outputs.proceed == 'true' && steps.project.outcome != 'success'");
-    expect(note.env).toEqual({ SETUP: '${{ steps.project.outcome }}' });
+  it('runs no package manager or build tool in any step', () => {
+    const found = steps.filter((x) => RUNNERS.test(lines(String(x.run ?? '')))).map((x) => x.name ?? x.id);
+    expect(found).toEqual([]);
   });
 
-  it('does not gate the pin check, the token or the agent on either succeeding', () => {
-    const guarded = steps.filter((x) => x.id === 'agent' || /Re-verify the pin|Mint reviewer/.test(String((x as { name?: string }).name)));
-    expect(guarded, 'the pin check, the token and the agent').toHaveLength(3);
-    for (const s of guarded) {
-      expect(String(s.if ?? ''), 'must not read the setup\'s outcomes').not.toMatch(/steps\.(install|dbinit|hook|project)\./);
-    }
+  it('executes no file from the tree directly, nor sources one', () => {
+    // `./x.sh` or `../x` in command position (after any `VAR=value` prefixes), or
+    // `source`/`.` of any file.
+    const DIRECT = /(?:^|[;&|(])\s*(?:[A-Za-z_]\w*=\S*\s+)*(?:\.\.?\/|source\s|\.\s)/m;
+    const found = steps.filter((x) => DIRECT.test(lines(String(x.run ?? '')))).map((x) => x.name ?? x.id);
+    expect(found).toEqual([]);
+  });
+
+  it("hands every interpreter one of Kanon's own scripts, never a file from the tree", () => {
+    const calls = steps.flatMap((x) => [...lines(String(x.run ?? '')).matchAll(INTERPRETED)]
+      .map((m) => ({ step: x.name ?? x.id, cmd: m[1], arg: m[2]! })));
+    expect(calls.length, 'the check is not vacuous').toBeGreaterThanOrEqual(4);
+    const outside = calls.filter((c) => !/^"\$(KANON|KANON_PATH)\//.test(c.arg));
+    expect(outside).toEqual([]);
+  });
+
+  it('tells the agent to run none of it, and offers no test run', () => {
+    const prompt = String(steps.find((x) => x.id === 'agent')!.with!.prompt);
+    expect(prompt).toContain("RUN NONE OF THE PR'S CODE (kanon#185)");
+    expect(prompt).toMatch(/Do not install, build, migrate,\s+or run any test tier, script, binary or hook from this tree/);
+    expect(prompt).toMatch(/take every test result from\s+CI/);
+    expect(prompt).not.toMatch(/sanity-run|FAST tier|FOREGROUND blocking/i);
+  });
+
+  it("reports no stage for a hook it no longer calls", () => {
+    const finish = steps.find((x) => x.uses === '$/actions/agent-finish')!;
+    expect(String(finish.with!.stages)).not.toMatch(/hook=/);
   });
 });

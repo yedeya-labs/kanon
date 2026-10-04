@@ -537,7 +537,8 @@ describe('where the rows go', () => {
       errors += n;
       expect((src.match(/echo "kanon-error=hook_missing" >> "\$GITHUB_OUTPUT"/g) ?? []).length, path).toBe(n);
     }
-    expect(errors).toBe(5);
+    // The review lane calls no hook since kanon#185, so it has no presence check either.
+    expect(errors).toBe(4);
   });
 
   it('the blocks smoke marks its row smoke', () => {

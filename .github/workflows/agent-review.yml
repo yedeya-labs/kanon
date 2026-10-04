@@ -1323,11 +1323,12 @@ jobs:
       #
       # WRITE DOWN WHAT THE PIN PUT THERE, SOMEWHERE THE PR CANNOT REACH (RA-1542).
       #
-      # The project-setup hook below runs the PR's code: its `npm ci` runs the PR's
-      # `postinstall`, and its database setup the PR's migrate and seed scripts. Any of
-      # them can undo this step — one `cp .qa-pr/docs/qa/reviewer-playbook.md docs/qa/`
-      # restores the PR's own playbook before the agent reads it. Moving this step later
-      # would not help: by then `.git` itself is the PR's to have rewritten.
+      # Until kanon#185 the project-setup hook ran the PR's code after this step: its
+      # `npm ci` ran the PR's `postinstall`, and its database setup the PR's migrate and
+      # seed scripts. Any of them could undo this step — one `cp
+      # .qa-pr/docs/qa/reviewer-playbook.md docs/qa/` restores the PR's own playbook
+      # before the agent reads it. No step runs the PR's code now, and the record and
+      # the check below stay as a tripwire for a step that ever does.
       #
       # So the pin is RECORDED here, before any PR code has run, and CHECKED after it: a
       # digest of every input on disk (`judging-inputs.mjs manifest`, which reads the
@@ -1382,10 +1383,11 @@ jobs:
       # re-verifications, the reload and the telemetry restore (RA-1588, RA-2608, RA-2689) all went
       # with the `./` form that needed them.
       #
-      # THE RESIDUE IS THE ACTION CACHE, AND IT IS NOT NEW. `_work/_actions/` is writable by
-      # the job's user, and the runner reads a composite's `action.yml` from it when the step
-      # starts, so the PR's code (the hook, its `npm ci`, its `db:init`) can rewrite the
-      # cached `agent-run` with a plain file write before the agent step loads it. That same
+      # THE RESIDUE WAS THE ACTION CACHE, CLOSED BY RUNNING NO PR CODE (kanon#185).
+      # `_work/_actions/` is writable by the job's user, and the runner reads a
+      # composite's `action.yml` from it when the step starts, so the PR's code (the hook,
+      # its `npm ci`, its `db:init`) could rewrite the cached `agent-run` with a plain
+      # file write before the agent step loaded it. That same
       # write already reached `anthropics/claude-code-action`'s cached copy, which `agent-run`
       # runs with both tokens, before RA-2697 and while the blocks were digested — so the
       # digest never closed this; it moved it. It is the reach the pin's re-verify below
@@ -1394,12 +1396,10 @@ jobs:
       #
       # BEFORE ANY PR CODE RUNS, as it always ran. It runs no
       # step here: the push probe is off, and the commit-identity step needs an App slug (the
-      # reviewer pushes nothing).
-      # The toolchain, the install and the database are the project-setup hook's (RA-2694),
-      # which runs the PR's code and is called further down, after the scope step. The
-      # minted identity is checked by no one here, so `app-slug` is empty: the reviewer App
-      # token is minted deliberately LATE, after every step that runs the PR's code (RA-1542),
-      # and does not exist yet.
+      # reviewer pushes nothing). This lane installs no toolchain, dependencies or database:
+      # it runs none of the PR's code (kanon#185). The minted identity is checked by no one
+      # here, so `app-slug` is empty: the reviewer App token is minted deliberately LATE,
+      # after the pin's re-check (RA-1542), and does not exist yet.
       - uses: $/actions/agent-setup
         id: setup
         if: steps.claim.outputs.proceed == 'true'
@@ -1425,10 +1425,9 @@ jobs:
       # 0001 §3). The tag comes from the base branch's copy of this file, so a PR cannot
       # supply the logic that decides how much of it the reviewer reads (RA-848/RA-1410's rule),
       # and there is no import list left to keep in step with the script (RA-2701 review).
-      # The App register is the default branch's, at the commit the restore step read. It runs here, before the
-      # project-setup hook runs the PR's code, and records a digest of what it wrote as a
-      # STEP OUTPUT; the place step below re-checks that digest after the PR's code has
-      # run, as RA-1542 does for the pin.
+      # The App register is the default branch's, at the commit the restore step read. It
+      # records a digest of what it wrote as a STEP OUTPUT, and the place step below
+      # re-checks it, as RA-1542 does for the pin.
       #
       # NEVER REDS THE JOB. Every failure path is a full review, which is always safe —
       # only more expensive. `continue-on-error` covers anything the paths below miss.
@@ -1493,84 +1492,28 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "→ incremental review ${PRIOR:0:7}..${HEAD_SHA:0:7}: $REASON"
           printf '%s\n' "**Review scope: incremental** \`${PRIOR:0:7}..${HEAD_SHA:0:7}\` — $REASON" >> "$GITHUB_STEP_SUMMARY"
-      # THE PROJECT-SETUP HOOK (RA-2694), WHICH IS THE PR'S CODE, AND MAY FAIL WITHOUT KILLING
-      # THE REVIEW (RA-1723).
+      # THE REVIEWER RUNS NONE OF THE PR'S CODE (kanon#185, the Owner, 2026-10-04).
       #
-      # It runs the PR's own code — the hook itself is the DEFAULT branch's, restored above
-      # (`K-MERGE-17`), but it runs the PR's lockfile, migrations and seed — so a PR whose
-      # migration is missing fails here
-      # for the same reason CI fails. When this was fatal the reviewer died on the step CI
-      # died on, posted nothing, and the revise lane (which fires on a CHANGES_REQUESTED)
-      # could never open: PR RA-1719 sat red and unreviewed for a day. A PR that cannot
-      # migrate is the MOST reviewable kind. The agent reads CI's red check from the rollup
-      # and requests changes on it; all it loses here is the option of re-running a
-      # DB-backed tier itself. The presence check (copied from `agent-lane.yml`, bar the
-      # gate and `continue-on-error`) names a default branch with no hook, and the hook
-      # is skipped.
+      # This job used to call the project-setup hook here: the PR's lockfile install
+      # (`postinstall` included), its migrations and its seed, in the workspace that later
+      # holds the reviewer App token and runs the agent. The token was minted after it and
+      # the pin re-checked in between, but `agent-run`'s own `git restore` ran in a `.git`
+      # that install could have rewritten, and a compromised Reviewer's approval is what the
+      # Merger acts on. All the install bought was the option of re-running a fast test
+      # tier inside the review, and CI already runs every tier as a required check, which
+      # the Reviewer reads from the head-SHA rollup.
       #
-      # WHERE IT RUNS IS THE SECURITY PROPERTY (RA-1542, RA-2608, RA-2689). After the pin is
-      # recorded and the re-review scope is written, so neither can be steered by it; before
-      # the pin's re-verify, so any pinned input it rewrote is caught; and
-      # before the reviewer App token is minted, so no PR code runs while that token exists
-      # — its post steps included, which the runner runs in reverse order, after the token
-      # action's own post step has revoked the token. It is given no token at all.
+      # So no step here installs, builds, migrates or runs the PR's code, no database is
+      # started, and the prompt tells the agent to run none either. The review reads the
+      # diff and the tree. `tests/unit/review-verdict.test.ts` fails a step that calls a
+      # workflow-local action (the PR's own code, on this checkout), the project-setup hook
+      # or the database block, or runs a package manager or build tool.
       #
-      # DB provisioned so the Reviewer can FOREGROUND-run a fast tier (unit/integration)
-      # to sanity-check a specific concern. The Reviewer does NOT run the E2E tier — CI
-      # runs E2E as a required check and the Reviewer reads its result from the head-SHA rollup
-      # (see the prompt / reviewer-playbook.md). Re-running the ~5-min E2E prod build
-      # inside the review turn was the recurring "review never posts" crash (the Reviewer
-      # backgrounded the build and yielded; CI is one-shot, so nothing was ever posted).
-      # No browser install here — that provisioning only served the E2E run.
-      #
-      # The summary step after it says so, so the reason is on the run rather than only
-      # in a collapsed log group.
-      - name: Check the project-setup hook is present
-        id: hook
-        if: steps.claim.outputs.proceed == 'true'
-        continue-on-error: true
-        run: |
-          if [ ! -f .github/actions/project-setup/action.yml ]; then
-            echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
-            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      # THE PROJECT'S DATABASE, AS IT DECLARES IT (kanon#18; `agent-lane.yml`'s header). The
-      # declaration is a markdown file directly inside `docs/qa/`, so it is the default
-      # branch's copy, restored above with the hook (K-MERGE-17): a PR can't change the
-      # database its own review runs on. After the claim, so a declined run starts none, and
-      # tolerated like the hook: a review without a database is still a review (#77).
-      - uses: $/actions/test-database
-        id: database
-        if: steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success'
-        continue-on-error: true
-      - uses: ./.github/actions/project-setup
-        id: project
-        if: steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success' && steps.database.outcome == 'success'
-        continue-on-error: true
-        with:
-          lane: reviewer
-          install: "true"
-          database: ${{ steps.database.outputs.database }}
-          browsers: "false"
-      - name: Note a PR whose project setup failed
-        # Judged by the hook's outcome alone (#77). The hook contract (plan 0001 §5) defines
-        # the hook's inputs and no outputs, so the lane reads none: it can't assume an
-        # adopter's hook installs anything in particular, or has a database at all (#18). A
-        # malformed database declaration skips the hook, and lands here as `skipped`.
-        if: steps.claim.outputs.proceed == 'true' && steps.project.outcome != 'success'
-        env:
-          SETUP: ${{ steps.project.outcome }}
-        run: |
-          echo "::warning title=review without a working setup::project setup: $SETUP. Reviewing anyway — the PR's own code failed to set up (or the PR predates the project-setup hook, RA-2694), which CI reports as a red check the reviewer reads; only a re-run of a test tier is unavailable to him (RA-1723)."
-          printf '%s\n' "**Reviewing without a working project setup** (project setup: \`$SETUP\`) — RA-1723." >> "$GITHUB_STEP_SUMMARY"
-
       # PUT THE SCOPE WHERE THE REVIEWER CAN READ IT — IF IT IS STILL WHAT WAS WRITTEN (RA-2455).
       #
-      # The scope step wrote to $RUNNER_TEMP before the PR's code ran; the project-setup
-      # hook has run it since. So the file is compared against the digest that step
-      # recorded as an output, and only an intact one is copied into the working tree
+      # The scope step wrote to $RUNNER_TEMP and recorded its digest as an output. No PR
+      # code runs in between since kanon#185, but the check stays, so a step that ever
+      # does cannot hand the Reviewer an edited diff: only an intact file is copied into the working tree
       # (`.qa-review/`, where the agent's Read tool reaches). ANY `.qa-review/` the PR
       # itself carries is deleted first, so a PR cannot plant "prior findings" or a
       # trimmed diff. And the prompt keys on THIS step's `mode` output, not on the file
@@ -1609,18 +1552,17 @@ jobs:
           echo "review scope: $mode"
 
       # THE FILE THE AGENT WRITES ITS VERDICT TO STARTS ABSENT (kanon#178). The stamp step
-      # below finds this run's review by that file's content, and the PR's project setup
-      # has run in this workspace since checkout, so a file it left there is removed
-      # before the agent starts. The prompt names the same path; a test holds the two equal.
+      # below finds this run's review by that file's content, so whatever the checkout or
+      # an earlier step left at that path is removed before the agent starts. The prompt names the same path; a test holds the two equal.
       - name: Clear the verdict file before the agent writes it
         if: steps.claim.outputs.proceed == 'true'
         env:
           VERDICT_FILE: ${{ runner.temp }}/qa-review-verdict.md
         run: rm -f -- "$VERDICT_FILE"
 
-      # THE PIN, RE-READ AFTER THE PR'S CODE HAS RUN (RA-1542). See the restore step for
-      # why it was recorded there. Placed AFTER the last step that runs PR code and
-      # BEFORE the App token is minted, so a tree that no longer matches never gets a
+      # THE PIN, RE-READ BEFORE THE TOKEN (RA-1542). See the restore step for why it was
+      # recorded there. No step runs PR code since kanon#185; the check stays as a
+      # tripwire, placed BEFORE the App token is minted, so a tree that no longer matches never gets a
       # write-scoped identity, and nothing PR-authored runs between this check and the
       # agent reading its playbook.
       #
@@ -1652,7 +1594,7 @@ jobs:
           MANIFEST="$(node "$KANON_PATH/scripts/judging-inputs.mjs" manifest)"
           ACTUAL="$(printf '%s\n' "$MANIFEST" | sha256sum | cut -d' ' -f1)"
           if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "::error title=pin tampered::The judging inputs changed AFTER the restore — only the PR's project-setup steps ran in between. Refusing to review on inputs this PR may have supplied (K-MERGE-17, RA-1542). Current manifest:" >&2
+            echo "::error title=pin tampered::The judging inputs changed AFTER the restore, though no step of this job runs the PR's code (kanon#185): something else on the runner rewrote them. Refusing to review on inputs this PR may have supplied (K-MERGE-17, RA-1542). Current manifest:" >&2
             printf '%s\n' "$MANIFEST" >&2
             exit 1
           fi
@@ -1759,14 +1701,20 @@ jobs:
             confirm the checks it names pass), and to anything the playbook singles out.
 
             Verify blast radius yourself (grep usages) rather than trusting the PR's
-            framing. Do NOT run the E2E tier — CI runs it as a REQUIRED check; read its
-            result from the head-SHA rollup (below), never by re-running it. NEVER launch
-            a build, test, or any command in the background and then wait for it: this CI
-            run is one-shot with NO next turn, so a backgrounded task means your verdict
-            is never posted (the recurring RA-356/RA-378 crash-equivalent). If you sanity-run
-            a FAST tier the stack document's `## Gates` names (the project's database,
-            if it declares one, is set up), run it as a single
-            FOREGROUND blocking command, and never report a subset as full verification.
+            framing.
+
+            RUN NONE OF THE PR'S CODE (kanon#185). Nothing is installed here and no
+            database is started, on purpose: you hold the token whose approval merges
+            this PR, so its code never runs beside you. Do not install, build, migrate,
+            or run any test tier, script, binary or hook from this tree, and do not
+            execute files the PR adds or changes. Read the code and the diff, run `git`,
+            `gh`, `grep` and other read-only commands, and take every test result from
+            CI, which runs every tier as a REQUIRED check: read it from the head-SHA
+            rollup (below). Never call that a re-run, and never report a subset of it
+            as full verification. NEVER launch a command in the background and then
+            wait for it: this CI run is one-shot with NO next turn, so a backgrounded
+            task means your verdict is never posted (the recurring RA-356/RA-378
+            crash-equivalent).
             When the PR changes a behavior / message / error string, grep the OLD string
             repo-wide INCLUDING `tests/` before trusting nothing else asserts on it.
 
@@ -1864,8 +1812,8 @@ jobs:
           # it twice and RA-659 once, each time dying WITHOUT posting a verdict —
           # which is indistinguishable from a crash and leaves the PR blocked.
           # The budget goes on exactly what the prompt above asks for (verify
-          # blast radius by grepping rather than trusting the PR's framing,
-          # sanity-run a fast tier), so the fix is headroom rather than a cheaper
+          # blast radius by grepping rather than trusting the PR's framing), so the
+          # fix is headroom rather than a cheaper
           # review: the reviewer found three genuine blocking defects in RA-584,
           # one of which took money without enrolling anyone.
           claude_args: |
@@ -1907,16 +1855,13 @@ jobs:
           # Independently, maximum TOTAL idle per run is 169s (duration_ms -
           # duration_api_ms, available since RA-2025). Saving: ~$2,615/yr.
           #
-          # BUT THIS ARM QUALIFIES ON MEASUREMENT, NOT ON STRUCTURE, and the distinction
-          # matters for whoever changes the prompt next. The other three cannot expire
-          # arithmetically — 100% of their runs finish inside 300s. This one can: the
-          # prompt above authorises a sanity-run of a FAST tier as a single foreground
-          # blocking command, and CI's Integration job averages 243s (max 262s) while a
-          # unit+integration `npm test` turn exceeds 300s outright. No run in the 92
-          # sampled took that path, which is why the pin is taken — an occasional expiry
-          # on a minority of runs stays far inside the 0.93/run break-even. If the
-          # reviewer prompt ever makes a tier run routine, re-measure before trusting
-          # this. RA-2082 tracks the fact that nothing would currently notice.
+          # THIS ARM QUALIFIED ON MEASUREMENT, NOT ON STRUCTURE, because the prompt used to
+          # authorise a foreground sanity-run of a fast test tier, which can idle past
+          # 300s (CI's Integration job averages 243s, max 262s). No run in the 92 sampled
+          # took that path. Since kanon#185 the prompt forbids running the PR's code at
+          # all, so that path is gone too. If the reviewer prompt ever brings back a
+          # long-running command, re-measure before trusting this; RA-2082 tracks the
+          # fact that nothing would currently notice.
           #
           # The saving assumes the cache-write VOLUME is unchanged, which holds because
           # there is little cross-run reuse to lose: the static-prefix intercept is
@@ -1972,8 +1917,8 @@ jobs:
       # the release that shipped it as the cutover. No file, or no verdict matching it,
       # stamps nothing and warns: an unstamped verdict falls back to `commit_id`, the
       # pre-RA-1680 reading, where a stamp on the wrong review would be a false one.
-      # RESIDUE: PR code the agent runs (a test tier) shares this workspace and could
-      # rewrite the file mid-turn. That is kanon#185's exposure, not this step's.
+      # The agent runs none of the PR's code (kanon#185), so nothing but the agent writes
+      # the file during its turn.
       #
       # IT ALSO RECORDS WHAT IT SUPERSEDES (RA-1334). Two the Reviewer verdicts can legitimately
       # sit on ONE SHA: RA-1351's human-relabel arm re-reviews an unchanged commit when
@@ -2385,13 +2330,11 @@ jobs:
           stages: >-
             checkout=${{ steps.checkout.conclusion }}
             setup=${{ steps.setup.conclusion }}
-            hook=${{ steps.hook.conclusion }}
             token=${{ steps.app-token.conclusion }}
             agent=${{ steps.agent.conclusion }}
           job-started-at: ${{ steps.job.outputs.started-at }}
           timeout-minutes: "45"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
-          # Not the hook check's code: this lane runs on past a missing hook, so nothing of
-          # Kanon's ended the run there.
+          # This lane calls no project-setup hook (kanon#185), so no hook check code reaches it.
           kanon-error: ${{ steps.setup.outputs.kanon-error }}
       - name: Upload reviewer transcript
         if: always() && steps.claim.outputs.proceed == 'true'
