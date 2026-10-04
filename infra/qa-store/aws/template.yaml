@@ -133,6 +133,12 @@ Resources:
               - Effect: Allow
                 Action: [s3:PutObject, s3:GetObject]
                 Resource: { 'Fn::Sub': '${Bucket.Arn}/*' }
+              # ListBucket on the bucket itself, so that S3 answers a read of a missing report
+              # with 404, which an export leaves out, and not with 403, which fails the export.
+              # A 403 then means only a role that is really wrong.
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: { 'Fn::GetAtt': [Bucket, Arn] }
               # Writers upsert, readers query: the operations share the role.
               - Effect: Allow
                 Action: [dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:GetItem, dynamodb:Query]

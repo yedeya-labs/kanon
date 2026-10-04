@@ -63,7 +63,7 @@ Every store operation runs in a job of its own, which holds the store's credenti
 
 1. **Create the `kanon-qa-store` environment** in the repository. Restrict it to the default branch: then a dispatch from any other branch can't reach the store.
 2. **Write the hook.** For Kanon's AWS store it is one call of Kanon's AWS action (below). For any other store, implement the five operations on the files above.
-3. **Grant `id-token: write` in the caller** of each store-coupled lane. Kanon's lane uses it only in its store jobs.
+3. **Grant `id-token: write` and `contents: read` in the caller** of each store-coupled lane. Kanon's lane uses `id-token` only in its store jobs, and their checkout needs `contents: read`.
 
 ## Kanon's AWS implementation
 
@@ -84,7 +84,7 @@ The code is in [`infra/qa-store/aws/`](../infra/qa-store/aws/):
 
 - **The table, `kanon-qa-store`:** on demand, keyed `pk` and `sk`, with point-in-time recovery, deletion protection, and `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`.
 - **The bucket, `kanon-qa-store-<account>-<region>`:** versioned, private, encrypted with S3's own key, TLS only, and retained like the table.
-- **The role, `kanon-qa-store`:** trusted for exactly `repo:<owner>/<repo>:environment:kanon-qa-store`. It may put and get objects, put, update, get and query items, and delete items only in the `COVERAGE` partition, the one a sweep re-derives.
+- **The role, `kanon-qa-store`:** trusted for exactly `repo:<owner>/<repo>:environment:kanon-qa-store`. It may put and get objects, list the bucket, put, update, get and query items, and delete items only in the `COVERAGE` partition, the one a sweep re-derives. Listing the bucket is what makes S3 answer a missing report with 404, which an export leaves out, rather than 403, which fails it.
 - **GitHub's OIDC provider,** unless the account has one.
 
 **No stage in its lifecycle** (`K-OBS-17`). Nothing in the stack is named for, conditioned on or parameterised by an application stage, and deleting the stack leaves the table and the bucket with their data. `provision.mjs` refuses a template that breaks this, and so does the unit test that parses it.
@@ -116,7 +116,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.22.0
+    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.23.0
       with:
         operation: ${{ inputs.operation }}
         kind: ${{ inputs.kind }}
@@ -131,7 +131,7 @@ runs:
 
 <!-- x-release-please-end -->
 
-**An existing store** of the same item model works the same way: name its table, bucket, region and role. Its role must trust `repo:<owner>/<repo>:environment:kanon-qa-store`.
+**An existing store** of the same item model works the same way: name its table, bucket, region and role. Its role must trust `repo:<owner>/<repo>:environment:kanon-qa-store`, and hold the template's grants, `s3:ListBucket` on the bucket included: without it, one run whose raw report is missing fails the whole export.
 
 **To delete the store,** delete the stack, then turn off the table's deletion protection and delete the table and the bucket by hand. The stack never takes the data with it.
 
@@ -152,7 +152,7 @@ permissions:
   id-token: write
 jobs:
   maintenance:
-    uses: yedeya-labs/kanon/.github/workflows/qa-store-aws-maintenance.yml@v0.22.0
+    uses: yedeya-labs/kanon/.github/workflows/qa-store-aws-maintenance.yml@v0.23.0
     with:
       task: ${{ inputs.task }}
       apply: ${{ inputs.apply }}

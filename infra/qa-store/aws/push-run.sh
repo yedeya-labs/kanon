@@ -31,13 +31,13 @@ if [ ! -f "$report" ]; then
   #
   # The AUDIT has no change-gate and no skip path: its agent is instructed to write
   # the summary on turn one, unconditionally. An absent report there is always a
-  # degraded run (audit #12 §1) — on 2026-07-22 that combination of this early
+  # degraded run (RA-504) — on 2026-07-22 that combination of this early
   # `exit 0` and the workflow's matching one produced a fully green run with no S3
   # report and no store row, invisible on every surface. agent-code-audit.yml now
   # synthesizes a `no_report` summary before calling this, so in the normal path we
   # never get here; this is the backstop for any other caller.
   if [ "$kind" = "audit" ]; then
-    echo "push-run: no report at '$report' — an audit run must always produce one (audit #12 §1); failing rather than skipping" >&2
+    echo "push-run: no report at '$report' — an audit run must always produce one (RA-504); failing rather than skipping" >&2
     exit 1
   fi
   echo "push-run: no report at '$report'; skipping (benign)"
@@ -49,7 +49,7 @@ region="${QA_AWS_REGION:?QA_AWS_REGION unset}"
 : "${QA_DYNAMO_TABLE:?QA_DYNAMO_TABLE unset}"
 
 # Deterministic per-run key (UTC). Matches the qa-runs layout: <kind>/<ts>.json.
-# QA_RUN_TS lets the one-time backfill (backfill.sh) preserve each historical run's
+# QA_RUN_TS lets a one-time backfill preserve each historical run's
 # original timestamp instead of stamping "now".
 ts="${QA_RUN_TS:-$(date -u +%Y%m%dT%H%M%SZ)}"
 commit="$(jq -r '.commit // "unknown"' "$report")"
@@ -106,7 +106,7 @@ case "$kind" in
     fr="$(jq -r '.files_read // 0' "$report")"
     lc="$(jq -r '.lines_cited // 0' "$report")"
     tn="$(jq -r '.turns // 0' "$report")"
-    # Liveness flags (audit #12 §1) — `no_report`: the agent wrote nothing and the
+    # Liveness flags (RA-504) — `no_report`: the agent wrote nothing and the
     # workflow synthesized this row; `report_invalid`: it wrote something unparseable;
     # `complete`: it reached its final write.
     #
@@ -117,7 +117,7 @@ case "$kind" in
     #
     # But ONLY when the source report actually carries the key. agent-code-audit.yml's
     # stamp step normalizes all three before this runs, so a live run always has them.
-    # backfill.sh does not go through that step — it replays historical reports written
+    # A one-time backfill does not go through that step — it replays historical reports written
     # before this protocol existed, and defaulting those to `false` would fabricate a
     # degraded signal: the docs promise pre-change rows have NEITHER attribute ("unknown,
     # not false"), and the playbook has the Overseer read `complete: false` as "a partial

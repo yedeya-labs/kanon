@@ -106,9 +106,12 @@ describe('the role trusts exactly the kanon-qa-store environment (decision 9)', 
   });
 
   it('may write and read the store, and delete only COVERAGE rows', () => {
-    const [s3, ddb, del, ...rest] = fresh().Resources.Role.Properties.Policies[0].PolicyDocument.Statement;
+    const [s3, list, ddb, del, ...rest] = fresh().Resources.Role.Properties.Policies[0].PolicyDocument.Statement;
     expect(rest).toEqual([]);
     expect(s3.Action).toEqual(['s3:PutObject', 's3:GetObject']);
+    // Without ListBucket on the bucket, S3 answers a missing report with 403, which export.mjs
+    // (rightly) doesn't read as "no report", so one missing report would fail the whole export.
+    expect(list).toEqual({ Effect: 'Allow', Action: 's3:ListBucket', Resource: { 'Fn::GetAtt': ['Bucket', 'Arn'] } });
     expect(ddb.Action).toEqual(['dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:GetItem', 'dynamodb:Query']);
     expect(del.Action).toBe('dynamodb:DeleteItem');
     expect(del.Condition).toEqual({ 'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': ['COVERAGE'] } });
@@ -322,6 +325,17 @@ describe('the scripts, against a stub aws', () => {
       expect(windowed).toEqual(expect.arrayContaining(['pk = :p AND sk > :s', '--no-scan-index-forward']));
       const ledger = logged().find((c) => c.join(' ').includes('AREAS'))!;
       expect(ledger).toContain('pk = :p');
+    });
+
+    it('a forbidden report is not a missing one: a 403 fails the export, so a wrong role is never read as "no report"', () => {
+      aws([
+        'case "$*" in',
+        `  *RUN#explorer*) echo '{"Items":[{"pk":{"S":"RUN#explorer"},"sk":{"S":"20261003T000000Z"}}]}';;`,
+        '  s3\\ cp*) echo "fatal error: An error occurred (403) when calling the HeadObject operation: Forbidden" >&2; exit 1;;',
+        `  *) echo '{"Items":[]}';;`,
+        'esac',
+      ].join('\n'));
+      expect(run('export', { KIND: 'overseer', FROM: '20260904T000000Z' })).toMatchObject({ status: 1, stdout: expect.stringContaining('the export failed') });
     });
 
     it('an audit export reads the code-reading ledger alone', () => {

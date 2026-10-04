@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# One-time maintenance sweep (audit #9 §4): delete the stale `signal sweep (dynamic):`
+# One-time maintenance sweep (an Overseer audit): delete the stale `signal sweep (dynamic):`
 # COVERAGE keys from the L1 index (DynamoDB, RA-84).
 #
 # Background: the Explorer's store-writer once keyed COVERAGE rows as
-#   "signal sweep (dynamic): /admin/training-sites/[id]"
-# but now writes the bare route as the key ("/admin/training-sites/[id]"). The old
+#   "signal sweep (dynamic): /admin/items/[id]"
+# but now writes the bare route as the key ("/admin/items/[id]"). The old
 # keys were never cleaned up, so they sit frozen at their last pre-switch status
-# (e.g. `failed` @ 77bdff7, 07-08) and read as permanent false reds for any query
+# and read as permanent false reds for any query
 # that doesn't know the legacy prefix — shadowing the real, green key. Three audits
 # have carried this; this script is the "get it done" arm of the proposal.
 #
@@ -19,7 +19,7 @@
 # so run it where those resolve to the store — locally with the store's credentials, or
 # through Kanon's maintenance workflow (`qa-store-aws-maintenance.yml`), which has the store's role.
 #
-# Usage:  scripts/qa/purge-legacy-coverage.sh [--apply]
+# Usage:  infra/qa-store/aws/purge-legacy-coverage.sh [--apply]
 set -euo pipefail
 
 region="${QA_AWS_REGION:?QA_AWS_REGION unset}"
