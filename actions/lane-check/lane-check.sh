@@ -56,6 +56,18 @@ fi
 
 # ── The callers ─────────────────────────────────────────────────────────────────────────
 level() { case "$1" in write) echo 2 ;; read) echo 1 ;; *) echo 0 ;; esac; }
+# Is this workflow document a reusable workflow? `on: workflow_call`, as a key, a list item or
+# the one event.
+is_reusable() {
+  jq -e '.on as $o | ($o | type) as $t
+    | ($t == "object" and ($o | has("workflow_call"))) or ($t == "array" and ($o | index("workflow_call") != null)) or ($o == "workflow_call")' <<<"$1" >/dev/null 2>&1
+}
+# Kanon's own source tree: the spine as a reusable workflow, and this check's own script, at
+# the paths Kanon ships them. No adopter's repository holds both.
+KANON_TREE=0
+if [ -f actions/lane-check/lane-check.sh ] && [ -f ".github/workflows/$SPINE.yml" ] && is_reusable "$(json ".github/workflows/$SPINE.yml" || true)"; then
+  KANON_TREE=1
+fi
 CALLERS=0
 ROLES=""
 DOCS=""
@@ -96,12 +108,23 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
   # find a lane's runs, and dispatch it, by the caller's file name: the review lane's
   # (`merge-gate.mjs`, the review-run evidence), the revise lanes' (the reconciler), and every
   # caller's (the health check, which watches `agent-*.yml`). Under another name those reads
-  # come back empty, which the recoveries read as "nothing is parked". The one exception is
-  # Kanon's own repository, where that path holds the lane itself, so its caller can't take it.
+  # come back empty, which the recoveries read as "nothing is parked".
+  #
+  # GitHub files a run under the TOP-LEVEL workflow's file name, so a caller that is itself a
+  # reusable workflow, a wrapper some other workflow calls, has its runs filed under that other
+  # name even at the right path (kanon#217). It is refused.
+  if is_reusable "$doc"; then
+    fail "$f" "calls the Kanon lane $lane but is itself a reusable workflow (\`on: workflow_call\`): GitHub files its runs under the workflow that calls it, so Kanon's scripts can't find them by this file name. Put the lane's triggers here and call the lane from this file (K-LAYOUT-18)"
+  fi
+  # The one exception to the path: Kanon's own repository, where `.github/workflows/<lane>.yml`
+  # holds the lane itself, so its caller can't take that path (its review caller is
+  # `review.yml`). Recognised by the checkout being Kanon's source tree (`KANON_TREE` below),
+  # and the file at the lane's path being a reusable workflow, never by a name or setting an
+  # adopter could share by accident (kanon#217).
   if [ "$f" != ".github/workflows/$lane.yml" ]; then
     taken="$(json ".github/workflows/$lane.yml" || true)"
     [ -n "$taken" ] || taken='{}'
-    if ! jq -e '(.on | type) == "object" and (.on | has("workflow_call"))' <<<"$taken" >/dev/null 2>&1; then
+    if ! { [ "$KANON_TREE" = 1 ] && is_reusable "$taken"; }; then
       fail "$f" "calls the Kanon lane $lane, so it lives at .github/workflows/$lane.yml: Kanon's scripts find this lane's runs, and dispatch it, by that file name (K-LAYOUT-18)"
     fi
   fi
