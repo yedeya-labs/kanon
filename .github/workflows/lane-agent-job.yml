@@ -1,7 +1,7 @@
-# The agent's job of the agent-lane spine (kanon#274).
+# The agent's job of the agent-lane spine.
 #
-# CALLED ONLY BY `agent-lane.yml`, whose header says why this is a job of its own: the App's
-# private key never enters it. `agent-lane.yml`'s `mint` job mints the lane's narrowed token
+# CALLED ONLY BY `agent-lane.yml`. It is a job of its own because the App's private key never
+# enters it (`K-AGENT-49`). `agent-lane.yml`'s `mint` job mints the lane's narrowed token
 # and hands it here as the `app-token` secret, hex-encoded; the first step after the start
 # stamp decodes and masks it, and the last step revokes it. Everything between is the spine
 # as it was: the checkout, Kanon's path, the project-setup hook, the three blocks and the
@@ -155,6 +155,13 @@ on:
           bot account, which the project-setup hook and `agent-setup` check the identity against.
         required: true
         type: string
+      mint-attempt:
+        description: >-
+          The run attempt the spine's `mint` job minted the token for. A partial re-run
+          ("Re-run failed jobs") reuses that job's outputs, so a token from an earlier attempt,
+          already revoked, arrives here; the token step refuses it by name.
+        required: true
+        type: string
     outputs:
       # THE CLASSIFIER'S VERDICT ON A RED RUN (RA-2118) — `unavailable` / `exhausted` /
       # `failed` / `not-reached`, empty on a green run. A caller branches on it after the
@@ -200,21 +207,30 @@ jobs:
         id: job
         run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
-      # THE TOKEN, UNSEALED AND MASKED BEFORE ANYTHING CAN PRINT IT (kanon#274). It arrives
+      # THE TOKEN, UNSEALED AND MASKED BEFORE ANYTHING CAN PRINT IT (`K-AGENT-49`). It arrives
       # hex-encoded as a secret, so the encoded form is already masked; the decoded token is
       # registered here, in the step that first holds it. `id: app-token` and the `token` /
       # `app-slug` outputs keep every later step reading `steps.app-token.outputs.*` exactly as
       # it did when the mint was this job's step. An empty or malformed value is a failed mint
-      # upstream: this step fails, and `agent-finish` records `token=failure`.
+      # upstream: this step fails, and `agent-finish` records `token=failure`. So is a token minted
+      # for an earlier attempt, which a partial re-run hands in (see the spine's header): it was
+      # revoked when that attempt ended, so the step says how to re-run instead of letting the
+      # checkout fail on bad credentials.
       - name: Receive the App token
         id: app-token
         env:
           SEALED: ${{ secrets.app-token }}
           APP_SLUG: ${{ inputs.app-slug }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$'; then
             echo "::error title=agent-lane::no App token arrived from the spine's mint job; see that job's log for why the mint failed."
+            exit 1
+          fi
+          if [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error title=agent-lane::this is attempt $RUN_ATTEMPT, but the App token was minted for attempt $MINT_ATTEMPT and revoked when that attempt ended. Use \"Re-run all jobs\", not \"Re-run failed jobs\": the token is minted in a job of its own, and only re-running it mints a fresh one."
             exit 1
           fi
           # Decoded with printf and sed alone, so the step needs nothing the runner may lack.
@@ -379,7 +395,7 @@ jobs:
         if: failure() && steps.finish.outputs.retry == 'api_error'
         run: echo "The model API failed part-way through. The revise lanes are retried once for this head after the cool-down (RA-2519); any other lane is NOT retried automatically — re-dispatch it once the cause clears."
 
-      # THE TOKEN DIES WITH THE JOB (kanon#274). `create-github-app-token`'s post step did this
+      # THE TOKEN DIES WITH THE JOB (`K-AGENT-49`). `create-github-app-token`'s post step did this
       # while the mint was a step here; the mint now skips it, because its own job ends first.
       # Last, after every step that uses the token, `agent-finish` included. Revoking needs only
       # the token itself, never the key. Never reds the run: a token that already expired (the

@@ -4,16 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 /**
- * kanon#274: no job that runs an agent, the project's code, or a pull request's code holds an
- * App's private key.
- *
- * WHY THE JOB, NOT THE STEP. Step order inside a job is not a boundary an agent with a shell
- * respects. The runner's action cache is writable by the job's user, and a node action's post
- * step is handed its inputs again: `create-github-app-token`'s post step runs at job end, after
- * the agent, from a script the agent could have rewritten, with the key as `INPUT_PRIVATE-KEY`
- * (measured on a hosted runner, with a placeholder, in #274). The job's user also has `sudo`
- * and the `docker` group there. So a rule like "mint before the agent" would pass and protect
- * nothing; the rule is that the key is not referenced by the job at all.
+ * `K-AGENT-49` (kanon#274): no job that runs an agent, the project's code, or a pull request's
+ * code holds an App's private key. The rule's Why is in `rulebook/03-agents.md`: it is the
+ * job that must lack the key, not a step, so this checks jobs.
  *
  * WHAT COUNTS AS RUNNING SOMEONE ELSE'S CODE:
  *   • the agent: Kanon's `agent-run` block, or `claude-code-action` called directly;
@@ -123,9 +116,23 @@ describe('the spine mints in a job of its own and hands the agent\'s job the tok
   it('passes every other input through unchanged, under its own name', () => {
     const spineInputs = Object.keys(spine.on!.workflow_call!.inputs!).filter((k) => !k.startsWith('permission-'));
     const jobInputs = Object.keys(agentJob.on!.workflow_call!.inputs!);
-    expect(jobInputs.sort()).toEqual([...spineInputs, 'app-slug'].sort());
+    expect(jobInputs.sort()).toEqual([...spineInputs, 'app-slug', 'mint-attempt'].sort());
     for (const k of spineInputs) expect(run.with?.[k], k).toBe(`\${{ inputs.${k} }}`);
     expect(run.with?.['app-slug']).toBe('${{ needs.mint.outputs.app-slug }}');
+    expect(run.with?.['mint-attempt']).toBe('${{ needs.mint.outputs.attempt }}');
+  });
+
+  it('refuses a token minted for another attempt, by name, before the checkout uses it', () => {
+    // "Re-run failed jobs" re-runs the agent's job alone, with the earlier attempt's token,
+    // which that attempt revoked: without this the checkout fails on bad credentials.
+    expect(mint.outputs?.attempt).toBe('${{ github.run_attempt }}');
+    const receive = steps.find((s) => s.id === 'app-token')!;
+    expect(receive.env).toMatchObject({ MINT_ATTEMPT: '${{ inputs.mint-attempt }}', RUN_ATTEMPT: '${{ github.run_attempt }}' });
+    const script = String(receive.run);
+    const check = script.indexOf('if [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]');
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(script.indexOf('token=$TOKEN'));
+    expect(script.slice(check)).toMatch(/Re-run all jobs[\s\S]*exit 1/);
   });
 
   it('masks the token in the step that first holds it, before writing it to an output', () => {

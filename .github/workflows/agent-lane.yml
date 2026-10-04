@@ -68,20 +68,12 @@
 # `database` IS STILL THE LANE'S SWITCH: a lane that edits prose (`lead-revise`) passes
 # `database: false` and starts nothing, whatever the project declares.
 #
-# THE APP'S PRIVATE KEY NEVER ENTERS THE AGENT'S JOB (kanon#274). Two jobs, not one:
+# THE APP'S PRIVATE KEY NEVER ENTERS THE AGENT'S JOB (`K-AGENT-49`, which says why). Two jobs:
 #   • `mint` holds the key, and nothing else runs there: no checkout, no project code, no
 #     agent. It mints the lane's narrowed token with `skip-token-revoke`, because its post
 #     step would otherwise revoke the token the moment this job ends, and hands it on.
 #   • `run` is `lane-agent-job.yml`, the job that checks out, runs the project's hook and the
 #     agent. It is given the TOKEN, never the key, and revokes the token itself when it ends.
-# One job used to do both, and that is not a boundary an agent with a shell respects. The
-# runner's action cache (`_work/_actions/`) is writable by the job's user, and a node
-# action's post step is handed its inputs again: `create-github-app-token`'s post step ran
-# at job end, after the agent, from a script the agent could have rewritten, with the private
-# key in its environment as `INPUT_PRIVATE-KEY`. Measured on a hosted runner with a harmless
-# placeholder: the cached script is `runner`-owned, a rewrite made by a later step ran in the
-# post step, and the post step saw the key input. The job's user also has `sudo` and the
-# `docker` group there, so no check inside the job can close it: the key has to be absent.
 #
 # HOW THE TOKEN CROSSES, and why that way. GitHub drops a job output that contains a masked
 # value, so `mint` hex-encodes the token. A job output is never printed, but a value used in a
@@ -92,6 +84,11 @@
 # before any step can print it. What is left, accepted by the Owner (2026-10-04): the
 # hex-encoded token sits in GitHub's stored job outputs for this run, short-lived (an hour at
 # most) and revoked when `run` ends.
+#
+# A RE-RUN MUST RE-RUN BOTH JOBS. "Re-run failed jobs" on a red run re-runs `run` alone and
+# hands it the token `mint` minted for the earlier attempt, which `run` revoked as it ended.
+# So `mint` also passes on the attempt it minted for, and `run`'s token step refuses a token
+# from another attempt by name, telling the operator to use "Re-run all jobs".
 name: Agent lane
 
 on:
@@ -288,7 +285,7 @@ on:
 # The App token still carries every write.
 
 jobs:
-  # HOLDS THE KEY, AND ONLY THE MINT (kanon#274; see the header). No step here reads the
+  # HOLDS THE KEY, AND ONLY THE MINT (`K-AGENT-49`; see the header). No step here reads the
   # workspace or runs anything a lane or its agent wrote, so nothing can rewrite the cached
   # action before its post step, which skips the revoke and returns.
   mint:
@@ -297,6 +294,8 @@ jobs:
     outputs:
       sealed: ${{ steps.seal.outputs.sealed }}
       app-slug: ${{ steps.app-token.outputs.app-slug }}
+      # The attempt this token was minted for. A partial re-run reuses this job's outputs.
+      attempt: ${{ github.run_attempt }}
     steps:
       - name: Mint App token
         id: app-token
@@ -326,7 +325,7 @@ jobs:
           TOKEN: ${{ steps.app-token.outputs.token }}
         run: printf 'sealed=%s\n' "$(printf %s "$TOKEN" | od -An -v -tx1 | tr -d ' \n')" >> "$GITHUB_OUTPUT"
 
-  # THE AGENT'S JOB, GIVEN THE TOKEN AND NEVER THE KEY (kanon#274). `!cancelled()`, not the
+  # THE AGENT'S JOB, GIVEN THE TOKEN AND NEVER THE KEY (`K-AGENT-49`). `!cancelled()`, not the
   # implicit `success()`: a failed mint still reaches `run`, whose token step then fails and
   # whose `agent-finish` records the run with `token=failure`, as it did when the mint was
   # that job's own step.
@@ -352,6 +351,7 @@ jobs:
       push-probe: ${{ inputs.push-probe }}
       quality-pr-label: ${{ inputs.quality-pr-label }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
+      mint-attempt: ${{ needs.mint.outputs.attempt }}
     secrets:
       app-token: ${{ needs.mint.outputs.sealed }}
       claude-token: ${{ secrets.claude-token }}

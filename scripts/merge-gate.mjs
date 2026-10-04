@@ -83,7 +83,8 @@ export { SELF_CHECKS, REVIEW_EVENT_CHECKS, ESCALATION_HEADER } from './lib/proto
  *   - `Implement (Implementer) — revise` / `revise / filter` decides whether a changes-request
  *     needs answering. Since RA-2709 the lane is Kanon's reusable workflow, which this repo's
  *     `revise` job calls, so GitHub names its jobs `revise / <job>`. Its agent job
- *     (`revise / revise / run / run`, through the spine, with its `revise / revise / mint` before it\n *     since kanon#274) is NOT excluded: it runs the Implementer and
+ *     (`revise / revise / run / run`, through the spine, with its `revise / revise / mint` before it
+ *     since kanon#274) is NOT excluded: it runs the Implementer and
  *     pushes, and when it is genuinely running the Merger must wait for it.
  *   - `Merge Reconcile (Reviewer)` / `reconcile / filter` checks whether the PR is already
  *     MERGED, and skips every open one; its `reconcile` job never runs on an open PR. Since

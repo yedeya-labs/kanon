@@ -517,6 +517,16 @@ These rules apply `K-PRIN-19` to the lanes and the workflows around them.
 
 **Class.** framework
 
+### `K-AGENT-49` A job that runs an agent or code it didn't write never holds an App's private key
+
+**Rule.** A job that runs an agent, a project's own action or a branch other than the default branch never references an App's private key. The key goes to a job that mints the token and runs nothing else. That job hands the token to the agent's job through a channel that arrives masked, a called workflow's `secrets:`, never an input or an `env:` value. The agent's job masks the token as soon as it holds it and revokes it when it ends.
+
+**Why.** Inside one job, step order is not a boundary. The runner's action cache and the workspace are writable by the job's user, and on a hosted runner that user also has `sudo` and the `docker` group. A step that runs later, including a post step that is handed its inputs again, can be made to run whatever an earlier step wrote. So a key minted "before the agent" in the same job is reachable by the agent. A leaked private key mints tokens with the App's full grant, on every repository the App is installed on, until someone rotates it. The token the agent holds anyway is narrowed, covers one repository, and expires within the hour. A check inside the job can't close this, because the same actor can rewrite the check; the key has to be absent.
+
+**Enforced by.** [`tests/unit/app-key-isolation.test.ts`](../tests/unit/app-key-isolation.test.ts), on Kanon's own workflows. It fails when a job references a private key by name (`secrets.*_PRIVATE_KEY`, `secrets.app-private-key` or a computed `secrets[…]`) and runs the agent (`agent-run` or `claude-code-action`), a `./` action, or `actions/checkout` with a ref other than the default branch. The lanes not yet split are listed as exact exceptions, so fixing one fails the test until its row goes. It also pins the spine's handoff: the key-holding `mint` job, the `secrets:` channel, the mask before any output, and the revoke as the last step. It doesn't see a key passed to a called workflow under another secret name, or a branch checked out by a `run:` step. For an adopter's own workflows, prose only.
+
+**Class.** framework
+
 ## Examples from the reference adopter
 
 - **Bail list** (`K-AGENT-13`): data migrations, auth and credential changes, security changes and destructive schema changes; additive schema and unique-index changes were allowed once conformance tests failed closed on them.
