@@ -194,6 +194,15 @@ describe("a review on a PR that was never the Merger's starts no runner (RA-2596
     expect(logins.steps!.some((s) => /actions\/checkout/.test(String(s.uses ?? '')))).toBe(false);
   });
 
+  it('checks out the default branch for merge-gate.mjs, never the PR’s merge ref (K-MERGE-17, kanon#210)', () => {
+    // `merge-gate.mjs` reads `REVIEWER_LOGIN`, whose approval merges, from this checkout. With
+    // no `ref` a review event checks out `refs/pull/<n>/merge`, and a stacked PR's merge ref
+    // carries its base branch's register.
+    const checkouts = merge.steps!.filter((s) => /^actions\/checkout@/.test(String(s.uses ?? '')));
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0]!.with?.ref).toBe('${{ github.event.repository.default_branch }}');
+  });
+
   it('runs for an approval on an open, labelled implementer PR — the green zone', () => {
     expect(runs(review())).toBe(true);
     expect(runs(review({ labels: ['agent:triage'] }))).toBe(true);
