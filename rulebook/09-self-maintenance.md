@@ -112,7 +112,7 @@ This chapter governs how a Kanon pipeline keeps itself honest: the guards that c
 
 **Why.** A rolling issue deduplicates for free and avoids issue spam. Closing its own superseded audit is the only thing the Overseer ever closes. An issue the adopter can't act on is noise in its backlog, and filing it on Kanon directly would carry the adopter's data across ADR 0007's boundary, so a draft the adopter reviews and files by hand is the one channel. Findings from one audit usually touch the same surfaces, so splitting them multiplies review rounds and conflicts for no gain.
 
-**Enforced by.** Kanon's Overseer lane: its agent's token reads only, and [`scripts/overseer-file.mjs`](../scripts/overseer-file.mjs) files what the agent wrote down, routing each finding by its subject and writing the `## Upstream` heading itself; [`tests/library/overseer-file.test.ts`](../tests/library/overseer-file.test.ts) holds the routing. Batching is prose only.
+**Enforced by.** Kanon's Overseer lane: its agent's token reads only, and [`scripts/overseer-file.mjs`](../scripts/overseer-file.mjs) files what the agent wrote down, routing each finding by its subject and writing the `## Upstream` heading itself; [`tests/library/overseer-file.test.ts`](../tests/library/overseer-file.test.ts) holds the routing. That binds the agent's classification, not an agent steered into rewriting the step it runs before: the step runs in the agent's job, which the agent can change, so for that case the routing is prose only, bounded by the filing token reaching only the adopter's own issues. Batching is prose only.
 
 **Class.** framework
 

@@ -56,8 +56,9 @@ const DIRECT: Record<string, { step: string; perms: Perms }> = {
 /** A lane's second minting step, keyed `<lane>#<step id>`. */
 const MORE: Record<string, Perms> = {
   // Files the findings and the audit issue, and comments on and closes the prior audit, after
-  // the agent has finished, so the agent never holds it (plan 0004 step 13, decision 12).
-  'agent-overseer.yml#file-token': { issues: 'write' },
+  // the agent has finished, so the agent never holds it (plan 0004 step 13, decision 12). The
+  // capability interlock's count reads each linked pull request's state.
+  'agent-overseer.yml#file-token': { issues: 'write', 'pull-requests': 'read' },
 };
 /** Each lane that calls the spine, and the token its agent gets there. */
 const SPINE_CALLERS: Record<string, Perms> = {

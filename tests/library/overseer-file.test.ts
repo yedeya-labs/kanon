@@ -107,6 +107,12 @@ describe('who can act decides where a finding goes', () => {
     expect(r.audit!.body).toContain('### No subject');
   });
 
+  it('never files a finding whose title the capability anchor would search', () => {
+    const r = run(report([finding('playbook', 'The audit-summary title is ambiguous')]));
+    expect(r.findings).toEqual([]);
+    expect(r.audit!.body).toContain('- **Held:** The audit-summary title is ambiguous: its title holds `audit-summary`, which the capability anchor searches for.');
+  });
+
   it('the Upstream heading is in every audit, empty or not', () => {
     const r = run(report([]));
     expect(r.audit!.body).toMatch(/\n## Upstream\n\n[^\n]+\n\nNone this run\.\n$/);

@@ -108,7 +108,7 @@ describe('who files what (decision 12)', () => {
     });
     expect(byId('agent').with?.['github-token']).toBe('${{ steps.app-token.outputs.token }}');
     const file = byId('file-token');
-    expect(Object.entries(file.with ?? {}).filter(([k]) => k.startsWith('permission-'))).toEqual([['permission-issues', 'write']]);
+    expect(Object.entries(file.with ?? {}).filter(([k]) => k.startsWith('permission-'))).toEqual([['permission-issues', 'write'], ['permission-pull-requests', 'read']]);
     expect(at((s) => s.id === 'agent')).toBeLessThan(at((s) => s.id === 'file-token'));
     // Nothing between the agent and the filing step hands the agent the filing token.
     for (const s of steps.slice(0, at((s) => s.id === 'file-token'))) expect(JSON.stringify(s)).not.toContain('file-token');

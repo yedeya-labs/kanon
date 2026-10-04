@@ -31,8 +31,18 @@
 # ── WHO FILES WHAT (decision 12) ─────────────────────────────────────────────────────────
 # The agent's token reads only. It writes its audit and findings to `qa-overseer-audit.json`,
 # each finding naming its subject, and a step after it, on a token that may write issues, files
-# them by who can act: `scripts/overseer-file.mjs`. A Kanon-actionable finding is never filed in
-# the adopter's repository, whatever the agent intended.
+# them by who can act: `scripts/overseer-file.mjs`. A finding the agent classes as
+# Kanon-actionable is never filed in the adopter's repository, and neither is one it classes
+# wrongly by subject: the step, not the agent, decides from the subject.
+#
+# WHAT THIS DOES NOT DEFEND. The filing step runs in the agent's job, after it. The agent has
+# `Bash`, and reads untrusted issue and review bodies, so a steered agent could rewrite what the
+# step runs before the filing token is used: `$KANON` is the runner's action cache, which the
+# job's user can write, and `$GITHUB_PATH` / `$GITHUB_ENV` (`NODE_OPTIONS`) change the `node`
+# it runs. So the routing binds the agent's classification, not an agent that subverts the
+# runner. The bound: the filing token is `issues: write` (and `pull-requests: read`) on the
+# adopter's own repository, which the agent held directly before this move, and nothing it holds
+# reaches Kanon. Filing from a job of its own, on a fresh runner, would close it.
 #
 # INERT until: the caller is on the default branch + the Overseer's App installed, with a row in
 # the App register + these secrets (plan 0001 §8):
@@ -436,6 +446,8 @@ jobs:
           client-id: ${{ secrets.OVERSEER_APP_ID }}
           private-key: ${{ secrets.OVERSEER_APP_PRIVATE_KEY }}
           permission-issues: write
+          # The interlock's count reads each linked pull request's state.
+          permission-pull-requests: read
 
       # THE OUTCOME DECISION, and the filing (decision 12). No report, or an unparseable one,
       # files nothing and reds the job: the whole audit was lost. An agent that exited non-zero

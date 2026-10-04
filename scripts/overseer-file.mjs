@@ -12,6 +12,11 @@
 // make that routing a judgement the agent could skip, so the agent's token reads only, and this
 // step, on a token that may write issues, does all the filing from what the agent wrote down.
 //
+// WHAT THIS DOES NOT DEFEND. It binds the agent's CLASSIFICATION, not an agent that subverts the
+// runner: this step runs in the agent's job, from the action cache, on the job's `node`, all of
+// which an agent with `Bash` can change before it runs (the lane's header says how, and what
+// the filing token can then reach: the adopter's own issues, as before the move, never Kanon).
+//
 // THE REPORT, `qa-overseer-audit.json`, written by the agent at the repository root:
 //
 //   { "audit": "<the audit issue's body, in Markdown>",
@@ -148,6 +153,9 @@ export function route(findings, interlock) {
   for (const finding of findings) {
     const { who, why } = classify(finding);
     if (who === 'kanon') { upstream.push({ finding, why }); continue; }
+    // The capability anchor searches `audit-summary in:title`, so a filed issue titled so, with
+    // a quoted `Watermark:` in its body, could become the anchor. It is never filed.
+    if (/audit-summary/i.test(finding.title)) { held.push({ finding, why: 'its title holds `audit-summary`, which the capability anchor searches for' }); continue; }
     if (!finding.capability) { file.push(finding); continue; }
     if (interlock === null) held.push({ finding, why: 'the capability interlock could not be counted, so it is closed' });
     else if (interlock > THRESHOLD) held.push({ finding, why: `the capability interlock is closed (${interlock} open, more than ${THRESHOLD})` });
