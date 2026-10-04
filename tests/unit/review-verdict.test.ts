@@ -867,3 +867,105 @@ describe("the review job runs none of the PR's code (kanon#185)", () => {
     expect(String(finish.with!.stages)).not.toMatch(/hook=/);
   });
 });
+
+/**
+ * kanon#248 — the agent's own shell is an allow-list, not only a sentence in its prompt.
+ *
+ * kanon#185 took the PR's code out of the job's steps, but the agent kept a bare `Bash`, so
+ * "RUN NONE OF THE PR'S CODE" bound it only as far as a PR's text could not talk it out of
+ * it. The flags now grant Bash for named `gh` subcommands only, and leave every other command
+ * to Claude Code's own read-only set, which refuses an executing or writing flag (the probe
+ * runs are in the PR). These read the flags the way claude-code-action does: full-line
+ * comments dropped, words shell-quoted, every value after `--allowedTools` up to the next
+ * flag taken, and each value split on commas.
+ */
+describe("the Reviewer's shell is an allow-list that runs no PR code (kanon#248)", () => {
+  type S = { id?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, unknown> };
+  const steps = wf.jobs.review.steps as S[];
+  const agent = steps.find((x) => x.id === 'agent')!;
+  const finish = steps.find((x) => x.uses === '$/actions/agent-finish')!;
+  const ARGS = String(agent.with!.claude_args);
+
+  const words = (args: string) => [...args.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+    .matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]!);
+  const allowedTools = (args: string) => {
+    const w = words(args);
+    const out: string[] = [];
+    for (let i = 0; i < w.length; i++) {
+      const eq = /^--allowed-?[Tt]ools=(.*)$/.exec(w[i]!);
+      if (eq) { out.push(eq[1]!); continue; }
+      if (!/^--allowed-?[Tt]ools$/.test(w[i]!)) continue;
+      while (i + 1 < w.length && !w[i + 1]!.startsWith('--')) out.push(w[++i]!);
+    }
+    return out.flatMap((v) => v.split(',')).map((t) => t.trim()).filter(Boolean);
+  };
+  const TEMP = '${{ runner.temp }}';
+
+  // THE LIST, pinned. A change to it is a security change the Owner reviews (the playbook's
+  // "What escalates"), so it is made here and in the workflow together, never in one alone.
+  const EXPECTED = [
+    'Read', 'Grep', 'Glob',
+    `Edit(/${TEMP}/qa-review-*.md)`,
+    'Bash(gh pr view:*)', 'Bash(gh pr diff:*)', 'Bash(gh pr checks:*)', 'Bash(gh pr list:*)',
+    'Bash(gh pr review:*)', 'Bash(gh pr edit:*)',
+    'Bash(gh issue view:*)', 'Bash(gh issue list:*)', 'Bash(gh issue create:*)', 'Bash(gh label list:*)',
+    'Bash(gh run view:*)', 'Bash(gh run list:*)', 'Bash(gh search:*)', 'Bash(gh api:*)',
+  ];
+
+  it('grants exactly the pinned list', () => {
+    expect([...allowedTools(ARGS)].sort()).toEqual([...EXPECTED].sort());
+  });
+
+  it('records the same flags it runs with, so config_fingerprint is the run\'s', () => {
+    expect(String(finish.with!.claude_args)).toBe(ARGS);
+  });
+
+  // Independent of the pinned list: a widening that edits both the workflow and EXPECTED
+  // still fails here. Each word is one that runs a program it is handed, or the project's.
+  const RUNS_CODE = new Set([
+    'node', 'bash', 'sh', 'zsh', 'dash', 'fish', 'python', 'python3', 'ruby', 'perl', 'php', 'lua', 'deno', 'bun',
+    'tsx', 'ts-node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack', 'make', 'pip', 'pip3', 'poetry', 'uv', 'cargo',
+    'go', 'gradle', 'gradlew', 'mvn', 'bundle', 'composer', 'playwright', 'docker', 'vitest', 'jest',
+    'env', 'xargs', 'timeout', 'nice', 'nohup', 'exec', 'eval', 'source', '.', 'command', 'builtin', 'watch',
+    'find', 'awk', 'sed', 'tee', 'git',
+  ]);
+  // `gh` subcommands that run a program or write the tree: an alias or extension can be any
+  // shell command, and these check out, download or clone into the workspace.
+  const GH_RUNS_CODE = /^gh (alias|extension|ext|codespace|pr checkout|run download|release download|repo clone|attestation)\b/;
+
+  it('grants Bash only for named, read-or-post commands: no bare Bash, interpreter, package manager or exec wrapper', () => {
+    const bash = allowedTools(ARGS).filter((t) => /^Bash\b/.test(t));
+    expect(bash.length, 'the check is not vacuous').toBeGreaterThan(5);
+    const bad = bash.filter((t) => {
+      const m = /^Bash\((.+?)(?::\*| \*)?\)$/.exec(t);
+      if (!m) return true; // bare `Bash`, or `Bash()`
+      const prefix = m[1]!.trim();
+      const first = prefix.split(/\s+/)[0]!;
+      return prefix.includes('*') || /[;&|`$<>()]/.test(prefix) || RUNS_CODE.has(first)
+        || (first === 'gh' && (prefix.split(/\s+/).length < 2 || GH_RUNS_CODE.test(prefix)));
+    });
+    expect(bad).toEqual([]);
+  });
+
+  it("writes only qa-review-*.md in the runner's temp directory, never the tree", () => {
+    const tools = allowedTools(ARGS);
+    expect(tools.filter((t) => /^(Write|NotebookEdit|MultiEdit)\b/.test(t) || t === 'Edit')).toEqual([]);
+    const edits = tools.filter((t) => /^Edit\(/.test(t));
+    expect(edits.length, 'the check is not vacuous').toBe(1);
+    for (const e of edits) expect(e).toMatch(/^Edit\(\/\$\{\{ runner\.temp \}\}\/qa-review-\*\.md\)$/);
+    // The file the stamp step matches the verdict against is one the rule lets the agent write.
+    const stamp = steps.find((x) => x.env?.VERDICT_FILE)!;
+    expect(String(stamp.env!.VERDICT_FILE)).toBe(`${TEMP}/qa-review-verdict.md`);
+  });
+
+  it('passes no flag that bypasses or widens the permission rules', () => {
+    expect(words(ARGS).filter((w) => /^--(dangerously-skip-permissions|allow-dangerously-skip-permissions|permission-mode|settings|add-dir|mcp-config)\b/.test(w))).toEqual([]);
+  });
+
+  it('tells the agent what its shell allows, so a refusal is not its first notice', () => {
+    const prompt = String(agent.with!.prompt);
+    expect(prompt).toContain('YOUR SHELL IS AN ALLOW-LIST (kanon#248)');
+    expect(prompt).toContain(`Write only to \`${TEMP}/qa-review-<name>.md\``);
+    expect(prompt).toMatch(/A shell variable other than `\$HOME`\s+\(`\$RUNNER_TEMP` included\) is refused/);
+  });
+});
