@@ -1,0 +1,37 @@
+# A trigger-only caller of Kanon's reconciler lane, as an adopter writes it (plan 0004 step 8).
+name: Lead (Lead) — reconcile
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: Tracking issue number of the project
+        required: true
+      apply:
+        description: Actually file and dispatch (unchecked = dry run)
+        type: boolean
+        default: false
+  pull_request:
+    types: [closed]
+  issues:
+    types: [closed]
+  schedule:
+    - cron: "25 * * * *"
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  checks: read
+  statuses: read
+  actions: read
+
+jobs:
+  tick:
+    uses: yedeya-labs/kanon/.github/workflows/agent-lead-reconcile.yml@v1.2.3
+    with:
+      project: ${{ inputs.project }}
+      apply: ${{ inputs.apply }}
+    secrets:
+      LEAD_APP_ID: ${{ secrets.LEAD_APP_ID }}
+      LEAD_APP_PRIVATE_KEY: ${{ secrets.LEAD_APP_PRIVATE_KEY }}

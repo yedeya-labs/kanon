@@ -1,0 +1,360 @@
+# QA pipeline — the Merger. RA-965. A Kanon lane (plan 0004, step 7).
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:`
+# this file at an exact Kanon tag, passes `pr_number` and `apply` through, and maps the two
+# secrets by name (never `secrets: inherit`). The `github` context in a called workflow is
+# the caller's, so both jobs' `if:` read the triggering event exactly as they did when this
+# file held the triggers itself.
+#
+# CALLER NAME: Merge (Merger)
+# The line above is read by `lane-check`, which fails a caller of this lane under any other
+# `name:`. GitHub reports a called lane's checks under its caller's name, and
+# `merge-gate.mjs` tells its own checks from the rest by it (`SELF_CHECKS`): under another
+# name the Merger waits on itself, forever and green.
+#
+# A person used to merge every PR by hand. That is the step that does not scale to "brief
+# the Lead and check in every couple of days", and it was the last one in the chain still
+# requiring a person for the ordinary case.
+#
+# THE GREEN ZONE IS NARROW ON PURPOSE. The Merger merges `agent:implement` / `agent:triage`
+# PRs authored by the Implementer, approved by the Reviewer ON THE CURRENT HEAD, with every
+# check green and no escalating path or label (`K-MERGE-4`). Everything else he leaves alone
+# — silently when it was never his (most review events in a repository are not), loudly
+# when it is his but a person must decide. Since RA-2596 the silent case costs no runner at
+# all where the review payload settles it on its own; see the `if:` on the `logins` job, and
+# on the `merge` job for the clauses that need a login (RA-2741).
+#
+# HE MERGES THROUGH THE FRONT DOOR. The Merger is deliberately NOT a ruleset bypass actor:
+# the default branch's ruleset still enforces its required checks and one approving review,
+# and the Reviewer's App holds `Contents: write` so its approval satisfies it. A bypass actor
+# bypasses the ENTIRE ruleset, checks included — under that design `merge-gate.mjs` would be
+# the only thing between a red build and the default branch. Here it is the second line.
+#
+# NOT THE DEFAULT GITHUB_TOKEN, and the run FAILS rather than falling back to it: a merge
+# pushed by GITHUB_TOKEN triggers no workflows, so the release workflow would never see the
+# commit, no release PR would open, and nothing would deploy. A silent break of the release
+# chain is precisely the failure this pipeline keeps producing.
+#
+# NO MODEL. This lane runs `merge-gate.mjs` and nothing else, so it takes no Claude token and
+# writes no telemetry row.
+#
+# INERT until: the caller is on the default branch + the Merger's App installed, with a row
+# in the App register + these secrets (plan 0001 §8):
+#   MERGER_APP_ID, MERGER_APP_PRIVATE_KEY
+# The App must be a DIFFERENT identity from the Reviewer — GitHub lets an App merge a PR it
+# approved, but keeping them apart is what makes the audit trail readable.
+name: Merge (Merger)
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#   pull_request_review: [submitted]
+#   workflow_run: CI, [completed], branches [<default branch>]
+#   schedule: "7 * * * *"          — the hourly floor
+#   workflow_dispatch              — inputs `pr_number` (optional: blank = every open PR) and
+#                                    `apply` (boolean, default false: report only)
+#
+# WHY EACH ONE. The review event is what the Merger acts on: an approval, and a `commented`
+# verdict he REPAIRS (RA-378) by re-dispatching the Reviewer. The Reviewer reviews only
+# after CI completes, so an approval arriving here already implies settled checks.
+#
+# The CI completion on the default branch is the sweep's real trigger (RA-1140). Measured on
+# the reference adopter, a sub-hourly cron there fired at 9% of nominal, with a 10.6-hour
+# gap; a CI completion on the default branch fires 12-37x/day, and at the moment that
+# MATTERS: a merge to the default branch is exactly what changes every other open PR's
+# mergeability. Filtered to the default branch deliberately, because every CI completion
+# would be ~40 runs/day for no extra signal.
+#
+# The cron is a floor, not the mechanism. It covers the case where nothing merges for a day
+# and a PR becomes ready on its own. It runs `gh` API calls only: no database, no build.
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` inputs, passed through. Empty on the other three
+    # triggers, and `apply` is a STRING here: a caller passes `${{ inputs.apply }}`, which a
+    # boolean input refuses as `''` on those triggers.
+    inputs:
+      pr_number:
+        description: A single PR to consider (blank = sweep every open PR)
+        required: false
+        type: string
+        default: ""
+      apply:
+        description: "'true' to actually merge, comment and label on a dispatch (anything else = report only)"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      MERGER_APP_ID:
+        required: true
+      MERGER_APP_PRIVATE_KEY:
+        required: true
+
+concurrency:
+  # Per PR on a review event; one global lane for the sweep. Never `cancel-in-progress`
+  # — cancelling a run mid-merge is how a PR ends up merged with nothing recorded.
+  group: qa-merge-${{ github.event.pull_request.number || inputs.pr_number || 'sweep' }}
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
+# ceiling and must grant at least this, or the run fails to start; `lane-check` fails a
+# caller that grants less. Every write is the App token's.
+permissions:
+  contents: read
+
+jobs:
+  # ── TWO PATHS, AND ONLY THE REVIEW PATH STARTS A SECOND RUNNER ─────────────────────
+  #
+  # A review is judged by who reviewed and whose PR it is, so its path needs two App
+  # logins and starts `logins` first. The sweep (CI completing on the default branch, the
+  # schedule, a dispatch) needs no login to decide whether to run, so it starts `merge`
+  # alone: `logins` is skipped, and a skipped job bills nothing. Decided by the Owner on
+  # 2026-10-04 (plan 0004, decision 8): a `logins` runner on every trigger billed about one
+  # minute per sweep, ~1,200-1,800 minutes a month on the reference adopter.
+  #
+  # EACH PATH HOLDS THE MEMBERSHIP GATE FIRST (K-AGENT-45, kanon#46). `logins` runs it before
+  # its register read, and `merge` runs it again before any token: on a sweep it is the only
+  # gate, and on a review it repeats the verdict `logins` reached, for no extra runner.
+  #
+  # ── THE LOGINS COME FROM THE APP REGISTER (plan 0004 P5, decision 8) ─────────────────
+  #
+  # The Merger job's `if:` compares a review's actor and the PR's author with two App
+  # logins, the Merger's and the Implementer's. Kanon cannot write an adopter's logins, so
+  # they come from the App register (`docs/qa/agent-identities.md`, `K-LAYOUT-6`): the same
+  # table `merge-gate.mjs` reads for `MERGER_LOGIN` and `IMPLEMENTER_LOGIN`. A job `if:`
+  # cannot read a file, so this job reads it and the Merger's `if:` reads this job's outputs.
+  #
+  # FROM THE DEFAULT BRANCH, OVER THE API, AND WITH NO CHECKOUT: a PR cannot choose the
+  # logins this job gates it by. (`merge-gate.mjs` still reads its own copies from the Merger
+  # job's checkout, which on a review event is the PR's merge ref; the slug assertion there
+  # compares both reads.) It is the read the revise lanes do in `read_login`, with the same
+  # parser, `actions/lane-check/app-register.awk`, from this Kanon tree. A missing register, a
+  # missing or repeated row, or a malformed slug FAILS this job, naming the role. An unknown
+  # login would otherwise read as "not the Implementer's PR" and skip every review event in
+  # silence.
+  #
+  # ── THE ROLE-NEUTRAL CLAUSES ARE HERE, SO A REVIEW THAT FAILS THEM STARTS NO RUNNER ──
+  #
+  # A job whose `if:` is false concludes `skipped` and bills nothing; a job that starts bills
+  # a whole minute on a private repository, however short it is. So every clause of a review
+  # that does not need a login is decided here, before any runner, and the Merger job below
+  # repeats it.
+  #
+  # A REVIEW ON A PR THAT IS CLOSED, A DRAFT, OR CARRIES NEITHER LANE LABEL IS SKIPPED
+  # (RA-2596). `pull_request_review` is repository-wide: measured on the reference adopter
+  # over Sept 1-27 2026, this workflow spent 1,166 minutes, 758 of them one-minute review runs
+  # that concluded the PR was not in the green zone. These are three of `mergeVerdict`'s own
+  # first four rules (`not-open`, `draft`, `not-implementer-label`), each a `quiet: true` skip
+  # that prints nothing, so deciding them here loses no output anyone reads. The fourth,
+  # `not-the-implementer`, needs the Implementer's login and is on the Merger job.
+  #
+  # THE SWEEP IS THE BACKSTOP, and it is what makes this safe rather than merely cheap: each
+  # sweep re-evaluates every open PR through the whole of `mergeVerdict`. So a review event
+  # declined wrongly costs up to an hour of latency, never a merge.
+  #
+  # DIRECTION, PER FIELD. `state` and `draft` are read to PROVE there is nothing to do, so
+  # they are written such that an absent field RUNS the job.
+  #
+  # COST: a few seconds per admitted review, billed as a minute on a private repository. It
+  # also starts for the reviews the login clauses alone decline: the Merger's own review
+  # events, and a labelled PR the Implementer did not author. Both are rare.
+  logins:
+    if: >-
+      github.event_name == 'pull_request_review'
+      && github.event.pull_request.state != 'closed'
+      && !github.event.pull_request.draft
+      && (contains(github.event.pull_request.labels.*.name, 'agent:implement')
+          || contains(github.event.pull_request.labels.*.name, 'agent:triage'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      member: ${{ steps.gate.outputs.member }}
+      # Bare slugs, as the register gives them. The Merger's `if:` adds `[bot]` where the
+      # payload renders one.
+      merger: ${{ steps.read.outputs.merger }}
+      implementer: ${{ steps.read.outputs.implementer }}
+    steps:
+      # THE MEMBERSHIP GATE COMES FIRST: this lane acts only when the event's actor is a
+      # member or a registered agent App. On a review, the actor is the reviewer. A refusal
+      # leaves `member=false`, a notice and a step-summary line, and every later step and job
+      # skips.
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+      - name: Read the Merger's and the Implementer's logins from the App register
+        id: read
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          err="$(mktemp)"
+          # No `ref`: the contents API reads the default branch.
+          text="$(gh api "repos/$REPO/contents/docs/qa/agent-identities.md" -H "Accept: application/vnd.github.raw" 2>"$err")" \
+            || { echo "::error title=App register::could not read docs/qa/agent-identities.md from the default branch of $REPO: $(cat "$err")"; exit 1; }
+          for role in Merger Implementer; do
+            login="$(printf '%s\n' "$text" | awk -v role="$role" -f "$KANON/actions/lane-check/app-register.awk" 2>"$err")" \
+              || { echo "::error title=App register::$(cat "$err")"; exit 1; }
+            key="$(printf '%s' "$role" | tr '[:upper:]' '[:lower:]')"
+            echo "$key=$login" >> "$GITHUB_OUTPUT"
+            echo "$role: \`$login\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  merge:
+    needs: logins
+    # TWO PATHS, ONE CONDITION. `!cancelled()` lets this job start with `logins` skipped,
+    # which a bare `needs` would not, so each path then states what it needs of `logins`:
+    #
+    #   - THE SWEEP (CI completing, the schedule, a dispatch): `logins` SKIPPED, as its `if:`
+    #     skips it on every event but a review. This job's own gate, below, is the sweep's.
+    #   - A REVIEW: `logins` SUCCEEDED, its gate ADMITTED the reviewer, and every clause of the
+    #     review gate holds over its outputs. A register that could not be read fails `logins`
+    #     and so skips this job, leaving the run red, named by `logins`.
+    #
+    # ONLY THE CALLER'S FOUR TRIGGERS. When this file held its triggers, no other event could
+    # reach it; as a called workflow it runs on whatever its caller is called on (Kanon's smoke
+    # calls it on pull requests, which must not reach the gate's API reads).
+    #
+    # A CANCELLED CI run is skipped: on the default branch those are superseded runs, and the
+    # push that superseded them fires its own. A third of the reference adopter's default-branch
+    # CI runs are cancelled.
+    #
+    # EVERY CLAUSE OF THE REVIEW GATE IS STILL HERE (decision 8). The role-neutral ones repeat
+    # the `logins` job's, so this expression reads whole on its own; the role clauses compare
+    # against that job's outputs instead of literals.
+    #
+    # The Merger must not answer his own REVIEW events. He posts comments and merges, and a
+    # merge closes a PR — without this, an escalation comment is one more event to process.
+    #
+    # SCOPED TO THE REVIEW EVENT, and the scoping is load-bearing (RA-1140). On a
+    # `workflow_run` event `github.actor` is the actor of the run that TRIGGERED it — so after
+    # the Merger merges, the resulting push to the default branch runs CI as the Merger, and a
+    # blanket actor guard would skip the sweep at the exact moment it is most useful: one merge
+    # has just changed every other open PR's mergeability. The guard would have failed
+    # silently — the `if:` simply never matching, a green run, nothing done.
+    #
+    # Letting `workflow_run` through does mean a merge can trigger a sweep that merges again.
+    # That cascade is bounded by the set of mergeable PRs and drains it, which is the point; it
+    # adds no default-branch CI runs beyond the ones each merge causes anyway, and the `sweep`
+    # concurrency group serialises it.
+    #
+    # ── AND NEITHER DOES A REVIEW THAT WAS NEVER HIS (RA-2596) ───────────────────────
+    #
+    # The fourth of `mergeVerdict`'s first rules, `not-the-implementer`, is decided here,
+    # because it needs the Implementer's login. The identity fields have no fail-open spelling
+    # — a gate that asks "is this the Implementer's" cannot be written so that an absent field
+    # runs the job — and they read the same register row `merge-gate.mjs` reads for
+    # `IMPLEMENTER_LOGIN`: rename the App and both stop matching together, which stops merging
+    # altogether rather than merely delaying it. `tests/unit/merge-lane.test.ts` evaluates both
+    # jobs' conditions against a fixture register.
+    #
+    # BOTH SPELLINGS OF THE LOGIN, for RA-1007's reason: one identity is rendered three ways
+    # across three endpoints (`app/<slug>`, `<slug>[bot]`, bare `<slug>`). A webhook payload
+    # gives `<slug>[bot]`; accepting the bare slug as well costs one clause and removes the
+    # single guess in the expression.
+    if: >-
+      !cancelled()
+      && ((contains(fromJSON('["workflow_run","schedule","workflow_dispatch"]'), github.event_name)
+           && needs.logins.result == 'skipped'
+           && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'cancelled'))
+          || (github.event_name == 'pull_request_review'
+              && needs.logins.result == 'success'
+              && needs.logins.outputs.member == 'true'
+              && github.actor != format('{0}[bot]', needs.logins.outputs.merger)
+              && github.event.pull_request.state != 'closed'
+              && !github.event.pull_request.draft
+              && (github.event.pull_request.user.login == format('{0}[bot]', needs.logins.outputs.implementer)
+                  || github.event.pull_request.user.login == needs.logins.outputs.implementer)
+              && (contains(github.event.pull_request.labels.*.name, 'agent:implement')
+                  || contains(github.event.pull_request.labels.*.name, 'agent:triage'))))
+    runs-on: ubuntu-latest
+    # Bounds a hang (RA-1336). Actions' default cap is 360m. Sized at ~3x the longest real run
+    # measured on the reference adopter, so it never truncates work.
+    timeout-minutes: 30
+    steps:
+      # THE MEMBERSHIP GATE, FIRST HERE TOO: on the sweep it is the lane's only gate — on a
+      # finished CI run the actor is whoever pushed the commit it ran on, on the schedule
+      # whoever last changed it, on a dispatch whoever ran it — and on a review it repeats the
+      # verdict `logins` reached. A refusal skips every later step, and the run stays green.
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+      # The checkout is `merge-gate.mjs`'s working tree: it reads the App register from it for
+      # `MERGER_LOGIN` and `IMPLEMENTER_LOGIN`, and the escalation file from the default branch
+      # over the API (`K-MERGE-17`). Nothing in it runs.
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.member == 'true'
+
+      - name: Mint merger App token
+        id: app-token
+        if: steps.gate.outputs.member == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.MERGER_APP_ID }}
+          private-key: ${{ secrets.MERGER_APP_PRIVATE_KEY }}
+          # Narrowed to what `merge-gate.mjs` uses (#48, `K-AGENT-46`), which is the Merger's
+          # whole grant: it merges (`contents`, `pull-requests`), comments and labels
+          # (`issues`), re-dispatches the review lane on a COMMENT verdict (`actions`), and
+          # reads the head's check runs and status contexts for the rollup (`checks`,
+          # `statuses`), which come back SHORT rather than as an error without them.
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-actions: write
+          permission-checks: read
+          permission-statuses: read
+
+      # `app-slug` is the login GitHub derives from the App's NAME, so this compares the logins
+      # the lane guards on against the identity actually authenticated as. Without it a renamed
+      # App disables the self-event guard SILENTLY — the `if:` above simply never matches and
+      # the Merger answers his own comments and merges.
+      #
+      # TWO READS OF ONE ROW on a review, both checked: the actor guard's, which `logins` read
+      # from the default branch, and `merge-gate.mjs`'s `MERGER_LOGIN`, which it reads from this
+      # job's checkout. They differ only when the checkout's register does. The sweep has no
+      # actor guard, so it checks the one read it makes, `MERGER_LOGIN`; a review that reaches
+      # this step without the guard's login is an error, never a sweep.
+      - name: Assert the minted App is the one this lane expects
+        id: slug
+        if: steps.app-token.outputs.token != ''
+        env:
+          MINTED_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          GUARD_SLUG: ${{ needs.logins.outputs.merger }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          EXPECTED=$(node -e "import(process.env.KANON + '/scripts/merge-gate.mjs').then(m => console.log(m.MERGER_LOGIN))")
+          if [ "$EVENT" = pull_request_review ] && [ -z "$GUARD_SLUG" ]; then
+            echo "::error title=agent-merge::a review reached the Merger without the Merger's login from the App register, which the actor guard compares against. Refusing to act on it."
+            exit 1
+          fi
+          if [ "$MINTED_SLUG" != "$EXPECTED" ] || { [ -n "$GUARD_SLUG" ] && [ "$MINTED_SLUG" != "$GUARD_SLUG" ]; }; then
+            echo "::error title=agent-merge::App slug mismatch — minted '$MINTED_SLUG', the actor guard expects '${GUARD_SLUG:-(none: not a review)}' (the default branch's register) and merge-gate.mjs expects '$EXPECTED' (MERGER_LOGIN, this checkout's register). Rename the App to produce the expected slug, or correct the Merger row's App slug in docs/qa/agent-identities.md, which both read (RA-2701, RA-2741). Leaving them disagreeing silently disables the self-event guard."
+            exit 1
+          fi
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+          echo "App slug \`$MINTED_SLUG\` matches the register's Merger row${GUARD_SLUG:+ on the default branch and} in MERGER_LOGIN." >> "$GITHUB_STEP_SUMMARY"
+
+      # The decision, the escalation and the merge all live in the script — this lane only
+      # supplies a token and a PR number. Shell that decides things is shell nobody can test;
+      # `merge-gate.mjs` is a pure function with a thin caller for exactly that reason.
+      - name: Consider the PR(s)
+        if: steps.slug.outputs.verified == 'true'
+        env:
+          # The App token, never `github.token` — see the header.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || inputs.pr_number }}
+          # A review event and the sweep both act. Only an explicit dispatch can be a dry run,
+          # and only by asking for one.
+          APPLY: ${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '--apply' || '' }}
+        run: |
+          set -euo pipefail
+          node "$KANON/scripts/merge-gate.mjs" ${PR:+--pr "$PR"} ${APPLY}

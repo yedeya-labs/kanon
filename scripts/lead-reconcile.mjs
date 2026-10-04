@@ -144,8 +144,25 @@ export const HUMAN_ACTION = 'qa:human-action';
  *
  *  It is a template, not a name — `nextActions` proposes it and `readWorld` recovers by
  *  it (RA-1286), and two hand-kept copies of a string those two must agree on is the drift
- *  this file has already paid for four times. */
-export const qaIssueTitle = (project) => `Verify project #${project} on staging — every acceptance criterion, per ID`;
+ *  this file has already paid for four times.
+ *
+ *  IT NAMES THE DECLARED REFERENCE ENVIRONMENT (kanon#199, `K-PROJ-11`), or "the reference
+ *  environment" when the verdict carries none. It used to say `staging` on every adopter,
+ *  so the recovery below matches the title whatever environment it names: a QA issue filed
+ *  before this change, or before the adopter renamed its environment, is still found. */
+export const qaIssueTitle = (project, environment) =>
+  `Verify project #${project} on ${environment || 'the reference environment'} — every acceptance criterion, per ID`;
+
+/** Is `title` this project's phase-5 title, naming any environment? (kanon#199) */
+export const isQaIssueTitle = (title, project) => {
+  const [before, after] = qaIssueTitle(project, '\u0000').split('\u0000');
+  return typeof title === 'string' && title.length > before.length + after.length
+    && title.startsWith(before) && title.endsWith(after);
+};
+
+/** The reference environment, as an adopter-facing text names it (kanon#199): the declared
+ *  name in backticks, or a description when the verdict carries none. */
+const envName = (environment) => (environment ? `\`${environment}\`` : 'the reference environment');
 /** A phrase only the Lead's phase-5 issue body carries — the `gh workflow run` snippet it
  *  prints for a human. The second half of the recovery anchor below. */
 const QA_BODY_ANCHOR = 'agent-verify-acs.yml';
@@ -489,7 +506,7 @@ export function phaseOf(world) {
   const deployPhase = DEPLOY_PHASE[deployState];
   if (deployPhase) return deployPhase;
 
-  // ── PHASE 5 — staging verification ────────────────────────────────────────
+  // ── PHASE 5 — verification on the reference environment ─────────────────────────
   //
   // The work is deployed. That is not the same as the work WORKING, and phase 6
   // closing on a deploy alone is the weakness RA-1056 shipped with and said so.
@@ -535,7 +552,7 @@ export function phaseOf(world) {
   }
 
   // ── PHASE 6 — close ───────────────────────────────────────────────────────
-  // The work is on staging and the tracking issue is still open: there is an action
+  // The work is on the reference environment and the tracking issue is still open: there is an action
   // to take. `complete` means the close already happened, so a re-run is a no-op
   // rather than a second retro.
   // A REOPENED tracking issue is not an unfinished close (RA-1062). Re-closing it
@@ -556,7 +573,7 @@ export function phaseOf(world) {
 /** The declared reference environment, deploy workflow and job, as a message names them
  *  (plan 0004 P6). A hand-built `deploy` object carries none of them, so each falls back to
  *  a description. */
-const deployEnvironment = (world) => (world.deploy?.environment ? `\`${world.deploy.environment}\`` : 'the reference environment');
+const deployEnvironment = (world) => envName(world.deploy?.environment);
 const deployWorkflow = (world) => (world.deploy?.workflow ? `\`${world.deploy.workflow}\`` : 'the reference deploy workflow');
 const deployJobName = (world) => (world.deploy?.job ? `\`${world.deploy.job}\`` : 'deploy');
 
@@ -702,9 +719,9 @@ function nextActionsCore(world, {
   }
 
   // ── PHASE 4 outcomes ──────────────────────────────────────────────────────
-  // A failed staging deploy STOPS the project. It never advances to close, and the
+  // A failed reference deploy STOPS the project. It never advances to close, and the
   // next tick re-derives the same failure rather than retrying past it — a project
-  // whose code did not reach staging is not one whose code works.
+  // whose code did not reach the reference environment is not one whose code works.
   if (phase === 'deploy-failed') {
     return {
       phase, actions: [],
@@ -738,8 +755,9 @@ function nextActionsCore(world, {
       phase,
       actions: [{
         kind: 'file-qa',
-        title: qaIssueTitle(world.project),
+        title: qaIssueTitle(world.project, world.deploy?.environment),
         tag: world.deploy?.tag ?? null,
+        environment: world.deploy?.environment ?? null,
       }],
     };
   }
@@ -841,6 +859,7 @@ function nextActionsCore(world, {
       kind: 'close-project',
       number: Number(world.project),
       tag: world.deploy?.tag ?? null,
+      environment: world.deploy?.environment ?? null,
       ...(world.deploy?.failedAt
         ? { failedAt: world.deploy.failedAt, failedUrl: world.deploy.failedUrl }
         : {}),
@@ -2378,7 +2397,10 @@ function readQaRounds(qaNumber) {
 export function qaIssueOf(all, project) {
   const labelled = all.find((i) => i.labels.includes(VERIFY));
   if (labelled) return { issue: labelled, labelMissing: false };
-  const orphan = all.find((i) => i.title === qaIssueTitle(project) && (i.body ?? '').includes(QA_BODY_ANCHOR));
+  // ANY ENVIRONMENT IN THE TITLE (kanon#199): the title names the declared environment now,
+  // and named `staging` before, so an open QA issue filed under either is recovered rather
+  // than re-filed with its round count reset.
+  const orphan = all.find((i) => isQaIssueTitle(i.title, project) && (i.body ?? '').includes(QA_BODY_ANCHOR));
   if (!orphan) return { issue: undefined, labelMissing: false };
   orphan.labels = [...orphan.labels, VERIFY];
   warn(`#${orphan.number} is this project's phase-5 QA issue but carries no \`${VERIFY}\` label — most likely a tick died between the remove and the re-add of the verification churn (RA-1286). Treating it as the QA issue so nothing files a duplicate or dispatches an implementer at it; the next \`verify\` action re-applies the label.`);
@@ -2666,7 +2688,7 @@ function readWorld(project) {
   // The QA issue is not implementation work; excluding it here is what stops phase
   // 4 waiting on it forever.
   // The gating set, as `phaseOf` draws it (RA-1783) — and only gating members' merges
-  // are waited for on staging: a carried-out follow-up's release is not the project's.
+  // are waited for on the reference environment: a carried-out follow-up's release is not the project's.
   const openWork = openGatingWork(open, proposed);
   const deploy = briefMerged && parsedFully && nothingLeftToFile && all.length && !openWork.length && !blocked.length
     ? readDeploy(all.filter((i) => gatesClosure(i, proposed)))
@@ -2780,7 +2802,7 @@ function readWorld(project) {
  *  only mechanism available was a reviewer re-reading the file. */
 export function renderCloseComment(a) {
   return a.tag
-    ? `Closed by the Lead: every issue from the brief is closed and the work is on staging in \`${a.tag}\`.${ownFailureCaveat(a)} See the retro above.`
+    ? `Closed by the Lead: every issue from the brief is closed and the work is on ${envName(a.environment)} in \`${a.tag}\`.${ownFailureCaveat(a)} See the retro above.`
     : 'Closed by the Lead: every issue from the brief is closed, and NOTHING was deployed — no merged PR closed any of them. See the retro above.';
 }
 
@@ -2816,7 +2838,7 @@ export function report(world, { phase, actions, stopped, reviewNotes = [] }) {
     // real and distinct answer here — phase 4 is unreachable while an issue is
     // open, so the deploy chain is deliberately not queried, and printing nothing
     // would make "not looked at" indistinguishable from "looked and found nothing".
-    `| staging deploy | ${world.deploy ? `${world.deploy.state}${world.deploy.tag ? ` (\`${world.deploy.tag}\`)` : ''}` : 'not read — issues still open'} |`,
+    `| deploy to ${deployEnvironment(world)} | ${world.deploy ? `${world.deploy.state}${world.deploy.tag ? ` (\`${world.deploy.tag}\`)` : ''}` : 'not read — issues still open'} |`,
     // BOTH SETS, ALWAYS (RA-1783) — including as 0, for the reason the rows above give.
     `| carried out — open members outside the project's work, not holding it open (RA-1783) | ${carriedOut(world).length} |`,
     ...(() => {
@@ -2950,7 +2972,7 @@ export function report(world, { phase, actions, stopped, reviewNotes = [] }) {
   }
   if (!actions.length) {
     lines.push(phase === 'complete'
-      // What this DOES say: every issue closed, the work reached staging, and
+      // What this DOES say: every issue closed, the work reached the reference environment, and
       // phase 5 verified the project's acceptance criteria against a build of that
       // tag. What it deliberately does NOT say is in `verificationCaveat` — one
       // renderer, because this sentence drifted across four artifacts before it had
@@ -2959,7 +2981,7 @@ export function report(world, { phase, actions, stopped, reviewNotes = [] }) {
       // reads when the project closes.
       ? (world.deploy?.state === 'nothing-to-deploy'
         ? '**Project complete.** Every issue closed, and NO merged PR closed any of them — so nothing was deployed and there is no release to name. The issues were closed some other way (duplicates, won\'t-fix, or a human doing the work by another route). Recorded rather than dressed up as a deploy.\n'
-        : `**Project complete.** Every issue closed, the work is on staging in \`${world.deploy?.tag}\`${world.qaIssue?.rounds === 0 || world.qaIssue?.readable === false ? '' : ', and phase 5 verified its acceptance criteria'}.${ownFailureCaveat(world.deploy)} ${verificationCaveat(world.deploy?.tag ?? null, world.qaIssue?.rounds, world.qaIssue?.readable)}\n`)
+        : `**Project complete.** Every issue closed, the work is on ${deployEnvironment(world)} in \`${world.deploy?.tag}\`${world.qaIssue?.rounds === 0 || world.qaIssue?.readable === false ? '' : ', and phase 5 verified its acceptance criteria'}.${ownFailureCaveat(world.deploy)} ${verificationCaveat(world.deploy?.tag ?? null, world.qaIssue?.rounds, world.qaIssue?.readable, world.deploy?.environment)}\n`)
       : '**Nothing to do this tick.** That is a finding, not an absence — the table above is what was read to reach it.\n');
   } else {
     lines.push(`**${actions.length} action(s)${APPLY ? '' : ' that would be taken'}:**\n`);
@@ -3033,10 +3055,10 @@ export function report(world, { phase, actions, stopped, reviewNotes = [] }) {
  *  arriving through the artifact instead of through the classifier. */
 export const ownFailureCaveat = (deploy) =>
   (deploy?.failedAt
-    ? ` Its own release \`${deploy.failedAt}\` FAILED to deploy (${deploy.failedUrl ?? 'no run url'}); the work reached staging only via the later whole-tree deploy of \`${deploy.tag}\`, so that failure is unexamined.`
+    ? ` Its own release \`${deploy.failedAt}\` FAILED to deploy (${deploy.failedUrl ?? 'no run url'}); the work reached ${envName(deploy.environment)} only via the later whole-tree deploy of \`${deploy.tag}\`, so that failure is unexamined.`
     : '');
 
-export const verificationCaveat = (tag, rounds, readable) =>
+export const verificationCaveat = (tag, rounds, readable, environment) =>
   // NOBODY VERIFIED ANYTHING (RA-1095). `phaseOf` reaches phase 6 the moment the QA
   // issue is not OPEN, and checks nothing about whether the Explorer ever ran — so a QA
   // issue closed BY HAND produced a retro, and a step summary, both asserting that
@@ -3063,11 +3085,11 @@ export const verificationCaveat = (tag, rounds, readable) =>
   // that happens once. RA-1203 records a transient `gh` failure here as observed, not
   // hypothetical.
   readable === false
-    ? `**Whether phase 5 ran is UNKNOWN.** The QA issue's comments could not be read on the tick that closed this project, so the verification round count is not evidence either way — neither that the criteria were verified nor that they were not.${tag ? ` The work is on staging in \`${tag}\`.` : ''}`
+    ? `**Whether phase 5 ran is UNKNOWN.** The QA issue's comments could not be read on the tick that closed this project, so the verification round count is not evidence either way — neither that the criteria were verified nor that they were not.${tag ? ` The work is on ${envName(environment)} in \`${tag}\`.` : ''}`
     : rounds === 0
-    ? `**No verification round ran.** QA issue closed without the Explorer ever reporting on it, so nothing established these criteria — this project is closed, not verified.${tag ? ` The work is on staging in \`${tag}\`.` : ''}`
+    ? `**No verification round ran.** QA issue closed without the Explorer ever reporting on it, so nothing established these criteria — this project is closed, not verified.${tag ? ` The work is on ${envName(environment)} in \`${tag}\`.` : ''}`
     : tag
-      ? `The acceptance criteria were verified against a **build of \`${tag}\`**, not against staging itself (RA-1063, option c) — a failed migration, a drifted env var or a config difference is invisible to that. A criterion with no citing test was reported \`unverifiable\`, never \`passed\`.`
+      ? `The acceptance criteria were verified against a **build of \`${tag}\`**, not against ${envName(environment)} itself (RA-1063, option c) — a failed migration, a drifted env var or a config difference is invisible to that. A criterion with no citing test was reported \`unverifiable\`, never \`passed\`.`
       : 'NOTHING WAS DEPLOYED for this project — no merged PR closed any of its issues — so the acceptance criteria were verified against the default branch, and **no release backs this**. A criterion with no citing test was reported `unverifiable`, never `passed`.';
 
 /**
@@ -3097,8 +3119,8 @@ export function retro(world, action) {
     RETRO_MARKER,
     '',
     action.tag
-      ? `The brief \`${world.briefPath}\` proposed **${world.proposed.length}** item(s), which named **${mine.length}** issue(s); all are closed. The work is on staging in \`${action.tag}\`.${ownFailureCaveat(action)}`
-      : `The brief \`${world.briefPath}\` proposed **${world.proposed.length}** item(s), which named **${mine.length}** issue(s); all are closed. **Nothing was deployed** — no merged PR closed any of them, so there is no release to name and staging was never touched by this project.`,
+      ? `The brief \`${world.briefPath}\` proposed **${world.proposed.length}** item(s), which named **${mine.length}** issue(s); all are closed. The work is on ${envName(action.environment)} in \`${action.tag}\`.${ownFailureCaveat(action)}`
+      : `The brief \`${world.briefPath}\` proposed **${world.proposed.length}** item(s), which named **${mine.length}** issue(s); all are closed. **Nothing was deployed** — no merged PR closed any of them, so there is no release to name and ${envName(action.environment)} was never touched by this project.`,
     '',
     '| | |',
     '|---|---|',
@@ -3122,7 +3144,7 @@ export function retro(world, action) {
     '',
     '### What this does NOT establish',
     '',
-    `**That the work behaves on STAGING.** ${verificationCaveat(action.tag, world.qaIssue?.rounds, world.qaIssue?.readable)}`,
+    `**That the work behaves on ${envName(action.environment)}.** ${verificationCaveat(action.tag, world.qaIssue?.rounds, world.qaIssue?.readable, action.environment)}`,
     '',
     'The `[seed]` invariants the brief proposed remain `[seed]`: promotion to `[confirmed]` is a human act and no agent on this project performed one.',
     '',
@@ -3335,7 +3357,7 @@ export function execute(world, actions, { run = gh } = {}) {
       } else if (a.kind === 'file-qa') {
         // PHASE 5. Appended by the tick, not proposed by the brief (RA-1063).
         const body = [
-          `Verify project #${world.project} on staging, per acceptance criterion.`,
+          `Verify project #${world.project} on ${envName(a.environment)}, per acceptance criterion.`,
           '',
           a.tag
             ? `The work is deployed in \`${a.tag}\`. This issue is where that is CHECKED — the project does not close until it passes.`
@@ -3351,7 +3373,7 @@ export function execute(world, actions, { run = gh } = {}) {
           '',
           'Findings are filed as project issues and picked up by the reconciler. **Close this issue only when the project passes**; the reconciler re-dispatches the Explorer whenever a project issue that holds the project open — a brief item, a finding, or a `sev:high`/`sev:critical` member — closes after his last run.',
           '',
-          `What this does NOT establish: ${verificationCaveat(a.tag)}`,
+          `What this does NOT establish: ${verificationCaveat(a.tag, undefined, undefined, a.environment)}`,
           '',
           `Part of #${world.project}.`,
           '',

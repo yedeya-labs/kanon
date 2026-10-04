@@ -87,10 +87,15 @@ describe("docs/lanes.md's lane-contract table is what each lane declares", () =>
     expect(rows.map((r) => r.lane).sort()).toEqual(LANES);
   });
 
-  it.each(LANES)('%s: the row maps exactly the App secrets the lane declares, plus the Claude token', (file) => {
+  it.each(LANES)('%s: the row maps exactly the App secrets the lane declares, and the lane takes the Claude token only if it runs a model', (file) => {
     const declared = Object.keys(lane(file).on.workflow_call?.secrets ?? {}).sort();
     const row = rows.find((r) => r.lane === file);
-    expect([...(row?.secrets ?? []), 'CLAUDE_CODE_OAUTH_TOKEN'].sort()).toEqual(declared);
+    expect(row?.secrets).toEqual(declared.filter((s) => s !== 'CLAUDE_CODE_OAUTH_TOKEN'));
+    // A lane runs a model through the spine or the run block; one that runs none (the
+    // Merger, plan 0004 step 7) must not ask its caller for the subscription's token.
+    const text = readFileSync(join(WORKFLOWS, file), 'utf8');
+    const runsModel = /uses: \$\/(\.github\/workflows\/agent-lane\.yml|actions\/agent-run)\b/.test(text);
+    expect(declared.includes('CLAUDE_CODE_OAUTH_TOKEN'), file).toBe(runsModel);
   });
 
   it.each(LANES)('%s: the row grants exactly the most any of the lane\'s jobs declares', (file) => {

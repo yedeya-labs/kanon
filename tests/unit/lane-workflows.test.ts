@@ -20,10 +20,12 @@ import { type WorkflowStep } from './helpers/workflow-step.js';
 const WF = '.github/workflows';
 const LANES = [
   'agent-triage.yml', 'agent-implement.yml', 'agent-implement-revise.yml', 'agent-lead-revise.yml', 'agent-merge-reconcile.yml',
-  'agent-lead.yml', 'agent-lead-split.yml', 'agent-rebase.yml',
+  'agent-lead.yml', 'agent-lead-split.yml', 'agent-rebase.yml', 'agent-merge.yml', 'agent-lead-reconcile.yml',
 ] as const;
-/** The lanes that call the blocks themselves; the rest hand their body to the spine. */
-const DIRECT_LANES: readonly string[] = ['agent-merge-reconcile.yml', 'agent-lead-split.yml', 'agent-rebase.yml'];
+/** The lanes that call the blocks themselves, or run no model at all; the rest hand their body to the spine. */
+const DIRECT_LANES: readonly string[] = ['agent-merge-reconcile.yml', 'agent-lead-split.yml', 'agent-rebase.yml', 'agent-merge.yml', 'agent-lead-reconcile.yml'];
+/** The lanes that run no model, so take no Claude token (plan 0004 §2.1, §2.2). */
+const NO_MODEL: readonly string[] = ['agent-merge.yml', 'agent-lead-reconcile.yml'];
 const SPINE_LANES = LANES.filter((f) => !DIRECT_LANES.includes(f));
 type Job = {
   uses?: string;
@@ -55,6 +57,8 @@ const ROLE: Record<(typeof LANES)[number], string> = {
   'agent-lead.yml': 'LEAD',
   'agent-lead-split.yml': 'LEAD',
   'agent-rebase.yml': 'IMPLEMENTER',
+  'agent-merge.yml': 'MERGER',
+  'agent-lead-reconcile.yml': 'LEAD',
 };
 
 describe('plan 0001 §3: each lane is a reusable workflow, called with its inputs and its secrets', () => {
@@ -65,7 +69,8 @@ describe('plan 0001 §3: each lane is a reusable workflow, called with its input
   it.each(LANES)('%s takes its secrets by their fixed names, all required (§8, decision 7)', (file) => {
     const secrets = lane(file).on.workflow_call!.secrets ?? {};
     const role = ROLE[file];
-    expect(Object.keys(secrets).sort()).toEqual([`${role}_APP_ID`, `${role}_APP_PRIVATE_KEY`, 'CLAUDE_CODE_OAUTH_TOKEN'].sort());
+    const claude = NO_MODEL.includes(file) ? [] : ['CLAUDE_CODE_OAUTH_TOKEN'];
+    expect(Object.keys(secrets).sort()).toEqual([`${role}_APP_ID`, `${role}_APP_PRIVATE_KEY`, ...claude].sort());
     for (const s of Object.values(secrets)) expect(s.required).toBe(true);
   });
 
@@ -144,8 +149,8 @@ describe('every arm passes the flags its run is measured and bounded by', () => 
   })));
   const flag = (args: string, name: string) => new RegExp(`(?:^|\\s)${name}[\\s=]+(\\S+)`).exec(args)?.[1];
 
-  it('finds one arm per lane', () => {
-    expect(arms.map((a) => a.file)).toEqual([...LANES]);
+  it('finds one arm per lane that runs a model, and none in a lane that runs none', () => {
+    expect(arms.map((a) => a.file)).toEqual(LANES.filter((f) => !NO_MODEL.includes(f)));
     expect(arms.map((a) => a.agent)).toEqual(['triage-fix', 'implementer', 'implementer-revise', 'lead-revise', 'merge-reconcile', 'lead', 'lead-split', 'rebase-lane']);
   });
 

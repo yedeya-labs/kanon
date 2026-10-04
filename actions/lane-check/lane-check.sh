@@ -108,6 +108,15 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
       *) fail "$f" "its run-name must end with \` $want_title\`, as the last token: the Kanon lane $lane's runs are found by it" ;;
     esac
   fi
+  # A check is reported under its caller's `name:`, and a lane whose checks another program
+  # tells apart by that name (the Merger's, by `merge-gate.mjs`, which must not wait on itself)
+  # says what the caller's name must be, on a `# CALLER NAME: <name>` line (plan 0004 step 7).
+  want_name="$(sed -n 's/^# CALLER NAME: //p' "$lane_file" | head -1)"
+  if [ -n "$want_name" ]; then
+    name="$(jq -r '.name // ""' <<<"$doc")"
+    [ "$name" = "$want_name" ] \
+      || fail "$f" "its name must be \`$want_name\`, not \`$name\`: GitHub reports the Kanon lane $lane's checks under its caller's name, and the lane tells its own checks from the rest by it (docs/lanes.md)"
+  fi
   # The project documents this lane's prompt reads, at their fixed paths (K-LAYOUT-17).
   # Read from the lane itself, so a lane that starts reading one makes it required here.
   for d in $(grep -oE 'docs/qa/(stack|[a-z]+(-[a-z]+)*-playbook)\.md' "$lane_file" | sort -u); do

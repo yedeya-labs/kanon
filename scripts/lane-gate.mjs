@@ -14,6 +14,9 @@
 //                            only the Metadata read every workflow token holds.
 //   pull_request `closed`    whoever merged it, `pull_request.merged_by` (else `sender`),
 //                            checked like a label's sender.
+//   issues `closed`          whoever closed it, `sender`, checked the same way. The reconciler
+//                            ticks on it (plan 0004 step 8): an issue a merge closes is closed
+//                            by whoever merged, and one closed by hand by whoever closed it.
 //   pull_request `opened`    whoever opened it, `sender`, checked the same way.
 //   pull_request_target      as `pull_request`: the review lane's label trigger runs the base
 //                            branch's copy of its caller, with the same payload.
@@ -120,8 +123,8 @@ export function triggeringActor(eventName, event, env) {
     case 'pull_request_target':
       if (event.action === 'labeled') return found(event.sender?.login, 'user who applied the label');
       if (eventName !== 'issues' && event.action === 'opened') return found(event.sender?.login, 'user who opened it');
-      if (eventName !== 'issues' && event.action === 'closed') {
-        return event.pull_request?.merged_by?.login
+      if (event.action === 'closed') {
+        return eventName !== 'issues' && event.pull_request?.merged_by?.login
           ? found(event.pull_request.merged_by.login, 'user who merged it')
           : found(event.sender?.login, 'user who closed it');
       }
