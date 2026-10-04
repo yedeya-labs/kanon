@@ -213,6 +213,19 @@ describe('which token each edit rides (plan 0001 decision 21)', () => {
     expect(r.out).toContain('LABEL_TOKEN');
     expect(r.calls.filter((c) => /^issue (edit|comment)|^workflow/.test(c.args))).toEqual([]);
   });
+
+  // #78: a failed mint (the step is `continue-on-error`) hands the script an EMPTY token.
+  // Only the split route needs the App, so a plain crash still frees the slot on the
+  // workflow token — the retry a crashed run is owed whatever state the App is in.
+  it('still frees the slot on the workflow token when the App token is missing and no split is due', () => {
+    const r = run({ LABEL_TOKEN: '', KIND: 'crashed' });
+    expect(r.status, r.out).toBe(0);
+    const writes = r.calls.filter((c) => /^issue (edit|comment)|^workflow/.test(c.args));
+    expect(writes.map((c) => `${c.token} ${c.args.split(' --repo')[0]!.split(' --body')[0]}`)).toEqual([
+      'workflow-token issue comment 4242',
+      `workflow-token issue edit 4242 --remove-label ${IMPL}`,
+    ]);
+  });
 });
 
 describe('the wiring', () => {
@@ -248,6 +261,11 @@ describe('the wiring', () => {
     // After the checkout, so the checkout never persists the App's token as git's credential.
     expect(steps.findIndex((s) => (s.uses ?? '').startsWith('actions/checkout'))).toBeLessThan(steps.indexOf(mint as never));
     expect(step?.env?.LABEL_TOKEN).toBe(`\${{ steps.${mint?.id}.outputs.token }}`);
+    // #78: a failed mint must not stop the job before the script runs, or a misconfigured
+    // App strands every crashed issue on its label. The script, not the mint, refuses the
+    // split route by name; nothing after the mint may be gated on it succeeding.
+    expect((mint as { 'continue-on-error'?: boolean })['continue-on-error']).toBe(true);
+    expect((step as { if?: string }).if).toBeUndefined();
     const src = readFileSync(join(ROOT, 'scripts/implement-crash.mjs'), 'utf8');
     expect(src).not.toMatch(/'workflow', 'run'/);
     // `main` hands `decide` the BODY — without it every split child reads as a first
