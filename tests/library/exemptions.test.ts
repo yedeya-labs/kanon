@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DeclarationError, parseExemptions, readExemptions } from '../../scripts/lib/exemptions.mjs';
-import { auditPaths } from '../../scripts/doc-path-guard.mjs';
+import { auditPaths, reportFindings } from '../../scripts/doc-path-guard.mjs';
 
 /**
  * kanon#54: what a guard exempts by name is the adopter's, declared in `docs/qa/exemptions.md`
@@ -111,5 +111,48 @@ describe('doc-path-guard exempts exactly the declared mentions (kanon#54)', () =
   it('refuses to audit with no exemptions argument, rather than run with none', () => {
     // @ts-expect-error -- the missing argument is the point
     expect(() => auditPaths(['docs/a.md'], () => '', ['docs/a.md'])).toThrow(/needs the declared path-mention exemptions/);
+  });
+});
+
+// kanon#176: the exemption row is read by the text-mention rule only, so the report must never
+// offer it for an anchor, a link or a fence — following that advice used to produce a second red.
+describe('doc-path-guard gives each rule a remedy that works for it (kanon#176)', () => {
+  const tracked = ['docs/a.md', 'docs/b.md'];
+  const target = '# B\n\n## Real heading\n';
+  const findingsFor = (text: string) =>
+    auditPaths(['docs/a.md'], (p: string) => (p === 'docs/a.md' ? text : target), tracked, []).findings;
+  const cases = {
+    text: 'See `docs/missing.md`.\n',
+    link: 'See [it](./missing.md).\n',
+    anchor: 'See [it](./b.md#gone-heading).\n',
+    fence: '```\nnever closed\n',
+  } as const;
+
+  it.each(Object.entries(cases))('a %s finding gets its own remedy, and only `text` is offered an exemption', (rule, text) => {
+    const findings = findingsFor(text);
+    expect(findings.map((f: { rule: string }) => f.rule)).toEqual([rule]);
+    const report = reportFindings(findings);
+    expect(report).toMatch(/^doc-path-guard: 1 unresolvable citation\(s\):/);
+    expect(report).not.toMatch(/name no file in the repository/);
+    expect(report.includes('docs/qa/exemptions.md')).toBe(rule === 'text');
+    if (rule !== 'text') expect(report).toMatch(/are not exemptible/);
+  });
+
+  it('names one remedy per rule present, each once', () => {
+    const findings = findingsFor(cases.text + cases.link + cases.anchor + cases.text + cases.fence);
+    const report = reportFindings(findings);
+    expect(report).toMatch(/^doc-path-guard: 5 unresolvable citation\(s\):/);
+    expect(report.match(/docs\/qa\/exemptions\.md/g)).toHaveLength(1);
+    expect(report).toMatch(/Links are not exemptible/);
+    expect(report).toMatch(/Anchors are not exemptible/);
+    expect(report).toMatch(/Fences are not exemptible/);
+  });
+
+  it('an exemption row does not silence an anchor finding, which is why it is never offered for one', () => {
+    const anchor = 'See [it](./b.md#gone-heading).\n';
+    const row = [{ file: 'docs/a.md', path: './b.md#gone-heading', line: 1 }];
+    const r = auditPaths(['docs/a.md'], (p: string) => (p === 'docs/a.md' ? anchor : target), tracked, row);
+    expect(r.findings).toHaveLength(1);
+    expect(r.exemptionsUsed.size).toBe(0);
   });
 });

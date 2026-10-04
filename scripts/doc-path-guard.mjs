@@ -219,6 +219,42 @@ export const auditPaths = (files, readFile, tracked, exemptions) => {
   return { findings, links, mentions, anchors, exemptionsUsed };
 };
 
+// THE REPORT BRANCHES ON THE RULE (kanon#176). One heading and one remedy used to cover all
+// four rules, and the remedy — an exemption row — is read only by the text-mention rule. An
+// author who followed it for an anchor, a link or a fence got a second red (the finding still
+// fired, and the row they added was now stale). So the heading names no rule, and each rule
+// present gets the remedy that works for it; only `text` is ever told about exemptions.
+const WHY = {
+  link: 'a markdown link a reader cannot follow',
+  anchor: 'a heading anchor no heading in the target produces (RA-2001)',
+  text: 'a path this text cites as real',
+  fence: 'a code fence that never closes, hiding every line below it from this guard',
+};
+const REMEDY = {
+  text:
+    'A path cited in text names no file (RA-919): fix the path, drop the citation, or — if the mention is\n' +
+    'deliberately illustrative or historical — add one (file, path) row with its reason under\n' +
+    '`## Path mentions` in docs/qa/exemptions.md.',
+  link:
+    'A markdown link names no file or directory: fix its target or drop the link. Links are not exemptible —\n' +
+    'if the target is only illustrative, write it as text rather than as a link.',
+  anchor:
+    'A link fragment matches no heading in its target (RA-2001): point it at the heading\'s current slug\n' +
+    "(GitHub's algorithm), or add an explicit `<a id=\"…\">` to the target. Anchors are not exemptible.",
+  fence:
+    'A code fence never closes: close it. Every line below it is hidden from this guard until it does.\n' +
+    'Fences are not exemptible.',
+};
+
+/** The findings block `main` prints: a rule-neutral heading, each finding, then one remedy per rule present. */
+export const reportFindings = (findings) => {
+  const out = [`doc-path-guard: ${findings.length} unresolvable citation(s):`, ''];
+  for (const f of findings) out.push(`  ${f.at}`, `    ${f.path} — ${WHY[f.rule]}`);
+  const present = new Set(findings.map((f) => f.rule));
+  for (const rule of ['text', 'link', 'anchor', 'fence']) if (present.has(rule)) out.push('', REMEDY[rule]);
+  return out.join('\n');
+};
+
 const main = () => {
   let tracked;
   try {
@@ -240,18 +276,7 @@ const main = () => {
   const r = auditPaths(files, (p) => readFileSync(p, 'utf8'), tracked, exemptions);
   const stale = exemptions.filter((_, k) => !r.exemptionsUsed.has(k));
   if (r.findings.length || stale.length) {
-    if (r.findings.length) {
-      console.error(`doc-path-guard: ${r.findings.length} cited path(s) name no file in the repository:\n`);
-      for (const f of r.findings) {
-        const why = { link: 'a markdown link a reader cannot follow', anchor: 'a heading anchor no heading in the target produces (RA-2001)', text: 'a path this text cites as real', fence: 'a code fence that never closes, hiding every line below it from this guard' };
-        console.error(`  ${f.at}\n    ${f.path} — ${why[f.rule]}`);
-      }
-      console.error(
-        '\nA citation to a file that does not exist makes the reason it gives unauditable (RA-919). Fix the\n' +
-          'path, drop the citation, or — if the mention is deliberately illustrative or historical — add\n' +
-          'one (file, path) row with its reason under `## Path mentions` in docs/qa/exemptions.md.',
-      );
-    }
+    if (r.findings.length) console.error(reportFindings(r.findings));
     for (const e of stale) {
       console.error(`doc-path-guard: stale exemption — ${e.file} no longer names ${e.path}, or it now exists. Remove the row at ${EXEMPTIONS_FILE}:${e.line}.`);
     }
