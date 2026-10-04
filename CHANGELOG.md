@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/yedeya-labs/kanon/compare/v0.23.0...v0.24.0) (2026-10-04)
+
+
+### Features
+
+* **qa-store:** define the QA store contract and ship its AWS implementation ([#222](https://github.com/yedeya-labs/kanon/issues/222)) ([cc9db0e](https://github.com/yedeya-labs/kanon/commit/cc9db0eef9668a1a94326e1eb1fbe0e925de9925))
+
 ## [0.23.0](https://github.com/yedeya-labs/kanon/compare/v0.22.0...v0.23.0) (2026-10-04)
 
 
