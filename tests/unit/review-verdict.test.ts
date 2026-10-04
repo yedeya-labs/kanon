@@ -235,8 +235,13 @@ describe('stamping the commit this run reviewed (RA-1680)', () => {
     startedAt = RUN_START as string | null,
     readFails = false,
     putFails = false,
+    // What this run's agent posted from (kanon#178). `undefined` writes the body `mine()`
+    // carries by default; `null` leaves no file at all.
+    posted = 'Approve.\n' as string | null,
   }) => {
     const dir = mkdtempSync(join(tmpdir(), 'review-stamp-'));
+    const verdictFile = join(dir, 'qa-review-verdict.md');
+    if (posted !== null) writeFileSync(verdictFile, posted);
     // THE STUB RUNS THE REAL `--jq` FILTERS, so which reviews are selected is asserted
     // against the shipped expression rather than a copy of it.
     writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
@@ -268,6 +273,7 @@ esac
         PR_NUMBER: '1672',
         HEAD_SHA: HEAD,
         RUN_ID: '99',
+        VERDICT_FILE: verdictFile,
       },
     });
     const args = (() => { try { return readFileSync(join(dir, 'args'), 'utf8'); } catch { return ''; } })();
@@ -325,7 +331,8 @@ esac
     // The idempotence test was "does the body contain the pattern", and the stamp is
     // APPENDED — so a review that quotes the format was treated as already stamped and
     // never got one. It is anchored to the END of the body instead.
-    const r = stampRun({ reviews: [mine({ body: `See <!-- reviewed: sha=${OLD} run=1 --> above, then real content.` })] });
+    const body = `See <!-- reviewed: sha=${OLD} run=1 --> above, then real content.`;
+    const r = stampRun({ reviews: [mine({ body })], posted: body });
     expect(r.args, 'the genuine stamp must still be appended').toContain(`<!-- reviewed: sha=${HEAD} run=99 -->`);
   });
 
@@ -376,6 +383,62 @@ esac
     const ok = stampRun({ reviews: [mine()] });
     expect(ok.summary).toMatch(/Stamped this run's verdict/);
     expect(ok.summary).not.toMatch(/Not stamped/);
+  });
+
+  describe("only the verdict this run's agent posted (kanon#178)", () => {
+    // Two runs on DIFFERENT heads of one PR: the sibling posted at 12:15:30 and has not
+    // stamped yet (or its stamp failed) when this run's stamp step reads the reviews.
+    const sibling = mine({ id: 450, commit_id: OLD, submitted_at: '2026-09-06T12:15:30Z',
+      body: 'Request changes: the sibling read an older head.' });
+
+    it("leaves a sibling's unstamped verdict alone and stamps this run's", () => {
+      const r = stampRun({ reviews: [sibling, mine()] });
+      expect(r.stdout).toMatch(/stamped review 500/);
+      expect(r.stdout).not.toMatch(/stamped review 450/);
+      expect(r.args, 'the sibling must not be given this run\'s SHA').not.toMatch(/sibling read an older head/);
+    });
+
+    it('stamps nothing when the only unstamped verdict is a sibling\'s — this run posted none', () => {
+      const r = stampRun({ reviews: [sibling] });
+      expect(r.args).not.toContain('-X');
+      expect(r.stdout).toMatch(/::warning title=reviewed-sha stamp::No unstamped verdict since/);
+      expect(r.status).toBe(0);
+    });
+
+    it('stamps nothing, and says so, when the agent left no verdict file', () => {
+      const r = stampRun({ reviews: [sibling, mine()], posted: null });
+      expect(r.args).not.toContain('-X');
+      expect(r.stdout).toMatch(/left no verdict body/);
+      expect(r.status).toBe(0);
+    });
+
+    it('matches the body across the whitespace a shell strips on the way to the API', () => {
+      const r = stampRun({ reviews: [mine({ body: 'Approve.\r\n\nSecond line.' })], posted: '\nApprove.\n\nSecond line.\n\n' });
+      expect(r.stdout).toMatch(/stamped review 500/);
+    });
+
+    it('does not match a body that differs inside, or a sibling sharing only a prefix', () => {
+      const r = stampRun({ reviews: [mine({ body: 'Approve.\n\nSecond  line.' })], posted: 'Approve.\n\nSecond line.' });
+      expect(r.args).not.toContain('-X');
+      const prefix = stampRun({ reviews: [mine({ body: 'Approve. And more.' })], posted: 'Approve.' });
+      expect(prefix.args).not.toContain('-X');
+    });
+
+    it('the prompt names the file the stamp reads, and a step clears it before the agent', () => {
+      const steps = wf.jobs.review.steps as { name?: string; id?: string; run?: string; env?: Record<string, string>; with?: Record<string, string> }[];
+      const path = stampStep.env.VERDICT_FILE;
+      expect(path).toBe('${{ runner.temp }}/qa-review-verdict.md');
+      const agent = steps.find((s) => s.id === 'agent')!;
+      expect(agent.with!.prompt).toContain(`\`${path}\``);
+      expect(agent.with!.prompt).toMatch(/--body-file/);
+      const clear = steps.findIndex((s) => s.name === 'Clear the verdict file before the agent writes it');
+      expect(clear, 'the clearing step exists').toBeGreaterThan(-1);
+      expect(steps[clear]!.env!.VERDICT_FILE).toBe(path);
+      expect(steps[clear]!.run).toMatch(/rm -f -- "\$VERDICT_FILE"/);
+      expect(clear, 'and runs after the PR\'s setup, before the agent')
+        .toBeGreaterThan(steps.findIndex((s) => s.id === 'project'));
+      expect(clear).toBeLessThan(steps.findIndex((s) => s.id === 'agent'));
+    });
   });
 
   it('runs before the reconcile step, which now reads the stamp it writes', () => {

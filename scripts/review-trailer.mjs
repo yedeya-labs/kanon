@@ -36,9 +36,9 @@
 //
 // STAMPED BY THE WORKFLOW, NOT BY THE AGENT, deliberately. The Reviewer already names the
 // SHA in his prose (that is how RA-1680 was found), but prose is a claim and its format
-// is his to change; the checked-out ref is a fact the job holds. It also keeps the
-// reviewer prompt — and therefore the `config_fingerprint` every cost comparison keys
-// on (RA-1485) — untouched.
+// is his to change; the checked-out ref is a fact the job holds. The agent's one part
+// is saying WHICH review is his (kanon#178): he posts from a file the stamp step reads,
+// so a sibling run's verdict is never stamped with this run's SHA.
 //
 // ── AND WHAT IT SUPERSEDES ──────────────────────────────────────────────────
 // The same trailer carries the review ids this verdict deliberately replaces (RA-1334).

@@ -1608,6 +1608,16 @@ jobs:
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "review scope: $mode"
 
+      # THE FILE THE AGENT WRITES ITS VERDICT TO STARTS ABSENT (kanon#178). The stamp step
+      # below finds this run's review by that file's content, and the PR's project setup
+      # has run in this workspace since checkout, so a file it left there is removed
+      # before the agent starts. The prompt names the same path; a test holds the two equal.
+      - name: Clear the verdict file before the agent writes it
+        if: steps.claim.outputs.proceed == 'true'
+        env:
+          VERDICT_FILE: ${{ runner.temp }}/qa-review-verdict.md
+        run: rm -f -- "$VERDICT_FILE"
+
       # THE PIN, RE-READ AFTER THE PR'S CODE HAS RUN (RA-1542). See the restore step for
       # why it was recorded there. Placed AFTER the last step that runs PR code and
       # BEFORE the App token is minted, so a tree that no longer matches never gets a
@@ -1730,6 +1740,15 @@ jobs:
             silent — it says nothing about the commits you were just invoked to look
             at, and silence is indistinguishable from a crash. If you somehow have
             nothing to verify, say that in a review rather than posting nothing.
+
+            POST THE REVIEW BODY FROM ONE FILE: write it to
+            `${{ runner.temp }}/qa-review-verdict.md` and submit it from that file,
+            `gh pr review ${{ env.PR_NUMBER }} --approve --body-file <that path>` (or
+            `--request-changes`). If you post through `gh api` instead, the review's
+            body must be that file's content, unchanged. After your turn the workflow
+            finds the review you posted by that content and records on it the commit
+            you read; a review whose body differs from the file is left unrecorded. So
+            write the file once, post it as written, and use the path for nothing else.
 
             Match your lens to the PR. A bug-fix PR (`agent:triage`) is held to Gate B
             (is the fix real, is the test genuinely red→green?). A feature / spec-delta
@@ -1929,8 +1948,23 @@ jobs:
       #
       # STAMPED BY THE WORKFLOW, NOT ASKED OF THE AGENT. The Reviewer already names the SHA in
       # prose — that is how RA-1680 was found — but prose is a claim whose format is his
-      # to change, and asking for it would edit the prompt and perturb the
-      # `config_fingerprint` the RA-1485 cost comparison keys on.
+      # to change; the checked-out ref is a fact the job holds.
+      #
+      # ON THE VERDICT THIS RUN'S AGENT POSTED, AND NO OTHER (kanon#178). Selecting by time
+      # alone ("the Reviewer's unstamped verdicts since this run started") also selects a
+      # SIBLING's: two runs on different heads of one PR, this stamp running after the
+      # sibling posted and before it stamped (or after its stamp failed), wrote this
+      # run's SHA onto the sibling's verdict — a false record of which commit was read.
+      # The review API records no run, so the identity comes from the agent: the prompt
+      # has it write the body to `$VERDICT_FILE` and post from it, and only a verdict whose
+      # body is that file's content is this run's. The one prompt change this needed does
+      # not move `config_fingerprint`, which hashes `claude_args` alone
+      # (`configFingerprint` in `agent-telemetry.mjs`); a cost comparison across it reads
+      # the release that shipped it as the cutover. No file, or no verdict matching it,
+      # stamps nothing and warns: an unstamped verdict falls back to `commit_id`, the
+      # pre-RA-1680 reading, where a stamp on the wrong review would be a false one.
+      # RESIDUE: PR code the agent runs (a test tier) shares this workspace and could
+      # rewrite the file mid-turn. That is kanon#185's exposure, not this step's.
       #
       # IT ALSO RECORDS WHAT IT SUPERSEDES (RA-1334). Two the Reviewer verdicts can legitimately
       # sit on ONE SHA: RA-1351's human-relabel arm re-reviews an unchanged commit when
@@ -1956,6 +1990,7 @@ jobs:
           PR_NUMBER: ${{ env.PR_NUMBER }}
           HEAD_SHA: ${{ needs.filter.outputs.head_sha }}
           RUN_ID: ${{ github.run_id }}
+          VERDICT_FILE: ${{ runner.temp }}/qa-review-verdict.md
         run: |
           # `set -e` IS ALREADY ON — the runner invokes a step with no `shell:` key as
           # `bash -e {0}` — so every read below must say what it does on failure or the
@@ -1988,10 +2023,10 @@ jobs:
               | select(.commit_id == $head)
               | select(.submitted_at < $since)
               | .id ] | join(",")')"
-          # MINE: real verdicts by the Reviewer submitted since this run began that carry no
-          # trailer yet. Selected by TIME rather than by `commit_id`, because the whole
+          # UNSTAMPED: real verdicts by the Reviewer submitted since this run began that carry
+          # no trailer yet. Selected by TIME rather than by `commit_id`, because the whole
           # defect is that `commit_id` may name a commit this run never read.
-          MINE="$(printf '%s' "$REVIEWS" | jq -r --arg login "${REVIEWER_LOGIN}[bot]" --arg since "$SINCE" '
+          UNSTAMPED_SINCE="$(printf '%s' "$REVIEWS" | jq -c --arg login "${REVIEWER_LOGIN}[bot]" --arg since "$SINCE" '
             [ .[]
               | select(.user.login == $login)
               | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
@@ -2001,10 +2036,24 @@ jobs:
               # that merely QUOTES the format — which is exactly how a review discussing
               # RA-1680 writes about it. Such a verdict was then never stamped, and every
               # consumer read its evidence out of the prose instead.
-              | select((.body // "") | test("<!--[ ]*reviewed:[ ]*sha=[0-9a-fA-F]{7,40}[^>]*-->[[:space:]]*$") | not)
-              | .id ] | .[]')"
-          if [ -z "$MINE" ]; then
+              | select((.body // "") | test("<!--[ ]*reviewed:[ ]*sha=[0-9a-fA-F]{7,40}[^>]*-->[[:space:]]*$") | not) ]')"
+          if [ "$(printf '%s' "$UNSTAMPED_SINCE" | jq 'length')" = "0" ]; then
             echo "no unstamped verdict by the Reviewer since $SINCE — nothing to annotate"
+            exit 0
+          fi
+          # MINE: of those, the ones whose body is the file this run's agent posted from
+          # (kanon#178). Compared with surrounding whitespace and CRs dropped, since a
+          # shell `$(cat …)` strips trailing newlines on the way to the API.
+          if [ ! -s "$VERDICT_FILE" ]; then
+            echo "::warning title=reviewed-sha stamp::This run's agent left no verdict body at \`$VERDICT_FILE\`, so which review it posted is unknown. Leaving every review unstamped rather than risk stamping a sibling run's verdict; merge-gate falls back to \`commit_id\` (kanon#178)."
+            exit 0
+          fi
+          MINE="$(printf '%s' "$UNSTAMPED_SINCE" | jq -r --rawfile posted "$VERDICT_FILE" '
+            def norm: gsub("\r"; "") | sub("\\A[[:space:]]+"; "") | sub("[[:space:]]+\\z"; "");
+            ($posted | norm) as $p
+            | [ .[] | select((.body // "" | norm) == $p) | .id ] | .[]')"
+          if [ -z "$MINE" ]; then
+            echo "::warning title=reviewed-sha stamp::No unstamped verdict since $SINCE has the body this run's agent posted from \`$VERDICT_FILE\`, so the ones there belong to another run, or this run's was posted from other text. Leaving them unstamped; merge-gate falls back to \`commit_id\` (kanon#178)."
             exit 0
           fi
           TRAILER="<!-- reviewed: sha=$HEAD_SHA run=$RUN_ID${SUPERSEDES:+ supersedes=$SUPERSEDES} -->"
