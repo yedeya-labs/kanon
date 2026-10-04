@@ -218,12 +218,12 @@ jobs:
             echo "| resolved to | \`${TAG:-$SHA}\` |"
             # An explicit branch. `${TAG:-x}` is NOT an else for `${TAG:+y}` — it
             # returns $TAG when TAG is set, so the two together printed the tag
-            # twice, garbling the one line that says whether this is what staging
-            # runs.
+            # twice, garbling the one line that says whether this is what the
+            # reference environment runs.
             if [ -n "$TAG" ]; then
               echo "| tagged release | \`$TAG\` |"
             else
-              echo "| tagged release | **no** — this is not a released commit, so it is not what staging runs |"
+              echo "| tagged release | **no** — this is not a released commit, so it is not what the reference environment runs |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -402,7 +402,8 @@ jobs:
             area/route field is the invariant ID and its citing test file, the evidence
             is the failing test's name and assertion from the report, and the
             environment is "local build of `<ref>` (targeted-invariant mode) — NOT
-            staging". Never write `staging`: nothing here touched a deployment.
+            a deployment". Never name the reference environment: nothing here touched a
+            deployment.
 
             Labels: bug, agent:explorer, qa:needs-triage, signal:spec-violation, and a
             sev:* you can justify from the evidence. Milestone: Product Backlog — never a

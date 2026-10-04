@@ -18,7 +18,7 @@
 # it; `always()` on the observers is kept so a cancelled job is still measured, as before.
 #
 # THE RA-2519 RETRY BREADCRUMBS ARE NOT IN HERE, and cannot be. The recoveries read them by
-# NAME from the run's jobs API (`RETRY_STEPS` in `scripts/qa/lane-retry.mjs`), and that
+# NAME from the run's jobs API (`RETRY_STEPS` in `scripts/lane-retry.mjs`), and that
 # API lists a composite action as ONE step — the ones inside it are invisible to it. So
 # they stay job-level steps of the lane, reading this block's `retry` output.
 name: Agent lane — finish

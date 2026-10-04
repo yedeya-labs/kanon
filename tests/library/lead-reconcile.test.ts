@@ -1620,7 +1620,7 @@ describe('phase 5 — staging verification (RA-1063)', () => {
         { number: 2000, title: 'Verify', state: 'OPEN', labels: ['qa:verify'] },
         // A phase-5 finding, as `agent-verify-acs.yml` files it (RA-1783: the label is
         // what makes a non-brief member the project's WORK rather than carried out).
-        { number: 1050, title: 'b', state: 'OPEN', labels: ['signal:spec-violation'], body: 'env: local build of `v1` (targeted-invariant mode) — NOT staging' },
+        { number: 1050, title: 'b', state: 'OPEN', labels: ['signal:spec-violation'], body: 'env: local build of `v1` (targeted-invariant mode) — NOT a deployment' },
       ];
       expect(phaseOf(w)).toBe('reconcile');
     });
@@ -1673,7 +1673,7 @@ describe('phase 5 — staging verification (RA-1063)', () => {
       // makes this assertion mean something.
       const base = worldFrom(BRIEF(['a']), [
         { number: 1049, title: 'a', state: 'CLOSED', closedAt: '2026-08-26T18:00:00Z' },
-        { number: 1050, title: 'a finding', state: 'OPEN', labels: ['signal:spec-violation'], body: 'env: local build of `v1` (targeted-invariant mode) — NOT staging' },
+        { number: 1050, title: 'a finding', state: 'OPEN', labels: ['signal:spec-violation'], body: 'env: local build of `v1` (targeted-invariant mode) — NOT a deployment' },
       ]);
       const r = nextActions({
         ...base, project: '961', deploy: deployed,

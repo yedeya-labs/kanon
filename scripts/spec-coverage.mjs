@@ -34,7 +34,8 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { QA_TOOLING_IMPORT, idPattern, loadPrefixes, parseAll } from './spec-lib.mjs';
+import { idPattern, loadPrefixes, parseAll, qaToolingImport } from './spec-lib.mjs';
+import { readEscalationFile } from './lib/escalation-paths.mjs';
 import { LOCKED_SET, byId, readLockedSet, serialiseLockedSet } from './locked-set.mjs';
 import { conventionFor, isTestFile } from './lib/test-conventions.mjs';
 import { execFileSync } from 'node:child_process';
@@ -536,23 +537,29 @@ export const declaredUnlockable = (invariants) =>
  *  tooling test files would re-create that defect exactly. An import is a property of
  *  the file, so the next tool test qualifies the day it is written.
  *
- *  The tradeoff, stated: a test that imports a `scripts/qa/` module for an unrelated
+ *  The tradeoff, stated: a test that imports a pipeline-code module for an unrelated
  *  reason AND names an invariant in a docblock is silently excluded. Measured on this
  *  tree, no such file exists, and the alternative rule considered — count a mention
  *  only where some title in the same file cites the same PREFIX — gave an identical
  *  result here while losing genuine signal from any file that cites nothing at all,
  *  which is the under-count this whole section exists to surface.
  *
- *  The pattern (`QA_TOOLING_IMPORT`) lives in `spec-lib.mjs`, shared with the reference
- *  corpus the existence sweep and the renumber check read (RA-2004). */
+ *  The pattern (`qaToolingImport`) lives in `spec-lib.mjs`, shared with the reference
+ *  corpus the existence sweep and the renumber check read (RA-2004), and is built from the
+ *  pipeline-code directories the adopter declares (`K-LAYOUT-8`, kanon#54).
+ *
+ *  @param {Set<string>} known
+ *  @param {Set<string>} optedOut
+ *  @param {string[]} pipelineDirs the declared pipeline-code directories */
 
-export function mentionsWithoutTitle(known, optedOut = new Set()) {
+export function mentionsWithoutTitle(known, optedOut, pipelineDirs) {
+  const tooling = qaToolingImport(pipelineDirs);
   const cited = citations();
   const found = new Map();
   {
     for (const file of testFiles()) {
       const raw = readFileSync(file, 'utf8');
-      if (QA_TOOLING_IMPORT.test(raw)) continue;
+      if (tooling.test(raw)) continue;
       // OUTSIDE STRINGS, because a mention inside one is FIXTURE DATA, and the advice
       // this section gives — "move the ID into the title" — is wrong for a fixture.
       // Without this the section listed the three ID-tooling tests, which is precisely
@@ -773,6 +780,18 @@ const claimsIn = (inv) => [...new Set([...inv.raw.matchAll(CLAIM)].map((m) => m[
 export const claimExists = (claim, testBasenames) =>
   existsSync(claim) || (!claim.includes('/') && testBasenames.has(claim));
 
+/** The adopter's pipeline-code directories (`K-LAYOUT-8`, kanon#54), read only by the reports
+ *  that list mentions, so `--write-locked` doesn't need the declaration. A missing or malformed
+ *  declaration ends the run by name rather than counting a tooling test's fixtures. */
+function pipelineDirs() {
+  try {
+    return readEscalationFile().pipeline.map(({ dir }) => dir);
+  } catch (e) {
+    console.error(`spec-coverage: ${/** @type {Error} */ (e).message}`);
+    process.exit(1);
+  }
+}
+
 function main() {
   const invariants = parseAll();
   const cited = citations();
@@ -800,6 +819,9 @@ function main() {
     return;
   }
 
+  // Every report lists mentions, so the declaration is read before any of them prints.
+  const dirs = pipelineDirs();
+
   if (JSON_OUT) {
     console.log(JSON.stringify({
       total: invariants.length,
@@ -810,7 +832,7 @@ function main() {
       confirmedWithoutTest: confirmedBare.map((i) => i.id),
       seedWithTest: seedLocked.map((i) => i.id),
       dangling,
-      mentionedNotCited: [...mentionsWithoutTitle(known, citationOptOut(invariants))].map(([id, files]) => ({ id, files: [...files] })),
+      mentionedNotCited: [...mentionsWithoutTitle(known, citationOptOut(invariants), dirs)].map(([id, files]) => ({ id, files: [...files] })),
     }, null, 2));
     return;
   }
@@ -826,7 +848,7 @@ function main() {
       process.exitCode = 1;
       return;
     }
-    const mentionedQ = mentionsWithoutTitle(known, citationOptOut(invariants));
+    const mentionedQ = mentionsWithoutTitle(known, citationOptOut(invariants), dirs);
     console.log(`spec-coverage: ${locked.length} locked (floor ${LOCKED_FLOOR}), ${dangling.length} dangling, ${mentionedQ.size} mentioned but not cited in a title. Run it without \`--quiet\` for the full ladder.`);
     return;
   }
@@ -850,7 +872,7 @@ function main() {
   }
 
   const optedOut = citationOptOut(invariants);
-  const mentioned = mentionsWithoutTitle(known, optedOut);
+  const mentioned = mentionsWithoutTitle(known, optedOut, dirs);
   if (mentioned.size) {
     console.log(`\n## Mentioned in a test file, cited by no title — ${mentioned.size}\n`);
     console.log('These read as `Bare` above, but a test file names them somewhere other than a title — a docblock or an inline comment. Often that is a FIXABLE CITATION: the test asserts the invariant and only the title is missing. **Check that it does before adding one** — a citation on a test that asserts something else, or asserts the DEFECTIVE behaviour a finding reproduces, turns `unverifiable` into a false `passed`, which is worse than the gap. A clause that says it *deliberately names no test file* is excluded from this list for exactly that reason.\n');
