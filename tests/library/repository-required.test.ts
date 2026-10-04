@@ -21,6 +21,7 @@ const CLIS: Array<[string, string[]]> = [
   ['review-recovery', []],
   ['split-lineage', ['gate']],
   ['starting-map', ['--issue', '1']],
+  ['workflow-health', []],
 ];
 
 describe('every lane script requires GITHUB_REPOSITORY', () => {

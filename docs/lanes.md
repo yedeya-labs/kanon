@@ -18,12 +18,14 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Rebase (resolve a conflict) | `agent-rebase.yml` | Implementer | `workflow_run` of your `CI` workflow, `types: [completed]`, `branches` your default branch; `schedule` (a daily floor); `workflow_dispatch` with `pr_number` |
 | Lead, reconcile | `agent-lead-reconcile.yml` | Lead | `workflow_dispatch` with `project` and `apply`; `pull_request: [closed]`; `issues: [closed]`; `schedule` (an hourly heartbeat) |
 | Merge | `agent-merge.yml` | Merger | `pull_request_review: [submitted]`; `workflow_run` of your `CI` workflow, `types: [completed]`, `branches` your default branch; `schedule` (an hourly floor); `workflow_dispatch` with `pr_number` and `apply` |
+| Daily project digest | `agent-project-digest.yml` | none | `schedule` (daily); `workflow_dispatch` with `dry_run` |
+| Weekly digest | `agent-weekly-digest.yml` | none | `schedule` (weekly); `workflow_dispatch` with `week_end` and `dry_run` |
 
-**What each caller maps, grants and needs.** Every caller maps its role's two App secrets, by name, and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger and the reconciler run no model, so their callers map only the two. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
+**What each caller maps, grants and needs.** Every caller maps its role's two App secrets, by name, and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger and the reconciler run no model, so their callers map only the two. The digests run as no App, so their callers map `CLAUDE_CODE_OAUTH_TOKEN` and `DIGEST_WEBHOOK`. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
 
 <!-- lane-contract:table -->
 
-| Lane | App secrets | Grant at least | Reads |
+| Lane | Secrets, besides the Claude token | Grant at least | Reads |
 |---|---|---|---|
 | `agent-triage.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
 | `agent-implement.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
@@ -37,10 +39,12 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | `agent-rebase.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
 | `agent-merge.yml` | `MERGER_APP_ID`, `MERGER_APP_PRIVATE_KEY` | `contents: read` | none |
 | `agent-lead-reconcile.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read`, `checks: read`, `statuses: read`, `actions: read` | none |
+| `agent-project-digest.yml` | `DIGEST_WEBHOOK` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read` | none |
+| `agent-weekly-digest.yml` | `DIGEST_WEBHOOK` | `contents: read`, `issues: read`, `pull-requests: read` | none |
 
 <!-- /lane-contract:table -->
 
-Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile calls the blocks itself and installs nothing, so it never calls your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own. The Merger and the reconciler call no block and install nothing: each runs Kanon's scripts in your checkout, with its role's App token, and never calls your hook.
+Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile and the two digests call the blocks themselves and install nothing, so they never call your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own. The Merger and the reconciler call no block and install nothing: each runs Kanon's scripts in your checkout, with its role's App token, and never calls your hook.
 
 **The review lane** has three things the others don't:
 - **Its caller sets `run-name`,** ending with `${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}`. A called workflow's `run-name` is ignored, and the review-run evidence finds a head's reviews by the last token of the run's title. `lane-check` holds the caller to it.
@@ -127,6 +131,7 @@ jobs:
 
 <!-- x-release-please-end -->
 
+- **Each caller has its lane's file name** (`K-LAYOUT-18`, [#207](https://github.com/yedeya-labs/kanon/issues/207)): the caller of `agent-implement-revise.yml` is `.github/workflows/agent-implement-revise.yml`, and so on. Kanon's scripts find a lane's runs, and start it, by that file name: the Merger dispatches your review caller, the reconciler lists the runs of your revise callers, and the health check watches every `agent-*.yml`. Under another name those reads come back empty and read as "nothing to do", so `lane-check` fails a caller at any other path. A project that runs the review lane or the reconciler also keeps its CI at `.github/workflows/ci.yml`, whose runs both read.
 - **Four callers have fixed names** ([#53](https://github.com/yedeya-labs/kanon/issues/53)). GitHub reports a called lane's checks under its caller's `name:`, and the merge gate tells its own checks, and the review event's, from the rest by that name. Name the review lane's caller `Review (Reviewer)`, the merge-reconcile lane's `Merge Reconcile (Reviewer)`, the implement-revise lane's `Implement (Implementer) — revise` and the Merger's caller `Merge (Merger)`, and give the revise and merge-reconcile callers' one job the ids `revise` and `reconcile`. Under another name the Merger waits on itself, so `lane-check` fails a Merger caller under any other name.
 - **Triggers are yours.** A reusable workflow can't declare its caller's events. The `github` context in a called workflow is the caller's, so the lane reads the triggering event exactly as it would in your own file.
 - **Inputs pass through, by name.** `with:` passes your `workflow_dispatch` inputs as `${{ inputs.<name> }}`, and nothing else. On the other triggers they arrive empty, which the lane expects.
@@ -249,6 +254,14 @@ The Lead's reconcile lane drives an approved brief to done (`K-PROJ-*`): each ti
 
 It needs the Lead's App, with `Actions: Read` on the installation (the tick probes it before the deploy phase), and your reference environment's deploy declaration (above).
 
+## The digests
+
+Two lanes post a summary to a chat channel, as a `{"text": …}` body to the webhook in your `DIGEST_WEBHOOK` secret (Slack's incoming webhooks take that body). Without the secret, a digest posts nothing and its run stays green. Each writes a few sentences with a model first, and posts its numbers without them if that step fails. Neither mints an App token: they read with the workflow token.
+
+- **The daily project digest** (`agent-project-digest.yml`) is for the developer: where each open project in `docs/projects/` has got to, and what is stopped and why. Its caller keeps a daily `schedule` and a dispatch with `dry_run`. Schedule it after the reconciler's hourly tick, so it reads the freshest state.
+- **Its health job** rides the same tick. It files one `pipeline-improvement` issue in *Development Automation* naming every lane caller (`.github/workflows/agent-*.yml`) that is red on every recent run, and keeps it until they recover, because GitHub's own failure notification goes to a run's actor, which on a schedule is nobody who reads it. Where an Overseer is installed (`agent-overseer.yml`), it also files one when no weekly Overseer audit has landed in nine days. It needs `actions: read` and `issues: write`, which the caller grants. A dry run prints its table and files nothing.
+- **The weekly digest** (`agent-weekly-digest.yml`) is for a stakeholder outside the day-to-day work: the week's milestone burndown and what was delivered, in plain language, and nothing pending. Its caller keeps a weekly `schedule` and a dispatch with `week_end` (the end of the 7-day window, an ISO date) and `dry_run`.
+
 ## Checking it
 
-Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook; on a missing stack document or playbook, or a stack document without its four sections; on a malformed test-database declaration, escalation file, exemptions file or reference-deploy declaration; on a role missing from the App register; and on a missing Dependabot entry.
+Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a caller that isn't at its lane's file name, a review or reconciler caller without `.github/workflows/ci.yml`, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook; on a missing stack document or playbook, or a stack document without its four sections; on a malformed test-database declaration, escalation file, exemptions file or reference-deploy declaration; on a role missing from the App register; and on a missing Dependabot entry.

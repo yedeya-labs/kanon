@@ -30,6 +30,8 @@ What a file *contains* is still the project's (its specs, its signals, its escal
 | `docs/qa/triage-fix-playbook.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md`, `docs/qa/lead-playbook.md` | The Implementer's, Reviewer's, Explorer's and Lead's playbooks | `K-LAYOUT-17` |
 | `.agent/starting-map.md` | The starting map the project-setup hook writes for an issue (`K-AGENT-41`) | `K-LAYOUT-17` |
 | `.github/dependabot.yml` | Holds the entry that proposes Kanon upgrades | `K-ADOPT-11` |
+| `.github/workflows/agent-<lane>.yml` | Each lane's caller, at the lane's own file name | `K-LAYOUT-18` |
+| `.github/workflows/ci.yml` | The project's CI, when it runs the review lane or the reconciler | `K-LAYOUT-18` |
 
 Every markdown file directly inside `docs/qa/` is pipeline governance: changing one changes what an agent does or what a merge requires, so it is on the pipeline's own escalation path (`K-MERGE-4`). Files under `docs/qa/specs/` are not: specs are a project's deliverable (`K-MERGE-4`).
 
@@ -318,6 +320,18 @@ The prompt names a section by its heading, and a command, a database or a settin
 **Enforced by.** [`lane-check`](../actions/lane-check/README.md), which fails when a document a called lane's prompt reads is missing, or the stack document lacks a section or repeats one; `tests/unit/lane-workflows.test.ts`, which fails when a Kanon lane, its prompts included, names a known stack literal; and [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts), which fails when a lane's prompt sends the agent to a playbook section this rule doesn't name. Whether an adopter's playbook has those sections is prose only: a missing one reads as a whole playbook, or as nothing to do.
 
 **Class.** split. The paths and the headings are framework. **The project supplies:** what each says.
+
+### `K-LAYOUT-18` Each lane's caller has the lane's file name, and CI is `ci.yml`
+
+**Rule.** A workflow that calls a Kanon lane is `.github/workflows/<lane>.yml`, the lane's own file name: the caller of `agent-review.yml` is `.github/workflows/agent-review.yml`, and so on for every lane. A project that runs the review lane or the Lead's reconciler keeps its CI workflow at `.github/workflows/ci.yml`.
+
+Kanon's own repository is the one exception. There, `.github/workflows/<lane>.yml` holds the lane itself, so a caller of Kanon's own lanes can't take that path.
+
+**Why.** Kanon's scripts find a lane's runs, or start it, by the file name of its caller in the adopter's repository: the Merger dispatches `agent-review.yml`, the review-run evidence lists its runs, the reconciler lists the runs of `agent-lead-revise.yml` and `agent-implement-revise.yml` and of `ci.yml`, the review lane lists `ci.yml`'s, and the health check watches every `agent-*.yml`. Under another name a dispatch fails, and a run listing comes back empty, which the recoveries read as "nothing is parked" rather than as an error. Declaring each name instead would be a setting ([ADR 0002](../docs/decisions/0002-standardise-dont-parameterise.md)), and one file name per lane is the shape every adopter's callers already have.
+
+**Enforced by.** [`lane-check`](../actions/lane-check/README.md), which fails a caller of a lane at any other path, and a caller of a lane that reads a workflow of the project's by name (a `# READS WORKFLOW:` line in the lane: the review lane and the reconciler, `ci.yml`) when that workflow is missing; and `tests/unit/caller-file-names.test.ts`, which fails when a script or a lane reads a workflow by a name that is neither a lane's nor declared on such a line.
+
+**Class.** framework
 
 ## The brief
 

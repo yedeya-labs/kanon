@@ -1,0 +1,301 @@
+# The daily project digest, and the health check that rides its tick. RA-1438, RA-1036. A
+# Kanon lane (plan 0004, step 10).
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:`
+# this file at an exact Kanon tag, passes `dry_run` through, and maps the two secrets by name
+# (never `secrets: inherit`).
+#
+# Reports where each project in `docs/projects/` has got to, and, the part that earns the
+# post, what is STOPPED and why. See `scripts/project-digest.mjs` for the derivation and the
+# editorial reasoning.
+#
+# This is NOT the weekly digest's audience. That one is written for a stakeholder outside the
+# day-to-day and is forbidden from naming anything pending (RA-166). This one is for the
+# developer, and what is pending is the entire point.
+#
+# It reads the GitHub API and the checked-out briefs only: no database and no cloud.
+#
+# THE WEBHOOK (plan 0004, decision 7). The post goes to the URL in the caller's
+# `DIGEST_WEBHOOK` secret, as a `{"text": …}` body. Without it, the digest posts nothing and
+# says so, and the run stays green: a repository with no chat channel still gets the health
+# check.
+#
+# INERT until: the caller is on the default branch + these secrets (plan 0001 §8):
+#   CLAUDE_CODE_OAUTH_TOKEN, and DIGEST_WEBHOOK to post
+name: Daily project digest
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#   schedule: "35 7 * * *"         — daily, after the reconciler's :25 hourly tick, so the
+#                                    state this reads is the freshest available
+#   workflow_dispatch              — input `dry_run` (boolean, default false: print the
+#                                    message and file nothing)
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` input, passed through. Empty on the schedule, and a
+    # STRING here: a caller passes `${{ inputs.dry_run }}`, which a boolean input refuses as
+    # `''` on the schedule.
+    inputs:
+      dry_run:
+        description: "'true' to print the message instead of posting it, and file nothing"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      # Not required: without it the digest posts nothing (above).
+      DIGEST_WEBHOOK:
+        required: false
+
+concurrency:
+  group: kanon-project-digest
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
+# ceiling and must grant at least this, or the run fails to start; `lane-check` fails a
+# caller that grants less. The health job's `actions: read` and `issues: write` are held to
+# the same ceiling.
+permissions:
+  contents: read
+  issues: read
+  # REQUIRED, and its absence is SILENT: the search API scopes results to what the token can
+  # see, so `is:pr` returns an empty set rather than a 403 without it. The weekly digest
+  # learned this by reporting "0 PRs merged" in a week with 25 releases; here it would
+  # silently reclassify every building issue as a stall, which is the one classification
+  # this digest must not get wrong.
+  pull-requests: read
+
+jobs:
+  # THE MEMBERSHIP GATE (K-AGENT-45, kanon#46), in a job of its own because both jobs below
+  # need its verdict and neither may wait for the other. On the schedule the actor is whoever
+  # last changed the cron; on a dispatch, whoever ran it. A refusal leaves `member=false`, a
+  # notice and a step-summary line, and both jobs skip.
+  #
+  # ONLY THE CALLER'S TWO TRIGGERS. As a called workflow it runs on whatever its caller is
+  # called on (Kanon's smoke calls it on pull requests), so every other event starts nothing.
+  gate:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      member: ${{ steps.gate.outputs.member }}
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+  digest:
+    needs: gate
+    if: needs.gate.outputs.member == 'true'
+    runs-on: ubuntu-latest
+    # Bounds a hang (RA-1336), sized like the weekly digest's.
+    timeout-minutes: 20
+    # Deliberately NO `actions: read`. Every status here is derived from issues and PRs:
+    # nothing is scraped from run logs, so there is nothing a log-format change can break
+    # (RA-1490). Per-tick budget starvation (RA-1484) stays out of this digest for the same
+    # reason: seeing it would mean reading a run log.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
+      # it is as close to the job's start as a step can be.
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      # The briefs under `docs/projects/` (K-LAYOUT-1), which the agent and the script read.
+      - uses: actions/checkout@v7
+        id: checkout
+
+      # THE AGENT-LANE BLOCKS, CALLED DIRECTLY (P8, RA-2743). This arm mints no App token, so
+      # `agent-setup` gets no slug and probes nothing, as the reviewer's does; `agent-run` is
+      # the narrative step; `agent-finish` records the cost row. No project setup: the agent
+      # reads the tree and calls `gh`, and the script after it is one of Kanon's, which needs
+      # only Node's built-in modules.
+      - uses: $/actions/agent-setup
+        id: setup
+        with:
+          arm: project-digest agent
+          app-slug: ""
+
+      # Kanon's scripts, for the post below, and `KANON` for the agent's environment (kanon#110):
+      # from this step's output, which no project file can rewrite.
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      # BEST-EFFORT, and the only best-effort step here. The numbers below are deterministic;
+      # this writes the judgement that a table cannot carry, most importantly whether a
+      # stopped project is waiting on a decision or on a re-dispatch. If it fails, times out
+      # or writes nothing, the digest still posts, just without the prose.
+      - name: Write today's narrative (non-fatal)
+        id: agent
+        continue-on-error: true
+        uses: $/actions/agent-run
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+        with:
+          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ github.token }}
+          # 5-MINUTE PROMPT CACHE, DELIBERATELY (RA-2058). Unset, this auth path takes the
+          # 1-HOUR TTL automatically, and a 1h cache WRITE bills at 2x base input against
+          # 1.25x for 5m. This arm runs daily, so an hour of warmth is dead long before the
+          # next run in any case, and most of the write is per-turn context growth read
+          # seconds later by the next turn.
+          #
+          # SAFE HERE BECAUSE A CACHE ONLY GOES COLD ON AN IDLE GAP, AND THIS ARM HAS NONE:
+          # measured on the reference adopter, 100% of runs finish in under 300s, and the
+          # most total idle in a run is 15s.
+          prompt-cache-ttl: 5m
+          prompt: |
+            Read the project briefs in `docs/projects/*.md` whose tracking issue
+            is still open, and the issues that carry their `<!-- qa:project N -->`
+            membership marker, and write **two to four sentences** to
+            `narrative.txt` in the repo root saying what a developer starting
+            their day should know.
+
+            The reader is the developer who owns this repo. They know the
+            codebase, the agent pipeline and the vocabulary. Write for them, not
+            for a stakeholder.
+
+            LEAD WITH WHAT IS STOPPED AND WHY. A project moving normally needs
+            half a sentence; a project that is stopped needs the reason and what
+            would unstick it. If everything is moving, say that in one sentence
+            and stop — an honest quiet day beats a padded one.
+
+            THE DISTINCTION THAT MATTERS MOST. An issue labelled `agent:implement`
+            with no PR has two causes that look identical and need opposite
+            responses:
+              - a SCOPE-FIRST BAIL — the implementer posted a plan and stopped,
+                correctly, because `agent-implement.yml` forbids it from
+                proceeding into a data migration, an auth/credential/security
+                change, or destructive schema without a human. It needs a
+                DECISION from the developer. Check the issue's comments.
+              - a STALLED DISPATCH — the run was skipped or died. It needs a
+                RE-DISPATCH.
+            Never call one the other. If you cannot tell from the comments, say
+            which it looks like and why, rather than asserting.
+
+            RULES:
+            - Do NOT restate the numbers — the digest already carries the
+              per-project counts and per-issue lines beneath your sentences.
+            - Do NOT nag about the developer's own review or merge backlog
+              (RA-166). Report where the PIPELINE is stopped, not their queue.
+            - Do not invent progress, and do not soften a stall.
+          # WITHOUT THIS BLOCK THE STEP IS DENIED EVERY TOOL AND SILENTLY WRITES NOTHING
+          # (RA-1473). `Read` reads the briefs, `Bash` runs `gh` for the member issues and
+          # their comments, and `Write` produces `narrative.txt`, which is the step's only
+          # output. `tests/unit/digest-lanes.test.ts` holds it.
+          claude_args: |
+            --model claude-sonnet-5
+            --effort high
+            --max-turns 20
+            --max-budget-usd 10
+            --fallback-model claude-opus-5-5
+            --allowedTools Read,Bash,Glob,Grep,Write
+            --exclude-dynamic-system-prompt-sections
+
+      # Record what this run cost (RA-1485). `always()` because a run that FAILED is the one
+      # you most want measured. `classify: "false"`, because this arm explains a red narrative
+      # in a step of its own below, gated on the narrative step and non-fatal; the block's
+      # classifier would key on the job's status instead, which is the wrong signal here.
+      - uses: $/actions/agent-finish
+        id: finish
+        if: always()
+        continue-on-error: true
+        with:
+          arm: project-digest agent
+          agent: project-digest
+          job-status: ${{ job.status }}
+          classify: "false"
+          execution_file: ${{ steps.agent.outputs.execution_file }}
+          claude_args: |
+            --model claude-sonnet-5
+            --effort high
+            --max-turns 20
+            --max-budget-usd 10
+            --fallback-model claude-opus-5-5
+            --allowedTools Read,Bash,Glob,Grep,Write
+            --exclude-dynamic-system-prompt-sections
+          # The version-2 telemetry row (plan 0002 §2.6, its decision 9: the digests record
+          # their rows as the Overseer's).
+          lane: project-digest
+          stages: >-
+            checkout=${{ steps.checkout.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "20"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
+          kanon-error: ${{ steps.setup.outputs.kanon-error }}
+
+      # FAILS THE JOB on error, deliberately. A swallowed failure means the digest quietly
+      # stops and the developer stops hearing about stalled projects, which is the exact
+      # failure this exists to prevent, now invisible. A red run is the cheapest detector.
+      - name: Post the digest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}
+          DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
+        run: |
+          set -euo pipefail
+          # `|| true` on the read only — an absent narrative is the degraded path, not a
+          # failure. Anything the script itself hits does fail the job.
+          NARRATIVE="$(cat narrative.txt 2>/dev/null || true)" \
+            node "$KANON/scripts/project-digest.mjs"
+
+      # WHY THE NARRATIVE DID NOT LAND (RA-1408). A cap, an outage and a real failure want
+      # different responses, and the classifier tells them apart.
+      #
+      # GATED ON THE STEP, NOT THE JOB (RA-1503). The narrative step is `continue-on-error`,
+      # so when it fails the job still finishes green: `failure()` would be false exactly
+      # when this explanation is needed. `non-fatal` drops the notice to a warning, because
+      # an `::error` on a green job reads as the thing that failed.
+      - name: Say whether the model was unreachable or the run genuinely failed
+        if: always() && steps.agent.outcome == 'failure'
+        uses: $/actions/agent-classify
+        with:
+          arm: project-digest agent
+          non-fatal: "true"
+
+  # ── A WORKFLOW RED ON EVERY RUN (RA-1036) ────────────────────────────────────────────
+  #
+  # The reconciler failed on EVERY run for weeks in the reference adopter, and nothing
+  # escalated it: GitHub's own failure notification goes to a run's actor, which on a
+  # scheduled workflow is nobody who reads it. `scripts/workflow-health.mjs` files one issue
+  # naming every lane caller red on every recent run, and one when the weekly Overseer audit
+  # stops landing (where an Overseer is installed).
+  #
+  # A SEPARATE JOB, NOT A STEP IN `digest`. Permissions are per job, so `actions: read` here
+  # leaves the digest job's refusal of that scope as it is.
+  #
+  # NO `needs: digest`: the digest and this check answer unrelated questions, so a chat
+  # outage cannot hide a dead reconciler. It waits only for the gate.
+  health:
+    needs: gate
+    if: needs.gate.outputs.member == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # `gh run list`.
+      actions: read
+      # The escalation is an ISSUE, because that is the surface that persists. A red run here
+      # would reproduce exactly the bug being fixed.
+      issues: write
+    steps:
+      # The lane callers it watches are the files under `.github/workflows/`.
+      - uses: actions/checkout@v7
+      - uses: $/actions/kanon-path
+      - name: Escalate a workflow red on every recent run, or a weekly audit that never landed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # A dry run prints the table and files nothing.
+          APPLY: ${{ inputs.dry_run != 'true' && '1' || '' }}
+        run: node "$KANON/scripts/workflow-health.mjs"

@@ -135,6 +135,7 @@ describe('every job that calls a block calls it from Kanon, and carries nothing 
   it('finds the spine, the direct-block lanes, the blocks smoke and the fixture, so this is not vacuous', () => {
     expect(jobs.map(([w]) => w).sort()).toEqual([
       'agent-blocks-smoke.yml:smoke', 'agent-lane.yml:run', 'agent-merge-reconcile.yml:reconcile',
+      'agent-project-digest.yml:digest', 'agent-weekly-digest.yml:digest',
       'agent-lead-split.yml:split', 'agent-rebase.yml:resolve', 'agent-review.yml:review', 'agent-verify-acs.yml:verify', `${FIXTURE}:${JOB}`,
     ].sort());
   });

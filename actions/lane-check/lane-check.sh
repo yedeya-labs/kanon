@@ -59,6 +59,7 @@ level() { case "$1" in write) echo 2 ;; read) echo 1 ;; *) echo 0 ;; esac; }
 CALLERS=0
 ROLES=""
 DOCS=""
+READS=""
 for f in .github/workflows/*.yml .github/workflows/*.yaml; do
   [ -f "$f" ] || continue
   doc="$(json "$f")" || { fail "$f" "is not valid YAML"; continue; }
@@ -90,6 +91,25 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
     continue
   fi
   lane_doc="$(json "$lane_file")" || die "Kanon's $lane.yml does not parse"
+
+  # Every caller lives at its lane's own file name (K-LAYOUT-18, kanon#207). Kanon's scripts
+  # find a lane's runs, and dispatch it, by the caller's file name: the review lane's
+  # (`merge-gate.mjs`, the review-run evidence), the revise lanes' (the reconciler), and every
+  # caller's (the health check, which watches `agent-*.yml`). Under another name those reads
+  # come back empty, which the recoveries read as "nothing is parked". The one exception is
+  # Kanon's own repository, where that path holds the lane itself, so its caller can't take it.
+  if [ "$f" != ".github/workflows/$lane.yml" ]; then
+    taken="$(json ".github/workflows/$lane.yml" || true)"
+    [ -n "$taken" ] || taken='{}'
+    if ! jq -e '(.on | type) == "object" and (.on | has("workflow_call"))' <<<"$taken" >/dev/null 2>&1; then
+      fail "$f" "calls the Kanon lane $lane, so it lives at .github/workflows/$lane.yml: Kanon's scripts find this lane's runs, and dispatch it, by that file name (K-LAYOUT-18)"
+    fi
+  fi
+  # The workflows of the adopter's own that the lane reads by file name, on `# READS WORKFLOW:
+  # <file>` lines in the lane (the review lane and the reconciler read CI's runs from `ci.yml`).
+  for w in $(sed -n 's/^# READS WORKFLOW: //p' "$lane_file"); do
+    READS="$READS $w=$lane"
+  done
 
   # Only `on`, `permissions` and one job (and a `name` and a `run-name`). No `concurrency`:
   # the lane holds its own group, and the same group on the caller would deadlock the two
@@ -175,6 +195,13 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
 done
 
 [ "$CALLERS" -gt 0 ] || fail .github/workflows "no workflow calls a Kanon lane (yedeya-labs/kanon/.github/workflows/<lane>.yml@vX.Y.Z)"
+
+# ── The workflows the called lanes read by file name (K-LAYOUT-18) ─────────────────────
+for w in $(printf '%s\n' $READS | sed 's/=.*//' | sort -u); do
+  by="$(printf '%s\n' $READS | sed -n "s|^$w=||p" | sort -u | paste -sd, -)"
+  [ -f ".github/workflows/$w" ] \
+    || fail ".github/workflows/$w" "is missing; the Kanon lane(s) $by read its runs by that file name (K-LAYOUT-18)"
+done
 
 # ── The project-setup hook ──────────────────────────────────────────────────────────────
 if [ ! -f "$HOOK" ]; then

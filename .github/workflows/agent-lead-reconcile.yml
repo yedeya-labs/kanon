@@ -7,6 +7,12 @@
 # the caller's, so the tick reads the triggering event exactly as it did when this file held
 # the triggers itself.
 #
+# `lane-check` requires the workflow on the line below (K-LAYOUT-18, kanon#207): the
+# unreviewed-PR re-delivery waits for CI to settle on a head, and asks Actions about that
+# file's runs (`review-recovery.mjs`'s `ciSettledFor`). Under another name it never settles,
+# and the re-delivery never fires.
+# READS WORKFLOW: ci.yml
+#
 # Drives an APPROVED brief to done: files the issues the brief proposes, then labels them
 # for the Implementer one at a time, in the brief's order, until they are all closed
 # (`K-PROJ-*`). It also owns three re-deliveries that are not a project: a brief PR parked

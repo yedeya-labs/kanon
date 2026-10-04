@@ -1,0 +1,28 @@
+# A trigger-only caller of Kanon's daily project digest lane, as an adopter writes it (plan
+# 0004 step 10).
+name: Daily project digest
+
+on:
+  schedule:
+    - cron: "35 7 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print the message and file nothing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  actions: read
+
+jobs:
+  digest:
+    uses: yedeya-labs/kanon/.github/workflows/agent-project-digest.yml@v1.2.3
+    with:
+      dry_run: ${{ inputs.dry_run }}
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}
