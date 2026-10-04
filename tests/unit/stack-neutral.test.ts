@@ -223,6 +223,8 @@ describe("Kanon's guards on a project with no package.json, run with only node a
     const r = guard('citation-guard', venv);
     expect(r.status, r.out).toBe(0);
     expect(r.out).toMatch(/1 coordinate\(s\) into an untracked, git-ignored path not checked/);
+    // …and the path itself, so a typo an allow-list ignore file hides can be seen (kanon#120).
+    expect(r.out).toMatch(/^ {4}docs\/design\.md: \.venv\/lib\/python3\.12\/site-packages\/requests\/api\.py$/m);
     // A path the project's git does NOT ignore is not a dependency: the same line is a finding.
     const typo = guard('citation-guard', (dir) => {
       venv(dir);

@@ -256,6 +256,14 @@ describe('code comments are read too (RA-2293)', () => {
     expect(() => readsCodeComments('scripts/seed.ts', '')).toThrow(/pipeline-code directories/);
   });
 
+  it('reads workflow helper scripts under `.github/scripts/`, unless declared pipeline code (kanon#180)', () => {
+    expect(readsCodeComments('.github/scripts/weekly-digest.mjs', '', PIPELINE)).toBe(true);
+    expect(readsCodeComments('.github/scripts/lib/milestones.mjs', '', PIPELINE)).toBe(true);
+    expect(readsCodeComments('.github/scripts/weekly-digest.mjs', '', ['.github/scripts/'])).toBe(false);
+    // Only the scripts tree: a workflow file is YAML, not a code comment this reads.
+    expect(readsCodeComments('.github/workflows/ci.yml', '', PIPELINE)).toBe(false);
+  });
+
   it('reads Python and Go source by their own comment syntax (kanon#20)', () => {
     expect(readsCodeComments('src/orders/core.py', '', [])).toBe(true);
     expect(readsCodeComments('tests/test_core.py', '', [])).toBe(true);
@@ -274,6 +282,28 @@ describe('code comments are read too (RA-2293)', () => {
 });
 
 describe('the CLI reads code comments end to end (RA-2293)', () => {
+  it('fails on a `.github/scripts/` comment coordinate the working tree moved, and --fix re-points it (kanon#180)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cshift-gh-'));
+    const sh = (...a: string[]) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+    const w = (f: string, t: string) => { mkdirSync(join(dir, f, '..'), { recursive: true }); writeFileSync(join(dir, f), t); };
+    sh('init', '-q');
+    sh('config', 'user.email', 't@t');
+    sh('config', 'user.name', 't');
+    w('.github/workflows/review.yml', Array.from({ length: 20 }, (_, i) => `# line${i + 1}`).join('\n') + '\n');
+    w('.github/scripts/review-helper.mjs', '// the gate step lives at review.yml:12\nexport const x = 1;\n');
+    w('docs/qa/escalation-paths.md', '## Escalation paths\n\n## Pipeline code\n');
+    sh('add', '.');
+    sh('commit', '-qm', 'base');
+    w('.github/workflows/review.yml', ['# line1', '# new-a', '# new-b', ...Array.from({ length: 19 }, (_, i) => `# line${i + 2}`)].join('\n') + '\n');
+    const cli = join(ROOT, 'scripts/citation-shift.mjs');
+    const r = spawnSync(process.execPath, [cli, '--base', 'HEAD'], { cwd: dir, encoding: 'utf8' });
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stderr).toContain('.github/scripts/review-helper.mjs:1  review.yml:12  ->  review.yml:14');
+    const f = spawnSync(process.execPath, [cli, '--base', 'HEAD', '--fix'], { cwd: dir, encoding: 'utf8' });
+    expect(f.status).toBe(0);
+    expect(readFileSync(join(dir, '.github/scripts/review-helper.mjs'), 'utf8')).toContain('lives at review.yml:14');
+  });
+
   it('fails on a comment coordinate the working tree moved, and --fix re-points it', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cshift-'));
     const sh = (...a: string[]) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
