@@ -318,8 +318,8 @@ describe('stage 2: Kanon runs the Implementer on itself, through the lanes at it
 // The ruleset on main (id 24259403) requires these checks by name. A merge queue waits
 // for each one on the queue's branch, so each must report there under the same name it
 // reports under on the pull request (K-MERGE-7). The agent blocks smoke run joins them
-// once the ruleset names it (plan 0001 §4).
-const REQUIRED_CHECKS = ['Lint, type-check and unit tests', 'Conventional title', 'Signed-off commits', 'Agent blocks smoke', 'Agent lanes smoke'];
+// once the ruleset names it (plan 0001 §4). The public-text check joined them after #258.
+const REQUIRED_CHECKS = ['Lint, type-check and unit tests', 'Conventional title', 'Signed-off commits', 'Agent blocks smoke', 'Agent lanes smoke', 'No reference-adopter names'];
 
 describe('K-MERGE-7 every required check reports on pull requests and in the merge queue, under one name', () => {
   const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
@@ -349,6 +349,9 @@ describe('K-MERGE-7 every required check reports on pull requests and in the mer
 // are required too, but they test the PR's own code, so `$/` is their point.
 const JUDGES: Record<string, string> = { 'Signed-off commits': 'dco', 'Conventional title': 'pr-title' };
 const SMOKES = ['Agent blocks smoke', 'Agent lanes smoke'];
+// A required check that judges with a script read from the PR's BASE commit, not an action:
+// the same bootstrap, since the PR's own copy of the script never runs.
+const BASE_JUDGES = ['No reference-adopter names'];
 
 describe('#47 no required check judges a PR with the PR\'s own copy of its action', () => {
   const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
@@ -357,7 +360,15 @@ describe('#47 no required check judges a PR with the PR\'s own copy of its actio
     [job.uses, ...(job.steps ?? []).map((s) => s.uses)].filter((u): u is string => typeof u === 'string');
 
   it('accounts for every required check as a judge, a smoke or CI', () => {
-    expect([...Object.keys(JUDGES), ...SMOKES, 'Lint, type-check and unit tests'].sort()).toEqual([...REQUIRED_CHECKS].sort());
+    expect([...Object.keys(JUDGES), ...SMOKES, ...BASE_JUDGES, 'Lint, type-check and unit tests'].sort()).toEqual([...REQUIRED_CHECKS].sort());
+  });
+
+  it.each(BASE_JUDGES)('%s checks out only the base commit, and runs no action', (check) => {
+    const { job } = jobs.find(({ job: j }) => j.name === check)!;
+    const checkouts = (job.steps ?? []).filter((s) => s.uses?.startsWith('actions/checkout@'));
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0]?.with?.ref).toBe('${{ github.event.pull_request.base.sha }}');
+    expect(usesOf(job).filter((u) => !u.startsWith('actions/checkout@'))).toEqual([]);
   });
 
   it.each(Object.entries(JUDGES))('%s calls its action at a released version, never through `$/`', (check, action) => {
