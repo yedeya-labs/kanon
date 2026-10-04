@@ -619,6 +619,22 @@ export const danglingCriterionRefs = (markdown, proposed) => {
  * X is `Issue <KEY>`, or a bare declared key of two or more characters (`C1B`, as
  * `1019.md` writes it) — a bare single letter is too common a word to trust.
  *
+ * A SENTENCE THAT DENIES THE EDGE IS NOT ONE (kanon#169). The phrases match the positive
+ * form, so "this is not blocked on Issue B" used to read as an edge, and the guard's own
+ * remedy ("add Issue B to the line") made a correct brief wrong. `deniedEdge` skips a
+ * match when one of these holds, in either direction:
+ *
+ *   - `not`, `never`, `no longer` or an `n't` word is one of the two words just before it,
+ *     in the same clause ("is not blocked on", "isn't blocked by", "does not matter if X
+ *     has not landed");
+ *   - its sentence opens with `Not in this issue`, the template's out-of-scope boundary;
+ *   - its own clause ends and the next one is about a follow-up ("once X lands, a
+ *     follow-up may extend …"), so what waits is that follow-up, not this issue.
+ *
+ * The window is deliberately two words and stops at a clause boundary, so a negation
+ * elsewhere in the sentence ("Issue B is not optional; this is blocked on Issue B") does
+ * not hide a real edge.
+ *
  * @param {{key: string, body?: string, dependsOnKeys?: string[]}[]} proposed
  * @returns {{from: string, needs: string, phrase: string}[]}  `from` must depend on `needs`
  */
@@ -643,13 +659,39 @@ export const omittedPredecessors = (proposed) => {
     out.push({ from, needs, phrase });
   };
   for (const p of proposed) {
-    const text = (p.body ?? '').replace(/\s+/g, ' ');
-    for (const re of forward) {
-      for (const m of text.matchAll(re)) need(p.key, (m[1] ?? m[2]).toUpperCase(), m[0]);
+    // Paragraph by paragraph, so a sentence boundary is never guessed across a blank line.
+    for (const para of (p.body ?? '').split(/\n\s*\n/)) {
+      const text = para.replace(/\s+/g, ' ');
+      for (const re of forward) {
+        for (const m of text.matchAll(re)) {
+          if (!deniedEdge(text, m.index, m[0].length)) need(p.key, (m[1] ?? m[2]).toUpperCase(), m[0]);
+        }
+      }
+      for (const m of text.matchAll(reverse)) {
+        if (!deniedEdge(text, m.index, m[0].length)) need((m[1] ?? m[2]).toUpperCase(), p.key, m[0]);
+      }
     }
-    for (const m of text.matchAll(reverse)) need((m[1] ?? m[2]).toUpperCase(), p.key, m[0]);
   }
   return out;
+};
+
+/**
+ * Does the sentence around a predecessor phrase deny the edge rather than assert it?
+ * See `omittedPredecessors` for the three shapes and why the window is two words.
+ *
+ * @param {string} text  one paragraph, whitespace collapsed
+ * @param {number} start  where the phrase starts
+ * @param {number} length  the phrase's length
+ */
+export const deniedEdge = (text, start, length) => {
+  const before = text.slice(0, start);
+  const sentence = before.slice(before.search(/(?:^|[.!?]\s)[^.!?]*$/)).replace(/^[.!?]?\s*/, '');
+  if (/^Not in this issue\b/i.test(sentence)) return true;
+  const clause = sentence.slice(sentence.search(/[^,;:—–()]*$/));
+  const words = clause.trim().split(/\s+/).filter(Boolean).slice(-2).join(' ');
+  if (/\b(?:not|never|no longer)\b|n['’]t\b/i.test(words)) return true;
+  const after = text.slice(start + length);
+  return /^[^.!?;,]*,\s*(?:a|any|the) (?:later |separate )?follow-?ups?\b/i.test(after);
 };
 
 /**

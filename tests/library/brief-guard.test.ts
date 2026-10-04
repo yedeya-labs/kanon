@@ -857,6 +857,44 @@ Acceptance criteria:
     expect(omittedPredecessors(parseProposed(withIssueAProse('If B has not landed, whatever.')))).toEqual([]);
   });
 
+  // kanon#169: the phrases match the positive form, so a sentence DENYING the edge used to
+  // read as one, and the guard's remedy then added an edge that does not exist.
+  it.each([
+    ['This issue is not blocked on Issue C1B.'],
+    ['Unlike Issue B, this is NOT blocked by Issue C1B at all.'],
+    ["It isn't blocked by Issue C1B, and never was."],
+    ['Not in this issue: anything blocked on Issue C1B, or its follow-ups.'],
+    ['Not in this issue: deciding whether Issue C1B follows this issue.'],
+    ['Once Issue C1B lands in the future, a follow-up may extend this.'],
+    ['It does not matter if Issue C1B has not landed.'],
+  ])('lints clean on a denied edge: %s', (prose) => {
+    expect(problems(withIssueAProse(prose))).toEqual([]);
+  });
+
+  it.each([
+    // A negation elsewhere in the sentence is not this phrase's: the window stops at the clause.
+    ['Issue C1B is not optional; this is blocked on Issue C1B.'],
+    ['Issue B is not related, but this is blocked on Issue C1B.'],
+    ['Issue B: not needed; blocked on Issue C1B instead.'],
+    // Two words, not the whole clause: a negation further back is about something else.
+    ['It is not surprising that this is blocked on Issue C1B.'],
+    // The sentence after the boundary is the issue's own again, and so is the next paragraph,
+    // even when the boundary line has no full stop.
+    ['Not in this issue: widening. This is blocked on Issue C1B.'],
+    ['Not in this issue: widening, or a rewrite\n\nThis starts once Issue C1B lands.'],
+    // The clause after the edge is this issue, not a follow-up.
+    ['Once Issue C1B lands, this starts.'],
+  ])('still refuses a real edge beside a negation: %s', (prose) => {
+    const found = problems(withIssueAProse(prose)).filter((p) => /does not name Issue C1B/.test(p));
+    expect(found, prose).toHaveLength(1);
+  });
+
+  it('gives the reverse direction the same treatment', () => {
+    expect(problems(withIssueAProse('Not in this issue: whether Issue B follows this issue.', 'Issue C1B'))).toEqual([]);
+    expect(problems(withIssueAProse('Not in this issue: widening. Issue B follows this issue.', 'Issue C1B')))
+      .toEqual([expect.stringMatching(/^Issue B's prose says it waits for Issue A/)]);
+  });
+
 });
 
 describe('RA-2147 — criteria ordinals and `Issue X criterion N` references', () => {
