@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: yedeya-labs/kanon/actions/dco@v0.19.0
+      - uses: yedeya-labs/kanon/actions/dco@v0.20.0
 ```
 
 <!-- x-release-please-end -->
