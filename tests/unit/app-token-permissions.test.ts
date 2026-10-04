@@ -36,6 +36,10 @@ const DIRECT: Record<string, { step: string; perms: Perms }> = {
   // The Merger's whole grant, which `merge-gate.mjs` uses: it merges, comments and labels,
   // re-dispatches the review lane, and reads the head's check runs and status contexts.
   'agent-merge.yml': { step: 'app-token', perms: { contents: 'write', issues: 'write', 'pull-requests': 'write', actions: 'write', checks: 'read', statuses: 'read' } },
+  // The reconcile files, edits, labels, comments on and closes issues; the re-deliveries churn
+  // labels on pull requests; the deploy probe and the recoveries read Actions; the reconcile
+  // and the probe read the repository's files.
+  'agent-lead-reconcile.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write', 'pull-requests': 'write', actions: 'read' } },
   // The crash recovery adds one label to the issue.
   'agent-implement.yml': { step: 'app-token', perms: { issues: 'write' } },
 };

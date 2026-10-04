@@ -1,0 +1,494 @@
+# QA pipeline — the Lead, MODE: reconcile. RA-955. A Kanon lane (plan 0004, step 8).
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:`
+# this file at an exact Kanon tag, passes `project` and `apply` through, and maps the two
+# secrets by name (never `secrets: inherit`). The `github` context in a called workflow is
+# the caller's, so the tick reads the triggering event exactly as it did when this file held
+# the triggers itself.
+#
+# Drives an APPROVED brief to done: files the issues the brief proposes, then labels them
+# for the Implementer one at a time, in the brief's order, until they are all closed
+# (`K-PROJ-*`). It also owns three re-deliveries that are not a project: a brief PR parked
+# on an unanswered review, a PR parked with no review, and a report of a PR that is red and
+# unreviewed.
+#
+# ── WHY A RECONCILER AND NOT A LONG-RUNNING JOB ─────────────────────────────
+# A project spans days and many PRs. A single job cannot: Actions caps a job at 6 hours, and
+# one burning wall-clock waiting for a review is pure waste. So this is a cheap tick that
+# wakes on an event, re-derives the world from GitHub, takes at most one kind of action, and
+# exits. There is no stored state, so a tick that dies costs one tick.
+#
+# ── THE CASCADE, AND WHY IT NEEDS AN APP TOKEN ──────────────────────────────
+# The Lead labels an issue -> the implement lane fires -> the Implementer opens a PR -> the
+# Reviewer reviews -> the PR merges -> `pull_request: closed` fires the next tick -> the next
+# issue goes out. The loop closes itself, and it works ONLY because the App token raises
+# events that trigger other workflows; the default GITHUB_TOKEN does not.
+#
+# The same property is how it runs away, so the guards are mechanical, not prose: a
+# PER-PROJECT WIP cap (`QA_LEAD_WIP`, default 3) AND a shared cap across every project a tick
+# reconciles (`QA_LEAD_GLOBAL_WIP`, same default, RA-1447) — both counting only issues an
+# implementer could actually be RUNNING, since RA-2038 stopped charging them for one parked on
+# a human — a shared per-tick action budget (`QA_LEAD_TICK_BUDGET`, a constant of this lane:
+# see the Reconcile step), an hourly heartbeat rather than a tight loop, and idempotency by
+# construction — a tick re-reads the world, so acting twice is impossible.
+#
+# ── THE HEARTBEAT IS STRUCTURAL, NOT A FALLBACK ─────────────────────────────
+# An event-driven system cannot recover from an event that never arrived (RA-378, RA-912).
+# Re-deriving state on a timer makes that whole class disappear, because it never depended
+# on the event.
+#
+# NO MODEL. Every step runs a library script or `gh`, so this lane takes no Claude token and
+# writes no telemetry row.
+#
+# INERT until: the caller is on the default branch + the Lead's App installed, with a row in
+# the App register + these secrets (plan 0001 §8):
+#   LEAD_APP_ID, LEAD_APP_PRIVATE_KEY
+# A project closes only once its merges are deployed to the reference environment, which the
+# adoption record declares (`K-LAYOUT-10`, `K-PROJ-11`; `docs/lanes.md`).
+name: Lead (Lead) — reconcile
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#   workflow_dispatch      — inputs `project` (required: the tracking issue) and `apply`
+#                            (boolean, default false: a dry run)
+#   pull_request: [closed]
+#   issues: [closed]
+#   schedule: "25 * * * *" — the hourly heartbeat; clear of the other agent crons
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` inputs, passed through. Empty on the other three
+    # triggers, so neither is required here, and `apply` is a STRING: a caller passes
+    # `${{ inputs.apply }}`, which a boolean input refuses as `''` on those triggers.
+    inputs:
+      project:
+        description: Tracking issue number of the project (blank = every open project)
+        required: false
+        type: string
+        default: ""
+      apply:
+        description: "'true' to actually file and dispatch on a dispatch (anything else = dry run)"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      LEAD_APP_ID:
+        required: true
+      LEAD_APP_PRIVATE_KEY:
+        required: true
+
+concurrency:
+  # Never two ticks at once: both would derive the same world and act on it twice.
+  group: agent-lead-reconcile
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
+# ceiling and must grant at least this, or the run fails to start; `lane-check` fails a
+# caller that grants less.
+permissions:
+  contents: read
+  # REQUIRED, and its absence was silent. A permissions block sets every unlisted scope to
+  # `none`, so without this the pre-filter's `gh issue view` 403s on a private repository,
+  # `project` comes back empty, and every step gates itself off — leaving the heartbeat,
+  # `pull_request: closed` and `issues: closed` all inert while the run stays green.
+  issues: read
+  # For the brief-PR pre-filter below (RA-1595), which asks whether any PR the Lead authored
+  # under `docs/projects/**` is open before minting anything. Read only — the CHURN that
+  # follows runs on the App token, because a label added by `github.token` raises no event
+  # and would therefore re-deliver nothing.
+  pull-requests: read
+  # For the red-and-unreviewed detector (RA-1723), the one step that reads a PR's
+  # `statusCheckRollup` on this token: check runs and status contexts are separate scopes,
+  # and a rollup missing either reads as "fewer checks", not as an error. `actions: read` for
+  # its run listing and the review-run evidence.
+  checks: read
+  statuses: read
+  actions: read
+
+jobs:
+  tick:
+    # ONLY THE CALLER'S FOUR TRIGGERS. When this file held its triggers, no other event could
+    # reach it; as a called workflow it runs on whatever its caller is called on (Kanon's smoke
+    # calls it on pull requests, whose `opened` the membership gate would admit).
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event_name == 'schedule'
+      || (github.event_name == 'pull_request' && github.event.action == 'closed')
+      || (github.event_name == 'issues' && github.event.action == 'closed')
+    runs-on: ubuntu-latest
+    # Bounds a hang (RA-1336). Actions' default cap is 360m. Sized at ~3x the longest real run
+    # measured on the reference adopter, so it never truncates work.
+    timeout-minutes: 20
+    steps:
+      # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
+      # this lane acts only when the event's actor is a member or a registered agent App.
+      # `scripts/lane-gate.mjs` says who the actor is for each event — on a closed pull
+      # request, whoever merged it; on a closed issue, whoever closed it; on the schedule,
+      # whoever last changed it — and a refusal leaves `member=false`, a notice and a
+      # step-summary line, and every later step skips. `kanon-path` first, which also gives
+      # every step below Kanon's scripts and Node.
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+      # The brief is read from the checkout (`docs/projects/<n>.md`, `K-PROJ-2`). Nothing in it
+      # runs: this lane installs nothing and never calls the project-setup hook.
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.member == 'true'
+
+      # THE LEAD'S LOGIN COMES FROM THE APP REGISTER (plan 0004 P5), not from this file:
+      # Kanon cannot write an adopter's logins. Read from the default branch over the API, as
+      # the revise lanes do in `read_login`, with the same parser
+      # (`actions/lane-check/app-register.awk` from this Kanon tree), so a PR cannot choose it.
+      # A missing register, row or slug FAILS the tick, naming the role: an unknown login would
+      # otherwise match no brief PR and read as "nothing parked" on every tick.
+      # `brief-revise-recovery.mjs` reads the same row (`LEAD_LOGIN`).
+      - name: Read the Lead's login from the App register
+        id: lead
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          err="$(mktemp)"
+          # No `ref`: the contents API reads the default branch.
+          text="$(gh api "repos/$REPO/contents/docs/qa/agent-identities.md" -H "Accept: application/vnd.github.raw" 2>"$err")" \
+            || { echo "::error title=App register::could not read docs/qa/agent-identities.md from the default branch of $REPO: $(cat "$err")"; exit 1; }
+          login="$(printf '%s\n' "$text" | awk -v role=Lead -f "$KANON/actions/lane-check/app-register.awk" 2>"$err")" \
+            || { echo "::error title=App register::$(cat "$err")"; exit 1; }
+          echo "login=$login" >> "$GITHUB_OUTPUT"
+          echo "Lead: \`$login\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # Cheap pre-filter: decide whether there is an active project at all before minting a
+      # token or running anything. A heartbeat with no project open must cost Actions seconds,
+      # not tokens.
+      - name: Is there a project to reconcile?
+        id: scope
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_PROJECT: ${{ inputs.project }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_PROJECT:-}" ]; then
+            echo "project=$INPUT_PROJECT" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # A project is a merged brief whose tracking issue is still open.
+          # Numeric order, not glob order: `1010.md` sorts before `952.md`
+          # lexically, so the lower-numbered project would starve.
+          #
+          # NO grep IN A STATUS-BEARING POSITION. `grep` exits 1 when it matches
+          # nothing, `set -e` takes an assignment's status from its substitution, and
+          # `pipefail` carries a mid-pipeline failure past a trailing `tr`. That is
+          # what made this step exit 1 on EVERY run for two weeks (RA-1032): the
+          # non-numeric warning's `grep -v` found nothing precisely when every brief
+          # was well-formed, so the guard succeeded only when the repo was broken.
+          # Classifying in the shell has no exit status to get wrong.
+          briefs="$(ls docs/projects/*.md 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.md$//' || true)"
+          numeric=""; nonnumeric=""
+          for b in $briefs; do
+            case "$b" in
+              # A LEADING `_` MEANS "NOT A BRIEF" (RA-949). `docs/projects/_template.md` is
+              # apparatus, not a project (`K-LAYOUT-11`), and warning about it every hour
+              # would be a warning that always fires. Every other non-numeric name is still
+              # named, because a slug-named brief really can never be reconciled.
+              _*)          ;;
+              ''|*[!0-9]*) nonnumeric="$nonnumeric $b" ;;
+              *)           numeric="$numeric$b\n" ;;
+            esac
+          done
+
+          # EVERY OPEN PROJECT, NOT THE FIRST (RA-1447). The reconciler is a SCRIPT, so
+          # reconciling all of them costs a loop rather than N agent runs, and the two things
+          # that do cost are bounded inside it — the tick budget is shared across projects
+          # instead of granted to each, and in-flight implementer work has a global cap
+          # alongside the per-project one.
+          picked=""; skipped=""
+          for n in $(printf "$numeric" | sort -n); do
+            # NOT swallowed: a failed read here is a permissions bug, and treating
+            # it as "no project" is what made this whole workflow inert.
+            if ! state="$(gh issue view "$n" --json state --jq .state)"; then
+              echo "::error title=agent-lead-reconcile::Could not read issue #$n. This job needs \`issues: read\`; without it every automatic path goes silently inert."
+              exit 1
+            fi
+            if [ "$state" = "OPEN" ]; then
+              picked="${picked:+$picked,}$n"
+            fi
+          done
+          # No silent caps: say what was left, never just what was taken. A slug-named brief
+          # can never be reconciled — readWorld keys the whole project off a numeric tracking
+          # issue — so it must be named, not silently dropped by the numeric filter.
+          if [ -n "${nonnumeric# }" ]; then
+            echo "::warning title=agent-lead-reconcile::Ignoring non-numeric brief file(s): $nonnumeric — a brief must be named for its tracking issue number or it can never be reconciled."
+          fi
+          # `skipped` is retained deliberately and stays empty: nothing is skipped for being
+          # later in the order any more. Left here so a future arm that DOES skip a project has
+          # the reporting channel already in place.
+          if [ -n "$skipped" ]; then
+            echo "::warning title=agent-lead-reconcile::Reconciling $picked; other open project(s) skipped this tick:$skipped"
+            echo "Other open projects skipped this tick:$skipped" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -n "$picked" ]; then
+            echo "project=$picked" >> "$GITHUB_OUTPUT"
+            echo "active project(s): $picked"
+            echo "Reconciling open project(s): $picked" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "No open project with a merged brief — nothing to reconcile." >> "$GITHUB_STEP_SUMMARY"
+          echo "project=" >> "$GITHUB_OUTPUT"
+
+      # THE SECOND SUBJECT THIS TICK OWNS, and it is deliberately not a project (RA-1595).
+      #
+      # `scope` above enumerates projects by `ls docs/projects/*.md` — briefs that have
+      # MERGED. A brief PR is one that has not, so it is invisible to that read and to
+      # everything downstream of it. So the one artifact the developer actually gates on was
+      # the one thing the hourly tick could not see.
+      #
+      # CHEAP, for the same reason `scope` is: one `gh pr list` on the default token, and only
+      # if it finds something does anything else in this job run. Most heartbeats have no open
+      # brief PR at all.
+      - name: Is a brief PR parked on an unanswered review?
+        id: briefs
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          LEAD_LOGIN: ${{ steps.lead.outputs.login }}
+        run: |
+          set -euo pipefail
+          # NORMALISED, because one identity has three spellings across three endpoints
+          # and `gh pr view --json author` returns the `app/` one.
+          parked="$(gh pr list --repo "$REPO" --state open --limit 100 \
+            --json number,author,files \
+            --jq "[.[] | select(((.author.login // \"\") | sub(\"^app/\";\"\") | sub(\"\\\\[bot\\\\]\$\";\"\")) == \"$LEAD_LOGIN\") | select([.files[].path] | any(startswith(\"docs/projects/\")))] | length")"
+          # NOT SWALLOWED, ON EITHER AXIS. `set -e` plus the assignment above fails the
+          # step on a denied read — treating that as "no brief PR" is the inert-but-green
+          # shape the `scope` step guards against. AND AN EMPTY ANSWER IS NOT A ZERO
+          # (RA-1659): a command in an `if` condition is exempt from `set -e`, so a `gh` that
+          # exited 0 with nothing on stdout would otherwise read as "no brief PR".
+          if [ -z "$parked" ]; then
+            echo "::error title=agent-lead-reconcile::\`gh pr list\` returned no count for open brief PRs. Refusing to read an empty answer as \"none\" — a parked brief PR would then go unrecovered on every tick, silently and green."
+            exit 1
+          fi
+          if [ "$parked" -gt 0 ]; then
+            echo "parked=$parked" >> "$GITHUB_OUTPUT"
+            echo "$parked open brief PR(s) to examine for a parked review" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "parked=" >> "$GITHUB_OUTPUT"
+          fi
+          echo "open brief PRs: $parked"
+
+      # THE THIRD SUBJECT (RA-1689). The review lane fires on CI's completion, which fires
+      # ONCE. When it does not deliver, nothing re-fires it and the PR parks: green, labelled,
+      # no review event, no signal.
+      #
+      # NOT COVERED BY THE PROJECT RECONCILE. `reviewRecovery` inside `lead-reconcile.mjs`
+      # walks the project's issues, filtered to `agent:implement`. A person's `review:please`
+      # PR, an `agent:triage` bug-fix, an implement PR outside any brief, and the Lead's own
+      # PRs are in none of that; and with no open project this job mints no token at all.
+      #
+      # CHEAP, like the two pre-filters above: one `gh pr list` on the default token, and only
+      # if it finds something does the App token get minted for it.
+      - name: Is any PR parked with no review?
+        id: unreviewed
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The label SET, matching what the review lane's own filter reads. The per-PR
+          # conditions that actually decide — no verdict on the head, old enough, CI settled,
+          # no review run — are the script's; this only asks whether it is worth minting a
+          # token to run it.
+          parked="$(gh pr list --repo "$REPO" --state open --limit 100 \
+            --json number,isDraft,labels \
+            --jq '[.[] | select(.isDraft | not) | select([.labels[].name] | any(. == "review:please" or . == "agent:implement" or . == "agent:triage"))] | length')"
+          # NOT SWALLOWED, ON EITHER AXIS — the same two doors `briefs` above covers.
+          if [ -z "$parked" ]; then
+            echo "::error title=agent-lead-reconcile::\`gh pr list\` returned no count for open review-labelled PRs. Refusing to read an empty answer as \"none\" — a PR parked with no review would then go unrecovered on every tick (RA-1689)."
+            exit 1
+          fi
+          if [ "$parked" -gt 0 ]; then
+            echo "parked=$parked" >> "$GITHUB_OUTPUT"
+            echo "$parked open review-labelled PR(s) to examine for a parked review" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "parked=" >> "$GITHUB_OUTPUT"
+          fi
+          echo "open review-labelled PRs: $parked"
+
+      - name: Mint lead App token
+        if: steps.scope.outputs.project != '' || steps.briefs.outputs.parked != '' || steps.unreviewed.outputs.parked != ''
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.LEAD_APP_ID }}
+          private-key: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
+          # Narrowed to what the steps below use (#48, `K-AGENT-46`): the reconcile files,
+          # edits, labels, comments on and closes issues (`issues`), churns labels on pull
+          # requests to re-deliver a review or a revise (`pull-requests`), reads the brief's
+          # repository and the adoption record (`contents`), and lists the deploy, revise and
+          # review runs (`actions`).
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
+          permission-actions: read
+
+      # THE REGISTER'S LEAD ROW IS A CLAIM, and this turns it into a check: the awk accepts any
+      # well-formed slug, so a typo in the row would match no brief PR and every tick would
+      # report "nothing parked", green. `app-slug` is the login GitHub derives from the App
+      # actually minted, so a mismatch fails the tick naming both.
+      - name: Assert the minted App is the register's Lead
+        if: steps.scope.outputs.project != '' || steps.briefs.outputs.parked != '' || steps.unreviewed.outputs.parked != ''
+        env:
+          MINTED_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          LEAD_LOGIN: ${{ steps.lead.outputs.login }}
+        run: |
+          set -euo pipefail
+          if [ "$MINTED_SLUG" != "$LEAD_LOGIN" ]; then
+            echo "::error title=agent-lead-reconcile::App slug mismatch — minted '$MINTED_SLUG', the register's Lead row says '$LEAD_LOGIN'. Rename the App to produce the register's slug, or correct the Lead row's App slug in docs/qa/agent-identities.md on the default branch (RA-2701, RA-2741). Left disagreeing, the brief-PR count matches nothing and every tick reads as idle."
+            exit 1
+          fi
+          echo "App slug \`$MINTED_SLUG\` matches the register's Lead row." >> "$GITHUB_STEP_SUMMARY"
+
+      # A MISSING APP SCOPE MUST BE A READABLE RED, NOT A 403 IN PHASE 4 (RA-1336).
+      #
+      # `lead-reconcile.mjs`'s phase-4 deploy probe lists the reference environment's deploy
+      # runs and reads one — both READS, both needing `Actions: Read` on the App. On the
+      # reference adopter the App once had no Actions access at all, and every tick that
+      # reached phase 4 died on `HTTP 403: Resource not accessible by integration`: 22 ticks
+      # in two days, green only because no project sat in phase 4.
+      #
+      # An App's scopes live on the installation, not in any file here — so the grant is a
+      # claim no test can check, and it can be revoked or lost in a re-authorization exactly as
+      # silently as it was missing. This is the only thing that would notice. The workflow's
+      # `permissions:` block is not the fix: it governs `github.token`, and the steps below
+      # authenticate with the App token, whose scopes come from the installation.
+      #
+      # PROBE THE CAPABILITY, DO NOT ASK THE API ABOUT IT: the installation-permissions endpoint
+      # returns the COLLABORATOR set, which never contains `actions`. `--limit 1` is the real
+      # call the script makes, against the declared deploy workflow (`K-LAYOUT-10`, read by
+      # `scripts/reference-deploy.mjs` from the default branch), and it creates nothing.
+      #
+      # A RECORD THAT DECLARES NO DEPLOY IS NOT THIS STEP'S RED. `readDeploy` names a missing
+      # declaration itself, when a project reaches its deploy phase (`K-PROJ-11`); a tick with
+      # no project in that phase must not fail on it. So without a declared workflow this lists
+      # one run of any workflow, which needs the same `Actions: Read`, and says why.
+      #
+      # ALSO FOR THE BRIEF AND REVIEW RE-DELIVERIES (RA-1595, RA-1689): `brief-revise-recovery.mjs`
+      # and `review-recovery.mjs` list runs on the same grant, and the review one fails QUIET —
+      # an unreadable listing means it declines to churn, so a revoked grant would present as
+      # "nothing is parked" forever rather than as an error.
+      #
+      # NOT `continue-on-error`. A tick that cannot see deploys cannot decide phase 4, and a
+      # sweep that silently skips the phase it exists to advance is the swallowed-403 shape all
+      # over again (RA-957).
+      - name: "Probe that the App can read Actions (actions: read)"
+        if: steps.scope.outputs.project != '' || steps.briefs.outputs.parked != '' || steps.unreviewed.outputs.parked != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          LEAD_LOGIN: ${{ steps.lead.outputs.login }}
+        run: |
+          set -uo pipefail
+          if workflow="$(node "$KANON/scripts/reference-deploy.mjs" workflow 2>/tmp/deploy.err)"; then
+            what="the reference deploy workflow, $workflow"
+            set -- --workflow "$workflow"
+          else
+            echo "::notice title=agent-lead-reconcile::No reference deploy workflow to probe: $(head -1 /tmp/deploy.err). Probing Actions: Read on any workflow's runs instead; the reconcile names the missing declaration when a project reaches its deploy phase (K-PROJ-11)."
+            what="any workflow"
+            set --
+          fi
+          if ! gh run list --repo "$GITHUB_REPOSITORY" "$@" --limit 1 >/dev/null 2>/tmp/actions.err; then
+            echo "::error title=agent-lead-reconcile::$LEAD_LOGIN cannot read Actions. Phase 4 (readDeploy) lists the runs of $what and 403s without \`Actions: Read\` on the App. Grant it in the GitHub App settings AND re-authorize the installation (a permission change does not take effect until it is accepted). This is NOT fixable from the caller's permissions block: that governs github.token, and the reconcile step uses the App token."
+            sed -n '1,5p' /tmp/actions.err
+            exit 1
+          fi
+          echo "Actions read capability confirmed (listed 1 run of $what; nothing was created)."
+
+      - name: Reconcile
+        if: steps.scope.outputs.project != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # A scheduled or cascaded tick is the automation and applies; a bare manual
+          # dispatch is a dry run.
+          APPLY: ${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}
+          # THE TICK BUDGET, A CONSTANT OF THIS LANE (plan 0004 §5): a standard, not a
+          # declaration (ADR 0002). Bounds a runaway cascade: a tick that would exceed it stops
+          # and escalates rather than continuing.
+          QA_LEAD_TICK_BUDGET: "6"
+          # RA-2412: follow-up membership is derived only over EVERY open project; a dispatch
+          # naming one project must not decide "exactly one" (fail closed).
+          QA_LEAD_SCOPE: ${{ !inputs.project && 'all' || 'narrowed' }}
+          PROJECT: ${{ steps.scope.outputs.project }}
+        run: node "$KANON/scripts/lead-reconcile.mjs" --project "$PROJECT"
+
+      # RE-DELIVERS A BRIEF PR'S UNANSWERED CHANGES-REQUEST (RA-1595).
+      #
+      # `pull_request_review` fires once; if the Lead's revise lane did not run for it, nothing
+      # re-fired the Lead and the brief parked — the developer's single gate, held green and
+      # silent. This churns `agent:lead-revise`, which that lane triggers on, and ONLY when no
+      # revise run exists for the head, so a cap or an outage is reported rather than repeated
+      # — until its cool-down has passed, when a head whose only run died of its cause is
+      # re-churned once (RA-2519, `lane-retry.mjs`).
+      #
+      # THE APP TOKEN, not `github.token`: an event raised by the default token never triggers
+      # another workflow, so a churn with it would re-deliver nothing while looking like it had.
+      #
+      # AFTER THE RECONCILE, deliberately. This lane shares no state with the project
+      # reconciliation above, so either order is correct — but a project's own tick is the more
+      # valuable half, and running it first means a `gh` outage here cannot cost the tick its
+      # main work. The converse is accepted: a failed Reconcile skips this step until the next
+      # tick, an hour, against a lane whose whole subject is a wait measured in hours.
+      - name: Re-deliver a parked brief PR's review
+        if: steps.briefs.outputs.parked != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          APPLY: ${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}
+        run: node "$KANON/scripts/brief-revise-recovery.mjs"
+
+      # RE-DELIVERS A REVIEW THAT NEVER LANDED, ON ANY REVIEW-LABELLED PR (RA-1689).
+      #
+      # The review lane's CI-completion trigger fires once; a dropped queue, a cap or an outage
+      # leaves the PR green, labelled and unreviewed with nothing re-firing it. This churns
+      # `review:please`, which that lane triggers on, and ONLY when CI has settled on the head
+      # and no review run has attempted it — so a cap or an outage is reported rather than
+      # repeated, and the CI-pending defer is never pre-empted. Bar one retry, after a
+      # cool-down, of a head whose only attempt died of its cause (RA-2519, `lane-retry.mjs`).
+      #
+      # THE APP TOKEN, for the reason the step above gives.
+      - name: Re-deliver a review that never landed
+        if: steps.unreviewed.outputs.parked != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          APPLY: ${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}
+        run: node "$KANON/scripts/review-recovery.mjs"
+
+      # REPORTS A PR THAT IS RED AND UNREVIEWED PAST THE STALL WINDOW (RA-1723).
+      #
+      # A PR once sat red with no verdict for a day because the Reviewer died on the same step
+      # CI did, and nothing read check state. This names such a PR on every tick. REPORT ONLY:
+      # no label, no dispatch. The remedy for a red PR the Reviewer could not read is the
+      # review, which the step above re-delivers on its own evidence.
+      #
+      # `github.token`, NOT THE APP'S. The rollup is assembled from check runs and status
+      # contexts, which need `Checks: Read` / `Commit statuses: Read` — scopes only the Merger's
+      # App holds. Read with the Lead's token the rollup comes back SHORT rather than as an
+      # error, and this detector would be green forever. The default token is granted both
+      # above; it only reads, so the "a default-token event triggers nothing" rule costs
+      # nothing here.
+      #
+      # `!cancelled()`: an earlier step going red (a project read throwing) must not silence the
+      # one report that exists for red PRs.
+      - name: Report a PR that is red and unreviewed
+        if: ${{ !cancelled() && steps.unreviewed.outputs.parked != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node "$KANON/scripts/red-unreviewed.mjs"

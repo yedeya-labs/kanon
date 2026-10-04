@@ -19,7 +19,8 @@
 # `qa:verify` or a dispatch. The brief lane starts only on a dispatch, the split lane only
 # on `qa:needs-split` or a dispatch, and the rebase lane only on a CI completion, its
 # schedule or a dispatch. The Merger starts only on a review, a CI completion, its schedule
-# or a dispatch. The jobs that would mint and run are skipped. The model
+# or a dispatch, and the reconciler only on its schedule, a closed issue or pull request, or a
+# dispatch. The jobs that would mint and run are skipped. The model
 # call is proven by the reference adopter's live run after each upgrade.
 #
 # The secrets are mapped by their fixed names to a secret that does not exist: nothing that
@@ -157,9 +158,23 @@ jobs:
       MERGER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       MERGER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
 
+  lead-reconcile:
+    # The reconciler runs no model either (plan 0004 step 8).
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      checks: read
+      statuses: read
+      actions: read
+    uses: $/.github/workflows/agent-lead-reconcile.yml
+    secrets:
+      LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+
   smoke:
     name: Agent lanes smoke
-    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs, lead, lead-split, rebase, merge]
+    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs, lead, lead-split, rebase, merge, lead-reconcile]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -169,7 +184,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"'
-          echo "$RESULTS" | jq -e 'to_entries | length == 11 and all(.value.result == "success" or .value.result == "skipped")'
+          echo "$RESULTS" | jq -e 'to_entries | length == 12 and all(.value.result == "success" or .value.result == "skipped")'
 
       # For the fixture adopter only. lane-check itself comes from `$/`.
       - uses: actions/checkout@v7

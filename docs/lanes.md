@@ -16,9 +16,10 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Lead, brief | `agent-lead.yml` | Lead | `workflow_dispatch` with `mandate` and `context` |
 | Lead, split | `agent-lead-split.yml` | Lead | `issues: [labeled]`; `workflow_dispatch` with `issue` |
 | Rebase (resolve a conflict) | `agent-rebase.yml` | Implementer | `workflow_run` of your `CI` workflow, `types: [completed]`, `branches` your default branch; `schedule` (a daily floor); `workflow_dispatch` with `pr_number` |
+| Lead, reconcile | `agent-lead-reconcile.yml` | Lead | `workflow_dispatch` with `project` and `apply`; `pull_request: [closed]`; `issues: [closed]`; `schedule` (an hourly heartbeat) |
 | Merge | `agent-merge.yml` | Merger | `pull_request_review: [submitted]`; `workflow_run` of your `CI` workflow, `types: [completed]`, `branches` your default branch; `schedule` (an hourly floor); `workflow_dispatch` with `pr_number` and `apply` |
 
-**What each caller maps, grants and needs.** Every caller maps its role's two App secrets, by name, and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger runs no model, so its caller maps only the two. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
+**What each caller maps, grants and needs.** Every caller maps its role's two App secrets, by name, and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger and the reconciler run no model, so their callers map only the two. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
 
 <!-- lane-contract:table -->
 
@@ -35,10 +36,11 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | `agent-lead-split.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read` | `docs/qa/lead-playbook.md` |
 | `agent-rebase.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
 | `agent-merge.yml` | `MERGER_APP_ID`, `MERGER_APP_PRIVATE_KEY` | `contents: read` | none |
+| `agent-lead-reconcile.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read`, `checks: read`, `statuses: read`, `actions: read` | none |
 
 <!-- /lane-contract:table -->
 
-Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile calls the blocks itself and installs nothing, so it never calls your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own. The Merger calls no block and installs nothing: it runs `merge-gate.mjs` in your checkout, with the Merger's App token, and never calls your hook.
+Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile calls the blocks itself and installs nothing, so it never calls your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own. The Merger and the reconciler call no block and install nothing: each runs Kanon's scripts in your checkout, with its role's App token, and never calls your hook.
 
 **The review lane** has three things the others don't:
 - **Its caller sets `run-name`,** ending with `${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}`. A called workflow's `run-name` is ignored, and the review-run evidence finds a head's reviews by the last token of the run's title. `lane-check` holds the caller to it.
@@ -66,6 +68,7 @@ Every lane starts real work only when the actor of its triggering event is a mem
 | A review | the reviewer | the review's `author_association` |
 | A label | whoever applied it | their permission on the repository: triage or more |
 | A merge (`pull_request: closed`) | whoever merged it | the same |
+| A closed issue (`issues: closed`) | whoever closed it | the same |
 | A dispatch | whoever ran it, re-runs included | the same; only write access can dispatch, so this refuses only an unregistered App |
 | A pull request opened (`pull_request_target`) | whoever opened it | the same |
 | A finished workflow (`workflow_run`) | whoever pushed the commit it ran on | the same |
@@ -235,6 +238,16 @@ The merge lane merges a pull request with no person in the loop only inside the 
 - **Grants `contents: read`.** Every write is the Merger's App token's.
 
 On a review, the lane first reads the Merger's and the Implementer's logins from the App register on your default branch, in a job of their own. That job starts no runner for a review on a pull request that is closed, a draft or carries neither lane label. The sweep needs no login, so CI's completion, the schedule and a dispatch start the Merger's own job alone, and bill one runner each.
+
+## The reconciler
+
+The Lead's reconcile lane drives an approved brief to done (`K-PROJ-*`): each tick files the issues the brief proposes, labels them for the Implementer in the brief's order, and closes the project once its merges are deployed to your reference environment. It also re-delivers a review that never landed and a brief pull request's unanswered changes-request, and reports a pull request that is red and unreviewed. It runs no model. Its caller:
+
+- **Keeps four triggers:** `pull_request: [closed]` and `issues: [closed]`, so a merge starts the next tick; an hourly `schedule`, the heartbeat that recovers an event that never arrived; and a dispatch with `project` and `apply`, which without `apply` is a dry run.
+- **Grants the reads its pre-filters use** on the workflow token: `issues`, `pull-requests`, `checks`, `statuses` and `actions`, all `read`. Without one, a read fails and the tick goes red rather than reading as idle.
+- **Passes no budget.** A tick takes at most six chargeable actions across every open project, a constant of the lane.
+
+It needs the Lead's App, with `Actions: Read` on the installation (the tick probes it before the deploy phase), and your reference environment's deploy declaration (above).
 
 ## Checking it
 

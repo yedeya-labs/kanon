@@ -323,6 +323,24 @@ describe.skipIf(!hasYq)('lane-check', () => {
       }, 'the Kanon lane agent-merge takes exactly [MERGER_APP_ID,MERGER_APP_PRIVATE_KEY]'));
   });
 
+  describe('the reconciler lane (plan 0004 step 8)', () => {
+    const TICK = '.github/workflows/agent-lead-reconcile.yml';
+    const extra = (t: Tree) => t.write(TICK, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-lead-reconcile.yml'), 'utf8'));
+    it('accepts the caller, run as the Lead the register lists', () => {
+      const t = adopter();
+      extra(t);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('5 lane caller(s) pass');
+    });
+    it('refuses a caller that does not grant the red-unreviewed report its read of check runs', () =>
+      red((t) => { extra(t); t.edit(TICK, (d) => { delete (d as Caller).permissions!.checks; }); }, 'needs checks: read'));
+    it('refuses a caller that does not grant the pre-filter its read of issues', () =>
+      red((t) => { extra(t); t.edit(TICK, (d) => { delete (d as Caller).permissions!.issues; }); }, 'needs issues: read'));
+    it('refuses a caller that passes the tick budget, which is the lane\'s constant, not a setting', () =>
+      red((t) => { extra(t); t.edit(TICK, (d) => { (job(d).with as Record<string, string>).budget = '${{ inputs.budget }}'; }); }, 'passes `budget`, which the Kanon lane agent-lead-reconcile does not declare'));
+  });
+
   describe('the project-setup hook (§5)', () => {
     const HOOK = '.github/actions/project-setup/action.yml';
     it('refuses a missing hook', () => red((t) => t.rm(HOOK), 'the project-setup hook is missing'));

@@ -1,6 +1,6 @@
 # Plan 0004: move the remaining lanes into Kanon
 
-- **Status:** accepted, 2026-10-03. The Owner decided all thirteen decisions that day. Decisions 2, 8, 9 and 10 differ from what the plan first recommended, and the plan below follows the Owner's version.
+- **Status:** accepted, 2026-10-03. The Owner decided all thirteen decisions that day. Decisions 2, 8, 9 and 10 differ from what the plan first recommended, and the plan below follows the Owner's version. Step P5 and P6's library side are done; steps 7 and 8 move in the release after v0.20.0 (kanon#202, kanon#203).
 - **Why now:** the Owner decided on 2026-10-03 to **pause step 6 of [plan 0001](0001-move-the-agent-lanes.md)** (Kolophon) and to plan the lanes still in the reference adopter. Plan 0001 listed them as "later", each with its own plan. This is that plan, for all of them.
 - **Governed by:** [ADR 0009](../decisions/0009-move-dont-rewrite.md) (move, don't rewrite), [ADR 0002](../decisions/0002-standardise-dont-parameterise.md), [ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md), `K-OBS-13`, `K-OBS-17`, #15 (stack-neutral) and #19 (the cloud-neutral store interface).
 - **Measured on** the reference adopter's main branch on 2026-10-03, pinned to Kanon v0.17.0, and on Kanon's main branch after v0.18.0. The commands are in [Measurements](#measurements).

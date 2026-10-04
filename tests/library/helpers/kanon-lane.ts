@@ -14,7 +14,9 @@ export const kanonLaneOf = (job: unknown): { file: string } | undefined => {
   return m ? { file: m[1]! } : undefined;
 };
 
-type Lane = { jobs: Record<string, Record<string, unknown>> } & Record<string, unknown>;
+/** A parsed workflow, untyped as YAML's own `parse` returns it: the tests reach into it freely. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Lane = any;
 
 /** The lane a caller's job calls, from this Kanon tree. */
 export const readKanonLane = (job: unknown): Lane => {
@@ -28,3 +30,22 @@ export const readLane = (file: string): Lane => parse(readFileSync(join(ROOT, '.
 
 /** The fixture callers an adopter writes, one per lane (`tests/fixtures/lane-check/`). */
 export const CALLER_DIRS = ['tests/fixtures/lane-check/adopter/.github/workflows', 'tests/fixtures/lane-check/extra'].map((d) => join(ROOT, d));
+
+/** The fixture caller of one lane, by the lane's file name. */
+export const readCaller = (file: string): Lane => {
+  for (const dir of CALLER_DIRS) {
+    try {
+      return parse(readFileSync(join(dir, file), 'utf8')) as Lane;
+    } catch {
+      // not in this directory
+    }
+  }
+  throw new Error(`no fixture caller of ${file} in ${CALLER_DIRS.join(', ')}`);
+};
+
+/**
+ * A lane as the reference adopter's single workflow file was before the move: the lane, with
+ * its caller's triggers as `on`. The adopter's tests of the workflow read both halves from one
+ * file; here each half comes from where it now lives.
+ */
+export const asOneWorkflow = (file: string): Lane => ({ ...readLane(file), on: readCaller(file).on });

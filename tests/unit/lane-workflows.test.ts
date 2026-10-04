@@ -20,12 +20,12 @@ import { type WorkflowStep } from './helpers/workflow-step.js';
 const WF = '.github/workflows';
 const LANES = [
   'agent-triage.yml', 'agent-implement.yml', 'agent-implement-revise.yml', 'agent-lead-revise.yml', 'agent-merge-reconcile.yml',
-  'agent-lead.yml', 'agent-lead-split.yml', 'agent-rebase.yml', 'agent-merge.yml',
+  'agent-lead.yml', 'agent-lead-split.yml', 'agent-rebase.yml', 'agent-merge.yml', 'agent-lead-reconcile.yml',
 ] as const;
 /** The lanes that call the blocks themselves, or run no model at all; the rest hand their body to the spine. */
-const DIRECT_LANES: readonly string[] = ['agent-merge-reconcile.yml', 'agent-lead-split.yml', 'agent-rebase.yml', 'agent-merge.yml'];
-/** The lanes that run no model, so take no Claude token (plan 0004 §2.1). */
-const NO_MODEL: readonly string[] = ['agent-merge.yml'];
+const DIRECT_LANES: readonly string[] = ['agent-merge-reconcile.yml', 'agent-lead-split.yml', 'agent-rebase.yml', 'agent-merge.yml', 'agent-lead-reconcile.yml'];
+/** The lanes that run no model, so take no Claude token (plan 0004 §2.1, §2.2). */
+const NO_MODEL: readonly string[] = ['agent-merge.yml', 'agent-lead-reconcile.yml'];
 const SPINE_LANES = LANES.filter((f) => !DIRECT_LANES.includes(f));
 type Job = {
   uses?: string;
@@ -58,6 +58,7 @@ const ROLE: Record<(typeof LANES)[number], string> = {
   'agent-lead-split.yml': 'LEAD',
   'agent-rebase.yml': 'IMPLEMENTER',
   'agent-merge.yml': 'MERGER',
+  'agent-lead-reconcile.yml': 'LEAD',
 };
 
 describe('plan 0001 §3: each lane is a reusable workflow, called with its inputs and its secrets', () => {

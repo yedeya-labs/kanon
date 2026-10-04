@@ -33,11 +33,12 @@ const LANES = readdirSync(WORKFLOWS)
   .sort();
 
 /** The triggers each lane's caller holds (docs/lanes.md), as the event the gate sees. */
-type Trigger = 'review' | 'issue-label' | 'pr-label' | 'merged' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'schedule';
+type Trigger = 'review' | 'issue-label' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'schedule';
 const TRIGGERS: Record<string, Trigger[]> = {
   'agent-implement-revise.yml': ['review', 'pr-label', 'dispatch'],
   'agent-implement.yml': ['issue-label', 'dispatch'],
   'agent-lead-revise.yml': ['review', 'pr-label', 'dispatch'],
+  'agent-lead-reconcile.yml': ['dispatch', 'merged', 'issue-closed', 'schedule'],
   'agent-lead-split.yml': ['issue-label', 'dispatch'],
   'agent-lead.yml': ['dispatch'],
   'agent-merge-reconcile.yml': ['merged', 'review', 'dispatch'],
@@ -275,6 +276,8 @@ const eventFor = (trigger: Trigger, actor: Actor): { name: string; payload: obje
       return { name: 'pull_request', payload: { action: 'labeled', sender: user }, env: {} };
     case 'merged':
       return { name: 'pull_request', payload: { action: 'closed', pull_request: { merged: true, merged_by: user }, sender: { login: 'someone-else' } }, env: {} };
+    case 'issue-closed':
+      return { name: 'issues', payload: { action: 'closed', issue: { number: 7, state: 'closed' }, sender: user }, env: {} };
     case 'dispatch':
       return { name: 'workflow_dispatch', payload: {}, env: { GITHUB_ACTOR: 'someone-else', GITHUB_TRIGGERING_ACTOR: actor.login } };
     case 'ci-finished':
@@ -425,6 +428,12 @@ describe('who the actor is', () => {
       .toEqual({ actor: { login: 'pusher', source: 'user whose push the finished workflow ran on' } });
     expect(triggeringActor('workflow_run', { workflow_run: { actor: { login: 'a' } } }, env))
       .toEqual({ actor: { login: 'a', source: 'user whose push the finished workflow ran on' } });
+  });
+  it('a closed issue: whoever closed it, never anyone the payload names otherwise (plan 0004 step 8)', () => {
+    expect(triggeringActor('issues', { action: 'closed', sender: { login: 'closer' }, pull_request: { merged_by: { login: 'not-on-an-issue' } } }, env))
+      .toEqual({ actor: { login: 'closer', source: 'user who closed it' } });
+    expect(triggeringActor('issues', { action: 'closed' }, env)).toHaveProperty('refuse');
+    expect(triggeringActor('issues', { action: 'reopened', sender: { login: 'x' } }, env)).toHaveProperty('refuse');
   });
   it('a merge: whoever merged it', () => {
     expect(triggeringActor('pull_request', { action: 'closed', pull_request: { merged_by: { login: 'merger' } }, sender: { login: 'x' } }, env))
