@@ -110,8 +110,12 @@ for (const i of invariants.filter((x) => x.id)) {
     const first = seen.get(i.id);
     fail(
       `duplicate ID \`${i.id}\` — ${first.file}:${first.line} and ${i.file}:${i.line}. Renumber one (strip its id, ` +
-        'run `node scripts/spec-ids.mjs --apply`) and record the move in `_id-registry.json`\'s `renumbered` map — ' +
-        `\`{"${i.id}": {"to": "<NEW-ID>", "by": <PR>}}\` — so every reference to \`[${i.id}]\` outside the specs is re-read once (RA-2004).`,
+        'run `node scripts/spec-ids.mjs --apply`). If the id you move off has already been on `main`, record the move in ' +
+        '`_id-registry.json`\'s `renumbered` map — ' +
+        `\`{"${i.id}": {"to": "<NEW-ID>", "by": <PR>}}\` — so every reference to \`[${i.id}]\` outside the specs is re-read once (RA-2004). ` +
+        'If it never reached `main` (two clauses minted on this branch, or a re-allocation after a rebase), write no entry: ' +
+        'nothing outside this PR can have cited that number, and an unearned entry makes every later citation of the ' +
+        'clause that kept it carry a `renumber-checked` marker.',
     );
   }
   seen.set(i.id, i);

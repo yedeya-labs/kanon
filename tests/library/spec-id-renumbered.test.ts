@@ -141,4 +141,26 @@ describe('whoever resolves a collision is told to write the trail', () => {
     expect(dup).toMatch(/`renumbered` map/);
     expect(dup).toContain('{"STORE-7": {"to": "<NEW-ID>"');
   });
+
+  // kanon#168 — the entry is owed only for an id that reached `main`. A duplicate is
+  // often minted inside one PR, and an unearned entry is permanent: every later
+  // citation of the clause that kept the number has to carry a `renumber-checked`
+  // marker. The three messages that tell a resolver what to do must agree on that.
+  it("spec-guard asks for the entry only for an id that has been on `main`, as spec-ids and spec-id-claims do", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'renum-dup-'));
+    writeFileSync(join(dir, 'storefront.md'), '# S\n\n**Id prefix:** `STORE`\n\n## A\n\n- `[STORE-7]` `[seed]` one\n- `[STORE-7]` `[seed]` two\n');
+    writeFileSync(join(dir, '_id-registry.json'), JSON.stringify({ STORE: 7 }));
+    const { problems } = check({ dir, registryPath: join(dir, '_id-registry.json') });
+    const dup = problems.find((p: string) => p.startsWith('duplicate ID `STORE-7`')) ?? '';
+    const qualifier = 'If the id you move off has already been on `main`, record the move';
+    expect(dup).toContain(qualifier);
+    // The qualifier precedes the instruction: no unconditional "and record the move".
+    expect(dup).not.toMatch(/\)\s*and record the move/);
+    expect(dup).toMatch(/never reached `main`[^.]*write no entry/);
+    // The siblings say the same thing, so a reword of one is a red test here.
+    const ids = readFileSync(join(REPO, 'scripts/spec-ids.mjs'), 'utf8');
+    expect(ids).toContain('If an id you move off has already been on \\`main\\`, record the move');
+    const claims = readFileSync(join(REPO, 'scripts/spec-id-claims.mjs'), 'utf8');
+    expect(claims).toMatch(/No `renumbered`\\n' \+\s*'entry in `_id-registry.json` is needed: the number never reached `main`/);
+  });
 });
