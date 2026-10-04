@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.0](https://github.com/yedeya-labs/kanon/compare/v0.20.0...v0.21.0) (2026-10-04)
+
+
+### Features
+
+* **lanes:** move the Merger and the Lead's reconciler into Kanon ([#206](https://github.com/yedeya-labs/kanon/issues/206)) ([5a58927](https://github.com/yedeya-labs/kanon/commit/5a5892753d68da1097bf156ebee609bcb6d2944d))
+* **telemetry:** read a lane's cost rows from its run artifacts ([#204](https://github.com/yedeya-labs/kanon/issues/204)) ([9f4bcf5](https://github.com/yedeya-labs/kanon/commit/9f4bcf58058c82fe80d984c8ad13f81de73a0f8f))
+
 ## [0.20.0](https://github.com/yedeya-labs/kanon/compare/v0.19.0...v0.20.0) (2026-10-04)
 
 
