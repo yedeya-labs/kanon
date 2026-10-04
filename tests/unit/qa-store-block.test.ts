@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import {
-  EXPORT_FILES, FILES, HOOK_PATH, MANIFEST, MAX_ROWS_OUTPUT, OPERATIONS, READ_OPERATIONS, STORE_ENVIRONMENT, WRITE_OPERATIONS,
+  EXPORT_FILES, FILES, HOOK_PATH, MANIFEST, MAX_ARG_STRLEN, MAX_ROWS_OUTPUT, OPERATIONS, READ_OPERATIONS, STORE_ENVIRONMENT, WRITE_OPERATIONS,
   absentLine, checkRequest, deleteExport, finish, prepare, readCostRowsFile,
 } from '../../actions/qa-store/qa-store.mjs';
 
@@ -223,7 +223,20 @@ describe('with a hook', () => {
       expect(JSON.parse(failed.outputs.rows!)).toEqual({ rows: [], error: 'the store hook failed' });
     });
 
-    it('degrades an answer too large for a job output, rather than truncating it', () => {
+    it('bounds the answer below the one environment string the sweep\'s step can be handed (MAX_ARG_STRLEN)', () => {
+      // The reader gets the answer as `QA_STORE_COST_ROWS_<AGENT>=<json>`: name, `=` and value
+      // must fit in 131,072 bytes, or the sweep fails at exec (E2BIG) instead of degrading.
+      expect(MAX_ARG_STRLEN).toBe(131_072);
+      expect(MAX_ROWS_OUTPUT + 'QA_STORE_COST_ROWS_TRIAGE_FIX='.length + 1).toBeLessThan(MAX_ARG_STRLEN);
+    });
+
+    it('measures the answer in bytes, not UTF-16 units', () => {
+      // 34,000 three-byte characters: 34,000 units, over 100,000 bytes.
+      const wide = { ...row, outcome: '\u20ac'.repeat(34_000) };
+      expect(run(JSON.stringify({ rows: [wide], error: null })).outputs.state).toBe('degraded');
+    });
+
+    it('degrades an answer too large for the reader, rather than truncating it', () => {
       const many = Array.from({ length: Math.ceil(MAX_ROWS_OUTPUT / 60) }, (_, i) => ({ ...row, run_id: String(1e10 + i) }));
       const r = run(JSON.stringify({ rows: many, error: null }));
       expect(r.outputs.state).toBe('degraded');

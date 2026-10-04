@@ -31,6 +31,7 @@
 // the export artifact.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs';
+import { Buffer } from 'node:buffer';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -71,11 +72,16 @@ export const FILES = {
   costRows: 'cost-rows.json',
 };
 
-/** The most a `cost-rows` answer may be as the block's `rows` output. A store job hands the rows
- *  to the dispatch sweep's job as a job output, which GitHub caps at 1 MB per job, and the sweep's
- *  store job holds two. A 14-day window is a few hundred rows of about 90 bytes, so this is far
- *  above any real answer; past it the read is degraded, never truncated. */
-export const MAX_ROWS_OUTPUT = 400_000;
+/** The most a `cost-rows` answer may be, in bytes, as the block's `rows` output. THE BINDING LIMIT
+ *  IS THE READER'S ENVIRONMENT, not the job output (1 MB per job): the dispatch sweep receives each
+ *  answer as ONE environment variable, and Linux refuses to exec a process with any single
+ *  environment string over 131,072 bytes (`MAX_ARG_STRLEN`, E2BIG), which would turn the sweep
+ *  red instead of degrading it. So this sits well below that, with headroom for the variable's
+ *  name. A 14-day window is a few hundred rows of about 90 bytes (about 1,100 rows fit); past it
+ *  the read is degraded, never truncated. */
+export const MAX_ROWS_OUTPUT = 100_000;
+/** Linux's cap on one environment string, which `MAX_ROWS_OUTPUT` must stay under. */
+export const MAX_ARG_STRLEN = 131_072;
 
 /** The export's artifact is kept one day, and a job of its own deletes it (§3.2). */
 export const EXPORT_RETENTION_DAYS = 1;
@@ -348,9 +354,10 @@ export function finish(env, now = Date.now()) {
       result = { rows: [], error: said ?? 'the store hook failed' };
     }
     // THE ANSWER IS ALSO THE `rows` OUTPUT, one line of JSON, for a lane whose reader runs in
-    // another job (the dispatch sweep, plan 0004 step 9). Too large for a job output is
-    // degraded, never truncated: a truncated list would read as runs that never happened.
-    if (!result.error && JSON.stringify(result).length > MAX_ROWS_OUTPUT) {
+    // another job (the dispatch sweep, plan 0004 step 9), which gets it as one environment
+    // variable. Too large for that is degraded, never truncated: a truncated list would read as
+    // runs that never happened.
+    if (!result.error && Buffer.byteLength(JSON.stringify(result), 'utf8') > MAX_ROWS_OUTPUT) {
       result = { rows: [], error: `${result.rows.length} cost rows are more than a job output holds (${MAX_ROWS_OUTPUT} bytes)` };
     }
     if (result.error) {
