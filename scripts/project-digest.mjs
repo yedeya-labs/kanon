@@ -82,7 +82,7 @@ import { CONFLICT_SHORT, ConflictFieldsUnread, conflictState } from './conflict-
 // its whole CLI — top-level env reads and a `gh` wrapper — into this job to get four pure
 // functions; `project-closure.mjs` is those functions and nothing else, so it imports
 // nothing and the workflow's plain checkout (no `npm ci`) runs it.
-import { carriedOut as reconcilerCarriedOut, itemSatisfied, openGatingWork, parseProposed } from './project-closure.mjs';
+import { carriedOut as reconcilerCarriedOut, declaresMembership, itemSatisfied, openGatingWork, parseProposed } from './project-closure.mjs';
 
 /** Where briefs live. A brief's basename IS its tracking issue number (RA-1032). */
 export const BRIEF_DIR = 'docs/projects';
@@ -230,6 +230,22 @@ export function classifyDispatch({ comments = [], hasPr = false, prConflicting =
 
   return { disposition: answered ? 'authorised' : 'bail', waitedDays };
 }
+
+/**
+ * The search hits that are MEMBERS of `project` — by the reconciler's own rule (kanon#174).
+ *
+ * The search is `in:body`, a term search, so it is only a filter. Membership is
+ * `declaresMembership`: the marker must be the body's LAST non-empty line, because a
+ * document QUOTING the marker mid-body is textually identical to a use of it (RA-1066).
+ * A body-wide match here counted such a quote as a member that the reconciler does not
+ * consider one at all, and the digest then named it as carried out.
+ *
+ * @template {{body?: string|null}} T
+ * @param {T[]} hits
+ * @param {number} project
+ * @returns {T[]}
+ */
+export const membersOf = (hits, project) => (hits ?? []).filter((i) => declaresMembership(i.body ?? '', project));
 
 /**
  * Whole-project state, from its members alone.
@@ -710,13 +726,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // superseded cause as current.
     const heldReason = held ? await holdReasonOf(api, repo, b.number, tracking.comments) : null;
 
-    // Membership is the marker (RA-1066). `in:body` is a substring search, so
-    // re-check exactly — a brief QUOTING the marker would otherwise join.
+    // Membership is the marker (RA-1066), by the reconciler's position rule — see
+    // `membersOf`. `in:body` is a term search, so it only narrows.
     // `is:issue` is BOTH the AGENTS.md counting rule (never count PRs alongside
     // issues) and a hard API requirement — the search endpoint 422s without
     // `is:issue` or `is:pull-request`, which the first dry run found.
     const hits = await search(`is:issue "qa:project ${b.number}" in:body`);
-    const members = hits.filter((i) => new RegExp(`<!--\\s*qa:project ${b.number}\\s*-->`).test(i.body ?? ''));
+    const members = membersOf(hits, b.number);
 
     const enriched = [];
     for (const m of members) {

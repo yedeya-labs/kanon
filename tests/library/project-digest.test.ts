@@ -18,6 +18,7 @@ const {
   holdReason,
   holdReasonOf,
   dispatchCommentsOf,
+  membersOf,
   HELD_MARKER,
 } = await import('../../scripts/project-digest.mjs');
 const { CONFLICT_SHORT } = await import('../../scripts/conflict-state.mjs');
@@ -93,7 +94,7 @@ describe('readBrief — the digest counts what the reconciler would file (cleanu
 describe('ONE brief grammar, ONE closure rule — the digest and the reconciler share them', () => {
   // Identity, not equality: the same function object, so there is no second copy that
   // could drift, and the reconciler re-exports rather than re-defines.
-  it.each(['parseProposed', 'openGatingWork', 'carriedOut', 'itemSatisfied'] as const)(
+  it.each(['parseProposed', 'openGatingWork', 'carriedOut', 'itemSatisfied', 'declaresMembership'] as const)(
     '`%s` is the shared module\'s own function in the reconciler', (name) => {
       expect(typeof closure[name]).toBe('function');
       expect(reconciler[name]).toBe(closure[name]);
@@ -118,6 +119,32 @@ describe('ONE brief grammar, ONE closure rule — the digest and the reconciler 
     expect(src).not.toMatch(/\bfrom\s*['"]/);
     expect(src).not.toMatch(/\bimport\s*\(/);
     expect(src).not.toMatch(/\brequire\s*\(/);
+  });
+});
+
+describe('membersOf — membership by the reconciler\'s position rule (kanon#174)', () => {
+  const marker = '<!-- qa:project 12 -->';
+  const hit = (number: number, body: string) => ({ number, body });
+
+  it('counts an issue whose LAST non-empty line is the marker', () => {
+    expect(membersOf([hit(1, `Part of #12.\n\n${marker}\n\n`)], 12).map((i: { number: number }) => i.number)).toEqual([1]);
+  });
+
+  it('does not count a body that QUOTES the marker mid-body, which the reconciler does not either', () => {
+    const quote = hit(2, `The filer appends \`${marker}\` as the last line.\n${marker}\nMore prose after it.`);
+    expect(membersOf([quote], 12)).toEqual([]);
+    expect(reconciler.declaresMembership(quote.body, 12)).toBe(false);
+  });
+
+  it('does not count another project\'s marker, or a spacing variant the reconciler rejects', () => {
+    expect(membersOf([hit(3, '<!-- qa:project 120 -->'), hit(4, '<!--qa:project 12-->')], 12)).toEqual([]);
+  });
+
+  it('the I/O path selects members with it, and keeps no marker regex of its own', () => {
+    const src = readFileSync(join(ROOT, 'scripts/project-digest.mjs'), 'utf8');
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(code).toMatch(/const members = membersOf\(hits, b\.number\);/);
+    expect(code).not.toMatch(/<!--[^`'"]*qa:project/);
   });
 });
 

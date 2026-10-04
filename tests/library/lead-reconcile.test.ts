@@ -1475,9 +1475,11 @@ describe('declaresMembership — a declaration, not a quotation (RA-1066)', () =
     // The two halves are in different functions ~200 lines apart. A rename on one
     // side would silently stop every future project from having any members, and
     // `phaseOf` would report `file` and RE-FILE all of them — unamendable.
+    // The reader lives in `project-closure.mjs` since kanon#174, so the digest shares it.
     const src = readFileSync(join(ROOT, 'scripts/lead-reconcile.mjs'), 'utf8');
+    const closure = readFileSync(join(ROOT, 'scripts/project-closure.mjs'), 'utf8');
     const written = src.match(/`<!-- qa:project \$\{world\.project\} -->`/g) ?? [];
-    const read = src.match(/`<!-- qa:project \$\{project\} -->`/g) ?? [];
+    const read = closure.match(/`<!-- qa:project \$\{project\} -->`/g) ?? [];
     // The point was never a WRITER COUNT — it is that every writer agrees with the
     // reader. Asserting the count made a third writer (RA-976's `adopt`, which joins an
     // existing issue rather than filing a rival) fail a test about marker agreement,
@@ -1488,7 +1490,7 @@ describe('declaresMembership — a declaration, not a quotation (RA-1066)', () =
     // The real property: no OTHER spelling of the marker exists anywhere in the file.
     // A rename on one side would otherwise stop every future project from having
     // members, and `phaseOf` would report `file` and RE-FILE all of them.
-    const spellings = new Set((src.match(/<!-- qa:project [^>]*-->/g) ?? []).map((m) => m.replace(/\$\{[^}]+\}/, '<n>')));
+    const spellings = new Set((`${src}\n${closure}`.match(/<!-- qa:project [^>]*-->/g) ?? []).map((m) => m.replace(/\$\{[^}]+\}/, '<n>')));
     expect([...spellings], 'one spelling, however many writers').toEqual(['<!-- qa:project <n> -->']);
   });
 });

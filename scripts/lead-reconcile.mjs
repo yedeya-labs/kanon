@@ -57,14 +57,14 @@ import { adoptedNote, adoptedNotes } from './lib/protocol-spellings.mjs';
 // project digest so the two cannot disagree about what a project owes. Re-exported, so
 // every caller that imported them from here still does.
 import {
-  VERIFY, briefIssues, carriedOut, dependsField, gatesClosure, inDecomposition, isPhase5Finding,
+  VERIFY, briefIssues, carriedOut, declaresMembership, dependsField, gatesClosure, inDecomposition, isPhase5Finding,
   isProjectWork, itemSatisfied, openGatingWork, parseProposed, satisfiedTitles,
   FINDING_ANCHOR, GATING_SEVERITIES, SPEC_FINDING,
 } from './project-closure.mjs';
 import { appLogin } from './app-register.mjs';
 import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/reference-deploy.mjs';
 export {
-  VERIFY, briefIssues, carriedOut, dependsField, gatesClosure, inDecomposition, isPhase5Finding,
+  VERIFY, briefIssues, carriedOut, declaresMembership, dependsField, gatesClosure, inDecomposition, isPhase5Finding,
   isProjectWork, itemSatisfied, openGatingWork, parseProposed, satisfiedTitles,
   FINDING_ANCHOR, GATING_SEVERITIES, SPEC_FINDING,
 };
@@ -1572,30 +1572,8 @@ export function readDeploy(issues, { json = ghJson, text = gh, declared = () => 
 }
 
 
-/**
- * Does this body DECLARE membership of the project, or merely QUOTE the convention?
- *
- * Presence cannot answer that, and neither can syntax. Three documents were
- * absorbed by project RA-961 within an hour (RA-1066): the phase-5 design doc, which
- * wrote the marker as an EXAMPLE; the bug report about it, captured by the bug it
- * reported; and that same report again, after it quoted the PROPOSED new marker.
- *
- * Prose about a marker is textually identical to a use of it, so no tightening of
- * the match separates them. POSITION does: a declaring issue ENDS with the marker
- * because the filer appends it, while a document discussing the convention has
- * prose after it. Same reasoning as RA-1013's declaration zone, which exists because
- * a body-wide regex could not tell a plan from a claim.
- *
- * An HTML comment, so it is invisible in the rendered issue; the human-readable
- * `Part of #N.` line above it still gives GitHub its cross-reference.
- *
- * @param {string} body
- * @param {string|number} project
- */
-export function declaresMembership(body, project) {
-  const last = (body ?? '').split(/\r?\n/).filter((l) => l.trim() !== '').at(-1)?.trim();
-  return last === `<!-- qa:project ${project} -->`;
-}
+// `declaresMembership` lives in `project-closure.mjs` (kanon#174), so the project digest
+// selects members by the same position rule; imported and re-exported above.
 
 
 /**
