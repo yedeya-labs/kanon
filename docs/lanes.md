@@ -151,7 +151,7 @@ The old spellings are read until a measurement says nothing live carries them. [
 
 Install the review lane first. Its App is the one that ends bootstrap, on a plan with rulesets (`K-ADOPT-3`, `K-ADOPT-6`), and it needs no other lane. On one branch, add:
 
-1. **The project-setup hook** (below), and `docs/qa/test-database.md` if your tests need a database.
+1. **The project-setup hook** (below), and `docs/qa/test-database.md` if your tests need a database. The review lane doesn't call the hook: it runs none of your pull request's code ([#185](https://github.com/yedeya-labs/kanon/issues/185)), and takes test results from your CI's required checks. [`lane-check`](../actions/lane-check/README.md) requires the hook anyway, because the lanes that install call it.
 2. **The documents the review lane reads**: `docs/qa/stack.md`, `docs/qa/reviewer-playbook.md` and `docs/qa/explorer-playbook.md`, with the sections `K-LAYOUT-17` names.
 3. **The caller**:
 
@@ -209,7 +209,7 @@ The lanes run Kanon's pipeline library (`scripts/`) from the runner's action cac
 
 **The starting map.** When a lane passes an `issue-number`, your hook may write `.agent/starting-map.md` (`K-AGENT-41`). The implement lane's prompt reads it first if it exists, and nothing fails without it. Kanon's [`scripts/starting-map.mjs`](../scripts/starting-map.mjs) `--issue <n>` writes one from the issue and the spec clauses it cites.
 
-The contract defines no outputs, and no lane reads any: a lane judges your hook only by whether it succeeded. The review lane still reviews a pull request whose setup failed, and notes it on the run ([#77](https://github.com/yedeya-labs/kanon/issues/77)).
+The contract defines no outputs, and no lane reads any: a lane judges your hook only by whether it succeeded. The review lane doesn't call your hook at all ([#185](https://github.com/yedeya-labs/kanon/issues/185)).
 
 ## The test database
 

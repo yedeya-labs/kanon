@@ -132,14 +132,47 @@ jobs:
         run: |
           skip() { echo "run=false" >> "$GITHUB_OUTPUT"; echo "→ skip ($1)"; exit 0; }
           echo "pr=$PR" >> "$GITHUB_OUTPUT"
-          STATE="$(gh pr view "$PR" --repo "$REPO" --json mergedAt,reviews 2>/dev/null || true)"
+          STATE="$(gh pr view "$PR" --repo "$REPO" --json mergedAt,reviews,headRefOid 2>/dev/null || true)"
           [ -z "$STATE" ] && skip "could not read PR $PR"
           MERGED="$(printf '%s' "$STATE" | jq -r '.mergedAt // empty')"
           [ -z "$MERGED" ] && skip "PR not merged — the normal review flow owns it"
           NREVIEWS="$(printf '%s' "$STATE" | jq '.reviews | length')"
           [ "$NREVIEWS" = "0" ] && skip "merged PR has no reviews to reconcile"
+
+          # NOTHING DECLARED OPEN, NOTHING TO RECONCILE (kanon#177). About 4 in 5 runs of this
+          # lane filed nothing (reference adopter, 242 runs over three weeks), each a full
+          # model pass re-reading reviews to conclude what the Reviewer already knew. The
+          # review prompt has him end every verdict with `<!-- qa:open-items N -->`: the
+          # actionable items raised, this round or carried over, that are neither applied
+          # nor filed. When every author's LATEST review on the PR says 0, and each was
+          # formed on the merged head, the model is not run.
+          #
+          # IT FAILS OPEN. Any author whose latest review carries no marker (an older
+          # review, a person's review, a reply to a review thread, which GitHub records as
+          # a review too), a count above 0, a review read on an earlier commit than the
+          # merged head (a commit landed after it), an unknown head or an unreadable answer
+          # all run the model as before. The last marker in a body counts, so a review
+          # that quotes the format before declaring its own count is read by its own. The
+          # commit a review read is its `reviewed: sha=` stamp where present, its commit
+          # otherwise, the selection the review lane uses. A review landing after the
+          # merge re-runs this step on its own event, so it is read by the same rule.
+          HEAD="$(printf '%s' "$STATE" | jq -r '.headRefOid // empty')"
+          OPEN="$(printf '%s' "$STATE" | jq -r --arg head "$HEAD" '
+            def marker: [(.body // "") | scan("<!--[ ]*qa:open-items[ ]+([0-9]+)[ ]*-->")] | (.[-1] // [])[0];
+            def read_at: ([(.body // "") | scan("<!--[ ]*reviewed:[ ]*sha=([[:xdigit:]]{7,40})")] | (.[-1] // [])[0]) // (.commit.oid // "") | ascii_downcase;
+            [.reviews | group_by(.author.login // "") | .[] | max_by(.submittedAt // "")] as $latest
+            | if ($head | test("^[[:xdigit:]]{40}$") | not) then "the merged head is unknown"
+              elif any($latest[]; marker == null) then "a latest review carries no open-items marker"
+              elif any($latest[]; (marker | tonumber) > 0) then "a latest review declares open items"
+              elif any($latest[]; read_at as $r | ($r | length) < 7 or (($head | ascii_downcase) | startswith($r) | not))
+                then "a latest review was read before the merged head"
+              else "zero" end' 2>/dev/null || true)"
+          if [ "$OPEN" = "zero" ]; then
+            printf '%s\n' "**Skipped:** every latest review on \`${HEAD:0:7}\` declares zero open items (kanon#177)." >> "$GITHUB_STEP_SUMMARY"
+            skip "every latest review on ${HEAD:0:7} declares zero open items (kanon#177)"
+          fi
           echo "run=true" >> "$GITHUB_OUTPUT"
-          echo "→ reconcile PR $PR ($NREVIEWS reviews)"
+          echo "→ reconcile PR $PR ($NREVIEWS reviews; ${OPEN:-open items unreadable})"
 
   reconcile:
     needs: filter

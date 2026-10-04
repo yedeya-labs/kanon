@@ -21,7 +21,7 @@ The database must be ready when your hook finishes: the agent and its tests find
 
 **A malformed declaration fails the lane, by name.** That covers a file with no `**Test database:**` line, one with two, and one naming anything else, an engine included. It never silently starts nothing. [`lane-check`](../lane-check/README.md) reads the declaration with the same program, so it fails in your CI first.
 
-**The review lane reads the declaration from your default branch**, as it reads your hook (`K-MERGE-17`). A pull request that changes it is reviewed against the old one.
+**The review lane starts no database.** It runs none of the pull request's code ([#185](https://github.com/yedeya-labs/kanon/issues/185)), so it calls neither this block nor your hook, and takes test results from your CI.
 
 **Add it before, or with, the Kanon upgrade that brings this block.** A lane that checks out a pull request reads the declaration from that branch. So an open PR cut before you added it reads "no file" and gets no database until it is rebased.
 

@@ -108,16 +108,15 @@ describe('the review lane restores the list in one step, and re-checks it before
   it('runs the scripts the `kanon` step OUTPUT names, after the PR’s code has run', () => {
     for (const s of [steps.find(RESTORE)!, steps.find(REVERIFY)!]) expect(s.env?.KANON_PATH).toBe('${{ steps.kanon.outputs.path }}');
   });
-  it('restores before the scope step and the hook; re-checks after the hook and before the token', () => {
+  it('restores before the scope step; re-checks after it and before the token', () => {
     const restore = stepIndex(steps, RESTORE, 'restores');
     const scope = stepIndex(steps, (s) => s.id === 'scope', 'scopes the review');
-    const hook = stepIndex(steps, (s) => s.uses === './.github/actions/project-setup', 'runs the hook');
     const verify = stepIndex(steps, REVERIFY, 're-checks the pin');
     const mint = stepIndex(steps, (s) => String(s.uses).startsWith('actions/create-github-app-token'), 'mints the token');
     const agent = stepIndex(steps, (s) => s.uses === '$/actions/agent-run', 'runs the agent');
     expect(restore).toBeLessThan(scope);
-    expect(scope).toBeLessThan(hook);
-    expect(hook).toBeLessThan(verify);
+    // No project-setup hook between them since kanon#185: the job runs none of the PR's code.
+    expect(scope).toBeLessThan(verify);
     // Nothing but the token runs between the re-check and the agent.
     expect([verify + 1, verify + 2]).toEqual([mint, agent]);
   });

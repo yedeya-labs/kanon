@@ -50,7 +50,6 @@ const EXEMPT = new Set([
   '.github/workflows/agent-lane.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-lead-split.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-rebase.yml: ./.github/actions/project-setup',
-  '.github/workflows/agent-review.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-verify-acs.yml: ./.github/actions/project-setup',
   '.github/workflows/dco.yml: yedeya-labs/kanon/actions/dco@vX.Y.Z',
   '.github/workflows/pr-title.yml: yedeya-labs/kanon/actions/pr-title@vX.Y.Z',

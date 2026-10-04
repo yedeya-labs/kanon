@@ -166,7 +166,8 @@ runs:
 
     # WHAT THIS RUN OPENED (RA-1627), for a lane that opts in with `quality-pr-label`.
     # Derived from GitHub, never from the agent — asking the agent to report it would
-    # change the prompt, and so the `config_fingerprint` every cost comparison keys on.
+    # change the prompt, which `config_fingerprint` does not record (it hashes
+    # `claude_args` alone), so a cost comparison across that change would not see it.
     #
     # THE APP TOKEN, NOT THE DEFAULT ONE. The job's default token has only what its
     # caller granted, so a default-token read here would need `pull-requests: read`

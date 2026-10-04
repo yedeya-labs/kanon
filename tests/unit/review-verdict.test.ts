@@ -235,8 +235,13 @@ describe('stamping the commit this run reviewed (RA-1680)', () => {
     startedAt = RUN_START as string | null,
     readFails = false,
     putFails = false,
+    // What this run's agent posted from (kanon#178). `undefined` writes the body `mine()`
+    // carries by default; `null` leaves no file at all.
+    posted = 'Approve.\n' as string | null,
   }) => {
     const dir = mkdtempSync(join(tmpdir(), 'review-stamp-'));
+    const verdictFile = join(dir, 'qa-review-verdict.md');
+    if (posted !== null) writeFileSync(verdictFile, posted);
     // THE STUB RUNS THE REAL `--jq` FILTERS, so which reviews are selected is asserted
     // against the shipped expression rather than a copy of it.
     writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
@@ -268,6 +273,7 @@ esac
         PR_NUMBER: '1672',
         HEAD_SHA: HEAD,
         RUN_ID: '99',
+        VERDICT_FILE: verdictFile,
       },
     });
     const args = (() => { try { return readFileSync(join(dir, 'args'), 'utf8'); } catch { return ''; } })();
@@ -325,7 +331,8 @@ esac
     // The idempotence test was "does the body contain the pattern", and the stamp is
     // APPENDED — so a review that quotes the format was treated as already stamped and
     // never got one. It is anchored to the END of the body instead.
-    const r = stampRun({ reviews: [mine({ body: `See <!-- reviewed: sha=${OLD} run=1 --> above, then real content.` })] });
+    const body = `See <!-- reviewed: sha=${OLD} run=1 --> above, then real content.`;
+    const r = stampRun({ reviews: [mine({ body })], posted: body });
     expect(r.args, 'the genuine stamp must still be appended').toContain(`<!-- reviewed: sha=${HEAD} run=99 -->`);
   });
 
@@ -376,6 +383,67 @@ esac
     const ok = stampRun({ reviews: [mine()] });
     expect(ok.summary).toMatch(/Stamped this run's verdict/);
     expect(ok.summary).not.toMatch(/Not stamped/);
+  });
+
+  describe("only the verdict this run's agent posted (kanon#178)", () => {
+    // Two runs on DIFFERENT heads of one PR: the sibling posted at 12:15:30 and has not
+    // stamped yet (or its stamp failed) when this run's stamp step reads the reviews.
+    const sibling = mine({ id: 450, commit_id: OLD, submitted_at: '2026-09-06T12:15:30Z',
+      body: 'Request changes: the sibling read an older head.' });
+
+    it("leaves a sibling's unstamped verdict alone and stamps this run's", () => {
+      const r = stampRun({ reviews: [sibling, mine()] });
+      expect(r.stdout).toMatch(/stamped review 500/);
+      expect(r.stdout).not.toMatch(/stamped review 450/);
+      expect(r.args, 'the sibling must not be given this run\'s SHA').not.toMatch(/sibling read an older head/);
+    });
+
+    it('stamps nothing when the only unstamped verdict is a sibling\'s — this run posted none', () => {
+      const r = stampRun({ reviews: [sibling] });
+      expect(r.args).not.toContain('-X');
+      expect(r.stdout).toMatch(/::warning title=reviewed-sha stamp::No unstamped verdict since/);
+      expect(r.status).toBe(0);
+    });
+
+    it('stamps nothing, and says so, when the agent left no verdict file', () => {
+      const r = stampRun({ reviews: [sibling, mine()], posted: null });
+      expect(r.args).not.toContain('-X');
+      expect(r.stdout).toMatch(/left no verdict body/);
+      expect(r.status).toBe(0);
+    });
+
+    it('matches the body across the whitespace a shell strips on the way to the API', () => {
+      const r = stampRun({ reviews: [mine({ body: 'Approve.\r\n\nSecond line.' })], posted: '\nApprove.\n\nSecond line.\n\n' });
+      expect(r.stdout).toMatch(/stamped review 500/);
+    });
+
+    it('does not match a body that differs inside, or a sibling sharing only a prefix', () => {
+      const r = stampRun({ reviews: [mine({ body: 'Approve.\n\nSecond  line.' })], posted: 'Approve.\n\nSecond line.' });
+      expect(r.args).not.toContain('-X');
+      const prefix = stampRun({ reviews: [mine({ body: 'Approve. And more.' })], posted: 'Approve.' });
+      expect(prefix.args).not.toContain('-X');
+    });
+
+    it('the prompt names the file the stamp reads, and a step clears it before the agent', () => {
+      const steps = wf.jobs.review.steps as { name?: string; id?: string; run?: string; env?: Record<string, string>; with?: Record<string, string> }[];
+      const path = stampStep.env.VERDICT_FILE;
+      expect(path).toBe('${{ runner.temp }}/qa-review-verdict.md');
+      const agent = steps.find((s) => s.id === 'agent')!;
+      expect(agent.with!.prompt).toContain(`\`${path}\``);
+      expect(agent.with!.prompt).toMatch(/--body-file/);
+      const clear = steps.findIndex((s) => s.name === 'Clear the verdict file before the agent writes it');
+      expect(clear, 'the clearing step exists').toBeGreaterThan(-1);
+      expect(steps[clear]!.env!.VERDICT_FILE).toBe(path);
+      expect(steps[clear]!.run).toMatch(/rm -f -- "\$VERDICT_FILE"/);
+      // After the scope is placed, and before the pin re-check, which only the token
+      // step separates from the agent.
+      const placed = steps.findIndex((s) => s.id === 'scope_place');
+      const verify = steps.findIndex((s) => s.name === 'Re-verify the pin before the agent reads it');
+      expect(placed, 'the place step exists').toBeGreaterThan(-1);
+      expect(verify, 'the pin re-check exists').toBeGreaterThan(-1);
+      expect(clear).toBeGreaterThan(placed);
+      expect(clear).toBeLessThan(verify);
+    });
   });
 
   it('runs before the reconcile step, which now reads the stamp it writes', () => {
@@ -580,6 +648,31 @@ esac
     expect(r.proceed).toBe('false');
   });
 
+  // kanon#167: Actions keeps one pending run per group, so a third arrival evicts a queued
+  // explicit re-label before it reaches this step. That loses nothing only while `explicit`
+  // decides nothing here, so that is what is asserted: the same decision for both, on
+  // every shape above. If an exemption returns, this fails and the job's concurrency
+  // comment has to be re-argued.
+  it('decides an explicit run exactly as any other, so evicting one from the queue loses nothing (kanon#167)', () => {
+    const shapes = [
+      {},
+      { reviews: [at('APPROVED', '2026-09-21T15:13:55Z')] },
+      { reviews: [at('CHANGES_REQUESTED', '2026-09-21T15:13:55Z')] },
+      { reviews: [at('APPROVED', '2026-09-21T15:00:00Z')] },
+      { headNow: OLD },
+      { headNow: null },
+      { startedAt: null },
+      { reviewsFail: true },
+    ];
+    for (const shape of shapes) {
+      expect(claimRun({ ...shape, explicit: 'true' }).proceed, JSON.stringify(shape))
+        .toBe(claimRun({ ...shape, explicit: 'false' }).proceed);
+    }
+    // And `explicit` is not in the key: a group of its own would not queue behind the
+    // running review, which is RA-2208's two verdicts on one head.
+    expect(review.concurrency.group).not.toContain('explicit');
+  });
+
   it('reviews when any read fails — this is de-duplication, not a gate', () => {
     expect(claimRun({ reviewsFail: true, reviews: [at('APPROVED', '2026-09-21T15:13:55Z')] }).proceed).toBe('true');
     expect(claimRun({ startedAt: null }).proceed).toBe('true');
@@ -712,45 +805,65 @@ printf '%s' ${JSON.stringify(JSON.stringify(reviews))} | jq -r "$filter"`
 });
 
 /**
- * RA-1723 — the reviewer must survive a PR whose own install or migrations are broken.
+ * kanon#185 — the Reviewer runs none of the PR's code (the Owner, 2026-10-04).
  *
- * PR RA-1719 failed `db:init` for the reason CI did (a missing migration), the review job
- * died on that step, no verdict was posted, and the revise lane — which fires on a
- * CHANGES_REQUESTED — could never open. The PR sat red and unreviewed for a day.
+ * The review job checks out the PR's head and later holds the reviewer App token, whose
+ * approval the Merger acts on. It used to run the PR's install, migrations and seed there
+ * through the project-setup hook, so a PR's `postinstall` ran in the workspace the token
+ * and the agent later used. Test results come from CI's required checks instead. These
+ * hold the job's STRUCTURE to that: what a step may call, and what a `run:` may execute.
  */
-describe('a PR that cannot install or migrate still gets a verdict (RA-1723)', () => {
-  const steps = wf.jobs.review.steps as { id?: string; uses?: string; run?: string; if?: string; 'continue-on-error'?: boolean; with?: Record<string, unknown> }[];
+describe("the review job runs none of the PR's code (kanon#185)", () => {
+  type S = { id?: string; name?: string; uses?: string; run?: string; with?: Record<string, unknown> };
+  const steps = wf.jobs.review.steps as S[];
+  // The shell words that run a project's code, or fetch and run someone else's.
+  const RUNNERS = /(^|[\s;&|(`])(npm|npx|pnpm|yarn|bun|corepack|make|pip3?|poetry|uv|cargo|go|gradle|gradlew|mvn|bundle|composer|deno|tsx|ts-node|playwright|docker)(\s|$)/m;
+  // An interpreter, and the first thing it is handed.
+  const INTERPRETED = /(?:^|[\s;&|(`])(node|bash|sh|zsh|python3?|ruby|perl)\s+("[^"]*"|\S+)/gm;
+  const lines = (run: string) => run.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 
-  // SINCE RA-2694 BOTH RUN INSIDE THE PROJECT-SETUP HOOK, called as `id: project` after a
-  // presence check (`id: hook`): a PR cut before the hook existed has none, and is reviewed
-  // the same way as one whose install fails.
-  it('lets the PR-code setup fail without failing the job — the hook, and the check for it', () => {
-    const hook = steps.find((s) => s.id === 'hook');
-    const project = steps.find((s) => s.id === 'project');
-    expect(project?.uses).toBe('./.github/actions/project-setup');
-    expect(project?.['continue-on-error'], 'the project-setup hook').toBe(true);
-    expect(hook?.['continue-on-error'], 'the check that it is present').toBe(true);
-    expect(project?.if).toBe("steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success' && steps.database.outcome == 'success'");
-    // …and the project's declared database (kanon#18) is tolerated the same way.
-    const database = steps.find((s) => s.id === 'database');
-    expect(database?.uses).toBe('$/actions/test-database');
-    expect(database?.['continue-on-error'], 'the test database').toBe(true);
-    expect(database?.if).toBe("steps.claim.outputs.proceed == 'true' && steps.hook.outcome == 'success'");
-    // …and it still installs and migrates, with the database the reviewer may re-run a tier on.
-    expect(project?.with).toMatchObject({ lane: 'reviewer', install: 'true', database: '${{ steps.database.outputs.database }}', browsers: 'false' });
+  it("calls only Kanon's blocks and pinned third-party actions — nothing from the PR's tree", () => {
+    const uses = steps.map((x) => x.uses).filter((u): u is string => typeof u === 'string');
+    expect(uses.length, 'the check is not vacuous').toBeGreaterThan(5);
+    // `./` on this job is the PR's head: the checkout above is `needs.filter.outputs.head_sha`.
+    expect(uses.filter((u) => u.startsWith('./'))).toEqual([]);
+    for (const u of uses) expect(u, u).toMatch(/^(\$\/actions\/[a-z-]+|[a-z0-9-]+\/[a-z0-9-]+@v\d+(\.\d+)*)$/);
+    // No database for a test tier that is no longer run, and no hook to hand one to.
+    expect(uses).not.toContain('$/actions/test-database');
+    expect(steps.some((x) => x.id === 'hook' || x.id === 'project' || x.id === 'database')).toBe(false);
   });
 
-  it("notes a failed or skipped setup from the hook's outcome alone, reading none of its outputs (#77)", () => {
-    const note = steps.find((s) => (s as { name?: string }).name === 'Note a PR whose project setup failed') as { if?: string; env?: Record<string, string> };
-    expect(note.if).toBe("steps.claim.outputs.proceed == 'true' && steps.project.outcome != 'success'");
-    expect(note.env).toEqual({ SETUP: '${{ steps.project.outcome }}' });
+  it('runs no package manager or build tool in any step', () => {
+    const found = steps.filter((x) => RUNNERS.test(lines(String(x.run ?? '')))).map((x) => x.name ?? x.id);
+    expect(found).toEqual([]);
   });
 
-  it('does not gate the pin check, the token or the agent on either succeeding', () => {
-    const guarded = steps.filter((x) => x.id === 'agent' || /Re-verify the pin|Mint reviewer/.test(String((x as { name?: string }).name)));
-    expect(guarded, 'the pin check, the token and the agent').toHaveLength(3);
-    for (const s of guarded) {
-      expect(String(s.if ?? ''), 'must not read the setup\'s outcomes').not.toMatch(/steps\.(install|dbinit|hook|project)\./);
-    }
+  it('executes no file from the tree directly, nor sources one', () => {
+    // `./x.sh` or `../x` in command position (after any `VAR=value` prefixes), or
+    // `source`/`.` of any file.
+    const DIRECT = /(?:^|[;&|(])\s*(?:[A-Za-z_]\w*=\S*\s+)*(?:\.\.?\/|source\s|\.\s)/m;
+    const found = steps.filter((x) => DIRECT.test(lines(String(x.run ?? '')))).map((x) => x.name ?? x.id);
+    expect(found).toEqual([]);
+  });
+
+  it("hands every interpreter one of Kanon's own scripts, never a file from the tree", () => {
+    const calls = steps.flatMap((x) => [...lines(String(x.run ?? '')).matchAll(INTERPRETED)]
+      .map((m) => ({ step: x.name ?? x.id, cmd: m[1], arg: m[2]! })));
+    expect(calls.length, 'the check is not vacuous').toBeGreaterThanOrEqual(4);
+    const outside = calls.filter((c) => !/^"\$(KANON|KANON_PATH)\//.test(c.arg));
+    expect(outside).toEqual([]);
+  });
+
+  it('tells the agent to run none of it, and offers no test run', () => {
+    const prompt = String(steps.find((x) => x.id === 'agent')!.with!.prompt);
+    expect(prompt).toContain("RUN NONE OF THE PR'S CODE (kanon#185)");
+    expect(prompt).toMatch(/Do not install, build, migrate,\s+or run any test tier, script, binary or hook from this tree/);
+    expect(prompt).toMatch(/take every test result from\s+CI/);
+    expect(prompt).not.toMatch(/sanity-run|FAST tier|FOREGROUND blocking/i);
+  });
+
+  it("reports no stage for a hook it no longer calls", () => {
+    const finish = steps.find((x) => x.uses === '$/actions/agent-finish')!;
+    expect(String(finish.with!.stages)).not.toMatch(/hook=/);
   });
 });

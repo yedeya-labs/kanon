@@ -40,8 +40,9 @@ const strings = (value: unknown): string[] => {
 
 describe('#77 no lane reads an output of the project-setup hook', () => {
   it('finds the hook calls, so the check below is not vacuous', () => {
-    expect(calls.length).toBeGreaterThanOrEqual(5);
-    expect(calls.map((c) => c.at)).toEqual(expect.arrayContaining([expect.stringMatching(/^agent-review\.yml /)]));
+    // The review lane calls no hook since kanon#185; the four lanes below still do.
+    expect(calls.length).toBeGreaterThanOrEqual(4);
+    expect(calls.map((c) => c.at)).toEqual(expect.arrayContaining([expect.stringMatching(/^agent-verify-acs\.yml /)]));
     expect(calls.filter((c) => c.id).map((c) => c.id)).toContain('project');
   });
 

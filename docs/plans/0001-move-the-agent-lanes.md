@@ -188,6 +188,8 @@ If the file is missing, the lane fails with a named error. That happens on PR br
 | review | the PR head (PR code) | **no**. The token is minted after the hook, and the document base pin is re-verified in between, as today. |
 | merge-reconcile | not called | none |
 
+*Since [#185](https://github.com/yedeya-labs/kanon/issues/185):* the review lane no longer calls the hook (the Owner, 2026-10-04). Its job runs none of the PR's code, and the Reviewer takes test results from CI's required checks. The `review` row above describes the lane before that change.
+
 In every lane the hook runs before the agent, and the Claude token is never passed to it.
 
 **Every literal, and where it ends up:**
