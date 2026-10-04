@@ -76,6 +76,12 @@ A measurement item's deliverable is the number and the command that produced it,
 - **`Closes #<n>`** adopts an existing issue instead of filing a new one, and is read **only** from the metadata line. Written anywhere else it is not adopted, and a duplicate is filed.
 - **`Depends on:`** cites items by letter. Only the leading run of `Issue X` references counts.
 
+**What the guard also holds you to** (`K-LAYOUT-12`, `K-LAYOUT-13`):
+
+- **Prose that says an item waits matches its `Depends on:` line.** *Blocked on Issue X*, *Issue X must land first*, *once Issue X lands* or *Issue Y follows this issue* is an edge, so the waiting item's line names the other. A sentence that denies one (*not blocked on Issue X*) is fine.
+- **Numbered criteria have no gap**, and an `Issue X criterion N` reference names a criterion that exists.
+- **A decisions section with numbered lines parses to at least one decision.** An indented item, `__underscores__`, or no space after the number is read as prose, and is refused rather than reported as checked.
+
 ## 4. Cost
 
 **Price it, or declare that there is nothing to price.** A dollar figure, including `$0`, is the commonest answer; an explicit `no delta`, with the reason, is the other acceptable form (`K-PROJ-6`). The Owner's agreement comes *before* spend (`K-OBS-9`), and a number nobody wrote cannot be agreed to.

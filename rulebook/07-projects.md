@@ -92,7 +92,7 @@ This chapter governs projects: work too large for one issue, planned by the Lead
 
 **Why.** These are the conditions that otherwise stop a tick hours after the merge. Membership is decided by position, not presence, because documents that discussed the marker were once absorbed as project members.
 
-**Enforced by.** The brief guard parses the decomposition the same way the reconciler does and fails on a missing milestone, a malformed dependency, a cycle or a misplaced closing reference. The reconciler reads membership by position.
+**Enforced by.** The brief guard parses the decomposition the same way the reconciler does and fails on a missing milestone, a malformed dependency, a cycle, a misplaced closing reference, or a blocking edge stated in prose but missing from the dependency line (`K-LAYOUT-12`). The reconciler reads membership by position.
 
 **Class.** framework
 
@@ -104,7 +104,7 @@ This chapter governs projects: work too large for one issue, planned by the Lead
 
 **Why.** A brief that keeps changing after approval is no longer the thing the Maintainer approved. Splitting keeps an over-large item from stalling the project without reopening its decisions.
 
-**Enforced by.** The brief guard applies to every brief except those the adopter lists as written before the standard, under `## Pre-standard briefs` in `docs/qa/exemptions.md` (`K-LAYOUT-15`). A pull request that adds one escalates to a human, because the file is directly inside `docs/qa/` (`K-MERGE-4`), and an entry for a brief that doesn't exist fails the guard.
+**Enforced by.** The brief guard applies to every brief except those the adopter lists as written before the standard, under `## Pre-standard briefs` in `docs/qa/exemptions.md` (`K-LAYOUT-15`). Its shape checks still run over those briefs; its summary line names each content rule it skipped for them. A pull request that adds one escalates to a human, because the file is directly inside `docs/qa/` (`K-MERGE-4`), and an entry for a brief that doesn't exist fails the guard.
 
 **Class.** framework
 

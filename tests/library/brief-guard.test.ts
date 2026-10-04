@@ -24,6 +24,8 @@ import {
   decisionsIn,
   isBrief,
   isPreStandard,
+  PRE_STANDARD_SKIPS,
+  exemptSummary,
 } from '../../scripts/brief-guard.mjs';
 import { parseProposed } from '../../scripts/lead-reconcile.mjs';
 import { ROOT } from './helpers/adopter.js';
@@ -594,6 +596,52 @@ describe('a pre-standard brief is exempt, and the adopter declares which (RA-174
   });
 });
 
+describe('the pre-standard exemption names every check it skips (kanon#190)', () => {
+  const decomposition = (issueA: string) =>
+    withSection('Decomposition', SECTIONS[2][1].replace(
+      'Acceptance criteria:\n\n- `[AREA-1]` — the criterion this issue takes on.',
+      issueA,
+    ));
+  /** One brief per entry of `PRE_STANDARD_SKIPS`, breaking that check and nothing else. */
+  const BREAKS: Record<string, [string, RegExp]> = {
+    coordinates: [withSection('The real problem', `${PAD} It is at \`src/x.ts:12\`.`), /`file:line` coordinate/],
+    criteria: [decomposition('Acceptance criteria:\n\n- Deliverable: add a CSV export.'), /acceptance criterion in prose/],
+    'open-decision': [withSection('Decisions', `${PAD}\n\n1. **Which store? ⛔ OPEN**\n`), /decision 1 is still open/],
+    'unparsed-decisions': [withSection('Decisions', `${PAD}\n\n1. __Which store?__\n`), /parses to ZERO decisions/],
+    predecessors: [decomposition('It is blocked on Issue B.\n\nAcceptance criteria:\n\n- `[AREA-1]` — c.'), /does not name Issue B/],
+    'criteria-gap': [decomposition('Acceptance criteria:\n\n1. `[AREA-1]` — c.\n3. `[AREA-3]` — c.'), /criterion 2 is written 3/],
+    'criterion-refs': [withSection('Scope', `${PAD} As Issue B criterion 9 says.`), /“Issue B criterion 9” points at nothing/],
+  };
+
+  it('lists each skipped check once, with a label', () => {
+    expect(PRE_STANDARD_SKIPS.map((c) => c.key).sort()).toEqual(Object.keys(BREAKS).sort());
+    for (const c of PRE_STANDARD_SKIPS) expect(c.label.length, c.key).toBeGreaterThan(10);
+  });
+
+  it.each(Object.keys(BREAKS))('%s: fires on a standard brief, and is skipped on a pre-standard one', (key) => {
+    const [md, finding] = BREAKS[key];
+    // Exactly that one finding, so each entry is tied to the check it names.
+    expect(problems(md)).toEqual([expect.stringMatching(finding)]);
+    expect(checkBrief('docs/projects/2.md', md)).toEqual([]);
+  });
+
+  it('gates every content rule through the list, so a new one cannot be exempted silently', () => {
+    const code = readFileSync(join(ROOT, 'scripts/brief-guard.mjs'), 'utf8');
+    const asked = [...code.matchAll(/\bruns\('([a-z-]+)'\)/g)].map((m) => m[1]);
+    expect([...new Set(asked)].sort()).toEqual(PRE_STANDARD_SKIPS.map((c) => c.key).sort());
+    // One read of the exemption inside checkBrief, the one `runs` answers from.
+    const body = code.slice(code.indexOf('export function checkBrief'), code.indexOf('const main = ()'));
+    expect(body.match(/isPreStandard\(/g)).toHaveLength(1);
+  });
+
+  it('names every one of them in the summary line', () => {
+    const line = exemptSummary(['docs/projects/2.md']);
+    expect(line).toMatch(/^1 of them predate the RA-1742 standard \(docs\/projects\/2\.md\) and were NOT checked for /);
+    for (const c of PRE_STANDARD_SKIPS) expect(line, c.key).toContain(c.label);
+    expect(exemptSummary([])).toBe('');
+  });
+});
+
 describe('which files are briefs', () => {
   it('is the numeric ones, because every consumer resolves a brief by its tracking number', () => {
     expect(isBrief('docs/projects/961.md')).toBe(true);
@@ -887,6 +935,10 @@ Acceptance criteria:
   ])('still refuses a real edge beside a negation: %s', (prose) => {
     const found = problems(withIssueAProse(prose)).filter((p) => /does not name Issue C1B/.test(p));
     expect(found, prose).toHaveLength(1);
+  });
+
+  it('reads the reverse direction only when the waiting item is declared', () => {
+    expect(problems(withIssueAProse('Issue Y follows this issue, in a later project.'))).toEqual([]);
   });
 
   it('gives the reverse direction the same treatment', () => {
