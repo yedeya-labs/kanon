@@ -790,7 +790,7 @@ function nextActionsCore(world, {
     // `run-unreadable`, whose message says nothing about resolving itself — so a human
     // had every reason to wait for a tick that could never differ. A completed run's
     // job set does not change.
-    'deploy-job-absent': () => `every containing release was read, and none has a ${deployJobName(world)} job — the newest examined is \`${world.deploy?.tag}\` (${world.deploy?.url ?? 'no url'}). A completed run's jobs never change, so this does NOT resolve itself: either the job was renamed since these tags were cut, or the adoption record names a different one, or those releases genuinely never deployed. Refusing to treat an absent job as a deploy`,
+    'deploy-job-absent': () => `every containing release was read, and none has a ${deployJobName(world)} job — the first examined is \`${world.deploy?.tag}\` (${world.deploy?.url ?? 'no url'}). A completed run's jobs never change, so this does NOT resolve itself: either the job was renamed since these tags were cut, or the adoption record names a different one, or those releases genuinely never deployed. Refusing to treat an absent job as a deploy`,
     'deploy-gate-declined': () => `\`${world.deploy?.tag}\` was released but its deploy job was SKIPPED: ${deployWorkflow(world)}'s gate found nothing to deploy in the range, so ${deployEnvironment(world)} was never touched${walked(world)}. The project is not closed on a deploy that did not happen`,
     // A REVERT IS NOT A DEPLOY (kanon#161). Ancestry credited a release whose tree no
     // longer held the work, because a reverted merge stays an ancestor of every later tag.
@@ -1382,6 +1382,13 @@ export function revertTargets(message, repo) {
 }
 
 /**
+ * The `--jq` prefilter for reverts, a regex that must hold every message `revertTargets`
+ * accepts. Exported so a test evaluates the SAME pattern. It may use no anchor and no flag
+ * but `i`, so that JavaScript and gojq read it the same way.
+ */
+export const REVERT_PREFILTER = 'reverts commit [0-9a-f]{7}|reverts [^ ]+#[0-9]';
+
+/**
  * Which of `shas` a commit in `commits` undoes (kanon#161), each with the revert that
  * does it.
  *
@@ -1620,8 +1627,9 @@ export function readDeploy(issues, { json = ghJson, text = gh, declared = () => 
   // evidence of nothing. Never used to CONCLUDE anything positive — only to choose
   // which negative to report, which is what RA-1268 means by "like `gate-declined` for
   // the purpose of continuing, but never for the purpose of concluding".
-  // `reverted` FIRST: it is the one negative that says the work is not in the tree, and
-  // the newest examined release is the one it names.
+  // `reverted` FIRST: it is the one negative that says the work is not in the tree. It is
+  // also the one state that keeps its LAST candidate rather than its first (see the walk),
+  // so the release it names is the newest one that deployed without the work.
   const REPORT_ORDER = ['reverted', 'failed', 'deploy-job-absent', 'run-not-found', 'gate-declined'];
 
   // PRESENCE, NOT ONLY ANCESTRY (kanon#161), asked only of a release that would be credited.
@@ -1629,7 +1637,13 @@ export function readDeploy(issues, { json = ghJson, text = gh, declared = () => 
   // tag holds after it, filtered by `--jq` to the ones whose message names a revert. A
   // pull request a revert names is resolved to its merge commit, which costs a call only
   // when a revert exists. Unreadable is never "no reverts".
-  const REVERT_JQ = '.commits[] | select(.commit.message | test("reverts commit [0-9a-f]{7}|^Reverts [^ ]+#[0-9]"; "im")) | {sha: .sha, message: .commit.message} | @json';
+  //
+  // The prefilter is a SUPERSET of what `revertTargets` parses, with no anchor and no flag
+  // but `i`: `gh --jq` is gojq, whose `m` flag means `(?s)`, not `(?m)`, so a `^Reverts`
+  // there matched only at the start of the whole message and dropped every PR-named revert,
+  // whose `Reverts …#N` line is in the body (kanon#262 review). `revertTargets` does the
+  // anchored parse.
+  const REVERT_JQ = `.commits[] | select(.commit.message | test("${REVERT_PREFILTER}"; "i")) | {sha: .sha, message: .commit.message} | @json`;
   const prMerge = new Map();
   const mergeOf = (n) => {
     if (!prMerge.has(n)) prMerge.set(n, json(['pr', 'view', String(n), '--repo', REPO, '--json', 'mergeCommit'])?.mergeCommit?.oid ?? null);
@@ -1687,7 +1701,9 @@ export function readDeploy(issues, { json = ghJson, text = gh, declared = () => 
     }
     // The FIRST candidate in each state, so the message names a tag the walk actually
     // classified rather than the last one it happened to see.
-    if (!remembered.has(d.state)) remembered.set(d.state, d);
+    // Except `reverted`, which keeps the LAST: the newest release that deployed without
+    // the work is the current fact, and the one its message names (kanon#262 review).
+    if (!remembered.has(d.state) || d.state === 'reverted') remembered.set(d.state, d);
     // The earliest containing release is the one that SHOULD have shipped this work,
     // so its failure is about this project in a way a later release's is not.
     if (d.state === 'failed' && examined === 1) ownFailure = d;

@@ -8,7 +8,10 @@ import { describe, expect, it } from 'vitest';
  */
 const REPO = 'example-org/example-repo';
 process.env.GITHUB_REPOSITORY = REPO;
-const { readDeploy, revertTargets, revertedMerges } = await import('../../scripts/lead-reconcile.mjs');
+const { readDeploy, revertTargets, revertedMerges, REVERT_PREFILTER } = await import('../../scripts/lead-reconcile.mjs');
+
+/** The production prefilter, evaluated with the one flag it is passed to gojq with. */
+const prefilter = new RegExp(REVERT_PREFILTER, 'i');
 
 const DECLARED = { environment: 'staging', workflow: 'deploy-staging.yml', job: 'deploy' };
 const SHA1 = 'a1'.repeat(20);
@@ -55,7 +58,7 @@ const world = (releases: Release[], { closing = [[9, SHA1]] as Array<[number, st
       const tag = /compare\/[0-9a-f]+\.\.\.([^?]+)\?/.exec(args[2]!)![1];
       const upTo = releases.slice(0, releases.findIndex((r) => r.tag === tag) + 1);
       return upTo.flatMap((r) => r.after ?? [])
-        .filter((c) => /reverts commit [0-9a-f]{7}|^Reverts [^ ]+#[0-9]/im.test(c.message))
+        .filter((c) => prefilter.test(c.message))
         .map((c) => JSON.stringify(c)).join('\n');
     },
   };
@@ -126,13 +129,26 @@ describe('readDeploy does not credit a release whose tree no longer holds the wo
     }
   });
 
+  it('names the NEWEST release that deployed without the work', () => {
+    const { io } = world([
+      { tag: 'v1.0.0', deploy: 'success', after: [revertOf(SHA1, REV1)] },
+      { tag: 'v1.0.1', deploy: 'success' },
+    ]);
+    const d = readDeploy(CLOSED, io);
+    expect(d.state).toBe('reverted');
+    expect(d.tag).toBe('v1.0.1');
+  });
+
   it('reads history only for a release it would credit: one paginated compare per closing merge', () => {
     const { io, calls } = world([
       { tag: 'v1.0.0', deploy: 'skipped' },
       { tag: 'v1.0.1', deploy: 'success' },
     ], { closing: [[9, SHA1], [10, SHA2]] });
     expect(readDeploy(CLOSED, io).state).toBe('deployed');
-    const reads = calls.filter((a) => a.includes('--paginate')).map((a) => a[2]);
+    const paged = calls.filter((a) => a.includes('--paginate'));
+    // The pattern the stub evaluates, passed with `i` alone — gojq's `m` is not `(?m)`.
+    for (const a of paged) expect(a[a.indexOf('--jq') + 1]).toContain(`test("${REVERT_PREFILTER}"; "i")`);
+    const reads = paged.map((a) => a[2]);
     expect(reads).toEqual([
       `repos/${REPO}/compare/${SHA1}...v1.0.1?per_page=100`,
       `repos/${REPO}/compare/${SHA2}...v1.0.1?per_page=100`,
@@ -149,6 +165,26 @@ describe('what a commit message says it reverts', () => {
     expect(revertTargets('Reverts someone-else/fork#9', REPO).prs).toEqual([]);
     // Not a revert: too short to be a commit, or a PR number mentioned mid-line.
     expect(revertTargets('This reverts commit abc12.\nIt Reverts example-org/example-repo#9', REPO)).toEqual({ shas: [], prs: [] });
+  });
+});
+
+describe('the --jq prefilter keeps every revert the parser reads (kanon#262 review)', () => {
+  // `gh --jq` is gojq, whose `m` flag is `(?s)`, not `(?m)`. A pattern with no anchor and
+  // no flag but `i` reads the same in gojq and in JavaScript, which is what lets the stub
+  // above evaluate the production pattern rather than a copy of it.
+  it('is flag-independent: no anchor, so gojq and JavaScript agree on it', () => {
+    // `^` only as a class negation (`[^ ]`); never `$` or an inline flag group.
+    expect(REVERT_PREFILTER).not.toMatch(/(^|[^[])\^|\$|\(\?/);
+  });
+  it.each([
+    [`Revert "x"\n\nThis reverts commit ${SHA1}.`],
+    [`Revert "feat: the work" (#12)\n\nReverts ${REPO}#9`],
+    [`Revert "feat: the work" (#12) (#13)\n\n* Reverts ${REPO}#9\nReverts ${REPO}#10`],
+    ['this REVERTS COMMIT ABCDEF1'],
+  ])('keeps %j', (message) => {
+    const t = revertTargets(message, REPO);
+    expect(t.shas.length + t.prs.length, 'the parser reads a revert here').toBeGreaterThan(0);
+    expect(prefilter.test(message)).toBe(true);
   });
 });
 
