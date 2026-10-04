@@ -57,4 +57,4 @@ Add tests for each in `tests/library/test-conventions.test.ts`. Nothing in the t
 ## Not decided here
 
 - **The JavaScript row's test runners are still Vitest and Playwright.** A JavaScript project on Jest or `node:test` is outside the row today. Making the JavaScript row choose between runners would be the first row with two runners, and that needs its own case.
-- **Where `citation-shift` looks for code comments** is still `src/`, `scripts/`, `tests/` and `e2e/`. A Go project's `internal/` and `cmd/`, or a Python package at the repository's root, aren't read yet.
+- **Where `citation-shift` looks for code comments** is still `src/`, `scripts/`, `tests/` and `e2e/`, plus `.github/scripts/` since #180. A Go project's `internal/` and `cmd/`, or a Python package at the repository's root, aren't read yet.

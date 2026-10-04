@@ -48,7 +48,9 @@
 //   • Code and string literals. Only a COMMENT is a claim; `expect(err).toContain(
 //     'services/payments.ts:4')` is a fixture (`commentCoordinates`).
 //
-// CODE COMMENTS ARE READ TOO (RA-2293), under `e2e/`, `tests/`, `src/` and `scripts/`, with
+// CODE COMMENTS ARE READ TOO (RA-2293), under `e2e/`, `tests/`, `src/`, `scripts/` and
+// `.github/scripts/` (kanon#180 — adopters keep workflow helpers there, and a coordinate in
+// one went stale after merge while its copy in a test was caught), with
 // or without backticks — RA-1384's own third example was one: `e2e/helpers.ts` says the
 // wizard "bails at `course-wizard.tsx:180`". MEASURED BEFORE MAKING IT FATAL, replayed
 // the way the doc corpus was, over the 80 most recent non-release commits on `main`
@@ -99,7 +101,13 @@ import { TABLE_EXT, conventionFor } from './lib/test-conventions.mjs';
  */
 
 /** Where a CODE COMMENT can carry a coordinate worth mapping (RA-2293). */
-export const CODE_TREES = ['e2e/', 'tests/', 'src/', 'scripts/'];
+// `.github/scripts/` since kanon#180: a PR shifted a workflow block, the guard caught the copy
+// of its coordinate in a test, and the same coordinate in a `.github/scripts/*.mjs` comment
+// went stale on merge. Nothing there quoted an old coordinate on purpose when it was added
+// (Kanon's and the reference adopter's trees were read, 2026-10-04); an adopter whose
+// workflow scripts ARE its pipeline code declares them under `## Pipeline code`, and the
+// exclusion below applies to them as to any other tree.
+export const CODE_TREES = ['e2e/', 'tests/', 'src/', 'scripts/', '.github/scripts/'];
 // The languages of the per-language table (`scripts/lib/test-conventions.mjs`, kanon#20),
 // whose comment syntax this file knows, plus `cjs`, which is JavaScript too.
 const CODE_EXT = new RegExp(`\\.(?:${TABLE_EXT}|cjs)$`);
