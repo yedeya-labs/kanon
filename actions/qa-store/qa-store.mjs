@@ -352,6 +352,58 @@ export function finish(env, now = Date.now()) {
   return { outputs, line: `QA store \`${op}\`${kind ? ` (${kind})` : ''}: written.`, warnings };
 }
 
+/**
+ * `delete-export`: delete the export's artifact, and say so when this attempt re-ran the agent
+ * job against an export an earlier attempt already deleted (kanon#224).
+ *
+ * WHY A RE-RUN NEEDS THIS. "Re-run failed jobs" re-runs a failed agent job and the jobs after
+ * it, the delete job among them, but never the export job, which succeeded: the re-run reuses
+ * its outputs, and the artifact they name was deleted when the earlier attempt's delete job
+ * ran, `if: always()`. So the lane's agent job runs only on the export's own attempt
+ * (`needs.<export>.outputs.attempt == github.run_attempt`, which `store-jobs.ts` requires),
+ * and is skipped on a partial re-run instead of reading nothing. This is where the run turns
+ * red and says why: the export is from an earlier attempt and the agent job was skipped.
+ * "Re-run all jobs" exports again. A re-run of the delete job alone (the agent job succeeded,
+ * the delete failed) deletes the export and stays green.
+ *
+ * An artifact already gone (404) is not an error: the export not existing is the goal.
+ *
+ * @param {Record<string, string | undefined>} env `ARTIFACT_ID`, `EXPORT_ATTEMPT`, `RUN_ATTEMPT`,
+ *   `AGENT_RESULT`, `REPO`, `GH_TOKEN`, `GITHUB_API_URL`
+ * @param {typeof fetch} fetchImpl
+ * @returns {Promise<{ lines: string[], error: string | null }>}
+ */
+export async function deleteExport(env, fetchImpl = fetch) {
+  const id = env.ARTIFACT_ID ?? '';
+  const exportAttempt = env.EXPORT_ATTEMPT ?? '';
+  const runAttempt = env.RUN_ATTEMPT ?? '';
+  /** @type {string[]} */
+  const lines = [];
+  if (id !== '' && !/^\d+$/.test(id)) return { lines, error: `artifact-id '${id}' is not a number` };
+  if (id !== '' && exportAttempt === '') return { lines, error: 'delete-export needs export-attempt, the export job\'s attempt output' };
+  if (id === '') {
+    lines.push('No export artifact to delete: the export job uploaded none.');
+  } else {
+    const api = env.GITHUB_API_URL || 'https://api.github.com';
+    const res = await fetchImpl(`${api}/repos/${env.REPO}/actions/artifacts/${id}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${env.GH_TOKEN}`, accept: 'application/vnd.github+json' },
+    });
+    if (res.status === 404) lines.push(`The QA store export (artifact ${id}) was already deleted.`);
+    else if (res.ok) lines.push(`Deleted the QA store export (artifact ${id}).`);
+    else return { lines, error: `deleting the QA store export (artifact ${id}) failed: HTTP ${res.status}` };
+  }
+  if (exportAttempt !== '' && exportAttempt !== runAttempt && env.AGENT_RESULT === 'skipped') {
+    return {
+      lines,
+      error: `attempt ${runAttempt} re-ran the agent job without the export job, whose export, from attempt ${exportAttempt}, `
+        + 'was deleted when that attempt finished. The agent job was skipped rather than run without the store. '
+        + 'Use "Re-run all jobs", which exports again.',
+    };
+  }
+  return { lines, error: null };
+}
+
 /** @param {Record<string, string>} outputs */
 const writeOutputs = (outputs) => {
   const out = process.env.GITHUB_OUTPUT;
@@ -378,8 +430,12 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       for (const w of warnings) console.log(`::warning title=qa-store::${w}`);
       writeOutputs(outputs);
       writeSummary(line);
+    } else if (mode === 'delete-export') {
+      const { lines, error } = await deleteExport(process.env);
+      for (const l of lines) writeSummary(l);
+      if (error) throw new Error(error);
     } else {
-      console.error('usage: qa-store.mjs prepare|finish');
+      console.error('usage: qa-store.mjs prepare|finish|delete-export');
       process.exit(2);
     }
   } catch (e) {

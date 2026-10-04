@@ -21,9 +21,16 @@ import { STORE_ENVIRONMENT } from '../../../actions/qa-store/qa-store.mjs';
  * - **The export's delete job** runs `actions/qa-store` with `operation: delete-export`, needs
  *   the export job and the agent job, runs `if: always()` and nothing else, and is the only job
  *   granted `actions: write`, which is all it is granted.
+ * - **A re-run of the agent job alone reads no deleted export** (kanon#224). "Re-run failed
+ *   jobs" reuses the export job's outputs, and the earlier attempt's delete job has already
+ *   deleted the artifact they name. So a lane that exports runs one agent job, which needs the
+ *   export job and runs only on its attempt (`needs.<export>.outputs.attempt ==
+ *   github.run_attempt`, a top-level conjunct of its `if:`); the export job outputs the block's
+ *   `attempt`; and the delete step is handed the export's `artifact-id` and `attempt` and the
+ *   agent job's `result`, so it turns that re-run red and says "Re-run all jobs".
  */
 
-type Step = { uses?: string; with?: Record<string, unknown>; run?: string; if?: string; env?: Record<string, string> };
+type Step = { id?: string; uses?: string; with?: Record<string, unknown>; run?: string; if?: string; env?: Record<string, string> };
 export type Job = {
   uses?: string;
   with?: Record<string, unknown>;
@@ -32,6 +39,7 @@ export type Job = {
   environment?: string | { name?: string };
   needs?: string | string[];
   if?: string;
+  outputs?: Record<string, string>;
 };
 export type Workflow = { permissions?: Record<string, string> | string; jobs: Record<string, Job> };
 
@@ -165,6 +173,52 @@ export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemet
     const p = grants(j);
     if (JSON.stringify(p) !== JSON.stringify({ actions: 'write' })) out.push(`${name}: the export's delete job grants ${JSON.stringify(p)}, not exactly actions: write`);
     if (j.environment !== undefined) out.push(`${name}: the export's delete job declares an environment`);
+  }
+  out.push(...rerunProblems(jobs, exporters, agents.map(([n]) => n)));
+  return out;
+}
+
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Whether `value` is exactly the expression `${{ <expr> }}`, give or take whitespace. */
+const isExpr = (value: unknown, expr: string) => typeof value === 'string'
+  && new RegExp(`^\\$\\{\\{\\s*${expr.split(/\s+/).map(esc).join('\\s+')}\\s*\\}\\}$`).test(value.trim());
+/** The top-level `&&` conjuncts of a job's `if:`, or null when it has an `||` (which could bypass one). */
+const conjuncts = (cond: string | undefined) => {
+  const c = (cond ?? '').trim().replace(/^\$\{\{([\s\S]*)\}\}$/, '$1').trim();
+  if (c === '' || c.includes('||')) return null;
+  return c.split('&&').map((x) => x.trim().replace(/\s+/g, ' '));
+};
+
+/** kanon#224: a partial re-run of a lane that exports never runs its agent on a deleted export. */
+function rerunProblems(jobs: Array<[string, Job]>, exporters: string[], agents: string[]): string[] {
+  if (exporters.length === 0) return [];
+  const out: string[] = [];
+  if (agents.length !== 1) out.push(`a lane that exports the store runs one agent job, not ${agents.length} (${agents.join(', ')})`);
+  const byName = new Map(jobs);
+  const deleteSteps = jobs.filter(([, j]) => isDeleteJob(j)).flatMap(([n, j]) => storeSteps(j)
+    .filter((s) => s.with?.operation === 'delete-export').map((s) => [n, s] as const));
+  for (const e of exporters) {
+    const j = byName.get(e)!;
+    const ids = storeSteps(j).filter((s) => s.with?.operation === 'export').map((s) => s.id);
+    if (!ids.some((id) => id && isExpr(j.outputs?.attempt, `steps.${id}.outputs.attempt`))) {
+      out.push(`${e}: the export job doesn't output its attempt (attempt: \${{ steps.<id>.outputs.attempt }}), which the agent job's if: compares with the run's`);
+    }
+    for (const a of agents) {
+      const aj = byName.get(a)!;
+      if (!needsOf(aj).includes(e)) out.push(`${a}: the agent job doesn't need the export job ${e}`);
+      const gate = `needs.${e}.outputs.attempt == github.run_attempt`;
+      if (!(conjuncts(aj.if) ?? []).includes(gate)) {
+        out.push(`${a}: the agent job's if: '${aj.if ?? ''}' lacks the conjunct '${gate}', so a re-run of it alone reads an export already deleted`);
+      }
+    }
+    const mine = deleteSteps.filter(([, s]) => isExpr(s.with?.['artifact-id'], `needs.${e}.outputs.artifact-id`));
+    if (mine.length === 0 && deleteSteps.length > 0) out.push(`no delete-export step is handed the export job's artifact-id (\${{ needs.${e}.outputs.artifact-id }})`);
+    for (const [d, s] of mine) {
+      if (!isExpr(s.with?.['export-attempt'], `needs.${e}.outputs.attempt`)) out.push(`${d}: the delete-export step isn't handed export-attempt: \${{ needs.${e}.outputs.attempt }}`);
+      if (agents.length === 1 && !isExpr(s.with?.['agent-result'], `needs.${agents[0]}.result`)) {
+        out.push(`${d}: the delete-export step isn't handed agent-result: \${{ needs.${agents[0]}.result }}, so a partial re-run that skipped the agent stays green`);
+      }
+    }
   }
   return out;
 }

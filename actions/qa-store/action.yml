@@ -33,6 +33,12 @@
 # named by `artifact-name`; a job of its own deletes it with `operation: delete-export`, the
 # one operation that runs no hook and needs no environment, only `actions: write`.
 #
+# A RE-RUN OF THE AGENT JOB ALONE HAS NO EXPORT (kanon#224). "Re-run failed jobs" reuses the
+# export job's outputs, and the earlier attempt's delete job has already deleted the artifact
+# they name. So the agent job runs only when the export's `attempt` is the run's, and the
+# delete job, given that attempt and the agent job's result, turns the re-run red and says
+# "Re-run all jobs". `tests/unit/helpers/store-jobs.ts` holds a lane to that wiring.
+#
 # NO `vars` OR `secrets` HERE: neither exists inside a composite action. The hook holds its
 # own store's coordinates.
 name: Kanon QA store
@@ -83,6 +89,14 @@ inputs:
     description: "`delete-export`: the export job's `artifact-id` output."
     required: false
     default: ""
+  export-attempt:
+    description: "`delete-export`: the export job's `attempt` output."
+    required: false
+    default: ""
+  agent-result:
+    description: "`delete-export`: the agent job's result, `needs.<agent>.result`."
+    required: false
+    default: ""
 
 outputs:
   present:
@@ -103,6 +117,9 @@ outputs:
   artifact-id:
     description: "`export`: the artifact's id, for `delete-export`."
     value: ${{ steps.upload.outputs.artifact-id }}
+  attempt:
+    description: "The run attempt this operation ran in. `export`: the agent job runs only when it equals `github.run_attempt` (kanon#224)."
+    value: ${{ github.run_attempt }}
 
 runs:
   using: composite
@@ -187,10 +204,7 @@ runs:
         GH_TOKEN: ${{ github.token }}
         REPO: ${{ github.repository }}
         ARTIFACT_ID: ${{ inputs.artifact-id }}
-      run: |
-        case "$ARTIFACT_ID" in
-          '') echo "No export artifact to delete: the export job uploaded none."; exit 0 ;;
-          *[!0-9]*) echo "::error title=qa-store::artifact-id '$ARTIFACT_ID' is not a number"; exit 1 ;;
-        esac
-        gh api --method DELETE "repos/$REPO/actions/artifacts/$ARTIFACT_ID"
-        echo "Deleted the QA store export (artifact $ARTIFACT_ID)."
+        EXPORT_ATTEMPT: ${{ inputs.export-attempt }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+        AGENT_RESULT: ${{ inputs.agent-result }}
+      run: node "$GITHUB_ACTION_PATH/qa-store.mjs" delete-export

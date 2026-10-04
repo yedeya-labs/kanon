@@ -134,3 +134,54 @@ describe('the export is deleted by a job of its own, always (§3.2)', () => {
     expect(mutate((wf) => { delete wf.jobs['delete-export']; })).toEqual(['the lane exports the store (export) and has no job that deletes the export']);
   });
 });
+
+describe('a re-run of the agent job alone never reads a deleted export (kanon#224)', () => {
+  const step = (wf: Workflow, name: string) => job(wf, name).steps!.find((s) => s.uses === '$/actions/qa-store')!;
+
+  it('the agent job runs only on the export\'s attempt', () => {
+    const gate = "agent: the agent job's if: '%s' lacks the conjunct 'needs.export.outputs.attempt == github.run_attempt', so a re-run of it alone reads an export already deleted";
+    expect(mutate((wf) => { delete job(wf, 'agent').if; })).toEqual([gate.replace('%s', '')]);
+    for (const cond of [
+      'always()',
+      "needs.export.outputs.attempt == github.run_attempt || inputs.issue != ''",
+      // `||` binds looser than `&&`: this runs whenever an issue is given, whatever the attempt.
+      "inputs.issue != '' || always() && needs.export.outputs.attempt == github.run_attempt",
+      'needs.export.outputs.attempt != github.run_attempt',
+      'needs.export.outputs.artifact-id == github.run_attempt',
+    ]) {
+      expect(mutate((wf) => { job(wf, 'agent').if = cond; })).toEqual([gate.replace('%s', cond)]);
+    }
+    // Another conjunct beside it, or the expression wrapped in ${{ }}, still holds the gate.
+    expect(mutate((wf) => { job(wf, 'agent').if = "${{ inputs.issue != '' && needs.export.outputs.attempt  ==  github.run_attempt }}"; })).toEqual([]);
+  });
+
+  it('the agent job needs the export job', () => {
+    expect(mutate((wf) => { job(wf, 'agent').needs = []; })).toEqual(["agent: the agent job doesn't need the export job export"]);
+  });
+
+  it('the export job outputs the block\'s attempt', () => {
+    const msg = 'export: the export job doesn\'t output its attempt (attempt: ${{ steps.<id>.outputs.attempt }}), which the agent job\'s if: compares with the run\'s';
+    expect(mutate((wf) => { delete job(wf, 'export').outputs!.attempt; })).toEqual([msg]);
+    expect(mutate((wf) => { job(wf, 'export').outputs!.attempt = '${{ github.run_attempt }}'; })).toEqual([msg]);
+    expect(mutate((wf) => { job(wf, 'export').outputs!.attempt = '${{ steps.other.outputs.attempt }}'; })).toEqual([msg]);
+    expect(mutate((wf) => { delete step(wf, 'export').id; })).toEqual([msg]);
+  });
+
+  it('the delete step is handed the export\'s artifact-id and attempt and the agent job\'s result', () => {
+    expect(mutate((wf) => { step(wf, 'delete-export').with!['artifact-id'] = '${{ needs.agent.outputs.artifact-id }}'; }))
+      .toEqual(['no delete-export step is handed the export job\'s artifact-id (${{ needs.export.outputs.artifact-id }})']);
+    expect(mutate((wf) => { delete step(wf, 'delete-export').with!['export-attempt']; }))
+      .toEqual(['delete-export: the delete-export step isn\'t handed export-attempt: ${{ needs.export.outputs.attempt }}']);
+    expect(mutate((wf) => { step(wf, 'delete-export').with!['export-attempt'] = '${{ github.run_attempt }}'; }))
+      .toEqual(['delete-export: the delete-export step isn\'t handed export-attempt: ${{ needs.export.outputs.attempt }}']);
+    expect(mutate((wf) => { step(wf, 'delete-export').with!['agent-result'] = 'skipped'; }))
+      .toEqual(['delete-export: the delete-export step isn\'t handed agent-result: ${{ needs.agent.result }}, so a partial re-run that skipped the agent stays green']);
+  });
+
+  it('a lane that exports runs one agent job', () => {
+    expect(mutate((wf) => {
+      wf.jobs.agent2 = { ...job(wf, 'agent') };
+      job(wf, 'delete-export').needs = ['export', 'agent', 'agent2'];
+    })).toEqual(['a lane that exports the store runs one agent job, not 2 (agent, agent2)']);
+  });
+});
