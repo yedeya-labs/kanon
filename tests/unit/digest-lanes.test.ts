@@ -191,7 +191,19 @@ describe('the weekly prompt names no adopter’s audience or product (plan 0004 
   it('says none of the reference adopter’s words', () => {
     const prompt = String(narrative(WEEKLY).with?.prompt);
     expect(prompt).not.toMatch(/co-founder|runway|PaymentIntents|Stripe|hydration|\bRLS\b|tax calculated|by card/i);
-    expect(prompt).toMatch(/stakeholder who follows the project from outside the\s+day-to-day work/);
+  });
+
+  it('names the audience the adoption record declares, read before the agent (kanon#218)', () => {
+    const steps = lane(WEEKLY).jobs.digest!.steps!;
+    const read = steps.findIndex((s) => s.id === 'audience');
+    expect(read, 'no audience step').toBeGreaterThanOrEqual(0);
+    expect(read).toBeLessThan(steps.findIndex((s) => s.id === 'agent'));
+    expect(steps[read]!.if, 'a malformed record must stop the run, not be skipped').toBeUndefined();
+    expect(steps[read]!['continue-on-error']).toBeUndefined();
+    expect(steps[read]!.run).toContain('audience="$(node "$KANON/scripts/digest-audience.mjs")"');
+    expect(steps[read]!.run).toContain('set -euo pipefail');
+    expect(steps[read]!.env).toMatchObject({ GH_TOKEN: '${{ github.token }}', GITHUB_REPOSITORY: '${{ github.repository }}' });
+    expect(String(narrative(WEEKLY).with?.prompt)).toContain('The reader is ${{ steps.audience.outputs.audience }}.');
   });
 });
 

@@ -519,6 +519,23 @@ describe.skipIf(!hasYq)('lane-check', () => {
         /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:6: `\.github\/workflows\/deploy-preview\.yml` isn't a workflow file name/));
   });
 
+  describe("the adoption record's weekly digest audience (K-LAYOUT-10, kanon#218)", () => {
+    const REC = 'docs/qa/adoption.md';
+    const AUDIENCE = '- **Weekly digest audience:** a co-founder tracking runway\n';
+    it('passes a declared audience beside the reference deploy', () => {
+      const t = adopter();
+      t.write(REC, `# Adoption record\n\n## Choices\n\n${AUDIENCE}- **Reference environment:** \`preview\`\n- **Reference deploy workflow:** \`deploy-preview.yml\`\n- **Reference deploy job:** \`ship\`\n`);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
+    it('refuses one declared twice, by name', () =>
+      red((t) => t.write(REC, `# Adoption record\n\n## Choices\n\n${AUDIENCE}${AUDIENCE}`),
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:6 repeats `Weekly digest audience`, already declared on line 5 \(K-LAYOUT-10\)/));
+    it('refuses one outside `## Choices`, by name', () =>
+      red((t) => t.write(REC, `# Adoption record\n\n${AUDIENCE}\n## Choices\n`),
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:3 declares the weekly digest's audience outside `## Choices`/));
+  });
+
   describe('the App register has a slug for every role a caller\'s lane runs as (K-LAYOUT-6)', () => {
     const REG = 'docs/qa/agent-identities.md';
     it('refuses a missing register', () => red((t) => t.rm(REG), 'the App register is missing'));
