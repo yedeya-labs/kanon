@@ -111,15 +111,15 @@ jobs:
           arm: weekly-digest agent
           app-slug: ""
 
-      # BEST-EFFORT, and the only best-effort step here. The numbers below are deterministic;
-      # this writes the one or two sentences of plain-language framing that turn "180
-      # commits" into something a reader outside the work can act on. If it fails, times out
-      # or writes nothing, the digest still posts, just without the prose.
       # Kanon's scripts, for the post below, and `KANON` for the agent's environment (kanon#110):
       # from this step's output, which no project file can rewrite.
       - uses: $/actions/kanon-path
         id: kanon
 
+      # BEST-EFFORT, and the only best-effort step here. The numbers below are deterministic;
+      # this writes the one or two sentences of plain-language framing that turn "180
+      # commits" into something a reader outside the work can act on. If it fails, times out
+      # or writes nothing, the digest still posts, just without the prose.
       - name: Write the week's narrative (non-fatal)
         id: agent
         continue-on-error: true
