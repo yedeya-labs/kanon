@@ -33,6 +33,9 @@ const DIRECT: Record<string, { step: string; perms: Perms }> = {
   // The round record reads the pull request and comments on it, which either permission allows.
   'agent-lead-revise.yml': { step: 'round-app-token', perms: { issues: 'write', 'pull-requests': 'write' } },
   'agent-implement-revise.yml': { step: 'round-app-token', perms: { issues: 'write', 'pull-requests': 'write' } },
+  // The Merger's whole grant, which `merge-gate.mjs` uses: it merges, comments and labels,
+  // re-dispatches the review lane, and reads the head's check runs and status contexts.
+  'agent-merge.yml': { step: 'app-token', perms: { contents: 'write', issues: 'write', 'pull-requests': 'write', actions: 'write', checks: 'read', statuses: 'read' } },
   // The crash recovery adds one label to the issue.
   'agent-implement.yml': { step: 'app-token', perms: { issues: 'write' } },
 };

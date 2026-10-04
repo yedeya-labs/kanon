@@ -16,8 +16,9 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Lead, brief | `agent-lead.yml` | Lead | `workflow_dispatch` with `mandate` and `context` |
 | Lead, split | `agent-lead-split.yml` | Lead | `issues: [labeled]`; `workflow_dispatch` with `issue` |
 | Rebase (resolve a conflict) | `agent-rebase.yml` | Implementer | `workflow_run` of your `CI` workflow, `types: [completed]`, `branches` your default branch; `schedule` (a daily floor); `workflow_dispatch` with `pr_number` |
+| Merge | `agent-merge.yml` | Merger | `pull_request_review: [submitted]`; `workflow_run` of your `CI` workflow, `types: [completed]`, `branches` your default branch; `schedule` (an hourly floor); `workflow_dispatch` with `pr_number` and `apply` |
 
-**What each caller maps, grants and needs.** Every caller maps its role's two App secrets and `CLAUDE_CODE_OAUTH_TOKEN`, by name. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
+**What each caller maps, grants and needs.** Every caller maps its role's two App secrets, by name, and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger runs no model, so its caller maps only the two. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
 
 <!-- lane-contract:table -->
 
@@ -33,10 +34,11 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | `agent-lead.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/lead-playbook.md` |
 | `agent-lead-split.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read` | `docs/qa/lead-playbook.md` |
 | `agent-rebase.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-merge.yml` | `MERGER_APP_ID`, `MERGER_APP_PRIVATE_KEY` | `contents: read` | none |
 
 <!-- /lane-contract:table -->
 
-Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile calls the blocks itself and installs nothing, so it never calls your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own.
+Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile calls the blocks itself and installs nothing, so it never calls your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own. The Merger calls no block and installs nothing: it runs `merge-gate.mjs` in your checkout, with the Merger's App token, and never calls your hook.
 
 **The review lane** has three things the others don't:
 - **Its caller sets `run-name`,** ending with `${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}`. A called workflow's `run-name` is ignored, and the review-run evidence finds a head's reviews by the last token of the run's title. `lane-check` holds the caller to it.
@@ -57,7 +59,7 @@ One commit gets one verdict. The lane skips a head the Reviewer has already revi
 
 ## Only members start a lane
 
-Every lane starts real work only when the actor of its triggering event is a member: GitHub's `author_association` of `OWNER`, `MEMBER` or `COLLABORATOR`, or one of your agent Apps listed in the App register (`K-AGENT-45`). The check is the first step of the lane's first job, [`scripts/lane-gate.mjs`](../scripts/lane-gate.mjs), before any token is minted, so it runs on a private repository exactly as on a public one (`K-PRIN-20`).
+Every lane starts real work only when the actor of its triggering event is a member: GitHub's `author_association` of `OWNER`, `MEMBER` or `COLLABORATOR`, or one of your agent Apps listed in the App register (`K-AGENT-45`). The check is the first step of the lane's first job, [`scripts/lane-gate.mjs`](../scripts/lane-gate.mjs), before any token is minted (the Merger, whose review and sweep start different jobs, runs it first in each), so it runs on a private repository exactly as on a public one (`K-PRIN-20`).
 
 | Event | The actor | How it is checked |
 |---|---|---|
@@ -122,7 +124,7 @@ jobs:
 
 <!-- x-release-please-end -->
 
-- **Four callers have fixed names** ([#53](https://github.com/yedeya-labs/kanon/issues/53)). GitHub reports a called lane's checks under its caller's `name:`, and the merge gate tells its own checks, and the review event's, from the rest by that name. Name the review lane's caller `Review (Reviewer)`, the merge-reconcile lane's `Merge Reconcile (Reviewer)`, the implement-revise lane's `Implement (Implementer) — revise` and your Merger's workflow `Merge (Merger)`, and give the revise and merge-reconcile callers' one job the ids `revise` and `reconcile`. Under another name the Merger waits on itself.
+- **Four callers have fixed names** ([#53](https://github.com/yedeya-labs/kanon/issues/53)). GitHub reports a called lane's checks under its caller's `name:`, and the merge gate tells its own checks, and the review event's, from the rest by that name. Name the review lane's caller `Review (Reviewer)`, the merge-reconcile lane's `Merge Reconcile (Reviewer)`, the implement-revise lane's `Implement (Implementer) — revise` and the Merger's caller `Merge (Merger)`, and give the revise and merge-reconcile callers' one job the ids `revise` and `reconcile`. Under another name the Merger waits on itself, so `lane-check` fails a Merger caller under any other name.
 - **Triggers are yours.** A reusable workflow can't declare its caller's events. The `github` context in a called workflow is the caller's, so the lane reads the triggering event exactly as it would in your own file.
 - **Inputs pass through, by name.** `with:` passes your `workflow_dispatch` inputs as `${{ inputs.<name> }}`, and nothing else. On the other triggers they arrive empty, which the lane expects.
 - **`permissions:` is the ceiling.** Each lane declares the permissions it needs, and a called workflow can only narrow what its caller grants. Grant at least what the lane declares, or the run fails to start.
@@ -224,6 +226,16 @@ A project closes only once its merges are deployed to your reference environment
 
 The reconciler reads it from your default branch, through [`scripts/lib/reference-deploy.mjs`](../scripts/lib/reference-deploy.mjs). Without it, the reconciler names the missing declaration when a project reaches its deploy phase, and that project can't close. A step of your own that needs the same names, such as a probe that your Lead's App can read Actions, prints one with `node "$KANON/scripts/reference-deploy.mjs" workflow` (or `job`, or `environment`), with `GITHUB_REPOSITORY` and a `gh` token in its environment. Add the declaration before, or with, the upgrade that brings it.
 
+## The Merger
+
+The merge lane merges a pull request with no person in the loop only inside the green zone (`K-MERGE-4`): an `agent:implement` or `agent:triage` pull request the Implementer authored, approved by the Reviewer on its current head, with every check green and no escalating path or label. It merges through the front door with the Merger's App, never as a ruleset bypass actor, and runs no model. Its caller:
+
+- **Is named `Merge (Merger)`.** `lane-check` fails it under any other name, because the lane would wait on its own check.
+- **Keeps four triggers.** A review is what it acts on. CI completing on your default branch is its sweep, because a merge there changes every other open pull request's mergeability. The hourly `schedule` is a floor for the day nothing merges. A dispatch with `pr_number` and `apply` is the only dry run: without `apply`, it reports each verdict and changes nothing.
+- **Grants `contents: read`.** Every write is the Merger's App token's.
+
+On a review, the lane first reads the Merger's and the Implementer's logins from the App register on your default branch, in a job of their own. That job starts no runner for a review on a pull request that is closed, a draft or carries neither lane label. The sweep needs no login, so CI's completion, the schedule and a dispatch start the Merger's own job alone, and bill one runner each.
+
 ## Checking it
 
-Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above or a review caller whose `run-name` doesn't end with the head SHA, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook; on a missing stack document or playbook, or a stack document without its four sections; on a malformed test-database declaration, escalation file, exemptions file or reference-deploy declaration; on a role missing from the App register; and on a missing Dependabot entry.
+Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook; on a missing stack document or playbook, or a stack document without its four sections; on a malformed test-database declaration, escalation file, exemptions file or reference-deploy declaration; on a role missing from the App register; and on a missing Dependabot entry.

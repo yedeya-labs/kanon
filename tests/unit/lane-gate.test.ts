@@ -41,6 +41,7 @@ const TRIGGERS: Record<string, Trigger[]> = {
   'agent-lead-split.yml': ['issue-label', 'dispatch'],
   'agent-lead.yml': ['dispatch'],
   'agent-merge-reconcile.yml': ['merged', 'review', 'dispatch'],
+  'agent-merge.yml': ['review', 'ci-finished', 'schedule', 'dispatch'],
   'agent-rebase.yml': ['ci-finished', 'schedule', 'dispatch'],
   'agent-review.yml': ['ci-finished', 'pr-target-label', 'pr-target-opened', 'dispatch'],
   'agent-triage.yml': ['issue-label', 'dispatch'],
@@ -58,34 +59,62 @@ const gateOf = (wf: Workflow): { jobId: string; index: number } | undefined => {
 
 const needsOf = (job: Job): string[] => [job.needs ?? []].flat();
 
-/** Every way the gate can be missing or bypassed, for one lane: empty when it is sound. */
+/**
+ * The lane's gates: the first job's `id: gate` step, and any later job's step that runs the
+ * membership gate itself (another lane's step may be called `gate` for a gate of its own, as
+ * the split lane's lineage gate is).
+ */
+const gatesOf = (wf: Workflow): { jobId: string; index: number }[] => {
+  const first = gateOf(wf);
+  if (!first) return [];
+  return [first, ...Object.entries(wf.jobs).filter(([jobId]) => jobId !== first.jobId).flatMap(([jobId, job]) => {
+    const index = (job.steps ?? []).findIndex((s) => s.id === 'gate' && /scripts\/lane-gate\.mjs/.test(s.run ?? ''));
+    return index >= 0 ? [{ jobId, index }] : [];
+  })];
+};
+
+/**
+ * Every way the gate can be missing or bypassed, for one lane: empty when it is sound.
+ *
+ * A lane has one gate, first in its first job, or — when its triggers start different jobs
+ * (the Merger's review path starts `logins`, its sweep starts `merge` alone, plan 0004 step 7)
+ * — one first in each job that can start without another gated job's verdict. Either way:
+ * every gate is the gate step, unconditional, after `kanon-path` alone; every later step in a
+ * gate's job skips on a refusal; and every job without a gate waits for a gated job and reads
+ * its verdict in its `if:`.
+ */
 const gateProblems = (wf: Workflow): string[] => {
   const problems: string[] = [];
-  const gate = gateOf(wf);
-  if (!gate) return ['no step with `id: gate`'];
-  const job = wf.jobs[gate.jobId]!;
-  const steps = job.steps ?? [];
-  const step = steps[gate.index]!;
-  if (!/^node "\$KANON\/scripts\/lane-gate\.mjs"\s*$/.test(step.run ?? '')) problems.push('the gate step does not run scripts/lane-gate.mjs');
-  if (step.if) problems.push('the gate step is itself conditional');
-  if (step.env?.GH_TOKEN !== '${{ github.token }}') problems.push('the gate step does not read with the workflow token');
-  const before = steps.slice(0, gate.index);
-  if (before.length !== 1 || before[0]!.uses !== '$/actions/kanon-path') problems.push('something other than kanon-path runs before the gate');
-  if (needsOf(job).length) problems.push(`the gate's job ${gate.jobId} waits for another job`);
+  const gates = gatesOf(wf);
+  if (!gates.length) return ['no step with `id: gate`'];
+  const gateJobs = new Set(gates.map((g) => g.jobId));
+  for (const gate of gates) {
+    const job = wf.jobs[gate.jobId]!;
+    const steps = job.steps ?? [];
+    const step = steps[gate.index]!;
+    if (!/^node "\$KANON\/scripts\/lane-gate\.mjs"\s*$/.test(step.run ?? '')) problems.push('the gate step does not run scripts/lane-gate.mjs');
+    if (step.if) problems.push('the gate step is itself conditional');
+    if (step.env?.GH_TOKEN !== '${{ github.token }}') problems.push('the gate step does not read with the workflow token');
+    const before = steps.slice(0, gate.index);
+    if (before.length !== 1 || before[0]!.uses !== '$/actions/kanon-path') problems.push('something other than kanon-path runs before the gate');
+    // A gate's job may wait only for another gate's job: anything else would run first.
+    const waits = needsOf(job).filter((n) => !gateJobs.has(n));
+    if (waits.length) problems.push(`the gate's job ${gate.jobId} waits for another job`);
 
-  // Every later step in the gate's job is skipped on a refusal: it reads the gate's
-  // output, or the output of a step that does.
-  const gated = new Set(['gate']);
-  for (const s of steps.slice(gate.index + 1)) {
-    const reads = [...String(s.if ?? '').matchAll(/steps\.([\w-]+)\.outputs\./g)].map((m) => m[1]!);
-    if (!reads.some((id) => gated.has(id))) problems.push(`step "${s.name ?? s.uses}" runs whether or not the gate admitted`);
-    else if (s.id) gated.add(s.id);
+    // Every later step in the gate's job is skipped on a refusal: it reads the gate's
+    // output, or the output of a step that does.
+    const gated = new Set(['gate']);
+    for (const s of steps.slice(gate.index + 1)) {
+      const reads = [...String(s.if ?? '').matchAll(/steps\.([\w-]+)\.outputs\./g)].map((m) => m[1]!);
+      if (!reads.some((id) => gated.has(id))) problems.push(`step "${s.name ?? s.uses}" runs whether or not the gate admitted`);
+      else if (s.id) gated.add(s.id);
+    }
   }
 
-  // Every other job waits for a gated job and reads its result or outputs in its `if`.
-  const gatedJobs = new Set([gate.jobId]);
+  // Every job without a gate waits for a gated job and reads its result or outputs in its `if`.
+  const gatedJobs = new Set(gateJobs);
   let changed = true;
-  const rest = Object.entries(wf.jobs).filter(([id]) => id !== gate.jobId);
+  const rest = Object.entries(wf.jobs).filter(([id]) => !gateJobs.has(id));
   while (changed) {
     changed = false;
     for (const [id, j] of rest) {
@@ -98,15 +127,29 @@ const gateProblems = (wf: Workflow): string[] => {
     }
   }
   for (const [id] of rest) if (!gatedJobs.has(id)) problems.push(`job ${id} can run without the gate admitting`);
-
-  // A refusal leaves every output of the gate's job EMPTY, and an empty output passes any
-  // `!=` test: `needs.filter.outputs.prs != '[]'` is true on a refused event. So a job that
-  // tests one of that job's outputs with `!=` must also require the verdict itself.
+  // A status function lets a job start when the job it needs was SKIPPED, so the gate there
+  // never ran. Such a job is gated only if its `if:` requires that job to have run (a
+  // non-empty output, or a `success` or `failure` result) and never admits it skipped;
+  // otherwise it holds a gate of its own (the Merger's sweep starts `merge` with `logins`
+  // skipped, plan 0004 step 7).
   for (const [id, j] of rest) {
     const cond = String(j.if ?? '');
-    const negated = new RegExp(`needs\\.${gate.jobId}\\.outputs\\.[\\w-]+\\s*!=`).test(cond);
-    const verdict = new RegExp(`needs\\.${gate.jobId}\\.outputs\\.member\\s*==\\s*'true'\\s*&&`).test(cond);
-    if (negated && !verdict) problems.push(`job ${id} tests an output of ${gate.jobId} with != without requiring its member verdict first`);
+    if (!/\b(?:always|cancelled|failure)\(\)/.test(cond)) continue;
+    const admitsSkipped = /needs\.[\w-]+\.result\s*==\s*'skipped'/.test(cond);
+    const requiresRan = /needs\.[\w-]+\.(?:outputs\.[\w-]+\s*==\s*'[^']+'|result\s*==\s*'(?:success|failure)')/.test(cond);
+    if (admitsSkipped || !requiresRan) problems.push(`job ${id} can start with the job it needs skipped, and holds no gate of its own`);
+  }
+
+  // A refusal leaves every output of a gate's job EMPTY, and an empty output passes any `!=`
+  // test: `needs.filter.outputs.prs != '[]'` is true on a refused event. So a job that tests
+  // one of that job's outputs with `!=` must also require the verdict itself.
+  for (const gateJob of gateJobs) {
+    for (const [id, j] of Object.entries(wf.jobs).filter(([jid]) => jid !== gateJob)) {
+      const cond = String(j.if ?? '');
+      const negated = new RegExp(`needs\\.${gateJob}\\.outputs\\.[\\w-]+\\s*!=`).test(cond);
+      const verdict = new RegExp(`needs\\.${gateJob}\\.outputs\\.member\\s*==\\s*'true'\\s*&&`).test(cond);
+      if (negated && !verdict) problems.push(`job ${id} tests an output of ${gateJob} with != without requiring its member verdict first`);
+    }
   }
   return problems;
 };
@@ -148,6 +191,14 @@ describe('every lane carries the membership gate (K-AGENT-45)', () => {
       const wf = lane('agent-rebase.yml');
       wf.jobs.resolve!.if = "needs.filter.outputs.prs != '[]'";
       expect(gateProblems(wf)).toEqual(['job resolve tests an output of filter with != without requiring its member verdict first']);
+    });
+    it('a job that can start with its gated job skipped, and holds no gate of its own', () => {
+      // The Merger's sweep path: `merge` starts with `logins` skipped, so its own gate is the
+      // only one that runs.
+      const wf = lane('agent-merge.yml');
+      wf.jobs.merge!.steps = wf.jobs.merge!.steps!.filter((st) => st.id !== 'gate' && st.uses !== '$/actions/kanon-path');
+      for (const st of wf.jobs.merge!.steps) if (st.if === "steps.gate.outputs.member == 'true'") delete st.if;
+      expect(gateProblems(wf)).toContain('job merge can start with the job it needs skipped, and holds no gate of its own');
     });
     it('a job reading a gated job it does not need', () => {
       const wf = lane('agent-implement.yml');

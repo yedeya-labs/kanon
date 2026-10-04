@@ -285,6 +285,44 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => { extra(t, LANES[1]!); t.edit(LANES[1]!, (d) => { (d as Caller).permissions!.issues = 'read'; }); }, 'needs issues: write'));
   });
 
+  describe('the Merger lane (plan 0004 step 7)', () => {
+    const MERGE = '.github/workflows/agent-merge.yml';
+    const extra = (t: Tree) => t.write(MERGE, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-merge.yml'), 'utf8'));
+    const merger = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Merger | \`example-merger\` | Read & write | Read & write | Read & write | No access |\n`);
+    it('accepts the caller, named `Merge (Merger)`, with the Merger registered', () => {
+      const t = adopter();
+      extra(t);
+      merger(t);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('5 lane caller(s) pass');
+    });
+    it('refuses the caller while the register has no Merger', () =>
+      red((t) => { extra(t); }, 'lists the role Merger 0 times'));
+    // The rule the step adds: `merge-gate.mjs` tells its own checks from the rest by the caller's
+    // name, so under another name the Merger waits on itself.
+    it('refuses the caller under any other name', () =>
+      red((t) => { extra(t); merger(t); t.edit(MERGE, (d) => { d.name = 'Merge'; }); },
+        'agent-merge.yml,title=lane-check::its name must be `Merge (Merger)`, not `Merge`'));
+    it('refuses the caller under the old persona name', () =>
+      red((t) => { extra(t); merger(t); t.edit(MERGE, (d) => { d.name = 'Merge (Joshua)'; }); }, 'its name must be `Merge (Merger)`'));
+    it('refuses the caller with no name, whose checks GitHub reports under its path', () =>
+      red((t) => { extra(t); merger(t); t.edit(MERGE, (d) => { delete d.name; }); }, 'its name must be `Merge (Merger)`, not ``'));
+    it('holds no other caller to a name: their lanes ask for none', () => {
+      const t = adopter();
+      t.edit(TRIAGE, (d) => { d.name = 'Anything at all'; });
+      expect(check(t).status).toBe(0);
+    });
+    it('refuses a caller that passes `apply` as a setting rather than its own input', () =>
+      red((t) => { extra(t); merger(t); t.edit(MERGE, (d) => { (job(d).with as Record<string, string>).apply = 'true'; }); }, 'passes `apply: true`'));
+    it('refuses a caller that maps the Claude token, which this lane does not take', () =>
+      red((t) => {
+        extra(t);
+        merger(t);
+        t.edit(MERGE, (d) => { (job(d).secrets as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN = '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}'; });
+      }, 'the Kanon lane agent-merge takes exactly [MERGER_APP_ID,MERGER_APP_PRIVATE_KEY]'));
+  });
+
   describe('the project-setup hook (§5)', () => {
     const HOOK = '.github/actions/project-setup/action.yml';
     it('refuses a missing hook', () => red((t) => t.rm(HOOK), 'the project-setup hook is missing'));

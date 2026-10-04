@@ -1,0 +1,34 @@
+# A trigger-only caller of Kanon's Merger lane, as an adopter writes it (plan 0004 step 7).
+name: Merge (Merger)
+
+on:
+  pull_request_review:
+    types: [submitted]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: A single PR to consider (blank = sweep every open PR)
+        required: false
+      apply:
+        description: Actually merge, comment and label (unchecked = report only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    uses: yedeya-labs/kanon/.github/workflows/agent-merge.yml@v1.2.3
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      apply: ${{ inputs.apply }}
+    secrets:
+      MERGER_APP_ID: ${{ secrets.MERGER_APP_ID }}
+      MERGER_APP_PRIVATE_KEY: ${{ secrets.MERGER_APP_PRIVATE_KEY }}
