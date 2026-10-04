@@ -88,6 +88,8 @@ A login ending in `[bot]` is judged by the App register alone, read from your de
 
 **A dispatch made with the workflow token is refused.** Its actor is `github-actions[bot]`, which is not in your App register. So no lane starts another that way. When an implement run hits its turn or budget cap, its crash recovery adds `qa:needs-split` with the Implementer's App token, narrowed to Issues write, and that label's own event starts the split lane through the gate as a registered App. Its comment stays on the workflow token, so it never reads as the Implementer's.
 
+**An implement run that ends green but leaves nothing turns red** ([#181](https://github.com/yedeya-labs/kanon/issues/181)). After a successful implement job, the lane checks what the run left: an open pull request that closes the issue, a `<type>/<number>-` branch pushed during the run, or a comment from the Implementer since the run started. If there is none, the run fails with the error `implement run left nothing`, and crash recovery takes over. For a project member that means a retry, posted as `github-actions` and capped like a crash's. An issue outside a project keeps its label, and the dispatch sweep re-dispatches it as before. A run that commented is never treated as empty, because the comment explains why the agent stopped. The revise lane turns a green run red too, if it pushed nothing and left no reply marker. Nothing retries that run.
+
 ## The caller
 
 A caller holds `name`, `on`, `permissions` and one job, and nothing else (and `run-name`, which the review lane asks for):

@@ -244,7 +244,9 @@ describe('every lane carries the membership gate (K-AGENT-45)', () => {
     it('a job behind a held job that starts on its failure or skip anyway', () => {
       const wf = lane('agent-implement.yml');
       wf.jobs['crash-recovery']!.if = "always() && needs.implement.result != 'success'";
-      expect(gateProblems(wf)).toEqual(['job crash-recovery runs with no gate admitting, when implement skipped; filter success (member=false)']);
+      // `empty-check` (kanon#181) is skipped too, behind the same held `implement`; the
+      // witness names it, and the job that starts anyway is still the one caught.
+      expect(gateProblems(wf)).toEqual(['job crash-recovery runs with no gate admitting, when implement skipped; empty-check skipped; filter success (member=false)']);
     });
     it('a condition it cannot read fails by name, never passes', () => {
       const wf = lane('agent-triage.yml');
@@ -265,7 +267,10 @@ describe('every lane carries the membership gate (K-AGENT-45)', () => {
       wf.jobs.implement!.if = "needs.filter.outputs.member == 'true' || github.event_name == 'workflow_dispatch'";
       expect(gateProblems(wf)).toEqual([
         "job implement runs with no gate admitting, when filter success (member=false); true: `github.event_name == 'workflow_dispatch'`",
-        'job crash-recovery runs with no gate admitting, when implement failure; filter success (member=false)',
+        // The taint reaches EVERY job downstream of the ungated one: `empty-check` (kanon#181)
+        // directly, and `crash-recovery` through it as well as through `implement`.
+        'job empty-check runs with no gate admitting, when implement success; filter success (member=false)',
+        "job crash-recovery runs with no gate admitting, when implement success; empty-check success; filter failure; true: `needs.empty-check.outputs.empty == 'true'`",
       ]);
     });
     it('a job reading a gated job it does not need', () => {
