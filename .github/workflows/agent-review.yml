@@ -1123,9 +1123,24 @@ jobs:
     # `cancel-in-progress: false` — QUEUE, do not cancel. Cancelling would kill a review
     # mid-turn and pay for it twice; queueing lets the running review finish, and the
     # `claim` step below then declines the queued one in seconds, before any agent
-    # spend, because the verdict it would post now exists. (Actions keeps one pending
-    # run per group, so a third arrival replaces the second while it is still queued —
-    # also free.)
+    # spend, because the verdict it would post now exists.
+    #
+    # A THIRD ARRIVAL EVICTS THE SECOND, AND THAT LOSES NOTHING (kanon#167). Actions
+    # keeps one pending run per group, so a third run on the head replaces the queued
+    # second, which ends `cancelled` without reaching `claim`. The run evicted may be an
+    # explicit human re-label, and the run replacing it (a recovery dispatch, say) is not
+    # explicit, so the question is whether `explicit` buys the evicted run anything the
+    # replacement lacks. Since kanon#88 it buys nothing: `claim` runs the same two checks
+    # for an explicit run as for any other and changes only the message it declines with.
+    # The replacement started later, so every verdict it counts as a sibling the evicted
+    # run would have counted too: whenever the evicted run would have reviewed, the
+    # replacement reviews. When it declines, it declines on a verdict posted after the
+    # human's request, which `claim` already treats as the answer to that request.
+    # Putting `explicit` in the key was considered and declined: it would give an
+    # explicit run its own group, so it would no longer queue behind the running
+    # review, and two groups on one head is RA-2208's two `APPROVED` events. If `claim`
+    # ever exempts an explicit run again, this eviction drops the exemption and this
+    # paragraph is wrong.
     concurrency:
       group: qa-review-head-${{ needs.filter.outputs.pr }}-${{ needs.filter.outputs.head_sha }}
       cancel-in-progress: false

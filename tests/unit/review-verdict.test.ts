@@ -580,6 +580,31 @@ esac
     expect(r.proceed).toBe('false');
   });
 
+  // kanon#167: Actions keeps one pending run per group, so a third arrival evicts a queued
+  // explicit re-label before it reaches this step. That loses nothing only while `explicit`
+  // decides nothing here, so that is what is asserted: the same decision for both, on
+  // every shape above. If an exemption returns, this fails and the job's concurrency
+  // comment has to be re-argued.
+  it('decides an explicit run exactly as any other, so evicting one from the queue loses nothing (kanon#167)', () => {
+    const shapes = [
+      {},
+      { reviews: [at('APPROVED', '2026-09-21T15:13:55Z')] },
+      { reviews: [at('CHANGES_REQUESTED', '2026-09-21T15:13:55Z')] },
+      { reviews: [at('APPROVED', '2026-09-21T15:00:00Z')] },
+      { headNow: OLD },
+      { headNow: null },
+      { startedAt: null },
+      { reviewsFail: true },
+    ];
+    for (const shape of shapes) {
+      expect(claimRun({ ...shape, explicit: 'true' }).proceed, JSON.stringify(shape))
+        .toBe(claimRun({ ...shape, explicit: 'false' }).proceed);
+    }
+    // And `explicit` is not in the key: a group of its own would not queue behind the
+    // running review, which is RA-2208's two verdicts on one head.
+    expect(review.concurrency.group).not.toContain('explicit');
+  });
+
   it('reviews when any read fails — this is de-duplication, not a gate', () => {
     expect(claimRun({ reviewsFail: true, reviews: [at('APPROVED', '2026-09-21T15:13:55Z')] }).proceed).toBe('true');
     expect(claimRun({ startedAt: null }).proceed).toBe('true');
