@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { qaToolingImport, referenceCorpus } from '../../scripts/spec-lib.mjs';
 import { mentionsWithoutTitle } from '../../scripts/spec-coverage.mjs';
 import { readsCodeComments } from '../../scripts/citation-shift.mjs';
+import { UNDECLARED } from '../../scripts/lib/code-areas.mjs';
 import { ROOT } from './helpers/adopter.js';
 
 /**
@@ -61,8 +62,8 @@ describe('qaToolingImport reads the declared pipeline-code directories', () => {
 
   it("citation-shift reads a test's comments unless it imports declared pipeline code", () => {
     const text = STATIC('../../tools/pipeline/guard.mjs');
-    expect(readsCodeComments('tests/unit/a.test.ts', text, ['tools/pipeline/'])).toBe(false);
-    expect(readsCodeComments('tests/unit/a.test.ts', text, ['scripts/pipeline/'])).toBe(true);
+    expect(readsCodeComments('tests/unit/a.test.ts', text, ['tools/pipeline/'], UNDECLARED)).toBe(false);
+    expect(readsCodeComments('tests/unit/a.test.ts', text, ['scripts/pipeline/'], UNDECLARED)).toBe(true);
   });
 
   it('referenceCorpus leaves out a test that imports declared pipeline code, and only that', () => {

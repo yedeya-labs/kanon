@@ -48,7 +48,9 @@
 //   • Code and string literals. Only a COMMENT is a claim; `expect(err).toContain(
 //     'services/payments.ts:4')` is a fixture (`commentCoordinates`).
 //
-// CODE COMMENTS ARE READ TOO (RA-2293), under `e2e/`, `tests/`, `src/`, `scripts/` and
+// CODE COMMENTS ARE READ TOO (RA-2293), in the code and test trees the stack document
+// declares under `## Code areas` (`K-LAYOUT-17`, kanon#54), or in the whole repository when it
+// declares none: the reference adopter's are `e2e/`, `tests/`, `src/`, `scripts/` and
 // `.github/scripts/` (kanon#180 — adopters keep workflow helpers there, and a coordinate in
 // one went stale after merge while its copy in a test was caught), with
 // or without backticks — RA-1384's own third example was one: `e2e/helpers.ts` says the
@@ -91,6 +93,7 @@ import { pathToFileURL } from 'node:url';
 import { PROJECTS_TREE, SOURCE_EXT, coordinatesIn, isOracleSpec, resolvePath } from './citation-guard.mjs';
 import { qaToolingImport } from './spec-lib.mjs';
 import { DeclarationError, ESCALATION_FILE, parseEscalationFile, readEscalationFile } from './lib/escalation-paths.mjs';
+import { STACK_FILE, UNDECLARED, codeTrees, isCodePath, isTestPath, parseCodeAreas, readCodeAreas } from './lib/code-areas.mjs';
 import { TABLE_EXT, conventionFor } from './lib/test-conventions.mjs';
 
 /**
@@ -100,20 +103,19 @@ import { TABLE_EXT, conventionFor } from './lib/test-conventions.mjs';
  * @typedef {{at: string, doc: string, line: number, citation: string, path: string, kind: 'doc'|'code'}} Edited
  */
 
-/** Where a CODE COMMENT can carry a coordinate worth mapping (RA-2293). */
-// `.github/scripts/` since kanon#180: a PR shifted a workflow block, the guard caught the copy
-// of its coordinate in a test, and the same coordinate in a `.github/scripts/*.mjs` comment
-// went stale on merge. Nothing there quoted an old coordinate on purpose when it was added
-// (Kanon's and the reference adopter's trees were read, 2026-10-04); an adopter whose
-// workflow scripts ARE its pipeline code declares them under `## Pipeline code`, and the
-// exclusion below applies to them as to any other tree.
-export const CODE_TREES = ['e2e/', 'tests/', 'src/', 'scripts/', '.github/scripts/'];
+// WHERE A CODE COMMENT can carry a coordinate worth mapping (RA-2293): the project's code and
+// test trees, as `scripts/lib/code-areas.mjs` reads them from the stack document (kanon#54).
+// They were a constant here, `['e2e/', 'tests/', 'src/', 'scripts/', '.github/scripts/']`, the
+// reference adopter's tree; `.github/scripts/` joined it in kanon#180, after a PR shifted a
+// workflow block and the same coordinate in a `.github/scripts/*.mjs` comment went stale on
+// merge. An adopter whose workflow scripts ARE its pipeline code declares them under
+// `## Pipeline code`, and the exclusion below applies to them as to any other tree.
 // The languages of the per-language table (`scripts/lib/test-conventions.mjs`, kanon#20),
 // whose comment syntax this file knows, plus `cjs`, which is JavaScript too.
 const CODE_EXT = new RegExp(`\\.(?:${TABLE_EXT}|cjs)$`);
 
 /**
- * Is this code file read for comment coordinates? Everything under `CODE_TREES` EXCEPT
+ * Is this code file read for comment coordinates? Everything in the declared code areas EXCEPT
  * the QA tooling's own source (the directories the adopter declares under `## Pipeline
  * code`, kanon#54) and its tests (a test that imports that code or Kanon's library —
  * `qaToolingImport`, the rule the spec-id sweeps use, built from the same declaration). Their comments
@@ -122,12 +124,13 @@ const CODE_EXT = new RegExp(`\\.(?:${TABLE_EXT}|cjs)$`);
  * third criterion forbids retargeting them. Both halves are properties of the file,
  * not a list of names (RA-1214), so the next guard qualifies the day it is written.
  */
-export const readsCodeComments = (path, text, pipelineDirs) => {
+export const readsCodeComments = (path, text, pipelineDirs, areas) => {
   if (!Array.isArray(pipelineDirs)) throw new TypeError('readsCodeComments needs the declared pipeline-code directories');
-  return CODE_TREES.some((t) => path.startsWith(t)) &&
+  if (!areas) throw new TypeError('readsCodeComments needs the declared code areas (K-LAYOUT-17)');
+  return isCodePath(path, areas) &&
   CODE_EXT.test(path) &&
   !pipelineDirs.some((d) => path.startsWith(d)) &&
-  !(/^(tests|e2e)\//.test(path) && qaToolingImport(pipelineDirs).test(text));
+  !(isTestPath(path, areas) && qaToolingImport(pipelineDirs).test(text));
 };
 
 // A coordinate in a code comment is written with or without backticks — the corpus has
@@ -372,6 +375,7 @@ const main = () => {
   // Read from the tree being checked, and a missing or malformed declaration stops the run
   // by name rather than reading every pipeline comment as a claim.
   let pipelineDirs;
+  let areas;
   try {
     const declared = head
       ? (() => {
@@ -381,6 +385,14 @@ const main = () => {
         })()
       : readEscalationFile();
     pipelineDirs = declared.pipeline.map(({ dir }) => dir);
+    // The code areas, from the same tree: a stack document with no `## Code areas` declares
+    // none, and the whole repository is read (`code-areas.mjs`).
+    areas = head
+      ? (() => {
+          const text = tryGit(['show', `${head}:${STACK_FILE}`]);
+          return text === null ? UNDECLARED : parseCodeAreas(text);
+        })()
+      : readCodeAreas();
   } catch (e) {
     console.error(`citation-shift: ${e.message}`);
     process.exitCode = 1;
@@ -393,9 +405,9 @@ const main = () => {
   const readHead = head ? (p) => git(['show', `${head}:${p}`]) : (p) => readFileSync(p, 'utf8');
   // Code files are read only when they contain something coordinate-shaped at all — a
   // `git grep` prefilter, so the replay (`--head`) does not `git show` every source file.
-  const grep = tryGit(['grep', '-l', '-E', `\\.${SOURCE_EXT.replace('(?:', '(')}:[0-9]`, ...(head ? [head] : []), '--', ...CODE_TREES]) ?? '';
+  const grep = tryGit(['grep', '-l', '-E', `\\.${SOURCE_EXT.replace('(?:', '(')}:[0-9]`, ...(head ? [head] : []), '--', ...(codeTrees(areas) ?? [])]) ?? '';
   const code = grep.split('\n').filter(Boolean).map((l) => (head ? l.slice(head.length + 1) : l))
-    .filter((f) => readsCodeComments(f, readHead(f), pipelineDirs));
+    .filter((f) => readsCodeComments(f, readHead(f), pipelineDirs, areas));
   const r = shiftedCoordinates({ docs, code, readHead, trackedHead, trackedBase, diff });
 
   if (FIX && r.moved.length) {

@@ -290,13 +290,14 @@ if [ -f "$DATABASE" ]; then
   fi
 fi
 
-# ── The escalation and exemptions files (K-LAYOUT-8, K-LAYOUT-15; kanon#153), and the ────
-# ── reference environment's deploy in the adoption record (K-LAYOUT-10, plan 0004 P6) ─────
+# ── The escalation and exemptions files (K-LAYOUT-8, K-LAYOUT-15; kanon#153), the ─────────
+# ── reference environment's deploy in the adoption record (K-LAYOUT-10, plan 0004 P6), ────
+# ── and the code areas in the stack document (K-LAYOUT-17, kanon#54) ──────────────────────
 # Read by the library's own readers from this Kanon tree, so a file this passes is one the
 # guards, the Merger and the reconciler accept. A missing file is the reader's to fail (each
 # rule says so), so only a file that exists is read here. A record that declares no reference
 # environment passes: the reconciler fails on it when a project reaches its deploy phase.
-for d in escalation-paths exemptions adoption; do
+for d in escalation-paths exemptions adoption stack; do
   f="docs/qa/$d.md"
   [ -f "$f" ] || continue
   command -v node >/dev/null 2>&1 || die "needs node on PATH to read $f; the action puts Kanon's own there"

@@ -3,6 +3,7 @@ import {
   CONVENTIONS, RUNNERS, conventionFor, goMentions, goTestFunctions, goTitles, interpretGoJson, interpretJunit,
   isTestFile, pythonMentions, pythonTitles, runnerFor,
 } from '../../scripts/lib/test-conventions.mjs';
+import { UNDECLARED } from '../../scripts/lib/code-areas.mjs';
 import { auditPaths } from '../../scripts/doc-path-guard.mjs';
 
 /**
@@ -231,13 +232,13 @@ describe('doc-path-guard reads Python and Go source as it reads JavaScript (kano
     ['internal/orders/core.go', '// The design is in docs/missing.md.\n'],
     ['src/orders/core.ts', '// The design is in docs/missing.md.\n'],
   ])('%s: a path to a file that does not exist is a finding', (file, text) => {
-    const r = auditPaths([file], () => text, [file], []);
+    const r = auditPaths([file], () => text, [file], [], UNDECLARED);
     expect(r.findings).toEqual([{ at: `${file}:1`, path: 'docs/missing.md', rule: 'text' }]);
   });
 
   it('and a cited Python script that exists is not', () => {
-    const r = auditPaths(['README.md'], () => 'Run `scripts/seed.py`.\n', ['README.md', 'scripts/seed.py'], []);
+    const r = auditPaths(['README.md'], () => 'Run `scripts/seed.py`.\n', ['README.md', 'scripts/seed.py'], [], UNDECLARED);
     expect(r.findings).toEqual([]);
-    expect(auditPaths(['README.md'], () => 'Run `scripts/seed.py`.\n', ['README.md'], []).findings).toHaveLength(1);
+    expect(auditPaths(['README.md'], () => 'Run `scripts/seed.py`.\n', ['README.md'], [], UNDECLARED).findings).toHaveLength(1);
   });
 });

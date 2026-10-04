@@ -25,3 +25,14 @@ Nothing to isolate: Kanon stores no data. The isolation Kanon cares about is bet
 
 - `package-lock.json`: take the default branch's, then run `npm install` so the lock is derived rather than merged.
 - `CHANGELOG.md`: release-please's. Take the default branch's and drop your side's entry.
+
+## Code areas
+
+Kanon's own source and tests (`K-LAYOUT-17`). `citation-shift` reads comments in each, `doc-path-guard` reads no test tree's files as claims, and the spec-id reference corpus walks them all.
+
+- `scripts/` — code: the library's scripts, which the lanes and the guards run
+- `actions/` — code: the composite actions and their scripts
+- `cli/` — code: the `kanon` command
+- `infra/` — code: the QA store's AWS implementation
+- `.github/scripts/` — code: the scripts Kanon's own workflows run
+- `tests/` — tests: the library and unit tests, and their fixtures

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DeclarationError, parseExemptions, readExemptions } from '../../scripts/lib/exemptions.mjs';
+import { UNDECLARED } from '../../scripts/lib/code-areas.mjs';
 import { auditPaths, reportFindings } from '../../scripts/doc-path-guard.mjs';
 
 /**
@@ -103,9 +104,9 @@ describe('doc-path-guard exempts exactly the declared mentions (kanon#54)', () =
 
   it('exempts a declared (file, path) pair, and no other file or path', () => {
     const exemptions = readExemptions().mentions;
-    expect(auditPaths(['docs/history.md'], () => text, ['docs/history.md'], exemptions)).toMatchObject({ findings: [], exemptionsUsed: new Set([0]) });
-    expect(auditPaths(['docs/other.md'], () => text, ['docs/other.md'], exemptions).findings).toHaveLength(1);
-    expect(auditPaths(['docs/history.md'], () => text, ['docs/history.md'], []).findings).toHaveLength(1);
+    expect(auditPaths(['docs/history.md'], () => text, ['docs/history.md'], exemptions, UNDECLARED)).toMatchObject({ findings: [], exemptionsUsed: new Set([0]) });
+    expect(auditPaths(['docs/other.md'], () => text, ['docs/other.md'], exemptions, UNDECLARED).findings).toHaveLength(1);
+    expect(auditPaths(['docs/history.md'], () => text, ['docs/history.md'], [], UNDECLARED).findings).toHaveLength(1);
   });
 
   it('refuses to audit with no exemptions argument, rather than run with none', () => {
@@ -120,7 +121,7 @@ describe('doc-path-guard gives each rule a remedy that works for it (kanon#176)'
   const tracked = ['docs/a.md', 'docs/b.md'];
   const target = '# B\n\n## Real heading\n';
   const findingsFor = (text: string) =>
-    auditPaths(['docs/a.md'], (p: string) => (p === 'docs/a.md' ? text : target), tracked, []).findings;
+    auditPaths(['docs/a.md'], (p: string) => (p === 'docs/a.md' ? text : target), tracked, [], UNDECLARED).findings;
   const cases = {
     text: 'See `docs/missing.md`.\n',
     link: 'See [it](./missing.md).\n',
@@ -151,7 +152,7 @@ describe('doc-path-guard gives each rule a remedy that works for it (kanon#176)'
   it('an exemption row does not silence an anchor finding, which is why it is never offered for one', () => {
     const anchor = 'See [it](./b.md#gone-heading).\n';
     const row = [{ file: 'docs/a.md', path: './b.md#gone-heading', line: 1 }];
-    const r = auditPaths(['docs/a.md'], (p: string) => (p === 'docs/a.md' ? anchor : target), tracked, row);
+    const r = auditPaths(['docs/a.md'], (p: string) => (p === 'docs/a.md' ? anchor : target), tracked, row, UNDECLARED);
     expect(r.findings).toHaveLength(1);
     expect(r.exemptionsUsed.size).toBe(0);
   });

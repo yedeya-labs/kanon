@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { commentCoordinates, lineMapper, parseDiff, readsCodeComments, retarget, shiftedCoordinates } from '../../scripts/citation-shift.mjs';
+import { commentCoordinates, lineMapper, parseDiff, readsCodeComments as readsWith, retarget, shiftedCoordinates } from '../../scripts/citation-shift.mjs';
+import { UNDECLARED, parseCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { ROOT } from './helpers/adopter.js';
 
 /**
@@ -235,6 +236,13 @@ describe('code comments are read too (RA-2293)', () => {
 
   // The adopter's declared pipeline code (`## Pipeline code` in docs/qa/escalation-paths.md, kanon#54).
   const PIPELINE = ['scripts/qa/'];
+  // The reference adopter's code areas, as its stack document declares them (`## Code areas`,
+  // K-LAYOUT-17): the trees this guard read before they were declared.
+  const AREAS = parseCodeAreas([
+    '## Code areas', '- `src/` — code: the application', '- `scripts/` — code: scripts',
+    '- `.github/scripts/` — code: workflow helpers', '- `tests/` — tests: unit', '- `e2e/` — tests: browser',
+  ].join('\n'));
+  const readsCodeComments = (path: string, text: string, dirs?: string[], areas = AREAS) => readsWith(path, text, dirs, areas);
 
   it("excludes the QA tooling's own source and tests by what they ARE, not by name (RA-1384 criterion 3)", () => {
     expect(readsCodeComments('src/server/services/payments.ts', '', PIPELINE)).toBe(true);
@@ -262,6 +270,21 @@ describe('code comments are read too (RA-2293)', () => {
     expect(readsCodeComments('.github/scripts/weekly-digest.mjs', '', ['.github/scripts/'])).toBe(false);
     // Only the scripts tree: a workflow file is YAML, not a code comment this reads.
     expect(readsCodeComments('.github/workflows/ci.yml', '', PIPELINE)).toBe(false);
+  });
+
+  it('reads the declared code areas, and the whole repository when none is declared (kanon#54)', () => {
+    const custom = parseCodeAreas('## Code areas\n- `lib/` — code: the package\n- `spec/` — tests: the suite\n');
+    expect(readsCodeComments('lib/orders.ts', '', [], custom)).toBe(true);
+    expect(readsCodeComments('src/orders.ts', '', [], custom)).toBe(false);
+    // A test that imports the pipeline is a tooling test in a declared test tree; one that doesn't is read.
+    expect(readsCodeComments('spec/x.test.ts', "import { x } from '../scripts/qa/a.mjs';", PIPELINE, custom)).toBe(false);
+    expect(readsCodeComments('spec/x.test.ts', "import { x } from '../lib/x';", PIPELINE, custom)).toBe(true);
+    // Undeclared: every code file, and a test is what its language calls one.
+    expect(readsCodeComments('lib/orders.ts', '', [], UNDECLARED)).toBe(true);
+    expect(readsCodeComments('anywhere/deep/x.py', '', [], UNDECLARED)).toBe(true);
+    expect(readsCodeComments('tests/x.test.ts', "import { x } from '../scripts/qa/a.mjs';", PIPELINE, UNDECLARED)).toBe(false);
+    expect(readsCodeComments('docs/a.md', '', [], UNDECLARED)).toBe(false);
+    expect(() => readsWith('src/a.ts', '', [])).toThrow(/declared code areas/);
   });
 
   it('reads Python and Go source by their own comment syntax (kanon#20)', () => {
