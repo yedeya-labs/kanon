@@ -67,6 +67,31 @@
 #
 # `database` IS STILL THE LANE'S SWITCH: a lane that edits prose (`lead-revise`) passes
 # `database: false` and starts nothing, whatever the project declares.
+#
+# THE APP'S PRIVATE KEY NEVER ENTERS THE AGENT'S JOB (kanon#274). Two jobs, not one:
+#   • `mint` holds the key, and nothing else runs there: no checkout, no project code, no
+#     agent. It mints the lane's narrowed token with `skip-token-revoke`, because its post
+#     step would otherwise revoke the token the moment this job ends, and hands it on.
+#   • `run` is `lane-agent-job.yml`, the job that checks out, runs the project's hook and the
+#     agent. It is given the TOKEN, never the key, and revokes the token itself when it ends.
+# One job used to do both, and that is not a boundary an agent with a shell respects. The
+# runner's action cache (`_work/_actions/`) is writable by the job's user, and a node
+# action's post step is handed its inputs again: `create-github-app-token`'s post step ran
+# at job end, after the agent, from a script the agent could have rewritten, with the private
+# key in its environment as `INPUT_PRIVATE-KEY`. Measured on a hosted runner with a harmless
+# placeholder: the cached script is `runner`-owned, a rewrite made by a later step ran in the
+# post step, and the post step saw the key input. The job's user also has `sudo` and the
+# `docker` group there, so no check inside the job can close it: the key has to be absent.
+#
+# HOW THE TOKEN CROSSES, and why that way. GitHub drops a job output that contains a masked
+# value, so `mint` hex-encodes the token. A job output is never printed, but a value used in a
+# step's `env:` or `with:` is printed in that step's header, job-level `env:` included, so a
+# plain `needs.mint.outputs` read in a job would put the token in that job's log. A called
+# workflow's `secrets:` is the one channel that arrives masked: `run` is a reusable-workflow
+# call for that reason, and `lane-agent-job.yml` decodes the value and masks the token
+# before any step can print it. What is left, accepted by the Owner (2026-10-04): the
+# hex-encoded token sits in GitHub's stored job outputs for this run, short-lived (an hour at
+# most) and revoked when `run` ends.
 name: Agent lane
 
 on:
@@ -263,33 +288,25 @@ on:
 # The App token still carries every write.
 
 jobs:
-  run:
+  # HOLDS THE KEY, AND ONLY THE MINT (kanon#274; see the header). No step here reads the
+  # workspace or runs anything a lane or its agent wrote, so nothing can rewrite the cached
+  # action before its post step, which skips the revoke and returns.
+  mint:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.timeout-minutes }}
+    timeout-minutes: 5
     outputs:
-      kind: ${{ steps.finish.outputs.kind }}
-      # `agent` is the agent-run block, whose only step that can fail is the action, so its
-      # outcome is the action's — see that block's header.
-      outcome: ${{ steps.agent.outcome }}
+      sealed: ${{ steps.seal.outputs.sealed }}
+      app-slug: ${{ steps.app-token.outputs.app-slug }}
     steps:
-      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1): a cancelled
-      # job that ran at least its `timeout-minutes` timed out. Nothing else in the job's
-      # contexts says when it started.
-      - name: Record when the job started
-        id: job
-        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-
-      # Mint the App token FIRST so checkout persists IT (not the read-only default
-      # GITHUB_TOKEN) as the git credential — otherwise the agent's `git push` 403s
-      # ("Write access not granted"), since the default token is `contents: read` here.
-      # A LANE STEP, NOT A BLOCK'S: it was forced while the blocks were `./` references,
-      # which cannot load before the checkout below, and it stays one (see the header).
       - name: Mint App token
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ secrets.app-id }}
           private-key: ${{ secrets.app-private-key }}
+          # `run` revokes it when the agent is done. The default would revoke it as THIS job
+          # ends, before `run` has started.
+          skip-token-revoke: "true"
           # NARROWED TO WHAT THE CALLING LANE'S AGENT USES (#48, `K-AGENT-46`), below the App's
           # grant. An empty input requests nothing, and a token with every input empty would
           # carry the App's whole grant, so every lane passes its set and
@@ -300,156 +317,41 @@ jobs:
           permission-workflows: ${{ inputs.permission-workflows }}
           permission-actions: ${{ inputs.permission-actions }}
 
-      - uses: actions/checkout@v7
-        id: checkout
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          # Empty is checkout's own default (the triggering commit), so a lane that sets
-          # neither input checks out exactly what it did before these existed.
-          ref: ${{ inputs.ref }}
-          fetch-depth: ${{ inputs.fetch-depth }}
-          # NO `fetch-depth: 0` (RA-1742). RA-1652 added it so a `npm run lint` the agent ran
-          # on its own initiative would see the same brief corpus `ci.yml` did. That
-          # corpus no longer exists: a brief carries no coordinate and the guard does not
-          # read `docs/projects/**`, so the two environments cannot disagree about a tree
-          # neither reads.
-
-      # KANON'S NODE AND KANON'S PATH, FOR THE AGENT (kanon#110). The prompts tell the agent to
-      # run `node "$KANON/…"`, and nothing else in this job sets `KANON`: an adopter's hook
-      # that happens to export it is not a contract. Before the hook, so a toolchain the
-      # hook sets up still wins the PATH for the project's own commands; the agent step reads
-      # the path from this step's OUTPUT, which the hook cannot rewrite as it can `$GITHUB_ENV`.
-      - uses: $/actions/kanon-path
-        id: kanon
-
-      # THE PROJECT-SETUP HOOK MUST BE THERE, AND SAY SO BY NAME IF IT IS NOT (RA-2694). A
-      # missing local action fails with the runner's own "can't find action.yml", which
-      # names neither the cause nor the fix. The hook is read from the checked-out tree, so
-      # the one tree that lacks it is a branch cut before it existed. The commit it is read
-      # from is recorded for the step that puts it back after the agent.
-      - name: Check the project-setup hook is present
-        id: hook
-        run: |
-          if [ ! -f .github/actions/project-setup/action.yml ]; then
-            echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
-            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      # THE PROJECT'S DATABASE, AS IT DECLARES IT (kanon#18; see the header). After the checkout,
-      # because the declaration is read from the tree, and before the hook, which is told by
-      # this block's answer whether to start the database and set up its schema.
-      - uses: $/actions/test-database
-        id: database
-        with:
-          wanted: ${{ inputs.database }}
-
-      # The project's own setup — everything this spine and its blocks deliberately do not
-      # name (see the header). After the checkout, because it is read from the tree, and
-      # before `agent-setup`. The App token is passed for the hook's issue reads; the
-      # Claude token never is.
-      - uses: ./.github/actions/project-setup
-        id: project
-        with:
-          lane: ${{ inputs.agent }}
-          install: "true"
-          database: ${{ steps.database.outputs.database }}
-          browsers: ${{ inputs.browsers }}
-          issue-number: ${{ inputs.issue-number }}
-          app-slug: ${{ steps.app-token.outputs.app-slug }}
-          github-token: ${{ steps.app-token.outputs.token }}
-
-      - uses: $/actions/agent-setup
-        id: setup
-        with:
-          arm: ${{ inputs.arm }}
-          app-slug: ${{ steps.app-token.outputs.app-slug }}
-          push-probe: ${{ inputs.push-probe }}
-          github-token: ${{ steps.app-token.outputs.token }}
-
-      - uses: $/actions/agent-run
-        id: agent
+      # HEX, BECAUSE GITHUB DROPS A JOB OUTPUT THAT HOLDS A MASKED VALUE ("Skip output … may
+      # contain secret"), and the action masks the token. `-v`, or `od` folds repeated lines
+      # into `*`. Nothing prints the value: only `run`'s `secrets:` reads it.
+      - name: Seal the token for the agent's job
+        id: seal
         env:
-          KANON: ${{ steps.kanon.outputs.path }}
-        with:
-          prompt: ${{ inputs.prompt }}
-          claude_args: ${{ inputs.claude_args }}
-          claude-token: ${{ secrets.claude-token }}
-          github-token: ${{ steps.app-token.outputs.token }}
-          prompt-cache-ttl: ${{ inputs.prompt-cache-ttl }}
-          full-transcript: ${{ inputs.full-transcript }}
+          TOKEN: ${{ steps.app-token.outputs.token }}
+        run: printf 'sealed=%s\n' "$(printf %s "$TOKEN" | od -An -v -tx1 | tr -d ' \n')" >> "$GITHUB_OUTPUT"
 
-      # THE HOOK GOES BACK, FROM THE COMMIT IT WAS READ FROM (RA-2694). Its toolchain step
-      # has a post step, and the runner re-reads a `./` action's file from the workspace for
-      # it (a `$/` block's comes from the action cache, which is why the blocks need no such
-      # step since RA-2697), so an agent that moved or deleted the hook would red a good run at
-      # the very end. It was read from the checked-out tree, not from `github.sha`, so that is
-      # where it comes back from — a no-op whenever the agent left it alone.
-      - name: Put the project-setup hook back for its post steps
-        if: always() && steps.hook.outputs.sha != ''
-        env:
-          SHA: ${{ steps.hook.outputs.sha }}
-        run: |
-          if git checkout "$SHA" -- .github/actions/project-setup 2>/dev/null; then
-            echo "project-setup hook put back from $SHA"
-          else
-            echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
-          fi
-
-      # Explain a red run, count what it opened, record what it cost. `always()` and
-      # `continue-on-error` for the reasons in the block's header; `job-status` because the
-      # block cannot see the job's `failure()` from inside itself.
-      - uses: $/actions/agent-finish
-        id: finish
-        if: always()
-        continue-on-error: true
-        with:
-          arm: ${{ inputs.arm }}
-          agent: ${{ inputs.agent }}
-          job-status: ${{ job.status }}
-          claude_args: ${{ inputs.claude_args }}
-          execution_file: ${{ steps.agent.outputs.execution_file }}
-          issue-number: ${{ inputs.issue-number }}
-          pr-number: ${{ inputs.pr-number }}
-          quality-pr-label: ${{ inputs.quality-pr-label }}
-          started-at: ${{ steps.agent.outputs.started-at }}
-          github-token: ${{ steps.app-token.outputs.token }}
-          # THE VERSION-2 ROW (plan 0002 §2.6). Each stage's step CONCLUSION, in the order this
-          # spine runs them, so the row can say where a red run failed. The hook's is the
-          # presence check's when that failed, else the test database's when that failed (its
-          # declaration is the project's), else the hook's own: a conclusion only, never the
-          # adopter's step names.
-          lane: ${{ inputs.lane }}
-          stages: >-
-            token=${{ steps.app-token.conclusion }}
-            checkout=${{ steps.checkout.conclusion }}
-            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.database.conclusion != 'success' && steps.database.conclusion || steps.project.conclusion }}
-            setup=${{ steps.setup.conclusion }}
-            agent=${{ steps.agent.conclusion }}
-          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
-          job-started-at: ${{ steps.job.outputs.started-at }}
-          timeout-minutes: ${{ inputs.timeout-minutes }}
-
-      # THE RA-2519 BREADCRUMBS. A PR lane's recovery (`reviseRecovery` in the pipeline
-      # library's `lead-reconcile.mjs` for the implementer, `brief-revise-recovery.mjs` for
-      # the Lead) finds a run that died of its CAUSE — the model unreachable, or its API
-      # failing mid-run — by one of these steps having RUN, read by NAME from the run's
-      # jobs (`RETRY_STEPS` in the library's `lane-retry.mjs`). So the names are the
-      # protocol and must not be reworded; `tests/unit/lane-workflows.test.ts` holds them to it.
-      #
-      # IN THE LANE, NOT THE FINISH BLOCK, because the jobs API lists a composite action as
-      # ONE step: a breadcrumb inside the block would never be seen by name. They read the
-      # classifier's verdict through the block's `retry` output.
-      #
-      # A lane no recovery reads (implement, triage) carries them too; nothing reads them
-      # there, and they cost a skipped step on a green run. So the text must not PROMISE a
-      # retry: on an issue lane none comes, and a human reading the log would wait for it
-      # instead of re-dispatching. It says which lanes retry, and what to do on the others;
-      # the caller's header names its own retrier.
-      - name: "Retryable once the cause clears: the model was unreachable"
-        if: failure() && steps.finish.outputs.retry == 'unreachable'
-        run: echo "The model was never reached. The revise lanes are retried once for this head after the cool-down (RA-2519); any other lane is NOT retried automatically — re-dispatch it once the cause clears."
-      - name: "Retryable once the cause clears: the model API failed mid-run"
-        if: failure() && steps.finish.outputs.retry == 'api_error'
-        run: echo "The model API failed part-way through. The revise lanes are retried once for this head after the cool-down (RA-2519); any other lane is NOT retried automatically — re-dispatch it once the cause clears."
+  # THE AGENT'S JOB, GIVEN THE TOKEN AND NEVER THE KEY (kanon#274). `!cancelled()`, not the
+  # implicit `success()`: a failed mint still reaches `run`, whose token step then fails and
+  # whose `agent-finish` records the run with `token=failure`, as it did when the mint was
+  # that job's own step.
+  run:
+    needs: mint
+    if: ${{ !cancelled() }}
+    uses: $/.github/workflows/lane-agent-job.yml
+    with:
+      agent: ${{ inputs.agent }}
+      lane: ${{ inputs.lane }}
+      arm: ${{ inputs.arm }}
+      prompt: ${{ inputs.prompt }}
+      claude_args: ${{ inputs.claude_args }}
+      timeout-minutes: ${{ inputs.timeout-minutes }}
+      prompt-cache-ttl: ${{ inputs.prompt-cache-ttl }}
+      full-transcript: ${{ inputs.full-transcript }}
+      issue-number: ${{ inputs.issue-number }}
+      pr-number: ${{ inputs.pr-number }}
+      ref: ${{ inputs.ref }}
+      fetch-depth: ${{ inputs.fetch-depth }}
+      database: ${{ inputs.database }}
+      browsers: ${{ inputs.browsers }}
+      push-probe: ${{ inputs.push-probe }}
+      quality-pr-label: ${{ inputs.quality-pr-label }}
+      app-slug: ${{ needs.mint.outputs.app-slug }}
+    secrets:
+      app-token: ${{ needs.mint.outputs.sealed }}
+      claude-token: ${{ secrets.claude-token }}

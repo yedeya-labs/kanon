@@ -203,7 +203,9 @@ describe('every filing arm is wired, and cannot red its own run', () => {
     // the Implementer also opens the implementer's PRs; they are `agent:implement`, and that lane
     // has no measured question here. Opting in is a decision, not a default.
     const optedIn = files.flatMap((f) => jobsOf(f)
-      .filter(([, d]) => (d as { with?: Record<string, unknown> })?.with?.['quality-pr-label'])
+      // A literal label is an opt-in; the spine's own call to its agent job (kanon#274) only
+      // passes the caller's input through, and opts nothing in.
+      .filter(([, d]) => { const v = (d as { with?: Record<string, unknown> })?.with?.['quality-pr-label']; return v && v !== '${{ inputs.quality-pr-label }}'; })
       .map(([job]) => `${f}:${job}`));
     expect(optedIn).toEqual(['agent-triage.yml:triage-fix']);
   });

@@ -242,7 +242,8 @@ describe('the agent-setup block runs it, and the lanes give it the App token', (
   });
 
   it('the shared lane passes the minted App token', () => {
-    const lane = parse(readFileSync(join(ROOT, '.github/workflows/agent-lane.yml'), 'utf8')) as {
+    // The spine's agent job (kanon#274), where its steps live; `steps.app-token` there is the token it receives.
+    const lane = parse(readFileSync(join(ROOT, '.github/workflows/lane-agent-job.yml'), 'utf8')) as {
       jobs: { run: { steps: { uses?: string; with?: Record<string, string> }[] } };
     };
     const call = lane.jobs.run.steps.find((s) => s.uses === '$/actions/agent-setup');

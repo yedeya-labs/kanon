@@ -417,12 +417,12 @@ describe('revise in place', () => {
     expect(runFilter().outputs.branch).toBe('docs/1049-payments-transition-table');
   });
 
-  it('mints before checkout so the push credential is the App token', () => {
+  it('receives the App token before checkout, so the push credential is the App token (minted in the key-holding job of the spine, kanon#274)', () => {
     const names = revise.steps.map((s) => s.name ?? s.uses);
     const checkout = revise.steps.find((s) => s.uses?.startsWith('actions/checkout'));
-    expect(names.indexOf('Mint App token'))
+    expect(names.indexOf('Receive the App token'))
       .toBeGreaterThanOrEqual(0);
-    expect(names.indexOf('Mint App token'))
+    expect(names.indexOf('Receive the App token'))
       .toBeLessThan(names.findIndex((n) => n?.startsWith('actions/checkout')));
     expect(checkout?.with?.token).toBe('${{ steps.app-token.outputs.token }}');
     // And it is THIS lane's App: the Implementer's identity, which the round count filters on.
