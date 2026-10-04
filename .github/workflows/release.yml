@@ -354,8 +354,32 @@ jobs:
             process.exit(0);
           }
 
+          // The release branch's own head, read from the ref rather than from the PR (#86).
+          // release-please force-pushed the branch earlier in this job, and GitHub records a
+          // PR's new head asynchronously, so the PR list can still name the head before it. A
+          // guard that judged that one would pass the PR an Owner is about to merge unchecked.
+          const branchHead = (ref) => api(`repos/${repo}/git/ref/heads/${ref}`).object.sha;
+          const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+          // Set only by the guard's own tests, so they don't wait.
+          const WAIT_MS = Number(process.env.RELEASE_PR_GUARD_WAIT_MS ?? 5000);
+          const RETRIES = 3;
+
           let failed = false;
-          for (const pr of releasePrs) {
+          for (let pr of releasePrs) {
+            // Re-read the PR until it records the branch's head; a PR that still doesn't fails
+            // closed, unjudged, rather than being judged at a head nobody will merge.
+            let head = branchHead(pr.head.ref);
+            for (let tries = 0; pr.head.sha !== head && tries < RETRIES; tries++) {
+              sleep(WAIT_MS);
+              pr = api(`repos/${repo}/pulls/${pr.number}`);
+              head = branchHead(pr.head.ref);
+            }
+            if (pr.head.sha !== head) {
+              failed = true;
+              console.log(`::error title=Release PR not at its branch head::Release PR #${pr.number} records head ${pr.head.sha}, but its branch ${pr.head.ref} is at ${head}, so the guard could not check what would be merged.`);
+              console.error(`Release PR #${pr.number} still records head ${pr.head.sha} after ${RETRIES} re-reads, but its branch \`${pr.head.ref}\` is at ${head}. GitHub hasn't caught up with release-please's push, so this run can't judge the PR. Don't merge it until a re-run of the Release workflow on \`${pr.base.ref}\` passes.`);
+              continue;
+            }
             const raw = api(`repos/${repo}/contents/release-please-config.json?ref=${pr.head.sha}`);
             const config = JSON.parse(Buffer.from(raw.content, 'base64').toString('utf8'));
             const versionFiles = new Set();
