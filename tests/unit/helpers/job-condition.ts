@@ -137,6 +137,136 @@ export type NeedWorld = { result: string; outputs: Record<string, string> };
 /** The jobs `job` waits for, by GitHub's `needs`. */
 const needsOf = (needs: string | string[] | undefined): string[] => [needs ?? []].flat();
 
+/** Read a condition, its `${{ }}` stripped; `null` when there is none. */
+const treeOf = (cond: string | undefined): Node | null =>
+  cond === undefined || String(cond).trim() === '' ? null : parseCondition(String(cond).replace(/^\s*\$\{\{([\s\S]*)\}\}\s*$/, '$1'));
+
+const usesStatus = (n: Node): boolean =>
+  n.kind === 'call' ? STATUS.has(n.name) || n.args.some(usesStatus)
+    : n.kind === 'not' ? usesStatus(n.arg)
+      : n.kind === 'and' || n.kind === 'or' || n.kind === 'cmp' ? usesStatus(n.left) || usesStatus(n.right)
+        : false;
+
+/** Does `cond` call a status function (`always()`, `success()`, `failure()`, `cancelled()`)? */
+export const hasStatusFunction = (cond: string | undefined): boolean => {
+  const tree = treeOf(cond);
+  return tree !== null && usesStatus(tree);
+};
+
+/**
+ * The clauses of `tree` the logical operators see as one free boolean each: those that read
+ * the event, or an output of a job that is neither `refused` nor `held`.
+ */
+const freeAtoms = (tree: Node | null, refused: Set<string>, held: Set<string>): Node[] => {
+  const free = (n: Node): boolean => {
+    switch (n.kind) {
+      case 'lit': return false;
+      case 'ref': {
+        if (/^(github|inputs|vars|env)\./.test(n.path)) return true;
+        const m = /^needs\.([\w-]+)\.outputs\./.exec(n.path);
+        return Boolean(m && !refused.has(m[1]!) && !held.has(m[1]!));
+      }
+      case 'call':
+        if (n.name === 'cancelled') return true;
+        if (!STATUS.has(n.name) && !PURE.has(n.name)) throw new Error(`job condition: unmodelled function ${n.name}() in ${n.src}`);
+        return n.args.some(free);
+      case 'not': return false;
+      case 'and': case 'or': return false;
+      case 'cmp': return free(n.left) || free(n.right);
+    }
+  };
+  const atoms: Node[] = [];
+  const collect = (n: Node) => {
+    if (n.kind === 'not') return collect(n.arg);
+    if (n.kind === 'and' || n.kind === 'or') { collect(n.left); collect(n.right); return; }
+    if (free(n)) atoms.push(n);
+    else if (n.kind === 'call') n.args.forEach(collect);
+  };
+  if (tree) collect(tree);
+  if (atoms.length > 16) throw new Error(`job condition: ${atoms.length} free clauses is more than this check enumerates`);
+  return atoms;
+};
+
+/** Every combination of results (and, from `worldsOf`, outputs) for `jobs`. */
+const worldsFor = (jobs: string[], worldsOf: (job: string) => NeedWorld[]): Record<string, NeedWorld>[] => {
+  let worlds: Record<string, NeedWorld>[] = [{}];
+  for (const job of jobs) worlds = worlds.flatMap((w) => worldsOf(job).map((o) => ({ ...w, [job]: o })));
+  return worlds;
+};
+
+/** The jobs whose results `success()` and `failure()` read, in one world. */
+type Status = { success: boolean; failure: boolean };
+
+/**
+ * The value of `n` in `world`, with each free clause as `assigned`. A free clause that reads an
+ * output of a job in `emptied` is read with that output empty instead, as GitHub gives a
+ * skipped job's outputs.
+ */
+const evaluate = (n: Node, world: Record<string, NeedWorld>, assigned: Map<Node, boolean>, status: Status, emptied: Set<string> = new Set()): Value => {
+  const reads = (m: Node): boolean => {
+    switch (m.kind) {
+      case 'ref': { const r = /^needs\.([\w-]+)\.outputs\./.exec(m.path); return Boolean(r && emptied.has(r[1]!)); }
+      case 'call': return m.args.some(reads);
+      case 'not': return reads(m.arg);
+      case 'and': case 'or': case 'cmp': return reads(m.left) || reads(m.right);
+      case 'lit': return false;
+    }
+  };
+  const value = (m: Node): Value => {
+    if (assigned.has(m) && !reads(m)) return assigned.get(m)!;
+    switch (m.kind) {
+      case 'lit': return m.value;
+      case 'ref': {
+        const r = /^needs\.([\w-]+)\.(result|outputs\.([\w-]+))$/.exec(m.path);
+        if (!r) throw new Error(`job condition: unmodelled context ${m.path}`);
+        const w = world[r[1]!];
+        if (!w) return '';
+        return r[2] === 'result' ? w.result : (w.outputs[r[3]!] ?? '');
+      }
+      case 'call': {
+        const args = m.args.map(value);
+        switch (m.name) {
+          case 'always': return true;
+          case 'success': return status.success;
+          case 'failure': return status.failure;
+          case 'contains': return Array.isArray(args[0])
+            ? args[0].some((x) => loose(x) === loose(args[1]))
+            : String(args[0] ?? '').toLowerCase().includes(String(args[1] ?? '').toLowerCase());
+          case 'startsWith': return String(args[0] ?? '').toLowerCase().startsWith(String(args[1] ?? '').toLowerCase());
+          case 'endsWith': return String(args[0] ?? '').toLowerCase().endsWith(String(args[1] ?? '').toLowerCase());
+          case 'format': return String(args[0]).replace(/\{(\d+)\}/g, (_m, k: string) => String(args[Number(k) + 1] ?? ''));
+          case 'fromJSON': return JSON.parse(String(args[0])) as Value;
+          case 'toJSON': return JSON.stringify(args[0]);
+          case 'join': return Array.isArray(args[0]) ? args[0].join(String(args[1] ?? ',')) : String(args[0] ?? '');
+        }
+        throw new Error(`job condition: unmodelled function ${m.name}()`);
+      }
+      case 'not': return !truthy(value(m.arg));
+      case 'and': { const l = value(m.left); return truthy(l) ? value(m.right) : l; }
+      case 'or': { const l = value(m.left); return truthy(l) ? l : value(m.right); }
+      case 'cmp': {
+        const l = loose(value(m.left));
+        const r = loose(value(m.right));
+        switch (m.op) {
+          case '==': return l === r;
+          case '!=': return l !== r;
+          case '<': return Number(l) < Number(r);
+          case '<=': return Number(l) <= Number(r);
+          case '>': return Number(l) > Number(r);
+          case '>=': return Number(l) >= Number(r);
+        }
+        throw new Error(`job condition: unmodelled operator ${m.op}`);
+      }
+    }
+  };
+  return value(n);
+};
+
+/** Every assignment of the free clauses `atoms`, as the map `evaluate` reads. */
+const assignments = function* (atoms: Node[]): Generator<Map<Node, boolean>> {
+  for (let bits = 0; bits < 2 ** atoms.length; bits += 1) yield new Map(atoms.map((a, k) => [a, Boolean(bits & (1 << k))]));
+};
+
 /**
  * The first world, if any, in which `cond` starts its job although no gate admitted.
  *
@@ -155,41 +285,8 @@ export const runsUnadmitted = (
   held: Set<string>,
 ): string | null => {
   const direct = needsOf(needs);
-  const tree = cond === undefined || String(cond).trim() === '' ? null : parseCondition(String(cond).replace(/^\s*\$\{\{([\s\S]*)\}\}\s*$/, '$1'));
-
-  // Free: reads the event, or a job the caller vouches for neither way.
-  const free = (n: Node): boolean => {
-    switch (n.kind) {
-      case 'lit': return false;
-      case 'ref': {
-        if (/^(github|inputs|vars|env)\./.test(n.path)) return true;
-        const m = /^needs\.([\w-]+)\.outputs\./.exec(n.path);
-        return Boolean(m && !refused.has(m[1]!) && !held.has(m[1]!));
-      }
-      case 'call':
-        if (n.name === 'cancelled') return true;
-        if (!STATUS.has(n.name) && !PURE.has(n.name)) throw new Error(`job condition: unmodelled function ${n.name}() in ${n.src}`);
-        return n.args.some(free);
-      case 'not': return false;
-      case 'and': case 'or': return false;
-      case 'cmp': return free(n.left) || free(n.right);
-    }
-  };
-  // The free clauses, as the logical operators see them; each is one boolean.
-  const atoms: Node[] = [];
-  const collect = (n: Node) => {
-    if (n.kind === 'not') return collect(n.arg);
-    if (n.kind === 'and' || n.kind === 'or') { collect(n.left); collect(n.right); return; }
-    if (free(n)) atoms.push(n);
-    else if (n.kind === 'call') n.args.forEach(collect);
-  };
-  if (tree) collect(tree);
-  if (atoms.length > 16) throw new Error(`job condition: ${atoms.length} free clauses is more than this check enumerates`);
-  const usesStatus = (n: Node): boolean =>
-    n.kind === 'call' ? STATUS.has(n.name) || n.args.some(usesStatus)
-      : n.kind === 'not' ? usesStatus(n.arg)
-        : n.kind === 'and' || n.kind === 'or' || n.kind === 'cmp' ? usesStatus(n.left) || usesStatus(n.right)
-          : false;
+  const tree = treeOf(cond);
+  const atoms = freeAtoms(tree, refused, held);
   const explicitStatus = tree ? usesStatus(tree) : false;
 
   // Every job whose result matters: the direct needs, and every ancestor `failure()` can see.
@@ -206,62 +303,15 @@ export const runsUnadmitted = (
     }
     return ['success', 'skipped', 'failure'].map((result) => ({ result, outputs: {} }));
   };
-  let worlds: Record<string, NeedWorld>[] = [{}];
-  for (const job of jobs) worlds = worlds.flatMap((w) => worldsOf(job).map((o) => ({ ...w, [job]: o })));
 
-  for (const world of worlds) {
+  for (const world of worldsFor(jobs, worldsOf)) {
+    // Direct needs only: an over-approximation towards "runs", which is the error this check
+    // wants to see (`startsDespite` below models GitHub's transitive rule).
     const allSucceeded = direct.every((j) => world[j]!.result === 'success');
     if (!explicitStatus && !allSucceeded) continue;
-    for (let bits = 0; bits < 2 ** atoms.length; bits += 1) {
-      const assigned = new Map(atoms.map((a, k) => [a, Boolean(bits & (1 << k))]));
-      const value = (n: Node): Value => {
-        if (assigned.has(n)) return assigned.get(n)!;
-        switch (n.kind) {
-          case 'lit': return n.value;
-          case 'ref': {
-            const m = /^needs\.([\w-]+)\.(result|outputs\.([\w-]+))$/.exec(n.path);
-            if (!m) throw new Error(`job condition: unmodelled context ${n.path}`);
-            const w = world[m[1]!];
-            if (!w) return '';
-            return m[2] === 'result' ? w.result : (w.outputs[m[3]!] ?? '');
-          }
-          case 'call': {
-            const args = n.args.map(value);
-            switch (n.name) {
-              case 'always': return true;
-              case 'success': return allSucceeded;
-              case 'failure': return jobs.some((j) => world[j]!.result === 'failure');
-              case 'contains': return Array.isArray(args[0])
-                ? args[0].some((x) => loose(x) === loose(args[1]))
-                : String(args[0] ?? '').toLowerCase().includes(String(args[1] ?? '').toLowerCase());
-              case 'startsWith': return String(args[0] ?? '').toLowerCase().startsWith(String(args[1] ?? '').toLowerCase());
-              case 'endsWith': return String(args[0] ?? '').toLowerCase().endsWith(String(args[1] ?? '').toLowerCase());
-              case 'format': return String(args[0]).replace(/\{(\d+)\}/g, (_m, k: string) => String(args[Number(k) + 1] ?? ''));
-              case 'fromJSON': return JSON.parse(String(args[0])) as Value;
-              case 'toJSON': return JSON.stringify(args[0]);
-              case 'join': return Array.isArray(args[0]) ? args[0].join(String(args[1] ?? ',')) : String(args[0] ?? '');
-            }
-            throw new Error(`job condition: unmodelled function ${n.name}()`);
-          }
-          case 'not': return !truthy(value(n.arg));
-          case 'and': { const l = value(n.left); return truthy(l) ? value(n.right) : l; }
-          case 'or': { const l = value(n.left); return truthy(l) ? l : value(n.right); }
-          case 'cmp': {
-            const l = loose(value(n.left));
-            const r = loose(value(n.right));
-            switch (n.op) {
-              case '==': return l === r;
-              case '!=': return l !== r;
-              case '<': return Number(l) < Number(r);
-              case '<=': return Number(l) <= Number(r);
-              case '>': return Number(l) > Number(r);
-              case '>=': return Number(l) >= Number(r);
-            }
-            throw new Error(`job condition: unmodelled operator ${n.op}`);
-          }
-        }
-      };
-      if (tree === null || truthy(value(tree))) {
+    const status = { success: allSucceeded, failure: jobs.some((j) => world[j]!.result === 'failure') };
+    for (const assigned of assignments(atoms)) {
+      if (tree === null || truthy(evaluate(tree, world, assigned, status))) {
         const jobsDesc = jobs.map((j) => {
           const w = world[j]!;
           const outs = Object.entries(w.outputs).map(([k, v]) => `${k}=${v}`).join(', ');
@@ -273,4 +323,41 @@ export const runsUnadmitted = (
     }
   }
   return null;
+};
+
+/**
+ * The ancestors whose skip or failure `cond` starts its job DESPITE (kanon#261), under GitHub's
+ * real rule: a job whose `if:` has no status function starts only when EVERY job in its `needs`
+ * chain succeeded, grandparents included (actions/runner#491), and so does `success()`.
+ *
+ * A job with no status function tolerates none: it is skipped whenever any ancestor did not
+ * succeed. A job with one (`!cancelled()`, `always()`, `failure()`) tolerates each ancestor for
+ * which some world exists where that ancestor was skipped or failed and `cond` still holds.
+ * Every job's result is free; a skipped job's outputs are empty and any other job's are free.
+ *
+ * @param cond the job's `if:` (absent = none)
+ * @param ancestors every job it transitively needs
+ * @returns each tolerated ancestor, in `ancestors` order, with the results (`skipped`,
+ *   `failure`) it is tolerated in
+ */
+export const startsDespite = (cond: string | undefined, ancestors: string[]): { job: string; results: string[] }[] => {
+  const tree = treeOf(cond);
+  if (tree === null || !usesStatus(tree)) return [];
+  const atoms = freeAtoms(tree, new Set(), new Set());
+  const worlds = worldsFor(ancestors, () => ['success', 'skipped', 'failure'].map((result) => ({ result, outputs: {} })));
+  const tolerated = new Set<string>();
+  const key = (j: string, world: Record<string, NeedWorld>) => `${j}\0${world[j]!.result}`;
+  for (const world of worlds) {
+    const unseen = ancestors.filter((j) => world[j]!.result !== 'success' && !tolerated.has(key(j, world)));
+    if (unseen.length === 0) continue;
+    const status = { success: false, failure: ancestors.some((j) => world[j]!.result === 'failure') };
+    const emptied = new Set(ancestors.filter((j) => world[j]!.result === 'skipped'));
+    for (const assigned of assignments(atoms)) {
+      if (truthy(evaluate(tree, world, assigned, status, emptied))) { unseen.forEach((j) => tolerated.add(key(j, world))); break; }
+    }
+  }
+  return ancestors.flatMap((job) => {
+    const results = ['skipped', 'failure'].filter((r) => tolerated.has(`${job}\0${r}`));
+    return results.length ? [{ job, results }] : [];
+  });
 };
