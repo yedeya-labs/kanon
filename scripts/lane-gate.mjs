@@ -23,7 +23,10 @@
 //   workflow_run             whoever pushed the commit the finished workflow ran on,
 //                            `workflow_run.triggering_actor` (else `workflow_run.actor`),
 //                            checked the same way. The rebase lane fires on CI finishing on
-//                            the default branch, where the pusher is who acted.
+//                            the default branch, where the pusher is who acted. With a merge
+//                            queue the pusher is `github-merge-queue[bot]`, an App outside the
+//                            register, so that trigger is refused and the lane waits for its
+//                            schedule (kanon#79, docs/lanes.md).
 //   workflow_run, review     THE REVIEW LANE sets `LANE_GATE_WORKFLOW_RUN=review-label` and
 //                            is judged by whoever applied the review label on the PR, not the
 //                            pusher (kanon#81). Its CI completion is a deferred label: a label
