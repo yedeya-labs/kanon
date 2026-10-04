@@ -7,6 +7,7 @@ import {
   DeclarationError,
   parseReferenceDeploy,
   readReferenceDeploy,
+  declaredEnvironmentFrom,
   readReferenceDeployFrom,
   requireReferenceDeploy,
 } from '../../scripts/lib/reference-deploy.mjs';
@@ -155,6 +156,17 @@ describe("the reconciler's reader, from the default branch (K-MERGE-17)", () => 
     expect(() => readReferenceDeployFrom('o/r', run(() => WITH([])))).toThrow(/adoption\.md on `trunk` declares no reference environment, so no project can close/);
     expect(() => readReferenceDeployFrom('o/r', run(() => WITH(DECLARED.slice(1))))).toThrow(/without `Reference environment`/);
     expect(() => readReferenceDeployFrom('o/r', () => '\n')).toThrow(/no default branch to read docs\/qa\/adoption\.md from/);
+  });
+
+  it('names the environment for a message, and never throws (kanon#219)', () => {
+    expect(declaredEnvironmentFrom('o/r', run(() => WITH(DECLARED)))).toBe('staging');
+    // Each of these fails the deploy phase by name, through `readReferenceDeployFrom`; a
+    // message before it falls back to "the reference environment" instead.
+    expect(declaredEnvironmentFrom('o/r', run(fail('gh: Not Found (HTTP 404)')))).toBeNull();
+    expect(declaredEnvironmentFrom('o/r', run(fail('gh: Server Error (HTTP 502)')))).toBeNull();
+    expect(declaredEnvironmentFrom('o/r', run(() => WITH([])))).toBeNull();
+    expect(declaredEnvironmentFrom('o/r', run(() => WITH(DECLARED.slice(1))))).toBeNull();
+    expect(declaredEnvironmentFrom('o/r', () => '\n')).toBeNull();
   });
 
   it('the CLI prints one field, and exits 1 or 2 by name', () => {

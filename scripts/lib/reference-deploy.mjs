@@ -169,6 +169,24 @@ export function readReferenceDeploy(root = process.cwd()) {
 }
 
 /**
+ * The declared reference environment's NAME, for a message, from the record on the default
+ * branch: `null` when the record is missing, declares none, is malformed or can't be read. It
+ * never throws, because only the deploy phase may fail on the record (`K-PROJ-11`): a project
+ * whose issues are still open names the environment when it can, and says "the reference
+ * environment" otherwise (kanon#219).
+ * @param {string} repo `owner/name`
+ * @param {(args: string[], opts?: object) => string} [run] `gh`, injected for tests
+ * @returns {string | null}
+ */
+export function declaredEnvironmentFrom(repo, run) {
+  try {
+    return readReferenceDeployFrom(repo, run).environment;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Reads the declaration from the repository's default branch, for the reconciler, which decides
  * whether a project closes. Throws `DeclarationError` when the record is missing there, declares
  * no reference environment, is malformed, or can't be read.

@@ -1930,6 +1930,31 @@ describe('everything a human reads from a tick agrees with itself (RA-1064)', ()
   });
 });
 
+describe('the report names the declared environment before the deploy phase (kanon#219)', () => {
+  const ROW = /^\| deploy to (.*) \| (.*) \|$/m;
+  const row = (w: Record<string, unknown>) => ROW.exec(report(w, { phase: 'reconcile', actions: [], stopped: null }))?.slice(1);
+
+  it('names it while issues are still open, when the record declares one', () => {
+    expect(row(world({ environment: 'staging' }))).toEqual(['`staging`', 'not read — issues still open']);
+  });
+
+  it('says "the reference environment" when the record declares none, or could not be read', () => {
+    expect(row(world({ environment: null }))).toEqual(['the reference environment', 'not read — issues still open']);
+    expect(row(world())).toEqual(['the reference environment', 'not read — issues still open']);
+  });
+
+  it('prefers what the deploy phase read', () => {
+    expect(row(world({ environment: 'staging', deploy: { state: 'deploying', tag: 'v1.0.0', environment: 'preview' } }))![0]).toBe('`preview`');
+  });
+
+  it('readWorld reads the name softly, once per tick, and only when the deploy phase did not', () => {
+    const src = readFileSync(join(ROOT, 'scripts/lead-reconcile.mjs'), 'utf8');
+    expect(src).toMatch(/const environment = deploy\?\.environment \?\? declaredEnvironment\(\);/);
+    expect(src).toMatch(/return \{ project, briefMerged, briefPath, proposed, filed, open, blocked, unmilestoned, all, deploy, environment,/);
+    expect(src).toMatch(/if \(declaredEnvironmentRead === undefined\) declaredEnvironmentRead = declaredEnvironmentFrom\(REPO\);/);
+  });
+});
+
 describe('a held project takes no actions (RA-963)', () => {
   /**
    * State is derived, so a tick that failed re-reads the same world, computes the same
