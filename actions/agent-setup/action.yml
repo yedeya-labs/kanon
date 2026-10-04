@@ -37,7 +37,8 @@
 name: Agent lane — set up
 description: >-
   After the lane has minted its App token, checked out and run the project-setup hook,
-  optionally prove the App can push.
+  make the agent's commits the App's, signed off by the delegate, and optionally prove the
+  App can push.
 
 inputs:
   arm:
@@ -52,6 +53,13 @@ inputs:
       for. Must follow the App-token checkout, whose persisted credential it pushes with.
     required: false
     default: "false"
+  github-token:
+    description: >-
+      A token that can read the App's bot account and the default branch's
+      `docs/qa/sign-off-delegation.md`. The lanes pass the minted App token; the workflow
+      token is enough for a public repository, or a caller that grants `contents: read`.
+    required: false
+    default: ${{ github.token }}
 
 outputs:
   kanon-error:
@@ -63,6 +71,20 @@ outputs:
 runs:
   using: composite
   steps:
+    # THE AGENT'S COMMITS PASS THE ADOPTER'S `dco` CHECK (K-AGENT-44, kanon#234): authored as
+    # the minted App, and signed off by the person the default branch's delegation record
+    # names. On every lane, because which lanes commit is the lane's business, not this block's,
+    # and a lane that makes no commit loses nothing. The script's header says how, and why the
+    # project's own git hooks still run. Skipped when no App was minted yet: the review lane
+    # calls this block before its token exists (RA-1542), and its agent commits nothing.
+    - name: Commit as the App, signed off by the delegate
+      if: inputs.app-slug != ''
+      shell: bash -e {0}
+      env:
+        APP_SLUG: ${{ inputs.app-slug }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: DCO_MJS="$GITHUB_ACTION_PATH/../dco/dco.mjs" bash "$GITHUB_ACTION_PATH/agent-commits.sh"
+
     # PROBE THE CAPABILITY, DO NOT ASK THE API ABOUT IT (RA-951, moved into the spine by
     # RA-2609 from `agent-lead.yml`, which is still the lane the probe was written for).
     #
