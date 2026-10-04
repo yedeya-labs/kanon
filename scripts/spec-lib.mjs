@@ -348,13 +348,28 @@ export function loadRenumbered(path = REGISTRY) {
   return readRegistryFile(path)[RENUMBERED] ?? {};
 }
 
-/** A test of the id TOOLING — it imports `scripts/qa/`, or the library from an adopter's
- *  `.kanon/scripts/` checkout of Kanon, statically or through an `import…(` helper — whose ids are deliberate
- *  fixtures (`[STORE-500]` exists to prove the high-water rule rejects it). Keyed on
- *  the import, not on a list of names, so the next tooling test qualifies the day it
- *  is written (RA-1214). `spec-coverage.mjs`'s mentioned-not-cited section and the
- *  reference corpus below share this one definition. */
-export const QA_TOOLING_IMPORT = /(?:from\s+|import\w*\s*\(\s*)['"][^'"]*(?:scripts\/qa|\.kanon\/scripts)\/[^'"]*['"]/;
+/** A test of the id TOOLING — it imports the adopter's own pipeline code (the directories it
+ *  declares under `## Pipeline code` in `docs/qa/escalation-paths.md`, `K-LAYOUT-8`), or the
+ *  library from an adopter's `.kanon/scripts/` checkout of Kanon, statically or through an
+ *  `import…(` helper — whose ids are deliberate fixtures (`[STORE-500]` exists to prove the
+ *  high-water rule rejects it). Keyed on the import, not on a list of names, so the next
+ *  tooling test qualifies the day it is written (RA-1214). `spec-coverage.mjs`'s
+ *  mentioned-not-cited section, `citation-shift` and the reference corpus below share this one
+ *  definition.
+ *
+ *  THE DIRECTORIES ARE THE ADOPTER'S (kanon#54). This was a constant naming the reference
+ *  adopter's `scripts/qa/`, so on any other repository a test of its own pipeline code counted
+ *  its fixture ids as coverage and as references. A directory is matched as a whole path
+ *  segment, after any relative prefix (`../../scripts/pipeline/x.mjs`).
+ *
+ *  @param {string[]} pipelineDirs the declared pipeline-code directories, each ending in `/`
+ *  @returns {RegExp} */
+export function qaToolingImport(pipelineDirs) {
+  if (!Array.isArray(pipelineDirs)) throw new TypeError('qaToolingImport needs the declared pipeline-code directories (K-LAYOUT-8)');
+  const escape = (d) => d.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  const dirs = ['.kanon/scripts/', ...pipelineDirs].map(escape).join('|');
+  return new RegExp(`(?:from\\s+|import\\w*\\s*\\(\\s*)['"](?:[^'"]*/)?(?:${dirs})[^'"]*['"]`);
+}
 
 /** The trees an `[AREA-N]` reference outside the specs can live in. */
 export const REFERENCE_TREES = ['src', 'e2e', 'tests', 'docs'];
@@ -366,9 +381,12 @@ export const REFERENCE_TREES = ['src', 'e2e', 'tests', 'docs'];
  * `tests/library/spec-ids.test.ts` and the renumber check (RA-2004) — so widening one
  * cannot leave the other behind.
  *
+ * @param {string} [root]
+ * @param {string[]} pipelineDirs the declared pipeline-code directories (`qaToolingImport`)
  * @returns {string[]} repo-relative paths
  */
-export function referenceCorpus(root = process.cwd()) {
+export function referenceCorpus(root = process.cwd(), pipelineDirs) {
+  const tooling = qaToolingImport(pipelineDirs);
   const out = [];
   const walk = (dir) => {
     let entries;
@@ -383,6 +401,6 @@ export function referenceCorpus(root = process.cwd()) {
   return out
     .map((f) => relative(root, f).split('\\').join('/'))
     .filter((f) => !f.startsWith(`${SPEC_DIR}/`))
-    .filter((f) => !(/^(tests|e2e)\//.test(f) && QA_TOOLING_IMPORT.test(readFileSync(join(root, f), 'utf8'))))
+    .filter((f) => !(/^(tests|e2e)\//.test(f) && tooling.test(readFileSync(join(root, f), 'utf8'))))
     .sort();
 }

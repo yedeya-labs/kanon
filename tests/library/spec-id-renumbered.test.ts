@@ -17,7 +17,7 @@ import { ROOT } from './helpers/adopter.js';
  * `spec-id-renumbered.mjs` lists every reference to a moved-off id until it is rewritten
  * or acknowledged with a per-file `renumber-checked: <OLD-ID>` marker.
  *
- * This file imports `scripts/qa/`, so it is outside the reference corpus it tests: the
+ * This file imports Kanon's library, so it is outside the reference corpus it tests: the
  * ids and markers below are fixtures, not references.
  *
  * KANON'S HALF (plan 0001, step 3). The reference adopter keeps the checks of its own tree: its trail, its corpus and its lint wiring.
@@ -113,6 +113,7 @@ describe('the real tree', () => {
     writeFileSync(join(dir, 'docs/qa/specs/storefront.md'), '# S\n\n**Id prefix:** `STORE`\n\n## A\n\n- `[STORE-102]` `[seed]` one\n- `[STORE-103]` `[seed]` two\n');
     writeFileSync(join(dir, 'docs/qa/specs/_id-registry.json'), JSON.stringify({ STORE: 103, renumbered: TRAIL }));
     writeFileSync(join(dir, 'docs/notes.md'), 'see [STORE-102]\n');
+    writeFileSync(join(dir, 'docs/qa/escalation-paths.md'), '## Escalation paths\n\n## Pipeline code\n');
     const r = spawnSync(process.execPath, [join(REPO, 'scripts/spec-id-renumbered.mjs')], { cwd: dir, encoding: 'utf8' });
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('docs/notes.md:1  [STORE-102]');

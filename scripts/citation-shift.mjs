@@ -87,7 +87,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { PROJECTS_TREE, SOURCE_EXT, coordinatesIn, isOracleSpec, resolvePath } from './citation-guard.mjs';
-import { QA_TOOLING_IMPORT } from './spec-lib.mjs';
+import { qaToolingImport } from './spec-lib.mjs';
 import { DeclarationError, ESCALATION_FILE, parseEscalationFile, readEscalationFile } from './lib/escalation-paths.mjs';
 import { TABLE_EXT, conventionFor } from './lib/test-conventions.mjs';
 
@@ -107,9 +107,8 @@ const CODE_EXT = new RegExp(`\\.(?:${TABLE_EXT}|cjs)$`);
 /**
  * Is this code file read for comment coordinates? Everything under `CODE_TREES` EXCEPT
  * the QA tooling's own source (the directories the adopter declares under `## Pipeline
- * code`, kanon#54) and its tests (a test that imports `scripts/qa/` or Kanon's library —
- * `QA_TOOLING_IMPORT`, the rule the spec-id sweeps use, which still names the reference
- * adopter's directory; #54 tracks it). Their comments
+ * code`, kanon#54) and its tests (a test that imports that code or Kanon's library —
+ * `qaToolingImport`, the rule the spec-id sweeps use, built from the same declaration). Their comments
  * quote OLD coordinates on purpose — `course-wizard.tsx:797-800` in `citation-guard.mjs`
  * and its test, `payments.ts:44-52` — as the guard's regression record, and RA-1384's
  * third criterion forbids retargeting them. Both halves are properties of the file,
@@ -120,7 +119,7 @@ export const readsCodeComments = (path, text, pipelineDirs) => {
   return CODE_TREES.some((t) => path.startsWith(t)) &&
   CODE_EXT.test(path) &&
   !pipelineDirs.some((d) => path.startsWith(d)) &&
-  !(/^(tests|e2e)\//.test(path) && QA_TOOLING_IMPORT.test(text));
+  !(/^(tests|e2e)\//.test(path) && qaToolingImport(pipelineDirs).test(text));
 };
 
 // A coordinate in a code comment is written with or without backticks — the corpus has

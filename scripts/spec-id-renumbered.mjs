@@ -46,6 +46,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { idPattern, loadPrefixes, loadRenumbered, parseAll, referenceCorpus } from './spec-lib.mjs';
+import { readEscalationFile } from './lib/escalation-paths.mjs';
 
 export const MARKER = /renumber-checked:\s*([A-Z]+-\d+)/g;
 
@@ -114,7 +115,18 @@ export const renumberFindings = (renumbered, files) => {
 const main = () => {
   const renumbered = loadRenumbered();
   const known = new Set(parseAll().map((i) => i.id).filter(Boolean));
-  const corpus = referenceCorpus();
+  // The tooling tests are out of the corpus, and which they are depends on the adopter's
+  // declared pipeline code (`K-LAYOUT-8`, kanon#54): a missing or malformed declaration stops
+  // the run by name.
+  let dirs;
+  try {
+    dirs = readEscalationFile().pipeline.map(({ dir }) => dir);
+  } catch (e) {
+    console.error(`spec-id-renumbered: ${e.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  const corpus = referenceCorpus(process.cwd(), dirs);
   const trail = trailProblems(renumbered, known);
   const r = renumberFindings(renumbered, corpus.map((path) => ({ path, text: readFileSync(path, 'utf8') })));
 
