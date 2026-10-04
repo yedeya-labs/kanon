@@ -139,7 +139,8 @@ export function decide({ kind, labels, project, spoke, hasPr, crashes, body = ''
   // included. The sweep reads a bot comment as the conversation's last word, so a notice on
   // an issue that keeps its label would turn a human's unanswered reply (`answered`, which
   // the sweep re-dispatches) into `in-flight` and then `awaiting-human`, which it does not.
-  // The red run is the signal; the sweep's own `never-ran` / `answered` reading is the retry.
+  // The red run is the signal, and the sweep reads it: the run's jobs show the empty check
+  // failed and this recovery ran, and the issue reads `ran-empty` there (kanon#254).
   if (project == null) return { act: 'none', why: 'not a project member, so no tick would re-dispatch it — the dispatch sweep owns its retry' };
   // NEVER REACHED THE MODEL. A cap or an outage is a fact about the pipeline, and an
   // hourly retry into it spends the attempts RA-1517 says must not be charged. The sweep's
