@@ -1715,6 +1715,24 @@ jobs:
             wait for it: this CI run is one-shot with NO next turn, so a backgrounded
             task means your verdict is never posted (the recurring RA-356/RA-378
             crash-equivalent).
+
+            YOUR SHELL IS AN ALLOW-LIST (kanon#248). A command outside it is refused,
+            and a refused call is a wasted turn, so stay inside it:
+            - Read files with the Read, Grep and Glob tools, or `cat`, `head`, `tail`,
+              `sed -n`, `grep`, `ls`, `wc`, `diff`, `sort`, `cut`, `tr` and `jq`.
+            - Read-only git: `diff`, `log`, `show`, `status`, `grep`, `blame`,
+              `merge-base`, `rev-parse`, `ls-files`, `cat-file`. The head's history and
+              `origin/<base>` are already fetched; reach any other ref through `gh api`.
+            - `gh`: `pr view|diff|checks|list|review|edit`, `issue view|list|create`,
+              `label list`, `run view|list`, `search`, and `api`. Never `gh pr checks
+              --watch` or `gh run watch`: they wait, and this run has no next turn.
+            - Write only to `${{ runner.temp }}/qa-review-<name>.md`, with the Write
+              tool or a heredoc: the verdict file above, and any follow-up body you pass
+              to `gh issue create --body-file`.
+            - Write every value literally. A shell variable other than `$HOME`
+              (`$RUNNER_TEMP` included) is refused, and so are loops, `find`, `awk`,
+              `xargs`, `git fetch` and any interpreter or package manager.
+
             When the PR changes a behavior / message / error string, grep the OLD string
             repo-wide INCLUDING `tests/` before trusting nothing else asserts on it.
 
@@ -1816,12 +1834,42 @@ jobs:
           # fix is headroom rather than a cheaper
           # review: the reviewer found three genuine blocking defects in RA-584,
           # one of which took money without enrolling anyone.
+          #
+          # THE AGENT'S SHELL IS AN ALLOW-LIST, NOT A SENTENCE IN THE PROMPT (kanon#248). The
+          # job runs none of the PR's code (kanon#185), but the agent held a bare `Bash`
+          # until this, so a PR that talked it into `sh ./x.sh` ran that file beside the
+          # token whose approval the Merger acts on. Now Bash is granted only for the `gh`
+          # subcommands the Reviewer uses (counted over 80 retained transcripts: 1,249 Bash
+          # calls; of their `gh` subcommands only `pr comment`, `release view` (once each)
+          # and `--version` are left out). Everything else falls to Claude Code's own
+          # read-only set (`cat`, `grep`, `sed -n`, `jq`, read-only `git`, ...), which is
+          # flag-aware: it refuses `git log --output=`, `git -c`, `find -exec`, `sed w`,
+          # `sort -o` and a pager or external-diff option, where a `Bash(git log:*)` rule
+          # here would ALLOW `--output=` (measured) — the write that could plant a
+          # `core.fsmonitor` in `.git/config` for a later `git status` to run. So no git rule
+          # is listed. A compound command needs every part allowed, so `gh api x && sh y`,
+          # `$(sh y)` and `| sh` are refused, and an allow rule does not match past a
+          # variable assignment. The one writable place is `qa-review-*.md` in the runner's
+          # temp directory, outside the tree: the verdict file and follow-up drafts.
+          # Measured with a probe harness on CLI 2.1.289 (the pinned action ran 2.1.287 in
+          # those transcripts): 32 attempts to run a tree file or write outside that path
+          # were refused and none ran; the old flags allowed all six of them retried.
+          # `tests/unit/review-verdict.test.ts` pins this list, and fails a bare `Bash`, an
+          # interpreter, a package manager or an exec wrapper.
+          #
+          # A COST CUTOVER. `config_fingerprint` hashes these flags, so the release that
+          # ships this starts a new fingerprint for the review arm; compare cost across it as
+          # two configurations, not one.
           claude_args: |
             --model claude-opus-5-5
             --effort high
             --max-turns 70
             --max-budget-usd 30
-            --allowedTools Read,Bash,Grep,Glob
+            --allowedTools Read,Grep,Glob
+            --allowedTools "Edit(/${{ runner.temp }}/qa-review-*.md)"
+            --allowedTools "Bash(gh pr view:*)" "Bash(gh pr diff:*)" "Bash(gh pr checks:*)" "Bash(gh pr list:*)" "Bash(gh pr review:*)" "Bash(gh pr edit:*)"
+            --allowedTools "Bash(gh issue view:*)" "Bash(gh issue list:*)" "Bash(gh issue create:*)" "Bash(gh label list:*)"
+            --allowedTools "Bash(gh run view:*)" "Bash(gh run list:*)" "Bash(gh search:*)" "Bash(gh api:*)"
             --exclude-dynamic-system-prompt-sections
           # Auth = Claude subscription (Max/Pro) via an OAuth token (`claude setup-token`).
           # GRADUATE to API-key billing: give the `agent-run` block an `anthropic_api_key`
@@ -2322,7 +2370,11 @@ jobs:
             --effort high
             --max-turns 70
             --max-budget-usd 30
-            --allowedTools Read,Bash,Grep,Glob
+            --allowedTools Read,Grep,Glob
+            --allowedTools "Edit(/${{ runner.temp }}/qa-review-*.md)"
+            --allowedTools "Bash(gh pr view:*)" "Bash(gh pr diff:*)" "Bash(gh pr checks:*)" "Bash(gh pr list:*)" "Bash(gh pr review:*)" "Bash(gh pr edit:*)"
+            --allowedTools "Bash(gh issue view:*)" "Bash(gh issue list:*)" "Bash(gh issue create:*)" "Bash(gh label list:*)"
+            --allowedTools "Bash(gh run view:*)" "Bash(gh run list:*)" "Bash(gh search:*)" "Bash(gh api:*)"
             --exclude-dynamic-system-prompt-sections
           # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
           # step CONCLUSION in the lane's own order, never a step's name or log.

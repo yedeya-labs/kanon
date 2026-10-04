@@ -261,7 +261,7 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Why.** The red-test check proves sensitivity, never meaningfulness, so meaningfulness is where the reviewer's attention pays. Re-running the slow tier caused reviews that never posted. A handful of tests once went out labelled "full check" while the real tier was red. And the Reviewer holds the token whose approval merges the pull request, so the pull request's own code (an install script, a test) must never run beside it.
 
-**Enforced by.** The review lane installs nothing and starts no database, and `tests/unit/review-verdict.test.ts` fails a review-job step that calls an action from the pull request's tree, runs a package manager or build tool, or hands an interpreter anything but Kanon's own scripts. That the agent runs none of it is prose, in its prompt.
+**Enforced by.** The review lane installs nothing and starts no database, and `tests/unit/review-verdict.test.ts` fails a review-job step that calls an action from the pull request's tree, runs a package manager or build tool, or hands an interpreter anything but Kanon's own scripts. The agent's own flags grant its shell only named `gh` subcommands and leave every other command to the agent runtime's read-only set, and the same test fails a bare shell grant, an interpreter, a package manager or an exec wrapper among them. Those flags are not the whole grant: permissions in the project's committed agent settings add to them, and nothing yet checks those.
 
 **Class.** framework
 
