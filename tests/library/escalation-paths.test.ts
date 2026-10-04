@@ -165,6 +165,13 @@ describe("the pipeline's own escalations cover every judging input (kanon#138)",
     const sample = pattern.endsWith('/') ? `${pattern}x.md` : pattern.replace('*', 'x');
     expect(PIPELINE_ESCALATIONS.some(([re]) => re.test(sample)), sample).toBe(true);
   });
+
+  it('names the one row it does not cover, the delegation closure, as K-MERGE-4’s exception (kanon#150)', () => {
+    // A row with no patterns is skipped by the cases above, so a new one would pass silently.
+    // The delegation row is the one `K-MERGE-4` records as deliberately not escalated: the
+    // documents the inputs link to are the project's documentation.
+    expect(JUDGING_INPUTS.filter((row) => row.patterns.length === 0).map((row) => row.input)).toEqual(['Anything the inputs above delegate to']);
+  });
 });
 
 describe('the escalating paths', () => {

@@ -58,7 +58,10 @@ export const PIPELINE_HEADING = '## Pipeline code';
  * directly inside `docs/qa/`, and the agent instructions and agent configuration every lane
  * reads, `AGENTS.md`, `CLAUDE.md` and `.claude/` (`K-LAYOUT-9`, kanon#138). Together they cover
  * every path row of `K-MERGE-17`'s judging-inputs table (`scripts/judging-inputs.mjs`), and a
- * parity test fails if a row is added that none of them escalates. `docs/qa/specs/` is
+ * parity test fails if a row is added that none of them escalates. The table's last row, the
+ * documents those inputs link to, is deliberately not escalated (`K-MERGE-4`, kanon#150): on
+ * the reference adopter it is the project's ordinary documentation, which feature changes
+ * update. The parity test names it as the one exception. `docs/qa/specs/` is
  * deliberately not here: specs are the project's deliverable, reviewed against its brief.
  * @type {ReadonlyArray<readonly [RegExp, string]>}
  */
