@@ -1,0 +1,196 @@
+# One QA store operation, in a store job of its own (plan 0004 §3.2, step P9; `K-OBS-17`).
+#
+#   store:
+#     runs-on: ubuntu-latest
+#     environment: kanon-qa-store     # the only name the store's OIDC trust accepts (decision 9)
+#     permissions:
+#       contents: read                # the checkout below
+#       id-token: write               # the hook's credentials; no agent job holds this
+#     steps:
+#       - uses: $/actions/qa-store
+#         id: store
+#         with:
+#           operation: export
+#           kind: overseer
+#
+# THE HOOK IS THE ADOPTER'S, READ FROM THE CHECKOUT THIS BLOCK MAKES. `qa-store.mjs` holds the
+# contract: the five operations, the files each reads or writes, and what each does when the
+# repository has no hook. The checkout is the commit the run is for (`github.sha`), without
+# persisted credentials, because the hook is the only thing this job runs from the workspace.
+# The store-coupled lanes run on a schedule or a dispatch, so that is the default branch or a
+# branch a writer chose; restricting the `kanon-qa-store` environment to the default branch
+# (`docs/qa-store.md`) keeps a dispatch from any other branch from reaching the store at all.
+#
+# A WRITE FAILS THE JOB; A READ IS DEGRADED. The hook runs in one of two steps: `put` and
+# `record-skip` in a step whose failure fails the job (that red run is the page, `K-OBS-6`),
+# and `last-green`, `export` and `cost-rows` in a step with `continue-on-error`, whose failure
+# the finish step reports as `state: degraded` and turns into the lane's fail-open answer.
+#
+# `put` READS ITS REPORT FROM OUTSIDE THE WORKSPACE. The checkout cleans the workspace, so a
+# lane downloads the report it puts into `runner.temp` and passes that path as `report`.
+#
+# `export` UPLOADS WHAT THE AGENT MAY READ, KEPT ONE DAY. The agent job downloads the artifact
+# named by `artifact-name`; a job of its own deletes it with `operation: delete-export`, the
+# one operation that runs no hook and needs no environment, only `actions: write`.
+#
+# NO `vars` OR `secrets` HERE: neither exists inside a composite action. The hook holds its
+# own store's coordinates.
+name: Kanon QA store
+description: Runs one operation of the QA store contract through the adopter's store hook (.github/actions/qa-store), or says the store is absent and does nothing.
+author: yedeya-labs
+
+inputs:
+  operation:
+    description: "`last-green`, `record-skip`, `put`, `export` or `cost-rows`; or `delete-export` to delete an export's artifact."
+    required: true
+  kind:
+    description: "`put`: `explorer` or `audit`. `export`: `audit` or `overseer`. `cost-rows`: the telemetry agent whose rows it reads."
+    required: false
+    default: ""
+  report:
+    description: "`put`: the report file, outside the workspace (the checkout cleans it)."
+    required: false
+    default: ""
+  commit:
+    description: "`record-skip`: the commit that was skipped, a full SHA."
+    required: false
+    default: ""
+  trigger:
+    description: "`record-skip`: the event that skipped it."
+    required: false
+    default: schedule
+  tier:
+    description: "`record-skip`: the tier that was skipped."
+    required: false
+    default: all
+  reason:
+    description: "`record-skip`: why."
+    required: false
+    default: unchanged-commit
+  from:
+    description: "`export` and `cost-rows`: the window's start, a store stamp (`20260904T120245Z`), exclusive."
+    required: false
+    default: ""
+  to:
+    description: "`cost-rows`: the window's end, a store stamp, inclusive. Empty is now."
+    required: false
+    default: ""
+  days:
+    description: "`export` and `cost-rows`: the window in days, when `from` is empty. An export's default is 30."
+    required: false
+    default: ""
+  artifact-id:
+    description: "`delete-export`: the export job's `artifact-id` output."
+    required: false
+    default: ""
+
+outputs:
+  present:
+    description: "'true' when the repository has a store hook."
+    value: ${{ steps.prepare.outputs.present }}
+  state:
+    description: "`ok`, `absent` (no hook) or `degraded` (a read failed, or returned something malformed)."
+    value: ${{ steps.finish.outputs.state }}
+  commit:
+    description: "`last-green`: the newest green full sweep's commit, or empty."
+    value: ${{ steps.finish.outputs.commit }}
+  dir:
+    description: The job's store directory; `cost-rows.json` is in it.
+    value: ${{ steps.prepare.outputs.dir }}
+  artifact-name:
+    description: "`export`: the artifact the agent job downloads."
+    value: ${{ format('kanon-qa-store-export-{0}-{1}', github.run_id, github.run_attempt) }}
+  artifact-id:
+    description: "`export`: the artifact's id, for `delete-export`."
+    value: ${{ steps.upload.outputs.artifact-id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out the store hook
+      if: inputs.operation != 'delete-export'
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Prepare the store operation
+      id: prepare
+      if: inputs.operation != 'delete-export'
+      shell: bash
+      env:
+        OPERATION: ${{ inputs.operation }}
+        KIND: ${{ inputs.kind }}
+        REPORT: ${{ inputs.report }}
+        COMMIT: ${{ inputs.commit }}
+        TRIGGER: ${{ inputs.trigger }}
+        TIER: ${{ inputs.tier }}
+        REASON: ${{ inputs.reason }}
+        FROM: ${{ inputs.from }}
+        TO: ${{ inputs.to }}
+        DAYS: ${{ inputs.days }}
+        WORKSPACE: ${{ github.workspace }}
+      run: node "$GITHUB_ACTION_PATH/qa-store.mjs" prepare
+
+    # A write: its failure fails the job.
+    - name: Write through the store hook
+      if: steps.prepare.outputs.present == 'true' && (inputs.operation == 'put' || inputs.operation == 'record-skip')
+      uses: ./.github/actions/qa-store
+      with:
+        operation: ${{ inputs.operation }}
+        kind: ${{ inputs.kind }}
+        dir: ${{ steps.prepare.outputs.dir }}
+        from: ${{ steps.prepare.outputs.from }}
+        to: ${{ steps.prepare.outputs.to }}
+
+    # A read: its failure is `degraded`, which the finish step turns into the fail-open answer.
+    - name: Read through the store hook
+      id: read
+      if: steps.prepare.outputs.present == 'true' && (inputs.operation == 'last-green' || inputs.operation == 'export' || inputs.operation == 'cost-rows')
+      continue-on-error: true
+      uses: ./.github/actions/qa-store
+      with:
+        operation: ${{ inputs.operation }}
+        kind: ${{ inputs.kind }}
+        dir: ${{ steps.prepare.outputs.dir }}
+        from: ${{ steps.prepare.outputs.from }}
+        to: ${{ steps.prepare.outputs.to }}
+
+    - name: Read what the store hook wrote
+      id: finish
+      if: inputs.operation != 'delete-export'
+      shell: bash
+      env:
+        OPERATION: ${{ inputs.operation }}
+        KIND: ${{ inputs.kind }}
+        DIR: ${{ steps.prepare.outputs.dir }}
+        PRESENT: ${{ steps.prepare.outputs.present }}
+        # `outcome`, not `conclusion`: `continue-on-error` turns a failure's conclusion into success.
+        HOOK_OUTCOME: ${{ steps.read.outcome }}
+      run: node "$GITHUB_ACTION_PATH/qa-store.mjs" finish
+
+    - name: Upload the export for the agent job
+      id: upload
+      if: inputs.operation == 'export'
+      uses: actions/upload-artifact@v7
+      with:
+        name: kanon-qa-store-export-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ steps.prepare.outputs.dir }}/export
+        retention-days: 1
+        if-no-files-found: error
+
+    # The export holds the adopter's QA data, which anyone who can read the repository could
+    # download while it exists. A delete that fails turns the run red (§3.2).
+    - name: Delete the export
+      if: inputs.operation == 'delete-export'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        ARTIFACT_ID: ${{ inputs.artifact-id }}
+      run: |
+        case "$ARTIFACT_ID" in
+          '') echo "No export artifact to delete: the export job uploaded none."; exit 0 ;;
+          *[!0-9]*) echo "::error title=qa-store::artifact-id '$ARTIFACT_ID' is not a number"; exit 1 ;;
+        esac
+        gh api --method DELETE "repos/$REPO/actions/artifacts/$ARTIFACT_ID"
+        echo "Deleted the QA store export (artifact $ARTIFACT_ID)."

@@ -26,6 +26,7 @@ What a file *contains* is still the project's (its specs, its signals, its escal
 | `docs/qa/sign-off-delegation.md` | The sign-off delegation, when the adopter records one | `K-LAYOUT-14` |
 | `docs/qa/exemptions.md` | What a guard exempts by name: pre-standard briefs and path mentions | `K-LAYOUT-15` |
 | `docs/qa/test-database.md` | The test-database declaration, when the lanes need a database | `K-LAYOUT-16` |
+| `.github/actions/qa-store/action.yml` | The QA store hook, when the adopter runs a store | `K-OBS-17` |
 | `docs/qa/stack.md` | The stack document: the project's gates, schema procedure, isolation rules and generated files | `K-LAYOUT-17` |
 | `docs/qa/triage-fix-playbook.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md`, `docs/qa/lead-playbook.md` | The Implementer's, Reviewer's, Explorer's and Lead's playbooks | `K-LAYOUT-17` |
 | `.agent/starting-map.md` | The starting map the project-setup hook writes for an issue (`K-AGENT-41`) | `K-LAYOUT-17` |

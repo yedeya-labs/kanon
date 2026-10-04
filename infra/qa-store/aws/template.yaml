@@ -1,0 +1,163 @@
+# Kanon's AWS QA store (plan 0004 §3.2, step P9; `K-OBS-17`): one DynamoDB table for the run
+# rows, the coverage and the code-reading ledger, one S3 bucket for the raw reports, and one role
+# that GitHub OIDC lets the adopter's store jobs assume.
+#
+# DEPLOYED INTO THE ADOPTER'S OWN ACCOUNT, BY `provision.mjs`, which refuses a template that fails
+# the checks it shares with the unit test. Intrinsics are in their long form (`Ref:`,
+# `Fn::GetAtt:`), so the file parses as plain YAML for both. `docs/qa-store.md` has the commands.
+#
+# NO STAGE IN ANY LIFECYCLE (`K-OBS-17`). The reference adopter kept its store inside a staging
+# stage, and a teardown of that stage once emptied the run reports. So nothing here is named for,
+# conditioned on or parameterised by an application stage: the stack is the store's alone, the
+# table and the bucket are retained when it is deleted or a property change would replace them,
+# and the table is protected from deletion. Deleting them is a deliberate act of the account's
+# owner, outside this stack.
+#
+# COST: on-demand DynamoDB with point-in-time recovery, and a few megabytes of S3 a year at the
+# reference adopter's volume. No NAT, no VPC, no compute, no customer-managed key, no alarm: a
+# failed write turns the store job red, and that red run is the page (`K-OBS-6`).
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Kanon's QA store (plan 0004, step P9).
+
+Parameters:
+  Repository:
+    Type: String
+    Description: The repository whose store jobs may assume the role, as owner/name.
+    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+  CreateOidcProvider:
+    Type: String
+    Description: Create GitHub's OIDC provider. Set false when the account already has one.
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+Conditions:
+  CreateOidc: { 'Fn::Equals': [{ Ref: CreateOidcProvider }, 'true'] }
+
+Resources:
+  # The run rows, coverage and ledger (`push-run.sh`'s item model). Retained on delete and on
+  # replace, and protected from deletion: its lifecycle is independent of the stack (K-OBS-17).
+  Table:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: kanon-qa-store
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      DeletionProtectionEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # The raw reports, one object per run (`<kind>/<ts>.json`). Retained, versioned, private.
+  # CloudFormation never empties a retained bucket, so its objects survive the stack too.
+  Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName:
+        Fn::Sub: kanon-qa-store-${AWS::AccountId}-${AWS::Region}
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: { Ref: Bucket }
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - { 'Fn::GetAtt': [Bucket, Arn] }
+              - { 'Fn::Sub': '${Bucket.Arn}/*' }
+            Condition:
+              Bool: { aws:SecureTransport: 'false' }
+
+  OidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidc
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  # The role the store jobs assume (decision 9): trusted for exactly one OIDC subject, the
+  # repository's `kanon-qa-store` environment, which only store jobs declare. Never a pattern.
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: kanon-qa-store
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated:
+                Fn::If:
+                  - CreateOidc
+                  - { Ref: OidcProvider }
+                  - { 'Fn::Sub': 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com' }
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub:
+                  Fn::Sub: repo:${Repository}:environment:kanon-qa-store
+      Policies:
+        - PolicyName: read-and-write-the-store
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # The raw reports: write one per run, read them for an export.
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: { 'Fn::Sub': '${Bucket.Arn}/*' }
+              # ListBucket on the bucket itself, so that S3 answers a read of a missing report
+              # with 404, which an export leaves out, and not with 403, which fails the export.
+              # A 403 then means only a role that is really wrong.
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: { 'Fn::GetAtt': [Bucket, Arn] }
+              # Writers upsert, readers query: the operations share the role.
+              - Effect: Allow
+                Action: [dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:GetItem, dynamodb:Query]
+                Resource: { 'Fn::GetAtt': [Table, Arn] }
+              # Store hygiene (the maintenance workflow) needs DeleteItem, held to the COVERAGE
+              # partition, the one that is re-derivable: `push-run.sh` rewrites every
+              # COVERAGE/<route> row from each sweep's report. `RUN#*` and `AREAS` are not
+              # re-derivable, so no job can delete them.
+              - Effect: Allow
+                Action: dynamodb:DeleteItem
+                Resource: { 'Fn::GetAtt': [Table, Arn] }
+                Condition:
+                  ForAllValues:StringEquals:
+                    dynamodb:LeadingKeys: [COVERAGE]
+
+Outputs:
+  RoleArn:
+    Value: { 'Fn::GetAtt': [Role, Arn] }
+  TableName:
+    Value: { Ref: Table }
+  BucketName:
+    Value: { Ref: Bucket }

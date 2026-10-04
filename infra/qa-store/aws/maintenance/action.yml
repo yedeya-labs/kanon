@@ -1,0 +1,59 @@
+# Upkeep of Kanon's AWS QA store (plan 0004 §2.8, decision 10): one task, a dry run unless
+# `apply` is 'true'. Called by `.github/workflows/qa-store-aws-maintenance.yml`, in a job that
+# declares the `kanon-qa-store` environment. An adopter whose store is its own writes its own.
+#
+# MOVED FROM THE REFERENCE ADOPTER'S MAINTENANCE WORKFLOW (ADR 0009): its task step, with the
+# credentials step it ran before it. Add new hygiene tasks as `task` values here, rather than new
+# workflows, as that workflow said.
+name: Kanon QA store maintenance on AWS
+description: Runs one upkeep task on Kanon's AWS QA store, as a dry run unless apply is 'true'.
+author: yedeya-labs
+
+inputs:
+  task:
+    description: "The task: `purge-legacy-coverage`."
+    required: true
+  apply:
+    description: "'true' actually deletes; anything else is a dry run."
+    required: false
+    default: "false"
+  role-arn:
+    description: The store role's ARN.
+    required: true
+  region:
+    description: The store's region.
+    required: true
+  table:
+    description: The store's DynamoDB table.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Assume the QA store's role
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: ${{ inputs.region }}
+
+    # Fail-the-job, never best-effort: this WRITES the store, and a red run is the only page
+    # this path has (the reference adopter's observability doc, §8).
+    - name: Run maintenance task
+      shell: bash
+      env:
+        TASK: ${{ inputs.task }}
+        QA_DYNAMO_TABLE: ${{ inputs.table }}
+        QA_AWS_REGION: ${{ inputs.region }}
+        APPLY: ${{ inputs.apply == 'true' && '1' || '' }}
+      run: |
+        set -euo pipefail
+        echo "task=$TASK  apply=${APPLY:-0}"
+        case "$TASK" in
+          purge-legacy-coverage)
+            bash "$GITHUB_ACTION_PATH/../purge-legacy-coverage.sh"
+            ;;
+          *)
+            echo "unknown task: $TASK" >&2
+            exit 1
+            ;;
+        esac

@@ -1,0 +1,89 @@
+# Kanon's AWS implementation of the QA store contract (plan 0004 §3.2, step P9; `K-OBS-17`).
+#
+# THE ADOPTER'S HOOK CALLS THIS, AND NOTHING ELSE DOES. An adopter whose QA store is on AWS writes
+# `.github/actions/qa-store/action.yml` as one call of this action, passing the contract's five
+# inputs through and naming its own store:
+#
+#   runs:
+#     using: composite
+#     steps:
+#       - uses: yedeya-labs/kanon/infra/qa-store/aws@vX.Y.Z
+#         with:
+#           operation: ${{ inputs.operation }}
+#           kind: ${{ inputs.kind }}
+#           dir: ${{ inputs.dir }}
+#           from: ${{ inputs.from }}
+#           to: ${{ inputs.to }}
+#           role-arn: <the stack's RoleArn output>
+#           region: <the stack's region>
+#           table: <the stack's TableName output>
+#           bucket: <the stack's BucketName output>
+#
+# The store is the one `provision.mjs` creates from `template.yaml`, or an existing table and
+# bucket of the same item model: the reference adopter passes its own, which it keeps.
+#
+# THE CREDENTIALS ARE THIS ACTION'S, IN THE STORE JOB ONLY. Kanon's `qa-store` block runs the hook
+# in a job that declares the `kanon-qa-store` environment and `id-token: write`, so the OIDC
+# subject is `repo:<owner>/<repo>:environment:kanon-qa-store`, the one the role trusts. No agent
+# job runs this action.
+#
+# THE SCRIPTS ARE THE REFERENCE ADOPTER'S, MOVED (ADR 0009): `push-run.sh` for `put`, the
+# Explorer gate's queries for `last-green` and `record-skip`, and the dispatch sweep's query for
+# `cost-rows`. `export.mjs` is new: before P9 the agents queried the store themselves.
+name: Kanon QA store on AWS
+description: Implements the QA store contract's five operations on a DynamoDB table and an S3 bucket, assuming the store's role through GitHub OIDC.
+author: yedeya-labs
+
+inputs:
+  operation:
+    description: The contract's operation, passed through from the hook's input.
+    required: true
+  kind:
+    description: The contract's kind, passed through.
+    required: false
+    default: ""
+  dir:
+    description: The contract's directory, passed through.
+    required: true
+  from:
+    description: The contract's window start, passed through.
+    required: false
+    default: ""
+  to:
+    description: The contract's window end, passed through.
+    required: false
+    default: ""
+  role-arn:
+    description: The store role's ARN (the stack's RoleArn output).
+    required: true
+  region:
+    description: The store's region.
+    required: true
+  table:
+    description: The store's DynamoDB table.
+    required: true
+  bucket:
+    description: The store's S3 bucket, for raw reports.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Assume the QA store's role
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: ${{ inputs.region }}
+
+    - name: Run the store operation
+      shell: bash
+      env:
+        OPERATION: ${{ inputs.operation }}
+        KIND: ${{ inputs.kind }}
+        DIR: ${{ inputs.dir }}
+        FROM: ${{ inputs.from }}
+        TO: ${{ inputs.to }}
+        QA_AWS_REGION: ${{ inputs.region }}
+        QA_DYNAMO_TABLE: ${{ inputs.table }}
+        QA_S3_BUCKET: ${{ inputs.bucket }}
+      run: bash "$GITHUB_ACTION_PATH/store.sh"

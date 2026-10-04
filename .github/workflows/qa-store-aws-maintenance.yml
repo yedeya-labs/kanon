@@ -1,0 +1,71 @@
+# Maintenance of Kanon's AWS QA store (plan 0004 §2.8, step P9, decision 10). A reusable
+# workflow: the adopter's caller holds the `workflow_dispatch` trigger and names its store.
+#
+# MOVED FROM THE REFERENCE ADOPTER'S `agent-maintenance.yml` (ADR 0009). It ran the one-off
+# store-hygiene scripts under the store's OIDC role, so they no longer depended on a human having
+# the account's credentials to hand. That dependency is why the legacy-COVERAGE purge sat undone
+# across five audits: the script shipped reviewed and idempotent and was simply never invoked
+# with `apply`. What changed in the move: the trigger is the caller's, the store's coordinates
+# are inputs instead of the `qa` environment's variables (a called workflow's caller can't read
+# an environment's variables), and the environment is `kanon-qa-store`, the one the store's role
+# trusts (decision 9).
+#
+# SAFE BY DEFAULT: `apply` is false, so a bare run is a dry run that prints what it WOULD
+# delete. The scripts are idempotent, so re-running after a successful apply is a clean
+# "still clean?" check.
+#
+# KEPT AFTER THE PURGE, deliberately: the purge task itself is one-off (nothing writes the
+# legacy key format any more), but this is the standing remediation arm for COVERAGE hygiene
+# generally. Orphan rows recur structurally: delete or rename a route and its COVERAGE/<route>
+# row is stranded. Add new hygiene tasks as `task` values of `infra/qa-store/aws/maintenance`
+# rather than new workflows.
+#
+# The adopter's caller is in `docs/qa-store.md`: a `workflow_dispatch` with `task` and `apply`,
+# `id-token: write`, and one job that calls this workflow at the pinned release with the store's
+# role, region and table.
+name: QA store maintenance (AWS)
+
+on:
+  workflow_call:
+    inputs:
+      task:
+        description: Maintenance task to run
+        type: string
+        required: false
+        default: purge-legacy-coverage
+      apply:
+        description: Actually delete (false = dry run)
+        type: boolean
+        required: false
+        default: false
+      role-arn:
+        description: The store role's ARN.
+        type: string
+        required: true
+      region:
+        description: The store's region.
+        type: string
+        required: true
+      table:
+        description: The store's DynamoDB table.
+        type: string
+        required: true
+
+permissions:
+  id-token: write # assume the store's OIDC role, in the job below only.
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    # Bounds a hang. Actions' default cap is 360m.
+    timeout-minutes: 30
+    # Scopes the OIDC token to `:environment:kanon-qa-store`, the one subject the store's role trusts.
+    environment: kanon-qa-store
+    steps:
+      - uses: $/infra/qa-store/aws/maintenance
+        with:
+          task: ${{ inputs.task }}
+          apply: ${{ inputs.apply && 'true' || 'false' }}
+          role-arn: ${{ inputs.role-arn }}
+          region: ${{ inputs.region }}
+          table: ${{ inputs.table }}

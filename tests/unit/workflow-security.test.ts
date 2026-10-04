@@ -19,6 +19,9 @@ const files = [
   ...readdirSync('actions', { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => join('actions', d.name, 'action.yml')),
+  // The AWS QA store's actions (plan 0004 step P9), which an adopter's hook calls by path.
+  'infra/qa-store/aws/action.yml',
+  'infra/qa-store/aws/maintenance/action.yml',
 ];
 const docs = files.map((file) => ({ file, doc: parse(readFileSync(file, 'utf8')) as Doc }));
 

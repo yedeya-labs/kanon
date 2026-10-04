@@ -42,6 +42,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { exhaustedRoute, projectOf } from './split-lineage.mjs';
 import { appLogin } from './app-register.mjs';
+import { queryCostRows } from '../infra/qa-store/aws/cost-rows.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -1231,13 +1232,14 @@ export function unreachedWindowStart(now = Date.now(), days = UNREACHED_WINDOW_D
   return costStamp(now - days * 86400_000);
 }
 
-/** Exactly the attributes `readCostRows` projects — the bound two documents record.
+/** Exactly the attributes `readCostRows` projects — the bound two documents record. Defined
+ *  beside the query since it moved into the AWS store action (plan 0004 step P9).
  *
  *  `sk` is the sort key the query already ranges on, `issue_number` and `outcome` are
  *  the two fields the subtraction needs, and `run_id` is what lets a row be traced to
  *  the account that triggered it (RA-1579). Nothing else is read, and no write verb
  *  exists in the function. */
-export const COST_PROJECTION = ['sk', 'issue_number', 'outcome', 'run_id'];
+export { COST_PROJECTION } from '../infra/qa-store/aws/cost-rows.mjs';
 
 /** Why the store cannot be read this run, or null if it can be tried (RA-2706).
  *
@@ -1299,29 +1301,9 @@ export function readCostRows(lane, now = Date.now(), env = process.env) {
   if (skipped) return { rows: [], error: skipped };
   const since = unreachedWindowStart(now);
   try {
-    const raw = execFileSync('aws', [
-      'dynamodb', 'query', '--table-name', table, '--region', region,
-      '--key-condition-expression', 'pk = :p AND sk > :s',
-      '--expression-attribute-values',
-      JSON.stringify({ ':p': { S: `COST#${lane.telemetryAgent}` }, ':s': { S: since } }),
-      // `sk` too: a row's timestamp is what pairs a run with the sweep comment that
-      // dispatched it (RA-1573 review, RA-1579) — and `run_id`, which says WHO triggered it.
-      //
-      // A CONSTANT, NOT A LITERAL (RA-1586). Two documents record this bound as a claim a
-      // reader can check — `agent-dispatch-sweep.yml`'s permissions comment and
-      // `docs/qa/agent-identities.md` footnote 7b — and both said "two fields" for as
-      // long as this projected three, because nothing failed when they disagreed. The
-      // test asserts the CONTENTS of this list against both records; a widening here
-      // is now a red test rather than a third round of the same drift.
-      '--projection-expression', COST_PROJECTION.join(', '),
-      '--output', 'json',
-    ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
-    const rows = (JSON.parse(raw).Items ?? []).map((it) => ({
-      ts: it.sk?.S ?? null,
-      issue_number: it.issue_number?.N ?? null,
-      outcome: it.outcome?.S ?? null,
-      run_id: it.run_id?.S ?? null,
-    }));
+    // The query is the AWS store action's (plan 0004 step P9): one query, which the store hook's
+    // `cost-rows` operation answers too, until step 9 moves this read onto the hook.
+    const rows = queryCostRows({ agent: lane.telemetryAgent, since, table, region });
     return { rows, error: null };
   } catch (err) {
     // Fails closed — see `unreachedByIssue` — and says so (RA-2706).
