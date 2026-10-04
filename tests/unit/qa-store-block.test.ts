@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import {
   EXPORT_FILES, FILES, HOOK_PATH, MANIFEST, OPERATIONS, READ_OPERATIONS, STORE_ENVIRONMENT, WRITE_OPERATIONS,
-  absentLine, checkRequest, finish, prepare, readCostRowsFile,
+  absentLine, checkRequest, deleteExport, finish, prepare, readCostRowsFile,
 } from '../../actions/qa-store/qa-store.mjs';
 
 /**
@@ -238,7 +238,12 @@ describe('the block\'s steps', () => {
     expect(upload?.with?.name).toBe('kanon-qa-store-export-${{ github.run_id }}-${{ github.run_attempt }}');
     expect(action.outputs['artifact-name']?.value).toBe("${{ format('kanon-qa-store-export-{0}-{1}', github.run_id, github.run_attempt) }}");
     const del = steps.find((s) => s.if === "inputs.operation == 'delete-export'");
-    expect(del?.run).toContain('gh api --method DELETE "repos/$REPO/actions/artifacts/$ARTIFACT_ID"');
+    expect(del?.run).toBe('node "$GITHUB_ACTION_PATH/qa-store.mjs" delete-export');
+    expect(del?.env).toMatchObject({
+      GH_TOKEN: '${{ github.token }}', ARTIFACT_ID: '${{ inputs.artifact-id }}', EXPORT_ATTEMPT: '${{ inputs.export-attempt }}',
+      RUN_ATTEMPT: '${{ github.run_attempt }}', AGENT_RESULT: '${{ inputs.agent-result }}',
+    });
+    expect(action.outputs.attempt?.value).toBe('${{ github.run_attempt }}');
   });
 
   it('interpolates no expression into a run line, and names neither vars nor secrets', () => {
@@ -262,5 +267,47 @@ describe('the script, as the block runs it', () => {
     expect(fin.status).toBe(0);
     expect(readFileSync(out, 'utf8')).toContain('state=absent\n');
     expect(readFileSync(summary, 'utf8')).toBe(`${absentLine('last-green')}\n`);
+  });
+});
+
+describe('delete-export, and a re-run of the agent job alone (kanon#224)', () => {
+  const calls: Array<{ url: string; method?: string; auth?: string }> = [];
+  const api = (status: number) => (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), method: init?.method, auth: (init?.headers as Record<string, string>)?.authorization });
+    return new Response(null, { status });
+  }) as typeof fetch;
+  const base = { REPO: 'o/r', GH_TOKEN: 't', GITHUB_API_URL: 'https://api.example', ARTIFACT_ID: '42', EXPORT_ATTEMPT: '1', RUN_ATTEMPT: '1', AGENT_RESULT: 'success' };
+  beforeEach(() => { calls.length = 0; });
+
+  it('deletes the export by id with the job token, and stays green', async () => {
+    expect(await deleteExport(base, api(204))).toEqual({ lines: ['Deleted the QA store export (artifact 42).'], error: null });
+    expect(calls).toEqual([{ url: 'https://api.example/repos/o/r/actions/artifacts/42', method: 'DELETE', auth: 'Bearer t' }]);
+  });
+
+  it('takes an export already gone as deleted, and fails any other answer', async () => {
+    expect(await deleteExport(base, api(404))).toEqual({ lines: ['The QA store export (artifact 42) was already deleted.'], error: null });
+    expect((await deleteExport(base, api(500))).error).toBe('deleting the QA store export (artifact 42) failed: HTTP 500');
+    expect((await deleteExport(base, api(403))).error).toBe('deleting the QA store export (artifact 42) failed: HTTP 403');
+  });
+
+  it('refuses a malformed id or a missing attempt before calling the API', async () => {
+    expect((await deleteExport({ ...base, ARTIFACT_ID: '4 2' }, api(204))).error).toBe("artifact-id '4 2' is not a number");
+    expect((await deleteExport({ ...base, EXPORT_ATTEMPT: '' }, api(204))).error).toBe("delete-export needs export-attempt, the export job's attempt output");
+    expect(calls).toEqual([]);
+    expect(await deleteExport({ ...base, ARTIFACT_ID: '' }, api(204))).toEqual({ lines: ['No export artifact to delete: the export job uploaded none.'], error: null });
+  });
+
+  it('turns a partial re-run that skipped the agent job red, and says to re-run all jobs', async () => {
+    const r = await deleteExport({ ...base, RUN_ATTEMPT: '2', AGENT_RESULT: 'skipped' }, api(404));
+    expect(r.lines).toEqual(['The QA store export (artifact 42) was already deleted.']);
+    expect(r.error).toBe('attempt 2 re-ran the agent job without the export job, whose export, from attempt 1, was deleted when that attempt finished. '
+      + 'The agent job was skipped rather than run without the store. Use "Re-run all jobs", which exports again.');
+  });
+
+  it('leaves green a re-run of the delete job alone, and an agent skipped on the export\'s own attempt', async () => {
+    // Attempt 1's agent succeeded and its delete failed: attempt 2 re-runs only the delete.
+    expect((await deleteExport({ ...base, RUN_ATTEMPT: '2' }, api(204))).error).toBeNull();
+    // The export failed, so the agent was skipped in the same attempt: the export's red is the page.
+    expect((await deleteExport({ ...base, AGENT_RESULT: 'skipped' }, api(204))).error).toBeNull();
   });
 });

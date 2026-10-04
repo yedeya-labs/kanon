@@ -4,6 +4,9 @@
 #
 #   export (store job) → agent (no credentials) → put (store job)
 #                      ↘ delete-export, after the export job and the agent job, always
+#
+# The agent job runs only on the export's attempt, and the delete job turns a partial re-run red
+# (kanon#224): "Re-run failed jobs" doesn't re-run the export, whose artifact is already gone.
 name: Store lane fixture
 
 on:
@@ -27,6 +30,7 @@ jobs:
     outputs:
       artifact-name: ${{ steps.store.outputs.artifact-name }}
       artifact-id: ${{ steps.store.outputs.artifact-id }}
+      attempt: ${{ steps.store.outputs.attempt }}
     steps:
       - uses: $/actions/qa-store
         id: store
@@ -36,6 +40,9 @@ jobs:
 
   agent:
     needs: export
+    # Only on the export's own attempt: a re-run of this job alone would read an export the
+    # earlier attempt's delete job already deleted (kanon#224).
+    if: needs.export.outputs.attempt == github.run_attempt
     permissions:
       contents: read
       issues: read
@@ -80,3 +87,5 @@ jobs:
         with:
           operation: delete-export
           artifact-id: ${{ needs.export.outputs.artifact-id }}
+          export-attempt: ${{ needs.export.outputs.attempt }}
+          agent-result: ${{ needs.agent.result }}
