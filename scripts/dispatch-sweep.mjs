@@ -145,6 +145,7 @@ export const MARKER = '<!-- qa:dispatch-sweep -->';
  * @property {boolean} legacy   true for the lane whose comments predate lane tags
  * @property {string[]} [terminal] labels meaning this lane's question is answered, so
  *   the issue leaves it regardless of its conversation (RA-1380)
+ * @property {string} [settled] the state an issue carrying a `terminal` label reports
  * @property {boolean} [decomposes] an `exhausted` run in this lane means the ISSUE is too
  *   big, and it is stopped and routed to a split rather than re-dispatched (RA-1781)
  * @property {string} neverRan  prose for a re-dispatch of a never-ran issue
@@ -176,6 +177,15 @@ export const LANES = [
     // `MAX_REDISPATCH` attempts learning that. Not the triage lane: a triage run that
     // exhausts is not an item in any brief, and there is nothing to split.
     decomposes: true,
+    // PARKED BY A HUMAN LEAVES THE LANE (kanon#170). A Maintainer who parks an issue by
+    // hand ("built by hand, do not re-dispatch") adds `qa:needs-info` and may KEEP
+    // `agent:implement`. The Lead's eligible filter already excludes that issue; the sweep
+    // did not, because it only ever met `qa:needs-info` as its own stop label, and
+    // `stop()` removes the trigger label in the same breath. So the human-parked
+    // combination read `answered` and was re-dispatched. For an issue the sweep stopped
+    // itself this is a no-op: the trigger label is already gone.
+    terminal: [STOP_LABEL],
+    settled: 'parked',
     neverRan:
       'This issue has carried the trigger label with no output from the implementer. ' +
       'Per `agent-implement.yml` the agent always comments before finishing, so silence ' +
@@ -197,6 +207,7 @@ export const LANES = [
     // fix — still in flight) and NOT the scope-first bail (which keeps the trigger
     // label on purpose and is a genuine hand-off this lane should surface).
     terminal: ['qa:cannot-reproduce', 'qa:false-positive'],
+    settled: 'triage-settled',
     neverRan:
       'This bug has carried `qa:needs-triage` with no output from the triage agent. ' +
       'Per `agent-triage.yml` the agent always comments before finishing, so silence ' +
@@ -219,8 +230,8 @@ export const ANY_LANE_TAG = /<!-- qa:lane:[a-z-]+ -->/;
  *
  *  Reads the issue's own labels, because this is the one fact the conversation cannot
  *  carry: a `qa:false-positive` bug and an untriaged one can have identical comment
- *  histories. A lane with no `terminal` list is unaffected — the implement lane has no
- *  such verdict, and inventing one for it would be guessing. */
+ *  histories. The implement lane's one terminal label is `qa:needs-info`, a human's park
+ *  (kanon#170); a lane with no `terminal` list is unaffected. */
 export const terminalVerdict = (issue, lane) => {
   const names = (issue?.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name));
   return (lane?.terminal ?? []).some((t) => names.includes(t));
@@ -716,7 +727,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
     // question. `act: null`, never `stop`: the sweep does not need to strip a label
     // to reach the right outcome here, and stopping would post a `qa:needs-info`
     // hand-off note about an issue nobody needs information about.
-    state = 'triage-settled';
+    state = lane.settled ?? 'triage-settled';
   } else if (hasPr) {
     state = 'has-pr';
   } else if (humanRepliedToSweep) {
@@ -773,7 +784,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
   //     and stopping it mid-run would strand its work beside a split PR.
   // NOT the states where a person or a PR already owns the issue. NOT `stop()`'s
   // `exhausted` either, which is the sweep's own attempt budget running out.
-  const OWNED = ['has-pr', 'human-held', 'triage-settled'];
+  const OWNED = ['has-pr', 'human-held', 'triage-settled', 'parked'];
   if (lane.decomposes && Number.isFinite(exhaustedAt) && !OWNED.includes(state)
     && !(Number.isFinite(labeledAt) && labeledAt > exhaustedAt)
     && !conversation.some((c) => Date.parse(c.createdAt) > exhaustedAt && (c.login === lane.agent || !isBot(c.login)))) {
@@ -885,14 +896,14 @@ function stop(v) {
       '',
       `It wants DECOMPOSING, not re-running. Labelled \`${stopLabel}\` — ${v.why}.`,
       '',
-      `_Filed by \`scripts/dispatch-sweep.mjs\` (RA-912, ${lane.key} lane RA-1336, too-big RA-1781). To run it again unchanged instead, ${stopLabel === lane.stopLabel ? '' : `remove \`${stopLabel}\` (the split lane skips an issue without it) and `}re-add \`${lane.label}\` — a label applied after the capped run lifts this verdict._`,
+      `_Filed by \`scripts/dispatch-sweep.mjs\` (RA-912, ${lane.key} lane RA-1336, too-big RA-1781). To run it again unchanged instead, remove \`${stopLabel}\`${stopLabel === lane.stopLabel ? '' : ' (the split lane skips an issue without it)'} and re-add \`${lane.label}\` — a label applied after the capped run lifts this verdict._`,
     ].join('\n')
     : [
       MARKER,
       laneTag(lane),
       `Removing \`${lane.label}\` after ${v.redispatches} re-dispatches with no pull request.`,
       '',
-      `Re-dispatching further would loop. Labelled \`${stopLabel}\` for a human: either the acceptance criteria need sharpening, or this needs building by hand. Re-add \`${lane.label}\` to try again — the sweep counts attempts from its own comments, so clear them to reset.`,
+      `Re-dispatching further would loop. Labelled \`${stopLabel}\` for a human: either the acceptance criteria need sharpening, or this needs building by hand. Remove \`${stopLabel}\` and re-add \`${lane.label}\` to try again — the sweep counts attempts from its own comments, so clear them to reset.`,
       '',
       `_Filed by \`scripts/dispatch-sweep.mjs\` (RA-912, ${lane.key} lane RA-1336)._`,
     ].join('\n');
@@ -934,7 +945,7 @@ export function actionCell(v, breaker = { tripped: false }) {
   return breaker.tripped && v.act === 'stop' ? 'stop (withheld)' : v.act;
 }
 
-const REPORT_ORDER = ['never-ran', 'answered', 'too-big', 'awaiting-human', 'human-held', 'exhausted', 'in-flight', 'has-pr', 'triage-settled'];
+const REPORT_ORDER = ['never-ran', 'answered', 'too-big', 'awaiting-human', 'human-held', 'exhausted', 'in-flight', 'has-pr', 'triage-settled', 'parked'];
 
 /**
  * The step-summary text, pure so it can be asserted on (RA-1260). Takes the breaker's

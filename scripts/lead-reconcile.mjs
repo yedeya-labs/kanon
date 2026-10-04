@@ -2437,8 +2437,9 @@ export function qaIssueOf(all, project) {
 export function laneStateOf(number, { labels = [], comments = commentsFor, classify = classifyLane } = {}) {
   try {
     // The REAL labels, not `[]` (RA-2103 review). `classify` reads them only through
-    // `terminalVerdict`, and the implement lane declares no terminal labels today —
-    // so passing `[]` was safe but coupled this call to that fact.
+    // `terminalVerdict`, and since kanon#170 the implement lane declares one
+    // (`qa:needs-info`, which `isParkedOnHuman` also reads first) — so `[]` would now
+    // misreport a human-parked issue's lane state.
     const v = classify({ number, labels }, comments(number), false);
     // `lastAt` is the conversation's last word — what the RA-2112 gate ages.
     return { state: v.state, lastAt: v.last?.createdAt ?? null };
