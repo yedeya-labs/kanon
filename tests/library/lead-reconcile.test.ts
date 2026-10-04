@@ -882,6 +882,10 @@ describe('phases 4 and 6 — deploy watch, then close (RA-1056)', () => {
       // RA-1369: a completed run whose jobs contain no `deploy` job. Distinct from
       // `run-unreadable` because it is PERMANENT — the job set never changes.
       [{ state: 'deploy-job-absent', tag: 'v0.38.5' }, 'deploy-job-absent'],
+      // kanon#161: a deployed release whose tree holds a revert of the work, and one whose
+      // history after the merges could not be read. Neither is a deploy.
+      [{ state: 'reverted', tag: 'v0.38.5' }, 'deploy-reverted'],
+      [{ state: 'history-unreadable', tag: 'v0.38.5' }, 'deploy-history-unreadable'],
       // Nothing merged closed these issues, so nothing shipped — but it must not
       // block, and it must not claim a deploy either.
       [{ state: 'nothing-to-deploy' }, 'file-qa'],
@@ -906,6 +910,8 @@ describe('phases 4 and 6 — deploy watch, then close (RA-1056)', () => {
       ['deploy-gate-declined', { state: 'gate-declined', tag: 'v0.38.2' }, /deploy job was SKIPPED/],
       ['deploy-run-not-found', { state: 'run-not-found', tag: 'v0.38.5' }, /does NOT resolve itself/],
       ['deploy-run-unreadable', { state: 'run-unreadable', tag: 'v0.38.5' }, /refusing to treat unknown as deployed/],
+      ['deploy-reverted', { state: 'reverted', tag: 'v0.38.5', reverted: [{ sha: 'aaaaaaa1', by: 'bbbbbbb2' }] }, /`aaaaaaa` reverted by `bbbbbbb`/],
+      ['deploy-history-unreadable', { state: 'history-unreadable', tag: 'v0.38.5' }, /whether one of them reverts the work is UNKNOWN/],
       ['deploy-unknown', { state: 'something-new' }, /refusing to guess/],
     ])('%s stops with its OWN reason, not a shared one', (_p, deploy, re) => {
       // Four different facts used to print "waiting for the release that contains
@@ -1009,7 +1015,7 @@ describe('phase 4 — the deploy derivation itself (RA-1061)', () => {
       if (args[0] === 'run' && args[1] === 'view') return routes.runView ?? { jobs: [] };
       throw new Error(`unrouted: ${args.join(' ')}`);
     },
-    text: () => (routes.compare as string) ?? 'behind',
+    text: (a: string[]) => (a.includes('--paginate') ? '' : (routes.compare as string) ?? 'behind'),
   });
 
   it('every state it can emit is a state phaseOf knows', () => {
@@ -1147,7 +1153,7 @@ describe('phase 4 — the deploy derivation itself (RA-1061)', () => {
         if (args[0] === 'run' && args[1] === 'view') return jobsByRun[args[2]];
         throw new Error(`unrouted: ${args.join(' ')}`);
       },
-      text: () => 'behind',
+      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
     };
     const d = readDeploy([{ number: 1, state: 'CLOSED' }], io);
     expect(d.state).toBe('deployed');
@@ -1168,7 +1174,7 @@ describe('phase 4 — the deploy derivation itself (RA-1061)', () => {
         if (args[0] === 'run' && args[1] === 'view') return { jobs: [{ name: 'deploy', conclusion: 'skipped' }] };
         throw new Error('unrouted');
       },
-      text: () => 'behind',
+      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
     };
     const d = readDeploy([{ number: 1, state: 'CLOSED' }], io);
     expect(d.state).toBe('gate-declined');
@@ -1203,7 +1209,7 @@ describe('phase 4 — the deploy derivation itself (RA-1061)', () => {
         if (args[0] === 'run' && args[1] === 'view') return { jobs: [{ name: 'deploy', conclusion: 'success' }] };
         throw new Error('unrouted');
       },
-      text: () => 'behind',
+      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
     };
     const d = readDeploy([{ number: 1, state: 'CLOSED' }], io);
     expect(d.state, 'the later whole-tree deploy really did ship this code').toBe('deployed');
@@ -3503,7 +3509,7 @@ describe('phase 4: only POSITIVE evidence ends the candidate walk (RA-1271/RA-12
       },
       // Every tag contains the merge — the walk's containment check is not what is
       // under test here, and `readDeploy` re-checks it by ancestry per candidate.
-      text: () => 'behind',
+      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
     };
   };
   const CLOSED = [{ number: 1, state: 'CLOSED' }];
@@ -3805,7 +3811,7 @@ describe('a run whose jobs have no deploy job is permanent, not unreadable (RA-1
         }
         throw new Error(`unrouted: ${args.join(' ')}`);
       },
-      text: () => 'behind',
+      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
     };
   };
   const CLOSED = [{ number: 1, state: 'CLOSED' }];

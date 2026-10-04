@@ -197,7 +197,7 @@ describe('readDeploy reads the declared workflow and job (plan 0004 P6)', () => 
         if (args[0] === 'run' && args[1] === 'view') return { jobs };
         throw new Error(`unexpected gh ${args.join(' ')}`);
       },
-      text: () => 'behind',
+      text: (a: string[]) => (a.includes('--paginate') ? '' : 'behind'),
     };
   };
 
