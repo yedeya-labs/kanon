@@ -62,6 +62,7 @@ import {
   FINDING_ANCHOR, GATING_SEVERITIES, SPEC_FINDING,
 } from './project-closure.mjs';
 import { appLogin } from './app-register.mjs';
+import { readReferenceDeployFrom } from './lib/reference-deploy.mjs';
 export {
   VERIFY, briefIssues, carriedOut, dependsField, gatesClosure, inDecomposition, isPhase5Finding,
   isProjectWork, itemSatisfied, openGatingWork, parseProposed, satisfiedTitles,
@@ -462,21 +463,22 @@ export function phaseOf(world) {
 
   // ── PHASE 4 — deploy watch ────────────────────────────────────────────────
   //
-  // Every issue is closed. That is not the same as the work being ON staging, and
-  // conflating them is how a project would report itself done while its code sat
-  // in an unreleased merge. Derived like everything else (§5.2):
+  // Every issue is closed. That is not the same as the work being ON the reference
+  // environment, and conflating them is how a project would report itself done while
+  // its code sat in an unreleased merge. Derived like everything else (§5.2):
   //
   //   issue closed -> its PR merged -> merge SHA
   //                -> the release whose tag CONTAINS that SHA
-  //                -> the deploy-staging run for that tag
+  //                -> the run, for that tag, of the deploy workflow the adoption
+  //                   record declares (K-PROJ-11, K-LAYOUT-10)
   //
-  // Measured before this was written, because an earlier plan assumed a human gate
-  // between merge and release and there is none: the Releaser AUTO-MERGES the release PR.
-  // `deploy-staging` then fires when the release commit's CI completes (RA-1190;
-  // until then it fired on `release: published`). So `awaiting-release` is a
-  // transient, not a gate — up to one scheduled release tick since RA-2594 (3 h, or
-  // overnight) — but it is a distinct state, because reporting it as `deployed` is
-  // the lie this phase exists to prevent.
+  // Measured on the reference adopter before this was written, because an earlier plan
+  // assumed a human gate between merge and release and there is none: the Releaser
+  // AUTO-MERGES the release PR. Its deploy workflow then fires when the release commit's
+  // CI completes (RA-1190; until then it fired on `release: published`). So
+  // `awaiting-release` is a transient, not a gate — up to one scheduled release tick
+  // since RA-2594 (3 h, or overnight) — but it is a distinct state, because reporting
+  // it as `deployed` is the lie this phase exists to prevent.
   // An EXPLICIT map, not a pass-through. Returning `world.deploy.state` directly was
   // correct only because readDeploy's states happened to be spelled the way
   // nextActions branches on them; any new state, or a rename on either side, became
@@ -550,6 +552,13 @@ export function phaseOf(world) {
 // not also dispatch one: filing is the bigger, less reversible step, and letting
 // the same tick act on its own output would mean acting on state it has not yet
 // re-derived — which is the whole point of deriving it.
+
+/** The declared reference environment, deploy workflow and job, as a message names them
+ *  (plan 0004 P6). A hand-built `deploy` object carries none of them, so each falls back to
+ *  a description. */
+const deployEnvironment = (world) => (world.deploy?.environment ? `\`${world.deploy.environment}\`` : 'the reference environment');
+const deployWorkflow = (world) => (world.deploy?.workflow ? `\`${world.deploy.workflow}\`` : 'the reference deploy workflow');
+const deployJobName = (world) => (world.deploy?.job ? `\`${world.deploy.job}\`` : 'deploy');
 
 /** How many containing releases the phase-4 walk classified, when that is more than
  *  one. Silent at one, because "examined 1 release" is noise on the common case and
@@ -699,7 +708,7 @@ function nextActionsCore(world, {
   if (phase === 'deploy-failed') {
     return {
       phase, actions: [],
-      stopped: `staging deploy FAILED for ${world.deploy?.tag ?? 'the release containing this project'} (${world.deploy?.url ?? 'no run url'})${walked(world)} — the project is not closed and will not be until a deploy of this work succeeds`,
+      stopped: `the deploy to ${deployEnvironment(world)} FAILED for ${world.deploy?.tag ?? 'the release containing this project'} (${world.deploy?.url ?? 'no run url'})${walked(world)} — the project is not closed and will not be until a deploy of this work succeeds`,
     };
   }
   // Not an absence: every issue is closed and the work is in flight. Saying so is
@@ -710,15 +719,15 @@ function nextActionsCore(world, {
   // reads as patience for something already past.
   const WAITING = {
     'awaiting-release': () => 'every issue is closed; no release contains their merges yet',
-    deploying: () => `every issue is closed; \`${world.deploy?.tag}\` is deploying to staging`,
-    'deploy-run-not-found': () => `every issue is closed and \`${world.deploy?.tag}\` contains their merges, but no deploy-staging run for that tag is among the last 30 read${walked(world)} — this does NOT resolve itself, and the project will sit here until someone looks`,
-    'deploy-run-unreadable': () => `could not read the jobs of the deploy run for \`${world.deploy?.tag}\` (${world.deploy?.url ?? 'no url'}), so whether staging was touched is UNKNOWN — refusing to treat unknown as deployed. A read failure is transient: the next tick re-issues it`,
+    deploying: () => `every issue is closed; \`${world.deploy?.tag}\` is deploying to ${deployEnvironment(world)}`,
+    'deploy-run-not-found': () => `every issue is closed and \`${world.deploy?.tag}\` contains their merges, but no ${deployWorkflow(world)} run for that tag is among the last ${DEPLOY_RUN_WINDOW} read${walked(world)} — this does NOT resolve itself, and the project will sit here until someone looks`,
+    'deploy-run-unreadable': () => `could not read the jobs of the deploy run for \`${world.deploy?.tag}\` (${world.deploy?.url ?? 'no url'}), so whether ${deployEnvironment(world)} was touched is UNKNOWN — refusing to treat unknown as deployed. A read failure is transient: the next tick re-issues it`,
     // NAMES ITS OWN PERMANENCE (RA-1369). This state used to be reported as
     // `run-unreadable`, whose message says nothing about resolving itself — so a human
     // had every reason to wait for a tick that could never differ. A completed run's
     // job set does not change.
-    'deploy-job-absent': () => `every containing release was read, and none has a \`deploy\` job — the newest examined is \`${world.deploy?.tag}\` (${world.deploy?.url ?? 'no url'}). A completed run's jobs never change, so this does NOT resolve itself: either \`deploy-staging.yml\`'s job was renamed since these tags were cut, or those releases genuinely never deployed. Refusing to treat an absent job as a deploy`,
-    'deploy-gate-declined': () => `\`${world.deploy?.tag}\` was released but its deploy job was SKIPPED: deploy-staging's gate found no deploying commits in the range, so staging was never touched. 8 of the last 25 releases are in this state${walked(world)}. The project is not closed on a deploy that did not happen`,
+    'deploy-job-absent': () => `every containing release was read, and none has a ${deployJobName(world)} job — the newest examined is \`${world.deploy?.tag}\` (${world.deploy?.url ?? 'no url'}). A completed run's jobs never change, so this does NOT resolve itself: either the job was renamed since these tags were cut, or the adoption record names a different one, or those releases genuinely never deployed. Refusing to treat an absent job as a deploy`,
+    'deploy-gate-declined': () => `\`${world.deploy?.tag}\` was released but its deploy job was SKIPPED: ${deployWorkflow(world)}'s gate found nothing to deploy in the range, so ${deployEnvironment(world)} was never touched${walked(world)}. The project is not closed on a deploy that did not happen`,
     'deploy-unknown': () => `readDeploy returned a state this tick does not know how to act on — refusing to guess`,
   };
   if (WAITING[phase]) return { phase, actions: [], stopped: WAITING[phase]() };
@@ -1190,7 +1199,7 @@ export function repoLabels({ json = ghJson } = {}) {
  * from GitHub, so none of it is stored (§5.2):
  *
  *   closed issue -> its merged PR -> merge SHA -> the release whose tag CONTAINS
- *   that SHA -> the deploy-staging run for that tag
+ *   that SHA -> the declared deploy workflow's run for that tag
  *
  * ANCESTRY, NOT TIMESTAMPS. `compare/<tag>...<sha>` returns `behind` or `identical`
  * when the SHA is in the tag. Comparing times instead would be wrong by exactly the
@@ -1256,7 +1265,7 @@ export function closingMergeShas(issues, { json = ghJson } = {}) {
  * @param {{shas: string[], tag: string|null, run: object|null, deployJob: object|null|undefined}} evidence
  */
 /**
- * The deploy-staging run for exactly this tag.
+ * The deploy workflow's run for exactly this tag.
  *
  * EXACT, never a substring. `includes` made `v0.38.1` match the run for `v0.38.10`
  * — and `gh run list` returns newest-first, so it preferred the wrong one. A
@@ -1286,11 +1295,11 @@ export const reachesPhase6 = (deployState) =>
   deployState !== undefined && DEPLOY_PHASE[deployState] === null;
 
 /**
- * The deploy-staging run for a release. Exact match on the title, never a substring
+ * The deploy workflow's run for a release. Exact match on the title, never a substring
  * (RA-1056).
  *
- * TWO TITLES (RA-1190). A dispatched run is titled with its tag (`run-name` in
- * deploy-staging.yml). A run started by the release commit's CI completing
+ * TWO TITLES (RA-1190). A dispatched run is titled with its tag (the reference adopter's
+ * deploy workflow sets `run-name` so). A run started by the release commit's CI completing
  * (`workflow_run`) can't know its tag when the title is fixed, because expressions
  * can't derive `v1.2.3` from a commit, so it is titled with the release commit's full
  * SHA. Pass `sha` to match those runs too.
@@ -1316,11 +1325,12 @@ export function classifyDeploy({ shas, tag, run, deployJob }) {
   if (run.status !== 'completed') return { state: 'deploying', tag, url: run.url };
   if (run.conclusion !== 'success') return { state: 'failed', tag, url: run.url };
 
-  // A `success` RUN CONCLUSION IS NOT A DEPLOY. `deploy-staging.yml` is a cheap
-  // `gate` job plus a `deploy` job guarded by `if: needs.gate.outputs.deploy ==
-  // 'true'`. When the gate finds no deploying commits in the tag range, `deploy` is
-  // SKIPPED and the run still concludes `success` — 8 of the last 25 runs, 32% of
-  // releases.
+  // A `success` RUN CONCLUSION IS NOT A DEPLOY (K-PROJ-11). The reference adopter's
+  // deploy workflow is a cheap `gate` job plus a `deploy` job guarded by
+  // `if: needs.gate.outputs.deploy == 'true'`. When the gate finds no deploying commits
+  // in the tag range, `deploy` is SKIPPED and the run still concludes `success` — 8 of
+  // its last 25 runs, 32% of releases, when this was measured. So the adoption record
+  // names the job whose success is the deploy, not only the workflow.
   //
   // It is the LIKELY case for this pipeline's own projects: the gate deploys on
   // feat|fix|perf|refactor|build|revert, while release-please also cuts releases
@@ -1347,17 +1357,31 @@ export function classifyDeploy({ shas, tag, run, deployJob }) {
   return { state: 'deployed', tag, url: run.url };
 }
 
+/** How many of the deploy workflow's runs phase 4 reads (RA-1190; see `readDeploy`). */
+export const DEPLOY_RUN_WINDOW = 200;
+
 /**
  * Phase 4's deploy state, derived rather than stored. See `closingMergeShas` for why
  * this takes an `io` seam.
  *
+ * WHICH WORKFLOW, AND WHICH JOB, THE ADOPTION RECORD SAYS (plan 0004 P6, `K-PROJ-11`).
+ * `declared` reads the reference environment's deploy from the record on the default
+ * branch, and throws `DeclarationError` by name when it is missing or malformed: the
+ * tick reports that project as failed, and no project can close without one. It is read
+ * only when some merge closed an issue, because `nothing-to-deploy` looks for no run.
+ * Every verdict after the read carries the declaration's `environment`, `workflow` and
+ * `job`, so the messages name what was looked for.
+ *
  * @param {object[]} issues
- * @param {{json?: (args: string[]) => any, text?: (args: string[]) => string}} [io]
+ * @param {{json?: (args: string[]) => any, text?: (args: string[]) => string,
+ *   declared?: () => import('./lib/reference-deploy.mjs').ReferenceDeploy}} [io]
  */
-export function readDeploy(issues, { json = ghJson, text = gh } = {}) {
+export function readDeploy(issues, { json = ghJson, text = gh, declared = () => readReferenceDeployFrom(REPO) } = {}) {
   const io = { json };
   const shas = closingMergeShas(issues, io);
   if (!shas.length) return classifyDeploy({ shas, tag: null, run: null, deployJob: null });
+  const deploy = declared();
+  const named = (d) => ({ ...d, environment: deploy.environment, workflow: deploy.workflow, job: deploy.job });
 
   const releases = json(['api', `repos/${REPO}/releases?per_page=30`, '--jq',
     '[.[] | {tag: .tag_name}]']);
@@ -1371,12 +1395,12 @@ export function readDeploy(issues, { json = ghJson, text = gh } = {}) {
       return false;                                    // unreadable is NOT containment
     }
   });
-  // 200, not 30 (RA-1190). Every `main` CI completion now starts a deploy-staging run,
-  // including each feature merge's, whose gate is skipped at once. Those runs are
+  // 200, not 30 (RA-1190). On the reference adopter every `main` CI completion starts a
+  // run of its deploy workflow, including each feature merge's, whose gate is skipped at once. Those runs are
   // free, but they fill the window: at ~16 merges and ~11 releases a day, 30 runs was
   // about a day, and this walk reads up to 30 releases back.
-  const runs = json(['run', 'list', '--repo', REPO, '--workflow', 'deploy-staging.yml',
-    '--limit', '200', '--json', 'databaseId,displayTitle,status,conclusion,url']);
+  const runs = json(['run', 'list', '--repo', REPO, '--workflow', deploy.workflow,
+    '--limit', String(DEPLOY_RUN_WINDOW), '--json', 'databaseId,displayTitle,status,conclusion,url']);
 
   // The release commit's SHA, for runs titled by it (see findDeployRun). Asked only when
   // the tag title found nothing. Unreadable means null, which reads as run-not-found:
@@ -1398,8 +1422,10 @@ export function readDeploy(issues, { json = ghJson, text = gh } = {}) {
         // `undefined` when the answer is unusable, `null` when it is usable and says
         // there is no deploy job (RA-1369). `?? null` collapsed both, which is what made
         // a permanent state wear a transient one's name.
+        // The declared job, by its exact name, never a pattern: a job whose name merely
+        // contains "deploy" (an announcement, a failure notice) is not the deploy.
         deployJob = Array.isArray(jobs)
-          ? (jobs.find((j) => /deploy/i.test(j.name) && !/gate/i.test(j.name)) ?? null)
+          ? (jobs.find((j) => j.name === deploy.job) ?? null)
           : undefined;
       } catch {
         deployJob = undefined;
@@ -1433,8 +1459,9 @@ export function readDeploy(issues, { json = ghJson, text = gh } = {}) {
   //   vA declined · vB run aged out of the 30-run window · vC deployed   (RA-1268)
   //   vA declined · vB deploy failed                     · vC deployed   (RA-1271)
   //
-  // In each, `vC` is real evidence — `deploy-staging.yml` checks out the tag and runs a
-  // whole-tree `sst deploy`, so it is not incremental — and the walk never reached it.
+  // In each, `vC` is real evidence — the reference adopter's deploy workflow checks out
+  // the tag and deploys the whole tree, so it is not incremental — and the walk never
+  // reached it.
   // Neither state recovers with time: the run window only ages `vB` further away, and
   // the earliest containing release never changes.
   //
@@ -1498,7 +1525,7 @@ export function readDeploy(issues, { json = ghJson, text = gh } = {}) {
       // project's release CAN have failed and its code CAN now be deployed. So the
       // failure travels with the verdict (`failedAt`) instead of ending the walk, and
       // every artifact that names the deploy also names the failure.
-      return { ...d, examined, ...(ownFailure ? { failedAt: ownFailure.tag, failedUrl: ownFailure.url } : {}) };
+      return named({ ...d, examined, ...(ownFailure ? { failedAt: ownFailure.tag, failedUrl: ownFailure.url } : {}) });
     }
     // The FIRST candidate in each state, so the message names a tag the walk actually
     // classified rather than the last one it happened to see.
@@ -1516,12 +1543,12 @@ export function readDeploy(issues, { json = ghJson, text = gh } = {}) {
       // "release vA failed; the work reached staging only via the later deploy of vA".
       // Unreachable today only because `deploy-failed` never gets to a caveat
       // renderer; gated so the invariant is structural rather than incidental.
-      return { ...d, examined,
-               ...(ownFailure && ownFailure !== d ? { failedAt: ownFailure.tag, failedUrl: ownFailure.url } : {}) };
+      return named({ ...d, examined,
+               ...(ownFailure && ownFailure !== d ? { failedAt: ownFailure.tag, failedUrl: ownFailure.url } : {}) });
     }
   }
   // Nothing contains the merges yet.
-  return classifyDeploy({ shas, tag: null, run: null, deployJob: null });
+  return named(classifyDeploy({ shas, tag: null, run: null, deployJob: null }));
 }
 
 
@@ -1635,8 +1662,8 @@ export function awaitingReview(prs, now = Date.now(), hours = AWAITING_REVIEW_HO
  * whether anything is churned. Failing to read Actions must never manufacture a
  * "no run ever fired" and re-fire a review on top of one that is already running.
  *
- * `Actions: Read` is granted (agent-identities.md footnote 7, for phase 4's
- * `deploy-staging` probe) and `agent-lead-reconcile.yml` already probes it at the top
+ * `Actions: Read` is granted (agent-identities.md footnote 7, for phase 4's probe of
+ * the declared deploy workflow) and `agent-lead-reconcile.yml` already probes it at the top
  * of the tick, so a missing grant reds the run in seconds rather than silently
  * degrading here.
  *

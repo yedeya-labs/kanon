@@ -199,11 +199,21 @@ It must be filled in before the first brief is written, because a brief's blast-
 - `## Plan`: the GitHub plan, and which fallbacks of `K-ADOPT-3` are in use;
 - `## Bootstrap`: `in bootstrap since YYYY-MM-DD`, or `ended YYYY-MM-DD`, and every bootstrap exception (`K-ADOPT-5`);
 - `## Mechanisms`: every mechanism the rulebook names, each `installed YYYY-MM-DD` or `not yet installed` (`K-ADOPT-9`);
-- `## Choices`: the project's own decisions that Kanon leaves to it, such as its chat channel.
+- `## Choices`: the project's own decisions that Kanon leaves to it, such as its chat channel, and its reference environment (`K-PROJ-11`).
 
-**Why.** Bootstrap, the plan's fallbacks and the installed mechanisms change what the rest of the rulebook means on this repository. If they aren't written down in one place, every reader has to reconstruct them.
+The reference environment is declared under `## Choices` in three bullets, each a `- ` at the start of its line, its bold label, and its value as one code span with nothing after it:
 
-**Enforced by.** On Kanon's own record, [`tests/unit/adoption-record.test.ts`](../tests/unit/adoption-record.test.ts): it fails when a heading is missing or out of order, a role is unnamed, the bootstrap line has no date, or a mechanism is marked anything but `installed YYYY-MM-DD` or `not yet installed`. For an adopter, prose only; a guard is planned (`K-ADOPT-6`).
+```markdown
+- **Reference environment:** `staging`
+- **Reference deploy workflow:** `deploy-staging.yml`
+- **Reference deploy job:** `deploy`
+```
+
+The environment is the name the project gives it. The workflow is the file name, in `.github/workflows/`, of the workflow that deploys there. The job is the name of the job whose success is the deploy, exactly as a run of that workflow lists it: its `name:`, or its key when it has none. A record declares all three or none of them. A record with none declares no reference environment, and then no project can close (`K-PROJ-11`). A record with some of them, one of them twice, one in another shape or outside `## Choices`, or a workflow that isn't a file name, is malformed.
+
+**Why.** Bootstrap, the plan's fallbacks and the installed mechanisms change what the rest of the rulebook means on this repository. If they aren't written down in one place, every reader has to reconstruct them. The reference environment's deploy is a choice like the others, and the record is already where `K-PROJ-11` has the project name the environment, so a second file would be a second home for it (`K-PRIN-2`). The job, and not only the workflow, is declared because a workflow can conclude `success` with its deploy job skipped.
+
+**Enforced by.** On Kanon's own record, [`tests/unit/adoption-record.test.ts`](../tests/unit/adoption-record.test.ts): it fails when a heading is missing or out of order, a role is unnamed, the bootstrap line has no date, or a mechanism is marked anything but `installed YYYY-MM-DD` or `not yet installed`. For an adopter, prose only, except the reference environment's declaration; a guard is planned (`K-ADOPT-6`). The declaration is read by the parser in [`scripts/lib/reference-deploy.mjs`](../scripts/lib/reference-deploy.mjs): the reconciler reads it from the default branch and fails by name, at a project's deploy phase, on a record that is missing, declares nothing or is malformed; [`lane-check`](../actions/lane-check/README.md) fails a malformed one on the pull request that breaks it. [`tests/library/reference-deploy.test.ts`](../tests/library/reference-deploy.test.ts) pins each malformed shape.
 
 **Class.** framework
 
