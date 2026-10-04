@@ -337,10 +337,14 @@ jobs:
       # its App register.
       - uses: $/actions/kanon-path
       # The Implementer's token, for the `qa:needs-split` label alone (decision 21), narrowed
-      # to the one permission that label needs (`K-AGENT-46`). Minted on every crash run: the
-      # route is the script's decision, and a mint costs nothing it could skip.
+      # to the one permission that label needs (`K-AGENT-46`). Minted on every crash run,
+      # because the route is the script's decision. `continue-on-error` (#78): a mint that
+      # fails (rotated key, App uninstalled, secret unset) leaves the token empty instead of
+      # stopping the job, so the retry and stop-to-human routes still free the WIP slot on
+      # the workflow token, and only the split route refuses, by name, and reds the job.
       - name: Mint the Implementer's token for the split label
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ secrets.IMPLEMENTER_APP_ID }}

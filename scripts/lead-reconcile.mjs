@@ -317,6 +317,8 @@ export const DEPLOY_PHASE = {
   'run-not-found': 'deploy-run-not-found',
   'run-unreadable': 'deploy-run-unreadable',
   'deploy-job-absent': 'deploy-job-absent',
+  reverted: 'deploy-reverted',
+  'history-unreadable': 'deploy-history-unreadable',
 };
 
 
@@ -788,8 +790,12 @@ function nextActionsCore(world, {
     // `run-unreadable`, whose message says nothing about resolving itself — so a human
     // had every reason to wait for a tick that could never differ. A completed run's
     // job set does not change.
-    'deploy-job-absent': () => `every containing release was read, and none has a ${deployJobName(world)} job — the newest examined is \`${world.deploy?.tag}\` (${world.deploy?.url ?? 'no url'}). A completed run's jobs never change, so this does NOT resolve itself: either the job was renamed since these tags were cut, or the adoption record names a different one, or those releases genuinely never deployed. Refusing to treat an absent job as a deploy`,
+    'deploy-job-absent': () => `every containing release was read, and none has a ${deployJobName(world)} job — the first examined is \`${world.deploy?.tag}\` (${world.deploy?.url ?? 'no url'}). A completed run's jobs never change, so this does NOT resolve itself: either the job was renamed since these tags were cut, or the adoption record names a different one, or those releases genuinely never deployed. Refusing to treat an absent job as a deploy`,
     'deploy-gate-declined': () => `\`${world.deploy?.tag}\` was released but its deploy job was SKIPPED: ${deployWorkflow(world)}'s gate found nothing to deploy in the range, so ${deployEnvironment(world)} was never touched${walked(world)}. The project is not closed on a deploy that did not happen`,
+    // A REVERT IS NOT A DEPLOY (kanon#161). Ancestry credited a release whose tree no
+    // longer held the work, because a reverted merge stays an ancestor of every later tag.
+    'deploy-reverted': () => `every containing release that deployed also contains a revert of this project's work: ${(world.deploy?.reverted ?? []).map((r) => `\`${String(r.sha).slice(0, 7)}\` reverted by \`${String(r.by).slice(0, 7)}\``).join(', ') || 'a closing merge'}, so ${deployEnvironment(world)} does not hold it — the newest examined is \`${world.deploy?.tag}\`${walked(world)}. A later release that re-lands the work (a revert of the revert) clears this; if it was re-landed another way, a human decides whether the project is done`,
+    'deploy-history-unreadable': () => `\`${world.deploy?.tag}\` deployed (${world.deploy?.url ?? 'no url'}), but the commits after this project's merges could not be read, so whether one of them reverts the work is UNKNOWN — refusing to treat unknown as deployed. A read failure is transient: the next tick re-issues it`,
     'deploy-unknown': () => `readDeploy returned a state this tick does not know how to act on — refusing to guess`,
   };
   if (WAITING[phase]) return { phase, actions: [], stopped: WAITING[phase]() };
@@ -1359,6 +1365,62 @@ export const reachesPhase6 = (deployState) =>
   deployState !== undefined && DEPLOY_PHASE[deployState] === null;
 
 /**
+ * What one commit message says it reverts (kanon#161): the commits git names
+ * (`This reverts commit <sha>.`, which `git revert` and GitHub's Revert button both write)
+ * and the pull requests GitHub names (`Reverts <owner>/<repo>#N`, the Revert button's PR
+ * body, which a squash merge can carry instead). Only `repo`'s own pull requests count.
+ *
+ * @param {string} message @param {string} repo
+ * @returns {{shas: string[], prs: number[]}}
+ */
+export function revertTargets(message, repo) {
+  const shas = [...String(message).matchAll(/reverts commit ([0-9a-f]{7,40})\b/gi)].map((m) => m[1].toLowerCase());
+  const prs = [...String(message).matchAll(/^Reverts ([\w.-]+\/[\w.-]+)#(\d+)\b/gim)]
+    .filter((m) => m[1].toLowerCase() === String(repo).toLowerCase())
+    .map((m) => Number(m[2]));
+  return { shas, prs };
+}
+
+/**
+ * The `--jq` prefilter for reverts, a regex that must hold every message `revertTargets`
+ * accepts. Exported so a test evaluates the SAME pattern. It may use no anchor and no flag
+ * but `i`, so that JavaScript and gojq read it the same way.
+ */
+export const REVERT_PREFILTER = 'reverts commit [0-9a-f]{7}|reverts [^ ]+#[0-9]';
+
+/**
+ * Which of `shas` a commit in `commits` undoes (kanon#161), each with the revert that
+ * does it.
+ *
+ * A revert stays in history, so ANCESTRY cannot see one: a reverted merge is an ancestor
+ * of every later tag. Presence is read from the reverts instead. A revert that is itself
+ * reverted (a re-land by `git revert` of the revert) undoes nothing, to any depth, so a
+ * re-landed merge reads as present again.
+ *
+ * @param {string[]} shas the project's closing merges
+ * @param {{sha: string, targets: string[]}[]} commits the reverts after them, with each
+ *   one's targets resolved to commit SHAs (full, or a prefix of 7 or more)
+ * @returns {{sha: string, by: string}[]}
+ */
+export function revertedMerges(shas, commits) {
+  const names = (target, sha) => sha.toLowerCase().startsWith(target.toLowerCase());
+  const undone = new Map();
+  /** @param {string} sha @param {Set<string>} seen @returns {string|null} the effective revert of `sha` */
+  const undoneBy = (sha, seen = new Set()) => {
+    if (undone.has(sha)) return undone.get(sha);
+    if (seen.has(sha)) return null;            // a malformed cycle undoes nothing
+    seen.add(sha);
+    const by = commits.find((c) => c.sha !== sha && c.targets.some((t) => names(t, sha)) && !undoneBy(c.sha, seen))?.sha ?? null;
+    undone.set(sha, by);
+    return by;
+  };
+  return shas.flatMap((sha) => {
+    const by = undoneBy(sha);
+    return by ? [{ sha, by }] : [];
+  });
+}
+
+/**
  * The deploy workflow's run for a release. Exact match on the title, never a substring
  * (RA-1056).
  *
@@ -1555,13 +1617,58 @@ export function readDeploy(issues, { json = ghJson, text = gh, declared = () => 
   // the first iteration. Walking further only happens where RA-1258 already walked, so
   // the worst case — one `compare` per SHA per candidate — is the one that already
   // existed.
-  const CONTINUE_PAST = new Set(['gate-declined', 'run-not-found', 'failed', 'deploy-job-absent']);
+  //
+  // `reverted` IS in the set too (kanon#161): a release whose tree no longer holds the work
+  // is negative evidence, and a later release can re-land it. `history-unreadable` is not:
+  // like `run-unreadable` it is a read that failed, and the next tick re-issues it.
+  const CONTINUE_PAST = new Set(['gate-declined', 'run-not-found', 'failed', 'deploy-job-absent', 'reverted']);
   // Reported when NO candidate deployed. Most actionable first: `failed` names a run a
   // human can re-run, `run-not-found` says the evidence aged out, `gate-declined` is
   // evidence of nothing. Never used to CONCLUDE anything positive — only to choose
   // which negative to report, which is what RA-1268 means by "like `gate-declined` for
   // the purpose of continuing, but never for the purpose of concluding".
-  const REPORT_ORDER = ['failed', 'deploy-job-absent', 'run-not-found', 'gate-declined'];
+  // `reverted` FIRST: it is the one negative that says the work is not in the tree. It is
+  // also the one state that keeps its LAST candidate rather than its first (see the walk),
+  // so the release it names is the newest one that deployed without the work.
+  const REPORT_ORDER = ['reverted', 'failed', 'deploy-job-absent', 'run-not-found', 'gate-declined'];
+
+  // PRESENCE, NOT ONLY ANCESTRY (kanon#161), asked only of a release that would be credited.
+  // One paginated `compare` per closing merge, from the merge to the tag: the commits the
+  // tag holds after it, filtered by `--jq` to the ones whose message names a revert. A
+  // pull request a revert names is resolved to its merge commit, which costs a call only
+  // when a revert exists. Unreadable is never "no reverts".
+  //
+  // The prefilter is a SUPERSET of what `revertTargets` parses, with no anchor and no flag
+  // but `i`: `gh --jq` is gojq, whose `m` flag means `(?s)`, not `(?m)`, so a `^Reverts`
+  // there matched only at the start of the whole message and dropped every PR-named revert,
+  // whose `Reverts …#N` line is in the body (kanon#262 review). `revertTargets` does the
+  // anchored parse.
+  const REVERT_JQ = `.commits[] | select(.commit.message | test("${REVERT_PREFILTER}"; "i")) | {sha: .sha, message: .commit.message} | @json`;
+  const prMerge = new Map();
+  const mergeOf = (n) => {
+    if (!prMerge.has(n)) prMerge.set(n, json(['pr', 'view', String(n), '--repo', REPO, '--json', 'mergeCommit'])?.mergeCommit?.oid ?? null);
+    return prMerge.get(n);
+  };
+  const presence = (tag, d) => {
+    let reverted;
+    try {
+      const reverts = new Map();
+      for (const sha of shas) {
+        const out = text(['api', '--paginate', `repos/${REPO}/compare/${sha}...${tag}?per_page=100`, '--jq', REVERT_JQ]);
+        for (const line of out.split('\n').filter((l) => l.trim())) {
+          const c = JSON.parse(line);
+          if (typeof c?.sha !== 'string' || typeof c?.message !== 'string') throw new Error(`not a commit: ${line}`);
+          if (reverts.has(c.sha)) continue;
+          const t = revertTargets(c.message, REPO);
+          reverts.set(c.sha, { sha: c.sha, targets: [...t.shas, ...t.prs.map(mergeOf).filter(Boolean)] });
+        }
+      }
+      reverted = revertedMerges(shas, [...reverts.values()]);
+    } catch {
+      return { state: 'history-unreadable', tag, url: d.url };
+    }
+    return reverted.length ? { state: 'reverted', tag, url: d.url, reverted } : d;
+  };
 
   // A DETECTOR REPORTS WHAT IT EXAMINED, not only what it found — the principle
   // `report()` already states. Now that the walk covers every containing release
@@ -1575,7 +1682,8 @@ export function readDeploy(issues, { json = ghJson, text = gh, declared = () => 
   for (const r of [...releases].reverse()) {
     if (!containsAll(r.tag)) continue;
     examined++;
-    const d = classifyTag(r.tag);
+    const classified = classifyTag(r.tag);
+    const d = classified.state === 'deployed' ? presence(r.tag, classified) : classified;
     if (!CONTINUE_PAST.has(d.state)) {
       // THE PROJECT'S OWN FAILURE IS CARRIED, NOT DISCARDED (RA-1372). This used to
       // `return` on a first-candidate `failed`, which was the last member of the
@@ -1593,7 +1701,9 @@ export function readDeploy(issues, { json = ghJson, text = gh, declared = () => 
     }
     // The FIRST candidate in each state, so the message names a tag the walk actually
     // classified rather than the last one it happened to see.
-    if (!remembered.has(d.state)) remembered.set(d.state, d);
+    // Except `reverted`, which keeps the LAST: the newest release that deployed without
+    // the work is the current fact, and the one its message names (kanon#262 review).
+    if (!remembered.has(d.state) || d.state === 'reverted') remembered.set(d.state, d);
     // The earliest containing release is the one that SHOULD have shipped this work,
     // so its failure is about this project in a way a later release's is not.
     if (d.state === 'failed' && examined === 1) ownFailure = d;
