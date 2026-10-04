@@ -138,7 +138,7 @@ jobs:
 - **`permissions:` is the ceiling.** Each lane declares the permissions it needs, and a called workflow can only narrow what its caller grants. Grant at least what the lane declares, or the run fails to start.
 - **Secrets are mapped explicitly, by their fixed names** ([plan 0001 §8](plans/0001-move-the-agent-lanes.md)): `<ROLE>_APP_ID`, `<ROLE>_APP_PRIVATE_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`. Never `secrets: inherit`, which would hand every secret in your repository to Kanon's code. [`kanon apps`](apps.md) stores the two App secrets. `CLAUDE_CODE_OAUTH_TOKEN` is the token of the Claude subscription the agents run on. Make it with `claude setup-token`, signed in to that subscription, and store it yourself with `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R <owner>/<repo>`, pasting it on standard input.
 - **No `concurrency:`.** Each lane holds its own concurrency group. The same group on the caller would have the caller wait for itself.
-- **One version.** Every Kanon reference in your repository pins the same exact version, and Dependabot proposes upgrades (`K-ADOPT-11`).
+- **One version.** Every Kanon reference in your repository pins the same exact version, and Dependabot proposes upgrades (`K-ADOPT-11`). Write the `cooldown` out with `yedeya-labs/kanon*` excluded: an entry with none still gets Dependabot's default of 3 days, which holds back every release made in the last 3 days, and `lane-check` fails it ([#233](https://github.com/yedeya-labs/kanon/issues/233)).
 
 ## Old spellings
 

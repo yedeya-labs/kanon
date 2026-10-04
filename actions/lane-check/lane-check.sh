@@ -311,9 +311,9 @@ else
       | select(((.groups // {}) | to_entries | any(.value.patterns // [] | index("yedeya-labs/kanon*") != null)))
       | select((."commit-message".prefix // "") == "ci")
       | select((.allow == null) or (.allow | any((."dependency-name" // "") | startswith("yedeya-labs/kanon"))))
-      | select((.cooldown == null) or ((.cooldown.exclude // []) | index("yedeya-labs/kanon*") != null))
+      | select((.cooldown.exclude // []) | index("yedeya-labs/kanon*") != null)
     ] | length' <<<"$dep")"
-  [ "${ok:-0}" -gt 0 ] || fail "$DEP" "has no github-actions entry for \`/\` that groups yedeya-labs/kanon*, prefixes its commits \`ci\`, and leaves Kanon out of any cooldown (K-ADOPT-11)"
+  [ "${ok:-0}" -gt 0 ] || fail "$DEP" "has no github-actions entry for \`/\` that groups yedeya-labs/kanon*, prefixes its commits \`ci\`, and excludes yedeya-labs/kanon* from its cooldown: with no \`cooldown\` at all, Dependabot's default of 3 days holds every Kanon release back (K-ADOPT-11)"
 fi
 
 if [ "$ERRORS" -gt 0 ]; then
