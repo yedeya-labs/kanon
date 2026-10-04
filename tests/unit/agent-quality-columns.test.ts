@@ -1,4 +1,6 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -6,6 +8,7 @@ import { parse } from 'yaml';
 import { readFiled, readVerdict, tallySeverities } from '../../scripts/agent-quality-columns.mjs';
 import { readOpenedPrs } from '../../actions/agent-finish/agent-quality-prs.mjs';
 import { blockOf, callsSpine, effectiveSteps, readBlock, readSpine } from './helpers/spine.js';
+import { writeStub } from './helpers/stub-bin.js';
 import { agentStep, telemetryStep, type WorkflowStep } from './helpers/workflow-step.js';
 
 /**
@@ -285,5 +288,56 @@ describe('every filing arm is wired, and cannot red its own run', () => {
         expect(telemetryStep(def?.steps), `${file}:${job} lost its telemetry step`).toBeTruthy();
       }
     }
+  });
+});
+
+describe('--no-filed suppresses both filed columns through the real CLI (RA-1631)', () => {
+  // The review lane re-invokes the script with `--no-filed` when it cannot read its own
+  // run's start time. The flag reaches the `args.no_filed ? null : readFiled(...)` branch
+  // only through the script's private argv parser. If that branch ever stops seeing the
+  // flag, `readFiled` runs with `since: undefined` — the unbounded, PR-cumulative count —
+  // and the row gets a plausible, larger integer instead of an unset column. So this
+  // drives the script as the lane does: a subprocess, a stubbed `gh`, `GITHUB_OUTPUT`.
+  const runCli = (extra: string[]) => {
+    const dir = mkdtempSync(join(tmpdir(), 'quality-cols-'));
+    const log = join(dir, 'gh.log');
+    const output = join(dir, 'out');
+    writeFileSync(output, '');
+    writeStub(join(dir, 'gh'), [
+      '#!/usr/bin/env bash',
+      `printf '%s\\n' "$*" >> '${log}'`,
+      'case "$1" in',
+      '  api) echo APPROVED ;;',
+      `  issue) echo '[{"number":7,"labels":[{"name":"sev:high"}]}]' ;;`,
+      'esac',
+      '',
+    ].join('\n'));
+    execFileSync(process.execPath, ['scripts/agent-quality-columns.mjs',
+      '--pr', '5', '--head', 'abc', '--reviewer', 'kanon-reviewer', ...extra], {
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, REPO: 'o/r', GITHUB_OUTPUT: output },
+    });
+    return {
+      out: readFileSync(output, 'utf8'),
+      calls: existsSync(log) ? readFileSync(log, 'utf8') : '',
+    };
+  };
+
+  it('counts the filed columns without the flag, so the stub is live', () => {
+    const { out, calls } = runCli([]);
+    expect(out).toContain('outcome_label=APPROVED');
+    expect(out).toContain('artifacts_filed=1');
+    expect(out).toContain('severities=high:1');
+    expect(calls).toMatch(/^issue list /m);
+  });
+
+  it.each([
+    ['last', ['--no-filed']],
+    ['before another flag', ['--no-filed', '--marker', 'x']],
+  ])('with --no-filed %s it emits the verdict and neither filed column, and never searches', (_, extra) => {
+    const { out, calls } = runCli(extra);
+    expect(out).toContain('outcome_label=APPROVED');
+    expect(out).not.toMatch(/^artifacts_filed=/m);
+    expect(out).not.toMatch(/^severities=/m);
+    expect(calls).not.toMatch(/^issue /m);
   });
 });
