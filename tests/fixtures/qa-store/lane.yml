@@ -1,0 +1,82 @@
+# A store-coupled lane in the shape plan 0004 §3.2 fixes (step P9), for `store-jobs.test.ts`.
+# Not a lane Kanon ships: the code audit, the Explorer, the Overseer and the dispatch sweep take
+# this shape when they move (steps 9, 11, 12 and 13), and their tests apply the same check.
+#
+#   export (store job) → agent (no credentials) → put (store job)
+#                      ↘ delete-export, after the export job and the agent job, always
+name: Store lane fixture
+
+on:
+  workflow_call:
+    inputs:
+      issue:
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    environment: kanon-qa-store
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      artifact-name: ${{ steps.store.outputs.artifact-name }}
+      artifact-id: ${{ steps.store.outputs.artifact-id }}
+    steps:
+      - uses: $/actions/qa-store
+        id: store
+        with:
+          operation: export
+          kind: audit
+
+  agent:
+    needs: export
+    permissions:
+      contents: read
+      issues: read
+    uses: $/.github/workflows/agent-lane.yml
+    with:
+      agent: explorer
+      arm: Code audit agent
+      prompt: Read the export.
+      issue-number: ${{ inputs.issue }}
+    secrets:
+      app-id: ${{ secrets.EXPLORER_APP_ID }}
+      app-private-key: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
+      claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  put:
+    needs: agent
+    if: always() && needs.agent.result != 'skipped'
+    runs-on: ubuntu-latest
+    environment: kanon-qa-store
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: qa-audit-summary
+          path: ${{ runner.temp }}/report
+      - uses: $/actions/qa-store
+        with:
+          operation: put
+          kind: audit
+          report: ${{ runner.temp }}/report/qa-audit-summary.json
+
+  delete-export:
+    needs: [export, agent]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: $/actions/qa-store
+        with:
+          operation: delete-export
+          artifact-id: ${{ needs.export.outputs.artifact-id }}

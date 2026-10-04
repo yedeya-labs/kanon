@@ -36,7 +36,12 @@ const files = [
 //
 // The test-database smoke runs the worked example's hook the same way (kanon#18): copied over
 // the workspace, then called as a lane calls a hook, to show the `hook` contract on a runner.
+//
+// The QA store block calls the ADOPTER's store hook (plan 0004 step P9), the first exception's
+// reason again: the adopter's code, in the checkout the block makes. It calls it from two steps,
+// a write and a read, so the entry is matched once per file, not once per step.
 const EXEMPT = new Set([
+  'actions/qa-store/action.yml: ./.github/actions/qa-store',
   '.github/workflows/agent-blocks-smoke.yml: ./tests/fixtures/python-adopter/.github/actions/project-setup',
   '.github/workflows/agent-lane.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-lead-split.yml: ./.github/actions/project-setup',
@@ -72,7 +77,7 @@ describe('plan 0001 §4: Kanon references itself only through `$/`', () => {
     const bad = all
       .filter((x) => x.uses.startsWith('./') || x.uses.startsWith('yedeya-labs/kanon/'))
       .map((x) => form(`${x.file}: ${x.uses}`));
-    expect(bad.sort()).toEqual([...EXEMPT].sort());
+    expect([...new Set(bad)].sort()).toEqual([...EXEMPT].sort());
   });
 
   it('has no such line in comments or examples either, which get copied', () => {
@@ -83,7 +88,7 @@ describe('plan 0001 §4: Kanon references itself only through `$/`', () => {
       // A `uses:` key, live or commented out (`#   - uses: …`), not prose quoting one.
       .filter(({ line }) => /^\s*(#\s*)?(-\s*)?uses:\s*["']?(\.\/|yedeya-labs\/kanon\/)/.test(line))
       .map(({ at, line }) => `${at}: ${line.trim()}`));
-    expect(hits.map((h) => form(h.replace(/:\d+: (- )?uses: /, ': '))).sort()).toEqual([...EXEMPT].sort());
+    expect([...new Set(hits.map((h) => form(h.replace(/:\d+: (- )?uses: /, ': '))))].sort()).toEqual([...EXEMPT].sort());
   });
 
   it('names every `$/` target that exists in this tree', () => {
