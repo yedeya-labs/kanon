@@ -1,0 +1,50 @@
+# Kanon builds its own issues with the Implementer (ADR 0011, stage 2).
+#
+# A trigger-only caller of Kanon's implement lane, written exactly as an adopter writes one
+# (docs/lanes.md). It is named `implement.yml` because `agent-implement.yml` is the lane
+# itself (K-LAYOUT-18's exception for Kanon's own tree, as for review.yml).
+#
+# IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap). Through `$/` an issue's
+# own branch could change the lane that builds it. Dependabot's `kanon` group proposes each
+# release here, and `lane-check` (in CI) holds every Kanon reference to one version.
+#
+# It starts on an `agent:implement` label or a dispatch, from a member only: the lane's first
+# job is its membership gate (K-AGENT-45), and an issue a stranger filed is never built until
+# a member labels it. Any other label skips the run before a token is minted.
+#
+# INERT UNTIL THE OWNER CREATES THE IMPLEMENTER'S APP. Until then IMPLEMENTER_APP_ID and
+# IMPLEMENTER_APP_PRIVATE_KEY are unset, which GitHub passes as empty strings without failing
+# the run, so an unrelated label is still skipped; an `agent:implement` label fails at the
+# token mint, by name, before any model run is paid for. ADR 0011 lists the activation steps.
+#
+# The secrets: IMPLEMENTER_APP_ID and IMPLEMENTER_APP_PRIVATE_KEY (the Implementer's App, in
+# docs/qa/agent-identities.md) and CLAUDE_CODE_OAUTH_TOKEN, mapped by name, never inherited.
+name: Implement
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to implement
+        required: true
+
+# The ceiling for the whole lane: the implement job narrows it to `contents: read`, and the
+# crash recovery uses the rest on the default token (its marker comment and label edit, the
+# open-PR read, and its own run's start time).
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  actions: read
+
+jobs:
+  implement:
+    uses: yedeya-labs/kanon/.github/workflows/agent-implement.yml@v0.23.0
+    with:
+      issue_number: ${{ inputs.issue_number }}
+    secrets:
+      IMPLEMENTER_APP_ID: ${{ secrets.IMPLEMENTER_APP_ID }}
+      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

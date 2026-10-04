@@ -282,6 +282,39 @@ describe('step 4b: Kanon reviews its own pull requests, through the lane at its 
   });
 });
 
+// ADR 0011, stage 2: Kanon builds its own issues with the Implementer, through the lanes at its
+// last release, like the Reviewer above. Inert until the Owner creates the App: the secrets are
+// then unset, and the lanes skip or fail at the mint.
+describe('stage 2: Kanon runs the Implementer on itself, through the lanes at its last release', () => {
+  const SECRETS = {
+    IMPLEMENTER_APP_ID: '${{ secrets.IMPLEMENTER_APP_ID }}',
+    IMPLEMENTER_APP_PRIVATE_KEY: '${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}',
+    CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
+  };
+  it.each([
+    ['implement.yml', 'agent-implement', {
+      issues: { types: ['labeled'] },
+      workflow_dispatch: { inputs: { issue_number: { description: 'Issue number to implement', required: true } } },
+    }, { issue_number: '${{ inputs.issue_number }}' }],
+    ['implement-revise.yml', 'agent-implement-revise', {
+      pull_request_review: { types: ['submitted'] },
+      pull_request: { types: ['labeled'] },
+      workflow_dispatch: { inputs: {
+        pr_number: { description: 'PR to revise', required: true },
+        reset: { description: expect.any(String), type: 'boolean', default: false },
+      } },
+    }, { pr_number: '${{ inputs.pr_number }}', reset: '${{ inputs.reset }}' }],
+  ])('%s calls %s at an exact release from its one job, with the lane\'s triggers and its secrets by name', (file, lane, triggers, inputs) => {
+    const { wf } = load(file);
+    const jobs = Object.values(wf.jobs) as (Job & { with?: Record<string, string>; secrets?: unknown })[];
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.uses).toMatch(new RegExp(`^yedeya-labs/kanon/\\.github/workflows/${lane}\\.yml@v\\d+\\.\\d+\\.\\d+$`));
+    expect(wf.on).toEqual(triggers);
+    expect(jobs[0]?.with).toEqual(inputs);
+    expect(jobs[0]?.secrets).toEqual(SECRETS);
+  });
+});
+
 // The ruleset on main (id 24259403) requires these checks by name. A merge queue waits
 // for each one on the queue's branch, so each must report there under the same name it
 // reports under on the pull request (K-MERGE-7). The agent blocks smoke run joins them

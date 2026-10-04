@@ -467,15 +467,30 @@ describe('the register row (K-LAYOUT-6)', () => {
 describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
   const OWN = join(ROOT, 'docs/qa/agent-identities.md');
 
-  it('is exactly what kanon apps writes for the Reviewer it created', () => {
-    const { text } = writeRegisterRow(null, { role: 'Reviewer', slug: 'kanon-reviewer', permissions: loadRoles().reviewer!.permissions });
-    expect(readFileSync(OWN, 'utf8')).toBe(text);
+  // The Implementer's row is a placeholder until the Owner creates its App (ADR 0011, stage 2),
+  // and a paragraph after the table says so. The table is still exactly what the tool writes,
+  // so creating the App rewrites the row in place rather than doubling it.
+  const PENDING = /\n\*\*The Implementer's App is not yet created\.\*\*[^\n]*\n$/;
+
+  it('is exactly what kanon apps writes for the Reviewer it created, and then the Implementer', () => {
+    const roles = loadRoles();
+    const reviewer = writeRegisterRow(null, { role: 'Reviewer', slug: 'kanon-reviewer', permissions: roles.reviewer!.permissions }).text;
+    const both = writeRegisterRow(reviewer, { role: 'Implementer', slug: 'kanon-implementer', permissions: roles.implementer!.permissions }).text;
+    const own = readFileSync(OWN, 'utf8');
+    expect(own).toMatch(PENDING);
+    expect(own.replace(PENDING, '')).toBe(both);
   });
 
-  it('gives the lanes the Reviewer slug', () => {
-    const r = spawnSync('awk', ['-v', 'role=Reviewer', '-f', AWK, OWN], { encoding: 'utf8' });
+  it('keeps the Implementer as one row when kanon apps writes the slug GitHub gave it', () => {
+    const { text } = writeRegisterRow(readFileSync(OWN, 'utf8'), { role: 'Implementer', slug: 'kanon-implementer-2', permissions: loadRoles().implementer!.permissions });
+    expect(text.match(/^\| Implementer \|/gm)).toHaveLength(1);
+    expect(text).toContain('| Implementer | `kanon-implementer-2` |');
+  });
+
+  it.each([['Reviewer', 'kanon-reviewer'], ['Implementer', 'kanon-implementer']])('gives the lanes the %s slug', (role, slug) => {
+    const r = spawnSync('awk', ['-v', `role=${role}`, '-f', AWK, OWN], { encoding: 'utf8' });
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
-    expect(r.stdout).toBe('kanon-reviewer\n');
+    expect(r.stdout).toBe(`${slug}\n`);
   });
 });

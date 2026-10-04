@@ -49,7 +49,7 @@
 - **The lanes with no workspace script go first,** so the reusable-workflow shape is proven before the library moves under it.
 - **The library moves in one step** because it can't move in parts (§3).
 - **No scanner is ever blind.** Each adopter scanner keeps running until its last lane leaves (§6).
-- **Kanon reviews itself from step 4b,** as soon as the review lane is here, so the remaining moves are each reviewed by the lane they extract. Steps 4a and 4b are the two Kanon steps that aren't moves. The Lead and the Implementer follow after step 5, once delegated sign-off ([#23](https://github.com/yedeya-labs/kanon/issues/23)) and the security rules ([#24](https://github.com/yedeya-labs/kanon/issues/24)) are in the rulebook ([ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md)).
+- **Kanon reviews itself from step 4b,** as soon as the review lane is here, so the remaining moves are each reviewed by the lane they extract. Steps 4a and 4b are the two Kanon steps that aren't moves. Delegated sign-off ([#23](https://github.com/yedeya-labs/kanon/issues/23)) and the security rules ([#24](https://github.com/yedeya-labs/kanon/issues/24)) are now in the rulebook, so the Implementer runs on Kanon as ADR 0011's stage 2, once the Owner creates its App; the Lead follows later, by the Owner's decision ([ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md)).
 
 ## 2. The load, reload and tamper machinery: verified, it goes
 

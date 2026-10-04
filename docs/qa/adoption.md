@@ -47,8 +47,8 @@ Bootstrap ended when both conditions of `K-ADOPT-6` held: the Reviewer's App, `k
 | 9. Production approval | Not done: Kanon has no production environment. |
 | 10. Chat channel | Not done: none yet (see Choices). |
 | 11. The first tracking issue | Not done as written: the first issues were filed 2026-09-30, before the milestones existed, and got their bucket milestones later. |
-| 12. Agent identities | Done for the Reviewer only: `kanon-reviewer`, created 2026-10-02 with `kanon apps`, installed on this repository only, and listed in the [App register](agent-identities.md). `apps-check` passed (run 37023855771, 2026-10-02). The other roles have no App yet. |
-| 13. Kanon's code | In progress: see Mechanisms. The checks and the review lane are pinned to exact releases, and Dependabot's `kanon` group proposes each release to them with no cooldown. |
+| 12. Agent identities | Done for the Reviewer only: `kanon-reviewer`, created 2026-10-02 with `kanon apps`, installed on this repository only, and listed in the [App register](agent-identities.md). `apps-check` passed (run 37023855771, 2026-10-02). The Implementer's row was added 2026-10-04, marked not yet created, for ADR 0011's stage 2: the Owner creates its App with `kanon apps`. The other roles have no App and no row. |
+| 13. Kanon's code | In progress: see Mechanisms. The checks, the review lane and the implement lanes are pinned to one exact release (v0.23.0 since 2026-10-04), and Dependabot's `kanon` group proposes each release to them with no cooldown. |
 | 14. End bootstrap | Done 2026-10-02 (above). Dropping the installer credential's Administration permission is not recorded, because step 3 made no such credential. |
 
 ## Mechanisms
@@ -73,10 +73,10 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | Unit tests on Kanon's own lanes: every arm's flags, the implement lanes' turn cap and ceiling, and blocks that use Node built-ins only | `K-AGENT-37`, `K-OBS-12`, `K-SELF-8` | installed 2026-10-02 |
 | The brief guard's test against the shipped template, and its exemption of the pre-standard briefs an adopter declares | `K-PRIN-11`, `K-PROJ-4`, `K-PROJ-10`, `K-LAYOUT-11` | installed 2026-10-02 |
 | `tests/unit/adoption-record.test.ts`, on this record | `K-LAYOUT-10`, `K-ADOPT-9` | installed 2026-10-02 |
-| The other agent lanes and their App tokens (Implementer, Lead, Explorer, Merger, Overseer), with their crash handlers, round caps, split and conflict lanes and quiet-runner settings | `K-AGENT-2`, `K-AGENT-14`, `K-AGENT-18`, `K-AGENT-30`, `K-AGENT-33`, `K-AGENT-34`, `K-AGENT-41`, `K-MERGE-16` | not yet installed |
-| The test-database block in the lanes, and `lane-check`'s reading of the declaration. Kanon declares no database, so its review lane starts none once its caller pins a release that has them | `K-LAYOUT-16` | not yet installed |
-| `lane-check`'s reading of the project documents the lanes read, and the lane-literal test over the prompts. Kanon's own stack document holds its gates; its caller pins a release from before the check | `K-LAYOUT-17` | not yet installed |
-| `lane-check`'s caller file names, and its check that `ci.yml` exists for the lanes that read it. Kanon's caller of the review lane is `review.yml`, because `agent-review.yml` here is the lane itself, which the rule exempts; its caller pins a release from before the check | `K-LAYOUT-18` | not yet installed |
+| The other agent lanes and their App tokens (Implementer, Lead, Explorer, Merger, Overseer; the Implementer's callers are in place, its App is not yet created), with their crash handlers, round caps, split and conflict lanes and quiet-runner settings | `K-AGENT-2`, `K-AGENT-14`, `K-AGENT-18`, `K-AGENT-30`, `K-AGENT-33`, `K-AGENT-34`, `K-AGENT-41`, `K-MERGE-16` | not yet installed |
+| The test-database block in the lanes, and `lane-check`'s reading of the declaration. Kanon declares `none` in `docs/qa/test-database.md`, so its lanes start no database | `K-LAYOUT-16` | installed 2026-10-04 |
+| `lane-check`'s reading of the project documents the lanes read, and the lane-literal test over the prompts. Kanon's stack document holds its gates, and its Implementer playbook is `docs/qa/triage-fix-playbook.md` | `K-LAYOUT-17` | installed 2026-10-04 |
+| `lane-check`'s caller file names, and its check that `ci.yml` exists for the lanes that read it. Kanon's callers are `review.yml`, `implement.yml` and `implement-revise.yml`, because `agent-<lane>.yml` here is the lane itself, which the rule exempts | `K-LAYOUT-18` | installed 2026-10-04 |
 | Re-delivery and retry logic that reads run history for the head | `K-PRIN-13` | not yet installed |
 | The merge gate: the Merger's verdict function, its merge step, its escalation markers and post-merge checks | `K-PRIN-4`, `K-PRIN-5`, `K-PRIN-10`, `K-MERGE-1`, `K-MERGE-3`, `K-MERGE-4`, `K-MERGE-5`, `K-MERGE-9`, `K-MERGE-10`, `K-MERGE-11`, `K-MERGE-12`, `K-AGENT-4`, `K-AGENT-13`, `K-AGENT-26`, `K-LAYOUT-8` | not yet installed |
 | A ruleset bypass list naming only the release bot. Today it holds the repository admin role, for pull requests only. The Owner decided that it stays until the Releaser App exists ([#49](https://github.com/yedeya-labs/kanon/issues/49)), and is then replaced by a bypass for the Releaser only | `K-MERGE-5`, `K-MERGE-8` | not yet installed |
@@ -106,15 +106,15 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | The calibration record, the run-record writer, and the capability ledger's watermark reader | `K-SELF-13`, `K-SELF-15`, `K-SELF-17`, `K-LAYOUT-7` | not yet installed |
 | The installer, beyond `kanon apps` and `kanon milestones` | `K-ADOPT-1`, `K-ADOPT-2`, `K-ADOPT-3`, `K-ADOPT-7`, `K-OBS-18` | not yet installed |
 | Planned guards the rules name but Kanon hasn't built | `K-PRIN-2`, `K-PRIN-18`, `K-WORK-22`, `K-SPEC-9`, `K-SPEC-10`, `K-MERGE-8`, `K-PROJ-14`, `K-PROJ-18`, `K-OBS-16`, `K-OBS-17`, `K-SELF-14`, `K-ADOPT-6`, `K-ADOPT-10`, `K-ADOPT-11`, `K-LAYOUT-10` | not yet installed |
-| A sign-off delegation record (`docs/qa/sign-off-delegation.md`); there is none yet | `K-AGENT-44`, `K-LAYOUT-14` | not yet installed |
+| The sign-off delegation record (`docs/qa/sign-off-delegation.md`), naming the Owner, and Kanon's project-setup hook adding its sign-off to the Implementer's commits | `K-AGENT-44`, `K-LAYOUT-14` | installed 2026-10-04 |
 | The exemptions file (`docs/qa/exemptions.md`), read by the brief guard and the doc-path guard; Kanon runs neither guard on itself yet | `K-LAYOUT-15` | not yet installed |
 
 These rules' lines are prose only with a note, and name nothing to install: `K-PRIN-1`, `K-PRIN-7`, `K-PRIN-20`, `K-AGENT-3`, `K-PROJ-8`, `K-PROJ-15`, `K-OBS-4`, `K-SELF-7`, `K-LAYOUT-1`, `K-LAYOUT-6`.
 
 **Not yet installed, and why:**
 
-- **The Implementer and the Lead** wait for the steps ADR 0011 stages after step 5 of plan 0001.
-- **No sign-off delegation is recorded** (`K-AGENT-44`), so an agent's commit can't pass Kanon's own DCO check yet.
+- **The Implementer's App** is not yet created. Its callers, its register row and the sign-off delegation are in place (ADR 0011, stage 2), so the Owner's `kanon apps --roles implementer` turns it on.
+- **The Lead** waits for the Owner's decision (ADR 0011).
 - **No hosted telemetry yet:** the store is plan 0002, in progress.
 - **The admin bypass on the `main` ruleset** stays until the Releaser App exists (#49), by the Owner's decision. It is then replaced by a bypass for the Releaser only, which installs `K-MERGE-8`'s bypass list.
 - **No agent ever merges on Kanon** (ADR 0011), so the merge gate and the Merger are not planned here.
