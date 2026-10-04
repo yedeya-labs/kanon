@@ -107,12 +107,31 @@ jobs:
           test "$KIND" = unavailable
           test "$RETRY" = unreachable
 
+      # A real bot account, so the block can read its id: the smoke has no App of its own.
+      # `github-token` is left to its default, the workflow token, as a direct caller may.
       - name: Set up, without the push probe
         uses: $/actions/agent-setup
         with:
           arm: smoke
-          app-slug: smoke
+          app-slug: github-actions
           push-probe: "false"
+
+      # THE AGENT'S COMMITS PASS DCO (K-AGENT-44, kanon#234), on a runner: authored as the bot
+      # the block was given, and signed off by the delegate Kanon's default branch records.
+      - name: Check a commit is the App's, signed off by the delegate
+        run: |
+          set -euo pipefail
+          test "$GIT_AUTHOR_NAME" = 'github-actions[bot]'
+          test "$GIT_COMMITTER_EMAIL" = '41898282+github-actions[bot]@users.noreply.github.com'
+          d="$(mktemp -d)"
+          git -C "$d" init -q
+          git -C "$d" commit -q --allow-empty -m 'smoke: a commit an agent makes'
+          git -C "$d" log -1 --format=%B
+          test "$(git -C "$d" log -1 --format=%an)" = 'github-actions[bot]'
+          signoff="$(git -C "$d" log -1 --format='%(trailers:key=Signed-off-by,valueonly)')"
+          name="${signoff% <*}"
+          test -n "$name"
+          grep -qF "| $name |" docs/qa/sign-off-delegation.md
 
       # Never runs: it would call the model. Resolved and downloaded during `Set up job`.
       # A run id is never 0. The literal `false` says the same, but actionlint rejects a

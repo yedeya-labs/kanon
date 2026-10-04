@@ -502,7 +502,7 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
       'package-ecosystem': string;
       directories?: string[];
       groups?: Record<string, { patterns?: string[] }>;
-      cooldown?: { exclude?: string[] };
+      cooldown?: { 'default-days'?: number; exclude?: string[] };
       'commit-message'?: Record<string, unknown>;
     }[];
   };
@@ -518,14 +518,16 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
     expect(actions?.directories).toEqual(expect.arrayContaining(['/', '/actions/*', '/.github/actions/*']));
   });
 
-  it('proposes each Kanon release to the judging checks in a group of its own, with no cooldown (#47, K-ADOPT-11)', () => {
+  it('proposes each Kanon release to the judging checks in a group of its own, exempt from the cooldown (#47, #233, K-ADOPT-11)', () => {
     const actions = dependabot.updates.find((u) => u['package-ecosystem'] === 'github-actions');
     // Dependabot puts a dependency in the FIRST group whose patterns match it, so Kanon's
     // group comes before the catch-all.
     const groups = Object.entries(actions?.groups ?? {});
     expect(groups[0]?.[1].patterns).toEqual(['yedeya-labs/kanon*']);
-    // A cooldown, if one is ever set, holds back every dependency it doesn't exclude.
-    if (actions?.cooldown) expect(actions.cooldown.exclude).toContain('yedeya-labs/kanon*');
+    // An entry with no `cooldown` still gets Dependabot's default of 3 days, which held Kanon's
+    // pins on v0.10.0 through 13 releases (#233). So the cooldown is written out, and excludes
+    // Kanon; third-party actions keep the 3 days.
+    expect(actions?.cooldown).toEqual({ 'default-days': 3, exclude: ['yedeya-labs/kanon*'] });
     // Titled `ci(deps): …`, so the PR passes K-SHIP-4.
     expect(actions?.['commit-message']).toEqual({ prefix: 'ci', include: 'scope' });
   });

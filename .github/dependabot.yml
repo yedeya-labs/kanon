@@ -11,9 +11,15 @@
 # each new release to them and to the review lane's caller (review.yml) and CI's lane-check
 # (ADR 0011, plan 0001 step 4b), as K-ADOPT-11 has it for any adopter: Kanon's own references in
 # a group of their own, and never held back by a cooldown. Kanon is first-party, so a
-# cooldown would only delay the release that judges the next PR. No entry sets a cooldown
-# today; one added later must exclude `yedeya-labs/kanon*`, which
-# tests/unit/workflows.test.ts pins.
+# cooldown would only delay the release that judges the next PR.
+#
+# THE EXEMPTION MUST BE WRITTEN OUT (#233). An entry that sets no `cooldown` is not free of
+# one: Dependabot then applies its default of 3 days, and this entry, which set none, held
+# Kanon's pins on v0.10.0 through 13 releases. Its run logs say so ("Days since release : 1
+# (cooldown days 3)", "All versions are in cooldown period, returning current version"), and
+# Kanon releases several times a day. So the cooldown below keeps those 3 days for every
+# third-party action and excludes Kanon. tests/unit/workflows.test.ts pins it, and
+# `lane-check` holds every adopter's entry to the same.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -25,6 +31,9 @@ updates:
       - /infra/qa-store/aws/maintenance
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 3
+      exclude: ["yedeya-labs/kanon*"]
     commit-message:
       prefix: ci
       include: scope

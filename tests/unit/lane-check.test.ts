@@ -597,6 +597,10 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => t.edit(DEP, (d) => { delete (d as Dep).updates[0]!.groups; }), 'has no github-actions entry'));
     it('refuses an entry that is not titled `ci`', () =>
       red((t) => t.edit(DEP, (d) => { (d as Dep).updates[0]!['commit-message'] = { prefix: 'build' }; }), 'has no github-actions entry'));
+    // Dependabot applies its default 3-day cooldown to an entry that sets none, and Kanon's
+    // own entry held 13 releases back that way (#233): no `cooldown` is not no cooldown.
+    it('refuses an entry with no cooldown, which Dependabot gives its default', () =>
+      red((t) => t.edit(DEP, (d) => { delete (d as Dep).updates[0]!.cooldown; }), 'excludes yedeya-labs/kanon* from its cooldown'));
     it('refuses a cooldown that holds Kanon back', () =>
       red((t) => t.edit(DEP, (d) => { (d as Dep).updates[0]!.cooldown = { 'default-days': 3 }; }), 'has no github-actions entry'));
     it('accepts a cooldown that excludes Kanon', () => {
