@@ -10,6 +10,7 @@ const { CONFLICT_WHY, ConflictFieldsUnread } = await import('../../scripts/confl
 import { readRepoDoc } from './helpers/adopter-doc.js';
 const { SPLIT_LABEL } = await import('../../scripts/split-lineage.mjs');
 const { itemSatisfied, satisfiedTitles, classifyDeploy, readDeploy: kanonReadDeploy, closingMergeShas, isReviewBlocked, awaitingReview, dependencyCycles, needsVerification, verificationCaveat, declaresMembership, findDeployRun, nextActions, reachesPhase6, renderCloseAction, renderCloseComment, ownFailureCaveat, DEPLOY_PHASE, reconcileAll, report, retro, parseProposed, phaseOf, readBudget, reviewRecovery, chargeable, reviseRecovery, reviseRunsFor, startedAfter, standingChangesRequest, projectReviews, execute, qaIssueOf, hold, renderHoldComment, applyDecision, repoLabels, ghCause, redactSecrets, isTransient, holdMarker, occupiesSlot, isParkedOnHuman, linkedPrsRead, laneStateOf, adoptedProvenance, HUMAN_ACTION, carriedOut, inDecomposition, isProjectWork, SPEC_FINDING, FINDING_ANCHOR, openGatingWork, blockedOf, labelMirror, mirrorLabels, mirrorCap, projectLabel, qaIssueTitle, isQaIssueTitle } = await import('../../scripts/lead-reconcile.mjs');
+const { qaRoundBudget, heldClearsRead, QA_ROUND_CAP } = await import('../../scripts/lead-reconcile.mjs');
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ROOT } from './helpers/adopter.js';
 /** A value of the untyped library, as the reference adopter's helper named it. */
@@ -1741,6 +1742,65 @@ describe('phase 5 — staging verification (RA-1063)', () => {
       expect(r.actions).toEqual([]);
       expect(r.stopped).toMatch(/belongs with the developer/);
       expect(r.stopped).toMatch(/NOT closed/);
+    });
+
+    // kanon#186 — the hold says "remove the label once the cause is fixed", so removing it
+    // must mean something: exactly one more round, never a re-hold without one.
+    describe('a human clearing a `qa-exhausted` hold grants one round (kanon#186)', () => {
+      const R1 = '2026-08-26T10:00:00Z';
+      const R2 = '2026-08-26T19:00:00Z';
+      const CLEAR = '2026-08-27T09:00:00Z';
+      const R3 = '2026-08-27T11:00:00Z';
+      const qa = (roundsAt: string[], clearedAt?: string[]) => world({ qaIssue: {
+        number: 2000, state: 'OPEN', readable: true, rounds: roundsAt.length, roundsAt,
+        lastVerifiedAt: roundsAt.at(-1) ?? null, ...(clearedAt ? { clearedAt } : {}),
+      } });
+
+      it('2 rounds → held; human clears → verify; a third round fails → held again', () => {
+        expect(phaseOf(qa([R1, R2]))).toBe('qa-exhausted');
+        expect(phaseOf(qa([R1, R2], [CLEAR]))).toBe('verify');
+        expect(nextActions(qa([R1, R2], [CLEAR])).actions).toEqual([expect.objectContaining({ kind: 'verify', number: 2000 })]);
+        expect(phaseOf(qa([R1, R2, R3], [CLEAR]))).toBe('qa-exhausted');
+        // And the next clear buys exactly one more again.
+        expect(phaseOf(qa([R1, R2, R3], [CLEAR, '2026-08-28T00:00:00Z']))).toBe('verify');
+      });
+
+      it('a clear BEFORE the bound is reached grants nothing — the two ordinary rounds are unspent', () => {
+        // Cleared for another hold's cause between rounds 1 and 2.
+        expect(phaseOf(qa([R1, R2], ['2026-08-26T12:00:00Z']))).toBe('qa-exhausted');
+        expect(qaRoundBudget({ roundsAt: [R1], clearedAt: ['2026-08-26T12:00:00Z'] })).toEqual({ allowed: QA_ROUND_CAP, pending: false });
+      });
+
+      it('two clears with no round between them still grant one round, not two', () => {
+        expect(qaRoundBudget({ roundsAt: [R1, R2], clearedAt: [CLEAR, '2026-08-27T10:00:00Z'] })).toEqual({ allowed: 3, pending: true });
+        expect(qaRoundBudget({ roundsAt: [R1, R2, R3], clearedAt: [CLEAR] }), 'the granted round ran').toEqual({ allowed: 3, pending: false });
+      });
+
+      it('no clears read (absent or unreadable) is the old bound of two', () => {
+        expect(qaRoundBudget({ roundsAt: [R1, R2] })).toEqual({ allowed: 2, pending: false });
+        expect(qaRoundBudget({})).toEqual({ allowed: 2, pending: false });
+      });
+
+      it('readWorld reads the clears once the bound is reached, and hands them to phaseOf', () => {
+        const src = readFileSync(join(ROOT, 'scripts/lead-reconcile.mjs'), 'utf8');
+        expect(src).toMatch(/qaRounds\.readable && qaRounds\.rounds >= QA_ROUND_CAP \? \{ clearedAt: heldClearsRead\(project\) \}/);
+        expect(src).toMatch(/roundsAt: mine\.map\(\(c\) => c\.createdAt\)/);
+      });
+
+      it('the hold says what releases it', () => {
+        expect(nextActions(qa([R1, R2])).escalate?.[0]).toMatch(/removing `needs:human` grants exactly one more verification round/);
+      });
+
+      it('reads only a HUMAN\'s removal of `needs:human`, and fails toward the hold', () => {
+        const calls: string[][] = [];
+        const text = (args: string[]) => { calls.push(args); return `${CLEAR}\n\n`; };
+        expect(heldClearsRead(961, { text })).toEqual([CLEAR]);
+        const jq = calls[0][calls[0].indexOf('--jq') + 1];
+        expect(jq).toMatch(/\.event == "unlabeled"/);
+        expect(jq).toMatch(/\.label\.name == "needs:human"/);
+        expect(jq).toMatch(/\.actor\.type == "User"/);
+        expect(heldClearsRead(961, { text: () => { throw new Error('502'); } })).toEqual([]);
+      });
     });
 
     it('closes the project only once QA has passed', () => {

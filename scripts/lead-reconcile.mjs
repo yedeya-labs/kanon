@@ -321,6 +321,45 @@ export const DEPLOY_PHASE = {
 
 
 
+/** Phase 5's round cap before a human steps in (RA-1023). */
+export const QA_ROUND_CAP = 2;
+
+/**
+ * How many verification rounds this project may have, and whether one is owed (kanon#186).
+ *
+ * `qa-exhausted` holds the project with `needs:human`, and the hold says to remove the
+ * label once the cause is fixed. But the rounds are the Explorer's marker comments, which
+ * never go away, so the next tick re-derived `qa-exhausted` and re-held it — twice in 70
+ * minutes in the reference adopter, with the fix shipped and no new round in between.
+ *
+ * So a HUMAN removing `needs:human` once the bound is reached GRANTS ONE ROUND: the bound
+ * becomes the rounds so far plus one, and the round is `pending` until the Explorer posts
+ * it. If it fails, the project holds again; each human action buys exactly one round. A
+ * clear before the bound is reached (another hold's cause) grants nothing, because the
+ * two ordinary rounds are still unspent.
+ *
+ * Pure. `roundsAt` are the Explorer's marker times; `clearedAt` the times a human removed
+ * `needs:human` from the tracking issue. Either absent reads as none, which is the
+ * pre-kanon#186 bound of two.
+ *
+ * @param {{roundsAt?: string[]|null, clearedAt?: string[]|null, cap?: number}} input
+ * @returns {{allowed: number, pending: boolean}}
+ */
+export function qaRoundBudget({ roundsAt, clearedAt, cap = QA_ROUND_CAP } = {}) {
+  const times = (xs) => (xs ?? []).map((x) => Date.parse(x)).filter(Number.isFinite).sort((a, b) => a - b);
+  const rounds = times(roundsAt);
+  let allowed = cap;
+  let grantedAt = null;
+  for (const t of times(clearedAt)) {
+    const before = rounds.filter((r) => r < t).length;
+    if (before >= allowed) {
+      allowed = before + 1;
+      grantedAt = t;
+    }
+  }
+  return { allowed, pending: grantedAt != null && !rounds.some((r) => r > grantedAt) };
+}
+
 /**
  * Has anything happened since the Explorer last verified that could change his answer?
  *
@@ -521,8 +560,13 @@ export function phaseOf(world) {
     // would look like a healthy wait. Neither is honest, so it stops and says why.
     if (world.qaIssue.readable === false) return 'qa-unreadable';
     // Bounded like every other loop here (RA-1023): a project that cannot pass QA in
-    // two rounds belongs with the developer, not another Explorer run.
-    if ((world.qaIssue.rounds ?? 0) >= 2) return 'qa-exhausted';
+    // two rounds belongs with the developer, not another Explorer run. A human clearing
+    // the hold grants exactly one more round (kanon#186) — see `qaRoundBudget`.
+    const budget = qaRoundBudget({ roundsAt: world.qaIssue.roundsAt, clearedAt: world.qaIssue.clearedAt });
+    if ((world.qaIssue.rounds ?? 0) >= budget.allowed) return 'qa-exhausted';
+    // The granted round is OWED, whether or not a gating member closed since the last one:
+    // the fix that clears the hold is often to the brief or the specs, which close nothing.
+    if (budget.pending) return 'verify';
     // The same gating set (RA-1783): a carried-out follow-up closing is not a change to
     // the project's work, and must not spend one of phase 5's two rounds.
     if (needsVerification((world.all ?? []).filter((i) => !i.labels.includes(VERIFY) && gatesClosure(i, world.proposed)), world.qaIssue.lastVerifiedAt))
@@ -843,8 +887,8 @@ function nextActionsCore(world, {
     return {
       phase, actions: [],
       escalateKind: 'stop',
-      escalate: [`phase 5 is \`qa-exhausted\`: QA issue #${world.qaIssue.number} has been verified ${world.qaIssue.rounds} times and the project still does not pass. Another the Explorer run is bounded out; this belongs with the developer.`],
-      stopped: `QA issue #${world.qaIssue.number} has been verified ${world.qaIssue.rounds} times and the project still does not pass. Stopping — this belongs with the developer, not another Explorer run. The project is NOT closed.`,
+      escalate: [`phase 5 is \`qa-exhausted\`: QA issue #${world.qaIssue.number} has been verified ${world.qaIssue.rounds} times and the project still does not pass. Another Explorer run is bounded out; this belongs with the developer. Once the cause is fixed, removing \`${HELD}\` grants exactly one more verification round on the next tick; if it fails, the project holds again.`],
+      stopped: `QA issue #${world.qaIssue.number} has been verified ${world.qaIssue.rounds} times and the project still does not pass. Stopping — this belongs with the developer, not another Explorer run. The project is NOT closed. Removing \`${HELD}\` grants one more round.`,
     };
   }
 
@@ -2350,7 +2394,7 @@ function readQaRounds(qaNumber) {
     const mine = comments.filter((c) =>
       (c.author?.login ?? '').replace(/^app\//, '').replace(/\[bot\]$/, '') === EXPLORER_LOGIN
       && (c.body ?? '').includes(QA_MARKER));
-    return { rounds: mine.length, lastVerifiedAt: mine.at(-1)?.createdAt ?? null, readable: true };
+    return { rounds: mine.length, roundsAt: mine.map((c) => c.createdAt), lastVerifiedAt: mine.at(-1)?.createdAt ?? null, readable: true };
   } catch {
     // ITS OWN STATE. The first version returned `lastVerifiedAt: new Date(0)` with a
     // comment claiming it "stalls rather than loops" — 1970 is BEFORE every closedAt
@@ -2360,6 +2404,21 @@ function readQaRounds(qaNumber) {
     // `new Date()` would stall, but silently and for the wrong reason. An unreadable
     // count is not evidence about verification either way, so it says so and stops.
     return { rounds: 0, lastVerifiedAt: null, readable: false };
+  }
+}
+
+/** When a HUMAN removed `needs:human` from the tracking issue (kanon#186), for
+ *  `qaRoundBudget`. A bot's removal is not a human's decision. An unreadable event list
+ *  is no clears at all, which keeps the hold — the direction that cannot run the Explorer
+ *  without a human. INJECTABLE for the unit tier. */
+export function heldClearsRead(project, { text = gh } = {}) {
+  try {
+    return text(['api', '--paginate', `repos/${REPO}/issues/${project}/events`, '--jq',
+      `.[] | select(.event == "unlabeled" and .label.name == "${HELD}" and .actor.type == "User") | .created_at`])
+      .split('\n').map((l) => l.trim()).filter(Boolean);
+  } catch (err) {
+    warn(`could not read #${project}'s label events, so whether a human cleared its \`${HELD}\` is UNKNOWN — keeping the QA round bound: ${err.message}`);
+    return [];
   }
 }
 
@@ -2706,6 +2765,7 @@ function readWorld(project) {
   // STATE, and RA-1095 now depends on that: a closed QA issue with `rounds === 0` is
   // how the retro knows nobody verified anything. A gate on `qa.state === 'OPEN'`
   // would have removed exactly that evidence and reinstated the false claim.
+  const qaRounds = qa && reachesPhase6(deploy?.state) ? readQaRounds(qa.number) : {};
   const qaIssue = qa
     ? {
         number: qa.number,
@@ -2715,7 +2775,9 @@ function readWorld(project) {
         labelMissing: qaLabelMissing,
         // the Explorer's own marker comments, the same derived-state discipline as every
         // other cap here: no bookkeeping, and it survives a re-run.
-        ...(reachesPhase6(deploy?.state) ? readQaRounds(qa.number) : {}),
+        ...qaRounds,
+        // Paid only once the bound is reached, which is the only time it is read (kanon#186).
+        ...(qaRounds.readable && qaRounds.rounds >= QA_ROUND_CAP ? { clearedAt: heldClearsRead(project) } : {}),
       }
     : null;
   // WAS IT CLOSED BY THIS TICK, AND REOPENED SINCE? (RA-1062)
