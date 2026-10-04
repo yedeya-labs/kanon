@@ -76,9 +76,35 @@ describe('the change gate (RA-167): skip a scheduled run on a commit already swe
 
   it('records a skip only when it skips, and sweeps only when it sweeps', () => {
     expect(jobs['record-skip']!.needs).toBe('change');
-    expect(jobs['record-skip']!.if).toBe("needs.change.outputs.sweep == 'false'");
+    expect(jobs['record-skip']!.if).toBe("${{ !cancelled() && needs.change.result == 'success' && needs.change.outputs.sweep == 'false' }}");
     expect(explore.needs).toBe('change');
-    expect(explore.if).toBe("needs.change.outputs.sweep == 'true'");
+    expect(explore.if).toBe("${{ !cancelled() && needs.change.result == 'success' && needs.change.outputs.sweep == 'true' }}");
+  });
+
+  // GitHub prepends `success()` to a job `if:` with no status function, and evaluates it over
+  // every job in the `needs` chain, grandparents included (actions/runner#491). `last-green` is
+  // skipped on every dispatch and can fail on a schedule, so a job downstream of it that relies
+  // on the implicit `success()` never starts on a dispatch, whatever `change` decided.
+  const ancestors = (name: string, seen = new Set<string>()): Set<string> => {
+    for (const n of [jobs[name]!.needs ?? []].flat()) if (!seen.has(n)) { seen.add(n); ancestors(n, seen); }
+    return seen;
+  };
+  const STATUS = /\b(always|cancelled|success|failure)\(\)/;
+  it.each(Object.keys(jobs).filter((n) => ancestors(n).has('last-green')))(
+    '%s, downstream of the store job a dispatch skips, names a status function and needs its parent to have succeeded',
+    (name) => {
+      const cond = String(jobs[name]!.if ?? '');
+      expect(cond, name).toMatch(STATUS);
+      expect(cond, name).toMatch(/^\$\{\{ !cancelled\(\) && /);
+      // Without a parent check, `!cancelled()` would start it after a failed or refused parent.
+      const parents = [jobs[name]!.needs ?? []].flat();
+      const guarded = parents.some((p) => cond.includes(`needs.${p}.result == 'success'`) || cond.includes(`needs.${p}.outputs.`));
+      expect(guarded, name).toBe(true);
+    },
+  );
+
+  it('finds the jobs downstream of last-green, so the rule above is not vacuous', () => {
+    expect(Object.keys(jobs).filter((n) => ancestors(n).has('last-green')).sort()).toEqual(['change', 'explore', 'put', 'record-skip']);
   });
 
   const decide = jobs.change!.steps.find((s) => s.id === 'decide')!;

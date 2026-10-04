@@ -150,9 +150,10 @@ jobs:
 
   # THE STORE JOB THAT RECORDS A SKIP, so a commit swept once and then skipped reads as bounded
   # coverage, not as a fresh full sweep. A failed write fails it: that red run is the page.
+  # Its `if:` names its status function for the reason `explore`'s does, below.
   record-skip:
     needs: change
-    if: needs.change.outputs.sweep == 'false'
+    if: ${{ !cancelled() && needs.change.result == 'success' && needs.change.outputs.sweep == 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: kanon-qa-store
@@ -168,9 +169,14 @@ jobs:
           tier: all
           reason: unchanged-commit
 
+  # AN EXPLICIT STATUS FUNCTION, ON PURPOSE. Without one GitHub prepends `success()`, which it
+  # evaluates over the WHOLE `needs` chain (actions/runner#491): `last-green` is skipped on every
+  # dispatch and can fail on a schedule, and either would skip this job even though `change` ran
+  # and said sweep. `needs.change.result == 'success'` keeps a refused gate or a failed `change`
+  # from starting anything. `record-skip` takes the same shape.
   explore:
     needs: change
-    if: needs.change.outputs.sweep == 'true'
+    if: ${{ !cancelled() && needs.change.result == 'success' && needs.change.outputs.sweep == 'true' }}
     runs-on: ubuntu-latest
     # Bounds a hang (RA-1336). Sized at ~3x the longest real run measured on the reference
     # adopter, so it never truncates work.
