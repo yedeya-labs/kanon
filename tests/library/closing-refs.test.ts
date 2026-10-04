@@ -105,6 +105,35 @@ describe('what the merge will silently drop', () => {
     expect(r.droppedBySquash).toEqual([1011, 1012]);
   });
 
+  it('does not report a reference the body declares as dropped, on a stacked PR (kanon#165)', () => {
+    // A stacked PR's `willClose` is `[]` by construction — GitHub fills it only for a PR
+    // onto the default branch — so a commit keyword the body ALSO declares used to be
+    // reported, with advice to "declare it in the body" for an issue it already declares.
+    const r = analyse({
+      body: 'Closes #1207',
+      willClose: [],
+      linksPopulated: false,
+      commitMessages: ['fix(qa): x\n\ncloses #1207', 'fix(qa): y\n\ncloses #1300'],
+    });
+    expect(r.droppedBySquash, 'the declared one is not dropped; the undeclared one still is').toEqual([1300]);
+  });
+
+  it('does not report a declared reference as dropped when the links are live either', () => {
+    // A backticked declaration GitHub cannot link is `declaredButWontClose`'s finding,
+    // not this one's: the body already says it, so "declare it in the body" is wrong.
+    const r = analyse({ body: 'Closes #1007, `closes #1010`', willClose: [1007], commitMessages: ['x\n\ncloses #1010'] });
+    expect(r.droppedBySquash).toEqual([]);
+    expect(r.declaredButWontClose).toEqual([1010]);
+  });
+
+  it('does not report one the PR link will close either, declared or not', () => {
+    // The link closes it at merge whatever the commit says, so nothing is dropped; the
+    // missing declaration is `willCloseButNotDeclared`'s finding.
+    const r = analyse({ body: 'Closes #1007 · Refs #918', willClose: [918, 1007], commitMessages: ['x\n\ncloses #918'] });
+    expect(r.droppedBySquash).toEqual([]);
+    expect(r.willCloseButNotDeclared).toEqual([918]);
+  });
+
   it('BLOCKS on a code-spanned keyword below the declaration', () => {
     // This used to be a note reading "inside code, so it will NOT close. Deliberate
     // for a planned issue" — and that advice is the exact false belief that closed

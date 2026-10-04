@@ -236,15 +236,13 @@ export const analyse = ({ body, title = '', willClose, commitMessages = [], repo
     // arm which caught RA-1029, the most expensive of the three defects this file exists
     // for, and it is why deferral cannot make this a check that never fires.
     //
-    // `droppedBySquash` IS AFFECTED, and naming it here as unaffected was wrong in both
-    // halves (RA-1672 review). It is `inCommits.filter((n) => !willClose.includes(n))`, so
-    // it reads `willClose` and on a deferred PR reports EVERY commit-message closing
-    // keyword rather than none; and it never fails the run in the first place — it is a
-    // `console.log` note, marked "Reported, never fatal". Harmless either way, because a
-    // commit keyword creates no closing link on any base, so the note it prints is true
-    // whichever set it is computed from. Recorded rather than quietly corrected: in a
-    // file whose whole premise is that its comments are load-bearing, an "unaffected and
-    // still fails" claim about the wrong arm is the defect this batch is about.
+    // `droppedBySquash` reads `willClose` too, and was the one arm left reading it bare
+    // (RA-1672 review, then kanon#165). On a deferred PR `willClose` is `[]` by
+    // construction, so it reported every commit-message keyword, including ones the body
+    // already declares, with advice to "declare it in the body". It is now computed
+    // against what the body declares as well as what the links close, so a declared
+    // reference is never reported as dropped on any base; a commit keyword the body does
+    // not declare is still reported on a stacked PR, where the note is as true as anywhere.
     linksDeferred: !linksPopulated,
     // Declared up top, but the PR link will not close it — backticks, a fence, or a
     // typo. It may still be closed by the MERGE COMMIT, which reads the same
@@ -262,8 +260,10 @@ export const analyse = ({ body, title = '', willClose, commitMessages = [], repo
     willCloseButNotDeclared: linksPopulated ? willClose.filter((n) => !declared.includes(n)) : [],
     // The subset of the above that is explained by a keyword below the zone.
     probableForwardRefs: linksPopulated ? forward : [],
-    // In a commit message and nowhere the merge will read.
-    droppedBySquash: inCommits.filter((n) => !willClose.includes(n)),
+    // In a commit message and nowhere the merge will read. A reference the body DECLARES
+    // is not dropped — the body is what the squash keeps — and that has to hold where
+    // `willClose` is empty for want of links rather than for want of a declaration.
+    droppedBySquash: inCommits.filter((n) => !willClose.includes(n) && !declared.includes(n)),
     // The second oracle. `closingIssuesReferences` predicts what the PR LINK
     // closes; this predicts what the merge COMMIT closes, and they disagree
     // whenever a keyword is inside a code span or split across a line break.
@@ -277,6 +277,9 @@ export const analyse = ({ body, title = '', willClose, commitMessages = [], repo
 
 const gh = (args) => execFileSync('gh', args, { encoding: 'utf8' });
 
+// `baseRefName` is read by `linksArePopulated`, and a field this list does not request is
+// `undefined` rather than an error, so dropping it would quietly un-defer every stacked PR.
+// tests/library/closing-refs-read.test.ts asserts the request (kanon#165).
 export const readPr = (pr, repo) => {
   const meta = JSON.parse(gh(['pr', 'view', String(pr), '--repo', repo, '--json', 'title,body,closingIssuesReferences,commits,baseRefName']));
   return {
