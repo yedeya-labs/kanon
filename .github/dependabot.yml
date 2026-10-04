@@ -1,7 +1,8 @@
 # Dependabot for Kanon's own actions (plan 0001, decision 14).
 #
 # `/` covers .github/workflows. Each composite action under actions/ is its own directory,
-# so it is listed by glob, and so is Kanon's own project-setup hook under .github/actions/. That includes the exact pin of claude-code-action in
+# so it is listed by glob, and so is Kanon's own project-setup hook under .github/actions/. The AWS
+# QA store's two actions under infra/ are listed by path. That includes the exact pin of claude-code-action in
 # actions/agent-run: the pin fixes the CLI per Kanon release, and this is what proposes
 # each bump, as an ordinary Kanon PR that runs the smoke workflow and the tests.
 #
@@ -20,6 +21,8 @@ updates:
       - /
       - /actions/*
       - /.github/actions/*
+      - /infra/qa-store/aws
+      - /infra/qa-store/aws/maintenance
     schedule:
       interval: weekly
     commit-message:
