@@ -63,13 +63,14 @@
  *   GITHUB_TOKEN=$(gh auth token) GITHUB_REPOSITORY=<owner>/<repo> \
  *   DRY_RUN=1 node scripts/project-digest.mjs
  *
- * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, SLACK_RELEASE_WEBHOOK, NARRATIVE
+ * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, DIGEST_WEBHOOK (lib/digest-webhook.mjs), NARRATIVE
  * (optional prose from the model step — the post degrades to numbers-only when
  * absent), TODAY (optional ISO date, for reproducible runs), DRY_RUN.
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { closingRefs } from './closing-refs.mjs';
+import { digestWebhook } from './lib/digest-webhook.mjs';
 import { CONFLICT_SHORT, ConflictFieldsUnread, conflictState } from './conflict-state.mjs';
 // THE RECONCILER'S OWN CLOSURE RULE AND BRIEF GRAMMAR, imported rather than restated
 // (RA-2414). Since RA-1783 a project closes when its GATING members are done — the brief's
@@ -655,11 +656,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const {
     GITHUB_TOKEN,
     GITHUB_REPOSITORY: repo,
-    SLACK_RELEASE_WEBHOOK: webhook,
     NARRATIVE,
     TODAY,
     DRY_RUN,
   } = process.env;
+  const webhook = digestWebhook(process.env);
 
   if (!GITHUB_TOKEN || !repo) {
     console.error('Missing required env: GITHUB_TOKEN, GITHUB_REPOSITORY');
@@ -668,7 +669,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (!webhook && !DRY_RUN) {
     // Graceful no-op, matching announce-deploy and weekly-digest: a missing
     // webhook must not fail a scheduled job whose output is a nice-to-have.
-    console.warn('SLACK_RELEASE_WEBHOOK not set — skipping digest.');
+    console.warn('DIGEST_WEBHOOK not set — skipping digest.');
     process.exit(0);
   }
 

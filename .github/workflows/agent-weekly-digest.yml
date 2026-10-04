@@ -1,0 +1,231 @@
+# The weekly digest. RA-502. A Kanon lane (plan 0004, step 10).
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:`
+# this file at an exact Kanon tag, passes `week_end` and `dry_run` through, and maps the two
+# secrets by name (never `secrets: inherit`).
+#
+# Written for a stakeholder who follows the project from outside the day-to-day, so the
+# headline is milestone burndown rather than activity volume. See `scripts/weekly-digest.mjs`
+# for the editorial rules. It adds to an adopter's per-release announcements; it does not
+# replace them.
+#
+# THE WEBHOOK (plan 0004, decision 7). The post goes to the URL in the caller's
+# `DIGEST_WEBHOOK` secret, as a `{"text": …}` body. Without it, the digest posts nothing and
+# says so, and the run stays green.
+#
+# INERT until: the caller is on the default branch + these secrets (plan 0001 §8):
+#   CLAUDE_CODE_OAUTH_TOKEN, and DIGEST_WEBHOOK to post
+name: Weekly dev digest
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#   schedule: "0 8 * * 1"          — Monday 08:00 UTC, an hour after the Overseer's weekly
+#                                    audit, so the week's pipeline work is already filed
+#   workflow_dispatch              — inputs `week_end` (the end of the 7-day window, an ISO
+#                                    date; blank = now) and `dry_run` (boolean, default false)
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` inputs, passed through. Empty on the schedule, and
+    # `dry_run` is a STRING here: a caller passes `${{ inputs.dry_run }}`, which a boolean
+    # input refuses as `''` on the schedule.
+    inputs:
+      week_end:
+        description: End of the 7-day window (ISO date). Defaults to now.
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "'true' to print the message instead of posting it"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      # Not required: without it the digest posts nothing (above).
+      DIGEST_WEBHOOK:
+        required: false
+
+concurrency:
+  group: kanon-weekly-digest
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
+# ceiling and must grant at least this, or the run fails to start; `lane-check` fails a
+# caller that grants less.
+permissions:
+  contents: read
+  # Also what the gate-candidates section reads (RA-2399): core REST `GET /labels` and
+  # `GET /issues?labels=gate-candidate`, not search. If it goes, that section says "could not
+  # be read" rather than "none"; it never fails the post on its own.
+  issues: read
+  # REQUIRED, and its absence is silent. The search API scopes results to what the token can
+  # see, so `is:pr is:merged` returns an EMPTY result set, not a 403, without this. The first
+  # real run reported "0 PRs merged" in a week with 25 releases, and nothing errored.
+  pull-requests: read
+
+jobs:
+  # THE MEMBERSHIP GATE (K-AGENT-45, kanon#46), in a job of its own: the digest job's first
+  # step stamps its start for the telemetry row, and the gate must run before anything else
+  # in its job. On the schedule the actor is whoever last changed the cron; on a dispatch,
+  # whoever ran it.
+  #
+  # ONLY THE CALLER'S TWO TRIGGERS. As a called workflow it runs on whatever its caller is
+  # called on (Kanon's smoke calls it on pull requests), so every other event starts nothing.
+  gate:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      member: ${{ steps.gate.outputs.member }}
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+  digest:
+    needs: gate
+    if: needs.gate.outputs.member == 'true'
+    runs-on: ubuntu-latest
+    # Bounds a hang (RA-1336). Sized at ~3x the longest real run measured on the reference
+    # adopter, so it never truncates work.
+    timeout-minutes: 20
+    steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1).
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        id: checkout
+
+      # THE AGENT-LANE BLOCKS, CALLED DIRECTLY (P8, RA-2743). This arm mints no App token, so
+      # `agent-setup` gets no slug and probes nothing; `agent-run` is the narrative step;
+      # `agent-finish` records the cost row.
+      - uses: $/actions/agent-setup
+        id: setup
+        with:
+          arm: weekly-digest agent
+          app-slug: ""
+
+      # BEST-EFFORT, and the only best-effort step here. The numbers below are deterministic;
+      # this writes the one or two sentences of plain-language framing that turn "180
+      # commits" into something a reader outside the work can act on. If it fails, times out
+      # or writes nothing, the digest still posts, just without the prose.
+      # Kanon's scripts, for the post below, and `KANON` for the agent's environment (kanon#110):
+      # from this step's output, which no project file can rewrite.
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      - name: Write the week's narrative (non-fatal)
+        id: agent
+        continue-on-error: true
+        uses: $/actions/agent-run
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+        with:
+          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ github.token }}
+          prompt: |
+            Read the GitHub releases published in the last 7 days for this repo
+            (`gh release list --limit 40` then `gh release view <tag>`) and write
+            **one or two sentences** summarising what the week's work was FOR, in
+            plain language, to `narrative.txt` in the repo root.
+
+            The reader is a stakeholder who follows the project from outside the
+            day-to-day work. They are not a developer. They want to know what the
+            week bought them.
+
+            RULES — these are what make it useful rather than noise:
+            - Plain language. No commit scopes, no PR numbers, no file names, no
+              jargon ("refactor", "endpoint", "migration" mean nothing to them).
+            - Describe the OUTCOME, not the mechanism: "people can now reset
+              their own password from the sign-in page", not "added a reset-token
+              table and an email job".
+            - NEVER claim something is live to customers, or name an environment.
+              Work is "delivered". Whether it has been promoted to production is a
+              separate decision this post does not speak to.
+            - Do NOT invent progress, and do NOT restate the numbers — the digest
+              already carries the milestone burndown and the counts beneath your
+              sentences. If the week was mostly internal, say so plainly; an
+              honest quiet week beats an inflated one.
+            - Past tense. Never mention what is pending, awaited, or remaining.
+
+            The two RULES in capitals are SCREENED IN CODE, not just asked for
+            (`sanitiseNarrative` in Kanon's `scripts/weekly-digest.mjs`, RA-707).
+            If what you write names an environment, claims something is live, or
+            frames work as pending/awaited/remaining, the WHOLE narrative is
+            dropped and the digest posts as numbers only. Prefer a plainer
+            sentence over one that flirts with either rule.
+
+            Write ONLY those sentences to narrative.txt. No heading, no preamble,
+            no markdown formatting, no sign-off.
+          claude_args: |
+            --model claude-haiku-4-5
+            --max-turns 15
+            --max-budget-usd 10
+            --fallback-model claude-sonnet-5
+            --allowedTools Read,Bash,Glob,Grep,Write
+            --exclude-dynamic-system-prompt-sections
+
+      # Record what this run cost (RA-1485). `always()` because a run that FAILED is the one
+      # you most want measured. `classify: "false"`, because this arm explains a red narrative
+      # in a step of its own below, gated on the narrative step and non-fatal.
+      - uses: $/actions/agent-finish
+        id: finish
+        if: always()
+        continue-on-error: true
+        with:
+          arm: weekly-digest agent
+          agent: weekly-digest
+          job-status: ${{ job.status }}
+          classify: "false"
+          execution_file: ${{ steps.agent.outputs.execution_file }}
+          claude_args: |
+            --model claude-haiku-4-5
+            --max-turns 15
+            --max-budget-usd 10
+            --fallback-model claude-sonnet-5
+            --allowedTools Read,Bash,Glob,Grep,Write
+            --exclude-dynamic-system-prompt-sections
+          # The version-2 telemetry row (plan 0002 §2.6, its decision 9: the digests record
+          # their rows as the Overseer's).
+          lane: weekly-digest
+          stages: >-
+            checkout=${{ steps.checkout.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "20"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
+          kanon-error: ${{ steps.setup.outputs.kanon-error }}
+
+      # FAILS THE JOB on error, deliberately. A swallowed failure means the digest quietly
+      # stops and its reader simply stops hearing from the project, which nobody notices for
+      # weeks. A red run is the cheapest possible detector (RA-644).
+      - name: Post the digest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}
+          WEEK_END: ${{ inputs.week_end }}
+          DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
+        run: |
+          set -euo pipefail
+          # `|| true` on the read only — an absent narrative is the degraded path, not a
+          # failure. Anything the script itself hits does fail the job.
+          NARRATIVE="$(cat narrative.txt 2>/dev/null || true)" \
+            node "$KANON/scripts/weekly-digest.mjs"
+
+      # WHY THE NARRATIVE DID NOT LAND (RA-1408). GATED ON THE STEP, NOT THE JOB (RA-1503): the
+      # narrative step is `continue-on-error`, so the job stays green when it fails, and
+      # `failure()` would be false exactly when this is needed. `non-fatal` drops the notice to
+      # a warning, because an `::error` on a green job reads as the thing that failed.
+      - name: Say whether the model was unreachable or the run genuinely failed
+        if: always() && steps.agent.outcome == 'failure'
+        uses: $/actions/agent-classify
+        with:
+          arm: weekly-digest agent
+          non-fatal: "true"

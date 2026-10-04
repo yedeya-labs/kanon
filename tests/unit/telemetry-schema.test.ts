@@ -457,7 +457,7 @@ describe('where the rows go', () => {
 
   it('every Kanon lane names a lane from the schema\'s list', () => {
     const lanes = [...finishCalls, ...spineCalls].filter((c) => c.f !== 'agent-lane.yml' && c.f !== 'agent-blocks-smoke.yml');
-    expect(lanes.length).toBe(10);
+    expect(lanes.length).toBe(12);
     for (const c of lanes) expect(LANES, c.f).toContain(c.with.lane);
   });
 
@@ -468,11 +468,15 @@ describe('where the rows go', () => {
     .filter((c) => c.f !== 'agent-blocks-smoke.yml');
 
   it('passes each stage as a step conclusion, in the order the job runs those steps', () => {
-    expect(laneJobs.length).toBe(6);
+    expect(laneJobs.length).toBe(8);
     for (const c of laneJobs) {
       expect(Object.keys(c.with).filter((k) => k.endsWith('-outcome')), c.f).toEqual([]);
       const pairs = String(c.with.stages ?? '').trim().split(/\s+(?=[a-z]+=)/);
-      expect(pairs.length, c.f).toBeGreaterThanOrEqual(4);
+      // A job that mints an App token passes that stage too; the digests mint none (plan 0004
+      // step 10), so theirs are the checkout, the set-up and the agent.
+      const mints = c.job.steps!.some((s) => s.id === 'app-token');
+      expect(pairs.length, c.f).toBeGreaterThanOrEqual(mints ? 4 : 3);
+      if (mints) expect(pairs.some((p) => p.startsWith('token=')), c.f).toBe(true);
       const at: number[] = [];
       for (const pair of pairs) {
         const m = /^([a-z]+)=\$\{\{ (.*) \}\}$/.exec(pair);

@@ -1,0 +1,31 @@
+# A trigger-only caller of Kanon's weekly digest lane, as an adopter writes it (plan 0004
+# step 10).
+name: Weekly dev digest
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      week_end:
+        description: End of the 7-day window (ISO date). Defaults to now.
+        type: string
+      dry_run:
+        description: Print the message instead of posting it
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  digest:
+    uses: yedeya-labs/kanon/.github/workflows/agent-weekly-digest.yml@v1.2.3
+    with:
+      week_end: ${{ inputs.week_end }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}

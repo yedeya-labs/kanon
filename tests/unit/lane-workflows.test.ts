@@ -286,7 +286,7 @@ describe('plan 0001 §5: nothing in the spine or a lane names a project', () => 
     return JSON.stringify(doc, null, 1).split('\n');
   };
 
-  it.each(['agent-lane.yml', ...LANES, 'agent-review.yml', 'agent-verify-acs.yml'])('%s', (file) => {
+  it.each(['agent-lane.yml', ...LANES, 'agent-review.yml', 'agent-verify-acs.yml', 'agent-project-digest.yml', 'agent-weekly-digest.yml'])('%s', (file) => {
     expect(parsed(file).filter((l) => LITERALS.test(l))).toEqual([]);
   });
 

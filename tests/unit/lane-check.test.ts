@@ -341,6 +341,35 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => { extra(t); t.edit(TICK, (d) => { (job(d).with as Record<string, string>).budget = '${{ inputs.budget }}'; }); }, 'passes `budget`, which the Kanon lane agent-lead-reconcile does not declare'));
   });
 
+  describe('the digest lanes (plan 0004 step 10)', () => {
+    const DAILY = '.github/workflows/agent-project-digest.yml';
+    const WEEKLY = '.github/workflows/agent-weekly-digest.yml';
+    const extra = (t: Tree, rel: string) => t.write(rel, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra', rel.split('/').pop()!), 'utf8'));
+    it('accepts both callers, which run as no App', () => {
+      const t = adopter();
+      extra(t, DAILY);
+      extra(t, WEEKLY);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('6 lane caller(s) pass');
+    });
+    it('refuses a daily caller that does not grant the health job its issue writes', () =>
+      red((t) => { extra(t, DAILY); t.edit(DAILY, (d) => { (d as Caller).permissions!.issues = 'read'; }); }, 'needs issues: write'));
+    it('refuses a daily caller that does not grant the health job its read of runs', () =>
+      red((t) => { extra(t, DAILY); t.edit(DAILY, (d) => { delete (d as Caller).permissions!.actions; }); }, 'needs actions: read'));
+    it('refuses a caller that does not map the webhook under its fixed name (decision 7)', () =>
+      red((t) => {
+        extra(t, WEEKLY);
+        t.edit(WEEKLY, (d) => {
+          const secrets = job(d).secrets as Record<string, string>;
+          delete secrets.DIGEST_WEBHOOK;
+          secrets.SLACK_RELEASE_WEBHOOK = '${{ secrets.SLACK_RELEASE_WEBHOOK }}';
+        });
+      }, 'the Kanon lane agent-weekly-digest takes exactly [CLAUDE_CODE_OAUTH_TOKEN,DIGEST_WEBHOOK]'));
+    it('refuses a caller that passes `dry_run` as a setting rather than its own input', () =>
+      red((t) => { extra(t, WEEKLY); t.edit(WEEKLY, (d) => { (job(d).with as Record<string, string>).dry_run = 'true'; }); }, 'passes `dry_run: true`'));
+  });
+
   describe('the project-setup hook (§5)', () => {
     const HOOK = '.github/actions/project-setup/action.yml';
     it('refuses a missing hook', () => red((t) => t.rm(HOOK), 'the project-setup hook is missing'));

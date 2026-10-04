@@ -35,7 +35,7 @@
  *   GITHUB_TOKEN=$(gh auth token) GITHUB_REPOSITORY=<owner>/<repo> \
  *   DRY_RUN=1 node scripts/weekly-digest.mjs
  *
- * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, SLACK_RELEASE_WEBHOOK, NARRATIVE
+ * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, DIGEST_WEBHOOK (lib/digest-webhook.mjs), NARRATIVE
  * (optional prose from the model step — the post degrades to numbers-only when
  * absent), WEEK_END (optional ISO date, defaults to now; for reproducible runs),
  * DRY_RUN (print instead of posting).
@@ -43,6 +43,7 @@
 
 import { parseSections, scopeOf, cleanBullet, dropScopePrefix, INTERNAL_SCOPES } from './lib/release-notes.mjs';
 import { isRoadmapMilestone } from './lib/milestones.mjs';
+import { digestWebhook } from './lib/digest-webhook.mjs';
 import { GATE_CANDIDATE_LABEL, SEVERITY_LABELS, severityOf as severityOfLabels } from './issue-triage-defaults.mjs';
 
 /**
@@ -887,11 +888,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const {
     GITHUB_TOKEN,
     GITHUB_REPOSITORY: repo,
-    SLACK_RELEASE_WEBHOOK: webhook,
     NARRATIVE,
     WEEK_END,
     DRY_RUN,
   } = process.env;
+  const webhook = digestWebhook(process.env);
 
   if (!GITHUB_TOKEN || !repo) {
     console.error('Missing required env: GITHUB_TOKEN, GITHUB_REPOSITORY');
@@ -900,7 +901,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (!webhook && !DRY_RUN) {
     // Graceful no-op, matching announce-deploy: a missing webhook must not fail
     // a scheduled job whose output is a nice-to-have.
-    console.warn('SLACK_RELEASE_WEBHOOK not set — skipping digest.');
+    console.warn('DIGEST_WEBHOOK not set — skipping digest.');
     process.exit(0);
   }
 
