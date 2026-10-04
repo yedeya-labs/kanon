@@ -24,17 +24,16 @@
  * ── THE ONE CLASSIFICATION THAT MUST BE RIGHT ──────────────────────────────
  * An `agent:implement` issue with no PR has two completely different causes:
  *
- *   BAIL   the implementer posted a plan and STOPPED, correctly, because
- *          `agent-implement.yml` forbids it from proceeding into a data
- *          migration, an auth/credential/security change, or destructive
- *          schema without a human. It needs a DECISION.
+ *   BAIL   the implementer STOPPED and said why — a scope-first bail on the
+ *          bail list, a precondition only a human can meet, a question. It
+ *          needs a DECISION.
  *   STALL  the run was skipped, died, or never fired. It needs a RE-DISPATCH.
  *
  * They look identical in labels and PR state and call for opposite responses,
  * so reporting one as the other is worse than not reporting at all — it sends
  * the reader to re-dispatch something that would immediately bail again. The
- * distinguishing evidence is a bail comment on the issue, which is why
- * `classifyDispatch` reads comments rather than inferring from age.
+ * distinguishing evidence is WHO spoke last — the dispatch sweep's own rule, which
+ * `classifyDispatch` imports — not the wording of what they said (kanon#179).
  *
  * ── THERE IS NO POSITION-DERIVED STARVATION ────────────────────────────────
  * This script used to classify every open project but the lowest-numbered one as
@@ -82,6 +81,10 @@ import { CONFLICT_SHORT, ConflictFieldsUnread, conflictState } from './conflict-
 // its whole CLI — top-level env reads and a `gh` wrapper — into this job to get four pure
 // functions; `project-closure.mjs` is those functions and nothing else, so it imports
 // nothing and the workflow's plain checkout (no `npm ci`) runs it.
+// THE SWEEP'S OWN CLASSIFIER (kanon#179), so the digest and the sweep read one state per
+// issue. Node built-ins only, like everything else this job runs; it reads the App
+// register for the Implementer's login, as the reconciler does.
+import { AGENT_LOGIN, MARKER as SWEEP_MARKER, classify as classifyLane, isBot, norm } from './dispatch-sweep.mjs';
 import { carriedOut as reconcilerCarriedOut, declaresMembership, itemSatisfied, openGatingWork, parseProposed } from './project-closure.mjs';
 
 /** Where briefs live. A brief's basename IS its tracking issue number (RA-1032). */
@@ -168,37 +171,56 @@ export function briefTitle(markdown, fallback) {
 }
 
 /**
+ * What the reader is told the Implementer stopped on: `scope-first bail` when the comment
+ * says so, else its first heading (or first line), Slack-escaped and bounded. A LABEL
+ * only — `BAIL_RE` never decides between "awaiting you" and "stalled" (kanon#179).
+ *
+ * @param {string|null|undefined} body
+ * @param {number} [max]
+ * @returns {string}
+ */
+export function stopReason(body, max = 80) {
+  const text = body ?? '';
+  if (BAIL_RE.test(text)) return 'scope-first bail';
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('<!--'));
+  const first = (lines.find((l) => /^#{1,6}\s/.test(l)) ?? lines[0] ?? '')
+    .replace(/^#{1,6}\s+/, '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+  if (!first) return 'stopped';
+  const safe = first.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `stopped: “${safe.length > max ? `${safe.slice(0, max - 1)}…` : safe}”`;
+}
+
+/**
  * Why a dispatched issue has no PR. See the header — this is the classification
  * the whole digest exists to get right.
  *
- * `comments` are the issue's comments, oldest first, each `{body, createdAt}`. A
- * bail comment from ANY author counts: the implementer writes it, but a human
- * re-stating one must not flip the classification back to `stall`.
+ * BY AUTHORSHIP, AS THE DISPATCH SWEEP DECIDES IT (kanon#179). The state comes from the
+ * sweep's own `classify`, so the digest and the sweep cannot disagree on an issue. It
+ * used to come from `BAIL_RE`: only a comment saying `SCOPE-FIRST BAIL` verbatim was a
+ * bail, so an Implementer stop worded any other way ("Stopped: the data precondition is
+ * still unmet") read as a stall, and sent the reader to re-dispatch something that
+ * would only stop again. The sweep refuses that keyword match for the same reason.
  *
- * A bail that has since been ANSWERED is `authorised` rather than `bail` — the
- * developer replied and it is waiting on a re-dispatch, not on them.
+ *  - the Implementer has never commented            → `stall` once quiet, else `dispatched`
+ *  - its word is the last (bots aside)              → `bail`: awaiting a human, with the
+ *                                                     stop's heading as the reason — unless
+ *                                                     it answers a human and is under 48h
+ *                                                     old: then a re-run, `authorised`
+ *  - a human answered it and nothing ran since      → `authorised`
+ *  - a human replied to the SWEEP, nothing ran      → `human-held`
+ *  - a human parked it with `qa:needs-info`         → `needs-info`
  *
- * THREE THINGS THIS HAS TO GET RIGHT, all of which an earlier version did not
- * (RA-1443 review, findings 2 and 4):
+ * So a bail never clears a bail once it is stale, and
+ * the reported wait comes from the Implementer's last comment rather than `updatedAt`,
+ * which a label change or a bot comment bumps.
  *
- *  - The LAST bail decides, not the first. A re-dispatch without a decision bails
- *    AGAIN, and keying off the first bail made the second one look answered by the
- *    first one's reply — silently dropping "awaiting your decision" from an issue
- *    unambiguously awaiting a decision.
- *  - A BAIL NEVER CLEARS A BAIL. The answering comment must itself not be a bail,
- *    which is what makes the cheap check fail toward "still waiting on you" rather
- *    than toward silence.
- *  - The reported wait comes from the BAIL COMMENT, not from `updatedAt`. A label
- *    change or a bot comment bumps `updatedAt`, so RA-1305's three-day-old bail would
- *    have printed `0d` — and that number is the only urgency on the line, so it
- *    could only ever under-report. `ageDays` (silence) still decides the stall.
- *
- * @param {{comments?: {body?: string|null, createdAt?: string}[], hasPr?: boolean,
- *          ageDays?: number, now?: Date}} input
- * @returns {{disposition: 'conflicting'|'building'|'authorised'|'bail'|'stall'|'dispatched',
- *            waitedDays: number}}
+ * @param {{comments?: {login?: string|null, body?: string|null, createdAt?: string}[],
+ *          labels?: string[], hasPr?: boolean, prConflicting?: boolean, ageDays?: number,
+ *          now?: Date}} input
+ * @returns {{disposition: 'conflicting'|'building'|'authorised'|'bail'|'stall'|'dispatched'|'human-held'|'needs-info',
+ *            waitedDays: number, reason?: string}}
  */
-export function classifyDispatch({ comments = [], hasPr = false, prConflicting = false, ageDays = 0, now = new Date() }) {
+export function classifyDispatch({ comments = [], labels = [], hasPr = false, prConflicting = false, ageDays = 0, now = new Date() }) {
   // BEFORE `building`, because it is the same PR and the opposite report (RA-1722). A
   // conflicting PR has no merge ref, so GitHub dispatches no `pull_request` events for
   // it: CI, review, revise and every label churn the reconciler owns are all
@@ -209,26 +231,38 @@ export function classifyDispatch({ comments = [], hasPr = false, prConflicting =
   if (hasPr && prConflicting) return { disposition: 'conflicting', waitedDays: ageDays };
   if (hasPr) return { disposition: 'building', waitedDays: ageDays };
 
-  let lastBail = -1;
-  for (let i = 0; i < comments.length; i += 1) {
-    if (BAIL_RE.test(comments[i]?.body ?? '')) lastBail = i;
+  const conversation = comments.map((c) => ({ login: norm(c.login), body: c.body ?? '', createdAt: c.createdAt }));
+  const v = classifyLane({ labels: labels.map((name) => ({ name })) }, conversation, false, { now: now.getTime() });
+  const lastAgent = conversation.filter((c) => c.login === AGENT_LOGIN).at(-1);
+  const at = Date.parse(lastAgent?.createdAt ?? '');
+  const waitedDays = Number.isFinite(at) ? Math.max(0, Math.floor((now.getTime() - at) / 86400000)) : ageDays;
+  const quiet = { disposition: ageDays >= QUIET_AFTER_DAYS ? 'stall' : 'dispatched', waitedDays: ageDays };
+
+  switch (v.state) {
+    case 'parked': return { disposition: 'needs-info', waitedDays: ageDays };
+    case 'human-held': return { disposition: 'human-held', waitedDays: ageDays };
+    case 'answered': return { disposition: 'authorised', waitedDays };
+    // `in-flight` is the sweep's young `awaiting-human`: the Implementer's word is the last,
+    // under the sweep's 48h. A first stop is awaiting the reader at once. One that FOLLOWS
+    // a human's answer is the re-dispatched run speaking (RA-1305: bail, "proceed",
+    // "Building now."), so it stays `authorised` until it is as stale as the sweep's own
+    // `awaiting-human` — after which a second stop reads as awaiting the reader again.
+    case 'in-flight': {
+      // By position, oldest first, as the API returns them: a human between the
+      // Implementer's last two comments. Its FIRST comment answers nobody — a human who
+      // spoke before the first run was not replying to it.
+      const agentIdx = conversation.flatMap((c, i) => (c.login === AGENT_LOGIN ? [i] : []));
+      const answered = agentIdx.length > 1 && conversation.slice(agentIdx.at(-2) + 1, agentIdx.at(-1))
+        .some((c) => !isBot(c.login) && !c.body.includes(SWEEP_MARKER));
+      if (answered) return { disposition: 'authorised', waitedDays };
+      return { disposition: 'bail', waitedDays, reason: stopReason(lastAgent?.body) };
+    }
+    case 'awaiting-human': return { disposition: 'bail', waitedDays, reason: stopReason(lastAgent?.body) };
+    // Out of re-dispatches: the sweep stops it on its next run. Report the state that
+    // ran out — silence is a stall, an answered stop is authorised.
+    case 'exhausted': return v.sawAgent ? { disposition: 'authorised', waitedDays } : quiet;
+    default: return quiet;
   }
-  if (lastBail === -1) {
-    return { disposition: ageDays >= QUIET_AFTER_DAYS ? 'stall' : 'dispatched', waitedDays: ageDays };
-  }
-
-  const at = comments[lastBail]?.createdAt;
-  const waitedDays = at ? Math.max(0, Math.floor((now - new Date(at)) / 86400000)) : ageDays;
-
-  // Anything after the LAST bail answers it — and taking the last one is what
-  // makes that true, so no "is this itself a bail?" filter is needed here. An
-  // earlier draft had one; it can never fire, because by construction no comment
-  // after `lastBail` matches BAIL_RE. Don't reinstate it: a guard that cannot fire
-  // reads as protection and provides none. The property it was meant to give is
-  // held by `lastBail`, and pinned by the double-bail tests below.
-  const answered = comments.length > lastBail + 1;
-
-  return { disposition: answered ? 'authorised' : 'bail', waitedDays };
 }
 
 /**
@@ -423,7 +457,8 @@ export async function holdReasonOf(api, repo, issue, commentCount, max = 160) {
 
 /**
  * The NEWEST run of a member issue's comments — enough of them for `classifyDispatch`,
- * and no more (RA-1705).
+ * and no more (RA-1705). Since kanon#179 the run reaches back to the Implementer's last
+ * comment rather than the last `BAIL_RE` match, because authorship decides now.
  *
  * SAME DEFECT AS `holdReasonOf`, one screen further down and untouched by RA-1673:
  * `?per_page=100` alone reads the OLDEST hundred, and every derivation
@@ -448,16 +483,19 @@ export async function holdReasonOf(api, repo, issue, commentCount, max = 160) {
  * @param {number} issue
  * @param {number} commentCount  the issue's own `comments` field, which `/search/issues`
  *   items carry — so finding the last page costs no extra request
- * @returns {Promise<{body: string|null, createdAt: string}[]>}
+ * @returns {Promise<{login: string|null, body: string|null, createdAt: string}[]>}
  */
 export async function dispatchCommentsOf(api, repo, issue, commentCount) {
   const pages = Math.max(1, Math.ceil((commentCount ?? 0) / PER_PAGE));
   let run = [];
   for (let page = pages; page >= 1; page--) {
     const batch = (await api(`/repos/${repo}/issues/${issue}/comments?per_page=${PER_PAGE}&page=${page}`))
-      .map((c) => ({ body: c.body, createdAt: c.created_at }));
+      .map((c) => ({ login: c.user?.login ?? null, body: c.body, createdAt: c.created_at }));
     run = [...batch, ...run];
-    if (batch.some((c) => BAIL_RE.test(c.body ?? ''))) break;
+    // The page holding the Implementer's last word: everything `classifyDispatch` reads
+    // follows it. Attempt counting (only `exhausted`) may see fewer sweep comments on an
+    // issue past 100 comments, which is a report detail rather than a classification.
+    if (batch.some((c) => norm(c.login) === AGENT_LOGIN)) break;
   }
   return run;
 }
@@ -481,7 +519,11 @@ export function renderMember(m) {
   const link = `<${m.url}|#${m.number}>`;
   switch (m.disposition) {
     case 'bail':
-      return `        :hand: ${link} ${t}\n            *awaiting your decision* — scope-first bail, ${m.waitedDays}d`;
+      return `        :hand: ${link} ${t}\n            *awaiting your decision* — ${m.reason ?? 'scope-first bail'}, ${m.waitedDays}d`;
+    // A human answered the SWEEP rather than the Implementer ("stop, this needs design"),
+    // and the sweep holds it rather than dispatching again.
+    case 'human-held':
+      return `        :raised_hand: ${link} ${t}\n            *held* — a human replied to the dispatch sweep and nothing has run since`;
     case 'authorised':
       // NOT "needs a re-dispatch". Without `actions: read` this cannot see a run
       // already in flight, and asserting an action the reader may have taken an
@@ -785,7 +827,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       }
       enriched.push({
         ...base,
-        ...classifyDispatch({ comments, hasPr, prConflicting, ageDays: days(m.updated_at), now: today }),
+        ...classifyDispatch({ comments, labels, hasPr, prConflicting, ageDays: days(m.updated_at), now: today }),
       });
     }
 
