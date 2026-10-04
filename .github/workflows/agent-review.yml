@@ -1846,6 +1846,15 @@ jobs:
             the other readers of the state it writes / the callers it gates), say which,
             and it isn't unverified.
 
+            END THE REVIEW BODY WITH ITS OPEN-ITEMS COUNT, every verdict, as its last
+            line: `<!-- qa:open-items N -->`. N counts the actionable items you raised,
+            this round or carried over from an earlier one, that are neither applied in
+            the head nor filed as an issue: an un-applied fold-in, an open finding. An
+            item you filed counts as filed. Write 0 only when nothing would need a
+            follow-up if this PR merged as it stands; when unsure, count it. After the
+            merge, a 0 on the merged head lets the merge-reconcile lane skip its pass, so
+            an under-count is a follow-up nobody files.
+
             A human still merges — NEVER merge.
           # NOTE: `claude_args` is a block scalar — its contents are passed to the
           # CLI verbatim, so `#` lines inside it are ARGUMENTS, not comments.
