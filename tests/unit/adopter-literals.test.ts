@@ -12,7 +12,8 @@ import { describe, expect, it } from 'vitest';
  * adopter's. Each moved to a file the adopter declares (`K-LAYOUT-8`, `K-LAYOUT-10`,
  * `K-LAYOUT-15` to `K-LAYOUT-17`). This test keeps them from coming back: it reads every
  * script, action and workflow Kanon ships, with comments removed, and fails on any of the
- * literals below.
+ * literals below. `infra/` is read too: the QA store's AWS implementation is shipped code,
+ * which adopters provision and whose maintenance action the lanes call.
  *
  * COMMENTS ARE NOT READ. They are history: the library's comments record what a guard was
  * measured on, and that was the reference adopter's tree (`RA-N` references). A comment
@@ -49,12 +50,14 @@ const ALLOWED: ReadonlyArray<readonly [string, string, string]> = [
     "the example the declaration's error message shows (`K-LAYOUT-10`)"],
   ['scripts/weekly-digest.mjs', 'its environment name',
     'the generic environment words the digest must not use ("staging", "production"): vocabulary, not a declaration'],
+  ['infra/qa-store/aws/provision.mjs', 'its environment name',
+    "the generic stage words a store resource's lifecycle must not name: vocabulary, not a declaration"],
   ['.github/workflows/agent-review.yml', "its product's areas",
     "a severity example in the Reviewer's prompt, left for the review-lane batch, which owns the file (kanon#54)"],
 ];
 
 const SCANNED = /\.(?:mjs|cjs|js|yml|yaml|sh|awk)$/;
-const files = execFileSync('git', ['ls-files', 'scripts', 'cli', 'actions', '.github'], { encoding: 'utf8' })
+const files = execFileSync('git', ['ls-files', 'scripts', 'cli', 'actions', '.github', 'infra'], { encoding: 'utf8' })
   .split('\n')
   .filter((f) => SCANNED.test(f));
 
@@ -110,7 +113,7 @@ describe("the library's code names no reference-adopter fact (kanon#54)", () => 
 
 describe('the scan reads code and skips comments', () => {
   it('reads the scripts, the actions and the workflows', () => {
-    for (const dir of ['scripts/', 'cli/', 'actions/', '.github/workflows/']) expect(files.some((f) => f.startsWith(dir))).toBe(true);
+    for (const dir of ['scripts/', 'cli/', 'actions/', '.github/workflows/', 'infra/']) expect(files.some((f) => f.startsWith(dir))).toBe(true);
   });
 
   it('reads a string, and a regular expression holding `//`, as code', () => {

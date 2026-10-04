@@ -101,12 +101,16 @@ describe('the CLIs read the declaration, and fail by name without it', () => {
   it.each([
     ['spec-id-renumbered.mjs', []],
     ['spec-coverage.mjs', ['--quiet']],
-  ])('%s fails by name when the declaration is missing', (script, args) => {
+    ['spec-coverage.mjs', ['--json']],
+    ['spec-coverage.mjs', []],
+  ])('%s %j fails by name, before reporting, when the declaration is missing', (script, args) => {
     const r = run(script, adopter(null), ...args);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/docs\/qa\/escalation-paths\.md doesn't exist.*K-LAYOUT-8/);
-    // It stops there, rather than reading on with no tooling tests excluded.
+    // It stops there, rather than reading on with no tooling tests excluded, or printing half
+    // a report.
     expect(r.stdout + r.stderr).not.toContain('tests/tool.test.ts');
+    expect(r.stdout).toBe('');
   });
 
   it.each([
@@ -117,5 +121,14 @@ describe('the CLIs read the declaration, and fail by name without it', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('docs/qa/escalation-paths.md:');
     expect(r.stdout + r.stderr).not.toContain('tests/tool.test.ts');
+  });
+});
+
+describe('announce-deploy names no environment of its own (kanon#54)', () => {
+  it('exits 1 by name when STAGE is unset, rather than announcing to a default', () => {
+    const env = { PATH: process.env.PATH ?? '', GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'o/r', VERSION: '1.0.0', DRY_RUN: '1' };
+    const r = spawnSync(process.execPath, [join(ROOT, 'scripts/announce-deploy.mjs')], { cwd: tmpdir(), env, encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/Missing required env:.*\bSTAGE\b/);
   });
 });

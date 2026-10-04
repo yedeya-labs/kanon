@@ -819,6 +819,9 @@ function main() {
     return;
   }
 
+  // Every report lists mentions, so the declaration is read before any of them prints.
+  const dirs = pipelineDirs();
+
   if (JSON_OUT) {
     console.log(JSON.stringify({
       total: invariants.length,
@@ -829,7 +832,7 @@ function main() {
       confirmedWithoutTest: confirmedBare.map((i) => i.id),
       seedWithTest: seedLocked.map((i) => i.id),
       dangling,
-      mentionedNotCited: [...mentionsWithoutTitle(known, citationOptOut(invariants), pipelineDirs())].map(([id, files]) => ({ id, files: [...files] })),
+      mentionedNotCited: [...mentionsWithoutTitle(known, citationOptOut(invariants), dirs)].map(([id, files]) => ({ id, files: [...files] })),
     }, null, 2));
     return;
   }
@@ -845,7 +848,7 @@ function main() {
       process.exitCode = 1;
       return;
     }
-    const mentionedQ = mentionsWithoutTitle(known, citationOptOut(invariants), pipelineDirs());
+    const mentionedQ = mentionsWithoutTitle(known, citationOptOut(invariants), dirs);
     console.log(`spec-coverage: ${locked.length} locked (floor ${LOCKED_FLOOR}), ${dangling.length} dangling, ${mentionedQ.size} mentioned but not cited in a title. Run it without \`--quiet\` for the full ladder.`);
     return;
   }
@@ -869,7 +872,7 @@ function main() {
   }
 
   const optedOut = citationOptOut(invariants);
-  const mentioned = mentionsWithoutTitle(known, optedOut, pipelineDirs());
+  const mentioned = mentionsWithoutTitle(known, optedOut, dirs);
   if (mentioned.size) {
     console.log(`\n## Mentioned in a test file, cited by no title — ${mentioned.size}\n`);
     console.log('These read as `Bare` above, but a test file names them somewhere other than a title — a docblock or an inline comment. Often that is a FIXABLE CITATION: the test asserts the invariant and only the title is missing. **Check that it does before adding one** — a citation on a test that asserts something else, or asserts the DEFECTIVE behaviour a finding reproduces, turns `unverifiable` into a false `passed`, which is worse than the gap. A clause that says it *deliberately names no test file* is excluded from this list for exactly that reason.\n');
