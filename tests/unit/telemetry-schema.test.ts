@@ -457,7 +457,7 @@ describe('where the rows go', () => {
 
   it('every Kanon lane names a lane from the schema\'s list', () => {
     const lanes = [...finishCalls, ...spineCalls].filter((c) => c.f !== 'agent-lane.yml' && c.f !== 'agent-blocks-smoke.yml');
-    expect(lanes.length).toBe(12);
+    expect(lanes.length).toBe(13);
     for (const c of lanes) expect(LANES, c.f).toContain(c.with.lane);
   });
 
@@ -468,7 +468,7 @@ describe('where the rows go', () => {
     .filter((c) => c.f !== 'agent-blocks-smoke.yml');
 
   it('passes each stage as a step conclusion, in the order the job runs those steps', () => {
-    expect(laneJobs.length).toBe(8);
+    expect(laneJobs.length).toBe(9);
     for (const c of laneJobs) {
       expect(Object.keys(c.with).filter((k) => k.endsWith('-outcome')), c.f).toEqual([]);
       const pairs = String(c.with.stages ?? '').trim().split(/\s+(?=[a-z]+=)/);
@@ -533,12 +533,14 @@ describe('where the rows go', () => {
     let errors = 0;
     for (const path of files) {
       const src = readFileSync(path, 'utf8');
-      const n = (src.match(/title=project-setup hook missing::/g) ?? []).length;
+      // The project-setup hook's, and the Explorer's sweep hook's (plan 0004 step 12).
+      const n = (src.match(/title=(project-setup|explore-sweep) hook missing::/g) ?? []).length;
       errors += n;
       expect((src.match(/echo "kanon-error=hook_missing" >> "\$GITHUB_OUTPUT"/g) ?? []).length, path).toBe(n);
     }
     // The review lane calls no hook since kanon#185, so it has no presence check either.
-    expect(errors).toBe(4);
+    // The explore lane checks two hooks, the project-setup hook and its sweep hook (plan 0004 step 12).
+    expect(errors).toBe(6);
   });
 
   it('the blocks smoke marks its row smoke', () => {

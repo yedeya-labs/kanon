@@ -50,6 +50,7 @@ const TRIGGERS: Record<string, Trigger[]> = {
   'agent-verify-acs.yml': ['issue-label', 'dispatch'],
   'agent-project-digest.yml': ['schedule', 'dispatch'],
   'agent-weekly-digest.yml': ['schedule', 'dispatch'],
+  'agent-explore.yml': ['schedule', 'dispatch'],
 };
 
 /** The job holding the gate step, and the step's index in it. */

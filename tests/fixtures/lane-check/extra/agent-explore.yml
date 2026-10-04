@@ -1,0 +1,28 @@
+# A trigger-only caller of Kanon's explore lane, as an adopter writes it (plan 0004 step 12).
+name: Explore (Explorer)
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: The tier to sweep; blank sweeps every tier
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: read
+  actions: read
+  id-token: write
+
+jobs:
+  explore:
+    uses: yedeya-labs/kanon/.github/workflows/agent-explore.yml@v1.2.3
+    with:
+      tier: ${{ inputs.tier }}
+    secrets:
+      EXPLORER_APP_ID: ${{ secrets.EXPLORER_APP_ID }}
+      EXPLORER_APP_PRIVATE_KEY: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

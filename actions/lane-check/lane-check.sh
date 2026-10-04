@@ -72,6 +72,7 @@ CALLERS=0
 ROLES=""
 DOCS=""
 READS=""
+HOOKS=""
 for f in .github/workflows/*.yml .github/workflows/*.yaml; do
   [ -f "$f" ] || continue
   doc="$(json "$f")" || { fail "$f" "is not valid YAML"; continue; }
@@ -132,6 +133,12 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
   # <file>` lines in the lane (the review lane and the reconciler read CI's runs from `ci.yml`).
   for w in $(sed -n 's/^# READS WORKFLOW: //p' "$lane_file"); do
     READS="$READS $w=$lane"
+  done
+  # The hooks of the adopter's own that only some lanes call, on `# NEEDS HOOK: <path>` lines
+  # in the lane (the Explorer's sweep hook, plan 0004 decision 5). The project-setup hook,
+  # which every lane that checks out calls, is checked on its own below.
+  for h in $(sed -n 's/^# NEEDS HOOK: //p' "$lane_file"); do
+    HOOKS="$HOOKS $h=$lane"
   done
 
   # Only `on`, `permissions` and one job (and a `name` and a `run-name`). No `concurrency`:
@@ -239,6 +246,16 @@ else
   done
   [ "$(jq -r '.runs.using // ""' <<<"$hook")" = composite ] || fail "$HOOK" "must be a composite action"
 fi
+
+# ── The hooks only some lanes call ─────────────────────────────────────────────────────
+for h in $(printf '%s\n' $HOOKS | sed 's/=.*//' | sort -u); do
+  by="$(printf '%s\n' $HOOKS | sed -n "s|^$h=||p" | sort -u | paste -sd, -)"
+  if [ ! -f "$h" ]; then
+    fail "$h" "is missing; the Kanon lane(s) $by call it"
+  elif [ "$(json "$h" | jq -r '.runs.using // ""')" != composite ]; then
+    fail "$h" "must be a composite action; the Kanon lane(s) $by call it"
+  fi
+done
 
 # ── The project documents the lanes read (K-LAYOUT-17) ────────────────────────────────
 # Each one a called lane's prompt names must exist; the stack document must also carry its

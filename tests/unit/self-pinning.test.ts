@@ -46,6 +46,10 @@ const files = [
 // a write and a read, so the entry is matched once per file, not once per step.
 const EXEMPT = new Set([
   'actions/qa-store/action.yml: ./.github/actions/qa-store',
+  // The Explorer runs the project's setup and its sweep, both the adopter's hooks (plan 0004
+  // step 12, decision 5), read from the checkout like every other lane's.
+  '.github/workflows/agent-explore.yml: ./.github/actions/explore-sweep',
+  '.github/workflows/agent-explore.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-blocks-smoke.yml: ./tests/fixtures/python-adopter/.github/actions/project-setup',
   '.github/workflows/agent-lane.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-lead-split.yml: ./.github/actions/project-setup',
