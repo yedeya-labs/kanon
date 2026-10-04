@@ -9,7 +9,7 @@ import { asOneWorkflow, readCaller, readKanonLane } from './helpers/kanon-lane.j
 const { CONFLICT_WHY, ConflictFieldsUnread } = await import('../../scripts/conflict-state.mjs');
 import { readRepoDoc } from './helpers/adopter-doc.js';
 const { SPLIT_LABEL } = await import('../../scripts/split-lineage.mjs');
-const { itemSatisfied, satisfiedTitles, classifyDeploy, readDeploy: kanonReadDeploy, closingMergeShas, isReviewBlocked, awaitingReview, dependencyCycles, needsVerification, verificationCaveat, declaresMembership, findDeployRun, nextActions, reachesPhase6, renderCloseAction, renderCloseComment, ownFailureCaveat, DEPLOY_PHASE, reconcileAll, report, retro, parseProposed, phaseOf, readBudget, reviewRecovery, chargeable, reviseRecovery, reviseRunsFor, startedAfter, standingChangesRequest, projectReviews, execute, qaIssueOf, hold, renderHoldComment, applyDecision, repoLabels, ghCause, redactSecrets, isTransient, holdMarker, occupiesSlot, isParkedOnHuman, linkedPrsRead , laneStateOf, adoptedProvenance, HUMAN_ACTION, carriedOut, inDecomposition, isProjectWork, SPEC_FINDING, FINDING_ANCHOR, openGatingWork, blockedOf, labelMirror, mirrorLabels, mirrorCap, projectLabel } = await import('../../scripts/lead-reconcile.mjs');
+const { itemSatisfied, satisfiedTitles, classifyDeploy, readDeploy: kanonReadDeploy, closingMergeShas, isReviewBlocked, awaitingReview, dependencyCycles, needsVerification, verificationCaveat, declaresMembership, findDeployRun, nextActions, reachesPhase6, renderCloseAction, renderCloseComment, ownFailureCaveat, DEPLOY_PHASE, reconcileAll, report, retro, parseProposed, phaseOf, readBudget, reviewRecovery, chargeable, reviseRecovery, reviseRunsFor, startedAfter, standingChangesRequest, projectReviews, execute, qaIssueOf, hold, renderHoldComment, applyDecision, repoLabels, ghCause, redactSecrets, isTransient, holdMarker, occupiesSlot, isParkedOnHuman, linkedPrsRead, laneStateOf, adoptedProvenance, HUMAN_ACTION, carriedOut, inDecomposition, isProjectWork, SPEC_FINDING, FINDING_ANCHOR, openGatingWork, blockedOf, labelMirror, mirrorLabels, mirrorCap, projectLabel, qaIssueTitle, isQaIssueTitle } = await import('../../scripts/lead-reconcile.mjs');
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ROOT } from './helpers/adopter.js';
 /** A value of the untyped library, as the reference adopter's helper named it. */
@@ -929,7 +929,7 @@ describe('phases 4 and 6 — deploy watch, then close (RA-1056)', () => {
       // separate assertions of a deploy that provably did not happen — including a
       // retro reading "the work is on staging in `(untagged)`".
       const r = nextActions(allClosed({ deploy: { state: 'nothing-to-deploy' }, qaIssue: qaPassed }));
-      expect(r.actions).toEqual([{ kind: 'close-project', number: 961, tag: null }]);
+      expect(r.actions).toEqual([{ kind: 'close-project', number: 961, tag: null, environment: null }]);
     });
 
     it('a failed deploy STOPS, and never advances to close', () => {
@@ -959,7 +959,7 @@ describe('phases 4 and 6 — deploy watch, then close (RA-1056)', () => {
     it('closes the TRACKING issue, not any work', () => {
       const r = nextActions(allClosed({ deploy: deployed, qaIssue: qaPassed }));
       expect(r.phase).toBe('close');
-      expect(r.actions).toEqual([{ kind: 'close-project', number: 961, tag: 'v0.38.5' }]);
+      expect(r.actions).toEqual([{ kind: 'close-project', number: 961, tag: 'v0.38.5', environment: null }]);
     });
 
     it('is complete once the tracking issue is closed, and does nothing twice', () => {
@@ -1595,7 +1595,7 @@ describe('phase 5 — staging verification (RA-1063)', () => {
       // Lead must remember" is the weakest available guard.
       const r = nextActions(world({ qaIssue: null }));
       expect(r.phase).toBe('file-qa');
-      expect(r.actions).toEqual([{ kind: 'file-qa', title: expect.stringContaining('#961'), tag: 'v0.38.5' }]);
+      expect(r.actions).toEqual([{ kind: 'file-qa', title: expect.stringContaining('#961'), tag: 'v0.38.5', environment: null }]);
     });
 
     it('does not file one before the work is deployed', () => {
@@ -1798,7 +1798,9 @@ describe('what phase 5 verified, said the same way everywhere (RA-1087)', () => 
    */
   it('names the tag it verified against', () => {
     expect(verificationCaveat('v0.38.5')).toContain('v0.38.5');
-    expect(verificationCaveat('v0.38.5')).toMatch(/not against staging itself/);
+    expect(verificationCaveat('v0.38.5')).toMatch(/not against the reference environment itself/);
+    // The declared environment by name, since kanon#199.
+    expect(verificationCaveat('v0.38.5', 1, true, 'preview')).toMatch(/not against `preview` itself/);
   });
 
   it('says NOTHING WAS DEPLOYED rather than naming a release, when none exists', () => {
@@ -1833,10 +1835,11 @@ describe('what phase 5 verified, said the same way everywhere (RA-1087)', () => 
     // exclusion entirely changed no result. Worse, the most probable fifth copy —
     // someone pasting what the function actually emits — sailed straight through.
     //
-    // `not against staging itself` occurs exactly once today (the renderer), which
+    // `itself (RA-1063, option c)` occurs exactly once today (the renderer), which
     // is what makes it usable as a key; the assertion below pins that count so this
-    // cannot quietly become unkeyable again.
-    expect(rest, 'a second rendering of the caveat').not.toMatch(/not against staging itself/i);
+    // cannot quietly become unkeyable again. (It was `not against staging itself` until
+    // the caveat named the declared environment, kanon#199.)
+    expect(rest, 'a second rendering of the caveat').not.toMatch(/itself \(RA-1063, option c\)/i);
     // Kept as a historical tripwire: it costs nothing and the old spelling
     // reappearing is still a copy.
     expect(rest, 'a second rendering, old spelling').not.toMatch(/against a build of the deployed tag/i);
@@ -1846,7 +1849,7 @@ describe('what phase 5 verified, said the same way everywhere (RA-1087)', () => 
 
     // The key has to stay unique for the exclusion to mean anything.
     expect(
-      (src.match(/not against staging itself/gi) ?? []).length,
+      (src.match(/itself \(RA-1063, option c\)/gi) ?? []).length,
       'the caveat key must occur exactly once — in the renderer',
     ).toBe(1);
   });
@@ -4008,7 +4011,7 @@ describe('the Examined table survives a dropped-* block (RA-1456)', () => {
     expect(start).toBeGreaterThan(-1);
     const table: string[] = [];
     for (let i = start; i < lines.length && lines[i].trim() !== ''; i++) table.push(lines[i]);
-    for (const row of ['| filed |', '| open |', '| blocked, awaiting a human |', '| staging deploy |']) {
+    for (const row of ['| filed |', '| open |', '| blocked, awaiting a human |', '| deploy to ']) {
       expect(table.some((l) => l.startsWith(row)), `${row} must be inside the table`).toBe(true);
     }
     // And the detail block comes after the table, not inside it.
@@ -4424,6 +4427,75 @@ describe('the closing references the parser did not read are named, not counted 
   it('is suppressed when there is nothing to name', () => {
     const text = report(worldFrom(BRIEF(['a']), []), { phase: 'file', actions: [], stopped: null });
     expect(text).not.toContain('Closing references the parser did not read');
+  });
+});
+
+describe('the reconciler names the declared reference environment, not `staging` (kanon#199)', () => {
+  const allClosedWith = (extra: Record<string, unknown> = {}) => ({
+    ...worldFrom(BRIEF(['a']), [{ number: 1, title: 'a', state: 'CLOSED' }]),
+    project: '961',
+    ...extra,
+  });
+  const DEPLOYED_PREVIEW = { state: 'deployed', tag: 'v1.2.0', environment: 'preview', workflow: 'deploy-preview.yml', job: 'ship' };
+
+  it('titles a new QA issue with the declared environment, and describes it when none is declared', () => {
+    expect(qaIssueTitle(961, 'preview')).toBe('Verify project #961 on preview — every acceptance criterion, per ID');
+    expect(qaIssueTitle(961)).toBe('Verify project #961 on the reference environment — every acceptance criterion, per ID');
+    // An adopter that declares `staging` files under the title it always did.
+    expect(qaIssueTitle(961, 'staging')).toBe('Verify project #961 on staging — every acceptance criterion, per ID');
+  });
+
+  it('files the QA issue under the declared environment’s title', () => {
+    const r = nextActions(allClosedWith({ deploy: DEPLOYED_PREVIEW, qaIssue: null }));
+    expect(r.phase).toBe('file-qa');
+    expect(r.actions).toEqual([{ kind: 'file-qa', title: 'Verify project #961 on preview — every acceptance criterion, per ID', tag: 'v1.2.0', environment: 'preview' }]);
+  });
+
+  it('recovers an open QA issue filed under the old `staging` title, so it is not filed twice', () => {
+    // The title is a recovery anchor (RA-1286): an adopter whose record now declares
+    // `preview` still has QA issues titled `on staging`. Matched, they are this project's QA
+    // issue; missed, the tick files a second one with its round count reset.
+    for (const env of ['staging', 'preview', 'the reference environment', 'a renamed one']) {
+      const orphan = { number: 9, title: `Verify project #961 on ${env} — every acceptance criterion, per ID`, body: 'gh workflow run agent-verify-acs.yml -f project=961', labels: [] as string[] };
+      expect(qaIssueOf([orphan], 961).issue?.number, env).toBe(9);
+    }
+    const old = { number: 9, title: 'Verify project #961 on staging — every acceptance criterion, per ID', body: 'gh workflow run agent-verify-acs.yml -f project=961', labels: [] as string[], state: 'OPEN' };
+    const { issue } = qaIssueOf([old], 961);
+    const r = nextActions(allClosedWith({ deploy: DEPLOYED_PREVIEW, qaIssue: { ...issue, state: 'OPEN', rounds: 0, readable: true } }));
+    expect(r.actions.filter((a: { kind: string }) => a.kind === 'file-qa')).toEqual([]);
+  });
+
+  it('matches no other project’s title, and no title of another shape', () => {
+    const body = 'gh workflow run agent-verify-acs.yml -f project=961';
+    for (const title of [
+      'Verify project #9610 on staging — every acceptance criterion, per ID',
+      'Verify project #961 on  — every acceptance criterion, per ID'.replace('  ', ' '),
+      'Verify project #961 on staging — some criteria',
+      'Re: Verify project #961 on staging — every acceptance criterion, per ID',
+    ]) {
+      expect(isQaIssueTitle(title, 961), title).toBe(false);
+      expect(qaIssueOf([{ number: 9, title, body, labels: [] as string[] }], 961).issue, title).toBeUndefined();
+    }
+  });
+
+  it('names it in the close comment, the retro, the report row and both caveats', () => {
+    const close = { kind: 'close-project', number: 961, tag: 'v1.2.0', environment: 'preview', failedAt: 'v1.1.0', failedUrl: 'u' };
+    expect(renderCloseComment(close)).toContain('the work is on `preview` in `v1.2.0`');
+    expect(ownFailureCaveat(close)).toContain('the work reached `preview` only via');
+    const r = retro(allClosedWith({ deploy: DEPLOYED_PREVIEW, qaIssue: { number: 2, state: 'CLOSED', rounds: 1, readable: true } }), close);
+    expect(r).toContain('The work is on `preview` in `v1.2.0`');
+    expect(r).toContain('**That the work behaves on `preview`.**');
+    expect(r).toContain('not against `preview` itself');
+    const text = report(allClosedWith({ deploy: DEPLOYED_PREVIEW }), { phase: 'close', actions: [], stopped: null });
+    expect(text).toContain('| deploy to `preview` | deployed (`v1.2.0`) |');
+    for (const t of [renderCloseComment(close), ownFailureCaveat(close), r, text]) expect(t).not.toMatch(/staging/i);
+  });
+
+  it('describes the environment where a verdict names none, never `staging`', () => {
+    const close = { kind: 'close-project', number: 961, tag: 'v1.2.0' };
+    expect(renderCloseComment(close)).toContain('the work is on the reference environment in `v1.2.0`');
+    expect(retro(allClosedWith({ deploy: { state: 'nothing-to-deploy' } }), { kind: 'close-project', number: 961, tag: null }))
+      .toContain('the reference environment was never touched');
   });
 });
 
