@@ -46,7 +46,8 @@ describe('every Kanon workflow', () => {
       'agent-code-audit.yml:export', 'agent-code-audit.yml:put',
       'agent-dispatch-sweep.yml:store',
       'agent-explore.yml:last-green', 'agent-explore.yml:put', 'agent-explore.yml:record-skip',
-      'agent-lanes-smoke.yml:code-audit', 'agent-lanes-smoke.yml:dispatch-sweep', 'agent-lanes-smoke.yml:explore',
+      'agent-lanes-smoke.yml:code-audit', 'agent-lanes-smoke.yml:dispatch-sweep', 'agent-lanes-smoke.yml:explore', 'agent-lanes-smoke.yml:overseer',
+      'agent-overseer.yml:export',
       'qa-store-aws-maintenance.yml:maintenance',
     ]);
   });

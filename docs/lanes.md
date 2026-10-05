@@ -342,7 +342,7 @@ The Overseer is optional. It audits your pipeline once a week from the aggregate
 or `not installed`. `lane-check` fails a record that doesn't say, or that says `installed` with no `agent-overseer.yml` caller, or `not installed` with one. Its caller:
 
 - **Keeps two triggers:** a weekly `schedule` (the reference adopter's is `0 7 * * 1`) and a dispatch with no inputs.
-- **Grants `contents: read`, `issues: read`, `actions: write` and `id-token: write`.** The OIDC token is for the lane's store job alone, and `actions: write` for the job that deletes the store's export after the audit. The audit job itself declares neither, and no environment.
+- **Grants `contents: read`, `issues: read`, `actions: write` and `id-token: write`.** The OIDC token is for the lane's store job alone, and `actions: write` for the job that deletes the store's export after the audit. The audit job itself declares neither, and no job declares an environment ([Who can reach the store](qa-store.md#who-can-reach-the-store)).
 
 **Who files what** (plan 0004 decision 12). The agent's token reads only. It writes its audit and its findings to a file, each finding naming its subject, and a job of its own, on a fresh runner that runs no agent and checks out nothing, files them on a token of its own (`scripts/overseer-file.mjs`), then deletes the file's artifact:
 - **A finding you can act on** (a declaration, a playbook, a hook, an App or its permissions, cost, a schedule, labels, milestones, test or spec coverage) is filed in your repository as a `pipeline-improvement` issue, in *Development Automation*.

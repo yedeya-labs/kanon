@@ -2,7 +2,6 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { STORE_ENVIRONMENT } from '../../actions/qa-store/qa-store.mjs';
 import { unlinkedQuery } from '../../scripts/capability-interlock.mjs';
 import { storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 
@@ -48,10 +47,9 @@ describe('the store job and the overseer job (plan 0004 P9\'s check, applied at 
     expect(storeLaneProblems(wf, telemetryReads())).toEqual([]);
   });
 
-  it('only the store job runs in kanon-qa-store, and only it holds id-token', () => {
+  it('no job declares an environment, and only the store job holds id-token', () => {
     const withEnv = Object.entries(wf.jobs).filter(([, j]) => j.environment !== undefined).map(([n]) => n);
-    expect(withEnv).toEqual(['export']);
-    expect(wf.jobs.export!.environment).toBe(STORE_ENVIRONMENT);
+    expect(withEnv).toEqual([]);
     const withToken = Object.entries(wf.jobs).filter(([, j]) => typeof j.permissions === 'object' && 'id-token' in j.permissions).map(([n]) => n);
     expect(withToken).toEqual(['export']);
   });
@@ -86,9 +84,9 @@ describe('the store job and the overseer job (plan 0004 P9\'s check, applied at 
     it('the overseer job with no permissions of its own, inheriting the caller\'s id-token', () =>
       expect(mutate((l) => { delete l.jobs.overseer!.permissions; })).toEqual(["overseer: the agent job declares no permissions block of its own, so it inherits the caller's grant, id-token included"]));
     it('the overseer job in an environment', () =>
-      expect(mutate((l) => { l.jobs.overseer!.environment = 'qa'; })).toEqual(["overseer: the agent job declares environment 'qa'; only store jobs declare one"]));
+      expect(mutate((l) => { l.jobs.overseer!.environment = 'qa'; })).toEqual(["overseer: the agent job declares environment 'qa'; no job of a store-coupled lane declares one"]));
     it('the export job under the adopter\'s old environment name', () =>
-      expect(mutate((l) => { l.jobs.export!.environment = 'qa'; })).toEqual(["export: a store job's environment is 'qa', not 'kanon-qa-store'"]));
+      expect(mutate((l) => { l.jobs.export!.environment = 'qa'; })).toEqual(["export: a store job declares environment 'qa', which would replace the default branch's ref in its OIDC subject, so the store's role would refuse it"]));
     it('the agent job run on a partial re-run', () =>
       expect(mutate((l) => { l.jobs.overseer!.if = "${{ !cancelled() && needs.export.result == 'success' }}"; }))
         .toEqual(["overseer: the agent job's if: '${{ !cancelled() && needs.export.result == 'success' }}' lacks the conjunct 'needs.export.outputs.attempt == github.run_attempt', so a re-run of it alone reads an export already deleted"]));
