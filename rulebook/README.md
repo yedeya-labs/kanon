@@ -35,7 +35,7 @@ Rule ids are permanent. A retired rule keeps its id and is marked **retired**, w
 | 07 | [Projects](07-projects.md) | Briefs, decomposition, splitting, closure |
 | 08 | [Observability and cost](08-observability-and-cost.md) | Every signal has a recorded decision; spend is discussed before it is incurred |
 | 09 | [Self-maintenance](09-self-maintenance.md) | The pipeline auditing itself: the Overseer, telemetry, guards on the guards |
-| 10 | [Adoption](10-adoption.md) | The installation checklist, the GitHub organisation and plan, bootstrap, credentials, how Kanon reaches an adopter's agents |
+| 10 | [Adoption](10-adoption.md) | The installation checklist, the GitHub account and plan, bootstrap, credentials, how Kanon reaches an adopter's agents |
 | 11 | [Repository layout](11-repository-layout.md) | Every fixed path and machine-read format: specs, registries, governance documents, the brief's syntax |
 
 The brief template ships at [`templates/brief.md`](templates/brief.md).
@@ -44,7 +44,7 @@ The brief template ships at [`templates/brief.md`](templates/brief.md).
 
 Kanon is not for every project. It assumes:
 
-- **a GitHub organisation** for code, issues, pull requests and Actions, never a personal account ([ADR 0008 §2](../docs/decisions/0008-installation-test-decisions.md), `K-ADOPT-2`);
+- **a GitHub account, personal or organisation,** for code, issues, pull requests and Actions; organisations and paid features are used where they exist and required nowhere ([ADR 0013](../docs/decisions/0013-personal-accounts-and-two-apps.md), `K-ADOPT-2`);
 - **GitHub's plan decides which platform features exist.** Kanon uses the merge queue and environment approval wherever the plan provides them, and a fixed, recorded fallback where it doesn't; rulesets have no fallback (`K-ADOPT-3`);
 - **adoption starts in bootstrap.** An empty repository is inside the target: it adopts Kanon in a named bootstrap state, with every exception recorded, and leaves it once, when its Reviewer exists and approval is required (`K-ADOPT-4` to `K-ADOPT-6`);
 - **Claude Code** as the agent runtime;

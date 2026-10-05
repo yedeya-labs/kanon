@@ -134,11 +134,11 @@ The admission rule is not restated in this document. It lives in `K-OBS-4`, and 
 
 ### `K-LAYOUT-6` The App register is one table, with reasons as footnotes
 
-**Rule.** `docs/qa/agent-identities.md` holds one table with a row per GitHub App installed on the repository, agent or not: the role, the App's slug exactly as GitHub derives it, and its permission on Contents, Issues, Pull requests, Workflows and Actions, plus any other permission it holds. Every permission broader than the roles table gives (`K-ADOPT-8`) carries a numbered footnote below the table saying why it was granted and what bounds its use (`K-AGENT-3`). A repository with no Apps yet says "none installed".
+**Rule.** `docs/qa/agent-identities.md` holds one table with a row per role that runs under a GitHub App installed on the repository, agent or not: the role, the slug of the App it runs under exactly as GitHub derives it, and that App's permission on Contents, Issues, Pull requests, Workflows and Actions, plus any other permission it holds. Roles that share an App share its slug: the Author's four rows name one slug, the Judge's two rows another, and the Releaser's row a third, and no two of the three Apps share a slug. Every permission broader than its roles' rows give (`K-ADOPT-8`) carries a numbered footnote below the table saying why it was granted and what bounds its use (`K-AGENT-3`). A repository with no Apps yet says "none installed".
 
-**Why.** The slug, not the display name, is what code compares (`K-AGENT-5`), so the register records the slug. A permission with no recorded reason is indistinguishable from drift.
+**Why.** The slug, not the display name, is what code compares (`K-AGENT-5`), so the register records the slug. A row per role keeps every reader that maps a role to a login working, and still says which role each App plays. An Author and a Judge sharing a slug would be one identity approving its own work (`K-PRIN-5`), and a Releaser sharing one would make its bypass another role's. A permission with no recorded reason is indistinguishable from drift.
 
-**Enforced by.** Prose only; the run-time slug and scope checks (`K-AGENT-5`) turn the parts the code depends on into failures.
+**Enforced by.** Prose only; the run-time slug and scope checks (`K-AGENT-5`) turn the parts the code depends on into failures. From the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md), `lane-check` fails a register whose Author roles name more than one slug, whose Judge roles name more than one, or in which two of the three Apps share one; until then each role has an App of its own.
 
 **Class.** framework
 

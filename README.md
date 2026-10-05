@@ -37,7 +37,7 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 
 ## Getting started
 
-1. **Read [who Kanon is for](rulebook/00-principles.md).** It assumes a GitHub organisation, Claude Code, and a test suite the agents can run.
+1. **Read [who Kanon is for](rulebook/00-principles.md).** It assumes a GitHub account (personal or organisation), Claude Code, and a test suite the agents can run.
 2. **Follow the [adoption checklist](rulebook/10-adoption.md)**, which takes a new repository from its first commit through the bootstrap phase.
 3. **Use Kanon's code by reference, pinned to an exact version,** and let Dependabot propose upgrades ([`K-ADOPT-11`](rulebook/10-adoption.md)):
 

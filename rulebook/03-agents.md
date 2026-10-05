@@ -1,6 +1,6 @@
 # 03 Agents
 
-This chapter governs who acts on a Kanon project: the human roles, the agent roles, the identities they run under, the GitHub permissions each holds, and how each agent behaves inside its lane. Kanon's safety comes less from any one agent being careful than from each agent holding exactly the authority its job needs and no more. The author, the reviewer and the merger are different identities, the component that watches the pipeline can only propose, and every run is bounded and leaves a record. The review-and-merge mechanics themselves (the green zone, escalation paths, the merge gate) belong to [04 Review and merge](04-review-and-merge.md); the Overseer's audit work belongs to [09 Self-maintenance](09-self-maintenance.md).
+This chapter governs who acts on a Kanon project: the human roles, the agent roles, the identities they run under, the GitHub permissions each holds, and how each agent behaves inside its lane. Kanon's safety comes less from any one agent being careful than from each agent holding exactly the authority its job needs and no more. The author and the approver are different identities, every role's token holds only what its lane uses, the component that watches the pipeline can only propose, and every run is bounded and leaves a record. The review-and-merge mechanics themselves (the green zone, escalation paths, the merge gate) belong to [04 Review and merge](04-review-and-merge.md); the Overseer's audit work belongs to [09 Self-maintenance](09-self-maintenance.md).
 
 ## Roles
 
@@ -13,7 +13,7 @@ Every Kanon project has the same roles. A person may hold several human roles at
 | **Stakeholder** | human | Place work on roadmap milestones and prioritise them. Decide whether a `gate-candidate` joins the launch gate. Agree the project closure rule. Each decision is approved in GitHub, or attested by the Maintainer where the Stakeholder doesn't use GitHub (`K-PRIN-18`). Receive the weekly digest. | Merge, or answer code escalations. The pipeline waits on the stakeholder for roadmap placement only. | Triage (enough to set milestones). |
 | **Session** | agent, under a human's identity | Run the local gates, open a PR, request review, fold review rounds in until approval. | Merge. Force-push. Milestone a PR. | The human's own; its tool allowlist must not pre-approve merge or force-push. |
 | **Explorer** | agent | Sweep a running stage for objective signals, audit code for objective contradictions, verify cited invariants. File bugs and spec deltas on a bucket; comment on duplicates. | File without evidence; target production; edit code or open PRs; use a roadmap milestone or mark a gate candidate; type credentials. | Contents read, Issues write, Pull requests read. |
-| **Implementer** | agent | Reproduce, write the failing test, open fix and feature PRs, revise its own PRs within the round cap, resolve conflicts on the pipeline's own PRs, edit workflow files, escalate a conflict of product intent. | Merge. Promote invariants. Make a change on the bail list without a human. Guess at vague acceptance criteria. Build a prescribed remedy it has not verified. Force-push. | Contents, Issues and Pull requests write; **Workflows write (the only App that holds it)**. |
+| **Implementer** | agent | Reproduce, write the failing test, open fix and feature PRs, revise its own PRs within the round cap, resolve conflicts on the pipeline's own PRs, edit workflow files, escalate a conflict of product intent. | Merge. Promote invariants. Make a change on the bail list without a human. Guess at vague acceptance criteria. Build a prescribed remedy it has not verified. Force-push. | Contents, Issues and Pull requests write; **Workflows write (only the Author App holds it, and only this role's lanes mint with it)**. |
 | **Reviewer** | agent | Review any PR carrying a review label; submit a real approve or request-changes; file follow-ups with a severity, on a bucket; review briefs. | Author the PR it reviews. Merge. Post a comment in place of a verdict in CI. Place work on a roadmap milestone. Dispatch its own follow-ups for implementation. Write its own commit stamp. | Contents write (so its approval satisfies the ruleset), Issues and Pull requests write. |
 | **Merger** | agent | Merge green-zone PRs through the front door; wait, recover, escalate or release; re-dispatch the Reviewer; lift a head-scoped escalation it applied itself once the head moves. | Be a ruleset bypass actor. Edit workflows. Judge correctness. Merge an escalating path or label. Use the default workflow token. Lift a label a person applied. | Contents, Issues and Pull requests write; Actions write; Checks and Commit statuses read; **no Workflows access**. |
 | **Lead** | agent | Author a brief as a PR on a manual mandate and revise it; file and dispatch the brief's issues under WIP caps once it merges; re-deliver a lost event by churning a recovery label; propose splitting an exhausted item; hold a project for a human. | Merge. Approve. Promote. Create issues from a brief before it merges. Re-label an issue already labelled. Start workflows directly. | Contents, Issues and Pull requests write; Actions read; **no Actions write, no Workflows access**. |
@@ -21,29 +21,46 @@ Every Kanon project has the same roles. A person may hold several human roles at
 | **Releaser** | bot, not an agent | Open and merge its own release PRs. | Touch any file outside the release file set. | Contents and Pull requests write; a ruleset bypass limited to release PRs. |
 | **Intake** | App, not an agent | File a report from the running application as an issue carrying exactly one intake label. | Read, decide, run in a workflow, apply any other label, or trigger an agent. | Issues write only. |
 
-The agent rows' GitHub permissions have a machine-readable twin, [`agent-permissions.json`](agent-permissions.json), which [`kanon apps`](../docs/apps.md) builds each App's manifest from (`K-ADOPT-8`). Change the table and the file in the same commit: a test fails when they disagree (`K-PRIN-2`).
+### The Apps
 
-### `K-AGENT-1` Run every agent role under its own GitHub App identity
+The agent roles, and the Releaser, run under three GitHub Apps per owner, each reused across all of that owner's repositories that adopt Kanon ([ADR 0013](../docs/decisions/0013-personal-accounts-and-two-apps.md)). Each App holds the union of its roles' permissions in the table above, plus what `K-ADOPT-8` adds:
 
-**Rule.** Each agent role runs under its own GitHub App, with its own installation token. No agent step uses the default workflow token or a person's token.
+| App | Roles | GitHub permissions |
+|---|---|---|
+| **Author** | Implementer, Lead, Explorer, Overseer | Contents, Issues and Pull requests write; Workflows write; Actions read; Commit statuses write (broadened, below). |
+| **Judge** | Reviewer, Merger | Contents, Issues and Pull requests write; Actions write; Checks and Commit statuses read. |
+| **Releaser**, optional | Releaser | Contents and Pull requests write; the only ruleset bypass, limited to release PRs. |
 
-**Why.** Attribution is only half of it. GitHub refuses to let an identity approve its own PR, so when the author and the reviewer share an identity, review silently becomes advisory. The reference adopter began with one shared token, and every actor read as the same person.
+- **The Author and the Judge are the author and the approver** (`K-PRIN-5`). The Author never approves, and the Judge never authors.
+- **The Author's Commit statuses write is broadened beyond its roles' rows,** and recorded as such (`K-AGENT-3`): only the fixed step of the Implementer's lanes that sets the `kanon/role: implementer` status mints with it, after the agent has finished, and no agent's token holds it. The Merger requires that status on a green-zone pull request's head (`K-MERGE-4`).
+- **A step's token still fits its role's row,** not only its App's grant (`K-AGENT-46`): the Lead's token holds no Workflows, though the Author does.
+- **The Releaser is optional.** An adopter that makes no releases, or merges its release PRs through the front door, needs only the Author and the Judge.
 
-**Enforced by.** Workflows mint a per-role App token for every agent step, and a run-time assertion fails the job when the minted identity is not the one the code expects (see `K-AGENT-5`).
+**Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md),** Kanon's lanes still run each agent role under its own App with exactly its row's permissions, and the Merger's green zone reads the Implementer's App login; the App register shows which Apps a repository runs.
+
+The agent rows' GitHub permissions have a machine-readable twin, [`agent-permissions.json`](agent-permissions.json), which [`kanon apps`](../docs/apps.md) builds each App's manifest from (`K-ADOPT-8`). It also holds the three Apps, each with its roles and its permissions. Change the tables and the file in the same commit: a test fails when they disagree, when an App's permissions differ from the union of its roles' rows plus its recorded broadening, and when a role belongs to no App or to two (`K-PRIN-2`).
+
+### `K-AGENT-1` Run every agent under its App's identity, and speak as its role
+
+**Rule.** Each agent runs under its App's installation token: the Author's or the Judge's (the Apps above). No agent step uses the default workflow token or a person's token. Every post an agent writes (a comment, a review, an issue or pull request body) opens with its persona header, `**<persona> (<Role>)**`, beside the hidden role marker `<!-- kanon:role=<role> -->`, and every commit it makes has the persona as its author name and the App's noreply address as its email.
+
+**Why.** Attribution is only half of it. GitHub refuses to let an identity approve its own PR, so when the author and the reviewer share an identity, review silently becomes advisory. The reference adopter began with one shared token, and every actor read as the same person. Two roles of one App are told apart by what they write instead: a person reads the header, and a check reads the marker, but only on an object the expected App authored, so the login says which App and the marker which of its roles.
+
+**Enforced by.** Workflows mint an App token for every agent step, and a run-time assertion fails the job when the minted identity is not the one the code expects (see `K-AGENT-5`). Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md), the lanes mint one App per role and tell roles apart by login; the persona header, the role marker and the persona as commit author arrive with step L3, beside the login, and are prose only until then.
 
 **Class.** framework
 
-### `K-AGENT-2` Staff the pipeline with the fixed role set
+### `K-AGENT-2` Staff the pipeline with the fixed role set, under two Apps
 
-**Rule.** A Kanon project has the roles in the table above, with the authority boundaries the table gives them. Two roles are never merged into one identity to save setup, even when their permissions are identical.
+**Rule.** A Kanon project has the roles in the table above, with the authority boundaries the table gives them. The roles share Apps only as the Apps table groups them: the writing roles under the Author, the judging roles under the Judge, and releases under the optional Releaser. Two roles never share a token: each step mints its own, narrowed to its role (`K-AGENT-46`).
 
-**Why.** Each role exists because it has a distinct authority boundary. Sharing an identity turns every comment marker into the only thing separating one agent's action from another's, and a lost marker then strands work in a human queue permanently.
+**Why.** Each role exists because it has a distinct authority boundary, and the boundary lives in what its token may do and what the merge gate requires, not in a separate App. A boundary that a role's marker alone drew would be forgeable by any other agent of the same App, so where one matters to a merge, a fixed step draws it with a signal no agent's token can write: the Merger's green zone requires the Implementer's commit status, not its marker (`K-MERGE-4`).
 
 The `agent:` labels mark lanes rather than roles; how they map onto this table is in `K-WORK-12`.
 
-**Enforced by.** The set of lane workflows, each minting its own role's token.
+**Enforced by.** The set of lane workflows, each minting its own role's token. Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md), each role also has its own App, and the implementer status is set from step L3 and required from step L4.
 
-**Class.** split. The role set and the boundaries are framework. **The project supplies:** the display names of its Apps.
+**Class.** split. The role set and the boundaries are framework. **The project supplies:** the display names of its personas.
 
 ### `K-AGENT-3` Keep a register of every App and record every broadened permission
 
@@ -85,13 +102,13 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Class.** framework
 
-### `K-AGENT-7` Only the code-authoring App may edit workflows, and never the Merger
+### `K-AGENT-7` Only the Author may edit workflows, only the Implementer's lanes use it, and never the Judge
 
-**Rule.** Grant workflow-file write access to the one App that authors code PRs, and to no other. The Merger never holds it.
+**Rule.** Grant workflow-file write access to the one App that authors code PRs, the Author, and to no other. Only the Implementer's lanes mint a token with it. The Judge, and so the Merger, never holds it.
 
 **Why.** Without it, one logical change that touches a workflow gets split across two PRs, and the reference adopter shipped a guard inert behind a green test that way. The Merger must not hold it because the agent that merges must not be able to edit what gates a merge.
 
-**Enforced by.** The App permission grants.
+**Enforced by.** The App permission grants, and each lane's minting step narrowed to its role's row (`K-AGENT-46`). Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md), the code-authoring App is the Implementer's own.
 
 **Class.** framework
 
@@ -489,7 +506,7 @@ These rules apply `K-PRIN-19` to the lanes and the workflows around them.
 
 ### `K-AGENT-46` Every token holds only what its lane uses
 
-**Rule.** Give each agent App exactly its role's permissions (`K-ADOPT-8`). Where a step needs less than its App holds, mint that step's token narrowed to what it uses. Give the workflow's own token an explicit `permissions:` block, read-only unless a step writes with it.
+**Rule.** Give each agent App exactly the permissions `K-ADOPT-8` gives it. Where a step needs less than its App holds, mint that step's token narrowed to what it uses. Give the workflow's own token an explicit `permissions:` block, read-only unless a step writes with it.
 
 **Why.** A token's reach is the blast radius of whatever reads it: a prompt-injected agent, a compromised dependency, a leaked log. The App's grant bounds the role, but a lane that only comments needs no push, and a step that holds a write it never uses gives an attacker one for free.
 

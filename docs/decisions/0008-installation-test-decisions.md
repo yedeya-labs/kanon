@@ -1,6 +1,6 @@
 # 0008. Decisions from the first installation test
 
-- **Status:** accepted
+- **Status:** accepted; §2 superseded by [ADR 0013](0013-personal-accounts-and-two-apps.md) on 2026-10-05 (any GitHub account may adopt Kanon)
 - **Date:** 2026-09-29
 
 ## Context
@@ -16,6 +16,8 @@ Kanon was installed on its second adopter, Kolophon, by an agent that could read
 *Why:* the test showed that Kanon adopted from its rulebook alone is prose only. Every guard, the Reviewer and the Merger are code or GitHub Apps that don't exist yet, so nothing on the adopter can fail a build. Pausing Kolophon until the extraction is complete would lose the only adopter that is testing the extraction as it happens.
 
 ### 2. Kanon assumes a GitHub organisation
+
+*Superseded by [ADR 0013 §1](0013-personal-accounts-and-two-apps.md) on 2026-10-05:* a personal account is first-class, and nothing in Kanon requires an organisation. The plan table and its fallbacks below still hold; `K-ADOPT-3` carries them, with the personal-account columns added.
 
 **An adopter's repositories live in a GitHub organisation, not a personal account.** Repositories may be private while they are prepared, and go public one at a time, each at its own gate.
 

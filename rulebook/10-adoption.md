@@ -1,6 +1,6 @@
 # 10 Adoption
 
-This chapter governs how a project becomes a Kanon project: what an adopter sets up, in what order, on which kind of GitHub account and plan, with which credentials, and what the repository is allowed to do before its agents exist. The rest of the rulebook describes a running project. An empty repository can't meet those rules on its first day: there is no base branch for a first pull request, no Reviewer to approve one, and no guard to fail. Kanon's answer is to name that state (**bootstrap**), say exactly what it permits, record every use of it, and give it an exit that can't be reversed ([ADR 0008](../docs/decisions/0008-installation-test-decisions.md)). A silent exception is what Kanon forbids. A named, recorded, finite one is a rule.
+This chapter governs how a project becomes a Kanon project: what an adopter sets up, in what order, on which kind of GitHub account (personal or organisation) and plan, with which credentials, and what the repository is allowed to do before its agents exist. The rest of the rulebook describes a running project. An empty repository can't meet those rules on its first day: there is no base branch for a first pull request, no Reviewer to approve one, and no guard to fail. Kanon's answer is to name that state (**bootstrap**), say exactly what it permits, record every use of it, and give it an exit that can't be reversed ([ADR 0008](../docs/decisions/0008-installation-test-decisions.md)). A silent exception is what Kanon forbids. A named, recorded, finite one is a rule.
 
 Every path this chapter mentions is fixed in [11 Repository layout](11-repository-layout.md).
 
@@ -10,7 +10,7 @@ Every path this chapter mentions is fixed in [11 Repository layout](11-repositor
 
 **Rule.** Adopt Kanon by working through these steps in order, recording each in the adoption record (`K-LAYOUT-10`) as it is done:
 
-1. **Account.** Create the repository in a GitHub organisation (`K-ADOPT-2`). Record the plan, and which of Kanon's fallbacks it forces (`K-ADOPT-3`).
+1. **Account.** Create the repository on any GitHub account, personal or organisation (`K-ADOPT-2`). Record the account's kind, the plan, and which of Kanon's fallbacks they force (`K-ADOPT-3`).
 2. **People.** Name the Owner, the Maintainer and the Stakeholder in the adoption record. One person may hold all three (chapter 03).
 3. **Installer credential.** Give the installer a credential with exactly the permissions in `K-ADOPT-7`.
 4. **First commit, straight to the main branch** (allowed by `K-ADOPT-4`). It lays down the fixed layout of chapter 11:
@@ -28,7 +28,7 @@ Every path this chapter mentions is fixed in [11 Repository layout](11-repositor
 9. **Production approval.** A required reviewer on the production environment where the plan provides it, otherwise the fallback (`K-SHIP-9`).
 10. **Chat channel.** Which service carries announcements, digests and cost alerts, and how it is wired, is the project's decision. Record it, or record "none yet".
 11. **The first tracking issue.** File it with its mandate as the body (`K-PROJ-15`), its kind label and a bucket milestone, in one call (`K-WORK-2`, `K-WORK-23`).
-12. **Agent identities.** The Owner creates one GitHub App per role, with the permissions in `K-ADOPT-8`, stores the keys as Actions secrets (`K-AGENT-6`), and lists every App in the App register (`K-AGENT-3`). [`kanon apps`](../docs/apps.md) does this from App manifests, and the Owner clicks **Create** and **Install** for each App.
+12. **Agent identities.** The Owner creates the Author and the Judge, and the Releaser if the project makes releases, once per owner, with the permissions in `K-ADOPT-8`; an owner that already runs them for another repository adds this one to each App's installation instead. The Owner stores the keys as Actions secrets (`K-AGENT-6`), and lists every App in the App register (`K-AGENT-3`). [`kanon apps`](../docs/apps.md) does this from App manifests, and the Owner clicks **Create** and **Install** for each App. Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md), the lanes need one App per agent role, and `kanon apps` creates those; until its step L2, `kanon apps` needs an organisation.
 13. **Kanon's code, as it becomes available.** Install each guard, lane and store, pinned to an exact Kanon version with Dependabot proposing upgrades (`K-ADOPT-11`), and mark it installed in the adoption record's mechanism list (`K-ADOPT-9`). Before the project reconciler, declare the reference environment's deploy in the adoption record (`K-LAYOUT-10`): without it no project can close (`K-PROJ-11`).
 14. **End bootstrap** (`K-ADOPT-6`): the Reviewer's App is installed and the required approving review is switched on. Record the date. Then drop the installer credential's Administration permission.
 
@@ -40,13 +40,13 @@ Every path this chapter mentions is fixed in [11 Repository layout](11-repositor
 
 ## The account and the plan
 
-### `K-ADOPT-2` An adopter's repositories live in a GitHub organisation
+### `K-ADOPT-2` Any GitHub account may adopt Kanon, personal or organisation
 
-**Rule.** Put every repository that adopts Kanon in a GitHub organisation, never in a personal account. A repository may stay private while it is prepared, and goes public at its own gate, one repository at a time.
+**Rule.** A repository that adopts Kanon may live on a personal account or in an organisation. Kanon uses an organisation's features and a paid plan's wherever they exist, and requires none of them: each missing feature has the fixed fallback of `K-ADOPT-3`. A repository may stay private while it is prepared, and goes public at its own gate, one repository at a time. On a personal account a collaborator has write access, with no Triage role, so a Stakeholder who is a collaborator holds more than chapter 03's Triage; the adoption record says so.
 
-**Why.** On a personal account the merge queue doesn't exist, and rulesets on a private repository need a paid personal plan. An organisation is also what makes the Owner, Maintainer and Stakeholder separate people with separate permissions, rather than one account. ([ADR 0008 §2](../docs/decisions/0008-installation-test-decisions.md))
+**Why.** Requiring an organisation bought nothing a recorded fallback doesn't cover: the merge queue and environment approval already have fallbacks, and the one feature with none, rulesets, is missing on a free organisation's private repository too. It did cost every solo adopter an organisation before their first commit. Which features exist is the plan's decision, not the adopter's, so it is one rule with recorded outcomes, not a requirement ([ADR 0013](../docs/decisions/0013-personal-accounts-and-two-apps.md), which supersedes [ADR 0008 §2](../docs/decisions/0008-installation-test-decisions.md)).
 
-**Enforced by.** Prose only. The installer will refuse a personal-account repository.
+**Enforced by.** Prose only. Until step L2 of [plan 0005](../docs/plans/0005-lean-installation.md), `kanon apps` builds organisation URLs only, so a personal account creates its Apps by hand.
 
 **Class.** framework
 
@@ -54,17 +54,19 @@ Every path this chapter mentions is fixed in [11 Repository layout](11-repositor
 
 **Rule.** GitHub's plans decide which of Kanon's platform features exist:
 
-| Feature | Public repo, free organisation | Private repo, free organisation | Private repo, Team plan | Private repo, Enterprise Cloud |
-|---|---|---|---|---|
-| Rulesets, branch protection | yes | **no** | yes | yes |
-| Merge queue | yes | **no** | **no** | yes |
-| Required reviewers on an environment | yes | **no** | **no** | yes |
+| Feature | Public repo, personal account | Public repo, free organisation | Private repo, personal account on Free | Private repo, personal account on Pro | Private repo, free organisation | Private repo, Team plan | Private repo, Enterprise Cloud |
+|---|---|---|---|---|---|---|---|
+| Rulesets, branch protection | yes | yes | **no** | yes | **no** | yes | yes |
+| Merge queue | **no** | yes | **no** | **no** | **no** | **no** | yes |
+| Required reviewers on an environment | yes | yes | **no** | **no** | **no** | **no** | yes |
+
+The personal-account columns are GitHub's documented plan limits; step M1 of [plan 0005](../docs/plans/0005-lean-installation.md) measures them on a personal account, and corrects this table if they differ.
 
 Use each feature wherever the plan provides it. Where it doesn't, use the fixed fallback, and record in the adoption record which one is in use:
 
 - **Merge queue.** Without one, leave "require branches to be up to date" **off**, and let the release commit's full CI run catch a stale base before anything deploys (`K-MERGE-7`, `K-SHIP-8`).
 - **Production approval.** Without environment reviewers, production promotion is a manually triggered workflow that only the Maintainer may run (`K-SHIP-9`).
-- **Rulesets.** There is no fallback. A private repository on a plan without rulesets, such as a free organisation's, stays in bootstrap and can't leave it (`K-ADOPT-6`). Its Reviewer still reviews, but nothing can require the approval, so installing the Reviewer doesn't end bootstrap there.
+- **Rulesets.** There is no fallback. A private repository on a plan without rulesets, such as GitHub Free on a personal account or a free organisation, is allowed, stays in bootstrap and can't leave it (`K-ADOPT-6`). Every lane runs there, and the Merger still merges only what the Judge approved, but nothing on the platform refuses a merge without an approval, so installing the Reviewer doesn't end bootstrap there. The adoption record says so.
 
 Whether to pay for a plan, or make a repository public, is the project's decision. Kanon only says what each choice provides.
 
@@ -130,13 +132,13 @@ Creating GitHub Apps and their keys is done by the Owner in GitHub's interface, 
 
 **Class.** framework
 
-### `K-ADOPT-8` Each agent App holds exactly its role's permissions
+### `K-ADOPT-8` Each App holds exactly the union of its roles' permissions
 
-**Rule.** Create each agent App with the permissions in chapter 03's roles table, plus **Metadata: read** on every App. The Merger also holds **Checks: read** and **Commit statuses: read**, because a PR's check rollup is built from both. No App holds any permission its row doesn't give it, and a broadened permission is recorded with its reason in the App register (`K-AGENT-3`).
+**Rule.** Create each App with the union of its roles' permissions in chapter 03's roles table, grouped as chapter 03's Apps table groups them: the Author, the Judge, and the optional Releaser. Each holds its roles' rows plus **Metadata: read** on every App. The Merger also holds **Checks: read** and **Commit statuses: read**, because a PR's check rollup is built from both, so the Judge holds them. The Author also holds **Commit statuses: write**, for the implementer status only, recorded as a broadened permission (`K-AGENT-3`). No App holds any permission its roles' rows don't give it, other than a broadened permission recorded with its reason in the App register (`K-AGENT-3`). An App is reused across its owner's repositories that adopt Kanon: install it on **only the selected repositories**, never on all of the owner's.
 
-**Why.** The roles table is the one home for what each role may do (`K-PRIN-2`), and this rule only adds the platform's own requirements. A rollup missing one of the two check sources reads as "fewer checks", not as an error, so the Merger's two read scopes are load-bearing.
+**Why.** The roles table is the one home for what each role may do (`K-PRIN-2`), and this rule only adds the platform's own requirements. A rollup missing one of the two check sources reads as "fewer checks", not as an error, so the Merger's two read scopes are load-bearing. An App installed on every repository of its owner mints tokens for repositories that never adopted Kanon.
 
-**Enforced by.** [`kanon apps`](../docs/apps.md) builds each App's manifest from [`agent-permissions.json`](agent-permissions.json), the roles table's machine-readable twin, and a test fails when the twin and the table disagree. On an App created by hand, or changed after it was created, only the run-time scope probe in every lane (`K-AGENT-5`) checks it.
+**Enforced by.** [`kanon apps`](../docs/apps.md) builds each App's manifest from [`agent-permissions.json`](agent-permissions.json), the roles table's machine-readable twin, and a test fails when the twin and the table disagree, or when an App's permissions differ from the union of its roles' rows and its recorded broadening. On an App created by hand, or changed after it was created, only the run-time scope probe in every lane (`K-AGENT-5`) checks it. Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md), `kanon apps` and `apps-check` create and check one App per agent role, with exactly its row's permissions.
 
 **Class.** framework
 
