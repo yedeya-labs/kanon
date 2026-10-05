@@ -44,14 +44,19 @@ export function subjectPrefix(repository, customization) {
 const ghApi = (args) => execFileSync('gh', args, { encoding: 'utf8' });
 
 /**
- * The repository's default branch and subject prefix, from GitHub's API through `gh`.
+ * The repository's default branch and subject prefix, from GitHub's API through `gh`. GitHub's
+ * `full_name` must equal `repository` exactly: `gh api` follows a rename's redirect, and IAM's
+ * `StringEquals` is case-sensitive, so a renamed or differently cased entry would otherwise render
+ * cleanly and fail only at the first collector run.
  * @param {string} repository owner/name
  * @param {(args: string[]) => string} [gh]
  * @returns {{ defaultBranch: string, prefix: string | null, problem: string | null }}
  *   `prefix` is null, and `problem` says why, when the repository customizes its subject.
  */
 export function readRepositorySubject(repository, gh = ghApi) {
-  const defaultBranch = gh(['api', `repos/${repository}`, '--jq', '.default_branch']).trim();
+  const repo = JSON.parse(gh(['api', `repos/${repository}`]));
+  if (repo.full_name !== repository) throw new Error(`GitHub calls ${repository} '${repo.full_name}': write the register entry as GitHub spells it`);
+  const defaultBranch = String(repo.default_branch ?? '');
   if (!BRANCH.test(defaultBranch)) throw new Error(`GitHub reported ${repository}'s default branch as '${defaultBranch}'`);
   const customization = JSON.parse(gh(['api', `repos/${repository}/actions/oidc/customization/sub`]));
   try {

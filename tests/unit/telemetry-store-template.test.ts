@@ -22,13 +22,13 @@ const register = { ...example, owner_principal_arn: `arn:aws:iam::${'1'.repeat(1
  * A stand-in for `gh api`: each repository's default branch and OIDC subject customization, as
  * GitHub reports them. Unknown repositories fail, as `gh` would.
  */
-type Repo = { default_branch?: string, customization?: Record<string, unknown> };
+type Repo = { full_name?: string, default_branch?: string, customization?: Record<string, unknown> };
 const fakeGh = (repos: Record<string, Repo>) => (args: string[]): string => {
   const path = args[1] ?? '';
   const m = /^repos\/([^/]+\/[^/]+)(\/actions\/oidc\/customization\/sub)?$/.exec(path);
   const r = m ? repos[m[1]!] : undefined;
   if (!m || !r) throw new Error(`gh: HTTP 404 for ${path}`);
-  return m[2] ? JSON.stringify(r.customization ?? { use_default: true, use_immutable_subject: false }) : `${r.default_branch ?? 'main'}\n`;
+  return JSON.stringify(m[2] ? r.customization ?? { use_default: true, use_immutable_subject: false } : { full_name: r.full_name ?? m[1], default_branch: r.default_branch ?? 'main' });
 };
 const gh = fakeGh({ 'yedeya-labs/kanon': {}, 'o/r': {}, 'o/s': {} });
 const { template, parameters, subjects } = render(register, { gh });
@@ -244,6 +244,7 @@ describe('the register (§5)', () => {
     expect(one({ writer_subjects: [] })).not.toEqual([]);
     expect(one({ reader_subjects: 'repo:o/r:ref:refs/heads/main' })).not.toEqual([]);
     expect(one({ readers: undefined, reader_subjects: ['repo:o/r:ref:refs/heads/main'] })).toEqual([]);
+    expect(one({ reader_subjects: ['repo:o/r:ref:refs/heads/main'] })).toEqual(['repositories[0] gives both readers and reader_subjects']);
     expect(one({ readers: ['pull_request'] })).not.toEqual([]);
     expect(one({ readers: [] })).not.toEqual([]);
     const dup = { key: 'k1', repository: 'o/r', readers: ['ref:refs/heads/main'] };
@@ -278,7 +279,7 @@ describe('the subjects come from GitHub, in the form each repository issues (§3
   it('refuses a custom subject template unless the entry names the exact subjects', () => {
     const custom = { use_default: false, include_claim_keys: ['repo', 'context', 'job_workflow_ref'] };
     expect(() => one({ customization: custom })).toThrow(/customizes its OIDC subject/);
-    const exact = { writer_subjects: ['repo:o/r:ref:refs/heads/main:job_workflow_ref:o/r/.github/workflows/c.yml@refs/heads/main'], reader_subjects: ['repo:o/r:ref:refs/heads/main'] };
+    const exact = { writer_subjects: ['repo:o/r:ref:refs/heads/main:job_workflow_ref:o/r/.github/workflows/c.yml@refs/heads/main'], readers: undefined, reader_subjects: ['repo:o/r:ref:refs/heads/main'] };
     expect(sub(one({ customization: custom }, exact).template.Resources.WriterRolek1)).toBe(exact.writer_subjects[0]);
   });
   it('exact subjects pass the same checks: the default branch for the writer, no environment, pull request, pattern or other repository', () => {
@@ -292,7 +293,7 @@ describe('the subjects come from GitHub, in the form each repository issues (§3
     expect(w('repo:o/*:ref:refs/heads/main')).toThrow(/pattern/);
     expect(w('repo:o/x:ref:refs/heads/main')).toThrow(/not a subject of o\/r/);
     expect(w('ref:refs/heads/main')).toThrow(/names no repository/);
-    expect(() => one({}, { reader_subjects: ['repo:o/r:environment:qa'] })).toThrow(/reader/);
+    expect(() => one({}, { readers: undefined, reader_subjects: ['repo:o/r:environment:qa'] })).toThrow(/reader/);
     expect(() => one({}, { readers: undefined, reader_subjects: ['repo:o/r:ref:refs/heads/any'] })).not.toThrow();
   });
   it('both forms may be trusted while a repository migrates', () => {
@@ -301,6 +302,10 @@ describe('the subjects come from GitHub, in the form each repository issues (§3
   });
   it('a repository GitHub does not answer for stops the render, under its key', () => {
     expect(() => render({ ...register, repositories: [{ ...entry, repository: 'o/gone' }] }, { gh })).toThrow(/^register: k1: gh: HTTP 404/);
+  });
+  it('refuses an entry GitHub spells differently: a rename redirect, or another case', () => {
+    expect(() => one({ full_name: 'o/renamed' })).toThrow(/GitHub calls o\/r 'o\/renamed'/);
+    expect(() => one({ full_name: 'O/r' })).toThrow(/GitHub calls o\/r 'O\/r'/);
   });
   it('refuses a default branch GitHub reports with pattern characters', () => {
     expect(() => one({ default_branch: 'ma*n' })).toThrow(/default branch/);

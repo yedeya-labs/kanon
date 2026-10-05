@@ -140,9 +140,9 @@ It exits 1 on any FAIL, and never prints a credential, a row or a response body.
 
    Each must still be a branch ref subject of that repository with no environment or pull request, and the writer's must name the default branch, which is read from GitHub even then. `writer_subjects` can also list both forms while a repository moves to the immutable subject.
 2. Render, package and deploy, as above.
-3. In the repository, give `id-token: write` to the collector job alone (`K-OBS-13`), and declare no environment on it: an environment replaces the ref in the token's subject, and the writer refuses it. Before the deploy, list the repository's default-branch jobs that already hold `id-token: write`; each of them can assume the writer role (below). The writer role's ARN is in the stack's outputs.
+3. In the repository, give `id-token: write` to the collector job alone (`K-OBS-13`), and declare no environment on it: an environment replaces the ref in the token's subject, and the writer refuses it. Before the deploy, list the repository's default-branch jobs that already hold `id-token: write`, Kanon's QA-store jobs included; each of them can assume the writer role (below). The writer role's ARN is in the stack's outputs.
 
-A renamed repository fails closed: its `sub` stops matching, the collector turns red, and the register needs the new name.
+A renamed repository fails closed: its `sub` stops matching, the collector turns red, and the register needs the new name. `render.mjs` refuses an entry whose `repository` differs from the name GitHub reports, a rename or a different case, so the next render says so before a deploy.
 
 ## Who can write
 
@@ -157,7 +157,11 @@ The writer trusts the default branch's ref. What a token's subject is decides wh
 | A fork | no token | refused |
 | Any job of a default-branch workflow that holds `id-token: write` | the default branch's ref | **admitted** |
 
-The last row is what the environment used to narrow. So "only the collector holds the store's credentials" (`K-OBS-13`) is held by which jobs hold `id-token: write`: GitHub gives a job without it no token to ask with. In Kanon's own workflows, the id-token guard that came with the QA store's same change ([#291](https://github.com/yedeya-labs/kanon/pull/291)) fails any other holder; the collector joins its allow-list when it moves into Kanon at S7. In an adopter's, it is the adopter's to check, and a job that already holds `id-token: write` for another cloud, such as a deploy on push to the default branch, can write rows under the adopter's key. It can't read another adopter's, name a partition, or write anything the function's validation refuses.
+The last row is what the environment used to narrow, and nothing narrows it now: **every default-branch job that holds `id-token: write` can assume the writer.** That includes:
+- **Kanon's own QA-store jobs**, in every adopter that runs those lanes and in Kanon: the store jobs of explore, the code audit, the Overseer and the dispatch sweep, and the AWS maintenance job. Several run on a schedule, so on the default branch. While they declare `environment: kanon-qa-store`, their subject names that environment and the writer refuses them; once the QA store drops its environment ([#291](https://github.com/yedeya-labs/kanon/pull/291)), each carries the default branch's ref and is admitted.
+- **The adopter's own jobs** that hold it for another cloud, such as a deploy on push to the default branch.
+
+Each can write rows under its own adopter's key that pass the function's validation. None can read, name a partition, or reach another adopter's key. A job without `id-token: write` gets no token to ask with, so the set is exactly the jobs that hold it. What is guarded is that set's size in Kanon's own workflows, not that the collector is its only member: the id-token guard #291 adds fails any Kanon job holding `id-token: write` that doesn't run a store block alone, and the collector joins its allow-list when it moves into Kanon at S7. The adopter's own holders are the adopter's to check.
 
 ## Erase an adopter
 

@@ -75,8 +75,10 @@ export function registerProblems(register) {
     if (typeof r?.repository !== 'string' || !REPOSITORY.test(r.repository)) out.push(`${at}.repository is not owner/name`);
     else if (names.has(r.repository.toLowerCase())) out.push(`${at}.repository is a duplicate`);
     else names.add(r.repository.toLowerCase());
-    // `readers` is the usual form; `reader_subjects` replaces it with exact subjects.
-    if (r?.reader_subjects === undefined || r?.readers !== undefined) {
+    // `readers` is the usual form; `reader_subjects` replaces it with exact subjects. Never both,
+    // so the register says exactly what is trusted.
+    if (r?.reader_subjects !== undefined && r?.readers !== undefined) out.push(`${at} gives both readers and reader_subjects`);
+    else if (r?.reader_subjects === undefined) {
       if (!Array.isArray(r?.readers) || r.readers.length === 0 || !r.readers.every((/** @type {unknown} */ s) => typeof s === 'string' && READER.test(s))) {
         out.push(`${at}.readers must list ref:refs/heads/<branch> subjects, and nothing else (no environment)`);
       }
