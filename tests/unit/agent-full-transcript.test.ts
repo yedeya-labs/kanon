@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { blockInputsFor, blockOf, callsSpine, effectiveSteps, laneBlockOf, readBlock, spineJobFor } from './helpers/spine.js';
+import { blockInputsFor, blockOf, callsSpine, effectiveSteps, laneBlockOf, readBlock, readSpine, spineJobFor } from './helpers/spine.js';
 
 /**
  * RA-2651 — the implementer's whole transcript goes to the job log, and only there.
@@ -38,7 +38,8 @@ describe('the implementer transcript reaches the job log', () => {
     // THROUGH THE RUN BLOCK (RA-2666): the action sits in `agent-run`, so the switch is two
     // hops — the spine hands its input to the block, the block hands its input to the
     // action — and both are asserted, or a dropped hop leaves an input that does nothing.
-    const step = agentStep({ steps: effectiveSteps(lane.jobs.run.steps) });
+    // The steps are the spine's agent job's since kanon#274 (`readSpine` joins the two files).
+    const step = agentStep({ steps: effectiveSteps(readSpine().jobs.run.steps) });
     expect(step?.with?.show_full_output).toBe('${{ inputs.full-transcript }}');
     const call = blockOf(step as never)?.call;
     expect(call?.with?.['full-transcript']).toBe('${{ inputs.full-transcript }}');
@@ -54,8 +55,9 @@ describe('the implementer transcript reaches the job log', () => {
   const callers: Caller[] = readdirSync(join(REPO, WF)).filter((f) => f.endsWith('.yml')).sort().flatMap((file) =>
     Object.entries(jobs(file)).flatMap(([job, def]): Caller[] => {
       if (callsSpine(def as never)) return [{ where: `${file}:${job}`, via: 'spine' as const, def }];
-      // The spine's own job forwards its caller's input; it is resolved per caller above.
-      if (file === 'agent-lane.yml') return [];
+      // The spine forwards its caller's input, through its agent's job (`lane-agent-job.yml`,
+      // kanon#274); both are resolved per caller above.
+      if (file === 'agent-lane.yml' || file === 'lane-agent-job.yml') return [];
       if ((def.steps ?? []).some((s) => laneBlockOf(s as never) === 'agent-run')) {
         return [{ where: `${file}:${job}`, via: 'direct' as const, def }];
       }
@@ -112,6 +114,7 @@ describe('the implementer transcript reaches the job log', () => {
     }
     expect(found).toEqual({
       'workflows/agent-lane.yml': 1, // the input's description
+      'workflows/lane-agent-job.yml': 1, // the same input, passed through to the agent's job (kanon#274)
       'actions/agent-run/action.yml': 2, // the block input's description, the with: line (RA-2666)
     });
   });

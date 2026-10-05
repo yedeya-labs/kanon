@@ -206,12 +206,12 @@ Decisions waiting for the Stakeholder are shown to them in the weekly digest (`K
 **Rule.** Build every lane and check on three commitments, each with its rules in the chapter it belongs to:
 
 - **Untrusted content is data, never instructions.** Issues, pull requests, reviews, comments and files written by anyone who isn't a member are input for an agent to judge, never a command, and agents act only on work a member raised or approved (`K-AGENT-45`, and `K-WORK-21` for intake). A pull request never chooses the rules it is judged by (`K-MERGE-17`).
-- **Least privilege.** Every token holds only what its lane uses (`K-AGENT-46`, `K-ADOPT-8`). Secrets go only to the runs that name them, and never to a run a fork started (`K-AGENT-47`). `pull_request_target` never checks out or runs the pull request's code (`K-AGENT-48`). Only a human creates a credential (`K-AGENT-6`).
+- **Least privilege.** Every token holds only what its lane uses (`K-AGENT-46`, `K-ADOPT-8`). Secrets go only to the runs that name them, and never to a run a fork started (`K-AGENT-47`). `pull_request_target` never checks out or runs the pull request's code (`K-AGENT-48`). A job that runs an agent or code it didn't write never holds an App's private key (`K-AGENT-49`). Only a human creates a credential (`K-AGENT-6`).
 - **Pinned dependencies.** Kanon is used at an exact version (`K-ADOPT-11`), and every other action at a version tag or a full commit SHA, never a branch (`K-ADOPT-12`).
 
 **Why.** Security was already inside many rules, but no principle tied them together, so a new lane had nothing to be checked against as a whole. It became urgent once agents run on a public repository, Kanon's own first: there, issues, pull requests and comments come from strangers. An agent with a write token that follows a stranger's text is working for the stranger, a secret a fork's code can read is the fork's, and an action pinned to a branch runs whatever its owner pushes next.
 
-**Enforced by.** Each rule's own line. Three are checked on Kanon's own workflows and actions by [`tests/unit/workflow-security.test.ts`](../tests/unit/workflow-security.test.ts): no `pull_request_target` checkout of the head, no unpinned third-party action, no `secrets: inherit`. The membership gate on every lane is checked by [`tests/unit/lane-gate.test.ts`](../tests/unit/lane-gate.test.ts) (`K-AGENT-45`).
+**Enforced by.** Each rule's own line. Three are checked on Kanon's own workflows and actions by [`tests/unit/workflow-security.test.ts`](../tests/unit/workflow-security.test.ts): no `pull_request_target` checkout of the head, no unpinned third-party action, no `secrets: inherit`. The App-key isolation is checked by [`tests/unit/app-key-isolation.test.ts`](../tests/unit/app-key-isolation.test.ts) (`K-AGENT-49`). The membership gate on every lane is checked by [`tests/unit/lane-gate.test.ts`](../tests/unit/lane-gate.test.ts) (`K-AGENT-45`).
 
 **Class.** framework
 

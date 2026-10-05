@@ -1,0 +1,412 @@
+# The agent's job of the agent-lane spine.
+#
+# CALLED ONLY BY `agent-lane.yml`. It is a job of its own because the App's private key never
+# enters it (`K-AGENT-49`). `agent-lane.yml`'s `mint` job mints the lane's narrowed token
+# and hands it here as the `app-token` secret, hex-encoded; the first step after the start
+# stamp decodes and masks it, and the last step revokes it. Everything between is the spine
+# as it was: the checkout, Kanon's path, the project-setup hook, the three blocks and the
+# RA-2519 breadcrumbs. The rationale for each lives with the step, and the spine's header
+# still describes the whole lane.
+#
+# A LANE NEVER CALLS THIS FILE. Its inputs mirror the spine's (less the `permission-*` set,
+# which the mint consumes), and the spine passes each one through unchanged.
+#
+# WHAT THE AGENT CAN STILL REACH HERE, stated so nobody reads more into the split: the token
+# it was always given, for at most the hour it lives, and the Claude token. Rewriting a cached
+# action in this job now reaches only those, which the agent holds anyway.
+name: Agent lane — the agent's job
+
+on:
+  workflow_call:
+    inputs:
+      agent:
+        description: Telemetry agent name — the `agent` column in the run row.
+        required: true
+        type: string
+      lane:
+        description: >-
+          Kanon's lane name for the version-2 telemetry row (plan 0002 §2; `LANES` in
+          `actions/agent-telemetry/schema.mjs`). Empty writes only the version-1 row.
+        required: false
+        type: string
+        default: ""
+      arm:
+        description: Human name for this arm, used by classify-agent-result on a red run.
+        required: true
+        type: string
+      prompt:
+        description: The agent's instructions. Interpolate issue numbers in the caller.
+        required: true
+        type: string
+      claude_args:
+        description: Passed to BOTH claude-code-action and the telemetry row, so they cannot disagree.
+        required: true
+        type: string
+      timeout-minutes:
+        description: >-
+          Bounds a hang (RA-1336). Size at ~3x this lane's longest real run — EXCEPT where a
+          turn cap is the constraint that should bind, in which case size above what the
+          cap can take (RA-2212): the implement lanes run 180 for that reason, not because
+          3x their longest run is 180.
+        required: false
+        type: number
+        default: 120
+      prompt-cache-ttl:
+        description: >-
+          `CLAUDE_CODE_PROMPT_CACHE_TTL` for this lane, or empty to leave the default.
+          AN INPUT RATHER THAN A SPINE CONSTANT (RA-2188): four arms pin `5m` and the rest
+          do not, so it is a per-lane decision. It also has to be readable from the
+          CALLER — `cache-ttl-check.mjs` joins the pin to the arm name, and a `uses:` job
+          accepts only `with:` and `secrets:`, never `env:`, so an env line on the spine
+          would name no arm and the four pinned arms would read as unpinned.
+        required: false
+        type: string
+        default: ""
+      full-transcript:
+        description: >-
+          Print the agent's whole transcript into the job log (`show_full_output` on
+          `claude-code-action`, RA-2651). Off, the log carries only the init and result
+          events, and the execution file that holds the rest is deleted with the runner,
+          so a run that ends `completed` with no push and no comment cannot be
+          diagnosed afterwards. The log, not an artifact, because Actions masks
+          registered secrets in logs and does not mask artifact files. It changes only
+          what is printed: the model's input, turns and spend are identical either way.
+          OPT-IN PER LANE; the default keeps the action's hidden output.
+        required: false
+        type: boolean
+        default: false
+      issue-number:
+        description: >-
+          The issue this run was dispatched for; recorded on the row (RA-1517), and passed to
+          the project-setup hook.
+        required: false
+        type: string
+        default: ""
+      pr-number:
+        description: >-
+          The PR this run was dispatched for; recorded on the row. A PR lane (revise) has
+          no issue to identify its run by, so without this the row carries neither.
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: >-
+          What to check out — a revise lane's PR head branch. Empty checks out the
+          triggering commit, as a lane that opens a new branch wants. The blocks never
+          come from it: they are `$/` references, read from the commit that defined this
+          workflow (see the header). The project-setup hook does, so a branch cut before
+          the hook existed fails its presence check, by name.
+        required: false
+        type: string
+        default: ""
+      fetch-depth:
+        description: >-
+          `actions/checkout`'s depth. 1 (the default) for a lane that branches from the
+          checked-out commit; 0 for a lane that must see a PR branch's history against
+          `main` — a revise lane rebases and diffs. See RA-1742 for why 1 is the default.
+        required: false
+        type: number
+        default: 1
+      database:
+        description: >-
+          This lane runs the project's tests, so it reads the test-database declaration
+          (`docs/qa/test-database.md`, kanon#18) and passes the project-setup hook
+          `database: 'true'` when the project declares one, for the hook to start it and
+          set up its schema. A project that declares none gets none either way. Default
+          on: a lane that writes code runs the project's tests. Off for a lane that edits
+          prose, which gets none whatever the project declares.
+        required: false
+        type: boolean
+        default: true
+      browsers:
+        description: >-
+          Tell the project-setup hook to install a browser. Default on, for a lane that may
+          run the E2E tier; off for one that never had it, so converting it adds no install
+          minute.
+        required: false
+        type: boolean
+        default: true
+      push-probe:
+        description: >-
+          Prove the minted App can push (`git push --dry-run`) after the project's setup
+          and before a single turn is paid for. Default off. On for a lane
+          whose whole output is a pushed branch, where a missing `contents: write` grant
+          would otherwise surface as a 403 at the END of a long run — or not at all, read
+          as "the agent had nothing to say". A capability switch like `database`, not a
+          hook: the step is the same for every lane that sets it, and the App slug and
+          the arm name are what make its message the lane's own.
+        required: false
+        type: boolean
+        default: false
+      quality-pr-label:
+        description: >-
+          OPT-IN quality column (RA-1627). The label on the PR this lane's agent opens, e.g.
+          `agent:triage`. Set, the run's `artifacts_filed` counts the PRs carrying it that
+          reference `issue-number` and were opened after the agent started — so a run that
+          opened none records 0, not absent. Empty (the default) adds no column: a lane
+          whose PRs another arm also labels, or that has no measured question, must not
+          gain a count it cannot earn.
+        required: false
+        type: string
+        default: ""
+      app-slug:
+        description: >-
+          The minted App's slug, from the spine's `mint` job. Not a secret: it names the App's
+          bot account, which the project-setup hook and `agent-setup` check the identity against.
+        required: true
+        type: string
+      mint-attempt:
+        description: >-
+          The run attempt the spine's `mint` job minted the token for. A partial re-run
+          ("Re-run failed jobs") reuses that job's outputs, so a token from an earlier attempt,
+          already revoked, arrives here; the token step refuses it by name.
+        required: true
+        type: string
+    outputs:
+      # THE CLASSIFIER'S VERDICT ON A RED RUN (RA-2118) — `unavailable` / `exhausted` /
+      # `failed` / `not-reached`, empty on a green run. A caller branches on it after the
+      # fact: `agent-implement.yml` frees a crashed run's WIP slot only for a run that
+      # reached the model and did not finish. Job outputs survive a failed job.
+      kind:
+        description: classify-agent-result.mjs's `kind` for a red run, empty otherwise.
+        value: ${{ jobs.run.outputs.kind }}
+      # THE AGENT STEP'S OWN OUTCOME (RA-2592) — `success` / `failure` / `skipped`, the value
+      # `steps.agent.outcome` had inside the job. A revise lane's round record reads it to
+      # say how the run ended, and that step runs in the CALLER now: it names the lane's
+      # login and marker, which a spine must not. Empty when the job was cancelled before
+      # it set outputs; the round record already prints `unknown` for that.
+      outcome:
+        description: The agent step's outcome, readable from the caller after the job.
+        value: ${{ jobs.run.outputs.outcome }}
+    secrets:
+      app-token:
+        description: >-
+          The lane's App installation token, hex-encoded by the spine's `mint` job (a job
+          output holding a masked value is dropped). Arrives masked, as every secret does.
+        required: true
+      claude-token:
+        required: true
+
+# NO `permissions:` BLOCK, for the reason `agent-lane.yml` gives: without one this job gets
+# exactly what the lane's calling job was given.
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      kind: ${{ steps.finish.outputs.kind }}
+      # `agent` is the agent-run block, whose only step that can fail is the action, so its
+      # outcome is the action's — see that block's header.
+      outcome: ${{ steps.agent.outcome }}
+    steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1): a cancelled
+      # job that ran at least its `timeout-minutes` timed out. Nothing else in the job's
+      # contexts says when it started.
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      # THE TOKEN, UNSEALED AND MASKED BEFORE ANYTHING CAN PRINT IT (`K-AGENT-49`). It arrives
+      # hex-encoded as a secret, so the encoded form is already masked; the decoded token is
+      # registered here, in the step that first holds it. `id: app-token` and the `token` /
+      # `app-slug` outputs keep every later step reading `steps.app-token.outputs.*` exactly as
+      # it did when the mint was this job's step. An empty or malformed value is a failed mint
+      # upstream: this step fails, and `agent-finish` records `token=failure`. So is a token minted
+      # for an earlier attempt, which a partial re-run hands in (see the spine's header): it was
+      # revoked when that attempt ended, so the step says how to re-run instead of letting the
+      # checkout fail on bad credentials.
+      - name: Receive the App token
+        id: app-token
+        env:
+          SEALED: ${{ secrets.app-token }}
+          APP_SLUG: ${{ inputs.app-slug }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$'; then
+            echo "::error title=agent-lane::no App token arrived from the spine's mint job; see that job's log for why the mint failed."
+            exit 1
+          fi
+          if [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error title=agent-lane::this is attempt $RUN_ATTEMPT, but the App token was minted for attempt $MINT_ATTEMPT and revoked when that attempt ended. Use \"Re-run all jobs\", not \"Re-run failed jobs\": the token is minted in a job of its own, and only re-running it mints a fresh one."
+            exit 1
+          fi
+          # Decoded with printf and sed alone, so the step needs nothing the runner may lack.
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          {
+            echo "token=$TOKEN"
+            echo "app-slug=$APP_SLUG"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        id: checkout
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          # Empty is checkout's own default (the triggering commit), so a lane that sets
+          # neither input checks out exactly what it did before these existed.
+          ref: ${{ inputs.ref }}
+          fetch-depth: ${{ inputs.fetch-depth }}
+          # NO `fetch-depth: 0` (RA-1742). RA-1652 added it so a `npm run lint` the agent ran
+          # on its own initiative would see the same brief corpus `ci.yml` did. That
+          # corpus no longer exists: a brief carries no coordinate and the guard does not
+          # read `docs/projects/**`, so the two environments cannot disagree about a tree
+          # neither reads.
+
+      # KANON'S NODE AND KANON'S PATH, FOR THE AGENT (kanon#110). The prompts tell the agent to
+      # run `node "$KANON/…"`, and nothing else in this job sets `KANON`: an adopter's hook
+      # that happens to export it is not a contract. Before the hook, so a toolchain the
+      # hook sets up still wins the PATH for the project's own commands; the agent step reads
+      # the path from this step's OUTPUT, which the hook cannot rewrite as it can `$GITHUB_ENV`.
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      # THE PROJECT-SETUP HOOK MUST BE THERE, AND SAY SO BY NAME IF IT IS NOT (RA-2694). A
+      # missing local action fails with the runner's own "can't find action.yml", which
+      # names neither the cause nor the fix. The hook is read from the checked-out tree, so
+      # the one tree that lacks it is a branch cut before it existed. The commit it is read
+      # from is recorded for the step that puts it back after the agent.
+      - name: Check the project-setup hook is present
+        id: hook
+        run: |
+          if [ ! -f .github/actions/project-setup/action.yml ]; then
+            echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
+            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # THE PROJECT'S DATABASE, AS IT DECLARES IT (kanon#18; see the header). After the checkout,
+      # because the declaration is read from the tree, and before the hook, which is told by
+      # this block's answer whether to start the database and set up its schema.
+      - uses: $/actions/test-database
+        id: database
+        with:
+          wanted: ${{ inputs.database }}
+
+      # The project's own setup — everything this spine and its blocks deliberately do not
+      # name (see the header). After the checkout, because it is read from the tree, and
+      # before `agent-setup`. The App token is passed for the hook's issue reads; the
+      # Claude token never is.
+      - uses: ./.github/actions/project-setup
+        id: project
+        with:
+          lane: ${{ inputs.agent }}
+          install: "true"
+          database: ${{ steps.database.outputs.database }}
+          browsers: ${{ inputs.browsers }}
+          issue-number: ${{ inputs.issue-number }}
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - uses: $/actions/agent-setup
+        id: setup
+        with:
+          arm: ${{ inputs.arm }}
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
+          push-probe: ${{ inputs.push-probe }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - uses: $/actions/agent-run
+        id: agent
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+        with:
+          prompt: ${{ inputs.prompt }}
+          claude_args: ${{ inputs.claude_args }}
+          claude-token: ${{ secrets.claude-token }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          prompt-cache-ttl: ${{ inputs.prompt-cache-ttl }}
+          full-transcript: ${{ inputs.full-transcript }}
+
+      # THE HOOK GOES BACK, FROM THE COMMIT IT WAS READ FROM (RA-2694). Its toolchain step
+      # has a post step, and the runner re-reads a `./` action's file from the workspace for
+      # it (a `$/` block's comes from the action cache, which is why the blocks need no such
+      # step since RA-2697), so an agent that moved or deleted the hook would red a good run at
+      # the very end. It was read from the checked-out tree, not from `github.sha`, so that is
+      # where it comes back from — a no-op whenever the agent left it alone.
+      - name: Put the project-setup hook back for its post steps
+        if: always() && steps.hook.outputs.sha != ''
+        env:
+          SHA: ${{ steps.hook.outputs.sha }}
+        run: |
+          if git checkout "$SHA" -- .github/actions/project-setup 2>/dev/null; then
+            echo "project-setup hook put back from $SHA"
+          else
+            echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
+          fi
+
+      # Explain a red run, count what it opened, record what it cost. `always()` and
+      # `continue-on-error` for the reasons in the block's header; `job-status` because the
+      # block cannot see the job's `failure()` from inside itself.
+      - uses: $/actions/agent-finish
+        id: finish
+        if: always()
+        continue-on-error: true
+        with:
+          arm: ${{ inputs.arm }}
+          agent: ${{ inputs.agent }}
+          job-status: ${{ job.status }}
+          claude_args: ${{ inputs.claude_args }}
+          execution_file: ${{ steps.agent.outputs.execution_file }}
+          issue-number: ${{ inputs.issue-number }}
+          pr-number: ${{ inputs.pr-number }}
+          quality-pr-label: ${{ inputs.quality-pr-label }}
+          started-at: ${{ steps.agent.outputs.started-at }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          # THE VERSION-2 ROW (plan 0002 §2.6). Each stage's step CONCLUSION, in the order this
+          # spine runs them, so the row can say where a red run failed. The hook's is the
+          # presence check's when that failed, else the test database's when that failed (its
+          # declaration is the project's), else the hook's own: a conclusion only, never the
+          # adopter's step names.
+          lane: ${{ inputs.lane }}
+          stages: >-
+            token=${{ steps.app-token.conclusion }}
+            checkout=${{ steps.checkout.conclusion }}
+            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.database.conclusion != 'success' && steps.database.conclusion || steps.project.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: ${{ inputs.timeout-minutes }}
+
+      # THE RA-2519 BREADCRUMBS. A PR lane's recovery (`reviseRecovery` in the pipeline
+      # library's `lead-reconcile.mjs` for the implementer, `brief-revise-recovery.mjs` for
+      # the Lead) finds a run that died of its CAUSE — the model unreachable, or its API
+      # failing mid-run — by one of these steps having RUN, read by NAME from the run's
+      # jobs (`RETRY_STEPS` in the library's `lane-retry.mjs`). So the names are the
+      # protocol and must not be reworded; `tests/unit/lane-workflows.test.ts` holds them to it.
+      #
+      # IN THE LANE, NOT THE FINISH BLOCK, because the jobs API lists a composite action as
+      # ONE step: a breadcrumb inside the block would never be seen by name. They read the
+      # classifier's verdict through the block's `retry` output.
+      #
+      # A lane no recovery reads (implement, triage) carries them too; nothing reads them
+      # there, and they cost a skipped step on a green run. So the text must not PROMISE a
+      # retry: on an issue lane none comes, and a human reading the log would wait for it
+      # instead of re-dispatching. It says which lanes retry, and what to do on the others;
+      # the caller's header names its own retrier.
+      - name: "Retryable once the cause clears: the model was unreachable"
+        if: failure() && steps.finish.outputs.retry == 'unreachable'
+        run: echo "The model was never reached. The revise lanes are retried once for this head after the cool-down (RA-2519); any other lane is NOT retried automatically — re-dispatch it once the cause clears."
+      - name: "Retryable once the cause clears: the model API failed mid-run"
+        if: failure() && steps.finish.outputs.retry == 'api_error'
+        run: echo "The model API failed part-way through. The revise lanes are retried once for this head after the cool-down (RA-2519); any other lane is NOT retried automatically — re-dispatch it once the cause clears."
+
+      # THE TOKEN DIES WITH THE JOB (`K-AGENT-49`). `create-github-app-token`'s post step did this
+      # while the mint was a step here; the mint now skips it, because its own job ends first.
+      # Last, after every step that uses the token, `agent-finish` included. Revoking needs only
+      # the token itself, never the key. Never reds the run: a token that already expired (the
+      # job outlived the hour) is refused, and there is nothing left to protect then.
+      - name: Revoke the App token
+        if: always() && steps.app-token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$API_URL/installation/token" || true)"
+          if [ "$STATUS" = "204" ]; then echo "App token revoked"; else echo "::warning title=agent-lane::the App token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi

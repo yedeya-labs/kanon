@@ -66,6 +66,7 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | The `dco` action, reading the App register from the default branch, and its parser's tests | `K-AGENT-44`, `K-LAYOUT-14`, `K-MERGE-17` | installed 2026-09-30 |
 | `tests/unit/workflows.test.ts`, which pins the `permissions:` block of Kanon's own checks | `K-AGENT-46` | installed 2026-09-30 |
 | `tests/unit/workflow-security.test.ts`, on Kanon's own workflows and actions | `K-PRIN-19`, `K-ADOPT-12`, `K-AGENT-47`, `K-AGENT-48` | installed 2026-10-02 |
+| `tests/unit/app-key-isolation.test.ts`, on Kanon's own workflows, and the spine's key-holding `mint` job. The lanes that call the blocks directly, the Explorer's sweep, the code audit and the Overseer are listed exceptions until #279 | `K-AGENT-49` | installed 2026-10-04 |
 | `kanon apps`, and the test that the roles table and `agent-permissions.json` agree | `K-ADOPT-1`, `K-ADOPT-8`, `K-SELF-5` | installed 2026-10-02 |
 | The Reviewer App's permission grants | `K-AGENT-7`, `K-AGENT-46` | installed 2026-10-02 |
 | The review lane, called by `review.yml` at a released version: the membership gate, the per-role token and slug assertion, the scope probe, the judging-input restore, the filter job and incremental scope, the trigger label, the verdict check, the outcome step, the shared classifier, and the telemetry row | `K-AGENT-1`, `K-AGENT-2`, `K-AGENT-5`, `K-AGENT-22`, `K-AGENT-25`, `K-AGENT-28`, `K-AGENT-42`, `K-AGENT-43`, `K-AGENT-45`, `K-LAYOUT-9`, `K-MERGE-14`, `K-MERGE-17`, `K-PRIN-9` | installed 2026-10-02 |

@@ -457,10 +457,10 @@ describe('revise in place', () => {
     expect(flat).toMatch(/do NOT re-author the brief from scratch/);
   });
 
-  it('mints before checkout so the push credential is the App token', () => {
+  it('receives the App token before checkout, so the push credential is the App token (minted in the key-holding job of the spine, kanon#274)', () => {
     const names = revise.steps.map((s) => s.name ?? s.uses);
-    expect(names.indexOf('Mint App token')).toBeGreaterThanOrEqual(0);
-    expect(names.indexOf('Mint App token'))
+    expect(names.indexOf('Receive the App token')).toBeGreaterThanOrEqual(0);
+    expect(names.indexOf('Receive the App token'))
       .toBeLessThan(names.findIndex((n) => n?.startsWith('actions/checkout')));
     // And the App is the Lead's — the identity the round count filters on.
     expect(wf.jobs.revise.secrets['app-id']).toBe('${{ secrets.LEAD_APP_ID }}');

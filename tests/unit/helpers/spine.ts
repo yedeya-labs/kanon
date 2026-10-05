@@ -42,6 +42,14 @@ type Job = {
 };
 
 const SPINE = '.github/workflows/agent-lane.yml';
+/**
+ * The spine's agent job (kanon#274). `agent-lane.yml` is two jobs since then: `mint`, which
+ * holds the App key, and `run`, a call to this file, which holds the steps and never the key.
+ * `readSpine()` reads the spine's `on:` and this file's `run` job as one view, because every
+ * assertion here is about what a lane's agent job RUNS; the call layer between them passes
+ * each input through unchanged, which `app-key-isolation.test.ts` holds it to.
+ */
+export const SPINE_JOB = '.github/workflows/lane-agent-job.yml';
 
 type Spine = {
   on: { workflow_call: { inputs: Record<string, { default?: unknown; type: string }>; outputs: Record<string, { value: string }> } };
@@ -52,7 +60,11 @@ type Spine = {
 // Kanon's root, not the working directory: the library's tests run inside the fixture
 // adopter (tests/library/helpers/in-adopter.ts) and read Kanon's lanes through this too.
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
-export const readSpine = (): Spine => parse(readFileSync(join(ROOT, SPINE), 'utf8')) as Spine;
+export const readSpine = (): Spine => {
+  const spine = parse(readFileSync(join(ROOT, SPINE), 'utf8')) as Spine;
+  const job = parse(readFileSync(join(ROOT, SPINE_JOB), 'utf8')) as Spine;
+  return { ...spine, jobs: { ...spine.jobs, run: job.jobs.run } };
+};
 
 /** A block's parsed `action.yml`, by repo-relative path — the reader `expandLaneBlocks` takes. */
 export const readAction = (path: string) => parse(readFileSync(join(ROOT, path), 'utf8'));

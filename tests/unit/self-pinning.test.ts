@@ -51,7 +51,7 @@ const EXEMPT = new Set([
   '.github/workflows/agent-explore.yml: ./.github/actions/explore-sweep',
   '.github/workflows/agent-explore.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-blocks-smoke.yml: ./tests/fixtures/python-adopter/.github/actions/project-setup',
-  '.github/workflows/agent-lane.yml: ./.github/actions/project-setup',
+  '.github/workflows/lane-agent-job.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-lead-split.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-rebase.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-verify-acs.yml: ./.github/actions/project-setup',

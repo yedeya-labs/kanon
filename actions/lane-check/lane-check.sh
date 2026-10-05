@@ -19,6 +19,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KANON_ROOT="${KANON_ROOT:-$HERE/../..}"
 ACTION_REF="${ACTION_REF:-}"
 SPINE=agent-lane
+SPINE_JOB=lane-agent-job
 HOOK=.github/actions/project-setup/action.yml
 REGISTER=docs/qa/agent-identities.md
 DATABASE=docs/qa/test-database.md
@@ -240,8 +241,9 @@ if [ ! -f "$HOOK" ]; then
   fail "$HOOK" "the project-setup hook is missing; every lane that checks out calls it (plan 0001 §5)"
 else
   hook="$(json "$HOOK")" || fail "$HOOK" "is not valid YAML"
-  spine="$(json "$KANON_ROOT/.github/workflows/$SPINE.yml")"
-  # The inputs Kanon passes the hook are read from the spine's own call to it.
+  # The inputs Kanon passes the hook are read from the spine's own call to it, which sits in
+  # the spine's agent job (`lane-agent-job.yml`) since kanon#274 kept the App key out of it.
+  spine="$(json "$KANON_ROOT/.github/workflows/$SPINE_JOB.yml")"
   for k in $(jq -r '[.jobs[].steps[]? | select(.uses == "./.github/actions/project-setup") | .with // {} | keys[]] | unique | .[]' <<<"$spine"); do
     jq -e --arg k "$k" '.inputs // {} | has($k)' <<<"$hook" >/dev/null \
       || fail "$HOOK" "does not declare the input \`$k\`, which Kanon's lanes pass it"

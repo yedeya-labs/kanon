@@ -148,7 +148,7 @@ describe('every lane\'s agent step has KANON from kanon-path (kanon#110)', () =>
 
   it('finds the spine and every direct-block lane, so the walk is not vacuous', () => {
     expect(lanes.map(({ f }) => f)).toEqual(expect.arrayContaining([
-      'agent-lane.yml', 'agent-lead-split.yml', 'agent-merge-reconcile.yml', 'agent-rebase.yml',
+      'lane-agent-job.yml', 'agent-lead-split.yml', 'agent-merge-reconcile.yml', 'agent-rebase.yml',
       'agent-review.yml', 'agent-verify-acs.yml',
     ]));
   });

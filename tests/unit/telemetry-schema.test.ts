@@ -456,7 +456,7 @@ describe('where the rows go', () => {
     .filter((j) => j.uses === '$/.github/workflows/agent-lane.yml').map((j) => ({ f, with: j.with ?? {} })));
 
   it('every Kanon lane names a lane from the schema\'s list', () => {
-    const lanes = [...finishCalls, ...spineCalls].filter((c) => c.f !== 'agent-lane.yml' && c.f !== 'agent-blocks-smoke.yml');
+    const lanes = [...finishCalls, ...spineCalls].filter((c) => c.f !== 'agent-lane.yml' && c.f !== 'lane-agent-job.yml' && c.f !== 'agent-blocks-smoke.yml');
     expect(lanes.length).toBe(15);
     for (const c of lanes) expect(LANES, c.f).toContain(c.with.lane);
   });
@@ -507,13 +507,14 @@ describe('where the rows go', () => {
       expect(c.job.steps![0]?.id, c.f).toBe('job');
       expect(c.job.steps![0]?.run, c.f).toContain('started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)');
       expect(c.with['job-started-at'], c.f).toBe('${{ steps.job.outputs.started-at }}');
-      if (c.f === 'agent-lane.yml') expect(c.with['timeout-minutes']).toBe('${{ inputs.timeout-minutes }}');
+      // The spine's agent job (kanon#274) is handed the lane's timeout as an input.
+      if (c.f === 'lane-agent-job.yml') expect(c.with['timeout-minutes']).toBe('${{ inputs.timeout-minutes }}');
       else expect(Number(c.with['timeout-minutes']), c.f).toBe(c.job['timeout-minutes']);
     }
   });
 
   it('the spine hands the finish block both Kanon codes and its lane', () => {
-    const spine = laneJobs.find((c) => c.f === 'agent-lane.yml')!.with;
+    const spine = laneJobs.find((c) => c.f === 'lane-agent-job.yml')!.with;
     expect(String(spine['kanon-error'])).toContain('steps.hook.outputs.kanon-error');
     expect(String(spine['kanon-error'])).toContain('steps.setup.outputs.kanon-error');
     expect(spine.lane).toBe('${{ inputs.lane }}');

@@ -131,13 +131,14 @@ describe('every lane starts the database the project declares, from a step', () 
   });
 
   it('no lane names a database engine, image, port or URL: those are the block\'s, or the project\'s', () => {
-    const named = workflows.filter((f) => f.startsWith('agent-')).filter((f) => /pgvector|postgres|:5432|DATABASE_URL=/i.test(readFileSync(join(WF, f), 'utf8')));
+    const named = workflows.filter((f) => f.startsWith('agent-') || f === 'lane-agent-job.yml').filter((f) => /pgvector|postgres|:5432|DATABASE_URL=/i.test(readFileSync(join(WF, f), 'utf8')));
     expect(named).toEqual([]);
   });
 
   // Every job that calls the hook and may hand it a database: the block runs before the hook,
   // in the same job, and the hook's `database` is the block's answer, never a literal 'true'.
-  const hookCalls = lanes.filter(({ f }) => f.startsWith('agent-')).flatMap(({ f, wf }) =>
+  // The spine's agent job (kanon#274) is the spine's hook call; it is not an `agent-*` lane file.
+  const hookCalls = lanes.filter(({ f }) => f.startsWith('agent-') || f === 'lane-agent-job.yml').flatMap(({ f, wf }) =>
     Object.entries(wf.jobs ?? {}).flatMap(([name, job]) => {
       const steps = job.steps ?? [];
       const at = steps.findIndex((s) => s.uses === './.github/actions/project-setup');
@@ -148,14 +149,14 @@ describe('every lane starts the database the project declares, from a step', () 
   it('finds every job that calls the hook', () => {
     expect(hookCalls.map((c) => c.where).sort()).toEqual([
       'agent-explore.yml explore',
-      'agent-lane.yml run',
       'agent-lead-split.yml split',
       'agent-rebase.yml resolve',
       'agent-verify-acs.yml verify',
+      'lane-agent-job.yml run',
     ]);
   });
 
-  it.each(['agent-explore.yml explore', 'agent-lane.yml run', 'agent-rebase.yml resolve', 'agent-verify-acs.yml verify'])(
+  it.each(['agent-explore.yml explore', 'lane-agent-job.yml run', 'agent-rebase.yml resolve', 'agent-verify-acs.yml verify'])(
     '%s runs the block before the hook and hands the hook its answer',
     (where) => {
       const { steps, at } = hookCalls.find((c) => c.where === where)!;
@@ -174,7 +175,7 @@ describe('every lane starts the database the project declares, from a step', () 
   });
 
   it('the spine passes the lane\'s own switch, so a prose lane starts nothing whatever is declared', () => {
-    const spine = lanes.find(({ f }) => f === 'agent-lane.yml')!.wf.jobs.run!;
+    const spine = lanes.find(({ f }) => f === 'lane-agent-job.yml')!.wf.jobs.run!;
     expect(spine.steps!.find((s) => s.uses === '$/actions/test-database')?.with).toEqual({ wanted: '${{ inputs.database }}' });
   });
 
