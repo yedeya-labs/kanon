@@ -55,8 +55,9 @@ describe('the implementer transcript reaches the job log', () => {
   const callers: Caller[] = readdirSync(join(REPO, WF)).filter((f) => f.endsWith('.yml')).sort().flatMap((file) =>
     Object.entries(jobs(file)).flatMap(([job, def]): Caller[] => {
       if (callsSpine(def as never)) return [{ where: `${file}:${job}`, via: 'spine' as const, def }];
-      // The spine's own job forwards its caller's input; it is resolved per caller above.
-      if (file === 'agent-lane.yml') return [];
+      // The spine forwards its caller's input, through its agent's job (`lane-agent-job.yml`,
+      // kanon#274); both are resolved per caller above.
+      if (file === 'agent-lane.yml' || file === 'lane-agent-job.yml') return [];
       if ((def.steps ?? []).some((s) => laneBlockOf(s as never) === 'agent-run')) {
         return [{ where: `${file}:${job}`, via: 'direct' as const, def }];
       }
