@@ -9,6 +9,7 @@ import { effectiveSteps, laneBlockOf, stepsAsRun } from './helpers/spine.js';
 import { LANE_BLOCKS, STAGE_BLOCKS, laneBlockPath } from './helpers/agent-lanes.mjs';
 import { FINDING_ANCHOR } from '../../scripts/project-closure.mjs';
 import { readFlattened, workflowText } from './helpers/called-workflow.js';
+import { callerInputs } from './helpers/smoke-group.js';
 
 /**
  * RA-1068 — the Explorer's targeted-invariant mode, a Kanon lane since step 4 of plan 0001.
@@ -42,7 +43,8 @@ const step = (needle: string): Step =>
 describe('a Kanon lane, called by a trigger-only caller', () => {
   it('is a reusable workflow taking the dispatch inputs as optional strings, and the Explorer’s secrets by their fixed names', () => {
     expect(Object.keys(wf.on)).toEqual(['workflow_call']);
-    const { inputs, secrets } = wf.on.workflow_call;
+    const { secrets } = wf.on.workflow_call;
+    const inputs = callerInputs(wf.on.workflow_call.inputs)!;
     expect(Object.keys(inputs).sort()).toEqual(['project', 'ref']);
     for (const i of Object.values(inputs)) expect(i).toMatchObject({ required: false, type: 'string' });
     expect(Object.keys(secrets).sort()).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'EXPLORER_APP_ID', 'EXPLORER_APP_PRIVATE_KEY']);

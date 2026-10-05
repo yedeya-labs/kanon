@@ -75,6 +75,11 @@ on:
         required: false
         type: string
         default: ""
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
     secrets:
       LEAD_APP_ID:
         required: true
@@ -130,7 +135,8 @@ jobs:
     # this workflow, and at workflow level each would join the group and could replace
     # a pending real run.
     concurrency:
-      group: agent-lead-split-${{ github.event.issue.number || inputs.issue }}
+      # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+      group: agent-lead-split-${{ github.event.issue.number || inputs.issue }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
       cancel-in-progress: false
     uses: $/.github/workflows/lead-split-run.yml
     with:

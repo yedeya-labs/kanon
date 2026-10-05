@@ -6,6 +6,7 @@ import { storeLaneProblems, type Workflow } from './helpers/store-jobs.js';
 import { agentPrompt, runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { effectiveSteps } from './helpers/spine.js';
 import { readFlattened, workflowText } from './helpers/called-workflow.js';
+import { callerInputs, realGroup } from './helpers/smoke-group.js';
 
 /**
  * Plan 0004 step 12: the Explorer's sweep lane, moved from the reference adopter onto the store
@@ -54,8 +55,8 @@ describe('the store contract (plan 0004 §3.2, P9\'s check)', () => {
 
   it('runs only on its caller\'s two triggers, and never two sweeps at once', () => {
     expect(jobs.gate!.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'");
-    expect(wf.concurrency.group).toBe('agent-explore');
-    expect(Object.keys(wf.on.workflow_call.inputs)).toEqual(['tier']);
+    expect(realGroup(wf.concurrency.group)).toBe('agent-explore');
+    expect(Object.keys(callerInputs(wf.on.workflow_call.inputs)!)).toEqual(['tier']);
     expect(wf.on.workflow_call.inputs.tier).toMatchObject({ type: 'string', default: '', required: false });
     expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'EXPLORER_APP_ID', 'EXPLORER_APP_PRIVATE_KEY']);
   });

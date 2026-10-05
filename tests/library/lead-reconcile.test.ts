@@ -14,6 +14,7 @@ const { qaRoundBudget, heldClearsRead, QA_ROUND_CAP } = await import('../../scri
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ROOT } from './helpers/adopter.js';
 import { workflowText } from '../unit/helpers/called-workflow.js';
+import { realGroup } from '../unit/helpers/smoke-group.js';
 /** A value of the untyped library, as the reference adopter's helper named it. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type LibraryValue = any;
@@ -667,7 +668,7 @@ describe('the tick workflow', () => {
   });
 
   it('serialises ticks, because two would derive the same world and act twice', () => {
-    expect(wf.concurrency.group).toBe('agent-lead-reconcile');
+    expect(realGroup(wf.concurrency.group)).toBe('agent-lead-reconcile');
     expect(wf.concurrency['cancel-in-progress']).toBe(false);
   });
 

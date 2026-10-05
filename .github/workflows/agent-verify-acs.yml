@@ -89,6 +89,11 @@ on:
         required: false
         type: string
         default: ""
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
     secrets:
       EXPLORER_APP_ID:
         required: true
@@ -101,7 +106,8 @@ concurrency:
   # `inputs.project` is empty on a label event and this is evaluated before any step
   # runs, so it cannot use the resolved value. The issue number is the stable stand-in:
   # one QA issue per project, which is what `readWorld` relies on to find it at all.
-  group: agent-verify-acs-${{ inputs.project || github.event.issue.number }}
+  # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  group: agent-verify-acs-${{ inputs.project || github.event.issue.number }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the

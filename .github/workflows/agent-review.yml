@@ -135,6 +135,11 @@ on:
         required: false
         type: string
         default: ""
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
     secrets:
       REVIEWER_APP_ID:
         required: true
@@ -196,7 +201,8 @@ concurrency:
   # there and the head SHA is what separates one PR's run from another's. Without
   # it every `workflow_run` in the repo collapses into ONE group and, with
   # `cancel-in-progress`, concurrent PRs cancel each other's reviews.
-  group: qa-review-${{ github.event.pull_request.number || inputs.pr_number || github.event.workflow_run.head_sha }}-${{ github.event_name }}-${{ (github.event.action == 'opened' || github.event.action == 'labeled') && 'open' || github.event.action || 'manual' }}-${{ github.event.label.name == 'agent:reviewer' && 'reviewer-label' || 'other' }}
+  # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  group: qa-review-${{ github.event.pull_request.number || inputs.pr_number || github.event.workflow_run.head_sha }}-${{ github.event_name }}-${{ (github.event.action == 'opened' || github.event.action == 'labeled') && 'open' || github.event.action || 'manual' }}-${{ github.event.label.name == 'agent:reviewer' && 'reviewer-label' || 'other' }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -1141,7 +1147,8 @@ jobs:
     # ever exempts an explicit run again, this eviction drops the exemption and this
     # paragraph is wrong.
     concurrency:
-      group: qa-review-head-${{ needs.filter.outputs.pr }}-${{ needs.filter.outputs.head_sha }}
+      # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+      group: qa-review-head-${{ needs.filter.outputs.pr }}-${{ needs.filter.outputs.head_sha }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
       cancel-in-progress: false
     # Declared because the scope step below reads the PR's base ref with `gh pr view`,
     # and the claim step its head and reviews: a `workflow_run` payload carries no

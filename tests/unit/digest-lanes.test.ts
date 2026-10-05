@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { type WorkflowStep } from './helpers/workflow-step.js';
+import { callerInputs, realGroup } from './helpers/smoke-group.js';
 
 /**
  * The two digests (plan 0004 step 10), moved from the reference adopter: the daily project
@@ -84,17 +85,18 @@ describe('each digest is a called lane, with its caller’s two triggers', () =>
       expect(input, `${file}: ${name}`).toMatchObject({ type: 'string', required: false });
     }
     const job = Object.values(caller(file).jobs)[0]!;
-    expect(job.with).toEqual(Object.fromEntries(Object.keys(lane(file).on.workflow_call.inputs).map((k) => [k, `\${{ inputs.${k} }}`])));
+    expect(job.with).toEqual(Object.fromEntries(Object.keys(callerInputs(lane(file).on.workflow_call.inputs)!).map((k) => [k, `\${{ inputs.${k} }}`])));
   });
 
   it('keeps `dry_run` on both and `week_end` on the weekly one', () => {
-    expect(Object.keys(lane(PROJECT).on.workflow_call.inputs)).toEqual(['dry_run']);
-    expect(Object.keys(lane(WEEKLY).on.workflow_call.inputs)).toEqual(['week_end', 'dry_run']);
+    expect(Object.keys(callerInputs(lane(PROJECT).on.workflow_call.inputs)!)).toEqual(['dry_run']);
+    expect(Object.keys(callerInputs(lane(WEEKLY).on.workflow_call.inputs)!)).toEqual(['week_end', 'dry_run']);
     expect(post(WEEKLY).env?.WEEK_END).toBe('${{ inputs.week_end }}');
   });
 
   it.each(DIGESTS)('%s: holds its own concurrency group, never cancelling a post in flight', (file) => {
-    expect(lane(file).concurrency).toEqual({ group: expect.stringMatching(/^kanon-.*digest$/), 'cancel-in-progress': false });
+    const c = lane(file).concurrency!;
+    expect({ ...c, group: realGroup(c.group) }).toEqual({ group: expect.stringMatching(/^kanon-.*digest$/), 'cancel-in-progress': false });
   });
 
   it('the fixture callers keep the reference adopter’s schedules, in under 40 lines', () => {

@@ -8,6 +8,7 @@ import { callsSpine, jobPrompt, spineJobFor } from './helpers/spine.js';
 import { comparePatch, GH_COMPARE_ARM } from './helpers/compare-diff.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { GH_REGISTER_ARM, LEAD_LOGIN, REGISTER_FIXTURE, registerEnv } from './helpers/register.js';
+import { callerInputs } from './helpers/smoke-group.js';
 
 /**
  * RA-966 — the Lead's revise mode.
@@ -891,7 +892,7 @@ describe('the re-delivery path for an unanswered changes-request (RA-1595)', () 
     // is called, and the fixture adopter's caller, which is the shape an adopter copies,
     // subscribes to exactly these. The adopter's own caller is held to it in the adopter.
     expect(Object.keys(wf.on)).toEqual(['workflow_call']);
-    expect(Object.keys(wf.on.workflow_call.inputs).sort()).toEqual(['pr_number', 'reset']);
+    expect(Object.keys(callerInputs(wf.on.workflow_call.inputs)!).sort()).toEqual(['pr_number', 'reset']);
     const caller = parse(readFileSync(join(process.cwd(), 'tests/fixtures/lane-check/adopter/.github/workflows/agent-lead-revise.yml'), 'utf8'));
     expect(Object.keys(caller.on).sort()).toEqual(['pull_request', 'pull_request_review', 'workflow_dispatch']);
     expect(caller.on.pull_request.types).toEqual(['labeled']);

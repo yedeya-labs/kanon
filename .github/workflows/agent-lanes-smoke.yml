@@ -26,7 +26,18 @@
 # call is proven by the reference adopter's live run after each upgrade.
 #
 # The secrets are mapped by their fixed names to a secret that does not exist: nothing that
-# reads them runs. No inputs are passed: every lane input is optional, and these events have none.
+# reads them runs. Every lane input is optional, and these events have none, so the one input
+# passed is `smoke`.
+#
+# WHY `smoke`. Each lane holds a concurrency group that serialises its real runs, and many are
+# one group for the whole repository (`agent-code-audit`, `agent-explore`, ...). GitHub keeps
+# one pending run per group, and a newer one cancels it. Without `smoke`, this workflow's calls
+# joined the same groups as the lanes' real runs, from the lane callers on the default
+# branch: a smoke run waited behind a real one, the next PR's smoke replaced it in the queue,
+# and the cancelled lane turned this check red (seen on `code-audit`). Per-PR groups were
+# shared too: a smoke run on PR 7 joined the real review or merge group of PR 7. With `smoke`
+# each lane appends `-smoke-<run id>` to its group, so a smoke run shares a group with no
+# other run, and a real run's group is the same as it was.
 #
 # On merge_group (K-MERGE-7) it runs the same jobs under the same job name, so it can be a
 # required check without stalling the queue. It reads nothing from the pull request.
@@ -46,6 +57,8 @@ jobs:
     permissions:
       contents: read
     uses: $/.github/workflows/agent-triage.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -57,6 +70,8 @@ jobs:
       pull-requests: read
       issues: read
     uses: $/.github/workflows/agent-implement-revise.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -71,6 +86,8 @@ jobs:
       pull-requests: read
       actions: read
     uses: $/.github/workflows/agent-implement.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -81,6 +98,8 @@ jobs:
       contents: read
       pull-requests: read
     uses: $/.github/workflows/agent-merge-reconcile.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       REVIEWER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       REVIEWER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -92,6 +111,8 @@ jobs:
       pull-requests: write
       issues: read
     uses: $/.github/workflows/agent-lead-revise.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -104,6 +125,8 @@ jobs:
       actions: read
       issues: read
     uses: $/.github/workflows/agent-review.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       REVIEWER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       REVIEWER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -114,6 +137,8 @@ jobs:
       contents: read
       issues: read
     uses: $/.github/workflows/agent-verify-acs.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       EXPLORER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       EXPLORER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -123,6 +148,8 @@ jobs:
     permissions:
       contents: read
     uses: $/.github/workflows/agent-lead.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -134,6 +161,8 @@ jobs:
       issues: write
       pull-requests: read
     uses: $/.github/workflows/agent-lead-split.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -146,6 +175,8 @@ jobs:
       actions: read
       pull-requests: read
     uses: $/.github/workflows/agent-rebase.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -156,6 +187,8 @@ jobs:
     permissions:
       contents: read
     uses: $/.github/workflows/agent-merge.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       MERGER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       MERGER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -170,6 +203,8 @@ jobs:
       statuses: read
       actions: read
     uses: $/.github/workflows/agent-lead-reconcile.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -183,6 +218,8 @@ jobs:
       pull-requests: read
       actions: read
     uses: $/.github/workflows/agent-project-digest.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
       DIGEST_WEBHOOK: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -193,6 +230,8 @@ jobs:
       issues: read
       pull-requests: read
     uses: $/.github/workflows/agent-weekly-digest.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
       DIGEST_WEBHOOK: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -206,6 +245,8 @@ jobs:
       actions: read
       id-token: write
     uses: $/.github/workflows/agent-explore.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       EXPLORER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       EXPLORER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -218,6 +259,8 @@ jobs:
       contents: read
       id-token: write
     uses: $/.github/workflows/agent-dispatch-sweep.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -232,6 +275,8 @@ jobs:
       actions: write
       id-token: write
     uses: $/.github/workflows/agent-code-audit.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       EXPLORER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       EXPLORER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
@@ -247,6 +292,8 @@ jobs:
       actions: write
       id-token: write
     uses: $/.github/workflows/agent-overseer.yml
+    with:
+      smoke: agent-lanes-smoke
     secrets:
       OVERSEER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       OVERSEER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}

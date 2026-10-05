@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { callsSpine, jobPrompt, spineJobFor } from './helpers/spine.js';
+import { callerInputs, realGroup } from './helpers/smoke-group.js';
 
 /**
  * RA-951 — the Lead's brief mode.
@@ -41,11 +42,11 @@ describe('trigger surface', () => {
     expect(wf.jobs.filter.if).toBe("github.event_name == 'workflow_dispatch'");
     expect(wf.jobs.brief.needs).toBe('filter');
     expect(wf.jobs.brief.if).toBe("needs.filter.outputs.member == 'true'");
-    expect(Object.keys(wf.on.workflow_call.inputs).sort()).toEqual(['context', 'mandate']);
+    expect(Object.keys(callerInputs(wf.on.workflow_call.inputs)!).sort()).toEqual(['context', 'mandate']);
   });
 
   it('serialises runs so two briefs cannot race', () => {
-    expect(wf.concurrency.group).toBe('agent-lead-brief');
+    expect(realGroup(wf.concurrency.group)).toBe('agent-lead-brief');
     expect(wf.concurrency['cancel-in-progress']).toBe(false);
   });
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { WINDOW_DAYS } from '../../scripts/lib/telemetry-artifacts.mjs';
 import { storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
+import { realGroup } from './helpers/smoke-group.js';
 
 /**
  * Plan 0004 step 9: the dispatch sweep, moved from the reference adopter as a Kanon lane
@@ -187,7 +188,7 @@ describe('the workflow that runs it (moved from the reference adopter)', () => {
   });
 
   it('serialises runs so two sweeps cannot double-dispatch one issue', () => {
-    expect(wf.concurrency.group).toBe('agent-dispatch-sweep');
+    expect(realGroup(wf.concurrency.group)).toBe('agent-dispatch-sweep');
     expect(wf.concurrency['cancel-in-progress']).toBe(false);
   });
 

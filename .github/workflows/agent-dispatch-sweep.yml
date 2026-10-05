@@ -76,6 +76,11 @@ on:
         default: ""
     # NOT REQUIRED, so a caller whose secrets don't exist yet reaches the soft skip below
     # instead of failing to start. `lane-check` still holds the caller to mapping both.
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
     secrets:
       LEAD_APP_ID:
         required: false
@@ -84,7 +89,8 @@ on:
 
 concurrency:
   # Never two sweeps at once: both would derive the same world and re-dispatch one issue twice.
-  group: agent-dispatch-sweep
+  # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  group: agent-dispatch-sweep${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). Each job below declares its
