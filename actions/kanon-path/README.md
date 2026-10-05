@@ -9,7 +9,7 @@ A `run:` step reads the checked-out repository, and a reusable workflow can't re
 <!-- x-release-please-start-version -->
 
 ```yaml
-- uses: yedeya-labs/kanon/actions/kanon-path@v0.25.0
+- uses: yedeya-labs/kanon/actions/kanon-path@v0.26.0
 - run: node "$KANON/scripts/playbook-excerpt.mjs"
 ```
 
