@@ -628,7 +628,9 @@ describe.skipIf(!hasYq)('lane-check', () => {
       passes(null);
       passes('# Adoption record\n\n## Choices\n\n- **Chat channel:** none yet.\n- **Overseer:** `not installed`\n');
       passes(`# Adoption record\n\n${DECLARED}`);
-    });
+    // Three whole lane-check runs, at about a second each alone: under a loaded full run that
+    // reached the default 5s once the register's persona check was added (plan 0005 §3.3).
+    }, 15_000);
     it('refuses a declaration missing its job, with the reader\'s own message', () =>
       red((t) => t.write(REC, `# Adoption record\n\n${DECLARED.replace(/^- \*\*Reference deploy job.*\n/m, '')}`),
         /adoption\.md,title=lane-check::docs\/qa\/adoption\.md declares the reference environment's deploy without `Reference deploy job`: declare all three, or none \(K-LAYOUT-10\)/));
