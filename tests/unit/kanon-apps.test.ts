@@ -467,18 +467,14 @@ describe('the register row (K-LAYOUT-6)', () => {
 describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
   const OWN = join(ROOT, 'docs/qa/agent-identities.md');
 
-  // The Implementer's row is a placeholder until the Owner creates its App (ADR 0011, stage 2),
-  // and a paragraph after the table says so. The table is still exactly what the tool writes,
-  // so creating the App rewrites the row in place rather than doubling it.
-  const PENDING = /\n\*\*The Implementer's App is not yet created\.\*\*[^\n]*\n$/;
-
-  it('is exactly what kanon apps writes for the Reviewer it created, and then the Implementer', () => {
+  // Each row is exactly what the tool wrote, in the order the Owner created the Apps: the
+  // Reviewer (2026-10-02), then the Implementer and the Explorer (2026-10-05).
+  it('is exactly what kanon apps writes for the Reviewer, the Implementer and the Explorer it created', () => {
     const roles = loadRoles();
     const reviewer = writeRegisterRow(null, { role: 'Reviewer', slug: 'kanon-reviewer', permissions: roles.reviewer!.permissions }).text;
     const both = writeRegisterRow(reviewer, { role: 'Implementer', slug: 'kanon-implementer', permissions: roles.implementer!.permissions }).text;
-    const own = readFileSync(OWN, 'utf8');
-    expect(own).toMatch(PENDING);
-    expect(own.replace(PENDING, '')).toBe(both);
+    const all = writeRegisterRow(both, { role: 'Explorer', slug: 'kanon-explorer', permissions: roles.explorer!.permissions }).text;
+    expect(readFileSync(OWN, 'utf8')).toBe(all);
   });
 
   it('keeps the Implementer as one row when kanon apps writes the slug GitHub gave it', () => {
@@ -487,7 +483,7 @@ describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
     expect(text).toContain('| Implementer | `kanon-implementer-2` |');
   });
 
-  it.each([['Reviewer', 'kanon-reviewer'], ['Implementer', 'kanon-implementer']])('gives the lanes the %s slug', (role, slug) => {
+  it.each([['Reviewer', 'kanon-reviewer'], ['Implementer', 'kanon-implementer'], ['Explorer', 'kanon-explorer']])('gives the lanes the %s slug', (role, slug) => {
     const r = spawnSync('awk', ['-v', `role=${role}`, '-f', AWK, OWN], { encoding: 'utf8' });
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
