@@ -46,7 +46,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { idPattern, loadPrefixes, loadRenumbered, parseAll, referenceCorpus } from './spec-lib.mjs';
-import { readEscalationFile } from './lib/escalation-paths.mjs';
+import { printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
 
 export const MARKER = /renumber-checked:\s*([A-Z]+-\d+)/g;
 
@@ -117,11 +117,13 @@ const main = () => {
   const known = new Set(parseAll().map((i) => i.id).filter(Boolean));
   // The tooling tests are out of the corpus, and which they are depends on the adopter's
   // declared pipeline code (`K-LAYOUT-8`, kanon#54); the corpus's trees are its declared code
-  // areas (`## Code areas`, `K-LAYOUT-17`). A missing or malformed declaration stops the run by
-  // name rather than walking the wrong trees.
+  // areas (`## Code areas`, `K-LAYOUT-17`). A malformed declaration stops the run by name rather
+  // than walking the wrong trees; a missing one is Kanon's default, and the run says so.
   let corpus;
   try {
-    const dirs = readEscalationFile().pipeline.map(({ dir }) => dir);
+    const declared = readEscalationFile();
+    printDefaults('spec-id-renumbered', declared);
+    const dirs = declared.pipeline.map(({ dir }) => dir);
     corpus = referenceCorpus(process.cwd(), dirs);
   } catch (e) {
     if (/** @type {Error} */ (e).name !== 'DeclarationError') throw e;

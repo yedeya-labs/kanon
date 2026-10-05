@@ -7,7 +7,7 @@
 // paths are high-risk, and where a project keeps its own pipeline scripts, is the project's
 // content; where it is written down, and in what shape, is Kanon's (ADR 0002).
 //
-// TWO FIXED HEADINGS, both required:
+// TWO FIXED HEADINGS, each optional:
 //
 //   ## Escalation paths
 //   - `^migrations/` — database migrations
@@ -22,8 +22,13 @@
 // reason. Prose between the bullets is allowed. A list item that isn't an entry is not: an
 // indented, `+` or numbered item, or a bullet that doesn't parse, would otherwise be read as
 // prose and its path silently dropped, which for the Merger is a PR merged with no human.
-// Neither is a heading that is missing or appears twice. CRLF line endings read as LF. A section with no bullets is a declaration
-// that the project has none.
+// Neither is a heading that appears twice. CRLF line endings read as LF. A section with no
+// bullets is a declaration that the project has none.
+//
+// AN OMITTED FILE OR SECTION IS KANON'S DEFAULT (plan 0005 §5.2): no file, or no heading, means
+// the project declares no paths of its own there, so only the pipeline's own paths escalate.
+// The result's `defaults` names each default it took, in one line, and every reader prints
+// those lines, so a repository that relies on the default is told so on every run.
 //
 // THE PIPELINE'S OWN PATHS ARE KANON'S, NOT THE FILE'S (`K-MERGE-4`). Every file under
 // `.github/`, every markdown file directly inside `docs/qa/`, `AGENTS.md`, `CLAUDE.md` and every
@@ -43,7 +48,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { fencedLines } from '../spec-lib.mjs';
-import { DeclarationError, bulletsOf, linesOf, sectionOf } from './declarations.mjs';
+import { DeclarationError, bulletsOf, linesOf, optionalSectionOf } from './declarations.mjs';
 
 /** The file's fixed path (`K-LAYOUT-1`, `K-LAYOUT-8`). */
 export const ESCALATION_FILE = 'docs/qa/escalation-paths.md';
@@ -80,8 +85,31 @@ const FILE = { file: ESCALATION_FILE, rule: 'K-LAYOUT-8' };
 /**
  * @typedef {{ pattern: RegExp, reason: string }} EscalationPath
  * @typedef {{ dir: string, reason: string }} PipelineDir
- * @typedef {{ paths: EscalationPath[], pipeline: PipelineDir[] }} EscalationFile
+ * @typedef {{ paths: EscalationPath[], pipeline: PipelineDir[], defaults: string[] }} EscalationFile
+ *   `defaults`: one line per omitted file or section, naming the default it means
  */
+
+/** What an omitted declaration means, said once for every reader (plan 0005 §5.2). */
+const PIPELINE_ONLY = 'only the pipeline\'s own paths escalate (`.github/`, `docs/qa/`, the agent instruction files)';
+
+/**
+ * The declaration a repository without the file makes: Kanon's default (plan 0005 §5.2).
+ * @param {string} where the file and, for a default-branch read, where it was looked for
+ * @returns {EscalationFile}
+ */
+export function defaultEscalationFile(where = ESCALATION_FILE) {
+  return { paths: [], pipeline: [], defaults: [`${where} doesn't exist, so Kanon's default applies: ${PIPELINE_ONLY} (K-LAYOUT-8)`] };
+}
+
+/**
+ * Prints the defaults a declaration took, one line each, prefixed with the reader's name.
+ * @param {string} reader
+ * @param {{ defaults?: string[] }} file
+ * @param {(line: string) => void} [print]
+ */
+export function printDefaults(reader, file, print = (line) => console.error(line)) {
+  for (const d of file.defaults ?? []) print(`${reader}: ${d}`);
+}
 
 const ENTRY = /^`([^`]+)`\s+—\s+(\S.*)$/;
 
@@ -158,19 +186,28 @@ export function parseEscalationFile(text) {
   if (fenced.unclosed !== -1) {
     throw new DeclarationError(`${ESCALATION_FILE}:${fenced.unclosed + 1} opens a code fence that never closes (K-LAYOUT-8)`);
   }
-  const paths = entries(sectionOf(FILE, lines, fenced, PATHS_HEADING), PATHS_HEADING).map(({ line, value, reason }) => ({
+  /** @type {string[]} */
+  const defaults = [];
+  /** @param {string} heading @param {string} means */
+  const section = (heading, means) => {
+    const body = optionalSectionOf(FILE, lines, fenced, heading);
+    if (body !== null) return entries(body, heading);
+    defaults.push(`${ESCALATION_FILE} has no \`${heading}\` heading, so Kanon's default applies: ${means} (K-LAYOUT-8)`);
+    return [];
+  };
+  const paths = section(PATHS_HEADING, 'the project declares no high-risk paths').map(({ line, value, reason }) => ({
     pattern: pattern(value, line),
     reason,
   }));
-  const pipeline = entries(sectionOf(FILE, lines, fenced, PIPELINE_HEADING), PIPELINE_HEADING).map(({ line, value, reason }) => ({
+  const pipeline = section(PIPELINE_HEADING, 'the project declares no pipeline code of its own').map(({ line, value, reason }) => ({
     dir: directory(value, line),
     reason,
   }));
-  return { paths, pipeline };
+  return { paths, pipeline, defaults };
 }
 
 /**
- * Reads and parses the escalation file from a checked-out tree.
+ * Reads and parses the escalation file from a checked-out tree. No file is Kanon's default.
  * @param {string} [root] the repository root
  * @returns {EscalationFile}
  */
@@ -179,12 +216,8 @@ export function readEscalationFile(root = process.cwd()) {
   try {
     text = readFileSync(join(root, ESCALATION_FILE), 'utf8');
   } catch (e) {
-    const code = /** @type {NodeJS.ErrnoException} */ (e).code;
-    throw new DeclarationError(
-      code === 'ENOENT'
-        ? `${ESCALATION_FILE} doesn't exist. Every adopter keeps one, with \`${PATHS_HEADING}\` and \`${PIPELINE_HEADING}\` headings (K-LAYOUT-8)`
-        : `${ESCALATION_FILE} couldn't be read: ${/** @type {Error} */ (e).message}`,
-    );
+    if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT') return defaultEscalationFile();
+    throw new DeclarationError(`${ESCALATION_FILE} couldn't be read: ${/** @type {Error} */ (e).message}`);
   }
   return parseEscalationFile(text);
 }
@@ -192,7 +225,7 @@ export function readEscalationFile(root = process.cwd()) {
 /**
  * Reads and parses the escalation file from the repository's default branch, for a lane that
  * judges a pull request (`K-MERGE-17`). `readFile` returns the file's text at a ref, or `null`
- * when it doesn't exist there, and throws on any other failure.
+ * when it doesn't exist there, which is Kanon's default, and throws on any other failure.
  * @param {string} defaultBranch
  * @param {(path: string, ref: string) => string | null} readFile
  * @returns {EscalationFile}
@@ -205,11 +238,7 @@ export function readEscalationFileAt(defaultBranch, readFile) {
   } catch (e) {
     throw new DeclarationError(`${ESCALATION_FILE} couldn't be read from \`${defaultBranch}\`: ${/** @type {Error} */ (e).message}`);
   }
-  if (text === null) {
-    throw new DeclarationError(
-      `${ESCALATION_FILE} doesn't exist on \`${defaultBranch}\`. Every adopter keeps one, with \`${PATHS_HEADING}\` and \`${PIPELINE_HEADING}\` headings (K-LAYOUT-8)`,
-    );
-  }
+  if (text === null) return defaultEscalationFile(`${ESCALATION_FILE} on \`${defaultBranch}\``);
   return parseEscalationFile(text);
 }
 

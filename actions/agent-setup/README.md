@@ -1,17 +1,23 @@
 # `agent-setup`: set up an agent lane
 
-Block 1 of an agent lane. After the lane has minted its App token, checked out and run the project-setup hook, it makes every commit the agent makes the App's, signed off by the person your repository delegated, and it can prove that the App can push, before a single model turn is paid for.
+Block 1 of an agent lane. After the lane has minted its App token, checked out and run the project-setup hook, it puts Kanon's baseline in the place of any playbook your repository leaves out, makes every commit the agent makes the App's, signed off by the person your repository delegated, and it can prove that the App can push, before a single model turn is paid for.
 
 A lane is built from four composite actions, so that a lane with steps of its own between the stages can use them directly:
 
 | Block | Does |
 |---|---|
-| `agent-setup` | Makes the agent's commits the App's, signed off by the delegate, and optionally proves the App can push. |
+| `agent-setup` | Takes Kanon's defaults for the declarations you leave out, makes the agent's commits the App's, signed off by the delegate, and optionally proves the App can push. |
 | [`agent-run`](../agent-run/README.md) | Runs the agent. |
 | [`agent-finish`](../agent-finish/README.md) | Explains a red run, and records what the run cost. |
 | [`agent-classify`](../agent-classify/README.md) | Explains a red run. `agent-finish` calls it, and so can a lane on its own. |
 
 `agent-finish` also calls [`agent-telemetry`](../agent-telemetry/README.md).
+
+## What it changes in your working tree
+
+Before it sets the commit identity, it takes Kanon's documented defaults (`K-LAYOUT-17`, [plan 0005](../../docs/plans/0005-lean-installation.md) §5.2). For each playbook `docs/qa/` doesn't have, it copies Kanon's baseline for the role, from [`rulebook/templates/playbooks/`](../../rulebook/templates/playbooks/) at the version you pin, to that path, so the prompt reads it where it names it. Each copy is listed in your checkout's `.git/info/exclude`, so the agent's commits never include it. A playbook you keep is never touched. For each optional section your stack document leaves out, it says what it means. Every default it takes is one line in the log and in the job's summary.
+
+On the review lane, the restore of the judging inputs takes the playbook defaults itself, before the lane pins them (`K-MERGE-17`), so this step then finds them in place and copies nothing.
 
 ## Use it
 

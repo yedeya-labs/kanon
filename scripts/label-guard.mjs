@@ -20,7 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { readEscalationFile } from './lib/escalation-paths.mjs';
+import { printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
 import { isRoadmapMilestone } from './lib/milestones.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 
@@ -41,13 +41,16 @@ export const KANON_SCAN = ['.github/workflows', '.github/ISSUE_TEMPLATE', 'docs/
 
 /**
  * Every directory the guard scans: Kanon's, then the adopter's declared pipeline code.
- * Throws `DeclarationError`, naming the file, when the declaration is missing or malformed.
+ * Throws `DeclarationError`, naming the file, when the declaration is malformed. A missing file
+ * or section is Kanon's default, no pipeline code of the project's own, and `print` is told so.
  * @param {string} [root]
+ * @param {(line: string) => void} [print]
  */
-export const scanDirs = (root = process.cwd()) => [
-  ...KANON_SCAN,
-  ...readEscalationFile(root).pipeline.map(({ dir }) => dir.replace(/\/$/, '')),
-];
+export const scanDirs = (root = process.cwd(), print = () => {}) => {
+  const file = readEscalationFile(root);
+  printDefaults('label-guard', file, print);
+  return [...KANON_SCAN, ...file.pipeline.map(({ dir }) => dir.replace(/\/$/, ''))];
+};
 
 /**
  * Comments removed. `# … the flag label and the comment` is PROSE ABOUT labels,
@@ -493,9 +496,10 @@ const main = () => {
   const fail = () => { status = Math.max(status, 1); };
 
   // 0. Where to look: Kanon's directories and the adopter's declared pipeline code (kanon#54).
-  //    A missing or malformed declaration is the repository's defect, named, not a scan of less.
+  //    A malformed declaration is the repository's defect, named, not a scan of less; a missing
+  //    one is Kanon's default, and the run says so.
   let dirs;
-  try { dirs = scanDirs(); } catch (err) {
+  try { dirs = scanDirs(process.cwd(), (line) => console.log(line)); } catch (err) {
     console.error(`label-guard: ${err.message}`);
     process.exit(1);
   }

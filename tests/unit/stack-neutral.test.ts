@@ -193,15 +193,20 @@ describe("Kanon's guards on a project with no package.json, run with only node a
     expect(stale.out).toMatch(/stale exemption — docs\/design\.md no longer names docs\/TODO\.md.*docs\/qa\/exemptions\.md:13/);
   });
 
-  it.each(['brief-guard', 'doc-path-guard'])('%s fails by name when the exemptions file is missing or malformed (kanon#54)', (name) => {
-    const missing = guard(name, (dir) => rmSync(join(dir, 'docs/qa/exemptions.md')));
-    expect(missing.status, missing.out).toBe(1);
-    // Reported by the guard, once, before any brief or document is read: not a crash.
-    expect(missing.out).toMatch(new RegExp(`^${name}: docs/qa/exemptions\\.md doesn't exist`, 'm'));
+  it.each(['brief-guard', 'doc-path-guard'])("%s reads a missing exemptions file as Kanon's default, nothing exempt, saying so, and fails a malformed one by name (plan 0005 §5.2, kanon#54)", (name) => {
+    // Removed from the index too, as a repository without the file has it: doc-path-guard reads
+    // every tracked document.
+    const missing = guard(name, (dir) => { const r = spawnSync('git', ['rm', '-qf', 'docs/qa/exemptions.md'], { cwd: dir, encoding: 'utf8' }); if (r.status !== 0) throw new Error(r.stderr); });
+    const none = guard(name, (dir) => writeFileSync(join(dir, 'docs/qa/exemptions.md'), '## Pre-standard briefs\n\n## Path mentions\n'));
+    // Said by the guard, once, before any brief or document is read: not a crash.
+    expect(missing.out).toMatch(new RegExp(`^${name}: docs/qa/exemptions\\.md doesn't exist, so Kanon's default applies: nothing is exempt`, 'm'));
     expect(missing.out).not.toMatch(/\n\s+at /);
-    const malformed = guard(name, (dir) => edit(dir, 'docs/qa/exemptions.md', (s) => s.replace('## Path mentions', '## Mentions')));
+    // Then it judges as a file that exempts nothing would.
+    expect(missing.status, missing.out).toBe(none.status);
+    expect(none.out).not.toMatch(/Kanon's default applies: nothing is exempt/);
+    const malformed = guard(name, (dir) => edit(dir, 'docs/qa/exemptions.md', (s) => `${s}\n## Path mentions\n`));
     expect(malformed.status, malformed.out).toBe(1);
-    expect(malformed.out).toMatch(/docs\/qa\/exemptions\.md has no `## Path mentions` heading/);
+    expect(malformed.out).toMatch(/docs\/qa\/exemptions\.md has the `## Path mentions` heading 2 times/);
   });
 
   it.each(['doc-path-guard', 'spec-id-renumbered'])('%s fails by name on a malformed `## Code areas`, and reads a well-formed one (kanon#54)', (name) => {
@@ -326,13 +331,15 @@ describe('citation-shift on the Python adopter, with only node and git on PATH (
     expect(undeclared.out).toContain('scripts/pipeline/triage.py:3  src/orders/core.py:4-6  ->  src/orders/core.py:6-8');
   });
 
-  it('fails by name when the escalation file is missing or malformed (kanon#54)', () => {
+  it("reads a missing escalation file as Kanon's default, no pipeline code, saying so, and fails a malformed one by name (plan 0005 §5.2, kanon#54)", () => {
     const missing = shiftWith((dir) => rmSync(join(dir, 'docs/qa/escalation-paths.md')));
+    expect(missing.out).toMatch(/citation-shift: docs\/qa\/escalation-paths\.md doesn't exist, so Kanon's default applies/);
+    // No pipeline code declared: the pipeline's comment is a claim like any other, and is red.
     expect(missing.status, missing.out).toBe(1);
-    expect(missing.out).toMatch(/docs\/qa\/escalation-paths\.md doesn't exist/);
-    const malformed = shiftWith((dir) => edit(dir, 'docs/qa/escalation-paths.md', (s) => s.replace('## Pipeline code', '## Pipeline')));
+    expect(missing.out).toContain('scripts/pipeline/triage.py:3  src/orders/core.py:4-6  ->  src/orders/core.py:6-8');
+    const malformed = shiftWith((dir) => edit(dir, 'docs/qa/escalation-paths.md', (s) => `${s}\n## Pipeline code\n`));
     expect(malformed.status, malformed.out).toBe(1);
-    expect(malformed.out).toMatch(/docs\/qa\/escalation-paths\.md has no `## Pipeline code` heading/);
+    expect(malformed.out).toMatch(/docs\/qa\/escalation-paths\.md has the `## Pipeline code` heading 2 times/);
   });
 
   it('--fix re-points both', () => {

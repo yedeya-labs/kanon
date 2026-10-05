@@ -43,7 +43,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readEscalationFile } from './lib/escalation-paths.mjs';
+import { printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 
 /**
@@ -144,11 +144,13 @@ function main(argv = process.argv.slice(2)) {
   // call throws — which would turn the documented `skip (ci)` into an exit 1 (RA-2332).
   const ci = inCi(process.env);
   const files = ci ? [] : parseNames(execFileSync('git', diffArgs(base), { encoding: 'utf8' }));
-  // The escalation file is read only when the verdict can depend on it, and a missing or
-  // malformed one stops the run by name (kanon#54).
-  const verdict = reviewScope(files, { skip, escalation: ci ? { paths: [], pipeline: [] } : readEscalationFile() });
+  // The escalation file is read only when the verdict can depend on it. A malformed one stops
+  // the run by name (kanon#54); a missing one is Kanon's default, and the run says so.
+  const escalation = ci ? { paths: [], pipeline: [], defaults: [] } : readEscalationFile();
+  const verdict = reviewScope(files, { skip, escalation });
 
   console.log(summaryLine(verdict, base));
+  printDefaults('ship-review-scope', escalation, (line) => console.log(line));
   for (const { file, area } of verdict.hits) console.log(`  ${file}  (${area})`);
   if (skip !== null && verdict.rule !== 'declined') {
     console.log(`(--skip reason not used: the verdict is ${verdict.rule}, which is decided before a reason is considered)`);

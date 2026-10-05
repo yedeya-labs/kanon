@@ -59,7 +59,7 @@ import { pathToFileURL } from 'node:url';
 import { fencedLines } from './spec-lib.mjs';
 import { TABLE_EXT } from './lib/test-conventions.mjs';
 import { EXEMPTIONS_FILE, readExemptions } from './lib/exemptions.mjs';
-import { isTestPath, readCodeAreas } from './lib/code-areas.mjs';
+import { codeAreasDefaults, isTestPath, readCodeAreas } from './lib/code-areas.mjs';
 
 /** A markdown inline link or image target: `](target)` or `](target "title")`. */
 const LINK = /\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
@@ -272,8 +272,11 @@ const main = () => {
   let exemptions;
   let areas;
   try {
-    exemptions = readExemptions().mentions;
+    const declared = readExemptions();
+    for (const d of declared.defaults) console.log(`doc-path-guard: ${d}`);
+    exemptions = declared.mentions;
     areas = readCodeAreas();
+    for (const d of codeAreasDefaults(areas)) console.log(`doc-path-guard: ${d}`);
   } catch (e) {
     console.error(`doc-path-guard: ${e.message}`);
     process.exitCode = 1;

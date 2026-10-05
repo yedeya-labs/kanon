@@ -10,6 +10,11 @@
 # adoption record's declarations, with Kanon's own library, on Node (the action puts Kanon's Node on the PATH first). Prints one
 # `::error` per violation and exits 1 if there is any; exits 2 when it cannot run at all.
 #
+# A declaration the project leaves out means its documented default (plan 0005 §5.2), so an
+# omitted file or section that has one is not a violation: it prints one `::notice` naming the
+# default instead. A malformed one still fails, by name. What has no default (the stack
+# document's `## Gates`, the App register) still fails when it is missing.
+#
 # ENV  KANON_ROOT   Kanon's tree (default: this script's ../..)
 #      ACTION_REF   the ref this action was called at; when it is an exact version, every
 #                   Kanon reference in the adopter's .github/ must name the same one
@@ -31,9 +36,14 @@ command -v jq >/dev/null 2>&1 || die "needs jq on PATH"
 [ -f "$KANON_ROOT/.github/workflows/$SPINE.yml" ] || die "Kanon's lanes are not at $KANON_ROOT"
 
 ERRORS=0
+DEFAULTS=0
 fail() { # file, message
   echo "::error file=$1,title=lane-check::$2"
   ERRORS=$((ERRORS + 1))
+}
+note() { # file, message: a default taken (plan 0005 §5.2)
+  echo "::notice file=$1,title=lane-check::$2"
+  DEFAULTS=$((DEFAULTS + 1))
 }
 json() { yq -o=json '.' "$1" 2>/dev/null; }
 
@@ -276,25 +286,49 @@ for h in $(printf '%s\n' $HOOKS | sed 's/=.*//' | sort -u); do
 done
 
 # ── The project documents the lanes read (K-LAYOUT-17) ────────────────────────────────
-# Each one a called lane's prompt names must exist; the stack document must also carry its
-# four sections, each once, outside a fenced block, because the prompts send the agent to a
-# section by its heading and a missing one reads as "nothing to do".
-STACK_HEADINGS=("## Gates" "## Schema changes" "## Data isolation" "## Generated files")
+# Each one a called lane's prompt names must exist, unless Kanon ships a baseline for it: a
+# missing playbook is Kanon's baseline for the role, which the lane's agent-setup block puts in
+# its place (plan 0005 §5.2). The stack document must exist, with `## Gates` exactly once outside
+# a fenced block: it has no default. Its other three sections may be left out, and then mean
+# none; each that is present is there once, because the prompts send the agent to a section by
+# its heading.
+BASELINES="$KANON_ROOT/rulebook/templates/playbooks"
+# heading|its default ('' when it has none)
+STACK_SECTIONS=(
+  "## Gates|"
+  "## Schema changes|the project has no schema"
+  "## Data isolation|the project has nothing to isolate"
+  "## Generated files|the project has no generated files"
+)
 for d in $(printf '%s\n' $DOCS | sed 's/=.*//' | sort -u); do
   by="$(printf '%s\n' $DOCS | sed -n "s|^$d=||p" | sort -u | paste -sd, -)"
   if [ ! -f "$d" ]; then
-    fail "$d" "is missing; the Kanon lane(s) $by read it (K-LAYOUT-17)"
+    if [ -f "$BASELINES/$(basename "$d")" ]; then
+      note "$d" "doesn't exist, so the Kanon lane(s) $by read Kanon's baseline for it (plan 0005 §5.2, K-LAYOUT-17)"
+    else
+      fail "$d" "is missing; the Kanon lane(s) $by read it (K-LAYOUT-17)"
+    fi
     continue
   fi
   [ "$d" = docs/qa/stack.md ] || continue
-  for h in "${STACK_HEADINGS[@]}"; do
+  for s in "${STACK_SECTIONS[@]}"; do
+    h="${s%%|*}"
+    means="${s#*|}"
     n="$(awk -v h="$h" '/^[ \t]*(```|~~~)/ { f = !f; next } !f && $0 == h { n++ } END { print n + 0 }' "$d")"
-    if [ "$n" != 1 ]; then
-      # A near miss (trailing spaces, CRLF, a different case) looks present and matches nothing.
-      near="$(awk -v h="$h" '/^[ \t]*(```|~~~)/ { f = !f; next } { l = $0; sub(/[ \t\r]+$/, "", l) } !f && $0 != h && tolower(l) == tolower(h) { n++ } END { print n + 0 }' "$d")"
-      hint=""
-      [ "$near" = 0 ] || hint=" ($near more line(s) match it once trailing spaces, a CR and case are ignored: write it exactly)"
-      fail "$d" "has the heading \`$h\` $n times$hint; the stack document has it exactly once, and the lanes read that section (K-LAYOUT-17)"
+    [ "$n" = 1 ] && continue
+    # A near miss (trailing spaces, CRLF, a different case) looks present and matches nothing,
+    # so it is a malformed section, never an omitted one.
+    near="$(awk -v h="$h" '/^[ \t]*(```|~~~)/ { f = !f; next } { l = $0; sub(/[ \t\r]+$/, "", l) } !f && $0 != h && tolower(l) == tolower(h) { n++ } END { print n + 0 }' "$d")"
+    if [ "$n" = 0 ] && [ "$near" = 0 ] && [ -n "$means" ]; then
+      note "$d" "has no \`$h\`, so Kanon's default applies: $means (K-LAYOUT-17)"
+      continue
+    fi
+    hint=""
+    [ "$near" = 0 ] || hint=" ($near more line(s) match it once trailing spaces, a CR and case are ignored: write it exactly)"
+    if [ -n "$means" ]; then
+      fail "$d" "has the heading \`$h\` $n times$hint; the stack document has it at most once, and the lanes read that section (K-LAYOUT-17)"
+    else
+      fail "$d" "has the heading \`$h\` $n times$hint; the stack document has it exactly once, with no default, and the lanes read that section (K-LAYOUT-17)"
     fi
   done
 done
@@ -312,30 +346,33 @@ fi
 # ── reference environment's deploy in the adoption record (K-LAYOUT-10, plan 0004 P6), ────
 # ── and the code areas in the stack document (K-LAYOUT-17, kanon#54) ──────────────────────
 # Read by the library's own readers from this Kanon tree, so a file this passes is one the
-# guards, the Merger and the reconciler accept. A missing file is the reader's to fail (each
-# rule says so), so only a file that exists is read here. A record that declares no reference
-# environment passes: the reconciler fails on it when a project reaches its deploy phase.
-for d in escalation-paths exemptions adoption stack; do
-  f="docs/qa/$d.md"
-  [ -f "$f" ] || continue
-  command -v node >/dev/null 2>&1 || die "needs node on PATH to read $f; the action puts Kanon's own there"
-  if ! out="$(node "$HERE/declarations.mjs" "$d" 2>&1)"; then
-    fail "$f" "$(printf '%s' "$out" | head -1)"
-  fi
-done
-
+# guards, the Merger and the reconciler accept. A missing file, or a missing section, is the
+# reader's documented default (plan 0005 §5.2), and each default the reader takes is printed as
+# a notice. A record that declares no reference environment passes: the reconciler fails on it
+# when a project reaches its deploy phase.
+#
 # ── Whether the Overseer is installed (K-LAYOUT-10, plan 0004 step 13, decision 12) ────────
 # The Overseer is an optional lane, so the adoption record says whether it is installed, and
 # says what is true: `installed` with a caller of its lane, `not installed` without one. A
-# repository with neither a record nor that caller passes; a caller without a record fails.
+# record that doesn't say, or no record, is Kanon's default, `not installed` (plan 0005 §5.2),
+# so a caller of the Overseer's lane still needs the record to say `installed`. Read with the
+# others, in one Node process.
+#
+# So is the App register's optional `Persona` column (plan 0005 §3.3), when a caller's lane runs
+# as a role and the register exists: a malformed persona fails by name here, on the pull request
+# that wrote it, where the lanes would only warn and post as the role.
 overseer=false
 case " $CALLED " in *" agent-overseer "*) overseer=true ;; esac
-if [ "$overseer" = true ] || [ -f docs/qa/adoption.md ]; then
-  command -v node >/dev/null 2>&1 || die "needs node on PATH to read docs/qa/adoption.md; the action puts Kanon's own there"
-  if ! out="$(node "$HERE/declarations.mjs" overseer "$overseer" 2>&1)"; then
-    fail docs/qa/adoption.md "$(printf '%s' "$out" | head -1)"
-  fi
-fi
+personas=false
+if [ -n "$ROLES" ] && [ -f "$REGISTER" ]; then personas=true; fi
+command -v node >/dev/null 2>&1 || die "needs node on PATH to read the declarations in docs/qa/; the action puts Kanon's own there"
+out="$(node "$HERE/declarations.mjs" "$overseer" "$personas")" || die "could not run Kanon's declaration readers ($HERE/declarations.mjs)"
+while IFS=$'\t' read -r kind file msg; do
+  case "$kind" in
+    notice) note "$file" "$msg" ;;
+    error) fail "$file" "$msg" ;;
+  esac
+done <<<"$out"
 
 # ── App slugs: every role a caller's lane runs as has one row in the register ──────────
 for role in $(printf '%s\n' $ROLES | sort -u); do
@@ -347,14 +384,7 @@ for role in $(printf '%s\n' $ROLES | sort -u); do
     fail "$REGISTER" "$out"
   fi
 done
-# Its optional `Persona` column (plan 0005 §3.3): a malformed persona fails by name here, on
-# the pull request that wrote it, where the lanes would only warn and post as the role.
-if [ -n "$ROLES" ] && [ -f "$REGISTER" ]; then
-  command -v node >/dev/null 2>&1 || die "needs node on PATH to read $REGISTER; the action puts Kanon's own there"
-  if ! out="$(node "$HERE/declarations.mjs" register 2>&1)"; then
-    fail "$REGISTER" "$(printf '%s' "$out" | head -1)"
-  fi
-fi
+# Its optional `Persona` column is read with the declarations above, in the same Node process.
 
 # ── The Dependabot entry that proposes Kanon upgrades (K-ADOPT-11) ─────────────────────
 DEP=.github/dependabot.yml
@@ -377,4 +407,4 @@ if [ "$ERRORS" -gt 0 ]; then
   echo "lane-check: $ERRORS problem(s) in $CALLERS lane caller(s)"
   exit 1
 fi
-echo "lane-check: $CALLERS lane caller(s) pass"
+echo "lane-check: $CALLERS lane caller(s) pass, with $DEFAULTS documented default(s) taken"

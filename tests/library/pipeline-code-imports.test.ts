@@ -73,7 +73,7 @@ describe('qaToolingImport reads the declared pipeline-code directories', () => {
   });
 });
 
-describe('the CLIs read the declaration, and fail by name without it', () => {
+describe("the CLIs read the declaration, and name Kanon's default without it", () => {
   const run = (script: string, dir: string, ...args: string[]) =>
     spawnSync(process.execPath, [join(ROOT, 'scripts', script), ...args], { cwd: dir, encoding: 'utf8' });
 
@@ -104,14 +104,15 @@ describe('the CLIs read the declaration, and fail by name without it', () => {
     ['spec-coverage.mjs', ['--quiet']],
     ['spec-coverage.mjs', ['--json']],
     ['spec-coverage.mjs', []],
-  ])('%s %j fails by name, before reporting, when the declaration is missing', (script, args) => {
-    const r = run(script, adopter(null), ...args);
-    expect(r.status).toBe(1);
-    expect(r.stderr).toMatch(/docs\/qa\/escalation-paths\.md doesn't exist.*K-LAYOUT-8/);
-    // It stops there, rather than reading on with no tooling tests excluded, or printing half
-    // a report.
-    expect(r.stdout + r.stderr).not.toContain('tests/tool.test.ts');
-    expect(r.stdout).toBe('');
+  ])("%s %j reads a missing declaration as Kanon's default, no pipeline code, and says so (plan 0005 §5.2)", (script, args) => {
+    const missing = run(script, adopter(null), ...args);
+    const none = run(script, adopter(ESCALATIONS('')), ...args);
+    expect(missing.stderr).toMatch(/: docs\/qa\/escalation-paths\.md doesn't exist, so Kanon's default applies: only the pipeline's own paths escalate.*K-LAYOUT-8/);
+    expect(none.stderr, 'a declared file takes no default').not.toMatch(/Kanon's default applies/);
+    // Then it reads on exactly as a file that declares no pipeline code would.
+    expect(missing.status).toBe(none.status);
+    expect(missing.stdout).toBe(none.stdout);
+    expect(missing.stderr.replace(/^.*Kanon's default applies.*\n/m, '')).toBe(none.stderr);
   });
 
   it.each([

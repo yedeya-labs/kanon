@@ -53,19 +53,27 @@ describe('held to the callers', () => {
   };
 
   it('accepts what is true: `installed` with a caller, `not installed` without one', () => {
-    expect(checkOverseerInstall({ root: tree(RECORD([BULLET])), caller: true })).toBe('installed');
-    expect(checkOverseerInstall({ root: tree(RECORD([`- **${LABEL}:** \`not installed\``])), caller: false })).toBe('not installed');
+    expect(checkOverseerInstall({ root: tree(RECORD([BULLET])), caller: true })).toEqual({ value: 'installed', defaults: [] });
+    expect(checkOverseerInstall({ root: tree(RECORD([`- **${LABEL}:** \`not installed\``])), caller: false })).toEqual({ value: 'not installed', defaults: [] });
   });
 
-  it('accepts a repository with neither a record nor a caller', () => {
-    expect(checkOverseerInstall({ root: tree(null), caller: false })).toBeNull();
+  it("reads no record, with no caller, as Kanon's default, `not installed`, and names it (plan 0005 §5.2)", () => {
+    expect(checkOverseerInstall({ root: tree(null), caller: false })).toEqual({
+      value: 'not installed',
+      defaults: ["docs/qa/adoption.md doesn't exist, so Kanon's default applies: the Overseer is `not installed` (K-LAYOUT-10)"],
+    });
   });
 
-  it('refuses a record that does not say, whether or not there is a caller', () => {
-    for (const caller of [true, false]) {
-      expect(() => checkOverseerInstall({ root: tree(RECORD(['- **Chat channel:** none'])), caller }))
-        .toThrow(/doesn't say whether the Overseer is installed/);
-    }
+  it("reads a record that doesn't say, with no caller, as the default, and names it", () => {
+    expect(checkOverseerInstall({ root: tree(RECORD(['- **Chat channel:** none'])), caller: false })).toEqual({
+      value: 'not installed',
+      defaults: ["docs/qa/adoption.md doesn't say whether the Overseer is installed, so Kanon's default applies: the Overseer is `not installed` (K-LAYOUT-10)"],
+    });
+  });
+
+  it('refuses a record that does not say beside a caller: the default contradicts it', () => {
+    expect(() => checkOverseerInstall({ root: tree(RECORD(['- **Chat channel:** none'])), caller: true }))
+      .toThrow(/doesn't say whether the Overseer is installed, so it reads as Kanon's default, `not installed`, but a workflow calls the Overseer's lane/);
   });
 
   it('refuses a record the callers contradict', () => {
@@ -76,6 +84,6 @@ describe('held to the callers', () => {
   });
 
   it('refuses a caller with no record', () => {
-    expect(() => checkOverseerInstall({ root: tree(null), caller: true })).toThrow(/is missing, and a workflow calls the Overseer's lane/);
+    expect(() => checkOverseerInstall({ root: tree(null), caller: true })).toThrow(/doesn't exist, so it reads as Kanon's default, `not installed`, but a workflow calls the Overseer's lane/);
   });
 });

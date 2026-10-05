@@ -6,13 +6,17 @@
 // Overseer was deleted by mistake, and a reader of the record can't tell which mechanisms audit
 // the pipeline. So the record says it, and `lane-check` holds it to the callers on disk.
 //
-// ONE REQUIRED BULLET UNDER `## Choices`, its value one code span and nothing after it:
+// ONE BULLET UNDER `## Choices`, its value one code span and nothing after it:
 //
 //   ## Choices
 //   - **Overseer:** `installed`
 //
-// or `not installed`. A record without it, with it twice, outside `## Choices`, in another shape
-// or with another value throws `DeclarationError` naming the file and the line.
+// or `not installed`. A record with it twice, outside `## Choices`, in another shape or with
+// another value throws `DeclarationError` naming the file and the line.
+//
+// OMITTED, IT IS KANON'S DEFAULT, `not installed` (plan 0005 §5.2). A record without the bullet,
+// or no record at all, declares the default, and the check says so in one line. The callers still
+// hold it to the truth: a workflow that calls the Overseer's lane needs the bullet, `installed`.
 //
 // WHERE IT IS READ FROM. Only `lane-check` reads it, from the checked-out tree, so a pull request
 // that breaks it, or adds or removes the Overseer's caller without changing it, fails on that
@@ -89,26 +93,33 @@ export function parseOverseerInstall(text) {
   return value;
 }
 
+/** Kanon's default when the record doesn't say (plan 0005 §5.2). */
+export const DEFAULT_VALUE = 'not installed';
+
 /**
  * Reads the record from a checked-out tree and holds it to the callers on disk, for
- * `lane-check`. The record must say whether the Overseer is installed, and say what is true: a
- * caller of the Overseer's lane is `installed`, none is `not installed`. A repository with no
- * record and no Overseer caller declares nothing, which this accepts: the record's other rules
- * are `K-LAYOUT-10`'s, not this reader's.
+ * `lane-check`. A record that says whether the Overseer is installed must say what is true: a
+ * caller of the Overseer's lane is `installed`, none is `not installed`. A record without the
+ * bullet, or no record, is Kanon's default, `not installed`, held to the callers the same way,
+ * and `defaults` names it. The record's other rules are `K-LAYOUT-10`'s, not this reader's.
  * @param {{ root?: string, caller: boolean }} o `caller`: whether a workflow calls the Overseer's lane
+ * @returns {{ value: 'installed' | 'not installed', defaults: string[] }}
  */
 export function checkOverseerInstall({ root = process.cwd(), caller }) {
-  let text;
+  /** @type {string | null} */
+  let text = null;
   try {
     text = readFileSync(join(root, ADOPTION_RECORD), 'utf8');
   } catch (e) {
     if (/** @type {NodeJS.ErrnoException} */ (e).code !== 'ENOENT') throw fail(`${ADOPTION_RECORD} couldn't be read: ${/** @type {Error} */ (e).message}`);
-    if (!caller) return null;
-    throw fail(`${ADOPTION_RECORD} is missing, and a workflow calls the Overseer's lane: write the record, with a \`**${LABEL}:**\` bullet under \`${CHOICES_HEADING}\` whose value is \`installed\``);
   }
-  const declared = parseOverseerInstall(text);
+  const declared = text === null ? null : parseOverseerInstall(text);
   if (declared === null) {
-    throw fail(`${ADOPTION_RECORD} doesn't say whether the Overseer is installed: add a \`**${LABEL}:**\` bullet under \`${CHOICES_HEADING}\`, its value \`installed\` or \`not installed\` (plan 0004 decision 12)`);
+    const why = text === null ? `${ADOPTION_RECORD} doesn't exist` : `${ADOPTION_RECORD} doesn't say whether the Overseer is installed`;
+    if (caller) {
+      throw fail(`${why}, so it reads as Kanon's default, \`${DEFAULT_VALUE}\`, but a workflow calls the Overseer's lane: add a \`**${LABEL}:**\` bullet under \`${CHOICES_HEADING}\` whose value is \`installed\``);
+    }
+    return { value: DEFAULT_VALUE, defaults: [`${why}, so Kanon's default applies: the Overseer is \`${DEFAULT_VALUE}\` (K-LAYOUT-10)`] };
   }
   if (caller && declared === 'not installed') {
     throw fail(`${ADOPTION_RECORD} says the Overseer is \`not installed\`, but a workflow calls its lane: change it to \`installed\`, or remove the caller`);
@@ -116,5 +127,5 @@ export function checkOverseerInstall({ root = process.cwd(), caller }) {
   if (!caller && declared === 'installed') {
     throw fail(`${ADOPTION_RECORD} says the Overseer is \`installed\`, but no workflow calls its lane (${OVERSEER_CALLER}): add the caller, or change it to \`not installed\``);
   }
-  return declared;
+  return { value: declared, defaults: [] };
 }

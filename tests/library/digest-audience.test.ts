@@ -80,6 +80,18 @@ describe('the lane reads it from the default branch (K-MERGE-17)', () => {
     expect(readDigestAudienceFrom('o/r', run(fail('gh: Not Found (HTTP 404)')))).toBe(DEFAULT_AUDIENCE);
   });
 
+  it("names Kanon's default when it takes it, and says nothing when the record declares one (plan 0005 §5.2)", () => {
+    const notes: string[] = [];
+    readDigestAudienceFrom('o/r', run(() => RECORD([])), (l) => notes.push(l));
+    readDigestAudienceFrom('o/r', run(fail('gh: Not Found (HTTP 404)')), (l) => notes.push(l));
+    readDigestAudienceFrom('o/r', run(() => RECORD([BULLET])), (l) => notes.push(l));
+    expect(notes).toEqual([
+      `docs/qa/adoption.md on \`trunk\` declares no audience, so Kanon's default applies: the digest is written for ${DEFAULT_AUDIENCE} (K-LAYOUT-10)`,
+      `docs/qa/adoption.md on \`trunk\` doesn't exist, so Kanon's default applies: the digest is written for ${DEFAULT_AUDIENCE} (K-LAYOUT-10)`,
+    ]);
+    expect(digestAudienceCli({ repo: 'o/r', run: run(() => RECORD([])) })).toEqual({ code: 0, out: DEFAULT_AUDIENCE, notes: [`digest-audience: ${notes[0]}`] });
+  });
+
   it('fails by name on a malformed record, an unreadable one, and no default branch', () => {
     expect(() => readDigestAudienceFrom('o/r', run(() => RECORD([BULLET, BULLET])))).toThrow(/repeats `Weekly digest audience`/);
     expect(() => readDigestAudienceFrom('o/r', run(fail('gh: Server Error (HTTP 502)')))).toThrow(/couldn't be read from `trunk`: gh: Server Error \(HTTP 502\)/);
