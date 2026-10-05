@@ -84,7 +84,7 @@ export const compare = ({ role, spec, registerSlug, appSlug, repository, selecti
   }
   const want = repository.toLowerCase();
   if (selection === 'all') {
-    warnings.push(`${role}: the installation covers ALL repositories in the organisation, not only ${repository} (K-ADOPT-8).`);
+    warnings.push(`${role}: the installation covers ALL repositories of its owner, not only ${repository} (K-ADOPT-8).`);
   } else {
     if (!repositories.some((n) => n.toLowerCase() === want)) {
       failures.push(`${role}: the installation doesn't cover ${repository} (it covers: ${repositories.join(', ') || 'nothing'}).`);

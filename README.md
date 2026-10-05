@@ -69,12 +69,12 @@ npx --yes --package github:yedeya-labs/kanon#v0.25.0 kanon milestones --repo <ow
 
 <!-- x-release-please-end -->
 
-**Create the agent Apps with [`kanon apps`](docs/apps.md)** (step 12 of the checklist). It builds each role's App from a manifest with exactly that role's permissions, stores the App's id and key as Actions secrets with your own `gh`, and writes the App register row. You click **Create** and **Install** in GitHub for each App; the command never creates one itself. Run it straight from a Kanon release tag, inside your repository's checkout:
+**Create the agent Apps with [`kanon apps`](docs/apps.md)** (step 12 of the checklist). It builds each role's App from a manifest with exactly that role's permissions, stores the App's id and key as Actions secrets with your own `gh`, and writes the App register row. You click **Create** and **Install** in GitHub for each App; the command never creates one itself. The owner may be a personal account or an organisation; the command asks GitHub which, and refuses to run anywhere but your repository's checkout. Run it straight from a Kanon release tag, inside that checkout:
 
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.25.0 kanon apps --org <org> --repo <repo> --roles reviewer
+npx --yes --package github:yedeya-labs/kanon#v0.25.0 kanon apps --owner <owner> --repo <repo> --roles reviewer
 ```
 
 <!-- x-release-please-end -->

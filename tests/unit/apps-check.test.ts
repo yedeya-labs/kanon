@@ -108,7 +108,7 @@ describe('compare', () => {
   it('warns, and does not fail, when it covers all repositories', () => {
     const r = compare({ ...base, selection: 'all', repositories: [] });
     expect(r.failures).toEqual([]);
-    expect(r.warnings).toEqual(['Reviewer: the installation covers ALL repositories in the organisation, not only acme/widgets (K-ADOPT-8).']);
+    expect(r.warnings).toEqual(['Reviewer: the installation covers ALL repositories of its owner, not only acme/widgets (K-ADOPT-8).']);
   });
 
   it('fails on a permission the role does not hold', () => {

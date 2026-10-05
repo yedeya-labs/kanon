@@ -13,8 +13,12 @@
 //   reported, left unchanged, and makes the command exit 1, so a bootstrap script notices.
 //
 // The list comes from the backstop's own constant, so there is one copy of it (K-WORK-13).
+//
+// Like `kanon apps`, it first says which token `gh` uses and whose it is, and when GitHub
+// refuses the token, how to fix a stale GH_TOKEN (cli/gh-token.mjs, plan 0005 §5.1).
 import { spawn } from 'node:child_process';
 import { BUCKET_MILESTONES } from '../scripts/issue-triage-defaults.mjs';
+import { isAuthFailure, tokenFix, whoami } from './gh-token.mjs';
 
 /** The two buckets, in the order K-WORK-4 names them: the backstop's own list. */
 export const BUCKETS = BUCKET_MILESTONES;
@@ -26,11 +30,12 @@ date, on a repository that has none of that name (K-WORK-4). Safe to run again: 
 only what is missing. A milestone with a bucket's name that has a due date, or is closed, is
 reported and left unchanged, and the command exits 1.
 
-Needs \`gh\` signed in with Issues: write on the repository.`;
+Needs \`gh\` signed in with Issues: write on the repository. gh takes its token from GH_TOKEN,
+then GITHUB_TOKEN, then its stored login; the command prints which one it uses and whose it is.`;
 
 /**
  * @typedef {{ status: number | null, stdout: string, stderr: string }} GhResult
- * @typedef {{ gh: (args: string[]) => Promise<GhResult>, out: (line: string) => void, err: (line: string) => void }} Deps
+ * @typedef {{ gh: (args: string[]) => Promise<GhResult>, out: (line: string) => void, err: (line: string) => void, env: Record<string, string | undefined> }} Deps
  * @typedef {{ number: number, title: string, state: string, due_on: string | null }} Milestone
  */
 
@@ -48,6 +53,7 @@ export const realDeps = {
     }),
   out: (line) => process.stdout.write(`${line}\n`),
   err: (line) => process.stderr.write(`${line}\n`),
+  env: process.env,
 };
 
 /**
@@ -94,6 +100,15 @@ export const milestones = async (argv, overrides = {}) => {
   }
   const { repo } = opts;
 
+  const who = await whoami(deps.gh, deps.env);
+  deps.out(who.line);
+  if (who.refusal) {
+    for (const l of who.refusal) deps.err(`kanon milestones: ${l}`);
+    return 1;
+  }
+  /** @param {GhResult} r */
+  const fix = (r) => (isAuthFailure(r.stderr) ? tokenFix(who.source).map((l) => `kanon milestones: ${l}`) : []);
+
   // Every milestone, closed ones included: GitHub refuses a second milestone with a closed
   // one's title, and a closed bucket is a finding, not an absence.
   const list = await deps.gh(['api', '--paginate', '--slurp', `repos/${repo}/milestones?state=all&per_page=100`]);
@@ -104,6 +119,7 @@ export const milestones = async (argv, overrides = {}) => {
     existing = /** @type {Milestone[][]} */ (JSON.parse(list.stdout)).flat();
   } catch (e) {
     deps.err(`kanon milestones: could not list the milestones of ${repo}: ${/** @type {Error} */ (e).message}`);
+    for (const l of fix(list)) deps.err(l);
     return 1;
   }
 
@@ -114,6 +130,7 @@ export const milestones = async (argv, overrides = {}) => {
       const r = await deps.gh(['api', '-X', 'POST', `repos/${repo}/milestones`, '-f', `title=${title}`]);
       if (r.status !== 0) {
         deps.err(`kanon milestones: could not create "${title}" on ${repo}: ${r.stderr.trim() || `gh exited ${r.status}`}`);
+        for (const l of fix(r)) deps.err(l);
         problems++;
         continue;
       }
