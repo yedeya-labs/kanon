@@ -140,7 +140,7 @@ A signal that fails any test is recorded as not-paged (`K-OBS-3`).
 
 **Why.** Granting cloud credentials to a job that executes PR code grants them to the PR's code.
 
-**Enforced by.** The telemetry collector is the only workflow granted the store's role.
+**Enforced by.** The telemetry collector's job is the only one granted `id-token: write`, and the store's writer role trusts only the repository's default-branch ref, never an environment, a pull request or another branch. `infra/telemetry/render.mjs` derives that subject from GitHub's API, in the form the repository issues, and refuses a writer subject on any other branch; `tests/unit/telemetry-store-template.test.ts` fails a rendered writer that trusts anything else. Which of the adopter's own default-branch jobs hold `id-token: write` is the adopter's to check: each of them can assume the writer role ([`docs/telemetry.md`](../docs/telemetry.md#who-can-write)).
 
 **Class.** framework. Where the collector writes is set by `K-OBS-17` and `K-OBS-18`.
 

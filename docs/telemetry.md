@@ -5,7 +5,7 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 | File | What it is |
 |---|---|
 | `template.yaml` | The CloudFormation template: the table, the ingest function and its URL, its log group, the GitHub OIDC provider, and the importer and backfill roles. |
-| `render.mjs` | Adds each registered repository's writer and reader roles to the template, from the private register. |
+| `render.mjs` | Adds each registered repository's writer and reader roles to the template, from the private register and GitHub's API. |
 | `function/` | The ingest function. `schema.mjs` there is a link to [`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), so the function validates with the same file the lanes use. |
 | `verify.mjs` | Step S3's checks, run against the deployed store. |
 | `erase.mjs` | Deletes one adopter's rows (§10). |
@@ -25,8 +25,10 @@ Every AWS command here is the Owner's to run. Agents run none (§5).
   It takes up to 25 rows a request and 256 KB, and answers per row: 200 when every row is stored, 422 when any is rejected, and 502 when a write fails.
 - **Its log group:** 30-day retention. It holds keys and field names, never a value.
 - **Per registered repository** (from `render.mjs`):
-  - `kanon-telemetry-<key>-writer`, trusted only for `repo:<owner>/<repo>:environment:kanon-telemetry`, which may invoke the URL and nothing else;
-  - `kanon-telemetry-<key>-reader`, trusted for the subjects the register lists, which may `Query` and `GetItem` only where `dynamodb:LeadingKeys` matches `<key>#*`.
+  - `kanon-telemetry-<key>-writer`, trusted only for the repository's default-branch ref, `<prefix>:ref:refs/heads/<default branch>`, which may invoke the URL and nothing else;
+  - `kanon-telemetry-<key>-reader`, trusted for the branch refs the register lists, under the same prefix, which may `Query` and `GetItem` only where `dynamodb:LeadingKeys` matches `<key>#*`.
+
+  No role trusts a GitHub Environment (the Owner's decision of 2026-10-05). `<prefix>` is what the repository's tokens carry, and `render.mjs` reads it from GitHub's API, with the default branch, every time it runs ([Who can write](#who-can-write)).
 - **Behind parameters, all off by default:**
   - `EnableImporter`: the importer role (§7, S5);
   - `EnableBackfill`: the backfill role (S7a);
@@ -36,7 +38,7 @@ Every AWS command here is the Owner's to run. Agents run none (§5).
 
 ## Before the first deploy
 
-Run these once, from a Kanon checkout at the release tag being deployed, after `npm ci`.
+Run these once, from a Kanon checkout at the release tag being deployed, after `npm ci`. `render.mjs` calls `gh api` for each registered repository (`repos/<owner>/<repo>` and `repos/<owner>/<repo>/actions/oidc/customization/sub`), so `gh` must be signed in as someone who can read those repositories' Actions settings. These are GitHub calls only; no AWS command runs before the deploy.
 
 1. **Keep the register outside the public tree** (§5). For example, in `~/kanon-private/telemetry/register.json`, copied from `register.example.json`. Generate each key with `openssl rand -hex 4`. The key is opaque: it is what every row and role carries, so it must say nothing about the repository.
 2. **Fill in `owner_principal_arn`:** your SSO role's ARN **with its path**. That is the role, not the `assumed-role` session that `sts get-caller-identity` prints:
@@ -75,6 +77,7 @@ REG=$HOME/kanon-private/telemetry/register.json
 OUT=$HOME/kanon-private/telemetry/build
 
 node infra/telemetry/render.mjs --register "$REG" --out "$OUT"
+# prints, per key: "<key>: writer trusts <subject>; reader trusts <subjects>"
 aws cloudformation package --profile kanon --region eu-central-1 \
   --template-file "$OUT/template.json" --s3-bucket <artifacts bucket> \
   --use-json --output-template-file "$OUT/packaged.json"
@@ -86,13 +89,15 @@ aws cloudformation describe-stacks --profile kanon --region eu-central-1 \
   --stack-name kanon-telemetry --query 'Stacks[0].Outputs'
 ```
 
+Before packaging, read the subjects `render.mjs` printed: each writer's must be `<prefix>:ref:refs/heads/<default branch>`, where the prefix is `repo:<owner>/<repo>` for a repository created before 2026-07-15 and `repo:<owner>@<id>/<repo>@<id>` for one created after. It refuses to render when GitHub doesn't answer for a repository, when a repository customizes its subject template and its entry names no exact subjects, and when an exact subject fails the checks below.
+
 The outputs name the URL and each repository's two roles.
 
 **If the first deploy fails,** the stack rolls back, but the table stays, because it is retained. The next deploy then fails because `kanon-telemetry` already exists. While the table holds no rows, delete the stack, then turn off the table's deletion protection, delete the table, and deploy again.
 
 ## Verify
 
-Step S3's falsifiers. Deploy with `--verify`, which lets your role assume the writer and reader roles and creates the write probe. Run the script, then deploy without it, which deletes the probe:
+Step S3's falsifiers. Deploy with `--verify`, which lets your role assume the writer and reader roles and creates the write probe. This path doesn't touch the OIDC subjects: your role assumes the writer and reader through their second trust statement, which names your role's ARN and exists only while `EnableVerify` is on. So a PASS shows the store and its policies, not that a workflow's token is accepted; that is S4's first collector run (and, for Kanon, S7's). Run the script, then deploy without it, which deletes the probe:
 
 ```sh
 node infra/telemetry/render.mjs --register "$REG" --out "$OUT" --verify
@@ -120,14 +125,39 @@ It exits 1 on any FAIL, and never prints a credential, a row or a response body.
 1. Add an entry to the register:
 
    ```json
-   { "key": "<openssl rand -hex 4>", "repository": "<owner>/<repo>", "readers": ["ref:refs/heads/main", "environment:<name>"] }
+   { "key": "<openssl rand -hex 4>", "repository": "<owner>/<repo>", "readers": ["ref:refs/heads/<default branch>"] }
    ```
 
-   `readers` lists the OIDC subjects the adopter's reading jobs run as: its default branch, plus each environment those jobs declare (§3, §6). A pattern is refused, and so is a repository already in the register.
+   `readers` lists the branch refs the adopter's reading jobs run on, usually just the default branch (§3, §6). An environment is refused, and so are a pattern and a repository already in the register. The writer's subject is not listed: `render.mjs` derives it.
+
+   **A repository with a custom OIDC subject template** (`use_default: false`) is refused, because its subject is not `<prefix>:ref:refs/heads/<branch>`. Name its subjects exactly instead, as GitHub issues them:
+
+   ```json
+   { "key": "…", "repository": "<owner>/<repo>",
+     "writer_subjects": ["<exact subject of the collector job on the default branch>"],
+     "reader_subjects": ["<exact subject of each reading job>"] }
+   ```
+
+   Each must still be a branch ref subject of that repository with no environment or pull request, and the writer's must name the default branch, which is read from GitHub even then. `writer_subjects` can also list both forms while a repository moves to the immutable subject.
 2. Render, package and deploy, as above.
-3. In the repository, create the `kanon-telemetry` environment and restrict it to the default branch. Only the collector job declares it (`K-OBS-13`). The writer role's ARN is in the stack's outputs.
+3. In the repository, give `id-token: write` to the collector job alone (`K-OBS-13`), and declare no environment on it: an environment replaces the ref in the token's subject, and the writer refuses it. Before the deploy, list the repository's default-branch jobs that already hold `id-token: write`; each of them can assume the writer role (below). The writer role's ARN is in the stack's outputs.
 
 A renamed repository fails closed: its `sub` stops matching, the collector turns red, and the register needs the new name.
+
+## Who can write
+
+The writer trusts the default branch's ref. What a token's subject is decides whether it is admitted:
+
+| A token from | Subject | Writer |
+|---|---|---|
+| A schedule, or a dispatch on the default branch | `<prefix>:ref:refs/heads/<default branch>` | admitted |
+| A pull request, including `pull_request_target` | `<prefix>:pull_request` | refused |
+| Another branch, a tag, the merge queue | that ref | refused |
+| A job that declares any environment | `<prefix>:environment:<name>` | refused |
+| A fork | no token | refused |
+| Any job of a default-branch workflow that holds `id-token: write` | the default branch's ref | **admitted** |
+
+The last row is what the environment used to narrow. So "only the collector holds the store's credentials" (`K-OBS-13`) is held by which jobs hold `id-token: write`: GitHub gives a job without it no token to ask with. In Kanon's own workflows, the id-token guard that came with the QA store's same change ([#291](https://github.com/yedeya-labs/kanon/pull/291)) fails any other holder; the collector joins its allow-list when it moves into Kanon at S7. In an adopter's, it is the adopter's to check, and a job that already holds `id-token: write` for another cloud, such as a deploy on push to the default branch, can write rows under the adopter's key. It can't read another adopter's, name a partition, or write anything the function's validation refuses.
 
 ## Erase an adopter
 
