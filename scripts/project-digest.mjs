@@ -90,7 +90,7 @@ import { isCliEntry } from './lib/cli-entry.mjs';
 import { asRole, markedRole } from './lib/role-marker.mjs';
 
 /** The Implementer's own comment: its login and, from L4, its role marker (plan 0005 §3.3). */
-const byImplementer = (/** @type {{login?: string|null, body?: string|null}} */ c) =>
+export const byImplementer = (/** @type {{login?: string|null, body?: string|null}} */ c) =>
   asRole('Implementer', { login: norm(c.login), expected: AGENT_LOGIN, body: c.body });
 
 /** Where briefs live. A brief's basename IS its tracking issue number (RA-1032). */

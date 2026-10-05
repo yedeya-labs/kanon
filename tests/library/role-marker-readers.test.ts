@@ -16,7 +16,7 @@ const { ineligible } = await import('../../scripts/rebase-lane.mjs');
 const { reviewerVerdicts } = await import('../../scripts/incremental-review.mjs');
 const { verdictOnHead } = await import('../../scripts/review-recovery.mjs');
 const { agentSpokeSince } = await import('../../scripts/implement-crash.mjs');
-const { classifyDispatch } = await import('../../scripts/project-digest.mjs');
+const { byImplementer, classifyDispatch } = await import('../../scripts/project-digest.mjs');
 
 /**
  * Plan 0005 step L3: every reader in §3.3's table reads the role marker beside today's login,
@@ -74,6 +74,10 @@ const READERS: Record<string, Reader> = {
   'implement-crash: did the Implementer speak during the run (agentSpokeSince)': {
     role: 'Implementer',
     read: (body) => agentSpokeSince([{ login: appLogin('Implementer'), body, createdAt: ago(1) }], ago(2)),
+  },
+  'project-digest: the Implementer\'s comments, for its last word and the page it is on (byImplementer)': {
+    role: 'Implementer',
+    read: (body) => byImplementer({ login: login('Implementer'), body }),
   },
   'project-digest: the Implementer\'s last word (classifyDispatch)': {
     role: 'Implementer',
@@ -154,8 +158,8 @@ describe('plan 0005 L3: each reader of §3.3 reads the marker beside the login, 
   });
 
   it('covers every reader §3.3 names that has a body to carry a marker', () => {
-    // §3.3's ten, and the two #312 found.
-    expect(Object.keys(READERS)).toHaveLength(12);
+    // §3.3's ten, and the #312 readers.
+    expect(Object.keys(READERS)).toHaveLength(13);
   });
 });
 
