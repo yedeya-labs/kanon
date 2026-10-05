@@ -971,3 +971,57 @@ describe("the Reviewer's shell is an allow-list that runs no PR code (kanon#248)
     expect(prompt).toMatch(/Never `gh pr checks\s+--watch` or `gh run watch`/);
   });
 });
+
+/**
+ * kanon#277 — the flags above are the whole grant only when the run loads no project settings.
+ *
+ * Unset, claude-code-action hands the SDK `settingSources: user,project,local`, so the
+ * checkout's `.claude/settings.json`, `.claude/settings.local.json` and `.mcp.json` join the
+ * run, and their hooks and MCP server commands run with no permission check at all. The action
+ * reads `--setting-sources <value>` (space form only) out of `claude_args`, strips it, and
+ * passes the value as `settingSources`; a later occurrence overwrites an earlier one, and the
+ * `=` form is not recognised, so it would reach the CLI beside the action's default. These read
+ * the flags the way that parser does.
+ */
+describe('the Reviewer loads no project settings, so its flags are the whole grant (kanon#277)', () => {
+  type S = { id?: string; uses?: string; with?: Record<string, unknown> };
+  const steps = wf.jobs.review.steps as S[];
+  const agent = steps.find((x) => x.id === 'agent')!;
+  const finish = steps.find((x) => x.uses === '$/actions/agent-finish')!;
+  const words = (args: string) => [...args.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+    .matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]!);
+  const settingSources = (args: string) => {
+    const w = words(args);
+    const at = w.flatMap((x, i) => (/^--setting-?sources\b/i.test(x) ? [i] : []));
+    return at.map((i) => ({ flag: w[i]!, value: w[i + 1] }));
+  };
+
+  for (const [name, step] of [['the agent step', agent], ['agent-finish', finish]] as const) {
+    it(`${name} passes \`--setting-sources user\`, once, in the form the action parses`, () => {
+      expect(settingSources(String(step.with!.claude_args))).toEqual([{ flag: '--setting-sources', value: 'user' }]);
+    });
+  }
+
+  it('passes no other flag that adds settings, MCP servers or plugins', () => {
+    const extra = words(String(agent.with!.claude_args))
+      .filter((w) => /^--(settings|mcp-config|plugin-dir|strict-mcp-config|agents)\b/.test(w));
+    expect(extra).toEqual([]);
+  });
+
+  it("hands claude-code-action no input that writes the user settings this run still loads", () => {
+    // `settings`, `plugins` and `plugin_marketplaces` all land in the runner's user scope,
+    // which `--setting-sources user` keeps; a different CLI binary would not honour the flag.
+    const run = parse(readFileSync(join(process.cwd(), 'actions/agent-run/action.yml'), 'utf8'));
+    const cca = (run.runs.steps as S[]).filter((x) => String(x.uses ?? '').startsWith('anthropics/claude-code-action@'));
+    expect(cca.length, 'the check is not vacuous').toBe(1);
+    const keys = Object.keys(cca[0]!.with ?? {});
+    expect(keys, 'the check is not vacuous').toContain('claude_args');
+    expect(keys.filter((k) => /^(settings|plugins|plugin_marketplaces|path_to_claude_code_executable)$/.test(k))).toEqual([]);
+  });
+
+  it("tells the agent to read the project's instructions, which no longer load on their own", () => {
+    const prompt = String(agent.with!.prompt);
+    expect(prompt).toContain("YOUR PROJECT'S INSTRUCTIONS ARE NOT LOADED FOR YOU (kanon#277)");
+    expect(prompt).toMatch(/Read `CLAUDE\.md` and\s+`AGENTS\.md` at the repository root yourself/);
+  });
+});
