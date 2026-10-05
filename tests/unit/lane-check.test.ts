@@ -714,6 +714,22 @@ describe.skipIf(!hasYq)('lane-check', () => {
     });
     it('refuses a slug that is not in backticks', () =>
       red((t) => t.write(REG, t.read(REG).replace('`example-implementer`', 'example-implementer')), 'gives the role Implementer no App slug in backticks'));
+
+    // The optional `Persona` column (plan 0005 §3.3): blank is the role's name, and a
+    // malformed persona fails by name, on the pull request that wrote it.
+    const withPersonas = (t: Tree, implementer: string, lead = '') => t.write(REG, t.read(REG)
+      .replace('| Role | App slug |', '| Role | App slug | Persona |').replace(/^\|---\|/m, '|---|---|')
+      .replace(/^(\| Implementer \| [^|]+\|)/m, `$1 ${implementer} |`).replace(/^(\| Lead \| [^|]+\|)/m, `$1 ${lead} |`));
+    it('passes a register with a Persona column, declared or blank', () => {
+      const t = adopter();
+      withPersonas(t, 'The Builder', '');
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
+    it('refuses a malformed persona, by row and name', () =>
+      red((t) => withPersonas(t, '<b>Builder</b>'), /agent-identities\.md:\d+: the Implementer row's persona `<b>Builder<\/b>` is malformed/));
+    it('refuses a persona that is another role\'s name', () =>
+      red((t) => withPersonas(t, 'Reviewer'), "the Implementer row's persona `Reviewer` is another role's name"));
   });
 
   describe('the Dependabot entry that proposes Kanon upgrades (K-ADOPT-11)', () => {

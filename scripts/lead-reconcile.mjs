@@ -60,7 +60,7 @@ import {
   isProjectWork, itemSatisfied, openGatingWork, parseProposed, satisfiedTitles,
   FINDING_ANCHOR, GATING_SEVERITIES, SPEC_FINDING,
 } from './project-closure.mjs';
-import { appLogin } from './app-register.mjs';
+import { appLogin, appPersona } from './app-register.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
 import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/reference-deploy.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
@@ -3420,7 +3420,7 @@ export function execute(world, actions, { run = gh } = {}) {
           'issue', 'create', '--repo', REPO, '--title', a.title,
           // Signed as the Lead (plan 0005 §3.3). At the top, so the membership marker stays
           // the last line `declaresMembership` reads.
-          '--body', signed(body, 'Lead'), '--milestone', a.milestone,
+          '--body', signed(body, 'Lead', appPersona('Lead')), '--milestone', a.milestone,
           ...(a.labels ?? []).flatMap((l) => ['--label', l]),
           // The mirror, at creation, wherever the marker is written (RA-1783). Only when
           // the label is known to exist: `--label` on a missing one fails the create.
@@ -3566,7 +3566,7 @@ export function execute(world, actions, { run = gh } = {}) {
           `**Re-delivering the split lane** (\`${SPLIT_WORKFLOW}\`) — ${a.why}. This is the one re-delivery; if it produces no split PR either, the first tick ${SPLIT_STALL_HOURS}h after it hands this issue to \`${NEEDS_INFO}\`.`,
           '',
           '_Posted by `scripts/lead-reconcile.mjs` (RA-2406)._',
-        ].join('\n'), 'Lead')]);
+        ].join('\n'), 'Lead', appPersona('Lead'))]);
         console.log(`re-labelled #${a.number} to re-deliver the split lane (RA-2406)`);
       } else if (a.kind === 'split-escalate') {
         // The human label FIRST, as the split gate orders it: if the removal then
@@ -3579,7 +3579,7 @@ export function execute(world, actions, { run = gh } = {}) {
           `- ${a.why}.`,
           '',
           '_Posted by `scripts/lead-reconcile.mjs` (RA-2406)._',
-        ].join('\n'), 'Lead')]);
+        ].join('\n'), 'Lead', appPersona('Lead'))]);
         console.log(`handed #${a.number} to a human (${NEEDS_INFO}) — the split was not re-delivered (RA-2406)`);
       } else if (a.kind === 'file-qa') {
         // PHASE 5. Appended by the tick, not proposed by the brief (RA-1063).
@@ -3608,7 +3608,7 @@ export function execute(world, actions, { run = gh } = {}) {
         ].join('\n');
         const url = run([
           'issue', 'create', '--repo', REPO, '--title', a.title,
-          '--body', signed(body, 'Lead'), '--milestone', 'Development Automation', '--label', VERIFY,
+          '--body', signed(body, 'Lead', appPersona('Lead')), '--milestone', 'Development Automation', '--label', VERIFY,
           // The mirror at creation (RA-1783 review): a later `--add-label` on the QA issue
           // would raise a `labeled` event into `agent-verify-acs.yml`'s concurrency group.
           ...(world.labelReady ? ['--label', projectLabel(world.project)] : []),
@@ -3649,7 +3649,7 @@ export function execute(world, actions, { run = gh } = {}) {
       } else if (a.kind === 'close-project') {
         // PHASE 6. Closes the TRACKING issue only — every filed issue is already
         // closed, which is the sole reason this phase is reachable.
-        run(['issue', 'comment', String(a.number), '--repo', REPO, '--body', signed(retro(world, a), 'Lead')]);
+        run(['issue', 'comment', String(a.number), '--repo', REPO, '--body', signed(retro(world, a), 'Lead', appPersona('Lead'))]);
         // Must AGREE with the retro posted one line above it. These two strings are
         // the ones actually written onto the tracking issue, and the untagged case
         // had them contradicting each other in adjacent comments: "Nothing was
@@ -3767,7 +3767,7 @@ export function hold(world, reasons, { run = gh, kind = 'action' } = {}) {
     const seen = run(['issue', 'view', String(world.project), '--repo', REPO, '--json', 'comments',
       '--jq', '[.comments[].body] | join("\\n")']);
     if (!seen.includes(holdMarker(reasons))) {
-      run(['issue', 'comment', String(world.project), '--repo', REPO, '--body', signed(renderHoldComment(reasons, kind), 'Lead')]);
+      run(['issue', 'comment', String(world.project), '--repo', REPO, '--body', signed(renderHoldComment(reasons, kind), 'Lead', appPersona('Lead'))]);
     }
     console.log(`held #${world.project}: ${reasons.length} ${kind === 'stop' ? 'terminal stop reason(s)' : 'failed action(s)'}`);
   } catch (err) {

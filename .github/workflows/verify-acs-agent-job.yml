@@ -198,6 +198,10 @@ jobs:
         with:
           arm: acceptance-criteria agent
           app-slug: ""
+          # The role by name, since there is no slug to look it up by: the Explorer's agent
+          # posts as the Explorer App, so its posts open with its header and role marker
+          # (plan 0005 §3.3), which `explorerQaComments` will require at L4.
+          role: Explorer
 
       # THE CRITERIA RUN SEES THE REF UNDER TEST, BYTE FOR BYTE. The load above put the
       # defining commit's copy of the hook into the tree, and a project's criteria can be

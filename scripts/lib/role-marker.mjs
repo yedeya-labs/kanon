@@ -22,8 +22,11 @@
 // persona as an argument and falls back to the role, which is the header §3.3 defines for a
 // project that declares none.
 //
-// Run as a CLI, it prints one header line, for a workflow's shell step:
+// Run as a CLI, it prints one header line, for a workflow's shell step: with the persona given,
+// or with the one the App register on standard input declares for the role (never failing: a
+// malformed or missing column gives the role's own header, which lane-check fails by name).
 //   node scripts/lib/role-marker.mjs header Implementer [persona]
+//   … | node scripts/lib/role-marker.mjs header-from-register Implementer
 
 import { isCliEntry } from './cli-entry.mjs';
 
@@ -160,8 +163,16 @@ export function withPersona(prompt, role, header) {
 
 if (isCliEntry(import.meta.url)) {
   const [cmd, role, persona] = process.argv.slice(2);
+  if (cmd === 'header-from-register' && role) {
+    const { readFileSync } = await import('node:fs');
+    const { parsePersonas } = await import('../app-register.mjs');
+    let declared = null;
+    try { declared = parsePersonas(readFileSync(0, 'utf8')).get(known(role)) ?? null; } catch { declared = null; }
+    console.log(headerLine(role, declared));
+    process.exit(0);
+  }
   if (cmd !== 'header' || !role) {
-    console.error('usage: role-marker.mjs header <Role> [persona]');
+    console.error('usage: role-marker.mjs header <Role> [persona] | header-from-register <Role>');
     process.exit(2);
   }
   try {

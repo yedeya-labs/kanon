@@ -1,12 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 const { asRole, headerLine, markedRole, personaHeader, roleMarker, setMarkerPhase, signed, withPersona } = await import('../../scripts/lib/role-marker.mjs');
-const { personaEnv, resolveRole } = await import('../../actions/agent-setup/persona.mjs');
+const { personaEnv, resolvePersona, resolveRole } = await import('../../actions/agent-setup/persona.mjs');
+const { appPersona, parsePersonas } = await import('../../scripts/app-register.mjs');
 
 /**
  * Plan 0005 §3.3, step L3: the persona header, the role marker, and the persona as the agent's
@@ -189,7 +190,8 @@ describe('every fixed step that posts as an App opens the post with its header (
     const src = readFileSync(file, 'utf8');
     const calls = [...src.matchAll(POST)].map((m) => callAround(src, m.index!));
     expect(calls.length).toBeGreaterThan(0);
-    for (const call of calls) expect(call, `${file}: ${call.slice(0, 120)}`).toMatch(new RegExp(`signed\\([\\s\\S]*'${role}'\\)`));
+    // With the register's persona for the role (plan 0005 §3.3), read where the script runs.
+    for (const call of calls) expect(call, `${file}: ${call.slice(0, 120)}`).toMatch(new RegExp(`signed\\([\\s\\S]*'${role}', appPersona\\('${role}'\\)\\)`));
   });
 
   it('the rebase lane\'s attempt comment, posted on the Implementer\'s token, is signed by its script', async () => {
@@ -205,7 +207,128 @@ describe('every fixed step that posts as an App opens the post with its header (
     const posts = wf.jobs[job]!.steps.filter((s) => /gh pr comment/.test(s.run ?? ''));
     expect(posts).toHaveLength(1);
     const body = posts[0]!.run!.slice(posts[0]!.run!.indexOf('gh pr comment'));
+    // The first line is the filter's persona header (`header`, read from the default branch's
+    // register), falling back to the role's own header line.
     expect(body).toMatch(/printf '%s\\n' \\\n\s+"([^"]+)" \\\n\s+"" \\/);
-    expect(/printf '%s\\n' \\\n\s+"([^"]+)"/.exec(body)![1]).toBe(headerLine(role));
+    expect(/printf '%s\\n' \\\n\s+"([^"]+)"/.exec(body)![1]).toBe(`\${HEADER:-${headerLine(role)}}`);
+    const step = wf.jobs[job]!.steps.find((s) => /gh pr comment/.test(s.run ?? '')) as { env?: Record<string, string> };
+    expect(step.env?.HEADER).toBe('${{ needs.filter.outputs.header }}');
+  });
+});
+
+/** The register's optional `Persona` column (plan 0005 §3.3; decided by the Owner, 2026-10-05). */
+describe('personas live in the App register\'s optional Persona column', () => {
+  const reg = (rows: string, header = '| Role | App slug | Persona |', sep = '|---|---|---|') => `# Agent identities\n\n${header}\n${sep}\n${rows}`;
+  const ROWS = '| Implementer | `acme-implementer` | The Builder |\n| Reviewer | `acme-reviewer` |  |\n| Lead | `acme-lead` | Lead |\n';
+
+  it('reads a declared persona, and a blank cell, the role\'s own name or no column as none', () => {
+    const p = parsePersonas(reg(ROWS));
+    expect([...p]).toEqual([['Implementer', 'The Builder']]);
+    expect(parsePersonas(reg('| Implementer | `acme-implementer` |\n', '| Role | App slug |', '|---|---|')).size).toBe(0);
+    // The column may sit anywhere after the slug, and the cell may be bold.
+    expect(parsePersonas(reg('| Implementer | `a-i` | Read | **Ada** |\n', '| Role | App slug | Contents | Persona |', '|---|---|---|---|')).get('Implementer')).toBe('Ada');
+    // A table in a fenced block is an example, and isn't read.
+    expect(parsePersonas(`\`\`\`\n${reg('| Implementer | `x` | <bad> |\n')}\`\`\`\n${reg(ROWS)}`).get('Implementer')).toBe('The Builder');
+  });
+
+  it.each([
+    ['two Persona columns', reg('| Implementer | `a` | A | B |\n', '| Role | App slug | Persona | Persona |', '|---|---|---|---|'), /2 `Persona` columns/],
+    ['markup', reg('| Implementer | `a` | <b>A</b> |\n'), /:5: the Implementer row's persona `<b>A<\/b>` is malformed/],
+    ['a leading digit', reg('| Implementer | `a` | 9 Lives |\n'), /is malformed/],
+    ['more than 40 characters', reg(`| Implementer | \`a\` | ${'A'.repeat(41)} |\n`), /is malformed/],
+    ['a bot suffix', reg('| Implementer | `a` | builder[bot] |\n'), /is malformed/],
+    ['another role\'s name', reg('| Implementer | `a` | Merger |\n'), /is another role's name/],
+    ['a persona on a role that is not an agent', reg('| Releaser | `a` | Shipper |\n'), /only an agent role has one/],
+  ])('fails by line and row on %s', (_, text, message) => {
+    expect(() => parsePersonas(text)).toThrow(message);
+  });
+
+  it('a fixed step reads it where it runs, and falls back to the role on any problem', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'personas-'));
+    try {
+      writeFileSync(join(dir, 'good.md'), reg(ROWS));
+      writeFileSync(join(dir, 'bad.md'), reg('| Implementer | `a` | <x> |\n'));
+      expect(appPersona('Implementer', join(dir, 'good.md'))).toBe('The Builder');
+      expect(appPersona('Reviewer', join(dir, 'good.md'))).toBeNull();
+      expect(appPersona('Implementer', join(dir, 'bad.md'))).toBeNull();
+      expect(appPersona('Implementer', join(dir, 'missing.md'))).toBeNull();
+      expect(signed('x', 'Implementer', appPersona('Implementer', join(dir, 'good.md')))).toBe('**The Builder (Implementer)** <!-- kanon:role=implementer -->\n\nx');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the agent-setup block exports it as the persona, and a malformed one as the role with a reason', () => {
+    expect(resolvePersona('Implementer', () => reg(ROWS))).toEqual({ persona: 'The Builder' });
+    expect(resolvePersona('Reviewer', () => reg(ROWS))).toEqual({ persona: null });
+    expect(resolvePersona('Implementer', () => reg('| Implementer | `a` | <x> |\n'))).toMatchObject({ persona: null, problem: expect.stringMatching(/is malformed/) });
+    expect(resolvePersona('Implementer', () => { throw new Error('HTTP 404'); })).toEqual({ persona: null, problem: 'HTTP 404' });
+    expect(personaEnv('Implementer', 'The Builder')).toEqual([
+      'KANON_ROLE=Implementer', 'KANON_PERSONA=The Builder', 'KANON_POST_HEADER=**The Builder (Implementer)** <!-- kanon:role=implementer -->',
+    ]);
+  });
+
+  it('the persona step runs end to end against a stubbed default-branch register', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'persona-step-'));
+    try {
+      writeFileSync(join(dir, 'register'), reg(ROWS));
+      writeFileSync(join(dir, 'gh'), `#!/usr/bin/env bash\ncat "${dir}/register"\n`);
+      chmodSync(join(dir, 'gh'), 0o755);
+      const envFile = join(dir, 'env');
+      writeFileSync(envFile, '');
+      const r = spawnSync(process.execPath, ['actions/agent-setup/persona.mjs'], { encoding: 'utf8',
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_ENV: envFile, GITHUB_REPOSITORY: 'acme/widgets', ROLE: '', APP_SLUG: 'acme-implementer' } });
+      expect(r.status, r.stderr).toBe(0);
+      expect(readFileSync(envFile, 'utf8')).toBe(`${personaEnv('Implementer', 'The Builder').join('\n')}\n`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the shell writers read it from a register on standard input, and never fail', () => {
+    const run = (input: string) => spawnSync(process.execPath, ['scripts/lib/role-marker.mjs', 'header-from-register', 'Implementer'], { input, encoding: 'utf8' });
+    expect(run(reg(ROWS)).stdout).toBe('**The Builder (Implementer)** <!-- kanon:role=implementer -->\n');
+    const bad = run(reg('| Implementer | `a` | <x> |\n'));
+    expect(bad.status).toBe(0);
+    expect(bad.stdout).toBe(`${headerLine('Implementer')}\n`);
+  });
+
+  it('Kanon\'s own register declares no persona: its headers are the roles\'', () => {
+    expect(parsePersonas(readFileSync('docs/qa/agent-identities.md', 'utf8')).size).toBe(0);
+  });
+});
+
+/**
+ * EVERY AGENT IS ASKED TO WRITE ITS HEADER (#310's review). The persona step resolves the role
+ * from a non-empty `app-slug` or from `role`; a call with neither asks its agent for nothing.
+ * So every `agent-setup` call passes one, or is listed here with why its agent posts as no App.
+ */
+const NO_PERSONA: Record<string, string> = {
+  'agent-project-digest.yml': 'its agent writes a digest the workflow posts to a webhook, as no App',
+  'agent-weekly-digest.yml': 'its agent writes a digest the workflow posts to a webhook, as no App',
+  'overseer-agent-job.yml': 'its agent files nothing; `overseer-file.mjs` files on a token of its own, signed as the Overseer',
+};
+describe('every agent-setup call names the agent\'s role, or says why its agent posts as no App', () => {
+  type SetupStep = { uses?: string; with?: Record<string, string> };
+  const calls = spawnSync('git', ['ls-files', '.github/workflows/*.yml'], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean)
+    .flatMap((f) => Object.values((parse(readFileSync(f, 'utf8')) as { jobs?: Record<string, { steps?: SetupStep[] }> }).jobs ?? {})
+      .flatMap((j) => j.steps ?? []).filter((s) => s.uses === '$/actions/agent-setup').map((s) => ({ file: f.split('/').pop()!, with: s.with ?? {} })));
+
+  it('finds the calls, so the rule below is not vacuous', () => {
+    expect(calls.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it('each passes an App slug or a role, or is listed', () => {
+    const silent = calls.filter((c) => !c.with['app-slug'] && !c.with.role).map((c) => c.file);
+    expect(silent.sort()).toEqual(Object.keys(NO_PERSONA).sort());
+  });
+
+  it.each([
+    ['review-agent-job.yml', 'Reviewer'],
+    ['explore-agent-job.yml', 'Explorer'],
+    ['verify-acs-agent-job.yml', 'Explorer'],
+    ['code-audit-agent-job.yml', 'Explorer'],
+  ])('%s names the %s, whose App its agent posts as', (file, role) => {
+    expect(calls.filter((c) => c.file === file).map((c) => c.with.role)).toEqual([role]);
   });
 });

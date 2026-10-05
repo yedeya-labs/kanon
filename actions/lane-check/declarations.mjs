@@ -11,7 +11,7 @@
 // adopter's CI on the pull request that broke it, by name, rather than only when a guard or
 // the Merger next reads it.
 //
-//   node declarations.mjs <escalation-paths|exemptions|adoption|stack>
+//   node declarations.mjs <escalation-paths|exemptions|adoption|stack|register>
 //   node declarations.mjs overseer <true|false>   # whether a workflow calls the Overseer's lane
 //
 // Run from the root of the adopter's checkout. Exits 0 when the file parses, and 1 with the
@@ -27,6 +27,9 @@ import { readDigestAudience } from '../../scripts/lib/digest-audience.mjs';
 import { readReferenceDeploy } from '../../scripts/lib/reference-deploy.mjs';
 import { readCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { checkOverseerInstall } from '../../scripts/lib/overseer-install.mjs';
+import { APP_REGISTER, parsePersonas } from '../../scripts/app-register.mjs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /** @type {Record<string, (root: string) => unknown>} */
 const READERS = {
@@ -40,6 +43,9 @@ const READERS = {
   // Called for every repository, record or not: a record must say whether the Overseer is
   // installed, and a caller of its lane needs a record that says `installed`.
   overseer: (root) => checkOverseerInstall({ root, caller: process.argv[3] === 'true' }),
+  // The App register's optional `Persona` column (plan 0005 §3.3). The slugs are the awk
+  // reader's, per role; this reads only what the persona writers read.
+  register: (root) => parsePersonas(readFileSync(join(root, APP_REGISTER), 'utf8')),
 };
 
 const which = process.argv[2] ?? '';

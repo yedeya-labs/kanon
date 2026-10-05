@@ -232,7 +232,8 @@ describe('the criteria run shares the agent’s job, workspace and database (RA-
   });
 
   it('keeps the App identity where it was: minted after the criteria run, immediately before the agent', () => {
-    expect(steps[call('agent-setup')]!.with).toEqual({ arm: 'acceptance-criteria agent', 'app-slug': '' });
+    // `role` names the Explorer for its persona header (plan 0005 §3.3); it reads no identity.
+    expect(steps[call('agent-setup')]!.with).toEqual({ arm: 'acceptance-criteria agent', 'app-slug': '', role: 'Explorer' });
     expect(hookCall().with).toEqual({ lane: 'verify-acs', install: 'true', database: '${{ steps.database.outputs.database }}', browsers: 'true' });
     // Received where it was minted (kanon#279): the Explorer's App, minted by the lane's call.
     const receive = steps[idx((s) => s.id === 'app-token')]!;

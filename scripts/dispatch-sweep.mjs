@@ -41,7 +41,7 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { exhaustedRoute, projectOf } from './split-lineage.mjs';
-import { appLogin } from './app-register.mjs';
+import { appLogin, appPersona } from './app-register.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
 import { queryCostRows } from '../infra/qa-store/aws/cost-rows.mjs';
 import { costRowsProblem } from '../actions/qa-store/qa-store.mjs';
@@ -925,7 +925,7 @@ function redispatch(v) {
   // the churn succeeded, the attempt would be uncounted and un-cooled-down, and the
   // issue would be re-dispatched every day forever.
   // Signed as the Lead (plan 0005 §3.3): the sweep runs on the Lead's App.
-  gh(['issue', 'comment', n, '--repo', REPO, '--body', signed(body, 'Lead')]);
+  gh(['issue', 'comment', n, '--repo', REPO, '--body', signed(body, 'Lead', appPersona('Lead'))]);
   gh(['issue', 'edit', n, '--repo', REPO, '--remove-label', lane.label]);
   addLabelOrDie(n, lane.label, 're-dispatch');
 }
@@ -961,7 +961,7 @@ function stop(v) {
       '',
       `_Filed by \`scripts/dispatch-sweep.mjs\` (RA-912, ${lane.key} lane RA-1336)._`,
     ].join('\n');
-  gh(['issue', 'comment', n, '--repo', REPO, '--body', signed(body, 'Lead')]);
+  gh(['issue', 'comment', n, '--repo', REPO, '--body', signed(body, 'Lead', appPersona('Lead'))]);
 }
 
 // ---------------------------------------------------------------------------

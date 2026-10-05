@@ -87,6 +87,11 @@ import { CONFLICT_SHORT, ConflictFieldsUnread, conflictState } from './conflict-
 import { AGENT_LOGIN, MARKER as SWEEP_MARKER, classify as classifyLane, isBot, norm } from './dispatch-sweep.mjs';
 import { carriedOut as reconcilerCarriedOut, declaresMembership, itemSatisfied, openGatingWork, parseProposed } from './project-closure.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { asRole, markedRole } from './lib/role-marker.mjs';
+
+/** The Implementer's own comment: its login and, from L4, its role marker (plan 0005 §3.3). */
+const byImplementer = (/** @type {{login?: string|null, body?: string|null}} */ c) =>
+  asRole('Implementer', { login: norm(c.login), expected: AGENT_LOGIN, body: c.body });
 
 /** Where briefs live. A brief's basename IS its tracking issue number (RA-1032). */
 export const BRIEF_DIR = 'docs/projects';
@@ -183,7 +188,9 @@ export function briefTitle(markdown, fallback) {
 export function stopReason(body, max = 80) {
   const text = body ?? '';
   if (BAIL_RE.test(text)) return 'scope-first bail';
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('<!--'));
+  // Not a hidden marker, and not the persona header the role marker rides on (plan 0005 §3.3):
+  // neither is what the Implementer stopped on.
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('<!--') && !markedRole(l));
   const first = (lines.find((l) => /^#{1,6}\s/.test(l)) ?? lines[0] ?? '')
     .replace(/^#{1,6}\s+/, '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
   if (!first) return 'stopped';
@@ -234,7 +241,7 @@ export function classifyDispatch({ comments = [], labels = [], hasPr = false, pr
 
   const conversation = comments.map((c) => ({ login: norm(c.login), body: c.body ?? '', createdAt: c.createdAt }));
   const v = classifyLane({ labels: labels.map((name) => ({ name })) }, conversation, false, { now: now.getTime() });
-  const lastAgent = conversation.filter((c) => c.login === AGENT_LOGIN).at(-1);
+  const lastAgent = conversation.filter(byImplementer).at(-1);
   const at = Date.parse(lastAgent?.createdAt ?? '');
   const waitedDays = Number.isFinite(at) ? Math.max(0, Math.floor((now.getTime() - at) / 86400000)) : ageDays;
   const quiet = { disposition: ageDays >= QUIET_AFTER_DAYS ? 'stall' : 'dispatched', waitedDays: ageDays };
@@ -252,7 +259,7 @@ export function classifyDispatch({ comments = [], labels = [], hasPr = false, pr
       // By position, oldest first, as the API returns them: a human between the
       // Implementer's last two comments. Its FIRST comment answers nobody — a human who
       // spoke before the first run was not replying to it.
-      const agentIdx = conversation.flatMap((c, i) => (c.login === AGENT_LOGIN ? [i] : []));
+      const agentIdx = conversation.flatMap((c, i) => (byImplementer(c) ? [i] : []));
       const answered = agentIdx.length > 1 && conversation.slice(agentIdx.at(-2) + 1, agentIdx.at(-1))
         .some((c) => !isBot(c.login) && !c.body.includes(SWEEP_MARKER));
       if (answered) return { disposition: 'authorised', waitedDays };
@@ -496,7 +503,7 @@ export async function dispatchCommentsOf(api, repo, issue, commentCount) {
     // The page holding the Implementer's last word: everything `classifyDispatch` reads
     // follows it. Attempt counting (only `exhausted`) may see fewer sweep comments on an
     // issue past 100 comments, which is a report detail rather than a classification.
-    if (batch.some((c) => norm(c.login) === AGENT_LOGIN)) break;
+    if (batch.some(byImplementer)) break;
   }
   return run;
 }

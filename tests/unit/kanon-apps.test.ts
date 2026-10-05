@@ -749,12 +749,18 @@ describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
 
   // Each row is exactly what the tool wrote, in the order the Owner created the Apps: the
   // Reviewer (2026-10-02), then the Implementer and the Explorer (2026-10-05).
-  it('is exactly what kanon apps writes for the Reviewer, the Implementer and the Explorer it created', () => {
+  it('is exactly what kanon apps writes for the Reviewer, the Implementer and the Explorer it created, plus the one broadening', () => {
     const roles = loadRoles();
     const reviewer = writeRegisterRow(null, { role: 'Reviewer', slug: 'kanon-reviewer', permissions: roles.reviewer!.permissions }).text;
     const both = writeRegisterRow(reviewer, { role: 'Implementer', slug: 'kanon-implementer', permissions: roles.implementer!.permissions }).text;
     const all = writeRegisterRow(both, { role: 'Explorer', slug: 'kanon-explorer', permissions: roles.explorer!.permissions }).text;
-    expect(readFileSync(OWN, 'utf8')).toBe(all);
+    // The Owner granted the Implementer Commit statuses write on 2026-10-05 (plan 0005 §3.3,
+    // question 6), recorded by hand with its reason as `K-AGENT-3` asks: the Implementer row's
+    // `Other` cell and one footnote. Nothing else differs from what the tool wrote.
+    const own = readFileSync(OWN, 'utf8');
+    const [table, footnote] = own.split(/\n(?=\[\^1\]: )/);
+    expect(footnote).toMatch(/^\[\^1\]: \*\*Commit statuses: Read & write, broadened beyond the Implementer's row\*\* \(`K-AGENT-3`/);
+    expect(`${table!.replace('| No access | Commit statuses: Read & write [^1] |', '| No access | None |').trimEnd()}\n`).toBe(all);
   });
 
   it('keeps the Implementer as one row when kanon apps writes the slug GitHub gave it', () => {

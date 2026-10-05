@@ -224,6 +224,10 @@ describe('classifyDispatch — the classification the digest must not get wrong'
     expect(d({ comments: [c(BAIL)], ageDays: 1 }).reason).toBe('scope-first bail');
     expect(stopReason('<!-- marker -->\n**Blocked** on <prod> & data')).toBe('stopped: “Blocked on &lt;prod&gt; &amp; data”');
     expect(stopReason('')).toBe('stopped');
+    // The persona header the Implementer's comments open with (plan 0005 §3.3) is not the stop.
+    expect(stopReason('**Implementer** <!-- kanon:role=implementer -->\n\n**Blocked** on <prod> & data')).toBe('stopped: “Blocked on &lt;prod&gt; &amp; data”');
+    expect(stopReason('**The Builder (Implementer)** <!-- kanon:role=implementer -->\n\n## Waiting on the schema\nmore')).toBe('stopped: “Waiting on the schema”');
+    expect(stopReason('**Implementer** <!-- kanon:role=implementer -->')).toBe('stopped');
   });
 
   it('a human parked with `qa:needs-info` reads as awaiting an answer; a reply to the sweep as held', () => {

@@ -997,7 +997,7 @@ import { analyse } from './closing-refs.mjs';
 import { evidenceSha, readTrailer } from './review-trailer.mjs';
 import { CONFLICT_JSON, CONFLICT_WHY, conflictState } from './conflict-state.mjs';
 import { marker as rebaseMarker } from './rebase-lane.mjs';
-import { appLogin } from './app-register.mjs';
+import { appLogin, appPersona } from './app-register.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
 import { escalatingPaths, readEscalationFileAt } from './lib/escalation-paths.mjs';
 import { defaultBranchFile } from './lib/declarations.mjs';
@@ -1324,7 +1324,7 @@ export function verifyClosed(pr, repo, say, { retries = 3, waitMs = 4000, sleep 
       'project as unfinished.',
       '',
       'Close it by hand, and grant the scope so the next one closes itself.',
-    ].join('\n'), 'Merger')]);
+    ].join('\n'), 'Merger', appPersona('Merger'))]);
   } catch (e) {
     say(`could not comment about the unclosed issue: ${e.message}`);
   }
@@ -1385,7 +1385,7 @@ export function apply(pr, verdict, repo, { dryRun = true } = {}) {
     say(`escalate #${pr.number}: ${verdict.rule}`);
     if (!dryRun) {
       // Signed as the Merger (plan 0005 §3.3): its header and role marker open every post.
-      gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body', signed(body, 'Merger')]);
+      gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body', signed(body, 'Merger', appPersona('Merger'))]);
       gh(['pr', 'edit', String(pr.number), '--repo', repo, '--add-label', 'needs:human']);
     }
     return;
@@ -1399,7 +1399,7 @@ export function apply(pr, verdict, repo, { dryRun = true } = {}) {
       // The record IS the idempotence key, so it is written even though it is noise
       // on a healthy PR. A re-dispatch that leaves no trace re-fires every hour.
       gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body',
-          signed(`🔁 the Merger asked ${'`agent-review.yml`'} to re-review this commit — ${verdict.why}\n\n${mark}`, 'Merger')]);
+          signed(`🔁 the Merger asked ${'`agent-review.yml`'} to re-review this commit — ${verdict.why}\n\n${mark}`, 'Merger', appPersona('Merger'))]);
     }
     return;
   }
@@ -1412,7 +1412,7 @@ export function apply(pr, verdict, repo, { dryRun = true } = {}) {
     if (!dryRun) {
       if (!alreadySaid(pr.number, repo, verdict.rule, pr.headSha)) {
         gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body',
-            signed(`🔓 **the Merger — lifting \`needs:human\`.**\n\nRule: \`${verdict.rule}\`\nWhy: ${verdict.why}\n\nTo hold this PR on purpose, re-apply \`needs:human\` by hand — the Merger never lifts a label a person applied.\n\n${mark}`, 'Merger')]);
+            signed(`🔓 **the Merger — lifting \`needs:human\`.**\n\nRule: \`${verdict.rule}\`\nWhy: ${verdict.why}\n\nTo hold this PR on purpose, re-apply \`needs:human\` by hand — the Merger never lifts a label a person applied.\n\n${mark}`, 'Merger', appPersona('Merger'))]);
       }
       gh(['pr', 'edit', String(pr.number), '--repo', repo, '--remove-label', 'needs:human']);
     }

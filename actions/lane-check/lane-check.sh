@@ -347,6 +347,14 @@ for role in $(printf '%s\n' $ROLES | sort -u); do
     fail "$REGISTER" "$out"
   fi
 done
+# Its optional `Persona` column (plan 0005 §3.3): a malformed persona fails by name here, on
+# the pull request that wrote it, where the lanes would only warn and post as the role.
+if [ -n "$ROLES" ] && [ -f "$REGISTER" ]; then
+  command -v node >/dev/null 2>&1 || die "needs node on PATH to read $REGISTER; the action puts Kanon's own there"
+  if ! out="$(node "$HERE/declarations.mjs" register 2>&1)"; then
+    fail "$REGISTER" "$(printf '%s' "$out" | head -1)"
+  fi
+fi
 
 # ── The Dependabot entry that proposes Kanon upgrades (K-ADOPT-11) ─────────────────────
 DEP=.github/dependabot.yml

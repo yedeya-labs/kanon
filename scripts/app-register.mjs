@@ -152,3 +152,80 @@ export function appLogin(role, path = APP_REGISTER) {
   if (!slug) throw new Error(`App register ${path} lists no ${role} App — add its row (Role | App slug) before code that compares its login can run.`);
   return slug;
 }
+
+// ── PERSONAS (plan 0005 §3.3; decided by the Owner, 2026-10-05) ───────────────────────────
+//
+// An optional `Persona` column, anywhere after `App slug`, gives a role the display name its
+// posts open with (`**<persona> (<Role>)**`) and its agent's commits are authored under. A
+// blank cell, or no column at all, means the role's own name. Read only where a persona is
+// written (the agent-setup block, the fixed steps that post, lane-check), never by code that
+// compares a login, so a malformed persona can't stop a lane deciding who is who: lane-check
+// fails it by name on the adopter's pull request, and a writer falls back to the role.
+
+/** Agent roles: the only rows a persona may name, since only an agent posts as a persona. */
+const PERSONA_ROLES = ['Explorer', 'Implementer', 'Reviewer', 'Merger', 'Lead', 'Overseer'];
+
+/** A display name: a letter first, then letters, digits, spaces and `.'-`, at most 40 in all. */
+const PERSONA = /^[A-Za-z][A-Za-z0-9 .'-]{0,39}$/;
+
+/**
+ * The register's personas, role → persona, for the rows that declare one. Throws, naming the
+ * line, on a malformed one: two `Persona` columns, a persona outside `PERSONA`, one on a row
+ * that isn't an agent's, or one that is another role's name (a header would then read as that
+ * role's). A persona equal to its own role is the default, written out, and is dropped.
+ *
+ * @param {string} text the register's markdown
+ * @param {string} [source] its path, for messages
+ * @returns {Map<string, string>}
+ */
+export function parsePersonas(text, source = APP_REGISTER) {
+  const lines = text.split('\n');
+  const fenced = fencedLines(lines);
+  const where = (i) => `${source}:${i + 1}`;
+  const start = lines.findIndex((l, i) => {
+    if (fenced.has(i) || !/^\s*\|/.test(l)) return false;
+    const c = cells(l);
+    return c.length >= 2 && unbold(c[0]) === 'Role' && unbold(c[1]) === 'App slug';
+  });
+  const personas = new Map();
+  if (start < 0) return personas;
+  const header = cells(lines[start]).map(unbold);
+  const columns = header.flatMap((h, i) => (h === 'Persona' ? [i] : []));
+  if (columns.length > 1) throw new Error(`${where(start)}: the App register has ${columns.length} \`Persona\` columns, not one.`);
+  if (columns.length === 0) return personas;
+  const [col] = columns;
+  for (let i = start + 2; i < lines.length && /^\s*\|/.test(lines[i]); i += 1) {
+    const row = cells(lines[i]);
+    const role = unbold(row[0] ?? '');
+    const persona = unbold(row[col] ?? '');
+    if (persona === '') continue;
+    if (!PERSONA_ROLES.includes(role)) {
+      throw new Error(`${where(i)}: the ${role} row declares the persona \`${persona}\`, but only an agent role has one (${PERSONA_ROLES.join(', ')}).`);
+    }
+    if (!PERSONA.test(persona)) {
+      throw new Error(`${where(i)}: the ${role} row's persona \`${persona}\` is malformed: write a display name of at most 40 characters, a letter first, then letters, digits, spaces and . ' -, or leave it blank for the role's own name.`);
+    }
+    if (persona !== role && ROLES.includes(/** @type {any} */ (persona))) {
+      throw new Error(`${where(i)}: the ${role} row's persona \`${persona}\` is another role's name, so its posts would read as the ${persona}'s.`);
+    }
+    if (persona !== role) personas.set(role, persona);
+  }
+  return personas;
+}
+
+/**
+ * The persona a fixed step posts `role`'s comments under, from the register at `path`, or null
+ * for the role's own name. Never throws: a missing or malformed register gives null, so a post
+ * falls back to the role's header rather than failing (lane-check fails the malformed column).
+ *
+ * @param {string} role
+ * @param {string} [path]
+ * @returns {string | null}
+ */
+export function appPersona(role, path = APP_REGISTER) {
+  try {
+    return parsePersonas(readFileSync(resolve(path), 'utf8'), path).get(role) ?? null;
+  } catch {
+    return null;
+  }
+}

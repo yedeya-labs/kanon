@@ -113,6 +113,10 @@ jobs:
         with:
           arm: Explorer agent
           app-slug: ""
+          # The role by name, since there is no slug to look it up by: the Explorer's agent
+          # posts as the Explorer App, so its posts open with its header and role marker
+          # (plan 0005 §3.3), which `explorerQaComments` will require at L4.
+          role: Explorer
 
       # THE SWEEP: the project's hook. It never fails on findings, which are in the summary;
       # it fails only when the sweep could not run, and then the summary check below says so.

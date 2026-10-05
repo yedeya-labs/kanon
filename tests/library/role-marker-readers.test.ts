@@ -15,6 +15,8 @@ const { briefPrs } = await import('../../scripts/brief-revise-recovery.mjs');
 const { ineligible } = await import('../../scripts/rebase-lane.mjs');
 const { reviewerVerdicts } = await import('../../scripts/incremental-review.mjs');
 const { verdictOnHead } = await import('../../scripts/review-recovery.mjs');
+const { agentSpokeSince } = await import('../../scripts/implement-crash.mjs');
+const { classifyDispatch } = await import('../../scripts/project-digest.mjs');
 
 /**
  * Plan 0005 step L3: every reader in §3.3's table reads the role marker beside today's login,
@@ -68,6 +70,16 @@ const verdictOf = (p: any) => {
 };
 
 const READERS: Record<string, Reader> = {
+  // #312: two readers §3.3's table omitted, folded in here.
+  'implement-crash: did the Implementer speak during the run (agentSpokeSince)': {
+    role: 'Implementer',
+    read: (body) => agentSpokeSince([{ login: appLogin('Implementer'), body, createdAt: ago(1) }], ago(2)),
+  },
+  'project-digest: the Implementer\'s last word (classifyDispatch)': {
+    role: 'Implementer',
+    read: (body) => classifyDispatch({ comments: [{ login: login('Implementer'), body: `${body}\n\nStopped: waiting on data`, createdAt: ago(2) }],
+      labels: ['agent:implement'], ageDays: 9, now: new Date(NOW) }).disposition,
+  },
   'merge-gate: the PR author (mergeVerdict)': {
     role: 'Implementer',
     read: (body) => verdictOf(gatePr({ body })),
@@ -142,7 +154,8 @@ describe('plan 0005 L3: each reader of §3.3 reads the marker beside the login, 
   });
 
   it('covers every reader §3.3 names that has a body to carry a marker', () => {
-    expect(Object.keys(READERS)).toHaveLength(10);
+    // §3.3's ten, and the two #312 found.
+    expect(Object.keys(READERS)).toHaveLength(12);
   });
 });
 

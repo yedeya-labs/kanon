@@ -36,7 +36,7 @@
 import { execFileSync } from 'node:child_process';
 import { CONFLICT_JSON, conflictState } from './conflict-state.mjs';
 import { NO_RETRY_EVIDENCE, RETRY_COOL_DOWN_HOURS, describeRetry, makeRetryEvidenceReader, retryDecision } from './lane-retry.mjs';
-import { appLogin } from './app-register.mjs';
+import { appLogin, appPersona } from './app-register.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 
@@ -123,7 +123,7 @@ export const attemptComment = (sha, runId = '') => signed([
   '',
   marker(sha),
   ...(/^\d+$/.test(String(runId)) ? [runMarker(sha, runId)] : []),
-].join('\n'), 'Implementer');
+].join('\n'), 'Implementer', appPersona('Implementer'));
 
 /**
  * Why this PR is not one the lane may hand over, or null if it is.

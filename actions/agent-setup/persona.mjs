@@ -11,7 +11,8 @@
 //
 // WHAT IT WRITES, to `$GITHUB_ENV` for the steps after it, the agent's included:
 //   KANON_ROLE         the role, as the roles table spells it
-//   KANON_PERSONA      the persona; the role itself while no persona is declared (§3.3)
+//   KANON_PERSONA      the persona: the register's `Persona` cell for the role (default
+//                      branch), or the role itself when it is blank or absent (§3.3)
 //   KANON_POST_HEADER  the header line that opens every post: `**<persona> (<Role>)**` and the marker
 // `agent-run` asks the agent to open every post with KANON_POST_HEADER.
 //
@@ -26,7 +27,7 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 
-import { APP_REGISTER, parseAppRegister } from '../../scripts/app-register.mjs';
+import { APP_REGISTER, parseAppRegister, parsePersonas } from '../../scripts/app-register.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 import { MARKED_ROLES, headerLine } from '../../scripts/lib/role-marker.mjs';
 
@@ -55,6 +56,22 @@ export function resolveRole({ role = '', slug = '', register = () => '' }) {
 }
 
 /**
+ * The role's persona from the register's optional `Persona` column, or null for the role's own
+ * name. A register that can't be read, or a malformed column, gives null and says why: the
+ * persona is a display name, and lane-check is what fails a malformed one, by name.
+ * @param {string} role
+ * @param {() => string} register
+ * @returns {{ persona: string | null, problem?: string }}
+ */
+export function resolvePersona(role, register) {
+  try {
+    return { persona: parsePersonas(register(), `${APP_REGISTER} on the default branch`).get(role) ?? null };
+  } catch (e) {
+    return { persona: null, problem: (e instanceof Error ? e.message : String(e)).split('\n')[0] };
+  }
+}
+
+/**
  * The environment lines for a resolved role.
  * @param {string} role
  * @param {string | null} [persona]
@@ -70,16 +87,18 @@ export function personaEnv(role, persona = null) {
 if (isCliEntry(import.meta.url) && !process.env.ROLE && !process.env.APP_SLUG) {
   console.log('No role and no App slug were passed, so the agent speaks as no persona (plan 0005 §3.3).');
 } else if (isCliEntry(import.meta.url)) {
-  const r = resolveRole({
-    role: process.env.ROLE ?? '',
-    slug: process.env.APP_SLUG ?? '',
-    register: () => execFileSync('gh', ['api', `repos/${process.env.GITHUB_REPOSITORY}/contents/${APP_REGISTER}`,
-      '-H', 'Accept: application/vnd.github.raw'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
-  });
+  // Read once, from the default branch, for both the role and the persona.
+  /** @type {string | undefined} */
+  let text;
+  const register = () => (text ??= execFileSync('gh', ['api', `repos/${process.env.GITHUB_REPOSITORY}/contents/${APP_REGISTER}`,
+    '-H', 'Accept: application/vnd.github.raw'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+  const r = resolveRole({ role: process.env.ROLE ?? '', slug: process.env.APP_SLUG ?? '', register });
   if ('problem' in r) {
     console.log(`::warning title=agent-setup::no persona for this agent: ${r.problem.split('\n')[0]}. Its posts carry no role marker and its commits keep the App's bot name (plan 0005 §3.3).`);
   } else {
-    appendFileSync(String(process.env.GITHUB_ENV), `${personaEnv(r.role).join('\n')}\n`);
-    console.log(`The agent speaks as the ${r.role}: ${headerLine(r.role)}`);
+    const p = resolvePersona(r.role, register);
+    if (p.problem) console.log(`::warning title=agent-setup::the ${r.role} speaks under its role's own name: ${p.problem}`);
+    appendFileSync(String(process.env.GITHUB_ENV), `${personaEnv(r.role, p.persona).join('\n')}\n`);
+    console.log(`The agent speaks as the ${r.role}: ${headerLine(r.role, p.persona)}`);
   }
 }
