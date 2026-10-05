@@ -12,10 +12,9 @@
 # job is its membership gate (K-AGENT-45), and an issue a stranger filed is never built until
 # a member labels it. Any other label skips the run before a token is minted.
 #
-# INERT UNTIL THE OWNER CREATES THE IMPLEMENTER'S APP. Until then IMPLEMENTER_APP_ID and
-# IMPLEMENTER_APP_PRIVATE_KEY are unset, which GitHub passes as empty strings without failing
-# the run, so an unrelated label is still skipped; an `agent:implement` label fails at the
-# token mint, by name, before any model run is paid for. ADR 0011 lists the activation steps.
+# THE IMPLEMENTER'S APP EXISTS (2026-10-05), SO A LABEL NOW RUNS THE MODEL. Don't label an
+# issue `agent:implement` until the pin below includes #234: before it, the lane's commits are
+# authored `claude[bot]` with no sign-off and fail `dco`. ADR 0011 lists the remaining steps.
 #
 # The secrets: IMPLEMENTER_APP_ID and IMPLEMENTER_APP_PRIVATE_KEY (the Implementer's App, in
 # docs/qa/agent-identities.md) and CLAUDE_CODE_OAUTH_TOKEN, mapped by name, never inherited.
