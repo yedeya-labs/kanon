@@ -15,7 +15,7 @@ import { parse } from 'yaml';
  *     default branch by name is not one: it is merged code (the Merger's job checks it out).
  *
  * KNOWN EXCEPTIONS, each until its lane is fixed (#279). The five lanes that call the blocks
- * directly still mint in the agent's job. They are listed by `file:job`, and the list must be
+ * directly, and the lanes that merged before #274's fix, still mint in the agent's job. They are listed by `file:job`, and the list must be
  * exact: a lane that is fixed fails here until its row is removed, so the list cannot outlive
  * the debt it records.
  */
@@ -27,6 +27,8 @@ const KNOWN_EXCEPTIONS: Record<string, string> = {
   'agent-lead-split.yml:split': '#279',
   'agent-merge-reconcile.yml:reconcile': '#279',
   'agent-verify-acs.yml:verify': '#279',
+  // Merged before #274's fix, admitted as an exception by the Owner (2026-10-04).
+  'agent-explore.yml:explore': '#279',
 };
 
 type Step = { id?: string; name?: string; uses?: string; run?: string; if?: string; with?: Record<string, unknown>; env?: Record<string, unknown> };
