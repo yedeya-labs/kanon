@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.26.0](https://github.com/yedeya-labs/kanon/compare/v0.25.0...v0.26.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **telemetry:** trust the default branch's ref for the telemetry store and drop its environment ([#293](https://github.com/yedeya-labs/kanon/issues/293))
+* **qa-store:** trust the default branch's ref for the QA store, drop its environment, and guard id-token ([#291](https://github.com/yedeya-labs/kanon/issues/291))
+
+### Features
+
+* **lanes:** audit Kanon's own code with the code-audit lane, from its last release ([#306](https://github.com/yedeya-labs/kanon/issues/306)) ([d981b2f](https://github.com/yedeya-labs/kanon/commit/d981b2f13485f8ac5eec71ddae1f84eb4d19350c))
+* **qa-store:** trust the default branch's ref for the QA store, drop its environment, and guard id-token ([#291](https://github.com/yedeya-labs/kanon/issues/291)) ([d70de29](https://github.com/yedeya-labs/kanon/commit/d70de296618379cac87b8ede1c6748d199f2388e))
+* **telemetry:** move the telemetry collector into Kanon and install it on Kanon ([#311](https://github.com/yedeya-labs/kanon/issues/311)) ([55aab15](https://github.com/yedeya-labs/kanon/commit/55aab15da4a3ebf6acebecf4d7cc78a67849986e))
+* **telemetry:** trust the default branch's ref for the telemetry store and drop its environment ([#293](https://github.com/yedeya-labs/kanon/issues/293)) ([77f8a73](https://github.com/yedeya-labs/kanon/commit/77f8a73d19406f5751b3727e164d088e99329223))
+
+
+### Bug Fixes
+
+* **cli:** `kanon apps` takes --owner for a personal account or an organisation, refuses outside the checkout, and names its token ([#299](https://github.com/yedeya-labs/kanon/issues/299)) ([b38b8b7](https://github.com/yedeya-labs/kanon/commit/b38b8b742e47d1ce9a7356e0b393051e8aaecdf9))
+* **lanes:** keep the App private key out of every lane's agent job ([#302](https://github.com/yedeya-labs/kanon/issues/302)) ([c30a83b](https://github.com/yedeya-labs/kanon/commit/c30a83b2b1ebedbd5258618fc62995b696f9a8b5))
+* **spec-lib:** read the reference corpus from git, and never crash on a file it can't read ([#305](https://github.com/yedeya-labs/kanon/issues/305)) ([532e211](https://github.com/yedeya-labs/kanon/commit/532e2117cbf690884a0053d9273579259e9e47ba))
+
+
+### Documentation
+
+* **decisions:** record personal accounts and the two-App model in ADR 0013 ([#301](https://github.com/yedeya-labs/kanon/issues/301)) ([4ba0a17](https://github.com/yedeya-labs/kanon/commit/4ba0a171d0cc4afed4f62005ae3bce5af9a71ad1))
+
+
+### CI
+
+* **deps:** Bump the kanon group across 1 directory with 4 updates ([#253](https://github.com/yedeya-labs/kanon/issues/253)) ([93af751](https://github.com/yedeya-labs/kanon/commit/93af751ca33e8f9509a4f13a6edcf8821fd3a8fb))
+
 ## [0.25.0](https://github.com/yedeya-labs/kanon/compare/v0.24.0...v0.25.0) (2026-10-05)
 
 

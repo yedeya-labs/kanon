@@ -39,7 +39,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - uses: yedeya-labs/kanon/actions/lane-check@v0.25.0
+      - uses: yedeya-labs/kanon/actions/lane-check@v0.26.0
 ```
 
 <!-- x-release-please-end -->
