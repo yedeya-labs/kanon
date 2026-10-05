@@ -137,11 +137,9 @@ describe('the permission probe', () => {
     const claude = stepNames.findIndex((n) => n.includes('claude-code-action'));
     expect(at).toBeGreaterThan(-1);
     expect(at).toBeLessThan(claude);
-    // After the project setup since RA-2694 (Kanon plan 0001 §5: the hook runs after the
-    // checkout and BEFORE `agent-setup`, whose step this is): the one ordering the hook
-    // boundary changes. It still fails before any turn, now one install later.
-    expect(stepNames.indexOf('npm ci')).toBeGreaterThan(-1);
-    expect(at).toBeGreaterThan(stepNames.indexOf('npm ci'));
+    // The Lead installs nothing since kanon#243 (`K-AGENT-50`): the spine's project setup is
+    // off for this lane, so no hook and no `npm ci` runs before the probe, or at all.
+    expect(stepNames.indexOf('npm ci')).toBe(-1);
     // After the App-token checkout, or it probes the default token's credential.
     expect(at).toBeGreaterThan(stepNames.findIndex((n) => n.startsWith('actions/checkout')));
   });

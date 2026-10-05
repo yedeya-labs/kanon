@@ -1,0 +1,148 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
+
+/**
+ * kanon#243 (the Owner's decision of 2026-10-05, `K-AGENT-50`): the Lead runs none of the tree's
+ * code, the way the Reviewer was closed by kanon#185 and kanon#248. Its lanes turn the spine's
+ * project setup off, so no hook or install runs, and its shell is an allow-list:
+ *   • it writes only under `docs/` (a brief, a spec clause);
+ *   • it runs Kanon's scripts by name (`kanon-brief-guard`, `kanon-spec-ids`, `kanon-spec-coverage`),
+ *     which the spine puts on the PATH as wrappers around Kanon's own Node and script;
+ *   • it commits and pushes, to `origin` only;
+ *   • it calls named `gh` subcommands;
+ *   • it loads no project settings (`--setting-sources user`, kanon#277), so no project hook or
+ *     MCP server joins the grant.
+ * Every other command falls to Claude Code's read-only set. The flags are read the way
+ * claude-code-action reads them (the Reviewer's test, kanon#248, explains the parse).
+ */
+const WF = '.github/workflows';
+type Step = { id?: string; name?: string; uses?: string; if?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, unknown> };
+const read = (f: string) => parse(readFileSync(join(WF, f), 'utf8')) as { jobs: Record<string, { uses?: string; with?: Record<string, unknown>; steps?: Step[] }> };
+
+const LANES = [['agent-lead.yml', 'brief'], ['agent-lead-revise.yml', 'revise']] as const;
+
+const words = (args: string) => [...args.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+  .matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]!);
+const allowedTools = (args: string) => {
+  const w = words(args);
+  const out: string[] = [];
+  for (let i = 0; i < w.length; i++) {
+    const eq = /^--allowed-?[Tt]ools=(.*)$/.exec(w[i]!);
+    if (eq) { out.push(eq[1]!); continue; }
+    if (!/^--allowed-?[Tt]ools$/.test(w[i]!)) continue;
+    while (i + 1 < w.length && !w[i + 1]!.startsWith('--')) out.push(w[++i]!);
+  }
+  return out.flatMap((v) => v.split(',')).map((t) => t.trim()).filter(Boolean);
+};
+
+// THE LIST, pinned. A change to it is a security change the Owner reviews, made here and in
+// both lanes together.
+const EXPECTED = [
+  'Read', 'Grep', 'Glob',
+  'Edit(/docs/**)',
+  'Bash(kanon-brief-guard:*)', 'Bash(kanon-spec-ids:*)', 'Bash(kanon-spec-coverage:*)',
+  'Bash(git checkout:*)', 'Bash(git switch:*)', 'Bash(git add:*)', 'Bash(git commit:*)',
+  'Bash(git push origin:*)', 'Bash(git push -u origin:*)', 'Bash(git fetch origin:*)',
+  'Bash(gh pr view:*)', 'Bash(gh pr diff:*)', 'Bash(gh pr checks:*)', 'Bash(gh pr list:*)',
+  'Bash(gh pr create:*)', 'Bash(gh pr comment:*)', 'Bash(gh pr edit:*)',
+  'Bash(gh issue view:*)', 'Bash(gh issue list:*)', 'Bash(gh issue comment:*)', 'Bash(gh label list:*)',
+  'Bash(gh run view:*)', 'Bash(gh run list:*)', 'Bash(gh search:*)', 'Bash(gh api:*)',
+];
+
+// Independent of the pinned list: each word runs a program it is handed, or the project's.
+const RUNS_CODE = new Set([
+  'node', 'bash', 'sh', 'zsh', 'dash', 'fish', 'python', 'python3', 'ruby', 'perl', 'php', 'lua', 'deno', 'bun',
+  'tsx', 'ts-node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack', 'make', 'pip', 'pip3', 'poetry', 'uv', 'cargo',
+  'go', 'gradle', 'gradlew', 'mvn', 'bundle', 'composer', 'playwright', 'docker', 'vitest', 'jest',
+  'env', 'xargs', 'timeout', 'nice', 'nohup', 'exec', 'eval', 'source', '.', 'command', 'builtin', 'watch',
+  'find', 'awk', 'sed', 'tee',
+]);
+const GH_RUNS_CODE = /^gh (alias|extension|ext|codespace|pr checkout|run download|release download|repo clone|attestation|workflow)\b/;
+/** The git rules the Lead may hold: none that runs a program or takes a remote other than `origin`. */
+const GIT_ALLOWED = new Set(['git checkout', 'git switch', 'git add', 'git commit', 'git push origin', 'git push -u origin', 'git fetch origin']);
+/** Kanon's scripts, as the spine names them on the PATH. */
+const KANON_SCRIPTS = ['brief-guard', 'spec-ids', 'spec-coverage'];
+
+export const badBashRules = (tools: string[]): string[] => tools.filter((t) => /^Bash\b/.test(t)).filter((t) => {
+  const m = /^Bash\((.+?)(?::\*| \*)?\)$/.exec(t);
+  if (!m) return true;
+  const prefix = m[1]!.trim();
+  const first = prefix.split(/\s+/)[0]!;
+  if (prefix.includes('*') || /[;&|`$<>()=]/.test(prefix) || RUNS_CODE.has(first)) return true;
+  if (first === 'git') return !GIT_ALLOWED.has(prefix);
+  if (first === 'gh') return prefix.split(/\s+/).length < 2 || GH_RUNS_CODE.test(prefix);
+  if (first.startsWith('kanon-')) return !KANON_SCRIPTS.includes(first.slice('kanon-'.length)) || prefix !== first;
+  return true;
+});
+
+describe("the Lead's shell is an allow-list that runs no tree code (kanon#243)", () => {
+  for (const [file, job] of LANES) {
+    const call = read(file).jobs[job]!;
+    const ARGS = String(call.with?.claude_args);
+    const prompt = String(call.with?.prompt);
+
+    describe(file, () => {
+      it('calls the spine with the project setup off', () => {
+        expect(call.uses).toBe('$/.github/workflows/agent-lane.yml');
+        expect(call.with?.['project-setup']).toBe(false);
+      });
+      it('grants exactly the pinned list', () => {
+        expect([...allowedTools(ARGS)].sort()).toEqual([...EXPECTED].sort());
+      });
+      it('grants Bash only for named commands that run no program of the tree', () => {
+        expect(allowedTools(ARGS).filter((t) => /^Bash\b/.test(t)).length, 'not vacuous').toBeGreaterThan(10);
+        expect(badBashRules(allowedTools(ARGS))).toEqual([]);
+      });
+      it('writes only under docs/, never the rest of the tree or .git', () => {
+        const tools = allowedTools(ARGS);
+        expect(tools.filter((t) => /^(Write|NotebookEdit|MultiEdit)\b/.test(t) || t === 'Edit')).toEqual([]);
+        expect(tools.filter((t) => /^Edit\(/.test(t))).toEqual(['Edit(/docs/**)']);
+      });
+      it('loads no project settings, once, in the form the action parses, and no flag widens the rules', () => {
+        const w = words(ARGS);
+        const at = w.flatMap((x, i) => (/^--setting-?sources\b/i.test(x) ? [i] : []));
+        expect(at.map((i) => [w[i], w[i + 1]])).toEqual([['--setting-sources', 'user']]);
+        expect(w.filter((x) => /^--(dangerously-skip-permissions|allow-dangerously-skip-permissions|permission-mode|settings|add-dir|mcp-config|plugin-dir|strict-mcp-config|agents)\b/.test(x))).toEqual([]);
+      });
+      it('tells the agent what its shell allows, and names Kanon\'s scripts as it can run them', () => {
+        expect(prompt).toContain('YOUR SHELL IS AN ALLOW-LIST (kanon#243)');
+        expect(prompt).toContain("YOUR PROJECT'S INSTRUCTIONS ARE NOT LOADED FOR YOU");
+        expect(prompt).not.toMatch(/node "\$KANON|\$KANON\//);
+      });
+    });
+  }
+
+  describe('the spine', () => {
+    const spine = read('lane-agent-job.yml').jobs.run!;
+    const steps = spine.steps!;
+    const wrap = steps.find((s) => s.name === "Put Kanon's scripts on the agent's PATH, by name")!;
+
+    it('records the flags the agent ran with, so config_fingerprint is the run\'s', () => {
+      const agent = steps.find((s) => s.id === 'agent')!;
+      const finish = steps.find((s) => s.uses === '$/actions/agent-finish')!;
+      expect(agent.with?.claude_args).toBe('${{ inputs.claude_args }}');
+      expect(finish.with?.claude_args).toBe('${{ inputs.claude_args }}');
+    });
+
+    it('puts exactly the allowed scripts on the PATH, only for a lane with the setup off, before the agent', () => {
+      expect(wrap.if).toBe('${{ !inputs.project-setup }}');
+      expect(String(wrap.run)).toContain(`for s in ${KANON_SCRIPTS.join(' ')}; do`);
+      expect(String(wrap.run)).toContain('>> "$GITHUB_PATH"');
+      expect(steps.indexOf(wrap)).toBeLessThan(steps.findIndex((s) => s.id === 'agent'));
+      expect(steps.indexOf(wrap)).toBeGreaterThan(steps.findIndex((s) => s.id === 'kanon'));
+    });
+  });
+});
+
+describe('the rule check', () => {
+  it('fails each widening', () => {
+    for (const t of ['Bash', 'Bash(*)', 'Bash(node:*)', 'Bash(npm run lint:*)', 'Bash(git:*)', 'Bash(git push:*)', 'Bash(git -c x:*)',
+      'Bash(git fetch:*)', 'Bash(gh:*)', 'Bash(gh workflow run:*)', 'Bash(gh pr checkout:*)', 'Bash(kanon-x:*)', 'Bash(kanon-brief-guard && sh:*)',
+      'Bash(sh marker.sh)', 'Bash(env X=1 git commit:*)', 'Bash(cat:*)']) {
+      expect(badBashRules([t]), t).toEqual([t]);
+    }
+    expect(badBashRules(EXPECTED)).toEqual([]);
+  });
+});

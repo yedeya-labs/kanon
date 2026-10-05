@@ -148,15 +148,15 @@ describe('every lane starts the database the project declares, from a step', () 
 
   it('finds every job that calls the hook', () => {
     expect(hookCalls.map((c) => c.where).sort()).toEqual([
+      'agent-verify-acs.yml criteria',
       'explore-agent-job.yml explore',
       'lane-agent-job.yml run',
       'lead-split-agent-job.yml split',
       'rebase-agent-job.yml resolve',
-      'verify-acs-agent-job.yml verify',
     ]);
   });
 
-  it.each(['explore-agent-job.yml explore', 'lane-agent-job.yml run', 'rebase-agent-job.yml resolve', 'verify-acs-agent-job.yml verify'])(
+  it.each(['explore-agent-job.yml explore', 'lane-agent-job.yml run', 'rebase-agent-job.yml resolve', 'agent-verify-acs.yml criteria'])(
     '%s runs the block before the hook and hands the hook its answer',
     (where) => {
       const { steps, at } = hookCalls.find((c) => c.where === where)!;
@@ -180,7 +180,8 @@ describe('every lane starts the database the project declares, from a step', () 
   });
 
   it('the verify-acs lane reads the declaration where it reads the hook, from the defining commit', () => {
-    const verify = lanes.find(({ f }) => f === 'verify-acs-agent-job.yml')!.wf.jobs.verify!;
+    // In the lane's `criteria` job, which runs the hook and the criteria without a token (kanon#243).
+    const verify = lanes.find(({ f }) => f === 'agent-verify-acs.yml')!.wf.jobs.criteria!;
     const steps = verify.steps!;
     const load = steps.findIndex((s) => s.id === 'hook');
     const db = steps.findIndex((s) => s.uses === '$/actions/test-database');

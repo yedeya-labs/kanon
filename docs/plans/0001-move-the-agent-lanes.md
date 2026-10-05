@@ -190,6 +190,8 @@ If the file is missing, the lane fails with a named error. That happens on PR br
 
 *Since [#185](https://github.com/yedeya-labs/kanon/issues/185):* the review lane no longer calls the hook (the Owner, 2026-10-04). Its job runs none of the PR's code, and the Reviewer takes test results from CI's required checks. The `review` row above describes the lane before that change.
 
+*Since [#243](https://github.com/yedeya-labs/kanon/issues/243):* the verify-acs lane runs the hook, the test database and the criteria in a `criteria` job of their own, handed no secret and persisting no credential, and mints the Explorer's token only after that job ends (`K-AGENT-50`). Its row above describes the lane before that change. Two corrections to the table, measured then: the rebase lane's checkout is the triggering commit, so its hook is the default branch's, and the pull request's code runs in its agent's shell when the agent checks the branch out and runs the gates; and the Owner decided (2026-10-05) the rest: implement-revise and rebase accept the exposure, recorded on `K-AGENT-50`, and the Lead's lanes (lead, lead-revise) call no hook and run their agent with a shell allow-list, as the review lane does.
+
 In every lane the hook runs before the agent, and the Claude token is never passed to it.
 
 **Every literal, and where it ends up:**

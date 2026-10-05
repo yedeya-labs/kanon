@@ -134,6 +134,19 @@ on:
         required: false
         type: boolean
         default: true
+      project-setup:
+        description: >-
+          Run the project-setup hook (and the test-database block before it). Default on, for
+          a lane whose agent builds and tests code. Off for a lane whose agent runs none of
+          the tree's code (`K-AGENT-50`, kanon#243): the hook, read from the checked-out tree,
+          is the tree's code, and on a lane that checks out a pull request it would run
+          beside the token. Off skips the presence check, the database and the hook, and
+          puts Kanon's own scripts on the agent's PATH by name (`kanon-brief-guard`,
+          `kanon-spec-ids`, `kanon-spec-coverage`), so an allow-listed shell can run them
+          without an interpreter rule. The Lead's lanes set it off, with a shell allow-list.
+        required: false
+        type: boolean
+        default: true
       push-probe:
         description: >-
           Prove the minted App can push (`git push --dry-run`) after the project's setup
@@ -278,6 +291,7 @@ jobs:
       # from is recorded for the step that puts it back after the agent.
       - name: Check the project-setup hook is present
         id: hook
+        if: inputs.project-setup
         run: |
           if [ ! -f .github/actions/project-setup/action.yml ]; then
             echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
@@ -291,6 +305,7 @@ jobs:
       # this block's answer whether to start the database and set up its schema.
       - uses: $/actions/test-database
         id: database
+        if: inputs.project-setup
         with:
           wanted: ${{ inputs.database }}
 
@@ -300,6 +315,7 @@ jobs:
       # Claude token never is.
       - uses: ./.github/actions/project-setup
         id: project
+        if: inputs.project-setup
         with:
           lane: ${{ inputs.agent }}
           install: "true"
@@ -308,6 +324,27 @@ jobs:
           issue-number: ${{ inputs.issue-number }}
           app-slug: ${{ steps.app-token.outputs.app-slug }}
           github-token: ${{ steps.app-token.outputs.token }}
+
+      # KANON'S SCRIPTS, BY NAME, FOR A LANE THAT RUNS NO TREE CODE (`K-AGENT-50`, kanon#243). A
+      # lane that sets `project-setup` off gives its agent a shell allow-list, and an allow
+      # rule can name neither an interpreter (`node` runs anything) nor a path behind a
+      # variable (`$KANON` is refused). So each script the Lead's prompts name gets a
+      # wrapper of its own on the PATH, outside the workspace, which runs that Kanon script
+      # with Kanon's Node and nothing else. None of them runs the tree's code: they read
+      # and write its files and call `git` and `gh`.
+      - name: Put Kanon's scripts on the agent's PATH, by name
+        if: ${{ !inputs.project-setup }}
+        env:
+          KANON_ROOT: ${{ steps.kanon.outputs.path }}
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/kanon-bin"
+          mkdir -p "$bin"
+          for s in brief-guard spec-ids spec-coverage; do
+            printf '#!/usr/bin/env bash\nexec %q %q "$@"\n' "$(command -v node)" "$KANON_ROOT/scripts/$s.mjs" > "$bin/kanon-$s"
+            chmod +x "$bin/kanon-$s"
+          done
+          echo "$bin" >> "$GITHUB_PATH"
 
       - uses: $/actions/agent-setup
         id: setup

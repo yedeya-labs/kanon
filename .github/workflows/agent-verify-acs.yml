@@ -25,13 +25,16 @@
 # them, and writes the JSON. A script that filed its own issues would be a second
 # mechanism for something the pipeline already does one way.
 #
-# ── ITS OWN JOB, ON THE AGENT-LANE BLOCKS (RA-2661) ───────────────────────────
-# The criteria run and the agent share one workspace and one database: the agent
-# reads the artifact the run wrote, against the data the run left. A reusable
-# workflow owns its whole job and takes no steps from its caller, so this lane does
-# not hand its job to `agent-lane.yml`. It keeps its own job and calls the spine's
-# blocks — `agent-setup`, `agent-run`, `agent-finish` — around its own steps, in the
-# order they always ran relative to the agent (the reference adopter's pipeline doc, §6).
+# ── TWO JOBS: THE CODE UNDER TEST, THEN THE AGENT (kanon#243) ─────────────────
+# `criteria` runs the code under test — the project-setup hook, the test database and
+# the criteria — and holds no App token and no Claude token. `verify` mints the
+# Explorer's token only after it, and its agent reads the report `criteria` uploaded.
+# Until kanon#243 the two shared one job (RA-2661), with the token received after the
+# criteria run; but inside one job step order is not a boundary (`K-AGENT-49`'s Why), so
+# the code under test could reach a token received after it. `K-AGENT-50` holds the
+# split. The agent's job calls the spine's blocks — `agent-setup`, `agent-run`,
+# `agent-finish` — itself rather than handing its job to `agent-lane.yml`, whose job runs
+# the project-setup hook beside the token.
 #
 # ── IT RUNS LOCALLY, AND THAT IS A DECISION, NOT AN OVERSIGHT ───────────────
 # RA-1063 records it: option (c). The Explorer has never touched a deployed environment —
@@ -153,17 +156,232 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
 
+  # THE CODE UNDER TEST RUNS HERE, AND NOWHERE ELSE (`K-AGENT-50`, kanon#243). The project-setup
+  # hook (its install, `postinstall` included), the test database and the criteria the brief
+  # cites are the ref's own code, and this job holds no App token and no Claude token: it is
+  # handed no secret at all, its checkout persists no credential, and its own token reads
+  # only. It runs before `verify`, whose run wrapper mints the Explorer's token only after this
+  # job has ended, so no line of the code under test ever runs in a job that holds the token.
+  # Inside one job, step order is not that boundary (`K-AGENT-49`'s Why), which is why this is
+  # a job of its own and not the steps before the token in the agent's job, as it was until
+  # kanon#243. The report crosses as an artifact, and what the agent's job needs besides it
+  # (the resolved project, the commit, the hook's conclusion) as outputs.
+  criteria:
+    needs: filter
+    if: needs.filter.outputs.member == 'true'
+    runs-on: ubuntu-latest
+    # The criteria's own bound: the hook and the tests, without the agent. The agent's job
+    # keeps its 45.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      project: ${{ steps.resolve.outputs.project }}
+      sha: ${{ steps.checkout.outputs.commit }}
+      hook: ${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.project.conclusion }}
+      kanon-error: ${{ steps.hook.outputs.kanon-error }}
+    steps:
+      # BEFORE CHECKOUT, because `ref` decides what gets checked out. On a dispatch the
+      # inputs are authoritative; on a label event they are recovered from the QA issue
+      # body, which states both — "Verify project #961 on staging" and "The work is
+      # deployed in `v0.48.9`".
+      #
+      # Failing loudly on an unresolvable project is deliberate: the alternative is a
+      # job that runs `verify-acs.mjs ""` and reports nothing, which reads as "the
+      # project has no criteria" — a green run that verified nothing, which is the one
+      # outcome phase 5 exists to prevent.
+      - name: Resolve the project and ref
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_PROJECT: ${{ inputs.project }}
+          DISPATCH_REF: ${{ inputs.ref }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          if [ -n "$DISPATCH_PROJECT" ]; then
+            PROJECT="$DISPATCH_PROJECT"; REF="$DISPATCH_REF"
+          else
+            BODY="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
+            PROJECT="$(printf '%s' "$BODY" | sed -n 's/.*[Vv]erify project #\([0-9][0-9]*\).*/\1/p' | head -1)"
+            REF="$(printf '%s' "$BODY" | sed -n 's/.*deployed in `\([^`]*\)`.*/\1/p' | head -1)"
+          fi
+          if [ -z "$PROJECT" ]; then
+            echo "::error title=agent-verify-acs::Could not resolve the project from issue #$ISSUE. A QA issue's body must say \"Verify project #<n>\"; without it there is nothing to verify and a green run would claim otherwise."
+            exit 1
+          fi
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Verifying project #$PROJECT at \`${REF:-the default branch}\`." >> "$GITHUB_STEP_SUMMARY"
+
+      # The BRIEF must come from the ref under test, not from HEAD: verifying a
+      # tag's code against a newer brief's criteria would judge the release by
+      # acceptance criteria it never had.
+      - uses: actions/checkout@v7
+        id: checkout
+        with:
+          ref: ${{ steps.resolve.outputs.ref || github.ref }}
+          fetch-depth: 0
+          # NO PERSISTED CREDENTIAL (`K-AGENT-50`): the code under test runs in this job, and
+          # nothing here pushes. The job's own token is read-only, and no step that runs the
+          # tree's code is handed it.
+          persist-credentials: false
+
+      - name: Say what is being verified, before verifying it
+        env:
+          REQUESTED: ${{ steps.resolve.outputs.ref }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+          {
+            echo "| Verifying | |"
+            echo "|---|---|"
+            echo "| requested ref | \`${REQUESTED:-（default branch）}\` |"
+            echo "| resolved to | \`${TAG:-$SHA}\` |"
+            # An explicit branch. `${TAG:-x}` is NOT an else for `${TAG:+y}` — it
+            # returns $TAG when TAG is set, so the two together printed the tag
+            # twice, garbling the one line that says whether this is what the
+            # reference environment runs.
+            if [ -n "$TAG" ]; then
+              echo "| tagged release | \`$TAG\` |"
+            else
+              echo "| tagged release | **no** — this is not a released commit, so it is not what the reference environment runs |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The scripts are Kanon's, read from the action cache at the tag the caller pinned (plan
+      # 0001 §3); the brief and the tests they run are the ref's, from the checkout above.
+      # BEFORE the hook, so the project's own toolchain still wins the PATH for its tests, and
+      # read from this step's OUTPUT after it, which the hook cannot rewrite as it can
+      # `$GITHUB_ENV` (kanon#110).
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      # THE PROJECT-SETUP HOOK, FROM THE COMMIT THAT DEFINED THIS LANE (RA-2694, RA-2697). Every
+      # other lane reads the hook from its checkout, but this one checks out the ref under
+      # test — usually a release tag, and a tag cut before the hook existed has none, which
+      # would make every verification of an older release fail. So the hook is loaded from
+      # `github.sha` (`fetch-depth: 0` makes it readable whatever was checked out), taken
+      # back out before the criteria run, and put back after the agent for its post steps.
+      # The commit is recorded for that last step, as the spine's presence check records the
+      # one it read from.
+      #
+      # THIS LOAD OUTLIVES THE BLOCKS' (RA-2697), and it is the hook's own, not a copy of
+      # theirs. The blocks moved to `$/` because they are the pipeline's code; the hook is the
+      # project's, so it stays a `./` reference, and the only tree a `./` reference can read
+      # is the workspace. A `$/` hook would load from the action cache with no step here at
+      # all, but only while this lane lives in the repository that holds the hook: once Kanon
+      # ships the lane (plan 0001 step 4), `$/` names Kanon, and an older tag would be back to
+      # having no hook. Loading it from the defining commit works in both places: in a called
+      # workflow `github.sha` is the CALLER's commit, which is the adopter's, with its hook.
+      - name: Load the project-setup hook from the commit that defined this lane
+        id: hook
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          if ! git checkout "$SHA" -- .github/actions/project-setup; then
+            echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and $SHA, the commit that defined it, has none."
+            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # THE PROJECT'S DATABASE, AS IT DECLARES IT (kanon#18; `agent-lane.yml`'s header). Read
+      # from the commit that defined this lane, as the hook is, and for the same reason: the
+      # tag under test may predate the declaration. Before the hook, which starts it.
+      - uses: $/actions/test-database
+        id: database
+        with:
+          from: ${{ steps.hook.outputs.sha }}
+
+      # The toolchain, `npm ci`, `db:init` and Chromium — the four setup steps this lane ran
+      # here before, now the hook's. Against the ref under test: the install and the schema
+      # are the tag's own. Chromium's installer is read from `github.sha`, as it was.
+      - uses: ./.github/actions/project-setup
+        id: project
+        with:
+          lane: verify-acs
+          install: "true"
+          database: ${{ steps.database.outputs.database }}
+          browsers: "true"
+
+      # THE CRITERIA RUN SEES THE REF UNDER TEST, BYTE FOR BYTE. The load above put the
+      # defining commit's copy of the hook into the tree, and a project's criteria can be
+      # cited by tests that READ `.github/actions/` — a pipeline project's are. Left in
+      # place, those tests would judge the tag against `main`'s hook (or, at a tag cut
+      # before the hook existed, against files the tag never had). So the tree goes back to
+      # exactly what was checked out before anything is verified.
+      - name: Put the ref under test back exactly as it is, before the criteria run
+        run: git restore --source=HEAD --staged --worktree -- .github/actions/project-setup
+
+      # Deterministic producer -> JSON. `continue-on-error` because a FAILING
+      # acceptance criterion is the finding, not a broken job: the whole point is
+      # to report it, and a hard exit here would leave the Explorer nothing to read.
+      - name: Resolve and run the project's acceptance criteria
+        id: verify
+        continue-on-error: true
+        env:
+          PROJECT: ${{ steps.resolve.outputs.project }}
+          KANON: ${{ steps.kanon.outputs.path }}
+        run: |
+          set -uo pipefail
+          node "$KANON/scripts/verify-acs.mjs" "$PROJECT" --run --json=qa-verify-acs.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # NOT swallowed. No artifact means the producer died before writing one, and
+      # that is a broken job — reporting "nothing to verify" would be the exact
+      # silent-absence this phase exists to avoid, on the artifact that closes a
+      # project.
+      - name: The artifact must exist
+        run: |
+          set -euo pipefail
+          if [ ! -f qa-verify-acs.json ]; then
+            echo "::error title=agent-verify-acs::verify-acs.mjs wrote no artifact — it failed before reporting. This is NOT 'no criteria to verify'."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: qa-verify-acs-${{ steps.resolve.outputs.project }}
+          path: qa-verify-acs.json
+          if-no-files-found: error
+
+      # THE HOOK GOES BACK (RA-2694), for its toolchain's post step — copied verbatim from
+      # `agent-lane.yml`, which says why. Last, as the post steps run when this job ends.
+      - name: Put the project-setup hook back for its post steps
+        if: always() && steps.hook.outputs.sha != ''
+        env:
+          SHA: ${{ steps.hook.outputs.sha }}
+        run: |
+          if git checkout "$SHA" -- .github/actions/project-setup 2>/dev/null; then
+            echo "project-setup hook put back from $SHA"
+          else
+            echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
+          fi
+
   # THE LANE'S RUN, AS A CALLED WORKFLOW (kanon#279, `K-AGENT-49`). `verify-acs-run.yml` mints the
   # token in a job that holds the key and runs nothing else, then hands it to the agent's job
   # (`verify-acs-agent-job.yml`). Both sit inside this job's scope, so the mint waits
   # with the agent: a token minted before the wait could expire under it.
+  #
+  # AFTER `criteria`, WHATEVER IT CONCLUDED (kanon#243): the mint happens only once the code
+  # under test has finished running. A criteria job that failed still gets an agent's job, which
+  # starts no agent but records the run and the stage it failed at, as the single job did; one
+  # that was skipped or cancelled gets none.
   verify:
-    needs: filter
-    if: needs.filter.outputs.member == 'true'
+    needs: [filter, criteria]
+    if: >-
+      !cancelled()
+      && needs.filter.outputs.member == 'true'
+      && (needs.criteria.result == 'success' || needs.criteria.result == 'failure')
     uses: $/.github/workflows/verify-acs-run.yml
     with:
-      project: ${{ inputs.project }}
-      ref: ${{ inputs.ref }}
+      project: ${{ needs.criteria.outputs.project }}
+      sha: ${{ needs.criteria.outputs.sha }}
+      criteria: ${{ needs.criteria.result }}
+      hook: ${{ needs.criteria.outputs.hook }}
+      kanon-error: ${{ needs.criteria.outputs.kanon-error }}
     secrets:
       app-id: ${{ secrets.EXPLORER_APP_ID }}
       app-private-key: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
