@@ -106,6 +106,11 @@ on:
         required: false
         type: string
         default: "false"
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
     secrets:
       LEAD_APP_ID:
         required: true
@@ -117,7 +122,8 @@ on:
 concurrency:
   # Never two revisions of one brief at once: both would read the same review and
   # push conflicting edits to the same branch.
-  group: agent-lead-revise-${{ github.event.pull_request.number || inputs.pr_number }}
+  # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  group: agent-lead-revise-${{ github.event.pull_request.number || inputs.pr_number }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the

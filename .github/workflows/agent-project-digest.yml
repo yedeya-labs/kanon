@@ -41,6 +41,11 @@ on:
         required: false
         type: string
         default: ""
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -49,7 +54,8 @@ on:
         required: false
 
 concurrency:
-  group: kanon-project-digest
+  # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  group: kanon-project-digest${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the

@@ -82,6 +82,11 @@ on:
         required: false
         type: string
         default: ""
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
     secrets:
       MERGER_APP_ID:
         required: true
@@ -91,7 +96,8 @@ on:
 concurrency:
   # Per PR on a review event; one global lane for the sweep. Never `cancel-in-progress`
   # — cancelling a run mid-merge is how a PR ends up merged with nothing recorded.
-  group: qa-merge-${{ github.event.pull_request.number || inputs.pr_number || 'sweep' }}
+  # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  group: qa-merge-${{ github.event.pull_request.number || inputs.pr_number || 'sweep' }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the

@@ -34,6 +34,11 @@ on:
         required: false
         type: string
         default: ""
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
     secrets:
       IMPLEMENTER_APP_ID:
         required: true
@@ -46,7 +51,8 @@ concurrency:
   # Scope by the JUST-ADDED label, not just the issue: creating an issue with N
   # labels fires N simultaneous `labeled` events, and an issue-only group would
   # let them cancel each other — including the legitimate qa:needs-triage run.
-  group: qa-triage-${{ github.event.issue.number || inputs.issue_number }}-${{ github.event.label.name || 'dispatch' }}
+  # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  group: qa-triage-${{ github.event.issue.number || inputs.issue_number }}-${{ github.event.label.name || 'dispatch' }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 # NO `issues: read` / `actions: read` HERE SINCE RA-2092 (RA-2223). They were for the quality

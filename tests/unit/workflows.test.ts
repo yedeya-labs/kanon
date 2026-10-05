@@ -509,12 +509,12 @@ describe('plan 0001 step 2: the agent lanes smoke run', () => {
     expect(named[0]?.[1].strategy).toBeUndefined();
   });
 
-  it('calls every Kanon lane through `$/`, with no inputs, and never inherits secrets', () => {
+  it('calls every Kanon lane through `$/`, with only the `smoke` input, and never inherits secrets', () => {
     const lanes = readdirSync(new URL('../../.github/workflows/', import.meta.url))
       .filter((n) => /^agent-.*\.yml$/.test(n) && !['agent-lane.yml', 'agent-lanes-smoke.yml', 'agent-blocks-smoke.yml'].includes(n));
     expect(callers.map(([, j]) => j.uses).sort()).toEqual(lanes.map((n) => `$/.github/workflows/${n}`).sort());
     for (const [, j] of callers) {
-      expect((j as { with?: unknown }).with).toBeUndefined();
+      expect((j as { with?: unknown }).with).toEqual({ smoke: 'agent-lanes-smoke' });
       expect((j as { secrets?: unknown }).secrets).toEqual(expect.any(Object));
     }
   });

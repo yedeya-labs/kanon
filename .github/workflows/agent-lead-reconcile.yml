@@ -76,6 +76,11 @@ on:
         required: false
         type: string
         default: ""
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
     secrets:
       LEAD_APP_ID:
         required: true
@@ -84,7 +89,8 @@ on:
 
 concurrency:
   # Never two ticks at once: both would derive the same world and act on it twice.
-  group: agent-lead-reconcile
+  # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  group: agent-lead-reconcile${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the

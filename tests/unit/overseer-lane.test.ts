@@ -5,6 +5,7 @@ import { parse } from 'yaml';
 import { unlinkedQuery } from '../../scripts/capability-interlock.mjs';
 import { storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 import { handedIn, mintFor, readFlattened, workflowText } from './helpers/called-workflow.js';
+import { callerInputs, realGroup } from './helpers/smoke-group.js';
 
 /**
  * Plan 0004 step 13: the Overseer, moved from the reference adopter as a Kanon lane
@@ -325,7 +326,7 @@ describe('the workflow around it', () => {
   it('keeps the weekly schedule, and a dispatch with no inputs', () => {
     expect(caller.on.schedule).toEqual([{ cron: '0 7 * * 1' }]);
     expect(LANE_TEXT).toContain('schedule: "0 7 * * 1"');
-    expect(wf.on.workflow_call.inputs).toBeUndefined();
+    expect(callerInputs(wf.on.workflow_call.inputs)).toBeUndefined();
   });
 
   it('the caller grants what the store job, the agent job and the delete job need', () => {
@@ -333,7 +334,7 @@ describe('the workflow around it', () => {
   });
 
   it('serialises runs, admits only its caller\'s two triggers, and bounds every job', () => {
-    expect(wf.concurrency).toEqual({ group: 'agent-overseer', 'cancel-in-progress': false });
+    expect({ ...wf.concurrency, group: realGroup(wf.concurrency.group) }).toEqual({ group: 'agent-overseer', 'cancel-in-progress': false });
     expect(wf.jobs.gate!.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'");
     for (const [name, job] of Object.entries(wf.jobs)) expect(job['timeout-minutes'], name).toBeGreaterThan(0);
   });
