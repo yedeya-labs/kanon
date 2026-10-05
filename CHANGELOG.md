@@ -1,5 +1,64 @@
 # Changelog
 
+## [0.25.0](https://github.com/yedeya-labs/kanon/compare/v0.24.0...v0.25.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **lanes:** move the Overseer into Kanon as an optional lane that files only what the adopter can act on ([#271](https://github.com/yedeya-labs/kanon/issues/271))
+* **lanes:** move the code audit into Kanon, and read the code trees from the stack document ([#257](https://github.com/yedeya-labs/kanon/issues/257))
+* **lanes:** load no project settings in the Reviewer, so its flags are the whole grant ([#282](https://github.com/yedeya-labs/kanon/issues/282))
+* **lanes:** restrict the Reviewer's shell to an allow-list that runs no PR code ([#276](https://github.com/yedeya-labs/kanon/issues/276))
+* escalate an invariant promotion at merge, fix two brief-guard checks, and drop the old digest webhook name ([#270](https://github.com/yedeya-labs/kanon/issues/270))
+* **lanes:** run no PR code in the review job, stamp only this run's verdict, and skip zero-item reconciles ([#235](https://github.com/yedeya-labs/kanon/issues/235))
+* **lanes:** read tooling tests' directories from the declared pipeline code, drop the environment's name, and guard against adopter literals ([#237](https://github.com/yedeya-labs/kanon/issues/237))
+* **lanes:** sign agent commits off as the recorded delegate, and exempt Kanon from Dependabot's default cooldown ([#245](https://github.com/yedeya-labs/kanon/issues/245))
+
+### Features
+
+* escalate an invariant promotion at merge, fix two brief-guard checks, and drop the old digest webhook name ([#270](https://github.com/yedeya-labs/kanon/issues/270)) ([2a9adc7](https://github.com/yedeya-labs/kanon/commit/2a9adc7055a5d876985cb8fcda3f457b45a693e5))
+* **lanes:** move the code audit into Kanon, and read the code trees from the stack document ([#257](https://github.com/yedeya-labs/kanon/issues/257)) ([be2cc00](https://github.com/yedeya-labs/kanon/commit/be2cc001e86a17f1430cc419a114c808d9a7d391))
+* **lanes:** move the dispatch sweep into Kanon, reading its cost rows from the store or run artifacts ([#247](https://github.com/yedeya-labs/kanon/issues/247)) ([7a8be8d](https://github.com/yedeya-labs/kanon/commit/7a8be8d9fbde42b46a3e6c96d4816032af9b3e31))
+* **lanes:** move the Explorer's sweep into Kanon, on the store contract and the adopter's sweep hook ([#259](https://github.com/yedeya-labs/kanon/issues/259)) ([449182a](https://github.com/yedeya-labs/kanon/commit/449182aacbd071923544253013dfca4d9c1fab16))
+* **lanes:** move the Overseer into Kanon as an optional lane that files only what the adopter can act on ([#271](https://github.com/yedeya-labs/kanon/issues/271)) ([d0915f4](https://github.com/yedeya-labs/kanon/commit/d0915f4f2ae54327e5c5b8abe3156ff9e2279453))
+* **lanes:** restrict the Reviewer's shell to an allow-list that runs no PR code ([#276](https://github.com/yedeya-labs/kanon/issues/276)) ([4d29e9c](https://github.com/yedeya-labs/kanon/commit/4d29e9c733f5b320d535544bd6a2718740e41505))
+* **lanes:** run no PR code in the review job, stamp only this run's verdict, and skip zero-item reconciles ([#235](https://github.com/yedeya-labs/kanon/issues/235)) ([72a740c](https://github.com/yedeya-labs/kanon/commit/72a740c52f0f0b21326e5688642b15678a24e4af))
+* **lanes:** run the Implementer on Kanon's own repository, inert until its App exists ([#231](https://github.com/yedeya-labs/kanon/issues/231)) ([be1077e](https://github.com/yedeya-labs/kanon/commit/be1077e1e4fbcbbf0b1c9be5216698318ab80870))
+
+
+### Bug Fixes
+
+* **citation-guards:** clear the citation and doc-guard backlog ([#227](https://github.com/yedeya-labs/kanon/issues/227)) ([d742bdf](https://github.com/yedeya-labs/kanon/commit/d742bdf549a5b8458f0f86aa781f4c1c6435e4ce))
+* free the implement slot without the App token, say what a merge queue's push does at the gate, and don't credit reverted deploys ([#262](https://github.com/yedeya-labs/kanon/issues/262)) ([f3a2217](https://github.com/yedeya-labs/kanon/commit/f3a22177036a0646e0d9e82319418a480387d69a))
+* judge the release PR at its branch head, and stop two closing-refs misdiagnoses ([#244](https://github.com/yedeya-labs/kanon/issues/244)) ([26ee2aa](https://github.com/yedeya-labs/kanon/commit/26ee2aaf4da543b79c749a203ee52ecb9853606a))
+* **lanes:** keep the App private key out of the spine's agent job ([#281](https://github.com/yedeya-labs/kanon/issues/281)) ([864bfff](https://github.com/yedeya-labs/kanon/commit/864bfff556b629e8a7bcfb33749982758ed331b8))
+* **lanes:** load no project settings in the Reviewer, so its flags are the whole grant ([#282](https://github.com/yedeya-labs/kanon/issues/282)) ([b7dfae1](https://github.com/yedeya-labs/kanon/commit/b7dfae1179b478e4a80c7dcce5da827acc49df1b))
+* **lanes:** re-dispatch an issue outside a project whose latest implement run left nothing ([#265](https://github.com/yedeya-labs/kanon/issues/265)) ([4a89bd5](https://github.com/yedeya-labs/kanon/commit/4a89bd504ea3df70c40e6639bb0fe3a64813943e))
+* **lanes:** read tooling tests' directories from the declared pipeline code, drop the environment's name, and guard against adopter literals ([#237](https://github.com/yedeya-labs/kanon/issues/237)) ([a7986ea](https://github.com/yedeya-labs/kanon/commit/a7986ead1777a00fc53a378d874642e957b2a1df))
+* **lanes:** red an implement run that ends green with no branch, PR or comment ([#252](https://github.com/yedeya-labs/kanon/issues/252)) ([a218007](https://github.com/yedeya-labs/kanon/commit/a21800780c2929400c150b416cf7f6dd78af95d0))
+* **lanes:** sign agent commits off as the recorded delegate, and exempt Kanon from Dependabot's default cooldown ([#245](https://github.com/yedeya-labs/kanon/issues/245)) ([e49a59f](https://github.com/yedeya-labs/kanon/commit/e49a59fcb588028cf69f30b507345018b3ac2c01))
+* **lead:** credit a deploy whose reverted work was re-landed by a new pull request ([#278](https://github.com/yedeya-labs/kanon/issues/278)) ([aa2599e](https://github.com/yedeya-labs/kanon/commit/aa2599e36949eb0e091456edb4dc8c271997a45b))
+* **lead:** settle the dispatch-sweep and project-digest backlog ([#242](https://github.com/yedeya-labs/kanon/issues/242)) ([9f0e5f9](https://github.com/yedeya-labs/kanon/commit/9f0e5f9ed2d7520d06114409b324c4e2e47115cc))
+* **merge:** read the Merger's register from the default branch, evaluate lane-gate conditions, and record K-MERGE-4's link exception ([#236](https://github.com/yedeya-labs/kanon/issues/236)) ([b352722](https://github.com/yedeya-labs/kanon/commit/b352722739529f6f252d4ec91ecef128422f5d52))
+* **qa-store:** make a partial re-run of a store-coupled lane safe, and hold store jobs to the block ([#228](https://github.com/yedeya-labs/kanon/issues/228)) ([0de8a2c](https://github.com/yedeya-labs/kanon/commit/0de8a2c8faf60d289ded4ea263f966f51224de64))
+
+
+### Documentation
+
+* **plans:** plan the lean installation ([#292](https://github.com/yedeya-labs/kanon/issues/292)) ([ba6cc65](https://github.com/yedeya-labs/kanon/commit/ba6cc65b8c4dc0e19f14bc3af66c8b3c152eee9f))
+* **qa:** register the Implementer and Explorer Apps the Owner created ([#289](https://github.com/yedeya-labs/kanon/issues/289)) ([fdfbbd9](https://github.com/yedeya-labs/kanon/commit/fdfbbd9a4910d5045e280243b3a00a0bf31bc2c8))
+
+
+### Tests
+
+* **lanes:** fail a lane job that GitHub's transitive implicit success() never starts ([#267](https://github.com/yedeya-labs/kanon/issues/267)) ([e38e537](https://github.com/yedeya-labs/kanon/commit/e38e5372e3e7fc7f07a9eb8ac247ed3b06e3772e))
+* widen five guards and resolve every script's CLI entry check through realpath ([#256](https://github.com/yedeya-labs/kanon/issues/256)) ([d3c186b](https://github.com/yedeya-labs/kanon/commit/d3c186b9e5793dc8aae11c9e69473bde5d7889a1))
+
+
+### CI
+
+* fail PR text that names the reference adopter, and a rule Why that cites the project's issues or files ([#258](https://github.com/yedeya-labs/kanon/issues/258)) ([e396bad](https://github.com/yedeya-labs/kanon/commit/e396bad19a1ce3b34ea2d996d6af6234c211fbab))
+
 ## [0.24.0](https://github.com/yedeya-labs/kanon/compare/v0.23.0...v0.24.0) (2026-10-04)
 
 
