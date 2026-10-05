@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -128,6 +129,16 @@ describe('the readers, on a tree', () => {
     }
     return root;
   };
+  const git = (root: string, ...args: string[]) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  /** The same tree, in a git repository, with `track` staged and the rest left untracked. */
+  const repo = (files: Record<string, string>, track: string[]) => {
+    const root = tree(files);
+    git(root, 'init', '-q');
+    git(root, 'config', 'user.email', 't@t');
+    git(root, 'config', 'user.name', 't');
+    if (track.length) git(root, 'add', '--', ...track);
+    return root;
+  };
 
   it('readCodeAreas: no stack document declares nothing; a malformed one throws', () => {
     expect(readCodeAreas(tree({}))).toBe(UNDECLARED);
@@ -159,6 +170,40 @@ describe('the readers, on a tree', () => {
     expect(referenceCorpus(declared, [])).toEqual(['docs/d.md', 'docs/qa/stack.md', 'src/a.ts', 'tests/c.test.ts']);
     const undeclared = tree(files);
     expect(referenceCorpus(undeclared, [])).toEqual(['docs/d.md', 'lib/b.ts', 'src/a.ts', 'tests/c.test.ts']);
+  });
+
+  it('referenceCorpus reads the tracked files, so an untracked dependency tree is not the corpus (kanon#266)', () => {
+    const root = repo({
+      'src/a.ts': '', 'docs/d.md': '', '.github/scripts/g.mjs': '',
+      'vendor/pkg/README.md': '', 'dist/bundle.mjs': '',
+    }, ['src/a.ts', 'docs/d.md', '.github/scripts/g.mjs']);
+    // Undeclared: the whole repository as git sees it — every tracked file, dot-directories
+    // included, as `citation-shift` and `doc-path-guard` read it, and nothing git does not track.
+    expect(referenceCorpus(root, [])).toEqual(['.github/scripts/g.mjs', 'docs/d.md', 'src/a.ts']);
+    // Declared, the same read, narrowed to the trees.
+    mkdirSync(join(root, 'docs/qa'), { recursive: true });
+    writeFileSync(join(root, 'docs/qa/stack.md'), STACK('- `src/` — code: x'));
+    git(root, 'add', 'docs/qa/stack.md');
+    expect(referenceCorpus(root, [])).toEqual(['docs/d.md', 'docs/qa/stack.md', 'src/a.ts']);
+  });
+
+  it('referenceCorpus skips a dangling symlink instead of crashing on it (kanon#266)', () => {
+    const files = { 'src/a.ts': '', 'tests/c.test.ts': '' };
+    // Outside a git repository, the walk.
+    const walked = tree(files);
+    symlinkSync(join(walked, 'src/nowhere.ts'), join(walked, 'src/dangling.ts'));
+    symlinkSync(join(walked, 'tests/nowhere.test.ts'), join(walked, 'tests/dangling.test.ts'));
+    expect(referenceCorpus(walked, [])).toEqual(['src/a.ts', 'tests/c.test.ts']);
+    // And inside one, where git tracks the dangling link as a file.
+    const tracked = repo(files, []);
+    symlinkSync(join(tracked, 'src/nowhere.ts'), join(tracked, 'src/dangling.ts'));
+    git(tracked, 'add', '-A');
+    expect(referenceCorpus(tracked, [])).toEqual(['src/a.ts', 'tests/c.test.ts']);
+  });
+
+  it('referenceCorpus walks a tree that is not a repository root, inside a repository or not (kanon#266)', () => {
+    const root = repo({ 'sub/src/a.ts': '', 'sub/docs/d.md': '' }, []);
+    expect(referenceCorpus(join(root, 'sub'), [])).toEqual(['docs/d.md', 'src/a.ts']);
   });
 
   it('referenceCorpus leaves out a tooling test only inside a test tree', () => {
