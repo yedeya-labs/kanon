@@ -12,13 +12,15 @@ import { BUCKETS, milestones } from '../../cli/milestones.mjs';
 const REPO = 'acme/widgets';
 type Milestone = { number: number; title: string; state: string; due_on: string | null };
 
-const fakeGitHub = (initial: Milestone[], opts: { listFails?: boolean; createFails?: string; pageSize?: number } = {}) => {
+type Gh = { status: number; stdout: string; stderr: string };
+const fakeGitHub = (initial: Milestone[], opts: { listFails?: string; createFails?: string; pageSize?: number; user?: Gh } = {}) => {
   const milestonesHeld = initial.map((m) => ({ ...m }));
   const calls: string[][] = [];
   const gh = async (args: string[]) => {
     calls.push(args);
+    if (args[1] === 'user') return opts.user ?? { status: 0, stdout: 'octo\n', stderr: '' };
     if (args.includes('--slurp')) {
-      if (opts.listFails) return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
+      if (opts.listFails) return { status: 1, stdout: '', stderr: opts.listFails };
       const size = opts.pageSize ?? 100;
       const pages: Milestone[][] = [];
       for (let i = 0; i < milestonesHeld.length; i += size) pages.push(milestonesHeld.slice(i, i + size));
@@ -36,14 +38,14 @@ const fakeGitHub = (initial: Milestone[], opts: { listFails?: boolean; createFai
   return { gh, calls, milestonesHeld };
 };
 
-const run = async (github: ReturnType<typeof fakeGitHub>, argv = ['--repo', REPO]) => {
+const run = async (github: ReturnType<typeof fakeGitHub>, argv = ['--repo', REPO], env: Record<string, string> = {}) => {
   const out: string[] = [];
   const err: string[] = [];
-  const status = await milestones(argv, { gh: github.gh, out: (l: string) => out.push(l), err: (l: string) => err.push(l) });
+  const status = await milestones(argv, { gh: github.gh, env, out: (l: string) => out.push(l), err: (l: string) => err.push(l) });
   return { status, out: out.join('\n'), err: err.join('\n') };
 };
 
-const writes = (calls: string[][]) => calls.filter((c) => !c.includes('--slurp'));
+const writes = (calls: string[][]) => calls.filter((c) => !c.includes('--slurp') && c[1] !== 'user');
 const roadmap = (title: string, number = 7): Milestone => ({ number, title, state: 'open', due_on: '2026-12-01T08:00:00Z' });
 const bucket = (title: string, number = 3): Milestone => ({ number, title, state: 'open', due_on: null });
 
@@ -82,7 +84,8 @@ describe('kanon milestones creates the bucket milestones (#72, K-ADOPT-1 step 7)
     const github = fakeGitHub([bucket('a', 1), bucket('b', 2), bucket('Development Automation', 3)], { pageSize: 2 });
     const r = await run(github);
     expect(r.status).toBe(0);
-    expect(github.calls[0]).toEqual(['api', '--paginate', '--slurp', `repos/${REPO}/milestones?state=all&per_page=100`]);
+    expect(github.calls[0]).toEqual(['api', 'user', '--jq', '.login']);
+    expect(github.calls[1]).toEqual(['api', '--paginate', '--slurp', `repos/${REPO}/milestones?state=all&per_page=100`]);
     expect(writes(github.calls)).toEqual([['api', '-X', 'POST', `repos/${REPO}/milestones`, '-f', 'title=Product Backlog']]);
   });
 
@@ -113,11 +116,13 @@ describe('kanon milestones creates the bucket milestones (#72, K-ADOPT-1 step 7)
   });
 
   it('fails, creating nothing, when the milestones cannot be listed', async () => {
-    const github = fakeGitHub([], { listFails: true });
+    const github = fakeGitHub([], { listFails: 'gh: Not Found (HTTP 404)' });
     const r = await run(github);
     expect(r.status).toBe(1);
     expect(r.err).toContain(`could not list the milestones of ${REPO}: gh: Not Found (HTTP 404)`);
     expect(writes(github.calls)).toEqual([]);
+    // A 404 is not the token's fault, so no token advice.
+    expect(r.err).not.toMatch(/unset|gh auth/);
   });
 
   it('fails when a create fails, naming it, and still tries the other bucket', async () => {
@@ -161,5 +166,49 @@ describe('kanon milestones creates the bucket milestones (#72, K-ADOPT-1 step 7)
   it('K-ADOPT-1 step 7 names the command', () => {
     const step = /^7\. \*\*Milestones\.\*\*.*$/m.exec(readFileSync('rulebook/10-adoption.md', 'utf8'))?.[0] ?? '';
     expect(step).toContain('kanon milestones');
+  });
+});
+
+describe('kanon milestones names the token it uses (plan 0005 §5.1)', () => {
+  it("prints the token's source and its login before it lists anything, and never the token", async () => {
+    const github = fakeGitHub([]);
+    const r = await run(github, ['--repo', REPO], { GH_TOKEN: 'ghp_never_printed' });
+    expect(r.status).toBe(0);
+    expect(r.out.split('\n')[0]).toBe('Using the token in GH_TOKEN, which belongs to octo.');
+    expect(github.calls[0]).toEqual(['api', 'user', '--jq', '.login']);
+    expect(`${r.out}${r.err}${JSON.stringify(github.calls)}`).not.toContain('ghp_never_printed');
+    expect((await run(fakeGitHub([]), ['--repo', REPO], {})).out).toContain("Using gh's stored login, which belongs to octo.");
+    expect((await run(fakeGitHub([]), ['--repo', REPO], { GITHUB_TOKEN: 'x' })).out).toContain('Using the token in GITHUB_TOKEN, which belongs to octo.');
+  });
+
+  it('stops, listing nothing, when GitHub refuses a stale GH_TOKEN, and says how to fix it', async () => {
+    const github = fakeGitHub([], { user: { status: 1, stdout: '', stderr: 'gh: Bad credentials (HTTP 401)' } });
+    const r = await run(github, ['--repo', REPO], { GH_TOKEN: 'ghp_stale' });
+    expect(r.status).toBe(1);
+    expect(github.calls).toEqual([['api', 'user', '--jq', '.login']]);
+    expect(r.err).toContain('GitHub refuses the token in GH_TOKEN (gh: Bad credentials (HTTP 401)). Nothing was changed.');
+    expect(r.err).toContain('`unset GH_TOKEN` to use the stored login');
+  });
+
+  it('carries on when the login cannot be read for another reason, and says so', async () => {
+    const github = fakeGitHub([], { user: { status: 1, stdout: '', stderr: 'gh: Resource not accessible by integration (HTTP 403)' } });
+    const r = await run(github, ['--repo', REPO], { GITHUB_TOKEN: 'x' });
+    expect(r.status).toBe(0);
+    expect(r.out).toContain('Using the token in GITHUB_TOKEN; its login could not be read (gh: Resource not accessible by integration (HTTP 403)).');
+  });
+
+  it('adds the GH_TOKEN fix when GitHub refuses the list with 401 or 403', async () => {
+    const github = fakeGitHub([], { listFails: 'gh: Resource not accessible by personal access token (HTTP 403)' });
+    const r = await run(github, ['--repo', REPO], { GH_TOKEN: 'x' });
+    expect(r.status).toBe(1);
+    expect(r.err).toContain('kanon milestones: GH_TOKEN is set in this shell, and gh uses it before its stored login');
+  });
+
+  it('adds the same fix when a create is refused', async () => {
+    const github = fakeGitHub([], { createFails: 'Product Backlog' });
+    const forbidden = github.gh;
+    const r = await run({ ...github, gh: async (args: string[]) => (args.includes('POST') ? { status: 1, stdout: '', stderr: 'gh: Must have admin rights (HTTP 403)' } : forbidden(args)) }, ['--repo', REPO], { GH_TOKEN: 'x' });
+    expect(r.status).toBe(1);
+    expect(r.err).toContain('`unset GH_TOKEN`');
   });
 });
