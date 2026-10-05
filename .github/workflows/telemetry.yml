@@ -1,0 +1,49 @@
+# Kanon collects its own telemetry rows into the hosted store (plan 0002 S7 and S9).
+#
+# A trigger-only caller of Kanon's collector, written exactly as an adopter writes one
+# (docs/telemetry.md, "Collect the rows"). It is named `telemetry.yml` because
+# `telemetry-collect.yml` is the collector itself.
+#
+# IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap, as review.yml does). The job
+# holds the store's writer credentials, so the code that runs with them is a released version.
+# Dependabot's `kanon` group proposes each release here with the other pins, and `lane-check`
+# (in CI) holds every Kanon reference to one version.
+#
+# INERT UNTIL THE PIN REACHES A RELEASE THAT SHIPS THE COLLECTOR. The collector is new in the
+# release after v0.25.0, and lane-check doesn't let this file pin a different version from the
+# others. A schedule now would fail at startup every hour, because GitHub resolves a called
+# workflow before it reads any job's `if:`. So the schedule is commented out below, and a
+# dispatch fails at startup until Dependabot moves the pins. After that, a member removes the
+# comment marks (kanon#304).
+#
+# THE VARIABLES (not secrets: neither is a credential), from the store's stack outputs:
+#   KANON_TELEMETRY_URL          the `IngestUrl` output
+#   KANON_TELEMETRY_WRITER_ROLE  the `WriterRole<key>` output, for Kanon's register key
+# Until both are set the collector skips with a warning.
+name: Telemetry
+
+on:
+  # schedule:
+  #   - cron: "40 * * * *"
+  workflow_dispatch:
+    inputs:
+      window_minutes:
+        description: >-
+          Force an exact sweep span, in minutes. Leave empty to sweep back to the last
+          successful sweep, which is what recovers dropped schedules.
+        required: false
+        default: ""
+
+# The ceiling for the collector: it reads the artifacts and runs, and its collect job mints
+# the OIDC token for the writer role. Nothing else is granted.
+permissions:
+  actions: read
+  id-token: write
+
+jobs:
+  collect:
+    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.25.0
+    with:
+      url: ${{ vars.KANON_TELEMETRY_URL }}
+      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}
+      window_minutes: ${{ inputs.window_minutes }}

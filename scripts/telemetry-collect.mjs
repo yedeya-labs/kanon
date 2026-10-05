@@ -1,0 +1,286 @@
+#!/usr/bin/env node
+// The telemetry collector (plan 0002 S7): sweeps this repository's version-2 run rows from
+// their artifacts and sends each to the hosted store's ingest function, as its one writer.
+//
+// MOVED, NOT REWRITTEN (ADR 0009). This is the reference adopter's hourly collector, with the
+// parts S7 changes and nothing else:
+//   - it sends only version 2, the `kanon-telemetry-*` artifacts, to the function, 25 rows to a
+//     signed `POST` (§4), where it used to push the version-1 row to the adopter's own table and
+//     bucket; there is one store and one step (ADR 0009 §2: no second live copy);
+//   - its credentials are the adopter's writer role, which can invoke the function and nothing
+//     else (§3), not the adopter's QA role;
+//   - a row is checked with `validate` before it is sent, so a bad row fails the collector with
+//     the field's NAME (§2.5), and a row whose lane, run or attempt isn't its artifact's is
+//     refused, because the artifact listing is the only thing vouching for it;
+//   - only this repository's own runs count (`listTelemetryArtifacts`): a fork's run can upload
+//     any row under any name, and this job holds the writer.
+// What is kept as it was: the watermark, the floor and the override, the one paginated artifact
+// scan, the download by id, and the red run as the page.
+//
+// AN ANCHOR, NOT A PERSISTED CURSOR. The function keys a row from its own fields (`recorded_at`,
+// run, attempt, number), so re-sending an artifact overwrites its row identically. Over-sweeping
+// is therefore free, and the span can be derived rather than remembered: each sweep reaches back
+// to the START of the last sweep whose collect job SUCCEEDED, floored at WINDOW so there is still
+// an overlap. A fixed span heals one dropped schedule and not two (the reference adopter lost a
+// four-hour hole that way, silently), and GitHub documents scheduled runs as best effort.
+//
+// CAPPED AT 7 DAYS, OR AT THE REPOSITORY'S RETENTION WHEN THAT IS SHORTER (S1a, #212). The
+// function refuses a `recorded_at` older than 8 days (§4), and an artifact past the repository's
+// retention is gone. A watermark older than the cap means rows were lost, and the run says so.
+//
+// LOGS HOLD COUNTS, IDS, LANES AND FIELD NAMES, NEVER A ROW'S VALUE (ADR 0007).
+
+import { appendFileSync } from 'node:fs';
+
+import { describeErrors, validate } from '../actions/agent-telemetry/schema.mjs';
+import { sign } from '../infra/telemetry/function/sigv4.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
+import { ARTIFACT_FILE, ghApi, ghDownload, listTelemetryArtifacts, readZipEntry } from './lib/telemetry-artifacts.mjs';
+
+const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
+/** The floor: even when the last sweep was minutes ago, overlap by this much. */
+export const WINDOW_MINUTES = 90;
+/** The ceiling: the function's 8-day `recorded_at` window less a day's slack (§4, §1.2). */
+export const SWEEP_CAP_DAYS = 7;
+/**
+ * Rows per `POST`, the function's own `MAX_ROWS` (§4). Not imported from it: the function's
+ * directory links the schema module, and this script runs from the Kanon tree a lane downloads.
+ */
+export const MAX_ROWS = 25;
+/** The collect job's name in `telemetry-collect.yml`, by which a run's success is judged. */
+export const COLLECT_JOB = 'Collect telemetry rows';
+
+/**
+ * @typedef {import('./lib/telemetry-artifacts.mjs').Api} Api
+ * @typedef {import('./lib/telemetry-artifacts.mjs').Download} Download
+ * @typedef {{ status: number, json: any }} PostResult
+ * @typedef {(rows: object[]) => Promise<PostResult>} Post
+ */
+
+/**
+ * How far back the sweep reaches, and whether rows were lost past its cap.
+ *
+ * An override (`window_minutes`) is an operator instruction and is honoured exactly, up to the
+ * cap. Otherwise: the last successful sweep's start, no later than the floor and no earlier than
+ * the cap. With no successful sweep, or an unreadable one, everything reachable: sweeping too
+ * much overwrites identically, and sweeping too little loses rows silently.
+ *
+ * @param {{ lastSuccess: string | null, now: number, windowMinutes?: number, overridden?: boolean, retentionDays?: number | null }} opts
+ * @returns {{ since: number, capped: boolean, capDays: number }}
+ */
+export function sweepSince({ lastSuccess, now, windowMinutes = WINDOW_MINUTES, overridden = false, retentionDays = null }) {
+  const capDays = retentionDays !== null && retentionDays < SWEEP_CAP_DAYS ? retentionDays : SWEEP_CAP_DAYS;
+  const cap = now - capDays * DAY;
+  const floor = now - windowMinutes * MINUTE;
+  if (overridden) return { since: Math.max(floor, cap), capped: floor < cap, capDays };
+  const watermark = lastSuccess === null ? NaN : Date.parse(lastSuccess);
+  if (!Number.isFinite(watermark)) return { since: cap, capped: false, capDays };
+  if (watermark > floor) return { since: floor, capped: false, capDays };
+  if (watermark < cap) return { since: cap, capped: true, capDays };
+  return { since: watermark, capped: false, capDays };
+}
+
+/**
+ * The top-level workflow's file, from `GITHUB_WORKFLOW_REF`
+ * (`<owner>/<repo>/.github/workflows/<file>@<ref>`). In a called workflow that is the CALLER's,
+ * which is where GitHub files the run, so the watermark needs no fixed file name.
+ * @param {string | undefined} ref
+ */
+export function workflowFileOf(ref) {
+  return /\/\.github\/workflows\/([^/@]+\.ya?ml)@/.exec(ref ?? '')?.[1] ?? null;
+}
+
+/**
+ * When the last sweep whose collect job succeeded started, or null when there was none.
+ *
+ * The RUN's success isn't enough: a run that skipped collecting because the store isn't set up
+ * yet also succeeds, and anchoring on it would drop the rows of the time before. So each
+ * successful run on the branch is checked for the collect job's own success, newest first.
+ *
+ * @param {{ api: Api, repo: string, file: string, branch: string, selfRunId: string, limit?: number }} opts
+ */
+export function lastSuccessfulSweep({ api, repo, file, branch, selfRunId, limit = 20 }) {
+  const runs = api(`repos/${repo}/actions/workflows/${encodeURIComponent(file)}/runs?status=success&branch=${encodeURIComponent(branch)}&per_page=${limit}`)?.workflow_runs ?? [];
+  for (const run of runs) {
+    // Never this run: it would be its own watermark and conclude that no time has passed.
+    if (String(run.id) === selfRunId) continue;
+    const jobs = api(`repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`)?.jobs ?? [];
+    const collected = jobs.some((/** @type {any} */ j) => (j.name === COLLECT_JOB || String(j.name).endsWith(` / ${COLLECT_JOB}`)) && j.conclusion === 'success');
+    if (collected) return String(run.created_at);
+  }
+  return null;
+}
+
+/** The function URL's region: `https://<id>.lambda-url.<region>.on.aws/`. */
+export function regionOf(/** @type {string} */ url) {
+  try {
+    return /\.lambda-url\.([a-z0-9-]+)\.on\.aws$/.exec(new URL(url).host)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The default `put(rows)`: one signed `POST` to the function URL with the writer role's
+ * credentials, which `configure-aws-credentials` put in the environment.
+ * @param {string} url
+ * @param {string} region
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {Post}
+ */
+export const signedPost = (url, region, env) => async (rows) => {
+  const body = JSON.stringify(rows);
+  const headers = { 'content-type': 'application/json' };
+  const credentials = { accessKeyId: env.AWS_ACCESS_KEY_ID ?? '', secretAccessKey: env.AWS_SECRET_ACCESS_KEY ?? '', sessionToken: env.AWS_SESSION_TOKEN };
+  const res = await fetch(url, { method: 'POST', headers: { ...headers, ...sign({ method: 'POST', url, headers, body, region, service: 'lambda', credentials }) }, body });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    // An answer that isn't JSON is judged by its status alone; its body is never printed.
+  }
+  return { status: res.status, json };
+};
+
+/**
+ * One sweep. Pure apart from what it is given.
+ *
+ * @param {{
+ *   repo: string, now: number, lastSuccess: string | null, window?: string,
+ *   api: Api, download: Download, post: Post, log?: (line: string) => void,
+ * }} opts
+ * @returns {Promise<{ since: number, listed: number, sent: number, stored: number, foreign: number, failures: string[], warnings: string[] }>}
+ */
+export async function collect({ repo, now, lastSuccess, window = '', api, download, post, log = () => {} }) {
+  const overridden = window.trim() !== '';
+  const windowMinutes = overridden ? Number(window) : WINDOW_MINUTES;
+  /** @type {string[]} */
+  const failures = [];
+  /** @type {string[]} */
+  const warnings = [];
+  if (overridden && !(Number.isInteger(windowMinutes) && windowMinutes > 0)) {
+    return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, failures: [`window_minutes is '${window}', not a whole number of minutes`], warnings };
+  }
+
+  // One listing back to the furthest the sweep could reach; the span is cut from it below, once
+  // the retention it measured is known. The ONLY listing: unreadable means the sweep saw nothing,
+  // which must not read as "there was nothing".
+  let listing;
+  try {
+    listing = listTelemetryArtifacts({ repo, from: now - SWEEP_CAP_DAYS * DAY, api });
+  } catch (err) {
+    failures.push(`could not list artifacts (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
+    return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, failures, warnings };
+  }
+  const { since, capped, capDays } = sweepSince({ lastSuccess, now, windowMinutes, overridden, retentionDays: listing.retentionDays });
+  if (capped) {
+    warnings.push(overridden
+      ? `window_minutes=${windowMinutes} reaches past the ${capDays}-day cap, so the sweep starts there`
+      : `the last successful sweep was at ${lastSuccess}, before the ${capDays}-day cap: rows recorded before ${new Date(since).toISOString()} are lost, because their artifacts have expired or the store refuses them (plan 0002 S1a, #212)`);
+  }
+  const artifacts = listing.artifacts.filter((a) => a.createdAt >= since);
+  const spanMin = Math.round((now - since) / MINUTE);
+  log(`sweeping ${artifacts.length} telemetry artifact(s) since ${new Date(since).toISOString()} (${spanMin}m; ${overridden ? 'window_minutes override' : lastSuccess ? `since the last successful sweep at ${lastSuccess}` : 'no prior successful sweep, so everything reachable'})`);
+  if (listing.foreign) log(`ignored ${listing.foreign} artifact(s) not from this repository's own runs`);
+  // A span far past the floor means ticks were dropped: the watermark recovered them.
+  if (!overridden && !capped && lastSuccess && spanMin > WINDOW_MINUTES * 2) {
+    warnings.push(`swept ${spanMin} minutes, well past the ${WINDOW_MINUTES}-minute floor: scheduled sweeps were dropped or delayed, and this sweep recovered their rows`);
+  }
+
+  /** @type {{ row: Record<string, unknown>, where: string }[]} */
+  const rows = [];
+  for (const a of artifacts) {
+    const where = `${a.lane} run ${a.runId} attempt ${a.attempt} (artifact ${a.id})`;
+    let row;
+    try {
+      const file = readZipEntry(download(a.id), ARTIFACT_FILE);
+      if (!file) throw new Error(`no ${ARTIFACT_FILE}`);
+      row = JSON.parse(file.toString('utf8'));
+    } catch (err) {
+      failures.push(`${where}: unreadable (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
+      continue;
+    }
+    const v = validate(row);
+    if (!v.ok) {
+      failures.push(`${where}: fails the schema (${describeErrors(v.errors)})`);
+      continue;
+    }
+    if (row.row_kind !== 'run' || row.lane !== a.lane || row.run_id !== a.runId || row.run_attempt !== a.attempt) {
+      failures.push(`${where}: the row's row_kind, lane, run_id or run_attempt is not its artifact's`);
+      continue;
+    }
+    rows.push({ row, where });
+  }
+
+  let stored = 0;
+  for (let i = 0; i < rows.length; i += MAX_ROWS) {
+    const batch = rows.slice(i, i + MAX_ROWS);
+    let res;
+    try {
+      res = await post(batch.map((r) => r.row));
+    } catch (err) {
+      failures.push(`rows ${i + 1}-${i + batch.length}: the request failed (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
+      continue;
+    }
+    const results = Array.isArray(res.json?.results) ? res.json.results : null;
+    if (!results || results.length !== batch.length) {
+      failures.push(`rows ${i + 1}-${i + batch.length}: the store answered ${res.status}${res.json?.error ? ` (${String(res.json.error)})` : ''}`);
+      continue;
+    }
+    results.forEach((/** @type {any} */ r, /** @type {number} */ n) => {
+      const where = /** @type {{ where: string }} */ (batch[n]).where;
+      if (r?.status === 'stored') stored += 1;
+      else if (r?.status === 'rejected') failures.push(`${where}: rejected by the store (${(r.errors ?? []).map((/** @type {any} */ e) => `${e.field}: ${e.problem}`).join(', ')})`);
+      else failures.push(`${where}: the store failed to write it`);
+    });
+  }
+  return { since, listed: artifacts.length, sent: rows.length, stored, foreign: listing.foreign, failures, warnings };
+}
+
+async function main() {
+  const env = process.env;
+  const repo = env.GITHUB_REPOSITORY;
+  if (!repo) {
+    console.error('telemetry-collect: GITHUB_REPOSITORY must be set; the runner sets it, and the collector never guesses a repository');
+    process.exit(2);
+  }
+  const url = env.KANON_TELEMETRY_URL ?? '';
+  const file = workflowFileOf(env.GITHUB_WORKFLOW_REF);
+  const region = regionOf(url);
+  const fail = (/** @type {string} */ why) => {
+    console.log(`::error title=telemetry-collect::${why}`);
+    process.exit(1);
+  };
+  if (!file) fail('GITHUB_WORKFLOW_REF names no workflow file, so the last successful sweep cannot be found');
+  if (!region) fail("KANON_TELEMETRY_URL is not a Lambda function URL (https://<id>.lambda-url.<region>.on.aws/): set it to the store's IngestUrl output");
+
+  const api = ghApi();
+  const overridden = (env.WINDOW ?? '').trim() !== '';
+  let lastSuccess = null;
+  if (!overridden) {
+    try {
+      lastSuccess = lastSuccessfulSweep({ api, repo, file: /** @type {string} */ (file), branch: env.GITHUB_REF_NAME ?? '', selfRunId: env.GITHUB_RUN_ID ?? '' });
+    } catch (err) {
+      console.log(`::warning title=telemetry-collect::could not read the last successful sweep, so this one takes everything reachable (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
+    }
+  }
+  const result = await collect({
+    repo, now: Date.now(), lastSuccess, window: env.WINDOW ?? '',
+    api, download: ghDownload(repo), post: signedPost(url, /** @type {string} */ (region), env),
+    log: (line) => console.log(line),
+  });
+  for (const w of result.warnings) console.log(`::warning title=telemetry-collect::${w}`);
+  const line = `Telemetry collector: ${result.stored} of ${result.sent} row(s) stored from ${result.listed} artifact(s) since ${new Date(result.since).toISOString()}; ${result.failures.length} failure(s).`;
+  console.log(line);
+  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${line}\n`);
+  // A red run is the page (§9): the next sweep re-covers the same span through the watermark, so
+  // failing loses no row.
+  if (result.failures.length) {
+    for (const f of result.failures) console.log(`::error title=telemetry-collect::${f}`);
+    process.exit(1);
+  }
+}
+
+if (isCliEntry(import.meta.url)) await main();

@@ -288,12 +288,43 @@ export function idTokenSource(wf: Workflow, j: Job): IdTokenSource | null {
 
 const usesMaintenance = (s: Step) => typeof s.uses === 'string' && /^(\$\/|yedeya-labs\/kanon\/)infra\/qa-store\/aws\/maintenance(@|$)/.test(s.uses);
 
+/** The collector's workflow and job (plan 0002 S7), the one holder outside the QA store's. */
+export const COLLECTOR_FILE = 'telemetry-collect.yml';
+export const COLLECTOR_JOB = 'collect';
+/** What the collector's script step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
+export const COLLECTOR_ENV = ['GH_TOKEN', 'KANON_TELEMETRY_URL', 'WINDOW'];
+const COLLECTOR_RUN = 'node "$KANON/scripts/telemetry-collect.mjs"';
+const CREDENTIALS = /^aws-actions\/configure-aws-credentials@v\d+(\.\d+){0,2}$/;
+const only = (o: object | undefined, keys: string[]) => Object.keys(o ?? {}).every((k) => keys.includes(k));
+
+/**
+ * The telemetry collector's job (plan 0002 S7): `collect` in `telemetry-collect.yml`, and only
+ * when its steps are exactly Kanon's path, the AWS credentials for the writer role, and the
+ * collector script, with nothing beside them that could run other code: no job `env:`,
+ * `container:`, `services:` or `defaults:` (`STORE_JOB_KEYS`), and only the script's own
+ * variables on its step. The writer trusts every default-branch job that holds `id-token`
+ * (docs/telemetry.md, "Who can write"), so the shape is what keeps the set to this job.
+ */
+export function isCollectorJob(file: string | undefined, name: string, j: Job): boolean {
+  if (file !== COLLECTOR_FILE || name !== COLLECTOR_JOB || !only(j, STORE_JOB_KEYS)) return false;
+  const steps = (j.steps ?? []) as Array<Record<string, unknown>>;
+  if (steps.length !== 3) return false;
+  const [path, creds, run] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
+  return only(path, ['uses']) && path.uses === '$/actions/kanon-path'
+    && only(creds, ['uses', 'with']) && CREDENTIALS.test(String(creds.uses))
+    && only(creds.with as object, ['role-to-assume', 'aws-region', 'role-session-name'])
+    && only(run, ['name', 'env', 'run']) && String(run.run).trim() === COLLECTOR_RUN
+    && only(run.env as object, COLLECTOR_ENV);
+}
+
 /**
  * A job that may hold `id-token: write`: one that runs the qa-store block alone (kanon#225's
  * allow-list: the block, plus the download of the report a `put` writes), or the AWS store's
- * maintenance block alone, with nothing that could run other code beside it.
+ * maintenance block alone, with nothing that could run other code beside it, or the telemetry
+ * collector's job (`isCollectorJob`), which needs its workflow's file name.
  */
-export function mayHoldIdToken(name: string, j: Job): boolean {
+export function mayHoldIdToken(name: string, j: Job, file?: string): boolean {
+  if (isCollectorJob(file, name, j)) return true;
   if (isStoreJob(j)) return !isAgentJob(j) && !isDeleteJob(j) && extraStepProblems(name, j, 'store').length === 0;
   const steps = j.steps ?? [];
   return steps.length === 1 && usesMaintenance(steps[0]!)
@@ -317,7 +348,7 @@ const calledWorkflow = (j: Job) =>
  */
 export function idTokenProblems(workflows: Record<string, Workflow>): string[] {
   const out: string[] = [];
-  const holdsLegitimately = (wf: Workflow) => Object.entries(wf.jobs ?? {}).some(([n, j]) => idTokenSource(wf, j) && mayHoldIdToken(n, j));
+  const holdsLegitimately = (file: string, wf: Workflow) => Object.entries(wf.jobs ?? {}).some(([n, j]) => idTokenSource(wf, j) && mayHoldIdToken(n, j, file));
   for (const [file, wf] of Object.entries(workflows)) {
     for (const [name, j] of Object.entries(wf.jobs ?? {})) {
       const source = idTokenSource(wf, j);
@@ -327,17 +358,17 @@ export function idTokenProblems(workflows: Record<string, Workflow>): string[] {
       if (callee !== undefined) {
         const target = workflows[callee];
         if (!target) out.push(`${file}: job ${name} holds id-token: write (${how}) and calls ${callee}, which the guard was not given`);
-        else if (!holdsLegitimately(target)) out.push(`${file}: job ${name} holds id-token: write (${how}) and calls ${callee}, which has no store job to pass it to`);
+        else if (!holdsLegitimately(callee, target)) out.push(`${file}: job ${name} holds id-token: write (${how}) and calls ${callee}, which has no store job to pass it to`);
         else if (target.permissions === undefined) {
           for (const [n, cj] of Object.entries(target.jobs ?? {})) {
-            if (cj.permissions === undefined && !mayHoldIdToken(n, cj)) {
-              out.push(`${callee}: job ${n} declares no permissions in a workflow with none, so it inherits id-token: write from ${file}'s job ${name}; only a job that runs the qa-store block alone may`);
+            if (cj.permissions === undefined && !mayHoldIdToken(n, cj, callee)) {
+              out.push(`${callee}: job ${n} declares no permissions in a workflow with none, so it inherits id-token: write from ${file}'s job ${name}; only a job that runs the qa-store block alone, or the telemetry collector job, may`);
             }
           }
         }
         continue;
       }
-      if (!mayHoldIdToken(name, j)) out.push(`${file}: job ${name} holds id-token: write (${how}); only a job that runs the qa-store block alone may`);
+      if (!mayHoldIdToken(name, j, file)) out.push(`${file}: job ${name} holds id-token: write (${how}); only a job that runs the qa-store block alone, or the telemetry collector job, may`);
     }
   }
   return out;

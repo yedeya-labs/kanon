@@ -32,9 +32,11 @@ type Site = {
   /**
    * What it reaches: a workflow file name, read where the line says or through `constant`;
    * `declared`, a name the adopter declares (the reference deploy, `K-PROJ-11`); or `callers`,
-   * every lane caller, by the `agent-` prefix every caller's name has.
+   * every lane caller, by the `agent-` prefix every caller's name has; or `self`, the run's own
+   * top-level workflow, read from `GITHUB_WORKFLOW_REF`, so no name is fixed (the collector's
+   * watermark, plan 0002 S7).
    */
-  reaches: string | 'declared' | 'callers';
+  reaches: string | 'declared' | 'callers' | 'self';
   constant?: string;
 };
 
@@ -50,6 +52,7 @@ const SITES: Site[] = [
   { file: 'scripts/workflow-health.mjs', line: "'--workflow', file,", reaches: 'callers' },
   { file: '.github/workflows/agent-lead-reconcile.yml', line: 'set -- --workflow "$workflow"', reaches: 'declared' },
   { file: '.github/workflows/agent-review.yml', line: '--workflow ci.yml --commit', reaches: 'ci.yml' },
+  { file: 'scripts/telemetry-collect.mjs', line: '/actions/workflows/${encodeURIComponent(file)}/runs', reaches: 'self' },
 ];
 
 /** Code lines only: a comment that names a workflow reaches nothing. */
@@ -90,7 +93,7 @@ describe('every workflow Kanon reaches by file name is one K-LAYOUT-18 fixes', (
     expect(read(s.file)).toMatch(new RegExp(`\\b${s.constant} = '${s.reaches.replace('.', '\\.')}';`));
   });
 
-  it.each(SITES.filter((s) => s.reaches !== 'declared' && s.reaches !== 'callers'))('$file reaches $reaches, a name the rule fixes', (s) => {
+  it.each(SITES.filter((s) => s.reaches !== 'declared' && s.reaches !== 'callers' && s.reaches !== 'self'))('$file reaches $reaches, a name the rule fixes', (s) => {
     if (LANES.includes(s.reaches)) return; // a caller has its lane's file name
     const lanes = lanesReaching(s.file);
     expect(lanes.length, `${s.file} runs in no lane`).toBeGreaterThan(0);

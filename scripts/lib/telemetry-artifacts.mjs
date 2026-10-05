@@ -170,9 +170,38 @@ export const ghDownload = (repo) => (id) =>
  * @param {{ repo: string, from: number, api: Api, maxPages?: number }} opts
  * @returns {{ artifacts: LaneArtifact[], foreign: number, retentionDays: number | null }}
  */
-export function listLaneArtifacts(lane, { repo, from, api, maxPages = MAX_PAGES }) {
+export function listLaneArtifacts(lane, opts) {
   const pattern = laneArtifactPattern(lane);
-  /** @type {LaneArtifact[]} */
+  const { artifacts, foreign, retentionDays } = listArtifacts((name) => pattern.exec(name), opts);
+  return { artifacts: artifacts.map(({ lane: _lane, ...a }) => a), foreign, retentionDays };
+}
+
+/** Any lane's version-2 artifact name: the lane, then the run id and the attempt. */
+export const ANY_LANE_ARTIFACT = new RegExp(`^${ARTIFACT_PREFIX}([a-z][a-z0-9-]*)-(\\d+)-(\\d+)$`);
+
+/**
+ * Every lane's unexpired version-2 artifacts created since `from`, for the collector (plan 0002
+ * S7), with the same rules as `listLaneArtifacts`: this repository's own runs only, a fork's
+ * counted in `foreign`, and the retention measured.
+ * @param {{ repo: string, from: number, api: Api, maxPages?: number }} opts
+ * @returns {{ artifacts: (LaneArtifact & { lane: string })[], foreign: number, retentionDays: number | null }}
+ */
+export function listTelemetryArtifacts(opts) {
+  return listArtifacts((name) => {
+    const m = ANY_LANE_ARTIFACT.exec(name);
+    return m ? [m[0], m[2], m[3], m[1]] : null;
+  }, opts);
+}
+
+/**
+ * The listing both readers share. `match` returns, for a name it takes, `[name, run id, attempt]`
+ * and, for the any-lane listing, the lane fourth.
+ * @param {(name: string) => (string | undefined)[] | null} match
+ * @param {{ repo: string, from: number, api: Api, maxPages?: number }} opts
+ * @returns {{ artifacts: (LaneArtifact & { lane: string })[], foreign: number, retentionDays: number | null }}
+ */
+function listArtifacts(match, { repo, from, api, maxPages = MAX_PAGES }) {
+  /** @type {(LaneArtifact & { lane: string })[]} */
   const artifacts = [];
   const seen = new Set();
   let foreign = 0;
@@ -190,13 +219,13 @@ export function listLaneArtifacts(lane, { repo, from, api, maxPages = MAX_PAGES 
       if (!name.startsWith(ARTIFACT_PREFIX) || !Number.isFinite(createdAt)) continue;
       const run = a?.workflow_run;
       const own = Number.isInteger(run?.repository_id) && run.head_repository_id === run.repository_id;
-      const m = pattern.exec(name);
+      const m = match(name);
       if (m && createdAt >= from && !a.expired && !(own && run.id === Number(m[1]))) { foreign += 1; continue; }
       if (!own) continue;
       if (Number.isFinite(expiresAt)) retention = Math.min(retention, expiresAt - createdAt);
       if (!m || a.expired || createdAt < from || seen.has(a.id)) continue;
       seen.add(a.id);
-      artifacts.push({ id: a.id, name, runId: Number(m[1]), attempt: Number(m[2]), createdAt, expiresAt });
+      artifacts.push({ id: a.id, name, runId: Number(m[1]), attempt: Number(m[2]), createdAt, expiresAt, lane: String(m[3] ?? '') });
     }
     if (list.length < 100 || newest < from - LISTING_SLACK) break;
   }
