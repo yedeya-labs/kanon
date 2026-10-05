@@ -11,6 +11,8 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 | `erase.mjs` | Deletes one adopter's rows (§10). |
 | `register.example.json` | The register's shape, naming only Kanon. |
 
+The collector that writes to it is [`telemetry-collect.yml`](../.github/workflows/telemetry-collect.yml) ([Collect the rows](#collect-the-rows)).
+
 Every AWS command here is the Owner's to run. Agents run none (§5).
 
 ## What the template creates
@@ -140,9 +142,67 @@ It exits 1 on any FAIL, and never prints a credential, a row or a response body.
 
    Each must still be a branch ref subject of that repository with no environment or pull request, and the writer's must name the default branch, which is read from GitHub even then. `writer_subjects` can also list both forms while a repository moves to the immutable subject.
 2. Render, package and deploy, as above.
-3. In the repository, give `id-token: write` to the collector job alone (`K-OBS-13`), and declare no environment on it: an environment replaces the ref in the token's subject, and the writer refuses it. Before the deploy, list the repository's default-branch jobs that already hold `id-token: write`, Kanon's QA-store jobs included; each of them can assume the writer role (below). The writer role's ARN is in the stack's outputs.
+3. In the repository, install the collector ([Collect the rows](#collect-the-rows)). It holds `id-token: write` in its collect job alone (`K-OBS-13`), and declares no environment, because an environment replaces the ref in the token's subject and the writer refuses it. Before the deploy, list the repository's default-branch jobs that already hold `id-token: write`, Kanon's QA-store jobs included. Each of them can assume the writer role (below).
 
 A renamed repository fails closed: its `sub` stops matching, the collector turns red, and the register needs the new name. `render.mjs` refuses an entry whose `repository` differs from the name GitHub reports, a rename or a different case, so the next render says so before a deploy.
+
+## Collect the rows
+
+Plan 0002 S7. The lanes hold no store credentials. Each run uploads its version-2 row as a `kanon-telemetry-<lane>-<run id>-<attempt>` artifact. One job sends the rows on: Kanon's reusable workflow [`telemetry-collect.yml`](../.github/workflows/telemetry-collect.yml), which runs [`scripts/telemetry-collect.mjs`](../scripts/telemetry-collect.mjs). Each run:
+
+- **reaches back to the start of the last run whose collect job succeeded,** and overlaps by at least 90 minutes. However many scheduled runs GitHub drops, the next one covers them. A re-sent row overwrites itself, because the function builds its key from the row.
+- **stops at 7 days, or at the repository's artifact retention when that is shorter** (S1a, [#212](https://github.com/yedeya-labs/kanon/issues/212)). The function refuses a row older than 8 days, and an expired artifact is gone. When the last successful run is older than that, the run warns that the rows before it are lost.
+- **sends only this repository's own runs' rows.** A fork's run can upload any row under any name, so its artifacts are counted and ignored.
+- **checks each row with `validate`, and against its artifact's lane, run and attempt,** then sends the rows 25 to a signed `POST`.
+- **turns red on anything it couldn't send:** an unreadable artifact, a row that fails the schema, a row the store rejects, or a listing that fails. The errors name the artifact and the field, never a value. That red run is the page (§9). The next run re-covers the same span, so nothing is lost by failing.
+
+**Cadence and cost.** The caller schedules it hourly, at minute 40 (§1.2), so 24 runs a day. It touches no database, and nothing it calls scales to zero. On a public repository its Actions minutes are free. On a private one it is about a minute a run. Each run calls the function only when it has rows, once per 25 rows. For Kanon that is at most 720 calls a month, inside Lambda's free tier, plus 2 DynamoDB write units per row. That is inside §9's estimate of about $0.05 a month.
+
+**The caller.** Write it as a trigger-only workflow. Pin it to the Kanon version every other Kanon reference uses, and pass the two values as repository variables. Neither is a credential: the role can be assumed only by the repository's own default-branch token. Name the caller as you like; the collector finds its own runs from `GITHUB_WORKFLOW_REF`.
+
+<!-- x-release-please-start-version -->
+
+```yaml
+name: Telemetry
+on:
+  schedule:
+    - cron: "40 * * * *"
+  workflow_dispatch:
+    inputs:
+      window_minutes:
+        description: Force an exact sweep span, in minutes. Leave empty to sweep back to the last successful sweep.
+        required: false
+        default: ""
+permissions:
+  actions: read
+  id-token: write
+jobs:
+  collect:
+    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.25.0
+    with:
+      url: ${{ vars.KANON_TELEMETRY_URL }}
+      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}
+      window_minutes: ${{ inputs.window_minutes }}
+```
+
+<!-- x-release-please-end -->
+
+Give `window_minutes` no default. Empty means "no operator instruction", and a default would make every scheduled run an override and switch the watermark off.
+
+**The variables.** The Owner reads them from the stack's outputs. `IngestUrl` is the URL. `WriterRole<key>` is the repository's writer role, with the register key's non-alphanumeric characters dropped (`render.mjs`):
+
+```sh
+aws cloudformation describe-stacks --stack-name kanon-telemetry --profile kanon --region eu-central-1 \
+  --query 'Stacks[0].Outputs'
+gh variable set KANON_TELEMETRY_URL -R <owner>/<repo> --body '<the IngestUrl output>'
+gh variable set KANON_TELEMETRY_WRITER_ROLE -R <owner>/<repo> --body '<the WriterRole<key> output>'
+```
+
+Until both are set, the collector skips with a warning and stays green.
+
+**The check.** Dispatch the caller on the default branch. The run is green, and its summary says how many rows the store accepted. The rows are under `<key>#<lane>`, and the reader role can query them.
+
+**Kanon's own caller** is [`telemetry.yml`](../.github/workflows/telemetry.yml). It is pinned like Kanon's other callers ([ADR 0011](decisions/0011-kanon-runs-its-own-lanes.md)). It stays inert until that pin reaches a release that ships the collector ([#304](https://github.com/yedeya-labs/kanon/issues/304)).
 
 ## Who can write
 
@@ -161,7 +221,7 @@ The last row is what the environment used to narrow, and nothing narrows it now:
 - **Kanon's own QA-store jobs**, in every adopter that runs those lanes and in Kanon: the store jobs of explore, the code audit, the Overseer and the dispatch sweep, and the AWS maintenance job. Several run on a schedule, so on the default branch. While they declare `environment: kanon-qa-store`, their subject names that environment and the writer refuses them; once the QA store drops its environment ([#291](https://github.com/yedeya-labs/kanon/pull/291)), each carries the default branch's ref and is admitted.
 - **The adopter's own jobs** that hold it for another cloud, such as a deploy on push to the default branch.
 
-Each can write rows under its own adopter's key that pass the function's validation. None can read, name a partition, or reach another adopter's key. A job without `id-token: write` gets no token to ask with, so the set is exactly the jobs that hold it. What is guarded is that set's size in Kanon's own workflows, not that the collector is its only member: the id-token guard #291 adds fails any Kanon job holding `id-token: write` that doesn't run a store block alone, and the collector joins its allow-list when it moves into Kanon at S7. The adopter's own holders are the adopter's to check.
+Each can write rows under its own adopter's key that pass the function's validation. None can read, name a partition, or reach another adopter's key. A job without `id-token: write` gets no token to ask with, so the set is exactly the jobs that hold it. What is guarded is that set's size in Kanon's own workflows, not that the collector is its only member: the id-token guard #291 added fails any Kanon job holding `id-token: write` that doesn't run a store block alone or isn't the collector's `collect` job in its exact shape (Kanon's path, the credentials and the collector script, and nothing beside them). The adopter's own holders are the adopter's to check.
 
 ## Erase an adopter
 

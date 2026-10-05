@@ -66,6 +66,9 @@ const EXEMPT = new Set([
   '.github/workflows/implement-revise.yml: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@vX.Y.Z',
   '.github/workflows/code-audit.yml: yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@vX.Y.Z',
   '.github/workflows/ci.yml: yedeya-labs/kanon/actions/lane-check@vX.Y.Z',
+  // telemetry.yml calls the telemetry collector (plan 0002 S7), at the same release: its job
+  // holds the store's writer credentials, so the code that runs with them is a released one.
+  '.github/workflows/telemetry.yml: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@vX.Y.Z',
   '.github/workflows/test-database-smoke.yml: ./.github/actions/project-setup',
 ]);
 /** An exact release, written as the form, so the exemption survives each Dependabot bump. */

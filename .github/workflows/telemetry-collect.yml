@@ -1,0 +1,113 @@
+# The telemetry collector (plan 0002 S7): the one writer of an adopter's rows to the telemetry
+# store, as a reusable workflow. Moved from the reference adopter's hourly collector (ADR 0009);
+# `scripts/telemetry-collect.mjs` says what changed in the move.
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER (docs/telemetry.md, "Collect
+# the rows"). The caller holds the triggers listed above `on:` below, a `permissions:` ceiling of
+# `actions: read` and `id-token: write`, and one job that `uses:` this file at an exact Kanon
+# tag, passing the store's function URL and the repository's writer role, which are repository
+# variables and not secrets: neither is a credential.
+#
+# WHY A COLLECTOR, AND WHY HOURLY. The lanes hold no store credentials (`K-OBS-13`): each run
+# uploads its version-2 row as a `kanon-telemetry-*` artifact, and only this job, on the
+# default branch, with no pull request's code in it, sends rows on. A collector woken per lane
+# completion wakes for every skipped run too; an hourly sweep is 24 wake-ups a day whatever the
+# lanes do. It touches no database and wakes nothing that scales to zero: the store is
+# on-demand DynamoDB behind a function (§9).
+#
+# ITS CREDENTIALS ARE THE WRITER ROLE ALONE (§3). The role trusts the default branch's ref
+# subject, so the collect job runs only on a schedule or on a dispatch of the default branch,
+# and DECLARES NO ENVIRONMENT, which would replace the ref in its token's subject. It is the
+# only job here holding `id-token: write`, and its steps are exactly Kanon's path, the
+# credentials and the collector script: the id-token guard (tests/unit/helpers/store-jobs.ts)
+# allows it by that shape, and nothing else of this file.
+#
+# A RED RUN IS THE PAGE (§9). A row the store rejects, a row that fails the schema, an artifact
+# that can't be read, or a listing that fails turns the run red, and the next sweep re-covers
+# the same span through its watermark, so failing loses nothing. A collector that stops running
+# is not paged, by the decision §9 records.
+#
+# INERT until the caller passes both values: then the collect job is skipped and the `unset`
+# job says so with a warning. Set them as the repository variables docs/telemetry.md names.
+name: Telemetry — collect
+
+# THE CALLER'S TRIGGERS, this lane's contract with it:
+#   schedule: "40 * * * *"   hourly at minute 40 (plan 0002 §1.2): no database is touched, so
+#                            the minute matters only to keep clear of the adopter's own crons
+#   workflow_dispatch        input `window_minutes` (string, no default), passed through
+on:
+  workflow_call:
+    inputs:
+      url:
+        description: The store's ingest function URL (its stack's `IngestUrl` output).
+        required: false
+        type: string
+        default: ""
+      writer-role:
+        description: The ARN of this repository's writer role (its stack's `WriterRole<key>` output).
+        required: false
+        type: string
+        default: ""
+      # NO DEFAULT, HERE OR IN THE CALLER: empty is "no operator instruction", and the script
+      # floors at 90 minutes itself. A default here would make every scheduled run an override
+      # and the watermark dead code, which is how the reference adopter once lost it.
+      window_minutes:
+        description: Force an exact sweep span, in minutes. Leave empty to sweep back to the last successful sweep.
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  # Never two sweeps at once: they would download the same artifacts and send the same rows.
+  # Harmless, since the store's keys make a re-send overwrite identically, but twice the work.
+  group: kanon-telemetry-collect
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). Nothing here, and each job
+# declares its own, so only the collect job holds `id-token: write`; it checks nothing out.
+permissions: {}
+
+jobs:
+  unset:
+    # ONLY THE CALLER'S TWO TRIGGERS, as for every lane: a called workflow runs on whatever its
+    # caller is called on.
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (inputs.url == '' || inputs.writer-role == '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Say the store isn't configured
+        run: |
+          echo "::warning title=telemetry-collect::The store's URL or the writer role is not passed, so no row is collected. See docs/telemetry.md (Collect the rows)."
+          echo "Telemetry collector **skipped**: the store's URL or the writer role is not set." >> "$GITHUB_STEP_SUMMARY"
+
+  collect:
+    # The name is what the watermark looks for: a run counts as a sweep only when this job succeeded.
+    name: Collect telemetry rows
+    # The default branch only: the writer role refuses any other ref, so a dispatch elsewhere is
+    # skipped rather than turned red at the credentials step. A schedule always runs there.
+    if: >-
+      (github.event_name == 'schedule'
+        || (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch))
+      && inputs.url != '' && inputs.writer-role != ''
+    runs-on: ubuntu-latest
+    # The reference adopter's: a week's recovery is a few hundred downloads.
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      id-token: write
+    steps:
+      - uses: $/actions/kanon-path
+      # The STS call goes to Frankfurt, where the hosted store lives: the account's region policy
+      # denies every other region.
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ inputs.writer-role }}
+          aws-region: eu-central-1
+          role-session-name: kanon-telemetry-collect
+      - name: Sweep the span and send every row in it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KANON_TELEMETRY_URL: ${{ inputs.url }}
+          WINDOW: ${{ inputs.window_minutes }}
+        run: node "$KANON/scripts/telemetry-collect.mjs"

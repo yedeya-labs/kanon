@@ -24,7 +24,8 @@
         "docs/apps.md",
         "docs/lanes.md",
         "docs/qa-store.md",
-        "docs/release.md"
+        "docs/release.md",
+        "docs/telemetry.md"
       ],
       "changelog-sections": [
         {
