@@ -65,7 +65,7 @@ Every store operation runs in a job of its own, which holds the store's credenti
 
 1. **Create the `kanon-qa-store` environment** in the repository. Restrict it to the default branch: then a dispatch from any other branch can't reach the store.
 2. **Write the hook.** For Kanon's AWS store it is one call of Kanon's AWS action (below). For any other store, implement the five operations on the files above.
-3. **Grant `id-token: write` and `contents: read` in the caller** of each store-coupled lane. Kanon's lane uses `id-token` only in its store jobs, and their checkout needs `contents: read`.
+3. **Grant `id-token: write` and `contents: read` in the caller** of each store-coupled lane. Kanon's lane uses `id-token` only in its store jobs, and their checkout needs `contents: read`. A lane that exports the store, such as the code audit, also needs `actions: write`, which only its delete job uses.
 
 ## Kanon's AWS implementation
 

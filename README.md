@@ -53,7 +53,7 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 | [Agent lane: finish](actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@v0.24.0` |
 | [Agent lane: classify a red run](actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@v0.24.0` |
 | [Agent telemetry](actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@v0.24.0` |
-| [Agent lanes: review, triage, implement, implement-revise, lead, lead-revise, lead-reconcile, lead-split, merge, merge-reconcile, rebase, verify-acs, project-digest, weekly-digest, explore, dispatch-sweep](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.24.0` in a job |
+| [Agent lanes: review, triage, implement, implement-revise, lead, lead-revise, lead-reconcile, lead-split, merge, merge-reconcile, rebase, verify-acs, project-digest, weekly-digest, explore, dispatch-sweep, code-audit](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.24.0` in a job |
 | [Lane check](actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@v0.24.0` |
 | [Kanon's scripts from a workflow step](actions/kanon-path/README.md) | `uses: yedeya-labs/kanon/actions/kanon-path@v0.24.0` |
 
@@ -79,7 +79,7 @@ npx --yes --package github:yedeya-labs/kanon#v0.24.0 kanon apps --org <org> --re
 
 <!-- x-release-please-end -->
 
-Every lane in [`docs/lanes.md`](docs/lanes.md) ships at this version ([plan 0001](docs/plans/0001-move-the-agent-lanes.md), steps 1 to 5). **Start with the review lane:** it is the first an adopter installs, because its App is what ends bootstrap (`K-ADOPT-6`), on a plan with rulesets (`K-ADOPT-3`). [`docs/lanes.md`](docs/lanes.md#your-first-lane-the-reviewer) walks through it. The dispatch sweep reads its cost rows through the QA store contract, or from run artifacts without a store, and the other store-coupled lanes (overseer and code-audit) come next, as the Explorer's sweep (explore) did ([plan 0004](docs/plans/0004-move-the-remaining-lanes.md)).
+Every lane in [`docs/lanes.md`](docs/lanes.md) ships at this version ([plan 0001](docs/plans/0001-move-the-agent-lanes.md), steps 1 to 5). **Start with the review lane:** it is the first an adopter installs, because its App is what ends bootstrap (`K-ADOPT-6`), on a plan with rulesets (`K-ADOPT-3`). [`docs/lanes.md`](docs/lanes.md#your-first-lane-the-reviewer) walks through it. The Explorer's sweep (explore), the dispatch sweep and the code audit reach their memory through the QA store contract ([`docs/qa-store.md`](docs/qa-store.md)); the dispatch sweep reads run artifacts without a store. The Overseer comes next ([plan 0004](docs/plans/0004-move-the-remaining-lanes.md)).
 
 ## Status
 

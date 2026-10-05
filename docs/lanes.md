@@ -22,6 +22,7 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Weekly digest | `agent-weekly-digest.yml` | none | `schedule` (weekly); `workflow_dispatch` with `week_end` and `dry_run` |
 | Explore (the sweep) | `agent-explore.yml` | Explorer | `schedule` (daily); `workflow_dispatch` with `tier` |
 | Dispatch sweep | `agent-dispatch-sweep.yml` | Lead | `schedule` (daily); `workflow_dispatch` with `apply` |
+| Code audit | `agent-code-audit.yml` | Explorer | `schedule` (every few days); `workflow_dispatch` |
 
 **What each caller maps, grants and needs.** Every caller maps its role's two App secrets, by name, and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger, the reconciler and the dispatch sweep run no model, so their callers map only the two. The digests run as no App, so their callers map `CLAUDE_CODE_OAUTH_TOKEN` and `DIGEST_WEBHOOK`. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
 
@@ -45,10 +46,11 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | `agent-weekly-digest.yml` | `DIGEST_WEBHOOK` | `contents: read`, `issues: read`, `pull-requests: read` | none |
 | `agent-explore.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: read`, `id-token: write` | `docs/qa/explorer-playbook.md` |
 | `agent-dispatch-sweep.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `id-token: write` | none |
+| `agent-code-audit.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: write`, `id-token: write` | `docs/qa/stack.md`, `docs/qa/explorer-playbook.md` |
 
 <!-- /lane-contract:table -->
 
-Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile and the two digests call the blocks themselves and install nothing, so they never call your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own. The Merger and the reconciler call no block and install nothing: each runs Kanon's scripts in your checkout, with its role's App token, and never calls your hook. The dispatch sweep does the same, after a store job that calls only the `qa-store` block.
+Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile and the two digests call the blocks themselves and install nothing, so they never call your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own. The Merger and the reconciler call no block and install nothing: each runs Kanon's scripts in your checkout, with its role's App token, and never calls your hook. The dispatch sweep does the same, after a store job that calls only the `qa-store` block. The code audit calls the blocks itself and installs nothing, between store jobs that call only the `qa-store` block.
 
 **The review lane** has three things the others don't:
 - **Its caller sets `run-name`,** ending with `${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}`. A called workflow's `run-name` is ignored, and the review-run evidence finds a head's reviews by the last token of the run's title. `lane-check` holds the caller to it.
@@ -233,6 +235,18 @@ The code audit, the Explorer, the Overseer and the dispatch sweep remember earli
 
 The lanes' prompts state the process and never your stack. What your stack decides, they read from files you own, at fixed paths (`K-LAYOUT-17`): the **stack document**, `docs/qa/stack.md`, with its four sections (`## Gates`, `## Schema changes`, `## Data isolation`, `## Generated files`), and the **playbooks**, `docs/qa/triage-fix-playbook.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` and `docs/qa/lead-playbook.md`. The rule says what each section holds. `lane-check` fails when a lane you call reads a document you don't have, or the stack document lacks a section.
 
+**Your code areas.** The stack document may also say where your code and tests are, under `## Code areas`, one bullet per area: a path in backticks, an em dash, its kind, a colon, and what it holds.
+
+```markdown
+## Code areas
+
+- `src/` — code: the application
+- `tests/` — tests: unit and integration tests
+- `src/server/services/` — audit: the service layer, where tenant scope and authorisation live
+```
+
+A `code` tree is your own source: `citation-shift` reads its comments, and the spec-id sweeps read its references. A `tests` tree holds tests and their fixtures: `doc-path-guard` doesn't read its files as claims. An `audit` area is what the code audit reads first. Without the section, the guards read the whole repository, a test is what its language's convention calls one, and the audit reads your `code` trees, or the whole repository. So an undeclared tree is read, never skipped: declare the trees once a guard reads something it shouldn't. `lane-check` fails a malformed section by name, and so does each guard that reads it.
+
 ## The App register
 
 The revise lanes find their own App's login in the App register, and the scripts the lanes run read every role's login from it, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks.
@@ -282,6 +296,19 @@ The Lead's dispatch sweep reconciles the two lanes that a label starts, implemen
 - **A read that fails** charges every dispatch, and the summary's line says why.
 
 It needs the Lead's App, with `Issues: write`, `Pull requests: read` and `Actions: read` on the installation. Until the App's secrets are set, the sweep skips with a warning instead of going red.
+
+## The code audit
+
+The Explorer's code-reading mode reads your code and your specs every few days, and files a bug only on an objective contradiction: a consumer that can't work, a security anti-pattern, a bypassable contract, or code that contradicts a promoted invariant (`K-WORK-9`'s rubric rates it). It reads what your stack document declares under `## Code areas` (above), and the playbook's "Code-reading mode" section. Its caller:
+
+- **Keeps two triggers:** a `schedule` (the reference adopter's is `30 7 */3 * *`) and a dispatch with no inputs.
+- **Grants `contents: read`, `issues: read`, `actions: write` and `id-token: write`.** The OIDC token is for the lane's two store jobs alone, and `actions: write` for the job that deletes the store's export after the audit. The audit job itself declares neither, and no environment. GitHub refuses to start a called job that asks for more than its caller grants, so the grants are needed with or without a store hook.
+
+**Its memory.** With a store hook ([The QA store](qa-store.md)), the audit widens its coverage from the store's code-reading ledger, read through the hook's `export` before the agent, and its report is written through `put` after it, red run or green. Without one, it runs without memory: the export says the store is absent, the agent chooses areas from the history alone, and `put` is skipped with a notice.
+
+**Its report.** The agent writes `qa-audit-summary.json` on its first turn and re-writes it after each area. The workflow stamps the measured duration, the trigger and the commit, and counts the lines cited itself. A run that wrote no report, or one that doesn't parse, is recorded as such and then turns red; a run whose agent exited non-zero after a complete report stays green with a warning.
+
+It needs the Explorer's App, with `Contents: Read` and `Issues: Write` on the installation.
 
 ## The digests
 

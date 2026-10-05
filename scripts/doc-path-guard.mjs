@@ -59,6 +59,7 @@ import { pathToFileURL } from 'node:url';
 import { fencedLines } from './spec-lib.mjs';
 import { TABLE_EXT } from './lib/test-conventions.mjs';
 import { EXEMPTIONS_FILE, readExemptions } from './lib/exemptions.mjs';
+import { isTestPath, readCodeAreas } from './lib/code-areas.mjs';
 
 /** A markdown inline link or image target: `](target)` or `](target "title")`. */
 const LINK = /\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
@@ -71,8 +72,10 @@ const TEXT_PATH = /(?<![\w./@~-])((?:docs|scripts|\.github)\/[\w./[\]-]*[\w\]]\.
  *  project's source is read as a JavaScript project's is. */
 const CODE = new RegExp(`\\.(?:${TABLE_EXT}|cjs|yml|yaml|sh)$`);
 
-/** Trees whose files are fixtures by construction, never read by rule 2 (see header). */
-const TEST_TREES = ['tests/', 'e2e/'];
+// Trees whose files are fixtures by construction, never read by rule 2 (see header): the test
+// trees the stack document declares under `## Code areas`, or, when it declares none, each
+// file its language's convention calls a test (`scripts/lib/code-areas.mjs`, kanon#54). They
+// were a constant here, `['tests/', 'e2e/']`, the reference adopter's.
 
 /** Dated records — a brief measures a commit that has passed (the same exclusion
  *  `citation-guard.mjs`'s `PROJECTS_TREE` makes, RA-1742), and a release note names the
@@ -141,11 +144,13 @@ export const anchorsOf = (src) => {
  * @param {(path: string) => string} readFile
  * @param {string[]} tracked every tracked path — what a citation must resolve to
  * @param {{file: string, path: string}[]} exemptions the declared path mentions, `readExemptions().mentions`
+ * @param {import('./lib/code-areas.mjs').CodeAreas} areas the declared code areas, `readCodeAreas()`
  * @returns {{findings: {at: string, path: string, rule: 'link'|'text'|'fence'|'anchor'}[], links: number,
  *            mentions: number, anchors: number, exemptionsUsed: Set<number>}}
  */
-export const auditPaths = (files, readFile, tracked, exemptions) => {
+export const auditPaths = (files, readFile, tracked, exemptions, areas) => {
   if (!Array.isArray(exemptions)) throw new TypeError('auditPaths needs the declared path-mention exemptions');
+  if (!areas) throw new TypeError('auditPaths needs the declared code areas (K-LAYOUT-17)');
   const known = new Set(tracked);
   const dirs = new Set();
   for (const f of tracked) for (let d = posix.dirname(f); d !== '.'; d = posix.dirname(d)) dirs.add(d);
@@ -177,7 +182,7 @@ export const auditPaths = (files, readFile, tracked, exemptions) => {
     const isMd = file.endsWith('.md');
     const readsText =
       file !== SELF &&
-      !TEST_TREES.some((t) => file.startsWith(t)) &&
+      !isTestPath(file, areas) &&
       (isMd ? !DATED_TREES.some((t) => file.startsWith(t)) : CODE.test(file));
     if (!isMd && !readsText) continue;
     const lines = readFile(file).split('\n');
@@ -265,15 +270,17 @@ const main = () => {
     return;
   }
   let exemptions;
+  let areas;
   try {
     exemptions = readExemptions().mentions;
+    areas = readCodeAreas();
   } catch (e) {
     console.error(`doc-path-guard: ${e.message}`);
     process.exitCode = 1;
     return;
   }
   const files = tracked.filter((f) => !f.startsWith('node_modules/') && (f.endsWith('.md') || CODE.test(f)));
-  const r = auditPaths(files, (p) => readFileSync(p, 'utf8'), tracked, exemptions);
+  const r = auditPaths(files, (p) => readFileSync(p, 'utf8'), tracked, exemptions, areas);
   const stale = exemptions.filter((_, k) => !r.exemptionsUsed.has(k));
   if (r.findings.length || stale.length) {
     if (r.findings.length) console.error(reportFindings(r.findings));

@@ -52,6 +52,7 @@ const TRIGGERS: Record<string, Trigger[]> = {
   'agent-weekly-digest.yml': ['schedule', 'dispatch'],
   'agent-explore.yml': ['schedule', 'dispatch'],
   'agent-dispatch-sweep.yml': ['schedule', 'dispatch'],
+  'agent-code-audit.yml': ['schedule', 'dispatch'],
 };
 
 /** The job holding the gate step, and the step's index in it. */
@@ -132,7 +133,18 @@ const gateProblems = (wf: Workflow): string[] => {
       }
     }
   }
-  for (const [id] of rest) if (!gatedJobs.has(id)) problems.push(`job ${id} can run without the gate admitting`);
+  // THE EXPORT'S DELETE JOB IS THE ONE EXCEPTION (plan 0004 §3.2): it runs `if: always()`,
+  // which `tests/unit/helpers/store-jobs.ts` requires, so it also runs after a refusal. It is
+  // inert there: its one step deletes the artifact a gated export job names, and a refused run
+  // exported nothing, so it is handed no id and deletes nothing.
+  const inertDelete = (j: Job) => {
+    const steps = j.steps ?? [];
+    const w = (steps[0] as { with?: Record<string, unknown> } | undefined)?.with ?? {};
+    const from = /^\$\{\{\s*needs\.([\w-]+)\.outputs\.artifact-id\s*\}\}$/.exec(String(w['artifact-id'] ?? ''))?.[1];
+    return steps.length === 1 && steps[0]!.uses === '$/actions/qa-store' && w.operation === 'delete-export'
+      && from !== undefined && gatedJobs.has(from) && needsOf(j).includes(from);
+  };
+  for (const [id, j] of rest) if (!gatedJobs.has(id) && !inertDelete(j)) problems.push(`job ${id} can run without the gate admitting`);
 
   // And its `if:` cannot hold unless a gate admitted (kanon#209). Reading a verdict is not
   // requiring one: `needs.logins.outputs.member == 'true' || github.event_name == 'schedule'`
@@ -274,6 +286,30 @@ describe('every lane carries the membership gate (K-AGENT-45)', () => {
         'job empty-check runs with no gate admitting, when implement success; filter success (member=false)',
         "job crash-recovery runs with no gate admitting, when implement success; empty-check success; filter failure; true: `needs.empty-check.outputs.empty == 'true'`",
       ]);
+    });
+    describe("the export's delete job runs past a refusal only while it is inert (plan 0004 §3.2)", () => {
+      type W = { with?: Record<string, string>; run?: string };
+      const del = (wf: Workflow) => wf.jobs['delete-export']!;
+      it('a second step in it', () => {
+        const wf = lane('agent-code-audit.yml');
+        del(wf).steps!.push({ run: 'echo hi' } as WorkflowStep);
+        expect(gateProblems(wf)).toEqual(['job delete-export can run without the gate admitting']);
+      });
+      it('an operation other than delete-export', () => {
+        const wf = lane('agent-code-audit.yml');
+        (del(wf).steps![0] as W).with!.operation = 'put';
+        expect(gateProblems(wf)).toContain('job delete-export can run without the gate admitting');
+      });
+      it('an artifact id from a job it does not need', () => {
+        const wf = lane('agent-code-audit.yml');
+        del(wf).needs = ['audit'];
+        expect(gateProblems(wf)).toContain('job delete-export can run without the gate admitting');
+      });
+      it('an artifact id that is not a gated job\'s output', () => {
+        const wf = lane('agent-code-audit.yml');
+        (del(wf).steps![0] as W).with!['artifact-id'] = '${{ github.event.inputs.id }}';
+        expect(gateProblems(wf)).toContain('job delete-export can run without the gate admitting');
+      });
     });
     it('a job reading a gated job it does not need', () => {
       const wf = lane('agent-implement.yml');

@@ -17,8 +17,8 @@
 // line and clause both carry a `#N`, 51 share none, nearly all correct. So the RENUMBER
 // leaves a trail instead — `_id-registry.json`'s `renumbered` map, written by whoever
 // resolves the collision (`loadRenumbered` in `spec-lib.mjs`) — and this lists every
-// reference to a moved-off id in the reference corpus (`referenceCorpus`: `src/`, `e2e/`,
-// `tests/`, non-spec `docs/`, minus the id tooling's own tests), failing until each has
+// reference to a moved-off id in the reference corpus (`referenceCorpus`: the declared code and
+// test trees, non-spec `docs/`, minus the id tooling's own tests), failing until each has
 // been acknowledged ONCE:
 //
 //   • it meant the clause that MOVED — rewrite it to the new id, and it leaves the list;
@@ -116,17 +116,19 @@ const main = () => {
   const renumbered = loadRenumbered();
   const known = new Set(parseAll().map((i) => i.id).filter(Boolean));
   // The tooling tests are out of the corpus, and which they are depends on the adopter's
-  // declared pipeline code (`K-LAYOUT-8`, kanon#54): a missing or malformed declaration stops
-  // the run by name.
-  let dirs;
+  // declared pipeline code (`K-LAYOUT-8`, kanon#54); the corpus's trees are its declared code
+  // areas (`## Code areas`, `K-LAYOUT-17`). A missing or malformed declaration stops the run by
+  // name rather than walking the wrong trees.
+  let corpus;
   try {
-    dirs = readEscalationFile().pipeline.map(({ dir }) => dir);
+    const dirs = readEscalationFile().pipeline.map(({ dir }) => dir);
+    corpus = referenceCorpus(process.cwd(), dirs);
   } catch (e) {
-    console.error(`spec-id-renumbered: ${e.message}`);
+    if (/** @type {Error} */ (e).name !== 'DeclarationError') throw e;
+    console.error(`spec-id-renumbered: ${/** @type {Error} */ (e).message}`);
     process.exitCode = 1;
     return;
   }
-  const corpus = referenceCorpus(process.cwd(), dirs);
   const trail = trailProblems(renumbered, known);
   const r = renumberFindings(renumbered, corpus.map((path) => ({ path, text: readFileSync(path, 'utf8') })));
 

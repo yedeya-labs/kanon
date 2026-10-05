@@ -43,6 +43,7 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { codeTrees, isTestPath, readCodeAreas } from './lib/code-areas.mjs';
 
 export const SPEC_DIR = 'docs/qa/specs';
 export const REGISTRY = join(SPEC_DIR, '_id-registry.json');
@@ -371,15 +372,27 @@ export function qaToolingImport(pipelineDirs) {
   return new RegExp(`(?:from\\s+|import\\w*\\s*\\(\\s*)['"](?:[^'"]*/)?(?:${dirs})[^'"]*['"]`);
 }
 
-/** The trees an `[AREA-N]` reference outside the specs can live in. */
-export const REFERENCE_TREES = ['src', 'e2e', 'tests', 'docs'];
+/** The tree an `[AREA-N]` reference outside the specs can live in beside the code areas: the
+ *  project's documents, at Kanon's fixed path. */
+export const REFERENCE_DOCS = 'docs';
 
 /**
- * Every file that may cite a spec id WITHOUT being a spec: `src/`, `e2e/`, `tests/` and
- * `docs/` minus `docs/qa/specs/**`, and minus the id tooling's own tests (above). One
+ * Every file that may cite a spec id WITHOUT being a spec: the code and test trees the stack
+ * document declares under `## Code areas` (`K-LAYOUT-17`, `scripts/lib/code-areas.mjs`), and
+ * `docs/`, minus `docs/qa/specs/**`, and minus the id tooling's own tests (above). One
  * definition for the two consumers that must agree on it — the existence sweep in
  * `tests/library/spec-ids.test.ts` and the renumber check (RA-2004) — so widening one
  * cannot leave the other behind.
+ *
+ * THE TREES ARE THE PROJECT'S (kanon#54). They were a constant, `src/`, `e2e/`, `tests/` and
+ * `docs/`, the reference adopter's. A project that declares no code tree has the whole
+ * repository walked, outside dot-directories and `node_modules/`: a reference left unread is
+ * the silent failure, and an extra one read is not.
+ *
+ * MINUS THE PROJECT'S OWN PIPELINE CODE, the directories it declares under `## Pipeline code`
+ * (`K-LAYOUT-8`). A `code` tree such as `scripts/` can hold the pipeline, whose ids are
+ * fixtures as its tests' are; `citation-shift` skips the same directories for the same reason.
+ * The trees this replaced never reached `scripts/`.
  *
  * @param {string} [root]
  * @param {string[]} pipelineDirs the declared pipeline-code directories (`qaToolingImport`)
@@ -387,20 +400,25 @@ export const REFERENCE_TREES = ['src', 'e2e', 'tests', 'docs'];
  */
 export function referenceCorpus(root = process.cwd(), pipelineDirs) {
   const tooling = qaToolingImport(pipelineDirs);
+  const areas = readCodeAreas(root);
+  const trees = codeTrees(areas);
   const out = [];
   const walk = (dir) => {
     let entries;
     try { entries = readdirSync(dir); } catch { return; }
     for (const e of entries) {
+      if (trees === null && (e.startsWith('.') || e === 'node_modules')) continue;
       const p = join(dir, e);
       if (statSync(p).isDirectory()) walk(p);
       else if (/\.(ts|tsx|mjs|md)$/.test(e)) out.push(p);
     }
   };
-  for (const d of REFERENCE_TREES) walk(join(root, d));
-  return out
-    .map((f) => relative(root, f).split('\\').join('/'))
+  if (trees === null) walk(root);
+  else for (const d of new Set([...trees, `${REFERENCE_DOCS}/`])) walk(join(root, d));
+  return [...new Set(out
+    .map((f) => relative(root, f).split('\\').join('/')))]
     .filter((f) => !f.startsWith(`${SPEC_DIR}/`))
-    .filter((f) => !(/^(tests|e2e)\//.test(f) && tooling.test(readFileSync(join(root, f), 'utf8'))))
+    .filter((f) => !pipelineDirs.some((d) => f.startsWith(d)))
+    .filter((f) => !(isTestPath(f, areas) && tooling.test(readFileSync(join(root, f), 'utf8'))))
     .sort();
 }

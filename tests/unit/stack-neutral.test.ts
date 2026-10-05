@@ -204,6 +204,16 @@ describe("Kanon's guards on a project with no package.json, run with only node a
     expect(malformed.out).toMatch(/docs\/qa\/exemptions\.md has no `## Path mentions` heading/);
   });
 
+  it.each(['doc-path-guard', 'spec-id-renumbered'])('%s fails by name on a malformed `## Code areas`, and reads a well-formed one (kanon#54)', (name) => {
+    const add = (entry: string) => (dir: string) => edit(dir, 'docs/qa/stack.md', (s) => `${s}\n## Code areas\n\n${entry}\n`);
+    const malformed = guard(name, add('- `src` — code: the package'));
+    expect(malformed.status, malformed.out).toBe(1);
+    expect(malformed.out).toMatch(new RegExp(`^${name}: docs/qa/stack\\.md:\\d+: a \`code\` area is a directory, so write \`src/\` \\(K-LAYOUT-17\\)`, 'm'));
+    expect(malformed.out).not.toMatch(/\n\s+at /);
+    const declared = guard(name, add('- `src/` — code: the package\n- `tests/` — tests: pytest'));
+    expect(declared.status, declared.out).toBe(0);
+  });
+
   it('brief-guard is red on a pre-standard entry for a brief that does not exist (kanon#54)', () => {
     const r = guard('brief-guard', (dir) => edit(dir, 'docs/qa/exemptions.md', (s) => s.replace('None: every brief here was written to the standard.', '- `docs/projects/7.md` — an old brief')));
     expect(r.status, r.out).toBe(1);
@@ -344,6 +354,7 @@ const ASSUMPTION = /\bnpm\b|\bnpx\b|\byarn\b|\bpnpm\b|package(?:-lock)?\.json|no
 const SHIPPED = /^(actions|cli|scripts)\/.*\.(mjs|js|sh|awk|yml|yaml)$|^rulebook\/.*\.md$|^ROADMAP\.md$/;
 const ALLOWED: Array<{ file: string; needle: string; why: string }> = [
   { file: 'scripts/doc-path-guard.mjs', needle: "!f.startsWith('node_modules/')", why: 'skips a Node dependency tree if one is tracked; on another stack it matches nothing' },
+  { file: 'scripts/spec-lib.mjs', needle: "e === 'node_modules')) continue;", why: "the reference corpus's whole-repository walk, for a project that declares no code tree, skips a Node dependency tree as git's ignore list would; on another stack it matches nothing (kanon#54)" },
   { file: 'scripts/spec-coverage.mjs', needle: "e !== 'node_modules'", why: "the walk outside a git repository skips a Node dependency tree, as git's ignore list would; on another stack it matches nothing" },
   { file: 'scripts/lib/test-conventions.mjs', needle: "bin: 'node_modules/.bin/vitest'", why: "the JavaScript row's runner, as the project-setup hook installs it; a Python or Go project never reaches it (#20)" },
   { file: 'scripts/lib/test-conventions.mjs', needle: "bin: 'node_modules/.bin/playwright'", why: '#20, as above' },
