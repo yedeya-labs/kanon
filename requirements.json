@@ -1,0 +1,649 @@
+{
+  "$comment": "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` compares two releases' copies. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets.",
+  "lanes": {
+    "agent-code-audit": {
+      "identities": [
+        "explorer"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "EXPLORER_APP_ID",
+        "EXPLORER_APP_PRIVATE_KEY"
+      ],
+      "inputs": {},
+      "grant": {
+        "actions": "write",
+        "contents": "read",
+        "id-token": "write",
+        "issues": "read"
+      },
+      "reads": [
+        "docs/qa/explorer-playbook.md",
+        "docs/qa/stack.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-dispatch-sweep": {
+      "identities": [
+        "lead"
+      ],
+      "secrets": [
+        "LEAD_APP_ID",
+        "LEAD_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "apply": {
+          "type": "string",
+          "description": "'true' to actually re-dispatch on a dispatch (anything else = dry run)"
+        }
+      },
+      "grant": {
+        "contents": "read",
+        "id-token": "write"
+      },
+      "reads": [],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-explore": {
+      "identities": [
+        "explorer"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "EXPLORER_APP_ID",
+        "EXPLORER_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "tier": {
+          "type": "string",
+          "description": "The tier to sweep, as the adopter's sweep hook names them; empty sweeps every tier."
+        }
+      },
+      "grant": {
+        "actions": "read",
+        "contents": "read",
+        "id-token": "write",
+        "issues": "read"
+      },
+      "reads": [
+        "docs/qa/explorer-playbook.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": [
+        ".github/actions/explore-sweep/action.yml"
+      ]
+    },
+    "agent-implement-revise": {
+      "identities": [
+        "implementer"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "IMPLEMENTER_APP_ID",
+        "IMPLEMENTER_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "pr_number": {
+          "type": "string",
+          "description": "PR to revise"
+        },
+        "reset": {
+          "type": "string",
+          "description": "Clear the round cap for this run. Use when the developer has resolved the disagreement the cap escalated — that is a new instruction, not a third iteration of the same argument. Authorises exactly one revision."
+        }
+      },
+      "grant": {
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "read"
+      },
+      "reads": [
+        "docs/qa/stack.md",
+        "docs/qa/triage-fix-playbook.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-implement": {
+      "identities": [
+        "implementer"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "IMPLEMENTER_APP_ID",
+        "IMPLEMENTER_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "issue_number": {
+          "type": "string",
+          "description": "Issue number to implement"
+        }
+      },
+      "grant": {
+        "actions": "read",
+        "contents": "read",
+        "issues": "write",
+        "pull-requests": "read"
+      },
+      "reads": [
+        "docs/qa/stack.md",
+        "docs/qa/triage-fix-playbook.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-lead-reconcile": {
+      "identities": [
+        "lead"
+      ],
+      "secrets": [
+        "LEAD_APP_ID",
+        "LEAD_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "project": {
+          "type": "string",
+          "description": "Tracking issue number of the project (blank = every open project)"
+        },
+        "apply": {
+          "type": "string",
+          "description": "'true' to actually file and dispatch on a dispatch (anything else = dry run)"
+        }
+      },
+      "grant": {
+        "actions": "read",
+        "checks": "read",
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "read",
+        "statuses": "read"
+      },
+      "reads": [],
+      "readsWorkflows": [
+        "ci.yml"
+      ],
+      "hooks": []
+    },
+    "agent-lead-revise": {
+      "identities": [
+        "lead"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "LEAD_APP_ID",
+        "LEAD_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "pr_number": {
+          "type": "string",
+          "description": "Brief PR to revise"
+        },
+        "reset": {
+          "type": "string",
+          "description": "Clear the round cap for this run. Use when the developer has ANSWERED the brief's open decisions — that is a new mandate, not a third iteration of a disagreement. Authorises exactly one revision."
+        }
+      },
+      "grant": {
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "write"
+      },
+      "reads": [],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-lead-split": {
+      "identities": [
+        "lead"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "LEAD_APP_ID",
+        "LEAD_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "issue": {
+          "type": "string",
+          "description": "The oversized issue to split (it must carry qa:needs-split)"
+        }
+      },
+      "grant": {
+        "contents": "read",
+        "issues": "write",
+        "pull-requests": "read"
+      },
+      "reads": [
+        "docs/qa/lead-playbook.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-lead": {
+      "identities": [
+        "lead"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "LEAD_APP_ID",
+        "LEAD_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "mandate": {
+          "type": "string",
+          "description": "What to plan — one paragraph, in your own words"
+        },
+        "context": {
+          "type": "string",
+          "description": "Issue numbers this covers, comma-separated (optional)"
+        }
+      },
+      "grant": {
+        "contents": "read"
+      },
+      "reads": [
+        "docs/qa/lead-playbook.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-merge-reconcile": {
+      "identities": [
+        "reviewer"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "REVIEWER_APP_ID",
+        "REVIEWER_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "pr_number": {
+          "type": "string",
+          "description": "Merged PR number to reconcile"
+        }
+      },
+      "grant": {
+        "contents": "read",
+        "pull-requests": "read"
+      },
+      "reads": [
+        "docs/qa/explorer-playbook.md",
+        "docs/qa/reviewer-playbook.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-merge": {
+      "identities": [
+        "merger"
+      ],
+      "secrets": [
+        "MERGER_APP_ID",
+        "MERGER_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "pr_number": {
+          "type": "string",
+          "description": "A single PR to consider (blank = sweep every open PR)"
+        },
+        "apply": {
+          "type": "string",
+          "description": "'true' to actually merge, comment and label on a dispatch (anything else = report only)"
+        }
+      },
+      "grant": {
+        "contents": "read"
+      },
+      "reads": [],
+      "readsWorkflows": [],
+      "hooks": [],
+      "callerName": "Merge (Merger)"
+    },
+    "agent-overseer": {
+      "identities": [
+        "overseer"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "OVERSEER_APP_ID",
+        "OVERSEER_APP_PRIVATE_KEY"
+      ],
+      "inputs": {},
+      "grant": {
+        "actions": "write",
+        "contents": "read",
+        "id-token": "write",
+        "issues": "read"
+      },
+      "reads": [
+        "docs/qa/capability-ledger.md",
+        "docs/qa/overseer-playbook.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-project-digest": {
+      "identities": [],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "DIGEST_WEBHOOK"
+      ],
+      "inputs": {
+        "dry_run": {
+          "type": "string",
+          "description": "'true' to print the message instead of posting it, and file nothing"
+        }
+      },
+      "grant": {
+        "actions": "read",
+        "contents": "read",
+        "issues": "write",
+        "pull-requests": "read"
+      },
+      "reads": [],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-rebase": {
+      "identities": [
+        "implementer"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "IMPLEMENTER_APP_ID",
+        "IMPLEMENTER_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "pr_number": {
+          "type": "string",
+          "description": "A single PR to consider (blank = every open PR)"
+        }
+      },
+      "grant": {
+        "actions": "read",
+        "contents": "read",
+        "pull-requests": "read"
+      },
+      "reads": [
+        "docs/qa/stack.md",
+        "docs/qa/triage-fix-playbook.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-review": {
+      "identities": [
+        "reviewer"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "REVIEWER_APP_ID",
+        "REVIEWER_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "pr_number": {
+          "type": "string",
+          "description": "PR number to review"
+        }
+      },
+      "grant": {
+        "actions": "read",
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "write"
+      },
+      "reads": [
+        "docs/qa/explorer-playbook.md",
+        "docs/qa/reviewer-playbook.md",
+        "docs/qa/stack.md"
+      ],
+      "readsWorkflows": [
+        "ci.yml"
+      ],
+      "hooks": [],
+      "callerRunNameEndsWith": "${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}"
+    },
+    "agent-triage": {
+      "identities": [
+        "implementer"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "IMPLEMENTER_APP_ID",
+        "IMPLEMENTER_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "issue_number": {
+          "type": "string",
+          "description": "Issue number to triage"
+        }
+      },
+      "grant": {
+        "contents": "read"
+      },
+      "reads": [
+        "docs/qa/stack.md",
+        "docs/qa/triage-fix-playbook.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-verify-acs": {
+      "identities": [
+        "explorer"
+      ],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "EXPLORER_APP_ID",
+        "EXPLORER_APP_PRIVATE_KEY"
+      ],
+      "inputs": {
+        "project": {
+          "type": "string",
+          "description": "Project tracking-issue number (the brief is docs/projects/<n>.md)"
+        },
+        "ref": {
+          "type": "string",
+          "description": "Tag or SHA to verify; empty for the default branch"
+        }
+      },
+      "grant": {
+        "contents": "read",
+        "issues": "read"
+      },
+      "reads": [
+        "docs/qa/explorer-playbook.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": []
+    },
+    "agent-weekly-digest": {
+      "identities": [],
+      "secrets": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "DIGEST_WEBHOOK"
+      ],
+      "inputs": {
+        "week_end": {
+          "type": "string",
+          "description": "End of the 7-day window (ISO date). Defaults to now."
+        },
+        "dry_run": {
+          "type": "string",
+          "description": "'true' to print the message instead of posting it"
+        }
+      },
+      "grant": {
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "read"
+      },
+      "reads": [],
+      "readsWorkflows": [],
+      "hooks": []
+    }
+  },
+  "hook": {
+    "path": ".github/actions/project-setup/action.yml",
+    "inputs": [
+      "app-slug",
+      "browsers",
+      "database",
+      "github-token",
+      "install",
+      "issue-number",
+      "lane"
+    ]
+  },
+  "identities": {
+    "roles": {
+      "explorer": {
+        "name": "Explorer",
+        "permissions": {
+          "contents": "read",
+          "issues": "write",
+          "pull_requests": "read",
+          "metadata": "read"
+        }
+      },
+      "implementer": {
+        "name": "Implementer",
+        "permissions": {
+          "contents": "write",
+          "issues": "write",
+          "pull_requests": "write",
+          "workflows": "write",
+          "metadata": "read"
+        }
+      },
+      "reviewer": {
+        "name": "Reviewer",
+        "permissions": {
+          "contents": "write",
+          "issues": "write",
+          "pull_requests": "write",
+          "metadata": "read"
+        }
+      },
+      "merger": {
+        "name": "Merger",
+        "permissions": {
+          "contents": "write",
+          "issues": "write",
+          "pull_requests": "write",
+          "actions": "write",
+          "checks": "read",
+          "statuses": "read",
+          "metadata": "read"
+        }
+      },
+      "lead": {
+        "name": "Lead",
+        "permissions": {
+          "contents": "write",
+          "issues": "write",
+          "pull_requests": "write",
+          "actions": "read",
+          "metadata": "read"
+        }
+      },
+      "overseer": {
+        "name": "Overseer",
+        "permissions": {
+          "contents": "read",
+          "issues": "write",
+          "pull_requests": "read",
+          "actions": "read",
+          "metadata": "read"
+        }
+      }
+    },
+    "apps": {
+      "author": {
+        "name": "Author",
+        "roles": [
+          "implementer",
+          "lead",
+          "explorer",
+          "overseer"
+        ],
+        "permissions": {
+          "contents": "write",
+          "issues": "write",
+          "pull_requests": "write",
+          "workflows": "write",
+          "actions": "read",
+          "statuses": "write",
+          "metadata": "read"
+        }
+      },
+      "judge": {
+        "name": "Judge",
+        "roles": [
+          "reviewer",
+          "merger"
+        ],
+        "permissions": {
+          "contents": "write",
+          "issues": "write",
+          "pull_requests": "write",
+          "actions": "write",
+          "checks": "read",
+          "statuses": "read",
+          "metadata": "read"
+        }
+      },
+      "releaser": {
+        "name": "Releaser",
+        "roles": [
+          "releaser"
+        ],
+        "permissions": {
+          "contents": "write",
+          "pull_requests": "write",
+          "metadata": "read"
+        }
+      }
+    }
+  },
+  "labels": [
+    "agent:explorer",
+    "agent:triage",
+    "agent:implement",
+    "agent:reviewer",
+    "agent:overseer",
+    "agent:revise",
+    "agent:lead-revise",
+    "qa:needs-triage",
+    "qa:reproduced",
+    "qa:cannot-reproduce",
+    "qa:false-positive",
+    "qa:fix-proposed",
+    "qa:needs-info",
+    "qa:needs-severity",
+    "qa:needs-split",
+    "qa:human-action",
+    "qa:verify",
+    "sev:critical",
+    "sev:high",
+    "sev:medium",
+    "sev:low",
+    "bug",
+    "enhancement",
+    "spec-delta",
+    "follow-up",
+    "pipeline-improvement",
+    "capability",
+    "signal:spec-violation",
+    "signal:<name>",
+    "review:please",
+    "gate-candidate",
+    "needs:human",
+    "blocked",
+    "project:<n>",
+    "from-app",
+    "autorelease: pending",
+    "autorelease: tagged"
+  ]
+}
