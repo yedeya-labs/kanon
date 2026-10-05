@@ -76,12 +76,15 @@ What the trust admits and refuses, measured on a sandbox repository on 2026-10-0
 | A scheduled run, or a dispatch on the default branch | `<prefix>:ref:refs/heads/<default branch>` (measured) | admitted |
 | A pull request, from any branch | `<prefix>:pull_request` (measured) | refused |
 | `pull_request_target` | `<prefix>:pull_request` (measured, although the run's ref is the default branch) | refused: stricter than before, when a `pull_request_target` job that declared the environment was admitted |
-| A dispatch or push on another branch, a tag, the merge queue | that ref | refused |
+| A dispatch or push on another branch, a tag, the merge queue | that ref (a branch dispatch measured) | refused |
 | A job that declares any environment | `<prefix>:environment:<name>` | refused |
 | A fork's pull request | no token: GitHub gives a fork's run none | refused |
-| Any job of a default-branch workflow that holds `id-token: write` | `<prefix>:ref:refs/heads/<default branch>` | admitted, as it was with an environment, which any such workflow could also declare |
+| Any job of a default-branch workflow that holds `id-token: write`, **including your own jobs that already hold it for another cloud** | `<prefix>:ref:refs/heads/<default branch>` | **admitted**. With an environment, only a job edited to declare `kanon-qa-store` was; now every existing holder on the default branch is, with no change on your side |
 
-The one thing the environment did that the ref does not is name the store jobs in the subject: a Kanon job wrongly given `id-token: write` would be admitted. The guard above fails such a job in Kanon's own workflows, and GitHub gives a job without the grant no `ACTIONS_ID_TOKEN_REQUEST_*` variables, so it cannot ask for a token at all. Your own workflows on the default branch are yours to keep the same way: grant `id-token: write` only where something needs it.
+The one thing the environment did that the ref does not is name the store jobs in the subject. Two things follow:
+
+- **A Kanon job wrongly given `id-token: write` would be admitted.** The guard above fails such a job in Kanon's own workflows, and GitHub gives a job without the grant no `ACTIONS_ID_TOKEN_REQUEST_*` variables, so it cannot ask for a token at all.
+- **Every job of yours that already holds `id-token: write` on the default branch is admitted too.** A push-to-main deploy that assumes a role in your cloud, say, holds the grant for its own reasons and runs its build's dependencies. Under the environment trust its subject was refused. Under the ref trust it can assume the store's role, and the store sits in your reference environment's account (`K-OBS-17`). Kanon's guard does not read your workflows. **Before you re-provision, list your default-branch jobs that hold `id-token: write`** (by their own `permissions:` or their workflow's), and accept each one as a holder of the store's credentials, or narrow its grant. The store's role can read and write QA data and delete `COVERAGE` rows; it cannot reach anything else in the account.
 
 ### Setting it up
 
@@ -123,7 +126,7 @@ node infra/qa-store/aws/provision.mjs --repository <owner>/<repo> --region <regi
 node infra/qa-store/aws/provision.mjs --repository <owner>/<repo> --region <region> --profile <profile>
 ```
 
-It needs `gh`, signed in with read access to the repository: it reads the default branch and the subject prefix from GitHub's API and prints the subject it will trust. A repository with a custom subject template (`use_default: false`) is refused, because its subject is not a branch ref; pass the exact subject with `--subject` instead. `--subject` may be repeated, to trust both prefix forms while a repository moves between them; each must still be a default-branch ref subject of the repository named. Re-running it on an existing stack replaces the trust in place: an older stack that trusted the `kanon-qa-store` environment trusts the default branch's ref instead, and the environment can then be deleted.
+It needs `gh`, signed in with read access to the repository: it reads the default branch and the subject prefix from GitHub's API and prints the subject it will trust. A repository with a custom subject template (`use_default: false`) is refused, because its subject is not a branch ref; pass the exact subject with `--subject` instead. `--subject` may be repeated, to trust both prefix forms while a repository moves between them. The script reads the default branch from the API even then, and refuses a subject on any other branch: trusting another branch would let anyone who can push to it reach the store. Re-running it on an existing stack replaces the trust in place: an older stack that trusted the `kanon-qa-store` environment trusts the default branch's ref instead, and the environment can then be deleted.
 
 Pass `--no-oidc-provider` if `aws iam list-open-id-connect-providers` already lists `token.actions.githubusercontent.com`. Put the store in the reference environment's account (`K-OBS-17`). The last command prints the stack's outputs, `RoleArn`, `TableName` and `BucketName`, which the hook names:
 

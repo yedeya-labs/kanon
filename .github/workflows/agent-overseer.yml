@@ -26,8 +26,9 @@
 # reports, and the adopter's own telemetry summaries), and hands them to the agent's job as an
 # artifact kept one day, which a job of its own deletes. The agent's job declares no `id-token`,
 # and no job declares an environment: the store's role trusts the default branch's ref (P9's
-# check, `tests/unit/helpers/store-jobs.ts`, and the id-token guard, `tests/unit/id-token-guard.test.ts`). Without a hook it runs to
-# completion without memory: the export holds only its manifest, which says the store is absent.
+# check, `tests/unit/helpers/store-jobs.ts`, and the id-token guard,
+# `tests/unit/id-token-guard.test.ts`). Without a hook it runs to completion without memory: the
+# export holds only its manifest, which says the store is absent.
 #
 # ── WHO FILES WHAT (decision 12) ─────────────────────────────────────────────────────────
 #

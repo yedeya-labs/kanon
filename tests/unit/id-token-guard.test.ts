@@ -100,6 +100,15 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
       .toEqual([expect.stringMatching(/^agent-triage\.yml: job \S+ holds id-token: write \(its own permissions grant\) and calls agent-lane\.yml, which has no store job to pass it to$/)]);
   });
 
+  it('a callee job that inherits the caller\'s id-token, in a callee with no permissions anywhere', () => {
+    expect(mutate((w) => {
+      delete w['agent-explore.yml']!.permissions;
+      delete job(w, 'agent-explore.yml', 'change').permissions;
+    })).toEqual(["agent-explore.yml: job change declares no permissions in a workflow with none, so it inherits id-token: write from agent-lanes-smoke.yml's job explore; only a job that runs the qa-store block alone may"]);
+    // With the workflow-level block in place the job inherits that, which grants no id-token.
+    expect(mutate((w) => { delete job(w, 'agent-explore.yml', 'change').permissions; })).toEqual([]);
+  });
+
   it('a store job that runs anything beside the block loses its exemption', () => {
     expect(mutate((w) => { job(w, 'agent-explore.yml', 'put').steps!.push({ run: 'echo hi' }); }))
       .toEqual(['agent-explore.yml: job put holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone may']);

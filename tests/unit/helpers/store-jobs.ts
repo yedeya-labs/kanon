@@ -278,8 +278,8 @@ const grantsIdToken = (p: Workflow['permissions']) =>
 
 /**
  * Whether a job holds `id-token: write`: from its own `permissions:`, or inherited from the
- * workflow's when it declares none. A job with neither inherits its caller's grant, which the
- * guard checks at the caller.
+ * workflow's when it declares none. A job with neither inherits its caller's grant: the guard
+ * holds it as a holder whenever a caller passes `id-token` (`idTokenProblems`).
  */
 export function idTokenSource(wf: Workflow, j: Job): IdTokenSource | null {
   if (j.permissions !== undefined) return grantsIdToken(j.permissions) ? 'job' : null;
@@ -311,7 +311,9 @@ const calledWorkflow = (j: Job) =>
  * OIDC token is held here: in every workflow given, a job that holds `id-token: write`, whether
  * its own grant or inherited from the workflow's, must be one that `mayHoldIdToken`, or a job
  * that calls one of the given workflows that has such a job (a caller has to grant what its
- * callee's store jobs ask for). Anything else is named, with where its grant comes from.
+ * callee's store jobs ask for). A caller's grant also reaches every callee job that declares no
+ * permissions in a callee with no workflow-level block, so each of those must be one that
+ * `mayHoldIdToken` too. Anything else is named, with where its grant comes from.
  */
 export function idTokenProblems(workflows: Record<string, Workflow>): string[] {
   const out: string[] = [];
@@ -326,6 +328,13 @@ export function idTokenProblems(workflows: Record<string, Workflow>): string[] {
         const target = workflows[callee];
         if (!target) out.push(`${file}: job ${name} holds id-token: write (${how}) and calls ${callee}, which the guard was not given`);
         else if (!holdsLegitimately(target)) out.push(`${file}: job ${name} holds id-token: write (${how}) and calls ${callee}, which has no store job to pass it to`);
+        else if (target.permissions === undefined) {
+          for (const [n, cj] of Object.entries(target.jobs ?? {})) {
+            if (cj.permissions === undefined && !mayHoldIdToken(n, cj)) {
+              out.push(`${callee}: job ${n} declares no permissions in a workflow with none, so it inherits id-token: write from ${file}'s job ${name}; only a job that runs the qa-store block alone may`);
+            }
+          }
+        }
         continue;
       }
       if (!mayHoldIdToken(name, j)) out.push(`${file}: job ${name} holds id-token: write (${how}); only a job that runs the qa-store block alone may`);

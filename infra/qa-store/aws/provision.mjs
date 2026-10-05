@@ -17,12 +17,12 @@
 // 2026-07-15 an immutable subject (`repo:<owner>@<owner id>/<repo>@<repo id>`), which a role
 // trusting `repo:<owner>/<repo>` refuses. A repository with a custom subject template is refused
 // unless `--subject` names the exact subject. `--subject` may be repeated, to trust both forms
-// while a repository migrates between them; each must still be a default-branch ref subject of
-// the repository named.
+// while a repository migrates between them; each must still be a ref subject of the repository
+// named, for its default branch, which is read from the API even when every subject is given.
 //
 // Then it deploys the stack `kanon-qa-store`, turns on the stack's termination protection, and
-// prints the outputs the adopter's store hook names. `--dry-run` reads GitHub's API (unless every
-// subject is given) and prints the AWS commands, running none.
+// prints the outputs the adopter's store hook names. `--dry-run` reads GitHub's API and prints the
+// AWS commands, running none.
 //
 // One store per account and region: the table is `kanon-qa-store`, and the bucket carries the
 // account id and region, because bucket names are global. The commands are the account owner's to
@@ -133,11 +133,14 @@ export function trustProblems(template) {
  * immutable (`repo:<owner>@<id>/<repo>@<id>`) form. GitHub's default subject is
  * `<repo claim>:ref:refs/heads/<branch>`; a custom template's, passed with `--subject`, may carry
  * other claims beside those two, but never trusts another repository or a pattern.
+ * The branch must be the repository's default branch, as GitHub's API reports it: trusting
+ * another branch would let anyone who can push to it reach the store.
  * @param {string[]} subjects
  * @param {string} repository owner/name
+ * @param {string} defaultBranch the repository's default branch
  * @returns {string[]}
  */
-export function subjectProblems(subjects, repository) {
+export function subjectProblems(subjects, repository, defaultBranch) {
   /** @type {string[]} */
   const out = [];
   if (subjects.length === 0) out.push('no subject to trust');
@@ -146,6 +149,8 @@ export function subjectProblems(subjects, repository) {
     if (/[*?,\s[\]]/.test(s)) { out.push(`'${s}' carries a pattern character, a comma or a space`); continue; }
     if (!/(^|:)ref:refs\/heads\/[A-Za-z0-9._/-]+(:|$)/.test(s)) { out.push(`'${s}' is not a branch ref subject (<prefix>:ref:refs/heads/<branch>)`); continue; }
     if (/(^|:)(environment|pull_request)(:|$)/.test(s)) { out.push(`'${s}' names an environment or a pull request`); continue; }
+    const branch = /(?:^|:)ref:refs\/heads\/([A-Za-z0-9._/-]+)(?::|$)/.exec(s)?.[1];
+    if (branch !== defaultBranch) { out.push(`'${s}' names the branch '${branch}', not ${repository}'s default branch '${defaultBranch}'`); continue; }
     const claim = /(?:^|:)repo:([^:]+)/.exec(s)?.[1];
     if (claim === undefined) { out.push(`'${s}' names no repository, so it would trust others`); continue; }
     const immutable = IMMUTABLE_PREFIX.exec(`repo:${claim}`);
@@ -175,28 +180,41 @@ export function subjectPrefix(repository, customization) {
   return `repo:${repository}`;
 }
 
+const ghApi = /** @param {string[]} args */ (args) => execFileSync('gh', args, { encoding: 'utf8' });
+
+/**
+ * The repository's default branch, from GitHub's API through `gh`.
+ * @param {string} repository owner/name
+ * @param {(args: string[]) => string} [gh]
+ * @returns {string}
+ */
+export function defaultBranch(repository, gh = ghApi) {
+  const branch = gh(['api', `repos/${repository}`, '--jq', '.default_branch']).trim();
+  if (!BRANCH.test(branch)) throw new Error(`GitHub reported ${repository}'s default branch as '${branch}'`);
+  return branch;
+}
+
 /**
  * The default-branch subject the store trusts, from GitHub's API through `gh`.
  * @param {string} repository owner/name
  * @param {(args: string[]) => string} [gh]
  * @returns {string}
  */
-export function defaultBranchSubject(repository, gh = (args) => execFileSync('gh', args, { encoding: 'utf8' })) {
-  const branch = gh(['api', `repos/${repository}`, '--jq', '.default_branch']).trim();
-  if (!BRANCH.test(branch)) throw new Error(`GitHub reported ${repository}'s default branch as '${branch}'`);
+export function defaultBranchSubject(repository, gh = ghApi) {
+  const branch = defaultBranch(repository, gh);
   const customization = JSON.parse(gh(['api', `repos/${repository}/actions/oidc/customization/sub`]));
   return `${subjectPrefix(repository, customization)}:ref:refs/heads/${branch}`;
 }
 
 /**
  * The commands that provision the store.
- * @param {{ repository: string, subjects: string[], region: string, profile?: string, oidcProvider?: boolean, template?: string }} o
+ * @param {{ repository: string, subjects: string[], defaultBranch: string, region: string, profile?: string, oidcProvider?: boolean, template?: string }} o
  * @returns {string[][]}
  */
-export function deployCommands({ repository, subjects, region, profile, oidcProvider = true, template = TEMPLATE_PATH }) {
+export function deployCommands({ repository, subjects, defaultBranch: branch, region, profile, oidcProvider = true, template = TEMPLATE_PATH }) {
   if (!REPOSITORY.test(repository)) throw new Error(`--repository '${repository}' is not owner/name`);
   if (!REGION.test(region)) throw new Error(`--region '${region}' is not an AWS region`);
-  const problems = subjectProblems(subjects, repository);
+  const problems = subjectProblems(subjects, repository, branch);
   if (problems.length) throw new Error(`refusing to trust these subjects: ${problems.join('; ')}`);
   const common = ['--region', region, ...(profile ? ['--profile', profile] : [])];
   return [
@@ -227,9 +245,12 @@ if (isCliEntry(import.meta.url)) {
     const problems = [...lifecycleProblems(readTemplate()), ...trustProblems(readTemplate())];
     if (problems.length) throw new Error(`the template fails its checks: ${problems.join('; ')}`);
     if (!REPOSITORY.test(values.repository)) throw new Error(`--repository '${values.repository}' is not owner/name`);
+    // The default branch is read even when every subject is given, so a `--subject` naming any
+    // other branch is refused.
+    const branch = defaultBranch(values.repository);
     const subjects = values.subject?.length ? values.subject : [defaultBranchSubject(values.repository)];
     console.log(`trusting ${subjects.join(', ')}`);
-    const commands = deployCommands({ repository: values.repository, subjects, region: values.region, profile: values.profile, oidcProvider: !values['no-oidc-provider'] });
+    const commands = deployCommands({ repository: values.repository, subjects, defaultBranch: branch, region: values.region, profile: values.profile, oidcProvider: !values['no-oidc-provider'] });
     for (const c of commands) {
       console.log(`$ ${c.join(' ')}`);
       if (!values['dry-run']) execFileSync(c[0] ?? 'aws', c.slice(1), { stdio: 'inherit' });
