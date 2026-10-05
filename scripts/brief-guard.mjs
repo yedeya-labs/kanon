@@ -1171,11 +1171,13 @@ const main = () => {
     if ('error' in read) throw read.error;
     return /** @type {Milestone[]} */ (read.value);
   };
-  // THE EXEMPTIONS FILE (kanon#54), read before any brief so a missing or malformed one is
-  // reported once, by name, rather than as a throw from inside the first brief's check.
+  // THE EXEMPTIONS FILE (kanon#54), read before any brief so a malformed one is reported once,
+  // by name, rather than as a throw from inside the first brief's check. A missing file or
+  // section is Kanon's default, nothing exempt (plan 0005 §5.2), and the run says so.
   let exemptions;
   try {
     exemptions = readExemptions();
+    for (const d of exemptions.defaults) console.log(`brief-guard: ${d}`);
   } catch (e) {
     console.error(`brief-guard: ${e.message}`);
     process.exitCode = 1;

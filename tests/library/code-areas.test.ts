@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  UNDECLARED, auditAreas, codeTrees, isCodePath, isTestPath, parseCodeAreas, readCodeAreas,
+  UNDECLARED, auditAreas, codeAreasDefaults, codeTrees, isCodePath, isTestPath, parseCodeAreas, readCodeAreas,
 } from '../../scripts/lib/code-areas.mjs';
 import { codeAreasCli } from '../../scripts/code-areas.mjs';
 import { referenceCorpus } from '../../scripts/spec-lib.mjs';
@@ -257,5 +257,17 @@ describe("Kanon's own stack document declares its code areas", () => {
     const a = parseCodeAreas(readFileSync(join(ROOT, 'docs/qa/stack.md'), 'utf8'));
     expect(a.code.map((c) => c.path)).toEqual(['scripts/', 'actions/', 'cli/', 'infra/', '.github/scripts/']);
     expect(a.tests.map((c) => c.path)).toEqual(['tests/']);
+  });
+});
+
+describe("an omitted `## Code areas` is Kanon's default, and the readers name it (plan 0005 §5.2)", () => {
+  it('names the default for an undeclared document, and nothing for a declared one', () => {
+    expect(codeAreasDefaults(UNDECLARED)).toEqual([
+      "docs/qa/stack.md declares no `## Code areas`, so Kanon's default applies: the code is the whole repository, and a test is what its language's convention calls one (K-LAYOUT-17)",
+    ]);
+    expect(codeAreasDefaults(parseCodeAreas('## Gates\n'))).toHaveLength(1);
+    expect(codeAreasDefaults(parseCodeAreas('## Code areas\n\n- `src/` — code: the app\n'))).toEqual([]);
+    // Declared with no entries is a declaration, not an omission.
+    expect(codeAreasDefaults(parseCodeAreas('## Code areas\n'))).toEqual([]);
   });
 });

@@ -43,8 +43,24 @@ export const LIST_ITEM = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s/;
  * @returns {Line[]}
  */
 export function sectionOf(d, lines, fenced, heading) {
+  const body = optionalSectionOf(d, lines, fenced, heading);
+  if (body === null) throw new DeclarationError(`${d.file} has no \`${heading}\` heading (${d.rule})`);
+  return body;
+}
+
+/**
+ * The body lines of one `##` section, or `null` when the heading is missing: a section the
+ * file may leave out, which then means its documented default (plan 0005 §5.2). A heading
+ * written more than once still throws: that is a malformed section, not an omitted one.
+ * @param {Declaration} d
+ * @param {string[]} lines
+ * @param {Set<number>} fenced
+ * @param {string} heading
+ * @returns {Line[] | null}
+ */
+export function optionalSectionOf(d, lines, fenced, heading) {
   const at = lines.flatMap((l, i) => (!fenced.has(i) && l.trimEnd() === heading ? [i] : []));
-  if (at.length === 0) throw new DeclarationError(`${d.file} has no \`${heading}\` heading (${d.rule})`);
+  if (at.length === 0) return null;
   if (at.length > 1) {
     throw new DeclarationError(`${d.file} has the \`${heading}\` heading ${at.length} times, on lines ${at.map((i) => i + 1).join(', ')} (${d.rule})`);
   }

@@ -8,7 +8,7 @@
 // files are exempt is the project's content; where it is written, and in what shape, is
 // Kanon's (ADR 0002).
 //
-// TWO FIXED HEADINGS, both required:
+// TWO FIXED HEADINGS, each optional:
 //
 //   ## Pre-standard briefs
 //   - `docs/projects/12.md` — approved before the brief standard; an immutable record
@@ -19,8 +19,11 @@
 //   | `docs/history.md` | `docs/TODO.md` | names the retired TODO file, as history |
 //
 // Prose may sit around the entries. A section with no entries says there are none. A heading
-// that is missing or appears twice, a bullet or a table row that isn't an entry, and an entry
-// listed twice each throw `DeclarationError`, whose message names the file and the line.
+// that appears twice, a bullet or a table row that isn't an entry, and an entry listed twice
+// each throw `DeclarationError`, whose message names the file and the line.
+//
+// AN OMITTED FILE OR SECTION IS KANON'S DEFAULT (plan 0005 §5.2): nothing is exempt there. The
+// result's `defaults` names each default it took, and both guards print those lines.
 //
 // WHERE IT IS READ FROM. Both guards run as checks on a pull request and read the checked-out
 // tree. The file is directly inside `docs/qa/`, so a pull request that adds an exemption for
@@ -30,7 +33,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { fencedLines } from '../spec-lib.mjs';
-import { DeclarationError, LIST_ITEM, bulletsOf, linesOf, sectionOf } from './declarations.mjs';
+import { DeclarationError, LIST_ITEM, bulletsOf, linesOf, optionalSectionOf } from './declarations.mjs';
 
 /** The file's fixed path (`K-LAYOUT-1`, `K-LAYOUT-15`). */
 export const EXEMPTIONS_FILE = 'docs/qa/exemptions.md';
@@ -49,8 +52,16 @@ const FILE = { file: EXEMPTIONS_FILE, rule: 'K-LAYOUT-15' };
 /**
  * @typedef {{ brief: string, reason: string, line: number }} BriefExemption
  * @typedef {{ file: string, path: string, reason: string, line: number }} MentionExemption
- * @typedef {{ briefs: BriefExemption[], mentions: MentionExemption[] }} Exemptions
+ * @typedef {{ briefs: BriefExemption[], mentions: MentionExemption[], defaults: string[] }} Exemptions
+ *   `defaults`: one line per omitted file or section, naming the default it means
  */
+
+/** What a repository without the file declares: Kanon's default, nothing exempt (plan 0005 §5.2). @returns {Exemptions} */
+export const defaultExemptions = () => ({
+  briefs: [],
+  mentions: [],
+  defaults: [`${EXEMPTIONS_FILE} doesn't exist, so Kanon's default applies: nothing is exempt (K-LAYOUT-15)`],
+});
 
 /** @param {string} message */
 const fail = (message) => new DeclarationError(`${message} (K-LAYOUT-15)`);
@@ -116,7 +127,15 @@ export function parseExemptions(text) {
   const lines = linesOf(text);
   const fenced = fencedLines(lines);
   if (fenced.unclosed !== -1) throw fail(`${EXEMPTIONS_FILE}:${fenced.unclosed + 1} opens a code fence that never closes`);
-  const out = { briefs: briefs(sectionOf(FILE, lines, fenced, BRIEFS_HEADING)), mentions: mentions(sectionOf(FILE, lines, fenced, MENTIONS_HEADING)) };
+  /** @type {string[]} */
+  const defaults = [];
+  /** @param {string} heading @param {string} what */
+  const section = (heading, what) => {
+    const body = optionalSectionOf(FILE, lines, fenced, heading);
+    if (body === null) defaults.push(`${EXEMPTIONS_FILE} has no \`${heading}\` heading, so Kanon's default applies: no ${what} is exempt (K-LAYOUT-15)`);
+    return body ?? [];
+  };
+  const out = { briefs: briefs(section(BRIEFS_HEADING, 'brief')), mentions: mentions(section(MENTIONS_HEADING, 'path mention')), defaults };
   /** @type {Map<string, number>} */
   const seen = new Map();
   for (const e of [...out.briefs.map((b) => ({ key: b.brief, line: b.line })), ...out.mentions.map((m) => ({ key: `${m.file} → ${m.path}`, line: m.line }))]) {
@@ -128,7 +147,7 @@ export function parseExemptions(text) {
 }
 
 /**
- * Reads and parses the exemptions file from a checked-out tree.
+ * Reads and parses the exemptions file from a checked-out tree. No file is Kanon's default.
  * @param {string} [root] the repository root
  * @returns {Exemptions}
  */
@@ -137,12 +156,8 @@ export function readExemptions(root = process.cwd()) {
   try {
     text = readFileSync(join(root, EXEMPTIONS_FILE), 'utf8');
   } catch (e) {
-    const code = /** @type {NodeJS.ErrnoException} */ (e).code;
-    throw fail(
-      code === 'ENOENT'
-        ? `${EXEMPTIONS_FILE} doesn't exist. Every adopter keeps one, with \`${BRIEFS_HEADING}\` and \`${MENTIONS_HEADING}\` headings, empty when nothing is exempt`
-        : `${EXEMPTIONS_FILE} couldn't be read: ${/** @type {Error} */ (e).message}`,
-    );
+    if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT') return defaultExemptions();
+    throw fail(`${EXEMPTIONS_FILE} couldn't be read: ${/** @type {Error} */ (e).message}`);
   }
   return parseExemptions(text);
 }

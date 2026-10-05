@@ -14,38 +14,45 @@
 //   node declarations.mjs <escalation-paths|exemptions|adoption|stack|register>
 //   node declarations.mjs overseer <true|false>   # whether a workflow calls the Overseer's lane
 //
-// Run from the root of the adopter's checkout. Exits 0 when the file parses, and 1 with the
-// reader's own message on standard error when it doesn't. lane-check calls it only for a file
-// that exists: a missing file is failed by the guard or lane that reads it (K-LAYOUT-8,
-// K-LAYOUT-15), and a repository that runs none of them has no reader to fail. An adoption
-// record that declares no reference environment passes here: the reconciler fails on it, by
-// name, when a project reaches its deploy phase (K-PROJ-11).
+// Run from the root of the adopter's checkout. Exits 0 when the file parses, printing on standard
+// output one line for each default it took (an omitted section, plan 0005 §5.2), and 1 with the
+// reader's own message on standard error when it doesn't parse. lane-check calls it only for a
+// file that exists: a missing file is the reader's documented default, and lane-check says so
+// itself. An adoption record that declares no reference environment passes here: the reconciler
+// fails on it, by name, when a project reaches its deploy phase (K-PROJ-11).
 
 import { readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import { readExemptions } from '../../scripts/lib/exemptions.mjs';
 import { readDigestAudience } from '../../scripts/lib/digest-audience.mjs';
 import { readReferenceDeploy } from '../../scripts/lib/reference-deploy.mjs';
-import { readCodeAreas } from '../../scripts/lib/code-areas.mjs';
+import { codeAreasDefaults, readCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { checkOverseerInstall } from '../../scripts/lib/overseer-install.mjs';
 import { APP_REGISTER, parsePersonas } from '../../scripts/app-register.mjs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** @type {Record<string, (root: string) => unknown>} */
+/** Each reader returns the defaults it took, one line each. @type {Record<string, (root: string) => string[]>} */
 const READERS = {
-  'escalation-paths': readEscalationFile,
-  exemptions: readExemptions,
+  'escalation-paths': (root) => readEscalationFile(root).defaults,
+  exemptions: (root) => readExemptions(root).defaults,
   // Both of the record's declarations, so a malformed one of either fails by name.
-  adoption: (root) => [readReferenceDeploy(root), readDigestAudience(root)],
-  // Only `## Code areas`: the four required sections are checked by lane-check itself, and only
-  // when a called lane reads the document. A stack document without the section declares none.
-  stack: readCodeAreas,
-  // Called for every repository, record or not: a record must say whether the Overseer is
-  // installed, and a caller of its lane needs a record that says `installed`.
-  overseer: (root) => checkOverseerInstall({ root, caller: process.argv[3] === 'true' }),
+  adoption: (root) => {
+    readReferenceDeploy(root);
+    readDigestAudience(root);
+    return [];
+  },
+  // Only `## Code areas`: the other sections are checked by lane-check itself, and only when a
+  // called lane reads the document. A stack document without the section is Kanon's default.
+  stack: (root) => codeAreasDefaults(readCodeAreas(root)),
+  // Called for every repository, record or not: a record that doesn't say is Kanon's default,
+  // `not installed`, and a caller of the Overseer's lane needs a record that says `installed`.
+  overseer: (root) => checkOverseerInstall({ root, caller: process.argv[3] === 'true' }).defaults,
   // The App register's optional `Persona` column (plan 0005 §3.3). The slugs are the awk
   // reader's, per role; this reads only what the persona writers read.
-  register: (root) => parsePersonas(readFileSync(join(root, APP_REGISTER), 'utf8')),
+  register: (root) => {
+    parsePersonas(readFileSync(join(root, APP_REGISTER), 'utf8'));
+    return [];
+  },
 };
 
 const which = process.argv[2] ?? '';
@@ -55,7 +62,7 @@ if (!read) {
   process.exit(2);
 }
 try {
-  read(process.cwd());
+  for (const line of read(process.cwd())) process.stdout.write(`${line}\n`);
 } catch (e) {
   process.stderr.write(`${/** @type {Error} */ (e).message}\n`);
   process.exit(1);

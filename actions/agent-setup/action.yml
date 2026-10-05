@@ -78,6 +78,15 @@ outputs:
 runs:
   using: composite
   steps:
+    # KANON'S DEFAULTS FOR WHAT THE PROJECT LEAVES OUT (plan 0005 §5.2, `K-LAYOUT-17`): a playbook
+    # the project keeps none of is Kanon's baseline for the role, copied into place for the agent
+    # and kept out of its commits; an omitted stack-document section means none. Each default is
+    # one line in the summary. Before the agent, and after any restore of the default branch's
+    # `docs/qa/` (the review lane's), so the project's own copy always wins.
+    - name: Take Kanon's defaults for omitted declarations
+      shell: bash -e {0}
+      run: bash "$GITHUB_ACTION_PATH/declaration-defaults.sh"
+
     # WHO THE AGENT SPEAKS AS (plan 0005 §3.3, step L3). The role, its persona and the header
     # line every post opens with, written to `$GITHUB_ENV` for the steps after this one:
     # `agent-commits.sh` authors the agent's commits with the persona as their name, and

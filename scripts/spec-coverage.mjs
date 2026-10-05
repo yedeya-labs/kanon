@@ -35,7 +35,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFil
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { idPattern, loadPrefixes, parseAll, qaToolingImport } from './spec-lib.mjs';
-import { readEscalationFile } from './lib/escalation-paths.mjs';
+import { printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
 import { LOCKED_SET, byId, readLockedSet, serialiseLockedSet } from './locked-set.mjs';
 import { conventionFor, isTestFile } from './lib/test-conventions.mjs';
 import { execFileSync } from 'node:child_process';
@@ -781,11 +781,14 @@ export const claimExists = (claim, testBasenames) =>
   existsSync(claim) || (!claim.includes('/') && testBasenames.has(claim));
 
 /** The adopter's pipeline-code directories (`K-LAYOUT-8`, kanon#54), read only by the reports
- *  that list mentions, so `--write-locked` doesn't need the declaration. A missing or malformed
- *  declaration ends the run by name rather than counting a tooling test's fixtures. */
+ *  that list mentions, so `--write-locked` doesn't need the declaration. A malformed declaration
+ *  ends the run by name rather than counting a tooling test's fixtures; a missing one is Kanon's
+ *  default, none, and the run says so. */
 function pipelineDirs() {
   try {
-    return readEscalationFile().pipeline.map(({ dir }) => dir);
+    const declared = readEscalationFile();
+    printDefaults('spec-coverage', declared);
+    return declared.pipeline.map(({ dir }) => dir);
   } catch (e) {
     console.error(`spec-coverage: ${/** @type {Error} */ (e).message}`);
     process.exit(1);

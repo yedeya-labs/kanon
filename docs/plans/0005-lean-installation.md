@@ -171,6 +171,8 @@ Each declaration's default is written once, in the rule that defines the file, a
 
 `lane-check` stops failing an omitted section that has a default, and keeps failing a malformed one by name.
 
+Measured when L8 was built, on `origin/main` at `b38b8b7`: the exemptions file was not "already" defaulted, as the table says. A missing file, or a missing section, failed both guards that read it, so L8 treats it as new. So were the stack document's `## Schema changes`, `## Data isolation` and `## Generated files`, which `lane-check` required and which L8's own check leaves out: each now means none.
+
 ### 5.3 Labels on first use
 
 The taxonomy (`K-WORK-12`, 37 labels in 36 rows) gains a machine-readable twin, `rulebook/labels.json`, with a test that fails when the table and the file disagree, as `agent-permissions.json` does for the roles table. When a lane applies a label the repository lacks, it creates it first, with the taxonomy's colour and description, and says so in its summary. Both Apps hold Issues write, which creating a label needs, and each minting step's list already includes it where the step labels. A label outside the taxonomy is never created: an unknown name is a bug, and fails by name. `kanon init` creates the whole taxonomy, and deletes GitHub's defaults that aren't in it, after asking.

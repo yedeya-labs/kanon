@@ -196,14 +196,25 @@ describe('the gate, run as a CLI — module evaluation is part of the contract (
     expect(r.stdout).toMatch(/predates the RA-1742 standard/);
   });
 
-  it("refuses to a human, by name and with no stack trace, when the exemptions file is missing (kanon#54)", () => {
-    rmSync(join(adopter, 'docs/qa/exemptions.md'));
+  it("refuses to a human, by name and with no stack trace, when the exemptions file is malformed (kanon#54)", () => {
+    writeFileSync(join(adopter, 'docs/qa/exemptions.md'), '## Pre-standard briefs\n\n## Pre-standard briefs\n');
     try {
       const r = run(2040);
       expect(r.status, r.stdout).toBe(0);
       expect(r.outputs).toContain('act=refuse');
-      expect(r.stdout).toMatch(/can't be decided \(docs\/qa\/exemptions\.md doesn't exist/);
+      expect(r.stdout).toMatch(/can't be decided \(docs\/qa\/exemptions\.md has the `## Pre-standard briefs` heading 2 times/);
       expect(r.stdout).not.toMatch(/\n\s+at /);
+    } finally {
+      cpSync(join(ADOPTER, 'docs/qa/exemptions.md'), join(adopter, 'docs/qa/exemptions.md'));
+    }
+  });
+
+  it("reads a missing exemptions file as Kanon's default, nothing exempt, and splits (plan 0005 §5.2)", () => {
+    rmSync(join(adopter, 'docs/qa/exemptions.md'));
+    try {
+      expect(run(2040).outputs).toContain('act=split');
+      // The brief the file declared pre-standard is no longer exempt.
+      expect(run(2).outputs).toContain('act=split');
     } finally {
       cpSync(join(ADOPTER, 'docs/qa/exemptions.md'), join(adopter, 'docs/qa/exemptions.md'));
     }

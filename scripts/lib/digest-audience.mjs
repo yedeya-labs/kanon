@@ -119,11 +119,13 @@ export function readDigestAudience(root = process.cwd()) {
  * or `DEFAULT_AUDIENCE` when the record is missing there or declares none. Throws
  * `DeclarationError` when the record is malformed or can't be read: a lane must not quietly
  * write for the wrong reader.
+ * `note` is given one line naming the default when the lane takes it (plan 0005 §5.2).
  * @param {string} repo `owner/name`
  * @param {(args: string[], opts?: object) => string} [run] `gh`, injected for tests
+ * @param {(line: string) => void} [note]
  * @returns {string}
  */
-export function readDigestAudienceFrom(repo, run) {
+export function readDigestAudienceFrom(repo, run, note = () => {}) {
   const { branch, read } = defaultBranchFile(repo, run);
   if (!branch) throw fail(`no default branch to read ${ADOPTION_RECORD} from`);
   let text;
@@ -132,5 +134,8 @@ export function readDigestAudienceFrom(repo, run) {
   } catch (e) {
     throw fail(`${ADOPTION_RECORD} couldn't be read from \`${branch}\`: ${/** @type {Error} */ (e).message}`);
   }
-  return (text === null ? null : parseDigestAudience(text)) ?? DEFAULT_AUDIENCE;
+  const declared = text === null ? null : parseDigestAudience(text);
+  if (declared !== null) return declared;
+  note(`${ADOPTION_RECORD} on \`${branch}\` ${text === null ? "doesn't exist" : 'declares no audience'}, so Kanon's default applies: the digest is written for ${DEFAULT_AUDIENCE} (K-LAYOUT-10)`);
+  return DEFAULT_AUDIENCE;
 }

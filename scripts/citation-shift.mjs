@@ -92,8 +92,8 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { PROJECTS_TREE, SOURCE_EXT, coordinatesIn, isOracleSpec, resolvePath } from './citation-guard.mjs';
 import { qaToolingImport } from './spec-lib.mjs';
-import { DeclarationError, ESCALATION_FILE, parseEscalationFile, readEscalationFile } from './lib/escalation-paths.mjs';
-import { STACK_FILE, UNDECLARED, codeTrees, isCodePath, isTestPath, parseCodeAreas, readCodeAreas } from './lib/code-areas.mjs';
+import { ESCALATION_FILE, defaultEscalationFile, parseEscalationFile, printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
+import { STACK_FILE, UNDECLARED, codeAreasDefaults, codeTrees, isCodePath, isTestPath, parseCodeAreas, readCodeAreas } from './lib/code-areas.mjs';
 import { TABLE_EXT, conventionFor } from './lib/test-conventions.mjs';
 
 /**
@@ -372,18 +372,19 @@ const main = () => {
     return;
   }
   // THE ADOPTER'S PIPELINE CODE (kanon#54), whose comments are a guard's regression record.
-  // Read from the tree being checked, and a missing or malformed declaration stops the run
-  // by name rather than reading every pipeline comment as a claim.
+  // Read from the tree being checked. A malformed declaration stops the run by name rather than
+  // reading every pipeline comment as a claim; a missing one is Kanon's default, and the run
+  // says so.
   let pipelineDirs;
   let areas;
   try {
     const declared = head
       ? (() => {
           const text = tryGit(['show', `${head}:${ESCALATION_FILE}`]);
-          if (text === null) throw new DeclarationError(`${ESCALATION_FILE} doesn't exist at \`${head}\` (K-LAYOUT-8)`);
-          return parseEscalationFile(text);
+          return text === null ? defaultEscalationFile(`${ESCALATION_FILE} at \`${head}\``) : parseEscalationFile(text);
         })()
       : readEscalationFile();
+    printDefaults('citation-shift', declared);
     pipelineDirs = declared.pipeline.map(({ dir }) => dir);
     // The code areas, from the same tree: a stack document with no `## Code areas` declares
     // none, and the whole repository is read (`code-areas.mjs`).
@@ -393,6 +394,7 @@ const main = () => {
           return text === null ? UNDECLARED : parseCodeAreas(text);
         })()
       : readCodeAreas();
+    for (const d of codeAreasDefaults(areas)) console.error(`citation-shift: ${d}`);
   } catch (e) {
     console.error(`citation-shift: ${e.message}`);
     process.exitCode = 1;

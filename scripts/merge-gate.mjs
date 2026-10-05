@@ -999,7 +999,7 @@ import { CONFLICT_JSON, CONFLICT_WHY, conflictState } from './conflict-state.mjs
 import { marker as rebaseMarker } from './rebase-lane.mjs';
 import { appLogin, appPersona } from './app-register.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
-import { escalatingPaths, readEscalationFileAt } from './lib/escalation-paths.mjs';
+import { escalatingPaths, printDefaults, readEscalationFileAt } from './lib/escalation-paths.mjs';
 import { defaultBranchFile } from './lib/declarations.mjs';
 import { isSpecFile, specPromotions } from './lib/spec-promotions.mjs';
 import {
@@ -1539,13 +1539,18 @@ export function summaryLines({ considered, dryRun, merged, escalated, waiting = 
  * The escalating paths, from the escalation file on the repository's default branch
  * (`K-MERGE-17`, kanon#54). `run` is `gh`, injected so the reader is testable: a 404 on the
  * contents read is "the file doesn't exist there", and any other failure is a read failure.
- * Both throw `DeclarationError` by name, through `readEscalationFileAt`.
+ * A read failure, or a malformed file, throws `DeclarationError` by name, through
+ * `readEscalationFileAt`. No file, or no section, is Kanon's default (plan 0005 §5.2): only the
+ * pipeline's own paths escalate, and `print` is given the line that says so.
  * @param {string} repo
  * @param {(args: string[], opts?: object) => string} [run]
+ * @param {(line: string) => void} [print]
  */
-export function readEscalations(repo, run = gh) {
+export function readEscalations(repo, run = gh, print = (line) => console.log(line)) {
   const { branch, read } = defaultBranchFile(repo, run);
-  return escalatingPaths(readEscalationFileAt(branch, (path) => read(path)));
+  const file = readEscalationFileAt(branch, (path) => read(path));
+  printDefaults('merge-gate', file, print);
+  return escalatingPaths(file);
 }
 
 async function main() {
@@ -1559,9 +1564,12 @@ async function main() {
   const explicit = i > -1 ? [process.argv[i + 1]] : null;
 
   // THE ESCALATION FILE, FROM THE DEFAULT BRANCH (`K-MERGE-17`, kanon#54). Read once, before
-  // any PR, and a missing or malformed file ends the run by name: a sweep with no path rules
-  // would merge PRs that touch the project's high-risk paths.
-  const escalations = readEscalations(repo);
+  // any PR, and a malformed file ends the run by name: a sweep with no path rules would merge
+  // PRs that touch the project's high-risk paths. A missing file or section is Kanon's default,
+  // only the pipeline's own paths (plan 0005 §5.2), said in the log and in the summary.
+  /** @type {string[]} */
+  const defaults = [];
+  const escalations = readEscalations(repo, gh, (line) => { console.log(line); defaults.push(line); });
 
   // No --pr: sweep every open PR. This is the heartbeat's mode, and it is what makes
   // a missed event recoverable rather than terminal — the failure this pipeline
@@ -1583,7 +1591,7 @@ async function main() {
   });
 
   if (process.env.GITHUB_STEP_SUMMARY) {
-    const lines = summaryLines({ considered: numbers.length, dryRun, merged, escalated, waiting, released, failed, skips });
+    const lines = [...summaryLines({ considered: numbers.length, dryRun, merged, escalated, waiting, released, failed, skips }), ...defaults.map((d) => `- ${d}`)];
     execFileSync('bash', ['-c', `cat >> "$GITHUB_STEP_SUMMARY"`], { input: lines.join('\n') + '\n' });
   }
 

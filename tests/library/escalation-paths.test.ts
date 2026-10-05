@@ -49,7 +49,23 @@ describe('the escalation file parser', () => {
   });
 
   it('takes a section with no entries as a declaration that there are none', () => {
-    expect(parseEscalationFile(FILE('None.\n', ''))).toEqual({ paths: [], pipeline: [] });
+    expect(parseEscalationFile(FILE('None.\n', ''))).toEqual({ paths: [], pipeline: [], defaults: [] });
+  });
+
+  it("reads an omitted section as Kanon's default, none, and names the default (plan 0005 §5.2)", () => {
+    const noPipeline = parseEscalationFile('## Escalation paths\n\n- `^a/` — a\n');
+    expect(noPipeline.paths).toHaveLength(1);
+    expect(noPipeline.pipeline).toEqual([]);
+    expect(noPipeline.defaults).toEqual([
+      "docs/qa/escalation-paths.md has no `## Pipeline code` heading, so Kanon's default applies: the project declares no pipeline code of its own (K-LAYOUT-8)",
+    ]);
+    const noPaths = parseEscalationFile('## Pipeline code\n\n- `p/` — p\n');
+    expect(noPaths.paths).toEqual([]);
+    expect(noPaths.pipeline).toEqual([{ dir: 'p/', reason: 'p' }]);
+    expect(noPaths.defaults).toEqual([
+      "docs/qa/escalation-paths.md has no `## Escalation paths` heading, so Kanon's default applies: the project declares no high-risk paths (K-LAYOUT-8)",
+    ]);
+    expect(parseEscalationFile('# Nothing declared\n').defaults).toHaveLength(2);
   });
 
   it('ignores a heading or a bullet inside a fenced block', () => {
@@ -57,9 +73,7 @@ describe('the escalation file parser', () => {
     expect(parseEscalationFile(text).paths).toHaveLength(1);
   });
 
-  it('fails by name when a heading is missing or doubled', () => {
-    fails('## Escalation paths\n', /docs\/qa\/escalation-paths\.md has no `## Pipeline code` heading/);
-    fails('## Pipeline code\n', /has no `## Escalation paths` heading/);
+  it('fails by name when a heading is doubled: malformed, not omitted', () => {
     fails(`${FILE('', '')}\n## Pipeline code\n`, /has the `## Pipeline code` heading 2 times, on lines 6, 13/);
   });
 
@@ -111,10 +125,12 @@ describe('reading the escalation file', () => {
     expect(file.paths.map((p) => p.reason)).toEqual(['database migrations', 'auth']);
   });
 
-  it('fails by name when the tree has no escalation file', () => {
+  it("reads a tree with no escalation file as Kanon's default, the pipeline's own paths only, and names it (plan 0005 §5.2)", () => {
     const dir = mkdtempSync(join(tmpdir(), 'escalation-'));
     try {
-      expect(() => readEscalationFile(dir)).toThrow(/docs\/qa\/escalation-paths\.md doesn't exist\. Every adopter keeps one/);
+      const file = readEscalationFile(dir);
+      expect(file).toEqual({ paths: [], pipeline: [], defaults: [expect.stringMatching(/^docs\/qa\/escalation-paths\.md doesn't exist, so Kanon's default applies: only the pipeline's own paths escalate/)] });
+      expect(escalatingPaths(file)).toEqual([...PIPELINE_ESCALATIONS]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -142,12 +158,19 @@ describe('reading the escalation file', () => {
     const fail = (stderr: string) => () => {
       throw Object.assign(new Error('gh failed'), { stderr });
     };
-    expect(() => readEscalations('o/r', run(fail('gh: Not Found (HTTP 404)')))).toThrow(/doesn't exist on `trunk`/);
+    const printed: string[] = [];
+    expect(readEscalations('o/r', run(fail('gh: Not Found (HTTP 404)')), (line) => printed.push(line))).toEqual([...PIPELINE_ESCALATIONS]);
+    expect(printed).toEqual([
+      "merge-gate: docs/qa/escalation-paths.md on `trunk` doesn't exist, so Kanon's default applies: only the pipeline's own paths escalate (`.github/`, `docs/qa/`, the agent instruction files) (K-LAYOUT-8)",
+    ]);
+    printed.length = 0;
+    readEscalations('o/r', run(() => FILE('- `^a/` — a\n', '')), (line) => printed.push(line));
+    expect(printed, 'a declared file takes no default, and says nothing').toEqual([]);
     expect(() => readEscalations('o/r', run(fail('gh: Server Error (HTTP 502)')))).toThrow(/couldn't be read from `trunk`: gh: Server Error \(HTTP 502\)/);
   });
 
-  it('fails by name when the default branch has no file, a failed read, or no branch', () => {
-    expect(() => readEscalationFileAt('main', () => null)).toThrow(/doesn't exist on `main`/);
+  it("reads no file on the default branch as Kanon's default, and fails by name on a failed read or no branch", () => {
+    expect(readEscalationFileAt('main', () => null)).toEqual({ paths: [], pipeline: [], defaults: [expect.stringMatching(/escalation-paths\.md on `main` doesn't exist, so Kanon's default applies/)] });
     expect(() =>
       readEscalationFileAt('main', () => {
         throw new Error('HTTP 502');
@@ -258,12 +281,15 @@ describe("the label guard scans Kanon's directories and the declared pipeline co
     expect(appliedLabels().get('qa:needs-severity')).toEqual(new Set(['scripts/pipeline/file-follow-up.mjs']));
   });
 
-  it("doesn't scan an undeclared directory, and fails by name without the file", () => {
+  it("doesn't scan an undeclared directory, and reads no file as Kanon's default, saying so", () => {
     const dir = mkdtempSync(join(tmpdir(), 'label-guard-'));
     try {
       mkdirSync(join(dir, 'scripts/pipeline'), { recursive: true });
       writeFileSync(join(dir, 'scripts/pipeline/a.mjs'), "export const L = 'qa:needs-severity';\n");
-      expect(() => scanDirs(dir)).toThrow(/docs\/qa\/escalation-paths\.md doesn't exist/);
+      const printed: string[] = [];
+      expect(scanDirs(dir, (line) => printed.push(line))).toEqual(KANON_SCAN);
+      expect(printed).toEqual([expect.stringMatching(/^label-guard: docs\/qa\/escalation-paths\.md doesn't exist, so Kanon's default applies/)]);
+      expect(appliedLabels(undefined, dir).has('qa:needs-severity')).toBe(false);
       mkdirSync(join(dir, 'docs/qa'), { recursive: true });
       writeFileSync(join(dir, ESCALATION_FILE), FILE('', ''));
       expect(appliedLabels(undefined, dir).has('qa:needs-severity')).toBe(false);

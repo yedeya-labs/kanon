@@ -442,9 +442,16 @@ describe('RA-2697 — the agent-lane blocks come from the action cache, never th
     expect(at).toBeGreaterThanOrEqual(0);
     // `role` names the Reviewer for its persona header (plan 0005 §3.3); it reads no identity.
     expect(job[at]!.with).toEqual({ arm: 'review agent', 'app-slug': '', role: 'Reviewer' });
-    // Nothing but the persona step, which reads no token here: the role is given by name, so
-    // it writes the Reviewer's header line to the environment and calls no API.
-    expect(stepsAsRun([job[at]!]).map((s) => s.name), 'agent-setup runs only its persona step on this lane').toEqual(['Say who the agent speaks as']);
+    // Kanon's own defaults step (plan 0005 §5.2), which finds the baseline playbooks the restore
+    // already put in place, and the persona step, which reads no token here: the role is given
+    // by name, so it writes the Reviewer's header line to the environment and calls no API.
+    // Neither runs anything of the PR's.
+    const runs = stepsAsRun([job[at]!]);
+    expect(runs.map((s) => s.name), 'agent-setup runs only its defaults and persona steps on this lane').toEqual(["Take Kanon's defaults for omitted declarations", 'Say who the agent speaks as']);
+    expect(String(runs[0]!.run)).toBe('bash "$GITHUB_ACTION_PATH/declaration-defaults.sh"');
+    const restore = job.findIndex((s) => /restore-judging-inputs\.sh/.test(String(s.run)));
+    expect(restore).toBeGreaterThanOrEqual(0);
+    expect(at, 'after the restore of the judging inputs').toBeGreaterThan(restore);
     expect(scope).toBeGreaterThan(at);
     // No project-setup hook between them any more: the job runs none of the PR's code.
     expect(job.some((s) => s.uses === './.github/actions/project-setup')).toBe(false);

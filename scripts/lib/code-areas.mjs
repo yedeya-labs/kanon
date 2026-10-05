@@ -177,6 +177,17 @@ export function readCodeAreas(root = process.cwd()) {
 }
 
 /**
+ * The default a reader took, as one line for its summary (plan 0005 §5.2): none when the stack
+ * document declares its code areas, and otherwise the line that names Kanon's rule.
+ * @param {CodeAreas} areas
+ * @returns {string[]}
+ */
+export function codeAreasDefaults(areas) {
+  if (areas.declared) return [];
+  return [`${STACK_FILE} declares no \`${CODE_AREAS_HEADING}\`, so Kanon's default applies: the code is the whole repository, and a test is what its language's convention calls one (K-LAYOUT-17)`];
+}
+
+/**
  * The trees a `code` read covers: the declared `code` and `tests` trees, or `null` for the whole
  * repository when no `code` tree is declared. Tests are code too: their comments carry
  * coordinates, and they cite spec ids.

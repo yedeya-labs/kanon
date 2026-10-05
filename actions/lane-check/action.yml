@@ -13,11 +13,11 @@
 #   - every Kanon reference under `.github/` pins one exact version, the one this runs at;
 #   - the hook exists at its fixed path and declares every input Kanon passes it;
 #   - every role a caller's lane runs as has one row, with a slug, in the App register;
-#   - the stack document and the playbooks a called lane's prompt reads exist, and the stack
-#     document has its four sections (K-LAYOUT-17);
+#   - the stack document a called lane's prompt reads exists, with `## Gates` once and each other
+#     section at most once; a missing playbook is Kanon's baseline (K-LAYOUT-17, plan 0005 §5.2);
 #   - the test-database declaration, when there is one, declares one kind Kanon knows;
-#   - the escalation and exemptions files, when there are any, parse with the library's own
-#     readers (K-LAYOUT-8, K-LAYOUT-15; kanon#153);
+#   - the escalation and exemptions files parse with the library's own readers (K-LAYOUT-8,
+#     K-LAYOUT-15; kanon#153), and a missing one is Kanon's default, named in a notice;
 #   - `.github/dependabot.yml` has the entry that proposes Kanon upgrades.
 #
 # What a lane declares (its inputs, secrets and permissions, and the hook's inputs) is read

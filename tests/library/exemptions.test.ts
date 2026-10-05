@@ -29,22 +29,31 @@ describe('the exemptions file parser', () => {
   });
 
   it('takes a section with no entries as a declaration that nothing is exempt', () => {
-    expect(parseExemptions(FILE('None.\n', 'None.\n'))).toEqual({ briefs: [], mentions: [] });
+    expect(parseExemptions(FILE('None.\n', 'None.\n'))).toEqual({ briefs: [], mentions: [], defaults: [] });
+  });
+
+  it("reads an omitted section as Kanon's default, nothing exempt, and names the default (plan 0005 §5.2)", () => {
+    const noMentions = parseExemptions('## Pre-standard briefs\n\n- `docs/projects/1.md` — r\n');
+    expect(noMentions.briefs).toHaveLength(1);
+    expect(noMentions.mentions).toEqual([]);
+    expect(noMentions.defaults).toEqual(["docs/qa/exemptions.md has no `## Path mentions` heading, so Kanon's default applies: no path mention is exempt (K-LAYOUT-15)"]);
+    const noBriefs = parseExemptions(`## Path mentions\n\n${TABLE}| \`a.md\` | \`b.md\` | x |\n`);
+    expect(noBriefs.briefs).toEqual([]);
+    expect(noBriefs.mentions).toHaveLength(1);
+    expect(noBriefs.defaults).toEqual(["docs/qa/exemptions.md has no `## Pre-standard briefs` heading, so Kanon's default applies: no brief is exempt (K-LAYOUT-15)"]);
   });
 
   it('stops each section at the next heading, so a later section is never read as entries', () => {
     const later = '## Notes\n\n- `docs/projects/9.md` — not an entry here\n\n| File | Path | Reason |\n|---|---|---|\n| `a.md` | `b.md` | nor this |\n';
-    expect(parseExemptions(`${FILE('', '')}${later}`)).toEqual({ briefs: [], mentions: [] });
-    expect(parseExemptions(`# Exemptions\n\n## Pre-standard briefs\n\n${later}\n## Path mentions\n`)).toEqual({ briefs: [], mentions: [] });
+    expect(parseExemptions(`${FILE('', '')}${later}`)).toEqual({ briefs: [], mentions: [], defaults: [] });
+    expect(parseExemptions(`# Exemptions\n\n## Pre-standard briefs\n\n${later}\n## Path mentions\n`)).toEqual({ briefs: [], mentions: [], defaults: [] });
   });
 
   it('ignores a heading or an entry inside a fenced block', () => {
     expect(parseExemptions(FILE('```\n- `docs/projects/1.md` — x\n## Path mentions\n```\n', '')).briefs).toEqual([]);
   });
 
-  it('fails by name when a heading is missing or doubled', () => {
-    fails('## Pre-standard briefs\n', /docs\/qa\/exemptions\.md has no `## Path mentions` heading/);
-    fails('## Path mentions\n', /has no `## Pre-standard briefs` heading/);
+  it('fails by name when a heading is doubled: malformed, not omitted', () => {
     fails(`${FILE('', '')}## Path mentions\n`, /has the `## Path mentions` heading 2 times/);
   });
 
@@ -89,10 +98,10 @@ describe('reading the exemptions file', () => {
     expect(file.mentions.map((m) => [m.file, m.path])).toEqual([['docs/history.md', 'docs/TODO.md']]);
   });
 
-  it('fails by name when the tree has none', () => {
+  it("reads a tree with none as Kanon's default, nothing exempt, and names it (plan 0005 §5.2)", () => {
     const dir = mkdtempSync(join(tmpdir(), 'exemptions-'));
     try {
-      expect(() => readExemptions(dir)).toThrow(/docs\/qa\/exemptions\.md doesn't exist\. Every adopter keeps one/);
+      expect(readExemptions(dir)).toEqual({ briefs: [], mentions: [], defaults: ["docs/qa/exemptions.md doesn't exist, so Kanon's default applies: nothing is exempt (K-LAYOUT-15)"] });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
