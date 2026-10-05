@@ -35,8 +35,9 @@
 //
 // UNDECLARED, A GUARD READS MORE, NEVER LESS. A project with no `## Code areas`, or with no
 // bullet of a kind, gets Kanon's rule for that kind:
-//   code    the whole repository: every tracked file `citation-shift` can read comments in, and
-//           every file the corpus can read, outside dot-directories and `node_modules/`;
+//   code    the whole repository, which to all three of its readers is what git tracks
+//           (kanon#266): every tracked file `citation-shift` can read comments in, and every
+//           tracked file the corpus can read;
 //   tests   what the file's language convention calls a test (`K-SPEC-6`,
 //           `scripts/lib/test-conventions.mjs`), file by file;
 //   audit   the declared `code` trees, or the whole repository when none is declared.

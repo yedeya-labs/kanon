@@ -41,7 +41,8 @@
 // kiosk.md, instructor.md, student.md and superadmin.md. A bullets-only rule drops
 // 38 real invariants, which is why the leading list marker is optional here.
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { accessSync, constants, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { codeTrees, isTestPath, readCodeAreas } from './lib/code-areas.mjs';
 
@@ -386,8 +387,21 @@ export const REFERENCE_DOCS = 'docs';
  *
  * THE TREES ARE THE PROJECT'S (kanon#54). They were a constant, `src/`, `e2e/`, `tests/` and
  * `docs/`, the reference adopter's. A project that declares no code tree has the whole
- * repository walked, outside dot-directories and `node_modules/`: a reference left unread is
- * the silent failure, and an extra one read is not.
+ * repository read: a reference left unread is the silent failure, and an extra one read is not.
+ *
+ * THE WHOLE REPOSITORY IS WHAT GIT TRACKS (kanon#266), the same read the two other guards that
+ * share this fallback make — `citation-shift` (`git grep`) and `doc-path-guard` (`git ls-files`).
+ * Walking the working tree instead made the three disagree, and read whatever the project-setup
+ * hook had installed into the checkout: an untracked `vendor/`, `venv/`, `target/` or `dist/`
+ * was walked for `[AREA-N]` references, and third-party text could raise a renumber finding.
+ * Only `node_modules/` was special-cased, which is a Node opinion; git's ignore list is every
+ * stack's. Outside a git repository (a fixture tree, an exported archive) the walk stands in,
+ * as it does in `spec-coverage.mjs`.
+ *
+ * AND NEVER CRASHES ON A FILE IT CANNOT READ. A dangling symlink anywhere in the tree used to
+ * throw `ENOENT` out of `statSync`, which `spec-id-renumbered` reports as a stack trace rather
+ * than as a finding. A file the corpus cannot read is a file no consumer can read either — they
+ * all `readFileSync` what this returns — so it is left out, never thrown on.
  *
  * MINUS THE PROJECT'S OWN PIPELINE CODE, the directories it declares under `## Pipeline code`
  * (`K-LAYOUT-8`). A `code` tree such as `scripts/` can hold the pipeline, whose ids are
@@ -402,23 +416,66 @@ export function referenceCorpus(root = process.cwd(), pipelineDirs) {
   const tooling = qaToolingImport(pipelineDirs);
   const areas = readCodeAreas(root);
   const trees = codeTrees(areas);
+  const scope = trees === null ? null : [...new Set([...trees, `${REFERENCE_DOCS}/`])];
+  const files = trackedFiles(root) ?? walkTree(root, scope);
+  return [...new Set(files.map((f) => f.split('\\').join('/')))]
+    .filter((f) => /\.(ts|tsx|mjs|md)$/.test(f))
+    .filter((f) => scope === null || scope.some((d) => f.startsWith(d)))
+    .filter((f) => !f.startsWith(`${SPEC_DIR}/`))
+    .filter((f) => !pipelineDirs.some((d) => f.startsWith(d)))
+    .filter((f) => isReadableFile(join(root, f)))
+    .filter((f) => !(isTestPath(f, areas) && tooling.test(readText(join(root, f)))))
+    .sort();
+}
+
+/** Every file git tracks in the repository `root` IS, repository-relative, or null when `root`
+ *  is not a repository's root — a fixture tree, an archive, or a directory inside a repository,
+ *  where `git ls-files` would answer about a tree other than the one asked about. */
+function trackedFiles(root) {
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1e9 });
+  const real = (p) => { try { return realpathSync(p); } catch { return null; } };
+  try {
+    const top = real(git('rev-parse', '--show-toplevel').trim());
+    if (top === null || top !== real(root)) return null;
+    return git('ls-files', '-z').split('\0').filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+/** The walk that stands in outside a git repository: `scope`'s trees, or the whole tree.
+ *  @param {string} root
+ *  @param {string[] | null} scope the trees to read, or null for the whole tree */
+function walkTree(root, scope) {
   const out = [];
   const walk = (dir) => {
     let entries;
-    try { entries = readdirSync(dir); } catch { return; }
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
-      if (trees === null && (e.startsWith('.') || e === 'node_modules')) continue;
-      const p = join(dir, e);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (/\.(ts|tsx|mjs|md)$/.test(e)) out.push(p);
+      // There is no ignore list here, so the walk makes the two skips git would have made.
+      if (scope === null && (e.name.startsWith('.') || e.name === 'node_modules')) continue;
+      // A directory by the entry's OWN type: a symlink is never followed and never stat'd, so a
+      // dangling one is a file this leaves to `isReadableFile`, not a crash (kanon#266).
+      if (e.isDirectory()) walk(join(dir, e.name));
+      else out.push(relative(root, join(dir, e.name)));
     }
   };
-  if (trees === null) walk(root);
-  else for (const d of new Set([...trees, `${REFERENCE_DOCS}/`])) walk(join(root, d));
-  return [...new Set(out
-    .map((f) => relative(root, f).split('\\').join('/')))]
-    .filter((f) => !f.startsWith(`${SPEC_DIR}/`))
-    .filter((f) => !pipelineDirs.some((d) => f.startsWith(d)))
-    .filter((f) => !(isTestPath(f, areas) && tooling.test(readFileSync(join(root, f), 'utf8'))))
-    .sort();
+  if (scope === null) walk(root);
+  else for (const d of scope) walk(join(root, d));
+  return out;
+}
+
+/** Whether a path is a file whose contents a consumer of the corpus can actually read. */
+function isReadableFile(path) {
+  try {
+    accessSync(path, constants.R_OK);
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** A file's text, or '' when it can't be read — the corpus never throws on a file (kanon#266). */
+function readText(path) {
+  try { return readFileSync(path, 'utf8'); } catch { return ''; }
 }
