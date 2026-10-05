@@ -92,6 +92,10 @@ const EXEMPT: Record<string, string> = {
   'apps-check.yml': 'not a lane',
 };
 const SPINE = 'agent-lane.yml';
+/** The Author App's broadened permissions, which `agent-permissions.json` records with their reason. */
+const authorBroadened = (JSON.parse(readFileSync(join(fileURLToPath(new URL('../../', import.meta.url)), 'rulebook/agent-permissions.json'), 'utf8')) as {
+  apps: { author: { broadened: Perms } };
+}).apps.author.broadened;
 const PERMISSIONS = ['contents', 'issues', 'pull-requests', 'workflows', 'actions'];
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -175,6 +179,8 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     expect(mint, `${key} mints nothing`).toBeDefined();
     expect(requested(mint!.step.with)).toEqual(perms);
     if (!('statuses' in perms)) withinGrant('implementer', perms);
+    // The write is exactly the Author App's one broadened permission (ADR 0013, `K-AGENT-3`).
+    else expect(perms).toEqual({ statuses: authorBroadened.statuses });
   });
 
   it('no token but the implementer status\'s holds Commit statuses write, so no agent can set it (plan 0005 §3.3)', () => {
