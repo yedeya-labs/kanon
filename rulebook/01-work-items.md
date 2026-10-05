@@ -125,7 +125,7 @@ This chapter governs the issue: how it is labelled, which milestone it belongs t
 
 ### `K-WORK-12` Use the fixed label taxonomy
 
-**Rule.** Labels are the queue and the lane triggers, and every adopter uses the same set, with the same colours and descriptions. Create all of them at installation, and delete GitHub's default labels that aren't in the taxonomy (`documentation`, `duplicate`, `good first issue`, `help wanted`, `invalid`, `question`, `wontfix`). `bug` and `enhancement` are defaults that are in it.
+**Rule.** Labels are the queue and the lane triggers, and every adopter uses the same set, with the same colours and descriptions. Installation creates all of them, and deletes GitHub's default labels that aren't in the taxonomy (`documentation`, `duplicate`, `good first issue`, `help wanted`, `invalid`, `question`, `wontfix`). `bug` and `enhancement` are defaults that are in it. A lane that is about to apply a taxonomy label the repository lacks creates it first, with the table's colour and description, and says so in its run summary. A name outside the taxonomy is never created: it fails by name, and nothing is created.
 
 | Family | Label | Colour | Description |
 |---|---|---|---|
@@ -181,11 +181,11 @@ Two families have no members at installation. A `signal:<name>` label is created
 | Lead | none of its own | Its issues are marked by `project:<n>`. It applies `agent:revise` and `agent:lead-revise`, which are recovery labels: each re-delivers a lost review event to a revise lane (the Implementer's, or the Lead's own), and marks no author. |
 | Merger | none | It files nothing. Its one label is `needs:human`, its escalation. |
 
-Every label the pipeline applies must exist in the live repository. The repository is the authority on what labels exist, not a declared list.
+Every label the pipeline applies must be in this table. The table is the authority on what each label is, and [`labels.json`](labels.json) is its machine-readable twin, from which a lane creates a missing label. The live repository is the authority on which labels exist.
 
-**Why.** A lane that applies a label that doesn't exist fails at the moment of filing, after the work is done, and an offline test can only check that a constant exists. A declared label list drifts silently and becomes a third opinion about what a label is. A fixed taxonomy, with its meanings, is what lets guards check labels at all (ADR 0002). Colours and descriptions are fixed too, so that the same label reads the same on every adopter's board, and a label left over from GitHub's defaults is noise every filer has to decide to ignore.
+**Why.** A lane that applies a label that doesn't exist fails at the moment of filing, after the work is done, so the lane creates it first rather than leave the adopter to create every label by hand and miss one. Only a name from the table is created, so a typo fails instead of becoming a new label. A second list of labels drifts silently and becomes a third opinion about what a label is, unless a test holds it to the table. A fixed taxonomy, with its meanings, is what lets guards check labels at all (ADR 0002). Colours and descriptions are fixed too, so that the same label reads the same on every adopter's board, and a label left over from GitHub's defaults is noise every filer has to decide to ignore.
 
-**Enforced by.** A guard that scans every place the pipeline applies a label (workflows, scripts, issue forms and agent prompts) and fails when one doesn't exist in the live repository. Staying inside the taxonomy, and its colours and descriptions, is prose only; the installer will create them.
+**Enforced by.** A guard that scans every place the pipeline applies a label (workflows, scripts, issue forms and agent prompts) and fails when one doesn't exist in the live repository. Kanon's own lanes create a missing label before applying it, from [`labels.json`](labels.json), and a test fails when that file and this table disagree, when Kanon's scripts, lanes or prompts apply a label outside it, or when a lane that labels has no create-before-apply step. Deleting GitHub's defaults is prose only; the installer will do it.
 
 **Class.** framework
 

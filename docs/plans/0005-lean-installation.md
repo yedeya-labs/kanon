@@ -31,7 +31,7 @@ Measured on Kanon's main branch: the rulebook, `docs/lanes.md`, `docs/apps.md` a
 | App register rows | 1 per App, committed by hand from the diff `kanon apps` prints | the command writes the file; a person commits it | `K-LAYOUT-6` |
 | Apps Kanon itself runs | 3 (`kanon-reviewer`, `kanon-implementer`, `kanon-explorer`), created on two days, 2026-10-02 and 2026-10-05 | `kanon apps` | the adoption record, step 12 |
 | Apps the reference adopter runs | about 8 | by hand, then `kanon apps` | |
-| Labels | 40 in the taxonomy, and 7 of GitHub's defaults to delete. Kanon itself has 26 today, so its step 6 is "not done" | by hand | `K-WORK-12` |
+| Labels | 37 in the taxonomy (36 rows), and 7 of GitHub's defaults to delete. Kanon itself has 26 today, so its step 6 is "not done" | by hand | `K-WORK-12` |
 | Fixed governance files in `docs/qa/` | 13: the App register, the capability ledger, the escalation file, the adoption record, the sign-off delegation, the exemptions file, the test-database declaration, the stack document, and five playbooks. #288 counts six of them as *declarations*: the adoption record, the stack document, the escalation file, the test-database declaration, the sign-off delegation and the App register | by hand, each in its own format | `K-LAYOUT-1` |
 | Lane callers | 1 per lane: 18 lanes, plus the `apps-check` caller, `lane-check` in CI and a Dependabot entry with the cooldown written out | by hand, from `docs/lanes.md` | `K-LAYOUT-18`, `K-ADOPT-11` |
 | The project-setup hook and `ci.yml` | 1 each | by hand | `docs/lanes.md` |
@@ -173,7 +173,7 @@ Each declaration's default is written once, in the rule that defines the file, a
 
 ### 5.3 Labels on first use
 
-The taxonomy (`K-WORK-12`, 40 labels) gains a machine-readable twin, `rulebook/labels.json`, with a test that fails when the table and the file disagree, as `agent-permissions.json` does for the roles table. When a lane applies a label the repository lacks, it creates it first, with the taxonomy's colour and description, and says so in its summary. Both Apps hold Issues write, which creating a label needs, and each minting step's list already includes it where the step labels. A label outside the taxonomy is never created: an unknown name is a bug, and fails by name. `kanon init` creates the whole taxonomy, and deletes GitHub's defaults that aren't in it, after asking.
+The taxonomy (`K-WORK-12`, 37 labels in 36 rows) gains a machine-readable twin, `rulebook/labels.json`, with a test that fails when the table and the file disagree, as `agent-permissions.json` does for the roles table. When a lane applies a label the repository lacks, it creates it first, with the taxonomy's colour and description, and says so in its summary. Both Apps hold Issues write, which creating a label needs, and each minting step's list already includes it where the step labels. A label outside the taxonomy is never created: an unknown name is a bug, and fails by name. `kanon init` creates the whole taxonomy, and deletes GitHub's defaults that aren't in it, after asking.
 
 ### 5.4 `kanon init`
 
@@ -282,10 +282,10 @@ grep -rlE "_APP_PRIVATE_KEY" .github/workflows actions | wc -l
 grep -rhoE "[A-Z]+_APP_PRIVATE_KEY" .github/workflows actions | sort | uniq -c
 ```
 
-**The label taxonomy** (40 rows), and Kanon's own labels (26):
+**The label taxonomy** (36 rows holding 37 names; the release tool's row holds two), and Kanon's own labels (26):
 
 ```
-awk '/K-WORK-12. Use the fixed/,/^\*\*Why/' rulebook/01-work-items.md | grep -cE '^\| [^|]*\| `'
+awk '/^\| Family \| Label \| Colour/,/^$/' rulebook/01-work-items.md | grep -cE '^\| [^|]*\| `'
 gh label list -R yedeya-labs/kanon --limit 200 --json name --jq 'length'
 ```
 

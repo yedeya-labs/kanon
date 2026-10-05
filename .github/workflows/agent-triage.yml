@@ -99,6 +99,7 @@ jobs:
     with:
       agent: triage-fix
       lane: triage
+      labels: agent:triage qa:needs-triage qa:reproduced qa:cannot-reproduce qa:false-positive qa:fix-proposed
       arm: triage/fix agent
       # The longest real run observed is 26m, so 80m is ~3x headroom. A timeout that
       # truncates honest work is worse than one that never fires.

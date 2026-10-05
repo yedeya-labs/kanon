@@ -150,6 +150,14 @@ on:
         required: false
         type: boolean
         default: false
+      labels:
+        description: >-
+          The taxonomy labels this lane's agent may apply, space-separated. The agent's job
+          creates each one the repository lacks before the agent starts (plan 0005 §5.3,
+          `K-WORK-12`). Empty creates nothing.
+        required: false
+        type: string
+        default: ""
       issue-number:
         description: >-
           The issue this run was dispatched for; recorded on the row (RA-1517), and passed to
@@ -342,6 +350,7 @@ jobs:
       timeout-minutes: ${{ inputs.timeout-minutes }}
       prompt-cache-ttl: ${{ inputs.prompt-cache-ttl }}
       full-transcript: ${{ inputs.full-transcript }}
+      labels: ${{ inputs.labels }}
       issue-number: ${{ inputs.issue-number }}
       pr-number: ${{ inputs.pr-number }}
       ref: ${{ inputs.ref }}

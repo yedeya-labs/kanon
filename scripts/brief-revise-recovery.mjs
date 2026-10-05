@@ -59,6 +59,7 @@ import { readTrailer } from './review-trailer.mjs';
 import { CONFLICT_JSON, CONFLICT_WHY, blocksChurn, conflictState } from './conflict-state.mjs';
 import { appLogin } from './app-register.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { beforeApply } from './lib/labels.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -99,6 +100,7 @@ export const normaliseLogin = (login) =>
   String(login ?? '').replace(/^app\//, '').replace(/\[bot\]$/, '');
 
 function gh(args) {
+  beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 const ghJson = (args) => JSON.parse(gh(args));

@@ -29,6 +29,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { splitBranch, splitBranches } from './lib/protocol-spellings.mjs';
+import { beforeApply } from './lib/labels.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 
@@ -155,6 +156,7 @@ export function splitGate({ state, labels, project, body, briefExists, preStanda
 }
 
 function gh(args) {
+  beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
   return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
 }
 const ghJson = (args) => JSON.parse(gh(args));

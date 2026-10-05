@@ -75,6 +75,14 @@ on:
         required: false
         type: boolean
         default: false
+      labels:
+        description: >-
+          The taxonomy labels this lane's agent may apply, space-separated. The agent's job
+          creates each one the repository lacks before the agent starts (plan 0005 §5.3,
+          `K-WORK-12`). Empty creates nothing.
+        required: false
+        type: string
+        default: ""
       issue-number:
         description: >-
           The issue this run was dispatched for; recorded on the row (RA-1517), and passed to
@@ -308,6 +316,21 @@ jobs:
           app-slug: ${{ steps.app-token.outputs.app-slug }}
           push-probe: ${{ inputs.push-probe }}
           github-token: ${{ steps.app-token.outputs.token }}
+
+      # CREATE-BEFORE-APPLY (plan 0005 §5.3, `K-WORK-12`): each label the lane's agent may apply
+      # and the repository lacks is created first, with the taxonomy's colour and description,
+      # on the agent's own token. A name outside `rulebook/labels.json` fails here by name; an
+      # unreadable list or a failed create only warns.
+      - name: Create the lane's labels the repository lacks
+        if: inputs.labels != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          KANON: ${{ steps.kanon.outputs.path }}
+          LABELS: ${{ inputs.labels }}
+        run: |
+          read -r -a names <<< "$LABELS"
+          node "$KANON/scripts/ensure-labels.mjs" "${names[@]}"
 
       - uses: $/actions/agent-run
         id: agent

@@ -72,6 +72,7 @@ import { normaliseLogin, reviewAttempts, reviewRunsFor, whyNoChurn } from './rev
 import { NO_RETRY_EVIDENCE, RETRY_COOL_DOWN_HOURS, describeRetry, makeRetryEvidenceReader, retryDecision } from './lane-retry.mjs';
 import { appLogin } from './app-register.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { beforeApply } from './lib/labels.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -94,6 +95,7 @@ export const REVIEW_LABELS = ['review:please', 'agent:implement', 'agent:triage'
 export const CHURN_LABEL = 'review:please';
 
 function gh(args) {
+  beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 const ghJson = (args) => JSON.parse(gh(args));

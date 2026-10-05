@@ -118,8 +118,13 @@ describe('the review lane restores the list in one step, and re-checks it before
     expect(restore).toBeLessThan(scope);
     // No project-setup hook between them since kanon#185: the job runs none of the PR's code.
     expect(scope).toBeLessThan(verify);
-    // Nothing but the token runs between the re-check and the agent.
-    expect([verify + 1, verify + 2]).toEqual([mint, agent]);
+    // Nothing but the token, and Kanon's own label step (plan 0005 §5.3), runs between the
+    // re-check and the agent. The label step runs a script from the `kanon` step's output,
+    // the action cache, and reads nothing the PR wrote.
+    const labels = stepIndex(steps, (s) => s.name === "Create the lane's labels the repository lacks", 'creates missing labels');
+    expect([verify + 1, verify + 2, verify + 3]).toEqual([mint, labels, agent]);
+    expect(steps[labels]?.env?.KANON).toBe('${{ steps.kanon.outputs.path }}');
+    expect(String(steps[labels]?.run)).toMatch(/^node "\$KANON\/scripts\/ensure-labels\.mjs"( [a-z:-]+)+$/);
   });
   it('compares the re-check against the digest the restore recorded', () => {
     expect(steps.find(REVERIFY)!.env?.EXPECTED).toBe('${{ steps.restore.outputs.pin_digest }}');

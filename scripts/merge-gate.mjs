@@ -990,8 +990,12 @@ import {
   ESCALATION_HEADER, REVIEW_EVENT_CHECKS, SELF_CHECKS, isEscalation, mergerMarker, mergerMarkerSpellings, mergerMarkersIn,
 } from './lib/protocol-spellings.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { beforeApply } from './lib/labels.mjs';
 
-const gh = (args, opts = {}) => execFileSync('gh', args, { encoding: 'utf8', ...opts });
+const gh = (args, opts = {}) => {
+  beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+  return execFileSync('gh', args, { encoding: 'utf8', ...opts });
+};
 
 /**
  * Block for a moment without pulling in a scheduler. This runs in a one-shot CI step

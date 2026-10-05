@@ -123,6 +123,7 @@ jobs:
     with:
       agent: lead
       lane: lead
+      labels: sev:critical follow-up pipeline-improvement review:please
       arm: lead agent
       # Bounds a hang (RA-1336). Actions' default cap is 360m, so a wedged agent
       # burned six hours and left its issue looking mid-flight. Sized at ~3x the

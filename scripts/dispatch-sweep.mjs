@@ -46,6 +46,7 @@ import { queryCostRows } from '../infra/qa-store/aws/cost-rows.mjs';
 import { costRowsProblem } from '../actions/qa-store/qa-store.mjs';
 import { artifactRetentionNote, readArtifactCostRows } from './lib/telemetry-artifacts.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { beforeApply } from './lib/labels.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -411,6 +412,7 @@ export const ghCause = (err) => {
 
 function gh(args) {
   try {
+    beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
     return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
   } catch (err) {
     // Re-thrown with the cause on the FIRST line, so the two callers that take

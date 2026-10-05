@@ -38,6 +38,7 @@ import { appendFileSync } from 'node:fs';
 import { AGENT_LOGIN, linkedPrIndex, norm } from './dispatch-sweep.mjs';
 import { SPLIT_LABEL, exhaustedRoute, projectOf } from './split-lineage.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { beforeApply } from './lib/labels.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const IMPLEMENT = 'agent:implement';
@@ -242,6 +243,8 @@ export function plan(verdict, issue, body) {
 
 function gh(args, token) {
   const env = token ? { ...process.env, GH_TOKEN: token } : process.env;
+  // Created with the token that applies it: the split label rides the App (see `plan`).
+  beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env, stdio: ['ignore', 'pipe', 'pipe'] }));
   return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env });
 }
 const ghJson = (args) => JSON.parse(gh(args));
