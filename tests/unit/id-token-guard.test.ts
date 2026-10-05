@@ -38,7 +38,7 @@ describe('every Kanon workflow', () => {
     expect(idTokenProblems(load())).toEqual([]);
   });
 
-  it('the guard is not vacuous: it sees the store jobs, the maintenance job and the smoke callers that hold id-token', () => {
+  it('the guard is not vacuous: it sees the store jobs, the maintenance job, and the smoke and lane callers that hold id-token', () => {
     const w = load();
     const holders = Object.entries(w).flatMap(([f, wf]) => Object.entries(wf.jobs ?? {})
       .filter(([, j]) => idTokenSource(wf, j)).map(([n]) => `${f}:${n}`)).sort();
@@ -48,6 +48,9 @@ describe('every Kanon workflow', () => {
       'agent-explore.yml:last-green', 'agent-explore.yml:put', 'agent-explore.yml:record-skip',
       'agent-lanes-smoke.yml:code-audit', 'agent-lanes-smoke.yml:dispatch-sweep', 'agent-lanes-smoke.yml:explore', 'agent-lanes-smoke.yml:overseer',
       'agent-overseer.yml:export',
+      // Kanon's own caller of the code-audit lane (plan 0004 step 11a): it calls a lane with
+      // store jobs, so it grants their id-token, and no job of its own runs anything.
+      'code-audit.yml:audit',
       'qa-store-aws-maintenance.yml:maintenance',
     ]);
   });
