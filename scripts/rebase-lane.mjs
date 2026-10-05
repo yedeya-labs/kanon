@@ -37,6 +37,7 @@ import { execFileSync } from 'node:child_process';
 import { CONFLICT_JSON, conflictState } from './conflict-state.mjs';
 import { NO_RETRY_EVIDENCE, RETRY_COOL_DOWN_HOURS, describeRetry, makeRetryEvidenceReader, retryDecision } from './lane-retry.mjs';
 import { appLogin } from './app-register.mjs';
+import { asRole, signed } from './lib/role-marker.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
@@ -108,8 +109,9 @@ export function attemptsIn(bodies, sha) {
 }
 
 /** What the lane says on the PR before handing it over, so a human reading the PR in
- *  that window sees an actor rather than silence. */
-export const attemptComment = (sha, runId = '') => [
+ *  that window sees an actor rather than silence. Signed as the Implementer, whose App
+ *  posts it (plan 0005 §3.3). */
+export const attemptComment = (sha, runId = '') => signed([
   '🔧 **Resolving this conflict.**',
   '',
   'This PR conflicts with `main`, so GitHub dispatches no `pull_request` events for it —'
@@ -121,7 +123,7 @@ export const attemptComment = (sha, runId = '') => [
   '',
   marker(sha),
   ...(/^\d+$/.test(String(runId)) ? [runMarker(sha, runId)] : []),
-].join('\n');
+].join('\n'), 'Implementer');
 
 /**
  * Why this PR is not one the lane may hand over, or null if it is.
@@ -135,7 +137,8 @@ export function ineligible(pr, { implementer = IMPLEMENTER_LOGIN } = {}) {
   if (labels.includes(HELD_LABEL)) {
     return `carries \`${HELD_LABEL}\` — a human owns this PR, and moving its head would mint a fresh duplicate of the Merger's escalation comment, whose marker is keyed on the head SHA`;
   }
-  if (normaliseLogin(pr.author?.login) !== implementer) {
+  // The Implementer's login and, from L4, its role marker in the PR body (plan 0005 §3.3).
+  if (!asRole('Implementer', { login: normaliseLogin(pr.author?.login), expected: implementer, body: pr.body })) {
     return `authored by \`${normaliseLogin(pr.author?.login) || 'unknown'}\`, not this pipeline — a human's branch is theirs to resolve`;
   }
   if (pr.isDraft) return 'a draft — nothing downstream is waiting on it';
@@ -220,7 +223,7 @@ export function rebaseDecision(prs, {
 
 /** The `gh pr list` fields the decision needs. One place, so a read that forgets one is
  *  one edit — and `conflictState` throws rather than answering "clear" if it does. */
-export const PR_FIELDS = `number,author,state,isDraft,labels,headRefOid,headRefName,${CONFLICT_JSON}`;
+export const PR_FIELDS = `number,author,body,state,isDraft,labels,headRefOid,headRefName,${CONFLICT_JSON}`;
 
 // ── IO ──────────────────────────────────────────────────────────────────────
 

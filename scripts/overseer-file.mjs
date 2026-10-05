@@ -59,6 +59,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { THRESHOLD, countInterlock } from './capability-interlock.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
+import { signed } from './lib/role-marker.mjs';
 
 /** The report the agent writes, at the repository root. */
 export const REPORT = 'qa-overseer-audit.json';
@@ -248,7 +249,7 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
   for (const f of file) {
     const labels = [...LABELS, ...(f.capability ? ['capability'] : [])].flatMap((l) => ['--label', l]);
     try {
-      const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...labels, '--milestone', BUCKET], f.body));
+      const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...labels, '--milestone', BUCKET], signed(f.body, 'Overseer')));
       filed.push({ title: f.title, number });
       log(`filed #${number}: ${f.title}`);
     } catch (e) {
@@ -267,7 +268,7 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
       '--search', 'in:title "audit-summary"', '--json', 'number,title,state']));
     const n = nextAuditNumber(prior.map((p) => p.title));
     const body = renderAudit({ audit: report.audit, filed, held, upstream });
-    audit = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', auditTitle(n), '--body-file', '-', ...LABELS.flatMap((l) => ['--label', l]), '--milestone', BUCKET], body));
+    audit = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', auditTitle(n), '--body-file', '-', ...LABELS.flatMap((l) => ['--label', l]), '--milestone', BUCKET], signed(body, 'Overseer')));
   } catch (e) {
     log(`::error title=overseer audit not filed::${String(/** @type {Error} */ (e).message).split('\n')[0]}`);
     return 1;
@@ -276,7 +277,7 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
 
   for (const p of prior.filter((x) => x.state === 'OPEN' && AUDIT_NUMBER.test(x.title) && x.number !== audit)) {
     try {
-      gh(['issue', 'comment', String(p.number), '--repo', repo, '--body', `Superseded by #${audit}.`]);
+      gh(['issue', 'comment', String(p.number), '--repo', repo, '--body', signed(`Superseded by #${audit}.`, 'Overseer')]);
       gh(['issue', 'close', String(p.number), '--repo', repo]);
     } catch (e) {
       failed += 1;

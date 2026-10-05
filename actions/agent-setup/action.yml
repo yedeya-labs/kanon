@@ -53,6 +53,13 @@ inputs:
       for. Must follow the App-token checkout, whose persisted credential it pushes with.
     required: false
     default: "false"
+  role:
+    description: >-
+      The role the agent speaks as (plan 0005 §3.3): `Implementer`, `Reviewer`, `Lead`, …
+      Empty reads it from the App register on the default branch, by the minted App's slug.
+      A lane that calls this block before its App token exists (the review lane) passes it.
+    required: false
+    default: ""
   github-token:
     description: >-
       A token that can read the App's bot account and the default branch's
@@ -71,6 +78,20 @@ outputs:
 runs:
   using: composite
   steps:
+    # WHO THE AGENT SPEAKS AS (plan 0005 §3.3, step L3). The role, its persona and the header
+    # line every post opens with, written to `$GITHUB_ENV` for the steps after this one:
+    # `agent-commits.sh` authors the agent's commits with the persona as their name, and
+    # `agent-run` asks the agent to open every post with the header and its role marker. A
+    # role that can't be resolved warns and changes nothing: the marker is required by no one
+    # until L4. Script beside this block, read from the action cache, never the workspace.
+    - name: Say who the agent speaks as
+      shell: bash -e {0}
+      env:
+        ROLE: ${{ inputs.role }}
+        APP_SLUG: ${{ inputs.app-slug }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: node "$GITHUB_ACTION_PATH/persona.mjs"
+
     # THE AGENT'S COMMITS PASS THE ADOPTER'S `dco` CHECK (K-AGENT-44, kanon#234): authored as
     # the minted App, and signed off by the person the default branch's delegation record
     # names. On every lane, because which lanes commit is the lane's business, not this block's,

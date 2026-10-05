@@ -797,10 +797,35 @@ jobs:
             echo "the implementer left its own marker ($BEFORE_MARKED -> $NOW_MARKED) — nothing to record"
             exit 0
           fi
+          # Opened with the Implementer's header and role marker (plan 0005 §3.3): its App posts it.
           gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s\n' \
+            "**Implementer** <!-- kanon:role=implementer -->" \
+            "" \
             "⚠️ **A revise run pushed to this branch and ended without replying** (agent step: \`${OUTCOME:-unknown}\`; head \`${BEFORE_SHA:0:7}\` → \`${AFTER_SHA:0:7}\`; $RUN_URL)." \
             "" \
             "This comment is the **workflow** recording that a revise round was spent, so the round cap still advances (RA-1981). It is **not** the implementer's answer to the review and says nothing about which findings were addressed — read the diff and the run." \
             "" \
             "$MARKER")"
           echo "::notice title=revise round record::PR #$PR: the run pushed (${BEFORE_SHA:0:7} -> ${AFTER_SHA:0:7}) and left no marker, so the workflow recorded the round (RA-1981)."
+
+  # THE IMPLEMENTER STATUS IS A CHAIN (plan 0005 §3.3, question 6; step L3). A fixed job after
+  # the agent's, never the agent: it moves `kanon/role: implementer` to the pull request's new
+  # head only when the head this run started from (`head_sha`, read before the agent ran)
+  # carried one created by the Implementer's App, and every commit between them is the App's.
+  # Otherwise it sets none and says why. Nothing requires the status until L4, when this lane
+  # also refuses a pull request whose head has none; it never reds the lane.
+  implementer-status:
+    needs: [filter, revise]
+    if: ${{ !cancelled() && needs.filter.outputs.act == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: $/actions/kanon-path
+      - uses: $/actions/implementer-status
+        continue-on-error: true
+        with:
+          mode: carry
+          app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
+          app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          pr: ${{ needs.filter.outputs.pr }}
+          start-head: ${{ needs.filter.outputs.head_sha }}

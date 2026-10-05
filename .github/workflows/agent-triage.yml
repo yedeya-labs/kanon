@@ -78,6 +78,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       member: ${{ steps.gate.outputs.member }}
+      since: ${{ steps.before.outputs.since }}
+      branches: ${{ steps.before.outputs.branches }}
     steps:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
       # this lane acts only when the event's actor is a member or a registered agent App.
@@ -89,6 +91,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
+
+      # WHAT EXISTS BEFORE THE AGENT RUNS (plan 0005 §3.3, step L3), for the implementer
+      # status: when the run started and which branches there were, so `implementer-status`
+      # can tell the pull request THIS run opened (after `since`, from a branch not listed
+      # here) from any other. In this job because no agent has run yet, so nothing an agent
+      # wrote can be in it. `continue-on-error`: a failed read must not stop the lane, and
+      # the status job then stamps nothing and says why.
+      - name: Record what exists before the agent runs
+        id: before
+        if: steps.gate.outputs.member == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "since=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          branches="$(gh api --paginate "repos/$REPO/branches?per_page=100" --jq '.[].name' | jq -Rsc 'split("\n") | map(select(length > 0))')"
+          echo "branches=$branches" >> "$GITHUB_OUTPUT"
 
   triage-fix:
     # Only what the `filter` job admitted: the lane's admission rule sits on that job (the
@@ -182,3 +203,23 @@ jobs:
       app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
       app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  # THE IMPLEMENTER STATUS (plan 0005 §3.3, question 6; step L3). A fixed job after the agent's,
+  # never the agent: it sets `kanon/role: implementer` on the one pull request this run opened,
+  # with a token narrowed to Commit statuses write that no agent's token holds. Nothing
+  # requires the status until L4; it never reds the lane (`actions/implementer-status`).
+  implementer-status:
+    needs: [filter, triage-fix]
+    if: ${{ !cancelled() && needs.filter.outputs.member == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: $/actions/kanon-path
+      - uses: $/actions/implementer-status
+        continue-on-error: true
+        with:
+          mode: open
+          app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
+          app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          since: ${{ needs.filter.outputs.since }}
+          branches-before: ${{ needs.filter.outputs.branches }}

@@ -750,7 +750,10 @@ jobs:
             echo "the Lead left its own marker ($BEFORE_MARKED -> $NOW_MARKED) — nothing to record"
             exit 0
           fi
+          # Opened with the Lead's header and role marker (plan 0005 §3.3): its App posts it.
           gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s\n' \
+            "**Lead** <!-- kanon:role=lead -->" \
+            "" \
             "$MARKER" \
             "⚠️ **A revise run pushed to this brief and ended without replying** (agent step: \`${OUTCOME:-unknown}\`; head \`${BEFORE_SHA:0:7}\` → \`${AFTER_SHA:0:7}\`; $RUN_URL)." \
             "" \

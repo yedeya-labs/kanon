@@ -249,6 +249,15 @@ export const blockCallOf = (step) => provenance.get(step);
  * @param {string[]} [within] the blocks already being expanded, outermost first
  * @returns {any[]}
  */
+/**
+ * A block's step output that IS one of its inputs, with an addition no scanner reads. One
+ * today: `agent-run`'s prompt step appends the persona instruction to the lane's prompt and
+ * changes nothing else (plan 0005 §3.3; `withPersona`, held by `tests/unit/role-marker.test.ts`),
+ * so what a lane tells its agent is still read as the lane's own prompt.
+ * @type {Record<string, string>}
+ */
+const PASSED_THROUGH = { 'agent-run:${{ steps.prompt.outputs.text || inputs.prompt }}': 'prompt' };
+
 export function expandLaneBlocks(steps, readAction, within = []) {
   const out = [];
   for (const step of steps ?? []) {
@@ -272,7 +281,9 @@ export function expandLaneBlocks(steps, readAction, within = []) {
     const substitute = (v) => {
       if (typeof v !== 'string') return v;
       const m = /^\$\{\{\s*inputs\.([\w-]+)\s*\}\}$/.exec(v.trim());
-      return m ? valueOf(m[1]) : v;
+      if (m) return valueOf(m[1]);
+      const through = PASSED_THROUGH[`${name}:${v.trim()}`];
+      return through ? valueOf(through) : v;
     };
     const mapValues = (o) => (o === undefined ? undefined : Object.fromEntries(Object.entries(o).map(([k, v]) => [k, substitute(v)])));
     for (const inner of action.runs.steps) {

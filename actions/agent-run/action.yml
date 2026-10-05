@@ -75,6 +75,22 @@ runs:
       shell: bash -e {0}
       run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+    # WHO THE AGENT SPEAKS AS (plan 0005 §3.3, step L3). `agent-setup` resolved the role and
+    # exported its header line; this appends one instruction to the lane's prompt: open every
+    # post with that line, whose hidden comment is the role marker. No role resolved, and the
+    # prompt goes through unchanged. The script is Kanon's, beside this block in the action
+    # cache, never the workspace's.
+    #
+    # `continue-on-error`, and the action falls back to the lane's own prompt: an instruction
+    # about the header must never cost the run, and an empty prompt must never reach the agent.
+    - name: Ask the agent to open every post with its persona header
+      id: prompt
+      continue-on-error: true
+      shell: bash -e {0}
+      env:
+        PROMPT: ${{ inputs.prompt }}
+      run: node "$GITHUB_ACTION_PATH/persona-prompt.mjs"
+
     # PINNED EXACTLY (plan 0001, decision 14). `@v1` moves under every adopter between two
     # Kanon releases, so the CLI an adopter runs, and the flags Kanon's tests check against
     # it, would be whatever the tag pointed at that day. An exact version fixes the CLI per
@@ -92,7 +108,7 @@ runs:
         # Permit bot-initiated runs (robustness — an issue may be labeled by a bot).
         # The label is the gate; the output is a PR a human must merge (the merge gate).
         allowed_bots: "*"
-        prompt: ${{ inputs.prompt }}
+        prompt: ${{ steps.prompt.outputs.text || inputs.prompt }}
         claude_args: ${{ inputs.claude_args }}
         # The string 'true'/'false' the spine's boolean arrived as — the same value the
         # action was handed when this step sat in the spine and read the boolean itself.

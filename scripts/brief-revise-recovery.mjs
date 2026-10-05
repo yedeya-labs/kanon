@@ -58,6 +58,7 @@ import { NO_RETRY_EVIDENCE, RETRY_COOL_DOWN_HOURS, describeRetry, makeRetryEvide
 import { readTrailer } from './review-trailer.mjs';
 import { CONFLICT_JSON, CONFLICT_WHY, blocksChurn, conflictState } from './conflict-state.mjs';
 import { appLogin } from './app-register.mjs';
+import { asRole } from './lib/role-marker.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
 
@@ -121,7 +122,8 @@ const ghJson = (args) => JSON.parse(gh(args));
 export function briefPrs(prs) {
   return (prs ?? []).filter((pr) =>
     pr.state === 'OPEN'
-    && normaliseLogin(pr.author?.login) === LEAD_LOGIN
+    // The Lead's login and, from L4, its role marker in the PR body (plan 0005 §3.3).
+    && asRole('Lead', { login: normaliseLogin(pr.author?.login), expected: LEAD_LOGIN, body: pr.body })
     && (pr.files ?? []).some((f) => String(f.path ?? '').startsWith(BRIEF_PATH)));
 }
 
@@ -323,7 +325,7 @@ function main() {
     process.exit(2);
   }
   const prs = ghJson(['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '100',
-    '--json', `number,author,state,files,headRefOid,reviews,${CONFLICT_JSON}`]);
+    '--json', `number,author,body,state,files,headRefOid,reviews,${CONFLICT_JSON}`]);
   const decision = briefReviseRecovery(prs, { evidenceOf: makeRetryEvidenceReader({ json: ghJson }) });
   const text = report(decision);
   console.log(text);

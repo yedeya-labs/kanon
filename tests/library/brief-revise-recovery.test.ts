@@ -136,7 +136,7 @@ describe('which commit a verdict is about (RA-1725)', () => {
     // `gh pr list --json reviews` carries each review's body, so the stamp needs no
     // second read — but only while `reviews` stays in the list.
     const src = readFileSync(join(ROOT, 'scripts/brief-revise-recovery.mjs'), 'utf8');
-    expect(src).toMatch(/'--json', `number,author,state,files,headRefOid,reviews,/);
+    expect(src).toMatch(/'--json', `number,author,body,state,files,headRefOid,reviews,/);
   });
 });
 

@@ -42,6 +42,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { exhaustedRoute, projectOf } from './split-lineage.mjs';
 import { appLogin } from './app-register.mjs';
+import { asRole, signed } from './lib/role-marker.mjs';
 import { queryCostRows } from '../infra/qa-store/aws/cost-rows.mjs';
 import { costRowsProblem } from '../actions/qa-store/qa-store.mjs';
 import { artifactRetentionNote, readArtifactCostRows } from './lib/telemetry-artifacts.mjs';
@@ -386,6 +387,13 @@ const HOUR = 3600_000;
 const hoursSince = (iso, now = Date.now()) => (now - Date.parse(iso)) / HOUR;
 export const isBot = (login) => BOT_LOGINS.has(norm(login));
 
+/**
+ * The sweep's own comment: the Lead's login and, from L4, its role marker (plan 0005 §3.3), or
+ * the sweep's MARKER. Either signal alone excludes it from the conversation (RA-1336).
+ * @param {{login: string, body: string}} c
+ */
+export const isSweepComment = (c) => asRole('Lead', { login: c.login, expected: SWEEP_LOGIN, body: c.body }) || c.body.includes(MARKER);
+
 /** A secret must never reach a public issue comment — see `lead-reconcile.mjs`'s copy,
  *  which carries the reasoning (including why the body class admits `.`, `-` and `_`).
  *  `SweepFatal`'s message ends up in a `::error` annotation and, via `stop()`, in a
@@ -676,7 +684,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
   // carries `agent:implement` is still the sweep talking, and reading it as a human
   // reply would trip `humanRepliedToSweep` and hold the issue forever. Counting, by
   // contrast, must be per-lane: attempts in one lane are not attempts in the other.
-  const isSweep = (c) => c.login === SWEEP_LOGIN || c.body.includes(MARKER);
+  const isSweep = isSweepComment;
   const sweepComments = comments.filter((c) => isLaneComment(c.body, lane));
   const dispatched = sweepComments.length;
   // CHARGED = DISPATCHED − NEVER REACHED THE MODEL. Floored at 0: the store is read
@@ -685,7 +693,9 @@ export function classify(issue, comments, hasPr, opts = {}) {
   const redispatches = Math.max(0, dispatched - Math.max(0, unreached));
   const lastSweep = sweepComments.at(-1);
   const conversation = comments.filter((c) => !isSweep(c));
-  const agentComments = conversation.filter((c) => c.login === lane.agent);
+  // The Implementer's comments: its login and, from L4, its role marker (plan 0005 §3.3).
+  const byAgent = (c) => asRole('Implementer', { login: c.login, expected: lane.agent, body: c.body });
+  const agentComments = conversation.filter(byAgent);
   const lastAgent = agentComments.at(-1);
   const last = conversation.at(-1);
 
@@ -816,7 +826,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
   const OWNED = ['has-pr', 'human-held', 'triage-settled', 'parked'];
   if (lane.decomposes && Number.isFinite(exhaustedAt) && !OWNED.includes(state)
     && !(Number.isFinite(labeledAt) && labeledAt > exhaustedAt)
-    && !conversation.some((c) => Date.parse(c.createdAt) > exhaustedAt && (c.login === lane.agent || !isBot(c.login)))) {
+    && !conversation.some((c) => Date.parse(c.createdAt) > exhaustedAt && (byAgent(c) || !isBot(c.login)))) {
     const route = exhaustedRoute({ project: projectOf(issue?.body), body: issue?.body });
     return { ...base, state: 'too-big', act: 'stop', stopLabel: route.label, why: route.why };
   }
@@ -914,7 +924,8 @@ function redispatch(v) {
   // The comment goes FIRST because it is what records the attempt. If it failed and
   // the churn succeeded, the attempt would be uncounted and un-cooled-down, and the
   // issue would be re-dispatched every day forever.
-  gh(['issue', 'comment', n, '--repo', REPO, '--body', body]);
+  // Signed as the Lead (plan 0005 §3.3): the sweep runs on the Lead's App.
+  gh(['issue', 'comment', n, '--repo', REPO, '--body', signed(body, 'Lead')]);
   gh(['issue', 'edit', n, '--repo', REPO, '--remove-label', lane.label]);
   addLabelOrDie(n, lane.label, 're-dispatch');
 }
@@ -950,7 +961,7 @@ function stop(v) {
       '',
       `_Filed by \`scripts/dispatch-sweep.mjs\` (RA-912, ${lane.key} lane RA-1336)._`,
     ].join('\n');
-  gh(['issue', 'comment', n, '--repo', REPO, '--body', body]);
+  gh(['issue', 'comment', n, '--repo', REPO, '--body', signed(body, 'Lead')]);
 }
 
 // ---------------------------------------------------------------------------

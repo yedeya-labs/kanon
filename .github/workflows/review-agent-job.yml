@@ -314,6 +314,9 @@ jobs:
         with:
           arm: review agent
           app-slug: ""
+          # The role by name, since there is no slug to look it up by: the Reviewer's
+          # reviews open with its persona header and role marker (plan 0005 §3.3).
+          role: Reviewer
 
       # REVIEW ONLY WHAT CHANGED SINCE THE LAST REVIEWED COMMIT (RA-2455).
       #

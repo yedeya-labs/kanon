@@ -440,8 +440,11 @@ describe('RA-2697 — the agent-lane blocks come from the action cache, never th
     const scope = job.findIndex((s) => s.id === 'scope');
     const mint = job.findIndex((s) => s.id === 'app-token');
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(job[at]!.with).toEqual({ arm: 'review agent', 'app-slug': '' });
-    expect(stepsAsRun([job[at]!]), 'agent-setup runs nothing on this lane').toEqual([]);
+    // `role` names the Reviewer for its persona header (plan 0005 §3.3); it reads no identity.
+    expect(job[at]!.with).toEqual({ arm: 'review agent', 'app-slug': '', role: 'Reviewer' });
+    // Nothing but the persona step, which reads no token here: the role is given by name, so
+    // it writes the Reviewer's header line to the environment and calls no API.
+    expect(stepsAsRun([job[at]!]).map((s) => s.name), 'agent-setup runs only its persona step on this lane').toEqual(['Say who the agent speaks as']);
     expect(scope).toBeGreaterThan(at);
     // No project-setup hook between them any more: the job runs none of the PR's code.
     expect(job.some((s) => s.uses === './.github/actions/project-setup')).toBe(false);

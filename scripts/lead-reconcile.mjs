@@ -61,6 +61,7 @@ import {
   FINDING_ANCHOR, GATING_SEVERITIES, SPEC_FINDING,
 } from './project-closure.mjs';
 import { appLogin } from './app-register.mjs';
+import { asRole, signed } from './lib/role-marker.mjs';
 import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/reference-deploy.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply, taxonomyLabel } from './lib/labels.mjs';
@@ -2548,15 +2549,24 @@ export function linkedPrsRead(issueNumber, { json = ghJson } = {}) {
 }
 
 
+/**
+ * The Explorer's own verification comments on a QA issue: its App's login and, from L4, its
+ * role marker (plan 0005 §3.3), carrying the QA marker. A human quoting the marker is not a
+ * round, the lesson RA-1079 learned the hard way.
+ * @param {Array<{author?: {login?: string}, body?: string}>} comments
+ */
+export function explorerQaComments(comments, explorer = EXPLORER_LOGIN) {
+  return (comments ?? []).filter((c) =>
+    asRole('Explorer', { login: c.author?.login, expected: explorer, body: c.body })
+    && (c.body ?? '').includes(QA_MARKER));
+}
+
 /** How many times the Explorer has verified this project, and when he last did.
- *  Counted from HIS OWN marker comments — a human quoting the marker is not a
- *  round, the lesson RA-1079 learned the hard way. */
+ *  Counted from HIS OWN marker comments (`explorerQaComments`). */
 function readQaRounds(qaNumber) {
   try {
     const comments = ghJson(['issue', 'view', String(qaNumber), '--repo', REPO, '--json', 'comments']).comments ?? [];
-    const mine = comments.filter((c) =>
-      (c.author?.login ?? '').replace(/^app\//, '').replace(/\[bot\]$/, '') === EXPLORER_LOGIN
-      && (c.body ?? '').includes(QA_MARKER));
+    const mine = explorerQaComments(comments);
     return { rounds: mine.length, roundsAt: mine.map((c) => c.createdAt), lastVerifiedAt: mine.at(-1)?.createdAt ?? null, readable: true };
   } catch {
     // ITS OWN STATE. The first version returned `lastVerifiedAt: new Date(0)` with a
@@ -3408,7 +3418,9 @@ export function execute(world, actions, { run = gh } = {}) {
         // is a label nobody adds.
         const url = run([
           'issue', 'create', '--repo', REPO, '--title', a.title,
-          '--body', body, '--milestone', a.milestone,
+          // Signed as the Lead (plan 0005 §3.3). At the top, so the membership marker stays
+          // the last line `declaresMembership` reads.
+          '--body', signed(body, 'Lead'), '--milestone', a.milestone,
           ...(a.labels ?? []).flatMap((l) => ['--label', l]),
           // The mirror, at creation, wherever the marker is written (RA-1783). Only when
           // the label is known to exist: `--label` on a missing one fails the create.
@@ -3550,24 +3562,24 @@ export function execute(world, actions, { run = gh } = {}) {
           try { run(['issue', 'edit', String(a.number), '--repo', REPO, '--add-label', NEEDS_INFO]); } catch { /* reported below */ }
           throw err;
         }
-        run(['issue', 'comment', String(a.number), '--repo', REPO, '--body', [
+        run(['issue', 'comment', String(a.number), '--repo', REPO, '--body', signed([
           `**Re-delivering the split lane** (\`${SPLIT_WORKFLOW}\`) — ${a.why}. This is the one re-delivery; if it produces no split PR either, the first tick ${SPLIT_STALL_HOURS}h after it hands this issue to \`${NEEDS_INFO}\`.`,
           '',
           '_Posted by `scripts/lead-reconcile.mjs` (RA-2406)._',
-        ].join('\n')]);
+        ].join('\n'), 'Lead')]);
         console.log(`re-labelled #${a.number} to re-deliver the split lane (RA-2406)`);
       } else if (a.kind === 'split-escalate') {
         // The human label FIRST, as the split gate orders it: if the removal then
         // fails the issue is still parked for a human, never carrying neither label.
         run(['issue', 'edit', String(a.number), '--repo', REPO, '--add-label', NEEDS_INFO]);
         run(['issue', 'edit', String(a.number), '--repo', REPO, '--remove-label', SPLIT_LABEL]);
-        run(['issue', 'comment', String(a.number), '--repo', REPO, '--body', [
+        run(['issue', 'comment', String(a.number), '--repo', REPO, '--body', signed([
           `**Not re-delivering the split** — moving this issue from \`${SPLIT_LABEL}\` to \`${NEEDS_INFO}\` for a human.`,
           '',
           `- ${a.why}.`,
           '',
           '_Posted by `scripts/lead-reconcile.mjs` (RA-2406)._',
-        ].join('\n')]);
+        ].join('\n'), 'Lead')]);
         console.log(`handed #${a.number} to a human (${NEEDS_INFO}) — the split was not re-delivered (RA-2406)`);
       } else if (a.kind === 'file-qa') {
         // PHASE 5. Appended by the tick, not proposed by the brief (RA-1063).
@@ -3596,7 +3608,7 @@ export function execute(world, actions, { run = gh } = {}) {
         ].join('\n');
         const url = run([
           'issue', 'create', '--repo', REPO, '--title', a.title,
-          '--body', body, '--milestone', 'Development Automation', '--label', VERIFY,
+          '--body', signed(body, 'Lead'), '--milestone', 'Development Automation', '--label', VERIFY,
           // The mirror at creation (RA-1783 review): a later `--add-label` on the QA issue
           // would raise a `labeled` event into `agent-verify-acs.yml`'s concurrency group.
           ...(world.labelReady ? ['--label', projectLabel(world.project)] : []),
@@ -3637,7 +3649,7 @@ export function execute(world, actions, { run = gh } = {}) {
       } else if (a.kind === 'close-project') {
         // PHASE 6. Closes the TRACKING issue only — every filed issue is already
         // closed, which is the sole reason this phase is reachable.
-        run(['issue', 'comment', String(a.number), '--repo', REPO, '--body', retro(world, a)]);
+        run(['issue', 'comment', String(a.number), '--repo', REPO, '--body', signed(retro(world, a), 'Lead')]);
         // Must AGREE with the retro posted one line above it. These two strings are
         // the ones actually written onto the tracking issue, and the untagged case
         // had them contradicting each other in adjacent comments: "Nothing was
@@ -3755,7 +3767,7 @@ export function hold(world, reasons, { run = gh, kind = 'action' } = {}) {
     const seen = run(['issue', 'view', String(world.project), '--repo', REPO, '--json', 'comments',
       '--jq', '[.comments[].body] | join("\\n")']);
     if (!seen.includes(holdMarker(reasons))) {
-      run(['issue', 'comment', String(world.project), '--repo', REPO, '--body', renderHoldComment(reasons, kind)]);
+      run(['issue', 'comment', String(world.project), '--repo', REPO, '--body', signed(renderHoldComment(reasons, kind), 'Lead')]);
     }
     console.log(`held #${world.project}: ${reasons.length} ${kind === 'stop' ? 'terminal stop reason(s)' : 'failed action(s)'}`);
   } catch (err) {

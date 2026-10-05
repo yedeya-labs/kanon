@@ -172,6 +172,16 @@ export const ESCALATE_LABELS = ['sev:critical', 'qa:needs-info', 'blocked', 'nee
  */
 export const IMPLEMENTER_LABELS = ['agent:implement', 'agent:triage'];
 
+/**
+ * A PROJECT BRIEF IS NEVER THE GREEN ZONE (plan 0005 §3.3, step L3). Briefs under
+ * `docs/projects/` are the Lead's, and once the Lead and the Implementer share the Author App
+ * (L4) a Lead agent steered by text it reads could open one marked `implementer`. So whatever
+ * the adopter's escalation file says, a pull request touching one escalates through the same
+ * `escalating-path` rule as a declared path, and a person merges it.
+ * @type {readonly [RegExp, string]}
+ */
+export const PROJECT_BRIEFS = [/^docs\/projects\//, 'a project brief: the Lead\'s, and never the green zone (plan 0005 §3.3)'];
+
 /** The implementer whose PRs the Merger merges — the same App the rebase lane authors as.
  *  Exported so the parity between the two gates is asserted against one constant each
  *  rather than against a literal re-spelled in a test (RA-2218). */
@@ -241,7 +251,8 @@ export const LAPSES_WITH_HEAD = new Set([
   'spec-diff-unreadable',
 ]);
 
-// The first line of every escalation comment the Merger posts, `ESCALATION_HEADER`, is
+// The line under the Merger's persona header in every escalation comment it posts (plan 0005
+// §3.3), `ESCALATION_HEADER`, is
 // exported above from `lib/protocol-spellings.mjs` (#53), so `readPr` can tell an ESCALATION
 // marker from a recover or release marker, which share the marker shape, in either spelling.
 
@@ -487,7 +498,9 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
 
   // The green zone is the implementer's work. Everything else — a human's PR, a
   // brief from the Lead, a dependabot bump — is somebody else's call.
-  if (slug(pr.author) !== implementer) {
+  // BY LOGIN AND, FROM L4, BY MARKER (plan 0005 §3.3): `asRole` reads the PR body's role
+  // marker beside the author's login, and answers what the login answers until L4.
+  if (!asRole('Implementer', { login: pr.author, expected: implementer, body: pr.body })) {
     return skip('not-the-implementer', `authored by \`${pr.author}\`, not ${implementer}`);
   }
   if (!IMPLEMENTER_LABELS.some((l) => pr.labels.includes(l))) {
@@ -504,7 +517,7 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
   if (sev.length) return stop('escalating-label', `carries \`${sev.join('`, `')}\``);
 
   const touched = pr.files.flatMap((f) => {
-    const hit = escalations.find(([re]) => re.test(f));
+    const hit = [...escalations, PROJECT_BRIEFS].find(([re]) => re.test(f));
     return hit ? [`\`${f}\` (${hit[1]})`] : [];
   });
 
@@ -729,21 +742,23 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
   // that had already drifted (`||` where the export uses `??`). The argument for
   // extracting `review-run-evidence.mjs` applies verbatim here.
   const onHead = pr.reviews.filter((r) => evidenceSha(r) === pr.headSha);
-  const latestByReviewer = [...onHead].reverse().find((r) => slug(r.author) === reviewer);
+  // The Reviewer's reviews: its App's login and, from L4, its role marker (plan 0005 §3.3).
+  const byReviewer = (r) => asRole('Reviewer', { login: r.author, expected: reviewer, body: r.body });
+  const latestByReviewer = [...onHead].reverse().find(byReviewer);
   if (!latestByReviewer) {
     // NAMED SEPARATELY FROM A MERELY STALE APPROVAL, because the two look identical on
     // the PR and only one of them is a lie. A stale approval is honestly filed against
     // an older commit and any reader can see it; a mis-attributed one is filed against
     // THIS commit and reads as current — which is why it reached a merge gate at all.
     const misattributed = pr.reviews.filter((r) =>
-      slug(r.author) === reviewer && r.sha === pr.headSha
+      byReviewer(r) && r.sha === pr.headSha
       && r.reviewedSha && r.reviewedSha !== pr.headSha);
     if (misattributed.length) {
       const read = misattributed.map((r) => `\`${String(r.reviewedSha).slice(0, 7)}\``).join(', ');
       return recover('review-misattributed',
         `GitHub filed ${reviewer}'s review under \`${pr.headSha.slice(0, 7)}\` because that was the head when it was SUBMITTED, but the run read ${read} — the head moved mid-review, so this is not evidence about this commit (RA-1680)`);
     }
-    const elsewhere = pr.reviews.some((r) => slug(r.author) === reviewer);
+    const elsewhere = pr.reviews.some(byReviewer);
     // RECOVERABLE either way: a review that never happened, and one attached to a
     // superseded commit, are both fixed by asking for a review of THIS commit.
     return recover('no-review-on-head', elsewhere
@@ -782,7 +797,7 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
   if (latestByReviewer.state === 'APPROVED') {
     const superseded = new Set((latestByReviewer.supersedes ?? []).map(String));
     const unanswered = onHead.filter((r) =>
-      slug(r.author) === reviewer && r.state === 'CHANGES_REQUESTED'
+      byReviewer(r) && r.state === 'CHANGES_REQUESTED'
       && !superseded.has(String(r.id))
       // SAME RUN, SO IT KNEW. A run that posts a request-changes and then an approval
       // read the earlier one by construction — it wrote it — and no concurrency key can
@@ -983,6 +998,7 @@ import { evidenceSha, readTrailer } from './review-trailer.mjs';
 import { CONFLICT_JSON, CONFLICT_WHY, conflictState } from './conflict-state.mjs';
 import { marker as rebaseMarker } from './rebase-lane.mjs';
 import { appLogin } from './app-register.mjs';
+import { asRole, signed } from './lib/role-marker.mjs';
 import { escalatingPaths, readEscalationFileAt } from './lib/escalation-paths.mjs';
 import { defaultBranchFile } from './lib/declarations.mjs';
 import { isSpecFile, specPromotions } from './lib/spec-promotions.mjs';
@@ -1069,6 +1085,8 @@ export function readPr(number, repo, opts = {}) {
   return {
     number: meta.number,
     author: meta.author?.login ?? '',
+    // For the role marker beside the author's login (plan 0005 §3.3).
+    body: meta.body ?? '',
     state: meta.state,
     isDraft: meta.isDraft,
     labels: meta.labels.map((l) => l.name),
@@ -1084,6 +1102,8 @@ export function readPr(number, repo, opts = {}) {
       state: r.state,
       sha: r.commit_id,
       author: r.user?.login ?? '',
+      // For the role marker beside the login (plan 0005 §3.3).
+      body: r.body ?? '',
       ...readTrailer(r),
     })),
     checks: (meta.statusCheckRollup ?? []).map((c) => ({
@@ -1171,7 +1191,7 @@ function specDiffOn(number, repo, gh) {
  *
  * @returns {{labeledBy: string, escalations: {rule: string, sha: string}[]}|null}
  */
-function holdOn(number, repo, gh) {
+export function holdOn(number, repo, gh) {
   try {
     const labeledBy = gh(['api', `repos/${repo}/issues/${number}/events?per_page=100`, '--paginate', '--jq',
       '.[] | select(.event == "labeled" and .label.name == "needs:human") | .actor.login'])
@@ -1179,9 +1199,8 @@ function holdOn(number, repo, gh) {
     const comments = gh(['api', `repos/${repo}/issues/${number}/comments?per_page=100`, '--paginate', '--jq',
       '.[] | {login: .user.login, body: .body} | @json'])
       .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
-    const slug = (s) => String(s ?? '').replace(/^app\//, '').replace(/\[bot\]$/, '');
     const escalations = comments
-      .filter((c) => slug(c.login) === MERGER_LOGIN && isEscalation(c.body))
+      .filter((c) => asRole('Merger', { login: c.login, expected: MERGER_LOGIN, body: c.body }) && isEscalation(c.body))
       .flatMap((c) => mergerMarkersIn(c.body));
     return { labeledBy, escalations };
   } catch {
@@ -1296,7 +1315,7 @@ export function verifyClosed(pr, repo, say, { retries = 3, waitMs = 4000, sleep 
   // the worst combination available. RA-1122 covers the loop; this site cannot wait for
   // it, because it is the one that reports the merge.
   try {
-    gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body', [
+    gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body', signed([
       `⚠️ **Merged, but #${open.join(', #')} did not close.**`,
       '',
       'GitHub performs the auto-close as the merging actor, so it needs `Issues: write`',
@@ -1305,7 +1324,7 @@ export function verifyClosed(pr, repo, say, { retries = 3, waitMs = 4000, sleep 
       'project as unfinished.',
       '',
       'Close it by hand, and grant the scope so the next one closes itself.',
-    ].join('\n')]);
+    ].join('\n'), 'Merger')]);
   } catch (e) {
     say(`could not comment about the unclosed issue: ${e.message}`);
   }
@@ -1365,7 +1384,8 @@ export function apply(pr, verdict, repo, { dryRun = true } = {}) {
     ].join('\n');
     say(`escalate #${pr.number}: ${verdict.rule}`);
     if (!dryRun) {
-      gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body', body]);
+      // Signed as the Merger (plan 0005 §3.3): its header and role marker open every post.
+      gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body', signed(body, 'Merger')]);
       gh(['pr', 'edit', String(pr.number), '--repo', repo, '--add-label', 'needs:human']);
     }
     return;
@@ -1379,7 +1399,7 @@ export function apply(pr, verdict, repo, { dryRun = true } = {}) {
       // The record IS the idempotence key, so it is written even though it is noise
       // on a healthy PR. A re-dispatch that leaves no trace re-fires every hour.
       gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body',
-          `🔁 the Merger asked ${'`agent-review.yml`'} to re-review this commit — ${verdict.why}\n\n${mark}`]);
+          signed(`🔁 the Merger asked ${'`agent-review.yml`'} to re-review this commit — ${verdict.why}\n\n${mark}`, 'Merger')]);
     }
     return;
   }
@@ -1392,7 +1412,7 @@ export function apply(pr, verdict, repo, { dryRun = true } = {}) {
     if (!dryRun) {
       if (!alreadySaid(pr.number, repo, verdict.rule, pr.headSha)) {
         gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body',
-            `🔓 **the Merger — lifting \`needs:human\`.**\n\nRule: \`${verdict.rule}\`\nWhy: ${verdict.why}\n\nTo hold this PR on purpose, re-apply \`needs:human\` by hand — the Merger never lifts a label a person applied.\n\n${mark}`]);
+            signed(`🔓 **the Merger — lifting \`needs:human\`.**\n\nRule: \`${verdict.rule}\`\nWhy: ${verdict.why}\n\nTo hold this PR on purpose, re-apply \`needs:human\` by hand — the Merger never lifts a label a person applied.\n\n${mark}`, 'Merger')]);
       }
       gh(['pr', 'edit', String(pr.number), '--repo', repo, '--remove-label', 'needs:human']);
     }

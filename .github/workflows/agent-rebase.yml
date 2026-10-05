@@ -110,6 +110,7 @@ jobs:
     outputs:
       member: ${{ steps.gate.outputs.member }}
       prs: ${{ steps.decide.outputs.prs }}
+      heads: ${{ steps.heads.outputs.heads }}
     steps:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
       # this lane acts only when the event's actor is a member or a registered agent App.
@@ -155,6 +156,27 @@ jobs:
           fi
           echo "prs=$PRS" >> "$GITHUB_OUTPUT"
 
+      # EACH PR'S HEAD BEFORE THE AGENT RUNS (plan 0005 §3.3, step L3): where the implementer
+      # status's chain must start for `implementer-status` to carry it to the resolved head. In
+      # this job because no agent has run yet. `continue-on-error`: a failed read must not stop
+      # the lane, and the status job then carries nothing and says why.
+      - name: Record each PR's head before the agent runs
+        id: heads
+        if: steps.gate.outputs.member == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PRS: ${{ steps.decide.outputs.prs }}
+        run: |
+          set -euo pipefail
+          heads='{}'
+          for pr in $(jq -r '.[]' <<<"$PRS"); do
+            sha="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq .headRefOid)"
+            heads="$(jq -c --arg pr "$pr" --arg sha "$sha" '. + {($pr): $sha}' <<<"$heads")"
+          done
+          echo "heads=$heads" >> "$GITHUB_OUTPUT"
+
   # ONE PR'S RESOLUTION PER MATRIX ENTRY, AS A CALLED WORKFLOW (kanon#279, `K-AGENT-49`).
   # `rebase-run.yml` mints this PR's token in a job that holds the key and runs nothing else,
   # then hands it to the agent's job (`rebase-agent-job.yml`). Per entry, not once for the
@@ -192,3 +214,29 @@ jobs:
       app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
       app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  # THE IMPLEMENTER STATUS IS A CHAIN (plan 0005 §3.3, question 6; step L3). A fixed job after
+  # the agent's, never the agent, one per PR the lane resolved: it moves `kanon/role:
+  # implementer` to the resolved head only when the head recorded before the agent ran carried
+  # one created by the Implementer's App, and every commit on the first-parent path between
+  # them is the App's (the merge's second parent is the default branch). Otherwise it sets
+  # none and says why. Nothing requires the status until L4; it never reds the lane.
+  implementer-status:
+    needs: [filter, resolve]
+    if: ${{ !cancelled() && needs.filter.outputs.member == 'true' && needs.filter.outputs.prs != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJson(needs.filter.outputs.prs) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: $/actions/kanon-path
+      - uses: $/actions/implementer-status
+        continue-on-error: true
+        with:
+          mode: carry
+          app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
+          app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          pr: ${{ matrix.pr }}
+          start-head: ${{ fromJson(needs.filter.outputs.heads || '{}')[format('{0}', matrix.pr)] }}

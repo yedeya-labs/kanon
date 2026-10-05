@@ -60,6 +60,20 @@ const MORE: Record<string, Perms> = {
   // capability interlock's count reads each linked pull request's state.
   'agent-overseer.yml#file-token': { issues: 'write', 'pull-requests': 'read' },
 };
+/**
+ * The implementer status (plan 0005 §3.3, question 6; step L3), keyed `<file>#<step id>`: a
+ * composite action each Implementer lane calls in a fixed job after its agent's job. The write
+ * token holds Commit statuses write and NOTHING else; it is a permission no role's row holds,
+ * so it is checked here rather than against `agent-permissions.json`: plan 0005 records it as
+ * the Author App's one broadened permission (`K-AGENT-3`). The read token is within the
+ * Implementer's row. Every caller passes the Implementer's secrets (`implementer-status.test.ts`).
+ */
+const STATUS: Record<string, Perms> = {
+  // Lists the open pull requests, reads a head commit and compares two heads.
+  'actions/implementer-status/action.yml#read-token': { contents: 'read', 'pull-requests': 'read' },
+  // Sets the status, and reads the statuses of the head the chain starts from.
+  'actions/implementer-status/action.yml#status-token': { statuses: 'write' },
+};
 /** Each lane that calls the spine, and the token its agent gets there. */
 const SPINE_CALLERS: Record<string, Perms> = {
   // Implement, triage and revise push code (workflow files included), open and comment.
@@ -132,8 +146,9 @@ const withinGrant = (role: string | undefined, perms: Perms) => {
 describe('every token a lane mints is narrowed to what its step uses (#48, K-AGENT-46)', () => {
   it('finds every minting step, and each one has a list or an exemption', () => {
     expect(mints.length).toBeGreaterThanOrEqual(10);
-    const unlisted = mints.filter(({ name, step }) =>
-      !(name in EXEMPT) && name !== SPINE && DIRECT[name]?.step !== step.id && !(`${name}#${step.id}` in MORE));
+    const unlisted = mints.filter(({ file, name, step }) =>
+      !(name in EXEMPT) && name !== SPINE && DIRECT[name]?.step !== step.id && !(`${name}#${step.id}` in MORE)
+      && !(`${file}#${step.id}` in STATUS));
     expect(unlisted.map(({ file, step }) => `${file}#${step.id}`)).toEqual([]);
     for (const [name, { step }] of Object.entries(DIRECT)) {
       expect(mints.some((m) => m.name === name && m.step.id === step), `${name}#${step} mints nothing`).toBe(true);
@@ -152,6 +167,25 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     expect(mint, `${key} mints nothing`).toBeDefined();
     expect(requested(mint!.step.with)).toEqual(perms);
     withinGrant(roleOf(mint!.step.with?.['client-id']), perms);
+  });
+
+  it.each(Object.entries(STATUS))('%s requests exactly its list', (key, perms) => {
+    const [file, step] = key.split('#');
+    const mint = mints.find((m) => m.file === file && m.step.id === step);
+    expect(mint, `${key} mints nothing`).toBeDefined();
+    expect(requested(mint!.step.with)).toEqual(perms);
+    if (!('statuses' in perms)) withinGrant('implementer', perms);
+  });
+
+  it('no token but the implementer status\'s holds Commit statuses write, so no agent can set it (plan 0005 §3.3)', () => {
+    const writers = mints.filter(({ step }) => String(step.with?.['permission-statuses'] ?? '') === 'write')
+      .map(({ file, step }) => `${file}#${step.id}`);
+    expect(writers).toEqual(Object.keys(STATUS).filter((k) => STATUS[k]!.statuses === 'write'));
+    // The spine's agent token can't ask for it: the spine passes exactly PERMISSIONS through.
+    expect(PERMISSIONS).not.toContain('statuses');
+    for (const perms of [...Object.values(SPINE_CALLERS), ...Object.values(DIRECT).map((d) => d.perms), ...Object.values(MORE)]) {
+      expect(perms.statuses ?? 'none').not.toBe('write');
+    }
   });
 
   it("maps each lane's called mint to the lane, and the App it mints for to the lane's own secret", () => {
