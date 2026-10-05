@@ -34,12 +34,12 @@
 // Usage: node scripts/red-unreviewed.mjs
 
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
 import { CONFLICT_WHY, conflictState } from './conflict-state.mjs';
 import { AWAITING_REVIEW_HOURS } from './lead-reconcile.mjs';
 import { checkPartition, readPr } from './merge-gate.mjs';
 import { hydrate, reviewPrs, verdictOnHead } from './review-recovery.mjs';
 import { reviewAttempts, reviewRunsFor, whyNoChurn } from './review-run-evidence.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 
@@ -182,7 +182,5 @@ function main() {
   }
 }
 
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1]).href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) main();

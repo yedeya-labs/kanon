@@ -13,6 +13,7 @@
 // The script never prints the word it found, only where it found it: a public run's log
 // would publish it just as the file would.
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 export const FORBIDDEN_WORD_HASHES = new Set([
@@ -64,7 +65,12 @@ export const check = (env, hashes = FORBIDDEN_WORD_HASHES) => {
     : { code: 0, message: 'Neither the title nor the body names the reference adopter.' };
 };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Inline rather than `scripts/lib/cli-entry.mjs`'s `isCliEntry`: `public-text.yml` sparse-checks
+// out only `.github/scripts`, so that import would not exist at run time (kanon#191).
+const IS_CLI = (() => {
+  try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? '')).href; } catch { return false; }
+})();
+if (IS_CLI) {
   const { code, message } = check(process.env);
   console.log(message);
   process.exit(code);

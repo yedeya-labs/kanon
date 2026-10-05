@@ -86,6 +86,7 @@ import { CONFLICT_SHORT, ConflictFieldsUnread, conflictState } from './conflict-
 // register for the Implementer's login, as the reconciler does.
 import { AGENT_LOGIN, MARKER as SWEEP_MARKER, classify as classifyLane, isBot, norm } from './dispatch-sweep.mjs';
 import { carriedOut as reconcilerCarriedOut, declaresMembership, itemSatisfied, openGatingWork, parseProposed } from './project-closure.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /** Where briefs live. A brief's basename IS its tracking issue number (RA-1032). */
 export const BRIEF_DIR = 'docs/projects';
@@ -710,7 +711,7 @@ export function buildMessage({ today, narrative, projects, runUrl = null }) {
 // ---------------------------------------------------------------------------
 
 /* c8 ignore start */
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isCliEntry(import.meta.url)) {
   const {
     GITHUB_TOKEN,
     GITHUB_REPOSITORY: repo,

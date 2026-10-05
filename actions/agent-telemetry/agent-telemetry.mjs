@@ -56,6 +56,7 @@ import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 // run it from its own path; this imports the same file.
 import { classifyResult, parseObjects, readConfiguredModel, readResult } from "../agent-classify/classify-agent-result.mjs";
 import { LANE_ROLES, STAGES, TERMINAL_REASONS, describeErrors, validate } from "./schema.mjs";
+import { isCliEntry } from "../../scripts/lib/cli-entry.mjs";
 
 const SCHEMA = 1;
 
@@ -845,7 +846,7 @@ export function runBoth(args, env) {
 }
 
 // --------------------------------------------------------------------- main
-const isMain = process.argv[1] && process.argv[1].endsWith("agent-telemetry.mjs");
+const isMain = isCliEntry(import.meta.url);
 if (isMain) {
   const args = parseArgs(process.argv.slice(2));
   const { row, v2, errors } = runBoth(args, process.env);

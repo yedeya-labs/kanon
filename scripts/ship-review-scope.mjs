@@ -43,8 +43,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
 import { readEscalationFile } from './lib/escalation-paths.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /**
  * True when running under CI. Only the exact value `true` counts — which is what GitHub
@@ -161,7 +161,7 @@ function main(argv = process.argv.slice(2)) {
   }
 }
 
-// `process.argv[1]` is undefined when imported by a test runner (RA-1071).
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Importing this module with no argv[1] must not crash (RA-1071); `isCliEntry` holds that.
+if (isCliEntry(import.meta.url)) {
   try { main(); } catch (e) { console.error(e.message); process.exit(1); }
 }

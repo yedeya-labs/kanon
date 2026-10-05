@@ -45,6 +45,7 @@ import { parseSections, scopeOf, cleanBullet, dropScopePrefix, INTERNAL_SCOPES }
 import { isRoadmapMilestone } from './lib/milestones.mjs';
 import { digestWebhook } from './lib/digest-webhook.mjs';
 import { GATE_CANDIDATE_LABEL, SEVERITY_LABELS, severityOf as severityOfLabels } from './issue-triage-defaults.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /**
  * Scopes that are real engineering work but have no stakeholder-facing surface.
@@ -884,7 +885,7 @@ export function buildMessage({ weekStart, narrative, milestones, grouped, stats,
 // ---------------------------------------------------------------------------
 
 /* c8 ignore start */
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isCliEntry(import.meta.url)) {
   const {
     GITHUB_TOKEN,
     GITHUB_REPOSITORY: repo,

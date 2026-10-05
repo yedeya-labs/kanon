@@ -54,10 +54,10 @@
 // `node:` builtins only, like every script under scripts/ (`K-SELF-8`).
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { existsSync, readFileSync } from 'node:fs';
 
 import { THRESHOLD, countInterlock } from './capability-interlock.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /** The report the agent writes, at the repository root. */
 export const REPORT = 'qa-overseer-audit.json';
@@ -290,9 +290,7 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
 }
 
 /* c8 ignore start */
-const IS_CLI = (() => {
-  try { return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(realpathSync(/** @type {string} */ (process.argv[1]))).href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) {
   if (!process.env.GITHUB_REPOSITORY) {
     console.error('overseer-file: GITHUB_REPOSITORY must be set');

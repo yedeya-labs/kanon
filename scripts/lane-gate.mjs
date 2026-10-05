@@ -80,10 +80,10 @@
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 
 import { parseAppRegister } from './app-register.mjs';
 import { checkCallerPin } from './caller-pin.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /** The `author_association` values that make a member (`K-AGENT-45`). */
 export const MEMBER_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
@@ -318,6 +318,6 @@ export function main(env = process.env) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isCliEntry(import.meta.url)) {
   process.exitCode = main();
 }

@@ -297,17 +297,106 @@ describe('no composite action references a context it cannot read (RA-1540)', ()
     return out;
   };
 
-  const actions = readdirSync('actions', { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => join('actions', d.name, 'action.yml'));
+  // WHICH CONTEXTS, AND WHERE THAT COMES FROM. GitHub's context-availability table
+  // ("Contexts reference", docs.github.com/en/actions/reference/workflows-and-actions/contexts
+  // #context-availability) is keyed by WORKFLOW keys and has no composite-action rows. The
+  // table that does exist for composite actions is the runner's own schema for
+  // `action.yml`, which is what template validation checks:
+  // github.com/actions/runner/blob/main/src/Runner.Worker/action_yaml.json — its
+  // `context` lists for `step-if`, `step-env`, `step-with`, `string-steps-context`,
+  // `boolean-steps-context`, `output-value` and `input-default-context`. Their union is
+  // READABLE below. Every workflow context outside it is banned. `matrix`, `strategy`
+  // and `job` ARE readable (the caller's job's values), so they are deliberately not
+  // banned — a ban on them would be a false positive, not extra safety.
+  const WORKFLOW_CONTEXTS = [
+    'github', 'env', 'vars', 'job', 'jobs', 'steps', 'runner',
+    'secrets', 'strategy', 'matrix', 'needs', 'inputs',
+  ];
+  const READABLE_IN_COMPOSITE = ['github', 'inputs', 'strategy', 'matrix', 'steps', 'job', 'runner', 'env'];
+  const BANNED = WORKFLOW_CONTEXTS.filter((c) => !READABLE_IN_COMPOSITE.includes(c));
+
+  // A context name only counts at the START of a property path: `inputs.needs.x` names
+  // the `inputs` context, not `needs`. Both access spellings — `secrets.X` and
+  // `secrets['X']` — are caught.
+  // String literals are blanked first, so `'needs.x'` as text is not read as the context.
+  const namedIn = (expr: string): string[] =>
+    [...expr.replace(/'(?:[^']|'')*'/g, "''").matchAll(new RegExp(`(?<![\\w.-])(${BANNED.join('|')})\\s*[.[]`, 'g'))]
+      .map((n) => n[1]!);
+  const bannedIn = (value: string): string[] =>
+    [...value.matchAll(/\$\{\{([\s\S]*?)\}\}/g)].flatMap((m) => namedIn(m[1] ?? ''));
+
+  // A step's `if:` IS an expression with or without `${{ }}`, and the bare form is how
+  // these actions most often read a context. So it is read by its KEY, not by spotting a
+  // wrapper — `strings()` drops keys and would let `if: needs.x.result == 'success'` by.
+  type Composite = { runs?: { steps?: { if?: unknown }[] } };
+  const bannedInStepIfs = (doc: Composite): string[] =>
+    (doc?.runs?.steps ?? []).flatMap((st) => {
+      const c = st?.if;
+      if (typeof c !== 'string' || c.includes('${{')) return [];
+      return namedIn(c).length > 0 ? [`if: ${c}`] : [];
+    });
+
+  // Every composite action this repository ships or loads, at any depth and under
+  // either file name GitHub accepts — not just `actions/<name>/action.yml`. Fixtures
+  // under tests/ are adopter-shaped templates no job here loads, so they are skipped.
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
+      const p = join(dir, d.name);
+      if (d.isDirectory()) return d.name === 'node_modules' ? [] : walk(p);
+      return d.name === 'action.yml' || d.name === 'action.yaml' ? [p] : [];
+    });
+  const actions = ['actions', '.github/actions', 'infra']
+    .filter((d) => existsSync(d))
+    .flatMap(walk)
+    .filter((f) => (parse(readFileSync(f, 'utf8')) as { runs?: { using?: string } })?.runs?.using === 'composite')
+    .sort();
+
+  it('derives a ban list that is neither empty nor over-broad', () => {
+    expect(BANNED).toEqual(['vars', 'jobs', 'secrets', 'needs']);
+  });
 
   it('finds the composite actions, so the assertion is not vacuous', () => {
     expect(actions.length).toBeGreaterThan(0);
+    // The nested and non-`actions/` homes are where a narrower walk went blind.
+    expect(actions).toContain(join('infra', 'qa-store', 'aws', 'maintenance', 'action.yml'));
+    expect(actions).toContain(join('.github', 'actions', 'project-setup', 'action.yml'));
   });
 
-  it.each(actions)('%s references neither vars nor secrets in any value', (file) => {
-    const bad = strings(parse(readFileSync(file, 'utf8')))
-      .filter((v) => /\$\{\{[^}]*\b(vars|secrets)\./.test(v));
+  it('walks nested directories and accepts both action file names', () => {
+    const root = mkdtempSync(join(tmpdir(), 'composite-walk-'));
+    mkdirSync(join(root, 'a', 'b'), { recursive: true });
+    writeFileSync(join(root, 'a', 'action.yml'), '');
+    writeFileSync(join(root, 'a', 'b', 'action.yaml'), '');
+    writeFileSync(join(root, 'a', 'b', 'other.yml'), '');
+    expect(walk(root).sort()).toEqual([join(root, 'a', 'action.yml'), join(root, 'a', 'b', 'action.yaml')]);
+  });
+
+  it('flags every banned context on injection, and nothing readable', () => {
+    expect(bannedIn('${{ needs.build.outputs.x }}')).toEqual(['needs']);
+    expect(bannedIn('${{ jobs.a.result }}')).toEqual(['jobs']);
+    expect(bannedIn("${{ secrets['TOKEN'] }}")).toEqual(['secrets']);
+    expect(bannedIn('${{ vars.QA_DYNAMO_TABLE }}')).toEqual(['vars']);
+    expect(bannedIn('${{ inputs.needs.x || matrix.os || strategy.job-index || job.status }}')).toEqual([]);
+    expect(bannedIn('needs.build outside an expression')).toEqual([]);
+    // A `}` inside a string literal does not end the expression early.
+    expect(bannedIn("${{ format('{0}', needs.a.result) }}")).toEqual(['needs']);
+    // A context's name inside a string literal is text, not a read.
+    expect(bannedIn("${{ inputs.mode == 'needs.x' }}")).toEqual([]);
+  });
+
+  it('reads a bare step `if:` as an expression, and only a step `if:`', () => {
+    const doc = (cond: string) => parse(
+      `runs:\n  using: composite\n  steps:\n    - if: ${cond}\n      run: echo\n      shell: bash\n`) as Composite;
+    expect(bannedInStepIfs(doc("inputs.app-slug != '' && needs.x.result == 'success'"))).toHaveLength(1);
+    expect(bannedInStepIfs(doc('secrets.TOKEN != \'\''))).toHaveLength(1);
+    expect(bannedInStepIfs(doc("inputs.app-slug != '' && job.status == 'success'"))).toEqual([]);
+    // Bare text anywhere else is not an expression, so it is not read as one.
+    expect(bannedInStepIfs(parse('description: needs.x is documented here\nruns:\n  using: composite\n  steps: []\n') as Composite)).toEqual([]);
+  });
+
+  it.each(actions)('%s names no context a composite action cannot read', (file) => {
+    const doc = parse(readFileSync(file, 'utf8')) as Composite;
+    const bad = [...strings(doc).filter((v) => bannedIn(v).length > 0), ...bannedInStepIfs(doc)];
     expect(bad, `${file} uses a context a composite action cannot read: ${bad.join(' | ')}`).toEqual([]);
   });
 });

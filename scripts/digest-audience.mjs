@@ -9,9 +9,8 @@
 // exits 0; exits 1 with the reader's message when the record is malformed or can't be read;
 // exits 2 without `GITHUB_REPOSITORY`.
 
-import { pathToFileURL } from 'node:url';
-
 import { readDigestAudienceFrom } from './lib/digest-audience.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /**
  * @param {{ repo?: string, run?: (args: string[], opts?: object) => string }} [io]
@@ -26,9 +25,7 @@ export function digestAudienceCli({ repo = process.env.GITHUB_REPOSITORY, run } 
   }
 }
 
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1] ?? '').href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) {
   const { code, out } = digestAudienceCli();
   (code === 0 ? process.stdout : process.stderr).write(`${out}\n`);

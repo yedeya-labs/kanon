@@ -13,9 +13,8 @@
 // exits 1 with the reader's message when the record is missing, declares no reference
 // environment, is malformed or can't be read; exits 2 on a usage error.
 
-import { pathToFileURL } from 'node:url';
-
 import { LABELS, readReferenceDeployFrom } from './lib/reference-deploy.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /**
  * @param {string[]} argv the arguments after the script
@@ -35,9 +34,7 @@ export function referenceDeployCli(argv, { repo = process.env.GITHUB_REPOSITORY,
   }
 }
 
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1] ?? '').href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) {
   const { code, out } = referenceDeployCli(process.argv.slice(2));
   (code === 0 ? process.stdout : process.stderr).write(`${out}\n`);

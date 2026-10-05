@@ -27,7 +27,7 @@
 // Writes `sweep=true|false` to $GITHUB_OUTPUT and one line to the step summary.
 
 import { appendFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /**
  * @param {Record<string, string | undefined>} env
@@ -59,9 +59,7 @@ export function decide(env) {
   return { sweep: false, line: `\`${head.slice(0, 12)}\` was already swept green: skipping the sweep, and recording the skip.`, warning: null };
 }
 
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1] ?? '').href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) {
   const { sweep, line, warning } = decide(process.env);
   if (warning) console.log(`::warning title=Explorer change gate degraded::${warning}`);

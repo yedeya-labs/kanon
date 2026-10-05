@@ -17,12 +17,12 @@
 // a label is. The repo is the only authority, so this asks it.
 
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { readEscalationFile } from './lib/escalation-paths.mjs';
 import { isRoadmapMilestone } from './lib/milestones.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 const REPO = process.env.REPO ?? process.env.GITHUB_REPOSITORY;
 
@@ -584,10 +584,6 @@ const main = () => {
   if (status) process.exit(status);
 };
 
-// try/catch, because `pathToFileURL(undefined)` THROWS where the old `file://`
-// template merely failed to match — importing this module with no argv[1] crashes.
-// The Reviewer caught exactly this on RA-1071 and I wrote the unguarded form again here.
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1]).href; } catch { return false; }
-})();
+// Importing this module with no argv[1] must not crash (RA-1071); `isCliEntry` holds that.
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) main();

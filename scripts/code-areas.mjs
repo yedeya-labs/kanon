@@ -10,9 +10,8 @@
 // Exits 0; exits 1 with the reader's message when the section is malformed, so the lane fails
 // by name before the agent rather than auditing areas nobody declared.
 
-import { pathToFileURL } from 'node:url';
-
 import { STACK_FILE, auditAreas, readCodeAreas } from './lib/code-areas.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 const SOURCES = {
   audit: `the \`audit\` areas ${STACK_FILE} declares`,
@@ -33,9 +32,7 @@ export function codeAreasCli({ root = process.cwd() } = {}) {
   }
 }
 
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1] ?? '').href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) {
   const { code, out, note } = codeAreasCli();
   process.stderr.write(`${note}\n`);

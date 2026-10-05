@@ -18,12 +18,13 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parse } from 'yaml';
 
 import { STORE_ENVIRONMENT } from '../../../actions/qa-store/qa-store.mjs';
+import { isCliEntry } from '../../../scripts/lib/cli-entry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const TEMPLATE_PATH = join(HERE, 'template.yaml');
@@ -126,7 +127,7 @@ export function deployCommands({ repository, region, profile, oidcProvider = tru
 /** @param {string} [path] */
 export const readTemplate = (path = TEMPLATE_PATH) => parse(readFileSync(path, 'utf8'));
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isCliEntry(import.meta.url)) {
   const { values } = parseArgs({
     options: {
       repository: { type: 'string' },

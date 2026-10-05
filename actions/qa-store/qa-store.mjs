@@ -33,7 +33,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs';
 import { Buffer } from 'node:buffer';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 
 /** The environment every store job declares, and the only one (decision 9). The store's
  *  OIDC trust names it, so a job under any other name gets no credentials. */
@@ -442,7 +442,7 @@ const writeSummary = (line) => {
   console.log(line);
 };
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isCliEntry(import.meta.url)) {
   const mode = process.argv[2];
   try {
     if (mode === 'prepare') {

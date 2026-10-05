@@ -42,7 +42,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { posix } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 /**
  * `K-MERGE-17`'s table. `input` is the rule's first column, exactly; `rule` is every path the
@@ -282,6 +282,6 @@ export function main(argv = process.argv.slice(2)) {
   return 2;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isCliEntry(import.meta.url)) {
   process.exitCode = main();
 }

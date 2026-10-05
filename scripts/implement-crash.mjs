@@ -35,9 +35,9 @@
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 import { AGENT_LOGIN, linkedPrIndex, norm } from './dispatch-sweep.mjs';
 import { SPLIT_LABEL, exhaustedRoute, projectOf } from './split-lineage.mjs';
+import { isCliEntry } from './lib/cli-entry.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const IMPLEMENT = 'agent:implement';
@@ -336,7 +336,5 @@ function main() {
   console.log(`::warning title=implement-crash::#${issue} ${verdict.act === 'retry' ? 'released for re-dispatch' : `handed on (${verdict.label})`} — ${verdict.why}`);
 }
 
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1]).href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) main();

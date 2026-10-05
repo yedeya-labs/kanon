@@ -35,7 +35,7 @@
 // when they should act: the same wrong advice this exists to remove, pointed the other
 // way.
 import { appendFileSync, readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 
 /** Did the model the run was CONFIGURED for actually get used?
  *
@@ -467,7 +467,5 @@ function cli() {
   }
 }
 
-const IS_CLI = (() => {
-  try { return import.meta.url === pathToFileURL(process.argv[1]).href; } catch { return false; }
-})();
+const IS_CLI = isCliEntry(import.meta.url);
 if (IS_CLI) cli();

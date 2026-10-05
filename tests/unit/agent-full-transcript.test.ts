@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { blockInputsFor, blockOf, effectiveSteps, readBlock, spineJobFor } from './helpers/spine.js';
+import { blockInputsFor, blockOf, callsSpine, effectiveSteps, laneBlockOf, readBlock, spineJobFor } from './helpers/spine.js';
 
 /**
  * RA-2651 — the implementer's whole transcript goes to the job log, and only there.
@@ -46,20 +46,55 @@ describe('the implementer transcript reaches the job log', () => {
     expect(readBlock('agent-run').inputs?.['full-transcript']?.default).toBe('false');
   });
 
-  it('reaches the action ON for the Implementer\'s two lanes only, of Kanon\'s lanes', () => {
-    // What the action is actually handed, per lane: the block input the call evaluates
-    // to. 'true' for the implement and revise lanes, which both stopped silently
-    // (RA-2651), and 'false' for every other spine caller.
-    const handed = (file: string, job: string) => {
-      const { steps, inputs } = spineJobFor(jobs(file)[job] as never);
+  // EVERY CALLER OF `agent-run`, DISCOVERED (RA-2688): a job that calls the spine, and a
+  // job that calls the `agent-run` block itself. A hand-written list of spine callers
+  // left the direct-block lanes unresolved, so one of them setting `full-transcript: true`
+  // stayed green — and direct-block lanes are added regularly.
+  type Caller = { where: string; via: 'spine' | 'direct'; def: Job };
+  const callers: Caller[] = readdirSync(join(REPO, WF)).filter((f) => f.endsWith('.yml')).sort().flatMap((file) =>
+    Object.entries(jobs(file)).flatMap(([job, def]): Caller[] => {
+      if (callsSpine(def as never)) return [{ where: `${file}:${job}`, via: 'spine' as const, def }];
+      // The spine's own job forwards its caller's input; it is resolved per caller above.
+      if (file === 'agent-lane.yml') return [];
+      if ((def.steps ?? []).some((s) => laneBlockOf(s as never) === 'agent-run')) {
+        return [{ where: `${file}:${job}`, via: 'direct' as const, def }];
+      }
+      return [];
+    }));
+
+  // What the action is actually handed, per job: the `agent-run` block input its call
+  // evaluates to. A direct-block job has no job-level `with:`; its own call's `with:` is
+  // resolved against no caller inputs, so an `${{ inputs.x }}` it passes stays a template
+  // and never reads as 'false'.
+  const handed = ({ via, def }: Caller): unknown => {
+    if (via === 'spine') {
+      const { steps, inputs } = spineJobFor(def as never);
       const step = agentStep({ steps: steps as Step[] });
       return blockInputsFor(blockOf(step as never)!.call, inputs)['full-transcript'];
-    };
-    expect(handed('agent-implement.yml', 'implement')).toBe('true');
-    expect(handed('agent-implement-revise.yml', 'revise')).toBe('true');
-    for (const [file, job] of [['agent-triage.yml', 'triage-fix'], ['agent-lead-revise.yml', 'revise'], ['agent-lead.yml', 'brief']]) {
-      expect(handed(file!, job!), `${file} prints a transcript it never opted into`).toBe('false');
     }
+    const call = def.steps!.find((s) => laneBlockOf(s as never) === 'agent-run')!;
+    return blockInputsFor(call as never, {})['full-transcript'];
+  };
+
+  it('finds the spine callers and the direct-block lanes, so the check is not vacuous', () => {
+    const where = (via: string) => callers.filter((c) => c.via === via).map((c) => c.where);
+    expect(where('spine')).toEqual(expect.arrayContaining([
+      'agent-implement.yml:implement', 'agent-implement-revise.yml:revise',
+      'agent-triage.yml:triage-fix', 'agent-lead-revise.yml:revise', 'agent-lead.yml:brief',
+    ]));
+    expect(where('direct')).toEqual(expect.arrayContaining([
+      'agent-lead-split.yml:split', 'agent-merge-reconcile.yml:reconcile', 'agent-rebase.yml:resolve',
+    ]));
+    // And the direct-block resolution reads the call, rather than reporting the default.
+    const optIn = { steps: [{ uses: '$/actions/agent-run', with: { 'full-transcript': true } }] };
+    expect(handed({ where: 'x', via: 'direct', def: optIn })).toBe('true');
+  });
+
+  it('reaches the action ON for the Implementer\'s two lanes only, of every caller of agent-run', () => {
+    // 'true' for the implement and revise lanes, which both stopped silently (RA-2651),
+    // and 'false' for every other caller, through the spine or not.
+    const on = callers.filter((c) => handed(c) !== 'false').map((c) => `${c.where}=${String(handed(c))}`);
+    expect(on).toEqual(['agent-implement-revise.yml:revise=true', 'agent-implement.yml:implement=true']);
   });
 
   it('no workflow turns the action output on except through the spine', () => {

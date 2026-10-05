@@ -27,10 +27,10 @@
 
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 import { EXPORT_FILES, EXPORT_REPORTS } from '../../../actions/qa-store/qa-store.mjs';
+import { isCliEntry } from '../../../scripts/lib/cli-entry.mjs';
 
 /**
  * A DynamoDB attribute value as plain JSON.
@@ -140,7 +140,7 @@ export function exportStore({ table, bucket, region, kind, from, dir }) {
   return { written, missing };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isCliEntry(import.meta.url)) {
   const env = process.env;
   try {
     const { written, missing } = exportStore({
