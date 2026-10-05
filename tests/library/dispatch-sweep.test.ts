@@ -1031,10 +1031,16 @@ describe('a terminal triage verdict leaves the lane (RA-1380)', () => {
     expect(v(['bug', 'qa:needs-triage'], [])).toMatchObject({ state: 'never-ran', act: 'dispatch' });
   });
 
-  it('never applies to the implement lane, which declares no terminal verdict', () => {
-    // Inventing one for it would be guessing; the lane has no such label.
-    expect(implement.terminal).toBeUndefined();
-    expect(terminalVerdict(bug(['qa:false-positive']), implement)).toBe(false);
+  it('never applies triage\'s verdicts to the implement lane, whose one terminal label is a human\'s park (kanon#170)', () => {
+    // The implement lane's only terminal label is `qa:needs-info`, which a human adds to park
+    // an issue, and an issue carrying it reports `parked`, not `triage-settled`
+    // (`dispatch-sweep-park.test.ts` holds the park itself). Triage's two verdicts mean
+    // nothing to it: inventing them for this lane would be guessing.
+    expect(implement.terminal).toEqual(['qa:needs-info']);
+    expect(implement.settled).toBe('parked');
+    expect(triage.terminal).toEqual(['qa:cannot-reproduce', 'qa:false-positive']);
+    for (const label of triage.terminal ?? []) expect(terminalVerdict(bug([label]), implement), label).toBe(false);
+    expect(terminalVerdict(bug(['qa:needs-info']), implement)).toBe(true);
   });
 
   it('tolerates both gh label shapes and a missing labels field', () => {
