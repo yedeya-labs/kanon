@@ -245,6 +245,8 @@ describe('kanon init, on an empty repository with every default (plan 0005 L9)',
     expect(again.milestoneCalls).toEqual([]);
     expect(again.out).toContain('Nothing changed: everything init sets up is already right.');
     expect(again.out).not.toMatch(/^wrote /m);
+    expect(again.out).toContain('.github/workflows/agent-review.yml: already as init writes it.');
+    expect(again.out).not.toContain('exists and differs');
   });
 
   it('creates exactly the label deleted after the first run', async () => {
