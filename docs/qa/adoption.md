@@ -47,7 +47,7 @@ Bootstrap ended when both conditions of `K-ADOPT-6` held: the Reviewer's App, `k
 | 9. Production approval | Not done: Kanon has no production environment. |
 | 10. Chat channel | Not done: none yet (see Choices). |
 | 11. The first tracking issue | Not done as written: the first issues were filed 2026-09-30, before the milestones existed, and got their bucket milestones later. |
-| 12. Agent identities | Done for the Reviewer only: `kanon-reviewer`, created 2026-10-02 with `kanon apps`, installed on this repository only, and listed in the [App register](agent-identities.md). `apps-check` passed (run 37023855771, 2026-10-02). `kanon-implementer` (ADR 0011's stage 2) and `kanon-explorer` (for the code audit, plan 0004 step 11a) were created 2026-10-05 with `kanon apps`, and their secrets are set; `apps-check` has not yet been run on them. The other roles have no App and no row. |
+| 12. Agent identities | Done for the Reviewer only: `kanon-reviewer`, created 2026-10-02 with `kanon apps`, installed on this repository only, and listed in the [App register](agent-identities.md). `apps-check` passed (run 37023855771, 2026-10-02). `kanon-implementer` (ADR 0011's stage 2) and `kanon-explorer` (for the code audit, plan 0004 step 11a) were created 2026-10-05 with `kanon apps`, and their secrets are set. `apps-check` passed for all three Apps (run 37321684369, 2026-10-05, on the branch that registered the two). The other roles have no App and no row. |
 | 13. Kanon's code | In progress: see Mechanisms. The checks, the review lane and the implement lanes are pinned to one exact release (v0.23.0 since 2026-10-04), and Dependabot's `kanon` group proposes each release to them, exempt from the cooldown. Until 2026-10-04 the entry set no `cooldown`, so Dependabot's default of 3 days held every release back and none was proposed ([#233](https://github.com/yedeya-labs/kanon/issues/233)). |
 | 14. End bootstrap | Done 2026-10-02 (above). Dropping the installer credential's Administration permission is not recorded, because step 3 made no such credential. |
 
@@ -114,7 +114,7 @@ These rules' lines are prose only with a note, and name nothing to install: `K-P
 
 **Not yet installed, and why:**
 
-- **The Implementer** is not yet on. Its App, callers, register row and sign-off delegation are in place (ADR 0011, stage 2); what remains is moving Kanon's pins to the first release that includes [#234](https://github.com/yedeya-labs/kanon/issues/234), then `apps-check`.
+- **The Implementer** is not yet on. Its App, callers, register row and sign-off delegation are in place (ADR 0011, stage 2); what remains is moving Kanon's pins to the first release that includes [#234](https://github.com/yedeya-labs/kanon/issues/234).
 - **The Explorer** has an App and a register row, and no caller yet: the code-audit caller comes with plan 0004's step 11a.
 - **The Lead** waits for the Owner's decision (ADR 0011).
 - **No hosted telemetry yet:** the store is plan 0002, in progress.
