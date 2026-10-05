@@ -17,7 +17,12 @@
 # checkout. Not a git checkout (a lane that checks nothing out): there is nothing to read, and it
 # says so and exits 0.
 #
-# ENV  KANON_ROOT  Kanon's tree (default: this script's ../..)
+# The review lane's restore (`scripts/restore-judging-inputs.sh`) runs this too, before the lane
+# records its pin of the judging inputs, so the pin holds the baseline and this block's later run
+# copies nothing (kanon#316). It passes PLAYBOOKS_ONLY, so the stack lines are said once, here.
+#
+# ENV  KANON_ROOT      Kanon's tree (default: this script's ../..)
+#      PLAYBOOKS_ONLY  '1' takes only the playbook defaults
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,7 +52,7 @@ for baseline in "$BASELINES"/*-playbook.md; do
 done
 
 STACK=docs/qa/stack.md
-if [ -f "$STACK" ]; then
+if [ "${PLAYBOOKS_ONLY:-}" != 1 ] && [ -f "$STACK" ]; then
   while IFS='|' read -r heading means; do
     n="$(awk -v h="$heading" '/^[ \t]*(```|~~~)/ { f = !f; next } !f && $0 == h { n++ } END { print n + 0 }' "$STACK")"
     [ "$n" = 0 ] && say "$STACK has no \`$heading\`, so Kanon's default applies: $means (K-LAYOUT-17)"

@@ -350,29 +350,29 @@ fi
 # reader's documented default (plan 0005 §5.2), and each default the reader takes is printed as
 # a notice. A record that declares no reference environment passes: the reconciler fails on it
 # when a project reaches its deploy phase.
-declared() { # file, reader name, [argument]
-  local out line
-  command -v node >/dev/null 2>&1 || die "needs node on PATH to read $1; the action puts Kanon's own there"
-  if ! out="$(node "$HERE/declarations.mjs" "$2" ${3:+"$3"} 2>&1)"; then
-    fail "$1" "$(printf '%s' "$out" | head -1)"
-    return
-  fi
-  while IFS= read -r line; do
-    [ -n "$line" ] && note "$1" "$line"
-  done <<<"$out"
-}
-for d in escalation-paths exemptions adoption stack; do
-  declared "docs/qa/$d.md" "$d"
-done
-
+#
 # ── Whether the Overseer is installed (K-LAYOUT-10, plan 0004 step 13, decision 12) ────────
 # The Overseer is an optional lane, so the adoption record says whether it is installed, and
 # says what is true: `installed` with a caller of its lane, `not installed` without one. A
 # record that doesn't say, or no record, is Kanon's default, `not installed` (plan 0005 §5.2),
-# so a caller of the Overseer's lane still needs the record to say `installed`.
+# so a caller of the Overseer's lane still needs the record to say `installed`. Read with the
+# others, in one Node process.
+#
+# So is the App register's optional `Persona` column (plan 0005 §3.3), when a caller's lane runs
+# as a role and the register exists: a malformed persona fails by name here, on the pull request
+# that wrote it, where the lanes would only warn and post as the role.
 overseer=false
 case " $CALLED " in *" agent-overseer "*) overseer=true ;; esac
-declared docs/qa/adoption.md overseer "$overseer"
+personas=false
+if [ -n "$ROLES" ] && [ -f "$REGISTER" ]; then personas=true; fi
+command -v node >/dev/null 2>&1 || die "needs node on PATH to read the declarations in docs/qa/; the action puts Kanon's own there"
+out="$(node "$HERE/declarations.mjs" "$overseer" "$personas")" || die "could not run Kanon's declaration readers ($HERE/declarations.mjs)"
+while IFS=$'\t' read -r kind file msg; do
+  case "$kind" in
+    notice) note "$file" "$msg" ;;
+    error) fail "$file" "$msg" ;;
+  esac
+done <<<"$out"
 
 # ── App slugs: every role a caller's lane runs as has one row in the register ──────────
 for role in $(printf '%s\n' $ROLES | sort -u); do
@@ -384,14 +384,7 @@ for role in $(printf '%s\n' $ROLES | sort -u); do
     fail "$REGISTER" "$out"
   fi
 done
-# Its optional `Persona` column (plan 0005 §3.3): a malformed persona fails by name here, on
-# the pull request that wrote it, where the lanes would only warn and post as the role.
-if [ -n "$ROLES" ] && [ -f "$REGISTER" ]; then
-  command -v node >/dev/null 2>&1 || die "needs node on PATH to read $REGISTER; the action puts Kanon's own there"
-  if ! out="$(node "$HERE/declarations.mjs" register 2>&1)"; then
-    fail "$REGISTER" "$(printf '%s' "$out" | head -1)"
-  fi
-fi
+# Its optional `Persona` column is read with the declarations above, in the same Node process.
 
 # ── The Dependabot entry that proposes Kanon upgrades (K-ADOPT-11) ─────────────────────
 DEP=.github/dependabot.yml

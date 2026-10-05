@@ -11,15 +11,18 @@
 // adopter's CI on the pull request that broke it, by name, rather than only when a guard or
 // the Merger next reads it.
 //
-//   node declarations.mjs <escalation-paths|exemptions|adoption|stack|register>
-//   node declarations.mjs overseer <true|false>   # whether a workflow calls the Overseer's lane
+//   node declarations.mjs <overseer> <register>
+//     overseer  `true` when a workflow calls the Overseer's lane, else `false`
+//     register  `true` to read the App register's `Persona` column (plan 0005 §3.3): when a
+//               caller's lane runs as a role and the register exists, else `false`
 //
-// Run from the root of the adopter's checkout. Exits 0 when the file parses, printing on standard
-// output one line for each default it took (an omitted section, plan 0005 §5.2), and 1 with the
-// reader's own message on standard error when it doesn't parse. lane-check calls it only for a
-// file that exists: a missing file is the reader's documented default, and lane-check says so
-// itself. An adoption record that declares no reference environment passes here: the reconciler
-// fails on it, by name, when a project reaches its deploy phase (K-PROJ-11).
+// Run from the root of the adopter's checkout. Runs every reader, in one process (one Node start
+// per lane-check run, not one per reader), and prints one tab-separated line per finding:
+// `notice<TAB><file><TAB><line>` for each default a reader took (an omitted file or section,
+// plan 0005 §5.2), and `error<TAB><file><TAB><message>` for a declaration that doesn't parse,
+// with the reader's own message. Exits 0 when it ran, whatever it found; 2 on a usage error. An
+// adoption record that declares no reference environment passes here: the reconciler fails on
+// it, by name, when a project reaches its deploy phase (K-PROJ-11).
 
 import { readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import { readExemptions } from '../../scripts/lib/exemptions.mjs';
@@ -31,39 +34,45 @@ import { APP_REGISTER, parsePersonas } from '../../scripts/app-register.mjs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** Each reader returns the defaults it took, one line each. @type {Record<string, (root: string) => string[]>} */
-const READERS = {
-  'escalation-paths': (root) => readEscalationFile(root).defaults,
-  exemptions: (root) => readExemptions(root).defaults,
+const [caller, register] = process.argv.slice(2);
+const bool = (/** @type {string | undefined} */ v) => v === 'true' || v === 'false';
+if (!bool(caller) || !bool(register)) {
+  process.stderr.write('usage: declarations.mjs <overseer: true|false> <register: true|false>\n');
+  process.exit(2);
+}
+
+/** Each reader, by the file it reads, returns the defaults it took, one line each. @type {Array<[string, (root: string) => string[]]>} */
+const READERS = [
+  ['docs/qa/escalation-paths.md', (root) => readEscalationFile(root).defaults],
+  ['docs/qa/exemptions.md', (root) => readExemptions(root).defaults],
   // Both of the record's declarations, so a malformed one of either fails by name.
-  adoption: (root) => {
+  ['docs/qa/adoption.md', (root) => {
     readReferenceDeploy(root);
     readDigestAudience(root);
     return [];
-  },
+  }],
   // Only `## Code areas`: the other sections are checked by lane-check itself, and only when a
   // called lane reads the document. A stack document without the section is Kanon's default.
-  stack: (root) => codeAreasDefaults(readCodeAreas(root)),
+  ['docs/qa/stack.md', (root) => codeAreasDefaults(readCodeAreas(root))],
   // Called for every repository, record or not: a record that doesn't say is Kanon's default,
   // `not installed`, and a caller of the Overseer's lane needs a record that says `installed`.
-  overseer: (root) => checkOverseerInstall({ root, caller: process.argv[3] === 'true' }).defaults,
-  // The App register's optional `Persona` column (plan 0005 §3.3). The slugs are the awk
-  // reader's, per role; this reads only what the persona writers read.
-  register: (root) => {
-    parsePersonas(readFileSync(join(root, APP_REGISTER), 'utf8'));
-    return [];
-  },
-};
+  ['docs/qa/adoption.md', (root) => checkOverseerInstall({ root, caller: caller === 'true' }).defaults],
+  // The App register's optional `Persona` column (plan 0005 §3.3): a malformed persona fails by
+  // name here, where the lanes would only warn. The slugs are the awk reader's, per role.
+  ...(register === 'true'
+    ? [/** @type {[string, (root: string) => string[]]} */ ([APP_REGISTER, (root) => {
+        parsePersonas(readFileSync(join(root, APP_REGISTER), 'utf8'));
+        return [];
+      }])]
+    : []),
+];
 
-const which = process.argv[2] ?? '';
-const read = READERS[which];
-if (!read) {
-  process.stderr.write(`usage: declarations.mjs <${Object.keys(READERS).join('|')}>\n`);
-  process.exit(2);
-}
-try {
-  for (const line of read(process.cwd())) process.stdout.write(`${line}\n`);
-} catch (e) {
-  process.stderr.write(`${/** @type {Error} */ (e).message}\n`);
-  process.exit(1);
+/** One finding per line: a message never spans lines here. @param {string} s */
+const oneLine = (s) => s.split('\n')[0] ?? '';
+for (const [file, read] of READERS) {
+  try {
+    for (const line of read(process.cwd())) process.stdout.write(`notice\t${file}\t${oneLine(line)}\n`);
+  } catch (e) {
+    process.stdout.write(`error\t${file}\t${oneLine(/** @type {Error} */ (e).message)}\n`);
+  }
 }

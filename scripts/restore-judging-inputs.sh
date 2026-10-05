@@ -41,6 +41,16 @@
 # scripts changed it before the agent starts. What remains is a `workflow_dispatch` on a PR's
 # own ref, which runs that ref's caller, and the human merge.
 #
+# KANON'S BASELINE PLAYBOOKS, BEFORE THE PIN (plan 0005 §5.2, kanon#316). A playbook the default
+# branch doesn't have is Kanon's baseline for the role (`K-LAYOUT-17`), put in place by
+# `agent-setup`'s defaults step. On the review lane that step runs after the calling step has
+# recorded the pin, and the pin is "every input on disk", so a baseline copied there would
+# read as a file something on the runner added, and the lane would refuse every review as
+# tampered. So this script takes the same defaults itself, last, after every PR-added input
+# has been removed: the pin records the baseline, and `agent-setup`'s step then finds every
+# playbook in place and copies nothing. The baseline comes from Kanon's tree beside this
+# script, never from the PR's.
+#
 # Inputs:  DEFAULT_REF  (required) the repository's default branch, e.g. `main`
 #          PARK_DIR     (optional) where the PR's copies go; default `.qa-pr`
 # Prints `sha=<commit>` on its last line: the default branch's commit it restored from.
@@ -188,6 +198,9 @@ if ! grep -qxF "/$PARK_DIR/" "$exclude_file" 2>/dev/null; then
   mkdir -p "$(dirname "$exclude_file")"
   printf '/%s/\n' "$PARK_DIR" >>"$exclude_file"
 fi
+
+# The baseline for each playbook the default branch lacks, before the caller records the pin.
+KANON_ROOT="$HERE/.." PLAYBOOKS_ONLY=1 bash "$HERE/../actions/agent-setup/declaration-defaults.sh"
 
 echo "restore-judging-inputs: default branch '$DEFAULT_REF' → $BASE_SHA"
 if [ ${#restored[@]} -eq 0 ] && [ ${#removed[@]} -eq 0 ]; then
