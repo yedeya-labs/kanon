@@ -29,6 +29,7 @@ const KNOWN_EXCEPTIONS: Record<string, string> = {
   'agent-verify-acs.yml:verify': '#279',
   // Merged before #274's fix, admitted as an exception by the Owner (2026-10-04).
   'agent-explore.yml:explore': '#279',
+  'agent-code-audit.yml:audit': '#279',
 };
 
 type Step = { id?: string; name?: string; uses?: string; run?: string; if?: string; with?: Record<string, unknown>; env?: Record<string, unknown> };
