@@ -1,0 +1,551 @@
+# QA pipeline — Agent 4, the Overseer: a weekly audit of the pipeline itself. A Kanon lane
+# (plan 0004, step 13).
+#
+# It audits the pipeline from the aggregate: GitHub's issues, pull requests, labels and workflow
+# history, and the QA store's run reports, coverage and telemetry summaries. It keeps one rolling
+# audit issue (`K-SELF-11`), files the findings the adopter can act on, and drafts the ones only
+# Kanon can act on in that issue's `## Upstream` part. It never fixes, merges or closes anything
+# but its own previous audit (`K-AGENT-35`). The project's playbook,
+# `docs/qa/overseer-playbook.md`, says how it audits this project (`K-LAYOUT-17`).
+#
+# OPTIONAL, AND ADOPTER-SCOPED (plan 0004 decision 12). An adopter installs it or doesn't, and its
+# adoption record says which (`K-LAYOUT-10`); `lane-check` holds the record to the callers.
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:` this
+# file at an exact Kanon tag and maps the three secrets by name (never `secrets: inherit`).
+#
+# ── THE QA STORE, THROUGH THE CONTRACT (plan 0004 §3.2) ──────────────────────────────────
+#
+#   gate → export (store job) → overseer (no credentials)
+#                             ↘ delete-export, after the export and the overseer, always
+#
+# The agent used to query the store's table and bucket itself, with the cloud CLI, in a job that
+# had assumed the store's role. Now the `export` job reads the store through the adopter's hook,
+# as files (`kind: overseer`: the run partitions, coverage, the code-reading ledger, the raw
+# reports, and the adopter's own telemetry summaries), and hands them to the agent's job as an
+# artifact kept one day, which a job of its own deletes. The agent's job declares no `id-token`
+# and no environment (P9's check, `tests/unit/helpers/store-jobs.ts`). Without a hook it runs to
+# completion without memory: the export holds only its manifest, which says the store is absent.
+#
+# ── WHO FILES WHAT (decision 12) ─────────────────────────────────────────────────────────
+#
+#   overseer (agent, read-only token) → uploads qa-overseer-audit.json
+#     → file (its own job, a fresh runner, no agent): downloads it, mints the filing token, files
+#     → delete-report, always
+#
+# The agent's token reads only. It writes its audit and findings to `qa-overseer-audit.json`,
+# each finding naming its subject, and the job uploads that file as an artifact kept one day. The
+# `file` job, on a fresh runner, downloads it, checks out nothing, mints the filing token and
+# runs `scripts/overseer-file.mjs` from its own action cache, which files each finding by who can
+# act on it. Nothing the agent can write runs there: not the workspace, not the action cache,
+# not `$GITHUB_PATH` or `$GITHUB_ENV`, which are per job. So a finding that only Kanon can act on
+# is never filed in the adopter's repository, whatever the agent intended, steered or not: the
+# file is data to that job, read by a parser that routes by subject. A job of its own deletes
+# the artifact after the filing, like the export.
+#
+# ONE DEPENDENCY: kanon#274. The agent job still mints its read-only token, and an agent with
+# `Bash` can reach an App's private key through that job's action cache. With the key, a steered
+# agent could mint a token of its own and file directly. Until #274 is fixed, the guarantee holds
+# against a mistaken agent and against one steered into rewriting the filing code, but not
+# against one that takes the key. The token it could mint reaches only what the Overseer's App
+# is granted, on the adopter's own repository; nothing in this lane reaches Kanon.
+#
+# INERT until: the caller is on the default branch + the Overseer's App installed, with a row in
+# the App register + these secrets (plan 0001 §8):
+#   OVERSEER_APP_ID, OVERSEER_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+name: Overseer
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#   schedule: "0 7 * * 1"      — weekly, Monday 07:00 UTC (the reference adopter's)
+#   workflow_dispatch          — no inputs
+on:
+  workflow_call:
+    secrets:
+      OVERSEER_APP_ID:
+        required: true
+      OVERSEER_APP_PRIVATE_KEY:
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+concurrency:
+  # Never two audits at once: both would file an audit issue and close each other's.
+  group: agent-overseer
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). Each job below declares its
+# own, so only the store job ever holds `id-token: write`, which the caller grants for it, and
+# only the delete job holds `actions: write`.
+permissions:
+  contents: read
+
+jobs:
+  # THE MEMBERSHIP GATE (K-AGENT-45, kanon#46), in a job of its own, before any token is minted
+  # or the store is read. ONLY THE CALLER'S TWO TRIGGERS: as a called workflow it runs on
+  # whatever its caller is called on (Kanon's smoke calls it on pull requests).
+  gate:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      member: ${{ steps.gate.outputs.member }}
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+  # THE STORE JOB (plan 0004 §3.2): the Overseer's export through the adopter's store hook, and
+  # nothing else. A failed read is `degraded`, and the export says so; without a hook it says
+  # the store is absent.
+  export:
+    needs: gate
+    if: needs.gate.outputs.member == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: kanon-qa-store
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      artifact-name: ${{ steps.store.outputs.artifact-name }}
+      artifact-id: ${{ steps.store.outputs.artifact-id }}
+      attempt: ${{ steps.store.outputs.attempt }}
+    steps:
+      - uses: $/actions/qa-store
+        id: store
+        with:
+          operation: export
+          kind: overseer
+
+  overseer:
+    needs: export
+    # AN EXPLICIT STATUS FUNCTION, AND THE EXPORT'S OWN RESULT. Without one GitHub prepends
+    # `success()`, which is false when any job up the `needs` chain was skipped or failed, so a
+    # job further down could be skipped while its condition reads true (kanon#261). And ONLY ON
+    # THE EXPORT'S OWN ATTEMPT (kanon#224): "Re-run failed jobs" re-runs this job without the
+    # export job, whose artifact the earlier attempt's delete job already deleted.
+    if: ${{ !cancelled() && needs.export.result == 'success' && needs.export.outputs.attempt == github.run_attempt }}
+    runs-on: ubuntu-latest
+    # Bounds a hang (RA-1336). Sized at ~3x the longest real run measured on the reference
+    # adopter, so it never truncates work.
+    timeout-minutes: 60
+    # NO `id-token` AND NO ENVIRONMENT: this job holds no cloud credentials (plan 0004 P9). The
+    # reads are the finish block's, with the workflow token: its own run, and issues.
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+    outputs:
+      agent-outcome: ${{ steps.agent.outcome }}
+      report-artifact-id: ${{ steps.report.outputs.artifact-id }}
+    steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1).
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        id: checkout
+        with:
+          persist-credentials: false
+
+      # THE STORE, as the export job read it, into the workspace, because the agent reads only
+      # the workspace. `manifest.json` says whether the store was present, absent or degraded.
+      - name: Download the QA store's export
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.export.outputs.artifact-name }}
+          path: qa-store-export
+
+      # THE AGENT-LANE BLOCKS, CALLED DIRECTLY (RA-2661): the filing step runs between
+      # `agent-run` and the end of the job. This arm reads the repository only, so it installs
+      # nothing and never calls the project-setup hook, and its App tokens are minted below.
+      - uses: $/actions/agent-setup
+        id: setup
+        with:
+          arm: Overseer agent
+          app-slug: ""
+
+      # Kanon's scripts, for the steps below, and `KANON` for the agent's environment (kanon#110).
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      # THE WEEK'S TOKEN-EFFICIENCY REPORT (RA-2081), to the step summary BEFORE the agent, so the
+      # figures survive an agent that dies. No model runs here: the report is the adopter's
+      # export's `token-trend.md`, arithmetic over its telemetry rows (plan 0004 §3.2). A missing
+      # one is described here rather than left to read as a quiet week.
+      - name: Token efficiency for the week
+        id: trend
+        run: |
+          set -uo pipefail
+          f=qa-store-export/token-trend.md
+          if [ -s "$f" ]; then
+            cat "$f" >> "$GITHUB_STEP_SUMMARY"
+          else
+            store="$(node -e 'try { console.log(JSON.parse(require("fs").readFileSync("qa-store-export/manifest.json", "utf8")).store) } catch { console.log("unreadable") }')"
+            printf '## Token efficiency\n\n**UNAVAILABLE**: the QA store export holds no `token-trend.md` (the store is %s). This is not a quiet week.\n' "$store" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # THE AGENT'S TOKEN READS ONLY (`K-AGENT-35`, `K-AGENT-46`): the tree, issues and pull
+      # requests, and the workflow history, the one place a run that died writing nothing is
+      # visible. It files nothing: the filing step below does, on a token of its own.
+      - name: Mint the Overseer's read-only App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.OVERSEER_APP_ID }}
+          private-key: ${{ secrets.OVERSEER_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-issues: read
+          permission-pull-requests: read
+          permission-actions: read
+
+      - uses: $/actions/agent-run
+        id: agent
+        continue-on-error: true
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+        with:
+          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          prompt: |
+            You are the Overseer (Agent 4) of this repository's QA pipeline. First read
+            docs/qa/overseer-playbook.md. Audit the pipeline from the AGGREGATE, read-only
+            and out of the hot path. The repository is ${{ github.repository }}.
+
+            WHAT YOU WRITE. You file nothing, comment on nothing and close nothing: your
+            token reads only. You write ONE file, `qa-overseer-audit.json` at the repository
+            root, and a step after you files from it:
+            {"audit": "<the audit issue's body, in Markdown>",
+             "findings": [{"title": "...", "body": "...", "subject": "...", "capability": false}]}
+            It must PARSE. A run that writes no valid file loses the whole audit. Write no
+            other file.
+
+            WHO CAN ACT ON EACH FINDING decides where it goes, and `subject` says which:
+            - THIS PROJECT can act: `declaration` (a file it declares under docs/qa/, its
+              adoption record), `playbook`, `hook` (its project-setup, store or sweep hook),
+              `app` (an App or its installation), `permissions`, `cost`, `schedule` (a
+              caller's cron), `labels`, `milestones`, `coverage` (test or spec coverage).
+              These are filed as issues in this repository, as `pipeline-improvement`.
+            - ONLY KANON can act: `lane` (a lane's behaviour or prompt), `guard`, `rule` (a
+              rulebook rule), `library` (Kanon's scripts and actions). These are NEVER filed
+              here: they go under the audit issue's `## Upstream` heading as drafts, which a human
+              may file on Kanon by hand. Write each one neutrally, as a draft for a public
+              repository: describe the behaviour and the evidence in general terms, and name
+              nothing of this project, not its issues, paths, people, product or data.
+            A finding that fits no subject goes upstream, unfiled. When in doubt about who
+            can act, say so in the body and choose the subject you can defend.
+            Each finding's body leads with the evidence and the CONSTRAINT the change must
+            satisfy (K-SELF-10). Put any concrete edit under a
+            `## Possible approach — UNVERIFIED, not acceptance criteria` heading, with a line
+            on what must be checked first. Never head it "Suggested fix". DEDUP first: search
+            open issues, and add no finding already tracked.
+
+            WHAT TO AUDIT:
+            - GitHub issues, pull requests and labels: precision per signal
+              (`qa:false-positive` against confirmed), pending promotions, and loop
+              self-deception (bugs closed without a real fix, vacuous or trivially-passing
+              tests, gamed gates).
+            - Follow-up leakage: scan recently-merged pull requests' review bodies for
+              deferred-work findings ("follow-up", "recommend", "worth a") and flag any with
+              NO matching `follow-up` issue.
+            - Backlog dynamics: read the playbook's "Backlog dynamics" first. Report, per week
+              across the audit window, (a) `follow-up` issues filed per pull request reviewed
+              and (b) the net open-issue change (opened minus closed). Count ISSUES ONLY:
+              `is:issue` is mandatory, because GitHub search mixes pull requests into a bare
+              query. These are OBSERVATIONS, NEVER A TARGET: state the dynamic and let the
+              human judge it. Never propose a filing threshold, a deferral bar, or any remedy
+              whose effect is "file less"; under-filing is what the leakage metric catches.
+            - The QA store, exported into `qa-store-export/` before you started. Do not query
+              any store yourself. `qa-store-export/manifest.json` says whether the store was
+              `present`, `absent` or `degraded`, and lists the files:
+              `runs-explorer.json` and `runs-audit.json` (each run in the window, newest
+              first: liveness and run history), `coverage.json` (per route, its last status
+              and commit), `areas.json` (the code-reading ledger), `reports/<kind>/<ts>.json`
+              (each run's raw report), and this project's own `token-trend.md`, `cache-ttl.md`
+              and `qa-clusters.md` when its store writes them. Audit coverage over time,
+              liveness and recency, and execution truth (files read, lines cited and turns
+              against the machine-stamped duration: an empty or degraded run is
+              self-evident). Coverage gaps: the routes the Explorer's summaries list against
+              `coverage.json`. When the store is absent or degraded, say so in the audit, and
+              audit from GitHub alone: an unreadable store is a finding, not a pass.
+            - Semantic-recall clusters, if `qa-store-export/qa-clusters.md` exists: candidate
+              "same class of bug recurring" groups. They are HINTS TO VERIFY, never findings:
+              confirm each against the real issues before proposing a systemic fix. If the
+              file is absent or says recall is unavailable, do NOT read that as "no recurring
+              classes".
+            - The prompt-cache TTL, as facts you do not derive: paste ALL of
+              `qa-store-export/cache-ttl.md` into the audit VERBATIM, every line in the order
+              written. Its `cache-ttl:` lines and the unprefixed lines under them are the
+              findings; keep the prefixes, which are what a reader greps for. If the file is
+              missing, say `cache-ttl: UNAVAILABLE — the store export holds no cache-ttl.md`:
+              an unreadable input is a finding, not a pass.
+            - The week's token efficiency, already computed: paste
+              `qa-store-export/token-trend.md` into the audit VERBATIM, under a
+              `## Token efficiency` heading. DO NOT recompute, re-rank, round or summarise it:
+              its deltas carry confidence intervals, and a delta inside its own interval is
+              not a finding. If the file is missing, say the token trend is UNAVAILABLE.
+            - Workflow history (`gh run list` and `gh run view` on the lane callers in
+              .github/workflows/, the Explorer's first): the ONLY place a run that died is
+              visible, since a store row is written from a completed report. Read the playbook's "Liveness queries" first: a count-less run
+              row is a change-gate skip, not a corpse, and a renamed workflow's earlier runs
+              are reached by its numeric workflow id.
+
+            - Capability review, WEEKLY (K-SELF-16, K-SELF-17). Read the playbook's
+              "Capability review" first; it is authoritative and this is the summary. The
+              ledger is docs/qa/capability-ledger.md.
+              THE LAST CAPABILITY AUDIT, one anchor for all three rules below (due test,
+              watermark, Ledger delta): the most recent audit issue carrying a `Ledger delta`
+              block. Usually last week's audit, but NOT necessarily the latest one: a
+              same-week re-run prints `not due` and carries no delta, and so does a run cut
+              short before the anchor. Search BACK past them; a `degraded` audit does carry
+              the block, so it counts. The audit you need is almost always CLOSED, because
+              each audit closes the one before it. Use
+              `gh search issues --repo ${{ github.repository }} "audit-summary in:title" --limit 30 --sort created --order desc --json number,state,title,createdAt,body --jq '[.[] | select(.body|test("(^|\r?\n)[^A-Za-z0-9\n]*Watermark[^A-Za-z0-9\n:]*:"))][0] | {number,state,createdAt}'`
+              then READ THAT ISSUE for its `Capability watch:` line (due test) and its
+              `Ledger delta` (watermark and dispositions). The query selects on the
+              `Watermark:` LINE, whatever decorates it, and lets the ladder below judge the
+              value. A null `number` means no audit has ever carried one: take the "first
+              run" branch everywhere.
+              SO WHEN YOU EMIT NO `Ledger delta` BLOCK, WRITE NO `Watermark:` LINE ANYWHERE IN
+              THE AUDIT, in any form, with any value, under any decoration: any of them would
+              make a block-less audit the anchor and orphan the real one. Write "capability
+              state not carried this run" and name no field.
+              DUE TEST: if the last capability audit's line reads `ran, through …` AND that
+              audit is dated in the CURRENT ISO week (Monday to Sunday, UTC), print exactly
+              `Capability watch: not due this audit` as the `### Capability watch` section,
+              then skip the rest of this bullet. Otherwise run it. Match on `ran, through`
+              specifically, never on any `Capability watch:` line.
+              TWO directions, both required:
+              (A) feature to operation. The watermark lives in the AUDIT ISSUE, not in the
+              ledger, which you cannot write. Read it from the last capability audit's
+              `Ledger delta` block; fall back to the ledger's seed watermark if there is no
+              last capability audit, OR if the value fails validation. The block's FIRST LINE
+              is exactly `Watermark: 2.1.NNN`: the bare version as it appears after `## ` in
+              the changelog, with nothing around it, no backticks, no `v`, no bolding.
+              Then run `node "$KANON/scripts/cc-sweep.mjs" slice <WATERMARK>`, ONE command that
+              fetches the changelog, proves it IS a changelog, validates the watermark and
+              slices HEAD down to it. Do NOT re-implement it, and NEVER read the changelog
+              whole. Read its EXIT CODE and its first line:
+              EXIT 0, `cc-sweep: ok ... head=2.1.NNN ... truncated=N`, the slice follows.
+              `truncated=0`: open with `Capability watch: ran, through <head>`.
+              `truncated=N` > 0: open with
+              `Capability watch: ran, through <head> — truncated, N versions skipped`, and
+              still advance the watermark to <head>: TRUNCATE AND ADVANCE, NEVER ABORT.
+              EXIT 2, `cc-sweep: fetch-failed`: report
+              `Capability watch: degraded — changelog fetch failed`, carry the prior
+              watermark forward VERBATIM, and do not enter the ladder.
+              EXIT 3, `cc-sweep: bad-watermark ... head=2.1.NNN`: nothing was sliced. NEVER
+              CARRY A WATERMARK THAT FAILED THIS CHECK INTO THE LEDGER DELTA. Recover in
+              order: (1) re-run the script with the ledger's seed; if it exits 0, use that
+              slice and report
+              `Capability watch: ran, through 2.1.NNN — recovered from an unreadable watermark, sliced from the ledger seed 2.1.MMM`.
+              (2) if the seed exits 3 too, reset to the `head=` value and report
+              `Capability watch: degraded — watermark unreadable, reset to 2.1.NNN, versions skipped unknown`.
+              No candidate may be named without a quoted changelog line and its version.
+              (B) operation to feature, the higher-yield direction, needing no changelog:
+              walk the ledger's rows against the pipeline's operations (the lanes' prompts,
+              which are Kanon's, in "$KANON/.github/workflows/"; this project's playbooks,
+              hooks and agent instructions; the store's read path; the `.claude/` surface)
+              and ask which operation a CATALOGUED capability would serve better. Check the
+              ledger's "Adoption constraints" before assessing value on a `.claude/` row.
+              THREE RULES: (1) no candidate is raised from the feature side alone: it must
+              end in a named operation with evidence THIS audit already measured; a
+              capability mapping to nothing is dispositioned `no current gap` in the Ledger
+              delta, recorded, not proposed. (2) every candidate carries the full form:
+              operation / observed pain and evidence / what it changes / what it replaces or
+              deletes / what would make it not worth it / disposition. (3) dispositions bind:
+              the binding record is the ledger's table PLUS the last capability audit's
+              `Ledger delta`. A `rejected —` or `deferred —` capability is re-raised ONLY if
+              its reason changed, and you say which. `0 proposals` is a correct outcome.
+              A candidate whose operation is a Kanon lane is Kanon's to act on: it is a
+              finding with subject `lane`, and goes upstream.
+              OUTPUT: a `### Capability watch` section in the audit, opening with exactly one
+              of `Capability watch: ran, through 2.1.NNN` (which may carry the suffixes
+              above), `Capability watch: not due this audit` or
+              `Capability watch: degraded — <what failed>`.
+              This section is the LOWEST-priority part of the audit: sacrifice it, never the
+              audit. If the turn budget starts to bind, stop, print
+              `Capability watch: degraded — cut short for turn budget`, and go write the
+              report. IF YOU STOP BEFORE READING THE PRIOR `Ledger delta`, EMIT NO
+              `Ledger delta` BLOCK AT ALL, and no `Watermark:` line.
+              CLOSE the section with a `Ledger delta — not yet folded in` block. Its FIRST
+              LINE is exactly `Watermark: 2.1.NNN`, the version the NEXT run must slice from:
+              the watermark means REVIEWED through, not read through. Sliced and finished
+              reviewing (plain, truncated, or recovered by ladder step 1): the HEAD version
+              you read through. Ladder step 2: the HEAD you reset to. Cut short after
+              validating, without finishing the review: the prior delta's value VERBATIM,
+              unless it failed the check this run, in which case the value that did validate
+              (the seed), or the seed on a first run. Never got to validate: the prior
+              delta's value VERBATIM, or the seed on a first run. On every path that prints
+              `ran, through`, this line MUST equal that version. Then every disposition
+              reached this run that is not yet in the ledger's table: carry the previous
+              delta's dispositions forward verbatim and add yours; write `none` when there
+              is none.
+              A standalone capability issue is the ESCALATION, and needs ALL of: it maps to a
+              named gap in this audit's findings; two consecutive capability sections carry
+              it as `pending — first sighting`; `gh search issues` finds no open match; and
+              the interlock is clear. THE INTERLOCK IS A QUERY, NEVER YOUR JUDGEMENT: run
+              `node "$KANON/scripts/capability-interlock.mjs"`. Its FIRST LINE is the count,
+              and `> 6` means propose nothing. It runs
+              `gh api -X GET search/issues -f q='repo:${{ github.repository }} is:issue is:open label:capability -linked:pr' --jq '.total_count'`
+              and adds back every open `capability` issue whose linked pull requests were
+              all closed unmerged; DO NOT run that query on its own as a substitute. IF IT
+              EXITS NON-ZERO OR PRINTS `unknown`, THE INTERLOCK IS CLOSED. When all hold, add
+              ONE finding with `"capability": true`; the filing step counts the interlock
+              again, files at most one, and labels it `capability`. Scope: Claude Code, the
+              Claude platform and API, and the pipeline's own tooling; not dependencies,
+              Actions or cloud services.
+
+            THE AUDIT BODY opens with a `## Progress since the prior audit` heading and holds
+            every part above. The filing step adds the `## Filed this run` and `## Upstream`
+            headings itself, so do not write them. Write the report LAST, once the audit is
+            done.
+          claude_args: |
+            --model claude-fable-5-1
+            --effort high
+            --max-turns 80
+            --max-budget-usd 35
+            --allowedTools Read,Bash,Grep,Glob,Write
+            --exclude-dynamic-system-prompt-sections
+
+      # Record what this run cost (RA-1485). `always()` because a run that FAILED is the one you
+      # most want measured. `classify: "false"`: a red here comes from a step before the agent,
+      # and the job's last step explains it; a lost audit reds the `file` job instead.
+      - uses: $/actions/agent-finish
+        id: finish
+        if: always()
+        continue-on-error: true
+        with:
+          arm: Overseer agent
+          agent: overseer
+          job-status: ${{ job.status }}
+          classify: "false"
+          execution_file: ${{ steps.agent.outputs.execution_file }}
+          claude_args: |
+            --model claude-fable-5-1
+            --effort high
+            --max-turns 80
+            --max-budget-usd 35
+            --allowedTools Read,Bash,Grep,Glob,Write
+            --exclude-dynamic-system-prompt-sections
+          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
+          # step CONCLUSION in the lane's own order, never a step's name or log.
+          lane: overseer
+          stages: >-
+            checkout=${{ steps.checkout.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            token=${{ steps.app-token.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "60"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
+          kanon-error: ${{ steps.setup.outputs.kanon-error }}
+
+      # THE REPORT, FOR THE FILE JOB: data, handed to a job the agent can't reach. One day; a job
+      # of its own deletes it after the filing. No report uploads nothing, and the file job says
+      # the audit was lost.
+      - name: Upload the report for the file job
+        id: report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qa-overseer-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: qa-overseer-audit.json
+          retention-days: 1
+          if-no-files-found: ignore
+
+      # WHY A RED RUN WENT RED (RA-1408): a quota cap and a real failure want opposite responses
+      # (wait or re-run). `if: failure()` so it speaks only when there is something to explain.
+      - name: Say whether the model was unreachable or the run genuinely failed
+        if: failure()
+        uses: $/actions/agent-classify
+        with:
+          arm: Overseer agent
+
+  # THE FILING JOB (decision 12): a fresh runner, so nothing the agent wrote runs here. It checks
+  # out nothing, reads the report as data, and is the only job that holds a token that writes.
+  file:
+    needs: overseer
+    # AN EXPLICIT STATUS FUNCTION AND THE PARENT'S RESULT (kanon#261): the overseer job is green
+    # whatever the agent concluded, because the agent step continues on error.
+    if: ${{ !cancelled() && needs.overseer.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Nothing on the workflow token: the download reads this run's artifacts with the runner's
+    # own token, and every write is the filing App token's.
+    permissions: {}
+    steps:
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      - name: Download the agent's report
+        if: needs.overseer.outputs.report-artifact-id != ''
+        uses: actions/download-artifact@v7
+        with:
+          name: qa-overseer-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/report
+
+      # THE FILING TOKEN, minted in this job, which runs no agent.
+      - name: Mint the Overseer's filing token
+        id: file-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.OVERSEER_APP_ID }}
+          private-key: ${{ secrets.OVERSEER_APP_PRIVATE_KEY }}
+          permission-issues: write
+          # The interlock's count reads each linked pull request's state.
+          permission-pull-requests: read
+
+      # THE OUTCOME DECISION, and the filing. No report, or an unparseable one, files nothing and
+      # reds the job: the whole audit was lost. An agent that exited non-zero after a valid report
+      # is a warning, and its audit is filed. `workflow-health.mjs` names this step when no audit
+      # has landed in over a week.
+      - name: Reconcile the agent's exit with what it durably produced
+        id: file
+        env:
+          GH_TOKEN: ${{ steps.file-token.outputs.token }}
+          AGENT_OUTCOME: ${{ needs.overseer.outputs.agent-outcome }}
+          REPORT_PATH: ${{ runner.temp }}/report/qa-overseer-audit.json
+          KANON: ${{ steps.kanon.outputs.path }}
+        run: node "$KANON/scripts/overseer-file.mjs"
+
+  # THE REPORT'S DELETE JOB: the qa-store block's delete step, handed the report's artifact id. It
+  # holds the audit before it is filed. After the filing, whatever happened to it.
+  delete-report:
+    needs: [export, overseer, file]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - uses: $/actions/qa-store
+        with:
+          operation: delete-export
+          artifact-id: ${{ needs.overseer.outputs.report-artifact-id }}
+          export-attempt: ${{ needs.export.outputs.attempt }}
+          agent-result: ${{ needs.overseer.result }}
+
+  # THE EXPORT'S DELETE JOB (plan 0004 §3.2): the export is the adopter's QA data, which anyone
+  # who can read the repository could download while the artifact exists. After the overseer
+  # job, whatever happened to it; a delete that fails turns the run red.
+  delete-export:
+    needs: [export, overseer]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - uses: $/actions/qa-store
+        with:
+          operation: delete-export
+          artifact-id: ${{ needs.export.outputs.artifact-id }}
+          export-attempt: ${{ needs.export.outputs.attempt }}
+          agent-result: ${{ needs.overseer.result }}

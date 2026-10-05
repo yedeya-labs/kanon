@@ -23,6 +23,7 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Explore (the sweep) | `agent-explore.yml` | Explorer | `schedule` (daily); `workflow_dispatch` with `tier` |
 | Dispatch sweep | `agent-dispatch-sweep.yml` | Lead | `schedule` (daily); `workflow_dispatch` with `apply` |
 | Code audit | `agent-code-audit.yml` | Explorer | `schedule` (every few days); `workflow_dispatch` |
+| Overseer (optional) | `agent-overseer.yml` | Overseer | `schedule` (weekly); `workflow_dispatch` |
 
 **What each caller maps, grants and needs.** Every caller maps its role's two App secrets, by name, and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger, the reconciler and the dispatch sweep run no model, so their callers map only the two. The digests run as no App, so their callers map `CLAUDE_CODE_OAUTH_TOKEN` and `DIGEST_WEBHOOK`. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
 
@@ -47,10 +48,11 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | `agent-explore.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: read`, `id-token: write` | `docs/qa/explorer-playbook.md` |
 | `agent-dispatch-sweep.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `id-token: write` | none |
 | `agent-code-audit.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: write`, `id-token: write` | `docs/qa/stack.md`, `docs/qa/explorer-playbook.md` |
+| `agent-overseer.yml` | `OVERSEER_APP_ID`, `OVERSEER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: write`, `id-token: write` | `docs/qa/capability-ledger.md`, `docs/qa/overseer-playbook.md` |
 
 <!-- /lane-contract:table -->
 
-Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile and the two digests call the blocks themselves and install nothing, so they never call your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own. The Merger and the reconciler call no block and install nothing: each runs Kanon's scripts in your checkout, with its role's App token, and never calls your hook. The dispatch sweep does the same, after a store job that calls only the `qa-store` block. The code audit calls the blocks itself and installs nothing, between store jobs that call only the `qa-store` block.
+Most lanes call the shared lane workflow, `agent-lane.yml`, which is not called by an adopter directly; merge reconcile and the two digests call the blocks themselves and install nothing, so they never call your hook, and review, verify-acs, lead-split and rebase call the blocks around steps of their own. The Merger and the reconciler call no block and install nothing: each runs Kanon's scripts in your checkout, with its role's App token, and never calls your hook. The dispatch sweep does the same, after a store job that calls only the `qa-store` block. The code audit calls the blocks itself and installs nothing, between store jobs that call only the `qa-store` block. The Overseer calls the blocks itself and installs nothing, after a store job that calls only the `qa-store` block.
 
 **The review lane** has three things the others don't:
 - **Its caller sets `run-name`,** ending with `${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}`. A called workflow's `run-name` is ignored, and the review-run evidence finds a head's reviews by the last token of the run's title. `lane-check` holds the caller to it.
@@ -233,7 +235,7 @@ The code audit, the Explorer, the Overseer and the dispatch sweep remember earli
 
 ## The stack document and the playbooks
 
-The lanes' prompts state the process and never your stack. What your stack decides, they read from files you own, at fixed paths (`K-LAYOUT-17`): the **stack document**, `docs/qa/stack.md`, with its four sections (`## Gates`, `## Schema changes`, `## Data isolation`, `## Generated files`), and the **playbooks**, `docs/qa/triage-fix-playbook.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` and `docs/qa/lead-playbook.md`. The rule says what each section holds. `lane-check` fails when a lane you call reads a document you don't have, or the stack document lacks a section.
+The lanes' prompts state the process and never your stack. What your stack decides, they read from files you own, at fixed paths (`K-LAYOUT-17`): the **stack document**, `docs/qa/stack.md`, with its four sections (`## Gates`, `## Schema changes`, `## Data isolation`, `## Generated files`), and the **playbooks**, `docs/qa/triage-fix-playbook.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` and `docs/qa/lead-playbook.md`, with `docs/qa/overseer-playbook.md` and the capability ledger, `docs/qa/capability-ledger.md`, when you install the Overseer. The rule says what each section holds. `lane-check` fails when a lane you call reads a document you don't have, or the stack document lacks a section.
 
 **Your code areas.** The stack document may also say where your code and tests are, under `## Code areas`, one bullet per area: a path in backticks, an em dash, its kind, a colon, and what it holds.
 
@@ -329,6 +331,28 @@ Its caller:
 
 **The change gate.** A scheduled run on a commit your QA store already holds a green full sweep of is skipped, and the skip is recorded, so a quiet day costs one short job, not a sweep. A dispatch always sweeps. The store's answer is read in a store job, through your store hook (`last-green`), and the run's summary is recorded the same way (`put`). Without a store hook the lane always sweeps, says the store is absent, and records nothing.
 
+## The Overseer
+
+The Overseer is optional. It audits your pipeline once a week from the aggregate: precision per signal, follow-up leakage, backlog dynamics, the QA store's runs and coverage, workflow history, and the capability ledger (`K-SELF-9`). It keeps one rolling audit issue, titled `[pipeline] audit-summary — Overseer audit #N`, and closes the one before it (`K-SELF-11`). Say whether you install it with one bullet under `## Choices` in your adoption record (`K-LAYOUT-10`):
+
+```markdown
+- **Overseer:** `installed`
+```
+
+or `not installed`. `lane-check` fails a record that doesn't say, or that says `installed` with no `agent-overseer.yml` caller, or `not installed` with one. Its caller:
+
+- **Keeps two triggers:** a weekly `schedule` (the reference adopter's is `0 7 * * 1`) and a dispatch with no inputs.
+- **Grants `contents: read`, `issues: read`, `actions: write` and `id-token: write`.** The OIDC token is for the lane's store job alone, and `actions: write` for the job that deletes the store's export after the audit. The audit job itself declares neither, and no environment.
+
+**Who files what** (plan 0004 decision 12). The agent's token reads only. It writes its audit and its findings to a file, each finding naming its subject, and a job of its own, on a fresh runner that runs no agent and checks out nothing, files them on a token of its own (`scripts/overseer-file.mjs`), then deletes the file's artifact:
+- **A finding you can act on** (a declaration, a playbook, a hook, an App or its permissions, cost, a schedule, labels, milestones, test or spec coverage) is filed in your repository as a `pipeline-improvement` issue, in *Development Automation*.
+- **A finding only Kanon can act on** (a lane's behaviour, a guard, a rule, Kanon's library) is never filed in your repository. It goes under the audit issue's `## Upstream` heading, as a draft you may file on Kanon by hand, after checking it names nothing of your project (ADR 0007). The heading is there every week, empty or not.
+- **A capability investigation** is filed only while the capability interlock is clear, counted by `scripts/capability-interlock.mjs`, and at most one a week (`K-SELF-17`).
+
+**What it reads.** Its playbook, `docs/qa/overseer-playbook.md`, with the sections `K-LAYOUT-17` names; the capability ledger; and, with a store hook, the store's `overseer` export ([The QA store](qa-store.md)), including the token trend, the cache-TTL facts and the recall clusters your hook writes. Without a store it audits from GitHub alone, and says the store is absent.
+
+It needs the Overseer's App, with `Contents: Read`, `Issues: Read & write`, `Pull requests: Read` and `Actions: Read` on the installation: the workflow history is the one place a run that died writing nothing is visible.
+
 ## Checking it
 
-Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a caller that isn't at its lane's file name, a review or reconciler caller without `.github/workflows/ci.yml`, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook, or a missing sweep hook for an explore caller; on a missing stack document or playbook, or a stack document without its four sections; on a malformed test-database declaration, escalation file, exemptions file or reference-deploy declaration; on a role missing from the App register; and on a missing Dependabot entry.
+Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a caller that isn't at its lane's file name, a review or reconciler caller without `.github/workflows/ci.yml`, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook, or a missing sweep hook for an explore caller; on a missing stack document or playbook, or a stack document without its four sections; on a malformed test-database declaration, escalation file, exemptions file or reference-deploy declaration; on an adoption record that doesn't say whether the Overseer is installed, or says it wrongly; on a role missing from the App register; and on a missing Dependabot entry.

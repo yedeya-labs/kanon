@@ -49,6 +49,16 @@ const DIRECT: Record<string, { step: string; perms: Perms }> = {
   'agent-dispatch-sweep.yml': { step: 'app-token', perms: { issues: 'write', 'pull-requests': 'read', actions: 'read' } },
   // The code audit reads the tree, and searches, files and comments on issues.
   'agent-code-audit.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write' } },
+  // The Overseer's agent reads the tree, issues, pull requests and the workflow history, and
+  // files nothing (plan 0004 step 13): its filing token is `MORE`'s.
+  'agent-overseer.yml': { step: 'app-token', perms: { contents: 'read', issues: 'read', 'pull-requests': 'read', actions: 'read' } },
+};
+/** A lane's second minting step, keyed `<lane>#<step id>`. */
+const MORE: Record<string, Perms> = {
+  // Files the findings and the audit issue, and comments on and closes the prior audit, after
+  // the agent has finished, so the agent never holds it (plan 0004 step 13, decision 12). The
+  // capability interlock's count reads each linked pull request's state.
+  'agent-overseer.yml#file-token': { issues: 'write', 'pull-requests': 'read' },
 };
 /** Each lane that calls the spine, and the token its agent gets there. */
 const SPINE_CALLERS: Record<string, Perms> = {
@@ -108,7 +118,7 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
   it('finds every minting step, and each one has a list or an exemption', () => {
     expect(mints.length).toBeGreaterThanOrEqual(10);
     const unlisted = mints.filter(({ name, step }) =>
-      !(name in EXEMPT) && name !== SPINE && DIRECT[name]?.step !== step.id);
+      !(name in EXEMPT) && name !== SPINE && DIRECT[name]?.step !== step.id && !(`${name}#${step.id}` in MORE));
     expect(unlisted.map(({ file, step }) => `${file}#${step.id}`)).toEqual([]);
     for (const [name, { step }] of Object.entries(DIRECT)) {
       expect(mints.some((m) => m.name === name && m.step.id === step), `${name}#${step} mints nothing`).toBe(true);
@@ -119,6 +129,14 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     const mint = mints.find((m) => m.name === name && m.step.id === step)!;
     expect(requested(mint.step.with)).toEqual(perms);
     withinGrant(roleOf(mint.step.with?.['client-id']), perms);
+  });
+
+  it.each(Object.entries(MORE))('%s requests exactly its list, within its role', (key, perms) => {
+    const [name, step] = key.split('#');
+    const mint = mints.find((m) => m.name === name && m.step.id === step);
+    expect(mint, `${key} mints nothing`).toBeDefined();
+    expect(requested(mint!.step.with)).toEqual(perms);
+    withinGrant(roleOf(mint!.step.with?.['client-id']), perms);
   });
 
   it('the spine passes every permission input through to its mint, and nothing else', () => {

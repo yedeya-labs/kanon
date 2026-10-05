@@ -53,6 +53,7 @@ const TRIGGERS: Record<string, Trigger[]> = {
   'agent-explore.yml': ['schedule', 'dispatch'],
   'agent-dispatch-sweep.yml': ['schedule', 'dispatch'],
   'agent-code-audit.yml': ['schedule', 'dispatch'],
+  'agent-overseer.yml': ['schedule', 'dispatch'],
 };
 
 /** The job holding the gate step, and the step's index in it. */
@@ -135,12 +136,13 @@ const gateProblems = (wf: Workflow): string[] => {
   }
   // THE EXPORT'S DELETE JOB IS THE ONE EXCEPTION (plan 0004 §3.2): it runs `if: always()`,
   // which `tests/unit/helpers/store-jobs.ts` requires, so it also runs after a refusal. It is
-  // inert there: its one step deletes the artifact a gated export job names, and a refused run
-  // exported nothing, so it is handed no id and deletes nothing.
+  // inert there: its one step deletes the artifact a gated job names (the export, or the
+  // Overseer's report), and a refused run uploaded nothing, so it is handed no id and deletes
+  // nothing.
   const inertDelete = (j: Job) => {
     const steps = j.steps ?? [];
     const w = (steps[0] as { with?: Record<string, unknown> } | undefined)?.with ?? {};
-    const from = /^\$\{\{\s*needs\.([\w-]+)\.outputs\.artifact-id\s*\}\}$/.exec(String(w['artifact-id'] ?? ''))?.[1];
+    const from = /^\$\{\{\s*needs\.([\w-]+)\.outputs\.(?:[\w-]+-)?artifact-id\s*\}\}$/.exec(String(w['artifact-id'] ?? ''))?.[1];
     return steps.length === 1 && steps[0]!.uses === '$/actions/qa-store' && w.operation === 'delete-export'
       && from !== undefined && gatedJobs.has(from) && needsOf(j).includes(from);
   };
