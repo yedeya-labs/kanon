@@ -209,6 +209,19 @@ on:
         required: false
         type: boolean
         default: true
+      project-setup:
+        description: >-
+          Run the project-setup hook (and the test-database block before it). Default on, for
+          a lane whose agent builds and tests code. Off for a lane whose agent runs none of
+          the tree's code (`K-AGENT-50`, kanon#243): the hook, read from the checked-out tree,
+          is the tree's code, and on a lane that checks out a pull request it would run
+          beside the token. Off skips the presence check, the database and the hook, and
+          puts Kanon's own scripts on the agent's PATH by name (`kanon-brief-guard`,
+          `kanon-spec-ids`, `kanon-spec-coverage`), so an allow-listed shell can run them
+          without an interpreter rule. The Lead's lanes set it off, with a shell allow-list.
+        required: false
+        type: boolean
+        default: true
       push-probe:
         description: >-
           Prove the minted App can push (`git push --dry-run`) after the project's setup
@@ -357,6 +370,7 @@ jobs:
       fetch-depth: ${{ inputs.fetch-depth }}
       database: ${{ inputs.database }}
       browsers: ${{ inputs.browsers }}
+      project-setup: ${{ inputs.project-setup }}
       push-probe: ${{ inputs.push-probe }}
       quality-pr-label: ${{ inputs.quality-pr-label }}
       app-slug: ${{ needs.mint.outputs.app-slug }}

@@ -38,7 +38,8 @@ import { calledFiles } from './helpers/called-workflow.js';
 
 const WF = '.github/workflows';
 type Step = { id?: string; name?: string; uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, unknown> };
-type Job = { uses?: string; permissions?: unknown; steps?: Step[] };
+type Step2 = Step & { if?: string };
+type Job = { uses?: string; permissions?: unknown; steps?: Step2[]; with?: Record<string, unknown> };
 type Workflow = { on?: { workflow_call?: { secrets?: Record<string, unknown> } }; permissions?: unknown; jobs?: Record<string, Job> };
 
 const read = (path: string) => parse(readFileSync(path, 'utf8')) as Workflow;
@@ -83,26 +84,57 @@ export const credentials = (wf: Workflow, job: Job): string[] => {
   return why;
 };
 
+/**
+ * THE SPINE IS JUDGED PER LANE (kanon#243). `lane-agent-job.yml` is one job every spine lane
+ * runs, with the lane's inputs; its hook steps run only when the lane leaves `project-setup`
+ * on. So it is read once per calling lane, as that lane runs it: a step gated on
+ * `inputs.project-setup` is dropped for a lane that passes `project-setup: false`. Any
+ * other `if` is kept, so a step is counted whenever it might run.
+ */
+const SPINE = 'agent-lane.yml';
+const SPINE_JOB = 'lane-agent-job.yml';
+export const asRunBy = (spineJob: Job, laneWith: Record<string, unknown>): Job => ({
+  ...spineJob,
+  steps: (spineJob.steps ?? []).filter((s) => !(laneWith['project-setup'] === false && /^\s*(\$\{\{\s*)?inputs\.project-setup(\s*\}\})?\s*$/.test(String(s.if ?? '')))),
+});
+
+const judge = (wf: Workflow, job: Job): string | undefined => {
+  const code = (job.steps ?? []).map(runsCodeUnderTest).find(Boolean);
+  const held = code ? credentials(wf, job) : [];
+  return held.length ? `${code}, and ${held.join('; ')}` : undefined;
+};
+
 /** `file:job` → why it breaks the rule, for every job that runs the code under test and holds a credential. */
-export const violations = (paths: string[]): Record<string, string> =>
-  Object.fromEntries(paths.flatMap((path) => {
+export const violations = (paths: string[]): Record<string, string> => {
+  const spineJobFile = paths.find((p) => basename(p) === SPINE_JOB);
+  const spineWf = spineJobFile ? read(spineJobFile) : undefined;
+  return Object.fromEntries(paths.flatMap((path) => {
+    if (basename(path) === SPINE_JOB) return [];
     const wf = read(path);
     return Object.entries(wf.jobs ?? {}).flatMap(([name, job]) => {
-      const code = (job.steps ?? []).map(runsCodeUnderTest).find(Boolean);
-      const held = code ? credentials(wf, job) : [];
-      return held.length ? [[`${basename(path)}:${name}`, `${code}, and ${held.join('; ')}`] as const] : [];
+      const why = job.uses === `$/.github/workflows/${SPINE}` && spineWf
+        ? judge(spineWf, asRunBy(Object.values(spineWf.jobs ?? {})[0]!, job.with ?? {}))
+        : judge(wf, job);
+      return why ? [[`${basename(path)}:${name}`, why] as const] : [];
     });
   }));
+};
 
+/**
+ * Each exception, with its reason. ACCEPTED is the Owner's decision of 2026-10-05 on kanon#243:
+ * the lane's agent must run the tests on what it pushes, with the token it pushes with, and the
+ * exposure is recorded on `K-AGENT-50` rather than closed. DEFAULT is the default branch's
+ * reviewed code, which the rule does not cover.
+ */
+const ACCEPTED = 'accepted by the Owner on kanon#243 (2026-10-05): the same App wrote the code it runs, with the same grant; recorded on K-AGENT-50 with its residual risk';
+const DEFAULT = 'checks out the triggering commit, the default branch\'s reviewed code, which this rule does not cover';
 const EXCEPTIONS: Record<string, string> = {
-  'lane-agent-job.yml:run':
-    'the spine: implement-revise and lead-revise check out the pull request\'s head and run its hook with the token persisted, and every spine lane\'s agent runs the tests on what it pushes. Waits on the Owner\'s decision (kanon#243)',
-  'rebase-agent-job.yml:resolve':
-    'the rebase lane\'s hook is the default branch\'s, but its agent checks out the pull request, merges and runs the gates with the token it pushes with. Waits on the Owner\'s decision (kanon#243)',
-  'lead-split-agent-job.yml:split':
-    'checks out the triggering commit, the default branch\'s reviewed code, which this rule does not cover',
-  'explore-agent-job.yml:explore':
-    'checks out the triggering commit, the default branch\'s reviewed code, which this rule does not cover',
+  'agent-implement-revise.yml:revise': ACCEPTED,
+  'rebase-agent-job.yml:resolve': ACCEPTED,
+  'agent-implement.yml:implement': DEFAULT,
+  'agent-triage.yml:triage-fix': DEFAULT,
+  'lead-split-agent-job.yml:split': DEFAULT,
+  'explore-agent-job.yml:explore': DEFAULT,
 };
 
 const PATHS = files(LANES);
@@ -116,7 +148,11 @@ describe('K-AGENT-50: no job that runs the code under test holds a write credent
     // It finds the code under test where it is known to run, credential or not.
     const running = PATHS.flatMap((p) => Object.entries(read(p).jobs ?? {})
       .filter(([, j]) => (j.steps ?? []).some(runsCodeUnderTest)).map(([n]) => `${basename(p)}:${n}`));
-    expect(running).toEqual(expect.arrayContaining(['agent-verify-acs.yml:criteria', ...Object.keys(EXCEPTIONS)]));
+    expect(running).toEqual(expect.arrayContaining(['agent-verify-acs.yml:criteria', 'lane-agent-job.yml:run', 'rebase-agent-job.yml:resolve']));
+    // Every spine lane is judged, the Lead's among them.
+    const spineLanes = PATHS.flatMap((p) => Object.entries(read(p).jobs ?? {})
+      .filter(([, j]) => j.uses === `$/.github/workflows/${SPINE}`).map(([n]) => `${basename(p)}:${n}`));
+    expect(spineLanes.sort()).toEqual(['agent-implement-revise.yml:revise', 'agent-implement.yml:implement', 'agent-lead-revise.yml:revise', 'agent-lead.yml:brief', 'agent-triage.yml:triage-fix']);
   });
 
   it('holds for every job but the named exceptions', () => {
@@ -142,6 +178,27 @@ describe('K-AGENT-50: no job that runs the code under test holds a write credent
       for (const s of (job.steps ?? []).filter((s) => String(s.uses ?? '').startsWith('actions/checkout@'))) {
         expect(s.with?.['persist-credentials']).toBe(false);
       }
+    }
+  });
+});
+
+describe('the Lead runs none of the tree\'s code (the Owner, 2026-10-05, kanon#243)', () => {
+  const spineWf = read(join(WF, SPINE_JOB));
+  const spineJob = Object.values(spineWf.jobs ?? {})[0]!;
+  for (const [file, job] of [['agent-lead.yml', 'brief'], ['agent-lead-revise.yml', 'revise']] as const) {
+    it(`${file} turns the spine's project setup off, so its job runs no hook beside the token`, () => {
+      const call = read(join(WF, file)).jobs![job]!;
+      expect(call.with?.['project-setup']).toBe(false);
+      expect(judge(spineWf, asRunBy(spineJob, call.with ?? {}))).toBeUndefined();
+      expect(Object.keys(violations(PATHS))).not.toContain(`${file}:${job}`);
+    });
+  }
+  it('the spine gates every hook step on the input, and the implement lanes leave it on', () => {
+    const gated = (spineJob.steps ?? []).filter((s) => /inputs\.project-setup/.test(String(s.if ?? '')));
+    expect(gated.map((s) => s.id)).toEqual(expect.arrayContaining(['hook', 'database', 'project']));
+    for (const s of (spineJob.steps ?? []).filter((x) => runsCodeUnderTest(x))) expect(s.if, String(s.uses)).toBe('inputs.project-setup');
+    for (const [file, job] of [['agent-implement.yml', 'implement'], ['agent-implement-revise.yml', 'revise'], ['agent-triage.yml', 'triage-fix']] as const) {
+      expect(read(join(WF, file)).jobs![job]!.with?.['project-setup'], file).toBeUndefined();
     }
   });
 });

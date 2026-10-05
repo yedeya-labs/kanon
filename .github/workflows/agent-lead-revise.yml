@@ -636,6 +636,10 @@ jobs:
       # spine's header) and leaves `DATABASE_URL` unset, as it was.
       database: false
       browsers: false
+      # NO PROJECT-SETUP HOOK (`K-AGENT-50`, kanon#243): the Lead runs none of the tree's code,
+      # so nothing is installed. On lead-revise the tree is the pull request's head, whose
+      # hook and install would otherwise run beside the Lead's token.
+      project-setup: false
       pr-number: ${{ needs.filter.outputs.pr }}
       # The retry breadcrumbs (RA-2519) are the spine's. The reader that acts on them for
       # this lane is the pipeline library's `brief-revise-recovery.mjs`.
@@ -649,6 +653,20 @@ jobs:
         push to this branch. Do NOT create a new branch, a new PR, or a new file,
         and do NOT re-author the brief from scratch — the review threads and the
         findings are attached to what is there, and rewriting discards them.
+
+        YOUR SHELL IS AN ALLOW-LIST (kanon#243). You run none of this repository's
+        code: nothing is installed, and no build, test, package script or interpreter
+        is allowed. You may write files only under `docs/`. Kanon's scripts are on
+        your PATH by name: `kanon-brief-guard`, `kanon-spec-ids` (with `--apply`) and
+        `kanon-spec-coverage`. Git: `git checkout`, `git switch`, `git add`,
+        `git commit`, `git push origin …` and `git fetch origin …`, plus read-only
+        git. `gh pr`, `gh issue`, `gh run`, `gh search` and `gh api` as named in your
+        flags. Every other command is refused, and so is a shell variable in a
+        command, so write every value literally. A count you would have measured with
+        a script, measure with Grep, Glob or a read-only command instead.
+
+        YOUR PROJECT'S INSTRUCTIONS ARE NOT LOADED FOR YOU. Read `CLAUDE.md` and
+        `AGENTS.md` at the repository root yourself, if they exist.
 
 
         VERIFY BEFORE YOU FIX. A reviewer can be wrong, and a finding you cannot
@@ -675,13 +693,30 @@ jobs:
         disputed and why, and what still needs the developer. (If you push and
         leave none, the workflow posts a stand-in that records the round and says
         nothing else (RA-1981) — a worse answer to the review than yours.)
+      # THE LEAD'S SHELL IS AN ALLOW-LIST THAT RUNS NO TREE CODE (`K-AGENT-50`, kanon#243, the
+      # Owner's decision of 2026-10-05), the way the Reviewer's is (`K-AGENT-24`, kanon#248):
+      # it writes only under `docs/`, runs Kanon's scripts by name (the spine puts them on the
+      # PATH when `project-setup` is off), commits and pushes to `origin` only, and calls
+      # named `gh` subcommands; every other command falls to Claude Code's read-only set.
+      # `git push`/`git fetch` are pinned to `origin`, whose transport ignores the
+      # `--receive-pack`/`--upload-pack` programs a local remote would run. `--setting-sources
+      # user` keeps the project's `.claude/` settings, hooks and MCP servers out (kanon#277).
+      # `tests/unit/lead-shell.test.ts` pins the list. COST CUTOVER: `config_fingerprint`
+      # hashes these flags, so this release starts a new fingerprint for this arm.
       claude_args: |
         --model claude-opus-5
         --effort high
         --max-turns 90
         --max-budget-usd 40
         --fallback-model claude-opus-5-5
-        --allowedTools Read,Edit,Write,Bash,Grep,Glob
+        --allowedTools Read,Grep,Glob
+        --allowedTools "Edit(/docs/**)"
+        --allowedTools "Bash(kanon-brief-guard:*)" "Bash(kanon-spec-ids:*)" "Bash(kanon-spec-coverage:*)"
+        --allowedTools "Bash(git checkout:*)" "Bash(git switch:*)" "Bash(git add:*)" "Bash(git commit:*)" "Bash(git push origin:*)" "Bash(git push -u origin:*)" "Bash(git fetch origin:*)"
+        --allowedTools "Bash(gh pr view:*)" "Bash(gh pr diff:*)" "Bash(gh pr checks:*)" "Bash(gh pr list:*)" "Bash(gh pr create:*)" "Bash(gh pr comment:*)" "Bash(gh pr edit:*)"
+        --allowedTools "Bash(gh issue view:*)" "Bash(gh issue list:*)" "Bash(gh issue comment:*)" "Bash(gh label list:*)"
+        --allowedTools "Bash(gh run view:*)" "Bash(gh run list:*)" "Bash(gh search:*)" "Bash(gh api:*)"
+        --setting-sources user
         --exclude-dynamic-system-prompt-sections
       # The App token's permissions, narrowed to what this lane's agent uses (`K-AGENT-46`).
       permission-contents: write

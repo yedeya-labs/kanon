@@ -273,7 +273,7 @@ describe('the criteria run in a job of its own, the agent in the token\'s (kanon
     expect(hookCall().with).toEqual({ lane: 'verify-acs', install: 'true', database: '${{ steps.database.outputs.database }}', browsers: 'true' });
   });
 
-  it('the agent\'s job relays what the criteria job concluded, then receives the token immediately before the agent', () => {
+  it('the agent\'s job relays what the criteria job concluded, then receives the token just before the agent', () => {
     const order = [
       idx(steps, (s) => s.uses?.startsWith('actions/checkout') ?? false),
       idx(steps, (s) => s.id === 'hook'),
@@ -286,7 +286,10 @@ describe('the criteria run in a job of its own, the agent in the token\'s (kanon
     ];
     expect(order.every((i) => i >= 0), JSON.stringify(order)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    expect(call('agent-run') - idx(steps, (s) => s.id === 'app-token')).toBe(1);
+    // Between the token and the agent, only Kanon's own label step (`K-WORK-12`, #309): nothing
+    // of the tree's.
+    const between = steps.slice(idx(steps, (s) => s.id === 'app-token') + 1, call('agent-run'));
+    expect(between.map((s) => s.name)).toEqual(["Create the lane's labels the repository lacks"]);
     expect(handedIn(FILE, 'verify', 'criteria')).toBe('${{ needs.criteria.result }}');
     expect(handedIn(FILE, 'verify', 'hook')).toBe('${{ needs.criteria.outputs.hook }}');
     expect(wf.jobs.verify!.if).toMatch(/!cancelled\(\)/);

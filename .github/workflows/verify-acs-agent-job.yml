@@ -5,7 +5,7 @@
 #
 # CALLED ONLY BY `verify-acs-run.yml`, beside the job that mints this lane's token. The App's private
 # key never enters this job (`K-AGENT-49`): the token arrives hex-encoded as the `app-token`
-# secret, `Receive the App token` decodes it immediately before the agent, and `Revoke the App
+# secret, `Receive the App token` decodes it after the criteria job's report is downloaded, and `Revoke the App
 # token` is the last step.
 #
 # NO CODE UNDER TEST RUNS HERE (`K-AGENT-50`, kanon#243). The project-setup hook, the test
@@ -127,7 +127,7 @@ jobs:
       # THE AGENT-LANE BLOCKS, CALLED DIRECTLY (RA-2661), as `$/` references (RA-2697): read from
       # the commit that defined this workflow, never from the ref checked out above.
       # `app-slug` IS EMPTY ON PURPOSE: the block reads it only for the push probe, and this
-      # lane makes none — so its App token is received immediately before the agent.
+      # lane makes none — so its App token is received just before the agent.
       - uses: $/actions/agent-setup
         id: setup
         with:
