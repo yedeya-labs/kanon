@@ -58,6 +58,7 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { THRESHOLD, countInterlock } from './capability-interlock.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { beforeApply } from './lib/labels.mjs';
 
 /** The report the agent writes, at the repository root. */
 export const REPORT = 'qa-overseer-audit.json';
@@ -297,7 +298,10 @@ if (IS_CLI) {
     process.exit(2);
   }
   /** @type {Gh} */
-  const gh = (args, input) => execFileSync('gh', args, { encoding: 'utf8', input, maxBuffer: 64 * 1024 * 1024 });
+  const gh = (args, input) => {
+    beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
+    return execFileSync('gh', args, { encoding: 'utf8', input, maxBuffer: 64 * 1024 * 1024 });
+  };
   process.exitCode = fileAudit({
     repo: process.env.GITHUB_REPOSITORY,
     text: (() => { const at = process.env.REPORT_PATH || REPORT; return existsSync(at) ? readFileSync(at, 'utf8') : null; })(),

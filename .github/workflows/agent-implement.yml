@@ -92,6 +92,7 @@ jobs:
     with:
       agent: implementer
       lane: implement
+      labels: agent:implement review:please
       arm: implementer agent
       # WALL-CLOCK CEILING — 180 since RA-2212, raised from 120 when the turn cap doubled.
       #

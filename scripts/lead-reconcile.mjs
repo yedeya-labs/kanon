@@ -63,6 +63,7 @@ import {
 import { appLogin } from './app-register.mjs';
 import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/reference-deploy.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { beforeApply, taxonomyLabel } from './lib/labels.mjs';
 export {
   VERIFY, briefIssues, carriedOut, declaresMembership, dependsField, gatesClosure, inDecomposition, isPhase5Finding,
   isProjectWork, itemSatisfied, openGatingWork, parseProposed, satisfiedTitles,
@@ -254,6 +255,7 @@ export const isTransient = (cause) => TRANSIENT_GH.test(String(cause ?? ''));
 
 function gh(args) {
   try {
+    beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
     return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
   } catch (err) {
     // RE-THROWN WITH THE CAUSE ON THE FIRST LINE (RA-1284), so every existing caller —
@@ -460,8 +462,10 @@ export function mirrorLabels(world, plan, { run = gh } = {}) {
   if (plan.create) {
     try {
       // `--force` makes it idempotent: a label created since `repoLabels` read is updated.
-      run(['label', 'create', plan.label, '--repo', REPO, '--force', '--color', 'BFD4F2',
-        '--description', `Project #${world.project} — mirrors the qa:project marker (RA-1783)`]);
+      // The taxonomy's colour and description (`K-WORK-12`, rulebook/labels.json).
+      const t = taxonomyLabel(plan.label);
+      if (!t) throw new Error(`${plan.label} is not a project label the taxonomy can fill in`);
+      run(['label', 'create', plan.label, '--repo', REPO, '--force', '--color', t.color, '--description', t.description]);
       ready = true;
     } catch (err) {
       warn(`project #${world.project}: could not create \`${plan.label}\` — ${ghCause(err)}`);

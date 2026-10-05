@@ -53,6 +53,7 @@
 import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { beforeApply } from './lib/labels.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -144,6 +145,7 @@ const BAD = new Set(['failure', 'timed_out', 'startup_failure']);
 const warn = (m) => console.log(`::warning title=workflow-health::${m}`);
 
 function gh(args) {
+  beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
   return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
 }
 const ghJson = (args) => JSON.parse(gh(args));

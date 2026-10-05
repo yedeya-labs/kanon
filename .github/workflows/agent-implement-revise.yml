@@ -558,6 +558,7 @@ jobs:
     with:
       agent: implementer-revise
       lane: implement-revise
+      labels: agent:revise
       arm: implementer (revise) agent
       timeout-minutes: 180
       # The PR's own branch, with history: the agent pushes to it and merges `main` into

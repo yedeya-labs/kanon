@@ -536,6 +536,18 @@ jobs:
             echo "app-slug=$APP_SLUG"
           } >> "$GITHUB_OUTPUT"
 
+      # CREATE-BEFORE-APPLY (plan 0005 §5.3, `K-WORK-12`): each label this lane's agent may
+      # apply and the repository lacks is created first, with the taxonomy's colour and
+      # description, on the agent's own token. A name outside `rulebook/labels.json` fails
+      # here by name; an unreadable list or a failed create only warns.
+      - name: Create the lane's labels the repository lacks
+        if: steps.claim.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          KANON: ${{ steps.kanon.outputs.path }}
+        run: node "$KANON/scripts/ensure-labels.mjs" agent:triage agent:implement agent:reviewer qa:needs-severity sev:critical sev:high sev:medium sev:low follow-up review:please gate-candidate
+
       # `continue-on-error` + an EXPLICIT outcome step below (RA-1351), the shape RA-846
       # established on the audit arm. The durable artifact here is A REVIEW EVENT ON
       # THIS SHA, and until now nothing asked whether one exists.
