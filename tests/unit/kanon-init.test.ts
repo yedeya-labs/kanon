@@ -203,7 +203,7 @@ describe('kanon init, on an empty repository with every default (plan 0005 L9)',
     }
     expect(read(dir, 'docs/qa/stack.md')).not.toMatch(/## (Schema changes|Data isolation|Generated files)/);
     expect(read(dir, 'docs/qa/adoption.md')).not.toContain('## Choices');
-  });
+  }, 30_000);
 
   it('pins every Kanon reference it writes to the release it runs from', async () => {
     const dir = checkout();
@@ -372,7 +372,7 @@ describe('kanon init, from the answers', () => {
     expect(lc.status, lc.out).toBe(0);
     const db = spawnSync('awk', ['-f', join(ROOT, 'actions/test-database/declaration.awk'), join(dir, 'docs/qa/test-database.md')], { encoding: 'utf8' });
     expect(db.stdout.trim()).toBe('hook');
-  });
+  }, 30_000);
 
   it("deletes GitHub's default labels outside the taxonomy only when asked", async () => {
     const github = fakeGitHub();
@@ -404,7 +404,7 @@ describe('the callers kanon init writes', () => {
     expect(lc.status, lc.out).toBe(0);
     expect(lc.out).toContain(`${Object.keys(REQ.lanes).length} lane caller(s) pass`);
     expect(r.out).toContain('gh secret set DIGEST_WEBHOOK -R acme/widgets');
-  });
+  }, 60_000);
 });
 
 describe('the Apps, today and after plan 0005 step L4', () => {

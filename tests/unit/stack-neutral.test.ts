@@ -365,6 +365,9 @@ const ALLOWED: Array<{ file: string; needle: string; why: string }> = [
   { file: 'scripts/spec-coverage.mjs', needle: "e !== 'node_modules'", why: "the walk outside a git repository skips a Node dependency tree, as git's ignore list would; on another stack it matches nothing" },
   { file: 'scripts/lib/test-conventions.mjs', needle: "bin: 'node_modules/.bin/vitest'", why: "the JavaScript row's runner, as the project-setup hook installs it; a Python or Go project never reaches it (#20)" },
   { file: 'scripts/lib/test-conventions.mjs', needle: "bin: 'node_modules/.bin/playwright'", why: '#20, as above' },
+  { file: 'cli/callers.mjs', needle: "new URL('../package.json', import.meta.url)", why: "Kanon's own manifest, read for the release `kanon init` pins: not the adopter's" },
+  { file: 'cli/init.mjs', needle: "const pkg = read('package.json');", why: "`kanon init` suggests gates from what the repository holds, an npm project's scripts beside a Makefile's, Cargo's and Go's; the adopter accepts or edits the suggestion (plan 0005 §5.2)" },
+  { file: 'cli/init.mjs', needle: "gates.push(s === 'test' ? 'npm test'", why: 'the same suggestion, only for a repository that has a package.json' },
   { file: 'rulebook/10-adoption.md', needle: 'may have no `package.json` to hold a version', why: "K-ADOPT-11's Why for the guard row: the reason a guard is not a package" },
   { file: 'rulebook/00-principles.md', needle: 'guards need no `package.json`, package manager', why: 'states that the guards need none, and that the lane prompts read the project\'s commands from its stack document' },
 ];
