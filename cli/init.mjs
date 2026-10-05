@@ -688,7 +688,9 @@ const run = async (deps, opts, req) => {
 
   // 2. Ask.
   /** @type {string[]} */
-  const installed = Object.keys(req.lanes).filter((l) => read(`.github/workflows/${l}.yml`) !== null);
+  // A lane counts as installed when its caller calls it, not when a file has its name: in
+  // Kanon's own tree that path holds the lane itself.
+  const installed = Object.keys(req.lanes).filter((l) => (read(`.github/workflows/${l}.yml`) ?? '').includes(`uses: yedeya-labs/kanon/.github/workflows/${l}.yml@`));
   const gitName = deps.git(['-C', root, 'config', 'user.name']).stdout.trim();
   const gitEmail = deps.git(['-C', root, 'config', 'user.email']).stdout.trim();
   out('');
@@ -710,6 +712,12 @@ const run = async (deps, opts, req) => {
     const have = read(rel);
     if (have === text) {
       out(`${rel}: already as init writes it.`);
+      continue;
+    }
+    if (have !== null && (rel.startsWith('docs/') || rel === req.hook.path)) {
+      // A declaration, or the project-setup hook, is the project's once it exists: init never
+      // rewrites one, and its content is the project's to say, so no difference is printed.
+      out(`${rel}: exists, and is the project's; left unchanged.`);
       continue;
     }
     if (have !== null) {
@@ -816,7 +824,10 @@ const run = async (deps, opts, req) => {
   else {
     const argvApps = ['--owner', s.owner, '--repo', repoName, ...appsArgs(missing, req), '--dir', root];
     const cmd = `kanon apps ${argvApps.join(' ')}`;
-    if (dry) changed.push(`Would run: ${cmd}`);
+    if (dry) {
+      out(`Would run: ${cmd}`);
+      changed.push(`Would run: ${cmd}`);
+    }
     else if (!opts.apps || !/^y/i.test(opts.yes ? 'y' : await deps.ask(`Create the Apps for ${missing.join(', ')} now? It opens your browser for each. (y/n)`, 'y'))) {
       manual.push([`Create the Apps the lanes run as, from this checkout, and commit the register rows it writes:`, cmd]);
     } else {

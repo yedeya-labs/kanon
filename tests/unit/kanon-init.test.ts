@@ -343,13 +343,24 @@ describe('kanon init, safely', () => {
     expect(github.calls).toEqual([]);
   });
 
-  it('never overwrites a file it finds, and names how it differs', async () => {
+  it("never overwrites a file it finds: keeps the project's declarations, and names how a caller differs", async () => {
     const mine = '# Stack\n\n## Gates\n\n1. `make check`\n';
-    const dir = checkout({ 'docs/qa/stack.md': mine });
+    const caller = 'name: Review (Reviewer)\n';
+    const dir = checkout({ 'docs/qa/stack.md': mine, '.github/workflows/agent-review.yml': caller });
     const r = await run(dir, fakeGitHub());
     expect(read(dir, 'docs/qa/stack.md')).toBe(mine);
-    expect(r.out).toContain('docs/qa/stack.md: exists and differs from what init would write; left unchanged.');
-    expect(r.out).toContain('    - 1. `make check`');
+    expect(read(dir, '.github/workflows/agent-review.yml')).toBe(caller);
+    expect(r.out).toContain("docs/qa/stack.md: exists, and is the project's; left unchanged.");
+    expect(r.out).toContain('.github/workflows/agent-review.yml: exists and differs from what init would write; left unchanged.');
+    expect(r.out).toMatch(/^ {4}\+ jobs:$/m);
+  });
+
+  it('offers the lanes whose callers already call them as the default, not a file that only has the name', async () => {
+    const implement = 'name: Implement\njobs:\n  implement:\n    uses: yedeya-labs/kanon/.github/workflows/agent-implement.yml@v0.1.0\n';
+    const dir = checkout({ '.github/workflows/agent-implement.yml': implement, '.github/workflows/agent-triage.yml': 'name: my own triage\n' });
+    const r = await run(dir, fakeGitHub());
+    expect(r.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--roles', 'implementer', '--dir', expect.any(String)]]);
+    expect(existsSync(join(dir, '.github/workflows/agent-review.yml'))).toBe(false);
   });
 
   it('writes lane-check beside a CI the project already has, reading its name for the review trigger', async () => {
