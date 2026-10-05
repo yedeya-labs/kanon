@@ -58,7 +58,8 @@ const EXEMPT = new Set([
   '.github/workflows/lane-agent-job.yml: ./.github/actions/project-setup',
   '.github/workflows/lead-split-agent-job.yml: ./.github/actions/project-setup',
   '.github/workflows/rebase-agent-job.yml: ./.github/actions/project-setup',
-  '.github/workflows/verify-acs-agent-job.yml: ./.github/actions/project-setup',
+  // verify-acs runs the hook in its `criteria` job, which holds no token (kanon#243).
+  '.github/workflows/agent-verify-acs.yml: ./.github/actions/project-setup',
   '.github/workflows/dco.yml: yedeya-labs/kanon/actions/dco@vX.Y.Z',
   '.github/workflows/pr-title.yml: yedeya-labs/kanon/actions/pr-title@vX.Y.Z',
   '.github/workflows/review.yml: yedeya-labs/kanon/.github/workflows/agent-review.yml@vX.Y.Z',

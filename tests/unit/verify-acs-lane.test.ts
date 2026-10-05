@@ -8,7 +8,7 @@ import { runWorkflowStep, agentPrompt, type WorkflowStep } from './helpers/workf
 import { effectiveSteps, laneBlockOf, stepsAsRun } from './helpers/spine.js';
 import { LANE_BLOCKS, STAGE_BLOCKS, laneBlockPath } from './helpers/agent-lanes.mjs';
 import { FINDING_ANCHOR } from '../../scripts/project-closure.mjs';
-import { readFlattened, workflowText } from './helpers/called-workflow.js';
+import { handedIn, readFlattened, workflowText } from './helpers/called-workflow.js';
 import { callerInputs } from './helpers/smoke-group.js';
 
 /**
@@ -27,18 +27,23 @@ type Wf = {
   on: { workflow_call: { inputs: Record<string, { required?: boolean; type?: string }>; secrets: Record<string, { required?: boolean }> } };
   concurrency: { group: string; 'cancel-in-progress': boolean };
   permissions: Record<string, string>;
-  jobs: Record<string, { if?: string; needs?: string; uses?: string; outputs?: Record<string, string>; services?: { postgres?: unknown }; env?: Record<string, string>; steps: Step[] }>;
+  jobs: Record<string, { if?: string; needs?: string | string[]; uses?: string; outputs?: Record<string, string>; services?: { postgres?: unknown }; env?: Record<string, string>; permissions?: Record<string, string>; steps: Step[] }>;
 };
 const FILE = join(process.cwd(), '.github/workflows/agent-verify-acs.yml');
 const raw = workflowText(FILE);
+/** The lane file alone, without the agent's job it calls. */
+const laneRaw = readFileSync(FILE, 'utf8');
 const wf = readFlattened(FILE) as Wf;
+/** The agent's job (kanon#279), which since kanon#243 runs none of the code under test. */
 const steps: Step[] = wf.jobs.verify!.steps;
+/** The lane's `criteria` job (kanon#243): the hook, the database and the criteria, with no token. */
+const crit: Step[] = wf.jobs.criteria!.steps;
 // THROUGH THE BLOCKS (RA-2661): the job calls `agent-run`, so the prompt is read off the
 // claude-code-action step as the job RUNS it, with the call's literal inputs substituted.
 const prompt: string = agentPrompt(effectiveSteps(steps));
 const flat = prompt.replace(/\s+/g, ' ');
 const step = (needle: string): Step =>
-  steps.find((s) => s.name?.includes(needle) || s.uses?.includes(needle) || s.run?.includes(needle))!;
+  [...crit, ...steps].find((s) => s.name?.includes(needle) || s.uses?.includes(needle) || s.run?.includes(needle))!;
 
 describe('a Kanon lane, called by a trigger-only caller', () => {
   it('is a reusable workflow taking the dispatch inputs as optional strings, and the Explorer’s secrets by their fixed names', () => {
@@ -58,16 +63,18 @@ describe('a Kanon lane, called by a trigger-only caller', () => {
     expect(String(filter.if)).toContain("github.event.label.name == 'qa:verify'");
     expect(filter.steps.map((s) => s.uses ?? s.id)).toEqual(['$/actions/kanon-path', 'gate']);
     expect(filter.outputs?.member).toBe('${{ steps.gate.outputs.member }}');
-    expect(wf.jobs.verify!.needs).toBe('filter');
-    expect(wf.jobs.verify!.if).toBe("needs.filter.outputs.member == 'true'");
+    expect(wf.jobs.criteria!.needs).toBe('filter');
+    expect(wf.jobs.criteria!.if).toBe("needs.filter.outputs.member == 'true'");
+    expect(wf.jobs.verify!.needs).toEqual(['filter', 'criteria']);
+    expect(wf.jobs.verify!.if).toContain("needs.filter.outputs.member == 'true'");
   });
 
   it('runs Kanon’s producer from the action cache, never the checkout', () => {
-    const at = steps.findIndex((s) => s.uses === '$/actions/kanon-path');
-    const run = steps.findIndex((s) => s.name?.includes('Resolve and run'));
+    const at = crit.findIndex((s) => s.uses === '$/actions/kanon-path');
+    const run = crit.findIndex((s) => s.name?.includes('Resolve and run'));
     expect(at).toBeGreaterThanOrEqual(0);
     expect(at).toBeLessThan(run);
-    expect(steps[run]!.run).toContain('node "$KANON/scripts/verify-acs.mjs"');
+    expect(crit[run]!.run).toContain('node "$KANON/scripts/verify-acs.mjs"');
     expect(raw).not.toMatch(/node (\.\/)?scripts\/|\.kanon\/scripts/);
   });
 });
@@ -77,11 +84,21 @@ describe('what it verifies, and at which ref', () => {
     // Verifying a tag's code against a newer brief's criteria would judge a release by
     // acceptance criteria it never had. The ref comes from `resolve`, authoritative for
     // BOTH triggers (RA-1281).
-    const checkout = steps.find((s) => s.uses?.startsWith('actions/checkout'))!;
+    const checkout = crit.find((s) => s.uses?.startsWith('actions/checkout'))!;
     expect(String(checkout.with?.ref)).toContain('steps.resolve.outputs.ref');
-    const resolve = steps.findIndex((s) => s.id === 'resolve');
+    const resolve = crit.findIndex((s) => s.id === 'resolve');
     expect(resolve).toBeGreaterThanOrEqual(0);
-    expect(resolve).toBeLessThan(steps.findIndex((s) => s.uses?.startsWith('actions/checkout')));
+    expect(resolve).toBeLessThan(crit.findIndex((s) => s.uses?.startsWith('actions/checkout')));
+  });
+
+  it('hands the agent the commit the criteria ran against, by SHA, and checks it out with no credential', () => {
+    // A tag moved between the two jobs must not change what the agent reads (kanon#243).
+    expect(wf.jobs.criteria!.outputs?.sha).toBe('${{ steps.checkout.outputs.commit }}');
+    expect(crit.find((s) => s.uses?.startsWith('actions/checkout'))!.id).toBe('checkout');
+    expect(handedIn(FILE, 'verify', 'sha')).toBe('${{ needs.criteria.outputs.sha }}');
+    const checkout = steps.find((s) => s.uses?.startsWith('actions/checkout'))!;
+    expect(checkout.with).toEqual({ ref: '${{ inputs.sha }}', 'fetch-depth': 0, 'persist-credentials': false });
+    expect(crit.find((s) => s.uses?.startsWith('actions/checkout'))!.with?.['persist-credentials']).toBe(false);
   });
 
   it('prints the tag ONCE when there is one, and says so when there is not', () => {
@@ -118,7 +135,15 @@ describe('the artifact is the contract', () => {
     expect(guard).toMatch(/NOT 'no criteria to verify'/);
   });
   it('uploads it with if-no-files-found: error', () => {
-    expect(steps.find((s) => s.uses?.startsWith('actions/upload-artifact'))!.with?.['if-no-files-found']).toBe('error');
+    expect(crit.find((s) => s.uses?.startsWith('actions/upload-artifact'))!.with?.['if-no-files-found']).toBe('error');
+  });
+  it('and the agent\'s job downloads exactly that artifact, for the resolved project', () => {
+    const up = crit.find((s) => s.uses?.startsWith('actions/upload-artifact'))!;
+    const down = steps.find((s) => s.uses?.startsWith('actions/download-artifact'))!;
+    expect(up.with?.name).toBe('qa-verify-acs-${{ steps.resolve.outputs.project }}');
+    expect(down.with).toEqual({ name: 'qa-verify-acs-${{ inputs.project }}' });
+    expect(handedIn(FILE, 'verify', 'project')).toBe('${{ needs.criteria.outputs.project }}');
+    expect(wf.jobs.criteria!.outputs?.project).toBe('${{ steps.resolve.outputs.project }}');
   });
   it('runs the producer with --run and --json, not resolution only', () => {
     expect(step('Resolve and run').run).toContain('--run');
@@ -132,7 +157,9 @@ describe('the prompt', () => {
     expect(flat).toMatch(/`unverifiable` and `not-run` are NOT findings against the project/);
   });
   it('requires the project marker, from the RESOLVED project, as the LAST line', () => {
-    expect(prompt).toContain('<!-- qa:project ${{ steps.resolve.outputs.project }} -->');
+    // The agent's job's `project` is the criteria job's resolved one (kanon#243), never the lane's input.
+    expect(prompt).toContain('<!-- qa:project ${{ inputs.project }} -->');
+    expect(handedIn(FILE, 'verify', 'project')).toBe('${{ needs.criteria.outputs.project }}');
     expect(flat).toMatch(/must be the LAST non-empty line/);
     expect(flat).toMatch(/merely QUOTES it is not a member/);
   });
@@ -177,68 +204,116 @@ describe('scope and cost', () => {
 
 describe('nothing reads inputs.project on the label route (RA-1285)', () => {
   it('leaves only the uses that are correct by design', () => {
-    const uses = raw.split('\n')
+    // The LANE's inputs, which are empty on a label event. The agent's job's `project` is a
+    // different value: the criteria job's resolved one, handed through (kanon#243).
+    const uses = laneRaw.split('\n')
       .map((line, i) => [i + 1, line] as const)
       .filter(([, line]) => /inputs\.(project|ref)/.test(line) && !line.trim().startsWith('#'));
-    // 1. `concurrency.group`, evaluated before any step runs; 2/3. the `resolve` step's own env;
-    // 4-7. the lane's call and `verify-acs-run.yml` handing both inputs on to the agent's job
-    // unchanged (kanon#279), which `resolve` then reads. A pass-through is a `with:` line only.
-    const allowed = /concurrency|group:|DISPATCH_PROJECT|DISPATCH_REF|^\s*(project|ref): \$\{\{ inputs\.(project|ref) \}\}$/;
+    // 1. `concurrency.group`, evaluated before any step runs; 2/3. the `resolve` step's own env.
+    const allowed = /concurrency|group:|DISPATCH_PROJECT|DISPATCH_REF/;
     expect(uses.filter(([, line]) => !allowed.test(line)).map(([n, l]) => `${n}: ${l.trim()}`), 'must use steps.resolve.outputs').toEqual([]);
-    expect(uses.length, 'and the seven legitimate uses must still be there').toBe(7);
+    expect(uses.length, 'and the three legitimate uses must still be there').toBe(3);
   });
   it('the project marker is stamped from the resolved value', () => {
-    expect(raw).toContain('<!-- qa:project ${{ steps.resolve.outputs.project }} -->');
-    expect(raw).not.toContain('<!-- qa:project ${{ inputs.project }} -->');
+    expect(raw).toContain('<!-- qa:project ${{ inputs.project }} -->');
+    expect(laneRaw).not.toContain('<!-- qa:project');
+    expect(handedIn(FILE, 'verify', 'project')).toBe('${{ needs.criteria.outputs.project }}');
   });
 });
 
 /**
- * RA-2661 — the lane keeps its own job and calls the agent-lane blocks around its own steps:
- * the criteria run and the agent share ONE workspace and ONE database.
+ * kanon#243 — the code under test runs in the lane's `criteria` job, which holds no token, and
+ * the agent's job, which receives the Explorer's token, runs none of it. Until then the two
+ * shared one job (RA-2661), with the token received after the criteria; inside one job step
+ * order is no boundary (`K-AGENT-49`'s Why). `pr-code-token-isolation.test.ts` holds the rule
+ * across every lane; this holds the lane's own shape.
  */
-describe('the criteria run shares the agent’s job, workspace and database (RA-2661)', () => {
-  const idx = (pred: (s: Step) => boolean) => steps.findIndex(pred);
-  const call = (block: string) => idx((s) => laneBlockOf(s) === block);
-  const named = (needle: string) => idx((s) => String(s.name ?? '').includes(needle));
-  const restore = () => steps[named('Put the ref under test back exactly as it is')]!;
-  const hookCall = () => steps[idx((s) => s.uses === './.github/actions/project-setup')]!;
-  const hookLoad = () => steps[named('Load the project-setup hook from the commit that defined this lane')]!;
+describe('the criteria run in a job of its own, the agent in the token\'s (kanon#243)', () => {
+  const idx = (list: Step[], pred: (s: Step) => boolean) => list.findIndex(pred);
+  const call = (block: string) => idx(steps, (s) => laneBlockOf(s) === block);
+  const named = (list: Step[], needle: string) => idx(list, (s) => String(s.name ?? '').includes(needle));
+  const restore = () => crit[named(crit, 'Put the ref under test back exactly as it is')]!;
+  const hookCall = () => crit[idx(crit, (s) => s.uses === './.github/actions/project-setup')]!;
+  const hookLoad = () => crit[named(crit, 'Load the project-setup hook from the commit that defined this lane')]!;
 
-  it('is one job that runs its own steps, never a caller of the spine', () => {
-    expect(Object.keys(wf.jobs)).toEqual(['filter', 'verify']);
-    expect(wf.jobs.verify!.uses).toBeUndefined();
+  it('is a criteria job and the agent\'s job, and only the agent\'s calls the blocks', () => {
+    expect(Object.keys(wf.jobs)).toEqual(['filter', 'criteria', 'verify']);
+    expect(wf.jobs.criteria!.uses).toBeUndefined();
     // The database is the project's declaration (kanon#18), started by a step, never a service.
-    expect(wf.jobs.verify!.services).toBeUndefined();
-    expect(wf.jobs.verify!.env?.DATABASE_URL).toBeUndefined();
+    for (const j of [wf.jobs.criteria!, wf.jobs.verify!]) {
+      expect(j.services).toBeUndefined();
+      expect(j.env?.DATABASE_URL).toBeUndefined();
+    }
     expect(steps.filter((s) => laneBlockOf(s)).map((s) => laneBlockOf(s))).toEqual([...STAGE_BLOCKS]);
+    expect(crit.filter((s) => laneBlockOf(s))).toEqual([]);
   });
 
-  it('runs the criteria, checks and uploads the artifact, and mints the App — in that order, between setup and the agent', () => {
+  it('the criteria job loads the hook, sets up, runs the criteria, checks and uploads the report — in that order', () => {
     // The hook runs whatever the adopter's hook runs; Kanon only passes it the switches.
     expect(stepsAsRun([hookCall()]).length).toBeGreaterThan(0);
     const order = [
-      steps.indexOf(hookLoad()),
-      steps.indexOf(hookCall()),
+      crit.indexOf(hookLoad()),
+      idx(crit, (s) => s.uses === '$/actions/test-database'),
+      crit.indexOf(hookCall()),
+      named(crit, 'Put the ref under test back exactly as it is'),
+      named(crit, 'Resolve and run the project\'s acceptance criteria'),
+      named(crit, 'The artifact must exist'),
+      idx(crit, (s) => String(s.uses).startsWith('actions/upload-artifact')),
+      named(crit, 'Put the project-setup hook back for its post steps'),
+    ];
+    expect(order.every((i) => i >= 0), JSON.stringify(order)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(order.at(-1)).toBe(crit.length - 1);
+  });
+
+  it('the criteria job is handed nothing: no secret, no token to its hook, a read-only grant', () => {
+    const lane = parse(readFileSync(FILE, 'utf8')) as { jobs: Record<string, unknown> };
+    expect(JSON.stringify(lane.jobs.criteria)).not.toMatch(/secrets\s*[.[]|app-token/);
+    expect(wf.jobs.criteria!.permissions).toEqual({ contents: 'read', issues: 'read' });
+    expect(hookCall().with).toEqual({ lane: 'verify-acs', install: 'true', database: '${{ steps.database.outputs.database }}', browsers: 'true' });
+  });
+
+  it('the agent\'s job relays what the criteria job concluded, then receives the token immediately before the agent', () => {
+    const order = [
+      idx(steps, (s) => s.uses?.startsWith('actions/checkout') ?? false),
+      idx(steps, (s) => s.id === 'hook'),
+      named(steps, 'The criteria job wrote its artifact'),
       call('agent-setup'),
-      named('Put the ref under test back exactly as it is'),
-      named('Resolve and run the project\'s acceptance criteria'),
-      named('The artifact must exist'),
-      idx((s) => String(s.uses).startsWith('actions/upload-artifact')),
-      idx((s) => s.id === 'app-token'),
+      idx(steps, (s) => String(s.uses).startsWith('actions/download-artifact')),
+      idx(steps, (s) => s.id === 'app-token'),
       call('agent-run'),
       call('agent-finish'),
     ];
     expect(order.every((i) => i >= 0), JSON.stringify(order)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(call('agent-run') - idx(steps, (s) => s.id === 'app-token')).toBe(1);
+    expect(handedIn(FILE, 'verify', 'criteria')).toBe('${{ needs.criteria.result }}');
+    expect(handedIn(FILE, 'verify', 'hook')).toBe('${{ needs.criteria.outputs.hook }}');
+    expect(wf.jobs.verify!.if).toMatch(/!cancelled\(\)/);
   });
 
-  it('keeps the App identity where it was: minted after the criteria run, immediately before the agent', () => {
+  it('a failed criteria job starts no agent, and says which stage failed', () => {
+    const relay = steps.find((s) => s.id === 'hook')!;
+    const artifact = steps[named(steps, 'The criteria job wrote its artifact')]!;
+    for (const [s, env, ok, bad] of [
+      [relay, 'HOOK', 'success', 'failure'],
+      [artifact, 'CRITERIA', 'success', 'failure'],
+    ] as const) {
+      expect(s.if).toBeUndefined();
+      expect(runWorkflowStep(s, { env: { [env]: ok } }).status).toBe(0);
+      const r = runWorkflowStep(s, { env: { [env]: bad } });
+      expect(r.status).not.toBe(0);
+      expect(r.output).toContain('the agent was not started');
+    }
+    expect(runWorkflowStep(relay, { env: { HOOK: 'failure', KANON_ERROR: 'hook_missing' } }).outputs['kanon-error']).toBe('hook_missing');
+    const finish = steps[call('agent-finish')]!;
+    expect(String(finish.with?.stages)).toContain('hook=${{ steps.hook.conclusion }}');
+  });
+
+  it('keeps the App identity: the Explorer\'s, received for the agent alone', () => {
     // `role` names the Explorer for its persona header (plan 0005 §3.3); it reads no identity.
     expect(steps[call('agent-setup')]!.with).toEqual({ arm: 'acceptance-criteria agent', 'app-slug': '', role: 'Explorer' });
-    expect(hookCall().with).toEqual({ lane: 'verify-acs', install: 'true', database: '${{ steps.database.outputs.database }}', browsers: 'true' });
-    // Received where it was minted (kanon#279): the Explorer's App, minted by the lane's call.
-    const receive = steps[idx((s) => s.id === 'app-token')]!;
+    const receive = steps[idx(steps, (s) => s.id === 'app-token')]!;
     expect(receive.name).toBe('Receive the App token');
     const laneCall = (parse(readFileSync(FILE, 'utf8')) as { jobs: Record<string, { secrets?: Record<string, string> }> }).jobs.verify!;
     expect(laneCall.secrets?.['app-id']).toBe('${{ secrets.EXPLORER_APP_ID }}');
@@ -246,13 +321,13 @@ describe('the criteria run shares the agent’s job, workspace and database (RA-
     expect(steps[call('agent-run')]!.with?.['github-token']).toBe('${{ steps.app-token.outputs.token }}');
   });
 
-  it('puts the ref under test back before verifying it, and puts nothing in the tree for the agent', () => {
+  it('puts the ref under test back before verifying it, and puts nothing in the tree after', () => {
     expect(restore().if).toBeUndefined();
     expect(restore().env).toBeUndefined();
     expect(restore().run).toBe('git restore --source=HEAD --staged --worktree -- .github/actions/project-setup');
-    expect(steps.indexOf(restore())).toBeGreaterThan(call('agent-setup'));
-    expect(steps.indexOf(restore())).toBeLessThan(named('Resolve and run the project\'s acceptance criteria'));
-    const between = steps.slice(steps.indexOf(restore()) + 1, call('agent-run'));
+    expect(crit.indexOf(restore())).toBeGreaterThan(crit.indexOf(hookCall()));
+    expect(crit.indexOf(restore())).toBeLessThan(named(crit, 'Resolve and run the project\'s acceptance criteria'));
+    const between = crit.slice(crit.indexOf(restore()) + 1, named(crit, 'Put the project-setup hook back for its post steps'));
     expect(between.filter((s) => /\.github\//.test(String(s.run ?? ''))).map((s) => s.name)).toEqual([]);
     // The hook's load is the hook's own, from `github.sha` — in a called workflow the
     // CALLER's commit — and the blocks are Kanon's, through `$/`.
@@ -315,7 +390,7 @@ describe('the criteria run shares the agent’s job, workspace and database (RA-
     });
     afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-    const putBack = () => steps.find((s) => s.name === 'Put the project-setup hook back for its post steps')!;
+    const putBack = () => crit.find((s) => s.name === 'Put the project-setup hook back for its post steps')!;
     const taggedHook = () => (existsSync(join(work, HOOK)) ? readFileSync(join(work, HOOK), 'utf8') : null);
 
     it.each(['v-before', 'v-old-blocks', 'v-same-blocks'])('%s: verified as tagged, and handed to the agent as tagged', (tag) => {

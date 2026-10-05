@@ -17,13 +17,28 @@ name: Verify ACs — mint, then the agent's job
 on:
   workflow_call:
     inputs:
+      # WHAT THE LANE'S `criteria` JOB MEASURED (kanon#243), passed through to the agent's job.
+      # The criteria run happens before this workflow starts, in a job that holds no token, so
+      # the mint below runs only after every line of the code under test has.
       project:
-        description: "The caller's `project`, passed through: the project tracking-issue number."
+        description: "The project the lane's `criteria` job resolved: its tracking-issue number."
+        required: true
+        type: string
+      sha:
+        description: The commit the `criteria` job verified.
+        required: true
+        type: string
+      criteria:
+        description: The `criteria` job's result.
+        required: true
+        type: string
+      hook:
+        description: The `criteria` job's hook stage, for the telemetry row.
         required: false
         type: string
         default: ""
-      ref:
-        description: "The caller's `ref`, passed through: the tag or SHA to verify."
+      kanon-error:
+        description: The `criteria` job's Kanon error code, if any.
         required: false
         type: string
         default: ""
@@ -77,7 +92,10 @@ jobs:
     uses: $/.github/workflows/verify-acs-agent-job.yml
     with:
       project: ${{ inputs.project }}
-      ref: ${{ inputs.ref }}
+      sha: ${{ inputs.sha }}
+      criteria: ${{ inputs.criteria }}
+      hook: ${{ inputs.hook }}
+      kanon-error: ${{ inputs.kanon-error }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}
     secrets:

@@ -544,6 +544,16 @@ These rules apply `K-PRIN-19` to the lanes and the workflows around them.
 
 **Class.** framework
 
+### `K-AGENT-50` A job that runs the code under test holds no write credential
+
+**Rule.** A job that runs the code a lane is testing — the project-setup hook and its install, a package manager or build tool, the acceptance criteria — holds no App token, no other secret and no credential that may write: no secret is handed to it, its checkout persists no credential, its own token reads only, and none of its steps that run that code is handed a token. When a lane needs both that code's results and a write token, the code runs in a job of its own first, and its results cross to the token's job as an artifact. The token is minted only after that job has ended. A lane that cannot be split this way is named, with its reason, until it is.
+
+**Why.** It is `K-AGENT-49` one level down: inside one job, step order is not a boundary, so a token received after the code under test ran is still reachable from it, through the runner, the workspace and the processes the two share. A token is narrower than a key and expires within the hour. But a pull request's install script, or a test the agent wrote, is the most likely place for untrusted text to become running code. Within that hour, the token lets it write to the repository, file issues or post as the agent. Splitting the job costs one runner start and an artifact, and the agent loses nothing it needs, because it reads results rather than producing them.
+
+**Enforced by.** [`tests/unit/pr-code-token-isolation.test.ts`](../tests/unit/pr-code-token-isolation.test.ts), on Kanon's lanes and every workflow they call. It fails a job that runs a `./` action, a package manager or build tool, or the criteria runner with `--run`, and either references a secret, is an agent's job handed `app-token`, persists a checkout credential that may write, is granted `write`, or hands one of those steps a token. Its named exceptions must each still fail, so a fixed lane leaves the list. Two exceptions run the default branch's reviewed code, which the rule doesn't cover. Two wait on an Owner decision: the spine (implement-revise and lead-revise check out the pull request's head) and the rebase lane, whose agents run the tests on what they push with the token they push with. It doesn't see code an agent runs from its own shell, which its prompt and flags govern (`K-AGENT-24` for the Reviewer). For an adopter's own workflows, prose only.
+
+**Class.** framework
+
 ## Examples from the reference adopter
 
 - **Bail list** (`K-AGENT-13`): data migrations, auth and credential changes, security changes and destructive schema changes; additive schema and unique-index changes were allowed once conformance tests failed closed on them.
