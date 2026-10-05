@@ -26,6 +26,8 @@ const DIRECT: Record<string, { step: string; perms: Perms }> = {
   'agent-review.yml': { step: 'app-token', perms: { contents: 'write', issues: 'write', 'pull-requests': 'write' } },
   // Reads the tree and pull requests; files and comments on issues.
   'agent-verify-acs.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write', 'pull-requests': 'read' } },
+  // Reads the tree and the pull requests that touched a failing route; files and comments on issues.
+  'agent-explore.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write', 'pull-requests': 'read' } },
   // Pushes the split branch, opens its pull request, comments on the issue.
   'agent-lead-split.yml': { step: 'app-token', perms: { contents: 'write', issues: 'write', 'pull-requests': 'write' } },
   // Pushes a merge that can carry the default branch's workflow changes; comments and labels.

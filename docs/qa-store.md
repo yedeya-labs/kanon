@@ -26,7 +26,7 @@ The block reads the hook from a checkout of the commit the run is for, made with
 |---|---|---|---|
 | `last-green` | the Explorer's change gate | nothing | `dir/last-green`: the commit of the newest green full sweep, or nothing |
 | `record-skip` | the Explorer's change gate | `dir/skip.json`: `{commit, trigger, tier, reason}` | nothing |
-| `put` | the code audit and the Explorer, after the agent | `dir/report.json`: the Explorer's sweep summary (plan 0004 §4) or the audit's report | nothing |
+| `put` | the code audit and the Explorer, after the agent | `dir/report.json`: the Explorer's sweep summary ([its format](explore-sweep.md#the-summary)) or the audit's report | nothing |
 | `export` | the code audit and the Overseer, before the agent | nothing | `dir/export/`: the files below |
 | `cost-rows` | the dispatch sweep, before its job | nothing | `dir/cost-rows.json`: `{rows, error}`, each row `{ts, issue_number, outcome, run_id}`, strings or null |
 

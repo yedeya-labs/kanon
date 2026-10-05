@@ -147,6 +147,7 @@ describe('every lane starts the database the project declares, from a step', () 
 
   it('finds every job that calls the hook', () => {
     expect(hookCalls.map((c) => c.where).sort()).toEqual([
+      'agent-explore.yml explore',
       'agent-lane.yml run',
       'agent-lead-split.yml split',
       'agent-rebase.yml resolve',
@@ -154,7 +155,7 @@ describe('every lane starts the database the project declares, from a step', () 
     ]);
   });
 
-  it.each(['agent-lane.yml run', 'agent-rebase.yml resolve', 'agent-verify-acs.yml verify'])(
+  it.each(['agent-explore.yml explore', 'agent-lane.yml run', 'agent-rebase.yml resolve', 'agent-verify-acs.yml verify'])(
     '%s runs the block before the hook and hands the hook its answer',
     (where) => {
       const { steps, at } = hookCalls.find((c) => c.where === where)!;

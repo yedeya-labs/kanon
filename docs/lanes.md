@@ -20,6 +20,7 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Merge | `agent-merge.yml` | Merger | `pull_request_review: [submitted]`; `workflow_run` of your `CI` workflow, `types: [completed]`, `branches` your default branch; `schedule` (an hourly floor); `workflow_dispatch` with `pr_number` and `apply` |
 | Daily project digest | `agent-project-digest.yml` | none | `schedule` (daily); `workflow_dispatch` with `dry_run` |
 | Weekly digest | `agent-weekly-digest.yml` | none | `schedule` (weekly); `workflow_dispatch` with `week_end` and `dry_run` |
+| Explore (the sweep) | `agent-explore.yml` | Explorer | `schedule` (daily); `workflow_dispatch` with `tier` |
 
 **What each caller maps, grants and needs.** Every caller maps its role's two App secrets, by name, and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger and the reconciler run no model, so their callers map only the two. The digests run as no App, so their callers map `CLAUDE_CODE_OAUTH_TOKEN` and `DIGEST_WEBHOOK`. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
 
@@ -41,6 +42,7 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | `agent-lead-reconcile.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read`, `checks: read`, `statuses: read`, `actions: read` | none |
 | `agent-project-digest.yml` | `DIGEST_WEBHOOK` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read` | none |
 | `agent-weekly-digest.yml` | `DIGEST_WEBHOOK` | `contents: read`, `issues: read`, `pull-requests: read` | none |
+| `agent-explore.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: read`, `id-token: write` | `docs/qa/explorer-playbook.md` |
 
 <!-- /lane-contract:table -->
 
@@ -273,6 +275,17 @@ Two lanes post a summary to a chat channel, as a `{"text": …}` body to the web
 - **Its health job** rides the same tick. It files one `pipeline-improvement` issue in *Development Automation* naming every lane caller (`.github/workflows/agent-*.yml`) that is red on every recent run, and keeps it until they recover, because GitHub's own failure notification goes to a run's actor, which on a schedule is nobody who reads it. Where an Overseer is installed (`agent-overseer.yml`), it also files one when no weekly Overseer audit has landed in nine days. It needs `actions: read` and `issues: write`, which the caller grants. A dry run prints its table and files nothing.
 - **The weekly digest** (`agent-weekly-digest.yml`) is for a stakeholder outside the day-to-day work: the week's milestone burndown and what was delivered, in plain language, and nothing pending. Name its reader with a `- **Weekly digest audience:** …` bullet under `## Choices` in your adoption record (`K-LAYOUT-10`), read from your default branch; without it, the narrative is written for "a stakeholder who follows the project from outside the day-to-day work". Its caller keeps a weekly `schedule` and a dispatch with `week_end` (the end of the 7-day window, an ISO date) and `dry_run`.
 
+## The Explorer's sweep
+
+The explore lane (`agent-explore.yml`) has the Explorer triage a sweep of your running product and file what it finds. What it sweeps, with which tool and in which tiers, is your product, so the sweep is yours: a composite action at `.github/actions/explore-sweep/action.yml`, the **sweep hook** (plan 0004 decision 5). The lane sets the project up through your project-setup hook, with `lane: explorer`, `browsers: 'true'` and the database your test-database declaration gives, then calls the sweep hook with one input, `tier`, and reads one file it writes, `qa-explore-summary.json`. [The Explorer's sweep](explore-sweep.md) has the hook's contract and the summary's format. A summary that is missing, malformed, or for another commit or tier is no sweep: the run goes red by name, the agent doesn't run, and nothing is recorded.
+
+Its caller:
+
+- **Keeps two triggers:** a daily `schedule`, and a dispatch with `tier`, passed through. Blank sweeps every tier.
+- **Grants `id-token: write`,** for the lane's store jobs alone, and `issues: read` and `actions: read` for the quality and telemetry reads. The Explorer's App token files the issues.
+
+**The change gate.** A scheduled run on a commit your QA store already holds a green full sweep of is skipped, and the skip is recorded, so a quiet day costs one short job, not a sweep. A dispatch always sweeps. The store's answer is read in a store job, through your store hook (`last-green`), and the run's summary is recorded the same way (`put`). Without a store hook the lane always sweeps, says the store is absent, and records nothing.
+
 ## Checking it
 
-Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a caller that isn't at its lane's file name, a review or reconciler caller without `.github/workflows/ci.yml`, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook; on a missing stack document or playbook, or a stack document without its four sections; on a malformed test-database declaration, escalation file, exemptions file or reference-deploy declaration; on a role missing from the App register; and on a missing Dependabot entry.
+Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a caller that isn't at its lane's file name, a review or reconciler caller without `.github/workflows/ci.yml`, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook, or a missing sweep hook for an explore caller; on a missing stack document or playbook, or a stack document without its four sections; on a malformed test-database declaration, escalation file, exemptions file or reference-deploy declaration; on a role missing from the App register; and on a missing Dependabot entry.

@@ -100,7 +100,8 @@ export const STAGES = Object.freeze(['token', 'checkout', 'hook', 'setup', 'agen
  * Kanon's, so they say nothing about the adopter.
  */
 export const KANON_ERRORS = Object.freeze([
-  // The spine found no `.github/actions/project-setup` in the checked-out tree.
+  // A lane found no hook it runs in the checked-out tree: `.github/actions/project-setup`, or
+  // the Explorer's sweep hook, `.github/actions/explore-sweep` (plan 0004 step 12).
   'hook_missing',
   // `agent-setup`'s push probe: the minted App can't push.
   'push_probe_denied',

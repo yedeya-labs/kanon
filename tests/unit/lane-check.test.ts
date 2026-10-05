@@ -268,6 +268,35 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => { extra(t, VERIFY); }, 'lists the role Explorer 0 times'));
   });
 
+  describe('the explore lane (plan 0004 step 12)', () => {
+    const EXPLORE = '.github/workflows/agent-explore.yml';
+    const HOOK = '.github/actions/explore-sweep/action.yml';
+    const caller = (t: Tree) => t.write(EXPLORE, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-explore.yml'), 'utf8'));
+    const explorer = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Explorer | \`example-explorer\` | Read | Read & write | Read | No access |\n`);
+    const sweep = (t: Tree, body = 'name: Explore sweep\ninputs:\n  tier: { required: false, default: "" }\nruns:\n  using: composite\n  steps:\n    - run: echo sweep\n      shell: bash\n') => {
+      mkdirSync(join(t.dir, '.github/actions/explore-sweep'), { recursive: true });
+      t.write(HOOK, body);
+    };
+    it('accepts the caller, with the Explorer registered and the sweep hook written', () => {
+      const t = adopter();
+      caller(t);
+      explorer(t);
+      sweep(t);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('5 lane caller(s) pass');
+    });
+    it('refuses the caller in a repository without the sweep hook (decision 5)', () =>
+      red((t) => { caller(t); explorer(t); }, `${HOOK},title=lane-check::is missing; the Kanon lane(s) agent-explore call it`));
+    it('refuses a sweep hook that is not a composite action', () =>
+      red((t) => { caller(t); explorer(t); sweep(t, 'name: Explore sweep\nruns:\n  using: node24\n  main: index.js\n'); },
+        `${HOOK},title=lane-check::must be a composite action`));
+    it('refuses a caller that does not grant the store jobs their id-token', () =>
+      red((t) => { caller(t); explorer(t); sweep(t); t.edit(EXPLORE, (d) => { delete (d as Caller).permissions!['id-token']; }); }, 'needs id-token: write'));
+    it('refuses a caller that passes the tier as a setting rather than its own input', () =>
+      red((t) => { caller(t); explorer(t); sweep(t); t.edit(EXPLORE, (d) => { (job(d).with as Record<string, string>).tier = 'admin'; }); }, 'passes `tier: admin`'));
+  });
+
   describe('the lead, lead-split and rebase lanes (step 5)', () => {
     const LANES = ['agent-lead', 'agent-lead-split', 'agent-rebase'].map((f) => `.github/workflows/${f}.yml`);
     const extra = (t: Tree, f: string) => t.write(f, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra', f.split('/').pop()!), 'utf8'));
