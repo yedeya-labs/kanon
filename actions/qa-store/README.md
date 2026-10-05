@@ -8,7 +8,7 @@ Kanon's store-coupled lanes call this block from their store jobs, each in the `
 | `record-skip` | the skip recorded, or a red job |
 | `put` | the report written, or a red job |
 | `export` | an artifact, `artifact-name`, kept one day, holding the files the contract fixes and `manifest.json` |
-| `cost-rows` | `cost-rows.json` in `dir`: `{rows, error}`, as the dispatch sweep's store read returns it |
+| `cost-rows` | `cost-rows.json` in `dir`: `{rows, error}`, as the dispatch sweep's store read returns it; and the same answer as the `rows` output, one line of JSON, which the dispatch sweep's job reads from the store job's outputs |
 | `delete-export` | the export's artifact deleted, by `artifact-id`; needs only `actions: write`. Given the export's `attempt` and the agent job's `result`, it turns red a re-run that skipped the agent job because its export was already deleted, and says to re-run all jobs |
 
 `state` is `ok`, `absent` (no hook: the operation did nothing, and the summary says the store is absent) or `degraded` (a read failed or returned something malformed, and the lane fails open).

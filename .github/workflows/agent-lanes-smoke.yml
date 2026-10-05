@@ -20,8 +20,8 @@
 # on `qa:needs-split` or a dispatch, and the rebase lane only on a CI completion, its
 # schedule or a dispatch. The Merger starts only on a review, a CI completion, its schedule
 # or a dispatch, and the reconciler only on its schedule, a closed issue or pull request, or a
-# dispatch. The two digests start only on their schedule or a dispatch, and so does the
-# Explorer's sweep. The jobs that would
+# dispatch. The two digests and the dispatch sweep start only on their schedule or a dispatch,
+# and so does the Explorer's sweep. The jobs that would
 # mint and run are skipped. The model
 # call is proven by the reference adopter's live run after each upgrade.
 #
@@ -211,9 +211,20 @@ jobs:
       EXPLORER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
+  dispatch-sweep:
+    # No model either (plan 0004 step 9). `id-token: write` is for the lane's store job alone:
+    # GitHub refuses to start a called job that asks for more than its caller grants.
+    permissions:
+      contents: read
+      id-token: write
+    uses: $/.github/workflows/agent-dispatch-sweep.yml
+    secrets:
+      LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+
   smoke:
     name: Agent lanes smoke
-    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs, lead, lead-split, rebase, merge, lead-reconcile, project-digest, weekly-digest, explore]
+    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs, lead, lead-split, rebase, merge, lead-reconcile, project-digest, weekly-digest, explore, dispatch-sweep]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -223,7 +234,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"'
-          echo "$RESULTS" | jq -e 'to_entries | length == 15 and all(.value.result == "success" or .value.result == "skipped")'
+          echo "$RESULTS" | jq -e 'to_entries | length == 16 and all(.value.result == "success" or .value.result == "skipped")'
 
       # For the fixture adopter only. lane-check itself comes from `$/`.
       - uses: actions/checkout@v7

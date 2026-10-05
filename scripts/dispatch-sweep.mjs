@@ -43,6 +43,8 @@ import { appendFileSync } from 'node:fs';
 import { exhaustedRoute, projectOf } from './split-lineage.mjs';
 import { appLogin } from './app-register.mjs';
 import { queryCostRows } from '../infra/qa-store/aws/cost-rows.mjs';
+import { costRowsProblem } from '../actions/qa-store/qa-store.mjs';
+import { artifactRetentionNote, readArtifactCostRows } from './lib/telemetry-artifacts.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -1424,6 +1426,97 @@ export function readCostRows(lane, now = Date.now(), env = process.env) {
   }
 }
 
+/** WHERE THIS RUN'S COST ROWS COME FROM (plan 0004 step 9, §3.3; decision 3 as the Owner changed
+ *  it on 2026-10-04): the store first, run artifacts without one.
+ *
+ *  - `store`: Kanon's lane ran the store hook's `cost-rows` in a store job of its own, and hands
+ *    each telemetry agent's answer over in `QA_STORE_COST_ROWS_<AGENT>` (`storeRowsEnv`). This
+ *    job holds no cloud credentials.
+ *  - `artifacts`: the store job ran and the repository has no hook (`QA_STORE_PRESENT` 'false'),
+ *    so the rows come from the lanes' run artifacts (P7's reader), as far back as the repository
+ *    keeps them.
+ *  - `store-failed`: the store job did not succeed, or its outputs are missing. Every lane's read
+ *    fails CLOSED, and says why, as a failed store read always has.
+ *  - `direct`: no store job at all (`QA_STORE_RESULT` unset): a workflow of the adopter's own,
+ *    from before it called Kanon's lane, holding the store's credentials itself
+ *    (`QA_DYNAMO_TABLE`, `readCostRows`). Kept so that a pin bump doesn't change what that
+ *    workflow reads.
+ *
+ *  @param {Record<string, string|undefined>} [env]
+ *  @returns {'store'|'artifacts'|'store-failed'|'direct'} */
+export function costRowsSource(env = process.env) {
+  if (!env.QA_STORE_RESULT) return 'direct';
+  if (env.QA_STORE_RESULT !== 'success') return 'store-failed';
+  if (env.QA_STORE_PRESENT === 'true') return 'store';
+  if (env.QA_STORE_PRESENT === 'false') return 'artifacts';
+  return 'store-failed';
+}
+
+/** The variable a lane's store rows arrive in: `QA_STORE_COST_ROWS_IMPLEMENTER` for the
+ *  `implementer` agent. The lane's sweep step names one per entry of `LANES`.
+ *  @param {{ telemetryAgent?: string }} lane */
+export const storeRowsEnv = (lane) => `QA_STORE_COST_ROWS_${String(lane.telemetryAgent ?? '').toUpperCase().replace(/-/g, '_')}`;
+
+/** One lane's rows as the store job handed them over: the block's `rows` output, `{ rows, error }`.
+ *  FAILS CLOSED on anything else, as the store read does: an empty or malformed value is no rows
+ *  and an error, never "no runs".
+ *  @param {{ telemetryAgent?: string, key: string }} lane
+ *  @param {Record<string, string|undefined>} [env]
+ *  @returns {{ rows: Array<{ts: string|null, issue_number: string|null, outcome: string|null, run_id: string|null}>, error: string|null }} */
+export function readStoreCostRows(lane, env = process.env) {
+  if (!lane.telemetryAgent) return { rows: [], error: 'the lane names no telemetry agent' };
+  const name = storeRowsEnv(lane);
+  const raw = env[name] ?? '';
+  /** @type {any} */
+  let v;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return { rows: [], error: `the store job handed over no readable cost rows in ${name}` };
+  }
+  const problem = costRowsProblem(v);
+  if (problem) return { rows: [], error: `the store job's cost rows are malformed (${problem})` };
+  if (v.error) return { rows: [], error: v.error };
+  return {
+    rows: v.rows.map((/** @type {any} */ r) => ({ ts: r.ts ?? null, issue_number: r.issue_number ?? null, outcome: r.outcome ?? null, run_id: r.run_id ?? null })),
+    error: null,
+  };
+}
+
+/** One lane's cost rows from `source`. Every branch FAILS CLOSED and says why (RA-2706).
+ *  @param {{ telemetryAgent?: string, key: string }} lane
+ *  @param {ReturnType<typeof costRowsSource>} source
+ *  @param {{ env?: Record<string, string|undefined>, now?: number, artifacts?: typeof readArtifactCostRows }} [deps]
+ *  @returns {{ rows: any[], error: string|null, retentionDays?: number|null, days?: number }} */
+export function readLaneCostRows(lane, source, { env = process.env, now = Date.now(), artifacts = readArtifactCostRows } = {}) {
+  if (source === 'store') return readStoreCostRows(lane, env);
+  if (source === 'artifacts') return artifacts(lane, now, { days: UNREACHED_WINDOW_DAYS });
+  if (source === 'store-failed') {
+    return { rows: [], error: `the QA store job did not hand over cost rows (result: ${env.QA_STORE_RESULT || 'none'})` };
+  }
+  return readCostRows(lane, now, env);
+}
+
+/** The summary line saying where the cost rows came from, above `costReadLine`. Without a store
+ *  it also carries `artifactRetentionNote`, for the shortest retention any lane's read measured:
+ *  the rows older than that are gone, which the sweep can't see (plan 0004 §3.3). The legacy
+ *  `direct` read says nothing here, as before.
+ *  @param {ReturnType<typeof costRowsSource>} source
+ *  @param {Map<string, { retentionDays?: number|null, days?: number }>} reads */
+export function costSourceLine(source, reads) {
+  if (source === 'store') return 'Cost rows from the QA store, through its hook (`cost-rows`).';
+  if (source === 'store-failed') return 'Cost rows from the QA store: its job did not succeed.';
+  if (source !== 'artifacts') return '';
+  const measured = [...reads.values()].map((r) => r.retentionDays).filter((d) => typeof d === 'number');
+  const note = measured.length
+    ? artifactRetentionNote({ retentionDays: Math.min(.../** @type {number[]} */ (measured)), days: UNREACHED_WINDOW_DAYS })
+    : '';
+  return `Cost rows from run artifacts: this repository has no QA store hook (\`.github/actions/qa-store/action.yml\`).${note ? ` ${note}` : ''}`;
+}
+
+/** The cost rows' summary text, source first. @param {ReturnType<typeof costRowsSource>} source @param {Map<string, any>} reads */
+const costLines = (source, reads) => [costSourceLine(source, reads), costReadLine(reads)].filter(Boolean).join('\n\n');
+
 function main() {
   if (!REPO) {
     console.error('dispatch-sweep: GITHUB_REPOSITORY must be set');
@@ -1440,8 +1533,19 @@ function main() {
   const commentsFor = makeCommentsReader({ onPayload: (p) => noteDrift('issue comments', p) });
   const byLane = LANES.map((lane) => ({ lane, issues: openDispatchedIssues(lane) }));
   const total = byLane.reduce((n, { issues }) => n + issues.length, 0);
+  const source = costRowsSource();
   if (total === 0) {
     console.log(`No open issues in any lane (${LANES.map((l) => `\`${l.label}\``).join(', ')}).`);
+    // Through Kanon's lane, the rows are read anyway: they are already in hand from the store,
+    // and a missing hook's retention, or a failed store job, is a fact about the NEXT run that a
+    // quiet day must not hide (RA-2706, plan 0004 §3.3).
+    if (source !== 'direct') {
+      const lines = costLines(source, new Map(LANES.map((l) => [l.key, readLaneCostRows(l, source)])));
+      warnCostRead(lines.split('\n\n').at(-1));
+      console.log(lines);
+      if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines}\n`);
+      return;
+    }
     // Nothing to charge, so no query — but a broken AWS step is still a fact about
     // the NEXT run, and a quiet day must not hide it (RA-2706).
     const reason = costReadPrecondition();
@@ -1464,10 +1568,11 @@ function main() {
   // ONE READ PER LANE, shared by both derivations below (RA-1781 added the second).
   // Whether the read happened is REPORTED, not only absorbed (RA-2706): the summary
   // carries `costReadLine`, and a skipped or failed read is also a ::warning::.
-  const reads = new Map(byLane.map(({ lane }) => [lane.key, readCostRows(lane)]));
+  // The source is the store's, or run artifacts without a hook (plan 0004 step 9).
+  const reads = new Map(byLane.map(({ lane }) => [lane.key, readLaneCostRows(lane, source)]));
   const rowsPerLane = new Map([...reads].map(([k, r]) => [k, r.rows]));
-  const costLine = costReadLine(reads);
-  warnCostRead(costLine);
+  warnCostRead(costReadLine(reads));
+  const costLine = costLines(source, reads);
   const exhaustedPerLane = new Map(byLane.map(({ lane, issues }) =>
     [lane.key, lane.decomposes ? exhaustedAtByIssue(rowsPerLane.get(lane.key), issues.map((i) => i.number)) : new Map()]));
   const unreachedPerLane = new Map(byLane.map(({ lane, issues }) => {

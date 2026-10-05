@@ -1,0 +1,236 @@
+# QA pipeline — the dispatch sweep (RA-912), across BOTH agent lanes (RA-1336). A Kanon lane
+# (plan 0004, step 9).
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:` this
+# file at an exact Kanon tag, passes `apply` through, and maps the Lead's two secrets by name
+# (never `secrets: inherit`). The `github` context in a called workflow is the caller's, so the
+# lane reads the triggering event exactly as it did when this file held the triggers itself.
+#
+# `agent-implement.yml` and `agent-triage.yml` both fire on `issues: [labeled]`, and that event
+# is the ONLY thing that starts the Implementer in either mode. An event-driven system cannot
+# recover from an event that never arrived, so three failures are invisible: the run that
+# never happened, the question a person answered that nothing re-fired, and the issue the agent
+# finished but nobody closed. The lane table lives in `scripts/dispatch-sweep.mjs`; this
+# workflow runs it.
+#
+# This is a RECONCILER, not a trigger: it re-derives state from GitHub on a timer rather than
+# depending on the event. It holds NO state: its own past actions are recovered by counting
+# the marker comments it left.
+#
+# IDENTITY: THE LEAD'S APP, deliberately not the Implementer it watches. It cannot be the
+# workflow token, because events that token raises never start another workflow, so a sweep
+# using it could re-label and start nothing. And with the Implementer's own App, the marker
+# comment would be the only thing telling "the agent spoke" from "the sweep spoke"; distinct
+# logins make that structural.
+#
+# ── ITS COST ROWS: THE STORE FIRST, RUN ARTIFACTS WITHOUT ONE (plan 0004 §3.3, decision 3) ──
+# The sweep charges a re-dispatch attempt per marker comment it left, which counts DISPATCHES,
+# not runs that happened. So it reads 14 days of the two lanes' cost rows to see which
+# dispatches never reached the model, and which issue's latest run hit its cap (RA-1517,
+# RA-1781).
+#   - WITH A STORE HOOK (`.github/actions/qa-store/action.yml`), the `store` job reads them
+#     through the hook's `cost-rows` operation, in the `kanon-qa-store` environment, and hands
+#     them to the sweep as job outputs. The sweep's own job holds no cloud credentials: an
+#     explicit `permissions:` without `id-token`, and no environment (`K-OBS-13`'s rule, P9).
+#   - WITHOUT ONE, the store job says the store is absent, and the sweep reads the lanes' run
+#     artifacts instead (`scripts/lib/telemetry-artifacts.mjs`, P7). Those cover only as far
+#     back as the repository keeps artifacts, and the summary says so when that is less than
+#     the window (`artifactRetentionNote`).
+#   - A READ THAT FAILS fails CLOSED, as it always has: every dispatch is charged, and the
+#     summary's first line says so (RA-2706).
+#
+# SOFT SKIP WITHOUT THE LEAD'S APP. Until its secrets exist, the lane skips with a
+# `::warning::` instead of going red: a daily red run for a known-pending one-time setup is
+# alarm fatigue. The trade is that a secret deleted later also soft-skips; the annotation and
+# the step summary are the signal, and the stalled issues the sweep is not reconciling are the
+# backstop.
+#
+# SAFE BY DEFAULT: a dispatch is a DRY RUN unless `apply` is ticked; the scheduled run applies,
+# which is the point of it existing.
+#
+# NO MODEL. Every step runs a library script, `gh` or the store block, so this lane takes no
+# Claude token and writes no telemetry row.
+#
+# INERT until: the caller is on the default branch + the Lead's App installed, with a row in
+# the App register + these secrets (plan 0001 §8):
+#   LEAD_APP_ID, LEAD_APP_PRIVATE_KEY
+# The Lead's App needs `Issues: write`, `Pull requests: read` and `Actions: read` (the run
+# that triggered each telemetry row, and the run artifacts without a store).
+name: Lead (Lead) — dispatch sweep
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#   schedule: "40 4 * * *"   — daily, clear of the other agent crons. Daily rather than hourly
+#                              because the cost that matters is the subscription quota each
+#                              re-dispatch spends on a full Implementer run.
+#   workflow_dispatch        — input `apply` (boolean, default false: a dry run)
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` input, passed through. Empty on the schedule, so it is
+    # a STRING: a caller passes `${{ inputs.apply }}`, which a boolean input refuses as `''`.
+    inputs:
+      apply:
+        description: "'true' to actually re-dispatch on a dispatch (anything else = dry run)"
+        required: false
+        type: string
+        default: ""
+    # NOT REQUIRED, so a caller whose secrets don't exist yet reaches the soft skip below
+    # instead of failing to start. `lane-check` still holds the caller to mapping both.
+    secrets:
+      LEAD_APP_ID:
+        required: false
+      LEAD_APP_PRIVATE_KEY:
+        required: false
+
+concurrency:
+  # Never two sweeps at once: both would derive the same world and re-dispatch one issue twice.
+  group: agent-dispatch-sweep
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). Each job below declares its
+# own, so only the store job ever holds `id-token: write`, which the caller grants for it.
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    # ONLY THE CALLER'S TWO TRIGGERS. As a called workflow this lane runs on whatever its
+    # caller is called on (Kanon's smoke calls it on pull requests).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      member: ${{ steps.gate.outputs.member }}
+      ready: ${{ steps.app.outputs.ready }}
+    steps:
+      # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted: on
+      # the schedule the actor is whoever last changed it, on a dispatch whoever ran it. A
+      # refusal leaves `member=false`, and the store and sweep jobs skip.
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+      # Secrets cannot be read in a job-level `if`, so the soft skip is a step whose output the
+      # later jobs read.
+      - name: Is the Lead's App configured?
+        id: app
+        if: steps.gate.outputs.member == 'true'
+        env:
+          APP_ID: ${{ secrets.LEAD_APP_ID }}
+        run: |
+          if [ -z "$APP_ID" ]; then
+            echo "::warning title=agent-dispatch-sweep::LEAD_APP_ID is unset: the Lead's App is not set up, so the sweep is skipping. See docs/lanes.md (The dispatch sweep)."
+            echo "Dispatch sweep **skipped**: the Lead's App is not configured (\`LEAD_APP_ID\` unset)." >> "$GITHUB_STEP_SUMMARY"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # THE STORE JOB (plan 0004 §3.2): the two lanes' cost rows through the adopter's store hook,
+  # and nothing else. It holds the store's credentials, so it runs the `qa-store` block alone
+  # (`tests/unit/helpers/store-jobs.ts`). Without a hook each step says the store is absent and
+  # `present` is 'false', on which the sweep reads run artifacts. A read that fails is
+  # `degraded`: its rows output carries the error, and the sweep charges every dispatch.
+  #
+  # ONE STEP PER TELEMETRY AGENT, named as `dispatch-sweep.mjs`'s `LANES` name them
+  # (`telemetryAgent`); `dispatch-sweep-lane.test.ts` holds the two lists together. The window
+  # is the sweep's, 14 days (`UNREACHED_WINDOW_DAYS`).
+  store:
+    needs: gate
+    if: needs.gate.outputs.member == 'true' && needs.gate.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: kanon-qa-store
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      present: ${{ steps.implementer.outputs.present }}
+      implementer: ${{ steps.implementer.outputs.rows }}
+      triage-fix: ${{ steps.triage-fix.outputs.rows }}
+    steps:
+      - uses: $/actions/qa-store
+        id: implementer
+        with:
+          operation: cost-rows
+          kind: implementer
+          days: "14"
+      - uses: $/actions/qa-store
+        id: triage-fix
+        with:
+          operation: cost-rows
+          kind: triage-fix
+          days: "14"
+
+  sweep:
+    needs: [gate, store]
+    # `!cancelled()`, so a store job that FAILED still sweeps, charging every dispatch and
+    # saying so, as a failed store read always has. The gate's verdict and the soft skip are
+    # still required: a refused or skipped gate skips the sweep.
+    if: ${{ !cancelled() && needs.gate.outputs.member == 'true' && needs.gate.outputs.ready == 'true' }}
+    runs-on: ubuntu-latest
+    # Bounds a hang (RA-1336). Sized at ~3x the longest real run measured on the reference
+    # adopter, so it never truncates work.
+    timeout-minutes: 20
+    # NO `id-token` AND NO ENVIRONMENT: this job holds no cloud credentials (plan 0004 step 9).
+    permissions:
+      contents: read
+    steps:
+      - uses: $/actions/kanon-path
+
+      # The App register (`docs/qa/agent-identities.md`, `K-LAYOUT-6`) is read from the
+      # checkout: `SWEEP_LOGIN` and the Implementer's login come from it.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Mint lead App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.LEAD_APP_ID }}
+          private-key: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
+          # Narrowed to what the sweep uses (`K-AGENT-46`): it comments on, labels and
+          # re-labels issues (`issues`), lists the open pull requests that close them
+          # (`pull-requests`), and reads the run behind each cost row, and the run artifacts
+          # without a store (`actions`).
+          permission-issues: write
+          permission-pull-requests: read
+          permission-actions: read
+
+      # The one mechanical check on the identity constant (RA-918). A wrong App NAME is
+      # otherwise silent and expensive: the login never matches, `isSweep` falls back to the
+      # marker alone, and an unknown login counts as a person, so a markerless sweep comment
+      # reads as a reply and reaches re-dispatch. `app-slug` is what GitHub derives the
+      # comment author's login from, so this compares the constant with the identity minted.
+      - name: Assert the minted App is the one the script expects
+        env:
+          MINTED_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          EXPECTED=$(node -e "import(process.env.KANON + '/scripts/dispatch-sweep.mjs').then(m => console.log(m.SWEEP_LOGIN))")
+          if [ "$MINTED_SLUG" != "$EXPECTED" ]; then
+            echo "::error title=agent-dispatch-sweep::App slug mismatch — minted '$MINTED_SLUG', the script expects '$EXPECTED'. Rename the App to produce the expected slug, or correct the Lead row's App slug in docs/qa/agent-identities.md, which SWEEP_LOGIN is read from (RA-2701). Left disagreeing, the sweep's identity check is silently off."
+            exit 1
+          fi
+          echo "App slug \`$MINTED_SLUG\` matches SWEEP_LOGIN." >> "$GITHUB_STEP_SUMMARY"
+
+      # No `npm ci`: the script uses only Node's built-in modules and `gh`.
+      - name: Reconcile open agent:implement and qa:needs-triage issues
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # The schedule is the automation and applies; a dispatch is a dry run unless ticked.
+          APPLY: ${{ (github.event_name == 'schedule' || inputs.apply == 'true') && '1' || '' }}
+          # Where the cost rows come from (`costRowsSource`): the store job's result and whether
+          # the repository has a hook, then each telemetry agent's rows from the hook.
+          QA_STORE_RESULT: ${{ needs.store.result }}
+          QA_STORE_PRESENT: ${{ needs.store.outputs.present }}
+          QA_STORE_COST_ROWS_IMPLEMENTER: ${{ needs.store.outputs.implementer }}
+          QA_STORE_COST_ROWS_TRIAGE_FIX: ${{ needs.store.outputs.triage-fix }}
+        run: node "$KANON/scripts/dispatch-sweep.mjs"

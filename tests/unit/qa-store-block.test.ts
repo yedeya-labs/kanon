@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import {
-  EXPORT_FILES, FILES, HOOK_PATH, MANIFEST, OPERATIONS, READ_OPERATIONS, STORE_ENVIRONMENT, WRITE_OPERATIONS,
+  EXPORT_FILES, FILES, HOOK_PATH, MANIFEST, MAX_ARG_STRLEN, MAX_ROWS_OUTPUT, OPERATIONS, READ_OPERATIONS, STORE_ENVIRONMENT, WRITE_OPERATIONS,
   absentLine, checkRequest, deleteExport, finish, prepare, readCostRowsFile,
 } from '../../actions/qa-store/qa-store.mjs';
 
@@ -71,7 +71,9 @@ describe('without a hook, every operation says the store is absent and does noth
     const { outputs } = prepare(env({ OPERATION: op, ...request }), NOW);
     expect(outputs.present).toBe('false');
     const done = finish({ OPERATION: op, KIND: request.KIND ?? '', DIR: outputs.dir!, PRESENT: outputs.present!, HOOK_OUTCOME: '' }, NOW);
-    expect(done.outputs).toEqual({ present: 'false', state: 'absent', commit: '' });
+    // `cost-rows` also hands its answer on as `rows`, saying the store is absent.
+    const rows = op === 'cost-rows' ? { rows: JSON.stringify({ rows: [], error: 'the QA store is absent' }) } : {};
+    expect(done.outputs).toEqual({ present: 'false', state: 'absent', commit: '', ...rows });
     expect(done.line).toBe(absentLine(op));
     expect(done.line).toMatch(/^The QA store is absent: .* this run has no memory/);
   });
@@ -88,6 +90,13 @@ describe('without a hook, every operation says the store is absent and does noth
     const { outputs } = prepare(env({ OPERATION: 'cost-rows', KIND: 'implementer', DAYS: '14' }), NOW);
     finish({ OPERATION: 'cost-rows', KIND: 'implementer', DIR: outputs.dir!, PRESENT: 'false' }, NOW);
     expect(readCostRowsFile(join(outputs.dir!, FILES.costRows))).toEqual({ rows: [], error: 'the QA store is absent' });
+  });
+
+  it('cost-rows says the same in its rows output, for a reader in another job (plan 0004 step 9)', () => {
+    const { outputs } = prepare(env({ OPERATION: 'cost-rows', KIND: 'implementer', DAYS: '14' }), NOW);
+    const done = finish({ OPERATION: 'cost-rows', KIND: 'implementer', DIR: outputs.dir!, PRESENT: 'false' }, NOW);
+    expect(done.outputs).toMatchObject({ present: 'false', state: 'absent' });
+    expect(JSON.parse(done.outputs.rows!)).toEqual({ rows: [], error: 'the QA store is absent' });
   });
 });
 
@@ -204,6 +213,35 @@ describe('with a hook', () => {
       expect(run(null).read).toEqual({ rows: [], error: expect.stringMatching(/could not be read/) });
       expect(run(JSON.stringify({ rows: [{ ...row, issue_number: 7 }] })).read).toEqual({ rows: [], error: "the store's cost rows are malformed (rows[0].issue_number is neither a string nor null)" });
       expect(run('[]').outputs.state).toBe('degraded');
+    });
+
+    it('hands the same answer on as the rows output, one line of JSON', () => {
+      const ok = run(JSON.stringify({ rows: [row], error: null }));
+      expect(ok.outputs.rows).toBe(JSON.stringify({ rows: [row], error: null }));
+      expect(ok.outputs.rows).not.toContain('\n');
+      const failed = run(JSON.stringify({ rows: [row], error: null }), 'failure');
+      expect(JSON.parse(failed.outputs.rows!)).toEqual({ rows: [], error: 'the store hook failed' });
+    });
+
+    it('bounds the answer below the one environment string the sweep\'s step can be handed (MAX_ARG_STRLEN)', () => {
+      // The reader gets the answer as `QA_STORE_COST_ROWS_<AGENT>=<json>`: name, `=` and value
+      // must fit in 131,072 bytes, or the sweep fails at exec (E2BIG) instead of degrading.
+      expect(MAX_ARG_STRLEN).toBe(131_072);
+      expect(MAX_ROWS_OUTPUT + 'QA_STORE_COST_ROWS_TRIAGE_FIX='.length + 1).toBeLessThan(MAX_ARG_STRLEN);
+    });
+
+    it('measures the answer in bytes, not UTF-16 units', () => {
+      // 34,000 three-byte characters: 34,000 units, over 100,000 bytes.
+      const wide = { ...row, outcome: '\u20ac'.repeat(34_000) };
+      expect(run(JSON.stringify({ rows: [wide], error: null })).outputs.state).toBe('degraded');
+    });
+
+    it('degrades an answer too large for the reader, rather than truncating it', () => {
+      const many = Array.from({ length: Math.ceil(MAX_ROWS_OUTPUT / 60) }, (_, i) => ({ ...row, run_id: String(1e10 + i) }));
+      const r = run(JSON.stringify({ rows: many, error: null }));
+      expect(r.outputs.state).toBe('degraded');
+      expect(JSON.parse(r.outputs.rows!)).toEqual({ rows: [], error: `${many.length} cost rows are more than a job output holds (${MAX_ROWS_OUTPUT} bytes)` });
+      expect(r.read.rows).toEqual([]);
     });
   });
 });
