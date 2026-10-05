@@ -357,7 +357,7 @@ describe('kanon init, safely', () => {
 
   it('offers the lanes whose callers already call them as the default, not a file that only has the name', async () => {
     const implement = 'name: Implement\njobs:\n  implement:\n    uses: yedeya-labs/kanon/.github/workflows/agent-implement.yml@v0.1.0\n';
-    const dir = checkout({ '.github/workflows/agent-implement.yml': implement, '.github/workflows/agent-triage.yml': 'name: my own triage\n' });
+    const dir = checkout({ '.github/workflows/agent-implement.yml': implement, '.github/workflows/agent-lead.yml': 'name: my own lead workflow\n' });
     const r = await run(dir, fakeGitHub());
     expect(r.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--roles', 'implementer', '--dir', expect.any(String)]]);
     expect(existsSync(join(dir, '.github/workflows/agent-review.yml'))).toBe(false);
