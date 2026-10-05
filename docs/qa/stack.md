@@ -36,3 +36,13 @@ Kanon's own source and tests (`K-LAYOUT-17`). `citation-shift` reads comments in
 - `infra/` — code: the QA store's AWS implementation
 - `.github/scripts/` — code: the scripts Kanon's own workflows run
 - `tests/` — tests: the library and unit tests, and their fixtures
+
+What the code audit reads, in this order (plan 0004 step 11a). Kanon's product is its rules and the machinery that holds a project to them, so the audit looks for objective contradictions between the two, as the [explorer playbook](explorer-playbook.md)'s "Code-reading mode" says.
+
+- `rulebook/` — audit: the rules, each with its **Why** and its "Enforced by" line, and `agent-permissions.json`, the roles table's twin
+- `docs/` — audit: the decisions, the plans, the lane and store documents, and this repository's own adoption record and App register, each of which says what the code does
+- `actions/` — audit: the composite actions, including the checks that judge a pull request (`dco`, `pr-title`, `lane-check`) and the agent-lane blocks
+- `.github/workflows/` — audit: the lanes, and Kanon's own workflows and callers
+- `tests/` — audit: the guards, which hold the rules and the docs to the code
+- `scripts/` — audit: the library's scripts, which the lanes and the guards run
+- `cli/` — audit: the `kanon` command, which installs what the rules require

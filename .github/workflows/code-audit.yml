@@ -1,0 +1,50 @@
+# Kanon audits its own code with the Explorer (ADR 0011, plan 0004 step 11a, decision 13).
+#
+# A trigger-only caller of Kanon's code-audit lane, written exactly as an adopter writes one
+# (docs/lanes.md). It is named `code-audit.yml` because `agent-code-audit.yml` is the lane
+# itself (K-LAYOUT-18's exception for Kanon's own tree, as for review.yml).
+#
+# IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap). Through `$/` the audit would
+# run whatever lane code a branch dispatched it from, and a lane change would audit with itself.
+# Dependabot's `kanon` group proposes each release here, and `lane-check` (in CI) holds every
+# Kanon reference to one version.
+#
+# WHAT IT READS is the `audit` areas of Kanon's stack document (docs/qa/stack.md): the rules,
+# the docs, the guards and the scripts, in that order. It looks for objective contradictions
+# between them, as the explorer playbook's "Code-reading mode" says, and files them on Kanon.
+#
+# NO QA STORE. Kanon has no store hook (.github/actions/qa-store), so the lane's export says the
+# store is absent, the audit runs without memory and picks its areas from `git log`, and the put
+# job is skipped with a notice. At v0.25.0 the store jobs still declare the `kanon-qa-store`
+# environment, which GitHub creates, empty, on the first run; nothing is stored in it (#291
+# drops it from the next release).
+#
+# It runs as the Explorer's App, `kanon-explorer` (ADR 0011). It files with the labels the
+# lane's prompt names, which must exist on Kanon before a run that finds something.
+#
+# The secrets: EXPLORER_APP_ID and EXPLORER_APP_PRIVATE_KEY (the Explorer's App, in
+# docs/qa/agent-identities.md) and CLAUDE_CODE_OAUTH_TOKEN, mapped by name, never inherited.
+name: Code audit
+
+on:
+  # The lane's suggested cadence: every ~3 days at 07:30 UTC (`*/3` is day-of-month).
+  schedule:
+    - cron: "30 7 */3 * *"
+  workflow_dispatch:
+
+# The lane's ceiling: the audit job reads the tree, the issues this run filed and its own run;
+# the store jobs need `id-token` (unused here, with no hook), and the export's delete job
+# `actions: write`.
+permissions:
+  contents: read
+  issues: read
+  actions: write
+  id-token: write
+
+jobs:
+  audit:
+    uses: yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@v0.25.0
+    secrets:
+      EXPLORER_APP_ID: ${{ secrets.EXPLORER_APP_ID }}
+      EXPLORER_APP_PRIVATE_KEY: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { auditAreas, readCodeAreas } from '../../scripts/lib/code-areas.mjs';
 
 type Step = {
   id?: string;
@@ -312,6 +313,45 @@ describe('stage 2: Kanon runs the Implementer on itself, through the lanes at it
     expect(wf.on).toEqual(triggers);
     expect(jobs[0]?.with).toEqual(inputs);
     expect(jobs[0]?.secrets).toEqual(SECRETS);
+  });
+});
+
+// ADR 0011, the Explorer (plan 0004 step 11a): Kanon audits its own code with the code-audit
+// lane, at its last release, like the Reviewer and the Implementer above. Inert until the Owner
+// creates the Explorer's App: the secrets are then unset, and the audit job fails at the mint.
+describe('step 11a: Kanon audits its own code, through the lane at its last release', () => {
+  const { wf } = load('code-audit.yml');
+  const jobs = Object.values(wf.jobs) as (Job & { with?: unknown; secrets?: unknown })[];
+
+  it('calls the code-audit lane at an exact release, never through `$/`, from its one job', () => {
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.uses).toMatch(/^yedeya-labs\/kanon\/\.github\/workflows\/agent-code-audit\.yml@v\d+\.\d+\.\d+$/);
+  });
+
+  it("runs on the lane's two triggers only: its schedule and a dispatch with no inputs", () => {
+    expect(wf.on).toEqual({ schedule: [{ cron: expect.stringMatching(/^\S+ \S+ \S+ \S+ \S+$/) }], workflow_dispatch: null });
+  });
+
+  it('passes no inputs, and maps the three secrets by name, never inheriting', () => {
+    expect(jobs[0]?.with).toBeUndefined();
+    expect(jobs[0]?.secrets).toEqual({
+      EXPLORER_APP_ID: '${{ secrets.EXPLORER_APP_ID }}',
+      EXPLORER_APP_PRIVATE_KEY: '${{ secrets.EXPLORER_APP_PRIVATE_KEY }}',
+      CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
+    });
+  });
+
+  // The plan's areas: Kanon's rules, docs, guards and scripts. Without `audit` areas the lane
+  // would read only the `code` trees, and never set a rule beside the code that holds it.
+  it("audits Kanon's rules, docs, guards and scripts, as its stack document declares them", () => {
+    const { source, lines } = auditAreas(readCodeAreas());
+    expect(source).toBe('audit');
+    const paths = lines.map((l) => /^- `([^`]+)`/.exec(l)?.[1]);
+    expect(paths).toEqual(expect.arrayContaining(['rulebook/', 'docs/', 'tests/', 'scripts/', 'actions/']));
+  });
+
+  it('has the playbook section the lane sends the audit to', () => {
+    expect(readFileSync('docs/qa/explorer-playbook.md', 'utf8').split('\n')).toContain('## Code-reading mode');
   });
 });
 
