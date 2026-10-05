@@ -2,10 +2,9 @@
 #
 #   store:
 #     runs-on: ubuntu-latest
-#     environment: kanon-qa-store     # the only name the store's OIDC trust accepts (decision 9)
-#     permissions:
+#     permissions:                    # no environment: it would replace the ref in the OIDC subject
 #       contents: read                # the checkout below
-#       id-token: write               # the hook's credentials; no agent job holds this
+#       id-token: write               # the hook's credentials; only a store job holds this
 #     steps:
 #       - uses: $/actions/qa-store
 #         id: store
@@ -18,8 +17,8 @@
 # repository has no hook. The checkout is the commit the run is for (`github.sha`), without
 # persisted credentials, because the hook is the only thing this job runs from the workspace.
 # The store-coupled lanes run on a schedule or a dispatch, so that is the default branch or a
-# branch a writer chose; restricting the `kanon-qa-store` environment to the default branch
-# (`docs/qa-store.md`) keeps a dispatch from any other branch from reaching the store at all.
+# branch a writer chose; the store's role trusts only the default branch's ref (decision 9,
+# `docs/qa-store.md`), so a dispatch from any other branch never reaches the store at all.
 #
 # A WRITE FAILS THE JOB; A READ IS DEGRADED. The hook runs in one of two steps: `put` and
 # `record-skip` in a step whose failure fails the job (that red run is the page, `K-OBS-6`),
@@ -31,7 +30,7 @@
 #
 # `export` UPLOADS WHAT THE AGENT MAY READ, KEPT ONE DAY. The agent job downloads the artifact
 # named by `artifact-name`; a job of its own deletes it with `operation: delete-export`, the
-# one operation that runs no hook and needs no environment, only `actions: write`.
+# one operation that runs no hook and needs no `id-token`, only `actions: write`.
 #
 # A RE-RUN OF THE AGENT JOB ALONE HAS NO EXPORT (kanon#224). "Re-run failed jobs" reuses the
 # export job's outputs, and the earlier attempt's delete job has already deleted the artifact

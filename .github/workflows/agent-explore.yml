@@ -30,9 +30,10 @@
 # sweeps, and a degraded or absent store says so.
 #
 # THE RECORD. The `put` job writes the run's summary through the hook: the store keeps it as
-# the run's raw report, with a row for the run and one per route. Only the store jobs hold the
-# store's credentials, in the `kanon-qa-store` environment; the explore job declares no
-# `id-token` and no environment (P9's check, `tests/unit/helpers/store-jobs.ts`).
+# the run's raw report, with a row for the run and one per route. Only the store jobs hold
+# `id-token: write`, which the store's role (trusting the default branch's ref) needs; the
+# explore job declares no `id-token`, and no job declares an environment (P9's check,
+# `tests/unit/helpers/store-jobs.ts`, and the id-token guard, `tests/unit/id-token-guard.test.ts`).
 #
 # WITHOUT A STORE HOOK, it runs to completion without memory: the gate says the store is
 # absent and sweeps, and `put` is skipped with a notice.
@@ -111,7 +112,6 @@ jobs:
     if: needs.gate.outputs.member == 'true' && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: kanon-qa-store
     permissions:
       contents: read
       id-token: write
@@ -156,7 +156,6 @@ jobs:
     if: ${{ !cancelled() && needs.change.result == 'success' && needs.change.outputs.sweep == 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: kanon-qa-store
     permissions:
       contents: read
       id-token: write
@@ -436,7 +435,6 @@ jobs:
     if: ${{ !cancelled() && needs.explore.outputs.summary-artifact != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: kanon-qa-store
     permissions:
       contents: read
       id-token: write

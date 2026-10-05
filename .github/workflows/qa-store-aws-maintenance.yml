@@ -7,8 +7,9 @@
 # across five audits: the script shipped reviewed and idempotent and was simply never invoked
 # with `apply`. What changed in the move: the trigger is the caller's, the store's coordinates
 # are inputs instead of the `qa` environment's variables (a called workflow's caller can't read
-# an environment's variables), and the environment is `kanon-qa-store`, the one the store's role
-# trusts (decision 9).
+# an environment's variables), and the job declares no environment: the store's role trusts the
+# default branch's ref (decision 9, as the Owner changed it on 2026-10-05), so the caller is
+# dispatched from the default branch, and a dispatch from any other ref is refused.
 #
 # SAFE BY DEFAULT: `apply` is false, so a bare run is a dry run that prints what it WOULD
 # delete. The scripts are idempotent, so re-running after a successful apply is a clean
@@ -59,8 +60,9 @@ jobs:
     runs-on: ubuntu-latest
     # Bounds a hang. Actions' default cap is 360m.
     timeout-minutes: 30
-    # Scopes the OIDC token to `:environment:kanon-qa-store`, the one subject the store's role trusts.
-    environment: kanon-qa-store
+    # No environment: one would replace the ref in the OIDC subject, and the store's role trusts
+    # only the default branch's ref. This job runs the maintenance block alone, which is what
+    # lets it hold `id-token: write` (`tests/unit/id-token-guard.test.ts`).
     steps:
       - uses: $/infra/qa-store/aws/maintenance
         with:

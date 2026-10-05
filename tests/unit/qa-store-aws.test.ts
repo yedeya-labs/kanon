@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { writeStub } from './helpers/stub-bin.js';
-import { STACK_NAME, TEMPLATE_PATH, deployCommands, environmentProblems, lifecycleProblems, readTemplate } from '../../infra/qa-store/aws/provision.mjs';
+import { STACK_NAME, TEMPLATE_PATH, defaultBranchSubject, deployCommands, lifecycleProblems, readTemplate, subjectPrefix, subjectProblems, trustProblems } from '../../infra/qa-store/aws/provision.mjs';
 import { toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
 import { readCostRowsFile } from '../../actions/qa-store/qa-store.mjs';
 
@@ -24,7 +24,7 @@ describe('the template: the store outlives its stack and every stage (K-OBS-17)'
   const t = fresh();
   it('passes its own checks', () => {
     expect(lifecycleProblems(t)).toEqual([]);
-    expect(environmentProblems(t)).toEqual([]);
+    expect(trustProblems(t)).toEqual([]);
   });
 
   it('retains the table and the bucket on delete and on replace, and protects the table from deletion', () => {
@@ -80,31 +80,88 @@ describe('the template: the store outlives its stack and every stage (K-OBS-17)'
   });
 });
 
-describe('the role trusts exactly the kanon-qa-store environment (decision 9)', () => {
+describe('the role trusts exactly the default branch\'s ref subjects it is given (decision 9, as changed 2026-10-05)', () => {
   const sub = (t: J) => t.Resources.Role.Properties.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals;
-  it('its subject is the repository\'s kanon-qa-store environment, and its audience STS', () => {
+  it('its subject is exactly the Subjects parameter, by StringEquals, and its audience STS', () => {
     expect(sub(fresh())).toEqual({
       'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-      'token.actions.githubusercontent.com:sub': { 'Fn::Sub': 'repo:${Repository}:environment:kanon-qa-store' },
+      'token.actions.githubusercontent.com:sub': { Ref: 'Subjects' },
     });
+    expect(fresh().Parameters.Subjects.Type).toBe('CommaDelimitedList');
+    expect(fresh().Parameters.Repository).toBeUndefined();
   });
 
-  it.each(['qa', 'kanon-telemetry', 'staging', 'kanon-qa-store-dev'])('an environment named %s fails', (name) => {
-    const m = fresh();
-    sub(m)['token.actions.githubusercontent.com:sub'] = { 'Fn::Sub': `repo:\${Repository}:environment:${name}` };
-    expect(environmentProblems(m)).toEqual([`Role trusts 'repo:\${Repository}:environment:${name}', not 'repo:\${Repository}:environment:kanon-qa-store'`]);
-  });
-
-  it('a second subject beside it, a branch subject or a pattern fails', () => {
-    const two = fresh();
-    sub(two)['token.actions.githubusercontent.com:sub'] = [{ 'Fn::Sub': 'repo:${Repository}:environment:kanon-qa-store' }, { 'Fn::Sub': 'repo:${Repository}:environment:qa' }];
-    expect(environmentProblems(two)).toEqual(["Role trusts 'repo:${Repository}:environment:qa', not 'repo:${Repository}:environment:kanon-qa-store'"]);
+  it('the old environment subject, a hard-coded subject or a pattern fails', () => {
+    for (const x of [{ 'Fn::Sub': 'repo:${Repository}:environment:kanon-qa-store' }, 'repo:o/r:ref:refs/heads/main', [{ Ref: 'Subjects' }, 'repo:o/r:pull_request']]) {
+      const m = fresh();
+      sub(m)['token.actions.githubusercontent.com:sub'] = x;
+      expect(trustProblems(m)).toEqual([`Role trusts ${JSON.stringify(x)}, not exactly the Subjects parameter`]);
+    }
     const like = fresh();
-    const s = like.Resources.Role.Properties.AssumeRolePolicyDocument.Statement[0];
-    s.Condition.StringLike = { 'token.actions.githubusercontent.com:sub': 'repo:*' };
-    expect(environmentProblems(like)).toEqual(['Role trusts a pattern']);
+    like.Resources.Role.Properties.AssumeRolePolicyDocument.Statement[0].Condition.StringLike = { 'token.actions.githubusercontent.com:sub': 'repo:*' };
+    expect(trustProblems(like)).toEqual(['Role trusts a pattern']);
+    const aud = fresh();
+    delete sub(aud)['token.actions.githubusercontent.com:aud'];
+    expect(trustProblems(aud)).toEqual(['Role trusts an audience other than sts.amazonaws.com']);
+    const noParam = fresh();
+    noParam.Parameters.Subjects.Type = 'String';
+    expect(trustProblems(noParam)).toEqual(['the template has no Subjects parameter of type CommaDelimitedList']);
+  });
+});
+
+describe('the subjects: the default branch\'s ref, in the repository\'s own subject form', () => {
+  const IMMUTABLE = 'repo:yedeya-labs@335343289/qa-store-sandbox@1405862401';
+
+  it('accepts the classic and the immutable form of a default-branch ref subject', () => {
+    expect(subjectProblems(['repo:o/r:ref:refs/heads/main'], 'o/r')).toEqual([]);
+    expect(subjectProblems([`${IMMUTABLE}:ref:refs/heads/main`], 'yedeya-labs/qa-store-sandbox')).toEqual([]);
+    // Both at once, while a repository migrates between the forms.
+    expect(subjectProblems(['repo:O/R:ref:refs/heads/trunk', 'repo:o@1/r@2:ref:refs/heads/trunk'], 'o/r')).toEqual([]);
   });
 
+  it('refuses an environment, a pull request, a tag, a pattern or another repository', () => {
+    expect(subjectProblems([], 'o/r')).toEqual(['no subject to trust']);
+    for (const s of ['repo:o/r:environment:kanon-qa-store', 'repo:o/r:pull_request', 'repo:o/r:ref:refs/tags/v1', 'repo:o/r:ref:refs/heads/']) {
+      expect(subjectProblems([s], 'o/r')).toEqual([`'${s}' is not a branch ref subject (<prefix>:ref:refs/heads/<branch>)`]);
+    }
+    for (const s of ['repo:o/r:*', 'repo:o/r:ref:refs/heads/*', 'repo:o/r:ref:refs/heads/a,b', 'repo:o/r:ref:refs/heads/ma?n', 'repo:o/r:ref:refs/heads/[m]ain']) {
+      expect(subjectProblems([s], 'o/r')).toEqual([`'${s}' carries a pattern character, a comma or a space`]);
+    }
+    expect(subjectProblems(['repo:o/r:environment:qa:ref:refs/heads/main'], 'o/r')).toEqual(["'repo:o/r:environment:qa:ref:refs/heads/main' names an environment or a pull request"]);
+    expect(subjectProblems(['repo:x/r:ref:refs/heads/main'], 'o/r')).toEqual(["'repo:x/r:ref:refs/heads/main' is not a subject of o/r"]);
+    expect(subjectProblems(['repo:o@1/x@2:ref:refs/heads/main'], 'o/r')).toEqual(["'repo:o@1/x@2:ref:refs/heads/main' is not a subject of o/r"]);
+    expect(subjectProblems(['repository_owner:o:context:ref:refs/heads/main'], 'o/r')).toEqual(["'repository_owner:o:context:ref:refs/heads/main' names no repository, so it would trust others"]);
+  });
+
+  it('accepts a custom template\'s exact subject that names the repository and the branch', () => {
+    expect(subjectProblems(['repo:o/r:context:ref:refs/heads/main:job_workflow_ref:o/r/.github/workflows/x.yml@refs/heads/main'], 'o/r')).toEqual([]);
+  });
+
+  it('reads the prefix from GitHub\'s customization answer', () => {
+    // Measured on the sandbox, 2026-10-05: a repository created after 2026-07-15.
+    expect(subjectPrefix('yedeya-labs/qa-store-sandbox', { use_default: true, use_immutable_subject: true, sub_claim_prefix: IMMUTABLE })).toBe(IMMUTABLE);
+    expect(subjectPrefix('o/r', { use_default: true })).toBe('repo:o/r');
+    expect(subjectPrefix('o/r', { use_default: true, use_immutable_subject: false, sub_claim_prefix: 'repo:o@1/r@2' })).toBe('repo:o/r');
+    expect(() => subjectPrefix('o/r', { use_default: false, include_claim_keys: ['repo', 'context', 'job_workflow_ref'] })).toThrow(/customizes its OIDC subject.*--subject/);
+    expect(() => subjectPrefix('o/r', { use_default: true, use_immutable_subject: true, sub_claim_prefix: 'repo:o/r' })).toThrow(/immutable/);
+  });
+
+  it('asks GitHub for the default branch and the prefix', () => {
+    const asked: string[][] = [];
+    const gh = (answers: Record<string, string>) => (args: string[]) => { asked.push(args); return answers[args[1]!]!; };
+    expect(defaultBranchSubject('yedeya-labs/qa-store-sandbox', gh({
+      'repos/yedeya-labs/qa-store-sandbox': 'main\n',
+      'repos/yedeya-labs/qa-store-sandbox/actions/oidc/customization/sub': JSON.stringify({ use_default: true, use_immutable_subject: true, sub_claim_prefix: IMMUTABLE }),
+    }))).toBe(`${IMMUTABLE}:ref:refs/heads/main`);
+    expect(asked).toEqual([
+      ['api', 'repos/yedeya-labs/qa-store-sandbox', '--jq', '.default_branch'],
+      ['api', 'repos/yedeya-labs/qa-store-sandbox/actions/oidc/customization/sub'],
+    ]);
+    expect(defaultBranchSubject('o/r', gh({ 'repos/o/r': 'trunk', 'repos/o/r/actions/oidc/customization/sub': '{"use_default":true}' }))).toBe('repo:o/r:ref:refs/heads/trunk');
+  });
+});
+
+describe('the role\'s grant', () => {
   it('may write and read the store, and delete only COVERAGE rows', () => {
     const [s3, list, ddb, del, ...rest] = fresh().Resources.Role.Properties.Policies[0].PolicyDocument.Statement;
     expect(rest).toEqual([]);
@@ -138,25 +195,51 @@ describe('the template\'s cost and shape', () => {
 
 describe('the provisioning script', () => {
   it('deploys the stack, protects it from termination, and prints its outputs', () => {
-    const [deploy, protect, describe_] = deployCommands({ repository: 'o/r', region: 'eu-central-1', profile: 'p' });
+    const subjects = ['repo:o/r:ref:refs/heads/main'];
+    const [deploy, protect, describe_] = deployCommands({ repository: 'o/r', subjects, region: 'eu-central-1', profile: 'p' });
     expect(deploy).toEqual(['aws', 'cloudformation', 'deploy', '--region', 'eu-central-1', '--profile', 'p', '--stack-name', STACK_NAME,
-      '--template-file', TEMPLATE_PATH, '--parameter-overrides', 'Repository=o/r', 'CreateOidcProvider=true',
+      '--template-file', TEMPLATE_PATH, '--parameter-overrides', 'Subjects=repo:o/r:ref:refs/heads/main', 'CreateOidcProvider=true',
       '--capabilities', 'CAPABILITY_NAMED_IAM', '--no-fail-on-empty-changeset']);
     expect(protect).toContain('--enable-termination-protection');
     expect(describe_).toContain('Stacks[0].Outputs');
-    expect(deployCommands({ repository: 'o/r', region: 'us-east-2', oidcProvider: false })[0]).toContain('CreateOidcProvider=false');
+    expect(deployCommands({ repository: 'o/r', subjects, region: 'us-east-2', oidcProvider: false })[0]).toContain('CreateOidcProvider=false');
+    expect(deployCommands({ repository: 'o/r', subjects: [...subjects, 'repo:o@1/r@2:ref:refs/heads/main'], region: 'us-east-2' })[0])
+      .toContain('Subjects=repo:o/r:ref:refs/heads/main,repo:o@1/r@2:ref:refs/heads/main');
   });
 
   it('refuses a repository or region it can\'t trust exactly', () => {
-    expect(() => deployCommands({ repository: 'o/*', region: 'eu-central-1' })).toThrow(/owner\/name/);
-    expect(() => deployCommands({ repository: 'o/r', region: 'europe' })).toThrow(/region/);
+    const subjects = ['repo:o/r:ref:refs/heads/main'];
+    expect(() => deployCommands({ repository: 'o/*', subjects, region: 'eu-central-1' })).toThrow(/owner\/name/);
+    expect(() => deployCommands({ repository: 'o/r', subjects, region: 'europe' })).toThrow(/region/);
+    expect(() => deployCommands({ repository: 'o/r', subjects: ['repo:o/r:environment:kanon-qa-store'], region: 'eu-central-1' })).toThrow(/refusing to trust/);
   });
 
   it('prints the commands and runs none on a dry run, after checking the template', () => {
-    const r = spawnSync(process.execPath, ['infra/qa-store/aws/provision.mjs', '--repository', 'o/r', '--region', 'eu-central-1', '--dry-run'],
-      { encoding: 'utf8', env: { ...process.env, PATH: '/nonexistent' } });
+    const r = spawnSync(process.execPath, ['infra/qa-store/aws/provision.mjs', '--repository', 'o/r', '--region', 'eu-central-1', '--dry-run',
+      '--subject', 'repo:o/r:ref:refs/heads/main', '--subject', 'repo:o@1/r@2:ref:refs/heads/main'],
+    { encoding: 'utf8', env: { ...process.env, PATH: '/nonexistent' } });
     expect(r.status).toBe(0);
     expect(r.stdout.split('\n').filter((l) => l.startsWith('$ aws cloudformation '))).toHaveLength(3);
+    expect(r.stdout).toContain('Subjects=repo:o/r:ref:refs/heads/main,repo:o@1/r@2:ref:refs/heads/main');
+  });
+
+  it('without --subject, reads it from GitHub, and refuses a custom subject template', () => {
+    const work = mkdtempSync(join(tmpdir(), 'qa-store-provision-'));
+    try {
+      const run = (customization: string) => {
+        writeStub(join(work, 'gh'), `#!/usr/bin/env bash\ncase "$2" in\n  repos/o/r) echo trunk ;;\n  *) echo '${customization}' ;;\nesac\n`);
+        return spawnSync(process.execPath, ['infra/qa-store/aws/provision.mjs', '--repository', 'o/r', '--region', 'eu-central-1', '--dry-run'],
+          { encoding: 'utf8', env: { ...process.env, PATH: `${work}:/usr/bin:/bin` } });
+      };
+      const immutable = run('{"use_default":true,"use_immutable_subject":true,"sub_claim_prefix":"repo:o@7/r@9"}');
+      expect(immutable.status).toBe(0);
+      expect(immutable.stdout).toContain('Subjects=repo:o@7/r@9:ref:refs/heads/trunk');
+      const custom = run('{"use_default":false,"include_claim_keys":["repo","context"]}');
+      expect(custom.status).toBe(1);
+      expect(custom.stderr).toMatch(/customizes its OIDC subject/);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
   });
 });
 
@@ -172,11 +255,11 @@ describe('the actions', () => {
     expect(a.runs.steps[1]?.run?.trim()).toBe('bash "$GITHUB_ACTION_PATH/store.sh"');
   });
 
-  it('the maintenance workflow runs in kanon-qa-store, with id-token and nothing else', () => {
+  it('the maintenance workflow runs in no environment, with id-token and nothing else', () => {
     const wf = parse(readFileSync('.github/workflows/qa-store-aws-maintenance.yml', 'utf8')) as J;
     expect(Object.keys(wf.on)).toEqual(['workflow_call']);
     expect(wf.permissions).toEqual({ 'id-token': 'write' });
-    expect(wf.jobs.maintenance.environment).toBe('kanon-qa-store');
+    expect(wf.jobs.maintenance.environment).toBeUndefined();
     expect(wf.jobs.maintenance.steps).toEqual([expect.objectContaining({ uses: '$/infra/qa-store/aws/maintenance' })]);
     expect(wf.on.workflow_call.inputs.apply.default).toBe(false);
   });

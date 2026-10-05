@@ -25,9 +25,10 @@
 # to query them itself with the cloud CLI, in a job that had assumed the store's role. Now the
 # `export` job reads them through the adopter's store hook, as `areas.json`, and hands them to
 # the audit job as an artifact kept one day, which a job of its own deletes after the audit.
-# The `put` job writes the run's report through the hook. Only those two jobs hold the store's
-# credentials, in the `kanon-qa-store` environment; the audit job declares no `id-token` and no
-# environment (P9's check, `tests/unit/helpers/store-jobs.ts`).
+# The `put` job writes the run's report through the hook. Only those two jobs hold `id-token:
+# write`, which the store's role (trusting the default branch's ref) needs; the audit job
+# declares no `id-token`, and no job declares an environment (P9's check,
+# `tests/unit/helpers/store-jobs.ts`, and the id-token guard, `tests/unit/id-token-guard.test.ts`).
 #
 # WITHOUT A HOOK, it runs to completion without memory: the export holds only its manifest,
 # which says the store is absent, the prompt says so, and `put` is skipped with a notice.
@@ -102,7 +103,6 @@ jobs:
     if: needs.gate.outputs.member == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: kanon-qa-store
     permissions:
       contents: read
       id-token: write
@@ -508,7 +508,6 @@ jobs:
     if: always() && (needs.audit.result == 'success' || needs.audit.result == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: kanon-qa-store
     permissions:
       contents: read
       id-token: write

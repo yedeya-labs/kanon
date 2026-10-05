@@ -56,18 +56,37 @@ An attribute a row doesn't carry is absent, never `false` or 0. The block leaves
 
 Every store operation runs in a job of its own, which holds the store's credentials and does nothing else. No agent job holds them:
 
-- **A store job** declares the `kanon-qa-store` environment, and an explicit `permissions:` with `id-token: write`. That environment is the one OIDC subject the store's role trusts, so a job under any other name gets no credentials. Its steps are the `qa-store` block's, and, in a job that `put`s, the `actions/download-artifact` step that fetches the report: nothing else runs with the store's credentials (kanon#225). Neither the job nor a step sets `env:`, which could hand the block a `NODE_OPTIONS`, and the job has no `container:`, `services:` or `defaults:`. Work that reads a store job's answer, such as the Explorer's gate comparing `last-green` with the commit, runs in a job of its own after it, reading its outputs.
-- **The agent job** declares an explicit `permissions:` without `id-token`, and no `environment:`. It still grants every read its telemetry step makes with the workflow token. It reads the store through the export, which it downloads as an artifact.
+- **A store job** declares an explicit `permissions:` with `id-token: write`, and no environment. The store's role trusts the default branch's ref (below), and an environment would replace the ref in the job's OIDC subject, so the role would refuse it. It is the only kind of job, in any of Kanon's workflows, that holds `id-token: write`. Its steps are the `qa-store` block's, and, in a job that `put`s, the `actions/download-artifact` step that fetches the report: nothing else runs with the store's credentials (kanon#225). Neither the job nor a step sets `env:`, which could hand the block a `NODE_OPTIONS`, and the job has no `container:`, `services:` or `defaults:`. Work that reads a store job's answer, such as the Explorer's gate comparing `last-green` with the commit, runs in a job of its own after it, reading its outputs.
+- **The agent job** declares an explicit `permissions:` without `id-token`. It still grants every read its telemetry step makes with the workflow token. It reads the store through the export, which it downloads as an artifact.
 - **The export's delete job** deletes that artifact after the agent job, whatever happened to it: `if: always()`, `needs:` the export job and the agent job, and `actions: write` granted to it alone, and runs the block's `delete-export` step and nothing else. The export is kept one day at most.
 - **A re-run of the agent job alone has no export** (kanon#224). "Re-run failed jobs" re-runs a failed agent job and the jobs after it, the delete job among them, but not the export job, which succeeded: it reuses the export job's outputs, and the earlier attempt's delete job has already deleted the artifact they name. So the agent job runs only on the export's own attempt, `if: needs.<export>.outputs.attempt == github.run_attempt`, and is skipped on such a re-run rather than run without the store. The delete job is handed the export's `attempt` and the agent job's `result`, and turns that re-run red with the remedy: **re-run all jobs**, which exports again. A re-run of the delete job alone, after an agent job that succeeded, deletes the export and stays green.
 
-`tests/unit/helpers/store-jobs.ts` checks this shape, and each store-coupled lane's test applies it to the lane.
+`tests/unit/helpers/store-jobs.ts` checks this shape, and each store-coupled lane's test applies it to the lane. `tests/unit/id-token-guard.test.ts` holds every workflow Kanon ships to the last rule: a job that holds `id-token: write`, by its own grant or by inheriting the workflow's, must run the `qa-store` block alone (or the AWS store's maintenance block alone), or call a lane that has such a job. Any other fails `npm test` by name.
+
+### Who can reach the store
+
+The store's role trusts one OIDC subject per repository: **the default branch's ref**, `<prefix>:ref:refs/heads/<default branch>`, by exact match. There is no GitHub Environment. The Owner dropped it on 2026-10-05 (plan 0004, decision 9): an environment's branch restriction needs a paid plan in a private repository, and the environment added a setup step without protecting anything the ref does not. What scopes the store to its store jobs is now which jobs hold `id-token: write`, which the guard above holds.
+
+`<prefix>` is the repository's own subject prefix, which GitHub's API reports at `repos/<owner>/<repo>/actions/oidc/customization/sub`. It is `repo:<owner>/<repo>` for an older repository, and the **immutable** `repo:<owner>@<owner id>/<repo>@<repo id>` for one created after 2026-07-15, which a role trusting the first form refuses. `provision.mjs` reads it, so you never type it.
+
+What the trust admits and refuses, measured on a sandbox repository on 2026-10-05 where marked:
+
+| A token from | Its subject | The store |
+|---|---|---|
+| A scheduled run, or a dispatch on the default branch | `<prefix>:ref:refs/heads/<default branch>` (measured) | admitted |
+| A pull request, from any branch | `<prefix>:pull_request` (measured) | refused |
+| `pull_request_target` | `<prefix>:pull_request` (measured, although the run's ref is the default branch) | refused: stricter than before, when a `pull_request_target` job that declared the environment was admitted |
+| A dispatch or push on another branch, a tag, the merge queue | that ref | refused |
+| A job that declares any environment | `<prefix>:environment:<name>` | refused |
+| A fork's pull request | no token: GitHub gives a fork's run none | refused |
+| Any job of a default-branch workflow that holds `id-token: write` | `<prefix>:ref:refs/heads/<default branch>` | admitted, as it was with an environment, which any such workflow could also declare |
+
+The one thing the environment did that the ref does not is name the store jobs in the subject: a Kanon job wrongly given `id-token: write` would be admitted. The guard above fails such a job in Kanon's own workflows, and GitHub gives a job without the grant no `ACTIONS_ID_TOKEN_REQUEST_*` variables, so it cannot ask for a token at all. Your own workflows on the default branch are yours to keep the same way: grant `id-token: write` only where something needs it.
 
 ### Setting it up
 
-1. **Create the `kanon-qa-store` environment** in the repository. Restrict it to the default branch: then a dispatch from any other branch can't reach the store.
-2. **Write the hook.** For Kanon's AWS store it is one call of Kanon's AWS action (below). For any other store, implement the five operations on the files above.
-3. **Grant `id-token: write` and `contents: read` in the caller** of each store-coupled lane. Kanon's lane uses `id-token` only in its store jobs, and their checkout needs `contents: read`. A lane that exports the store, such as the code audit, also needs `actions: write`, which only its delete job uses.
+1. **Write the hook.** For Kanon's AWS store it is one call of Kanon's AWS action (below). For any other store, implement the five operations on the files above.
+2. **Grant `id-token: write` and `contents: read` in the caller** of each store-coupled lane. Kanon's lane uses `id-token` only in its store jobs, and their checkout needs `contents: read`. A lane that exports the store, such as the code audit, also needs `actions: write`, which only its delete job uses.
 
 ## Kanon's AWS implementation
 
@@ -88,7 +107,7 @@ The code is in [`infra/qa-store/aws/`](../infra/qa-store/aws/):
 
 - **The table, `kanon-qa-store`:** on demand, keyed `pk` and `sk`, with point-in-time recovery, deletion protection, and `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`.
 - **The bucket, `kanon-qa-store-<account>-<region>`:** versioned, private, encrypted with S3's own key, TLS only, and retained like the table.
-- **The role, `kanon-qa-store`:** trusted for exactly `repo:<owner>/<repo>:environment:kanon-qa-store`. It may put and get objects, list the bucket, put, update, get and query items, and delete items only in the `COVERAGE` partition, the one a sweep re-derives. Listing the bucket is what makes S3 answer a missing report with 404, which an export leaves out, rather than 403, which fails it.
+- **The role, `kanon-qa-store`:** trusted for exactly the subjects passed as the `Subjects` parameter, each `<prefix>:ref:refs/heads/<default branch>` ([Who can reach the store](#who-can-reach-the-store)), never a pattern. It may put and get objects, list the bucket, put, update, get and query items, and delete items only in the `COVERAGE` partition, the one a sweep re-derives. Listing the bucket is what makes S3 answer a missing report with 404, which an export leaves out, rather than 403, which fails it.
 - **GitHub's OIDC provider,** unless the account has one.
 
 **No stage in its lifecycle** (`K-OBS-17`). Nothing in the stack is named for, conditioned on or parameterised by an application stage, and deleting the stack leaves the table and the bucket with their data. `provision.mjs` refuses a template that breaks this, and so does the unit test that parses it.
@@ -103,6 +122,8 @@ From a Kanon checkout at the release you pin, after `npm ci`:
 node infra/qa-store/aws/provision.mjs --repository <owner>/<repo> --region <region> --profile <profile> --dry-run
 node infra/qa-store/aws/provision.mjs --repository <owner>/<repo> --region <region> --profile <profile>
 ```
+
+It needs `gh`, signed in with read access to the repository: it reads the default branch and the subject prefix from GitHub's API and prints the subject it will trust. A repository with a custom subject template (`use_default: false`) is refused, because its subject is not a branch ref; pass the exact subject with `--subject` instead. `--subject` may be repeated, to trust both prefix forms while a repository moves between them; each must still be a default-branch ref subject of the repository named. Re-running it on an existing stack replaces the trust in place: an older stack that trusted the `kanon-qa-store` environment trusts the default branch's ref instead, and the environment can then be deleted.
 
 Pass `--no-oidc-provider` if `aws iam list-open-id-connect-providers` already lists `token.actions.githubusercontent.com`. Put the store in the reference environment's account (`K-OBS-17`). The last command prints the stack's outputs, `RoleArn`, `TableName` and `BucketName`, which the hook names:
 
@@ -135,13 +156,13 @@ runs:
 
 <!-- x-release-please-end -->
 
-**An existing store** of the same item model works the same way: name its table, bucket, region and role. Its role must trust `repo:<owner>/<repo>:environment:kanon-qa-store`, and hold the template's grants, `s3:ListBucket` on the bucket included: without it, one run whose raw report is missing fails the whole export.
+**An existing store** of the same item model works the same way: name its table, bucket, region and role. Its role must trust the default branch's ref subject, `<prefix>:ref:refs/heads/<default branch>` with the prefix GitHub's API reports, and hold the template's grants, `s3:ListBucket` on the bucket included: without it, one run whose raw report is missing fails the whole export.
 
 **To delete the store,** delete the stack, then turn off the table's deletion protection and delete the table and the bucket by hand. The stack never takes the data with it.
 
 ### Maintenance
 
-The upkeep runs from a caller of yours, by dispatch only, and is a dry run unless you tick `apply`:
+The upkeep runs from a caller of yours, by dispatch only, and is a dry run unless you tick `apply`. Dispatch it on the default branch: the store's role refuses a run of any other ref.
 
 <!-- x-release-please-start-version -->
 

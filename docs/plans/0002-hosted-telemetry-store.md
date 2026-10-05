@@ -169,6 +169,8 @@ The table is guidance for reading the data, not a field. The store records facts
 
 **Why an environment for the writer.** `K-OBS-13` says only the collector holds the store's credentials. The `kanon-telemetry` environment, restricted to the default branch, is how that becomes true: only the collector job declares it. Without it, every job on the default branch could assume the writer role. This is the reference adopter's existing pattern, narrowed to one job.
 
+**Note, 2026-10-05: the QA store dropped its environment, and the same approach applies here** (plan 0004, decision 9 as the Owner changed it). The QA store's role now trusts the default branch's ref subject, in the repository's own form (`repo:<owner>/<repo>`, or the immutable `repo:<owner>@<id>/<repo>@<id>` GitHub gives a repository created after 2026-07-15, which a template naming `repo:<owner>/<repo>` refuses), and "only this job reaches the store" is held by a guard on which jobs hold `id-token: write`, not by an environment, whose branch restriction needs a paid plan in a private repository. The writer's `kanon-telemetry` environment, S4's and #213's, would take the same shape: the collector job alone holds `id-token: write`, and the writer trusts the default branch's ref. That change is #213's, not made here; the reader's subject list above also needs the immutable form for a newer repository.
+
 **A renamed repository fails closed.** The `sub` no longer matches, the collector turns red, and the register is updated.
 
 ## 4. Shape: the ingest path (decision 4)

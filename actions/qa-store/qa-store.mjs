@@ -35,10 +35,6 @@ import { Buffer } from 'node:buffer';
 import { join, resolve } from 'node:path';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 
-/** The environment every store job declares, and the only one (decision 9). The store's
- *  OIDC trust names it, so a job under any other name gets no credentials. */
-export const STORE_ENVIRONMENT = 'kanon-qa-store';
-
 /** The adopter's hook, at a fixed path (`K-LAYOUT-1`). */
 export const HOOK_PATH = '.github/actions/qa-store/action.yml';
 

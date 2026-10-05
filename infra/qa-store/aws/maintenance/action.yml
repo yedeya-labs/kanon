@@ -1,6 +1,6 @@
 # Upkeep of Kanon's AWS QA store (plan 0004 §2.8, decision 10): one task, a dry run unless
 # `apply` is 'true'. Called by `.github/workflows/qa-store-aws-maintenance.yml`, in a job that
-# declares the `kanon-qa-store` environment. An adopter whose store is its own writes its own.
+# runs this action alone, from the default branch. An adopter whose store is its own writes its own.
 #
 # MOVED FROM THE REFERENCE ADOPTER'S MAINTENANCE WORKFLOW (ADR 0009): its task step, with the
 # credentials step it ran before it. Add new hygiene tasks as `task` values here, rather than new

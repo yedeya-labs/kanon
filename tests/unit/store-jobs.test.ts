@@ -62,7 +62,7 @@ describe('the agent job holds no store credentials (P9\'s mutations)', () => {
 
   it('giving it an environment turns the check red', () => {
     expect(mutate((wf) => { job(wf, 'agent').environment = 'kanon-qa-store'; }))
-      .toEqual(["agent: the agent job declares environment 'kanon-qa-store'; only store jobs declare one"]);
+      .toEqual(["agent: the agent job declares environment 'kanon-qa-store'; no job of a store-coupled lane declares one"]);
   });
 
   it('dropping a read the telemetry step uses turns the check red (RA-2592)', () => {
@@ -83,13 +83,16 @@ describe('the agent job holds no store credentials (P9\'s mutations)', () => {
   });
 });
 
-describe('the store jobs run in kanon-qa-store, and only they hold id-token', () => {
-  it('a store job under any other environment name turns the check red', () => {
-    for (const name of ['qa', 'kanon-telemetry', 'kanon-qa-store-staging']) {
-      expect(mutate((wf) => { job(wf, 'put').environment = name; })).toEqual([`put: a store job's environment is '${name}', not 'kanon-qa-store'`]);
+describe('the store jobs declare no environment, and only they hold id-token', () => {
+  it('a store job under any environment turns the check red: it would change the OIDC subject', () => {
+    for (const name of ['kanon-qa-store', 'qa', 'kanon-telemetry']) {
+      expect(mutate((wf) => { job(wf, 'put').environment = name; }))
+        .toEqual([`put: a store job declares environment '${name}', which would replace the default branch's ref in its OIDC subject, so the store's role would refuse it`]);
     }
-    expect(mutate((wf) => { job(wf, 'export').environment = { name: 'qa' }; })).toEqual(["export: a store job's environment is 'qa', not 'kanon-qa-store'"]);
-    expect(mutate((wf) => { delete job(wf, 'export').environment; })).toEqual(["export: a store job's environment is '', not 'kanon-qa-store'"]);
+    expect(mutate((wf) => { job(wf, 'export').environment = { name: 'qa' }; }))
+      .toEqual(["export: a store job declares environment 'qa', which would replace the default branch's ref in its OIDC subject, so the store's role would refuse it"]);
+    expect(mutate((wf) => { job(wf, 'delete-export').environment = 'qa'; }))
+      .toEqual(["delete-export: declares environment 'qa'; no job of a store-coupled lane declares one"]);
   });
 
   it('a store job without id-token: write turns the check red', () => {
@@ -105,7 +108,7 @@ describe('the store jobs run in kanon-qa-store, and only they hold id-token', ()
   it('any other job with id-token, an environment or no permissions of its own turns the check red', () => {
     const gate = (j: Job) => mutate((wf) => { wf.jobs.gate = j; });
     expect(gate({ permissions: { contents: 'read', 'id-token': 'write' }, steps: [{ run: 'true' }] })).toEqual(['gate: grants id-token: write; only store jobs do']);
-    expect(gate({ permissions: { contents: 'read' }, environment: 'kanon-qa-store', steps: [{ run: 'true' }] })).toEqual(["gate: declares environment 'kanon-qa-store'; only store jobs declare one"]);
+    expect(gate({ permissions: { contents: 'read' }, environment: 'kanon-qa-store', steps: [{ run: 'true' }] })).toEqual(["gate: declares environment 'kanon-qa-store'; no job of a store-coupled lane declares one"]);
     expect(gate({ steps: [{ run: 'true' }] })).toEqual(["gate: declares no permissions block of its own, so it inherits the caller's grant, id-token included"]);
   });
 });

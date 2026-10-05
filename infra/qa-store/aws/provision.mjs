@@ -1,16 +1,28 @@
 #!/usr/bin/env node
 // Provision Kanon's AWS QA store in the adopter's own account (plan 0004 §3.2, step P9;
-// `K-OBS-17`), from `template.yaml`, with nothing beyond Node and the AWS CLI.
+// `K-OBS-17`), from `template.yaml`, with nothing beyond Node, `gh` and the AWS CLI.
 //
 //   node infra/qa-store/aws/provision.mjs --repository <owner>/<repo> --region <region> \
-//     [--profile <profile>] [--no-oidc-provider] [--dry-run]
+//     [--subject <exact OIDC subject>]... [--profile <profile>] [--no-oidc-provider] [--dry-run]
 //
 // It checks the template first, with the same functions the unit test runs, and refuses to deploy
 // one that fails them: the table and the bucket must be retained and the table protected from
 // deletion, nothing in their lifecycle may name or depend on an application stage, and the role
-// must trust exactly the repository's `kanon-qa-store` environment. Then it deploys the stack
-// `kanon-qa-store`, turns on the stack's termination protection, and prints the outputs the
-// adopter's store hook names. `--dry-run` prints the commands and runs none.
+// must trust exactly the `Subjects` parameter, never a pattern.
+//
+// THE SUBJECT IS THE DEFAULT BRANCH'S REF (decision 9, as the Owner changed it on 2026-10-05):
+// `<prefix>:ref:refs/heads/<default branch>`. Both halves come from GitHub's API, never from a
+// guess: the default branch from `repos/<o>/<r>`, and the prefix from
+// `repos/<o>/<r>/actions/oidc/customization/sub`, because GitHub gives a repository created after
+// 2026-07-15 an immutable subject (`repo:<owner>@<owner id>/<repo>@<repo id>`), which a role
+// trusting `repo:<owner>/<repo>` refuses. A repository with a custom subject template is refused
+// unless `--subject` names the exact subject. `--subject` may be repeated, to trust both forms
+// while a repository migrates between them; each must still be a default-branch ref subject of
+// the repository named.
+//
+// Then it deploys the stack `kanon-qa-store`, turns on the stack's termination protection, and
+// prints the outputs the adopter's store hook names. `--dry-run` reads GitHub's API (unless every
+// subject is given) and prints the AWS commands, running none.
 //
 // One store per account and region: the table is `kanon-qa-store`, and the bucket carries the
 // account id and region, because bucket names are global. The commands are the account owner's to
@@ -23,7 +35,6 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parse } from 'yaml';
 
-import { STORE_ENVIRONMENT } from '../../../actions/qa-store/qa-store.mjs';
 import { isCliEntry } from '../../../scripts/lib/cli-entry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -35,6 +46,13 @@ export const STORE_RESOURCES = { table: 'AWS::DynamoDB::Table', bucket: 'AWS::S3
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 const OIDC_SUB = 'token.actions.githubusercontent.com:sub';
+const OIDC_AUD = 'token.actions.githubusercontent.com:aud';
+/** The template parameter that carries the subjects. */
+export const SUBJECTS_PARAMETER = 'Subjects';
+/** A branch name as a subject may carry it: no pattern characters, no spaces, no commas. */
+const BRANCH = /^[A-Za-z0-9._/-]+$/;
+/** The immutable subject prefix GitHub gives a repository created after 2026-07-15. */
+const IMMUTABLE_PREFIX = /^repo:([A-Za-z0-9_.-]+)@(\d+)\/([A-Za-z0-9_.-]+)@(\d+)$/;
 /** A word that names an application stage, wherever it appears in a store resource's lifecycle. */
 const STAGE_WORD = /(^|[^a-z])(stages?|staging|prod|production|dev|development|preview)([^a-z]|$)/i;
 
@@ -82,42 +100,108 @@ export function lifecycleProblems(template) {
 }
 
 /**
- * Every OIDC subject a role in the template trusts, and what's wrong with any of them: each must
- * be exactly `repo:${Repository}:environment:kanon-qa-store` (decision 9).
+ * What's wrong with the template's trust (decision 9): every role trusts GitHub's OIDC audience
+ * for STS and exactly the `Subjects` parameter as the subject, by `StringEquals`. The subjects
+ * themselves are checked by `subjectProblems` before they are passed.
  * @param {any} template
  * @returns {string[]}
  */
-export function environmentProblems(template) {
+export function trustProblems(template) {
   /** @type {string[]} */
   const out = [];
-  const want = `repo:\${Repository}:environment:${STORE_ENVIRONMENT}`;
+  const param = template?.Parameters?.[SUBJECTS_PARAMETER];
+  if (param?.Type !== 'CommaDelimitedList') out.push(`the template has no ${SUBJECTS_PARAMETER} parameter of type CommaDelimitedList`);
   const roles = Object.entries(/** @type {Record<string, Resource>} */ (template?.Resources ?? {})).filter(([, r]) => r.Type === 'AWS::IAM::Role');
   if (roles.length === 0) out.push('the template has no role');
   for (const [id, r] of roles) {
     for (const s of r.Properties?.AssumeRolePolicyDocument?.Statement ?? []) {
       const cond = s.Condition ?? {};
       if (Object.keys(cond).some((k) => /Like/.test(k))) out.push(`${id} trusts a pattern`);
+      if (cond.StringEquals?.[OIDC_AUD] !== 'sts.amazonaws.com') out.push(`${id} trusts an audience other than sts.amazonaws.com`);
       const sub = cond.StringEquals?.[OIDC_SUB];
-      const subs = [sub].flat().map((x) => (x && typeof x === 'object' && 'Fn::Sub' in x ? x['Fn::Sub'] : x));
       if (sub === undefined) { out.push(`${id} trusts no OIDC subject`); continue; }
-      for (const x of subs) if (x !== want) out.push(`${id} trusts '${x}', not '${want}'`);
+      if (JSON.stringify(sub) !== JSON.stringify({ Ref: SUBJECTS_PARAMETER })) out.push(`${id} trusts ${JSON.stringify(sub)}, not exactly the ${SUBJECTS_PARAMETER} parameter`);
     }
   }
   return out;
 }
 
 /**
+ * What's wrong with the subjects a store would trust. Each must be exact (no pattern character,
+ * comma or space), carry the claim `ref:refs/heads/<branch>` and no environment or pull request,
+ * and name the repository in its `repo` claim, in the classic (`repo:<owner>/<repo>`) or the
+ * immutable (`repo:<owner>@<id>/<repo>@<id>`) form. GitHub's default subject is
+ * `<repo claim>:ref:refs/heads/<branch>`; a custom template's, passed with `--subject`, may carry
+ * other claims beside those two, but never trusts another repository or a pattern.
+ * @param {string[]} subjects
+ * @param {string} repository owner/name
+ * @returns {string[]}
+ */
+export function subjectProblems(subjects, repository) {
+  /** @type {string[]} */
+  const out = [];
+  if (subjects.length === 0) out.push('no subject to trust');
+  const [owner, repo] = repository.toLowerCase().split('/');
+  for (const s of subjects) {
+    if (/[*?,\s[\]]/.test(s)) { out.push(`'${s}' carries a pattern character, a comma or a space`); continue; }
+    if (!/(^|:)ref:refs\/heads\/[A-Za-z0-9._/-]+(:|$)/.test(s)) { out.push(`'${s}' is not a branch ref subject (<prefix>:ref:refs/heads/<branch>)`); continue; }
+    if (/(^|:)(environment|pull_request)(:|$)/.test(s)) { out.push(`'${s}' names an environment or a pull request`); continue; }
+    const claim = /(?:^|:)repo:([^:]+)/.exec(s)?.[1];
+    if (claim === undefined) { out.push(`'${s}' names no repository, so it would trust others`); continue; }
+    const immutable = IMMUTABLE_PREFIX.exec(`repo:${claim}`);
+    const names = immutable ? [immutable[1], immutable[3]] : claim.split('/');
+    if (names.length !== 2 || names[0]?.toLowerCase() !== owner || names[1]?.toLowerCase() !== repo) out.push(`'${s}' is not a subject of ${repository}`);
+  }
+  return out;
+}
+
+/**
+ * The subject prefix GitHub puts in the repository's OIDC tokens, from
+ * `repos/<o>/<r>/actions/oidc/customization/sub`. A custom template (`use_default: false`) makes
+ * the subject something else entirely, so it is refused: pass `--subject` for it.
+ * @param {string} repository owner/name
+ * @param {{ use_default?: boolean, use_immutable_subject?: boolean, sub_claim_prefix?: string, include_claim_keys?: string[] }} customization
+ * @returns {string}
+ */
+export function subjectPrefix(repository, customization) {
+  if (customization.use_default === false) {
+    throw new Error(`${repository} customizes its OIDC subject (include_claim_keys: ${JSON.stringify(customization.include_claim_keys ?? [])}), so its subject is not <prefix>:ref:refs/heads/<branch>; pass the exact subject with --subject`);
+  }
+  if (customization.use_immutable_subject) {
+    const prefix = customization.sub_claim_prefix ?? '';
+    if (!IMMUTABLE_PREFIX.test(prefix)) throw new Error(`${repository} has an immutable OIDC subject, but GitHub reported its prefix as '${prefix}', not repo:<owner>@<id>/<repo>@<id>`);
+    return prefix;
+  }
+  return `repo:${repository}`;
+}
+
+/**
+ * The default-branch subject the store trusts, from GitHub's API through `gh`.
+ * @param {string} repository owner/name
+ * @param {(args: string[]) => string} [gh]
+ * @returns {string}
+ */
+export function defaultBranchSubject(repository, gh = (args) => execFileSync('gh', args, { encoding: 'utf8' })) {
+  const branch = gh(['api', `repos/${repository}`, '--jq', '.default_branch']).trim();
+  if (!BRANCH.test(branch)) throw new Error(`GitHub reported ${repository}'s default branch as '${branch}'`);
+  const customization = JSON.parse(gh(['api', `repos/${repository}/actions/oidc/customization/sub`]));
+  return `${subjectPrefix(repository, customization)}:ref:refs/heads/${branch}`;
+}
+
+/**
  * The commands that provision the store.
- * @param {{ repository: string, region: string, profile?: string, oidcProvider?: boolean, template?: string }} o
+ * @param {{ repository: string, subjects: string[], region: string, profile?: string, oidcProvider?: boolean, template?: string }} o
  * @returns {string[][]}
  */
-export function deployCommands({ repository, region, profile, oidcProvider = true, template = TEMPLATE_PATH }) {
+export function deployCommands({ repository, subjects, region, profile, oidcProvider = true, template = TEMPLATE_PATH }) {
   if (!REPOSITORY.test(repository)) throw new Error(`--repository '${repository}' is not owner/name`);
   if (!REGION.test(region)) throw new Error(`--region '${region}' is not an AWS region`);
+  const problems = subjectProblems(subjects, repository);
+  if (problems.length) throw new Error(`refusing to trust these subjects: ${problems.join('; ')}`);
   const common = ['--region', region, ...(profile ? ['--profile', profile] : [])];
   return [
     ['aws', 'cloudformation', 'deploy', ...common, '--stack-name', STACK_NAME, '--template-file', template,
-      '--parameter-overrides', `Repository=${repository}`, `CreateOidcProvider=${oidcProvider ? 'true' : 'false'}`,
+      '--parameter-overrides', `${SUBJECTS_PARAMETER}=${subjects.join(',')}`, `CreateOidcProvider=${oidcProvider ? 'true' : 'false'}`,
       '--capabilities', 'CAPABILITY_NAMED_IAM', '--no-fail-on-empty-changeset'],
     ['aws', 'cloudformation', 'update-termination-protection', ...common, '--stack-name', STACK_NAME, '--enable-termination-protection'],
     ['aws', 'cloudformation', 'describe-stacks', ...common, '--stack-name', STACK_NAME, '--query', 'Stacks[0].Outputs', '--output', 'table'],
@@ -132,16 +216,20 @@ if (isCliEntry(import.meta.url)) {
     options: {
       repository: { type: 'string' },
       region: { type: 'string' },
+      subject: { type: 'string', multiple: true },
       profile: { type: 'string' },
       'no-oidc-provider': { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
     },
   });
   try {
-    if (!values.repository || !values.region) throw new Error('usage: provision.mjs --repository <owner>/<repo> --region <region> [--profile <profile>] [--no-oidc-provider] [--dry-run]');
-    const problems = [...lifecycleProblems(readTemplate()), ...environmentProblems(readTemplate())];
+    if (!values.repository || !values.region) throw new Error('usage: provision.mjs --repository <owner>/<repo> --region <region> [--subject <subject>]... [--profile <profile>] [--no-oidc-provider] [--dry-run]');
+    const problems = [...lifecycleProblems(readTemplate()), ...trustProblems(readTemplate())];
     if (problems.length) throw new Error(`the template fails its checks: ${problems.join('; ')}`);
-    const commands = deployCommands({ repository: values.repository, region: values.region, profile: values.profile, oidcProvider: !values['no-oidc-provider'] });
+    if (!REPOSITORY.test(values.repository)) throw new Error(`--repository '${values.repository}' is not owner/name`);
+    const subjects = values.subject?.length ? values.subject : [defaultBranchSubject(values.repository)];
+    console.log(`trusting ${subjects.join(', ')}`);
+    const commands = deployCommands({ repository: values.repository, subjects, region: values.region, profile: values.profile, oidcProvider: !values['no-oidc-provider'] });
     for (const c of commands) {
       console.log(`$ ${c.join(' ')}`);
       if (!values['dry-run']) execFileSync(c[0] ?? 'aws', c.slice(1), { stdio: 'inherit' });
