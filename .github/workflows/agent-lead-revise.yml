@@ -195,6 +195,8 @@ jobs:
       marked: ${{ steps.filter.outputs.marked }}
       # The login the register gave, which the round record filters on.
       login: ${{ steps.filter.outputs.login }}
+      # The role's persona header line, for the round record (plan 0005 §3.3).
+      header: ${{ steps.filter.outputs.header }}
       mandate: ${{ steps.mandate.outputs.text }}
     steps:
       # Everything decidable without a token, decided before one is minted.
@@ -344,6 +346,9 @@ jobs:
               || { echo "::error title=App register::could not read docs/qa/agent-identities.md from the default branch of $REPO: $(cat "$err")"; exit 1; }
             ROLE_LOGIN="$(printf '%s\n' "$text" | awk -v role="$1" "$REGISTER_AWK" 2>"$err")" \
               || { echo "::error title=App register::$(cat "$err")"; exit 1; }
+            # The role's persona header (plan 0005 §3.3), from the same default-branch copy, for
+            # the round record's comment. Never fails: a malformed persona gives the role's own.
+            ROLE_HEADER="$(printf '%s\n' "$text" | node "$KANON/scripts/lib/role-marker.mjs" header-from-register "$1")" || ROLE_HEADER=""
           }
           hash_stdin() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
           fingerprint() {
@@ -507,6 +512,7 @@ jobs:
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "marked=$MARKED" >> "$GITHUB_OUTPUT"
           echo "login=$LEAD_LOGIN" >> "$GITHUB_OUTPUT"
+          echo "header=$ROLE_HEADER" >> "$GITHUB_OUTPUT"
           # The prompt branches on this. A gate that opens without telling the agent
           # WHY it opened sends him to re-read the review he already answered.
           if [ "$IS_DISPATCH" = "true" ] && [ "$RESET" = "true" ]; then
@@ -732,6 +738,9 @@ jobs:
           PR: ${{ needs.filter.outputs.pr }}
           LEAD_LOGIN: ${{ needs.filter.outputs.login }}
           MARKER: "<!-- qa:lead-revise -->"
+          # The persona header the filter read from the default branch's register, or the role's
+          # own (the comment's fallback) when that read gave nothing (plan 0005 §3.3).
+          HEADER: ${{ needs.filter.outputs.header }}
           BEFORE_SHA: ${{ needs.filter.outputs.head_sha }}
           BEFORE_MARKED: ${{ needs.filter.outputs.marked }}
           OUTCOME: ${{ needs.revise.outputs.outcome }}
@@ -756,7 +765,10 @@ jobs:
             echo "the Lead left its own marker ($BEFORE_MARKED -> $NOW_MARKED) — nothing to record"
             exit 0
           fi
+          # Opened with the Lead's header and role marker (plan 0005 §3.3): its App posts it.
           gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s\n' \
+            "${HEADER:-**Lead** <!-- kanon:role=lead -->}" \
+            "" \
             "$MARKER" \
             "⚠️ **A revise run pushed to this brief and ended without replying** (agent step: \`${OUTCOME:-unknown}\`; head \`${BEFORE_SHA:0:7}\` → \`${AFTER_SHA:0:7}\`; $RUN_URL)." \
             "" \

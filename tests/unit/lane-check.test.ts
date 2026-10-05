@@ -628,7 +628,9 @@ describe.skipIf(!hasYq)('lane-check', () => {
       passes(null);
       passes('# Adoption record\n\n## Choices\n\n- **Chat channel:** none yet.\n- **Overseer:** `not installed`\n');
       passes(`# Adoption record\n\n${DECLARED}`);
-    });
+    // Three whole lane-check runs, at about a second each alone: under a loaded full run that
+    // reached the default 5s once the register's persona check was added (plan 0005 §3.3).
+    }, 15_000);
     it('refuses a declaration missing its job, with the reader\'s own message', () =>
       red((t) => t.write(REC, `# Adoption record\n\n${DECLARED.replace(/^- \*\*Reference deploy job.*\n/m, '')}`),
         /adoption\.md,title=lane-check::docs\/qa\/adoption\.md declares the reference environment's deploy without `Reference deploy job`: declare all three, or none \(K-LAYOUT-10\)/));
@@ -714,6 +716,22 @@ describe.skipIf(!hasYq)('lane-check', () => {
     });
     it('refuses a slug that is not in backticks', () =>
       red((t) => t.write(REG, t.read(REG).replace('`example-implementer`', 'example-implementer')), 'gives the role Implementer no App slug in backticks'));
+
+    // The optional `Persona` column (plan 0005 §3.3): blank is the role's name, and a
+    // malformed persona fails by name, on the pull request that wrote it.
+    const withPersonas = (t: Tree, implementer: string, lead = '') => t.write(REG, t.read(REG)
+      .replace('| Role | App slug |', '| Role | App slug | Persona |').replace(/^\|---\|/m, '|---|---|')
+      .replace(/^(\| Implementer \| [^|]+\|)/m, `$1 ${implementer} |`).replace(/^(\| Lead \| [^|]+\|)/m, `$1 ${lead} |`));
+    it('passes a register with a Persona column, declared or blank', () => {
+      const t = adopter();
+      withPersonas(t, 'The Builder', '');
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
+    it('refuses a malformed persona, by row and name', () =>
+      red((t) => withPersonas(t, '<b>Builder</b>'), /agent-identities\.md:\d+: the Implementer row's persona `<b>Builder<\/b>` is malformed/));
+    it('refuses a persona that is another role\'s name', () =>
+      red((t) => withPersonas(t, 'Reviewer'), "the Implementer row's persona `Reviewer` is another role's name"));
   });
 
   describe('the Dependabot entry that proposes Kanon upgrades (K-ADOPT-11)', () => {

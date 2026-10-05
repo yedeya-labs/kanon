@@ -147,6 +147,8 @@ jobs:
       marked: ${{ steps.filter.outputs.marked }}
       # The login the register gave, which the round record filters on.
       login: ${{ steps.filter.outputs.login }}
+      # The role's persona header line, for the round record (plan 0005 §3.3).
+      header: ${{ steps.filter.outputs.header }}
       mandate: ${{ steps.mandate.outputs.text }}
     steps:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
@@ -291,6 +293,9 @@ jobs:
               || { echo "::error title=App register::could not read docs/qa/agent-identities.md from the default branch of $REPO: $(cat "$err")"; exit 1; }
             ROLE_LOGIN="$(printf '%s\n' "$text" | awk -v role="$1" "$REGISTER_AWK" 2>"$err")" \
               || { echo "::error title=App register::$(cat "$err")"; exit 1; }
+            # The role's persona header (plan 0005 §3.3), from the same default-branch copy, for
+            # the round record's comment. Never fails: a malformed persona gives the role's own.
+            ROLE_HEADER="$(printf '%s\n' "$text" | node "$KANON/scripts/lib/role-marker.mjs" header-from-register "$1")" || ROLE_HEADER=""
           }
           hash_stdin() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
           fingerprint() {
@@ -447,6 +452,7 @@ jobs:
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "marked=$MARKED" >> "$GITHUB_OUTPUT"
           echo "login=$IMPL_LOGIN" >> "$GITHUB_OUTPUT"
+          echo "header=$ROLE_HEADER" >> "$GITHUB_OUTPUT"
           # The mandate branches on this. A gate that opens without telling the
           # agent WHY sends him to re-read the review he already answered twice.
           if [ "$IS_DISPATCH" = "true" ] && [ "$RESET" = "true" ]; then
@@ -767,6 +773,9 @@ jobs:
           PR: ${{ needs.filter.outputs.pr }}
           IMPL_LOGIN: ${{ needs.filter.outputs.login }}
           MARKER: "<!-- qa:implement-revise -->"
+          # The persona header the filter read from the default branch's register, or the role's
+          # own (the comment's fallback) when that read gave nothing (plan 0005 §3.3).
+          HEADER: ${{ needs.filter.outputs.header }}
           BEFORE_SHA: ${{ needs.filter.outputs.head_sha }}
           BEFORE_MARKED: ${{ needs.filter.outputs.marked }}
           OUTCOME: ${{ needs.revise.outputs.outcome }}
@@ -803,10 +812,35 @@ jobs:
             echo "the implementer left its own marker ($BEFORE_MARKED -> $NOW_MARKED) — nothing to record"
             exit 0
           fi
+          # Opened with the Implementer's header and role marker (plan 0005 §3.3): its App posts it.
           gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s\n' \
+            "${HEADER:-**Implementer** <!-- kanon:role=implementer -->}" \
+            "" \
             "⚠️ **A revise run pushed to this branch and ended without replying** (agent step: \`${OUTCOME:-unknown}\`; head \`${BEFORE_SHA:0:7}\` → \`${AFTER_SHA:0:7}\`; $RUN_URL)." \
             "" \
             "This comment is the **workflow** recording that a revise round was spent, so the round cap still advances (RA-1981). It is **not** the implementer's answer to the review and says nothing about which findings were addressed — read the diff and the run." \
             "" \
             "$MARKER")"
           echo "::notice title=revise round record::PR #$PR: the run pushed (${BEFORE_SHA:0:7} -> ${AFTER_SHA:0:7}) and left no marker, so the workflow recorded the round (RA-1981)."
+
+  # THE IMPLEMENTER STATUS IS A CHAIN (plan 0005 §3.3, question 6; step L3). A fixed job after
+  # the agent's, never the agent: it moves `kanon/role: implementer` to the pull request's new
+  # head only when the head this run started from (`head_sha`, read before the agent ran)
+  # carried one created by the Implementer's App, and every commit between them is the App's.
+  # Otherwise it sets none and says why. Nothing requires the status until L4, when this lane
+  # also refuses a pull request whose head has none; it never reds the lane.
+  implementer-status:
+    needs: [filter, revise]
+    if: ${{ !cancelled() && needs.filter.outputs.act == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: $/actions/kanon-path
+      - uses: $/actions/implementer-status
+        continue-on-error: true
+        with:
+          mode: carry
+          app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
+          app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          pr: ${{ needs.filter.outputs.pr }}
+          start-head: ${{ needs.filter.outputs.head_sha }}

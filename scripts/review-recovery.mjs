@@ -71,6 +71,7 @@ import { readTrailer } from './review-trailer.mjs';
 import { normaliseLogin, reviewAttempts, reviewRunsFor, whyNoChurn } from './review-run-evidence.mjs';
 import { NO_RETRY_EVIDENCE, RETRY_COOL_DOWN_HOURS, describeRetry, makeRetryEvidenceReader, retryDecision } from './lane-retry.mjs';
 import { appLogin } from './app-register.mjs';
+import { asRole } from './lib/role-marker.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
 
@@ -137,7 +138,8 @@ export function ciSettledFor(sha, { json = ghJson } = {}) {
  */
 export function verdictOnHead(pr) {
   return (pr.reviews ?? []).find((r) =>
-    normaliseLogin(r.author?.login) === REVIEWER_LOGIN
+    // The Reviewer's login and, from L4, its role marker (plan 0005 §3.3).
+    asRole('Reviewer', { login: normaliseLogin(r.author?.login), expected: REVIEWER_LOGIN, body: r.body })
     && (r.state === 'APPROVED' || r.state === 'CHANGES_REQUESTED')
     && (readTrailer(r).reviewedSha ?? r.commit?.oid) === pr.headRefOid) ?? null;
 }

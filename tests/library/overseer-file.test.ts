@@ -93,7 +93,8 @@ describe('who can act decides where a finding goes', () => {
       const r = run(report([finding(subject)]));
       expect(r.findings).toHaveLength(1);
       const { args, body } = r.findings[0]!;
-      expect(body).toBe(`Evidence for a ${subject} finding.`);
+      // Opened with the Overseer's header and role marker (plan 0005 §3.3).
+      expect(body).toBe(`**Overseer** <!-- kanon:role=overseer -->\n\nEvidence for a ${subject} finding.`);
       expect(args.filter((_, i) => args[i - 1] === '--label')).toEqual(LABELS);
       expect(args[args.indexOf('--milestone') + 1]).toBe(BUCKET);
       expect(r.audit!.body).toContain(`- #100 a ${subject} finding`);
@@ -162,7 +163,7 @@ describe('the rolling audit issue (K-SELF-11)', () => {
     ];
     const r = run(report([]), { prior });
     expect(r.audit!.title).toBe('[pipeline] audit-summary — Overseer audit #15');
-    expect(r.calls.filter((c) => c.args[1] === 'comment').map((c) => c.args)).toEqual([['issue', 'comment', '7', '--repo', 'o/r', '--body', 'Superseded by #100.']]);
+    expect(r.calls.filter((c) => c.args[1] === 'comment').map((c) => c.args)).toEqual([['issue', 'comment', '7', '--repo', 'o/r', '--body', '**Overseer** <!-- kanon:role=overseer -->\n\nSuperseded by #100.']]);
     expect(r.calls.filter((c) => c.args[1] === 'close').map((c) => c.args[2])).toEqual(['7']);
   });
 

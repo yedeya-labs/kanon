@@ -77,6 +77,10 @@ jobs:
         with:
           arm: code-audit agent
           app-slug: ""
+          # The role by name, since there is no slug to look it up by: the Explorer's agent
+          # posts as the Explorer App, so its posts open with its header and role marker
+          # (plan 0005 §3.3), which `explorerQaComments` will require at L4.
+          role: Explorer
 
       # Kanon's scripts, for the steps below, and `KANON` for the agent's environment (kanon#110):
       # from this step's output, which no project file can rewrite.

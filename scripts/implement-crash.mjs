@@ -39,6 +39,7 @@ import { AGENT_LOGIN, linkedPrIndex, norm } from './dispatch-sweep.mjs';
 import { SPLIT_LABEL, exhaustedRoute, projectOf } from './split-lineage.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
+import { asRole } from './lib/role-marker.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const IMPLEMENT = 'agent:implement';
@@ -109,7 +110,8 @@ export function agentSpokeSince(comments, since) {
   const t = Date.parse(since ?? '');
   // No start time is no evidence of silence: treat it as "spoke", which keeps the label.
   if (!Number.isFinite(t)) return true;
-  return (comments ?? []).some((c) => norm(c.login ?? c.author?.login) === AGENT_LOGIN
+  // The Implementer's login and, from L4, its role marker (plan 0005 §3.3).
+  return (comments ?? []).some((c) => asRole('Implementer', { login: norm(c.login ?? c.author?.login), expected: AGENT_LOGIN, body: c.body })
     && Date.parse(c.createdAt) >= t);
 }
 

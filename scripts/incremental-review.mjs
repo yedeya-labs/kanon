@@ -48,6 +48,7 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { appLogin } from './app-register.mjs';
+import { asRole } from './lib/role-marker.mjs';
 import { readTrailer } from './review-trailer.mjs';
 
 // EXACT login, not a prefix: the review supplies both X and the "prior findings" text,
@@ -71,8 +72,11 @@ const VERDICTS = new Set(['APPROVED', 'CHANGES_REQUESTED']);
  */
 export function reviewerVerdicts(reviews, reviewer = appLogin('Reviewer')) {
   const logins = reviewerLogins(reviewer);
+  // The Reviewer's exact login and, from L4, its role marker (plan 0005 §3.3).
   const mine = (reviews ?? []).filter(
-    (r) => logins.has(String(r?.user?.login ?? '')) && VERDICTS.has(r?.state ?? ''),
+    (r) => logins.has(String(r?.user?.login ?? ''))
+      && asRole('Reviewer', { login: r?.user?.login, expected: reviewer, body: r?.body })
+      && VERDICTS.has(r?.state ?? ''),
   );
   return mine.sort((a, b) =>
     String(a.submitted_at ?? '').localeCompare(String(b.submitted_at ?? '')) || (a.id ?? 0) - (b.id ?? 0),

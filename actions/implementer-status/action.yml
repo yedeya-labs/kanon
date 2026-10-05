@@ -1,0 +1,85 @@
+# The implementer commit status, `kanon/role: implementer` (plan 0005 §3.3, question 6; step L3).
+#
+# CALLED BY A FIXED JOB OF EACH IMPLEMENTER LANE, AFTER ITS AGENT'S JOB, NEVER INSIDE IT. The
+# job holds the Implementer App's private key to mint two tokens, so it runs no agent, no
+# `./` action and no checkout of a pull request's code (`K-AGENT-49`,
+# `tests/unit/app-key-isolation.test.ts`), and `tests/unit/implementer-status.test.ts` holds
+# every caller to that shape.
+#
+# TWO TOKENS, EACH NARROWED (`K-AGENT-46`). The write is a token with Commit statuses write and
+# nothing else: no agent's token holds that permission, which is what makes the status a
+# signal no agent can forge once #279 keeps the key out of every agent's job. The reads (the
+# open pull requests, a commit, a comparison) are a second token with Contents and Pull
+# requests read, so the default token needs no grant an adopter's caller doesn't already give.
+#
+# ADDITIVE AT L3. The Implementer's App may not hold Commit statuses yet (Kanon's own didn't,
+# on 2026-10-05): the mint then fails, the script says so in the summary, and nothing reds.
+# Both mints are `continue-on-error` for that reason; the caller's `uses:` is too.
+name: Implementer status
+description: >-
+  Set the `kanon/role: implementer` commit status on the pull request this run opened (mode
+  `open`), or carry it to a pull request's new head when the head the run started from had it
+  (mode `carry`). Never fails the caller.
+
+inputs:
+  mode:
+    description: "`open` (implement, triage) or `carry` (implement-revise, rebase)."
+    required: true
+  app-id:
+    description: The Implementer App's id (its `IMPLEMENTER_APP_ID` secret).
+    required: true
+  app-private-key:
+    description: The Implementer App's private key (its `IMPLEMENTER_APP_PRIVATE_KEY` secret).
+    required: true
+  since:
+    description: "`open`: when the run started, stamped by the lane's filter job before the agent."
+    required: false
+    default: ""
+  branches-before:
+    description: "`open`: a JSON array of the branch names that existed before the agent ran."
+    required: false
+    default: ""
+  pr:
+    description: "`carry`: the pull request the run acted on."
+    required: false
+    default: ""
+  start-head:
+    description: "`carry`: the pull request's head before the agent ran."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Mint the Implementer's read token
+      id: read-token
+      continue-on-error: true
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        permission-contents: read
+        permission-pull-requests: read
+
+    - name: Mint the Implementer's status token
+      id: status-token
+      continue-on-error: true
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        permission-statuses: write
+
+    - name: Set or carry the implementer status
+      shell: bash -e {0}
+      env:
+        MODE: ${{ inputs.mode }}
+        READ_TOKEN: ${{ steps.read-token.outputs.token }}
+        STATUS_TOKEN: ${{ steps.status-token.outputs.token }}
+        APP_SLUG: ${{ steps.read-token.outputs.app-slug }}
+        SINCE: ${{ inputs.since }}
+        BRANCHES_BEFORE: ${{ inputs.branches-before }}
+        PR: ${{ inputs.pr }}
+        START_HEAD: ${{ inputs.start-head }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: node "$GITHUB_ACTION_PATH/implementer-status.mjs"

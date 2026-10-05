@@ -884,6 +884,28 @@ describe('the login is read from the App register (plan 0001 §5)', () => {
     expect(r.outputFile).toContain(`login=${IMPLEMENTER_LOGIN}`);
   });
 
+  it('publishes the persona header the register declares, for the round record (plan 0005 §3.3)', () => {
+    // A Persona column at the end of the table: the Implementer's declared, every other row blank.
+    const withPersona = REGISTER_FIXTURE.split('\n').map((l) => (!l.startsWith('|') ? l
+      : l.startsWith('| Role ') ? `${l} Persona |` : /^\|[-| ]+\|$/.test(l) ? `${l}---|`
+        : l.startsWith('| Implementer ') ? `${l} The Builder |` : `${l}  |`)).join('\n');
+    const dir = mkdtempSync(join(tmpdir(), 'impl-revise-persona-'));
+    writeStub(join(dir, 'gh'), GH_STUB);
+    const r = runWorkflowStep(filter, {
+      dir,
+      env: {
+        PATH: `${dir}:${process.env.PATH}`, KANON: process.cwd(),
+        REPO: 'r', ...registerEnv(filter, withPersona), PR: '1',
+        STATE: 'changes_requested', IS_DISPATCH: 'false', RESET: '',
+        STUB_META: JSON.stringify({ author: { login: `app/${IMPLEMENTER_LOGIN}` }, state: 'OPEN', headRefName: 'b', labels: [{ name: 'agent:implement' }] }),
+        STUB_REVIEWS: JSON.stringify({ reviews: [{ state: 'CHANGES_REQUESTED' }] }),
+        STUB_COMMENTS: JSON.stringify({ comments: [] }),
+      },
+    });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputFile).toContain('header=**The Builder (Implementer)** <!-- kanon:role=implementer -->');
+  });
+
   it('follows the register, not a constant: another slug there turns the same author away', () => {
     const r = runWith(REGISTER_FIXTURE.replace(`\`${IMPLEMENTER_LOGIN}\``, '`someone-else`'));
     expect(r.status, r.output).toBe(0);
