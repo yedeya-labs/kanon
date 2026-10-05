@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.27.0](https://github.com/yedeya-labs/kanon/compare/v0.26.0...v0.27.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **lanes:** run no tree code beside a write token, except where the Owner accepted it ([#317](https://github.com/yedeya-labs/kanon/issues/317))
+
+### Features
+
+* **declarations:** read an omitted declaration as its documented default ([#323](https://github.com/yedeya-labs/kanon/issues/323)) ([69f9a24](https://github.com/yedeya-labs/kanon/commit/69f9a24b035e27fb515b02868a71d5754f17819b))
+* **lanes:** create a missing taxonomy label on first use, from rulebook/labels.json ([#309](https://github.com/yedeya-labs/kanon/issues/309)) ([9cccda0](https://github.com/yedeya-labs/kanon/commit/9cccda0f61cfe5c3419e0bde33323761a0781f5e))
+* **lanes:** write persona headers, role markers and the implementer status, and read the marker beside the login ([#310](https://github.com/yedeya-labs/kanon/issues/310)) ([41c88da](https://github.com/yedeya-labs/kanon/commit/41c88da57aa290739566526c0264670b5e39cc60))
+
+
+### Bug Fixes
+
+* **lanes:** give each smoke run its own concurrency group in every lane ([#319](https://github.com/yedeya-labs/kanon/issues/319)) ([0c49bb8](https://github.com/yedeya-labs/kanon/commit/0c49bb81febb83f86bfcfdd83328f6bb5f1844bc))
+* **lanes:** run no tree code beside a write token, except where the Owner accepted it ([#317](https://github.com/yedeya-labs/kanon/issues/317)) ([295963a](https://github.com/yedeya-labs/kanon/commit/295963a5d07ee1f8a275e2059536204a08604094))
+
 ## [0.26.0](https://github.com/yedeya-labs/kanon/compare/v0.25.0...v0.26.0) (2026-10-05)
 
 
