@@ -140,7 +140,7 @@ A signal that fails any test is recorded as not-paged (`K-OBS-3`).
 
 **Why.** Granting cloud credentials to a job that executes PR code grants them to the PR's code.
 
-**Enforced by.** The telemetry collector is the only workflow granted the store's role.
+**Enforced by.** The store's writer role trusts only the repository's default-branch ref, never an environment, a pull request or another branch: `infra/telemetry/render.mjs` derives that subject from GitHub's API, in the form the repository issues, and refuses a writer subject on any other branch, and `tests/unit/telemetry-store-template.test.ts` fails a rendered writer that trusts anything else. Agent jobs hold no `id-token: write` (the store-coupled lanes' tests). **Not enforced:** that the collector is the only job able to assume the writer. Every default-branch job holding `id-token: write` can, including Kanon's QA-store jobs once they declare no environment, and the adopter's own jobs that hold it for another cloud; such a job can write validated rows under its own adopter's key and nothing more ([`docs/telemetry.md`](../docs/telemetry.md#who-can-write)).
 
 **Class.** framework. Where the collector writes is set by `K-OBS-17` and `K-OBS-18`.
 

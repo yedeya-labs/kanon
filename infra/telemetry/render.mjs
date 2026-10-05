@@ -11,6 +11,18 @@
 // Per repository it adds a writer role, a reader role and the function URL permission. The
 // repository appears only in the two trust policies' `sub` conditions, never with a wildcard.
 // The roles carry the opaque key, and so does every row.
+//
+// THE WRITER TRUSTS THE DEFAULT BRANCH'S REF, NEVER AN ENVIRONMENT (plan 0002 §3, as the Owner
+// decided on 2026-10-05 to drop GitHub Environments). Its subject is
+// `<prefix>:ref:refs/heads/<default branch>`, and each reader subject is `<prefix>:<reader>`. Both
+// halves come from GitHub's API through `gh`, at render time: the default branch, and the prefix
+// the repository really issues, `repo:<owner>/<repo>` or, for a repository created after
+// 2026-07-15, the immutable `repo:<owner>@<id>/<repo>@<id>` (`scripts/lib/oidc-subject.mjs`).
+// A repository with a custom subject template is refused unless its entry names the exact
+// subjects (`writer_subjects`, `reader_subjects`), which are checked the same way: exact, a branch
+// ref of that repository, no environment or pull request, and for the writer the default branch.
+// "Only the collector reaches the store" (`K-OBS-13`) is then held by which jobs hold
+// `id-token: write`, not by an environment.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -18,22 +30,22 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parse } from 'yaml';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
+import { readRepositorySubject, subjectProblems } from '../../scripts/lib/oidc-subject.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const TEMPLATE_PATH = join(HERE, 'template.yaml');
 export const FUNCTION_DIR = join(HERE, 'function');
 
-/** The environment only the collector job declares (§3, `K-OBS-13`). */
-export const WRITER_ENVIRONMENT = 'kanon-telemetry';
 const OIDC_HOST = 'token.actions.githubusercontent.com';
 
 const OWNER = /^arn:aws:iam::\d{12}:role\/.+$/;
 const KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const READER = /^(ref:refs\/heads\/[A-Za-z0-9._/-]+|environment:[A-Za-z0-9._-]+)$/;
+const READER = /^ref:refs\/heads\/[A-Za-z0-9._/-]+$/;
 
 /**
- * @typedef {{ key: string, repository: string, readers: string[] }} Entry
+ * @typedef {{ key: string, repository: string, readers?: string[], writer_subjects?: string[], reader_subjects?: string[] }} Entry
+ * @typedef {{ writer: string[], readers: string[] }} Subjects
  * @typedef {{ owner_principal_arn: string, create_oidc_provider?: boolean, reserved_concurrency?: number, repositories: Entry[] }} Register
  */
 
@@ -63,8 +75,19 @@ export function registerProblems(register) {
     if (typeof r?.repository !== 'string' || !REPOSITORY.test(r.repository)) out.push(`${at}.repository is not owner/name`);
     else if (names.has(r.repository.toLowerCase())) out.push(`${at}.repository is a duplicate`);
     else names.add(r.repository.toLowerCase());
-    if (!Array.isArray(r?.readers) || r.readers.length === 0 || !r.readers.every((/** @type {unknown} */ s) => typeof s === 'string' && READER.test(s))) {
-      out.push(`${at}.readers must list ref:refs/heads/<branch> or environment:<name> subjects`);
+    // `readers` is the usual form; `reader_subjects` replaces it with exact subjects. Never both,
+    // so the register says exactly what is trusted.
+    if (r?.reader_subjects !== undefined && r?.readers !== undefined) out.push(`${at} gives both readers and reader_subjects`);
+    else if (r?.reader_subjects === undefined) {
+      if (!Array.isArray(r?.readers) || r.readers.length === 0 || !r.readers.every((/** @type {unknown} */ s) => typeof s === 'string' && READER.test(s))) {
+        out.push(`${at}.readers must list ref:refs/heads/<branch> subjects, and nothing else (no environment)`);
+      }
+    }
+    for (const field of ['writer_subjects', 'reader_subjects']) {
+      const v = r?.[field];
+      if (v !== undefined && (!Array.isArray(v) || v.length === 0 || !v.every((/** @type {unknown} */ s) => typeof s === 'string'))) {
+        out.push(`${at}.${field}, when given, must list exact subjects`);
+      }
     }
   });
   return out;
@@ -110,11 +133,39 @@ const oidcTrust = (subjects) => ({
 });
 
 /**
+ * The subjects one entry's roles trust. The writer's is the default branch's ref, in the form
+ * the repository issues; the readers' are its `readers` under the same prefix. Exact subjects
+ * in the entry replace the derived ones and pass the same checks.
+ * @param {Entry} entry
+ * @param {(args: string[]) => string} [gh] runs `gh`, for GitHub's API
+ * @returns {Subjects}
+ */
+export function entrySubjects(entry, gh) {
+  // The default branch is read even when every subject is given, so a writer subject naming any
+  // other branch is refused.
+  const { defaultBranch, prefix, problem } = readRepositorySubject(entry.repository, gh);
+  const exactly = (/** @type {string[] | undefined} */ given, /** @type {() => string[]} */ derive) => {
+    if (given) return given;
+    if (prefix === null) throw new Error(`${problem ?? 'no subject prefix'}: writer_subjects and reader_subjects`);
+    return derive();
+  };
+  const writer = exactly(entry.writer_subjects, () => [`${prefix}:ref:refs/heads/${defaultBranch}`]);
+  const readers = exactly(entry.reader_subjects, () => (entry.readers ?? []).map((s) => `${prefix}:${s}`));
+  const problems = [
+    ...subjectProblems(writer, entry.repository, defaultBranch).map((p) => `writer: ${p}`),
+    ...subjectProblems(readers, entry.repository, null).map((p) => `reader: ${p}`),
+  ];
+  if (problems.length) throw new Error(`refusing to trust these subjects: ${problems.join('; ')}`);
+  return { writer, readers };
+}
+
+/**
  * The resources for one repository.
  * @param {Entry} entry
  * @param {object} invokePolicy the importer's policy document, which writers share
+ * @param {Subjects} subjects from `entrySubjects`
  */
-export function repositoryResources(entry, invokePolicy) {
+export function repositoryResources(entry, invokePolicy, subjects) {
   const id = logicalId(entry.key);
   return {
     [`WriterRole${id}`]: {
@@ -123,7 +174,7 @@ export function repositoryResources(entry, invokePolicy) {
         RoleName: `kanon-telemetry-${entry.key}-writer`,
         AssumeRolePolicyDocument: {
           Version: '2012-10-17',
-          Statement: [oidcTrust([`repo:${entry.repository}:environment:${WRITER_ENVIRONMENT}`]), ownerForVerify],
+          Statement: [oidcTrust(subjects.writer), ownerForVerify],
         },
         // Invoke the ingest URL. Nothing else: no DynamoDB action at all.
         Policies: [{ PolicyName: 'invoke-ingest-url', PolicyDocument: invokePolicy }],
@@ -144,7 +195,7 @@ export function repositoryResources(entry, invokePolicy) {
         RoleName: `kanon-telemetry-${entry.key}-reader`,
         AssumeRolePolicyDocument: {
           Version: '2012-10-17',
-          Statement: [oidcTrust(entry.readers.map((s) => `repo:${entry.repository}:${s}`)), ownerForVerify],
+          Statement: [oidcTrust(subjects.readers), ownerForVerify],
         },
         // Query and GetItem on its own key's partitions only (§6): IAM denies any other key.
         Policies: [{
@@ -167,17 +218,30 @@ export function repositoryResources(entry, invokePolicy) {
 /**
  * The deployable template and its parameter overrides.
  * @param {Register} register
- * @param {{ verify?: boolean, importer?: boolean, backfill?: boolean, templateText?: string, functionDir?: string }} [opts]
+ * @param {{ verify?: boolean, importer?: boolean, backfill?: boolean, templateText?: string, functionDir?: string, gh?: (args: string[]) => string }} [opts]
+ *   `gh` runs `gh` for GitHub's API; the default is the real one
+ * @returns {{ template: any, parameters: string[], subjects: Record<string, Subjects> }} `subjects` by key
  */
 export function render(register, opts = {}) {
   const problems = registerProblems(register);
   if (problems.length) throw new Error(`register: ${problems.join('; ')}`);
+  /** @type {Record<string, Subjects>} */
+  const subjects = {};
+  const refused = [];
+  for (const entry of register.repositories) {
+    try {
+      subjects[entry.key] = entrySubjects(entry, opts.gh);
+    } catch (e) {
+      refused.push(`${entry.key}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  if (refused.length) throw new Error(`register: ${refused.join('; ')}`);
   const template = parse(opts.templateText ?? readFileSync(TEMPLATE_PATH, 'utf8'));
   const fn = template.Resources.IngestFunction.Properties;
   fn.Code = opts.functionDir ?? FUNCTION_DIR;
   fn.Environment.Variables.WRITER_KEYS = register.repositories.map((r) => r.key).join(',');
   const invokePolicy = template.Resources.ImporterRole.Properties.Policies[0].PolicyDocument;
-  for (const entry of register.repositories) Object.assign(template.Resources, repositoryResources(entry, invokePolicy));
+  for (const entry of register.repositories) Object.assign(template.Resources, repositoryResources(entry, invokePolicy, /** @type {Subjects} */ (subjects[entry.key])));
   for (const entry of register.repositories) {
     const id = logicalId(entry.key);
     template.Outputs[`WriterRole${id}`] = { Value: { 'Fn::GetAtt': [`WriterRole${id}`, 'Arn'] } };
@@ -191,7 +255,7 @@ export function render(register, opts = {}) {
     `EnableImporter=${opts.importer ? 'true' : 'false'}`,
     `EnableBackfill=${opts.backfill ? 'true' : 'false'}`,
   ];
-  return { template, parameters };
+  return { template, parameters, subjects };
 }
 
 if (isCliEntry(import.meta.url)) {
@@ -209,7 +273,9 @@ if (isCliEntry(import.meta.url)) {
     process.exit(2);
   }
   try {
-    const { template, parameters } = render(JSON.parse(readFileSync(values.register, 'utf8')), values);
+    const { template, parameters, subjects } = render(JSON.parse(readFileSync(values.register, 'utf8')), values);
+    // The Owner checks these before deploying: each is what that repository's tokens carry.
+    for (const [key, s] of Object.entries(subjects)) console.log(`${key}: writer trusts ${s.writer.join(', ')}; reader trusts ${s.readers.join(', ')}`);
     mkdirSync(values.out, { recursive: true });
     writeFileSync(join(values.out, 'template.json'), `${JSON.stringify(template, null, 2)}\n`);
     writeFileSync(join(values.out, 'parameters.json'), `${JSON.stringify(parameters, null, 2)}\n`);

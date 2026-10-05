@@ -18,7 +18,20 @@ type Res = { Type: string, Condition?: string, DeletionPolicy?: string, UpdateRe
 
 const example = JSON.parse(readFileSync('infra/telemetry/register.example.json', 'utf8'));
 const register = { ...example, owner_principal_arn: `arn:aws:iam::${'1'.repeat(12)}:role/aws-reserved/sso.amazonaws.com/eu-central-1/AWSReservedSSO_Admin_ab` };
-const { template, parameters } = render(register);
+/**
+ * A stand-in for `gh api`: each repository's default branch and OIDC subject customization, as
+ * GitHub reports them. Unknown repositories fail, as `gh` would.
+ */
+type Repo = { full_name?: string, default_branch?: string, customization?: Record<string, unknown> };
+const fakeGh = (repos: Record<string, Repo>) => (args: string[]): string => {
+  const path = args[1] ?? '';
+  const m = /^repos\/([^/]+\/[^/]+)(\/actions\/oidc\/customization\/sub)?$/.exec(path);
+  const r = m ? repos[m[1]!] : undefined;
+  if (!m || !r) throw new Error(`gh: HTTP 404 for ${path}`);
+  return JSON.stringify(m[2] ? r.customization ?? { use_default: true, use_immutable_subject: false } : { full_name: r.full_name ?? m[1], default_branch: r.default_branch ?? 'main' });
+};
+const gh = fakeGh({ 'yedeya-labs/kanon': {}, 'o/r': {}, 'o/s': {} });
+const { template, parameters, subjects } = render(register, { gh });
 const R = template.Resources as Record<string, Res>;
 const key = example.repositories[0].key as string;
 const repo = example.repositories[0].repository as string;
@@ -107,15 +120,17 @@ describe('the roles (§3, §6, §7)', () => {
   const reader = R[`ReaderRole${id}`]!.Properties;
   const oidc = (role: Record<string, J>) => statements(role.AssumeRolePolicyDocument)[0];
 
-  it('the writer trusts only the kanon-telemetry environment of its repository', () => {
+  it('the writer trusts only its repository\'s default-branch ref, never an environment', () => {
     expect(writer.RoleName).toBe(`kanon-telemetry-${key}-writer`);
     expect(oidc(writer).Action).toBe('sts:AssumeRoleWithWebIdentity');
     expect(oidc(writer).Condition).toEqual({
       StringEquals: {
         'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-        'token.actions.githubusercontent.com:sub': `repo:${repo}:environment:kanon-telemetry`,
+        'token.actions.githubusercontent.com:sub': `repo:${repo}:ref:refs/heads/main`,
       },
     });
+    expect(subjects[key]).toEqual({ writer: [`repo:${repo}:ref:refs/heads/main`], readers: [`repo:${repo}:ref:refs/heads/main`] });
+    expect(JSON.stringify(template)).not.toMatch(/environment:/);
   });
   it('the writer may invoke the URL and nothing else, and InvokeFunction only through the URL', () => {
     const s = statements(writer.Policies[0].PolicyDocument);
@@ -140,9 +155,9 @@ describe('the roles (§3, §6, §7)', () => {
     }
   });
   it('a reader with several subjects lists each, exactly', () => {
-    const two = render({ ...register, repositories: [{ key: 'k2', repository: 'o/r', readers: ['ref:refs/heads/main', 'environment:qa'] }] });
+    const two = render({ ...register, repositories: [{ key: 'k2', repository: 'o/r', readers: ['ref:refs/heads/main', 'ref:refs/heads/release'] }] }, { gh });
     const s = statements((two.template.Resources.ReaderRolek2 as Res).Properties.AssumeRolePolicyDocument)[0];
-    expect(s.Condition.StringEquals['token.actions.githubusercontent.com:sub']).toEqual(['repo:o/r:ref:refs/heads/main', 'repo:o/r:environment:qa']);
+    expect(s.Condition.StringEquals['token.actions.githubusercontent.com:sub']).toEqual(['repo:o/r:ref:refs/heads/main', 'repo:o/r:ref:refs/heads/release']);
   });
   it('the Owner may assume a writer or reader only while EnableVerify is on', () => {
     for (const role of [writer, reader]) {
@@ -210,7 +225,7 @@ describe('the register (§5)', () => {
       `OwnerPrincipalArn=${register.owner_principal_arn}`, 'CreateOidcProvider=true', 'ReservedConcurrency=0',
       'EnableVerify=false', 'EnableImporter=false', 'EnableBackfill=false',
     ]);
-    expect(render(register, { verify: true, importer: true, backfill: true }).parameters.slice(3))
+    expect(render(register, { verify: true, importer: true, backfill: true, gh }).parameters.slice(3))
       .toEqual(['EnableVerify=true', 'EnableImporter=true', 'EnableBackfill=true']);
   });
   it('the example names only Kanon', () => {
@@ -224,6 +239,12 @@ describe('the register (§5)', () => {
     expect(one({ key: 'K#1' })).not.toEqual([]);
     expect(one({ key: 'a'.repeat(33) })).not.toEqual([]);
     expect(one({ readers: ['environment:*'] })).not.toEqual([]);
+    expect(one({ readers: ['environment:qa'] })).not.toEqual([]);
+    expect(one({ readers: ['ref:refs/heads/main', 'environment:kanon-telemetry'] })).not.toEqual([]);
+    expect(one({ writer_subjects: [] })).not.toEqual([]);
+    expect(one({ reader_subjects: 'repo:o/r:ref:refs/heads/main' })).not.toEqual([]);
+    expect(one({ readers: undefined, reader_subjects: ['repo:o/r:ref:refs/heads/main'] })).toEqual([]);
+    expect(one({ reader_subjects: ['repo:o/r:ref:refs/heads/main'] })).toEqual(['repositories[0] gives both readers and reader_subjects']);
     expect(one({ readers: ['pull_request'] })).not.toEqual([]);
     expect(one({ readers: [] })).not.toEqual([]);
     const dup = { key: 'k1', repository: 'o/r', readers: ['ref:refs/heads/main'] };
@@ -231,6 +252,62 @@ describe('the register (§5)', () => {
     expect(registerProblems({ ...register, repositories: [dup, { ...dup, key: 'k2' }] })).not.toEqual([]);
     expect(registerProblems({ ...register, repositories: [{ ...dup, key: 'k-1' }, { ...dup, key: 'k1', repository: 'o/s' }] })).not.toEqual([]);
     expect(registerProblems({ ...register, owner_principal_arn: 'arn:aws:iam::*:role/x' })).not.toEqual([]);
-    expect(() => render({ ...register, repositories: [] })).toThrow(/register/);
+    expect(() => render({ ...register, repositories: [] }, { gh })).toThrow(/register/);
+  });
+});
+
+describe('the subjects come from GitHub, in the form each repository issues (§3)', () => {
+  const sub = (role: Res) => statements(role.Properties.AssumeRolePolicyDocument)[0].Condition.StringEquals['token.actions.githubusercontent.com:sub'];
+  const entry = { key: 'k1', repository: 'o/r', readers: ['ref:refs/heads/trunk'] };
+  const immutable = { use_default: true, use_immutable_subject: true, sub_claim_prefix: 'repo:o@11/r@22' };
+  const one = (repo: Repo, e: object = {}) => render({ ...register, repositories: [{ ...entry, ...e }] }, { gh: fakeGh({ 'o/r': repo }) });
+
+  it('a classic repository gets repo:<owner>/<repo>, on the default branch GitHub reports', () => {
+    const { template: t } = one({ default_branch: 'trunk' });
+    expect(sub(t.Resources.WriterRolek1)).toBe('repo:o/r:ref:refs/heads/trunk');
+    expect(sub(t.Resources.ReaderRolek1)).toBe('repo:o/r:ref:refs/heads/trunk');
+  });
+  it('a repository with an immutable subject gets the prefix GitHub reports, for writer and reader', () => {
+    const { template: t } = one({ default_branch: 'trunk', customization: immutable });
+    expect(sub(t.Resources.WriterRolek1)).toBe('repo:o@11/r@22:ref:refs/heads/trunk');
+    expect(sub(t.Resources.ReaderRolek1)).toBe('repo:o@11/r@22:ref:refs/heads/trunk');
+  });
+  it('refuses an immutable prefix that is not repo:<owner>@<id>/<repo>@<id>, or names another repository', () => {
+    expect(() => one({ customization: { ...immutable, sub_claim_prefix: 'repo:o/r' } })).toThrow(/immutable/);
+    expect(() => one({ customization: { ...immutable, sub_claim_prefix: 'repo:x@11/r@22' } })).toThrow(/not a subject of o\/r/);
+  });
+  it('refuses a custom subject template unless the entry names the exact subjects', () => {
+    const custom = { use_default: false, include_claim_keys: ['repo', 'context', 'job_workflow_ref'] };
+    expect(() => one({ customization: custom })).toThrow(/customizes its OIDC subject/);
+    const exact = { writer_subjects: ['repo:o/r:ref:refs/heads/main:job_workflow_ref:o/r/.github/workflows/c.yml@refs/heads/main'], readers: undefined, reader_subjects: ['repo:o/r:ref:refs/heads/main'] };
+    expect(sub(one({ customization: custom }, exact).template.Resources.WriterRolek1)).toBe(exact.writer_subjects[0]);
+  });
+  it('exact subjects pass the same checks: the default branch for the writer, no environment, pull request, pattern or other repository', () => {
+    const w = (s: string) => () => one({}, { writer_subjects: [s] });
+    expect(w('repo:o/r:ref:refs/heads/main')).not.toThrow();
+    expect(w('repo:o@11/r@22:ref:refs/heads/main')).not.toThrow();
+    expect(w('repo:o/r:ref:refs/heads/other')).toThrow(/default branch 'main'/);
+    expect(w('repo:o/r:environment:kanon-telemetry')).toThrow(/not a branch ref/);
+    expect(w('repo:o/r:environment:x:ref:refs/heads/main')).toThrow(/environment or a pull request/);
+    expect(w('repo:o/r:pull_request')).toThrow(/not a branch ref/);
+    expect(w('repo:o/*:ref:refs/heads/main')).toThrow(/pattern/);
+    expect(w('repo:o/x:ref:refs/heads/main')).toThrow(/not a subject of o\/r/);
+    expect(w('ref:refs/heads/main')).toThrow(/names no repository/);
+    expect(() => one({}, { readers: undefined, reader_subjects: ['repo:o/r:environment:qa'] })).toThrow(/reader/);
+    expect(() => one({}, { readers: undefined, reader_subjects: ['repo:o/r:ref:refs/heads/any'] })).not.toThrow();
+  });
+  it('both forms may be trusted while a repository migrates', () => {
+    const both = ['repo:o/r:ref:refs/heads/main', 'repo:o@11/r@22:ref:refs/heads/main'];
+    expect(sub(one({}, { writer_subjects: both }).template.Resources.WriterRolek1)).toEqual(both);
+  });
+  it('a repository GitHub does not answer for stops the render, under its key', () => {
+    expect(() => render({ ...register, repositories: [{ ...entry, repository: 'o/gone' }] }, { gh })).toThrow(/^register: k1: gh: HTTP 404/);
+  });
+  it('refuses an entry GitHub spells differently: a rename redirect, or another case', () => {
+    expect(() => one({ full_name: 'o/renamed' })).toThrow(/GitHub calls o\/r 'o\/renamed'/);
+    expect(() => one({ full_name: 'O/r' })).toThrow(/GitHub calls o\/r 'O\/r'/);
+  });
+  it('refuses a default branch GitHub reports with pattern characters', () => {
+    expect(() => one({ default_branch: 'ma*n' })).toThrow(/default branch/);
   });
 });
