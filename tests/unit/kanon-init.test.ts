@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
-import { appsArgs, init, LANE_CHECK, lineDiff, registerRolesOf, RULESET_NAME, rulesetGaps } from '../../cli/init.mjs';
+import { appsArgs, init, LANE_CHECK, lineDiff, registerRolesOf, RULESET_NAME, rulesetGaps, workflowName } from '../../cli/init.mjs';
 
 /**
  * `kanon init` (plan 0005 §5.4, step L9). Every case runs the command against a real git
@@ -138,7 +138,7 @@ const writes = (calls: Array<{ args: string[] }>) =>
 
 type Run = { status: number; out: string; err: string; appsCalls: string[][]; milestoneCalls: string[][] };
 
-const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: string[] = ['--yes'], answers?: Record<string, string>): Promise<Run> => {
+const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: string[] = ['--yes'], answers?: Record<string, string>, requirements = REQ): Promise<Run> => {
   const out: string[] = [];
   const err: string[] = [];
   const appsCalls: string[][] = [];
@@ -146,6 +146,7 @@ const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: str
   const status = await init(['--dir', dir, ...argv], {
     gh: github.gh,
     env: {},
+    requirements: () => requirements,
     out: (l: string) => out.push(l),
     err: (l: string) => err.push(l),
     today: () => '2026-10-05',
@@ -303,9 +304,35 @@ describe('kanon init, on what the plan and the token allow', () => {
     expect(r.out).toContain('Push the first commit straight to main (K-ADOPT-4), then run kanon init again');
   });
 
+  it("doesn't count a disabled or evaluate-only ruleset as covering the branch: it says so and creates its own", async () => {
+    const dir = checkout();
+    const full = { conditions: { ref_name: { include: ['~DEFAULT_BRANCH'] } }, target: 'branch', rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }, { type: 'pull_request', parameters: { allowed_merge_methods: ['squash'] } }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: LANE_CHECK }] } }] };
+    const github = fakeGitHub({ rulesets: [{ id: 7, name: 'off', enforcement: 'disabled', ...full }, { id: 8, name: 'trial', enforcement: 'evaluate', ...full }] });
+    const r = await run(dir, github);
+    expect(r.out).not.toContain('has every rule');
+    expect(r.out).toContain('Not counted: the ruleset(s) "off" (disabled), "trial" (evaluate) on main, which enforce nothing.');
+    expect(github.st.rulesets.map((x) => x.name)).toEqual(['off', 'trial', RULESET_NAME]);
+  });
+
+  it('says it does not know the merge queue when the token cannot read an organisation\'s plan', async () => {
+    const dir = checkout();
+    await run(dir, fakeGitHub({ kind: 'Organization', private: true }));
+    expect(read(dir, 'docs/qa/adoption.md')).toContain("**Merge queue:** not known: the token can't read the organisation's plan.");
+  });
+
+  it('stops with its own message, not a stack trace, when a release\'s lanes mix roles and Apps', async () => {
+    const mixed = structuredClone(REQ);
+    mixed.lanes['agent-review']!.identities = ['judge'];
+    mixed.lanes['agent-triage']!.identities = ['implementer'];
+    const r = await run(checkout(), fakeGitHub(), ['--yes', '--lanes', 'review,triage'], undefined, mixed);
+    expect(r.status).toBe(1);
+    expect(r.err).toContain('kanon init: the lanes mix roles and Apps (implementer, judge)');
+    expect(r.appsCalls).toEqual([]);
+  });
+
   it("names what an existing default-branch ruleset lacks, and doesn't change it", async () => {
     const dir = checkout();
-    const existing = { id: 7, name: 'protect main', target: 'branch', conditions: { ref_name: { include: ['~DEFAULT_BRANCH'] } }, rules: [{ type: 'pull_request', parameters: { allowed_merge_methods: ['squash', 'merge'] } }] };
+    const existing = { id: 7, name: 'protect main', target: 'branch', enforcement: 'active', conditions: { ref_name: { include: ['~DEFAULT_BRANCH'] } }, rules: [{ type: 'pull_request', parameters: { allowed_merge_methods: ['squash', 'merge'] } }] };
     const github = fakeGitHub({ rulesets: [existing] });
     const r = await run(dir, github);
     expect(github.st.rulesets).toEqual([existing]);
@@ -371,6 +398,16 @@ describe('kanon init, safely', () => {
     expect(read(dir, '.github/workflows/lane-check.yml')).toContain('name: Lane check');
     expect(read(dir, '.github/workflows/agent-review.yml')).toContain('workflows: [Build]');
   });
+
+  it("names the workflow_run trigger as GitHub names the CI: its name without a comment or quotes, or its path when unnamed", async () => {
+    expect(workflowName('name: CI # build and test\non: push\n', 'x')).toBe('CI');
+    expect(workflowName('name: "Build all"\n', 'x')).toBe('Build all');
+    expect(workflowName("name: 'Build' # c\n", 'x')).toBe('Build');
+    expect(workflowName('on: push\njobs:\n  a:\n    name: inner\n', '.github/workflows/ci.yml')).toBe('.github/workflows/ci.yml');
+    const dir = checkout({ '.github/workflows/ci.yml': 'on:\n  pull_request:\njobs:\n  t:\n    name: Test\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n' });
+    await run(dir, fakeGitHub());
+    expect(read(dir, '.github/workflows/agent-review.yml')).toContain('workflows: [".github/workflows/ci.yml"]');
+  });
 });
 
 describe('kanon init, from the answers', () => {
@@ -400,6 +437,38 @@ describe('kanon init, from the answers', () => {
 describe('the callers kanon init writes', () => {
   it('has a caller template for every lane the release ships, and no other', () => {
     expect(Object.keys(TRIGGERS).sort()).toEqual(Object.keys(REQ.lanes).sort());
+  });
+
+  // Each trigger as one line: `<event>:<types>`, `workflow_run:branches` for a default-branch
+  // filter, `schedule`, and `workflow_dispatch:<inputs>`.
+  const fromTable = (cell: string): string[] =>
+    cell.split(';').flatMap((part) => {
+      const ticks = [...part.matchAll(/`([^`]+)`/g)].map((m) => m[1]!);
+      const [head = '', ...rest] = ticks;
+      const event = head.split(':')[0]!.trim();
+      if (event === 'schedule') return ['schedule'];
+      if (event === 'workflow_dispatch') return [`workflow_dispatch:${rest.sort().join(',')}`];
+      if (event === 'workflow_run') {
+        const types = /\[([^\]]+)\]/.exec(ticks.find((t) => t.startsWith('types:')) ?? '')?.[1] ?? '';
+        return [`workflow_run:${types}`, ...(rest.includes('branches') ? ['workflow_run:branches'] : [])];
+      }
+      return [`${event}:${(/\[([^\]]+)\]/.exec(head)?.[1] ?? '').split(',').map((x) => x.trim()).sort().join(',')}`];
+    });
+  const fromTriggers = (t: (typeof TRIGGERS)[string]): string[] => [
+    ...(t.ci ? ['workflow_run:completed', ...(t.ci === 'default' ? ['workflow_run:branches'] : [])] : []),
+    ...(t.review ? ['pull_request_review:submitted'] : []),
+    ...(t.pr ? [`pull_request:${[...t.pr].sort().join(',')}`] : []),
+    ...(t.prTarget ? [`pull_request_target:${[...t.prTarget].sort().join(',')}`] : []),
+    ...(t.issues ? [`issues:${[...t.issues].sort().join(',')}`] : []),
+    ...(t.schedule ? ['schedule'] : []),
+    `workflow_dispatch:${Object.keys(t.dispatch).sort().join(',')}`,
+  ];
+
+  it("holds each lane's triggers to docs/lanes.md's table, event by event", () => {
+    const section = readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8').split('## Which lanes are available')[1]!.split('\n## ')[0]!;
+    const rows = [...section.matchAll(/^\| [^|]+\| `(agent-[a-z-]+)\.yml` \| [^|]+\| (.+) \|$/gm)];
+    expect(rows.length).toBe(Object.keys(TRIGGERS).length);
+    for (const [, lane, cell] of rows) expect(fromTriggers(TRIGGERS[lane!]!).sort(), lane).toEqual(fromTable(cell!).sort());
   });
 
   it.skipIf(!hasYq)('passes lane-check with a caller for every lane at once', async () => {

@@ -363,14 +363,19 @@ export const inspect = async (deps, repo) => {
     }
   }
 
-  // The rulesets that cover the default branch, read whole: the list carries no rules.
+  // The rulesets that cover the default branch, read whole: the list carries no rules. Only an
+  // `active` one enforces anything; a `disabled` or `evaluate` one is kept apart and reported.
   /** @type {any[]} */
   const covering = [];
+  /** @type {any[]} */
+  const inactive = [];
   for (const s of rulesetList.filter((x) => x?.target === 'branch')) {
     const full = await ghJson(deps, ['api', `repos/${repo}/rulesets/${s.id}`]);
     if (!full.ok) continue;
     const include = full.json?.conditions?.ref_name?.include ?? [];
-    if (include.some((/** @type {string} */ p) => p === '~DEFAULT_BRANCH' || p === '~ALL' || p === `refs/heads/${defaultBranch}`)) covering.push(full.json);
+    if (include.some((/** @type {string} */ p) => p === '~DEFAULT_BRANCH' || p === '~ALL' || p === `refs/heads/${defaultBranch}`)) {
+      (full.json?.enforcement === 'active' ? covering : inactive).push(full.json);
+    }
   }
 
   const labels = await ghJson(deps, ['api', '--paginate', '--slurp', `repos/${repo}/labels?per_page=100`]);
@@ -389,6 +394,7 @@ export const inspect = async (deps, repo) => {
     rulesets,
     mergeQueue,
     covering,
+    inactive,
     settings: {
       allow_squash_merge: r.allow_squash_merge,
       allow_merge_commit: r.allow_merge_commit,
@@ -524,13 +530,15 @@ export const adoptionFile = (s, a, repo, today) => {
   lines.push('## Plan', '', `\`${repo}\` is a **${s.isPrivate ? 'private' : 'public'} repository on ${account}** (\`K-ADOPT-2\`). Of the platform features of \`K-ADOPT-3\`:`, '');
   lines.push(
     s.rulesets === 'no'
-      ? '- **Rulesets:** not on this plan, and there is no fallback. The repository stays in bootstrap and can\'t leave it: every lane runs, and the Merger merges only what the Judge approved, but nothing on the platform refuses a merge without an approval (`K-ADOPT-3`, `K-ADOPT-6`).'
+      ? '- **Rulesets:** not on this plan, and there is no fallback. The repository stays in bootstrap and can\'t leave it: every lane runs, and the Merger merges only what the Reviewer approved, but nothing on the platform refuses a merge without an approval (`K-ADOPT-3`, `K-ADOPT-6`).'
       : `- **Rulesets:** ${s.rulesets === 'yes' ? 'available' : 'not known; check the repository\'s settings'}.`,
   );
   lines.push(
     s.mergeQueue === 'yes'
       ? '- **Merge queue:** available.'
-      : '- **Merge queue:** not on this plan, so "require branches to be up to date" stays off and the release commit\'s full CI run catches a stale base (`K-MERGE-7`).',
+      : s.mergeQueue === 'unknown'
+        ? "- **Merge queue:** not known: the token can't read the organisation's plan. Without one, \"require branches to be up to date\" stays off (`K-MERGE-7`)."
+        : '- **Merge queue:** not on this plan, so "require branches to be up to date" stays off and the release commit\'s full CI run catches a stale base (`K-MERGE-7`).',
   );
   lines.push('- **Environments:** no Kanon lane needs one.', '', '## Bootstrap', '', `\`in bootstrap since ${today}\``, '');
   if (a.lanes.includes('agent-overseer')) lines.push('## Choices', '', '- **Overseer:** `installed`', '');
@@ -569,6 +577,17 @@ export const delegationFile = (d, today) =>
 export const TEST_DATABASE_HOOK = ['# Test database', '', 'The project-setup hook starts the database and writes `DATABASE_URL` (`K-LAYOUT-16`).', '', '**Test database:** `hook`', ''].join('\n');
 
 /**
+ * The name GitHub gives a workflow, which a `workflow_run` trigger names it by: its top-level
+ * `name:`, unquoted and without a trailing comment, or, with none, its path in the repository.
+ * @param {string} text @param {string} path
+ */
+export const workflowName = (text, path) => {
+  const line = /^name:[ \t]*(.*)$/m.exec(text)?.[1] ?? '';
+  const value = line.replace(/^(["'])(.*)\1(\s+#.*)?$/, '$2').replace(/\s+#.*$/, '').trim();
+  return value || path;
+};
+
+/**
  * Every file `init` would write, by path relative to the checkout. A file it leaves to its
  * default is not here.
  * @param {{ s: Inspection, a: Answers, req: Requirements, release: string, repo: string, today: string, read: (rel: string) => string | null }} c
@@ -584,7 +603,7 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read }) => {
   files.set(req.hook.path, hookFile(req.hook.inputs));
 
   const ci = read('.github/workflows/ci.yml');
-  const ciName = ci ? (/^name:\s*["']?([^"'\n]+?)["']?\s*$/m.exec(ci)?.[1] ?? 'CI') : 'CI';
+  const ciName = ci === null ? 'CI' : workflowName(ci, '.github/workflows/ci.yml');
   for (const lane of a.lanes) {
     files.set(`.github/workflows/${lane}.yml`, callerFile(lane, /** @type {import('./callers.mjs').Lane} */ (req.lanes[lane]), { release, ciName, defaultBranch: s.defaultBranch }));
   }
@@ -789,6 +808,9 @@ const run = async (deps, opts, req) => {
 
   const body = rulesetBody(s.mergeQueue === 'yes');
   const rulesetCmd = [`gh api -X POST repos/${repo}/rulesets --input - <<'JSON'`, JSON.stringify(body), 'JSON'];
+  if (s.inactive.length && s.rulesets !== 'no') {
+    out(`Not counted: the ruleset(s) ${s.inactive.map((c) => `"${c.name}" (${c.enforcement})`).join(', ')} on ${s.defaultBranch}, which enforce nothing.`);
+  }
   if (s.rulesets === 'no') {
     out('');
     out(`THE PLATFORM DOES NOT ENFORCE REVIEW ON ${repo}. A private repository on this plan has no rulesets, so it never leaves bootstrap: every lane runs, and the Merger merges only what the Reviewer approved, but a person can merge past the Reviewer and nothing on GitHub refuses it (K-ADOPT-3, K-ADOPT-6). Making the repository public, or a plan with rulesets, changes that. The adoption record says so.`);
@@ -822,7 +844,15 @@ const run = async (deps, opts, req) => {
   if (!identities.length) out('The chosen lanes run as no App.');
   else if (!missing.length) out(`The App register lists every App the lanes run as: ${identities.join(', ')}.`);
   else {
-    const argvApps = ['--owner', s.owner, '--repo', repoName, ...appsArgs(missing, req), '--dir', root];
+    /** @type {string[]} */
+    let flag;
+    try {
+      flag = appsArgs(missing, req);
+    } catch (e) {
+      err(`kanon init: ${/** @type {Error} */ (e).message}`);
+      return 1;
+    }
+    const argvApps = ['--owner', s.owner, '--repo', repoName, ...flag, '--dir', root];
     const cmd = `kanon apps ${argvApps.join(' ')}`;
     if (dry) {
       out(`Would run: ${cmd}`);

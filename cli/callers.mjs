@@ -6,9 +6,9 @@
 // requirements file the release ships, built from the lanes and held to them by
 // tests/unit/requirements.test.ts), never restated here. What this file holds is the one thing a
 // lane can't declare: its caller's triggers (docs/lanes.md, "Which lanes are available"), with
-// a name for the caller and a cadence for each schedule. tests/unit/kanon-init.test.ts runs
-// `lane-check` on a caller written for every lane, so a trigger table that drifts from a lane
-// is a red test.
+// a name for the caller and a cadence for each schedule. tests/unit/kanon-init.test.ts holds
+// TRIGGERS to that table, event by event, and runs `lane-check` on a caller written for every
+// lane, which catches a dispatch input the lane doesn't declare and a lane with no template.
 //
 // Node built-ins only: this runs from a Kanon checkout or through `npx`, with no install.
 
