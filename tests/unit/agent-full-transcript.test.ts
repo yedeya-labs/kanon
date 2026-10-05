@@ -85,7 +85,8 @@ describe('the implementer transcript reaches the job log', () => {
       'agent-triage.yml:triage-fix', 'agent-lead-revise.yml:revise', 'agent-lead.yml:brief',
     ]));
     expect(where('direct')).toEqual(expect.arrayContaining([
-      'agent-lead-split.yml:split', 'agent-merge-reconcile.yml:reconcile', 'agent-rebase.yml:resolve',
+      // The direct lanes' agent jobs, each in a called workflow of its own since kanon#279.
+      'lead-split-agent-job.yml:split', 'merge-reconcile-agent-job.yml:reconcile', 'rebase-agent-job.yml:resolve',
     ]));
     // And the direct-block resolution reads the call, rather than reporting the default.
     const optIn = { steps: [{ uses: '$/actions/agent-run', with: { 'full-transcript': true } }] };

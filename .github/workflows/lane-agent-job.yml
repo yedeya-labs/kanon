@@ -226,11 +226,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$'; then
-            echo "::error title=agent-lane::no App token arrived from the spine's mint job; see that job's log for why the mint failed."
+            echo "::error title=app-token::no App token arrived from this lane's mint job; see that job's log for why the mint failed."
             exit 1
           fi
           if [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
-            echo "::error title=agent-lane::this is attempt $RUN_ATTEMPT, but the App token was minted for attempt $MINT_ATTEMPT and revoked when that attempt ended. Use \"Re-run all jobs\", not \"Re-run failed jobs\": the token is minted in a job of its own, and only re-running it mints a fresh one."
+            echo "::error title=app-token::this is attempt $RUN_ATTEMPT, but the App token was minted for attempt $MINT_ATTEMPT and revoked when that attempt ended. Use \"Re-run all jobs\", not \"Re-run failed jobs\": the token is minted in a job of its own, and only re-running it mints a fresh one."
             exit 1
           fi
           # Decoded with printf and sed alone, so the step needs nothing the runner may lack.
@@ -395,18 +395,26 @@ jobs:
         if: failure() && steps.finish.outputs.retry == 'api_error'
         run: echo "The model API failed part-way through. The revise lanes are retried once for this head after the cool-down (RA-2519); any other lane is NOT retried automatically — re-dispatch it once the cause clears."
 
-      # THE TOKEN DIES WITH THE JOB (`K-AGENT-49`). `create-github-app-token`'s post step did this
-      # while the mint was a step here; the mint now skips it, because its own job ends first.
-      # Last, after every step that uses the token, `agent-finish` included. Revoking needs only
-      # the token itself, never the key. Never reds the run: a token that already expired (the
-      # job outlived the hour) is refused, and there is nothing left to protect then.
+      # THE TOKEN DIES WITH THE JOB (`K-AGENT-49`). Last, after every step that uses it. It is
+      # decoded from the secret again rather than read from `Receive the App token`, so a run that
+      # ended before that step (a decline, a failed gate) still revokes the token its mint job
+      # minted. Revoking needs only the token itself, never the key. Never reds the run: an
+      # earlier attempt's token was revoked by that attempt, and one that expired is refused.
       - name: Revoke the App token
-        if: always() && steps.app-token.outcome == 'success'
+        if: always()
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           API_URL: ${{ github.api_url }}
         run: |
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$' || [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "No App token of this attempt to revoke"
+            exit 0
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
           STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
-            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
             "$API_URL/installation/token" || true)"
-          if [ "$STATUS" = "204" ]; then echo "App token revoked"; else echo "::warning title=agent-lane::the App token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi
+          if [ "$STATUS" = "204" ]; then echo "App token revoked"; else echo "::warning title=app-token::the App token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi

@@ -3,10 +3,10 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { parse } from 'yaml';
 import { JUDGING_INPUTS, NEVER_AN_INPUT, delegatedFrom, diskReader, judgingInputs, matchesRow } from '../../scripts/judging-inputs.mjs';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
+import { readFlattened, workflowText } from './helpers/called-workflow.js';
 
 /**
  * `K-MERGE-17` (kanon#25, kanon#62): a pull request never chooses the rules it is judged by.
@@ -21,7 +21,7 @@ import { writeStub } from './helpers/stub-bin.js';
 const ROOT = process.cwd();
 const LANE = join(ROOT, '.github/workflows/agent-review.yml');
 type Job = { steps: WorkflowStep[] };
-const reviewJob = (): Job => (parse(readFileSync(LANE, 'utf8')) as { jobs: Record<string, Job> }).jobs.review!;
+const reviewJob = (): Job => (readFlattened(LANE) as { jobs: Record<string, Job> }).jobs.review!;
 
 // ── 1. The list and the rule ─────────────────────────────────────────────────────────────
 
@@ -97,7 +97,7 @@ describe('the review lane restores the list in one step, and re-checks it before
   const steps = reviewJob().steps;
   it('has exactly one restore, and no per-file restore beside it', () => {
     expect(steps.filter(RESTORE)).toHaveLength(1);
-    const text = readFileSync(LANE, 'utf8');
+    const text = workflowText(LANE);
     expect(text).not.toMatch(/restore-agent-docs|pin_manifest|GUARD_RE/);
   });
   it('reads the default branch, never the PR’s base (kanon#62)', () => {
@@ -112,7 +112,8 @@ describe('the review lane restores the list in one step, and re-checks it before
     const restore = stepIndex(steps, RESTORE, 'restores');
     const scope = stepIndex(steps, (s) => s.id === 'scope', 'scopes the review');
     const verify = stepIndex(steps, REVERIFY, 're-checks the pin');
-    const mint = stepIndex(steps, (s) => String(s.uses).startsWith('actions/create-github-app-token'), 'mints the token');
+    // The token is minted in a job of its own (kanon#279, `K-AGENT-49`) and RECEIVED here, where the mint was.
+    const mint = stepIndex(steps, (s) => s.id === 'app-token' && String(s.run ?? '').includes('::add-mask::'), 'receives the token');
     const agent = stepIndex(steps, (s) => s.uses === '$/actions/agent-run', 'runs the agent');
     expect(restore).toBeLessThan(scope);
     // No project-setup hook between them since kanon#185: the job runs none of the PR's code.

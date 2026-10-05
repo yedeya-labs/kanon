@@ -1,10 +1,10 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parse } from 'yaml';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
+import { readFlattened } from './helpers/called-workflow.js';
 
 /**
  * kanon#177 — the merge-reconcile lane skips its model pass when every latest review on
@@ -13,9 +13,9 @@ import { writeStub } from './helpers/stub-bin.js';
  * These EXECUTE the shipped `decide` step (RA-1032) against a `gh` stub that answers the
  * one read it makes, so the jq that decides is the workflow's own.
  */
-const wf = parse(readFileSync(join(process.cwd(), '.github/workflows/agent-merge-reconcile.yml'), 'utf8'));
+const wf = readFlattened(join(process.cwd(), '.github/workflows/agent-merge-reconcile.yml'));
 const decide = wf.jobs.filter.steps.find((s: { id?: string }) => s.id === 'decide');
-const review = parse(readFileSync(join(process.cwd(), '.github/workflows/agent-review.yml'), 'utf8'));
+const review = readFlattened(join(process.cwd(), '.github/workflows/agent-review.yml'));
 
 const HEAD = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);

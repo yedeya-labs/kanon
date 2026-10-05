@@ -3,6 +3,7 @@ import { RETRY_STEPS } from '../../scripts/lib/protocol-spellings.mjs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { readFlattened } from './helpers/called-workflow.js';
 import { laneBlockOf, resolvedAgentJobs } from './helpers/agent-lanes.mjs';
 import { blockOf, callsSpine, effectiveSteps, readBlock, readSpine, spineJobFor } from './helpers/spine.js';
 import { type WorkflowStep } from './helpers/workflow-step.js';
@@ -44,7 +45,7 @@ type Lane = {
   jobs: Record<string, Job>;
 };
 const text = (file: string) => readFileSync(join(process.cwd(), WF, file), 'utf8');
-const lane = (file: string) => parse(text(file)) as Lane;
+const lane = (file: string) => readFlattened(join(process.cwd(), WF, file)) as Lane;
 const spineCalls = (file: string) => Object.entries(lane(file).jobs).filter(([, j]) => callsSpine(j as never));
 
 /** The role each lane runs as, and so the fixed secret names it takes (plan 0001 §8). */
@@ -136,7 +137,7 @@ describe('plan 0001 decision 11: each lane keeps its concurrency group at the to
     const probe = lane('lane-concurrency-probe.yml');
     expect(Object.keys(probe.on)).toEqual(['workflow_call']);
     expect(probe.concurrency).toEqual({ group: 'kanon-lane-concurrency-probe', 'cancel-in-progress': false });
-    const smoke = lane('lane-concurrency-smoke.yml');
+    const smoke = parse(text('lane-concurrency-smoke.yml')) as Lane;
     expect(Object.values(smoke.jobs).map((j) => j.uses)).toEqual(['$/.github/workflows/lane-concurrency-probe.yml']);
   });
 });

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
+import { handedIn, readFlattened, workflowText } from './helpers/called-workflow.js';
 
 /**
  * RA-1028 / RA-1090 / RA-378 — which pushes get reviewed, and WHEN.
@@ -29,8 +30,9 @@ import { writeStub } from './helpers/stub-bin.js';
  * match on its source, and RA-1032 is what that costs — a workflow that had never
  * once succeeded while its tests were green.
  */
-const wf = parse(readFileSync(join(process.cwd(), '.github/workflows/agent-review.yml'), 'utf8'));
-const LANE_TEXT = readFileSync(join(process.cwd(), '.github/workflows/agent-review.yml'), 'utf8');
+const LANE_PATH = join(process.cwd(), '.github/workflows/agent-review.yml');
+const wf = readFlattened(LANE_PATH);
+const LANE_TEXT = workflowText(join(process.cwd(), '.github/workflows/agent-review.yml'));
 // The triggers are the CALLER's (plan 0001 §3): the lane states them as its contract in a
 // comment, and the fixture caller is that contract as an adopter writes it.
 const CALLER = parse(readFileSync(join(process.cwd(), 'tests/fixtures/lane-check/extra/agent-review.yml'), 'utf8'));
@@ -301,7 +303,9 @@ describe('the trigger is CI finishing, not the branch changing (RA-378, RA-965)'
 
   it('checks out the PR head — a workflow_run checkout gets `main` otherwise', () => {
     const checkout = wf.jobs.review.steps.find((s: { uses?: string }) => s.uses?.startsWith('actions/checkout'));
-    expect(checkout.with.ref).toBe('${{ needs.filter.outputs.head_sha }}');
+    expect(checkout.with.ref).toBe('${{ inputs.head_sha }}');
+    // The agent's job is a called workflow (kanon#279), handed the filter's head unchanged.
+    expect(handedIn(LANE_PATH, 'review', 'head_sha')).toBe('${{ needs.filter.outputs.head_sha }}');
   });
 
   it('resolves the PR from the commit, because a workflow_run payload has no PR', () => {
@@ -670,7 +674,8 @@ describe('every exit path carries the identity the review job checks out', () =>
     // recoverable and reviewing `main` under a PR's name is not.
     const guard = wf.jobs.review.steps.find((s: { name?: string }) => s.name?.startsWith('Refuse to review'));
     expect(guard).toBeDefined();
-    expect(guard.if).toBe("needs.filter.outputs.head_sha == ''");
+    expect(guard.if).toBe("inputs.head_sha == ''");
+    expect(handedIn(LANE_PATH, 'review', 'head_sha')).toBe('${{ needs.filter.outputs.head_sha }}');
   });
 });
 
@@ -946,7 +951,7 @@ describe("the header describes every carve-out the step implements (RA-1043)", (
    * stale. A test is the only thing that makes the next one impossible rather than
    * merely regrettable.
    */
-  const header = readFileSync(join(process.cwd(), '.github/workflows/agent-review.yml'), 'utf8')
+  const header = workflowText(join(process.cwd(), '.github/workflows/agent-review.yml'))
     .split(/^name:/m)[0];
 
   it.each([

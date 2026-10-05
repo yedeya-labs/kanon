@@ -8,6 +8,7 @@ import { runWorkflowStep, agentPrompt, type WorkflowStep } from './helpers/workf
 import { effectiveSteps, laneBlockOf, stepsAsRun } from './helpers/spine.js';
 import { LANE_BLOCKS, STAGE_BLOCKS, laneBlockPath } from './helpers/agent-lanes.mjs';
 import { FINDING_ANCHOR } from '../../scripts/project-closure.mjs';
+import { readFlattened, workflowText } from './helpers/called-workflow.js';
 
 /**
  * RA-1068 — the Explorer's targeted-invariant mode, a Kanon lane since step 4 of plan 0001.
@@ -28,8 +29,8 @@ type Wf = {
   jobs: Record<string, { if?: string; needs?: string; uses?: string; outputs?: Record<string, string>; services?: { postgres?: unknown }; env?: Record<string, string>; steps: Step[] }>;
 };
 const FILE = join(process.cwd(), '.github/workflows/agent-verify-acs.yml');
-const raw = readFileSync(FILE, 'utf8');
-const wf = parse(raw) as Wf;
+const raw = workflowText(FILE);
+const wf = readFlattened(FILE) as Wf;
 const steps: Step[] = wf.jobs.verify!.steps;
 // THROUGH THE BLOCKS (RA-2661): the job calls `agent-run`, so the prompt is read off the
 // claude-code-action step as the job RUNS it, with the call's literal inputs substituted.
@@ -177,10 +178,12 @@ describe('nothing reads inputs.project on the label route (RA-1285)', () => {
     const uses = raw.split('\n')
       .map((line, i) => [i + 1, line] as const)
       .filter(([, line]) => /inputs\.(project|ref)/.test(line) && !line.trim().startsWith('#'));
-    // 1. `concurrency.group`, evaluated before any step runs; 2/3. the `resolve` step's own env.
-    const allowed = /concurrency|group:|DISPATCH_PROJECT|DISPATCH_REF/;
+    // 1. `concurrency.group`, evaluated before any step runs; 2/3. the `resolve` step's own env;
+    // 4-7. the lane's call and `verify-acs-run.yml` handing both inputs on to the agent's job
+    // unchanged (kanon#279), which `resolve` then reads. A pass-through is a `with:` line only.
+    const allowed = /concurrency|group:|DISPATCH_PROJECT|DISPATCH_REF|^\s*(project|ref): \$\{\{ inputs\.(project|ref) \}\}$/;
     expect(uses.filter(([, line]) => !allowed.test(line)).map(([n, l]) => `${n}: ${l.trim()}`), 'must use steps.resolve.outputs').toEqual([]);
-    expect(uses.length, 'and the three legitimate uses must still be there').toBe(3);
+    expect(uses.length, 'and the seven legitimate uses must still be there').toBe(7);
   });
   it('the project marker is stamped from the resolved value', () => {
     expect(raw).toContain('<!-- qa:project ${{ steps.resolve.outputs.project }} -->');
@@ -231,9 +234,12 @@ describe('the criteria run shares the agent’s job, workspace and database (RA-
   it('keeps the App identity where it was: minted after the criteria run, immediately before the agent', () => {
     expect(steps[call('agent-setup')]!.with).toEqual({ arm: 'acceptance-criteria agent', 'app-slug': '' });
     expect(hookCall().with).toEqual({ lane: 'verify-acs', install: 'true', database: '${{ steps.database.outputs.database }}', browsers: 'true' });
-    const mint = steps[idx((s) => s.id === 'app-token')]!;
-    expect(mint.with?.['client-id']).toBe('${{ secrets.EXPLORER_APP_ID }}');
-    expect(mint.with?.['private-key']).toBe('${{ secrets.EXPLORER_APP_PRIVATE_KEY }}');
+    // Received where it was minted (kanon#279): the Explorer's App, minted by the lane's call.
+    const receive = steps[idx((s) => s.id === 'app-token')]!;
+    expect(receive.name).toBe('Receive the App token');
+    const laneCall = (parse(readFileSync(FILE, 'utf8')) as { jobs: Record<string, { secrets?: Record<string, string> }> }).jobs.verify!;
+    expect(laneCall.secrets?.['app-id']).toBe('${{ secrets.EXPLORER_APP_ID }}');
+    expect(laneCall.secrets?.['app-private-key']).toBe('${{ secrets.EXPLORER_APP_PRIVATE_KEY }}');
     expect(steps[call('agent-run')]!.with?.['github-token']).toBe('${{ steps.app-token.outputs.token }}');
   });
 

@@ -173,13 +173,13 @@ jobs:
   # dispatch and can fail on a schedule, and either would skip this job even though `change` ran
   # and said sweep. `needs.change.result == 'success'` keeps a refused gate or a failed `change`
   # from starting anything. `record-skip` takes the same shape.
+  # THE LANE'S RUN, AS A CALLED WORKFLOW (kanon#279, `K-AGENT-49`). `explore-run.yml` mints the
+  # token in a job that holds the key and runs nothing else, then hands it to the agent's job
+  # (`explore-agent-job.yml`). Both sit inside this job's scope, so the mint waits
+  # with the agent: a token minted before the wait could expire under it.
   explore:
     needs: change
     if: ${{ !cancelled() && needs.change.result == 'success' && needs.change.outputs.sweep == 'true' }}
-    runs-on: ubuntu-latest
-    # Bounds a hang (RA-1336). Sized at ~3x the longest real run measured on the reference
-    # adopter, so it never truncates work.
-    timeout-minutes: 45
     # NO `id-token` AND NO ENVIRONMENT: this job holds no cloud credentials (plan 0004 P9). The
     # reads are the quality step's and the telemetry step's, with the workflow token: the issues
     # this run filed, and its own start time (`gh run view`).
@@ -187,249 +187,14 @@ jobs:
       contents: read
       issues: read
       actions: read
-    outputs:
-      summary-artifact: ${{ steps.upload.outputs.artifact-id && format('kanon-explore-summary-{0}-{1}', github.run_id, github.run_attempt) || '' }}
-    steps:
-      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1).
-      - name: Record when the job started
-        id: job
-        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+    uses: $/.github/workflows/explore-run.yml
+    with:
+      tier: ${{ inputs.tier }}
+    secrets:
+      app-id: ${{ secrets.EXPLORER_APP_ID }}
+      app-private-key: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
+      claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
-      - uses: actions/checkout@v7
-        id: checkout
-        with:
-          persist-credentials: false
-
-      # THE TWO HOOKS THIS LANE RUNS, both the project's and both read from the checkout. The
-      # project-setup check is the spine's, verbatim (`agent-lane.yml`); the sweep hook's is the
-      # same, for the hook only this lane calls. Its commit is recorded for the put-back below.
-      - name: Check the project-setup and sweep hooks are present
-        id: hook
-        run: |
-          if [ ! -f .github/actions/project-setup/action.yml ]; then
-            echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
-            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          if [ ! -f .github/actions/explore-sweep/action.yml ]; then
-            echo "::error title=explore-sweep hook missing::This lane runs the project's sweep from .github/actions/explore-sweep/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. What the Explorer sweeps is the project's: write the hook (Kanon's docs/explore-sweep.md)."
-            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      # Kanon's scripts, for the steps below, and `KANON` for the agent's environment (kanon#110):
-      # BEFORE the hook, so the project's own toolchain still wins the PATH for its sweep, and
-      # read from this step's OUTPUT after it, which the hook cannot rewrite as it can
-      # `$GITHUB_ENV`.
-      - uses: $/actions/kanon-path
-        id: kanon
-
-      # THE PROJECT'S DATABASE, AS IT DECLARES IT (kanon#18; `agent-lane.yml`'s header). After
-      # the checkout, because the declaration is read from the tree, and before the hook, which
-      # starts it.
-      - uses: $/actions/test-database
-        id: database
-
-      # The toolchain, the install, the database and its schema, and the browser: the project's,
-      # under the `explorer` lane name.
-      - uses: ./.github/actions/project-setup
-        id: project
-        with:
-          lane: explorer
-          install: "true"
-          database: ${{ steps.database.outputs.database }}
-          browsers: "true"
-
-      # THE AGENT-LANE BLOCKS, CALLED DIRECTLY (RA-2661): the sweep runs between the setup and the
-      # agent, in the same workspace. The App token is minted after the sweep, so `agent-setup`
-      # gets no slug and probes nothing.
-      - uses: $/actions/agent-setup
-        id: setup
-        with:
-          arm: Explorer agent
-          app-slug: ""
-
-      # THE SWEEP: the project's hook. It never fails on findings, which are in the summary;
-      # it fails only when the sweep could not run, and then the summary check below says so.
-      - name: Run the project's sweep hook
-        id: sweep
-        uses: ./.github/actions/explore-sweep
-        with:
-          tier: ${{ inputs.tier }}
-
-      # NO SUMMARY IS NO SWEEP, NEVER GREEN (plan 0004 §4). A summary that is missing, malformed,
-      # for another commit or tier, or of no route fails here by name, so the agent never triages
-      # it and the `put` job never records it as a sweep.
-      - name: Check the sweep's summary
-        id: summary
-        if: ${{ !cancelled() && steps.hook.outcome == 'success' && steps.project.outcome == 'success' }}
-        env:
-          KANON: ${{ steps.kanon.outputs.path }}
-          COMMIT: ${{ github.sha }}
-          TIER: ${{ inputs.tier }}
-        run: node "$KANON/scripts/explore-summary.mjs" check qa-explore-summary.json --commit "$COMMIT" --tier "$TIER"
-
-      # For the `put` job, which holds the store's credentials and runs nothing of the lane's.
-      # Uploaded before the agent runs, so the record is the sweep's, whatever the agent does to
-      # the workspace. One day: the store holds the durable copy.
-      - name: Upload the summary for the store
-        id: upload
-        if: ${{ !cancelled() && steps.summary.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: kanon-explore-summary-${{ github.run_id }}-${{ github.run_attempt }}
-          path: qa-explore-summary.json
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Mint explorer App token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ secrets.EXPLORER_APP_ID }}
-          private-key: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
-          # Narrowed to what the agent uses (`K-AGENT-46`): it reads the tree and the pull
-          # requests that touched a route, and searches, files and comments on issues.
-          permission-contents: read
-          permission-issues: write
-          permission-pull-requests: read
-
-      # THE AGENT TRIAGES THE SUMMARY (plan 0004 §4's second open item). It reads the summary
-      # Kanon fixes, never the hook's own raw report, whose format is the project's tool's.
-      - uses: $/actions/agent-run
-        id: agent
-        env:
-          KANON: ${{ steps.kanon.outputs.path }}
-        with:
-          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github-token: ${{ steps.app-token.outputs.token }}
-          prompt: |
-            You are the Explorer (Agent 1) of the QA pipeline, in SWEEP mode. First read
-            docs/qa/explorer-playbook.md.
-
-            The project's signal sweep has ALREADY RUN. Its summary is in
-            `qa-explore-summary.json`: one JSON object whose `routes` array holds one
-            `{route, status, signal}` per route swept. `status` is `passed` or `failed`,
-            and a failed route's `signal` is the first objective signal the sweep
-            recorded on it (for example "objective signals on /admin/courses:
-            [pageerror] ..."). `tier` is the tier swept, `commit` the commit, and
-            `passed` and `failed` the counts. Do NOT run the sweep yourself, and read
-            no other report: the summary is the sweep's result.
-
-            Read that file. For each FAILED route: compute the dedup signature
-            (route::signal::normalized-message), search OPEN issues, and file a bug, or
-            comment on the existing match. A cluster of ONE root cause across routes is
-            ONE bug, not many: dedup hard. Labels: bug, agent:explorer, qa:needs-triage,
-            the matching signal:* and sev:*. Milestone: Product Backlog, a bucket (it is
-            a product bug), never a roadmap milestone such as the launch gate
-            (K-WORK-5). Tier severity by evidence.
-            If every route PASSED (`failed` is 0), file NOTHING and say the sweep was
-            clean.
-
-            PROJECT MEMBERSHIP (RA-1783): a bug belongs to a project only where the
-            surface you swept is CLAIMED by one, traced rather than guessed, and only
-            RECENTLY: among the last 3 commits in the past 14 days that touched the
-            files rendering the failing route, a merged PR closes an issue whose body's
-            LAST non-empty line is `<!-- qa:project <n> -->`, or changes
-            `docs/projects/<n>.md`. The checkout is SHALLOW, so `git log` has no
-            history: read it from the API, `gh api "repos/${{ github.repository }}/commits?path=<file>&since=<ISO date>&per_page=3"`,
-            then `gh api repos/${{ github.repository }}/commits/<sha>/pulls`. Then the
-            bug's body ENDS with `<!-- qa:project <n> -->`, nothing after it. A project
-            number that merely appears in prose claims nothing; if the trace does not
-            give exactly one project, or any read fails, add no marker. Never apply a
-            `project:<n>` label: `lead-reconcile.mjs` mirrors it from the marker.
-
-            Do NOT edit code. In your final message summarize: tier swept, routes
-            passed/failed, signals found, and what you filed or deduped.
-          claude_args: |
-            --model claude-opus-5
-            --effort high
-            --max-turns 60
-            --max-budget-usd 25
-            --fallback-model claude-opus-5-5
-            --allowedTools Read,Bash,Grep,Glob
-            --exclude-dynamic-system-prompt-sections
-          # 5-MINUTE PROMPT CACHE, DELIBERATELY (RA-2058). Every run on the reference adopter
-          # finished in under 300s with no idle gap, so a 5-minute cache never goes cold
-          # mid-run, and its write bills at 1.25x base input against the 1-hour default's 2x.
-          prompt-cache-ttl: 5m
-
-      # THE HOOK GOES BACK (RA-2694), for its toolchain's post step: the spine's step, verbatim.
-      - name: Put the project-setup hook back for its post steps
-        if: always() && steps.hook.outputs.sha != ''
-        env:
-          SHA: ${{ steps.hook.outputs.sha }}
-        run: |
-          if git checkout "$SHA" -- .github/actions/project-setup 2>/dev/null; then
-            echo "project-setup hook put back from $SHA"
-          else
-            echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
-          fi
-
-      # THE QUALITY HALF OF THE ROW (RA-1504), derived from GitHub (the issues this run filed and
-      # their `sev:*` labels), never from the agent. An observer must never red a good run.
-      - name: Read what this run filed, for the telemetry row
-        id: quality
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          KANON: ${{ steps.kanon.outputs.path }}
-        run: |
-          # THIS RUN'S OWN START, not a fixed lookback: a window would count what an earlier run
-          # filed. An over-count is worse than an absent value, so a failed read leaves both unset.
-          SINCE="$(gh run view "$GITHUB_RUN_ID" --repo "$REPO" --json startedAt -q .startedAt 2>/dev/null || true)"
-          if [ -z "$SINCE" ]; then
-            echo "::warning title=quality::could not read this run's start; leaving the filed columns unset rather than guessing a window"
-            exit 0
-          fi
-          node "$KANON/scripts/agent-quality-columns.mjs" --filed-since "$SINCE" --label 'agent:explorer'
-
-      # Explain a red run (RA-1408) and record what it cost (RA-1485). `always()` because a run
-      # that FAILED is the one you most want explained and measured; `continue-on-error` because
-      # nothing here may red a good agent run. The SAME `claude_args` as the run, so the cost row
-      # records the configuration that ran.
-      - uses: $/actions/agent-finish
-        id: finish
-        if: always()
-        continue-on-error: true
-        with:
-          arm: Explorer agent
-          agent: explorer
-          job-status: ${{ job.status }}
-          execution_file: ${{ steps.agent.outputs.execution_file }}
-          started-at: ${{ steps.agent.outputs.started-at }}
-          github-token: ${{ steps.app-token.outputs.token }}
-          artifacts-filed: ${{ steps.quality.outputs.artifacts_filed }}
-          severities: ${{ steps.quality.outputs.severities }}
-          claude_args: |
-            --model claude-opus-5
-            --effort high
-            --max-turns 60
-            --max-budget-usd 25
-            --fallback-model claude-opus-5-5
-            --allowedTools Read,Bash,Grep,Glob
-            --exclude-dynamic-system-prompt-sections
-          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
-          # step CONCLUSION in the lane's own order, never a step's name or log. The sweep and
-          # its summary are the project's hook, so a failure there is recorded as `hook`.
-          lane: explore
-          stages: >-
-            checkout=${{ steps.checkout.conclusion }}
-            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.project.conclusion != 'success' && steps.project.conclusion || steps.sweep.conclusion != 'success' && steps.sweep.conclusion || steps.summary.conclusion }}
-            setup=${{ steps.setup.conclusion }}
-            token=${{ steps.app-token.conclusion }}
-            agent=${{ steps.agent.conclusion }}
-          job-started-at: ${{ steps.job.outputs.started-at }}
-          timeout-minutes: "45"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
-          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
-
-  # THE STORE JOB THAT RECORDS THE RUN: the sweep's summary, through the adopter's store hook,
-  # whatever the agent did (`!cancelled()`), but only when there is a summary to record. No
-  # summary is no sweep, and nothing is written. A failed write fails it: that red run is the
-  # page (`K-OBS-6`).
   put:
     needs: explore
     if: ${{ !cancelled() && needs.explore.outputs.summary-artifact != '' }}

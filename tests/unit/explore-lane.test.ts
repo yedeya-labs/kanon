@@ -1,11 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parse } from 'yaml';
 import { storeLaneProblems, type Workflow } from './helpers/store-jobs.js';
 import { agentPrompt, runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { effectiveSteps } from './helpers/spine.js';
+import { readFlattened, workflowText } from './helpers/called-workflow.js';
 
 /**
  * Plan 0004 step 12: the Explorer's sweep lane, moved from the reference adopter onto the store
@@ -20,10 +20,10 @@ import { effectiveSteps } from './helpers/spine.js';
  */
 const ROOT = process.cwd();
 const FILE = '.github/workflows/agent-explore.yml';
-const raw = readFileSync(join(ROOT, FILE), 'utf8');
+const raw = workflowText(join(ROOT, FILE));
 type Step = WorkflowStep & { with?: Record<string, unknown> };
 type Job = { if?: string; needs?: string | string[]; environment?: string; outputs?: Record<string, string>; permissions?: Record<string, string>; steps: Step[] };
-const wf = parse(raw) as { on: { workflow_call: { inputs: Record<string, { type?: string; default?: string; required?: boolean }>; secrets: Record<string, unknown> } }; jobs: Record<string, Job>; concurrency: { group: string } };
+const wf = readFlattened(join(ROOT, FILE)) as { on: { workflow_call: { inputs: Record<string, { type?: string; default?: string; required?: boolean }>; secrets: Record<string, unknown> } }; jobs: Record<string, Job>; concurrency: { group: string } };
 const jobs = wf.jobs;
 const explore = jobs.explore!;
 const steps = explore.steps;

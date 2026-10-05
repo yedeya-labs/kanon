@@ -3,9 +3,9 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkS
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parse } from 'yaml';
 import { type WorkflowStep } from './helpers/workflow-step.js';
 import { effectiveSteps, laneBlockOf, stepsAsRun } from './helpers/spine.js';
+import { readFlattened } from './helpers/called-workflow.js';
 
 /**
  * RA-848, moved at step 4 of plan 0001 with the reference adopter's `restore-agent-docs.sh`:
@@ -353,7 +353,7 @@ describe('RA-859 — restore-judging-inputs.sh never writes or parks through a s
 
 type Step = WorkflowStep;
 const reviewSteps = (): Step[] =>
-  ((parse(readFileSync(WORKFLOW, 'utf8')) as { jobs: Record<string, { steps?: Step[] }> }).jobs.review?.steps ?? []);
+  ((readFlattened(WORKFLOW) as { jobs: Record<string, { steps?: Step[] }> }).jobs.review?.steps ?? []);
 const restoreStep = (): Step => reviewSteps().find((s) => /restore-judging-inputs\.sh/.test(s.run ?? ''))!;
 
 describe('RA-848 — the review lane runs the restore, and tells the Reviewer so', () => {
@@ -446,7 +446,8 @@ describe('RA-2697 — the agent-lane blocks come from the action cache, never th
     // No project-setup hook between them any more: the job runs none of the PR's code.
     expect(job.some((s) => s.uses === './.github/actions/project-setup')).toBe(false);
     expect(mint).toBeGreaterThan(scope);
-    expect(job[mint]!.uses).toBe('actions/create-github-app-token@v3');
-    expect(job[mint]!.with?.['skip-token-revoke']).toBeUndefined();
+    // Received there, not minted: the key never enters this job (kanon#279, `K-AGENT-49`).
+    expect(job[mint]!.name).toBe('Receive the App token');
+    expect(job.some((s) => String(s.uses ?? '').startsWith('actions/create-github-app-token@'))).toBe(false);
   });
 });

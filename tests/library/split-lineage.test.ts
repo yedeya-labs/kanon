@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ADOPTER, ROOT } from './helpers/adopter.js';
-import { parse } from 'yaml';
 const {
   HUMAN_LABEL, SPLIT_LABEL, SPLIT_WORKFLOW,
   childrenMissingMarker, exhaustedRoute, projectOf, splitBranch, splitBranches, splitGate, splitMarker, splitOf,
@@ -12,6 +11,7 @@ const {
 const { declaresMembership, parseProposed } = await import('../../scripts/lead-reconcile.mjs');
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { laneBlockOf, stepsAsRun } from '../unit/helpers/spine.js';
+import { readFlattened, workflowText } from '../unit/helpers/called-workflow.js';
 const { isPreStandard } = await import('../../scripts/brief-guard.mjs');
 
 /**
@@ -61,7 +61,7 @@ describe('childrenMissingMarker — the split PR is checked for lineage', () => 
     expect(childrenMissingMarker(diff(['+### Issue A1 — One', `+${splitMarker(9)}`, '+### Issue A2 — Two', '+body']))).toEqual(['### Issue A2 — Two']);
   });
   it('runs from the lane’s own step', () => {
-    const wf = readFileSync(join(ROOT, `.github/workflows/${SPLIT_WORKFLOW}`), 'utf8');
+    const wf = workflowText(join(ROOT, `.github/workflows/${SPLIT_WORKFLOW}`));
     expect(wf).toContain('node "$KANON/scripts/split-lineage.mjs" check-pr');
   });
 });
@@ -217,7 +217,7 @@ describe('the gate, run as a CLI — module evaluation is part of the contract (
 });
 
 describe('the split lane’s wiring', () => {
-  const wf = parse(readFileSync(join(ROOT, `.github/workflows/${SPLIT_WORKFLOW}`), 'utf8')) as {
+  const wf = readFlattened(join(ROOT, `.github/workflows/${SPLIT_WORKFLOW}`)) as {
     on: Record<string, unknown>;
     concurrency?: unknown;
     jobs: {
@@ -249,7 +249,11 @@ describe('the split lane’s wiring', () => {
     const mint = steps.findIndex((s) => s.id === 'app-token');
     expect(gateAt).toBeGreaterThanOrEqual(0);
     expect(mint).toBeGreaterThan(gateAt);
-    for (const s of steps.slice(gateAt + 1)) expect(s.if, s.name ?? s.uses ?? s.run).toContain("steps.gate.outputs.act == 'split'");
+    // But the token's revoke, the job's last step (kanon#279): the token is minted in a job of
+    // its own before this one, and a run the gate stood down still revokes it.
+    const revoke = steps.at(-1)!;
+    expect(revoke.name).toBe('Revoke the App token');
+    for (const s of steps.slice(gateAt + 1, -1)) expect(s.if, s.name ?? s.uses ?? s.run).toContain("steps.gate.outputs.act == 'split'");
   });
 
   it('keeps the gate and the agent in ONE job, under the one per-issue group (RA-2658)', () => {

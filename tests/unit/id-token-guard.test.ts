@@ -62,10 +62,16 @@ describe('every Kanon workflow', () => {
 
 describe('the mutations: any other job holding id-token turns the guard red, by name', () => {
   it('an agent job given id-token: write', () => {
+    // The agent's job itself, in the called workflow it runs in since kanon#279.
+    expect(mutate((w) => grant(job(w, 'explore-agent-job.yml', 'explore'))))
+      .toEqual(['explore-agent-job.yml: job explore holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone may']);
+    expect(mutate((w) => grant(job(w, 'code-audit-agent-job.yml', 'audit'))))
+      .toEqual(['code-audit-agent-job.yml: job audit holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone may']);
+    // And the lane's call to it, whose grant is the ceiling of every job it runs.
     expect(mutate((w) => grant(job(w, 'agent-explore.yml', 'explore'))))
-      .toEqual(['agent-explore.yml: job explore holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone may']);
-    expect(mutate((w) => grant(job(w, 'agent-code-audit.yml', 'audit'))))
-      .toEqual(['agent-code-audit.yml: job audit holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone may']);
+      .toEqual(['agent-explore.yml: job explore holds id-token: write (its own permissions grant) and calls explore-run.yml, which has no store job to pass it to']);
+    expect(mutate((w) => grant(job(w, 'agent-overseer.yml', 'overseer'))))
+      .toEqual(['agent-overseer.yml: job overseer holds id-token: write (its own permissions grant) and calls overseer-run.yml, which has no store job to pass it to']);
   });
 
   it('a gate job given id-token: write', () => {

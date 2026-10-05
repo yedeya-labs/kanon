@@ -52,7 +52,7 @@ const ALLOWED: ReadonlyArray<readonly [string, string, string]> = [
     'the generic environment words the digest must not use ("staging", "production"): vocabulary, not a declaration'],
   ['infra/qa-store/aws/provision.mjs', 'its environment name',
     "the generic stage words a store resource's lifecycle must not name: vocabulary, not a declaration"],
-  ['.github/workflows/agent-review.yml', "its product's areas",
+  ['.github/workflows/review-agent-job.yml', "its product's areas",
     "a severity example in the Reviewer's prompt, left for the review-lane batch, which owns the file (kanon#54)"],
 ];
 

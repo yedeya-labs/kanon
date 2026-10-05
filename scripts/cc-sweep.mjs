@@ -99,6 +99,24 @@ export function statusLine(r, watermark) {
 /** Kanon's own lanes, in the tree this script runs from: the tag the adopter pinned. */
 export const KANON_LANES = fileURLToPath(new URL('../.github/workflows/', import.meta.url));
 
+/** The workflows a workflow calls through `$/` (Kanon's call to its own), by file name. */
+const selfCalls = (/** @type {string} */ text) =>
+  [...text.matchAll(/^\s*uses:\s*\$\/\.github\/workflows\/([\w.-]+\.ya?ml)\s*$/gm)].map((m) => /** @type {string} */ (m[1]));
+
+/**
+ * A workflow's text, then the text of every workflow it calls through `$/`, transitively.
+ * @param {string} dir
+ * @param {string} file
+ * @param {Set<string>} [seen]
+ * @returns {string[]}
+ */
+const withCalls = (dir, file, seen = new Set()) => {
+  if (seen.has(file) || !existsSync(join(dir, file))) return [];
+  seen.add(file);
+  const text = readFileSync(join(dir, file), 'utf8');
+  return [text, ...selfCalls(text).flatMap((c) => withCalls(dir, c, seen))];
+};
+
 /**
  * Every `--model` / `--effort` / `--autocompact` / `--max-turns` block in the workflows, one
  * line per distinct `claude_args:` in each file. Regex rather than a YAML parse, to stay
@@ -110,14 +128,20 @@ export const KANON_LANES = fileURLToPath(new URL('../.github/workflows/', import
 export function fleetConfig(workflowDir = '.github/workflows', lanesDir = KANON_LANES) {
   /** @type {string[]} */
   const out = [];
-  for (const f of readdirSync(workflowDir).filter((n) => n.endsWith('.yml')).sort()) {
+  const files = readdirSync(workflowDir).filter((n) => n.endsWith('.yml')).sort();
+  // A lane's agent job runs in a workflow the lane calls through `$/` (kanon#279), and its
+  // claude_args are there: each is read as part of the lane that calls it, never on its own.
+  // A lane is an `agent-*.yml` file even when another calls it (the lanes smoke test does).
+  const called = new Set(files.flatMap((f) => selfCalls(readFileSync(join(workflowDir, f), 'utf8')))
+    .filter((c) => !/^agent-/.test(c)));
+  for (const f of files.filter((n) => !called.has(n))) {
     const own = readFileSync(join(workflowDir, f), 'utf8');
     // A trigger-only caller of one of Kanon's lanes (RA-2709, RA-2715) carries no claude_args;
     // its lane does, read from this Kanon tree, and it is this file's arm.
     const lanes = [...own.matchAll(/^\s*uses:\s*yedeya-labs\/kanon\/\.github\/workflows\/([\w.-]+\.ya?ml)@[\w.-]+\s*$/gm)]
       .map((m) => /** @type {string} */ (m[1])).filter((l) => l !== 'agent-lane.yml')
-      .map((l) => readFileSync(join(lanesDir, l), 'utf8'));
-    const text = [own, ...lanes].join('\n');
+      .flatMap((l) => withCalls(lanesDir, l));
+    const text = [...withCalls(workflowDir, f).slice(1), own, ...lanes].join('\n');
     for (const m of text.matchAll(/claude_args:\s*\|?\s*\n((?:[ \t]+--.*\n?)+)/g)) {
       const args = String(m[1]);
       const pick = (/** @type {string} */ flag) => args.match(new RegExp(`${flag}[\\s=]+(\\S+)`))?.[1] ?? '-';

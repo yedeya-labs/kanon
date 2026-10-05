@@ -48,13 +48,13 @@ const EXEMPT = new Set([
   'actions/qa-store/action.yml: ./.github/actions/qa-store',
   // The Explorer runs the project's setup and its sweep, both the adopter's hooks (plan 0004
   // step 12, decision 5), read from the checkout like every other lane's.
-  '.github/workflows/agent-explore.yml: ./.github/actions/explore-sweep',
-  '.github/workflows/agent-explore.yml: ./.github/actions/project-setup',
+  '.github/workflows/explore-agent-job.yml: ./.github/actions/explore-sweep',
+  '.github/workflows/explore-agent-job.yml: ./.github/actions/project-setup',
   '.github/workflows/agent-blocks-smoke.yml: ./tests/fixtures/python-adopter/.github/actions/project-setup',
   '.github/workflows/lane-agent-job.yml: ./.github/actions/project-setup',
-  '.github/workflows/agent-lead-split.yml: ./.github/actions/project-setup',
-  '.github/workflows/agent-rebase.yml: ./.github/actions/project-setup',
-  '.github/workflows/agent-verify-acs.yml: ./.github/actions/project-setup',
+  '.github/workflows/lead-split-agent-job.yml: ./.github/actions/project-setup',
+  '.github/workflows/rebase-agent-job.yml: ./.github/actions/project-setup',
+  '.github/workflows/verify-acs-agent-job.yml: ./.github/actions/project-setup',
   '.github/workflows/dco.yml: yedeya-labs/kanon/actions/dco@vX.Y.Z',
   '.github/workflows/pr-title.yml: yedeya-labs/kanon/actions/pr-title@vX.Y.Z',
   '.github/workflows/review.yml: yedeya-labs/kanon/.github/workflows/agent-review.yml@vX.Y.Z',

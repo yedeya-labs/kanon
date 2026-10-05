@@ -1,0 +1,347 @@
+# Rebase — the agent's job
+#
+# The agent's job of `agent-rebase.yml`, moved here unchanged apart from its token (kanon#279).
+#
+# CALLED ONLY BY `rebase-run.yml`, beside the job that mints this lane's token. The App's private
+# key never enters this job (`K-AGENT-49`): the token arrives hex-encoded as the `app-token`
+# secret. `Receive the App token` sits where the mint step was, so the token exists in this job
+# from the same point as before, and `Revoke the App token` is the last step. Every other step
+# is the lane's, as it was; what it read from the lane's earlier jobs (`needs.*.outputs`) and
+# the lane's inputs arrives as inputs of the same name. The lane's header says what the job
+# does, and `tests/unit/app-key-isolation.test.ts` holds its token steps to the spine's.
+#
+# WHAT THE AGENT CAN STILL REACH HERE: the token it was always given, for at most the hour it
+# lives, and the Claude token. Rewriting a cached action in this job reaches only those.
+name: Rebase — the agent's job
+
+on:
+  workflow_call:
+    inputs:
+      pr:
+        description: The conflicting PR to resolve.
+        required: true
+        type: number
+      app-slug:
+        description: The minted App's slug, from the lane's `mint` job.
+        required: true
+        type: string
+      mint-attempt:
+        description: >-
+          The run attempt the lane's `mint` job minted the token for. A partial re-run
+          ("Re-run failed jobs") reuses that job's outputs, so a token from an earlier
+          attempt, which that attempt revoked, is refused by name.
+        required: true
+        type: string
+    secrets:
+      app-token:
+        description: >-
+          The lane's App token, hex-encoded by its `mint` job (a job output holding a masked
+          value is dropped). Arrives masked, as every secret does.
+        required: true
+      claude-token:
+        required: true
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PR_NUMBER: ${{ inputs.pr }}
+    steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1). First, so
+      # it is as close to the job's start as a step can be.
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      # The token FIRST so checkout persists it as the git credential — the resolution
+      # is a push, and the default token is `contents: read` here.
+      # THE TOKEN, RECEIVED WHERE IT WAS MINTED (kanon#279, `K-AGENT-49`): `rebase-run.yml`'s `mint` job
+      # holds the key and mints it; this step decodes and masks it, and the job never sees the key.
+      - name: Receive the App token
+        id: app-token
+        env:
+          SEALED: ${{ secrets.app-token }}
+          APP_SLUG: ${{ inputs.app-slug }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$'; then
+            echo "::error title=app-token::no App token arrived from this lane's mint job; see that job's log for why the mint failed."
+            exit 1
+          fi
+          if [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error title=app-token::this is attempt $RUN_ATTEMPT, but the App token was minted for attempt $MINT_ATTEMPT and revoked when that attempt ended. Use \"Re-run all jobs\", not \"Re-run failed jobs\": the token is minted in a job of its own, and only re-running it mints a fresh one."
+            exit 1
+          fi
+          # Decoded with printf and sed alone, so the step needs nothing the runner may lack.
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          {
+            echo "token=$TOKEN"
+            echo "app-slug=$APP_SLUG"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        id: checkout
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          # The agent merges `main` into a branch, so it needs both, not a shallow tip.
+          fetch-depth: 0
+
+      # THIS LANE CALLS THE AGENT-LANE BLOCKS DIRECTLY (RA-2659), not the reusable spine,
+      # because "Record the attempt" below must run INSIDE this matrix job, between the
+      # checkout and the agent — a reusable workflow takes no steps from its caller, and
+      # the record cannot move to an earlier job (see that step). So the job keeps its own
+      # matrix, service, slug assertion and record, and calls `agent-setup`, `agent-run` and
+      # `agent-finish` around them (`docs/agentic-qa-pipeline.md` §6). As `$/` references
+      # (RA-2697), so they come from Kanon at the tag the caller pinned and never from the
+      # tree the agent merges `main` into: nothing loads them, and nothing puts them back.
+
+      # The scripts are Kanon's, read from the action cache at the tag the caller pinned (plan
+      # 0001 §3), never from the tree the agent merges `main` into.
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      # A renamed App would make `ineligible()`'s author check match nothing — the
+      # guard that keeps this lane off human branches — and it would fail SILENTLY,
+      # which is this pipeline's recurring shape. Same assertion as agent-implement.yml.
+      # THE LANE'S OWN STEP, not the project-setup hook's (RA-2659, RA-2694): the hook checks
+      # the same constant for the implement lane but with the sweep's error text, and this
+      # annotation is what a red run says about THIS lane's author check. It also has to
+      # come before the record below, which the hook does not.
+      - name: Assert the minted App is the one this lane expects
+        env:
+          MINTED_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          EXPECTED=$(node -e "import(process.env.KANON + '/scripts/rebase-lane.mjs').then(m => console.log(m.IMPLEMENTER_LOGIN))")
+          if [ "$MINTED_SLUG" != "$EXPECTED" ]; then
+            echo "::error title=agent-rebase::App slug mismatch — minted '$MINTED_SLUG', this lane expects '$EXPECTED'. The author check in \`ineligible()\` would match nothing, which is what keeps this lane off human branches. Rename the App, or correct the Implementer row's App slug in docs/qa/agent-identities.md, which IMPLEMENTER_LOGIN is read from (RA-2701)."
+            exit 1
+          fi
+
+      # BEFORE THE AGENT, DELIBERATELY. A crashed or capped session writes nothing, so a
+      # marker only a SUCCESSFUL run left would re-hand the same commit forever. This is
+      # RA-1408's "a run that FAILED is a run" (bar one retry of an attempt that died of its
+      # cause, RA-2519), written as a comment because this lane's
+      # runs carry `main`'s SHA rather than the PR's (RA-1717) and run evidence cannot see
+      # them. It doubles as the thing a human reading the PR sees while the agent works.
+      - name: Record the attempt on the PR before making it
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SHA="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
+          # The run id rides along (RA-2519): a head whose only attempt died of its cause
+          # (the model unreachable, or its API failing mid-run) is retried once after a
+          # cool-down, and the filter reads THIS run's jobs to know how it ended.
+          node -e "import(process.env.KANON + '/scripts/rebase-lane.mjs').then(m => console.log(m.attemptComment(process.argv[1], process.argv[2])))" "$SHA" "$GITHUB_RUN_ID" \
+            | gh pr comment "$PR_NUMBER" --body-file -
+
+      # THE PROJECT-SETUP HOOK (RA-2694): the toolchain, `npm ci` and `db:init`, which this
+      # job ran as the block's install and a step of its own. AFTER the record, as before:
+      # the attempt is posted before anything slower than a checkout can fail. The presence
+      # check is copied verbatim from `agent-lane.yml`.
+      - name: Check the project-setup hook is present
+        id: hook
+        run: |
+          if [ ! -f .github/actions/project-setup/action.yml ]; then
+            echo "::error title=project-setup hook missing::This lane runs the project's setup from .github/actions/project-setup/action.yml, and the checked-out tree ($(git rev-parse --short HEAD)) has none. A branch cut before the hook existed (RA-2694) must be rebased onto the default branch."
+            echo "kanon-error=hook_missing" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # THE PROJECT'S DATABASE, AS IT DECLARES IT (kanon#18; `agent-lane.yml`'s header), from
+      # the branch checked out, as the hook is. Before the hook, which starts it.
+      - uses: $/actions/test-database
+        id: database
+      - uses: ./.github/actions/project-setup
+        id: project
+        with:
+          lane: rebase-lane
+          install: "true"
+          database: ${{ steps.database.outputs.database }}
+          browsers: "false"
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
+          github-token: ${{ steps.app-token.outputs.token }}
+      - uses: $/actions/agent-setup
+        id: setup
+        with:
+          arm: rebase lane
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
+
+      - uses: $/actions/agent-run
+        id: agent
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+        with:
+          prompt: |
+            You are the Implementer (Agent 2) in RESOLVE-CONFLICT mode. PR
+            #${{ env.PR_NUMBER }} of this repo conflicts with `main`. Until it stops
+            conflicting GitHub dispatches NO `pull_request` events for it, so it gets no
+            CI, no review and no revise — nothing downstream can act (RA-1722). Your job is
+            to make it mergeable again without changing what it does.
+
+            Read docs/qa/triage-fix-playbook.md and the project's stack document,
+            docs/qa/stack.md, first, then:
+
+            WHAT TO DO. Check out the PR's branch, merge `origin/main` into it (a MERGE,
+            never a rebase — a rebase force-pushes, which detaches the Reviewer's review from
+            the commits it cites), resolve every conflict, verify, commit and push.
+
+            RESOLVE, DO NOT REDECIDE. Both sides are already-reviewed intent. A
+            resolution keeps BOTH: `main`'s change and this PR's change, combined so each
+            still does what it was written to do. If you find yourself deleting one
+            side's behaviour to make the file compile, stop and re-read — that is the
+            failure this mode is most likely to produce, and nobody downstream can see it
+            because the diff you push is a merge commit that reviewers skim.
+
+            SOME FILES ARE NOT RESOLVED BY CHOOSING A SIDE. These are the cases a script
+            could not do and you can:
+              · every file the stack document's `## Generated files` section names —
+                a lockfile, a migration sequence — resolve exactly as it says, so the
+                file is derived rather than merged. Never drop a migration.
+              · `docs/qa/specs/_id-registry.json` — clause ids come from the allocator.
+                Take `main`'s registry, then re-run `node "$KANON/scripts/spec-ids.mjs" --apply`
+                so this PR's new clauses get ids that do not collide, and update every
+                reference to an id you had to change.
+              · `docs/qa/specs/_locked-floor.json` — GENERATED. Do not hand-merge it:
+                take either side and run `node "$KANON/scripts/spec-coverage.mjs" --write-locked`.
+              · `CHANGELOG.md` — release-please's. Take `main`'s and drop your side's
+                entry; the release PR regenerates it from the commits.
+
+            VERIFY BEFORE YOU PUSH, and verify the MERGED tree, not your side of it:
+            every command the stack document's `## Gates` section lists. If the PR
+            touched the schema, also follow its `## Schema changes` section and run the
+            checks its `## Data isolation` section names — a resolution that loses an
+            isolation rule is the worst outcome available here. Do not push a tree whose
+            gates you have not run.
+
+            WHEN TO STOP AND ASK — and this is the ONLY thing that reaches the developer.
+            If the conflict encodes a PRODUCT decision rather than a code one — two
+            changes to the same rule that cannot both hold, where reading the code cannot
+            tell you which is wanted — do NOT guess and do NOT split the difference.
+            `git merge --abort`, comment on the PR saying exactly which two intents
+            collide and what you would need to know, apply the `needs:human` label, and
+            STOP. A wrong guess here ships a behaviour nobody chose. Everything else — an
+            awkward merge, a test you must update, a rename on both sides — is yours.
+
+            IF YOU CANNOT RESOLVE IT for any other reason, the same shape applies minus
+            the label: abort, comment with what defeated you, STOP. Never push a tree
+            with conflict markers in it, and never push one whose tests you did not run.
+
+            NEVER: merge the PR (a human merges), force-push, close anything,
+            touch a branch other than this PR's, or edit `.github/workflows/**` as part of
+            a resolution unless that is where the conflict actually is.
+
+            OUTPUT: a comment on PR #${{ env.PR_NUMBER }} saying what conflicted, how you
+            resolved each one, which gates you ran and their results. The push re-runs CI
+            and dismisses the Reviewer's approval, so he re-reviews your resolution — say
+            plainly what you want him to look at hardest. ALWAYS leave a comment, even if
+            you did nothing.
+          claude_args: |
+            --model claude-opus-5
+            --effort high
+            --max-turns 120
+            --max-budget-usd 50
+            --fallback-model claude-opus-5-5
+            --allowedTools Read,Edit,Write,Bash,Grep,Glob
+            --exclude-dynamic-system-prompt-sections
+          claude-token: ${{ secrets.claude-token }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      # THE HOOK GOES BACK (RA-2694), for its toolchain's post step — copied verbatim from
+      # `agent-lane.yml`, which says why.
+      - name: Put the project-setup hook back for its post steps
+        if: always() && steps.hook.outputs.sha != ''
+        env:
+          SHA: ${{ steps.hook.outputs.sha }}
+        run: |
+          if git checkout "$SHA" -- .github/actions/project-setup 2>/dev/null; then
+            echo "project-setup hook put back from $SHA"
+          else
+            echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
+          fi
+
+      # Explain a red run (`classify-agent-result.mjs --arm 'rebase lane'`) and record what
+      # it cost. `always()` and `continue-on-error` for the reasons in the block's header;
+      # `job-status` because the block cannot see the job's `failure()` from inside itself.
+      - uses: $/actions/agent-finish
+        id: finish
+        if: always()
+        continue-on-error: true
+        with:
+          arm: rebase lane
+          # ITS OWN NAME, not `implementer`. Every lane this repo measures carries a
+          # distinct one (`implementer-revise`, `lead-revise`, `merge-reconcile`), and
+          # folding a conflict resolution into the implementer's row would pollute the
+          # one population RA-1485 exists to size — a resolution and a feature build cost
+          # very different things.
+          agent: rebase-lane
+          job-status: ${{ job.status }}
+          pr-number: ${{ env.PR_NUMBER }}
+          execution_file: ${{ steps.agent.outputs.execution_file }}
+          started-at: ${{ steps.agent.outputs.started-at }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          claude_args: |
+            --model claude-opus-5
+            --effort high
+            --max-turns 120
+            --max-budget-usd 50
+            --fallback-model claude-opus-5-5
+            --allowedTools Read,Edit,Write,Bash,Grep,Glob
+            --exclude-dynamic-system-prompt-sections
+          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
+          # step CONCLUSION in the lane's own order, never a step's name or log.
+          lane: rebase
+          stages: >-
+            token=${{ steps.app-token.conclusion }}
+            checkout=${{ steps.checkout.conclusion }}
+            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.project.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "90"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
+          kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
+
+      # BREADCRUMBS FOR THE RETRY (RA-2519). A run that died of its CAUSE (the model was
+      # unreachable, or its API failed mid-run) is retried once, after a cool-down, by
+      # `scripts/rebase-lane.mjs`. That reader cannot see this run's annotations (`Checks: read`),
+      # but it can see which of these steps RAN — the jobs API reports `success` or
+      # `skipped` under `Actions: read`. The names are the protocol: they must match
+      # `RETRY_STEPS` in `scripts/lane-retry.mjs`, which `tests/unit/lane-workflows.test.ts`
+      # asserts. Both do nothing but say so. JOB-LEVEL STEPS, after the finish block whose
+      # classifier they read: the jobs API lists a composite action as ONE step, so a
+      # breadcrumb inside it could never be read by its name.
+      - name: "Retryable once the cause clears: the model was unreachable"
+        if: failure() && steps.finish.outputs.retry == 'unreachable'
+        run: echo "The model was never reached. Kanon's scripts/rebase-lane.mjs retries this head once, after the cool-down (RA-2519)."
+      - name: "Retryable once the cause clears: the model API failed mid-run"
+        if: failure() && steps.finish.outputs.retry == 'api_error'
+        run: echo "The model API failed part-way through. Kanon's scripts/rebase-lane.mjs retries this head once, after the cool-down (RA-2519)."
+
+      # THE TOKEN DIES WITH THE JOB (`K-AGENT-49`). Last, after every step that uses it. It is
+      # decoded from the secret again rather than read from `Receive the App token`, so a run that
+      # ended before that step (a decline, a failed gate) still revokes the token its mint job
+      # minted. Revoking needs only the token itself, never the key. Never reds the run: an
+      # earlier attempt's token was revoked by that attempt, and one that expired is refused.
+      - name: Revoke the App token
+        if: always()
+        env:
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$' || [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "No App token of this attempt to revoke"
+            exit 0
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            "$API_URL/installation/token" || true)"
+          if [ "$STATUS" = "204" ]; then echo "App token revoked"; else echo "::warning title=app-token::the App token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi

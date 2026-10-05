@@ -91,11 +91,26 @@ const yamls = [
     .filter((e) => e.isFile()).map((e) => relative(root, join(e.parentPath, e.name))),
 ].filter((f) => /\.ya?ml$/.test(f));
 
+/**
+ * A lane that runs its agent in called workflows (kanon#279, `K-AGENT-49`) mints in a `mint` job
+ * of `<lane>-run.yml`, with the key and App id the lane's call hands it as `app-id` and
+ * `app-private-key`. That mint is the lane's: each such file maps to the lane calling it and
+ * to the App id that call passes, so the role is still read from a `<ROLE>_APP_ID` secret.
+ */
+const RUN = /^\$\/\.github\/workflows\/([\w.-]+-run\.yml)$/;
+const runOwner = new Map(yamls.flatMap((file) => Object.values(read(file).jobs ?? {}).flatMap((j) => {
+  const m = RUN.exec(String(j.uses ?? ''));
+  return m ? [[m[1]!, { name: file.split('/').pop()!, appId: j.secrets?.['app-id'] }] as const] : [];
+})));
 const mints = yamls.flatMap((file) => {
   const doc = read(file);
+  const owner = runOwner.get(file.split('/').pop()!);
   return [...Object.values(doc.jobs ?? {}).flatMap((j) => j.steps ?? []), ...(doc.runs?.steps ?? [])]
     .filter((s) => String(s.uses ?? '').startsWith('actions/create-github-app-token@'))
-    .map((step) => ({ file, name: file.split('/').pop()!, step }));
+    .map((step) => ({
+      file, name: owner?.name ?? file.split('/').pop()!,
+      step: owner ? { ...step, with: { ...step.with, 'client-id': owner.appId } } : step,
+    }));
 });
 const requested = (w: Record<string, unknown> = {}): Perms =>
   Object.fromEntries(Object.entries(w).filter(([k, v]) => k.startsWith('permission-') && String(v ?? '') !== '')
@@ -137,6 +152,18 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     expect(mint, `${key} mints nothing`).toBeDefined();
     expect(requested(mint!.step.with)).toEqual(perms);
     withinGrant(roleOf(mint!.step.with?.['client-id']), perms);
+  });
+
+  it("maps each lane's called mint to the lane, and the App it mints for to the lane's own secret", () => {
+    const runs = yamls.filter((f) => /-run\.yml$/.test(f)).map((f) => f.split('/').pop()!);
+    expect(runs.length).toBe(8);
+    for (const r of runs) {
+      expect(runOwner.get(r), `${r} is called by no lane`).toBeDefined();
+      expect(String(runOwner.get(r)!.appId), r).toMatch(/^\$\{\{ secrets\.[A-Z]+_APP_ID \}\}$/);
+      const mint = Object.values(read(`.github/workflows/${r}`).jobs ?? {}).flatMap((j) => j.steps ?? [])
+        .find((st) => String(st.uses ?? '').startsWith('actions/create-github-app-token@'));
+      expect(mint?.with?.['client-id'], r).toBe('${{ secrets.app-id }}');
+    }
   });
 
   it('the spine passes every permission input through to its mint, and nothing else', () => {

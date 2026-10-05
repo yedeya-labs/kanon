@@ -101,6 +101,9 @@ describe('fleetConfig', () => {
     expect(lines.length).toBeGreaterThanOrEqual(12);
     expect(lines.some((l) => l.startsWith('agent-review.yml') && /model=claude-opus-5/.test(l))).toBe(true);
     expect(lines.some((l) => l.startsWith('agent-overseer.yml') && /model=claude-fable-5-1/.test(l))).toBe(true);
+    // A lane's agent job runs in workflows the lane calls (kanon#279): read as the lane's arm,
+    // never as an arm of its own, or the snapshot lists every arm twice under two names.
+    expect(lines.filter((l) => /^\S+-(run|agent-job)\.yml/.test(l))).toEqual([]);
   });
 
   it('reads an adopter\'s trigger-only caller through the lane it calls, from this Kanon tree', () => {
