@@ -38,6 +38,10 @@ describe('open: the first status goes only on the pull request this run opened',
     expect(opened([forged, pr(7, 'feat/1-new', sha('a'))], { [sha('f')]: commitBy(sha('f')), [sha('a')]: commitBy(sha('a')) })).toEqual({ pr: 7, sha: sha('a') });
   });
 
+  it('never stamps a PR from a new branch that was opened before the run started', () => {
+    expect(opened([pr(7, 'feat/1-new', sha('a'), '2026-10-05T09:59:59Z')], { [sha('a')]: commitBy(sha('a')) })).toHaveProperty('none');
+  });
+
   it('stamps neither of two candidates, and says so by number', () => {
     const v = opened([pr(7, 'feat/1-new', sha('a')), pr(8, 'feat/1-other', sha('b'))], { [sha('a')]: commitBy(sha('a')), [sha('b')]: commitBy(sha('b')) });
     expect(v).toEqual({ none: expect.stringContaining('2 pull requests match (#7, #8)') });

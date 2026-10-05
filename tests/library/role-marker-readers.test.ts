@@ -1,9 +1,13 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ESCALATE_PATHS } from './helpers/escalations.js';
 
 const { appLogin } = await import('../../scripts/app-register.mjs');
 const { headerLine, setMarkerPhase } = await import('../../scripts/lib/role-marker.mjs');
-const { mergeVerdict, holdOn, ESCALATION_HEADER } = await import('../../scripts/merge-gate.mjs');
+const { mergeVerdict, holdOn, readPr, ESCALATION_HEADER } = await import('../../scripts/merge-gate.mjs');
 const { mergerMarker } = await import('../../scripts/lib/protocol-spellings.mjs');
 const { classify, isSweepComment, MARKER } = await import('../../scripts/dispatch-sweep.mjs');
 const { explorerQaComments } = await import('../../scripts/lead-reconcile.mjs');
@@ -139,6 +143,35 @@ describe('plan 0005 L3: each reader of §3.3 reads the marker beside the login, 
 
   it('covers every reader §3.3 names that has a body to carry a marker', () => {
     expect(Object.keys(READERS)).toHaveLength(10);
+  });
+});
+
+describe('the Merger reads the bodies its markers ride on', () => {
+  it('readPr carries the PR body and each review\'s body into the verdict', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'role-marker-readpr-'));
+    try {
+      const meta = {
+        number: 1234, author: { login: login('Implementer') }, state: 'OPEN', isDraft: false,
+        labels: [{ name: 'agent:implement' }], headRefOid: HEAD, statusCheckRollup: [],
+        mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE', title: 't', body: own('Implementer', 'Closes #1'),
+        closingIssuesReferences: [{ number: 1 }], commits: [{ messageHeadline: 'x', messageBody: '' }],
+      };
+      const reviews = [{ id: 1, state: 'APPROVED', commit_id: HEAD, user: { login: login('Reviewer') }, body: own('Reviewer') }];
+      writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
+case "$*" in
+  "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"/files"*)           printf '%s\\n' 'src/a.ts' ;;
+  *"/reviews"*)         printf '%s' '${JSON.stringify(reviews)}' ;;
+  *"issues?per_page"*)  printf '%s' '0' ;;
+  "run list"*)          printf '%s' '[]' ;;
+esac
+`);
+      const read = readPr(1234, 'o/r', { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+      expect(read.body).toBe(meta.body);
+      expect(read.reviews.map((r: { body?: string }) => r.body)).toEqual([own('Reviewer')]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

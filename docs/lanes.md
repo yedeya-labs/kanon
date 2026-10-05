@@ -253,6 +253,8 @@ A `code` tree is your own source: `citation-shift` reads its comments, and the s
 
 The revise lanes find their own App's login in the App register, and the scripts the lanes run read every role's login from it, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks.
 
+Every post a lane writes as one of your Apps opens with a persona header and a hidden role marker, `**Implementer** <!-- kanon:role=implementer -->`, and every agent commit has the persona as its author name (plan 0005 §3.3). The Implementer's lanes also set a `kanon/role: implementer` commit status, from a job after the agent's, with a token narrowed to Commit statuses write. To have it set, grant your Implementer App **Commit statuses: Read & write** and record that broadened permission in the register (`K-AGENT-3`). Until then the job says so in the run's summary and changes nothing. Nothing requires the marker or the status yet.
+
 ## The reference environment's deploy
 
 A project closes only once its merges are deployed to your reference environment (`K-PROJ-11`), and the reconciler confirms that by the deploy job itself, not the workflow's conclusion. Declare which workflow deploys there, and which job's success is the deploy, under `## Choices` in your adoption record, `docs/qa/adoption.md` (`K-LAYOUT-10`):
