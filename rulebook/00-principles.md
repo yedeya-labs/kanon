@@ -46,13 +46,13 @@ This chapter holds the opinions every other chapter is built on: why Kanon has n
 
 **Class.** framework
 
-### `K-PRIN-5` Author, reviewer and merger are three identities
+### `K-PRIN-5` Author and approver are distinct identities, and no agent approves or merges its own work
 
-**Rule.** Keep the author, the reviewer and the merger of a change as three distinct identities. No agent both plans and approves its own work, or approves and merges it.
+**Rule.** Keep the author of a change and its approver as two distinct platform identities: the agents that write code, issues and pull requests run under one App, and the agents that review and merge under another ([ADR 0013](../docs/decisions/0013-personal-accounts-and-two-apps.md)). The reviewer and the merger may share an identity. No agent both plans and approves its own work, or approves and merges a change it authored.
 
-**Why.** An agent reviewing its own output is marking its own homework. The platform agrees: it already refuses self-approval.
+**Why.** An agent reviewing its own output is marking its own homework. The platform agrees: it refuses self-approval, so the author-approver line is the one separation an identity enforces by itself. Every other line between two roles is drawn by what the role's token may do and by what the merge gate requires, and a second identity would add setup without adding a boundary.
 
-**Enforced by.** A separate platform identity per role, and a merge gate that refuses when the author or approver identity is wrong.
+**Enforced by.** A separate platform identity for the author and the approver, and a merge gate that refuses when the author or approver identity is wrong. Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md), the lanes still run each agent role under its own App, so the three identities are also distinct.
 
 **Class.** framework
 
@@ -231,11 +231,11 @@ Kanon cannot be configured, so it has to say whom it fits. Each assumption below
 
 | Kanon assumes | What it costs a project that doesn't meet it |
 |---|---|
-| **A GitHub organisation owns the repository** ([ADR 0008 §2](../docs/decisions/0008-installation-test-decisions.md), `K-ADOPT-2`). Repositories may be private while prepared and go public one at a time. | Outside the target. A personal account has no merge queue, and needs a paid personal plan for rulesets on a private repository. |
+| **A GitHub account owns the repository: a personal account or an organisation** ([ADR 0013](../docs/decisions/0013-personal-accounts-and-two-apps.md), `K-ADOPT-2`). Organisations and paid features are used where they exist and required nowhere. Repositories may be private while prepared and go public one at a time. | None for the account itself. A personal account has no merge queue, and no Triage role, so a collaborator who is the Stakeholder holds write access; both are recorded fallbacks, not exclusions (`K-ADOPT-3`). |
 | **GitHub's plan decides which platform features exist**, and Kanon uses each where the plan provides it, with a fixed fallback where it doesn't (`K-ADOPT-3`): the merge queue and environment approval are missing on private repositories on the Team plan. | A fallback, recorded, not a setting. The one feature with no fallback is rulesets: a private repository on a plan without them stays in bootstrap. |
 | **GitHub is the queue and the store.** Issues, labels, milestones, PR links and review verdicts hold all execution state; GitHub Issues (not Projects), rulesets, required checks, closing references and squash merge are used. | Outside the target. State is derived from the queue on every tick (`K-PRIN-12`); on another forge there is no queue to derive it from. |
 | **GitHub Actions is the runtime.** Every lane is a workflow, event triggers are load-bearing, and hourly and daily schedules are the heartbeat. | Outside the target. Another CI system means rewriting every lane and every reconciler. |
-| **One platform identity per agent role, created by a human admin** who can edit rulesets and app permissions (`K-ADOPT-8`). | Without an admin, identities can't be separated, so `K-PRIN-5` can't hold and the merge gate has nothing to check. Onboarding cost is real: several apps, keys and secrets. Until they exist, the repository is in bootstrap. |
+| **Two platform identities per owner, created by a human admin** who can edit rulesets and App permissions: the Author and the Judge, plus the optional Releaser for releases, each reused across the owner's repositories (`K-ADOPT-8`, [ADR 0013](../docs/decisions/0013-personal-accounts-and-two-apps.md)). Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md), the lanes still need one App per agent role. | Without an admin, the author and the approver can't be separated, so `K-PRIN-5` can't hold and the merge gate has nothing to check. Onboarding cost is real: two or three Apps, keys and secrets. Until they exist, the repository is in bootstrap. |
 | **Claude Code is the agent runtime,** with its CLI flags and model tiers. | Outside the target. Cost ceilings, fallback and cache policy (chapter 08) are written against it. |
 | **A running project, reached through bootstrap.** Several assumptions below (a test suite, a toolchain, a verified environment, releases) describe a running project. An empty repository adopts Kanon by starting in **bootstrap** (`K-ADOPT-4` to `K-ADOPT-6`), with every exception recorded, and meets them as it grows. | None. Day zero is inside the target. Until a mechanism is installed, its rule is prose only on that repository, and the adoption record says so (`K-ADOPT-9`). |
 | **A test suite the agents can run and revert against,** locally and in CI, with test titles able to carry spec ids, a lint chain, and source separable from tests. Its language has a row in Kanon's table of test conventions (`K-SPEC-6`): JavaScript or TypeScript, Python, or Go. | Without it there is no red-test check, no verified acceptance criterion (`K-SPEC-6`), and agents can only be trusted by reading their output. That is outside the target. |

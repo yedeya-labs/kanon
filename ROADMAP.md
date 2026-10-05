@@ -11,7 +11,7 @@ Write every opinion down in [`rulebook/`](rulebook/). Each opinion gets its reas
 
 ## Where Kanon lives
 
-Kanon's repositories live in the **`yedeya-labs`** GitHub organisation. **Kanon itself is public since 2026-09-30**, under Apache-2.0 ([ADR 0010](docs/decisions/0010-licence.md)), recreated without its private drafting history. Each other repository goes public on its own, at its own gate ([ADR 0008 §2](docs/decisions/0008-installation-test-decisions.md)). This is the same rule Kanon sets for its adopters (`K-ADOPT-2`).
+Kanon's repositories live in the **`yedeya-labs`** GitHub organisation. **Kanon itself is public since 2026-09-30**, under Apache-2.0 ([ADR 0010](docs/decisions/0010-licence.md)), recreated without its private drafting history. Each other repository goes public on its own, at its own gate. This is the same rule Kanon sets for its adopters (`K-ADOPT-2`), which since [ADR 0013](docs/decisions/0013-personal-accounts-and-two-apps.md) admits a personal account as well as an organisation.
 
 ## Phase 2: Second adopter and extraction, together
 

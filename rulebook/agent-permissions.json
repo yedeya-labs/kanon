@@ -25,5 +25,28 @@
       "role": "Overseer",
       "permissions": { "contents": "read", "issues": "write", "pull_requests": "read", "actions": "read", "metadata": "read" }
     }
+  },
+  "$apps": "The three GitHub Apps of ADR 0013, as chapter 03's Apps table groups the roles. Each App holds the union of its roles' rows of the roles table plus Metadata: read, and any permission in `broadened`, which K-AGENT-3 records with its reason. A role named here may be any row of the roles table, so the Releaser, which is not an agent, belongs to its own App. Until the release that completes step L4 of plan 0005, `kanon apps` and apps-check read `roles` only.",
+  "apps": {
+    "author": {
+      "app": "Author",
+      "roles": ["implementer", "lead", "explorer", "overseer"],
+      "permissions": { "contents": "write", "issues": "write", "pull_requests": "write", "workflows": "write", "actions": "read", "statuses": "write", "metadata": "read" },
+      "broadened": {
+        "statuses": "write",
+        "$why": "For the kanon/role: implementer commit status only: a fixed step of the Implementer's lanes mints a token narrowed to Commit statuses write after the agent has finished, and no agent's token holds it (ADR 0013, decision 3)."
+      }
+    },
+    "judge": {
+      "app": "Judge",
+      "roles": ["reviewer", "merger"],
+      "permissions": { "contents": "write", "issues": "write", "pull_requests": "write", "actions": "write", "checks": "read", "statuses": "read", "metadata": "read" }
+    },
+    "releaser": {
+      "app": "Releaser",
+      "optional": true,
+      "roles": ["releaser"],
+      "permissions": { "contents": "write", "pull_requests": "write", "metadata": "read" }
+    }
   }
 }
