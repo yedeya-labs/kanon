@@ -276,7 +276,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           KANON: ${{ steps.kanon.outputs.path }}
-        run: node "$KANON/scripts/ensure-labels.mjs" agent:explorer qa:needs-triage qa:verify bug signal:spec-violation
+        run: node "$KANON/scripts/ensure-labels.mjs" agent:explorer qa:needs-triage qa:verify bug signal:spec-violation sev:critical sev:high sev:medium sev:low
 
       - uses: $/actions/agent-run
         id: agent

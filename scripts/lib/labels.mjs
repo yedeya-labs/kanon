@@ -143,11 +143,11 @@ export function ensureLabels(names, { repo, run }) {
       run(['label', 'create', n, ...R, '--color', t.color, '--description', t.description]);
     } catch (err) {
       const why = String(/** @type {{ stderr?: unknown }} */ (err)?.stderr ?? /** @type {Error} */ (err)?.message ?? err);
-      // A concurrent lane created it between the read and now: it exists, which is the point.
-      if (!/already exists/i.test(why)) {
-        console.log(`::warning title=labels::could not create ${q(n)} — ${why.split('\n')[0]}`);
-        continue;
-      }
+      // A concurrent lane created it between the read and now: it exists, which is the point,
+      // and this run created nothing, so it reports nothing.
+      if (/already exists/i.test(why)) live.add(n);
+      else console.log(`::warning title=labels::could not create ${q(n)} — ${why.split('\n')[0]}`);
+      continue;
     }
     live.add(n);
     created.push(n);

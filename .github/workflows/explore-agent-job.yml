@@ -183,7 +183,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           KANON: ${{ steps.kanon.outputs.path }}
-        run: node "$KANON/scripts/ensure-labels.mjs" agent:explorer qa:needs-triage bug
+        run: node "$KANON/scripts/ensure-labels.mjs" agent:explorer qa:needs-triage bug sev:critical sev:high sev:medium sev:low signal:spec-violation
 
       # THE AGENT TRIAGES THE SUMMARY (plan 0004 §4's second open item). It reads the summary
       # Kanon fixes, never the hook's own raw report, whose format is the project's tool's.

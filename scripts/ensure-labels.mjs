@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Create, before an agent runs, the labels its lane may apply and the repository lacks
-// (plan 0005 §5.3, `K-WORK-12`). `actions/agent-run` calls this with the lane's `labels` input
-// and the agent's own token, so the agent never meets a missing label mid-run, after the work
-// is done.
+// (plan 0005 §5.3, `K-WORK-12`). Each labelling lane's "Create the lane's labels the repository
+// lacks" step calls this right before `agent-run`, with the labels its prompt names and the
+// agent's own token, so the agent never meets a missing label mid-run, after the work is done.
 //
 //   node scripts/ensure-labels.mjs <label> [<label> ...]
 //

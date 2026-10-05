@@ -137,12 +137,19 @@ describe('every label the library applies is in the taxonomy', () => {
 const LABEL_STEP = "Create the lane's labels the repository lacks";
 const ENSURE = /^node "\$KANON\/scripts\/ensure-labels\.mjs"((?: [a-z:-]+)+)$/;
 
-/** The taxonomy labels a lane's file names: what its agent's prompt may tell it to apply. */
+/**
+ * The taxonomy labels a lane's file names: what its agent's prompt may tell it to apply. A family
+ * wildcard (`sev:*`, "a sev:* you can justify") names every member of that family a lane creates,
+ * because the agent picks one at run time; for `signal:*` that is only `signal:spec-violation`,
+ * since a project's own signals are created with its signal list, never by a lane.
+ */
 const promptLabels = (file: string): string[] => {
   const text = stripComments(file, read(file));
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const wildcards = new Set([...text.matchAll(/(?<![\w:-])([a-z]+):\*/g)].map((m) => `${m[1]}:`));
   return TAXONOMY.filter((l) => !l.createdBy && !l.name.includes('<'))
-    .filter((l) => new RegExp(`[\`'"]${esc(l.name)}[\`'"]|--(?:add-)?label[ =]+['"]?${esc(l.name)}(?![\\w:-])|Labels:[^\\n]*(?<![\\w:-])${esc(l.name)}(?![\\w:-])`).test(text))
+    .filter((l) => [...wildcards].some((w) => l.name.startsWith(w))
+      || new RegExp(`[\`'"]${esc(l.name)}[\`'"]|--(?:add-)?label[ =]+['"]?${esc(l.name)}(?![\\w:-])|Labels:[^\\n]*(?<![\\w:-])${esc(l.name)}(?![\\w:-])`).test(text))
     .map((l) => l.name);
 };
 
@@ -172,6 +179,12 @@ describe('every lane whose agent labels creates the labels first (plan 0005 §5.
   const lanes = readdirSync(join(ROOT, '.github/workflows'))
     .filter((f) => (/^agent-.*\.yml$/.test(f) && f !== 'agent-lane.yml') || (/-agent-job\.yml$/.test(f) && f !== 'lane-agent-job.yml'))
     .map((f) => `.github/workflows/${f}`).filter(runsAgent);
+
+  it('reads a family wildcard as every lane-created member of the family', () => {
+    expect(promptLabels('.github/workflows/explore-agent-job.yml')).toEqual(expect.arrayContaining(['sev:critical', 'sev:high', 'sev:medium', 'sev:low']));
+    // `signal:*` reaches only the one signal label the taxonomy fixes; a project's own are never a lane's to create.
+    expect(promptLabels('.github/workflows/explore-agent-job.yml').filter((n) => n.startsWith('signal:'))).toEqual(['signal:spec-violation']);
+  });
 
   it('finds the agent lanes, so the checks below are not vacuous', () => {
     expect(lanes.length).toBeGreaterThanOrEqual(14);
@@ -330,9 +343,12 @@ describe('ensureLabels', () => {
     expect(repo.creates()).toEqual([]);
   });
 
-  it('warns on a failed create and goes on; counts a create another lane won as done', () => {
+  it('warns on a failed create and goes on; a create another lane won is neither an error nor reported as created', () => {
     const repo = fakeRepo([], { createFails: 'bug', raced: 'follow-up' });
-    expect(ensureLabels(['bug', 'follow-up', 'blocked'], { repo: 'acme/widgets', run: repo.run })).toEqual(['follow-up', 'blocked']);
+    expect(ensureLabels(['bug', 'follow-up', 'blocked'], { repo: 'acme/widgets', run: repo.run })).toEqual(['blocked']);
+    // Known to exist now: a second apply in this process does not try again.
+    expect(ensureLabels(['follow-up'], { repo: 'acme/widgets', run: repo.run })).toEqual([]);
+    expect(repo.creates().filter((c) => c[2] === 'follow-up')).toHaveLength(1);
   });
 
   it('says so in the run summary', () => {
