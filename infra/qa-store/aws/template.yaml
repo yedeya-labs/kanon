@@ -1,6 +1,6 @@
 # Kanon's AWS QA store (plan 0004 §3.2, step P9; `K-OBS-17`): one DynamoDB table for the run
 # rows, the coverage and the code-reading ledger, one S3 bucket for the raw reports, and one role
-# that GitHub OIDC lets the adopter's store jobs assume.
+# that GitHub OIDC lets the adopter's store jobs assume, from the default branch only.
 #
 # DEPLOYED INTO THE ADOPTER'S OWN ACCOUNT, BY `provision.mjs`, which refuses a template that fails
 # the checks it shares with the unit test. Intrinsics are in their long form (`Ref:`,
@@ -20,10 +20,14 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Kanon's QA store (plan 0004, step P9).
 
 Parameters:
-  Repository:
-    Type: String
-    Description: The repository whose store jobs may assume the role, as owner/name.
-    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+  # The exact OIDC subjects the role trusts, each `<prefix>:ref:refs/heads/<default branch>`,
+  # where `<prefix>` is the repository's own subject prefix as GitHub's API reports it:
+  # `repo:<owner>/<repo>`, or the immutable `repo:<owner>@<owner id>/<repo>@<repo id>` that
+  # GitHub gives a repository created after 2026-07-15. `provision.mjs` reads both from the API
+  # and refuses anything else; two are passed only while migrating between the two forms.
+  Subjects:
+    Type: CommaDelimitedList
+    Description: The exact OIDC subjects the role trusts, each <prefix>:ref:refs/heads/<default branch>.
   CreateOidcProvider:
     Type: String
     Description: Create GitHub's OIDC provider. Set false when the account already has one.
@@ -101,8 +105,12 @@ Resources:
       Url: https://token.actions.githubusercontent.com
       ClientIdList: [sts.amazonaws.com]
 
-  # The role the store jobs assume (decision 9): trusted for exactly one OIDC subject, the
-  # repository's `kanon-qa-store` environment, which only store jobs declare. Never a pattern.
+  # The role the store jobs assume (decision 9, as the Owner changed it on 2026-10-05): trusted
+  # for the repository's default branch, by exact OIDC subject, never a pattern and never an
+  # environment. A pull request's token says `:pull_request`, another branch or a tag names its
+  # own ref, and a job that declares an environment gets `:environment:<name>` instead of its
+  # ref, so all of those are refused. Which jobs of a default-branch run may ask for a token at
+  # all is held in the workflows: only a store job holds `id-token: write` (`K-OBS-17`).
   Role:
     Type: AWS::IAM::Role
     Properties:
@@ -122,8 +130,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub:
-                  Fn::Sub: repo:${Repository}:environment:kanon-qa-store
+                token.actions.githubusercontent.com:sub: { Ref: Subjects }
       Policies:
         - PolicyName: read-and-write-the-store
           PolicyDocument:

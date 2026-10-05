@@ -23,9 +23,10 @@
 # bucket of the same item model: the reference adopter passes its own, which it keeps.
 #
 # THE CREDENTIALS ARE THIS ACTION'S, IN THE STORE JOB ONLY. Kanon's `qa-store` block runs the hook
-# in a job that declares the `kanon-qa-store` environment and `id-token: write`, so the OIDC
-# subject is `repo:<owner>/<repo>:environment:kanon-qa-store`, the one the role trusts. No agent
-# job runs this action.
+# in a job that declares `id-token: write` and no environment, so on the default branch the OIDC
+# subject is `<prefix>:ref:refs/heads/<default branch>`, the one the role trusts (`<prefix>` is
+# `repo:<owner>/<repo>`, or the immutable form GitHub gives a newer repository). No agent job
+# runs this action, and no job but a store job holds `id-token: write`.
 #
 # THE SCRIPTS ARE THE REFERENCE ADOPTER'S, MOVED (ADR 0009): `push-run.sh` for `put`, the
 # Explorer gate's queries for `last-green` and `record-skip`, and the dispatch sweep's query for

@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { STORE_ENVIRONMENT } from '../../actions/qa-store/qa-store.mjs';
 import { storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 
 /**
@@ -43,10 +42,9 @@ describe('the store jobs and the audit job (plan 0004 P9\'s check, applied at st
     expect(storeLaneProblems(wf, telemetryReads())).toEqual([]);
   });
 
-  it('only the store jobs run in kanon-qa-store, and only they hold id-token', () => {
+  it('no job declares an environment, and only the store jobs hold id-token', () => {
     const withEnv = Object.entries(wf.jobs).filter(([, j]) => j.environment !== undefined).map(([n]) => n);
-    expect(withEnv).toEqual(['export', 'put']);
-    for (const n of withEnv) expect(wf.jobs[n]!.environment).toBe(STORE_ENVIRONMENT);
+    expect(withEnv).toEqual([]);
     const withToken = Object.entries(wf.jobs).filter(([, j]) => typeof j.permissions === 'object' && 'id-token' in j.permissions).map(([n]) => n);
     expect(withToken).toEqual(['export', 'put']);
   });
@@ -96,9 +94,9 @@ describe('the store jobs and the audit job (plan 0004 P9\'s check, applied at st
     it('the audit job with no permissions of its own, inheriting the caller\'s id-token', () =>
       expect(mutate((l) => { delete l.jobs.audit!.permissions; })).toEqual(["audit: the agent job declares no permissions block of its own, so it inherits the caller's grant, id-token included"]));
     it('the audit job in an environment', () =>
-      expect(mutate((l) => { l.jobs.audit!.environment = 'qa'; })).toEqual(["audit: the agent job declares environment 'qa'; only store jobs declare one"]));
+      expect(mutate((l) => { l.jobs.audit!.environment = 'qa'; })).toEqual(["audit: the agent job declares environment 'qa'; no job of a store-coupled lane declares one"]));
     it('the put job under the adopter\'s old environment name', () =>
-      expect(mutate((l) => { l.jobs.put!.environment = 'qa'; })).toEqual(["put: a store job's environment is 'qa', not 'kanon-qa-store'"]));
+      expect(mutate((l) => { l.jobs.put!.environment = 'qa'; })).toEqual(["put: a store job declares environment 'qa', which would replace the default branch's ref in its OIDC subject, so the store's role would refuse it"]));
     it('the agent job run on a partial re-run', () =>
       expect(mutate((l) => { l.jobs.audit!.if = 'always()'; })).toEqual(["audit: the agent job's if: 'always()' lacks the conjunct 'needs.export.outputs.attempt == github.run_attempt', so a re-run of it alone reads an export already deleted"]));
     it('the delete job conditioned on the audit', () =>

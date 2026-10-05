@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import {
-  EXPORT_FILES, FILES, HOOK_PATH, MANIFEST, MAX_ARG_STRLEN, MAX_ROWS_OUTPUT, OPERATIONS, READ_OPERATIONS, STORE_ENVIRONMENT, WRITE_OPERATIONS,
+  EXPORT_FILES, FILES, HOOK_PATH, MANIFEST, MAX_ARG_STRLEN, MAX_ROWS_OUTPUT, OPERATIONS, READ_OPERATIONS, WRITE_OPERATIONS,
   absentLine, checkRequest, deleteExport, finish, prepare, readCostRowsFile,
 } from '../../actions/qa-store/qa-store.mjs';
 
@@ -43,7 +43,6 @@ describe('the contract', () => {
   it('has five operations, two of them writes', () => {
     expect(OPERATIONS).toEqual(['last-green', 'record-skip', 'put', 'export', 'cost-rows']);
     expect([...WRITE_OPERATIONS, ...READ_OPERATIONS].sort()).toEqual([...OPERATIONS].sort());
-    expect(STORE_ENVIRONMENT).toBe('kanon-qa-store');
     expect(HOOK_PATH).toBe('.github/actions/qa-store/action.yml');
   });
 

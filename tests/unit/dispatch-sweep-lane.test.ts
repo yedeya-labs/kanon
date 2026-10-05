@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { STORE_ENVIRONMENT } from '../../actions/qa-store/qa-store.mjs';
 import { WINDOW_DAYS } from '../../scripts/lib/telemetry-artifacts.mjs';
 import { storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 
@@ -51,10 +50,9 @@ describe('the store job and the sweep job (plan 0004 step 9, P9\'s check)', () =
     expect(storeLaneProblems(wf, telemetryReads(), { agentless: true })).toEqual([]);
   });
 
-  it('only the store job runs in kanon-qa-store, and only it holds id-token', () => {
+  it('no job declares an environment, and only the store job holds id-token', () => {
     const withEnv = Object.entries(wf.jobs).filter(([, j]) => j.environment !== undefined).map(([n]) => n);
-    expect(withEnv).toEqual(['store']);
-    expect(wf.jobs.store!.environment).toBe(STORE_ENVIRONMENT);
+    expect(withEnv).toEqual([]);
     const withToken = Object.entries(wf.jobs).filter(([, j]) => typeof j.permissions === 'object' && 'id-token' in j.permissions).map(([n]) => n);
     expect(withToken).toEqual(['store']);
   });
@@ -74,11 +72,11 @@ describe('the store job and the sweep job (plan 0004 step 9, P9\'s check)', () =
     it('id-token on the sweep job', () =>
       expect(mutate((l) => { (l.jobs.sweep!.permissions as Record<string, string>)['id-token'] = 'write'; })).toEqual(['sweep: grants id-token: write; only store jobs do']));
     it('the sweep job in an environment', () =>
-      expect(mutate((l) => { l.jobs.sweep!.environment = 'kanon-qa-store'; })).toEqual(["sweep: declares environment 'kanon-qa-store'; only store jobs declare one"]));
+      expect(mutate((l) => { l.jobs.sweep!.environment = 'kanon-qa-store'; })).toEqual(["sweep: declares environment 'kanon-qa-store'; no job of a store-coupled lane declares one"]));
     it('the sweep job with no permissions of its own, inheriting the caller\'s id-token', () =>
       expect(mutate((l) => { delete l.jobs.sweep!.permissions; })).toEqual(["sweep: declares no permissions block of its own, so it inherits the caller's grant, id-token included"]));
     it('the store job under the adopter\'s old environment name', () =>
-      expect(mutate((l) => { l.jobs.store!.environment = 'qa'; })).toEqual(["store: a store job's environment is 'qa', not 'kanon-qa-store'"]));
+      expect(mutate((l) => { l.jobs.store!.environment = 'qa'; })).toEqual(["store: a store job declares environment 'qa', which would replace the default branch's ref in its OIDC subject, so the store's role would refuse it"]));
     it('a step of the sweep\'s in the store job', () =>
       expect(mutate((l) => { l.jobs.store!.steps!.push({ run: 'node "$KANON/scripts/dispatch-sweep.mjs"' }); }))
         .toEqual(['store: a store job runs step 3 (run: node "$KANON/scripts/dispatch-sweep.mjs"), which is neither the qa-store block nor the download of the report it puts']));

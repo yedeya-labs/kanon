@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { STORE_ENVIRONMENT } from '../../actions/qa-store/qa-store.mjs';
 import { storeLaneProblems, type Workflow } from './helpers/store-jobs.js';
 import { agentPrompt, runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { effectiveSteps } from './helpers/spine.js';
@@ -41,9 +40,9 @@ describe('the store contract (plan 0004 §3.2, P9\'s check)', () => {
   });
 
   it('reads the baseline, records a skip and puts the run, each in a store job of its own', () => {
-    const store = Object.entries(jobs).filter(([, j]) => j.environment !== undefined).map(([n]) => n).sort();
+    const store = Object.entries(jobs).filter(([, j]) => j.permissions?.['id-token'] === 'write').map(([n]) => n).sort();
     expect(store).toEqual(['last-green', 'put', 'record-skip']);
-    for (const n of store) expect(jobs[n]!.environment, n).toBe(STORE_ENVIRONMENT);
+    for (const [n, j] of Object.entries(jobs)) expect(j.environment, n).toBeUndefined();
     expect(storeOp('last-green')).toEqual({ operation: 'last-green' });
     expect(storeOp('record-skip')).toEqual({ operation: 'record-skip', commit: '${{ github.sha }}', trigger: '${{ github.event_name }}', tier: 'all', reason: 'unchanged-commit' });
     expect(storeOp('put')).toMatchObject({ operation: 'put', kind: 'explorer', report: '${{ runner.temp }}/kanon-explore/qa-explore-summary.json' });

@@ -30,9 +30,9 @@
 # dispatches never reached the model, and which issue's latest run hit its cap (RA-1517,
 # RA-1781).
 #   - WITH A STORE HOOK (`.github/actions/qa-store/action.yml`), the `store` job reads them
-#     through the hook's `cost-rows` operation, in the `kanon-qa-store` environment, and hands
+#     through the hook's `cost-rows` operation, the one job holding `id-token: write`, and hands
 #     them to the sweep as job outputs. The sweep's own job holds no cloud credentials: an
-#     explicit `permissions:` without `id-token`, and no environment (`K-OBS-13`'s rule, P9).
+#     explicit `permissions:` without `id-token` (`K-OBS-13`'s rule, P9, and the id-token guard).
 #   - WITHOUT ONE, the store job says the store is absent, and the sweep reads the lanes' run
 #     artifacts instead (`scripts/lib/telemetry-artifacts.mjs`, P7). Those cover only as far
 #     back as the repository keeps artifacts, and the summary says so when that is less than
@@ -145,7 +145,6 @@ jobs:
     if: needs.gate.outputs.member == 'true' && needs.gate.outputs.ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: kanon-qa-store
     permissions:
       contents: read
       id-token: write

@@ -1,29 +1,30 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-import { STORE_ENVIRONMENT } from '../../../actions/qa-store/qa-store.mjs';
 
 /**
  * The shape plan 0004 §3.2 fixes for a lane that reaches the QA store (step P9), as a check
  * that each store-coupled lane's test applies to its own workflow: the dispatch sweep (step 9),
  * the code audit (11), the Explorer (12) and the Overseer (13). P9 tests it on a fixture lane.
  *
- * - **Store jobs** run `actions/qa-store` and nothing else of the lane's: each declares the
- *   `kanon-qa-store` environment, and no other name, and an explicit `permissions:` that grants
- *   `id-token: write`. The store's role trusts that environment's OIDC subject alone. Their
- *   steps are the block's, plus `actions/download-artifact` in a job that `put`s, to fetch the
+ * - **Store jobs** run `actions/qa-store` and nothing else of the lane's: each declares an
+ *   explicit `permissions:` that grants `id-token: write`, and no environment. The store's role
+ *   trusts the default branch's ref subject alone (decision 9, as the Owner changed it on
+ *   2026-10-05), and an environment would replace the ref in the subject. Their steps are the block's, plus `actions/download-artifact` in a job that `put`s, to fetch the
  *   report it writes; nothing else runs with the store's credentials (kanon#225). A step
  *   carries only `uses`, `id`, `name`, `with`, `if` and `timeout-minutes`, and a job only the
  *   keys in `STORE_JOB_KEYS`: no `env:` (a `NODE_OPTIONS` would run code inside the block), no
  *   `container:`, `services:` or `defaults:`. The delete job is held to the same, with the
  *   block's `delete-export` step alone.
- * - **The agent job** declares an explicit `permissions:` without `id-token`, and no
- *   `environment:`. Without its own block it would inherit the caller's `id-token: write`, as
+ * - **The agent job** declares an explicit `permissions:` without `id-token`. Without its own block it would inherit the caller's `id-token: write`, as
  *   every job of `agent-lane.yml` inherits its caller's grant. The block must still grant every
  *   read the telemetry step makes with the default token, because narrowing that grant once
  *   cost the telemetry step a read (RA-2592): `telemetryReads` derives them from the action.
- * - **Every other job** declares its own `permissions:` without `id-token` and no environment,
- *   so only a store job can ever hold the store's credentials.
+ * - **Every other job** declares its own `permissions:` without `id-token`, so only a store job
+ *   can ever hold the store's credentials. `idTokenProblems` holds every Kanon workflow, not
+ *   only the store-coupled lanes, to that last rule.
+ * - **No job declares an environment.** The store no longer uses one (decision 9 as changed),
+ *   and one on a store job would make its subject `:environment:<name>`, which the role refuses.
  * - **The export's delete job** runs `actions/qa-store` with `operation: delete-export`, needs
  *   the export job and the agent job, runs `if: always()` and nothing else, and is the only job
  *   granted `actions: write`, which is all it is granted.
@@ -90,7 +91,7 @@ const callsSpine = (j: Job) => typeof j.uses === 'string' && /(^\$\/|^yedeya-lab
 const storeSteps = (j: Job) => (j.steps ?? []).filter((s) => usesBlock(s, 'qa-store'));
 
 /** The keys a store job, or the export's delete job, may carry (kanon#225). */
-export const STORE_JOB_KEYS = ['name', 'needs', 'if', 'runs-on', 'environment', 'permissions', 'outputs', 'steps', 'timeout-minutes', 'concurrency'];
+export const STORE_JOB_KEYS = ['name', 'needs', 'if', 'runs-on', 'permissions', 'outputs', 'steps', 'timeout-minutes', 'concurrency'];
 /** The keys a step of one may carry: no `env:`, `run:`, `shell:`, `working-directory:` or `continue-on-error:`. */
 export const STORE_STEP_KEYS = ['uses', 'id', 'name', 'with', 'if', 'timeout-minutes'];
 const downloadsArtifact = (s: Step) => typeof s.uses === 'string' && /^actions\/download-artifact@[^/\s]+$/.test(s.uses);
@@ -103,7 +104,11 @@ const describeStep = (s: Step, i: number) => `step ${i + 1} (${s.name ?? s.id ??
 function extraStepProblems(name: string, j: Job, kind: 'store' | 'delete'): string[] {
   const out: string[] = [];
   const what = kind === 'store' ? 'a store job' : "the export's delete job";
-  for (const key of Object.keys(j)) if (!STORE_JOB_KEYS.includes(key)) out.push(`${name}: ${what} carries '${key}', which a store job never needs`);
+  for (const key of Object.keys(j)) {
+    if (key === 'environment' && kind === 'delete') continue; // the rule for every other job names it
+    if (key === 'environment') out.push(`${name}: ${what} declares environment '${envName(j)}', which would replace the default branch's ref in its OIDC subject, so the store's role would refuse it`);
+    else if (!STORE_JOB_KEYS.includes(key)) out.push(`${name}: ${what} carries '${key}', which a store job never needs`);
+  }
   const puts = storeSteps(j).some((s) => s.with?.operation === 'put');
   (j.steps ?? []).forEach((s, i) => {
     // A delete-export step in a store job, or a store operation in the delete job, is already
@@ -147,7 +152,7 @@ function telemetryInputs(j: Job): { pr: unknown; issue: unknown } | null {
  */
 export function agentJobProblems(name: string, j: Job, reads: TelemetryRead[] = telemetryReads()): string[] {
   const out: string[] = [];
-  if (j.environment !== undefined) out.push(`${name}: the agent job declares environment '${envName(j)}'; only store jobs declare one`);
+  if (j.environment !== undefined) out.push(`${name}: the agent job declares environment '${envName(j)}'; no job of a store-coupled lane declares one`);
   const p = grants(j);
   if (!p) {
     out.push(`${name}: the agent job declares no permissions block of its own, so it inherits the caller's grant, id-token included`);
@@ -173,7 +178,7 @@ export function agentJobProblems(name: string, j: Job, reads: TelemetryRead[] = 
  *
  * `agentless`: a lane that runs no model, the dispatch sweep (plan 0004 step 9). It must then
  * have no agent job, and its script's job is held to the rule for every other job: its own
- * `permissions:` without `id-token`, and no environment.
+ * `permissions:` without `id-token`.
  */
 export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemetryReads(), { agentless = false }: { agentless?: boolean } = {}): string[] {
   const out: string[] = [];
@@ -188,7 +193,6 @@ export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemet
   for (const [name, j] of jobs) {
     const p = grants(j);
     if (isStoreJob(j)) {
-      if (envName(j) !== STORE_ENVIRONMENT) out.push(`${name}: a store job's environment is '${envName(j) ?? ''}', not '${STORE_ENVIRONMENT}'`);
       if (!p || p['id-token'] !== 'write') out.push(`${name}: a store job declares no permissions block granting id-token: write`);
       if (isAgentJob(j)) out.push(`${name}: a store job runs the agent`);
       if (isDeleteJob(j)) out.push(`${name}: a store job also deletes the export`);
@@ -199,7 +203,7 @@ export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemet
     if (isAgentJob(j)) {
       out.push(...agentJobProblems(name, j, reads));
     } else {
-      if (j.environment !== undefined) out.push(`${name}: declares environment '${envName(j)}'; only store jobs declare one`);
+      if (j.environment !== undefined) out.push(`${name}: declares environment '${envName(j)}'; no job of a store-coupled lane declares one`);
       if (!p) out.push(`${name}: declares no permissions block of its own, so it inherits the caller's grant, id-token included`);
       else if ('id-token' in p) out.push(`${name}: grants id-token: ${p['id-token']}; only store jobs do`);
     }
@@ -215,7 +219,6 @@ export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemet
     for (const [a] of agents) if (!needs.includes(a)) out.push(`${name}: the export's delete job doesn't need the agent job ${a}`);
     const p = grants(j);
     if (JSON.stringify(p) !== JSON.stringify({ actions: 'write' })) out.push(`${name}: the export's delete job grants ${JSON.stringify(p)}, not exactly actions: write`);
-    if (j.environment !== undefined) out.push(`${name}: the export's delete job declares an environment`);
     out.push(...extraStepProblems(name, j, 'delete'));
   }
   out.push(...rerunProblems(jobs, exporters, agents.map(([n]) => n)));
@@ -262,6 +265,79 @@ function rerunProblems(jobs: Array<[string, Job]>, exporters: string[], agents: 
       if (agents.length === 1 && !isExpr(s.with?.['agent-result'], `needs.${agents[0]}.result`)) {
         out.push(`${d}: the delete-export step isn't handed agent-result: \${{ needs.${agents[0]}.result }}, so a partial re-run that skipped the agent stays green`);
       }
+    }
+  }
+  return out;
+}
+
+/** Where a job's `id-token` grant comes from, if it has one. */
+export type IdTokenSource = 'job' | 'workflow';
+
+const grantsIdToken = (p: Workflow['permissions']) =>
+  p === 'write-all' || (typeof p === 'object' && p !== null && 'id-token' in p && p['id-token'] !== 'none');
+
+/**
+ * Whether a job holds `id-token: write`: from its own `permissions:`, or inherited from the
+ * workflow's when it declares none. A job with neither inherits its caller's grant: the guard
+ * holds it as a holder whenever a caller passes `id-token` (`idTokenProblems`).
+ */
+export function idTokenSource(wf: Workflow, j: Job): IdTokenSource | null {
+  if (j.permissions !== undefined) return grantsIdToken(j.permissions) ? 'job' : null;
+  return grantsIdToken(wf.permissions) ? 'workflow' : null;
+}
+
+const usesMaintenance = (s: Step) => typeof s.uses === 'string' && /^(\$\/|yedeya-labs\/kanon\/)infra\/qa-store\/aws\/maintenance(@|$)/.test(s.uses);
+
+/**
+ * A job that may hold `id-token: write`: one that runs the qa-store block alone (kanon#225's
+ * allow-list: the block, plus the download of the report a `put` writes), or the AWS store's
+ * maintenance block alone, with nothing that could run other code beside it.
+ */
+export function mayHoldIdToken(name: string, j: Job): boolean {
+  if (isStoreJob(j)) return !isAgentJob(j) && !isDeleteJob(j) && extraStepProblems(name, j, 'store').length === 0;
+  const steps = j.steps ?? [];
+  return steps.length === 1 && usesMaintenance(steps[0]!)
+    && Object.keys(j).every((k) => STORE_JOB_KEYS.includes(k))
+    && Object.keys(steps[0]!).every((k) => STORE_STEP_KEYS.includes(k));
+}
+
+/** The workflow file a job calls, when it is one of Kanon's own. */
+const calledWorkflow = (j: Job) =>
+  (typeof j.uses === 'string' ? /^(?:\$\/|\.\/|yedeya-labs\/kanon\/)\.github\/workflows\/([^/@]+\.ya?ml)(?:@|$)/.exec(j.uses)?.[1] : undefined);
+
+/**
+ * The widened id-token guard (decision 9, as the Owner changed it on 2026-10-05). The store's
+ * role trusts every run of the default branch, so which job of such a run may ask GitHub for an
+ * OIDC token is held here: in every workflow given, a job that holds `id-token: write`, whether
+ * its own grant or inherited from the workflow's, must be one that `mayHoldIdToken`, or a job
+ * that calls one of the given workflows that has such a job (a caller has to grant what its
+ * callee's store jobs ask for). A caller's grant also reaches every callee job that declares no
+ * permissions in a callee with no workflow-level block, so each of those must be one that
+ * `mayHoldIdToken` too. Anything else is named, with where its grant comes from.
+ */
+export function idTokenProblems(workflows: Record<string, Workflow>): string[] {
+  const out: string[] = [];
+  const holdsLegitimately = (wf: Workflow) => Object.entries(wf.jobs ?? {}).some(([n, j]) => idTokenSource(wf, j) && mayHoldIdToken(n, j));
+  for (const [file, wf] of Object.entries(workflows)) {
+    for (const [name, j] of Object.entries(wf.jobs ?? {})) {
+      const source = idTokenSource(wf, j);
+      if (!source) continue;
+      const how = source === 'job' ? 'its own permissions grant' : "it declares no permissions, so it inherits the workflow's";
+      const callee = calledWorkflow(j);
+      if (callee !== undefined) {
+        const target = workflows[callee];
+        if (!target) out.push(`${file}: job ${name} holds id-token: write (${how}) and calls ${callee}, which the guard was not given`);
+        else if (!holdsLegitimately(target)) out.push(`${file}: job ${name} holds id-token: write (${how}) and calls ${callee}, which has no store job to pass it to`);
+        else if (target.permissions === undefined) {
+          for (const [n, cj] of Object.entries(target.jobs ?? {})) {
+            if (cj.permissions === undefined && !mayHoldIdToken(n, cj)) {
+              out.push(`${callee}: job ${n} declares no permissions in a workflow with none, so it inherits id-token: write from ${file}'s job ${name}; only a job that runs the qa-store block alone may`);
+            }
+          }
+        }
+        continue;
+      }
+      if (!mayHoldIdToken(name, j)) out.push(`${file}: job ${name} holds id-token: write (${how}); only a job that runs the qa-store block alone may`);
     }
   }
   return out;

@@ -7,7 +7,7 @@
 # Graduates the interim `qa-runs` git branch. See the reference adopter's pipeline design doc, §6.
 # MOVED FROM THE REFERENCE ADOPTER (Kanon plan 0004 step P9, ADR 0009). Kanon's AWS store action
 # (`store.sh`) calls it for the contract's `put` (kind=explorer|audit), after its own credentials
-# step has assumed the store's role through GitHub OIDC (environment: kanon-qa-store). The
+# step has assumed the store's role through GitHub OIDC (the default branch's ref subject). The
 # reference adopter's telemetry collector calls it for kind=telemetry until plan 0002's S7.
 #
 # Usage:  push-run.sh <explorer|audit|telemetry> <report.json>
