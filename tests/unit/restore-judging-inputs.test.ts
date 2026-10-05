@@ -447,8 +447,8 @@ describe('RA-2697 — the agent-lane blocks come from the action cache, never th
     // by name, so it writes the Reviewer's header line to the environment and calls no API.
     // Neither runs anything of the PR's.
     const runs = stepsAsRun([job[at]!]);
-    expect(runs.map((s) => s.name), 'agent-setup runs only its defaults and persona steps on this lane').toEqual(["Take Kanon's defaults for omitted declarations", 'Say who the agent speaks as']);
-    expect(String(runs[0]!.run)).toBe('bash "$GITHUB_ACTION_PATH/declaration-defaults.sh"');
+    expect(runs.map((s) => s.name), 'agent-setup runs only its defaults and persona steps on this lane').toEqual(['Say who the agent speaks as', "Take Kanon's defaults for omitted declarations"]);
+    expect(String(runs[1]!.run)).toBe('bash "$GITHUB_ACTION_PATH/declaration-defaults.sh"');
     const restore = job.findIndex((s) => /restore-judging-inputs\.sh/.test(String(s.run)));
     expect(restore).toBeGreaterThanOrEqual(0);
     expect(at, 'after the restore of the judging inputs').toBeGreaterThan(restore);

@@ -15,7 +15,7 @@ A lane is built from four composite actions, so that a lane with steps of its ow
 
 ## What it changes in your working tree
 
-Its first step takes Kanon's documented defaults (`K-LAYOUT-17`, [plan 0005](../../docs/plans/0005-lean-installation.md) §5.2). For each playbook `docs/qa/` doesn't have, it copies Kanon's baseline for the role, from [`rulebook/templates/playbooks/`](../../rulebook/templates/playbooks/) at the version you pin, to that path, so the prompt reads it where it names it. Each copy is listed in your checkout's `.git/info/exclude`, so the agent's commits never include it. A playbook you keep is never touched. For each optional section your stack document leaves out, it says what it means. Every default it takes is one line in the log and in the job's summary.
+Before it sets the commit identity, it takes Kanon's documented defaults (`K-LAYOUT-17`, [plan 0005](../../docs/plans/0005-lean-installation.md) §5.2). For each playbook `docs/qa/` doesn't have, it copies Kanon's baseline for the role, from [`rulebook/templates/playbooks/`](../../rulebook/templates/playbooks/) at the version you pin, to that path, so the prompt reads it where it names it. Each copy is listed in your checkout's `.git/info/exclude`, so the agent's commits never include it. A playbook you keep is never touched. For each optional section your stack document leaves out, it says what it means. Every default it takes is one line in the log and in the job's summary.
 
 On the review lane, the restore of the judging inputs takes the playbook defaults itself, before the lane pins them (`K-MERGE-17`), so this step then finds them in place and copies nothing.
 

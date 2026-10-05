@@ -66,11 +66,14 @@ describe("Kanon's baseline playbooks (K-LAYOUT-17)", () => {
 });
 
 describe('agent-setup takes the defaults before the agent starts', () => {
-  it('runs the script as its first step, with no condition, so every lane gets it', () => {
+  it('runs the script with no condition, so every lane gets it, before any step that commits', () => {
     const action = parse(readFileSync(join(ROOT, 'actions/agent-setup/action.yml'), 'utf8')) as { runs: { steps: { name?: string; if?: string; run?: string }[] } };
-    const first = action.runs.steps[0]!;
-    expect(first.run).toBe('bash "$GITHUB_ACTION_PATH/declaration-defaults.sh"');
-    expect(first.if).toBeUndefined();
+    const steps = action.runs.steps;
+    const at = steps.findIndex((s) => s.run === 'bash "$GITHUB_ACTION_PATH/declaration-defaults.sh"');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(steps[at]!.if).toBeUndefined();
+    // After the persona step, which #310 holds first, and before the commit identity.
+    expect(steps.findIndex((s) => s.name === 'Commit as the App, signed off by the delegate')).toBeGreaterThan(at);
   });
 
   it("puts Kanon's baseline where each missing playbook would be, keeps it out of commits, and names it", () => {
