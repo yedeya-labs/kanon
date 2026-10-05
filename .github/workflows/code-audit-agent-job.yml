@@ -1,0 +1,453 @@
+# Code audit — the agent's job
+#
+# The agent's job of `agent-code-audit.yml`, moved here unchanged apart from its token (kanon#279).
+#
+# CALLED ONLY BY `code-audit-run.yml`, beside the job that mints this lane's token. The App's private
+# key never enters this job (`K-AGENT-49`): the token arrives hex-encoded as the `app-token`
+# secret. `Receive the App token` sits where the mint step was, so the token exists in this job
+# from the same point as before, and `Revoke the App token` is the last step. Every other step
+# is the lane's, as it was; what it read from the lane's earlier jobs (`needs.*.outputs`) and
+# the lane's inputs arrives as inputs of the same name. The lane's header says what the job
+# does, and `tests/unit/app-key-isolation.test.ts` holds its token steps to the spine's.
+#
+# WHAT THE AGENT CAN STILL REACH HERE: the token it was always given, for at most the hour it
+# lives, and the Claude token. Rewriting a cached action in this job reaches only those.
+name: Code audit — the agent's job
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: The QA store export the lane's `export` job uploaded, which the agent reads.
+        required: false
+        type: string
+        default: ""
+      app-slug:
+        description: The minted App's slug, from the lane's `mint` job.
+        required: true
+        type: string
+      mint-attempt:
+        description: >-
+          The run attempt the lane's `mint` job minted the token for. A partial re-run
+          ("Re-run failed jobs") reuses that job's outputs, so a token from an earlier
+          attempt, which that attempt revoked, is refused by name.
+        required: true
+        type: string
+    secrets:
+      app-token:
+        description: >-
+          The lane's App token, hex-encoded by its `mint` job (a job output holding a masked
+          value is dropped). Arrives masked, as every secret does.
+        required: true
+      claude-token:
+        required: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    # Bounds a hang (RA-1336). Sized at ~3x the longest real run measured on the reference
+    # adopter, so it never truncates work.
+    timeout-minutes: 60
+    steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1).
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        id: checkout
+        with:
+          persist-credentials: false
+
+      # THE STORE'S LEDGER, as the export job read it: `areas.json` and `manifest.json`, which
+      # says whether the store was present, absent or degraded. Into the workspace, because the
+      # agent reads only the workspace.
+      - name: Download the QA store's export
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: qa-store-export
+
+      # THE AGENT-LANE BLOCKS, CALLED DIRECTLY (RA-2661): the stamp and the outcome steps below
+      # run between `agent-run` and the end of the job. This arm reads the repository only, so it
+      # installs nothing and never calls the project-setup hook, and its App token is minted below,
+      # so `agent-setup` gets no slug and probes nothing.
+      - uses: $/actions/agent-setup
+        id: setup
+        with:
+          arm: code-audit agent
+          app-slug: ""
+
+      # Kanon's scripts, for the steps below, and `KANON` for the agent's environment (kanon#110):
+      # from this step's output, which no project file can rewrite.
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      # WHAT TO AUDIT (plan 0004 decision 6, `K-LAYOUT-17`). Before the token is minted, so a
+      # malformed declaration fails here by name and starts no agent.
+      - name: Read the code areas from the stack document
+        id: areas
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+        run: |
+          set -euo pipefail
+          list="$(node "$KANON/scripts/code-areas.mjs")"
+          {
+            echo "list<<KANON_CODE_AREAS"
+            printf '%s\n' "$list"
+            echo "KANON_CODE_AREAS"
+          } >> "$GITHUB_OUTPUT"
+          { echo "Auditing:"; printf '%s\n' "$list"; } >> "$GITHUB_STEP_SUMMARY"
+
+      # THE TOKEN, RECEIVED WHERE IT WAS MINTED (kanon#279, `K-AGENT-49`): `code-audit-run.yml`'s `mint` job
+      # holds the key and mints it; this step decodes and masks it, and the job never sees the key.
+      - name: Receive the App token
+        id: app-token
+        env:
+          SEALED: ${{ secrets.app-token }}
+          APP_SLUG: ${{ inputs.app-slug }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$'; then
+            echo "::error title=app-token::no App token arrived from this lane's mint job; see that job's log for why the mint failed."
+            exit 1
+          fi
+          if [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error title=app-token::this is attempt $RUN_ATTEMPT, but the App token was minted for attempt $MINT_ATTEMPT and revoked when that attempt ended. Use \"Re-run all jobs\", not \"Re-run failed jobs\": the token is minted in a job of its own, and only re-running it mints a fresh one."
+            exit 1
+          fi
+          # Decoded with printf and sed alone, so the step needs nothing the runner may lack.
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          {
+            echo "token=$TOKEN"
+            echo "app-slug=$APP_SLUG"
+          } >> "$GITHUB_OUTPUT"
+
+      # Machine-measured wall clock around the agent: the execution-truth proxy a model can't
+      # fake. A degraded or empty run finishes fast; a deep pass takes minutes.
+      - name: Start timer
+        id: timer
+        run: echo "start=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+
+      # `continue-on-error` + an EXPLICIT outcome step below (RA-846, RA-1336). The action exits
+      # non-zero when the agent exhausts `--max-turns`, even when its report is complete, so a
+      # run that did all its work and overran its cap by a turn was indistinguishable from one
+      # that died with nothing. The outcome step re-reds the job for every case except "the
+      # agent failed AND the report is complete and parseable".
+      - uses: $/actions/agent-run
+        id: agent
+        continue-on-error: true
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+        with:
+          claude-token: ${{ secrets.claude-token }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          prompt: |
+            You are the Explorer (Agent 1) in CODE-READING mode: a deep contract and
+            security audit of this repository. First read docs/qa/explorer-playbook.md
+            (the "Code-reading mode" section), then audit the source.
+
+            WHAT TO READ. This project's code areas, from the `## Code areas` section of
+            docs/qa/stack.md, are:
+
+            ${{ steps.areas.outputs.list }}
+
+            Sweep them for CODE-LEVEL bugs the runtime sweep cannot see: the data
+            schema, authentication, guards and sessions, payment paths, server actions,
+            jobs and webhooks, and the routes, wherever they are among those areas.
+
+            WIDEN COVERAGE: don't re-mine the same hot files every run. First read the
+            code-reading ledger, which the workflow exported from the QA store into
+            `qa-store-export/`. `qa-store-export/manifest.json` says whether the store
+            was `present`, `absent` or `degraded`. When it is present,
+            `qa-store-export/areas.json` holds one row per area already deep-read:
+            `{area, last_scanned_ts, commit, detail}`, the full unbounded history. When
+            the store is absent or degraded there is no ledger: say so in your final
+            message, and choose areas from `git log` alone. Do not query any store
+            yourself.
+            PREFER areas the ledger shows read least recently, or never, over re-reading
+            the ones read last, unless `git log` shows they changed since. Coverage must
+            widen monotonically across runs, not oscillate over the same surface.
+
+            GATE A: file a bug ONLY on an OBJECTIVE contradiction (never a subjective
+            "this looks off" or a style nit; those are a `spec-delta` or nothing):
+            1. CONSUMER contradiction: an unused enum value, a column nothing writes, a
+               dead report or UI branch, a sibling built for the OPPOSITE behaviour (a
+               feature the code structurally can't deliver).
+            2. SECURITY anti-pattern: plaintext or reversible credentials, a
+               non-constant-time secret compare, a query missing its data-isolation scope or
+               authorisation, an injection surface.
+            3. STRUCTURAL-contract violation: a schema, guard or validation contract
+               that is bypassable or contradicted in code.
+            4. PROMOTED-spec contradiction: code contradicts a `[confirmed]` or
+               `[structural]` invariant in `docs/qa/specs/**`.
+
+            For EVERY bug cite `file:line` and the contradicted contract or consumer.
+            DEDUP first: search OPEN issues and do NOT refile anything already tracked;
+            a cluster of one root cause is ONE bug. Label bugs `bug`, `agent:explorer`,
+            `qa:needs-triage`, the matching `signal:contract` or `signal:security` (or
+            `signal:spec-violation`), and a `sev:*` by impact. Milestone: Product
+            Backlog, a bucket (it is a product bug), never a roadmap milestone such as
+            the launch gate (K-WORK-5).
+            Subjective or speculative findings: a `spec-delta` issue (labels
+            `spec-delta`, `agent:explorer`), never a bug. Do NOT edit code or open PRs.
+
+            REPORTING: WRITE `qa-audit-summary.json` at the repo root **BEFORE you start
+            auditing**, and keep re-writing it as you go. Do NOT save it for the end: a
+            run that exhausts `--max-turns` before one final write used to vanish
+            completely, with a green workflow, no report and no store row (RA-504).
+            Writing it first turns that hole into a visible PARTIAL report. Write this
+            skeleton on your first turn:
+            {"complete":false,"timestamp":"<ISO-8601 UTC>","areas_scanned":[],"filed":[],
+             "deduped":[],"notes":"","files_read":0,"citations":[],"turns":0}
+            That is literal, copy-pasteable JSON apart from the timestamp, and it must
+            PARSE. A malformed skeleton is worse than none: the file then exists, so the
+            workflow can only record it as an unparseable report, and the run's real
+            findings are lost.
+            Then re-write the whole file after each area you finish, appending to
+            `areas_scanned`, `filed`, `deduped` and `citations` and updating the counts,
+            so whatever you have completed so far is always on disk. On your FINAL write,
+            and only then, set `"complete": true`. `complete:false` in the store means
+            "this audit was cut short, trust its coverage accordingly"; it is not a
+            failure to be hidden, so never set it true early to look tidy.
+            Each `areas_scanned` entry starts with the area's path: the ledger is keyed
+            on it.
+            Filled shape:
+            {"complete":true,"timestamp","areas_scanned":[..],"filed":[{"title","kind","file","issue"}],
+             "deduped":[..],"notes",
+             "files_read":<count of source files you actually opened>,
+             "citations":[<every `path:line` you cited across the bugs you filed, e.g. "path/to/module.ext:42" or "path/to/schema.ext:88-95">],
+             "turns":<your approximate tool-call count>}
+            Do NOT self-report a `lines_cited` number: the workflow machine-counts it
+            from `citations` (unique `path:line` tokens) and stamps it next to a
+            machine-measured `duration_ms`, so a degraded or empty run is self-evident in
+            the store. List every citation honestly in `citations` and the count follows.
+            Be honest about `files_read` and `turns`, which stay self-reported. Summarise
+            what you scanned, filed and deduped in your final message; bounded coverage
+            must not read as full.
+          claude_args: |
+            --model claude-opus-5
+            --effort high
+            --max-turns 100
+            --max-budget-usd 40
+            --allowedTools Read,Bash,Grep,Glob,Write
+            --exclude-dynamic-system-prompt-sections
+
+      # THE QUALITY HALF OF THE ROW (RA-1504), derived from GitHub (the issues this run filed and
+      # their `sev:*` labels), never from the agent. An observer must never red a good run.
+      - name: Read what this run filed, for the telemetry row
+        id: quality
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KANON: ${{ steps.kanon.outputs.path }}
+        run: |
+          # THIS RUN'S OWN START, not a fixed lookback: a window would count what an earlier run
+          # filed. An over-count is worse than an absent value, so a failed read leaves both unset.
+          SINCE="$(gh run view "$GITHUB_RUN_ID" --repo "$REPO" --json startedAt -q .startedAt 2>/dev/null || true)"
+          if [ -z "$SINCE" ]; then
+            echo "::warning title=quality::could not read this run's start; leaving the filed columns unset rather than guessing a window"
+            exit 0
+          fi
+          node "$KANON/scripts/agent-quality-columns.mjs" --filed-since "$SINCE" --label 'agent:explorer'
+
+      # Record what this run cost (RA-1485). `always()` because a run that FAILED is the one you
+      # most want measured. `classify: "false"`: the job's red comes from the outcome steps below,
+      # after this block, so the last step explains it.
+      - uses: $/actions/agent-finish
+        id: finish
+        if: always()
+        continue-on-error: true
+        with:
+          arm: code-audit agent
+          agent: auditor
+          job-status: ${{ job.status }}
+          classify: "false"
+          execution_file: ${{ steps.agent.outputs.execution_file }}
+          artifacts-filed: ${{ steps.quality.outputs.artifacts_filed }}
+          severities: ${{ steps.quality.outputs.severities }}
+          claude_args: |
+            --model claude-opus-5
+            --effort high
+            --max-turns 100
+            --max-budget-usd 40
+            --allowedTools Read,Bash,Grep,Glob,Write
+            --exclude-dynamic-system-prompt-sections
+          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
+          # step CONCLUSION in the lane's own order, never a step's name or log.
+          lane: code-audit
+          stages: >-
+            checkout=${{ steps.checkout.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            token=${{ steps.app-token.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "60"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
+          kanon-error: ${{ steps.setup.outputs.kanon-error }}
+
+      # Stamp the measured duration and the actual trigger and commit into the report (RA-504),
+      # so a degraded run is self-evident and scheduled liveness is logged, not inferred.
+      - name: Stamp execution metrics + trigger
+        id: stamp
+        if: always()
+        env:
+          START_MS: ${{ steps.timer.outputs.start }}
+          EVENT: ${{ github.event_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          # AN ABSENT REPORT IS NEVER BENIGN HERE (RA-504). This lane has no change gate and no
+          # skip path, and the agent is told to write the report on turn one, so "no file" means
+          # it died or ran out of turns before its first write. Synthesize an explicit
+          # `no_report` report instead, so the run lands in the store as a recorded degraded
+          # run. The job is then failed by a LATER step, after the report is uploaded.
+          if [ ! -f qa-audit-summary.json ]; then
+            echo "::warning title=no-report audit run::agent wrote no qa-audit-summary.json; recording a no_report run"
+            echo '{"no_report":true,"complete":false,"areas_scanned":[],"filed":[],"deduped":[],"citations":[],"files_read":0,"turns":0,"notes":"No qa-audit-summary.json was written by the agent step (died or exhausted --max-turns before its first write). Row synthesized by the workflow (RA-504)."}' > qa-audit-summary.json
+            echo "no_report=true" >> "$GITHUB_OUTPUT"
+          fi
+          node <<'EOF'
+          const fs = require('fs');
+          const f = 'qa-audit-summary.json';
+          // A PRESENT-but-unparseable report is the third degraded shape, and the protocol makes
+          // it more likely: the agent rewrites the whole file after every area. Recover under a
+          // DISTINCT attribute: `no_report` means "the agent produced nothing", and a corrupt
+          // file means it produced something unusable. Keep a truncated copy of the raw bytes in
+          // `notes`, so the stored report carries the evidence after the log has expired.
+          let s;
+          let invalid = false;
+          try {
+            s = JSON.parse(fs.readFileSync(f, 'utf8'));
+            if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error('not a JSON object');
+          } catch (err) {
+            invalid = true;
+            // The flag FIRST, before any further work (RA-639), so the fail step's trigger
+            // survives a crash below.
+            if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, 'report_invalid=true\n');
+            const raw = fs.readFileSync(f, 'utf8');
+            console.log(`::warning title=invalid audit report::qa-audit-summary.json did not parse (${err.message}); recording a report_invalid run`);
+            s = {
+              report_invalid: true,
+              complete: false,
+              areas_scanned: [], filed: [], deduped: [], citations: [],
+              files_read: 0, turns: 0,
+              notes: `qa-audit-summary.json was present but did not parse (${err.message}). ` +
+                `Row synthesized by the workflow (RA-504). First 2000 raw bytes: ${raw.slice(0, 2000)}`,
+            };
+          }
+          const dur = Date.now() - Number(process.env.START_MS || 0);
+          s.trigger = process.env.EVENT;   // schedule | workflow_dispatch
+          s.commit = process.env.COMMIT;
+          // MACHINE-COUNT lines_cited (RA-504): unique `path.ext:line` tokens in the report,
+          // never the agent's own number. `.ext` before the colon keeps timestamps out; `[]` in
+          // the class keeps dynamic route segments (…/[id]/page.tsx:17) whole. A citation is a
+          // repository PATH: it has a `/` and never a `//`, which drops `host.tld:port` URLs.
+          // NOT on a report_invalid run (RA-639): its `notes` hold the corrupt report's bytes,
+          // and counting them would give the most degraded run the healthiest number.
+          const selfReported = s.lines_cited;
+          const cites = invalid ? new Set() : new Set((JSON.stringify(s).match(/[\w./[\]-]+\.[A-Za-z]\w*:\d+(?:-\d+)?/g) || [])
+            .filter(t => t.includes('/') && !t.includes('//')));
+          s.lines_cited = cites.size;
+          // The three liveness flags as real booleans. `complete` is the agent's own end-of-run
+          // marker: anything but an explicit `true` reads as NOT known-complete, the honest
+          // default. `complete:false` degrades the coverage claim; only an absent or unparseable
+          // report fails the job.
+          s.complete = s.complete === true;
+          s.no_report = s.no_report === true;
+          s.report_invalid = s.report_invalid === true;
+          s.cost_proxy = { ...(s.cost_proxy || {}), duration_ms: dur, turns: s.turns ?? null };
+          fs.writeFileSync(f, JSON.stringify(s, null, 2));
+          if (process.env.GITHUB_OUTPUT) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `complete=${s.complete}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `turns=${s.turns ?? ''}\n`);
+          }
+          console.log(`stamped: trigger=${s.trigger} duration_ms=${dur} turns=${s.turns} files_read=${s.files_read} lines_cited=${s.lines_cited} complete=${s.complete} no_report=${s.no_report} report_invalid=${s.report_invalid} (self-reported lines_cited=${selfReported ?? 'none'})`);
+          EOF
+
+      # THE REPORT, FOR THE `put` JOB. Uploaded whatever happened above, BEFORE the outcome
+      # steps below can red the job, so the durable write runs either way. One day: the `put`
+      # job reads it within the run, and the store is the record.
+      - name: Upload the report for the put job
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qa-audit-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: qa-audit-summary.json
+          retention-days: 1
+          if-no-files-found: error
+
+      # THE OUTCOME DECISION (RA-846). Exactly one case is downgraded: the agent step failed AND
+      # the report is complete and parseable, which means "the audit finished its work and then
+      # exited non-zero". Why it exited (the turn cap, the dollar cap, a mid-run `api_error`) is
+      # not observable here; the run's telemetry row names it (RA-1950). Everything else still
+      # reds the job: an incomplete report after a failed agent here, and an absent or
+      # unparseable report in the next step.
+      - name: Reconcile the agent's exit with what it durably produced
+        if: always() && steps.agent.outcome == 'failure'
+        env:
+          COMPLETE: ${{ steps.stamp.outputs.complete }}
+          NO_REPORT: ${{ steps.stamp.outputs.no_report }}
+          INVALID: ${{ steps.stamp.outputs.report_invalid }}
+          TURNS: ${{ steps.stamp.outputs.turns }}
+        run: |
+          set -euo pipefail
+          if [ "$NO_REPORT" = "true" ] || [ "$INVALID" = "true" ]; then
+            echo "Agent step failed and the report is absent or unparseable — the next step reds the job."
+            exit 0
+          fi
+          if [ "$COMPLETE" = "true" ]; then
+            echo "::warning title=audit exited non-zero after a complete report::The audit agent exited non-zero but its report is COMPLETE and parseable (turns: ${TURNS:-unknown} of --max-turns 100). Nothing durable was lost: the report was on disk first, and the put job writes it. Treating this as green is deliberate (RA-846). Why it exited is on this run's \`auditor\` telemetry row: its \`outcome\`, \`reason\` and \`terminal_reason\` separate the turn and dollar caps (\`exhausted\`) from a mid-run \`api_error\` (\`failed\`)."
+            echo "Agent exited non-zero AFTER writing a complete report (turns: ${TURNS:-unknown}): recorded as a warning, not a failure. The cause is on this run's \`auditor\` telemetry row." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::error title=degraded audit run::The audit agent exited non-zero and its report is present but INCOMPLETE (\`complete: false\`), so the run was cut short mid-audit and its coverage claim cannot be trusted. The partial report still goes to the store through the put job; this job is red because work was lost. The cause is on this run's \`auditor\` telemetry row."
+          exit 1
+
+      - name: Fail on a no-report or unparseable-report run
+        if: always() && (steps.stamp.outputs.no_report == 'true' || steps.stamp.outputs.report_invalid == 'true')
+        env:
+          NO_REPORT: ${{ steps.stamp.outputs.no_report }}
+        run: |
+          if [ "$NO_REPORT" = "true" ]; then
+            echo "::error title=no-report audit run::The audit agent produced no qa-audit-summary.json: no areas scanned, no bugs filed, a whole audit window lost. The put job records a no_report run in the store; this job is red so it is visible now (RA-504)."
+          else
+            echo "::error title=invalid audit report::qa-audit-summary.json was present but did not parse, so the run's real findings are unrecoverable. The put job records a report_invalid run, with the first 2000 raw bytes in the stored report's notes; this job is red so it is visible now (RA-504)."
+          fi
+          exit 1
+
+      # WHY A RED RUN WENT RED (RA-1408): a quota cap and a real failure want opposite responses
+      # (wait or re-run). `if: failure()` so it speaks only when there is something to explain;
+      # it always exits 0, so explaining a red run cannot create one.
+      - name: Say whether the model was unreachable or the run genuinely failed
+        if: failure()
+        uses: $/actions/agent-classify
+        with:
+          arm: code-audit agent
+
+      # THE TOKEN DIES WITH THE JOB (`K-AGENT-49`). Last, after every step that uses it. It is
+      # decoded from the secret again rather than read from `Receive the App token`, so a run that
+      # ended before that step (a decline, a failed gate) still revokes the token its mint job
+      # minted. Revoking needs only the token itself, never the key. Never reds the run: an
+      # earlier attempt's token was revoked by that attempt, and one that expired is refused.
+      - name: Revoke the App token
+        if: always()
+        env:
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$' || [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "No App token of this attempt to revoke"
+            exit 0
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            "$API_URL/installation/token" || true)"
+          if [ "$STATUS" = "204" ]; then echo "App token revoked"; else echo "::warning title=app-token::the App token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi

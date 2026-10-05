@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { workflowText } from './helpers/called-workflow.js';
 import { SECTIONS as EXCERPTED } from '../../scripts/playbook-excerpt.mjs';
 
 /**
@@ -48,7 +49,7 @@ const ceiling = (wf: Lane): Perms => {
 
 /** The project documents a lane's prompt reads, found exactly as lane-check finds them. */
 const docsRead = (file: string): string[] =>
-  [...new Set(readFileSync(join(WORKFLOWS, file), 'utf8').match(/docs\/qa\/(stack|capability-ledger|[a-z]+(-[a-z]+)*-playbook)\.md/g) ?? [])].sort();
+  [...new Set(workflowText(join(WORKFLOWS, file)).match(/docs\/qa\/(stack|capability-ledger|[a-z]+(-[a-z]+)*-playbook)\.md/g) ?? [])].sort();
 
 /** The text between an anchor pair. Throws when either anchor is missing or doubled. */
 const between = (text: string, open: string, close: string): string => {
@@ -93,7 +94,7 @@ describe("docs/lanes.md's lane-contract table is what each lane declares", () =>
     expect(row?.secrets).toEqual(declared.filter((s) => s !== 'CLAUDE_CODE_OAUTH_TOKEN'));
     // A lane runs a model through the spine or the run block; one that runs none (the
     // Merger, plan 0004 step 7) must not ask its caller for the subscription's token.
-    const text = readFileSync(join(WORKFLOWS, file), 'utf8');
+    const text = workflowText(join(WORKFLOWS, file));
     const runsModel = /uses: \$\/(\.github\/workflows\/agent-lane\.yml|actions\/agent-run)\b/.test(text);
     expect(declared.includes('CLAUDE_CODE_OAUTH_TOKEN'), file).toBe(runsModel);
   });
@@ -133,7 +134,7 @@ describe('K-LAYOUT-17 names every playbook section a lane prompt sends the agent
    *  `Use the rubric in docs/qa/explorer-playbook.md`, and the sections the excerpting step
    *  cuts out, in every lane. Prompts break lines anywhere, so whitespace is folded first. */
   const named = [...EXCERPTED, ...LANES.flatMap((file) => {
-    const text = readFileSync(join(WORKFLOWS, file), 'utf8').replace(/\s+/g, ' ');
+    const text = workflowText(join(WORKFLOWS, file)).replace(/\s+/g, ' ');
     return [
       ...[...text.matchAll(/playbook's "([^"]+)"/g)].map((m) => m[1]!),
       ...[...text.matchAll(/"([^"]+)"(?= (?:and "[^"]+" )?sections?\b)/g)].map((m) => m[1]!),

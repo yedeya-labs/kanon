@@ -2,13 +2,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
-import { parse } from 'yaml';
 const {
   HELD_LABEL, IMPLEMENTER_LOGIN, MAX_PER_RUN, PIPELINE_LABELS, PR_FIELDS,
   attemptComment, ineligible, isResolveJob, marker, rebaseDecision, report,
 } = await import('../../scripts/rebase-lane.mjs');
 const { ConflictFieldsUnread } = await import('../../scripts/conflict-state.mjs');
 import { blockOf, effectiveSteps, laneBlockOf } from '../unit/helpers/spine.js';
+import { readFlattened, workflowText } from '../unit/helpers/called-workflow.js';
 
 /**
  * RA-2150 — something finally resolves the conflict the five RA-1722 lanes only report.
@@ -162,7 +162,7 @@ describe('the report says what it examined', () => {
 });
 
 describe('the workflow wiring', () => {
-  const wf = parse(readFileSync(join(ROOT, '.github/workflows/agent-rebase.yml'), 'utf8'));
+  const wf = readFlattened(join(ROOT, '.github/workflows/agent-rebase.yml'));
   // What the job RUNS (RA-2659): the lane calls the agent-lane blocks directly, so its agent,
   // classifier and telemetry steps live inside `agent-run` / `agent-finish`, and each block
   // call is read as the block's own steps with the call's inputs substituted.
@@ -172,7 +172,7 @@ describe('the workflow wiring', () => {
   // A KANON LANE is called, never triggered (plan 0001 step 5): its caller holds the
   // triggers, which the lane states as its contract above `on:`, and the filter job admits
   // exactly those events, since a called workflow runs on whatever its caller is called on.
-  const text = readFileSync(join(ROOT, '.github/workflows/agent-rebase.yml'), 'utf8');
+  const text = workflowText(join(ROOT, '.github/workflows/agent-rebase.yml'));
   const contract = text.slice(text.indexOf("# THE CALLER'S TRIGGERS"), text.indexOf('\non:\n'));
 
   it('is NOT triggered by a label, which could never fire on a conflicting PR', () => {
@@ -287,7 +287,7 @@ describe('the workflow wiring', () => {
 });
 
 describe('the prompt carries the rules that keep a resolution honest', () => {
-  const wf = parse(readFileSync(join(ROOT, '.github/workflows/agent-rebase.yml'), 'utf8'));
+  const wf = readFlattened(join(ROOT, '.github/workflows/agent-rebase.yml'));
   const prompt: string = effectiveSteps(wf.jobs.resolve.steps)
     .find((s: { uses?: string }) => (s.uses ?? '').startsWith('anthropics/claude-code-action'))!.with!.prompt as string;
 
@@ -349,6 +349,10 @@ describe('which job of a run is this PR’s (RA-2519, plan 0001 step 5)', () => 
   it('reads the lane’s own name and the name a caller’s job prefixes', () => {
     expect(isResolveJob('resolve (55)', 55)).toBe(true);
     expect(isResolveJob('rebase / resolve (55)', 55)).toBe(true);
+    // The agent's job, below the per-PR call since kanon#279, which holds the breadcrumbs.
+    expect(isResolveJob('rebase / resolve (55) / resolve / resolve', 55)).toBe(true);
+    expect(isResolveJob('rebase / resolve (55) / mint', 55)).toBe(true);
+    expect(isResolveJob('rebase / resolve (155) / resolve / resolve', 55)).toBe(false);
   });
   it('never another PR’s job, nor another job', () => {
     expect(isResolveJob('rebase / resolve (155)', 55)).toBe(false);
@@ -363,7 +367,7 @@ describe('which job of a run is this PR’s (RA-2519, plan 0001 step 5)', () => 
       .toMatch(/evidenceOf: \(runId, pr\) => readRetry\(runId, \{ job: \(name\) => isResolveJob\(name, pr\.number\) \}\)/);
   });
   it('the lane’s matrix job is the one it names', () => {
-    const wf = parse(readFileSync(join(ROOT, '.github/workflows/agent-rebase.yml'), 'utf8'));
+    const wf = readFlattened(join(ROOT, '.github/workflows/agent-rebase.yml'));
     expect(wf.jobs.resolve.strategy.matrix.pr).toBeDefined();
     expect(wf.jobs.resolve.name).toBeUndefined();
   });

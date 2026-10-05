@@ -228,19 +228,23 @@ const gh = (args) => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignor
 const ghJson = (args) => JSON.parse(gh(args));
 
 /**
- * Is this job, by the name the jobs API gives it, the lane's matrix job for PR `n`?
+ * Is this job, by the name the jobs API gives it, one of the lane's jobs for PR `n`?
  *
- * TWO SPELLINGS. The lane's own file names it `resolve (<n>)`. Called from an adopter's
- * caller, as a Kanon lane is (plan 0001 step 5), the API prefixes the caller's job:
- * `<caller job> / resolve (<n>)`. Reading only the first would find no breadcrumb in any
- * Kanon run, so a head whose attempt died of its cause would never be retried, silently.
+ * ANY SEGMENT. The lane's own file names its matrix job `resolve (<n>)`. Called from an
+ * adopter's caller, as a Kanon lane is (plan 0001 step 5), the API prefixes the caller's job:
+ * `<caller job> / resolve (<n>)`. And since kanon#279 that matrix job is a call to
+ * `rebase-run.yml`, so the jobs that ran are named BELOW it too: `… / resolve (<n>) / mint`
+ * and `… / resolve (<n>) / resolve / resolve`, the second holding the breadcrumbs. So a name
+ * is this PR's when one of its ` / ` segments is `resolve (<n>)`. Reading only the last would
+ * find no breadcrumb in any Kanon run, so a head whose attempt died of its cause would never
+ * be retried, silently. The mint job matches too and carries no breadcrumb, which is harmless:
+ * every matching job is read.
  *
  * @param {string} name
  * @param {number|string} n
  */
 export function isResolveJob(name, n) {
-  const own = `resolve (${n})`;
-  return name === own || name.endsWith(` / ${own}`);
+  return name.split(' / ').includes(`resolve (${n})`);
 }
 
 /** Render for a human. Says what it examined, not only what it found. */

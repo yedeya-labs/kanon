@@ -7,6 +7,7 @@ import { parse } from 'yaml';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { trailerFor } from '../../scripts/review-trailer.mjs';
+import { handedIn, readFlattened } from './helpers/called-workflow.js';
 
 /**
  * RA-1351 — a review run that posts nothing must not read as normal.
@@ -27,7 +28,7 @@ import { trailerFor } from '../../scripts/review-trailer.mjs';
  * string match on its source, and that bought a workflow which had never once
  * succeeded while its tests were green.
  */
-const wf = parse(readFileSync(join(process.cwd(), '.github/workflows/agent-review.yml'), 'utf8'));
+const wf = readFlattened(join(process.cwd(), '.github/workflows/agent-review.yml'));
 const step = wf.jobs.review.steps.find(
   (s: { name?: string }) => s.name === "Reconcile the agent's exit with whether a verdict was posted");
 
@@ -496,7 +497,9 @@ describe('the step is wired so it can actually run (RA-1351)', () => {
     // A `workflow_run` payload carries no pull_request, so `github.event...head.sha`
     // is empty on the path this job most often runs from — which would make every
     // verdict look stale.
-    expect(step.env.HEAD_SHA).toBe('${{ needs.filter.outputs.head_sha }}');
+    expect(step.env.HEAD_SHA).toBe('${{ inputs.head_sha }}');
+    // The agent's job is a called workflow (kanon#279), handed the filter's head unchanged.
+    expect(handedIn(join(process.cwd(), '.github/workflows/agent-review.yml'), 'review', 'head_sha')).toBe('${{ needs.filter.outputs.head_sha }}');
   });
 });
 
@@ -704,7 +707,10 @@ esac
       const label = s.name ?? s.uses ?? s.run;
       const gated = String(s.if ?? '').includes("steps.claim.outputs.proceed == 'true'")
         // The stamp and reconcile steps key on the agent step, which is itself gated.
-        || String(s.if ?? '').includes("steps.agent.conclusion != 'skipped'");
+        || String(s.if ?? '').includes("steps.agent.conclusion != 'skipped'")
+        // The token's revoke, the job's last step (kanon#279): a declined run still revokes the
+        // token its mint job minted. A `curl`, not a spend.
+        || (s.name === 'Revoke the App token' && s === steps.at(-1));
       expect(gated, `${label} runs on a run the claim stood down`).toBe(true);
     }
     expect(String(steps.find((s) => s.id === 'agent')?.if)).toContain("steps.claim.outputs.proceed == 'true'");

@@ -13,6 +13,7 @@ const { itemSatisfied, satisfiedTitles, classifyDeploy, readDeploy: kanonReadDep
 const { qaRoundBudget, heldClearsRead, QA_ROUND_CAP } = await import('../../scripts/lead-reconcile.mjs');
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ROOT } from './helpers/adopter.js';
+import { workflowText } from '../unit/helpers/called-workflow.js';
 /** A value of the untyped library, as the reference adopter's helper named it. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type LibraryValue = any;
@@ -3287,7 +3288,7 @@ describe('phase 5 reaches the Explorer by label, not by dispatch (RA-1281)', () 
   // The lane is Kanon's since RA-2718; its caller holds the `issues: labeled` trigger.
   // The adopter's caller (its triggers), then the lane (its gates), as one text.
   const wf = readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-verify-acs.yml'), 'utf8')
-    + readFileSync(join(ROOT, '.github/workflows/agent-verify-acs.yml'), 'utf8');
+    + workflowText(join(ROOT, '.github/workflows/agent-verify-acs.yml'));
 
   it('does not dispatch the verify workflow', () => {
     // `gh workflow run` needs `actions: write`, and agent-identities.md footnote 2

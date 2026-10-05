@@ -1,9 +1,8 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { parse } from 'yaml';
 import { STAGE_BLOCKS, laneBlockOf } from './helpers/agent-lanes.mjs';
 import { blockOf, readBlock, stepsAsRun } from './helpers/spine.js';
 import type { WorkflowStep } from './helpers/workflow-step.js';
+import { readFlattened } from './helpers/called-workflow.js';
 
 /**
  * RA-2660 — merge-reconcile calls the agent-lane blocks directly, and installs NOTHING.
@@ -18,7 +17,7 @@ import type { WorkflowStep } from './helpers/workflow-step.js';
  */
 const FILE = '.github/workflows/agent-merge-reconcile.yml';
 type Job = { steps: WorkflowStep[]; services?: unknown };
-const doc = parse(readFileSync(FILE, 'utf8')) as { jobs: Record<string, Job> };
+const doc = readFlattened(FILE) as { jobs: Record<string, Job> };
 const job = doc.jobs.reconcile!;
 const call = (block: string) => job.steps.find((s) => laneBlockOf(s) === block)!;
 const INSTALL = /\bnpm (?:ci|install|i)\b/;

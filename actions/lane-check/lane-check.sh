@@ -75,6 +75,18 @@ ROLES=""
 DOCS=""
 READS=""
 HOOKS=""
+# A Kanon workflow's file, then every workflow of Kanon's it calls through `$/`, transitively
+# (kanon#279: a lane's agent job runs in a called workflow, beside the job that mints its token).
+lane_files() {
+  local f="$1" seen="${2:-}" c
+  printf '%s\n' "$f"
+  for c in $(sed -n 's|^ *uses: \$/\.github/workflows/\([A-Za-z0-9_.-]*\.ya*ml\) *$|\1|p' "$f" | sort -u); do
+    case " $seen " in *" $c "*) continue ;; esac
+    seen="$seen $c"
+    lane_files "$KANON_ROOT/.github/workflows/$c" "$seen"
+  done
+}
+
 for f in .github/workflows/*.yml .github/workflows/*.yaml; do
   [ -f "$f" ] || continue
   doc="$(json "$f")" || { fail "$f" "is not valid YAML"; continue; }
@@ -171,8 +183,10 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
       || fail "$f" "its name must be \`$want_name\`, not \`$name\`: GitHub reports the Kanon lane $lane's checks under its caller's name, and the lane tells its own checks from the rest by it (docs/lanes.md)"
   fi
   # The project documents this lane's prompt reads, at their fixed paths (K-LAYOUT-17).
-  # Read from the lane itself, so a lane that starts reading one makes it required here.
-  for d in $(grep -oE 'docs/qa/(stack|capability-ledger|[a-z]+(-[a-z]+)*-playbook)\.md' "$lane_file" | sort -u); do
+  # Read from the lane itself, so a lane that starts reading one makes it required here, and
+  # from the workflows it calls: a lane's agent job, with its prompt, is a called workflow of
+  # its own since kanon#279 kept the App key out of it (`K-AGENT-49`).
+  for d in $(lane_files "$lane_file" | xargs grep -ohE 'docs/qa/(stack|capability-ledger|[a-z]+(-[a-z]+)*-playbook)\.md' | sort -u); do
     DOCS="$DOCS $d=$lane"
   done
   njobs="$(jq '.jobs | length' <<<"$doc")"

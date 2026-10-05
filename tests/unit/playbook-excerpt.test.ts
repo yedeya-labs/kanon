@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { parse } from 'yaml';
 import {
   EXCERPT_PATH,
   PLAYBOOK,
@@ -9,6 +8,7 @@ import {
   rebaseLinks,
 } from '../../scripts/playbook-excerpt.mjs';
 import { effectiveSteps } from './helpers/spine.js';
+import { readFlattened } from './helpers/called-workflow.js';
 
 /**
  * RA-2488 option 2 — merge-reconcile reads only the reviewer-playbook sections it uses.
@@ -66,7 +66,7 @@ describe('the extractor', () => {
 
 describe('the workflow writes it and points the prompt at it', () => {
   type Step = { name?: string; uses?: string; run?: string; 'continue-on-error'?: boolean; with?: { prompt?: string } };
-  const wf = parse(readFileSync('.github/workflows/agent-merge-reconcile.yml', 'utf8'));
+  const wf = readFlattened('.github/workflows/agent-merge-reconcile.yml');
   // AS THE JOB RUNS (RA-2660): the job calls the agent-lane blocks directly, so the agent
   // step and its prompt sit inside `agent-run` — read through the shared resolver.
   const steps = effectiveSteps(wf.jobs.reconcile.steps) as Step[];

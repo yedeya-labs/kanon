@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { unlinkedQuery } from '../../scripts/capability-interlock.mjs';
 import { storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
+import { handedIn, mintFor, readFlattened, workflowText } from './helpers/called-workflow.js';
 
 /**
  * Plan 0004 step 13: the Overseer, moved from the reference adopter as a Kanon lane
@@ -28,8 +29,9 @@ type Lane = Workflow & {
   jobs: Record<string, LaneJob>;
 };
 
-const LANE_TEXT = readFileSync('.github/workflows/agent-overseer.yml', 'utf8');
-const lane = (): Lane => parse(LANE_TEXT) as Lane;
+const LANE_FILE = '.github/workflows/agent-overseer.yml';
+const LANE_TEXT = workflowText(LANE_FILE);
+const lane = (): Lane => readFlattened(LANE_FILE) as Lane;
 const wf = lane();
 const overseer = wf.jobs.overseer!;
 const steps = (overseer.steps ?? []) as Step[];
@@ -62,7 +64,8 @@ describe('the store job and the overseer job (plan 0004 P9\'s check, applied at 
   it('exports the Overseer\'s kind before the agent, and the agent reads that export', () => {
     expect(wf.jobs.export!.steps).toEqual([{ uses: '$/actions/qa-store', id: 'store', with: { operation: 'export', kind: 'overseer' } }]);
     const exported = steps.find((s) => s.uses?.startsWith('actions/download-artifact@'))!;
-    expect(exported.with).toEqual({ name: '${{ needs.export.outputs.artifact-name }}', path: 'qa-store-export' });
+    expect(handedIn(LANE_FILE, 'overseer', 'artifact-name')).toBe('${{ needs.export.outputs.artifact-name }}');
+    expect(exported.with).toEqual({ name: '${{ inputs.artifact-name }}', path: 'qa-store-export' });
     // It writes nothing back: the Overseer's durable output is its issues.
     expect(Object.values(wf.jobs).flatMap((j) => j.steps ?? []).filter((s) => (s as Step).with?.operation === 'put')).toEqual([]);
   });
@@ -102,15 +105,18 @@ describe('who files what (decision 12)', () => {
   const writes = (s: Step) => Object.entries(s.with ?? {}).filter(([k, v]) => k.startsWith('permission-') && v === 'write').map(([k]) => k);
 
   it('the agent job holds no token that writes: its one mint reads only, and its workflow token too', () => {
-    expect(mints(overseer).map((s) => s.id)).toEqual(['app-token']);
-    expect(byId('app-token').with).toMatchObject({
+    // Minted in a job of its own (kanon#279), received here: the agent's job mints nothing.
+    expect(mints(overseer)).toEqual([]);
+    expect(byId('app-token').name).toBe('Receive the App token');
+    const mint = mintFor(LANE_FILE, 'overseer');
+    expect(mint.with).toMatchObject({
       'client-id': '${{ secrets.OVERSEER_APP_ID }}',
       'permission-contents': 'read',
       'permission-issues': 'read',
       'permission-pull-requests': 'read',
       'permission-actions': 'read',
     });
-    expect(writes(byId('app-token'))).toEqual([]);
+    expect(writes(mint)).toEqual([]);
     expect(Object.values(overseer.permissions as Record<string, string>)).not.toContain('write');
     expect(byId('agent').with?.['github-token']).toBe('${{ steps.app-token.outputs.token }}');
   });
@@ -228,7 +234,9 @@ describe('what the agent is told', () => {
   });
 
   it('explains a red run last', () => {
-    const last = steps[steps.length - 1]!;
+    // Then only the token's revoke, the job's last step (kanon#279, `K-AGENT-49`).
+    expect(steps.at(-1)!.name).toBe('Revoke the App token');
+    const last = steps[steps.length - 2]!;
     expect(last.uses).toBe('$/actions/agent-classify');
     expect(last.if).toBe('failure()');
     expect(byId('finish').with?.classify).toBe('false');

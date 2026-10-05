@@ -3,12 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parse } from 'yaml';
 
 import { trailerFor } from '../../scripts/review-trailer.mjs';
 import { writeStub } from './helpers/stub-bin.js';
 import { agentPrompt, runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { effectiveSteps } from './helpers/spine.js';
+import { readFlattened } from './helpers/called-workflow.js';
 
 /**
  * The review lane's half of RA-2455 (the script's own tests are tests/library/incremental-review.test.ts).
@@ -81,7 +81,7 @@ function prWithReviewedCommit(): string {
 
 type Step = WorkflowStep & { env?: Record<string, string> };
 const steps = (): Step[] =>
-  ((parse(readFileSync(WORKFLOW, 'utf8')) as { jobs: Record<string, { steps: Step[] }> }).jobs.review!.steps);
+  ((readFlattened(WORKFLOW) as { jobs: Record<string, { steps: Step[] }> }).jobs.review!.steps);
 const byId = (id: string) => {
   const s = steps().find((st) => st.id === id);
   if (!s) throw new Error(`no step with id ${id}`);

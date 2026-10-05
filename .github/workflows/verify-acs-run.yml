@@ -1,0 +1,85 @@
+# Verify ACs — mint, then the agent's job
+#
+# CALLED ONLY BY `agent-verify-acs.yml`, whose `verify` job calls it. Two jobs, for `K-AGENT-49` (kanon#279):
+#   • `mint` holds the App's private key and runs nothing else: no checkout, no project code, no
+#     agent. It mints the lane's narrowed token with `skip-token-revoke` and hands it on
+#     hex-encoded, because GitHub drops a job output that holds a masked value.
+#   • `verify` is `verify-acs-agent-job.yml`, the lane's agent job, handed the token and never the key.
+#     A called workflow, because its `secrets:` is the one channel that arrives masked; it
+#     masks the token as it decodes it and revokes it as its last step.
+# Both jobs sit inside the lane's `verify` job, under its `if`, permissions and any group or
+# matrix it carries, so the mint waits with the agent and never mints for a run that is
+# skipped or queued. The spine has the same shape (`agent-lane.yml`), and
+# `tests/unit/app-key-isolation.test.ts` holds this file to it. The lane's header says what the
+# lane does; `agent-lane.yml`'s header says why the token crosses this way.
+name: Verify ACs — mint, then the agent's job
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: "The caller's `project`, passed through: the project tracking-issue number."
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: "The caller's `ref`, passed through: the tag or SHA to verify."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      app-id:
+        required: true
+      app-private-key:
+        required: true
+      claude-token:
+        required: true
+
+# NO `permissions:` BLOCK: the lane's calling job sets this call's ceiling, and without a block
+# here each job gets exactly what that job was given.
+jobs:
+  # HOLDS THE KEY, AND ONLY THE MINT (`K-AGENT-49`). Nothing else runs here: no checkout, no
+  # project code, no agent, so nothing can rewrite the cached action before its post step,
+  # which skips the revoke (the agent's job revokes the token when it ends). The token
+  # crosses hex-encoded, because GitHub drops a job output holding a masked value.
+  mint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sealed: ${{ steps.seal.outputs.sealed }}
+      app-slug: ${{ steps.app-token.outputs.app-slug }}
+      # The attempt this token was minted for. A partial re-run reuses this job's outputs.
+      attempt: ${{ github.run_attempt }}
+    steps:
+      - name: Mint explorer App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          # The agent's job revokes it when it ends. The default would revoke it as THIS job ends.
+          skip-token-revoke: "true"
+          # Narrowed to what this step uses (#48, `K-AGENT-46`): it reads the tree and pull requests, and files or comments on issues.
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: read
+      - name: Seal the token for the agent's job
+        id: seal
+        env:
+          TOKEN: ${{ steps.app-token.outputs.token }}
+        run: printf 'sealed=%s\n' "$(printf %s "$TOKEN" | od -An -v -tx1 | tr -d ' \n')" >> "$GITHUB_OUTPUT"
+
+  # THE AGENT'S JOB, GIVEN THE TOKEN AND NEVER THE KEY (`K-AGENT-49`). `!cancelled()`: a failed
+  # mint still reaches it, and its finish block records `token=failure`.
+  verify:
+    needs: mint
+    if: ${{ !cancelled() }}
+    uses: $/.github/workflows/verify-acs-agent-job.yml
+    with:
+      project: ${{ inputs.project }}
+      ref: ${{ inputs.ref }}
+      app-slug: ${{ needs.mint.outputs.app-slug }}
+      mint-attempt: ${{ needs.mint.outputs.attempt }}
+    secrets:
+      app-token: ${{ needs.mint.outputs.sealed }}
+      claude-token: ${{ secrets.claude-token }}

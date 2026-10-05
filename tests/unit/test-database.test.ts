@@ -131,14 +131,14 @@ describe('every lane starts the database the project declares, from a step', () 
   });
 
   it('no lane names a database engine, image, port or URL: those are the block\'s, or the project\'s', () => {
-    const named = workflows.filter((f) => f.startsWith('agent-') || f === 'lane-agent-job.yml').filter((f) => /pgvector|postgres|:5432|DATABASE_URL=/i.test(readFileSync(join(WF, f), 'utf8')));
+    const named = workflows.filter((f) => f.startsWith('agent-') || f.endsWith('-agent-job.yml')).filter((f) => /pgvector|postgres|:5432|DATABASE_URL=/i.test(readFileSync(join(WF, f), 'utf8')));
     expect(named).toEqual([]);
   });
 
   // Every job that calls the hook and may hand it a database: the block runs before the hook,
   // in the same job, and the hook's `database` is the block's answer, never a literal 'true'.
   // The spine's agent job (kanon#274) is the spine's hook call; it is not an `agent-*` lane file.
-  const hookCalls = lanes.filter(({ f }) => f.startsWith('agent-') || f === 'lane-agent-job.yml').flatMap(({ f, wf }) =>
+  const hookCalls = lanes.filter(({ f }) => f.startsWith('agent-') || f.endsWith('-agent-job.yml')).flatMap(({ f, wf }) =>
     Object.entries(wf.jobs ?? {}).flatMap(([name, job]) => {
       const steps = job.steps ?? [];
       const at = steps.findIndex((s) => s.uses === './.github/actions/project-setup');
@@ -148,15 +148,15 @@ describe('every lane starts the database the project declares, from a step', () 
 
   it('finds every job that calls the hook', () => {
     expect(hookCalls.map((c) => c.where).sort()).toEqual([
-      'agent-explore.yml explore',
-      'agent-lead-split.yml split',
-      'agent-rebase.yml resolve',
-      'agent-verify-acs.yml verify',
+      'explore-agent-job.yml explore',
       'lane-agent-job.yml run',
+      'lead-split-agent-job.yml split',
+      'rebase-agent-job.yml resolve',
+      'verify-acs-agent-job.yml verify',
     ]);
   });
 
-  it.each(['agent-explore.yml explore', 'lane-agent-job.yml run', 'agent-rebase.yml resolve', 'agent-verify-acs.yml verify'])(
+  it.each(['explore-agent-job.yml explore', 'lane-agent-job.yml run', 'rebase-agent-job.yml resolve', 'verify-acs-agent-job.yml verify'])(
     '%s runs the block before the hook and hands the hook its answer',
     (where) => {
       const { steps, at } = hookCalls.find((c) => c.where === where)!;
@@ -169,7 +169,7 @@ describe('every lane starts the database the project declares, from a step', () 
   );
 
   it('the split lane, which edits prose, starts none and tells the hook so', () => {
-    const { steps, at } = hookCalls.find((c) => c.where === 'agent-lead-split.yml split')!;
+    const { steps, at } = hookCalls.find((c) => c.where === 'lead-split-agent-job.yml split')!;
     expect(steps.some((s) => s.uses === '$/actions/test-database')).toBe(false);
     expect(steps[at]!.with?.database).toBe('false');
   });
@@ -180,7 +180,7 @@ describe('every lane starts the database the project declares, from a step', () 
   });
 
   it('the verify-acs lane reads the declaration where it reads the hook, from the defining commit', () => {
-    const verify = lanes.find(({ f }) => f === 'agent-verify-acs.yml')!.wf.jobs.verify!;
+    const verify = lanes.find(({ f }) => f === 'verify-acs-agent-job.yml')!.wf.jobs.verify!;
     const steps = verify.steps!;
     const load = steps.findIndex((s) => s.id === 'hook');
     const db = steps.findIndex((s) => s.uses === '$/actions/test-database');

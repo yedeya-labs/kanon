@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
+import { handedIn, mintFor, readFlattened, workflowText } from './helpers/called-workflow.js';
 
 /**
  * Plan 0004 step 11: the code audit, moved from the reference adopter as a Kanon lane
@@ -24,8 +25,9 @@ type Lane = Workflow & {
   jobs: Record<string, LaneJob>;
 };
 
-const LANE_TEXT = readFileSync('.github/workflows/agent-code-audit.yml', 'utf8');
-const lane = (): Lane => parse(LANE_TEXT) as Lane;
+const LANE_FILE = '.github/workflows/agent-code-audit.yml';
+const LANE_TEXT = workflowText(LANE_FILE);
+const lane = (): Lane => readFlattened(LANE_FILE) as Lane;
 const wf = lane();
 const audit = wf.jobs.audit!;
 const steps = (audit.steps ?? []) as Step[];
@@ -75,7 +77,8 @@ describe('the store jobs and the audit job (plan 0004 P9\'s check, applied at st
     expect(upload.with?.path).toBe('qa-audit-summary.json');
     // And the export the audit job downloads is the export job's.
     const exported = steps.find((s) => s.uses?.startsWith('actions/download-artifact@'))!;
-    expect(exported.with).toEqual({ name: '${{ needs.export.outputs.artifact-name }}', path: 'qa-store-export' });
+    expect(handedIn(LANE_FILE, 'audit', 'artifact-name')).toBe('${{ needs.export.outputs.artifact-name }}');
+    expect(exported.with).toEqual({ name: '${{ inputs.artifact-name }}', path: 'qa-store-export' });
   });
 
   it('puts the report whether the audit went red or green, never after a skip or a cancel', () => {
@@ -169,7 +172,9 @@ describe('the report is recorded before the job is judged (RA-504, RA-846)', () 
   });
 
   it('explains a red run last', () => {
-    const last = steps[steps.length - 1]!;
+    // Then only the token's revoke, the job's last step (kanon#279, `K-AGENT-49`).
+    expect(steps.at(-1)!.name).toBe('Revoke the App token');
+    const last = steps[steps.length - 2]!;
     expect(last.uses).toBe('$/actions/agent-classify');
     expect(last.if).toBe('failure()');
     expect(byId('finish').with?.classify).toBe('false');
@@ -178,7 +183,9 @@ describe('the report is recorded before the job is judged (RA-504, RA-846)', () 
 
 describe('the workflow around it (moved from the reference adopter)', () => {
   it('mints the Explorer\'s App, narrowed to what the agent does', () => {
-    const minter = byId('app-token');
+    // In a job of its own (kanon#279): the agent's job receives the token, and never the key.
+    expect(byId('app-token').name).toBe('Receive the App token');
+    const minter = mintFor(LANE_FILE, 'audit');
     expect(minter.uses).toBe('actions/create-github-app-token@v3');
     expect(minter.with).toMatchObject({
       'client-id': '${{ secrets.EXPLORER_APP_ID }}',

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -10,6 +10,7 @@ import { readOpenedPrs } from '../../actions/agent-finish/agent-quality-prs.mjs'
 import { blockOf, callsSpine, effectiveSteps, readBlock, readSpine } from './helpers/spine.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { agentStep, telemetryStep, type WorkflowStep } from './helpers/workflow-step.js';
+import { readFlattened, topLevelWorkflows } from './helpers/called-workflow.js';
 
 /**
  * RA-1504 — the quality half of the telemetry row.
@@ -132,12 +133,14 @@ describe('a PR-shaped arm counts the PR it opened (RA-1627)', () => {
 
 describe('every filing arm is wired, and cannot red its own run', () => {
   // The smokes run the blocks on fixtures and file nothing, so they are not filing arms.
-  const files = readdirSync('.github/workflows').filter((f) => f.endsWith('.yml') && !f.endsWith('-smoke.yml'));
+  // Each lane's agent job is read as its lane's (kanon#279): the called workflows a lane runs it
+  // in are not files of their own here, and the lane's job carries the permissions it runs with.
+  const files = topLevelWorkflows('.github/workflows').filter((f) => !f.endsWith('-smoke.yml'));
   // Each job's steps as the job RUNS them — through the spine's blocks (RA-2666), where the
   // quality and telemetry steps now live — or the spine would drop out of `wired` and
   // every per-file check below would skip it without a word.
   const jobsOf = (f: string) =>
-    Object.entries<{ steps?: WorkflowStep[]; uses?: string }>(parse(readFileSync(join('.github/workflows', f), 'utf8'))?.jobs ?? {})
+    Object.entries<{ steps?: WorkflowStep[]; uses?: string }>(readFlattened(join('.github/workflows', f))?.jobs ?? {})
       .map(([job, def]) => [job, { ...def, steps: def?.steps && effectiveSteps(def.steps) }] as [string, { steps?: WorkflowStep[] }]);
 
   const wired = files.flatMap((f) =>
@@ -242,7 +245,7 @@ describe('every filing arm is wired, and cannot red its own run', () => {
     // permissions guard enforces this in lint; this states the property it enforces.
     for (const entry of wired) {
       const [file, job] = entry.split(':');
-      const doc = parse(readFileSync(join('.github/workflows', file!), 'utf8'));
+      const doc = readFlattened(join('.github/workflows', file!));
       const def = doc.jobs[job!];
       // EXCEPT a step that reads with the App token (RA-1627): the spine cannot hold a
       // default-token grant its callers do not all give, and the permissions guard skips
@@ -265,7 +268,7 @@ describe('every filing arm is wired, and cannot red its own run', () => {
     // (RA-1504), and records the row through `agent-finish`. Inside the block `steps.quality`
     // names the block's quality step, so the call must hand all three in, and the block
     // must forward each to the telemetry action — or the row loses a column silently.
-    const job = parse(readFileSync('.github/workflows/agent-review.yml', 'utf8')).jobs.review;
+    const job = readFlattened('.github/workflows/agent-review.yml').jobs.review;
     const steps = effectiveSteps(job.steps);
     const own = (job.steps as WorkflowStep[]).find((s) => s.id === 'quality');
     expect(own, 'the reviewer\'s own quality step').toBeTruthy();

@@ -136,9 +136,9 @@ describe('every job that calls a block calls it from Kanon, and carries nothing 
 
   it('finds the spine, the direct-block lanes, the blocks smoke and the fixture, so this is not vacuous', () => {
     expect(jobs.map(([w]) => w).sort()).toEqual([
-      'agent-blocks-smoke.yml:smoke', 'agent-explore.yml:explore', 'lane-agent-job.yml:run', 'agent-merge-reconcile.yml:reconcile',
-      'agent-project-digest.yml:digest', 'agent-weekly-digest.yml:digest', 'agent-code-audit.yml:audit', 'agent-overseer.yml:overseer',
-      'agent-lead-split.yml:split', 'agent-rebase.yml:resolve', 'agent-review.yml:review', 'agent-verify-acs.yml:verify', `${FIXTURE}:${JOB}`,
+      'agent-blocks-smoke.yml:smoke', 'explore-agent-job.yml:explore', 'lane-agent-job.yml:run', 'merge-reconcile-agent-job.yml:reconcile',
+      'agent-project-digest.yml:digest', 'agent-weekly-digest.yml:digest', 'code-audit-agent-job.yml:audit', 'overseer-agent-job.yml:overseer',
+      'lead-split-agent-job.yml:split', 'rebase-agent-job.yml:resolve', 'review-agent-job.yml:review', 'verify-acs-agent-job.yml:verify', `${FIXTURE}:${JOB}`,
     ].sort());
   });
 
@@ -200,7 +200,7 @@ describe('a gated direct lane holds every block call, agent-finish included, to 
 
   it('finds gated lanes and ungated ones, so neither branch is vacuous', () => {
     const gated = lanes.filter(([, steps]) => cond(steps.find((s) => laneBlockOf(s) === 'agent-setup')) !== undefined);
-    expect(gated.map(([w]) => w)).toEqual(expect.arrayContaining(['agent-lead-split.yml:split', 'agent-review.yml:review']));
+    expect(gated.map(([w]) => w)).toEqual(expect.arrayContaining(['lead-split-agent-job.yml:split', 'review-agent-job.yml:review']));
     expect(lanes.length - gated.length).toBeGreaterThan(0);
   });
 
@@ -209,7 +209,7 @@ describe('a gated direct lane holds every block call, agent-finish included, to 
   });
 
   it('reds a gated lane whose agent-finish dropped the gate, or whose agent-run did', () => {
-    const [, split] = lanes.find(([w]) => w === 'agent-lead-split.yml:split')!;
+    const [, split] = lanes.find(([w]) => w === 'lead-split-agent-job.yml:split')!;
     const swap = (block: string, ifValue: string | undefined) =>
       split.map((s) => (laneBlockOf(s) === block ? { ...s, if: ifValue } : s));
     expect(misGated(swap('agent-finish', 'always()'))).not.toEqual([]);
