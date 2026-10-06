@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { commentCoordinates, lineMapper, parseDiff, readsCodeComments as readsWith, retarget, shiftedCoordinates } from '../../scripts/citation-shift.mjs';
+import { commentCoordinates, lineMapper, parseDiff, readsCodeComments as readsWith, retarget, rewrittenLines, shiftedCoordinates } from '../../scripts/citation-shift.mjs';
 import { UNDECLARED, parseCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { ROOT } from './helpers/adopter.js';
 
@@ -347,5 +347,121 @@ describe('the CLI reads code comments end to end (RA-2293)', () => {
     const f = spawnSync(process.execPath, [cli, '--base', 'HEAD', '--fix'], { cwd: dir, encoding: 'utf8' });
     expect(f.status).toBe(0);
     expect(readFileSync(join(dir, 'e2e/helpers.ts'), 'utf8')).toContain('bails at `wizard.tsx:14`');
+  });
+});
+
+/**
+ * kanon#175 — a code-comment coordinate the diff itself wrote is skipped by the move check,
+ * and `citation-guard` reads `docs/` only, so nothing checked it. Read here as ADVICE.
+ */
+describe('a code-comment coordinate this diff wrote is read as advice (kanon#175)', () => {
+  const lines = (n: number) => Array.from({ length: n }, (_, i) => `# line${i + 1}`).join('\n') + '\n';
+  // The workflow gained 2 lines after line 1 and 2 more after line 5, so base :12 is head :16.
+  const WF = `+++ b/.github/workflows/review.yml
+@@ -1,0 +2,2 @@
++# a
++# b
+@@ -5,0 +8,2 @@
++# c
++# d
+`;
+  const runRw = (head: string, extraDiff = '', target = lines(24)) =>
+    shiftedCoordinates({
+      docs: [],
+      code: ['tests/a.test.ts'],
+      readHead: (p: string) => (p === 'tests/a.test.ts' ? head : target),
+      trackedHead: ['tests/a.test.ts', '.github/workflows/review.yml'],
+      trackedBase: ['tests/a.test.ts', '.github/workflows/review.yml'],
+      diff: parseDiff(WF + extraDiff),
+    });
+  const repoint = (to: string) => `+++ b/tests/a.test.ts
+@@ -1 +1 @@
+-// the step is at review.yml:12
++// the step is at review.yml:${to}
+`;
+
+  it('flags a re-point the diff\'s own map disagrees with — the replayed case: --fix, then 2 more lines above', () => {
+    const r = runRw('// the step is at review.yml:14\n', repoint('14'));
+    expect(r.moved).toEqual([]);
+    expect(r.rewritten).toEqual([
+      { at: 'tests/a.test.ts:1', doc: 'tests/a.test.ts', line: 1, citation: 'review.yml:14', path: '.github/workflows/review.yml', shape: 'off-map', base: [12, 12], mapped: [16, 16] },
+    ]);
+  });
+
+  it('says nothing when the re-point agrees with the map', () => {
+    expect(runRw('// the step is at review.yml:16\n', repoint('16')).rewritten).toEqual([]);
+  });
+
+  it('says nothing about a coordinate on a line the diff did not touch (the move check owns it)', () => {
+    const r = runRw('// the step is at review.yml:12\n');
+    expect(r.rewritten).toEqual([]);
+    expect(r.moved).toHaveLength(1);
+    expect(runRw('// the step is at review.yml:99\n').rewritten).toEqual([]);
+  });
+
+  it('flags a coordinate the diff wrote past the end of its file, changed by the diff or not', () => {
+    const add = `+++ b/tests/a.test.ts
+@@ -0,0 +1 @@
++// see review.yml:40
+`;
+    expect(runRw('// see review.yml:40\n', add).rewritten.map((x: { shape: string; length?: number }) => [x.shape, x.length])).toEqual([['past-eof', 24]]);
+    expect(runRw('// see review.yml:24\n', add).rewritten).toEqual([]);
+    // A target the diff did NOT change: only the comment's own hunk is in the diff.
+    const unchanged = shiftedCoordinates({
+      docs: [],
+      code: ['tests/a.test.ts'],
+      readHead: (p: string) => (p === 'tests/a.test.ts' ? '// see review.yml:40\n' : lines(24)),
+      trackedHead: ['tests/a.test.ts', '.github/workflows/review.yml'],
+      trackedBase: ['tests/a.test.ts', '.github/workflows/review.yml'],
+      diff: parseDiff(add),
+    });
+    expect(unchanged.rewritten.map((x: { shape: string; path: string }) => [x.shape, x.path])).toEqual([['past-eof', '.github/workflows/review.yml']]);
+  });
+
+  it('never reads a doc this way — citation-guard judges those', () => {
+    const r = shiftedCoordinates({
+      docs: ['docs/a.md'],
+      readHead: (p: string) => (p === 'docs/a.md' ? 'At `review.yml:14`.\n' : lines(24)),
+      trackedHead: ['docs/a.md', '.github/workflows/review.yml'],
+      trackedBase: ['docs/a.md', '.github/workflows/review.yml'],
+      diff: parseDiff(WF + '+++ b/docs/a.md\n@@ -1 +1 @@\n-At `review.yml:12`.\n+At `review.yml:14`.\n'),
+    });
+    expect(r.rewritten).toEqual([]);
+  });
+
+  it('prints one warning per coordinate, as an annotation in CI', () => {
+    const x = { at: 't.ts:1', doc: 't.ts', line: 1, citation: 'review.yml:14', path: 'review.yml', shape: 'off-map' as const, base: [12, 12], mapped: [16, 16] };
+    const [l] = rewrittenLines([x], false);
+    expect(l).toMatch(/^citation-shift \(advisory\): t\.ts:1 {2}review\.yml:14 — /);
+    expect(l).toContain('replaced :12, which this diff\'s own line map sends to :16');
+    expect(rewrittenLines([x], true)[0]).toMatch(/^::warning::citation-shift \(advisory\)/);
+  });
+
+  it('end to end over two commits: advisory printed, exit 0', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cshift-rw-'));
+    const sh = (...a: string[]) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+    const w = (f: string, t: string) => { mkdirSync(join(dir, f, '..'), { recursive: true }); writeFileSync(join(dir, f), t); };
+    sh('init', '-q');
+    sh('config', 'user.email', 't@t');
+    sh('config', 'user.name', 't');
+    const wf = (extra: string[]) => ['# line1', ...extra, ...Array.from({ length: 19 }, (_, i) => `# line${i + 2}`)].join('\n') + '\n';
+    w('.github/workflows/review.yml', wf([]));
+    w('tests/review.test.ts', '// the gate step lives at review.yml:12\nexport const x = 1;\n');
+    w('docs/qa/escalation-paths.md', '## Escalation paths\n\n## Pipeline code\n');
+    sh('add', '.');
+    sh('commit', '-qm', 'base');
+    const base = sh('rev-parse', 'HEAD').stdout.trim();
+    // Commit 1: the step moves 2 lines and the comment is re-pointed (what --fix writes).
+    w('.github/workflows/review.yml', wf(['# a', '# b']));
+    w('tests/review.test.ts', '// the gate step lives at review.yml:14\nexport const x = 1;\n');
+    sh('commit', '-qam', 'one');
+    // Commit 2: two more lines above the step; the comment is left as commit 1 wrote it.
+    w('.github/workflows/review.yml', wf(['# a', '# b', '# c', '# d']));
+    sh('commit', '-qam', 'two');
+    const cli = join(ROOT, 'scripts/citation-shift.mjs');
+    const r = spawnSync(process.execPath, [cli, '--base', base, '--head', 'HEAD'], { cwd: dir, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: '' } });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain('citation-shift (advisory): tests/review.test.ts:1  review.yml:14');
+    expect(r.stdout).toContain('sends to :16');
   });
 });

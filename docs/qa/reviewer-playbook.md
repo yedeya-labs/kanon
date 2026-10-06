@@ -25,6 +25,7 @@ Every finding cites the rule it rests on.
 7. **Every lane carries the membership gate.** It is the first step of every lane's first job, before any token is minted (`K-AGENT-45`, [`tests/unit/lane-gate.test.ts`](../../tests/unit/lane-gate.test.ts)). A new lane or trigger without it is a finding, and so is an event type the gate admits by default.
 8. **Plans and ADRs agree with the change.** A PR that carries out a plan step matches that step's row in [`docs/plans/`](../plans/). A PR that departs from an accepted ADR in [`docs/decisions/`](../decisions/) changes or supersedes it in the same PR. A premise that stopped being true is recorded next to its rule (`K-PRIN-16`).
 9. **No stack opinion.** Kanon is opinionated about process, never about the adopter's stack ([#15](https://github.com/yedeya-labs/kanon/issues/15)). A new rule, lane, guard or doc that requires a language, database or cloud is a finding. Node is allowed only for Kanon's own tooling, in CI. A lane prompt names the project's commands, database and documents only through its stack document and playbooks (`K-LAYOUT-17`); a PR adds no new assumption.
+10. **The text next to a documentation edit is still true** (`K-AGENT-20`). For every edited block in a document, the rulebook included, re-read its enclosing section, the parts `K-AGENT-20` lists, yourself. A neighbour the edit made false is a finding. Read the rendered block, not only the hunk: the diff shows the edit, never the line two below it.
 
 ## What escalates to the Owner
 

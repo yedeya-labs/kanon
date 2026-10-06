@@ -232,11 +232,11 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 ### `K-AGENT-20` Sweep a claim before changing it, and state the blast radius honestly
 
-**Rule.** When a change makes a claim false (a name, a behaviour, a message string), sweep the whole repository, tests included, with at least three different queries: the name, the idiom, and the adjacent concept. Where the claim lives in prose, pair the predicate and the name by line window rather than trusting a keyword query. Decide every hit, and put the inventory in the PR body. State the root cause, the fix and the honest blast radius; never describe a change to a shared utility as "minimal".
+**Rule.** When a change makes a claim false (a name, a behaviour, a message string), sweep the whole repository, tests included, with at least three different queries: the name, the idiom, and the adjacent concept. Where the claim lives in prose, pair the predicate and the name by line window rather than trusting a keyword query. Decide every hit, and put the inventory in the PR body. When the change edits a document, re-read the section around each edit as well: the heading above it, the sentence that introduces a list it changes and the list under a sentence it changes, any legend or table header it defines, and the clause that justifies it. Fix what the edit made false. State the root cause, the fix and the honest blast radius; never describe a change to a shared utility as "minimal".
 
-**Why.** A restatement that doesn't use the name survives a name search: one reference-adopter sweep took four review rounds, and five successive query-based sweeps of another looked clean and were wrong. A changed message string breaks assertions elsewhere. Undersold blast radius steers the reviewer away from exactly what needs reading.
+**Why.** A restatement that doesn't use the name survives a name search: one reference-adopter sweep took four review rounds, and five successive query-based sweeps of another looked clean and were wrong. A changed message string breaks assertions elsewhere. Undersold blast radius steers the reviewer away from exactly what needs reading. An edit that is correct on its own often makes the text beside it false, and no query finds that: one reference-adopter PR took five review rounds over a rewritten heading, a rewritten list introduction and a misplaced table legend, each sitting next to its stale neighbour.
 
-**Enforced by.** Prose only; the Reviewer treats a missing inventory as a finding.
+**Enforced by.** Prose only; the Reviewer treats a missing inventory as a finding. The section re-read is Reviewer-enforced too: the Reviewer's playbook asks it to re-read the enclosing section of every documentation edit and to treat the stale text it finds there as a finding. No lint checks it: a lint that compares a hunk with its section can't tell stale text from text kept on purpose, such as a dated decision record.
 
 **Class.** framework
 

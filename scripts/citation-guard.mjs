@@ -52,7 +52,7 @@
 // anchor cannot judge at all (11 of the 16 in RA-2208 named no identifier, or named one
 // declared above the drift) are stale for the same reason and nothing else will say so.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 // STATUSES only — `spec-lib` does its `readdirSync` inside `specFiles()`, not at module
 // load, so importing it here does not give this file a `docs/qa/specs` dependency. That
@@ -126,14 +126,15 @@ const LINE_AFTER = new RegExp(String.raw`\x60([\w./[\]-]+\.${SOURCE_EXT})\x60\s*
  * pattern covers it, even inside a directory the repository tracks: GitHub's stock Python
  * template ignores `lib/`, so with `src/pkg/lib/a.py` force-added, a typo `src/pkg/lib/aa.py`
  * and `src/pkg/lib/nested/x.py` both read as ignored and would pass unjudged. So the
- * SHALLOWEST ignored directory above the path must hold no tracked file: a dependency tree
- * is one the repository keeps none of its own files in. `node_modules/` and `.venv/` hold
- * none; `src/pkg/lib/` holds `a.py`, so a coordinate under it is the repository's and is
- * judged. A path ignored only by a file pattern (no ignored directory above it) keeps the
- * old rule. What this cannot see is an allow-list ignore file (`/*`, `!/src/`): there a
- * typo in a top-level folder (`scr/…`) is an ignored directory with nothing tracked in it,
- * exactly like `node_modules/`. That case is why the all-clear names every external PATH,
- * not only a count per doc — a reader can see a typo there.
+ * SHALLOWEST ignored directory above the path must hold no tracked SOURCE file (`OWN_SOURCE`,
+ * kanon#232): a dependency tree is one the repository keeps none of its own code in.
+ * `node_modules/` and `.venv/` hold none; `src/pkg/lib/` holds `a.py`, so a coordinate under
+ * it is the repository's and is judged. A path ignored only by a file pattern (no ignored
+ * directory above it) keeps the old rule. What this cannot see is an allow-list ignore file
+ * (`/*`, `!/src/`): there a typo in a top-level folder (`scr/…`) is an ignored directory with
+ * nothing tracked in it, exactly like `node_modules/`; nor a typo cited by suffix (`lib/aa.py`
+ * for `src/pkg/lib/`). Those cases are why the all-clear names every external PATH, not only
+ * a count per doc, and why `externalSuspicion` flags them — as a warning, not a failure.
  *
  * @param {string} file the cited path
  * @param {string[]} tracked
@@ -142,12 +143,76 @@ const LINE_AFTER = new RegExp(String.raw`\x60([\w./[\]-]+\.${SOURCE_EXT})\x60\s*
 export const isExternal = (file, tracked, ignored) => {
   if (tracked.some((f) => f === file || f.endsWith(`/${file}`))) return false;
   if (!ignored(file)) return false;
+  const dir = ignoredRoot(file, ignored);
+  return dir === null || !tracked.some((f) => f.startsWith(dir) && OWN_SOURCE.test(f));
+};
+
+/**
+ * WHAT COUNTS AS "THE REPOSITORY KEEPS ITS OWN FILES HERE" (kanon#232): a tracked SOURCE
+ * file, one whose extension a coordinate may name (`SOURCE_EXT`). Any tracked file used to
+ * count, so a force-added placeholder — `vendor/.gitkeep`, a `README.md` explaining the
+ * folder — under a directory-form ignore (`vendor/`) turned every dependency coordinate
+ * beneath it into "no such file in the repository": a false red on a correct citation, with
+ * a manual workaround. A placeholder is not code a doc can cite, so it is not evidence the
+ * tree is the repository's. kanon#120's case is unchanged: `src/pkg/lib/a.py` is a source
+ * file, so a typo beside it is still judged. What this gives up: an ignored directory whose
+ * only tracked files are non-source (a lone `README.md`) now reads as a dependency, so a typo
+ * under it is external. It is named in the all-clear and the advisory below flags it when the
+ * path is not on disk — the same net that catches the allow-list residual.
+ */
+const OWN_SOURCE = new RegExp(String.raw`\.${SOURCE_EXT}$`);
+
+/**
+ * The shallowest ignored directory above `file`, with its trailing `/`, or `null` when no
+ * directory above it is ignored (it is ignored by a file pattern alone).
+ *
+ * @param {string} file
+ * @param {(path: string) => boolean} ignored
+ */
+export const ignoredRoot = (file, ignored) => {
   const segments = file.split('/');
   for (let k = 1; k < segments.length; k += 1) {
     const dir = `${segments.slice(0, k).join('/')}/`;
-    if (ignored(dir)) return !tracked.some((f) => f.startsWith(dir));
+    if (ignored(dir)) return dir;
   }
-  return true;
+  return null;
+};
+
+/**
+ * WHY AN EXTERNAL PATH MAY BE A TYPO, NOT A DEPENDENCY — ADVISORY ONLY (kanon#120's residuals).
+ * `isExternal` cannot tell two shapes from a dependency, and they pass unjudged:
+ *
+ *   • `absent` — the path is not in the working tree. A dependency is installed wherever the
+ *     guard runs after the project's install step, and a typo never exists. This catches the
+ *     allow-list typo (`/*`, `!/src/`, then `scr/orders/a.ts`) and every shape below. It is
+ *     wrong exactly when the dependency is not installed where the guard runs, which is a
+ *     property of the CI job, not of the citation — the reason it can never be fatal.
+ *   • `suffix` — the shallowest ignored directory, read as a shortened path, is a directory
+ *     the repository keeps source files in: `lib/aa.py` under a `lib/` ignore while
+ *     `src/pkg/lib/a.py` is tracked. A doc may cite `lib/a.py` by suffix (`resolvePath`), so
+ *     the same form with a typo reads as a dependency. Structural, environment-free.
+ *
+ * MEASURED BEFORE CHOOSING ADVISORY (kanon#120, 2026-10-06). Kanon's own `docs/` holds no
+ * external coordinate, so its history can show no false positive and no catch either: zero of
+ * zero is not evidence. The reference adopter's tree holds 32 external coordinates over 15
+ * paths, all dependency output; with its dependencies installed neither reason fires on any
+ * of them (0 false positives), and in a job that skips the install `absent` fires on all 15.
+ * So `absent` can't be fatal on any count, and `suffix` stays advisory until a corpus with
+ * real externals has measured it. Neither reason changes a verdict; `main` prints them as
+ * warnings and exits as before.
+ *
+ * @param {string} file an external path (`isExternal` was true)
+ * @param {string[]} tracked
+ * @param {(path: string) => boolean} ignored
+ * @param {(path: string) => boolean} exists whether the path is in the working tree
+ * @returns {('absent'|'suffix')[]}
+ */
+export const externalSuspicion = (file, tracked, ignored, exists) => {
+  const reasons = [];
+  if (!exists(file)) reasons.push('absent');
+  const dir = ignoredRoot(file, ignored);
+  if (dir && tracked.some((f) => f.includes(`/${dir}`) && OWN_SOURCE.test(f))) reasons.push('suffix');
+  return reasons;
 };
 
 /**
@@ -667,17 +732,22 @@ export const isOracleSpec = (path) => path.startsWith('docs/qa/specs/');
  * @param {string[]} docs
  * @param {(path: string) => string} readFile
  * @param {string[]} tracked
- * @param {{bareNeedsFile?: (doc: string) => boolean, ignored?: (path: string) => boolean}} [options]
+ * @param {{bareNeedsFile?: (doc: string) => boolean, ignored?: (path: string) => boolean,
+ *          exists?: (path: string) => boolean}} [options]
  *   `ignored`: whether git ignores a path, for `isExternal`. Without it, nothing is external.
+ *   `exists`: whether a path is in the working tree, for `externalSuspicion`'s `absent`.
+ *   Without it, every path exists, so only the structural `suffix` reason can fire.
  * @returns {{findings: Finding[], checked: number, anchored: number, viaEnclosing: number,
  *            viaEnclosingAt: string[], discarded: number, discardedLineZero: number,
  *            discardedBy: Record<string, number>, external: number,
  *            externalBy: Record<string, number>, externalPaths: Record<string, string[]>,
+ *            suspectExternal: {doc: string, path: string, reasons: string[]}[],
  *            blocks: Block[]}}
  */
 export const auditCitations = (docs, readFile, tracked, options = {}) => {
   const bareNeedsFile = options.bareNeedsFile ?? isOracleSpec;
   const ignored = options.ignored ?? (() => false);
+  const exists = options.exists ?? (() => true);
   const findings = [];
   const discardedBy = {};
   // Per TARGET file (the cited `.ts`, not the citing doc): every shift measured into it,
@@ -710,6 +780,9 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
   // …and WHICH paths, per doc, distinct and in order of first citation: a count alone
   // hides a typo that an allow-list ignore file makes look like a dependency (kanon#120).
   const externalPaths = {};
+  // …and which of those paths look like a typo rather than a dependency (kanon#120's
+  // residuals). ADVISORY: no verdict reads this; `main` prints it as a warning.
+  const suspectExternal = [];
 
   for (const doc of docs) {
     const lines = readFile(doc).split('\n');
@@ -765,7 +838,11 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
           external += 1;
           externalBy[doc] = (externalBy[doc] ?? 0) + 1;
           const seenPaths = (externalPaths[doc] ??= []);
-          if (!seenPaths.includes(m.file)) seenPaths.push(m.file);
+          if (!seenPaths.includes(m.file)) {
+            seenPaths.push(m.file);
+            const reasons = externalSuspicion(m.file, tracked, ignored, exists);
+            if (reasons.length) suspectExternal.push({ doc, path: m.file, reasons });
+          }
           continue;
         }
         checked += 1;
@@ -873,7 +950,7 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
   }
   return {
     findings, checked, anchored, viaEnclosing, viaEnclosingAt, discarded, discardedLineZero, discardedBy,
-    external, externalBy, externalPaths, blocks: blocksIn(shiftsByFile, citationsByFile),
+    external, externalBy, externalPaths, suspectExternal, blocks: blocksIn(shiftsByFile, citationsByFile),
   };
 };
 
@@ -951,6 +1028,24 @@ const blocksIn = (shiftsByFile, citationsByFile) => {
  */
 export const PROJECTS_TREE = 'docs/projects/';
 
+const SUSPICION = {
+  absent: 'not in the working tree, where an installed dependency would be',
+  suffix: 'its ignored directory is, by suffix, one the repository keeps source files in',
+};
+
+/**
+ * The advisory lines for `externalSuspicion`'s verdicts (kanon#120): one warning per path,
+ * as a GitHub annotation in CI so it reaches the PR's checks page rather than only the log.
+ * Advisory by design — see `externalSuspicion` for why neither reason may fail a run.
+ *
+ * @param {{doc: string, path: string, reasons: string[]}[]} list
+ * @param {boolean} ci
+ */
+export const suspectExternalLines = (list, ci) =>
+  list.map(({ doc, path, reasons }) =>
+    `${ci ? '::warning::' : ''}citation-guard (advisory): \`${path}\` in ${doc} was counted as a dependency and not checked, ` +
+      `but ${reasons.map((r) => SUSPICION[r]).join('; and ')} — if it is a typo for the repository's own file, fix it.`);
+
 const main = () => {
   let tracked;
   try {
@@ -974,6 +1069,7 @@ const main = () => {
   const discardedBy = {};
   const externalBy = {};
   const externalPaths = {};
+  const suspectExternal = [];
   const viaEnclosingAt = [];
   let checked = 0;
   let anchored = 0;
@@ -985,6 +1081,7 @@ const main = () => {
     findings.push(...r.findings);
     blocks.push(...r.blocks);
     viaEnclosingAt.push(...r.viaEnclosingAt);
+    suspectExternal.push(...r.suspectExternal);
     checked += r.checked;
     anchored += r.anchored;
     viaEnclosing += r.viaEnclosing;
@@ -1003,8 +1100,10 @@ const main = () => {
     );
   }
 
-  absorb(auditCitations(md, read, tracked, { ignored: gitIgnored() }));
+  absorb(auditCitations(md, read, tracked, { ignored: gitIgnored(), exists: existsSync }));
   const audited = md.length;
+  // BEFORE the verdict, so a red run shows it too. Never sets the exit code.
+  for (const l of suspectExternalLines(suspectExternal, Boolean(process.env.GITHUB_ACTIONS))) console.log(l);
 
   if (findings.length) {
     // CONFIRMED FIRST, and labelled. A run that buries the one hard-oracle failure
