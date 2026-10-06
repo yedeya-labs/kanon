@@ -42,6 +42,7 @@ Each skill states these rules in its own instructions:
 `tests/unit/skills.test.ts` holds each skill to the command it drives, so a change to the command that would break a skill fails Kanon's own build instead:
 
 - every `kanon` command a skill names is one the CLI has, and every flag it passes is one that command's parser takes;
+- every `kanon init` a skill runs carries `--json`, which an agent's shell needs (it has no terminal for `init`'s questions), and `--no-apps` when it writes, so the Apps' browser flow never starts unannounced;
 - each skill's table of findings lists exactly the finding ids of [`docs/init.md`](init.md#the-findings) or [`docs/doctor.md`](doctor.md#the-finding-ids), so a new finding can't go unhandled;
 - every field a skill reads, such as `.findings[].fix.commands`, is a field those pages document, and each skill's table of statuses and exit codes is theirs;
 - the plugin ships `skills/` and nothing else: the repository's root is the plugin's root, so a `hooks/`, `.mcp.json` or other plugin component added there would reach every adopter's agent, and fails the test instead;

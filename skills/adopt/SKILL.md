@@ -89,8 +89,8 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 | `milestone.buckets` | person | As `label.create`: the person runs the fix's `kanon milestones` command with such a token, or you run it once they have one. |
 | `merge.settings` | person | The person runs the fix's command with a token that has Administration: write, or sets squash-only merging in the repository's settings. |
 | `ruleset.gaps` | person | The person adds the rules the fix names on the ruleset's page. |
-| `ruleset.first-commit` | agent | Run `kanon init` again after the first commit is pushed; it creates the ruleset then. |
-| `ruleset.create` | person | The person creates the ruleset as the fix says, or runs `kanon init` again with a token that can administer the repository. |
+| `ruleset.first-commit` | agent | Run `kanon init --json --no-apps` with the same flags again after the first commit is pushed; it creates the ruleset then. |
+| `ruleset.create` | person | The person creates the ruleset as the fix says, or runs `kanon init` again in their own terminal with a token that can administer the repository. |
 | `app.create` | person | Step 6: you run the command; the person clicks **Create** and **Install**. |
 | `app.failed` | person | Show what `kanon apps` said; once the person has fixed it, run the fix's command again. |
 | `app.reuse` | person | The owner already has the App. The person adds this repository to its installation and generates a private key on its settings page, then gives you only the key file's path; you run the fix's `kanon apps --reuse` command with it, which stores the secrets and deletes the file. |

@@ -28,7 +28,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 - **Only a person can** click **Create** and **Install** for a GitHub App, generate an App's private key, widen an App's permissions and accept the change on its installation, type a secret's value, and decide anything the rulebook gives to a person (an id-token holder to accept, an approval). Say so plainly, give them the exact step, and wait for them to say it's done. Never pretend to have done one of these, and never work around one.
 - **Explain, then ask, then act.** Before a command or an edit that changes anything, say in plain words what it changes and why, show the diff, and get a yes.
 - **The person signs off.** Commit with `git commit -s` under the person's own git identity. Never sign off as yourself: Kanon's DCO check rejects an AI sign-off.
-- **The contract is `kanon-doctor/v1`.** If the document's `.schema` is anything else, stop and tell the person this skill and the command disagree, and to update the plugin. Ignore a field you don't know. A finding whose `.findings[].id` is not in the table below is newer than this skill: show the person its `.findings[].message` and `.findings[].fix`, and do nothing else with it.
+- **The contract is `kanon-doctor/v1`.** If the document's `.schema` is anything else, stop and tell the person this skill and the command disagree, and to update the plugin. Ignore a field you don't know. The one exception is a `kanon init` you run to fix a finding (below): its document is init's, versioned as `kanon-init/v<N>`, and you read it as the adopt skill does. A finding whose `.findings[].id` is not in the table below is newer than this skill: show the person its `.findings[].message` and `.findings[].fix`, and do nothing else with it.
 
 ## Steps
 
@@ -45,7 +45,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 2. **Say what it checked.** The release (`.checking`), the lanes (`.lanes`), the Apps (`.apps[].identity` and `.apps[].slug`), and whose token it used. If `.checkout.branch` is not `.checkout.defaultBranch`, say that the id-token holders are counted on this branch, not the default one.
 
 3. **Explain the findings, in their order.** `.findings` is already in the order to fix it. Blocking ones (`.findings[].blocking`) first. For each: what it means in plain words (from `.findings[].message` and the table below), who fixes it, and the exact fix (`.findings[].fix.text`, `.findings[].fix.commands`, `.findings[].fix.url`). Read the fix's commands this way:
-   - one that starts `kanon ` you run as above, after saying what it does;
+   - one that starts `kanon ` you run as above, after saying what it does. A `kanon init` you always run as `kanon init --json --no-apps`, with the adopt skill's answer flags when the person has given them: without the JSON flag it refuses in a shell whose standard input isn't a terminal, and without the no-apps flag it would start the Apps' browser flow unannounced;
    - one that starts `gh secret set` is the person's: they run it in their own terminal and paste the value on standard input;
    - any other line is a line to add to, or remove from, the file the finding's `.findings[].subject` names, as its `.findings[].fix.text` says.
 
@@ -69,12 +69,12 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 | `app.permission-extra` | decision | Doesn't block. Say that `apps-check` fails it; the person may narrow it on `.findings[].fix.url`, or leave it. |
 | `secret.missing` | person | If the fix is a `kanon apps` command, run it (for `kanon apps --reuse`, the person first generates a key on the App's page and gives you only the file's path; the command deletes the file). If it is `gh secret set`, the person runs it. |
 | `secret.stale` | decision | Doesn't block. Offer the fix's `gh secret delete` command, and run it only on a yes. |
-| `declaration.missing` | agent | Run `kanon init --dry-run --json`, show the file it would write, then write it with `kanon init --no-apps` and the adopt skill's other flags, so the Apps' browser flow doesn't start unannounced, or by hand. |
+| `declaration.missing` | agent | Run `kanon init --dry-run --json`, show the file it would write, then write it with `kanon init --json --no-apps` (with the adopt skill's answer flags), or by hand. |
 | `declaration.section-missing` | agent | Add the section, or remove the duplicate, as the fix says. Ask the person for content only they know, such as the stack's gates. |
 | `declaration.malformed` | agent | Rewrite the acceptance in the shape the fix shows, keeping the person's reason. |
 | `hook.missing` | agent | As `declaration.missing`. |
 | `hook.input-missing` | agent | Add the inputs the fix lists to the hook. |
-| `workflow.missing` | agent | Rename the project's CI workflow to the file name the fix gives, or let `kanon init` write one. |
+| `workflow.missing` | agent | Rename the project's CI workflow to the file name the fix gives, or let `kanon init --json --no-apps` write one. |
 | `caller.lane-removed` | decision | The release no longer ships that lane: ask the person whether to remove the caller, and read them the release notes. |
 | `caller.misplaced` | agent | Run the fix's `git mv`. |
 | `caller.secrets-inherited` | agent | Replace `secrets: inherit` with the lines the fix lists. |
@@ -86,8 +86,8 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 | `caller.run-name` | agent | Set the `run-name:` as the fix says. |
 | `apps-check.secret-missing` | agent | Add the lines the fix lists to the `apps-check` caller. |
 | `apps-check.secret-stale` | agent | Remove the lines the fix lists. |
-| `label.missing` | agent | Doesn't block. Run the fix's `gh label create` commands, or `kanon init`. |
-| `ruleset.missing` | agent, person | `kanon init` creates it when the token can administer the repository; otherwise the person creates it as the fix says, or runs `kanon init` with such a token. |
+| `label.missing` | agent | Doesn't block. Run the fix's `gh label create` commands, or `kanon init --json --no-apps`. |
+| `ruleset.missing` | agent, person | `kanon init --json --no-apps` creates it when the token can administer the repository; otherwise the person creates it as the fix says, or runs `kanon init` in their own terminal with such a token. |
 | `ruleset.rule-missing` | person | The person adds the rule on the ruleset's page. |
 | `id-token.unaccepted` | decision | Ask the person whether that job needs `id-token: write`. If not, narrow its grant. If it does, ask why, and add the fix's bullet under `## Choices` in the adoption record with their reason. |
 | `id-token.stale-acceptance` | agent | Doesn't block. Offer to remove the bullet. |

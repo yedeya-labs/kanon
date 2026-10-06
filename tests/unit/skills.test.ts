@@ -292,6 +292,25 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(answering.filter((f) => !offered.has(f))).toEqual(['--create-apps', '--no-apps']);
   });
 
+  // An agent's shell has no terminal on standard input, where `kanon init` refuses to start
+  // without `--yes` or `--json` (docs/init.md), and without `--no-apps` a write runs `kanon apps`,
+  // which opens the person's browser unannounced. So each `kanon init` a skill runs, one with
+  // flags, carries `--json`, and each that writes carries `--no-apps` too (kanon#374 review).
+  // A bare `kanon init` is the command's name in prose, or a step the person runs themselves.
+  it("runs kanon init only as an agent's shell can: with --json, and --no-apps when it writes", () => {
+    const problems: string[] = [];
+    let seen = 0;
+    for (const s of SKILLS) {
+      for (const c of invocations(s.body).filter((x) => x.command === 'init' && x.flags.length > 0)) {
+        seen++;
+        if (!c.flags.includes('--json')) problems.push(`skills/${s.dir}: ${c.text} lacks --json`);
+        if (!c.flags.includes('--dry-run') && !c.flags.includes('--no-apps')) problems.push(`skills/${s.dir}: ${c.text} writes without --no-apps`);
+      }
+    }
+    expect(problems).toEqual([]);
+    expect(seen).toBeGreaterThanOrEqual(6);
+  });
+
   it('runs kanon through npx from one release, as the command its contract is', () => {
     for (const s of SKILLS) {
       const lines = code(s.body).filter((c) => c.startsWith('npx '));
