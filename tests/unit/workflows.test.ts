@@ -72,9 +72,44 @@ describe('CI runs lint, type-check and unit tests on every pull request', () => 
   });
 
   it('runs all three, none of them allowed to fail', () => {
-    for (const command of ['npm run lint', 'npm run typecheck', 'npm test']) expect(runs).toContain(command);
+    for (const command of ['npm run lint', 'npm run typecheck']) expect(runs).toContain(command);
+    expect(runs.filter((r) => r.startsWith('npm test'))).toEqual(['npm test -- --shard=${{ matrix.shard }}/3']);
     const steps = stepsOf(wf);
     expect(steps.filter((s) => s['continue-on-error'])).toEqual([]);
+  });
+
+  // #407: the suite runs in shards beside a lint job, and the required check is the job that
+  // needs them all. Every job that runs lint, type-check, actionlint or tests must be one it
+  // needs, or that job's red never reaches the check the ruleset requires.
+  describe('the required check passes only when the lint job and every test shard succeeded', () => {
+    const jobs = wf.jobs as Record<string, Job & { needs?: string | string[]; strategy?: { 'fail-fast'?: boolean; matrix?: { shard?: number[] } } }>;
+    const checks = jobs.checks!;
+    const needs = [checks.needs].flat();
+
+    it('needs every job that runs a check command, and nothing else', () => {
+      const runsAny = (id: string, cmds: RegExp) => (jobs[id]!.steps ?? []).some((s) => cmds.test(s.run ?? ''));
+      const workers = Object.keys(jobs).filter((id) => runsAny(id, /^(npm (run lint|run typecheck|test)\b|bash \.github\/scripts\/actionlint\.sh)/));
+      expect(workers.sort()).toEqual(['lint', 'unit']);
+      expect([...needs].sort()).toEqual(workers);
+    });
+
+    it('runs on `always()` and fails unless every need is `success`, so a skip or a cancel is red', () => {
+      expect(checks.name).toBe('Lint, type-check and unit tests');
+      expect(checks.if).toBe('always()');
+      const script = checks.steps?.map((s) => s.run ?? '').join('\n') ?? '';
+      expect(checks.steps?.[0]?.env).toEqual({ RESULTS: '${{ toJSON(needs) }}' });
+      expect(script).toContain(`jq -e 'to_entries | length == ${needs.length} and all(.value.result == "success")'`);
+      expect(script).not.toMatch(/skipped|cancelled|failure/);
+    });
+
+    it('splits the suite into as many shards as the matrix lists, and lets every shard finish', () => {
+      const { strategy } = jobs.unit!;
+      const shards = strategy?.matrix?.shard ?? [];
+      expect(shards).toEqual(Array.from({ length: shards.length }, (_, i) => i + 1));
+      expect(shards.length).toBeGreaterThan(1);
+      expect(jobs.unit!.steps?.map((s) => s.run).filter(Boolean)).toContain(`npm test -- --shard=\${{ matrix.shard }}/${shards.length}`);
+      expect(strategy?.['fail-fast']).toBe(false);
+    });
   });
 
   it('reads contents only', () => {
