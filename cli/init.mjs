@@ -93,7 +93,8 @@ Options:
   -h, --help             this text
 
 The answers, one flag per question (without --yes, the questions no flag answers are asked):
-  --owner <who>          the Owner, a GitHub login or a name (default: the token's login)
+  --project-owner <who>  the project's Owner (K-ADOPT-1 step 2), a GitHub login or a name
+                         (default: the token's login); --owner is kanon apps' account
   --maintainer <who>     the Maintainer (default: the Owner)
   --stakeholder <who>    the Stakeholder (default: the Owner)
   --lanes <list>         comma-separated lanes to install, e.g. review,implement
@@ -185,7 +186,7 @@ export const realDeps = {
  * The answer flags (#367), one per question `askAll` asks, and the Apps' question. Unset means
  * "not answered": the question takes its default with `--yes`, and is asked without it.
  * @typedef {{
- *   owner?: string, maintainer?: string, stakeholder?: string, gates?: string, testDatabase?: 'none' | 'hook',
+ *   projectOwner?: string, maintainer?: string, stakeholder?: string, gates?: string, testDatabase?: 'none' | 'hook',
  *   delegation?: boolean, delegateName?: string, delegateEmail?: string, deleteDefaults?: boolean,
  *   releaser?: boolean, createApps?: boolean,
  * }} Given
@@ -231,7 +232,7 @@ export const parseArgs = (argv, req) => {
     else if (flag === '--json') opts.json = true;
     else if (flag === '--no-apps') opts.apps = false;
     else if (flag === '--create-apps') g.createApps = true;
-    else if (flag === '--owner') g.owner = value();
+    else if (flag === '--project-owner') g.projectOwner = value();
     else if (flag === '--maintainer') g.maintainer = value();
     else if (flag === '--stakeholder') g.stakeholder = value();
     else if (flag === '--gates') g.gates = value();
@@ -247,8 +248,11 @@ export const parseArgs = (argv, req) => {
     else if (flag === '--keep-default-labels') g.deleteDefaults = false;
     else if (flag === '--releaser') g.releaser = true;
     else if (flag === '--no-releaser') g.releaser = false;
+    // `--owner` names the GitHub account everywhere else (`kanon apps --owner`), so init's Owner
+    // question is `--project-owner`, and a bare `--owner` is refused with that name (Owner, 2026-10-06).
+    else if (flag === '--owner') throw new Error('unknown argument "--owner": the project\'s Owner is --project-owner; --owner names the GitHub account, in kanon apps');
     else throw new Error(`unknown argument "${arg}"`);
-    if (inline !== undefined && !['--repo', '--dir', '--lanes', '--owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email'].includes(flag)) {
+    if (inline !== undefined && !['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email'].includes(flag)) {
       throw new Error(`${flag} takes no value, not "${inline}"`);
     }
     seen.add(flag);
@@ -597,7 +601,7 @@ export const askAll = async (deps, opts, ctx) => {
     given !== undefined ? Promise.resolve(given) : opts.yes ? Promise.resolve(d) : deps.ask(q, d);
   const yesNo = async (/** @type {string} */ q, /** @type {boolean} */ d, /** @type {boolean | undefined} */ given) =>
     given !== undefined ? given : /^y/i.test(await ask(`${q} (y/n)`, d ? 'y' : 'n', undefined));
-  const owner = await ask('Who is the Owner (K-ADOPT-1 step 2)?', ctx.login, g.owner);
+  const owner = await ask('Who is the Owner (K-ADOPT-1 step 2)?', ctx.login, g.projectOwner);
   const maintainer = await ask('Who is the Maintainer?', owner, g.maintainer);
   const stakeholder = await ask('Who is the Stakeholder?', owner, g.stakeholder);
   const lanes = opts.lanes ?? parseLanes(await ask(`Which lanes to install? (${Object.keys(ctx.req.lanes).map((l) => l.slice(6)).join(', ')})`, ctx.defaultLanes.map((l) => l.slice(6)).join(','), undefined), ctx.req);
@@ -919,7 +923,7 @@ const run = async (deps, opts, req, rep) => {
   out('');
   const a = await askAll(deps, opts, { login: who.login ?? ownerName, gates: suggestGates(read), gitName, gitEmail, req, defaultLanes: installed.length ? installed : DEFAULT_LANES, releases });
   rep.answers = {
-    owner: a.owner,
+    projectOwner: a.owner,
     maintainer: a.maintainer,
     stakeholder: a.stakeholder,
     lanes: a.lanes,

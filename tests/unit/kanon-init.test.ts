@@ -628,7 +628,7 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
       expect(keys(f.fix)).toEqual(['commands', 'text', 'url']);
     }
     expect(d.inspection).toMatchObject({ owner: 'acme', ownerKind: 'user', private: false, defaultBranch: 'main', rulesets: 'yes', installedLanes: [], callsRelease: false });
-    expect(d.answers).toEqual({ owner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false });
+    expect(d.answers).toEqual({ projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false });
     expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
     expect(d.files.find((f) => f.path === '.github/workflows/agent-review.yml')).toMatchObject({ status: 'new', content: read(dir, '.github/workflows/agent-review.yml'), diff: [] });
     expect(d.findings.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token']);
@@ -739,7 +739,7 @@ describe('kanon init, a flag for each question (#367)', () => {
     const dir = checkout({ '.github/workflows/release.yml': RELEASE_CALLER });
     const github = fakeGitHub();
     const r = await run(dir, github, [
-      '--yes', '--owner', 'grace', '--maintainer', 'linus', '--stakeholder=ada', '--lanes', 'review', '--gates', 'make check, make lint',
+      '--yes', '--project-owner', 'grace', '--maintainer', 'linus', '--stakeholder=ada', '--lanes', 'review', '--gates', 'make check, make lint',
       '--test-database', 'hook', '--delegate-name', 'Grace Hopper', '--delegate-email', 'grace@example.com', '--delete-default-labels', '--releaser', '--create-apps',
     ], undefined, REQ, { ask: never });
     expect(r.status, r.err).toBe(0);
@@ -767,7 +767,7 @@ describe('kanon init, a flag for each question (#367)', () => {
 
   it('asks, without --yes, only the questions no flag answers', async () => {
     const asked: string[] = [];
-    const r = await run(checkout(), fakeGitHub(), ['--owner', 'grace', '--gates', 'none', '--no-delegation', '--create-apps'], undefined, REQ, {
+    const r = await run(checkout(), fakeGitHub(), ['--project-owner', 'grace', '--gates', 'none', '--no-delegation', '--create-apps'], undefined, REQ, {
       ask: async (q: string, d: string) => (asked.push(q), d),
     });
     expect(r.status, r.err).toBe(0);
@@ -797,7 +797,8 @@ describe('kanon init, a flag for each question (#367)', () => {
 
   it('fails by name on an unknown flag, a value flag given twice, a bad value, or a flag that takes none', () => {
     expect(() => parseArgs(['--maintainers', 'x'], REQ)).toThrow('unknown argument "--maintainers"');
-    expect(() => parseArgs(['--owner', 'a', '--owner', 'b'], REQ)).toThrow('--owner is given twice');
+    expect(() => parseArgs(['--project-owner', 'a', '--project-owner', 'b'], REQ)).toThrow('--project-owner is given twice');
+    expect(() => parseArgs(['--owner', 'grace'], REQ)).toThrow('unknown argument "--owner": the project\'s Owner is --project-owner');
     expect(() => parseArgs(['--gates=x', '--gates', 'y'], REQ)).toThrow('--gates is given twice');
     expect(() => parseArgs(['--test-database', 'docker'], REQ)).toThrow('--test-database takes none or hook, not "docker"');
     expect(() => parseArgs(['--lanes', 'reviews'], REQ)).toThrow('"agent-reviews" is not a Kanon lane');
@@ -834,7 +835,8 @@ describe('kanon init, a flag for each question (#367)', () => {
 
   it('lists every flag it takes in its usage text and in docs/init.md, and only those', () => {
     const source = readFileSync(join(ROOT, 'cli/init.mjs'), 'utf8');
-    const parsed = new Set([...source.matchAll(/flag === '(--[a-z-]+)'/g)].map((m) => m[1]!));
+    // `--owner` is matched only to be refused with a hint (Owner, 2026-10-06), so it is not a flag init takes.
+    const parsed = new Set([...source.matchAll(/flag === '(--[a-z-]+)'/g)].map((m) => m[1]!).filter((f) => f !== '--owner'));
     const usage = new Set([...USAGE.matchAll(/^ {2}(?:-h, )?(--[a-z-]+)/gm)].map((m) => m[1]!));
     expect([...usage].sort()).toEqual([...parsed].sort());
     const documented = new Set(tableColumn('## Answering without a terminal', 1).flatMap((c) => [...c.matchAll(/`(--[a-z-]+)/g)].map((m) => m[1]!)));

@@ -10,7 +10,7 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 
 | Question | Flag | Default |
 |---|---|---|
-| Who is the Owner? | `--owner <who>` | the token's login |
+| Who is the Owner? | `--project-owner <who>` | the token's login |
 | Who is the Maintainer? | `--maintainer <who>` | the Owner |
 | Who is the Stakeholder? | `--stakeholder <who>` | the Owner |
 | Which lanes to install? | `--lanes <list>` | the lanes the repository already calls, or `review` |
@@ -23,7 +23,9 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 | Create the optional Releaser App? (asked only of a repository that calls Kanon's release workflow) | `--releaser`, `--no-releaser` | no |
 | Create the Apps now? | `--create-apps`, `--no-apps` | yes |
 
-**What fails, by name, before anything changes:** a flag `init` doesn't know; a value flag given twice; a value `init` doesn't take (`--test-database` other than `none` or `hook`, a lane Kanon doesn't ship); two flags that contradict each other (`--delegation` and `--no-delegation`, `--delegate-name` or `--delegate-email` with `--no-delegation`, `--delete-default-labels` and `--keep-default-labels`, `--releaser` and `--no-releaser`, `--create-apps` and `--no-apps`); and `--releaser` for a repository that doesn't call Kanon's release workflow. Each exits 2.
+**What fails, by name, before anything changes:** a flag `init` doesn't know, `--owner` among them, with a hint naming `--project-owner`; a value flag given twice; a value `init` doesn't take (`--test-database` other than `none` or `hook`, a lane Kanon doesn't ship); two flags that contradict each other (`--delegation` and `--no-delegation`, `--delegate-name` or `--delegate-email` with `--no-delegation`, `--delete-default-labels` and `--keep-default-labels`, `--releaser` and `--no-releaser`, `--create-apps` and `--no-apps`); and `--releaser` for a repository that doesn't call Kanon's release workflow. Each exits 2.
+
+**Why `--project-owner`, not `--owner`** (the Owner, 2026-10-06): `--owner` names the GitHub account that owns the repository, in `kanon apps` and everywhere else, so the person who is the project's Owner gets a flag of their own, and `answers.projectOwner` in the JSON.
 
 `kanon apps` opens a browser for each App it creates, and waits for you to click Create and Install there. A program that wants to run that step on its own, for instance to explain it first, passes `--no-apps`: the command it would have run is then the finding `app.create`.
 
@@ -37,6 +39,13 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 - **Anything else is a new version,** `kanon-init/v2`, shipped in a breaking release and named in its release notes.
 
 `tests/unit/kanon-init.test.ts` holds the document's fields, the statuses, the finding ids and the flags to the tables on this page.
+
+### Decided by the Owner (2026-10-06)
+
+- **`--json` runs the same run as without it,** `kanon apps` included: it opens a browser and waits for the person. A program that wants that step on its own passes `--no-apps`.
+- **A standard input that isn't a terminal still needs `--yes` (or `--json`),** even when flags answer every question: which questions are asked depends on the repository.
+- **Under `--json` the prose goes to standard error,** rather than nowhere, so a person watching the run still reads it.
+- **The person's flag is `--project-owner`,** and `--owner` keeps meaning the GitHub account.
 
 ### The document
 
@@ -89,7 +98,7 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 
 | Field | Type | Meaning |
 |---|---|---|
-| `owner` | string | The Owner. |
+| `projectOwner` | string | The project's Owner (`K-ADOPT-1` step 2). |
 | `maintainer` | string | The Maintainer. |
 | `stakeholder` | string | The Stakeholder. |
 | `lanes` | array | The lanes to install, by file name without `.yml`. |
