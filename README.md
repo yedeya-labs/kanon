@@ -82,6 +82,8 @@ claude plugin install kanon@kanon
 
 <!-- x-release-please-end -->
 
+Or declare the plugin in the repository, in `.claude/settings.json`, which `kanon init` offers to write: everyone who uses Claude Code there then gets the skills at that release, moving to a new one is one edit, and `kanon doctor` says when it differs from your callers' pin ([docs/skills.md](docs/skills.md#declare-it-in-the-repository)).
+
 **Before you move the pin, run [`kanon doctor`](docs/doctor.md)** (plan 0005 §5.5). From the checkout, `kanon doctor --to <release>` compares your installation with that release's requirements file and lists what it needs, in the order to do it, each with its exact fix: an App permission to widen, a declaration to add, a caller's grant or secret to change. It also lists every job of your workflows that holds `id-token: write`, which the QA store's role and the telemetry writer admit. It writes nothing, and `--json` prints the same result as a versioned document for scripts and agents.
 
 **Create the bucket milestones with `kanon milestones`** (step 7 of the checklist). It creates *Product Backlog* and *Development Automation*, with no due date, when no milestone has that name, and reports one that has a due date or is closed without changing it. Running it again creates nothing:

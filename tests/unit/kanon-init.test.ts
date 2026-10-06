@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
 import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, USAGE, workflowName } from '../../cli/init.mjs';
+import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 
 /**
  * `kanon init` (plan 0005 §5.4, step L9). Every case runs the command against a real git
@@ -640,7 +641,7 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
       expect(keys(f.fix)).toEqual(['commands', 'text', 'url']);
     }
     expect(d.inspection).toMatchObject({ owner: 'acme', ownerKind: 'user', private: false, defaultBranch: 'main', rulesets: 'yes', installedLanes: [], callsRelease: false });
-    expect(d.answers).toEqual({ projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false });
+    expect(d.answers).toEqual({ projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false, plugin: true });
     expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
     expect(d.files.find((f) => f.path === '.github/workflows/agent-review.yml')).toMatchObject({ status: 'new', content: read(dir, '.github/workflows/agent-review.yml'), diff: [] });
     expect(d.findings.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token']);
@@ -729,9 +730,9 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(inCode).toEqual(documented);
     const categories = new Map(tableColumn('### The findings').map((id, i) => [id.replace(/`/g, ''), tableColumn('### The findings', 1)[i]!.replace(/`/g, '')]));
     // The findings these fixtures produce carry their documented category.
-    const dep = checkout({ '.github/dependabot.yml': 'version: 2\nupdates: []\n' });
+    const dep = checkout({ '.github/dependabot.yml': 'version: 2\nupdates: []\n', '.claude/settings.json': '{}\n' });
     const d = parse(await run(dep, fakeGitHub({ admin: false, labelCreateFails: true, secrets: null }), ['--json', '--no-apps']));
-    expect(d.findings.map((f) => f.id)).toEqual(['dependabot.kanon-entry', 'label.create', 'merge.settings', 'ruleset.create', 'app.create', 'secret.unreadable']);
+    expect(d.findings.map((f) => f.id)).toEqual(['dependabot.kanon-entry', 'plugin.declare', 'label.create', 'merge.settings', 'ruleset.create', 'app.create', 'secret.unreadable']);
     for (const f of d.findings) expect(f.category, f.id).toBe(categories.get(f.id));
     expect(d.apps.outcome).toBe('left-to-you');
   });
@@ -796,13 +797,14 @@ describe('kanon init, a flag for each question (#367)', () => {
     const dir = checkout({ '.github/workflows/release.yml': RELEASE_CALLER });
     const github = fakeGitHub();
     const asked: string[] = [];
-    const r = await run(dir, github, ['--no-releaser', '--keep-default-labels', '--no-delegation', '--no-apps'], undefined, REQ, {
+    const r = await run(dir, github, ['--no-releaser', '--keep-default-labels', '--no-delegation', '--no-plugin', '--no-apps'], undefined, REQ, {
       ask: async (q: string, d: string) => (asked.push(q), q.endsWith('(y/n)') ? 'y' : d),
     });
     expect(r.status, r.err).toBe(0);
     expect(asked.filter((q) => q.endsWith('(y/n)'))).toEqual([]);
     expect(github.st.labels.has('question')).toBe(true);
     expect(existsSync(join(dir, 'docs/qa/sign-off-delegation.md'))).toBe(false);
+    expect(existsSync(join(dir, '.claude/settings.json'))).toBe(false);
     expect(read(dir, '.github/workflows/apps-check.yml')).not.toContain('RELEASER_APP_ID');
     expect(r.appsCalls).toEqual([]);
   });
@@ -819,7 +821,7 @@ describe('kanon init, a flag for each question (#367)', () => {
   });
 
   it('fails by name on each pair of flags that contradict each other', () => {
-    expect(CONFLICTS.length).toBe(6);
+    expect(CONFLICTS.length).toBe(7);
     for (const [x, y] of CONFLICTS) {
       const argv = [x, y].flatMap((f) => (f.startsWith('--delegate-') ? [f, 'v'] : [f]));
       expect(() => parseArgs(argv, REQ), `${x} ${y}`).toThrow(`${x} and ${y} contradict each other; give one`);
@@ -854,5 +856,71 @@ describe('kanon init, a flag for each question (#367)', () => {
     const documented = new Set(tableColumn('## Answering without a terminal', 1).flatMap((c) => [...c.matchAll(/`(--[a-z-]+)/g)].map((m) => m[1]!)));
     const answers = [...parsed].filter((f) => !['--repo', '--dir', '--yes', '--dry-run', '--json', '--help'].includes(f));
     expect([...documented].sort()).toEqual(answers.sort());
+  });
+});
+
+// #376: init offers to declare the kanon plugin in .claude/settings.json, pinned to its release
+// (docs/skills.md), and never rewrites a settings file the project already has.
+describe('kanon init and the kanon plugin (#376)', () => {
+  const RELEASE = `v${JSON.parse(read(ROOT, 'package.json')).version}`;
+  const SETTINGS = '.claude/settings.json';
+
+  it('declares it by default, pinned to the release it runs from, and leaves it as written on a second run', async () => {
+    const dir = checkout();
+    const first = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    expect(first.answers.plugin).toBe(true);
+    expect(read(dir, SETTINGS)).toBe(pluginSettingsFile(RELEASE));
+    expect(readPluginDeclaration(read(dir, SETTINGS))).toEqual({ status: 'declared', name: 'kanon', ref: RELEASE, enabled: true });
+    expect(first.files.find((f) => f.path === SETTINGS)).toMatchObject({ status: 'new' });
+    expect(first.findings.map((f) => f.id)).not.toContain('plugin.declare');
+    const second = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    expect(second.files.find((f) => f.path === SETTINGS)).toMatchObject({ status: 'same' });
+    expect(second.findings.map((f) => f.id)).not.toContain('plugin.declare');
+  });
+
+  it('writes nothing with --no-plugin, and a dry run writes nothing either', async () => {
+    const no = checkout();
+    const d = parse(await run(no, fakeGitHub(), ['--yes', '--json', '--no-plugin', '--no-apps']));
+    expect(d.answers.plugin).toBe(false);
+    expect(existsSync(join(no, SETTINGS))).toBe(false);
+    expect(d.files.map((f) => f.path)).not.toContain(SETTINGS);
+    const dry = checkout();
+    const dd = parse(await run(dry, fakeGitHub(), ['--yes', '--json', '--dry-run']));
+    expect(dd.files.find((f) => f.path === SETTINGS)).toMatchObject({ status: 'new', content: pluginSettingsFile(RELEASE) });
+    expect(existsSync(join(dry, SETTINGS))).toBe(false);
+  });
+
+  it('leaves a settings file the project has alone, and names the keys to merge into it', async () => {
+    const own = '{\n  "permissions": { "allow": ["Bash(npm test)"] }\n}\n';
+    const dir = checkout({ [SETTINGS]: own });
+    const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    expect(read(dir, SETTINGS)).toBe(own);
+    expect(d.files.map((f) => f.path)).not.toContain(SETTINGS);
+    const f = d.findings.find((x) => x.id === 'plugin.declare')!;
+    expect(f).toMatchObject({ category: 'plugin', blocking: false, subject: SETTINGS });
+    expect(f.message).toBe(`${SETTINGS} exists, and doesn't declare the kanon plugin.`);
+    // The lines are the declaration's keys, which merged into an empty object give what init writes.
+    expect(JSON.parse(`{${f.fix.commands.join('\n')}}`)).toEqual(JSON.parse(pluginSettingsFile(RELEASE)));
+  });
+
+  it('names a declaration at another release, or not enabled, and says nothing of one at its release', async () => {
+    const stale = JSON.parse(pluginSettingsFile('v0.1.0'));
+    const off = { ...JSON.parse(pluginSettingsFile(RELEASE)), enabledPlugins: { 'kanon@kanon': false }, permissions: {} };
+    const at = { ...JSON.parse(pluginSettingsFile(RELEASE)), permissions: {} };
+    const message = async (doc: unknown) => parse(await run(checkout({ [SETTINGS]: JSON.stringify(doc) }), fakeGitHub(), ['--yes', '--json', '--no-apps'])).findings.find((x) => x.id === 'plugin.declare')?.message;
+    expect(await message(stale)).toBe(`${SETTINGS} declares the kanon plugin's marketplace "kanon" at v0.1.0, not at ${RELEASE}.`);
+    expect(await message(off)).toBe(`${SETTINGS} declares the kanon plugin's marketplace "kanon" at ${RELEASE}, and doesn't enable kanon@kanon.`);
+    expect(await message(at)).toBeUndefined();
+  });
+
+  it('asks the question without --yes, and takes the answer', async () => {
+    const asked: string[] = [];
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, {
+      ask: async (q: string, d: string) => (asked.push(q), q.startsWith('Declare the kanon plugin') ? 'n' : d),
+    });
+    expect(r.status, r.err).toBe(0);
+    expect(asked.filter((q) => q.startsWith('Declare the kanon plugin'))).toHaveLength(1);
+    expect(existsSync(join(dir, SETTINGS))).toBe(false);
   });
 });

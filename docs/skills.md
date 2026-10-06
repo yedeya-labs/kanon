@@ -10,9 +10,42 @@ Kanon ships three skills for Claude Code that install Kanon and keep it healthy,
 
 adopt and upgrade change things, so they run only when you ask for them by name; the agent may start doctor on its own, and doctor changes nothing without asking.
 
-## Install them
+## Why a plugin
 
-The skills are a Claude Code plugin, `kanon`, in Kanon's own repository, which is also a plugin marketplace. Pin it to an exact release, as you pin Kanon's actions and lanes (`K-ADOPT-11`), so the skills, the `kanon` command they run and the release they install are always the same one:
+The skills live in `skills/`, as a Claude Code plugin, `kanon`, not in a repository's `.claude/skills/`, so **a session has no `/kanon:*` until the plugin is loaded,** in Kanon's own repository too: Claude Code finds a plugin's skills only through a marketplace it knows. The plugin is what lets one copy of the skills reach every adopter at a release they choose, and Kanon's repository is also the plugin's marketplace. Pin it to an exact release, as you pin Kanon's actions and lanes (`K-ADOPT-11`), so the skills, the `kanon` command they run and the release they install are always the same one. You need Claude Code, `gh` signed in as someone who can administer the repository, and Node 24 or later: the skills run `kanon` through `npx`, from the release's tag, so nothing is installed in your repository.
+
+## Declare it in the repository
+
+The way to pin it is in the repository, in its `.claude/settings.json`, which Claude Code reads for everyone who works there ([Require plugins per repository](https://code.claude.com/docs/en/plugins/org#require-plugins-per-repository)). `kanon init` offers to write it (`--plugin`, the default, or `--no-plugin`; [`docs/init.md`](init.md)); into a settings file the project already has, merge the two keys yourself:
+
+<!-- x-release-please-start-version -->
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "kanon": {
+      "source": { "source": "github", "repo": "yedeya-labs/kanon", "ref": "v0.31.0" }
+    }
+  },
+  "enabledPlugins": {
+    "kanon@kanon": true
+  }
+}
+```
+
+<!-- x-release-please-end -->
+
+- **`extraKnownMarketplaces`** names the marketplace, Kanon's repository, and `ref` pins it to a release tag ([marketplace sources](https://code.claude.com/docs/en/plugins/marketplace-reference#marketplace-sources)). **`enabledPlugins`** turns the plugin on for the repository ([`enabledPlugins`](https://code.claude.com/docs/en/settings-reference#enabledplugins)).
+- **Each person trusts the folder first.** Claude Code honours a repository's marketplace only after the person accepts its workspace trust dialog, and ignores it, without a message, in a folder they haven't trusted, a `-p` run there included ([`extraKnownMarketplaces`](https://code.claude.com/docs/en/settings-reference#extraknownmarketplaces)). So the lanes, which run Claude Code on a fresh checkout, don't load it.
+- **Moving to a new release is one edit:** set `ref` to the new tag, as part of the upgrade's pull request. Claude Code fetches a declared marketplace again when its source changes in settings, and asks for `/reload-plugins` ([plugin loading](https://code.claude.com/docs/en/plugins/loading)).
+- **The release is where Kanon can see it.** `kanon doctor` reports a `ref` that differs from the release your callers pin, or the one you are moving to with `--to` (`plugin.version-mismatch`, [`docs/doctor.md`](doctor.md)). It doesn't block. Dependabot doesn't read this file, so when it bumps the callers' pin, doctor's finding gives the `ref` to set, and the upgrade skill sets it with the pin.
+- **The repository's entry wins over a person's own `kanon` entry.** `claude plugin marketplace add` records the marketplace under its name, `kanon`, in the person's user settings ([plugin loading](https://code.claude.com/docs/en/plugins/loading)), and "when more than one settings file defines a marketplace entry under the same name, Claude Code uses the entry from the highest-precedence file whole", which the project's file is over the user's ([`extraKnownMarketplaces`](https://code.claude.com/docs/en/settings-reference#extraknownmarketplaces), from Claude Code v2.1.228). So a person who installed the plugin themselves gets the repository's release in it. Claude Code keeps one copy of a marketplace per person, though, so two repositories that pin the plugin to different releases move it back and forth as the person goes between them.
+
+Kanon's own repository declares it the same way, and release-please moves its `ref` to each release in the release pull request, ahead of the callers' pin, which Dependabot moves after the release: until that bump merges, doctor reports the difference there, as it would in any repository the plugin leads.
+
+## Or install it yourself
+
+Without the declaration, each person installs the plugin in their own Claude Code configuration:
 
 <!-- x-release-please-start-version -->
 
@@ -23,9 +56,9 @@ claude plugin install kanon@kanon
 
 <!-- x-release-please-end -->
 
-Or, inside a Claude Code session, the same two as `/plugin marketplace add …` and `/plugin install kanon@kanon`. Start a new session, or run `/reload-plugins`, and the skills are there. You need Claude Code, `gh` signed in as someone who can administer the repository, and Node 24 or later: the skills run `kanon` through `npx`, from the release's tag, so nothing is installed in your repository.
+Or, inside a Claude Code session, the same two as `/plugin marketplace add …` and `/plugin install kanon@kanon`. Start a new session, or run `/reload-plugins`, and the skills are there.
 
-**The plugin's pin lives in your Claude Code configuration, not in the repository,** so Dependabot doesn't propose it and `kanon doctor` doesn't check it (`K-ADOPT-11`); [#376](https://github.com/yedeya-labs/kanon/issues/376) tracks declaring it in the repository and having doctor report a skills and command mismatch. **To move to a newer release,** run `claude plugin marketplace remove kanon`, then the two commands above as that release's copy of this page gives them, with its tag, and run `/kanon:upgrade`.
+**That pin lives in each person's configuration, not in the repository,** so Dependabot doesn't propose it and `kanon doctor` doesn't check it. **To move it to a newer release,** `claude plugin marketplace update` and `claude plugin update` won't do: the marketplace is pinned to a tag, and an update fetches that same tag again. Run `claude plugin marketplace remove kanon`, which uninstalls the plugin too, then the two commands above as that release's copy of this page gives them, with its tag, then `/reload-plugins`, and run `/kanon:upgrade`. The upgrade skill prints the exact lines for the release it moves to.
 
 ## What they will and won't do
 

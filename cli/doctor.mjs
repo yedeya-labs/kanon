@@ -5,9 +5,9 @@
 // (`requirements.json`, which every release ships at its tag): the release its callers pin, or,
 // with `--to vX.Y.Z`, the release being moved to, so that run before Dependabot's pin bump merges
 // it turns "the first red run" into a list. Each finding says what is missing or stale and the
-// exact fix, and the list comes in the order to work through it: the pin, then each App (its
-// register rows and its permissions), the secrets, the declarations and hooks, the callers, the
-// labels and the ruleset.
+// exact fix, and the list comes in the order to work through it: the pin (with the kanon plugin's,
+// where the project declares it), then each App (its register rows and its permissions), the
+// secrets, the declarations and hooks, the callers, the labels and the ruleset.
 //
 // It also lists every job of the repository's own workflows that holds `id-token: write`,
 // counted as Kanon's id-token guard counts it (tests/unit/helpers/store-jobs.ts): its own grant,
@@ -53,6 +53,7 @@ import { appSecrets, kanonRelease, loadRequirements } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
 import { appsArgs, inspect, registerRolesOf, registerRows, rulesetGaps, RULESET_NAME } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
+import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { parseUpstreamFindings } from '../scripts/lib/upstream-findings.mjs';
 
@@ -119,6 +120,7 @@ export const CATEGORIES = ['pin', 'app', 'secret', 'declaration', 'caller', 'lab
  */
 export const FINDINGS = {
   'pin.mixed': { category: 'pin', blocking: true },
+  'plugin.version-mismatch': { category: 'pin', blocking: false },
   'register.missing-row': { category: 'app', blocking: true },
   'register.split-slug': { category: 'app', blocking: true },
   'register.shared-slug': { category: 'app', blocking: true },
@@ -580,6 +582,26 @@ export const diagnose = async (deps, opts) => {
     find('pin.mixed', '.github', `Kanon's references pin more than one release, or a ref that is not an exact release: ${list}. lane-check requires one exact release everywhere (K-ADOPT-11).`, {
       text: `Pin every yedeya-labs/kanon reference under .github/ to ${checked}.`,
     });
+  }
+
+  // ── The kanon plugin's release ──────────────────────────────────────────────────────────
+  // Declared in the project's .claude/settings.json (#376, cli/plugin.mjs), the plugin's release
+  // is in the repository, where doctor can compare it with the release it checks against: the
+  // skills run `kanon` from the release they ship in, and install that release. Not blocking: no
+  // lane reads it, and the two move at different times (the upgrade skill moves the ref with the
+  // pins, Dependabot the pins alone, release-please in Kanon's own repository the ref first).
+  const plugin = readPluginDeclaration(read(SETTINGS_PATH));
+  if (plugin.status === 'unreadable') unchecked.push({ check: 'plugin', subject: SETTINGS_PATH, reason: `could not read it: ${plugin.reason}` });
+  else if (plugin.status === 'declared') {
+    if (plugin.ref !== checked) {
+      find('plugin.version-mismatch', SETTINGS_PATH, `declares the kanon plugin's marketplace "${plugin.name}" ${plugin.ref ? `at ${plugin.ref}` : "with no ref, so it follows Kanon's default branch"}, not at ${checking}; the skills run kanon from the release they ship in, and install it (K-ADOPT-11).`, {
+        text: `Set the "${plugin.name}" marketplace's ref in ${SETTINGS_PATH} to ${checked}. Claude Code fetches the marketplace again from the changed source; run /reload-plugins in a session that is open.`,
+        commands: [`"ref": "${checked}"`],
+      });
+    }
+    if (!plugin.enabled) notes.push(`${SETTINGS_PATH} declares the kanon plugin's marketplace "${plugin.name}" but doesn't enable kanon@${plugin.name} under enabledPlugins, so nobody gets its skills from it (docs/skills.md).`);
+  } else {
+    notes.push(`${SETTINGS_PATH} doesn't declare the kanon plugin${plugin.status === 'undeclared' && plugin.enabled.length ? ` (it enables ${plugin.enabled.join(', ')}, from a marketplace each person added themselves)` : ''}, so its release lives in each person's Claude Code configuration, where doctor can't compare it with the callers' (docs/skills.md).`);
   }
 
   // ── The callers ─────────────────────────────────────────────────────────────────────────

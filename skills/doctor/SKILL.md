@@ -74,6 +74,7 @@ Propose the bullet and ask for the reason; never invent one. Write it only once 
 | Id | Who | What you do |
 |---|---|---|
 | `pin.mixed` | agent | Make every `yedeya-labs/kanon` reference under `.github/` name the one release the person chooses (`.releases.pins` lists them). |
+| `plugin.version-mismatch` | agent | Doesn't block. Set the `ref` the fix names on the kanon marketplace in `.claude/settings.json`, changing nothing else there, and show the diff. Once it is on their checkout, the person runs `/reload-plugins`: Claude Code fetches the marketplace again from the changed source. If the fix's release is newer than this skill's, say that this session still runs the older skills until they reload. |
 | `register.missing-row` | agent, person | Run the fix's `kanon apps` command when it has one: the person clicks **Create** and **Install** in the browser it opens. Otherwise add the register rows the fix names. Commit `docs/qa/agent-identities.md`. |
 | `register.split-slug` | decision | Ask the person which slug is the App's, then make the register's rows for that App name only it. |
 | `register.shared-slug` | person | Each App needs its own. Ask the person which identity gets a new App, run `kanon apps --owner <owner> --repo <repo> --apps <identity>` for it (they click **Create** and **Install**), and commit the register rows it writes. |

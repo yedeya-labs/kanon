@@ -55,6 +55,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
    | `.answers.delegation` | `--delegation` with `--delegate-name <name>` and `--delegate-email <email>`, or `--no-delegation` | Whether a named person signs off the agents' commits (`K-AGENT-44`). |
    | `.answers.deleteDefaultLabels` | `--delete-default-labels` or `--keep-default-labels` | Whether to delete GitHub's default labels that Kanon's taxonomy doesn't use. |
    | `.answers.releaser` | `--releaser` or `--no-releaser` | Only when `.inspection.callsRelease` is true: whether to create the optional Releaser App for release pull requests. |
+   | `.answers.plugin` | `--plugin` or `--no-plugin` | Whether to declare this plugin in `.claude/settings.json`, pinned to this release: everyone who uses Claude Code in the repository then gets these skills once they trust the folder, at the release the callers pin, and doctor checks the two agree. |
 
    Then run the dry run again with their flags, show what changed in `.files` and `.changes`, and get a yes.
 
@@ -97,3 +98,4 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 | `secret.claude-code-oauth-token` | person | The person creates the token (`claude setup-token`) and runs the fix's `gh secret set` in their own terminal. |
 | `secret.digest-webhook` | person | The person runs the fix's `gh secret set` with the chat webhook's URL. |
 | `secret.unreadable` | person | The token can't list the secrets: the person checks the ones the lanes need by hand, or the doctor skill does with a token that can. |
+| `plugin.declare` | agent | `.claude/settings.json` is the project's: merge the fix's keys into it, keeping every key it has, or set the `ref` of the kanon marketplace it already declares. Show the diff before you write. |

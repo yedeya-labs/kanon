@@ -16,7 +16,7 @@ It reads the repository the way `kanon init` does, and compares it with the requ
 
 In the order it lists them, which is the order to fix them:
 
-1. **The pin.** Every `yedeya-labs/kanon` reference under `.github/` names one exact release (`K-ADOPT-11`).
+1. **The pin.** Every `yedeya-labs/kanon` reference under `.github/` names one exact release (`K-ADOPT-11`). Where the project declares the [kanon plugin](skills.md#declare-it-in-the-repository) in `.claude/settings.json`, also the plugin's: the `ref` of the marketplace whose source is Kanon's repository must be the release doctor checks against, because the skills run `kanon` from the release they ship in, and install that release (`plugin.version-mismatch`, [#376](https://github.com/yedeya-labs/kanon/issues/376)). It doesn't block, because no lane reads the plugin, and the two move at different times: the upgrade skill moves the `ref` with the pins, Dependabot moves the pins alone, and in Kanon's own repository release-please moves the `ref` ahead of them. A project that doesn't declare it gets a note; a settings file that isn't a JSON object makes the check `unchecked`.
 2. **The Apps** the lanes you call run as, and the optional Releaser when your release caller maps its secrets: a register row for each of their roles, the roles of one App sharing one slug and no two Apps sharing one (`K-LAYOUT-6`, plan 0005 §3.4), and each App's permissions at least the release's grant for it, read from `GET /apps/<slug>`. An App that holds more is listed, without blocking: each lane narrows its token to what it uses (`K-AGENT-46`). **`apps-check` still fails such an App,** because it requires the App's permissions to be exactly its own; the two differ on purpose (the Owner's decision 3 below).
    It also lists, without blocking, **an App left installed that no lane uses any more** (`app.unused`): one the App register's git history on the checkout once named, that its current copy doesn't, and that the owner still has an installation of, such as a per-role App left from before the two-App move (decided by the Owner, 2026-10-06). Delete it once the Apps that replaced it have run green for a week, and not while another repository's register still names it. If the token can't list the owner's installations, this check is `unchecked`.
 3. **The secrets,** by name: each lane's, and each App's two (plan 0005 §3.5). A per-role or retired App secret that nothing reads any more is listed as stale, without blocking.
@@ -81,6 +81,7 @@ Each of these is reported as before, whatever the record says, and a waiver of o
 5. **The holders are counted on the checkout's workflows,** not on the default branch read through the API; doctor adds a note when the checkout is on another branch.
 6. **A per-role App left installed after the two-App move is listed, without blocking** (`app.unused`), with the steps to uninstall and delete it in its fix.
 7. **Any repository waives a finding it keeps with one bullet under `## Choices`,** one finding id on one subject with its reason, as above ([#390](https://github.com/yedeya-labs/kanon/issues/390)); doctor learns no repository's special case ([#389](https://github.com/yedeya-labs/kanon/issues/389)). A waived finding doesn't count toward the exit code and stays in `waived`; a stale waiver is listed; a malformed one blocks. Which findings can't be waived is listed above.
+8. **A project may declare the kanon plugin in `.claude/settings.json`,** and doctor reports, without blocking, a declared release other than the one it checks against (`plugin.version-mismatch`, [#376](https://github.com/yedeya-labs/kanon/issues/376)). Under `--to` that is the release you are moving to, so the upgrade shows the plugin's edit beside the pin's. It can be waived like any other finding.
 
 ## Exit codes
 
@@ -176,6 +177,7 @@ It is the finding, whole, as it would have been listed, with the waiver's reason
 | Id | Category | Blocks | Meaning |
 |---|---|---|---|
 | `pin.mixed` | `pin` | yes | Kanon's references pin more than one release, or a ref that is not an exact release. |
+| `plugin.version-mismatch` | `pin` | no | `.claude/settings.json` declares the kanon plugin's marketplace at a `ref` other than the checked release, or with no `ref`, so it follows Kanon's default branch. Its fix is the one `ref` to set. |
 | `register.missing-row` | `app` | yes | The App register has no row for a role an App's lanes read their slug from. |
 | `register.split-slug` | `app` | yes | An App's roles name more than one slug. |
 | `register.shared-slug` | `app` | yes | Two Apps name one slug. |
