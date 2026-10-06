@@ -25,7 +25,16 @@
         "docs/lanes.md",
         "docs/qa-store.md",
         "docs/release.md",
-        "docs/telemetry.md"
+        "docs/telemetry.md",
+        "docs/skills.md",
+        "skills/adopt/SKILL.md",
+        "skills/doctor/SKILL.md",
+        "skills/upgrade/SKILL.md",
+        {
+          "type": "json",
+          "path": ".claude-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
       ],
       "changelog-sections": [
         {

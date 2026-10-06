@@ -71,6 +71,17 @@ npx --yes --package github:yedeya-labs/kanon#v0.28.0 kanon init --dry-run
 
 Each release also ships [`requirements.json`](requirements.json): what its lanes need of an adopter (secrets, the caller's grant, the documents and workflows they read, the hooks they call, the Apps they run as), built from the lanes and held to them by a test.
 
+**Or let your agent do it, with Kanon's skills for Claude Code** ([docs/skills.md](docs/skills.md)). `/kanon:adopt` runs `kanon init` for you: a dry run first, each choice explained and asked, the files written on a branch, and each step only you can take (clicking **Create** and **Install** for the Apps, typing a secret) walked through, then the pull request, which you merge. `/kanon:doctor` checks an installation and fixes what it can, and `/kanon:upgrade` moves your pins to a new release. Install them as a plugin, pinned to the same release as everything else:
+
+<!-- x-release-please-start-version -->
+
+```sh
+claude plugin marketplace add yedeya-labs/kanon#v0.28.0
+claude plugin install kanon@kanon
+```
+
+<!-- x-release-please-end -->
+
 **Before you move the pin, run [`kanon doctor`](docs/doctor.md)** (plan 0005 §5.5). From the checkout, `kanon doctor --to <release>` compares your installation with that release's requirements file and lists what it needs, in the order to do it, each with its exact fix: an App permission to widen, a declaration to add, a caller's grant or secret to change. It also lists every job of your workflows that holds `id-token: write`, which the QA store's role and the telemetry writer admit. It writes nothing, and `--json` prints the same result as a versioned document for scripts and agents.
 
 **Create the bucket milestones with `kanon milestones`** (step 7 of the checklist). It creates *Product Backlog* and *Development Automation*, with no due date, when no milestone has that name, and reports one that has a due date or is closed without changing it. Running it again creates nothing:
@@ -114,6 +125,7 @@ See the [roadmap](ROADMAP.md) for what comes next.
 | [`rulebook/`](rulebook/) | The rules. This is Kanon's specification. |
 | [`docs/decisions/`](docs/decisions/) | Architecture decision records: why Kanon is shaped the way it is. |
 | [`cli/`](cli/) | The `kanon` command: [`kanon init`](docs/init.md), [`kanon doctor`](docs/doctor.md), `kanon milestones` and [`kanon apps`](docs/apps.md). |
+| [`skills/`](skills/) | The agent skills, adopt, doctor and upgrade, shipped as the `kanon` Claude Code plugin from [`.claude-plugin/`](.claude-plugin/) ([docs/skills.md](docs/skills.md)). |
 | [`actions/`](actions/) | Kanon's checks, the lane check and the agent-lane blocks, each a versioned composite action. |
 | [`scripts/`](scripts/) | The pipeline library: the scripts the lanes run, through [`kanon-path`](actions/kanon-path/README.md). |
 | [`.github/workflows/`](.github/workflows/) | Kanon's agent lanes and the shared lane workflow they call, the reusable release workflow, and Kanon's own CI, including smoke runs of the blocks and the lanes. |
