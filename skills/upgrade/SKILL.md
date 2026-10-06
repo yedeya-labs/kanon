@@ -58,14 +58,14 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 
 `claude plugin marketplace update` and `claude plugin update` don't move the plugin to a new release: its marketplace is pinned to a release tag, and an update fetches that same tag again. The move is one of these two, with the release it moves to:
 
-- **Declared in the repository,** in `.claude/settings.json`: set the kanon marketplace's `ref` to the release, and run `/reload-plugins`. Claude Code fetches a declared marketplace again when its source changes. To upgrade, make that edit on the branch `kanon/upgrade-<the release>`, made from the default branch, so the upgrade's pull request carries it; the entry in the repository's file takes precedence over one the person added themselves under the same name.
+- **Declared in the repository,** in `.claude/settings.json`: set the kanon marketplace's `ref` to the release, and run `/reload-plugins`. Claude Code fetches a declared marketplace again when its source changes. To upgrade, make that edit on the branch `kanon/upgrade-<the release>`, made from the default branch, so the upgrade's pull request carries it; where the person also added the `kanon` marketplace themselves, the repository's entry, under the same name, is the one Claude Code uses (`docs/skills.md` in Kanon's repository, "Declare it in the repository", cites the rule).
 - **Installed by the person,** in their own Claude Code configuration: they run the lines below in their own terminal, then start a new session or run `/reload-plugins`. The lines name the target; for another release, its tag takes the target's place in the second line. Removing the marketplace uninstalls its plugin, which is why the install follows.
 
 <!-- x-release-please-start-version -->
 
 ```sh
 claude plugin marketplace remove kanon
-claude plugin marketplace add yedeya-labs/kanon#v0.30.0
+claude plugin marketplace add yedeya-labs/kanon#v0.31.0
 claude plugin install kanon@kanon
 ```
 

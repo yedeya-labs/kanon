@@ -588,7 +588,8 @@ export const diagnose = async (deps, opts) => {
   // Declared in the project's .claude/settings.json (#376, cli/plugin.mjs), the plugin's release
   // is in the repository, where doctor can compare it with the release it checks against: the
   // skills run `kanon` from the release they ship in, and install that release. Not blocking: no
-  // lane reads it, and the upgrade moves the plugin first (docs/skills.md).
+  // lane reads it, and the two move at different times (the upgrade skill moves the ref with the
+  // pins, Dependabot the pins alone, release-please in Kanon's own repository the ref first).
   const plugin = readPluginDeclaration(read(SETTINGS_PATH));
   if (plugin.status === 'unreadable') unchecked.push({ check: 'plugin', subject: SETTINGS_PATH, reason: `could not read it: ${plugin.reason}` });
   else if (plugin.status === 'declared') {

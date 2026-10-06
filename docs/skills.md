@@ -24,7 +24,7 @@ The way to pin it is in the repository, in its `.claude/settings.json`, which Cl
 {
   "extraKnownMarketplaces": {
     "kanon": {
-      "source": { "source": "github", "repo": "yedeya-labs/kanon", "ref": "v0.30.0" }
+      "source": { "source": "github", "repo": "yedeya-labs/kanon", "ref": "v0.31.0" }
     }
   },
   "enabledPlugins": {
@@ -39,7 +39,7 @@ The way to pin it is in the repository, in its `.claude/settings.json`, which Cl
 - **Each person trusts the folder first.** Claude Code honours a repository's marketplace only after the person accepts its workspace trust dialog, and ignores it, without a message, in a folder they haven't trusted, a `-p` run there included ([`extraKnownMarketplaces`](https://code.claude.com/docs/en/settings-reference#extraknownmarketplaces)). So the lanes, which run Claude Code on a fresh checkout, don't load it.
 - **Moving to a new release is one edit:** set `ref` to the new tag, as part of the upgrade's pull request. Claude Code fetches a declared marketplace again when its source changes in settings, and asks for `/reload-plugins` ([plugin loading](https://code.claude.com/docs/en/plugins/loading)).
 - **The release is where Kanon can see it.** `kanon doctor` reports a `ref` that differs from the release your callers pin, or the one you are moving to with `--to` (`plugin.version-mismatch`, [`docs/doctor.md`](doctor.md)). It doesn't block. Dependabot doesn't read this file, so when it bumps the callers' pin, doctor's finding gives the `ref` to set, and the upgrade skill sets it with the pin.
-- **The repository's entry wins** over one of the same name a person added themselves, so a person who installed the plugin at their own scope gets the repository's release in it ([`extraKnownMarketplaces`](https://code.claude.com/docs/en/settings-reference#extraknownmarketplaces)). Claude Code keeps one copy of a marketplace per person, though, so two repositories that pin the plugin to different releases move it back and forth as the person goes between them.
+- **The repository's entry wins over a person's own `kanon` entry.** `claude plugin marketplace add` records the marketplace under its name, `kanon`, in the person's user settings ([plugin loading](https://code.claude.com/docs/en/plugins/loading)), and "when more than one settings file defines a marketplace entry under the same name, Claude Code uses the entry from the highest-precedence file whole", which the project's file is over the user's ([`extraKnownMarketplaces`](https://code.claude.com/docs/en/settings-reference#extraknownmarketplaces), from Claude Code v2.1.228). So a person who installed the plugin themselves gets the repository's release in it. Claude Code keeps one copy of a marketplace per person, though, so two repositories that pin the plugin to different releases move it back and forth as the person goes between them.
 
 Kanon's own repository declares it the same way, and release-please moves its `ref` to each release in the release pull request, ahead of the callers' pin, which Dependabot moves after the release: until that bump merges, doctor reports the difference there, as it would in any repository the plugin leads.
 
