@@ -7,6 +7,7 @@ import { parse } from 'yaml';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { trailerFor } from '../../scripts/review-trailer.mjs';
+import { headerLine } from '../../scripts/lib/role-marker.mjs';
 import { handedIn, readFlattened } from './helpers/called-workflow.js';
 
 /**
@@ -75,11 +76,13 @@ printf '%s' ${JSON.stringify(JSON.stringify(reviews))} | jq -r "$filter"`
   return { status: r.status, stdout: r.stdout, summary: r.summary };
 };
 
-const verdict = (state: string, commit = HEAD, login = REVIEWER, body = '') =>
+/** The header and role marker every reader requires on a verdict since plan 0005's L4 (kanon#336). */
+const MARK = headerLine('Reviewer');
+const verdict = (state: string, commit = HEAD, login = REVIEWER, body = MARK) =>
   ({ user: { login }, commit_id: commit, state, body });
 /** A verdict whose run recorded which commit it actually read (RA-1680). */
 const stamped = (state: string, filedUnder: string, read: string) =>
-  verdict(state, filedUnder, REVIEWER, `Verdict.\n\n<!-- reviewed: sha=${read} run=1 -->`);
+  verdict(state, filedUnder, REVIEWER, `${MARK}\n\nVerdict.\n\n<!-- reviewed: sha=${read} run=1 -->`);
 
 describe('the job fails unless a verdict was actually posted (RA-1351)', () => {
   it('is green when the agent succeeded and a verdict is on this SHA', () => {
@@ -176,7 +179,7 @@ describe('the job fails unless a verdict was actually posted (RA-1351)', () => {
       // string, where a backtick is command substitution — the same trap the filter
       // suite records against `[skip-review]`, which had the marker executed away
       // before the script ever saw it.
-      const body = `Discussing <!-- reviewed: sha=${OLD} run=1 --> in prose.\n\n`
+      const body = `${MARK}\n\nDiscussing <!-- reviewed: sha=${OLD} run=1 --> in prose.\n\n`
         + `<!-- reviewed: sha=${HEAD} run=9 -->`;
       expect(run({ agent: 'success', reviews: [verdict('APPROVED', HEAD, REVIEWER, body)] }).status).toBe(0);
     });
@@ -239,6 +242,9 @@ describe('stamping the commit this run reviewed (RA-1680)', () => {
     // What this run's agent posted from (kanon#178). `undefined` writes the body `mine()`
     // carries by default; `null` leaves no file at all.
     posted = 'Approve.\n' as string | null,
+    // Kanon's checkout, for the signing script (kanon#336), and what `agent-setup` resolved.
+    kanon = process.cwd(),
+    role = {} as Record<string, string>,
   }) => {
     const dir = mkdtempSync(join(tmpdir(), 'review-stamp-'));
     const verdictFile = join(dir, 'qa-review-verdict.md');
@@ -275,6 +281,8 @@ esac
         HEAD_SHA: HEAD,
         RUN_ID: '99',
         VERDICT_FILE: verdictFile,
+        KANON: kanon,
+        ...role,
       },
     });
     const args = (() => { try { return readFileSync(join(dir, 'args'), 'utf8'); } catch { return ''; } })();
@@ -455,6 +463,49 @@ esac
     // never reached the agent has no verdict to annotate.
     expect(stampStep.if).toBe(step.if);
   });
+
+  // kanon#336: since L4 every reader counts a verdict only with the Reviewer's marker, and the
+  // prompt alone put it there. The stamp step, which knows whose run it is, now signs it.
+  describe("signs this run's verdict as the Reviewer's (kanon#336)", () => {
+    const putBody = (args: string) => /body=([\s\S]*)$/.exec(args)?.[1] ?? '';
+
+    it('opens a verdict the agent left unmarked with the header line, in the one PUT', () => {
+      const r = stampRun({ reviews: [mine()] });
+      expect(r.stdout).toMatch(/stamped review 500/);
+      expect(r.stdout).toMatch(/signing review 500: the agent left off the Reviewer's header/);
+      expect(putBody(r.args).startsWith(`${headerLine('Reviewer')}\n\nApprove.`)).toBe(true);
+      expect(putBody(r.args)).toContain(trailerFor({ sha: HEAD, runId: '99' }));
+    });
+
+    it('uses the persona agent-setup resolved for the Reviewer, and only for the Reviewer', () => {
+      const named = stampRun({ reviews: [mine()], role: { KANON_ROLE: 'Reviewer', KANON_PERSONA: 'Example Persona' } });
+      expect(putBody(named.args).startsWith(headerLine('Reviewer', 'Example Persona'))).toBe(true);
+      const other = stampRun({ reviews: [mine()], role: { KANON_ROLE: 'Merger', KANON_PERSONA: 'Example Persona' } });
+      expect(putBody(other.args).startsWith(`${headerLine('Reviewer')}\n`)).toBe(true);
+    });
+
+    it("leaves a verdict that already opens as the Reviewer's as it is", () => {
+      const body = `${headerLine('Reviewer')}\n\nApprove.`;
+      const r = stampRun({ reviews: [mine({ body })], posted: body });
+      expect(r.stdout).toMatch(/stamped review 500/);
+      expect(r.stdout).not.toMatch(/signing review/);
+      expect(putBody(r.args).split('kanon:role=').length - 1).toBe(1);
+    });
+
+    it("opens a verdict whose first marker is another role's", () => {
+      const body = `${headerLine('Merger')}\n\nApprove.`;
+      const r = stampRun({ reviews: [mine({ body })], posted: body });
+      expect(putBody(r.args).startsWith(`${headerLine('Reviewer')}\n\n${headerLine('Merger')}`)).toBe(true);
+    });
+
+    it('warns, stamps the body as posted, and never reds when it cannot sign', () => {
+      const r = stampRun({ reviews: [mine()], kanon: '/nonexistent-kanon' });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/::warning title=reviewer marker::Could not sign review 500/);
+      expect(r.stdout).toMatch(/stamped review 500/);
+      expect(putBody(r.args).startsWith('Approve.')).toBe(true);
+    });
+  });
 });
 
 describe('the step is wired so it can actually run (RA-1351)', () => {
@@ -600,9 +651,12 @@ esac
       at('COMMENTED', '2026-09-21T15:17:00Z'),
     ];
     const jqOf = (step: { run: string }) => /--jq "([\s\S]*?)" 2>\/dev\/null\)"/.exec(step.run)?.[1]
-      ?.replace(/\\"/g, '"').replace(/\$HEAD_SHA/g, HEAD).replace(/\$\{REVIEWER_LOGIN\}/g, LOGIN).replace(/\$SINCE/g, '2000-01-01T00:00:00Z');
+      // bash's double quotes hand jq `\(` for `\\(` and `"` for `\"`.
+      ?.replace(/\\\\\(/g, '\\(').replace(/\\"/g, '"').replace(/\$HEAD_SHA/g, HEAD).replace(/\$\{REVIEWER_LOGIN\}/g, LOGIN).replace(/\$SINCE/g, '2000-01-01T00:00:00Z');
+    // The reconcile filter prints `<verdicts> <marked verdicts>` (kanon#336); the claim's
+    // count is the first.
     const count = (filter: string) => Number(execFileSync('jq', ['-r', filter],
-      { input: JSON.stringify(population), encoding: 'utf8' }).trim());
+      { input: JSON.stringify(population), encoding: 'utf8' }).trim().split(' ')[0]);
     const claimJq = jqOf(claim) as string;
     const reconcileJq = jqOf(step) as string;
     expect(claimJq, 'claim filter parsed').toBeTruthy();
@@ -795,7 +849,7 @@ printf '%s' ${JSON.stringify(JSON.stringify(reviews))} | jq -r "$filter"`
       const dir = mkdtempSync(join(tmpdir(), 'review-classify-'));
       const temp = mkdtempSync(join(tmpdir(), 'review-classify-temp-'));
       writeFileSync(join(temp, 'claude-execution-output.json'), 'x');
-      writeStub(join(dir, 'gh'), `#!/usr/bin/env bash\nprintf '%s' '0'\n`);
+      writeStub(join(dir, 'gh'), `#!/usr/bin/env bash\nprintf '%s' '0 0'\n`);
       return runWorkflowStep(step, { dir, env: { PATH: `${dir}:${process.env.PATH}`, GH_TOKEN: 't', REVIEWER_LOGIN: LOGIN, REPO: 'r', PR_NUMBER: '1', HEAD_SHA: HEAD, AGENT: 'failure', RUNNER_TEMP: temp } });
     })();
     expect(r.outputs.result_sha256).toBe('2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881');
@@ -1029,5 +1083,33 @@ describe('the Reviewer loads no project settings, so its flags are the whole gra
     const prompt = String(agent.with!.prompt);
     expect(prompt).toContain("YOUR PROJECT'S INSTRUCTIONS ARE NOT LOADED FOR YOU (kanon#277)");
     expect(prompt).toMatch(/Read `CLAUDE\.md` and\s+`AGENTS\.md` at the repository root yourself/);
+  });
+});
+
+/**
+ * kanon#336: a verdict without the Reviewer's role marker is no verdict to the Merger, the
+ * review filter or `incremental-review.mjs`. The stamp step signs this run's; when it could
+ * not, the reconcile step reds by name rather than leaving the PR waiting in silence.
+ */
+describe('the reconcile step names a verdict no reader counts (kanon#336)', () => {
+  it('reds a run whose only verdict on this SHA carries no Reviewer marker', () => {
+    const r = run({ agent: 'success', reviews: [verdict('APPROVED', HEAD, REVIEWER, 'Approve.')] });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toMatch(/::error title=verdict carries no Reviewer marker::/);
+    expect(r.stdout).toMatch(/gh workflow run agent-review\.yml -f pr_number=1376/);
+    expect(r.stdout, 'it is not the no-verdict case').not.toMatch(/no verdict posted/);
+    expect(r.summary).toMatch(/carries no Reviewer role marker/);
+  });
+
+  it("reds one whose first marker is another role's", () => {
+    const r = run({ agent: 'success', reviews: [verdict('APPROVED', HEAD, REVIEWER, `${headerLine('Merger')}\n\nApprove.`)] });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toMatch(/verdict carries no Reviewer marker/);
+  });
+
+  it('is green when one marked verdict stands beside an unmarked one', () => {
+    const r = run({ agent: 'success', reviews: [verdict('APPROVED', HEAD, REVIEWER, 'Approve.'), verdict('APPROVED')] });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/Verdicts by the Reviewer on aaaaaaa: 2, 1 with its role marker/);
   });
 });

@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
-const { asRole, headerLine, markedRole, personaHeader, roleMarker, setMarkerPhase, signed, withPersona } = await import('../../scripts/lib/role-marker.mjs');
-const { personaEnv, resolvePersona, resolveRole } = await import('../../actions/agent-setup/persona.mjs');
+const { asRole, headerLine, markedRole, personaHeader, roleMarker, setMarkerPhase, signed, signedAs, withPersona } = await import('../../scripts/lib/role-marker.mjs');
+const { personaEnv, resolvePersona, resolveRole, speaksAsNoRole } = await import('../../actions/agent-setup/persona.mjs');
 const { appPersona, parsePersonas } = await import('../../scripts/app-register.mjs');
 
 /**
@@ -47,6 +47,30 @@ describe('the header and the marker', () => {
     expect(signed(`${headerLine('Lead')}\n\nx`, 'Implementer')).toBe(`${headerLine('Lead')}\n\nx`);
     // A marker further down is not an opening one.
     expect(signed(`x\n${roleMarker('Lead')}`, 'Implementer').startsWith(headerLine('Implementer'))).toBe(true);
+  });
+});
+
+describe("signedAs: a fixed step makes a post read as the role it knows it is (kanon#336)", () => {
+  it("opens a body unless its first marker is already the role's, whatever another role's says", () => {
+    expect(signedAs('Approve.', 'Reviewer')).toBe(`${headerLine('Reviewer')}\n\nApprove.`);
+    expect(signedAs('Approve.', 'Reviewer', 'Thea')).toBe(`${headerLine('Reviewer', 'Thea')}\n\nApprove.`);
+    const mine = `${headerLine('Reviewer')}\n\nApprove.`;
+    expect(signedAs(mine, 'Reviewer')).toBe(mine);
+    // Where `signed` leaves another role's opening marker alone, `signedAs` opens the body, so
+    // the result always reads as the role.
+    const other = `${headerLine('Merger')}\n\nApprove.`;
+    expect(signedAs(other, 'Reviewer')).toBe(`${headerLine('Reviewer')}\n\n${other}`);
+    for (const b of ['', 'x', mine, other, `x\n${roleMarker('Lead')}`]) expect(markedRole(signedAs(b, 'Reviewer'))).toBe('Reviewer');
+  });
+
+  it('the CLI signs standard input, and refuses a role that is not an agent\'s', () => {
+    const cli = (args: string[], input: string) => spawnSync('node', ['scripts/lib/role-marker.mjs', ...args], { input, encoding: 'utf8' });
+    const r = cli(['sign', 'Reviewer'], 'Approve.\n');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe(`${headerLine('Reviewer')}\n\nApprove.\n`);
+    expect(cli(['sign', 'Reviewer', 'Thea'], 'x').stdout.startsWith(headerLine('Reviewer', 'Thea'))).toBe(true);
+    expect(cli(['sign', 'Reviewer', ''], 'x').stdout.startsWith(`${headerLine('Reviewer')}\n`)).toBe(true);
+    expect(cli(['sign', 'Releaser'], 'x').status).toBe(1);
   });
 });
 
@@ -283,6 +307,41 @@ describe('personas live in the App register\'s optional Persona column', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // Owner decision, 2026-10-06 (kanon#336): an unresolved role fails the step, by name.
+  it('the persona step FAILS by name when it cannot resolve the role, and passes a run that asks for none', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'persona-fail-'));
+    try {
+      writeFileSync(join(dir, 'register'), reg(ROWS));
+      writeFileSync(join(dir, 'gh'), `#!/usr/bin/env bash\ncat "${dir}/register"\n`);
+      chmodSync(join(dir, 'gh'), 0o755);
+      const envFile = join(dir, 'env');
+      const step = (ROLE: string, APP_SLUG: string) => {
+        writeFileSync(envFile, '');
+        const r = spawnSync(process.execPath, ['actions/agent-setup/persona.mjs'], { encoding: 'utf8',
+          env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_ENV: envFile, GITHUB_REPOSITORY: 'acme/widgets', ROLE, APP_SLUG } });
+        return { status: r.status, out: r.stdout + r.stderr, env: readFileSync(envFile, 'utf8') };
+      };
+      for (const [role, slug] of [['Releaser', ''], ['', 'acme-unregistered']] as const) {
+        const r = step(role, slug);
+        expect(r.status, `${role}/${slug}: ${r.out}`).toBe(1);
+        expect(r.out).toMatch(/::error title=agent-setup::cannot tell which role this agent speaks as: /);
+        expect(r.env, 'and exports nothing').toBe('');
+      }
+      for (const [role, slug] of [['', ''], ['', 'github-actions']] as const) {
+        const r = step(role, slug);
+        expect(r.status, `${role}/${slug}: ${r.out}`).toBe(0);
+        expect(r.out).toMatch(/speaks as no persona/);
+      }
+      expect(step('Reviewer', '').status).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(speaksAsNoRole({})).toBe(true);
+    expect(speaksAsNoRole({ slug: 'github-actions' })).toBe(true);
+    expect(speaksAsNoRole({ slug: 'acme-implementer' })).toBe(false);
+    expect(speaksAsNoRole({ role: 'Reviewer', slug: 'github-actions' })).toBe(false);
   });
 
   it('the shell writers read it from a register on standard input, and never fail', () => {

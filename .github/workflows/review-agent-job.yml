@@ -717,10 +717,10 @@ jobs:
             gets. Use the rubric in docs/qa/explorer-playbook.md: `sev:critical` = data
             loss / security / data isolation / outage; `sev:high` = core flow broken,
             no workaround; `sev:medium` = degraded, workaround exists; `sev:low` =
-            cosmetic. Judge the REACHABLE impact, not the title's shape — RA-585
-            ("a public/student caller can select gateway:'fake'" — register or pay for
-            FREE) is critical and RA-622 ("kiosk_code has no unique index") is low,
-            and they read alike. Filing with no severity leaves the issue
+            cosmetic. Judge the REACHABLE impact, not the title's shape: two
+            findings that read alike can sit at opposite ends of the rubric, and the
+            playbook's `## Severity rubric` says what each level looks like on THIS
+            project. Filing with no severity leaves the issue
             indistinguishable from a stale doc comment; it now gets flagged
             `qa:needs-severity` and comes back to you.
 
@@ -944,6 +944,17 @@ jobs:
       # An out-of-band session cannot, which is precisely the one that must not win on
       # ordering.
       #
+      # IT ALSO SIGNS THE VERDICT AS THE REVIEWER'S (kanon#336). Since plan 0005's L4 every
+      # reader of a verdict (the Merger's `byReviewer`, the review filter's `already
+      # reviewed`, `incremental-review.mjs`, `review-recovery.mjs`) counts a review only when
+      # it carries the Reviewer's role marker beside the Judge's login. The prompt asks the
+      # agent for the header; this step does not trust it to. A verdict whose first marker is
+      # not the Reviewer's is opened with the header line (`signedAs` in
+      # `scripts/lib/role-marker.mjs`) in the same `PUT` as the trailer. Signing here cannot
+      # mark another role's post: it touches only a review (the Merger posts none, and
+      # `merge-lane.test.ts` pins that), by the Judge's login, whose body is the file THIS
+      # run's Reviewer agent posted from. When it can't sign, the reconcile step reds by name.
+      #
       # NEVER REDS THE JOB. The review is the durable artifact and it has landed; a
       # failure to annotate it must not turn a good run red (the RA-846/RA-1351 argument).
       # It warns instead, and the reconcile step below is the hard gate.
@@ -958,6 +969,7 @@ jobs:
           HEAD_SHA: ${{ inputs.head_sha }}
           RUN_ID: ${{ github.run_id }}
           VERDICT_FILE: ${{ runner.temp }}/qa-review-verdict.md
+          KANON: ${{ steps.kanon.outputs.path }}
         run: |
           # `set -e` IS ALREADY ON — the runner invokes a step with no `shell:` key as
           # `bash -e {0}` — so every read below must say what it does on failure or the
@@ -1025,11 +1037,24 @@ jobs:
           fi
           TRAILER="<!-- reviewed: sha=$HEAD_SHA run=$RUN_ID${SUPERSEDES:+ supersedes=$SUPERSEDES} -->"
           echo "stamping: $TRAILER"
+          # THE PERSONA `agent-setup` resolved for this job's agent, only when it resolved the
+          # Reviewer; otherwise the header is the role's own, `**Reviewer**` (plan 0005 §3.3).
+          PERSONA=""
+          [ "${KANON_ROLE:-}" = Reviewer ] && PERSONA="${KANON_PERSONA:-}"
           STAMPED=0
           UNSTAMPED=""
           for ID in $MINE; do
             FILED="$(printf '%s' "$REVIEWS" | jq -r --arg id "$ID" '.[] | select((.id|tostring) == $id) | .commit_id')"
             BODY="$(printf '%s' "$REVIEWS" | jq -r --arg id "$ID" '.[] | select((.id|tostring) == $id) | .body')"
+            # SIGNED AS THE REVIEWER'S (kanon#336): the body, opened with the header line when
+            # its first marker is not the Reviewer's. A failure leaves the body as it was and
+            # says so; the reconcile step then reds on the unmarked verdict, by name.
+            if SIGNED="$(printf '%s' "$BODY" | node "$KANON/scripts/lib/role-marker.mjs" sign Reviewer "$PERSONA")" && [ -n "$SIGNED" ]; then
+              [ "$SIGNED" = "$BODY" ] || echo "signing review $ID: the agent left off the Reviewer's header and role marker, so this step adds them (kanon#336)"
+            else
+              echo "::warning title=reviewer marker::Could not sign review $ID with the Reviewer's header, so it keeps the body the agent posted. If that carries no Reviewer marker, no reader counts it as a verdict (kanon#336)."
+              SIGNED="$BODY"
+            fi
             if [ "$FILED" != "$HEAD_SHA" ]; then
               echo "::warning title=review mis-attributed::GitHub filed review $ID under \`${FILED:0:7}\` because the head moved while this run was reviewing \`${HEAD_SHA:0:7}\`. The stamp records what was actually read, so merge-gate will not treat it as evidence about \`${FILED:0:7}\` (RA-1680). The push that moved the head fires its own review."
             fi
@@ -1046,7 +1071,7 @@ jobs:
             # updated review) is still dropped; stderr, where `gh api` writes the HTTP
             # status and GitHub's message, goes into the warning.
             if ERR="$(gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$ID" \
-                 -f body="$(printf '%s\n\n%s' "$BODY" "$TRAILER")" 2>&1 >/dev/null)"; then
+                 -f body="$(printf '%s\n\n%s' "$SIGNED" "$TRAILER")" 2>&1 >/dev/null)"; then
               echo "stamped review $ID (filed under ${FILED:0:7}, read ${HEAD_SHA:0:7})"
               STAMPED=$((STAMPED + 1))
             else
@@ -1131,19 +1156,32 @@ jobs:
           # body that quotes the format earlier — how a review of RA-1680 describes it —
           # would otherwise hijack its own evidence and this step would red a run whose
           # verdict landed.
-          POSTED="$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" \
+          #
+          # AND HOW MANY OF THEM READ AS THE REVIEWER'S (kanon#336): whose first role marker is
+          # the Reviewer's, as `asRole` reads it. Since L4 the Judge's login is shared with the
+          # Merger, and every reader counts a review only with that marker, so a verdict
+          # without it is no verdict to any of them, and the PR would wait in silence.
+          COUNTS="$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" \
             --jq "def stamped: [(.body // \"\") | scan(\"<!--[ ]*reviewed:[ ]*sha=([0-9a-fA-F]{7,40})\")] | (.[-1] // [])[0];
+                  def role: [(.body // \"\") | scan(\"<!--[[:space:]]*kanon:role=([a-z]+)[[:space:]]*-->\")] | (.[0] // [])[0];
                   [.[]
                    | select(.user.login == \"${REVIEWER_LOGIN}[bot]\")
                    | select(.state == \"APPROVED\" or .state == \"CHANGES_REQUESTED\")
                    | select(((stamped // .commit_id) | ascii_downcase) == (\"$HEAD_SHA\" | ascii_downcase))]
-                  | length" 2>/dev/null)" || POSTED=""
-          case "$POSTED" in
-            ''|*[!0-9]*)
-              echo "::error title=reviewer outcome unknown::Could not read PR #$PR_NUMBER's reviews, so whether a verdict was posted for ${HEAD_SHA:0:7} is UNKNOWN. Refusing to treat unknown as reviewed (RA-957, RA-1351)."
-              exit 1 ;;
-          esac
-          echo "Verdicts by the Reviewer on ${HEAD_SHA:0:7}: $POSTED (agent step: $AGENT)"
+                  | \"\\(length) \\(map(select(role == \"reviewer\")) | length)\"" 2>/dev/null)" || COUNTS=""
+          if ! [[ "$COUNTS" =~ ^[0-9]+\ [0-9]+$ ]]; then
+            echo "::error title=reviewer outcome unknown::Could not read PR #$PR_NUMBER's reviews, so whether a verdict was posted for ${HEAD_SHA:0:7} is UNKNOWN. Refusing to treat unknown as reviewed (RA-957, RA-1351)."
+            exit 1
+          fi
+          POSTED="${COUNTS% *}"
+          MARKED="${COUNTS#* }"
+          echo "Verdicts by the Reviewer on ${HEAD_SHA:0:7}: $POSTED, $MARKED with its role marker (agent step: $AGENT)"
+
+          if [ "$POSTED" -gt 0 ] && [ "$MARKED" -eq 0 ]; then
+            echo "::error title=verdict carries no Reviewer marker::A verdict for ${HEAD_SHA:0:7} was posted by the Reviewer's App, but none carries the Reviewer's role marker (\`<!-- kanon:role=reviewer -->\`), and the stamp step above could not add it (its warning says why). The Merger and the review filter count only a marked verdict, so PR #$PR_NUMBER would wait with no review. Re-run with: gh workflow run agent-review.yml -f pr_number=$PR_NUMBER (kanon#336)."
+            echo "**The verdict for \`${HEAD_SHA:0:7}\` carries no Reviewer role marker**, so no reader counts it: this job is red so that is visible now (kanon#336)." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
           if [ "$POSTED" -gt 0 ]; then
             if [ "$AGENT" = "failure" ]; then

@@ -47,7 +47,7 @@ A worked summary of a two-route sweep with one finding:
   "failed": 1,
   "routes": [
     { "route": "/", "status": "passed" },
-    { "route": "/admin/courses", "status": "failed", "signal": "objective signals on /admin/courses: [pageerror] Minified React error #418" }
+    { "route": "/settings", "status": "failed", "signal": "objective signals on /settings: [pageerror] Minified React error #418" }
   ],
   "cost_proxy": { "duration_ms_total": 48210, "screenshots": 2 }
 }

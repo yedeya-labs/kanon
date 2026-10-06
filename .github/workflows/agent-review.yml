@@ -841,11 +841,20 @@ jobs:
           # satisfy `already reviewed` for a head nobody read. So: the stamp, else
           # `commit_id`, over APPROVED/CHANGES_REQUESTED only — the selection the `claim`
           # step uses. It is also the base of the `compare` below, for the same reason.
+          #
+          # AND ONLY A VERDICT MARKED AS THE REVIEWER'S (kanon#336). Since plan 0005's L4 the
+          # Judge's login is shared with the Merger, and the Merger counts a review only when
+          # its first role marker is the Reviewer's (`asRole`), as `incremental-review.mjs`
+          # does. A verdict without it is no verdict to the Merger, so it must not be one
+          # here either: counted by login alone it made its head "already reviewed", and the
+          # PR stalled with no signal. Now the next event reviews that head again.
           LAST="$(printf '%s' "$REVIEWS" \
             | jq -r --arg login "${REVIEWER_LOGIN}[bot]" '
                 def stamped: [(.body // "") | scan("<!--[ ]*reviewed:[ ]*sha=([[:xdigit:]]{7,40})")] | (.[-1] // [])[0];
+                def role: [(.body // "") | scan("<!--[[:space:]]*kanon:role=([a-z]+)[[:space:]]*-->")] | (.[0] // [])[0];
                 [.[] | select(.user.login == $login)
-                     | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")]
+                     | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
+                     | select(role == "reviewer")]
                 | last | if . == null then "" else ((stamped // .commit_id // "") | ascii_downcase) end')"
           evidence LAST_REVIEWED "$LAST"
           [ -n "$LAST" ] && [ "$LAST" = "$HEAD" ] && decide false "already reviewed ${HEAD:0:7}"

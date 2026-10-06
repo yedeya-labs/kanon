@@ -33,13 +33,27 @@ const JUDGE_LANES = [
 /** Drop comment lines (`#`, `//`, a JSDoc `*`), so prose about the label is not a step that applies it. */
 const code = (text: string) => text.split('\n').filter((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l)).join('\n');
 
-/** The files a workflow or script runs, by path: `$KANON/scripts/…`, `$/actions/…`, and relative imports. */
+/** A script a step runs: JavaScript, shell or awk. */
+const SCRIPT = String.raw`[\w./-]+\.(?:mjs|sh|awk)`;
+
+/**
+ * The files a workflow or script runs, by path, in every spelling the lanes use (kanon#338):
+ * Kanon's checkout as `$KANON/…` or `$KANON_PATH/…` (braced or not); `uses: $/actions/…` and
+ * `uses: $/.github/workflows/…`; an action's own directory as `$GITHUB_ACTION_PATH/…` or
+ * `${{ github.action_path }}/…`; a shell script's own directory as `$HERE/…`; and an `.mjs`
+ * file's relative imports. A form missing here is a file the guard never reads.
+ */
 function reaches(file: string, text: string): string[] {
   const out: string[] = [];
-  for (const m of text.matchAll(/\$KANON\/(scripts\/[\w./-]+\.mjs)/g)) out.push(m[1]!);
+  for (const m of text.matchAll(new RegExp(String.raw`\$\{?KANON(?:_PATH)?\}?\/((?:scripts|actions|cli)\/${SCRIPT})`, 'g'))) out.push(m[1]!);
   for (const m of text.matchAll(/uses:\s*\$\/(actions\/[\w-]+)/g)) out.push(`${m[1]}/action.yml`);
   for (const m of text.matchAll(/uses:\s*\$\/(\.github\/workflows\/[\w-]+\.yml)/g)) out.push(m[1]!);
-  for (const m of text.matchAll(/GITHUB_ACTION_PATH\/([\w./-]+\.(?:mjs|sh))/g)) out.push(join(dirname(file), m[1]!));
+  for (const m of text.matchAll(new RegExp(String.raw`(?:(?:\$\{?)?GITHUB_ACTION_PATH\}?|\$\{\{\s*github\.action_path\s*\}\})\/(${SCRIPT})`, 'g'))) {
+    out.push(join(dirname(file), m[1]!));
+  }
+  if (file.endsWith('.sh')) {
+    for (const m of text.matchAll(new RegExp(String.raw`\$\{?HERE\}?\/(${SCRIPT})`, 'gi'))) out.push(join(dirname(file), m[1]!));
+  }
   if (file.endsWith('.mjs')) {
     for (const m of text.matchAll(/(?:^|\n)\s*import\s[^;]*?from\s+'(\.[^']+)'/g)) out.push(join(dirname(file), m[1]!));
     for (const m of text.matchAll(/import\('(\.[^']+)'\)/g)) out.push(join(dirname(file), m[1]!));
@@ -67,6 +81,28 @@ describe('plan 0005 L4: no fixed step of another Judge lane applies `needs:human
     for (const lane of JUDGE_LANES) expect(files.has(lane), lane).toBe(true);
     expect([...files.keys()].some((f) => f.startsWith('scripts/'))).toBe(true);
     expect([...files.keys()].some((f) => f.startsWith('actions/'))).toBe(true);
+  });
+
+  it("follows `$KANON_PATH` and a shell script's own directory into the scripts they run (kanon#338)", () => {
+    // `review-agent-job.yml` runs this as `bash "$KANON_PATH/scripts/restore-judging-inputs.sh"`,
+    // and it runs `node "$HERE/judging-inputs.mjs"` and `bash "$HERE/../actions/agent-setup/declaration-defaults.sh"`.
+    expect(files.has('scripts/restore-judging-inputs.sh')).toBe(true);
+    expect(files.has('actions/agent-setup/declaration-defaults.sh')).toBe(true);
+  });
+
+  it('reads every spelling of an entry point (kanon#338)', () => {
+    const step = [
+      'node "$KANON/scripts/a.mjs"',
+      'bash "${KANON_PATH}/scripts/b.sh"',
+      'awk -f "$KANON/actions/c/c.awk"',
+      'node "$KANON/cli/d.mjs"',
+      'node "${{ github.action_path }}/e.mjs"',
+      'bash "$GITHUB_ACTION_PATH/f.sh"',
+    ].join('\n');
+    expect(reaches('actions/x/action.yml', step).sort()).toEqual(
+      ['actions/c/c.awk', 'actions/x/e.mjs', 'actions/x/f.sh', 'cli/d.mjs', 'scripts/a.mjs', 'scripts/b.sh'],
+    );
+    expect(reaches('scripts/x.sh', 'node "$HERE/g.mjs"\nbash "$HERE/../actions/y/h.sh"')).toEqual(['scripts/g.mjs', 'actions/y/h.sh']);
   });
 
   it('never names the label outside a comment, in any of them', () => {
