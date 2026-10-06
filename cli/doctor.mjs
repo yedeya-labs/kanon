@@ -352,7 +352,7 @@ export const requirementsAt = async (deps, release) => {
   const r = await deps.gh(['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${KANON_REPO}/contents/requirements.json?ref=${encodeURIComponent(release)}`]);
   if (r.status !== 0) {
     const why = r.stderr.trim() || `exit ${r.status}`;
-    throw new Error(/HTTP 404|Not Found/i.test(why) ? `Kanon ${release} ships no requirements file (requirements.json); doctor can check against a release from v0.26.0 on` : `could not read Kanon ${release}'s requirements file (${why})`);
+    throw new Error(/HTTP 404|Not Found/i.test(why) ? `Kanon ${release} ships no requirements file (requirements.json); doctor can check against a release from v0.28.0 on, the first that ships one` : `could not read Kanon ${release}'s requirements file (${why})`);
   }
   try {
     const req = JSON.parse(r.stdout);
@@ -562,9 +562,13 @@ export const diagnose = async (deps, opts) => {
     const grant = c.job.permissions !== undefined ? c.job.permissions : c.wf.permissions;
     const short = Object.entries(spec.grant).filter(([k, v]) => !isMap(grant) || level(grant[k]) < level(v));
     if (short.length) {
-      find('caller.grant-missing', c.file, isMap(grant) ? `grants ${short.map(([k]) => `${k}: ${grant[k] ?? 'none'}`).join(', ')}; the lane ${c.lane} needs ${short.map(([k, v]) => `${k}: ${v}`).join(', ')} at ${checked}.` : `grants no explicit permissions; the calling job's permissions: are the lane ${c.lane}'s ceiling (plan 0001 §3).`, {
-        text: `Grant under the caller's permissions:`,
-        commands: short.map(([k, v]) => `  ${k}: ${v}`),
+      find('caller.grant-missing', c.file, isMap(grant)
+        ? `grants ${short.map(([k]) => `${k}: ${grant[k] ?? 'none'}`).join(', ')}; the lane ${c.lane} needs ${short.map(([k, v]) => `${k}: ${v}`).join(', ')} at ${checked}.`
+        : grant === undefined
+          ? `grants no explicit permissions; the calling job's permissions: are the lane ${c.lane}'s ceiling (plan 0001 §3).`
+          : `grants \`permissions: ${String(grant)}\` rather than a map; the calling job's permissions: are the lane ${c.lane}'s ceiling, so lane-check requires the lane's grant written out (plan 0001 §3).`, {
+        text: isMap(grant) ? `Grant under the caller's permissions:` : `Replace the caller's permissions: with the lane's grant:`,
+        commands: isMap(grant) ? short.map(([k, v]) => `  ${k}: ${v}`) : ['permissions:', ...Object.entries(spec.grant).map(([k, v]) => `  ${k}: ${v}`)],
       });
     }
     if (spec.callerName && c.wf.name !== spec.callerName) {
@@ -758,8 +762,9 @@ export const diagnose = async (deps, opts) => {
   for (const c of appsCheckCallers) {
     const got = isMap(c.job.secrets) ? Object.keys(c.job.secrets) : [];
     const lacks = identities.flatMap(appSecrets).filter((n) => !got.includes(n));
+    const blind = identities.filter((i) => appSecrets(i).some((n) => lacks.includes(n)));
     const stale = got.filter((n) => !takes.has(n));
-    if (lacks.length) find('apps-check.secret-missing', c.file, `does not map ${lacks.join(', ')}, so apps-check can't check ${lacks.length > 2 ? 'those Apps' : 'that App'}.`, { text: `Add under the job's secrets:`, commands: lacks.map((n) => `      ${n}: \${{ secrets.${n} }}`) });
+    if (lacks.length) find('apps-check.secret-missing', c.file, `does not map ${lacks.join(', ')}, so apps-check can't check the ${blind.join(' and ')} App${blind.length > 1 ? 's' : ''}.`, { text: `Add under the job's secrets:`, commands: lacks.map((n) => `      ${n}: \${{ secrets.${n} }}`) });
     if (stale.length) find('apps-check.secret-stale', c.file, `maps ${stale.join(', ')}, which Kanon ${checked}'s apps-check does not take; GitHub refuses the call.`, { text: `Remove these lines from the job's secrets:`, commands: stale.map((n) => `      ${n}: \${{ secrets.${n} }}`) });
   }
 

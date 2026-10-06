@@ -310,6 +310,34 @@ describe('kanon doctor on what an installation lacks', () => {
     expect(ids(r)).toEqual(['caller.secrets-inherited .github/workflows/agent-review.yml', 'apps-check.secret-stale .github/workflows/apps-check.yml']);
   });
 
+  it('names a caller granting write-all as what it is, with the lane\'s grant written out as the fix', async () => {
+    const files = healthyFiles();
+    files['.github/workflows/agent-review.yml'] = files['.github/workflows/agent-review.yml']!.replace(/^permissions:\n( {2}.*\n)+/m, 'permissions: write-all\n');
+    const dir = checkout(files);
+    const r = await run(dir, fakeGitHub(), ['--json']);
+    // write-all also hands the review lane, which is not store-coupled, id-token: write.
+    expect(ids(r)).toEqual(['caller.grant-missing .github/workflows/agent-review.yml', 'id-token.unaccepted .github/workflows/agent-review.yml#review']);
+    expect(r.json.findings[0].message).toContain('grants `permissions: write-all` rather than a map');
+    expect(r.json.findings[0].fix.commands).toEqual(['permissions:', ...Object.entries(REQ.lanes['agent-review']!.grant).map(([k, v]) => `  ${k}: ${v}`)]);
+  });
+
+  it('names, in the apps-check finding, each App whose secrets the caller does not map', async () => {
+    const files = healthyFiles();
+    files['.github/workflows/apps-check.yml'] = files['.github/workflows/apps-check.yml']!.split('\n').filter((l) => !/_APP_PRIVATE_KEY:/.test(l)).join('\n');
+    const dir = checkout(files);
+    const r = await run(dir, fakeGitHub(), ['--json']);
+    expect(ids(r)).toEqual(['apps-check.secret-missing .github/workflows/apps-check.yml']);
+    const both = identitiesOf(LANES);
+    expect(both).toHaveLength(2);
+    expect(r.json.findings[0].message).toContain(`can't check the ${both.join(' and ')} Apps.`);
+  });
+
+  it('says which release first ships a requirements file', async () => {
+    const dir = checkout(healthyFiles());
+    const r = await run(dir, fakeGitHub(), ['--to', 'v0.27.0', '--json']);
+    expect(r.json.error).toContain('from v0.28.0 on');
+  });
+
   it('names pins that disagree', async () => {
     const files = healthyFiles();
     files['.github/workflows/ci.yml'] = files['.github/workflows/ci.yml']!.replace(`@${PINNED}`, '@v0.9.0');

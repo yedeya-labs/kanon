@@ -8,7 +8,7 @@ kanon doctor --to v1.4.0  # before you merge the pin bump to v1.4.0
 kanon doctor --json       # for a script or an agent
 ```
 
-It reads the repository the way `kanon init` does, and compares it with the requirements file (`requirements.json`) that every release ships at its tag: the release your callers pin, or, with `--to`, the one you are moving to. It reads that file from Kanon's repository at the tag, so the doctor you run can be any release from v0.26.0 on.
+It reads the repository the way `kanon init` does, and compares it with the requirements file (`requirements.json`) that every release ships at its tag: the release your callers pin, or, with `--to`, the one you are moving to. It reads that file from Kanon's repository at the tag, so the release it checks against, pinned or `--to`, can be any from v0.28.0 on, the first that ships one.
 
 **It writes nothing.** Every GitHub call it makes is a read, and it changes no file. `kanon init` fixes what can be fixed from the checkout; doctor says what is left, and how.
 
