@@ -201,9 +201,9 @@ jobs:
           client-id: ${{ secrets.LEAD_APP_ID }}
           private-key: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
           # Narrowed to what the sweep uses (`K-AGENT-46`): it comments on, labels and
-          # re-labels issues (`issues`), lists the open pull requests that close them
-          # (`pull-requests`), and reads the run behind each cost row, and the run artifacts
-          # without a store (`actions`).
+          # re-labels issues, and takes `gate-candidate` off a decided one (`issues`), lists
+          # the open pull requests that close them (`pull-requests`), and reads the run behind
+          # each cost row, and the run artifacts without a store (`actions`).
           permission-issues: write
           permission-pull-requests: read
           permission-actions: read
@@ -239,3 +239,17 @@ jobs:
           QA_STORE_COST_ROWS_IMPLEMENTER: ${{ needs.store.outputs.implementer }}
           QA_STORE_COST_ROWS_TRIAGE_FIX: ${{ needs.store.outputs.triage-fix }}
         run: node "$KANON/scripts/dispatch-sweep.mjs"
+
+      # THE GATE-CANDIDATE EXIT (`K-WORK-10`, kanon#171). Not a dispatch, but the same kind of
+      # job: an issue-hygiene reconcile on a timer, needing `issues: write` and the Lead's App,
+      # which this job already holds, so it rides this schedule rather than adding one. It only
+      # removes `gate-candidate` from an issue the Stakeholder already decided: placed on a
+      # roadmap milestone, or labelled `gate:declined`. `!cancelled()`: a sweep that failed on
+      # the step above is no reason to leave a decided candidate in the Stakeholder's queue.
+      - name: Retire gate-candidate on decided issues
+        if: ${{ !cancelled() && steps.app-token.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          APPLY: ${{ (github.event_name == 'schedule' || inputs.apply == 'true') && '1' || '' }}
+        run: node "$KANON/scripts/gate-candidate-exit.mjs"

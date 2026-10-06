@@ -46,6 +46,7 @@ import { isRoadmapMilestone } from './lib/milestones.mjs';
 import { digestWebhook } from './lib/digest-webhook.mjs';
 import { GATE_CANDIDATE_LABEL, SEVERITY_LABELS, severityOf as severityOfLabels } from './issue-triage-defaults.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { GATE_CANDIDATE_QUERY, GATE_DECLINED_LABEL, gateCandidateDecision } from './gate-candidate-exit.mjs';
 
 /**
  * Scopes that are real engineering work but have no stakeholder-facing surface.
@@ -468,8 +469,9 @@ export async function collectMilestones(allMilestones, { closedByMilestone, week
 // The label and the severity rubric are OWNED by the triage module that applies
 // them (RA-1616), so a rename there reaches this reader rather than leaving it
 // querying the old name.
-export { GATE_CANDIDATE_LABEL };
-export const GATE_CANDIDATE_QUERY = `is:issue is:open label:${GATE_CANDIDATE_LABEL}`;
+// The queue and the decision are `K-WORK-10`'s, read in one place (`gate-candidate-exit.mjs`,
+// kanon#171), so the digest and the sweep that retires the label agree on what "decided" means.
+export { GATE_CANDIDATE_LABEL, GATE_CANDIDATE_QUERY };
 const DAY_MS = 24 * 60 * 60 * 1000;
 /**
  * Label names, LOWERCASED: GitHub matches label names case-insensitively, so a
@@ -489,12 +491,14 @@ const isLabelledOpenIssue = (i) =>
   !i.pull_request && i.state === 'open' && labelNames(i).includes(GATE_CANDIDATE_LABEL.toLowerCase());
 
 /**
- * A candidate the developer has already PLACED: it sits on a roadmap milestone.
- * Nothing removes the label on a decision, so without this a placed issue would
- * be re-offered every week and the queue would grow without bound. (A candidate
- * the developer declines has its label removed, and drops out of the read.)
+ * A candidate the Stakeholder has already PLACED: it sits on a roadmap milestone.
+ * The dispatch sweep takes the label off a decided candidate (`K-WORK-10`, kanon#171),
+ * but only once a day and only where the Lead's App is installed, so the digest
+ * still drops a decided one itself rather than re-offer it.
  */
-export const isPlacedCandidate = (i) => isLabelledOpenIssue(i) && isRoadmapMilestone(i.milestone);
+export const isPlacedCandidate = (i) => isLabelledOpenIssue(i) && gateCandidateDecision(i) === 'placed';
+/** A candidate the Stakeholder DECLINED (`gate:declined`) whose label is not off yet. */
+export const isDeclinedCandidate = (i) => isLabelledOpenIssue(i) && gateCandidateDecision(i) === 'declined';
 
 /**
  * REST `/issues` items → the rows to render. Drops pull requests (the issues
@@ -514,7 +518,9 @@ export const isPlacedCandidate = (i) => isLabelledOpenIssue(i) && isRoadmapMiles
 export function gateCandidatesFrom(items, now) {
   const rank = (sev) => (sev === null ? SEVERITY_LABELS.length : SEVERITY_LABELS.indexOf(`sev:${sev}`));
   return items
-    .filter((i) => isLabelledOpenIssue(i) && !isRoadmapMilestone(i.milestone))
+    // Awaiting only. A contradictory one (placed AND declined) stays listed: the sweep leaves
+    // its label on for the Stakeholder, and so does this.
+    .filter((i) => isLabelledOpenIssue(i) && !['placed', 'declined'].includes(gateCandidateDecision(i)))
     .map((i) => ({
       number: i.number,
       title: i.title ?? '',
@@ -539,7 +545,7 @@ export function shortReason(reason) {
 }
 
 /**
- * `result` is `{ ok: true, candidates, placed? }` or `{ ok: false, reason }`. Anything
+ * `result` is `{ ok: true, candidates, placed?, declined? }` or `{ ok: false, reason }`. Anything
  * else — including `undefined`, a caller that never read the list — renders as
  * UNREADABLE, never as "none", so the section is fail-closed.
  */
@@ -558,6 +564,9 @@ export function renderGateCandidates(result) {
   }
   if (result.placed > 0) {
     body += `_${result.placed} more already placed on a roadmap milestone — not listed._\n`;
+  }
+  if (result.declined > 0) {
+    body += `_${result.declined} more already declined (\`${GATE_DECLINED_LABEL}\`) — not listed._\n`;
   }
   return out + body;
 }
@@ -590,7 +599,12 @@ export async function readGateCandidates({ api, repo, now, maxPages = 10 }) {
       if (r.length < 100) break;
       if (page >= maxPages) throw new Error(`more than ${maxPages * 100} open items carry the label`);
     }
-    return { ok: true, candidates: gateCandidatesFrom(items, now), placed: items.filter(isPlacedCandidate).length };
+    return {
+      ok: true,
+      candidates: gateCandidatesFrom(items, now),
+      placed: items.filter(isPlacedCandidate).length,
+      declined: items.filter(isDeclinedCandidate).length,
+    };
   } catch (e) {
     return { ok: false, reason: String(e?.message ?? e) };
   }

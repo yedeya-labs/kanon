@@ -105,9 +105,16 @@ This chapter governs the issue: how it is labelled, which milestone it belongs t
 
 **Rule.** A `sev:critical` or `sev:high` reviewer follow-up also gets the `gate-candidate` label, and **stays in its bucket**. The **Stakeholder** decides whether it joins the launch gate. Never inflate a severity to reach the gate: `sev:medium` means a workaround exists, which is what "not launch-gating" means.
 
-**Why.** The filer is qualified to claim severity but not placement (`K-WORK-5`). The label keeps the signal visible as a queue (`is:issue is:open label:gate-candidate`) that a human works through, and puts the human step only on the highest-severity items, where it is cheapest to justify.
+The label comes off when the Stakeholder has decided, either way:
 
-**Enforced by.** The issue-opened automation adds `gate-candidate` to a gate-severity reviewer follow-up that lacks it. Not inflating severity is prose only.
+- **Placed:** the issue is on a roadmap milestone, open and with a due date (`K-WORK-3`). The placement is the record (`K-WORK-22`).
+- **Declined:** the issue carries `gate:declined`, which only a person applies. It stays on the issue as the record of the decision.
+
+So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awaiting a decision. Placed reads as a roadmap milestone, declined as `gate:declined`. An issue that is both placed and declined keeps `gate-candidate` until the Stakeholder resolves it. Agents only ever add `gate-candidate`, and never apply `gate:declined` or write the milestone: taking the label off transcribes a decision, it doesn't make one.
+
+**Why.** The filer is qualified to claim severity but not placement (`K-WORK-5`). The label keeps the signal visible as a queue that a human works through, and puts the human step only on the highest-severity items, where it is cheapest to justify. Without an exit, the queue only grows: a candidate the Stakeholder already ruled on reads exactly like one still waiting, and a digest lists a declined `sev:critical` as its top line for good. The decline is a label rather than a comment because a sweep reads it from the same list it finds the candidates in, with no prose to parse, and the Stakeholder can apply it without write access (Triage, chapter 03's role table).
+
+**Enforced by.** The issue-opened automation adds `gate-candidate` to a gate-severity reviewer follow-up that lacks it; it fires on `opened` only, so it never re-adds a label the exit removed. The Lead's daily dispatch sweep removes `gate-candidate` from each open issue that is placed or declined, and reports a contradictory one ([`scripts/gate-candidate-exit.mjs`](../scripts/gate-candidate-exit.mjs)); the weekly digest lists only candidates awaiting a decision, reading the same predicate. A test fails when Kanon's lanes, scripts or prompts name `gate:declined` anywhere but that script, or when the script writes anything but the removal. Not inflating severity is prose only.
 
 **Class.** framework
 
@@ -160,6 +167,7 @@ This chapter governs the issue: how it is labelled, which milestone it belongs t
 | | `signal:<name>` | `fef2c0` | One per objective signal on the project's list (`K-AGENT-9`); `b60205` for a security signal |
 | Review and escalation | `review:please` | `d4c5f9` | Asks the Reviewer to review this PR |
 | | `gate-candidate` | `d93f0b` | Filer says launch-gating (sev:critical or sev:high); the Stakeholder decides if it joins the gate |
+| | `gate:declined` | `cfd3d7` | The Stakeholder declined this gate-candidate for the gate; applied by a person only |
 | | `needs:human` | `d93f0b` | A human decides: the Merger declined this PR, or the Lead held this project |
 | | `blocked` | `b60205` | Waiting on something outside the pipeline; parks the issue's whole project |
 | Project membership | `project:<n>` | `bfd4f2` | Project #n: mirrors the project marker; written by the Lead only |
