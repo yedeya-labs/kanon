@@ -9,6 +9,7 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 | `function/` | The ingest function. `schema.mjs` there is a link to [`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), so the function validates with the same file the lanes use. |
 | `verify.mjs` | Step S3's checks, run against the deployed store. |
 | `erase.mjs` | Deletes one adopter's rows (§10). |
+| `import.mjs` | The reference adopter's history import (§7, S5): its transform, dry run and send. |
 | `register.example.json` | The register's shape, naming only Kanon. |
 
 The collector that writes to it is [`telemetry-collect.yml`](../.github/workflows/telemetry-collect.yml) ([Collect the rows](#collect-the-rows)).
@@ -239,10 +240,21 @@ Plan 0002 §10. Deletion is immediate in the table, and complete in backups with
 ## The importer and the backfill role
 
 These roles are created only for their step and deleted after it (§7). Add `--importer` (S5) or `--backfill` (S7a) to `render.mjs`, package and deploy, and the function accepts that role. Such a caller names the adopter's key as `?key=<key>` on the URL, and the key must be in the register:
-- the importer may send rows recorded up to 13 months ago;
+- the importer may send rows recorded up to 13 months ago, with no `kanon_version` (decision 17);
 - the backfill role may send work-item rows only, in the normal window.
 
 When the step is done, render without the flag and deploy again.
+
+**The history import (S5)** reads the reference adopter's `COST#` items from a read-only export, prints its dry run, and with `--apply` sends the rows as the importer:
+
+```sh
+aws dynamodb scan --table-name <table> --region us-east-2 --output json \
+  --filter-expression 'begins_with(pk, :c)' --expression-attribute-values '{":c":{"S":"COST#"}}' > "$OUT/cost-rows.json"
+node infra/telemetry/import.mjs --export "$OUT/cost-rows.json"
+node infra/telemetry/import.mjs --export "$OUT/cost-rows.json" --key <key> --apply --profile kanon
+```
+
+The export holds the adopter's rows, so it stays beside the register, outside the public tree. The dry run prints counts, field names and enum values only, and exits non-zero while any row stops; plan 0002 §7 lists what stops a row.
 
 ## Cost and paging
 

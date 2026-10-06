@@ -221,6 +221,28 @@ describe('every fixture\'s version-2 row validates (S1, M1)', () => {
   });
 });
 
+describe('an imported run row carries no kanon_version (plan 0002 decision 17)', () => {
+  const without = () => { const r = { ...finished() }; delete r.kanon_version; return r; };
+
+  it('is required on every row but the importer\'s', () => {
+    expect(validate(without())).toEqual({ ok: false, errors: [{ field: 'kanon_version', problem: 'required' }] });
+    expect(validate(without(), { imported: true })).toEqual({ ok: true });
+  });
+
+  it('is refused on an imported row, whatever its value', () => {
+    for (const kanon_version of ['0.27.0', 'dev']) {
+      expect(validate({ ...without(), kanon_version }, { imported: true })).toEqual({ ok: false, errors: [{ field: 'kanon_version', problem: 'not-allowed' }] });
+    }
+  });
+
+  it('changes nothing else an imported row is checked for', () => {
+    expect(validate({ ...without(), surplus: 1 }, { imported: true })).toEqual({ ok: false, errors: [{ field: 'surplus', problem: 'unknown' }] });
+    const noReason = without();
+    delete noReason.reason;
+    expect(validate(noReason, { imported: true })).toEqual({ ok: false, errors: [{ field: 'reason', problem: 'required' }] });
+  });
+});
+
 describe('the mutations plan 0002 §8 lists each fail validate', () => {
   const fails = (row: Row, field: string) => {
     const v = validate(row);

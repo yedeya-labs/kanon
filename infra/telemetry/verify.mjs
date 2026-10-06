@@ -169,7 +169,7 @@ export async function runChecks(key, profile, deps) {
 }
 
 /** @type {Deps['aws']} */
-function aws(args, creds) {
+export function aws(args, creds) {
   const env = { ...process.env };
   if (creds) {
     delete env.AWS_PROFILE;
@@ -181,7 +181,7 @@ function aws(args, creds) {
 }
 
 /** @type {Deps['post']} */
-async function post(url, body, creds) {
+export async function post(url, body, creds) {
   const headers = { 'content-type': 'application/json' };
   const res = await fetch(url, {
     method: 'POST',

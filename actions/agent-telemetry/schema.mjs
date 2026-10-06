@@ -431,14 +431,23 @@ function runPairings(row) {
   return out;
 }
 
+/** The run field an imported row leaves absent (decision 17): no Kanon version ran it. */
+export const IMPORT_ABSENT = 'kanon_version';
+
 /**
  * Validate one row. Reads `row_kind` first, then checks the row against that kind's list at
  * its `schema_version`. Rejects the WHOLE row on any problem, and names fields only.
  *
+ * `imported` is the history import's run row (plan 0002 §7, decision 17): it ran before Kanon
+ * existed, so it carries NO `kanon_version`, and one that does is refused. A release or `dev`
+ * would claim a Kanon version the run never had. Only the ingest function sets it, and only for
+ * the importer role; every other caller validates a run row with `kanon_version` required.
+ *
  * @param {unknown} row
+ * @param {{ imported?: boolean }} [opts]
  * @returns {{ ok: true } | { ok: false, errors: { field: string, problem: string }[] }}
  */
-export function validate(row) {
+export function validate(row, { imported = false } = {}) {
   if (row === null || typeof row !== 'object' || Array.isArray(row)) {
     return { ok: false, errors: [{ field: '(row)', problem: 'type' }] };
   }
@@ -462,9 +471,12 @@ export function validate(row) {
     const p = problemOf(f, r[name]);
     if (p) errors.push({ field: name, problem: p });
   }
+  const importedRun = imported && kind === 'run';
   for (const [name, f] of Object.entries(fields)) {
+    if (importedRun && name === IMPORT_ABSENT) continue;
     if (f.required && !Object.hasOwn(r, name)) errors.push({ field: name, problem: 'required' });
   }
+  if (importedRun && Object.hasOwn(r, IMPORT_ABSENT)) errors.push({ field: IMPORT_ABSENT, problem: 'not-allowed' });
   if (kind === 'run') errors.push(...runPairings(r));
   return errors.length ? { ok: false, errors } : { ok: true };
 }
