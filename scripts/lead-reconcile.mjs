@@ -418,6 +418,12 @@ const severityOf = (i) => (i.labels ?? []).find((l) => l.startsWith('sev:')) ?? 
 // to every member that lacks it and removes it from any holder that is no longer a
 // member. Two homes that can disagree will — so one derives from the other, and
 // `labelMirror` is the parity check, run every tick.
+//
+// ONLY WHILE THE PROJECT IS OPEN (kanon#192). The tick reconciles a project only while its
+// tracking issue is open, so nothing writes the label after close: an issue that gains
+// the marker later (a follow-up inheriting the closed project, a backfill) carries the
+// marker alone. The rulebook says so (`K-LAYOUT-12`), and after close the marker is the
+// membership record.
 
 export const projectLabel = (project) => `project:${project}`;
 /** Label edits one tick may make for one project. The first tick after this landed

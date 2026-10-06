@@ -35,7 +35,7 @@
     { "name": "gate:declined", "family": "Review and escalation", "color": "cfd3d7", "description": "The Stakeholder declined this gate-candidate for the gate; applied by a person only" },
     { "name": "needs:human", "family": "Review and escalation", "color": "d93f0b", "description": "A human decides: the Merger declined this PR, or the Lead held this project" },
     { "name": "blocked", "family": "Review and escalation", "color": "b60205", "description": "Waiting on something outside the pipeline; parks the issue's whole project" },
-    { "name": "project:<n>", "family": "Project membership", "color": "bfd4f2", "description": "Project #n: mirrors the project marker; written by the Lead only" },
+    { "name": "project:<n>", "family": "Project membership", "color": "bfd4f2", "description": "Project #n: mirrors the marker while the project is open; written by the Lead only" },
     { "name": "from-app", "family": "Untrusted intake", "color": "ffd200", "description": "Filed from the running application; never dispatched" },
     { "name": "autorelease: pending", "family": "Release tool", "color": "ededed", "description": "Created and applied by the Releaser only", "createdBy": "the release tool, never a lane" },
     { "name": "autorelease: tagged", "family": "Release tool", "color": "ededed", "description": "Created and applied by the Releaser only", "createdBy": "the release tool, never a lane" }
