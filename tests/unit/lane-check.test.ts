@@ -738,6 +738,23 @@ describe.skipIf(!hasYq)('lane-check', () => {
         /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:3 declares the weekly digest's audience outside `## Choices`/));
   });
 
+  describe("the adoption record's production promotion (K-MERGE-4, K-LAYOUT-10, kanon#158)", () => {
+    const REC = 'docs/qa/adoption.md';
+    const GATED = "- **Production promotion:** human-gated (the `production` environment's required reviewer)\n";
+    it('passes a declared human-gated promotion', () => {
+      const t = adopter();
+      t.write(REC, `# Adoption record\n\n## Choices\n\n${GATED}- **Overseer:** \`not installed\`\n`);
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
+    it('refuses one in another shape, by name, with the reader\'s own message', () =>
+      red((t) => t.write(REC, '# Adoption record\n\n## Choices\n\n- **Production promotion:** `human-gated`\n'),
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:5, under `## Choices`, isn't a declaration: .*human-gated/));
+    it('refuses one outside `## Choices`, by name', () =>
+      red((t) => t.write(REC, `# Adoption record\n\n${GATED}\n## Choices\n`),
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:3 declares the production promotion outside `## Choices`/));
+  });
+
   describe('the Overseer lane, and the adoption record saying whether it is installed (plan 0004 step 13)', () => {
     const OVERSEER = '.github/workflows/agent-overseer.yml';
     const REC = 'docs/qa/adoption.md';

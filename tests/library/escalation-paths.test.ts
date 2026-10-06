@@ -163,10 +163,12 @@ describe('reading the escalation file', () => {
     expect(readEscalations('o/r', run(fail('gh: Not Found (HTTP 404)')), (line) => printed.push(line))).toEqual([...PIPELINE_ESCALATIONS]);
     expect(printed).toEqual([
       "merge-gate: docs/qa/escalation-paths.md on `trunk` doesn't exist, so Kanon's default applies: only the pipeline's own paths escalate (`.github/`, `docs/qa/`, the agent instruction files) (K-LAYOUT-8)",
+      // The adoption record 404s too, so the production promotion takes its default (kanon#158).
+      "merge-gate: docs/qa/adoption.md on `trunk` doesn't exist, so Kanon's default applies: the production promotion isn't declared human-gated, and every escalation path escalates (K-MERGE-4)",
     ]);
     printed.length = 0;
     readEscalations('o/r', run(() => FILE('- `^a/` — a\n', '')), (line) => printed.push(line));
-    expect(printed, 'a declared file takes no default, and says nothing').toEqual([]);
+    expect(printed.filter((l) => l.includes(ESCALATION_FILE)), 'a declared file takes no default, and says nothing').toEqual([]);
     expect(() => readEscalations('o/r', run(fail('gh: Server Error (HTTP 502)')))).toThrow(/couldn't be read from `trunk`: gh: Server Error \(HTTP 502\)/);
   });
 
