@@ -230,7 +230,8 @@ jobs:
   # implementer` to the resolved head only when the head recorded before the agent ran carried
   # one created by the Implementer's App, and every commit on the first-parent path between
   # them is the App's (the merge's second parent is the default branch). Otherwise it sets
-  # none and says why. Nothing requires the status until L4; it never reds the lane.
+  # none and says why. It never reds the lane. Since L4 the Merger requires the status, and this
+  # lane's filter refuses a pull request whose head lacks it (`rebase-lane.mjs`, `ineligible`).
   implementer-status:
     needs: [filter, resolve]
     if: ${{ !cancelled() && needs.filter.outputs.member == 'true' && needs.filter.outputs.prs != '[]' }}

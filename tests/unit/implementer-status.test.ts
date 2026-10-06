@@ -6,8 +6,8 @@ const { CONTEXT, byApp, carryDecision, pickOpened } = await import('../../action
 
 /**
  * The implementer commit status, `kanon/role: implementer` (plan 0005 §3.3, question 6; step
- * L3). A fixed step of the Implementer's lanes sets it, never the agent, and nothing requires it
- * until L4. The decisions are pure and held here case by case; the wiring below holds every lane
+ * L3). A fixed step of the Implementer's lanes sets it, never the agent, and since L4 the Merger
+ * requires it (`tests/library/two-apps.test.ts`). The decisions are pure and held here case by case; the wiring below holds every lane
  * to "a job after the agent's, holding no agent".
  */
 
@@ -22,6 +22,14 @@ const pr = (number: number, ref: string, head: string, created = '2026-10-05T10:
   ({ number, created_at: created, head: { ref, sha: head, repo: { full_name: repo } } });
 const opened = (prs: ReturnType<typeof pr>[], commits: Record<string, ReturnType<typeof commitBy>>, over: Record<string, unknown> = {}) =>
   pickOpened({ prs, repo: REPO, since: SINCE, branchesBefore: before, email: EMAIL, headCommit: (s: string) => commits[s], ...over });
+
+describe('the summary an adopter reads when the App lacks Commit statuses write (L4)', () => {
+  it('says what now requires the status, and no longer that nothing does', () => {
+    const src = readFileSync('actions/implementer-status/implementer-status.mjs', 'utf8');
+    expect(src).not.toMatch(/until L4/);
+    expect(src).toMatch(/the Merger skips this pull request as \\`not-the-implementer\\`, and the revise and rebase lanes refuse it/);
+  });
+});
 
 describe('open: the first status goes only on the pull request this run opened', () => {
   it('stamps the one PR opened after the run started, from a new branch, at a head the App authored', () => {

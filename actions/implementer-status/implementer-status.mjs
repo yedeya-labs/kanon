@@ -4,7 +4,8 @@
 // a claim any Author agent can write. The Merger's green zone needs a signal no other Author
 // lane's agent can produce: a commit status set by a FIXED step of the Implementer's lanes,
 // after the agent has finished, with a token narrowed to Commit statuses write, which no
-// agent's token holds (`K-AGENT-46`). L3 only writes it; nothing requires it until L4.
+// agent's token holds (`K-AGENT-46`). Since L4 the Merger requires it on a green-zone head, and
+// the revise and rebase lanes refuse a pull request whose head lacks it.
 //
 // TWO MODES, because the status is a chain, not a stamp:
 //
@@ -137,7 +138,7 @@ function main() {
   const lead = `**Implementer status** (\`${CONTEXT}\`, plan 0005 §3.3):`;
   if (!read || !slug) return say(`${lead} not set: the Implementer's App could not mint a read token, so nothing could be checked.`);
   if (!write) {
-    return say(`${lead} not set: the Implementer's App could not mint a token with Commit statuses write. Grant it that permission (a broadened permission, recorded in the App register, \`K-AGENT-3\`); until L4 nothing requires the status.`);
+    return say(`${lead} not set: the Implementer's App could not mint a token with Commit statuses write. Grant it that permission (a broadened permission, recorded in the App register, \`K-AGENT-3\`). Without the status the Merger skips this pull request as \`not-the-implementer\`, and the revise and rebase lanes refuse it, so a person merges it.`);
   }
   const id = ghJson(['api', `users/${slug}%5Bbot%5D`], read).id;
   const host = String(env.GITHUB_SERVER_URL ?? 'https://github.com').replace(/^[a-z]+:\/\//, '').replace(/\/.*$/, '');

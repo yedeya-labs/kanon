@@ -19,8 +19,8 @@
 // NO ROLE AND NO SLUG (a smoke run of the block) writes nothing, and says so.
 //
 // NEVER FAILS THE STEP. A role it can't resolve is a warning, and the agent then runs as
-// before L3: unsigned posts, and commits named for the App's bot account. Nothing reads the
-// marker as required until L4.
+// before L3: unsigned posts, and commits named for the App's bot account. Since L4 every
+// reader requires the marker, so such a run's posts read as no role's: the warning says so.
 //
 // Inputs, by environment only: ROLE, APP_SLUG, GH_TOKEN, GITHUB_REPOSITORY, GITHUB_ENV.
 

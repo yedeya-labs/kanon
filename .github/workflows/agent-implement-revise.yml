@@ -840,8 +840,8 @@ jobs:
   # the agent's, never the agent: it moves `kanon/role: implementer` to the pull request's new
   # head only when the head this run started from (`head_sha`, read before the agent ran)
   # carried one created by the Implementer's App, and every commit between them is the App's.
-  # Otherwise it sets none and says why. Nothing requires the status until L4, when this lane
-  # also refuses a pull request whose head has none; it never reds the lane.
+  # Otherwise it sets none and says why. It never reds the lane. Since L4 the Merger requires the
+  # status, and this lane's filter refuses a pull request whose head has none.
   implementer-status:
     needs: [filter, revise]
     if: ${{ !cancelled() && needs.filter.outputs.act == 'true' }}
