@@ -170,7 +170,7 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 | | `gate:declined` | `cfd3d7` | The Stakeholder declined this gate-candidate for the gate; applied by a person only |
 | | `needs:human` | `d93f0b` | A human decides: the Merger declined this PR, or the Lead held this project |
 | | `blocked` | `b60205` | Waiting on something outside the pipeline; parks the issue's whole project |
-| Project membership | `project:<n>` | `bfd4f2` | Project #n: mirrors the project marker; written by the Lead only |
+| Project membership | `project:<n>` | `bfd4f2` | Project #n: mirrors the marker while the project is open; written by the Lead only |
 | Untrusted intake | `from-app` | `ffd200` | Filed from the running application; never dispatched |
 | Release tool | `autorelease: pending`, `autorelease: tagged` | `ededed` | Created and applied by the Releaser only |
 

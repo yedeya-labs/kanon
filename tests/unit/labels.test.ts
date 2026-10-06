@@ -332,7 +332,7 @@ describe('ensureLabels', () => {
   it("fills in a project label's number", () => {
     const repo = fakeRepo([]);
     ensureLabels(['project:27'], { repo: 'acme/widgets', run: repo.run });
-    expect(repo.creates()[0]).toEqual(['label', 'create', 'project:27', '--repo', 'acme/widgets', '--color', 'bfd4f2', '--description', 'Project #27: mirrors the project marker; written by the Lead only']);
+    expect(repo.creates()[0]).toEqual(['label', 'create', 'project:27', '--repo', 'acme/widgets', '--color', 'bfd4f2', '--description', 'Project #27: mirrors the marker while the project is open; written by the Lead only']);
     expect(taxonomyLabel('project:0')).toBeNull();
     expect(taxonomyLabel('project:x')).toBeNull();
   });
@@ -456,5 +456,44 @@ describe('a lane on a repository without qa:needs-split (plan 0005 L7)', () => {
     });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(repo.calls().filter((c) => / label create /.test(c)).map((c) => c.split(' ').slice(3, 4)[0])).toEqual(['qa:needs-triage']);
+  });
+});
+
+/**
+ * kanon#192: `project:<n>` was described as mirroring the marker, but the mirror runs only
+ * inside a tick, and the tick reconciles only projects whose tracking issue is open. So an
+ * issue that gains the marker after close never gets the label. The rule now says the label
+ * stops at close; these hold the wording to the behaviour that makes it true.
+ */
+describe('project:<n> is mirrored only while the project is open (kanon#192)', () => {
+  /** One paragraph of `text`, found by its anchor. Throws when the anchor moves. */
+  const paragraph = (path: string, anchor: string): string => {
+    const text = read(path);
+    const at = text.indexOf(anchor);
+    if (at < 0) throw new Error(`${path}: anchor not found: ${anchor}`);
+    const start = text.lastIndexOf('\n', at) + 1;
+    const end = text.indexOf('\n', at);
+    return text.slice(start, end < 0 ? undefined : end);
+  };
+
+  it('the reconcile tick picks only projects whose tracking issue is open', () => {
+    const picker = paragraph('.github/workflows/agent-lead-reconcile.yml', 'if [ "$state" = "OPEN" ]; then');
+    expect(picker.trim()).toBe('if [ "$state" = "OPEN" ]; then');
+    const step = read('.github/workflows/agent-lead-reconcile.yml');
+    expect(step).toContain('picked="${picked:+$picked,}$n"');
+  });
+
+  it("the taxonomy's description says the label mirrors the marker only while the project is open", () => {
+    const row = taxonomyTable().find((r) => r.names.includes('project:<n>'));
+    expect(row?.description).toContain('while the project is open');
+  });
+
+  it('the marker rule says the label stops at close and the marker is the record after it', () => {
+    const rule = paragraph('rulebook/11-repository-layout.md', '- **The project marker.**');
+    expect(rule).toContain('only while its tracking issue is open');
+    expect(rule).toContain('never gets the label');
+    expect(rule).toContain('the marker is its only complete membership record');
+    const decomposition = paragraph('rulebook/07-projects.md', 'mirrored by the label `project:<n>`');
+    expect(decomposition).toContain('only while the project is open');
   });
 });

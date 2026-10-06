@@ -99,10 +99,11 @@ const responses = (opts: { prs?: Pr[]; files?: PrFile[]; comments?: Array<{ body
     [`repos/${REPO}/pulls?state=open&per_page=100`]: opts.prs ?? [releasePr()],
     [`repos/${REPO}/git/ref/heads/${BRANCH}`]: { object: { sha: SHA } },
     [`repos/${REPO}/contents/release-please-config.json?ref=${SHA}`]: contents(config),
-    [`repos/${REPO}/pulls/68/files?per_page=100`]: opts.files ?? [],
+    // The diff of the confirmed head, read by its SHA (#246). `pulls/68/files` is never read,
+    // so it isn't answered.
+    [`repos/${REPO}/compare/${BASE_SHA}...${SHA}?per_page=1`]: { merge_base_commit: { sha: MERGE_BASE }, files: opts.files ?? [] },
     [`repos/${REPO}/issues/68/comments?per_page=100`]: opts.comments ?? [],
     ...(sides && {
-      [`repos/${REPO}/compare/${BASE_SHA}...${SHA}?per_page=1`]: { merge_base_commit: { sha: MERGE_BASE } },
       [`repos/${REPO}/contents/.release-please-manifest.json?ref=${MERGE_BASE}`]: contents(sides.base),
       [`repos/${REPO}/contents/.release-please-manifest.json?ref=${SHA}`]: contents(sides.head),
     }),
@@ -516,7 +517,8 @@ describe('#73 the release workflow refuses a release PR that changes more than v
   it('reads the release-please config at the release branch head, from the calling repository', () => {
     const result = runGuard(responses({ files: clean }));
     expect(result.calls).toContain(`api repos/${REPO}/contents/release-please-config.json?ref=${SHA}`);
-    expect(result.calls).toContain(`api --paginate --slurp repos/${REPO}/pulls/68/files?per_page=100`);
+    expect(result.calls).toContain(`api repos/${REPO}/compare/${BASE_SHA}...${SHA}?per_page=1`);
+    expect(result.calls).not.toContain('pulls/68/files');
   });
 
   it('fails closed when the API cannot be read', () => {
@@ -537,7 +539,7 @@ describe('#73 the release workflow refuses a release PR that changes more than v
       expect(result.status).toBe(1);
       expect(result.stdout).toContain(`::error title=Release PR not at its branch head::Release PR #68 records head ${OLD}, but its branch ${BRANCH} is at ${SHA}`);
       expect(result.calls.match(new RegExp(`api repos/${REPO}/pulls/68\\n`, 'g')), 'it re-reads the PR before giving up').toHaveLength(3);
-      expect(result.calls, 'the lagging head is never judged').not.toContain('pulls/68/files');
+      expect(result.calls, 'the lagging head is never judged').not.toContain('/compare/');
       expect(result.calls).not.toContain(`ref=${OLD}`);
       expect(result.posted).toEqual([]);
     });
@@ -556,6 +558,37 @@ describe('#73 the release workflow refuses a release PR that changes more than v
       expect(result.status).toBe(0);
       expect(result.calls).toContain(`api repos/${REPO}/git/ref/heads/${BRANCH}`);
       expect(result.calls).not.toMatch(new RegExp(`api repos/${REPO}/pulls/68\\n`));
+    });
+  });
+
+  // #246: `pulls/<n>/files` names no SHA, and GitHub recomputes it asynchronously after a
+  // push, so it can still be the previous head's list once `head.sha` has moved.
+  describe('#246 judges the diff of the head it confirmed, not a lagging file list', () => {
+    it('goes red on the confirmed head\'s diff while the PR\'s file list still holds the previous, clean head', () => {
+      const answers = { ...responses({ files: stale }), [`repos/${REPO}/pulls/68/files?per_page=100`]: clean };
+      const result = runGuard(answers);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('::error title=Release PR is stale::Release PR #68');
+      expect(result.stderr).toContain('docs/lanes.md:');
+      expect(result.calls).toContain(`api repos/${REPO}/compare/${BASE_SHA}...${SHA}?per_page=1`);
+      expect(result.calls).not.toContain('pulls/68/files');
+    });
+
+    it('fails closed when the comparison lists no files', () => {
+      const answers = responses({ files: clean });
+      answers[`repos/${REPO}/compare/${BASE_SHA}...${SHA}?per_page=1`] = { merge_base_commit: { sha: MERGE_BASE } };
+      const result = runGuard(answers);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('returned no file list');
+    });
+
+    it('fails closed at 300 files, where GitHub may have cut the list', () => {
+      const many = Array.from({ length: 300 - clean.length }, (_, i) => ({ filename: `pad/${i}.md`, status: 'modified', patch: '@@ -1 +1 @@\n-0.10.0\n+0.11.0' }));
+      const under = runGuard(responses({ files: [...clean, ...many.slice(1)] }));
+      expect(under.stderr).not.toContain('past what GitHub lists');
+      const at = runGuard(responses({ files: [...clean, ...many] }));
+      expect(at.status).toBe(1);
+      expect(at.stderr).toContain('it changes 300 files or more, past what GitHub lists in one comparison');
     });
   });
 
