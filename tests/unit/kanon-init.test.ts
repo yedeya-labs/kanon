@@ -414,6 +414,18 @@ describe('kanon init, safely', () => {
     await run(dir, fakeGitHub());
     expect(read(dir, '.github/workflows/agent-review.yml')).toContain('workflows: [".github/workflows/ci.yml"]');
   });
+
+  it('keeps a # inside a quoted CI name, where only a plain name loses a trailing comment (#335)', async () => {
+    expect(workflowName('name: "CI #1"\n', 'x')).toBe('CI #1');
+    expect(workflowName("name: 'CI #1' # nightly\n", 'x')).toBe('CI #1');
+    expect(workflowName('name: "Say \\"hi\\" #2" # c\n', 'x')).toBe('Say "hi" #2');
+    expect(workflowName("name: 'It''s #3'\n", 'x')).toBe("It's #3");
+    expect(workflowName('name: CI#1 # c\n', 'x')).toBe('CI#1');
+    expect(workflowName('name: # no name\n', 'p')).toBe('p');
+    const dir = checkout({ '.github/workflows/ci.yml': 'name: "CI #1"\non:\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n' });
+    await run(dir, fakeGitHub());
+    expect(read(dir, '.github/workflows/agent-review.yml')).toContain('workflows: ["CI #1"]');
+  });
 });
 
 describe('kanon init, from the answers', () => {
