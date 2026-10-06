@@ -286,8 +286,7 @@ jobs:
           // that changes or is added must be a version, and not one below the value it
           // replaces; that makes it one this release sets. A removed key fails, because a
           // release only ever sets entries.
-          const manifestChange = (pr) => {
-            const base = api(`repos/${repo}/compare/${pr.base.sha}...${pr.head.sha}?per_page=1`).merge_base_commit.sha;
+          const manifestChange = (pr, base) => {
             const before = json(MANIFEST, base);
             const after = json(MANIFEST, pr.head.sha);
             const released = new Set();
@@ -363,6 +362,8 @@ jobs:
           // Set only by the guard's own tests, so they don't wait.
           const WAIT_MS = Number(process.env.RELEASE_PR_GUARD_WAIT_MS ?? 5000);
           const RETRIES = 3;
+          // GitHub's ceiling on the files one `compare` lists (#246).
+          const COMPARE_FILE_CAP = 300;
 
           let failed = false;
           for (let pr of releasePrs) {
@@ -401,9 +402,19 @@ jobs:
             }
 
             const problems = [];
-            const files = pages(`repos/${repo}/pulls/${pr.number}/files?per_page=100`);
+            // The diff judged is the one of the head confirmed above, read from `compare`, whose
+            // request names that SHA (#246). `pulls/<n>/files` names none, and GitHub recomputes
+            // it asynchronously after a push, so it could still be the previous head's file list
+            // while `pr.head.sha` is already the new one. The three-dot compare is the merge-base
+            // diff a PR's files list shows, and it carries the merge base the manifest is read at.
+            // Its first page lists every changed file, up to 300 for the whole comparison, so a
+            // list that may have been cut there fails closed rather than passing unread files.
+            const comparison = api(`repos/${repo}/compare/${pr.base.sha}...${pr.head.sha}?per_page=1`);
+            const files = Array.isArray(comparison.files) ? comparison.files : [];
+            if (!Array.isArray(comparison.files)) problems.push(`the comparison of ${pr.base.sha} with ${pr.head.sha} returned no file list, so the guard can't check it`);
+            else if (files.length >= COMPARE_FILE_CAP) problems.push(`it changes ${COMPARE_FILE_CAP} files or more, past what GitHub lists in one comparison, so the guard can't check all of them`);
             const manifest = files.find((f) => f.filename === MANIFEST && f.status === 'modified');
-            const { released, bad } = manifest ? manifestChange(pr) : { released: new Set(), bad: [] };
+            const { released, bad } = manifest ? manifestChange(pr, comparison.merge_base_commit.sha) : { released: new Set(), bad: [] };
             for (const line of bad) problems.push(`${MANIFEST}: ${line}`);
             if (released.size === 0) problems.push(`${MANIFEST}: no version is added to it, so the guard can't tell which versions this release sets`);
             for (const file of files) {
