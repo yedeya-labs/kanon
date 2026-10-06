@@ -824,6 +824,9 @@ jobs:
           # one the action parses (it strips the flag and passes the rest to the SDK); `=` would
           # reach the CLI beside the action's default. `tests/unit/review-verdict.test.ts`
           # pins it on both copies of these flags.
+          # The user scope it keeps is one this job made: `agent-run` points `CLAUDE_CONFIG_DIR`
+          # at a new directory for any flags that load no project settings, so a reused runner's
+          # `~/.claude` doesn't join them either (kanon#283).
           claude_args: |
             --model claude-opus-5-5
             --effort high
