@@ -30,7 +30,7 @@ This chapter governs how a Kanon pipeline keeps itself honest: the guards that c
 
 **Why.** A design doc that didn't exist was cited through four reviews. A range check alone passes a citation that now points at a different invariant: after one edit, eleven of sixteen shifted citations still passed it.
 
-**Enforced by.** A path guard that fails on a cited path that is not tracked; a citation guard that fails when the cited lines don't contain the identifier the sentence names, or when the sentence names none (an unanchored citation), and that checks itself against a fixture before it judges the docs, so a broken guard fails as one; a shift helper that reports citations a diff moved.
+**Enforced by.** A path guard that fails on a cited path that is not tracked; a citation guard that fails when the cited lines don't contain the identifier the sentence names, or when the sentence names none (an unanchored citation), and that checks itself against a fixture before it judges the docs, so a broken guard fails as one; a shift helper that reports citations a diff moved. Both read `docs/**/*.md` unless a repository passes them the globs of the Markdown it cites code from (`--path`, once per glob), and fail a glob that selects nothing.
 
 **Class.** framework
 

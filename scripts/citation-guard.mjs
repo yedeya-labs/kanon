@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // @ts-nocheck -- moved from the reference adopter's pipeline library, which doesn't type-check its scripts (plan 0001 §3; ADR 0009)
 // Fail lint when a `file:line` citation in docs/ no longer points at what its own
-// sentence says it points at (RA-658, RA-919).
+// sentence says it points at (RA-658, RA-919). `docs/**/*.md` is the default; `--path <glob>`,
+// once per glob, names the Markdown the run reads instead (kanon#388, `DOC_PATTERNS`).
+//
+// Usage: node scripts/citation-guard.mjs [--path <glob>]... [--verbose]
 //
 // WHY RANGE-CHECKING IS NOT ENOUGH, measured on the case that prompted this. PR RA-1128
 // was force-push rebased; `settleOrderWith`'s enrollment write moved from
@@ -1115,6 +1118,93 @@ const blocksIn = (shiftsByFile, citationsByFile) => {
 export const PROJECTS_TREE = 'docs/projects/';
 
 /**
+ * WHICH MARKDOWN IS READ (kanon#388, the Owner's decision of 2026-10-06). `DOC_PATTERNS` unless
+ * the run is given `--path <glob>`, once per glob. The list replaces the default rather than
+ * adding to it, so a run that also reads `docs/` names it, and the list a CI step passes is the
+ * whole corpus, written in one place. A repository whose rulebook or READMEs cite code passes
+ * them here: Kanon's own `Citation guard` job passes its `rulebook/` and READMEs this way, as
+ * any adopter would. `citation-shift` takes the same flag, so a coordinate the guard judges is
+ * one the shift helper maps.
+ *
+ * What does not change with the list: only `.md` files are read, and `PROJECTS_TREE` is never
+ * read, whatever a glob says, for the reason above. An explicit glob that selects no file the
+ * run would read FAILS, by name: a mistyped `rulbook/` glob would otherwise shrink the corpus
+ * to nothing in silence, and the all-clear would still say "resolve" (RA-945). The default is
+ * exempt, so a repository with no `docs/` passes as it always has.
+ *
+ * The glob is small on purpose: `*` and `?` stay within one path segment, a `**` segment spans
+ * any number of segments, none included, and every other character is literal. A segment that
+ * starts with a dot matches like any other, so the default reads the same files as the `docs/`
+ * prefix test it replaced.
+ */
+export const DOC_PATTERNS = Object.freeze(['docs/**/*.md']);
+
+/**
+ * @param {string} glob
+ * @returns {RegExp}
+ */
+export const globToRegExp = (glob) => {
+  let re = '';
+  for (let i = 0; i < glob.length; i += 1) {
+    const c = glob[i];
+    if (c === '*' && glob[i + 1] === '*') {
+      // `**/` is zero or more whole segments; a `**` anywhere else is the rest of the path.
+      if (glob[i + 2] === '/') { re += '(?:[^/]*/)*'; i += 2; } else { re += '.*'; i += 1; }
+    } else if (c === '*') re += '[^/]*';
+    else if (c === '?') re += '[^/]';
+    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`);
+};
+
+/**
+ * The globs a run reads, from its arguments: each `--path <glob>`, or `DOC_PATTERNS` when none.
+ * Throws on a `--path` with no glob after it, which a CI step's quoting can produce.
+ *
+ * @param {string[]} argv
+ * @returns {{patterns: readonly string[], explicit: boolean}}
+ */
+export const docPatternsFrom = (argv) => {
+  const patterns = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] !== '--path') continue;
+    const glob = argv[i + 1];
+    if (!glob || glob.startsWith('--')) throw new Error('--path needs a glob after it, such as `--path \'rulebook/**/*.md\'`');
+    patterns.push(glob);
+    i += 1;
+  }
+  return patterns.length ? { patterns, explicit: true } : { patterns: DOC_PATTERNS, explicit: false };
+};
+
+/**
+ * The Markdown files the globs select from `tracked`, less `PROJECTS_TREE`; how many briefs a
+ * glob selected and the run skipped; and each EXPLICIT glob that selected nothing the run reads.
+ *
+ * @param {string[]} tracked
+ * @param {{patterns: readonly string[], explicit: boolean}} selection
+ * @returns {{docs: string[], briefsSkipped: number, unmatched: string[]}}
+ */
+export const selectDocs = (tracked, { patterns, explicit }) => {
+  const res = patterns.map((p) => ({ p, re: globToRegExp(p) }));
+  const md = tracked.filter((f) => f.endsWith('.md'));
+  const selected = md.filter((f) => res.some(({ re }) => re.test(f)));
+  const docs = selected.filter((f) => !f.startsWith(PROJECTS_TREE));
+  const unmatched = explicit ? res.filter(({ re }) => !docs.some((f) => re.test(f))).map(({ p }) => p) : [];
+  return { docs, briefsSkipped: selected.length - docs.length, unmatched };
+};
+
+/**
+ * The run's failure for `selectDocs`' `unmatched` globs, shared with `citation-shift`.
+ *
+ * @param {string} tool
+ * @param {string[]} unmatched
+ */
+export const unmatchedMessage = (tool, unmatched) =>
+  `${tool}: ${unmatched.map((p) => `\`--path ${p}\``).join(', ')} selected no tracked Markdown file it reads ` +
+  `(only \`.md\` files are read, and never \`${PROJECTS_TREE}\`). A glob that reads nothing would shrink the ` +
+  'corpus in silence, so fix or drop it.';
+
+/**
  * IS THE GUARD ITSELF WORKING? Asked of a fixed fixture, not of the corpus (kanon#387).
  *
  * The old answer was "a run that read citations and anchored none of them is broken" (RA-945):
@@ -1163,7 +1253,15 @@ export const suspectExternalLines = (list, ci) =>
       `but ${reasons.map((r) => SUSPICION[r]).join('; and ')} — if it is a typo for the repository's own file, fix it.`);
 
 const main = () => {
-  // FIRST, before `docs/` is read: a broken guard's verdict on the corpus means nothing, so
+  let selection;
+  try {
+    selection = docPatternsFrom(process.argv.slice(2));
+  } catch (e) {
+    console.error(`citation-guard: ${e.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  // FIRST, before the docs are read: a broken guard's verdict on the corpus means nothing, so
   // it is not given (kanon#387). See `selfCheck`.
   const self = selfCheck();
   if (!self.ok) {
@@ -1171,7 +1269,7 @@ const main = () => {
       `citation-guard: its self-check read ${self.checked} of 2 built-in citation(s), ` +
         `anchor-checked ${self.anchored ? self.anchored : 'NONE'} of them, and caught ${self.caught} of the 1 stale one. ` +
         'That is a broken guard, not a stale citation: the anchor logic is not doing what it should, ' +
-        'so `docs/` was not judged. Fix `citation-guard.mjs`, not the docs.',
+        'so the docs were not judged. Fix `citation-guard.mjs`, not the docs.',
     );
     process.exitCode = 1;
     return;
@@ -1188,10 +1286,13 @@ const main = () => {
   // narrower than its own all-clear implies (RA-945). A brief carries no coordinates
   // since RA-1742 — see the note above `PROJECTS_TREE` — so there is nothing here to
   // resolve, and the pre-standard briefs' coordinates (`isPreStandard`, `K-LAYOUT-15`)
-  // are evidence about commits that have passed.
-  const all = tracked.filter((f) => f.startsWith('docs/') && f.endsWith('.md'));
-  const md = all.filter((f) => !f.startsWith(PROJECTS_TREE));
-  const briefsSkipped = all.length - md.length;
+  // are evidence about commits that have passed. The rest is what `--path` selects (kanon#388).
+  const { docs: md, briefsSkipped, unmatched } = selectDocs(tracked, selection);
+  if (unmatched.length) {
+    console.error(unmatchedMessage('citation-guard', unmatched));
+    process.exitCode = 1;
+    return;
+  }
   const read = (p) => readFileSync(p, 'utf8');
   const findings = [];
   const blocks = [];
@@ -1261,7 +1362,7 @@ const main = () => {
     for (const bl of blocks) {
       console.error(
         `  BLOCK SHIFT — ${bl.count} citation(s) into ${bl.path} are each ${bl.shift} line(s) ` +
-          `above what they name. ${bl.citations} coordinate(s) in docs/ point into that file; ` +
+          `above what they name. ${bl.citations} coordinate(s) in the docs read point into that file; ` +
           're-derive ALL of them, not only the ones listed below — a citation whose identifier ' +
           'is declared above the insertion still passes the anchor check, and drifted by the same amount in silence.\n',
       );
@@ -1298,6 +1399,8 @@ const main = () => {
       `${anchored} anchor-checked (${viaEnclosing} of them only via the enclosing scope, not inside the cited range)` +
       `${discarded ? `, ${discardedPhrase(discarded, discardedLineZero)}` : ''}.`,
   );
+  // WHAT WAS READ, so a narrower corpus than the reader assumes is on the page (kanon#388).
+  console.log(`  read: ${selection.patterns.join(', ')}${selection.explicit ? '' : ' (the default; `--path <glob>` reads others)'}`);
   // THE WEAKER ANCHOR, LISTED ON REQUEST (RA-1217). The count above is always printed; the
   // coordinates behind it are a `--verbose` list, because a reader auditing one of them
   // needs the `file:line`, and a routine run does not need two hundred lines.

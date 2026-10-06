@@ -353,7 +353,7 @@ describe('the CLI reads code comments end to end (RA-2293)', () => {
 
 /**
  * kanon#175 — a code-comment coordinate the diff itself wrote is skipped by the move check,
- * and `citation-guard` reads `docs/` only, so nothing checked it. Read here as ADVICE.
+ * and `citation-guard` reads Markdown only, so nothing checked it. Read here as ADVICE.
  */
 describe('a code-comment coordinate this diff wrote is read as advice (kanon#175)', () => {
   const lines = (n: number) => Array.from({ length: n }, (_, i) => `# line${i + 1}`).join('\n') + '\n';
@@ -464,5 +464,39 @@ describe('a code-comment coordinate this diff wrote is read as advice (kanon#175
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(r.stdout).toContain('citation-shift (advisory): tests/review.test.ts:1  review.yml:14');
     expect(r.stdout).toContain('sends to :16');
+  });
+});
+
+describe('the docs it maps are the guard\'s `--path` list, `docs/**/*.md` by default (kanon#388)', () => {
+  const setup = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cshift-paths-'));
+    const sh = (...a: string[]) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+    const w = (f: string, t: string) => { mkdirSync(join(dir, f, '..'), { recursive: true }); writeFileSync(join(dir, f), t); };
+    sh('init', '-q');
+    sh('config', 'user.email', 't@t');
+    sh('config', 'user.name', 't');
+    w('src/wizard.tsx', Array.from({ length: 20 }, (_, i) => `line${i + 1}`).join('\n') + '\n');
+    w('rulebook/r.md', '# A rule\n\nThe wizard bails at `src/wizard.tsx:12`.\n');
+    w('docs/qa/escalation-paths.md', '## Escalation paths\n\n## Pipeline code\n');
+    sh('add', '.');
+    sh('commit', '-qm', 'base');
+    w('src/wizard.tsx', ['line1', 'line2', 'new-a', 'new-b', ...Array.from({ length: 18 }, (_, i) => `line${i + 3}`)].join('\n') + '\n');
+    const cli = join(ROOT, 'scripts/citation-shift.mjs');
+    return (...args: string[]) => spawnSync(process.execPath, [cli, '--base', 'HEAD', ...args], { cwd: dir, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: '' } });
+  };
+
+  it('leaves a rulebook/ coordinate alone by default, and reports it moved once rulebook/ is on the list', () => {
+    const run = setup();
+    const byDefault = run();
+    expect(byDefault.status, byDefault.stdout + byDefault.stderr).toBe(0);
+    const listed = run('--path', 'docs/**/*.md', '--path', 'rulebook/**/*.md');
+    expect(listed.status, listed.stdout + listed.stderr).toBe(1);
+    expect(listed.stderr).toContain('rulebook/r.md:3  `src/wizard.tsx:12`  ->  `src/wizard.tsx:14`');
+  });
+
+  it('fails a glob that selects nothing it reads, by name', () => {
+    const r = setup()('--path', 'rulbook/**/*.md');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('citation-shift: `--path rulbook/**/*.md` selected no tracked Markdown file it reads');
   });
 });

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
-import { auditCitations, codeSpans, resolvePath, tokensOf, clauseAt, enclosingDeclarations, anchorsFor, coordinatesIn, codeOnly, isOracleSpec, namesIdentifier, topLevelDeclarations, declarationShift, strongNames, BLOCK_MIN, discardedPhrase, gitIgnored, externalSuspicion, suspectExternalLines, selfCheck } from '../../scripts/citation-guard.mjs';
+import { auditCitations, codeSpans, resolvePath, tokensOf, clauseAt, enclosingDeclarations, anchorsFor, coordinatesIn, codeOnly, isOracleSpec, namesIdentifier, topLevelDeclarations, declarationShift, strongNames, BLOCK_MIN, discardedPhrase, gitIgnored, externalSuspicion, suspectExternalLines, selfCheck, DOC_PATTERNS, docPatternsFrom, globToRegExp, selectDocs } from '../../scripts/citation-guard.mjs';
 import { STATUSES } from '../../scripts/spec-lib.mjs';
 import { ROOT } from './helpers/adopter.js';
 
@@ -1316,4 +1316,96 @@ describe('the Clause typedef names the statuses clauseAt can return, derived (RA
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(new RegExp(`^${STATUSES.length + 2}: Type '"bogus"' is not assignable`));
   }, 30_000);
+});
+
+describe('the Markdown a run reads is a list of globs, `docs/**/*.md` by default (kanon#388)', () => {
+  const tracked = [
+    'docs/a.md', 'docs/qa/specs/b.md', 'docs/.notes/c.md', 'docs/projects/1.md', 'docs/x.ts',
+    'rulebook/01-work-items.md', 'rulebook/templates/brief.md', 'README.md', 'actions/dco/README.md', 'actions/dco/action.yml', 'src/a.ts',
+  ];
+
+  it('reads with no --path exactly what the `docs/` prefix test it replaced read', () => {
+    const before = tracked.filter((f) => f.startsWith('docs/') && f.endsWith('.md') && !f.startsWith('docs/projects/'));
+    expect(docPatternsFrom([])).toEqual({ patterns: DOC_PATTERNS, explicit: false });
+    expect(DOC_PATTERNS).toEqual(['docs/**/*.md']);
+    expect(selectDocs(tracked, docPatternsFrom([]))).toEqual({ docs: before, briefsSkipped: 1, unmatched: [] });
+  });
+
+  it('reads the globs it is given instead, each once, and never a non-Markdown file or a brief', () => {
+    const sel = docPatternsFrom(['--verbose', '--path', 'rulebook/**/*.md', '--path', 'README.md', '--path', 'actions/*/README.md', '--path', 'docs/**']);
+    expect(sel).toEqual({ patterns: ['rulebook/**/*.md', 'README.md', 'actions/*/README.md', 'docs/**'], explicit: true });
+    expect(selectDocs(tracked, sel)).toEqual({
+      docs: ['docs/a.md', 'docs/qa/specs/b.md', 'docs/.notes/c.md', 'rulebook/01-work-items.md', 'rulebook/templates/brief.md', 'README.md', 'actions/dco/README.md'],
+      briefsSkipped: 1,
+      unmatched: [],
+    });
+  });
+
+  it('names an explicit glob that selects nothing it reads, and exempts the default', () => {
+    const sel = docPatternsFrom(['--path', 'rulbook/**/*.md', '--path', 'src/**', '--path', 'docs/projects/*.md', '--path', 'README.md']);
+    expect(selectDocs(tracked, sel).unmatched).toEqual(['rulbook/**/*.md', 'src/**', 'docs/projects/*.md']);
+    expect(selectDocs(['src/a.ts'], docPatternsFrom([]))).toEqual({ docs: [], briefsSkipped: 0, unmatched: [] });
+  });
+
+  it('refuses a --path with no glob after it', () => {
+    expect(() => docPatternsFrom(['--path'])).toThrow('--path needs a glob');
+    expect(() => docPatternsFrom(['--path', '--verbose'])).toThrow('--path needs a glob');
+  });
+
+  it('globs: `*` and `?` stay in a segment, a `**` segment spans none or many, the rest is literal', () => {
+    const m = (g: string, f: string) => globToRegExp(g).test(f);
+    expect(m('actions/*/README.md', 'actions/dco/README.md')).toBe(true);
+    expect(m('actions/*/README.md', 'actions/a/b/README.md')).toBe(false);
+    expect(m('rulebook/**/*.md', 'rulebook/a.md')).toBe(true);
+    expect(m('rulebook/**/*.md', 'rulebook/t/p/a.md')).toBe(true);
+    expect(m('rulebook/**', 'rulebook/t/a.md')).toBe(true);
+    expect(m('README.md', 'actions/dco/README.md')).toBe(false);
+    expect(m('README.md', 'READMExmd')).toBe(false);
+    expect(m('doc?/a.md', 'docs/a.md')).toBe(true);
+    expect(m('doc?/a.md', 'doc/a.md')).toBe(false);
+    expect(m('(a)+/[b].md', '(a)+/[b].md')).toBe(true);
+  });
+
+  /** The CLI on a repository with a stale coordinate in `rulebook/` and a sound one in `docs/`. */
+  const runGuard = (args: string[]) => {
+    const dir = mkdtempSync(join(tmpdir(), 'cite-paths-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      mkdirSync(join(dir, 'src'));
+      mkdirSync(join(dir, 'docs'));
+      mkdirSync(join(dir, 'rulebook'));
+      writeFileSync(join(dir, 'src/a.ts'), '// Reads the deploy workflow.\nexport const readDeploy = () => 1;\n');
+      writeFileSync(join(dir, 'docs/x.md'), 'It reads `readDeploy` (`src/a.ts:2`).\n');
+      writeFileSync(join(dir, 'rulebook/r.md'), '# A rule\n\nIt reads `readDeploy` (`src/a.ts:1`).\n');
+      execFileSync('git', ['add', '.'], { cwd: dir });
+      const r = spawnSync('node', [join(ROOT, 'scripts/citation-guard.mjs'), ...args], { cwd: dir, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: '' } });
+      return { status: r.status, out: `${r.stdout}${r.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('the default list still ignores a stale coordinate in rulebook/', () => {
+    const r = runGuard([]);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toContain('1 citation(s) across 1 docs resolve');
+    expect(r.out).toContain('  read: docs/**/*.md (the default; `--path <glob>` reads others)');
+  });
+
+  it('a stale coordinate in rulebook/ fails the guard once rulebook/ is on the list', () => {
+    const r = runGuard(['--path', 'docs/**/*.md', '--path', 'rulebook/**/*.md']);
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('rulebook/r.md:3');
+    expect(r.out).toContain('`src/a.ts:1`');
+    expect(r.out).not.toContain('docs/x.md:1');
+  });
+
+  it('a mistyped glob fails by name, and a bare --path fails, before anything is judged', () => {
+    const typo = runGuard(['--path', 'rulbook/**/*.md']);
+    expect(typo.status, typo.out).toBe(1);
+    expect(typo.out).toContain('`--path rulbook/**/*.md` selected no tracked Markdown file it reads');
+    const bare = runGuard(['--path']);
+    expect(bare.status, bare.out).toBe(1);
+    expect(bare.out).toContain('--path needs a glob');
+  });
 });
