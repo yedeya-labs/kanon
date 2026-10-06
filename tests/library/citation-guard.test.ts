@@ -1,10 +1,10 @@
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
-import { auditCitations, codeSpans, resolvePath, tokensOf, clauseAt, enclosingDeclarations, anchorsFor, coordinatesIn, codeOnly, isOracleSpec, namesIdentifier, topLevelDeclarations, declarationShift, strongNames, BLOCK_MIN, discardedPhrase, gitIgnored, externalSuspicion, suspectExternalLines } from '../../scripts/citation-guard.mjs';
+import { auditCitations, codeSpans, resolvePath, tokensOf, clauseAt, enclosingDeclarations, anchorsFor, coordinatesIn, codeOnly, isOracleSpec, namesIdentifier, topLevelDeclarations, declarationShift, strongNames, BLOCK_MIN, discardedPhrase, gitIgnored, externalSuspicion, suspectExternalLines, selfCheck } from '../../scripts/citation-guard.mjs';
 import { STATUSES } from '../../scripts/spec-lib.mjs';
 import { ROOT } from './helpers/adopter.js';
 
@@ -147,7 +147,11 @@ describe('the relaxations, each pinned by the false positive that forced it', ()
       doc('Bodies are text (`src/a.ts:1` → `src/b.ts:1`, `{n.body}` under `whitespace-pre-wrap`).'),
       { 'src/a.ts': 'export function noteBody() {}\n', 'src/b.ts': '  {n.body}\n' },
     );
-    expect(r.findings).toEqual([]);
+    // Neither coordinate names an identifier BEFORE it, so since kanon#387 both fail as
+    // unanchored. Pooled, the storage side would answer for `{n.body}` instead, and fail as
+    // drift: "the range names none of what its sentence does".
+    expect(r.findings.map((f) => f.citation)).toEqual(['`src/a.ts:1`', '`src/b.ts:1`']);
+    for (const f of r.findings) expect(f.problem).toMatch(/^unanchored citation/);
   });
 
   it('drops tokens too short to be distinctive rather than matching on noise', () => {
@@ -157,9 +161,25 @@ describe('the relaxations, each pinned by the false positive that forced it', ()
     expect(tokensOf('orders.status')).toEqual(['orders', 'status']);
   });
 
-  it('range-checks, and SAYS SO, when the sentence names no identifier', () => {
+  it.each([
+    ['a statement inside a function', 'export function placeOrder() {\n  const x = 1;\n  return x;\n}\n', 3, '`placeOrder` (`src/a.ts:3`)'],
+    ['a doc comment, widened to what it documents', 'const total = 1;\n/** Places the order. */\nexport const placeOrder = () => 1;\n', 2, '`placeOrder` (`src/a.ts:2-3`)'],
+    ['a line with nothing declared near it', 'x = 1\n', 1, '`theFunction` (`src/a.ts:1`)'],
+  ])("an unanchored citation's remedy names %s, and the example passes the guard", (_, src, line, example) => {
+    const r = audit(doc(`See \`src/a.ts:${line}\`.`), { 'src/a.ts': src });
+    expect(r.findings[0].problem).toContain(`as in \`\` ${example} \`\``);
+    if (!example.startsWith('`theFunction`')) expect(audit(doc(`Written as the remedy says: ${example}.`), { 'src/a.ts': src }).findings).toEqual([]);
+  });
+
+  it('says when the sentence names a span too short to look for', () => {
+    const r = audit(doc('The `<li>` (`src/a.ts:1`).'), { 'src/a.ts': '<li>\n' });
+    expect(r.findings[0].problem).toMatch(/^unanchored citation: its sentence names no identifier the guard can look for \(`<li>` is too short/);
+  });
+
+  it('fails a citation whose sentence names no identifier, as unanchored (kanon#387)', () => {
     const r = audit(doc('See `src/a.ts:1` for context.'), { 'src/a.ts': 'anything\n' });
-    expect(r.findings).toEqual([]);
+    expect(r.findings).toEqual([expect.objectContaining({ at: 'docs/x.md:1', citation: '`src/a.ts:1`' })]);
+    expect(r.findings[0].problem).toMatch(/^unanchored citation: its sentence names no identifier, so nothing checks that line 1/);
     expect(r.checked).toBe(1);
     expect(r.anchored, 'an unanchorable citation must not be counted as anchor-checked').toBe(0);
   });
@@ -295,9 +315,9 @@ describe('the continuation shorthand is a citation (RA-1198 review)', () => {
 
   it('checks a stale continuation, which is what makes it worth reading', () => {
     const r = audit(
-      { 'docs/x.md': 'names `thing` — `src/a.ts:1`, and `otherThing` at `:20`.' },
+      { 'docs/x.md': 'names `thing()` — `src/a.ts:1`, and `otherThing` at `:20`.' },
       // Line 20 is clear of the 8-line window above a range, so nothing admits it.
-      { 'src/a.ts': `thing\n${Array.from({ length: 18 }, () => 'filler').join('\n')}\nsomething else\n` },
+      { 'src/a.ts': `thing()\n${Array.from({ length: 18 }, () => 'filler').join('\n')}\nsomething else\n` },
     );
     expect(r.findings).toHaveLength(1);
     expect(r.findings[0].citation).toBe('`:20`');
@@ -327,14 +347,89 @@ describe('a comment is not evidence for a citation (RA-1192, RA-1198 review)', (
 });
 
 describe('the guard fails when it stops checking (RA-945, self-applied)', () => {
-  it('a run that anchors nothing is broken, not clean', () => {
-    // Adding the shorthand renamed the match object's offset field, so every anchor
-    // lookup ran at `undefined`, every citation silently demoted to range-checked, and
-    // the guard printed a green `0 anchor-checked` over 19 real failures. The
-    // disclosure line made it visible; this makes it fatal.
-    const src = readFileSync(join(ROOT, 'scripts/citation-guard.mjs'), 'utf8');
-    expect(src).toMatch(/checked > 0 && anchored === 0/);
-    expect(src).toMatch(/broken guard, not a clean corpus/);
+  /**
+   * Adding the shorthand renamed the match object's offset field, so every anchor lookup ran
+   * at `undefined`, every citation silently demoted to range-checked, and the guard printed a
+   * green `0 anchor-checked` over 19 real failures. The fatal rule that followed inferred the
+   * guard's health from the corpus ("read N, anchored none"), and kanon#387 is what that cost:
+   * a corpus whose one citation named no identifier failed as a broken guard. So the question
+   * is now asked of a fixture whose answer is known (`selfCheck`), and the corpus's
+   * unanchored citations are ordinary findings.
+   */
+  it('the self-check passes the guard as it is', () => {
+    expect(selfCheck()).toEqual({ ok: true, checked: 2, anchored: 2, caught: 1 });
+  });
+
+  it('the self-check fails a guard that anchors nothing, one that cannot fail, and one that reads nothing', () => {
+    type Audit = typeof auditCitations;
+    const anchorsNothing: Audit = (docs, read, tracked, o) =>
+      auditCitations(docs, (p) => read(p).replace(/`selfCheckAnchor`/g, 'it'), tracked, o);
+    const neverFails: Audit = (...a) => ({ ...auditCitations(...a), findings: [] });
+    const readsNothing: Audit = (docs, read, tracked, o) => auditCitations(docs, () => '', tracked, o);
+    expect(selfCheck(anchorsNothing)).toMatchObject({ ok: false, anchored: 0 });
+    expect(selfCheck(neverFails)).toMatchObject({ ok: false, caught: 0 });
+    expect(selfCheck(readsNothing)).toMatchObject({ ok: false, checked: 0 });
+    // The all-clear's count is part of what the guard claims, so a miscount is a broken guard too.
+    const miscounts: Audit = (...a) => ({ ...auditCitations(...a), anchored: 0 });
+    expect(selfCheck(miscounts)).toMatchObject({ ok: false, anchored: 0 });
+  });
+
+  /** The CLI on a one-doc repository: a copy of the script, as it is or mutated. */
+  const runGuard = (docBody: string, mutate?: (src: string) => string) => {
+    const dir = mkdtempSync(join(tmpdir(), 'cite-health-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      mkdirSync(join(dir, 'src'));
+      mkdirSync(join(dir, 'docs'));
+      writeFileSync(join(dir, 'src/a.ts'), '// Reads the deploy workflow.\nexport const readDeploy = () => 1;\n');
+      writeFileSync(join(dir, 'docs/x.md'), docBody);
+      execFileSync('git', ['add', '.'], { cwd: dir });
+      // Outside the repository, so the guard does not read its own copy as part of the tree.
+      // The copy runs beside the real `scripts/`, which it imports, under a name of its own.
+      const tools = mkdtempSync(join(tmpdir(), 'cite-tools-'));
+      cpSync(join(ROOT, 'scripts'), join(tools, 'scripts'), { recursive: true });
+      const source = readFileSync(join(ROOT, 'scripts/citation-guard.mjs'), 'utf8');
+      const copy = join(tools, 'scripts', 'copy.mjs');
+      writeFileSync(copy, mutate ? mutate(source) : source);
+      const r = spawnSync('node', [copy], { cwd: dir, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: '' } });
+      rmSync(tools, { recursive: true, force: true });
+      return { status: r.status, out: `${r.stdout}${r.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  // kanon#377's shape: a plan row whose one coordinate names no identifier in its cell.
+  const tableRow = '| Step | Check |\n|---|---|\n| **P6** | The grep prints nothing. Today it prints `src/a.ts:1`. |\n';
+
+  it('a lone table-row coordinate fails as an unanchored citation, with its file, line and remedy, not as a broken guard', () => {
+    const r = runGuard(tableRow);
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('docs/x.md:3');
+    expect(r.out).toContain('`src/a.ts:1` — unanchored citation: its sentence names no identifier');
+    // The remedy names the declaration at or above the cited line, and how to write it.
+    // The cited line is readDeploy's doc comment, so the example reaches the declaration.
+    expect(r.out).toContain('as in `` `readDeploy` (`src/a.ts:1-2`) ``');
+    expect(r.out).not.toMatch(/anchor-checked NONE|broken guard/);
+  });
+
+  it('the same row, naming what the line holds, passes', () => {
+    const r = runGuard(tableRow.replace('Today it prints `src/a.ts:1`', 'It reads `readDeploy` (`src/a.ts:2`)'));
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toContain('1 citation(s) across 1 docs resolve; 1 anchor-checked');
+  });
+
+  it('a guard whose anchor logic has stopped fails as broken, before it judges docs/', () => {
+    // RA-945's mutation, on a copy: no segment yields an anchor any more.
+    const broken = (src: string) => {
+      const line = 'const anchors = identifierSpans(segment).filter(looksLikeCode);';
+      expect(src).toContain(line);
+      return src.replace(line, 'const anchors = [];');
+    };
+    const r = runGuard('It reads `readDeploy` (`src/a.ts:2`).\n', broken);
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('anchor-checked NONE of them');
+    expect(r.out).toContain('That is a broken guard, not a stale citation');
+    expect(r.out).not.toContain('unanchored citation');
   });
 });
 
@@ -450,7 +545,10 @@ describe('inheritance stops at a sentence, not only at a clause (RA-1220 review)
       { 'docs/x.md': 'The write is `inArray(courseIds)` at `src/a.ts:1`. Unrelatedly, the helper lives at `:20`.' },
       files,
     );
-    expect(r.findings, 'the second sentence names nothing, so `:20` is range-checked').toEqual([]);
+    // The second sentence names nothing, so `:20` fails as unanchored (kanon#387). What this
+    // pins is that it is not judged against `inArray`, the first sentence's identifier.
+    expect(r.findings.map((f) => f.citation)).toEqual(['`:20`']);
+    expect(r.findings[0].problem).toMatch(/^unanchored citation/);
   });
 
   it('still carries them within one sentence', () => {

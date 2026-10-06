@@ -17,10 +17,12 @@
 // citing sentence must appear inside the cited range. That is inferable from what is
 // already written — no format change, no marker to remember.
 //
-// WHEN NO ANCHOR IS INFERABLE the citation is range-checked only, and the run REPORTS
-// how many fell back. A guard that silently degrades to a weaker check on most of its
-// corpus is the "detector that finds nothing looks like a healthy system" shape (RA-945),
-// so the number is printed with the all-clear rather than left to be discovered.
+// WHEN NO ANCHOR IS INFERABLE the citation FAILS, as an "unanchored citation" with its file,
+// line and what to write instead (kanon#387, the Owner's decision of 2026-10-06). It used to be
+// range-checked only and counted in the all-clear; but a range check proves only that the line
+// exists, and a run in which every citation was like that failed as a broken guard, which is
+// how a single stale table row failed Kanon's `main` (kanon#377). Whether the guard itself
+// works is asked of a fixture now (`selfCheck`), not inferred from the corpus.
 //
 // WHY FINDING THE ANCHOR IS NOT ENOUGH EITHER (RA-2211). PR RA-2208 inserted 8 lines near the
 // top of `tenancy.ts` and re-pointed 5 of the 16 citations into it; the other 11 were left
@@ -41,8 +43,8 @@
 //      RA-2211 named `` `createTenant()` … `tenancy.ts:80` `` (`docs/tenant-provisioning.md`)
 //      as the instance, and it is not one. That citation is a markdown TABLE ROW, and
 //      `anchorsFor` deliberately scopes anchors to the cell, so it carries NO anchors at
-//      all and is range-checked only — restoring the stale `:80` still exits 0, on this
-//      guard as on the old one. The substring hole was real and is now shut; nothing in
+//      all. It was range-checked only then, and restoring the stale `:80` still exited 0;
+//      since kanon#387 it fails as an unanchored citation whatever its line says. The substring hole was real and is now shut; nothing in
 //      today's corpus was falling through it, which is exactly why the measurement above
 //      is zero rather than merely small. Do not re-derive a history from this entry.
 //
@@ -421,8 +423,8 @@ export const tokensOf = (identifier) => {
   const kept = parts.filter((t) => t.length >= 4 && !STOPWORDS.has(t.toLowerCase()));
   // An identifier whose every token is too short to be distinctive — `<li>`, `id`,
   // `db` — yields nothing rather than yielding noise. Returning a 2-character token
-  // would match almost any line; returning none correctly demotes the citation to
-  // range-checked, which the run reports.
+  // would match almost any line; returning none leaves the citation unanchored, which
+  // fails and says that the span was too short to look for (kanon#387).
   return kept;
 };
 
@@ -640,8 +642,8 @@ export const resolvePath = (cited, tracked, rangeHasAnchor) => {
  *  green-lights the coordinate a human would otherwise re-check.
  *
  *  Deliberately crude: line and block comments, and nothing about strings. A citation
- *  that genuinely means a comment (a documented rationale) loses its anchor and falls
- *  back to range-checking, which the run reports as such. */
+ *  that genuinely means a comment (a documented rationale) does not find its anchor in
+ *  the range, and fails unless the enclosing scope or the window above names it. */
 export const codeOnly = (text) =>
   text
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
@@ -696,8 +698,9 @@ export const anchorsFor = (line, index, inherited) => {
   // relaxation in this file was forced by.
   //
   // The boundary is prose: an em dash, a semicolon, or a `, and`/`, so` join. Crude
-  // deliberately, and it only ever WITHHOLDS inheritance, so the failure mode is a
-  // demotion to range-checked rather than a wrong verdict.
+  // deliberately, and it only ever WITHHOLDS inheritance, so the failure mode is an
+  // "unanchored citation" finding (kanon#387) that asks for the identifier to be named
+  // again, rather than a wrong verdict on a correct coordinate.
   const brokeClause = /[—;]|,\s+(?:and|so|but|which|where)\b/.test(segment);
   if (brokeClause) return { anchors, anchorTokens: [...new Set(anchors.flatMap(tokensOf))], clauseBroken: true };
   if (!anchors.length && inherited?.length) {
@@ -727,6 +730,72 @@ export const isOracleSpec = (path) => path.startsWith('docs/qa/specs/');
  * @typedef {{at: string, citation: string, problem: string, clause: Clause|null}} Finding
  * @typedef {{path: string, shift: number, count: number, citations: number}} Block
  */
+
+/**
+ * A CITATION WHOSE SENTENCE NAMES NO IDENTIFIER IS AN ORDINARY FAILURE (kanon#387, the Owner's
+ * decision of 2026-10-06), reported where it is, with what to write instead.
+ *
+ * `K-SELF-3`'s rule is that every `file:line` points at an identifier its own sentence names.
+ * Until #387 such a citation was range-checked only and counted in the all-clear, and a run in
+ * which EVERY citation was like that failed as "anchor-checked NONE", a broken guard. That
+ * failed Kanon's own `main` (kanon#377) over one table row, "Today it prints
+ * `lead-reconcile.mjs:1378`": the failure said the guard was broken, when what it had found
+ * was a stale coordinate, and it named no file and no line. A range check proves only that the
+ * line exists, which stays true however far the code slides, so the coordinate is now a
+ * finding like any other, and whether the guard itself works is `selfCheck`'s question.
+ *
+ * The remedy names a declaration when the file has one near the range: when the range is a doc
+ * comment, the declaration it documents, with the range widened to reach it; otherwise the
+ * nearest at or above its end. Either way the example it prints passes the guard as written, and the
+ * author has a concrete identifier to check by content, not a placeholder.
+ *
+ * @param {string[]} anchors the backticked spans the segment names, none of them distinctive
+ * @param {string[]} target the cited file's lines
+ * @param {string} cited the path as the doc wrote it
+ * @param {number} a
+ * @param {number} b
+ */
+export const unanchoredProblem = (anchors, target, cited, a, b) => {
+  // A doc comment documents what follows it, so that comes first; otherwise the nearest name
+  // at or above the range's end.
+  const below = documentedBelow(target, a, b);
+  const near = below?.name ?? enclosingDeclarations(target, b).find((n) => tokensOf(n).length);
+  // A doc comment's coordinate is widened to the declaration it documents, so the example
+  // itself passes: the comment lines alone hold no code for the name to be found in.
+  const end = below?.line ?? b;
+  const coordinate = `${cited}:${a}${end === a ? '' : `-${end}`}`;
+  const example = `\`\` \`${near ?? 'theFunction'}\` (\`${coordinate}\`) \`\``;
+  const short = anchors.length
+    ? ` the guard can look for (${anchors.slice(0, 3).map((x) => `\`${x}\``).join(', ')} ${anchors.length > 1 ? 'are' : 'is'} too short or too common to find in code)`
+    : '';
+  return (
+    `unanchored citation: its sentence names no identifier${short}, so nothing checks that ` +
+    `line ${a} still holds what it means, and a range check passes whatever sits there now. ` +
+    'Name what the cited lines hold, in backticks, before the coordinate in the same sentence ' +
+    `(in a table, the same cell), as in ${example}${near ? `, after checking by content that \`${near}\` is what it means` : ''}. ` +
+    'If the line number records the past rather than pointing at code, drop it and name the code instead (K-SELF-3)'
+  );
+};
+
+/**
+ * The declaration a range of comment lines documents: the first one within a few lines below
+ * `b`, with only blank or comment lines from `a` down to it, the doc-comment shape
+ * `declarationShift` admits, with its line. `undefined` when the range holds code, or nothing
+ * is declared.
+ *
+ * @param {string[]} target
+ * @param {number} a
+ * @param {number} b
+ */
+const documentedBelow = (target, a, b) => {
+  const DECL = /^\s*(?:export\s+)?(?:async\s+)?(?:function|const|let|class|interface|type)\s+([A-Za-z_$][\w$]*)/;
+  for (let i = a - 1; i < Math.min(target.length, b + 8); i += 1) {
+    const m = DECL.exec(target[i]);
+    if (m) return tokensOf(m[1]).length ? { name: m[1], line: i + 1 } : undefined;
+    if (!BLANK_OR_COMMENT.test(target[i])) return undefined;
+  }
+  return undefined;
+};
 
 /**
  * @param {string[]} docs
@@ -888,7 +957,11 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
           findings.push({ at, citation: whole, problem: `inverted range ${a}-${b}`, clause });
           continue;
         }
-        if (!anchorTokens.length) continue; // range-checked only; counted below
+        // NO IDENTIFIER, NO VERDICT, SO IT FAILS (kanon#387). See `unanchoredProblem`.
+        if (!anchorTokens.length) {
+          findings.push({ at, citation: whole, clause, problem: unanchoredProblem(anchors, target, cited, a, b) });
+          continue;
+        }
         anchored += 1;
         const range = codeOnly(target.slice(a - 1, b).join('\n'));
         // ENCLOSING SCOPE COUNTS, and leaving it out made the check wrong rather than
@@ -986,8 +1059,9 @@ export const BLOCK_MIN = 3;
  * Of the 16 coordinates into `tenancy.ts` that RA-2208 shifted, `declarationShift` sees the
  * ones whose sentence names a top-level declaration. The rest name nothing checkable —
  * *"**Insert the tenant row** — `tenancy.ts:192-202`"* names no identifier at all, and
- * `tenantIntegrationSettings` is declared in the schema, not here — so they are
- * range-checked only and no per-citation rule can ever reach them. They were stale for
+ * `tenantIntegrationSettings` is declared in the schema, not here — so `declarationShift`
+ * can't reach them (the first kind fails as an unanchored citation since kanon#387, which
+ * says nothing about a shift). They were stale for
  * exactly the same reason and by exactly the same `k`. Naming the FILE is what carries the
  * finding across to them.
  */
@@ -1028,6 +1102,36 @@ const blocksIn = (shiftsByFile, citationsByFile) => {
  */
 export const PROJECTS_TREE = 'docs/projects/';
 
+/**
+ * IS THE GUARD ITSELF WORKING? Asked of a fixed fixture, not of the corpus (kanon#387).
+ *
+ * The old answer was "a run that read citations and anchored none of them is broken" (RA-945):
+ * adding the continuation shorthand renamed the match object's offset field, every anchor
+ * lookup ran at `undefined`, and the guard printed a green `0 anchor-checked` over 19 real
+ * failures. That inferred the guard's health from the corpus, so it was wrong both ways: a
+ * corpus whose only citation names no identifier (Kanon's `main`, kanon#377) read as a broken
+ * guard, and a corpus with no citations at all could not tell a working guard from a broken one.
+ *
+ * So the guard runs `auditCitations` over two citations it knows the answer to before it reads
+ * `docs/`. One must resolve and anchor, and the other, whose line is now a comment, must be
+ * caught. If anchoring has stopped, the first is not anchor-checked; if the guard can no longer
+ * fail, the second passes; and if coordinates are no longer read, neither is checked. Each of
+ * those is a broken guard, said as one, and the corpus is not judged by it.
+ *
+ * @param {typeof auditCitations} [audit] the audit to check; a test passes a broken one
+ * @returns {{ok: boolean, checked: number, anchored: number, caught: number}}
+ */
+export const selfCheck = (audit = auditCitations) => {
+  const files = {
+    'docs/self-check.md':
+      'The guard reads `selfCheckAnchor` (`src/self-check.ts:2`). A stale one points at `selfCheckAnchor` (`src/self-check.ts:1`).\n',
+    'src/self-check.ts': '// The fixture the guard checks itself against.\nexport const selfCheckAnchor = 1;\n',
+  };
+  const r = audit(['docs/self-check.md'], (p) => files[p], Object.keys(files));
+  const caught = r.findings.filter((f) => f.citation === '`src/self-check.ts:1`').length;
+  return { ok: r.checked === 2 && r.anchored === 2 && r.findings.length === 1 && caught === 1, checked: r.checked, anchored: r.anchored, caught };
+};
+
 const SUSPICION = {
   absent: 'not in the working tree, where an installed dependency would be',
   suffix: 'its ignored directory is, by suffix, one the repository keeps source files in',
@@ -1047,6 +1151,19 @@ export const suspectExternalLines = (list, ci) =>
       `but ${reasons.map((r) => SUSPICION[r]).join('; and ')} — if it is a typo for the repository's own file, fix it.`);
 
 const main = () => {
+  // FIRST, before `docs/` is read: a broken guard's verdict on the corpus means nothing, so
+  // it is not given (kanon#387). See `selfCheck`.
+  const self = selfCheck();
+  if (!self.ok) {
+    console.error(
+      `citation-guard: its self-check read ${self.checked} of 2 built-in citation(s), ` +
+        `anchor-checked ${self.anchored ? self.anchored : 'NONE'} of them, and caught ${self.caught} of the 1 stale one. ` +
+        'That is a broken guard, not a stale citation: the anchor logic is not doing what it should, ' +
+        'so `docs/` was not judged. Fix `citation-guard.mjs`, not the docs.',
+    );
+    process.exitCode = 1;
+    return;
+  }
   let tracked;
   try {
     tracked = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
@@ -1133,8 +1250,8 @@ const main = () => {
       console.error(
         `  BLOCK SHIFT — ${bl.count} citation(s) into ${bl.path} are each ${bl.shift} line(s) ` +
           `above what they name. ${bl.citations} coordinate(s) in docs/ point into that file; ` +
-          're-derive ALL of them, not only the ones listed below — a citation whose sentence ' +
-          'names no identifier is range-checked only and drifted by the same amount in silence.\n',
+          're-derive ALL of them, not only the ones listed below — a citation whose identifier ' +
+          'is declared above the insertion still passes the anchor check, and drifted by the same amount in silence.\n',
       );
     }
     if (confirmed.length) {
@@ -1161,26 +1278,12 @@ const main = () => {
     process.exitCode = 1;
     return;
   }
-  // A RUN THAT ANCHORS NOTHING IS A BROKEN RUN, not a clean one. Adding the
-  // continuation shorthand renamed the match object's offset field, so every anchor
-  // lookup ran at `undefined`, every citation silently demoted to range-checked, and
-  // the guard printed a green `0 anchor-checked` all-clear over 19 real failures. The
-  // disclosure line was what made it visible — this makes it fatal, because a
-  // detector that quietly stops detecting is the class this guard exists to serve
-  // (RA-945).
-  if (checked > 0 && anchored === 0) {
-    console.error(
-      `citation-guard: read ${checked} citation(s) and anchor-checked NONE of them. ` +
-        'That is a broken guard, not a clean corpus — some citation in `docs/` names an ' +
-        'identifier, so anchoring zero means the anchor logic is not running.',
-    );
-    process.exitCode = 1;
-    return;
-  }
+  // EVERY CITATION READ IS ANCHOR-CHECKED NOW, since one with no identifier is a finding
+  // (kanon#387), so the all-clear no longer has a "range-checked only" bucket. The RA-945 rule
+  // that a run anchoring nothing is broken became `selfCheck`, above, which asks it of a fixture.
   console.log(
     `citation-guard: ${checked} citation(s) across ${audited} docs resolve; ` +
-      `${anchored} anchor-checked (${viaEnclosing} of them only via the enclosing scope, not inside the cited range), ` +
-      `${checked - anchored} range-checked only (no identifier named in the sentence)` +
+      `${anchored} anchor-checked (${viaEnclosing} of them only via the enclosing scope, not inside the cited range)` +
       `${discarded ? `, ${discardedPhrase(discarded, discardedLineZero)}` : ''}.`,
   );
   // THE WEAKER ANCHOR, LISTED ON REQUEST (RA-1217). The count above is always printed; the
