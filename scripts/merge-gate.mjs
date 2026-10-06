@@ -53,7 +53,9 @@
  * `.claude/`), and the project's pipeline code and high-risk paths are the
  * adopter's, declared in `docs/qa/escalation-paths.md` (`K-LAYOUT-8`). `main` reads that file
  * from the default branch (`K-MERGE-17`) and hands `escalatingPaths` of it to `mergeVerdict`,
- * so a pull request can't add or remove an escalation path for itself.
+ * so a pull request can't add or remove an escalation path for itself. An adopter whose
+ * adoption record, on that branch, declares its production promotion human-gated has its
+ * high-risk paths merge in the green zone, and nothing else (`K-MERGE-4`, kanon#158).
  *
  * `docs/qa/specs/**` is deliberately never an escalation path: those specs are the project's
  * DELIVERABLE, and escalating them made the Merger decline every PR the project he exists for
@@ -1017,6 +1019,8 @@ import { appLogin, appPersona } from './app-register.mjs';
 import { IMPLEMENTER_STATUS, asRole, implementerStatusOn, signed } from './lib/role-marker.mjs';
 import { escalatingPaths, printDefaults, readEscalationFileAt } from './lib/escalation-paths.mjs';
 import { defaultBranchFile } from './lib/declarations.mjs';
+import { readProductionPromotionAt } from './lib/production-promotion.mjs';
+import { apiReader, judgingInputs } from './judging-inputs.mjs';
 import { isSpecFile, specPromotions } from './lib/spec-promotions.mjs';
 import {
   ESCALATION_HEADER, REVIEW_EVENT_CHECKS, SELF_CHECKS, isEscalation, mergerMarker, mergerMarkerSpellings, mergerMarkersIn,
@@ -1572,15 +1576,30 @@ export function summaryLines({ considered, dryRun, merged, escalated, waiting = 
  * A read failure, or a malformed file, throws `DeclarationError` by name, through
  * `readEscalationFileAt`. No file, or no section, is Kanon's default (plan 0005 §5.2): only the
  * pipeline's own paths escalate, and `print` is given the line that says so.
+ *
+ * A HUMAN-GATED PRODUCTION PROMOTION (`K-MERGE-4`, kanon#158) is read from the adoption record
+ * on the same default branch, never from a PR, so a PR that declares one is still judged
+ * without it. Declared, the project's high-risk paths merge in the green zone, and `inputsAt`
+ * gives the judging inputs on that branch, so a high-risk path that is also one still
+ * escalates (`escalatingPaths`). It is read only when the opt-in is declared: the default costs
+ * no extra read. A record that can't be read, is malformed, or a judging-input set that can't
+ * be read, throws by name: a sweep with the wrong rules would merge what a human decides.
+ * `print` is given one line either way: the default, or what the declaration widened.
  * @param {string} repo
  * @param {(args: string[], opts?: object) => string} [run]
  * @param {(line: string) => void} [print]
+ * @param {(branch: string) => string[]} [inputsAt] the judging inputs at a ref, read over the API
  */
-export function readEscalations(repo, run = gh, print = (line) => console.log(line)) {
+export function readEscalations(repo, run = gh, print = (line) => console.log(line), inputsAt = (branch) => judgingInputs(apiReader(repo, branch))) {
   const { branch, read } = defaultBranchFile(repo, run);
   const file = readEscalationFileAt(branch, (path) => read(path));
   printDefaults('merge-gate', file, print);
-  return escalatingPaths(file);
+  const promotion = readProductionPromotionAt(branch, (path) => read(path));
+  printDefaults('merge-gate', promotion, print);
+  if (promotion.gate === null) return escalatingPaths(file);
+  const relaxed = file.paths.length;
+  print(`merge-gate: the production promotion is human-gated (${promotion.gate}), as docs/qa/adoption.md on \`${branch}\` declares, so the project's ${relaxed} high-risk path${relaxed === 1 ? '' : 's'} under \`## Escalation paths\` merge${relaxed === 1 ? 's' : ''} in the green zone. The pipeline's own paths, the project's pipeline code and every judging input still escalate (K-MERGE-4)`);
+  return escalatingPaths(file, { judgingInputs: inputsAt(branch) });
 }
 
 async function main() {
@@ -1596,7 +1615,9 @@ async function main() {
   // THE ESCALATION FILE, FROM THE DEFAULT BRANCH (`K-MERGE-17`, kanon#54). Read once, before
   // any PR, and a malformed file ends the run by name: a sweep with no path rules would merge
   // PRs that touch the project's high-risk paths. A missing file or section is Kanon's default,
-  // only the pipeline's own paths (plan 0005 §5.2), said in the log and in the summary.
+  // only the pipeline's own paths (plan 0005 §5.2), said in the log and in the summary. So is
+  // the adoption record's production promotion (`K-MERGE-4`, kanon#158): declared human-gated,
+  // it widens the zone to the project's high-risk paths, and the line saying so is in both too.
   /** @type {string[]} */
   const defaults = [];
   const escalations = readEscalations(repo, gh, (line) => { console.log(line); defaults.push(line); });

@@ -33,7 +33,9 @@
 // THE PIPELINE'S OWN PATHS ARE KANON'S, NOT THE FILE'S (`K-MERGE-4`). Every file under
 // `.github/`, every markdown file directly inside `docs/qa/`, `AGENTS.md`, `CLAUDE.md` and every
 // file under `.claude/` escalates whatever the file says, and so does every pipeline-code
-// directory it declares.
+// directory it declares. An adopter whose production promotion is human-gated may declare so in
+// its adoption record (kanon#158), and then only its high-risk paths stop escalating on their own
+// (`escalatingPaths`, below); none of these do.
 //
 // FAILS BY NAME. Every reader throws `DeclarationError`, whose message names the file and,
 // for a malformed entry, the line, so a guard that can't read the declaration fails saying
@@ -248,13 +250,45 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 /**
  * Every path that escalates, as `[pattern, reason]` pairs: the pipeline's own paths, then the
  * project's pipeline code, then its high-risk paths.
+ *
+ * A HUMAN-GATED PRODUCTION PROMOTION (`K-MERGE-4`, kanon#158). When the adoption record on the
+ * default branch declares one, `promotion` is given, and the project's high-risk paths
+ * (`## Escalation paths`) no longer escalate on their own: the human gate is the promotion,
+ * which every deploy of them still waits for. Everything that decides how a PR is judged, or
+ * whether the promotion is gated at all, still escalates, because a PR must never be able to
+ * change its own rules:
+ *   · the pipeline's own paths (`PIPELINE_ESCALATIONS`): every file under `.github/` (the
+ *     workflows that run Kanon's lanes and pin its release, the project-setup hook, and the
+ *     deploy workflow whose environment holds the human gate), every markdown file directly
+ *     inside `docs/qa/` (the adoption record that makes this declaration, the escalation file,
+ *     the identity register, the sign-off delegation and the playbooks), and the agent
+ *     instructions and configuration (`AGENTS.md`, `CLAUDE.md`, `.claude/`);
+ *   · the project's own pipeline code (`## Pipeline code`), the scripts its lanes run;
+ *   · a declared high-risk path that is also a judging input on the default branch
+ *     (`K-MERGE-17`'s delegation row): a document the instructions link to, which a project
+ *     declared because it wanted a human to approve changes to it. `judgingInputs` is that
+ *     set, read from the default branch, and only its files a declared path matches escalate,
+ *     each as one exact path, so the declaration never relaxes a judging input.
+ * The project briefs, the escalating labels and a spec promotion (`K-SPEC-9`) are the verdict's
+ * own rules, and this changes none of them.
  * @param {EscalationFile} file
+ * @param {{ judgingInputs: readonly string[] } | null} [promotion] `null`, or omitted, when the
+ *   record declares no human-gated promotion: Kanon's default
  * @returns {Array<readonly [RegExp, string]>}
  */
-export function escalatingPaths(file) {
-  return [
+export function escalatingPaths(file, promotion = null) {
+  const own = [
     ...PIPELINE_ESCALATIONS,
     ...file.pipeline.map(({ dir, reason }) => /** @type {const} */ ([new RegExp(`^${escape(dir)}`), reason])),
-    ...file.paths.map(({ pattern: re, reason }) => /** @type {const} */ ([re, reason])),
+  ];
+  if (!promotion) return [...own, ...file.paths.map(({ pattern: re, reason }) => /** @type {const} */ ([re, reason]))];
+  return [
+    ...own,
+    ...promotion.judgingInputs.flatMap((input) => {
+      const hit = file.paths.find(({ pattern: re }) => re.test(input));
+      return hit
+        ? [/** @type {const} */ ([new RegExp(`^${escape(input)}$`), `${hit.reason}, and a judging input (K-MERGE-17), which a human-gated promotion never relaxes`])]
+        : [];
+    }),
   ];
 }
