@@ -654,11 +654,16 @@ export const danglingCriterionRefs = (markdown, proposed) => {
  * match when one of these holds, in either direction:
  *
  *   - `not`, `never`, `no longer` or an `n't` word is one of the two words just before it,
- *     in the same clause ("is not blocked on", "isn't blocked by", "does not matter if X
- *     has not landed");
+ *     in the same clause ("is not blocked on", "isn't blocked by"). Before the conditional
+ *     phrase (`if/until/unless X has not landed`) only a negated `matter`, `block`, `wait` or
+ *     `depend` counts ("does not matter if X has not landed"): any other negated verb there
+ *     is a prohibition ("Don't deploy if X has not landed"), which asserts the edge
+ *     (kanon#272);
  *   - its sentence opens with `Not in this issue`, the template's out-of-scope boundary;
  *   - its own clause ends and the next one is about a follow-up ("once X lands, a
- *     follow-up may extend …"), so what waits is that follow-up, not this issue.
+ *     follow-up may extend …"), so what waits is that follow-up, not this issue. The
+ *     follow-up must be the next clause's subject, a verb after it; "the follow-up check
+ *     runs here" is about this issue (kanon#272).
  *
  * The window is deliberately two words and stops at a clause boundary, so a negation
  * elsewhere in the sentence ("Issue B is not optional; this is blocked on Issue B") does
@@ -719,9 +724,20 @@ export const deniedEdge = (text, start, length) => {
   if (/^Not in this issue\b/i.test(sentence)) return true;
   const clause = sentence.slice(sentence.search(/[^,;:—–()]*$/));
   const words = clause.trim().split(/\s+/).filter(Boolean).slice(-2).join(' ');
-  if (/\b(?:not|never|no longer)\b|n['’]t\b/i.test(words)) return true;
+  // kanon#272: before `if/until/unless X has not landed`, the two words are usually the verb
+  // the condition governs, and a negated verb there is a PROHIBITION ("Don't deploy if Issue
+  // B has not landed"), which asserts the edge. Only a negated word that says the condition
+  // is irrelevant ("does not matter if …", "isn't blocked if …") denies it.
+  const conditional = /^(?:if|until|unless)\b/i.test(text.slice(start));
+  const negated = conditional
+    ? /(?:\b(?:not|never|longer)|n['’]t) (?:matters?|block(?:s|ed)?|waits?|depends?)$/i
+    : /\b(?:not|never|no longer)\b|n['’]t\b/i;
+  if (negated.test(words)) return true;
   const after = text.slice(start + length);
-  return /^[^.!?;,]*,\s*(?:a|any|the) (?:later |separate )?follow-?ups?\b/i.test(after);
+  // The follow-up is the subject of the next clause, so a verb comes next ("a follow-up may
+  // extend …"); `follow-up` before a noun ("the follow-up check runs here") is an adjective,
+  // and that clause is about this issue (kanon#272).
+  return /^[^.!?;,]*,\s*(?:a|any|the) (?:later |separate )?follow-?ups? (?:may|might|can|could|will|would|should|must|is|are|does|do)\b/i.test(after);
 };
 
 /**
