@@ -68,10 +68,13 @@
 // among them. None was a quotation, so none was a false positive. Without the tooling
 // exclusion the same replay flags 68: the extra 22 are 7 of the deliberate quotations
 // above (`payments.ts:44-52`, `course-wizard.tsx:797-800`, `enrollment.ts:124-129`) and
-// 15 live pointers in tooling comments (`merge-gate.mjs:506` in `permissions-guard.mjs`,
-// `lead-reconcile.mjs:975` in `spec-coverage.mjs`; both were stale by 2026-09-24 and have
-// since been fixed by hand, the first reworded without a line number, the second
-// re-pointed). Those 15 are the price of a rule that
+// 15 live pointers in tooling comments (line 506 of `merge-gate.mjs`, cited from
+// `permissions-guard.mjs`, and line 975 of `lead-reconcile.mjs`, cited from
+// `spec-coverage.mjs`; both were stale by 2026-09-24 and have since been fixed by hand,
+// the first reworded without a line number, the second re-pointed). Those two are named
+// here without a `file:line` on purpose: Kanon has files of both names, and on Kanon this
+// file is code, so a coordinate here was read as a pointer into them and reported moved
+// by every diff above line 506 or 975 (kanon#377). Those 15 are the price of a rule that
 // reads a property of the file rather than a list of lines, and they are said here so
 // the all-clear is not read as covering them. Two forms are not read in code: a bare
 // `:NNN` continuation (a port or a time as often as a line), and every coordinate after

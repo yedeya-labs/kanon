@@ -378,7 +378,9 @@ describe('step 11a: Kanon audits its own code, through the lane at its last rele
 // for each one on the queue's branch, so each must report there under the same name it
 // reports under on the pull request (K-MERGE-7). The agent blocks smoke run joins them
 // once the ruleset names it (plan 0001 §4). The public-text check joined them after #258.
-const REQUIRED_CHECKS = ['Lint, type-check and unit tests', 'Conventional title', 'Signed-off commits', 'Agent blocks smoke', 'Agent lanes smoke', 'No reference-adopter names'];
+// `Citation guard` is meant to be required (#377): the Owner adds it to the `main` ruleset, and
+// these tests hold it to a required check's shape from the PR that adds it.
+const REQUIRED_CHECKS = ['Lint, type-check and unit tests', 'Conventional title', 'Signed-off commits', 'Agent blocks smoke', 'Agent lanes smoke', 'No reference-adopter names', 'Citation guard'];
 
 describe('K-MERGE-7 every required check reports on pull requests and in the merge queue, under one name', () => {
   const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
@@ -411,6 +413,9 @@ const SMOKES = ['Agent blocks smoke', 'Agent lanes smoke'];
 // A required check that judges with a script read from the PR's BASE commit, not an action:
 // the same bootstrap, since the PR's own copy of the script never runs.
 const BASE_JUDGES = ['No reference-adopter names'];
+// A required check that reads the PR's tree and judges it with a script from the base commit,
+// checked out beside it: the tree is the PR's, the judge is not (#377).
+const BASE_SCRIPT_JUDGES: Record<string, string> = { 'Citation guard': 'citation-guard.mjs' };
 
 describe('#47 no required check judges a PR with the PR\'s own copy of its action', () => {
   const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
@@ -419,7 +424,26 @@ describe('#47 no required check judges a PR with the PR\'s own copy of its actio
     [job.uses, ...(job.steps ?? []).map((s) => s.uses)].filter((u): u is string => typeof u === 'string');
 
   it('accounts for every required check as a judge, a smoke or CI', () => {
-    expect([...Object.keys(JUDGES), ...SMOKES, ...BASE_JUDGES, 'Lint, type-check and unit tests'].sort()).toEqual([...REQUIRED_CHECKS].sort());
+    expect([...Object.keys(JUDGES), ...SMOKES, ...BASE_JUDGES, ...Object.keys(BASE_SCRIPT_JUDGES), 'Lint, type-check and unit tests'].sort()).toEqual([...REQUIRED_CHECKS].sort());
+  });
+
+  it.each(Object.entries(BASE_SCRIPT_JUDGES))('%s runs %s from the base commit, over the PR\'s tree', (check, script) => {
+    const { job } = jobs.find(({ job: j }) => j.name === check)!;
+    const steps = job.steps ?? [];
+    const checkouts = steps.filter((s) => s.uses?.startsWith('actions/checkout@'));
+    expect(checkouts).toHaveLength(2);
+    // The PR's tree, at the workspace root, where the script reads `git ls-files`.
+    expect(checkouts[0]?.with?.ref).toBeUndefined();
+    expect(checkouts[0]?.with?.path).toBeUndefined();
+    // The base's scripts, in a directory of their own: the PR's base, or the queue's.
+    const base = checkouts[1]!;
+    expect(base.with?.ref).toContain('github.event.pull_request.base.sha');
+    expect(base.with?.ref).toContain('github.event.merge_group.base_sha');
+    expect(base.with?.path).toMatch(/^\.[\w-]+$/);
+    const runs = steps.map((s) => s.run).filter((r): r is string => typeof r === 'string');
+    expect(runs).toEqual([`node ${base.with?.path}/scripts/${script}`]);
+    expect(usesOf(job).filter((u) => !u.startsWith('actions/checkout@') && !u.startsWith('actions/setup-node@'))).toEqual([]);
+    expect(steps.filter((s) => s['continue-on-error'])).toEqual([]);
   });
 
   it.each(BASE_JUDGES)('%s checks out only the base commit, and runs no action', (check) => {
@@ -473,6 +497,38 @@ describe('#47 the PR\'s own copy of each judging action still runs, as a test', 
 
   it('reads contents and pull requests only', () => {
     expect(wf.permissions).toEqual({ contents: 'read', 'pull-requests': 'read' });
+    for (const job of jobs) expect(job.permissions).toBeUndefined();
+  });
+});
+
+describe('#377 citation-shift runs on every pull request to Kanon, as advice', () => {
+  const { wf } = load('citation-shift.yml');
+  const jobs = Object.values(wf.jobs);
+  const steps = stepsOf(wf);
+  const run = steps.find((s) => s.run?.includes('citation-shift.mjs'));
+
+  it('runs on pull requests only, and is not a required check', () => {
+    expect(Object.keys(wf.on)).toEqual(['pull_request']);
+    expect(jobs).toHaveLength(1);
+    expect(REQUIRED_CHECKS).not.toContain(jobs[0]?.name);
+    expect(jobs[0]?.name).toContain('advisory');
+  });
+
+  it("runs the PR's own copy, with the merge commit's first parent to diff against", () => {
+    expect(run?.run).toContain('node scripts/citation-shift.mjs');
+    const checkout = steps.find((s) => s.uses?.startsWith('actions/checkout@'));
+    expect(checkout?.with?.ref).toBeUndefined();
+    expect(Number(checkout?.with?.['fetch-depth'])).toBe(2);
+  });
+
+  it('never fails the job: a red run of the script becomes one warning annotation', () => {
+    expect(run?.run).toMatch(/^if ! node scripts\/citation-shift\.mjs; then\n\s*echo "::warning /);
+    expect(run?.run).not.toContain('exit');
+    expect(steps.filter((s) => s['continue-on-error'])).toEqual([]);
+  });
+
+  it('reads contents only', () => {
+    expect(wf.permissions).toEqual({ contents: 'read' });
     for (const job of jobs) expect(job.permissions).toBeUndefined();
   });
 });

@@ -436,7 +436,7 @@ const main = () => {
   }
 };
 
-// try/catch is half the precedent (lead-reconcile.mjs:3747). Without it,
+// try/catch is half the precedent (`lead-reconcile.mjs`'s entry check, now `isCliEntry`). Without it,
 // `pathToFileURL(undefined)` THROWS where the old `file://` template merely failed
 // to match, so importing this module with no argv[1] — a REPL, a worker — crashes.
 // Round 3's commit claimed both files were fixed; only spec-coverage.mjs was.

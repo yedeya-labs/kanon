@@ -936,7 +936,7 @@ function main() {
 // Guarded so this module can be IMPORTED for its `citations()` map without
 // printing the whole coverage report as a side effect (RA-1068). Running it directly
 // is unchanged.
-// try/catch is half the precedent (lead-reconcile.mjs:3747): without it, importing
+// try/catch is half the precedent (`lead-reconcile.mjs`'s entry check, now `isCliEntry`): without it, importing
 // this module with no argv[1] THROWS rather than quietly not running.
 const IS_CLI = (() => {
   try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href; } catch { return false; }
