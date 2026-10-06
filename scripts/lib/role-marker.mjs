@@ -27,6 +27,9 @@
 // malformed or missing column gives the role's own header, which lane-check fails by name).
 //   node scripts/lib/role-marker.mjs header Implementer [persona]
 //   … | node scripts/lib/role-marker.mjs header-from-register Implementer
+// It signs a body on standard input as the role, opening it with the header line unless its
+// first marker is already the role's (`signedAs`), for the review lane's stamp step (kanon#336):
+//   … | node scripts/lib/role-marker.mjs sign Reviewer [persona]
 // And it judges a head's commit statuses (the REST list, on standard input) for the
 // implementer status, for the revise lane's filter (plan 0005 §3.3, L4):
 //   … | node scripts/lib/role-marker.mjs implementer-status <author-slug>
