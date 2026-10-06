@@ -691,15 +691,23 @@ export const delegationFile = (d, today) =>
 
 export const TEST_DATABASE_HOOK = ['# Test database', '', 'The project-setup hook starts the database and writes `DATABASE_URL` (`K-LAYOUT-16`).', '', '**Test database:** `hook`', ''].join('\n');
 
+/** What a YAML double-quoted escape stands for; one not listed is kept as written. */
+const ESCAPES = /** @type {Record<string, string>} */ ({ '"': '"', '\\': '\\', '/': '/', ' ': ' ', t: '\t', n: '\n' });
+
 /**
  * The name GitHub gives a workflow, which a `workflow_run` trigger names it by: its top-level
  * `name:`, unquoted and without a trailing comment, or, with none, its path in the repository.
+ * A `#` inside a quoted name is part of it; only a plain name loses a ` # comment` (#335).
  * @param {string} text @param {string} path
  */
 export const workflowName = (text, path) => {
   const line = /^name:[ \t]*(.*)$/m.exec(text)?.[1] ?? '';
-  const value = line.replace(/^(["'])(.*)\1(\s+#.*)?$/, '$2').replace(/\s+#.*$/, '').trim();
-  return value || path;
+  const [, double, single] = /^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)')/.exec(line) ?? [];
+  const value =
+    double !== undefined ? double.replace(/\\(.)/g, (e, c) => ESCAPES[c] ?? e)
+    : single !== undefined ? single.replace(/''/g, "'")
+    : line.replace(/(^|\s+)#.*$/, '');
+  return value.trim() || path;
 };
 
 /**
