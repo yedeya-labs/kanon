@@ -13,25 +13,15 @@ import { ROOT, SCRIPT, TRIAGE, IMPL, adopter, check, red, job, type Caller, lane
  * says how every case runs and holds the helpers they share.
  */
 laneCheck(() => {
-  it('fails Kanon itself on exactly what plan 0005\'s L5 migrates, and on nothing else (ADR 0011)', () => {
+  it('passes Kanon itself, its four lane callers on the Author and the Judge (ADR 0011)', () => {
     // In this tree, not a copy: Kanon is its own adopter. CI runs the RELEASED action on it, at
-    // the version its callers pin; this run reads the lanes as this PR leaves them. Since L4
-    // the lanes take the Author's and the Judge's secrets and the register names one slug per
-    // App, and Kanon moves onto both only at L5, after #279 (plan 0005, question 4). Until then
-    // its own callers fail here on the L5 migration and on nothing else: the role-named
-    // secrets its three callers map, and its per-role register. Any other error is a lane
-    // change that would break Kanon's caller, and is red here before it is released.
-    // At L5 this goes back to `status 0` and `4 lane caller(s) pass`.
+    // the version its callers pin; this run reads the lanes as this PR leaves them, so a lane
+    // change that would break Kanon's caller is red here before it is released. Since plan
+    // 0005's L5 the callers map the Author's and the Judge's secrets, and the register names
+    // one slug per App.
     const r = spawnSync('bash', [SCRIPT], { cwd: ROOT, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '' } });
-    expect(r.status).toBe(1);
-    const errors = r.stdout.split('\n').filter((l) => l.startsWith('::error'));
-    const l5 = errors.filter((l) => /maps the role-named secret `(EXPLORER|IMPLEMENTER|REVIEWER)_APP_(ID|PRIVATE_KEY)`/.test(l)
-      || /maps secrets \[CLAUDE_CODE_OAUTH_TOKEN,(EXPLORER|IMPLEMENTER|REVIEWER)_APP_ID,\1_APP_PRIVATE_KEY\]; the Kanon lane agent-[a-z-]+ takes exactly \[[A-Z_,]*(AUTHOR|JUDGE)_APP_ID/.test(l)
-      || /agent-identities\.md,title=lane-check::the Author's roles name 2 App slugs \(Implementer `kanon-implementer`, Explorer `kanon-explorer`\)/.test(l));
-    expect(errors.filter((l) => !l5.includes(l)), r.stdout).toEqual([]);
-    // Four callers (code-audit, implement, implement-revise, review), each two renames and a set
-    // difference, and the register.
-    expect(l5).toHaveLength(13);
+    expect(r.status, r.stdout).toBe(0);
+    expect(r.stdout).toContain('4 lane caller(s) pass');
     // One lane-check run over Kanon's whole tree: under a loaded full run it outlasted the 5s
     // default once, as the three-run test below did.
   }, 30_000);

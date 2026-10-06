@@ -7,6 +7,7 @@
 - **Amended:** 2026-10-05, the Explorer's code audit (plan 0004 step 11a, [#275](https://github.com/yedeya-labs/kanon/issues/275))
 - **Amended:** 2026-10-06, the cost bound does not hold until plan 0005's L6 ([#294](https://github.com/yedeya-labs/kanon/issues/294))
 - **Amended:** 2026-10-06, Kanon's own pins are held below v0.28.0 until plan 0005's L5
+- **Amended:** 2026-10-06, plan 0005's L5 ends the hold: Kanon's pins move to v0.29.0, and run as the Author, the Judge and the Releaser
 
 ## Context
 
@@ -29,6 +30,7 @@ If Kanon can't adopt Kanon, then either a rule is wrong or Kanon is narrower tha
    - **No agent ever merges on Kanon.** The repository is public and it is the product, so the Owner merges.
 2. **Kanon calls its own lanes at its last release tag, never through `$/`.** A PR that changes the Reviewer is then reviewed by the released Reviewer, not by itself. This is the bootstrap: the stable compiler builds the next one. It is the Kanon-specific case of a general rule, that a pull request never chooses the rules it is judged by ([#25](https://github.com/yedeya-labs/kanon/issues/25), `K-MERGE-17`). An adopter meets that rule through the lane's *inputs*; Kanon also meets it for the lane's *code*.
    - **Held below the two-App release until plan 0005's L5 (amended 2026-10-06).** v0.28.0 is breaking: its lanes take the Author's, the Judge's and the Releaser's secrets and read one register row per role, and Kanon has no Author or Judge App until [plan 0005](../plans/0005-lean-installation.md)'s L5. So Kanon's own pins, the judging callers among them, stay on v0.27.x, and Dependabot's entry ignores `yedeya-labs/kanon*` at `>= 0.28.0`. Until L5, "its last release" reads "its last release before v0.28.0". L5 waits on [#279](https://github.com/yedeya-labs/kanon/issues/279), so the hold has no fixed end date; L5 moves the pins and removes the ignore in the same change. This is the rollback this ADR already allows (pin the previous tag), applied ahead of the break.
+   - **The hold ended at L5 (amended 2026-10-06).** L5 moved Kanon's pins from v0.27.0 to v0.29.0 through the upgrade skill, with the callers mapping the Author's and the Judge's secrets and the release caller the Releaser's, and removed Dependabot's ignore in the same change. "Its last release" means its last release again.
 3. **Only members' PRs are reviewed.** Kanon is public, so a stranger's PR is input, never a trigger for a paid agent run (#24).
 4. **Agent usage is out of Kanon's scope.** Whether an adopter shares one Claude subscription across its repositories or keeps them separate is the adopter's choice.
 
