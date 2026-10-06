@@ -20,8 +20,10 @@
 # yet. The shim is what makes it check each `$/` call's inputs against the action's own
 # `action.yml`; without it, those calls are parse errors and their inputs go unchecked.
 #
-# The `citation-guard` job runs scripts/citation-guard.mjs over Kanon's own docs/ (#377,
-# K-SELF-3): every `file:line` there must resolve, and point at what its sentence names. It is
+# The `citation-guard` job runs scripts/citation-guard.mjs over Kanon's own docs/, rulebook/ and
+# READMEs (#377, #388, K-SELF-3): every `file:line` there must resolve, and point at what its
+# sentence names. The globs are passed with `--path`, as any adopter passes its own, and
+# citation-shift.yml passes the same list (tests/unit/workflows.test.ts holds the two equal). It is
 # meant to be a required check, so it judges with the script at the PR's BASE commit, never the
 # PR's own copy (#47), as public-text.yml does: a PR that weakened the guard must not be judged
 # by the weakened guard. The PR's copy is tested by tests/library/citation-guard.test.ts. It
@@ -104,4 +106,4 @@ jobs:
         with:
           node-version-file: .nvmrc
       - name: citation-guard (the base's copy)
-        run: node .citation-guard-base/scripts/citation-guard.mjs
+        run: node .citation-guard-base/scripts/citation-guard.mjs --path 'docs/**/*.md' --path 'rulebook/**/*.md' --path README.md --path 'actions/*/README.md'

@@ -1,7 +1,8 @@
 # Runs scripts/citation-shift.mjs on every pull request to Kanon, as advice (#377).
 #
 # `citation-shift` maps each source file the PR changes, old line to new line, and names every
-# `file:line` in docs/ or in a code comment that the PR moved and left as it was (K-SELF-3). On
+# `file:line` in the docs or in a code comment that the PR moved and left as it was (K-SELF-3).
+# The docs are the citation guard's: the same `--path` list as ci.yml's `Citation guard` (#388). On
 # Kanon it is ADVISORY, as the Owner decided for adopters in #343: a check becomes fatal only
 # when its false-positive rate, replayed over history, is about zero, and this one's isn't. So
 # the job never fails. When the script exits non-zero, the job turns that into one warning
@@ -43,6 +44,6 @@ jobs:
           node-version-file: .nvmrc
       - name: citation-shift (advisory, never fails)
         run: |
-          if ! node scripts/citation-shift.mjs; then
-            echo "::warning title=citation-shift (advisory)::This PR moved lines that a doc or a code comment cites, and left the coordinate as it was. The log of this step lists each one; run 'node scripts/citation-shift.mjs --fix' to re-point them. Advisory only (#343, #377): it doesn't block the merge."
+          if ! node scripts/citation-shift.mjs --path 'docs/**/*.md' --path 'rulebook/**/*.md' --path README.md --path 'actions/*/README.md'; then
+            echo "::warning title=citation-shift (advisory)::This PR moved lines that a doc or a code comment cites, and left the coordinate as it was. The log of this step lists each one; run 'node scripts/citation-shift.mjs' with this step's --path list and --fix to re-point them. Advisory only (#343, #377): it doesn't block the merge."
           fi
