@@ -6,6 +6,7 @@ import {
   EXEMPT_BOTS,
   fetchCommits,
   isAutomated,
+  isReleaserCommit,
   main,
   offending,
   parseDelegation,
@@ -358,6 +359,7 @@ const record = (who: { name: string; email: string } = ADA, date = '2026-10-02')
   ['# Sign-off delegation', '', '| Delegate | Email | Delegated on |', '|---|---|---|', `| ${who.name} | ${who.email} | ${date} |`, ''].join('\n');
 const DELEGATE = { ...ADA, date: '2026-10-02' };
 const TRUST = { slugs: [IMPL, 'example-lead'], delegate: DELEGATE };
+const NO_RELEASER = { slugs: [IMPL, 'example-lead'], delegate: DELEGATE, releaser: null };
 const BOB = { name: 'Bob', email: 'bob@example.com' };
 
 /** A commit the Implementer's App authored, as GitHub records one pushed with its token. */
@@ -451,7 +453,7 @@ describe('K-LAYOUT-14 the delegation record and the App register parse strictly'
   });
 
   it('reads every App slug in the register, bold or not', () => {
-    expect(parseRegister(REGISTER)).toEqual({ slugs: [IMPL, 'example-lead'] });
+    expect(parseRegister(REGISTER)).toEqual({ slugs: [IMPL, 'example-lead'], releaser: null });
   });
 
   it('rejects a register with no table, or a slug out of backticks', () => {
@@ -615,5 +617,74 @@ describe("K-MERGE-17 a stacked PR is judged by the default branch, not by its ba
     expect(await main(stackedEnv, impl, sink)).toBe(0);
     expect(reads).toEqual([`main:${REGISTER_PATH}`, `main:${DELEGATION_PATH}`]);
     expect(out.logs.join('\n')).toContain("for an agent's commit by Ada Lovelace");
+  });
+});
+
+// #337: a release PR opened with the Releaser App's token. release-please writes its commits
+// through the API, so GitHub creates and signs them as the App, with no sign-off.
+const RELEASER = 'example-releaser';
+const RELEASER_ROW = `| Releaser | \`${RELEASER}\` | Read & write | No access | Read & write | No access |`;
+const REGISTER_R = `${REGISTER.trimEnd()}\n${RELEASER_ROW}\n`;
+const TRUST_R = { ...TRUST, slugs: [...TRUST.slugs, RELEASER], releaser: RELEASER };
+const releaseCommit = (over: Partial<Commit> = {}) => botCommit(`${RELEASER}[bot]`, 'chore(main): release 1.2.3', over);
+
+describe('#337 the Releaser\'s release commits are exempt, by its App identity', () => {
+  it('reads the Releaser\'s slug from the register\'s one Releaser row', () => {
+    expect(parseRegister(REGISTER_R)).toEqual({ slugs: [IMPL, 'example-lead', RELEASER], releaser: RELEASER });
+    expect(parseRegister(REGISTER_R.replace('| Releaser |', '| **Releaser** |'))).toMatchObject({ releaser: RELEASER });
+  });
+
+  it('names no Releaser for two Releaser rows, or one sharing an agent App\'s slug', () => {
+    expect(parseRegister(`${REGISTER_R}| Releaser | \`other-releaser\` | Read & write | No access | Read & write | No access |\n`)).toMatchObject({ releaser: null });
+    expect(parseRegister(`${REGISTER.trimEnd()}\n${RELEASER_ROW.replace(RELEASER, IMPL)}\n`)).toMatchObject({ releaser: null });
+    expect(parseRegister(`${REGISTER_R}| Overseer | \`${RELEASER}\` | Read | Read & write | Read | No access |\n`)).toMatchObject({ releaser: null });
+  });
+
+  it('passes a GitHub-signed commit of the register\'s Releaser, with no sign-off and whatever the delegation', () => {
+    expect(checkCommit(releaseCommit(), TRUST_R)).toEqual({ ok: true, skipped: 'releaser' });
+    expect(checkCommit(releaseCommit(), { ...TRUST_R, delegate: null })).toEqual({ ok: true, skipped: 'releaser' });
+  });
+
+  it.each([
+    ['not signed by GitHub', { commit: { ...releaseCommit().commit, verification: { verified: false } } }],
+    ['committed by someone other than GitHub', { committer: { login: `${RELEASER}[bot]` } }],
+    ['authored by a user account of that name', { author: { login: `${RELEASER}[bot]`, type: 'User' } }],
+    ['with the Releaser\'s email but no GitHub account', { author: null }],
+    ['by another App of the register', { author: { login: `${IMPL}[bot]`, type: 'Bot' } }],
+  ])('checks a commit %s', (_, over) => {
+    const c = releaseCommit(over as Partial<Commit>);
+    expect(isReleaserCommit(c, TRUST_R)).toBe(false);
+    expect(checkCommit(c, TRUST_R).ok).toBe(false);
+  });
+
+  it('exempts nothing when the register names no Releaser, or names it beside an agent', () => {
+    expect(checkCommit(releaseCommit(), { ...TRUST_R, releaser: null }).ok).toBe(false);
+    expect(checkCommit(releaseCommit(), NO_RELEASER).ok).toBe(false);
+    // An agent's App given the Releaser's row too: its GitHub-signed commits still need the delegate.
+    const shared = parseRegister(`${REGISTER.trimEnd()}\n${RELEASER_ROW.replace(RELEASER, IMPL)}\n`);
+    const trust = { slugs: 'slugs' in shared ? shared.slugs : [], delegate: DELEGATE, releaser: 'releaser' in shared ? shared.releaser : null };
+    const agentSigned = botCommit(`${IMPL}[bot]`, 'fix: one');
+    expect(checkCommit(agentSigned, trust)).toMatchObject({ ok: false, reason: expect.stringContaining("needs the delegate's sign-off") });
+  });
+
+  it('leaves agent and human commits on the release branch to their own rules', () => {
+    expect(checkCommit(agentCommit('fix: one\n\nNo trailers.'), TRUST_R).ok).toBe(false);
+    expect(checkCommit(commit('fix: by hand\n\nNo trailers.'), TRUST_R).ok).toBe(false);
+  });
+
+  it('the action passes a release PR of Releaser commits, reading the register from the default branch', async () => {
+    const files = { ...BASE_FILES, [`main:${REGISTER_PATH}`]: REGISTER_R };
+    const { impl, reads } = repoFetch([releaseCommit(), releaseCommit()], files);
+    const { out, sink } = capture();
+    expect(await main(env, impl, sink)).toBe(0);
+    expect(reads[0]).toBe(`main:${REGISTER_PATH}`);
+    expect(out.logs.join('\n')).toContain('DCO OK');
+  });
+
+  it('the action fails it when only the PR\'s branch names the Releaser', async () => {
+    const files = { ...BASE_FILES, [`feat/x:${REGISTER_PATH}`]: REGISTER_R, [`0001abc:${REGISTER_PATH}`]: REGISTER_R };
+    const { impl } = repoFetch([releaseCommit()], files);
+    const { sink } = capture();
+    expect(await main(env, impl, sink)).toBe(1);
   });
 });

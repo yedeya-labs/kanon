@@ -15,8 +15,9 @@
 #
 # Everything reaches the script through the environment, never interpolated into a shell
 # line. There are no inputs (ADR 0002): the exemptions are fixed, and listed with their
-# reasons in dco.mjs's header: merge commits, and GitHub-signed commits by Dependabot and
-# by the github-actions bot (release PRs).
+# reasons in dco.mjs's header: merge commits, and GitHub-signed commits by Dependabot, by the
+# github-actions bot (release PRs), and by the App the default branch's App register names as
+# the Releaser (release PRs opened with the Releaser's token, #337).
 #
 # Requires Node 18 or later on the runner. GitHub's hosted runners have it; a
 # self-hosted runner must provide it. The action does not install Node itself.

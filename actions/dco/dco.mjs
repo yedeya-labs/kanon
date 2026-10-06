@@ -40,6 +40,20 @@
 //   A bot author alone is not enough, because anyone can write that email into a commit.
 //   The exemption also needs GitHub's committer (`web-flow`) and a verified signature,
 //   which only GitHub can produce. A human commit pushed onto a bot's branch is checked.
+// - Commits GitHub itself creates for the repository's own Releaser App (plan 0005 §3.1,
+//   #337), when the commit is GitHub-signed. With the Releaser's secrets mapped, the release
+//   workflow runs release-please on the Releaser's token instead of the workflow's, so the
+//   release PR's commits are the Releaser's, for the same reason and in the same shape as
+//   `github-actions[bot]`'s above. The Releaser is told by its App identity, never a name:
+//   - its slug is the App register's `Releaser` row, read from the default branch like the
+//     rest of the register (K-MERGE-17), and named by no other role's row, so a register
+//     that gives the Releaser an agent App's slug exempts nothing;
+//   - the commit's author is GitHub's account for that App (`<slug>[bot]`, type `Bot`), not an
+//     email in the commit, and its committer is `web-flow` with a verified signature. GitHub
+//     signs a commit for an App only when the App's own token created it through the API
+//     with no custom author or committer, so no other identity can produce one.
+//   The Releaser runs no agent (plan 0005 §3.1), so this leaves K-AGENT-44 whole: every
+//   commit an agent or a person writes still needs a person's sign-off.
 //
 // Delegated sign-off for the repository's own agents (K-AGENT-44). An adopter may record a
 // standing delegation naming one person in `docs/qa/sign-off-delegation.md` (K-LAYOUT-14).
@@ -100,12 +114,16 @@ export function isAutomated(who) {
 
 /**
  * @typedef {{ name: string, email: string }} Person
- * @typedef {{ slugs: string[], delegate: (Person & { date: string }) | null }} Trust
- *   What the default branch says: the register's App slugs, and the delegate, if one is recorded.
+ * @typedef {{ slugs: string[], delegate: (Person & { date: string }) | null, releaser?: string | null }} Trust
+ *   What the default branch says: the register's App slugs, the delegate, if one is recorded, and
+ *   the Releaser's slug, if the register names one no other role shares.
  */
 
 /** No register and no delegation: every commit is checked as a person's. */
-export const NO_TRUST = /** @type {Trust} */ ({ slugs: [], delegate: null });
+export const NO_TRUST = /** @type {Trust} */ ({ slugs: [], delegate: null, releaser: null });
+
+/** The App register's role whose GitHub-created commits are exempt (plan 0005 §3.1, #337). Fixed (ADR 0002). */
+export const RELEASER_ROLE = 'Releaser';
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const BOT_LOGIN = /^([a-z0-9]+(?:-[a-z0-9]+)*)\[bot\]$/;
@@ -152,23 +170,31 @@ const unquote = (/** @type {string} */ s) => (/^`[^`]*`$/.test(s) ? s.slice(1, -
 
 /**
  * The App slugs in the App register: every row of its one table headed `| Role | App slug |`,
- * read as `actions/lane-check/app-register.awk` reads one role.
+ * read as `actions/lane-check/app-register.awk` reads one role. Also the Releaser's slug: the
+ * one `Releaser` row's, or null when there is none, more than one, or another role's row names
+ * the same slug (an App that is also an agent is never exempt).
  * @param {string} text
- * @returns {{ slugs: string[] } | { problem: string }}
+ * @returns {{ slugs: string[], releaser: string | null } | { problem: string }}
  */
 export function parseRegister(text) {
   const heads = tables(text).filter((t) => t.header[0] === 'Role' && t.header[1] === 'App slug');
   if (heads.length !== 1) return { problem: `${REGISTER_PATH} has ${heads.length} tables headed | Role | App slug |, not one` };
   /** @type {string[]} */
   const slugs = [];
+  /** @type {string[]} */
+  const releasers = [];
+  /** @type {string[]} */
+  const others = [];
   for (const row of heads[0]?.rows ?? []) {
     const slug = unquote(unbold(row[1] ?? ''));
     if (slug === null || !SLUG.test(slug)) {
       return { problem: `${REGISTER_PATH} gives the role ${unbold(row[0] ?? '')} no App slug in backticks` };
     }
     slugs.push(slug);
+    (unbold(row[0] ?? '') === RELEASER_ROLE ? releasers : others).push(slug);
   }
-  return { slugs };
+  const releaser = releasers.length === 1 && !others.includes(/** @type {string} */ (releasers[0])) ? /** @type {string} */ (releasers[0]) : null;
+  return { slugs, releaser };
 }
 
 /**
@@ -302,13 +328,31 @@ export function isExemptBot(c) {
 }
 
 /**
+ * Whether GitHub itself created this commit for the repository's Releaser App (#337): the
+ * register's Releaser slug as the commit's GitHub account, and GitHub's own signature.
+ * @param {Commit} c
+ * @param {Trust} trust
+ */
+export function isReleaserCommit(c, trust) {
+  const slug = trust.releaser ?? null;
+  return (
+    slug !== null &&
+    c.author?.type === 'Bot' &&
+    c.author?.login === `${slug}[bot]` &&
+    c.committer?.login === GITHUB_COMMITTER &&
+    c.commit.verification?.verified === true
+  );
+}
+
+/**
  * @param {Commit} c
  * @param {Trust} trust What the default branch says (NO_TRUST when it says nothing).
- * @returns {{ ok: true, skipped?: 'merge' | 'bot', delegated?: string } | { ok: false, reason: string }}
+ * @returns {{ ok: true, skipped?: 'merge' | 'bot' | 'releaser', delegated?: string } | { ok: false, reason: string }}
  */
 export function checkCommit(c, trust = NO_TRUST) {
   if (c.parents.length > 1) return { ok: true, skipped: 'merge' };
   if (isExemptBot(c)) return { ok: true, skipped: 'bot' };
+  if (isReleaserCommit(c, trust)) return { ok: true, skipped: 'releaser' };
   const slug = agentSlug(c, trust.slugs);
   if (slug !== null && trust.delegate !== null) {
     const delegate = trust.delegate;
@@ -434,17 +478,18 @@ export async function readTrust(where, fetchImpl = fetch) {
   if (register === null) return { trust: NO_TRUST, notes: [`${REGISTER_PATH} doesn't exist on ${where.ref}, so no commit is an agent's.`] };
   const apps = parseRegister(register);
   if ('problem' in apps) return { trust: NO_TRUST, notes: [`${apps.problem}, so no commit is an agent's.`] };
+  const { slugs, releaser } = apps;
   const record = await fetchFile({ ...where, path: DELEGATION_PATH }, fetchImpl);
   if (record === null) {
     notes.push(`${DELEGATION_PATH} doesn't exist on ${where.ref}, so agent commits are checked like any other.`);
-    return { trust: { slugs: apps.slugs, delegate: null }, notes };
+    return { trust: { slugs, delegate: null, releaser }, notes };
   }
   const delegation = parseDelegation(record);
   if ('problem' in delegation) {
     notes.push(`${delegation.problem}, so it delegates nothing, and agent commits are checked like any other.`);
-    return { trust: { slugs: apps.slugs, delegate: null }, notes };
+    return { trust: { slugs, delegate: null, releaser }, notes };
   }
-  return { trust: { slugs: apps.slugs, delegate: delegation.delegate }, notes };
+  return { trust: { slugs, delegate: delegation.delegate, releaser }, notes };
 }
 
 /**
