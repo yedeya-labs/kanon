@@ -181,7 +181,9 @@ jobs:
             - ONLY KANON can act: `lane` (a lane's behaviour or prompt), `guard`, `rule` (a
               rulebook rule), `library` (Kanon's scripts and actions). These are NEVER filed
               here: they go under the audit issue's `## Upstream` heading as drafts, which a human
-              may file on Kanon by hand. Write each one neutrally, as a draft for a public
+              may file on Kanon by hand. (A repository whose adoption record says
+              `Upstream findings: filed here` has the filing step file them in it instead. The
+              step reads the record, not you.) Write each one neutrally, as a draft for a public
               repository: describe the behaviour and the evidence in general terms, and name
               nothing of this project, not its issues, paths, people, product or data.
             A finding that fits no subject goes upstream, unfiled. When in doubt about who

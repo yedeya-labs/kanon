@@ -6,11 +6,13 @@ import {
   auditTitle,
   classify,
   fileAudit,
+  filedHere,
   neutralise,
   nextAuditNumber,
   parseReport,
   renderAudit,
   route,
+  upstreamChoice,
 } from '../../scripts/overseer-file.mjs';
 
 /**
@@ -41,7 +43,7 @@ const fakeGh = (prior: Array<{ number: number; title: string; state: string }> =
     .map((c) => ({ title: c.args[c.args.indexOf('--title') + 1]!, body: c.input ?? '', args: c.args }));
   return { gh, calls, created };
 };
-const run = (text: string | null, opts: { prior?: Array<{ number: number; title: string; state: string }>; interlock?: number | 'throws'; agentOutcome?: string } = {}) => {
+const run = (text: string | null, opts: { prior?: Array<{ number: number; title: string; state: string }>; interlock?: number | 'throws'; agentOutcome?: string; upstream?: string } = {}) => {
   const fake = fakeGh(opts.prior);
   const log: string[] = [];
   const code = fileAudit({
@@ -54,6 +56,7 @@ const run = (text: string | null, opts: { prior?: Array<{ number: number; title:
       return { count: opts.interlock ?? 0 };
     },
     log: (l) => log.push(l),
+    ...(opts.upstream === undefined ? {} : { upstream: opts.upstream }),
   });
   const created = fake.created();
   const audit = created.find((c) => c.title.startsWith('[pipeline] audit-summary'));
@@ -247,5 +250,83 @@ describe('the report', () => {
     const r = route([finding('guard'), finding('playbook')], null);
     expect(r.upstream.map((u) => u.finding.subject)).toEqual(['guard']);
     expect(r.file.map((f) => f.subject)).toEqual(['playbook']);
+  });
+});
+
+describe('a repository that declares `Upstream findings: filed here` (K-LAYOUT-10, kanon#423)', () => {
+  const kanonFinding = finding('guard', 'The citation guard passes a stale line range');
+  const mixed = () => report([finding('playbook', 'The playbook names no liveness query'), kanonFinding, finding('vibes', 'Something feels off')]);
+
+  it('files a finding only Kanon can act on in this repository, like the adopter\'s own', () => {
+    const r = run(mixed(), { upstream: 'filed here' });
+    expect(r.code).toBe(0);
+    expect(r.findings.map((f) => f.title)).toEqual(['The playbook names no liveness query', kanonFinding.title]);
+    const filed = r.findings[1]!;
+    // In this repository, and no other: the same `--repo`, labels and bucket as the adopter's own.
+    expect(filed.args.slice(0, 4)).toEqual(['issue', 'create', '--repo', 'o/r']);
+    expect(r.calls.every((c) => !c.args.includes('--repo') || c.args[c.args.indexOf('--repo') + 1] === 'o/r')).toBe(true);
+    expect(filed.args).toEqual(expect.arrayContaining(['--label', 'pipeline-improvement', '--label', 'agent:overseer', '--milestone', BUCKET]));
+    expect(filed.body).toContain(kanonFinding.body);
+    const body = r.audit!.body;
+    expect(body).toContain(`- #101 ${kanonFinding.title} (only Kanon can act on it)`);
+    expect(body).toContain('`Upstream findings: filed here`');
+    expect(body.slice(body.indexOf('\n## Upstream\n'))).not.toContain(`### ${kanonFinding.title}`);
+  });
+
+  it('still drafts a finding whose subject it doesn\'t know: nothing is filed on a guess', () => {
+    const r = run(mixed(), { upstream: 'filed here' });
+    expect(r.calls.some((c) => c.args.includes('Something feels off'))).toBe(false);
+    const upstream = r.audit!.body.slice(r.audit!.body.indexOf('\n## Upstream\n'));
+    expect(upstream).toContain('### Something feels off');
+    expect(upstream).toContain('subject `vibes` is not one of the known subjects');
+    expect(filedHere(finding('', 'no subject'), 'filed here')).toBe(false);
+  });
+
+  it('holds a filed upstream finding to the same guards: the anchor\'s title, and the capability interlock', () => {
+    const anchor = finding('lane', 'The audit-summary anchor drifts');
+    const cap = finding('library', 'Adopt the new runtime flag', { capability: true });
+    let counted = 0;
+    const fake = fakeGh();
+    const code = fileAudit({ repo: 'o/r', text: report([anchor, cap]), agentOutcome: 'success', gh: fake.gh, upstream: 'filed here',
+      interlock: () => { counted += 1; return { count: 99 }; }, log: () => {} });
+    expect(code).toBe(0);
+    expect(counted).toBe(1);
+    expect(fake.created().map((c) => c.title)).toEqual([auditTitle(1)]);
+    const body = fake.created()[0]!.body;
+    expect(body).toContain('- **Held:** The audit-summary anchor drifts');
+    expect(body).toContain('- **Held:** Adopt the new runtime flag: the capability interlock is closed');
+  });
+
+  it('WITHOUT THE CHOICE, nothing changes: the same calls and the same audit, byte for byte', () => {
+    const baseline = run(mixed());
+    for (const upstream of ['drafted', '']) {
+      const r = run(mixed(), { upstream });
+      expect(r.calls, upstream).toEqual(baseline.calls);
+      expect(r.log, upstream).toEqual(baseline.log);
+    }
+    expect(baseline.findings.map((f) => f.title)).toEqual(['The playbook names no liveness query']);
+    // A capability finding only Kanon can act on is not counted against the interlock either.
+    let counted = 0;
+    fileAudit({ repo: 'o/r', text: report([finding('library', 'x', { capability: true })]), agentOutcome: 'success', gh: fakeGh().gh,
+      interlock: () => { counted += 1; return { count: 0 }; }, log: () => {} });
+    expect(counted).toBe(0);
+  });
+
+  it('drafts on a value it doesn\'t know, and says so, rather than filing on a guess', () => {
+    const r = run(mixed(), { upstream: 'filed on kanon' });
+    expect(r.findings.map((f) => f.title)).toEqual(['The playbook names no liveness query']);
+    expect(r.log).toContain('::warning title=overseer upstream choice::the lane passed `filed on kanon`, which is neither `drafted` nor `filed here`, so findings only Kanon can act on are drafted, not filed (K-LAYOUT-10)');
+    expect(upstreamChoice(' filed here ')).toEqual({ upstream: 'filed here' });
+    expect(upstreamChoice(undefined)).toEqual({ upstream: 'drafted' });
+    expect(upstreamChoice('Filed Here')).toEqual({ upstream: 'drafted', unknown: 'Filed Here' });
+  });
+
+  it('routes by the choice in the pure router too', () => {
+    const fs = [finding('rule'), finding('declaration')];
+    expect(route(fs, 0).file.map((f) => f.subject)).toEqual(['declaration']);
+    expect(route(fs, 0, 'drafted').upstream.map((u) => u.finding.subject)).toEqual(['rule']);
+    expect(route(fs, 0, 'filed here').file.map((f) => f.subject)).toEqual(['rule', 'declaration']);
+    expect(route(fs, 0, 'filed here').upstream).toEqual([]);
+    expect(renderAudit({ audit: 'a', filed: [], held: [], upstream: [] })).toBe(renderAudit({ audit: 'a', filed: [], held: [], upstream: [], choice: 'drafted' }));
   });
 });

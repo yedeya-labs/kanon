@@ -13,6 +13,16 @@
 // step, in a job of its own on a token that may write issues, does all the filing from what the
 // agent wrote down.
 //
+// UNLESS THE REPOSITORY DECLARES OTHERWISE (kanon#423, plan 0004 decision 12 as amended on
+// 2026-10-06). A repository whose adoption record says `- **Upstream findings:** \`filed here\``
+// under `## Choices` (`K-LAYOUT-10`) can act on those findings itself, so each one whose subject
+// is Kanon's is filed in THIS repository, like an adopter-actionable one; nothing is ever filed
+// in another repository. A finding with an unknown subject is still only drafted: nothing is
+// filed on a guess. The choice reaches this step as `UPSTREAM`, the lane's gate job's output,
+// which that job read from the default branch before any agent ran: the agent can't set it, and
+// this step never reads it from anything the agent wrote. Without the bullet, or with an empty
+// or unknown `UPSTREAM`, the routing is `drafted`, exactly as before the choice existed.
+//
 // IN A JOB OF ITS OWN. This runs in the lane's `file` job, on a fresh runner that runs no agent
 // and checks out nothing: the report is data downloaded from the agent's job, so a steered agent
 // can change what the report says, never how it is routed (the lane's header says so, and names
@@ -49,7 +59,8 @@
 //
 //   node "$KANON/scripts/overseer-file.mjs"
 //   env: GH_TOKEN (issues write), GITHUB_REPOSITORY, AGENT_OUTCOME (the agent step's outcome),
-//        REPORT_PATH (the downloaded report; default `qa-overseer-audit.json`)
+//        REPORT_PATH (the downloaded report; default `qa-overseer-audit.json`),
+//        UPSTREAM (`drafted` or `filed here`, the gate job's reading of the record; default `drafted`)
 //
 // `node:` builtins only, like every script under scripts/ (`K-SELF-8`).
 
@@ -97,6 +108,7 @@ export class ReportError extends Error {}
 /**
  * @typedef {{ title: string, body: string, subject: string, capability: boolean }} Finding
  * @typedef {{ audit: string, findings: Finding[] }} Report
+ * @typedef {'drafted' | 'filed here'} Upstream
  */
 
 /**
@@ -142,22 +154,48 @@ export function classify(f) {
 }
 
 /**
+ * Where upstream findings go, from the gate job's `UPSTREAM`: `filed here` only when it says
+ * exactly that, and Kanon's default, `drafted`, otherwise. `unknown` is set when it said
+ * something else, which the step warns about rather than filing on a guess.
+ * @param {string | undefined} value
+ * @returns {{ upstream: Upstream, unknown?: string }}
+ */
+export function upstreamChoice(value) {
+  const v = String(value ?? '').trim();
+  if (v === 'filed here' || v === 'drafted') return { upstream: v };
+  return v === '' ? { upstream: 'drafted' } : { upstream: 'drafted', unknown: v };
+}
+
+/**
+ * Is this finding filed in this repository? An adopter-actionable one always is; one only Kanon
+ * can act on is when the repository declares `filed here`, and only when its subject is one of
+ * the known ones: an unknown subject is never filed on a guess.
+ * @param {Finding} f
+ * @param {Upstream} upstream
+ */
+export const filedHere = (f, upstream) => {
+  if (classify(f).who === 'adopter') return true;
+  return upstream === 'filed here' && Object.hasOwn(SUBJECTS, f.subject);
+};
+
+/**
  * Where each finding goes. Pure: the interlock count is passed in, `null` when it couldn't be
- * read (a closed interlock).
+ * read (a closed interlock). `upstream` is the repository's declared choice, `drafted` by default.
  * @param {Finding[]} findings
  * @param {number | null} interlock
+ * @param {Upstream} [upstream]
  * @returns {{ file: Finding[], held: Array<{ finding: Finding, why: string }>, upstream: Array<{ finding: Finding, why: string }> }}
  */
-export function route(findings, interlock) {
+export function route(findings, interlock, upstream = 'drafted') {
   /** @type {Finding[]} */
   const file = [];
   /** @type {Array<{ finding: Finding, why: string }>} */
   const held = [];
   /** @type {Array<{ finding: Finding, why: string }>} */
-  const upstream = [];
+  const drafts = [];
   for (const finding of findings) {
-    const { who, why } = classify(finding);
-    if (who === 'kanon') { upstream.push({ finding, why }); continue; }
+    const { why } = classify(finding);
+    if (!filedHere(finding, upstream)) { drafts.push({ finding, why }); continue; }
     // The capability anchor searches `audit-summary in:title`, so a filed issue titled so, with
     // a quoted `Watermark:` in its body, could become the anchor. It is never filed.
     if (/audit-summary/i.test(finding.title)) { held.push({ finding, why: 'its title holds `audit-summary`, which the capability anchor searches for' }); continue; }
@@ -167,7 +205,7 @@ export function route(findings, interlock) {
     else if (file.some((f) => f.capability)) held.push({ finding, why: 'one capability investigation is filed per run' });
     else file.push(finding);
   }
-  return { file, held, upstream };
+  return { file, held, upstream: drafts };
 }
 
 /** Text this step adds to the audit body never carries a `Watermark:` line the anchor would select. */
@@ -175,16 +213,25 @@ export const neutralise = (/** @type {string} */ s) => s.replace(/Watermark(?=[^
 
 /**
  * The audit issue's body: the agent's audit, what was filed or held, and the Upstream section.
- * @param {{ audit: string, filed: Array<{ title: string, number?: number, error?: string }>,
- *   held: Array<{ finding: Finding, why: string }>, upstream: Array<{ finding: Finding, why: string }> }} o
+ * `choice` is the repository's declared routing: under `filed here`, a filed finding only Kanon
+ * can act on is marked so, and the Upstream section says where those went.
+ * @param {{ audit: string, filed: Array<{ title: string, number?: number, error?: string, kanon?: boolean }>,
+ *   held: Array<{ finding: Finding, why: string }>, upstream: Array<{ finding: Finding, why: string }>, choice?: Upstream }} o
  */
-export function renderAudit({ audit, filed, held, upstream }) {
+export function renderAudit({ audit, filed, held, upstream, choice = 'drafted' }) {
   const out = [audit.trimEnd(), '', '## Filed this run', ''];
   if (filed.length === 0 && held.length === 0) out.push('Nothing.');
-  for (const f of filed) out.push(f.number ? `- #${f.number} ${neutralise(f.title)}` : `- **Not filed, the create failed:** ${neutralise(f.title)} (${f.error ?? 'unknown error'})`);
+  for (const f of filed) {
+    const title = `${neutralise(f.title)}${f.kanon ? ' (only Kanon can act on it)' : ''}`;
+    out.push(f.number ? `- #${f.number} ${title}` : `- **Not filed, the create failed:** ${title} (${f.error ?? 'unknown error'})`);
+  }
   for (const h of held) out.push(`- **Held:** ${neutralise(h.finding.title)}: ${h.why}.`);
   out.push('', '## Upstream', '');
-  out.push('Drafts of findings only Kanon can act on: a lane\'s behaviour, a guard, a rule or Kanon\'s library. Nothing here was filed. Before filing one on Kanon by hand, check that it names nothing of this project, its issues or its data (ADR 0007).');
+  if (choice === 'filed here') {
+    out.push('This repository\'s adoption record says `Upstream findings: filed here` (K-LAYOUT-10), so a finding only Kanon can act on (a lane\'s behaviour, a guard, a rule or Kanon\'s library) is filed in this repository, under "Filed this run", and in no other. A finding whose subject is not one of the known subjects is drafted here instead, and was not filed: nothing is filed on a guess.');
+  } else {
+    out.push('Drafts of findings only Kanon can act on: a lane\'s behaviour, a guard, a rule or Kanon\'s library. Nothing here was filed. Before filing one on Kanon by hand, check that it names nothing of this project, its issues or its data (ADR 0007).');
+  }
   out.push('');
   if (upstream.length === 0) out.push('None this run.');
   for (const { finding, why } of upstream) {
@@ -214,12 +261,14 @@ const issueNumber = (url) => {
  */
 
 /**
- * The whole step. Returns the exit code; prints its annotations through `log`.
+ * The whole step. Returns the exit code; prints its annotations through `log`. `upstream` is the
+ * repository's declared routing for findings only Kanon can act on, as the gate job read it
+ * (`UPSTREAM`): `filed here`, or anything else for `drafted`, warning on a value it doesn't know.
  * @param {{ repo: string, text: string | null, agentOutcome: string, gh: Gh, interlock?: (repo: string, gh: Gh) => { count: number },
- *   log?: (line: string) => void }} o
+ *   log?: (line: string) => void, upstream?: string }} o
  * @returns {number}
  */
-export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInterlock, log = console.log }) {
+export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInterlock, log = console.log, upstream: declared }) {
   if (text === null) {
     log(`::error title=overseer produced nothing::The agent wrote no ${REPORT}, so nothing was filed and the whole audit was lost (the agent step's outcome: ${agentOutcome || 'unknown'}). Why it stopped is on this run's \`overseer\` telemetry row: its \`outcome\` and \`terminal_reason\`.`);
     return 1;
@@ -233,30 +282,35 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
     return 1;
   }
   let failed = 0;
+  const { upstream: choice, unknown } = upstreamChoice(declared);
+  if (unknown !== undefined) {
+    log(`::warning title=overseer upstream choice::the lane passed \`${unknown}\`, which is neither \`drafted\` nor \`filed here\`, so findings only Kanon can act on are drafted, not filed (K-LAYOUT-10)`);
+  }
 
   /** @type {number | null} */
   let count = null;
-  if (report.findings.some((f) => f.capability && classify(f).who === 'adopter')) {
+  if (report.findings.some((f) => f.capability && filedHere(f, choice))) {
     try {
       count = interlock(repo, gh).count;
     } catch (e) {
       log(`::warning title=capability interlock::could not count it (${String(/** @type {Error} */ (e).message).split('\n')[0]}); it is closed, so no capability investigation is filed`);
     }
   }
-  const { file, held, upstream } = route(report.findings, count);
+  const { file, held, upstream } = route(report.findings, count, choice);
 
-  /** @type {Array<{ title: string, number?: number, error?: string }>} */
+  /** @type {Array<{ title: string, number?: number, error?: string, kanon?: boolean }>} */
   const filed = [];
   for (const f of file) {
+    const kanon = classify(f).who === 'kanon' ? { kanon: true } : {};
     const labels = [...LABELS, ...(f.capability ? ['capability'] : [])].flatMap((l) => ['--label', l]);
     try {
       const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...labels, '--milestone', BUCKET], signed(f.body, 'Overseer', appPersona('Overseer'))));
-      filed.push({ title: f.title, number });
+      filed.push({ title: f.title, number, ...kanon });
       log(`filed #${number}: ${f.title}`);
     } catch (e) {
       failed += 1;
       const error = String(/** @type {Error} */ (e).message).split('\n')[0] ?? '';
-      filed.push({ title: f.title, error });
+      filed.push({ title: f.title, error, ...kanon });
       log(`::error title=overseer finding not filed::"${f.title}": ${error}`);
     }
   }
@@ -268,7 +322,7 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
     prior = JSON.parse(gh(['issue', 'list', '--repo', repo, '--label', 'agent:overseer', '--state', 'all', '--limit', '200',
       '--search', 'in:title "audit-summary"', '--json', 'number,title,state']));
     const n = nextAuditNumber(prior.map((p) => p.title));
-    const body = renderAudit({ audit: report.audit, filed, held, upstream });
+    const body = renderAudit({ audit: report.audit, filed, held, upstream, choice });
     audit = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', auditTitle(n), '--body-file', '-', ...LABELS.flatMap((l) => ['--label', l]), '--milestone', BUCKET], signed(body, 'Overseer', appPersona('Overseer'))));
   } catch (e) {
     log(`::error title=overseer audit not filed::${String(/** @type {Error} */ (e).message).split('\n')[0]}`);
@@ -306,6 +360,7 @@ if (IS_CLI) {
   };
   process.exitCode = fileAudit({
     repo: process.env.GITHUB_REPOSITORY,
+    upstream: process.env.UPSTREAM,
     text: (() => { const at = process.env.REPORT_PATH || REPORT; return existsSync(at) ? readFileSync(at, 'utf8') : null; })(),
     agentOutcome: String(process.env.AGENT_OUTCOME ?? ''),
     gh,

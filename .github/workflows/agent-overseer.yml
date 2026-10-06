@@ -46,6 +46,12 @@
 # file is data to that job, read by a parser that routes by subject. A job of its own deletes
 # the artifact after the filing, like the export.
 #
+# UNLESS THE REPOSITORY DECLARES OTHERWISE (kanon#423). A repository whose adoption record says
+# `Upstream findings: filed here` under `## Choices` (`K-LAYOUT-10`) has the findings only Kanon
+# can act on filed in itself, never in another repository. The `gate` job reads that choice from the
+# default branch before any agent runs and hands it to the `file` job as a job output, so the
+# agent can't change it either. Without the bullet, they are drafts, as above.
+#
 # THE AGENT'S JOB HOLDS NO KEY (kanon#274, kanon#279, `K-AGENT-49`). Its read-only token is
 # minted in `overseer-run.yml`'s `mint` job, which runs nothing else, and handed to the agent's
 # job (`overseer-agent-job.yml`) through `secrets:`. Before that, an agent with `Bash` could
@@ -106,6 +112,7 @@ jobs:
       contents: read
     outputs:
       member: ${{ steps.gate.outputs.member }}
+      upstream: ${{ steps.upstream.outputs.upstream }}
     steps:
       - uses: $/actions/kanon-path
       - name: Is the actor a member?
@@ -113,6 +120,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
+      # WHERE UPSTREAM FINDINGS GO (`K-LAYOUT-10`, kanon#423): the adoption record's
+      # `Upstream findings:` choice, read from the default branch (`K-MERGE-17`) here, before
+      # any agent runs, and handed to the `file` job as this job's output. The agent's job can
+      # write neither, so a steered agent can't move a finding from a draft to an issue. A
+      # malformed record stops the run here, by name, before anything is spent.
+      - name: Where do upstream findings go?
+        id: upstream
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          upstream="$(node "$KANON/scripts/upstream-findings.mjs")"
+          printf 'upstream=%s\n' "$upstream" >> "$GITHUB_OUTPUT"
 
   # THE STORE JOB (plan 0004 §3.2): the Overseer's export through the adopter's store hook, and
   # nothing else. A failed read is `degraded`, and the export says so; without a hook it says
@@ -158,7 +178,7 @@ jobs:
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   file:
-    needs: overseer
+    needs: [gate, overseer]
     # AN EXPLICIT STATUS FUNCTION AND THE PARENT'S RESULT (kanon#261): the overseer job is green
     # whatever the agent concluded, because the agent step continues on error.
     if: ${{ !cancelled() && needs.overseer.result == 'success' }}
@@ -215,6 +235,8 @@ jobs:
           AGENT_OUTCOME: ${{ needs.overseer.outputs.agent-outcome }}
           REPORT_PATH: ${{ runner.temp }}/report/qa-overseer-audit.json
           KANON: ${{ steps.kanon.outputs.path }}
+          # The gate job's reading of the record, never anything the agent wrote.
+          UPSTREAM: ${{ needs.gate.outputs.upstream }}
         run: node "$KANON/scripts/overseer-file.mjs"
 
   # THE REPORT'S DELETE JOB: the qa-store block's delete step, handed the report's artifact id. It

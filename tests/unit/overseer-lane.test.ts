@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -135,7 +135,7 @@ describe('who files what (decision 12)', () => {
   });
 
   it('the file job starts on the agent job\'s success, whatever the agent concluded (kanon#261)', () => {
-    expect(file.needs).toBe('overseer');
+    expect(file.needs).toEqual(['gate', 'overseer']);
     expect(file.if).toBe("${{ !cancelled() && needs.overseer.result == 'success' }}");
     expect(byId('agent')['continue-on-error']).toBe(true);
   });
@@ -209,6 +209,45 @@ describe('who files what (decision 12)', () => {
       AGENT_OUTCOME: '${{ needs.overseer.outputs.agent-outcome }}',
       REPORT_PATH: '${{ runner.temp }}/report/qa-overseer-audit.json',
       KANON: '${{ steps.kanon.outputs.path }}',
+      UPSTREAM: '${{ needs.gate.outputs.upstream }}',
+    });
+  });
+
+  // kanon#423, `K-LAYOUT-10`: where upstream findings go is the repository's declaration, read
+  // before any agent runs, and reaching the filing job only as the gate job's output.
+  describe('the upstream choice comes from the gate job, never from the agent', () => {
+    const gate = wf.jobs.gate!;
+    const gateSteps = (gate.steps ?? []) as Step[];
+    const read = gateSteps.find((s) => s.id === 'upstream')!;
+
+    it('is read in the gate job, after the membership gate and only when it admitted, from the default branch', () => {
+      expect(gateSteps.findIndex((s) => s.id === 'upstream')).toBeGreaterThan(gateSteps.findIndex((s) => s.id === 'gate'));
+      expect(read.if).toBe("steps.gate.outputs.member == 'true'");
+      expect(read.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
+      expect(read.run).toContain('upstream="$(node "$KANON/scripts/upstream-findings.mjs")"');
+      expect(read.run).toContain('printf \'upstream=%s\\n\' "$upstream" >> "$GITHUB_OUTPUT"');
+      expect((gate as { outputs?: Record<string, string> }).outputs?.upstream).toBe('${{ steps.upstream.outputs.upstream }}');
+      // Nothing the agent's job produces feeds it: the gate waits for no job.
+      expect(gate.needs).toBeUndefined();
+    });
+
+    it('fails the gate job on a malformed record, before the agent: the assignment carries the reader\'s exit', () => {
+      // GitHub runs `run:` under `bash -e`. The reader exits 1 on a malformed record.
+      const script = (reader: string) => `${read.run!.replace('node "$KANON/scripts/upstream-findings.mjs"', reader)}\necho reached`;
+      const bash = (reader: string) => spawnSync('bash', ['-e', '-c', script(reader)], { env: { ...process.env, GITHUB_OUTPUT: '/dev/null' }, encoding: 'utf8' });
+      const failed = bash('exit 1');
+      expect(failed.status).toBe(1);
+      expect(failed.stdout).not.toContain('reached');
+      expect(bash('echo "filed here"').stdout).toBe('reached\n');
+    });
+
+    it('no other job names the choice, and the agent\'s job is never handed it', () => {
+      for (const [name, j] of Object.entries(wf.jobs)) {
+        const text = JSON.stringify(j);
+        if (name === 'gate' || name === 'file') continue;
+        expect(text, name).not.toMatch(/outputs\.upstream|\bUPSTREAM\b|upstream-findings/);
+      }
+      expect(JSON.stringify(fileSteps.filter((s) => s.id !== 'file'))).not.toMatch(/UPSTREAM|outputs\.upstream/);
     });
   });
 

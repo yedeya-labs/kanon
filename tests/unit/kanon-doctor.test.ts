@@ -456,6 +456,18 @@ ${jobPerms}    steps:
     expect(r.json.findings[1].blocking).toBe(false);
   });
 
+  it("blocks on a malformed `Upstream findings:` choice, and passes a well-formed one (K-LAYOUT-10, kanon#423)", async () => {
+    const good = healthyFiles();
+    good['docs/qa/adoption.md'] += '- **Upstream findings:** `filed here`\n';
+    expect(ids(await run(checkout(good), fakeGitHub(), ['--json']))).toEqual([]);
+    const bad = healthyFiles();
+    bad['docs/qa/adoption.md'] += '- **Upstream findings:** `filed on another repository`\n';
+    const r = await run(checkout(bad), fakeGitHub(), ['--json']);
+    expect(ids(r)).toEqual(['declaration.malformed docs/qa/adoption.md']);
+    expect(r.json.findings[0].message).toMatch(/`Upstream findings` is `filed on another repository`; write `drafted` or `filed here`/);
+    expect(r.status).toBe(EXIT.findings);
+  });
+
   it('accepts a caller of a store-coupled Kanon lane only at the pinned release', async () => {
     const files = healthyFiles();
     const dir = checkout(files);
