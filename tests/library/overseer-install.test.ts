@@ -7,7 +7,7 @@ import { LABEL, checkOverseerInstall, parseOverseerInstall } from '../../scripts
 /**
  * Plan 0004 step 13, decision 12, `K-LAYOUT-10`: the Overseer is an optional lane, so the adoption
  * record says whether it is installed, under `## Choices`, and `lane-check` holds that to the
- * callers on disk (`tests/unit/lane-check.test.ts` runs it end to end).
+ * callers on disk (`tests/unit/lane-check-tick-lanes.test.ts` runs it end to end).
  */
 const RECORD = (choices: string[], tail = '') =>
   ['# Adoption record', '', '## People', '', '- Owner: someone', '', '## Choices', '', ...choices, '', tail].join('\n');
