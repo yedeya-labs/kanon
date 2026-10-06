@@ -13,7 +13,8 @@
 // 4. CREATES the taxonomy's labels (rulebook/labels.json), the bucket milestones (`kanon
 //    milestones`), the squash-only merge setting and, where the plan has rulesets and the token
 //    can administer the repository, the default branch's ruleset with its required check.
-// 5. DRIVES `kanon apps` for the identities the chosen lanes run as.
+// 5. DRIVES `kanon apps` for the Apps the chosen lanes run as (the Author and the Judge), and the
+//    optional Releaser when the repository calls Kanon's release workflow.
 // 6. SAYS PLAINLY what the plan can't enforce: on a private repository without rulesets, nothing
 //    on the platform refuses a merge without the Reviewer's approval (decision 3, K-ADOPT-3).
 //
@@ -21,11 +22,14 @@
 // changes nothing that is already right, never overwrites a file, and names what differs.
 // `--dry-run` reads everything and changes nothing.
 //
-// THE APPS. Which identities a lane runs as is read from the secrets it declares, through the
-// requirements file (`<NAME>_APP_ID` names the identity). Today that is one App per role, and
-// `kanon apps --roles` creates them. When step L4 renames the lanes' secrets to the Apps'
-// (`AUTHOR_APP_ID`, `JUDGE_APP_ID`), the same file names `author` and `judge`, and `appsArgs`
-// below passes `--apps` instead, with no other change here.
+// THE APPS. Which Apps a lane runs as is read from the secrets it declares, through the
+// requirements file (`<NAME>_APP_ID` names the identity). Since plan 0005's L4 those are the
+// Author (`AUTHOR_APP_ID`: the Implementer's, Lead's, Explorer's and Overseer's lanes) and the
+// Judge (`JUDGE_APP_ID`: the Reviewer's and Merger's), and `kanon apps --apps` creates them,
+// each with its roles' register rows and the Author's broadened Commit statuses write. The
+// optional Releaser, which no lane takes, is offered when the repository calls Kanon's release
+// workflow (`.github/workflows/release.yml`, docs/release.md). An App another repository of the
+// owner already has is added with `kanon apps --reuse`, from a key generated on its page.
 //
 // Node built-ins only: this runs from a Kanon checkout or through `npx`, with no install.
 
@@ -67,8 +71,10 @@ export const USAGE = `Usage: kanon init [options]
 Installs Kanon in the repository whose checkout you run it from: inspects the repository,
 asks what it can't infer (each question has a default), writes the declarations and the lane
 callers pinned to this release, creates the labels, the bucket milestones and, where the plan
-has rulesets, the default branch's ruleset, and runs \`kanon apps\` for the lanes' Apps. It
-commits nothing, and prints as exact steps whatever its token can't do. Safe to run again.
+has rulesets, the default branch's ruleset, and runs \`kanon apps --apps\` for the Apps the
+lanes run as: the Author and the Judge, and the optional Releaser if the repository calls
+Kanon's release workflow and you ask for it. It commits nothing, and prints as exact steps
+whatever its token can't do. Safe to run again.
 
 Options:
   --repo <owner>/<repo>  the repository (default: the checkout's origin remote)
@@ -205,15 +211,35 @@ export const registerRolesOf = (identity, req) => {
 };
 
 /**
- * `kanon apps`'s flag for these identities: `--roles` while the lanes run one App per role,
- * `--apps` once they run the Apps of ADR 0013 (plan 0005 step L4).
+ * `kanon apps`'s flag for these identities: `--apps`, for the Apps of ADR 0013 (plan 0005 step
+ * L4). A role is no identity since L4, so a requirements file that names one is from a release
+ * whose lanes disagree with this `kanon apps`, and is refused by name.
  * @param {string[]} identities @param {Requirements} req
  */
 export const appsArgs = (identities, req) => {
-  if (identities.every((i) => req.identities.roles[i])) return ['--roles', identities.join(',')];
-  if (identities.every((i) => req.identities.apps[i])) return ['--apps', identities.join(',')];
-  throw new Error(`the lanes mix roles and Apps (${identities.join(', ')}); this release's lanes disagree with each other`);
+  const roles = identities.filter((i) => !req.identities.apps[i]);
+  if (roles.length) {
+    throw new Error(`the lanes run as ${roles.join(', ')}, which ${roles.length > 1 ? 'are' : 'is'} not one of Kanon's Apps (${Object.keys(req.identities.apps).join(', ')}); this release's lanes and its kanon apps disagree`);
+  }
+  return ['--apps', identities.join(',')];
 };
+
+/** The optional Releaser's identity (plan 0005 §3.1), taken by Kanon's release workflow alone. */
+export const RELEASER = 'releaser';
+
+/**
+ * The Apps `init` creates and checks: the Author and the Judge, as the chosen lanes need them,
+ * and the Releaser when the adopter asked for it.
+ * @param {{ lanes: string[], releaser?: boolean }} a @param {Requirements} req
+ */
+export const appIdentities = (a, req) => [...identitiesOf(a.lanes, req), ...(a.releaser ? [RELEASER] : [])];
+
+/**
+ * Whether the repository calls Kanon's release workflow, at the path docs/release.md gives its
+ * caller: the one place the optional Releaser's secrets are mapped.
+ * @param {string | null} text the caller's text, or null
+ */
+export const callsRelease = (text) => /^\s*uses:\s*yedeya-labs\/kanon\/\.github\/workflows\/release\.yml@/m.test(text ?? '');
 
 /**
  * The roles the App register lists, with their slugs, read as `lane-check`'s reader reads it:
@@ -479,7 +505,7 @@ export const rulesetGaps = (covering) => {
 
 /**
  * The answers, asked one by one with a default each, or all defaults with `--yes`.
- * @param {Deps} deps @param {{ yes: boolean, lanes: string[] | null }} opts @param {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements, defaultLanes: string[] }} ctx
+ * @param {Deps} deps @param {{ yes: boolean, lanes: string[] | null }} opts @param {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements, defaultLanes: string[], releases?: boolean }} ctx
  */
 export const askAll = async (deps, opts, ctx) => {
   const ask = (/** @type {string} */ q, /** @type {string} */ d) => (opts.yes ? Promise.resolve(d) : deps.ask(q, d));
@@ -497,7 +523,13 @@ export const askAll = async (deps, opts, ctx) => {
     delegation = { name: await ask('The delegate, as their sign-off writes their name', ctx.gitName), email: await ask("The delegate's email", ctx.gitEmail) };
   }
   const deleteDefaults = await yesNo("Delete GitHub's default labels that aren't in Kanon's taxonomy?", false);
-  return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults };
+  // THE OPTIONAL RELEASER (plan 0005 §3.1), asked only of a repository that calls Kanon's release
+  // workflow, and no by default: its release PRs fail a required dco check until #337, and the
+  // admin bypass stays until it can merge them (docs/release.md, "With the Releaser").
+  const releaser = ctx.releases
+    ? await yesNo('Create the optional Releaser App, so the release PR runs CI (docs/release.md, "With the Releaser")?', false)
+    : false;
+  return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser };
 };
 
 /** @typedef {Awaited<ReturnType<typeof askAll>>} Answers */
@@ -607,7 +639,7 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read }) => {
   for (const lane of a.lanes) {
     files.set(`.github/workflows/${lane}.yml`, callerFile(lane, /** @type {import('./callers.mjs').Lane} */ (req.lanes[lane]), { release, ciName, defaultBranch: s.defaultBranch }));
   }
-  const identities = identitiesOf(a.lanes, req);
+  const identities = appIdentities(a, req);
   if (identities.length) files.set('.github/workflows/apps-check.yml', appsCheckFile(identities, release));
   if (!ci) files.set('.github/workflows/ci.yml', ciFile(release, s.defaultBranch));
   else if (!/yedeya-labs\/kanon\/actions\/lane-check@/.test(ci)) files.set('.github/workflows/lane-check.yml', laneCheckFile(release));
@@ -713,7 +745,7 @@ const run = async (deps, opts, req) => {
   const gitName = deps.git(['-C', root, 'config', 'user.name']).stdout.trim();
   const gitEmail = deps.git(['-C', root, 'config', 'user.email']).stdout.trim();
   out('');
-  const a = await askAll(deps, opts, { login: who.login ?? ownerName, gates: suggestGates(read), gitName, gitEmail, req, defaultLanes: installed.length ? installed : DEFAULT_LANES });
+  const a = await askAll(deps, opts, { login: who.login ?? ownerName, gates: suggestGates(read), gitName, gitEmail, req, defaultLanes: installed.length ? installed : DEFAULT_LANES, releases: callsRelease(read('.github/workflows/release.yml')) });
 
   /** @type {string[]} what changed (or, in a dry run, would) */
   const changed = [];
@@ -832,7 +864,7 @@ const run = async (deps, opts, req) => {
   // 5. The Apps.
   out('');
   out('== Apps ==');
-  const identities = identitiesOf(a.lanes, req);
+  const identities = appIdentities(a, req);
   const rows = registerRows(read(REGISTER_PATH));
   /** @type {string[]} */
   let missing = [];
@@ -875,7 +907,10 @@ const run = async (deps, opts, req) => {
     for (const i of identities) {
       const lacks = appSecrets(i).filter((n) => !s.secrets?.has(n));
       if (lacks.length && !missing.includes(i)) {
-        manual.push([`The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}. Generate a private key on the App's settings page, then:`, `gh secret set ${appSecrets(i)[1]} -R ${repo} < <downloaded>.pem && rm <downloaded>.pem`, `gh secret set ${appSecrets(i)[0]} -R ${repo} --body <the App's id>`]);
+        // One App per owner (plan 0005 §3.2): the App exists, so this repository joins it with
+        // a key generated on its page, which `kanon apps --reuse` checks, stores and deletes.
+        const slug = registerRolesOf(i, req).map((r) => rows.get(r)).find(Boolean) ?? `<the ${i} App's slug>`;
+        manual.push([`The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}. Add ${repoName} to the App's installation, generate a private key on its settings page, then:`, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${i}:${slug}=<downloaded>.pem`]);
       }
     }
     const others = [...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))].filter((n) => !/_APP_(ID|PRIVATE_KEY)$/.test(n) && !s.secrets?.has(n));

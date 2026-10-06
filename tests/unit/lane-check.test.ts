@@ -75,7 +75,10 @@ const REGISTER = 'docs/qa/agent-identities.md';
 type Caller = { on?: unknown; concurrency?: unknown; env?: unknown; permissions?: Record<string, string>; jobs: Record<string, Record<string, unknown>> };
 const job = (doc: Record<string, unknown>) => Object.values((doc as Caller).jobs)[0]!;
 
-describe.skipIf(!hasYq)('lane-check', () => {
+// Each case spawns lane-check (bash, yq, jq and one Node process) on a fixture tree, about a
+// second alone. Under a loaded full `npm test` single cases outlasted the 5s default (seen on
+// the L4 branch twice, on different cases), so the whole block gets 20s.
+describe.skipIf(!hasYq)('lane-check', { timeout: 20_000 }, () => {
   it('fails Kanon itself on exactly what plan 0005\'s L5 migrates, and on nothing else (ADR 0011)', () => {
     // In this tree, not a copy: Kanon is its own adopter. CI runs the RELEASED action on it, at
     // the version its callers pin; this run reads the lanes as this PR leaves them. Since L4

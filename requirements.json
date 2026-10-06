@@ -3,12 +3,12 @@
   "lanes": {
     "agent-code-audit": {
       "identities": [
-        "explorer"
+        "author"
       ],
       "secrets": [
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "EXPLORER_APP_ID",
-        "EXPLORER_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
       ],
       "inputs": {},
       "grant": {
@@ -26,11 +26,11 @@
     },
     "agent-dispatch-sweep": {
       "identities": [
-        "lead"
+        "author"
       ],
       "secrets": [
-        "LEAD_APP_ID",
-        "LEAD_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY"
       ],
       "inputs": {
         "apply": {
@@ -48,12 +48,12 @@
     },
     "agent-explore": {
       "identities": [
-        "explorer"
+        "author"
       ],
       "secrets": [
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "EXPLORER_APP_ID",
-        "EXPLORER_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
       ],
       "inputs": {
         "tier": {
@@ -77,12 +77,12 @@
     },
     "agent-implement-revise": {
       "identities": [
-        "implementer"
+        "author"
       ],
       "secrets": [
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "IMPLEMENTER_APP_ID",
-        "IMPLEMENTER_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
       ],
       "inputs": {
         "pr_number": {
@@ -109,12 +109,12 @@
     },
     "agent-implement": {
       "identities": [
-        "implementer"
+        "author"
       ],
       "secrets": [
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "IMPLEMENTER_APP_ID",
-        "IMPLEMENTER_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
       ],
       "inputs": {
         "issue_number": {
@@ -137,11 +137,11 @@
     },
     "agent-lead-reconcile": {
       "identities": [
-        "lead"
+        "author"
       ],
       "secrets": [
-        "LEAD_APP_ID",
-        "LEAD_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY"
       ],
       "inputs": {
         "project": {
@@ -169,12 +169,12 @@
     },
     "agent-lead-revise": {
       "identities": [
-        "lead"
+        "author"
       ],
       "secrets": [
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "LEAD_APP_ID",
-        "LEAD_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
       ],
       "inputs": {
         "pr_number": {
@@ -197,12 +197,12 @@
     },
     "agent-lead-split": {
       "identities": [
-        "lead"
+        "author"
       ],
       "secrets": [
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "LEAD_APP_ID",
-        "LEAD_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
       ],
       "inputs": {
         "issue": {
@@ -223,12 +223,12 @@
     },
     "agent-lead": {
       "identities": [
-        "lead"
+        "author"
       ],
       "secrets": [
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "LEAD_APP_ID",
-        "LEAD_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
       ],
       "inputs": {
         "mandate": {
@@ -251,12 +251,12 @@
     },
     "agent-merge-reconcile": {
       "identities": [
-        "reviewer"
+        "judge"
       ],
       "secrets": [
         "CLAUDE_CODE_OAUTH_TOKEN",
-        "REVIEWER_APP_ID",
-        "REVIEWER_APP_PRIVATE_KEY"
+        "JUDGE_APP_ID",
+        "JUDGE_APP_PRIVATE_KEY"
       ],
       "inputs": {
         "pr_number": {
@@ -277,11 +277,11 @@
     },
     "agent-merge": {
       "identities": [
-        "merger"
+        "judge"
       ],
       "secrets": [
-        "MERGER_APP_ID",
-        "MERGER_APP_PRIVATE_KEY"
+        "JUDGE_APP_ID",
+        "JUDGE_APP_PRIVATE_KEY"
       ],
       "inputs": {
         "pr_number": {
@@ -303,12 +303,12 @@
     },
     "agent-overseer": {
       "identities": [
-        "overseer"
+        "author"
       ],
       "secrets": [
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "OVERSEER_APP_ID",
-        "OVERSEER_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
       ],
       "inputs": {},
       "grant": {
@@ -348,12 +348,12 @@
     },
     "agent-rebase": {
       "identities": [
-        "implementer"
+        "author"
       ],
       "secrets": [
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "IMPLEMENTER_APP_ID",
-        "IMPLEMENTER_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
       ],
       "inputs": {
         "pr_number": {
@@ -376,12 +376,12 @@
     },
     "agent-review": {
       "identities": [
-        "reviewer"
+        "judge"
       ],
       "secrets": [
         "CLAUDE_CODE_OAUTH_TOKEN",
-        "REVIEWER_APP_ID",
-        "REVIEWER_APP_PRIVATE_KEY"
+        "JUDGE_APP_ID",
+        "JUDGE_APP_PRIVATE_KEY"
       ],
       "inputs": {
         "pr_number": {
@@ -408,12 +408,12 @@
     },
     "agent-triage": {
       "identities": [
-        "implementer"
+        "author"
       ],
       "secrets": [
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "IMPLEMENTER_APP_ID",
-        "IMPLEMENTER_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
       ],
       "inputs": {
         "issue_number": {
@@ -433,12 +433,12 @@
     },
     "agent-verify-acs": {
       "identities": [
-        "explorer"
+        "author"
       ],
       "secrets": [
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "EXPLORER_APP_ID",
-        "EXPLORER_APP_PRIVATE_KEY"
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
       ],
       "inputs": {
         "project": {
