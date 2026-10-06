@@ -147,3 +147,7 @@ These rules' lines are prose only with a note, and name nothing to install: `K-P
 - **Accepted id-token holder:** `qa-store-aws-maintenance.yml` job `maintenance` (runs the QA store's hygiene scripts under the store's role; Kanon's own reusable workflow, held by the id-token guard test)
 - **Accepted id-token holder:** `telemetry-collect.yml` job `collect` (writes to the telemetry store as its writer; Kanon's own reusable workflow, held by the id-token guard test)
 - **Accepted id-token holder:** `telemetry.yml` job `collect` (Kanon's telemetry caller: grants it to telemetry-collect.yml at the pinned release, whose one job holds it)
+- **Waived doctor finding:** `caller.misplaced` on `.github/workflows/review.yml` (Kanon hosts the lanes it calls: `agent-review.yml` is the lane itself, so its caller can't take that name; ADR 0011)
+- **Waived doctor finding:** `caller.misplaced` on `.github/workflows/implement.yml` (Kanon hosts the lanes it calls: `agent-implement.yml` is the lane itself, so its caller can't take that name; ADR 0011)
+- **Waived doctor finding:** `caller.misplaced` on `.github/workflows/implement-revise.yml` (Kanon hosts the lanes it calls: `agent-implement-revise.yml` is the lane itself, so its caller can't take that name; ADR 0011)
+- **Waived doctor finding:** `caller.misplaced` on `.github/workflows/code-audit.yml` (Kanon hosts the lanes it calls: `agent-code-audit.yml` is the lane itself, so its caller can't take that name; ADR 0011)
