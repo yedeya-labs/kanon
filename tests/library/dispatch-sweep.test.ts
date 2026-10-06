@@ -9,7 +9,7 @@ import { appLogin } from '../../scripts/app-register.mjs';
 // The sweep reads the repository it acts on when it loads (`REPO`), and the recordings under
 // `tests/fixtures/gh/` are of this repository's own public payloads.
 process.env.GITHUB_REPOSITORY = 'yedeya-labs/kanon';
-const { MARKER, classify, isBot, linkedPrIndex, norm, breakerTripped, AGENT_LOGIN, SWEEP_LOGIN, LANES, laneTag, isLaneComment, terminalVerdict, actionable, unreachedByIssue, unreachedWindowStart, costStamp, parseCostStamp, makeSweepTriggerCheck, PAIR_WINDOW_MINUTES, attemptsCell, exhaustedAtByIssue, lastLabeledAt, makeLabeledAtReader, COST_PROJECTION, makeCommentsReader, redactSecrets, READ_SHAPES, keyPaths, shapeDrift } = await import('../../scripts/dispatch-sweep.mjs');
+const { MARKER, classify, isBot, linkedPrIndex, norm, breakerTripped, AGENT_LOGIN, SWEEP_LOGIN, LANES, laneTag, isLaneComment, terminalVerdict, actionable, unreachedByIssue, unreachedWindowStart, costStamp, parseCostStamp, makeSweepTriggerCheck, PAIR_WINDOW_MINUTES, attemptsCell, exhaustedAtByIssue, lastLabeledAt, makeLabeledAtReader, COST_PROJECTION, makeCommentsReader, redactSecrets, READ_SHAPES, keyPaths, shapeDrift, redispatchReason, renderReport } = await import('../../scripts/dispatch-sweep.mjs');
 
 /** The fixture adopter's App logins (`tests/fixtures/adopter/docs/qa/agent-identities.md`). */
 const REVIEWER_LOGIN = appLogin('Reviewer');
@@ -1286,5 +1286,50 @@ describe('RA-1781 — exhaustedAtByIssue reads the LATEST row only', () => {
   it('skips a row with no parseable stamp rather than letting it win or mask', () => {
     const m = exhaustedAtByIssue([row('20260921T100000Z', 7, 'exhausted'), row('garbage', 7, 'ok')], [7]);
     expect(m.has(7)).toBe(true);
+  });
+});
+
+describe('kanon#380 — an unmarked implementer comment is named, not only read as silence', () => {
+  const [implement] = LANES;
+  // Posted by the implementer's App with its header left off: since L4 `classify` does not read it as the agent.
+  const unmarked = (hours: number, body = 'Stopping: this needs design.') => ({ login: `${AGENT_LOGIN}[bot]`, createdAt: ago(hours), body });
+
+  it('still reads `never-ran`, as the marker rule says, but counts the comment on the verdict', () => {
+    const v = verdict([unmarked(100)]);
+    expect(v.state).toBe('never-ran');
+    expect(v.sawAgent, 'the breaker keys on marked words only').toBe(false);
+    expect(v.unmarked).toBe(1);
+    expect(verdict([]).unmarked, 'and none on a silent issue').toBe(0);
+  });
+
+  it('counts only the App\'s unmarked comments after its last marked one', () => {
+    expect(verdict([unmarked(200), comment(AGENT_LOGIN, 100, 'Stopping: blocked.')]).unmarked, 'one the marked word followed').toBe(0);
+    const v = verdict([comment(AGENT_LOGIN, 200, 'Plan: …'), unmarked(100)]);
+    expect(v.unmarked).toBe(1);
+    expect(v.state, 'the marked word is still the one read').toBe('awaiting-human');
+  });
+
+  it("never counts another role's comment on the same App, or someone else's", () => {
+    expect(verdict([unmarked(100, '**Lead** <!-- kanon:role=lead -->\n\nnote')]).unmarked, "the Lead's").toBe(0);
+    expect(verdict([{ ...unmarked(100), login: 'a-human' }]).unmarked, "a person's").toBe(0);
+    expect(verdict([unmarked(100, asAgent(AGENT_LOGIN, 'done'))]).unmarked, 'a marked one').toBe(0);
+  });
+
+  it('the re-dispatch comment names them instead of saying the run never happened', () => {
+    const v = verdict([unmarked(100)]);
+    const text = redispatchReason(v);
+    expect(text).not.toContain('never happened');
+    expect(text).toContain('1 comment(s) by the agent\'s App carry no role marker');
+    expect(text).toContain(`\`${implement.label}\``);
+    expect(redispatchReason({ ...v, unmarked: 0 }), 'unchanged without one').toBe(implement.neverRan);
+    const answered = redispatchReason({ lane: implement, state: 'answered', unmarked: 2 });
+    expect(answered.startsWith(implement.answered), "another state keeps its prose").toBe(true);
+    expect(answered).toContain('2 comment(s) by the agent\'s App carry no role marker');
+  });
+
+  it('the report names them in the State cell', () => {
+    const { text } = renderReport([verdict([unmarked(100)])], { apply: false });
+    expect(text).toContain('`never-ran` (1 unmarked)');
+    expect(renderReport([verdict([])], { apply: false }).text).not.toContain('unmarked');
   });
 });

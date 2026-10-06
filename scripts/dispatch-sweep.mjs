@@ -42,7 +42,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { exhaustedRoute, projectOf } from './split-lineage.mjs';
 import { appLogin, appPersona } from './app-register.mjs';
-import { asRole, signed } from './lib/role-marker.mjs';
+import { asRole, markedRole, signed, slugOf } from './lib/role-marker.mjs';
 import { queryCostRows } from '../infra/qa-store/aws/cost-rows.mjs';
 import { costRowsProblem } from '../actions/qa-store/qa-store.mjs';
 import { artifactRetentionNote, readArtifactCostRows } from './lib/telemetry-artifacts.mjs';
@@ -735,6 +735,16 @@ export function classify(issue, comments, hasPr, opts = {}) {
   // A bounded wasted run beats an unbounded silent hold. `tests/unit/dispatch-sweep.
   // test.ts` pins this ("the human-held hold is per-lane"); changing the ruling means
   // changing that test and this paragraph together.
+  // UNMARKED IS NAMED, NOT ONLY SILENT (kanon#380). Since L4 `byAgent` needs the role marker
+  // beside the login, so a comment the agent posted without its header drops out of
+  // `agentComments`, and an issue whose agent stopped in an unmarked comment reads `never-ran`.
+  // The reading stands, as the marker rule says it must; what changes is that the verdict
+  // counts those comments, so the re-dispatch comment and the report say so rather than
+  // assert the run never happened. Only those after the agent's last marked word, which is
+  // what the classification already read, and never one carrying another role's marker (the
+  // Lead's, on the same App): that is that role's.
+  const unmarked = conversation.filter((c) => slugOf(c.login) === slugOf(lane.agent)
+    && markedRole(c.body) === null && (!lastAgent || after(c, lastAgent))).length;
   const humanRepliedToSweep = Boolean(
     lastSweep &&
     conversation.some((c) => !isBot(c.login) && after(c, lastSweep)) &&
@@ -808,7 +818,7 @@ export function classify(issue, comments, hasPr, opts = {}) {
   // 2" under three visible sweep comments reads as a bug.
   const base = {
     issue, lane, redispatches, dispatched, unreached: Math.max(0, unreached),
-    maxRedispatch, lastSweep, last, sawAgent: agentComments.length > 0,
+    maxRedispatch, lastSweep, last, sawAgent: agentComments.length > 0, unmarked,
   };
 
   // TOO BIG — the latest run hit its cap (RA-1781). Checked before the attempt cap and the
@@ -905,6 +915,23 @@ function addLabelOrDie(n, label, context) {
 // to anyone — whereas re-adding a label needs only `Issues: Read & write`, which is
 // all the Lead is granted. Label churn costs one extra event and strictly less
 // authority than a workflow dispatch would need.
+/**
+ * Why the sweep re-dispatches, in the comment that records the attempt: the lane's prose for
+ * the state, and, when the agent's App left comments with no role marker, those named
+ * (kanon#380). A `never-ran` issue with such comments did hear from the App, so the lane's
+ * "silence means the run never happened" would be false: it is replaced, not appended to.
+ * @param {{ lane: Lane, state: string, unmarked?: number }} v
+ */
+export function redispatchReason(v) {
+  const { lane } = v;
+  const prose = { 'never-ran': lane.neverRan, 'ran-empty': lane.ranEmpty }[v.state] ?? lane.answered;
+  if (!v.unmarked) return prose;
+  const named = `${v.unmarked} comment(s) by the agent's App carry no role marker, so the sweep does not read them as the agent speaking (plan 0005 §3.3, kanon#380)`;
+  return v.state === 'never-ran'
+    ? `This issue has carried \`${lane.label}\` with no marked output from the agent: ${named}. Read them before this run: one may be a stop that needs a human.`
+    : `${prose}\n\n${named}.`;
+}
+
 function redispatch(v) {
   const n = String(v.issue.number);
   const { lane } = v;
@@ -917,7 +944,7 @@ function redispatch(v) {
     `Re-dispatching \`${lane.label}\` (attempt ${v.redispatches + 1} of ${v.maxRedispatch}`
       + `${v.unreached ? `; ${v.unreached} earlier dispatch${v.unreached === 1 ? '' : 'es'} never reached the model and ${v.unreached === 1 ? 'is' : 'are'} not charged, RA-1517` : ''}) — **${v.state}**.`,
     '',
-    { 'never-ran': lane.neverRan, 'ran-empty': lane.ranEmpty }[v.state] ?? lane.answered,
+    redispatchReason(v),
     '',
     `_Filed by \`scripts/dispatch-sweep.mjs\` (RA-912, ${lane.key} lane RA-1336). If this is wrong, remove the \`${lane.label}\` label._`,
   ].join('\n');
@@ -1037,7 +1064,7 @@ export function renderReport(verdicts, { apply = APPLY, breaker = { tripped: fal
     '| Issue | Lane | State | Action | Attempts | Last word |',
     '|---|---|---|---|---|---|',
     ...rows.map((v) =>
-      `| [#${v.issue.number}](https://github.com/${REPO}/issues/${v.issue.number}) | \`${v.lane.key}\` | \`${v.state}\` | ${actionCell(v, breaker)} | ${attemptsCell(v)} | ${excerpt(v.last).replace(/\|/g, '\\|')} |`),
+      `| [#${v.issue.number}](https://github.com/${REPO}/issues/${v.issue.number}) | \`${v.lane.key}\` | \`${v.state}\`${v.unmarked ? ` (${v.unmarked} unmarked)` : ''} | ${actionCell(v, breaker)} | ${attemptsCell(v)} | ${excerpt(v.last).replace(/\|/g, '\\|')} |`),
     '',
   ];
 
@@ -1060,6 +1087,9 @@ function report(verdicts, breaker, costLine) {
   // Surfaced as annotations so they are visible on the run without opening the summary.
   for (const v of rows.filter((v) => v.state === 'awaiting-human')) {
     warn(`#${v.issue.number} [${v.lane.key}] has waited ${Math.floor(hoursSince(v.last.createdAt))}h for a human — ${v.issue.title}`);
+  }
+  for (const v of rows.filter((v) => v.unmarked > 0)) {
+    warn(`#${v.issue.number} [${v.lane.key}] reads as \`${v.state}\` past ${v.unmarked} comment(s) by the agent's App that carry no role marker (plan 0005 §3.3, kanon#380) — ${v.issue.title}`);
   }
   for (const v of rows.filter((v) => v.state === 'human-held')) {
     warn(`#${v.issue.number} [${v.lane.key}] is held: a human replied to the sweep and the agent has not run since — ${v.issue.title}`);
