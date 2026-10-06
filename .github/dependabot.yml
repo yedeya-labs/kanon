@@ -13,8 +13,7 @@
 # each new release to them and to the review lane's caller (review.yml) and CI's lane-check
 # (ADR 0011, plan 0001 step 4b), as K-ADOPT-11 has it for any adopter: Kanon's own references in
 # a group of their own, and never held back by a cooldown. Kanon is first-party, so a
-# cooldown would only delay the release that judges the next PR. The one exception is v0.28.0
-# and later, which the `ignore` below holds back until plan 0005's L5.
+# cooldown would only delay the release that judges the next PR.
 #
 # THE EXEMPTION MUST BE WRITTEN OUT (#233). An entry that sets no `cooldown` is not free of
 # one: Dependabot then applies its default of 3 days, and this entry, which set none, held
@@ -41,14 +40,6 @@ updates:
     cooldown:
       default-days: 3
       exclude: ["yedeya-labs/kanon*"]
-    # HELD BELOW v0.28.0 UNTIL PLAN 0005 L5. REMOVE AT L5. v0.28.0 is the breaking two-App
-    # release (#333, #358): its lanes take AUTHOR_*, JUDGE_* and RELEASER_* secrets and read the
-    # register's one row per role. Kanon doesn't have the Author and Judge Apps until L5, so a
-    # bump to it would break every one of Kanon's own lanes. Patches to v0.27.x still flow. L5
-    # moves the pins itself and removes this block in the same change (plan 0005, L5).
-    ignore:
-      - dependency-name: "yedeya-labs/kanon*"
-        versions: [">= 0.28.0"]
     commit-message:
       prefix: ci
       include: scope
