@@ -1,7 +1,11 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { auditAreas, readCodeAreas } from '../../scripts/lib/code-areas.mjs';
+import { writeStub } from './helpers/stub-bin.js';
 
 type Step = {
   id?: string;
@@ -513,6 +517,70 @@ describe('plan 0001 §4 the agent blocks smoke run', () => {
   it('reads contents only', () => {
     expect(wf.permissions).toEqual({ contents: 'read' });
     for (const job of jobs) expect(job.permissions).toBeUndefined();
+  });
+
+  // kanon#251: the block signs off as the delegate the DEFAULT BRANCH records, read over the
+  // API; the check must judge the commit by that record too, never by the checkout's copy,
+  // which on a pull request is the PR's. The step's body runs here with the block's git
+  // environment (a commit-msg hook that adds the sign-off) and a `gh` that serves the default
+  // branch's record, in a checkout whose own record says something else.
+  describe("the delegate check reads the default branch's record, as the block does (kanon#251)", () => {
+    const step = steps.find((s) => s.name === 'Check a commit is the App\'s, signed off by the delegate')!;
+    const RECORD = 'docs/qa/sign-off-delegation.md';
+    const table = (name: string, email: string) => `| Delegate | Email | Delegated on |\n|---|---|---|\n| ${name} | ${email} | 2026-10-04 |\n`;
+    const BOT = '41898282+github-actions[bot]@users.noreply.github.com';
+    const check = (o: { signoff: string; main: string | null; checkout: string | null }) => {
+      const dir = mkdtempSync(join(tmpdir(), 'blocks-smoke-delegate-'));
+      try {
+        const bin = join(dir, '.bin');
+        const hooks = join(dir, '.hooks');
+        const work = join(dir, 'checkout');
+        for (const d of [bin, hooks, join(work, 'docs/qa')]) mkdirSync(d, { recursive: true });
+        if (o.checkout !== null) writeFileSync(join(work, RECORD), o.checkout);
+        if (o.main !== null) writeFileSync(join(bin, 'record'), o.main);
+        writeStub(join(bin, 'gh'), `#!/usr/bin/env bash
+[ "$*" = "api repos/acme/widgets/contents/${RECORD} -H Accept: application/vnd.github.raw" ] || { echo "unexpected: $*" >&2; exit 2; }
+[ "$GH_TOKEN" = workflow-token ] || { echo "no token" >&2; exit 4; }
+${o.main === null ? 'echo "gh: Not Found (HTTP 404)" >&2; exit 1' : `cat "${bin}/record"`}
+`);
+        writeFileSync(join(hooks, 'commit-msg'), `#!/usr/bin/env bash\ngit interpret-trailers --in-place --trailer 'Signed-off-by: ${o.signoff}' "$1"\n`, { mode: 0o755 });
+        const r = spawnSync('bash', ['-e', '-c', String(step.run)], {
+          cwd: work,
+          encoding: 'utf8',
+          env: {
+            PATH: `${bin}:${process.env.PATH}`, HOME: dir, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+            GITHUB_REPOSITORY: 'acme/widgets', GH_TOKEN: step.env?.GH_TOKEN === '${{ github.token }}' ? 'workflow-token' : '',
+            GIT_AUTHOR_NAME: 'github-actions[bot]', GIT_AUTHOR_EMAIL: BOT, GIT_COMMITTER_NAME: 'github-actions[bot]', GIT_COMMITTER_EMAIL: BOT,
+            GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: hooks,
+          },
+        });
+        return { status: r.status, out: `${r.stdout}${r.stderr}` };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    const ada = table('Ada Lovelace', 'ada@example.com');
+    const grace = table('Grace Hopper', 'grace@example.com');
+
+    it('passes a commit signed off by the default branch\'s delegate', () => {
+      const r = check({ signoff: 'Ada Lovelace <ada@example.com>', main: ada, checkout: ada });
+      expect(r.status, r.out).toBe(0);
+    });
+    it('passes it on a pull request that changes the delegate, or removes the record', () => {
+      for (const checkout of [grace, null]) {
+        const r = check({ signoff: 'Ada Lovelace <ada@example.com>', main: ada, checkout });
+        expect(r.status, r.out).toBe(0);
+      }
+    });
+    it('fails a commit signed off by the delegate the pull request records, but the default branch does not', () => {
+      expect(check({ signoff: 'Grace Hopper <grace@example.com>', main: ada, checkout: grace }).status).not.toBe(0);
+    });
+    it('fails the delegate\'s name with an address the record does not give', () => {
+      expect(check({ signoff: 'Ada Lovelace <ada@elsewhere.example>', main: ada, checkout: ada }).status).not.toBe(0);
+    });
+    it('fails when the default branch has no record, whatever the checkout holds', () => {
+      expect(check({ signoff: 'Ada Lovelace <ada@example.com>', main: null, checkout: ada }).status).not.toBe(0);
+    });
   });
 });
 
