@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.29.0](https://github.com/yedeya-labs/kanon/compare/v0.28.0...v0.29.0) (2026-10-06)
+
+
+### Features
+
+* **cli:** add kanon doctor, with a versioned JSON output ([#370](https://github.com/yedeya-labs/kanon/issues/370)) ([b9daf5b](https://github.com/yedeya-labs/kanon/commit/b9daf5bc8137852e486c27f66273b2fad793df75))
+* **cli:** make kanon init scriptable, with a flag per question and JSON output ([#371](https://github.com/yedeya-labs/kanon/issues/371)) ([1fcf39f](https://github.com/yedeya-labs/kanon/commit/1fcf39f730b7968fdaf522c8a21986bfac603f70))
+* close the L5 gaps: Releaser bypass in kanon apps and doctor, dco exempts the Releaser, implementer status binds to the pushed head ([#379](https://github.com/yedeya-labs/kanon/issues/379)) ([53c97da](https://github.com/yedeya-labs/kanon/commit/53c97da14b1ad2dcf3bc93e7a96f29e8e3e183b9))
+* **skills:** ship the agent-client skills adopt, doctor and upgrade as the kanon Claude Code plugin ([#374](https://github.com/yedeya-labs/kanon/issues/374)) ([3eea068](https://github.com/yedeya-labs/kanon/commit/3eea068c2ee1a69bedac1ed575ba4475b15695a7))
+
+
+### Bug Fixes
+
+* **qa:** harden lane role markers, guards and the smoke input, and drop adopter examples ([#378](https://github.com/yedeya-labs/kanon/issues/378)) ([dae9fa5](https://github.com/yedeya-labs/kanon/commit/dae9fa59ba63ea05854af82c751b4d7aa23f8026))
+
+
+### Documentation
+
+* **adr:** record who adopts Kanon, and build for agent-client developers first ([#364](https://github.com/yedeya-labs/kanon/issues/364)) ([012dcdc](https://github.com/yedeya-labs/kanon/commit/012dcdc4c1d99c459dd0860a42bc8612877a1919))
+
+
+### CI
+
+* **deps:** Bump the github-actions group across 2 directories with 2 updates ([#354](https://github.com/yedeya-labs/kanon/issues/354)) ([53c80e9](https://github.com/yedeya-labs/kanon/commit/53c80e911233e66851ea3b0c479df153f5b3975c))
+* hold Kanon's own pins below v0.28.0 until L5, and run the telemetry collector hourly ([#369](https://github.com/yedeya-labs/kanon/issues/369)) ([dd21ebc](https://github.com/yedeya-labs/kanon/commit/dd21ebc778b0f37cc7ed3e5c2558ea4e0607b10c))
+
 ## [0.28.0](https://github.com/yedeya-labs/kanon/compare/v0.27.0...v0.28.0) (2026-10-06)
 
 

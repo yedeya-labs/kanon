@@ -17,7 +17,7 @@ The skills are a Claude Code plugin, `kanon`, in Kanon's own repository, which i
 <!-- x-release-please-start-version -->
 
 ```sh
-claude plugin marketplace add yedeya-labs/kanon#v0.28.0
+claude plugin marketplace add yedeya-labs/kanon#v0.29.0
 claude plugin install kanon@kanon
 ```
 
