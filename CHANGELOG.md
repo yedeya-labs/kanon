@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.32.0](https://github.com/yedeya-labs/kanon/compare/v0.31.0...v0.32.0) (2026-10-06)
+
+
+### Features
+
+* **doctor:** declare the kanon plugin in the repository, and report a declared release other than the pin ([#424](https://github.com/yedeya-labs/kanon/issues/424)) ([3db5b38](https://github.com/yedeya-labs/kanon/commit/3db5b3881a92839344ebd4e2aaab64e8a6dfcb4c))
+* **overseer:** route upstream findings by a declared adoption-record choice ([#426](https://github.com/yedeya-labs/kanon/issues/426)) ([62986d8](https://github.com/yedeya-labs/kanon/commit/62986d8d8a633c24f0fae835672082de7fba667f))
+
+
+### Tests
+
+* assert both actionlint wrapper steps in CI carry no token ([#425](https://github.com/yedeya-labs/kanon/issues/425)) ([a9ed9fd](https://github.com/yedeya-labs/kanon/commit/a9ed9fdf72af96671497ab0eda9eee80246263b7))
+
 ## [0.31.0](https://github.com/yedeya-labs/kanon/compare/v0.30.0...v0.31.0) (2026-10-06)
 
 
