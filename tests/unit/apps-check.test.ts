@@ -55,9 +55,15 @@ describe('registeredApps reads the register with the lanes\' reader (plan 0005 Â
     expect(apps).toEqual([{ key: 'author', app: 'Author', slug: 'example-author', roles: ['Implementer', 'Lead'], secret: 'AUTHOR' }]);
   });
 
-  it('fails on an App whose roles name two slugs, as the per-role register before L4 does', () => {
-    expect(() => registeredApps(join(ROOT, 'docs/qa/agent-identities.md'), APPS, ROLES))
-      .toThrow(/the Author's roles name 2 App slugs \(Implementer `kanon-implementer`, Explorer `kanon-explorer`\); one App, one slug/);
+  it('fails on an App whose roles name two slugs, as the per-role register before L4 did', () => {
+    const split = FIXTURE.replace(/^(\| Lead \| )\*\*`example-author`\*\*/m, '$1`example-lead`');
+    expect(split).not.toBe(FIXTURE);
+    expect(() => withRegister(split, (dir) => registeredApps(REG(dir), APPS, ROLES)))
+      .toThrow(/the Author's roles name 2 App slugs \(Implementer `example-author`, Lead `example-lead`\); one App, one slug/);
+  });
+
+  it('reads Kanon\'s own register since plan 0005\'s L5: one slug per App', () => {
+    expect(() => registeredApps(join(ROOT, 'docs/qa/agent-identities.md'), APPS, ROLES)).not.toThrow();
   });
 
   it('fails on a register the lanes would refuse, rather than skipping the role', () => {
