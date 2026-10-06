@@ -93,17 +93,27 @@ describe('the review lane pins Kanon\'s baseline playbooks, so the re-verify agr
 
   // MUTATION (K-PRIN-11): the restore without its defaults call is the order the first version
   // of #316 shipped, and the re-verify then disagrees.
+  //
+  // The copy goes to a temporary directory, never into `scripts/` (kanon#330): a file there
+  // appears in, and then vanishes from, the walks other test files run over `scripts/` — and
+  // while it is there it is read as one of Kanon's own scripts. The copy finds
+  // `judging-inputs.mjs` and `declaration-defaults.sh` through `HERE`, which it resolves from
+  // its own location, so the mutation pins `HERE` back at Kanon's `scripts/`.
   it('goes red without the restore taking the defaults: the pin then misses the baseline', () => {
     const text = readFileSync(RESTORE, 'utf8');
     const call = /^KANON_ROOT=.*declaration-defaults\.sh"$/m;
+    const here = /^HERE=.*$/m;
     expect(text).toMatch(call);
-    const mutated = join(ROOT, 'scripts', '.restore-without-defaults.sh');
-    writeFileSync(mutated, text.replace(call, ':'));
+    expect(text).toMatch(here);
+    const dir = mkdtempSync(join(tmpdir(), 'restore-without-defaults-'));
+    const mutated = join(dir, 'restore-judging-inputs.sh');
+    const body = text.replace(here, () => `HERE='${join(ROOT, 'scripts')}'`).replace(call, () => ':');
+    writeFileSync(mutated, body);
     try {
       const { pinned, verified } = lane(mutated);
       expect(verified).not.toBe(pinned);
     } finally {
-      rmSync(mutated, { force: true });
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
