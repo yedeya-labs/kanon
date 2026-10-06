@@ -102,6 +102,22 @@ export function signed(body, role, persona = null) {
 }
 
 /**
+ * `body`, made to read as `role`'s: returned unchanged when its first marker is already
+ * `role`'s, and otherwise opened with `role`'s header line. Unlike `signed`, a first line that
+ * carries ANOTHER role's marker is opened too, so `markedRole` of the result is always `role`.
+ * For a fixed step that knows whose post it is signing, never for an agent's guess: the review
+ * lane's stamp step, on the verdict its own agent posted (kanon#336).
+ * @param {string} body
+ * @param {string} role
+ * @param {string | null} [persona]
+ */
+export function signedAs(body, role, persona = null) {
+  const text = String(body ?? '');
+  if (markedRole(text) === known(role)) return text;
+  return `${headerLine(role, persona)}\n\n${text}`;
+}
+
+/**
  * What the readers require. `additive` (L3, kept for the reader-table test): the login
  * decides, and the marker is read but not required. `required` (L4, shipped): the login and
  * the role's marker both.
@@ -215,8 +231,20 @@ if (isCliEntry(import.meta.url)) {
     console.log(headerLine(role, declared));
     process.exit(0);
   }
+  if (cmd === 'sign' && role) {
+    // `… body on stdin | role-marker.mjs sign <Role> [persona]`: the body, opened with the
+    // role's header unless its first marker is already the role's (`signedAs`).
+    const { readFileSync } = await import('node:fs');
+    try {
+      process.stdout.write(signedAs(readFileSync(0, 'utf8'), role, persona || null));
+      process.exit(0);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e));
+      process.exit(1);
+    }
+  }
   if (cmd !== 'header' || !role) {
-    console.error('usage: role-marker.mjs header <Role> [persona] | header-from-register <Role> | implementer-status <author-slug>');
+    console.error('usage: role-marker.mjs header <Role> [persona] | header-from-register <Role> | sign <Role> [persona] | implementer-status <author-slug>');
     process.exit(2);
   }
   try {

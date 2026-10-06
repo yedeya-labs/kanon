@@ -39,7 +39,7 @@ import { AGENT_LOGIN, linkedPrIndex, norm } from './dispatch-sweep.mjs';
 import { SPLIT_LABEL, exhaustedRoute, projectOf } from './split-lineage.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
-import { asRole } from './lib/role-marker.mjs';
+import { asRole, markedRole, slugOf } from './lib/role-marker.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const IMPLEMENT = 'agent:implement';
@@ -113,6 +113,30 @@ export function agentSpokeSince(comments, since) {
   // The Implementer's login and, from L4, its role marker (plan 0005 §3.3).
   return (comments ?? []).some((c) => asRole('Implementer', { login: norm(c.login ?? c.author?.login), expected: AGENT_LOGIN, body: c.body })
     && Date.parse(c.createdAt) >= t);
+}
+
+/**
+ * How many comments the Implementer's App posted on the issue since the run started that carry
+ * NO role marker (kanon#336). Since L4 `agentSpokeSince` reads such a comment as silence, so a
+ * run whose agent left its header off reads as one that said nothing; this count lets the job
+ * say so by name rather than leave "the implementer did not comment" as the only account.
+ * A comment carrying another role's marker (the Lead's, on the same App) is that role's, and
+ * not counted.
+ * @param {{ login?: string, author?: { login?: string }, createdAt: string, body?: string }[]} comments
+ * @param {string} since
+ */
+export function unmarkedSince(comments, since) {
+  const t = Date.parse(since ?? '');
+  if (!Number.isFinite(t)) return 0;
+  return (comments ?? []).filter((c) => slugOf(norm(c.login ?? c.author?.login)) === slugOf(AGENT_LOGIN)
+    && markedRole(c.body) === null && Date.parse(c.createdAt) >= t).length;
+}
+
+/** The warning `unmarkedSince` asks for, or '' when there is nothing to say. */
+export function unmarkedWarning(issue, n) {
+  return n > 0
+    ? `::warning title=unmarked comment::#${issue}: ${n} comment(s) by the Implementer's App since the run started carry no role marker, so none is read as the Implementer speaking (plan 0005 §3.3; the agent left off its header, kanon#336).`
+    : '';
 }
 
 /**
@@ -289,6 +313,8 @@ function detect(issue, runId) {
     spoke: agentSpokeSince(comments, since),
     since,
   });
+  const unmarked = unmarkedWarning(issue, unmarkedSince(comments, since));
+  if (unmarked) console.log(unmarked);
   if (!verdict.empty) {
     console.log(`#${issue}: the run left output — ${verdict.why}`);
     return;
@@ -326,6 +352,8 @@ function main() {
     crashes: priorCrashes(comments),
     body: view.body,
   });
+  const unmarked = unmarkedWarning(issue, unmarkedSince(comments, since));
+  if (unmarked) console.log(unmarked);
   console.log(`#${issue}: ${verdict.act} — ${verdict.why}`);
   if (verdict.act === 'none' || !apply) return;
   const body = renderComment(verdict, { runUrl: `https://github.com/${REPO}/actions/runs/${runId}`, kind });

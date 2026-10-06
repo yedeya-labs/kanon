@@ -6,6 +6,10 @@ import { parse } from 'yaml';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { handedIn, readFlattened, workflowText } from './helpers/called-workflow.js';
+import { headerLine } from '../../scripts/lib/role-marker.mjs';
+
+/** The header and role marker a verdict carries since plan 0005's L4 (kanon#336). */
+const MARK = headerLine('Reviewer');
 
 /**
  * RA-1028 / RA-1090 / RA-378 — which pushes get reviewed, and WHEN.
@@ -147,7 +151,7 @@ const runDecide = ({
   );
   const reviews = JSON.stringify(
     reviewsOverride ??
-    (lastReviewed === null ? [] : [{ user: { login: 'example-reviewer[bot]' }, commit_id: lastReviewed, state: 'APPROVED' }]),
+    (lastReviewed === null ? [] : [{ user: { login: 'example-reviewer[bot]' }, commit_id: lastReviewed, state: 'APPROVED', body: MARK }]),
   );
   // Order matters: `/commits/<sha>/pulls` also matches `*commits*`.
   writeStub(join(dir, 'gh'),
@@ -1198,25 +1202,40 @@ describe('an already-reviewed head is not reviewed again, whatever the PR contai
   const BOT = { login: 'example-reviewer[bot]' };
   it('reads the stamp, not commit_id: a verdict filed under the head but read on the last commit', () => {
     const r = runDecide({ pushed: ['docs/a.md'], prFiles: ['docs/a.md'], reviews: [
-      { user: BOT, state: 'APPROVED', commit_id: HEAD, body: `ok\n\n<!-- reviewed: sha=${LAST} run=1 -->` }] });
+      { user: BOT, state: 'APPROVED', commit_id: HEAD, body: `${MARK}\n\nok\n\n<!-- reviewed: sha=${LAST} run=1 -->` }] });
     expect(r.review).toBe('true');
     expect(evidenceOf(r.stdout).LAST_REVIEWED).toBe(LAST);
   });
 
   it('and a verdict stamped with the head skips it, whatever it was filed under', () => {
     const r = runDecide({ pushed: ['docs/a.md'], prFiles: ['docs/a.md'], reviews: [
-      { user: BOT, state: 'CHANGES_REQUESTED', commit_id: LAST, body: `x\n<!-- reviewed: sha=${HEAD.toUpperCase()} -->` }] });
+      { user: BOT, state: 'CHANGES_REQUESTED', commit_id: LAST, body: `${MARK}\n\nx\n<!-- reviewed: sha=${HEAD.toUpperCase()} -->` }] });
     expect(r.review).toBe('false');
     expect(r.stdout).toContain('already reviewed');
   });
 
   it('counts verdicts only: a later COMMENTED review on the head does not mark it reviewed', () => {
     const r = runDecide({ pushed: ['src/a.ts'], prFiles: ['src/a.ts'], reviews: [
-      { user: BOT, state: 'APPROVED', commit_id: LAST, body: `<!-- reviewed: sha=${LAST} -->` },
-      { user: BOT, state: 'COMMENTED', commit_id: HEAD, body: `<!-- reviewed: sha=${HEAD} -->` }] });
+      { user: BOT, state: 'APPROVED', commit_id: LAST, body: `${MARK}\n\n<!-- reviewed: sha=${LAST} -->` },
+      { user: BOT, state: 'COMMENTED', commit_id: HEAD, body: `${MARK}\n\n<!-- reviewed: sha=${HEAD} -->` }] });
     expect(r.review).toBe('true');
     expect(evidenceOf(r.stdout).LAST_REVIEWED).toBe(LAST);
     expect(r.calls, 'the compare base is the commit the verdict read').toContain(`compare/${LAST}...${HEAD}`);
+  });
+
+  // kanon#336: since L4 the Merger counts a verdict only with the Reviewer's role marker. One
+  // without it marked its head "already reviewed" here, so nothing reviewed it again and the
+  // PR stalled with no signal.
+  it("does not count a verdict without the Reviewer's role marker as reviewing the head", () => {
+    const unmarked = runDecide({ pushed: ['src/a.ts'], prFiles: ['src/a.ts'], reviews: [
+      { user: BOT, state: 'APPROVED', commit_id: LAST, body: `${MARK}\n\n<!-- reviewed: sha=${LAST} -->` },
+      { user: BOT, state: 'APPROVED', commit_id: HEAD, body: `Approve.\n\n<!-- reviewed: sha=${HEAD} -->` }] });
+    expect(unmarked.review).toBe('true');
+    expect(unmarked.stdout).not.toContain('already reviewed');
+    expect(evidenceOf(unmarked.stdout).LAST_REVIEWED, 'the base is the last MARKED verdict').toBe(LAST);
+    const other = runDecide({ pushed: ['src/a.ts'], prFiles: ['src/a.ts'], reviews: [
+      { user: BOT, state: 'APPROVED', commit_id: HEAD, body: `${headerLine('Merger')}\n\n<!-- reviewed: sha=${HEAD} -->` }] });
+    expect(other.review, "nor one whose first marker is another role's").toBe('true');
   });
 
   it('acts on a failed reviews read where it always did, after the skip marker', () => {

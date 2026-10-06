@@ -8,7 +8,7 @@ import { parse } from 'yaml';
 import { laneBlockOf, readBlock, readSpine } from '../unit/helpers/spine.js';
 import {
   CRASH_AUTHOR, CRASH_MARKER, EMPTY_KIND, MAX_CRASH_RETRIES, STOP_LABEL,
-  agentSpokeSince, branchPattern, decide, emptyRun, plan, priorCrashes, projectOf, renderComment,
+  agentSpokeSince, branchPattern, decide, emptyRun, plan, priorCrashes, projectOf, renderComment, unmarkedSince, unmarkedWarning,
 } from '../../scripts/implement-crash.mjs';
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { SPLIT_LABEL, splitMarker } from '../../scripts/split-lineage.mjs';
@@ -139,6 +139,21 @@ describe('the inputs', () => {
     expect(agentSpokeSince([{ login: 'example-reviewer', createdAt: '2026-09-19T19:00:00Z' }], since), 'another bot').toBe(false);
     expect(agentSpokeSince([{ login: `${AGENT_LOGIN}[bot]`, createdAt: '2026-09-19T19:00:00Z', body: asAgent(AGENT_LOGIN, 'done') }], since)).toBe(true);
     expect(agentSpokeSince([], null), 'no start time keeps the label').toBe(true);
+  });
+
+  it("names the Implementer App's unmarked comments, which agentSpokeSince reads as silence (kanon#336)", () => {
+    const since = '2026-09-19T18:06:00Z';
+    const at = '2026-09-19T19:00:00Z';
+    const unmarked = { login: `${AGENT_LOGIN}[bot]`, createdAt: at, body: 'done, but no header' };
+    expect(agentSpokeSince([unmarked], since), 'the reader does not count it').toBe(false);
+    expect(unmarkedSince([unmarked], since)).toBe(1);
+    expect(unmarkedSince([{ ...unmarked, body: asAgent(AGENT_LOGIN, 'done') }], since), 'a marked one is not').toBe(0);
+    expect(unmarkedSince([{ ...unmarked, body: '**Lead** <!-- kanon:role=lead -->\n\nx' }], since), "another role's is that role's").toBe(0);
+    expect(unmarkedSince([{ ...unmarked, createdAt: '2026-09-18T00:00:00Z' }], since), 'an older one').toBe(0);
+    expect(unmarkedSince([{ ...unmarked, login: 'a-human' }], since), "someone else's").toBe(0);
+    expect(unmarkedSince([unmarked], ''), 'no start time').toBe(0);
+    expect(unmarkedWarning('7', 1)).toMatch(/^::warning title=unmarked comment::#7: 1 comment\(s\) by the Implementer's App .* no role marker/);
+    expect(unmarkedWarning('7', 0)).toBe('');
   });
 
   it('the comment carries the marker, the run and the verdict', () => {
@@ -432,6 +447,16 @@ describe('MODE=detect, run (kanon#181)', () => {
     const r = run({ comments: [{ author: { login: `${AGENT_LOGIN}[bot]` }, createdAt: '2026-10-02T01:00:00Z', body: asAgent(AGENT_LOGIN, 'Stopping: the acceptance criteria are ambiguous about X.') }] });
     expect(r.status, r.out).toBe(0);
     expect(r.output).toBe('');
+  });
+
+  it("names an unmarked Implementer comment, in detection and in recovery, rather than only calling the run silent (kanon#336)", () => {
+    const comments = [{ author: { login: `${AGENT_LOGIN}[bot]` }, createdAt: '2026-10-02T01:00:00Z', body: 'Stopping: no header on this one.' }];
+    const detected = run({ comments });
+    expect(detected.status, detected.out).toBe(1);
+    expect(detected.out).toContain("::warning title=unmarked comment::#181: 1 comment(s) by the Implementer's App");
+    const recovered = run({ comments, mode: '', kind: EMPTY_KIND });
+    expect(recovered.out).toContain('::warning title=unmarked comment::#181');
+    expect(run({}).out, 'and says nothing when there is none').not.toContain('unmarked comment');
   });
 
   it('passes a run that pushed its branch, and dates only the candidates', () => {

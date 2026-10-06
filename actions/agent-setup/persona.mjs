@@ -94,7 +94,7 @@ if (isCliEntry(import.meta.url) && !process.env.ROLE && !process.env.APP_SLUG) {
     '-H', 'Accept: application/vnd.github.raw'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   const r = resolveRole({ role: process.env.ROLE ?? '', slug: process.env.APP_SLUG ?? '', register });
   if ('problem' in r) {
-    console.log(`::warning title=agent-setup::no persona for this agent: ${r.problem.split('\n')[0]}. Its posts carry no role marker and its commits keep the App's bot name (plan 0005 §3.3).`);
+    console.log(`::warning title=agent-setup::no persona for this agent: ${r.problem.split('\n')[0]}. Its posts carry no role marker, so since L4 no reader counts them as any role's, and its commits keep the App's bot name (plan 0005 §3.3, kanon#336).`);
   } else {
     const p = resolvePersona(r.role, register);
     if (p.problem) console.log(`::warning title=agent-setup::the ${r.role} speaks under its role's own name: ${p.problem}`);

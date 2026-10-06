@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
-const { asRole, headerLine, markedRole, personaHeader, roleMarker, setMarkerPhase, signed, withPersona } = await import('../../scripts/lib/role-marker.mjs');
+const { asRole, headerLine, markedRole, personaHeader, roleMarker, setMarkerPhase, signed, signedAs, withPersona } = await import('../../scripts/lib/role-marker.mjs');
 const { personaEnv, resolvePersona, resolveRole } = await import('../../actions/agent-setup/persona.mjs');
 const { appPersona, parsePersonas } = await import('../../scripts/app-register.mjs');
 
@@ -47,6 +47,30 @@ describe('the header and the marker', () => {
     expect(signed(`${headerLine('Lead')}\n\nx`, 'Implementer')).toBe(`${headerLine('Lead')}\n\nx`);
     // A marker further down is not an opening one.
     expect(signed(`x\n${roleMarker('Lead')}`, 'Implementer').startsWith(headerLine('Implementer'))).toBe(true);
+  });
+});
+
+describe("signedAs: a fixed step makes a post read as the role it knows it is (kanon#336)", () => {
+  it("opens a body unless its first marker is already the role's, whatever another role's says", () => {
+    expect(signedAs('Approve.', 'Reviewer')).toBe(`${headerLine('Reviewer')}\n\nApprove.`);
+    expect(signedAs('Approve.', 'Reviewer', 'Thea')).toBe(`${headerLine('Reviewer', 'Thea')}\n\nApprove.`);
+    const mine = `${headerLine('Reviewer')}\n\nApprove.`;
+    expect(signedAs(mine, 'Reviewer')).toBe(mine);
+    // Where `signed` leaves another role's opening marker alone, `signedAs` opens the body, so
+    // the result always reads as the role.
+    const other = `${headerLine('Merger')}\n\nApprove.`;
+    expect(signedAs(other, 'Reviewer')).toBe(`${headerLine('Reviewer')}\n\n${other}`);
+    for (const b of ['', 'x', mine, other, `x\n${roleMarker('Lead')}`]) expect(markedRole(signedAs(b, 'Reviewer'))).toBe('Reviewer');
+  });
+
+  it('the CLI signs standard input, and refuses a role that is not an agent\'s', () => {
+    const cli = (args: string[], input: string) => spawnSync('node', ['scripts/lib/role-marker.mjs', ...args], { input, encoding: 'utf8' });
+    const r = cli(['sign', 'Reviewer'], 'Approve.\n');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe(`${headerLine('Reviewer')}\n\nApprove.\n`);
+    expect(cli(['sign', 'Reviewer', 'Thea'], 'x').stdout.startsWith(headerLine('Reviewer', 'Thea'))).toBe(true);
+    expect(cli(['sign', 'Reviewer', ''], 'x').stdout.startsWith(`${headerLine('Reviewer')}\n`)).toBe(true);
+    expect(cli(['sign', 'Releaser'], 'x').status).toBe(1);
   });
 });
 
