@@ -20,6 +20,10 @@
 # Kanon releases several times a day. So the cooldown below keeps those 3 days for every
 # third-party action and excludes Kanon. tests/unit/workflows.test.ts pins it, and
 # `lane-check` holds every adopter's entry to the same.
+#
+# DAILY, NOT WEEKLY. The cooldown exemption only helps once Dependabot looks: a weekly entry
+# still reached a new Kanon release up to a week late, and a Dependabot run can't be started
+# from the UI. Daily matches the entry adopters are given (actions/pr-title/README.md).
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -30,7 +34,7 @@ updates:
       - /infra/qa-store/aws
       - /infra/qa-store/aws/maintenance
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
       default-days: 3
       exclude: ["yedeya-labs/kanon*"]
