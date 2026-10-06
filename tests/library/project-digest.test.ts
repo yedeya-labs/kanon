@@ -950,3 +950,25 @@ describe('a member whose PR conflicts is stopped, not building (RA-1722)', () =>
     expect(line).not.toContain('building');
   });
 });
+
+describe('kanon#380 — an unmarked Implementer comment is named on the member line', () => {
+  const unmarked = (body = 'Stopping: this needs design.') => ({ login: `${AGENT_LOGIN}[bot]`, body, createdAt: '2026-08-30T00:00:00Z' });
+
+  it('keeps the disposition the marker rule reads, and carries the count', () => {
+    const v = classifyDispatch({ now: NOW, comments: [unmarked()], ageDays: QUIET_AFTER_DAYS });
+    expect(v.disposition, 'read as silence, as since L4').toBe('stall');
+    expect(v.unmarked).toBe(1);
+    expect(classifyDispatch({ now: NOW, comments: [], ageDays: QUIET_AFTER_DAYS }).unmarked, 'none on a silent issue').toBeUndefined();
+    expect(classifyDispatch({ now: NOW, comments: [unmarked('**Lead** <!-- kanon:role=lead -->\n\nnote')], ageDays: 0 }).unmarked, "the Lead's is the Lead's").toBeUndefined();
+  });
+
+  it('names them on the line, whatever the disposition, and says nothing more without one', () => {
+    const stall = renderMember(member({ disposition: 'stall', unmarked: 1 }));
+    expect(stall).toContain('stalled dispatch');
+    expect(stall).toContain('1 Implementer comment(s) carry no role marker');
+    const quiet = renderMember(member({ disposition: 'dispatched', unmarked: 2 }));
+    expect(quiet, 'a member the digest is otherwise silent on').toContain('2 Implementer comment(s) carry no role marker');
+    expect(quiet, 'on a line of its own').toMatch(/^ {8}:grey_question: <[^>]+> /);
+    expect(renderMember(member({ disposition: 'stall' }))).not.toContain('role marker');
+  });
+});

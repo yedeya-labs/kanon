@@ -226,7 +226,7 @@ export function stopReason(body, max = 80) {
  *          labels?: string[], hasPr?: boolean, prConflicting?: boolean, ageDays?: number,
  *          now?: Date}} input
  * @returns {{disposition: 'conflicting'|'building'|'authorised'|'bail'|'stall'|'dispatched'|'human-held'|'needs-info',
- *            waitedDays: number, reason?: string}}
+ *            waitedDays: number, reason?: string, unmarked?: number}}
  */
 export function classifyDispatch({ comments = [], labels = [], hasPr = false, prConflicting = false, ageDays = 0, now = new Date() }) {
   // BEFORE `building`, because it is the same PR and the opposite report (RA-1722). A
@@ -246,6 +246,15 @@ export function classifyDispatch({ comments = [], labels = [], hasPr = false, pr
   const waitedDays = Number.isFinite(at) ? Math.max(0, Math.floor((now.getTime() - at) / 86400000)) : ageDays;
   const quiet = { disposition: ageDays >= QUIET_AFTER_DAYS ? 'stall' : 'dispatched', waitedDays: ageDays };
 
+  const r = dispositionOf(v, { conversation, lastAgent, waitedDays, ageDays, quiet });
+  // The Implementer App's comments the sweep's classifier read as silence for want of a role
+  // marker (kanon#380). The disposition and the wait stand as the marker rule reads them; the
+  // line names the comments, so a stop left unmarked does not pass as a stalled dispatch.
+  return v.unmarked ? { ...r, unmarked: v.unmarked } : r;
+}
+
+/** `classifyDispatch`'s disposition for the sweep's verdict `v`. */
+function dispositionOf(v, { conversation, lastAgent, waitedDays, ageDays, quiet }) {
   switch (v.state) {
     case 'parked': return { disposition: 'needs-info', waitedDays: ageDays };
     case 'human-held': return { disposition: 'human-held', waitedDays: ageDays };
@@ -519,12 +528,22 @@ const ICON = {
  * One line per member issue that needs a human's attention, or nothing.
  *
  * @param {{number: number, title: string, url: string, ageDays: number,
- *          disposition: string|null}} m
+ *          disposition: string|null, unmarked?: number}} m
  * @returns {string|null} null when the issue needs nothing said about it
  */
 export function renderMember(m) {
   const t = m.title.length > 68 ? `${m.title.slice(0, 65)}…` : m.title;
   const link = `<${m.url}|#${m.number}>`;
+  const line = memberLine(m, t, link);
+  // NAMED WHATEVER THE DISPOSITION (kanon#380): an unmarked Implementer comment is read as
+  // silence, so the line above may call a stop a stall, or say nothing at all.
+  if (!m.unmarked) return line;
+  const named = `            ${m.unmarked} Implementer comment(s) carry no role marker, so they are read as silence (plan 0005 §3.3)`;
+  return `${line ?? `        :grey_question: ${link} ${t}`}\n${named}`;
+}
+
+/** `renderMember`'s line for the disposition alone. */
+function memberLine(m, t, link) {
   switch (m.disposition) {
     case 'bail':
       return `        :hand: ${link} ${t}\n            *awaiting your decision* — ${m.reason ?? 'scope-first bail'}, ${m.waitedDays}d`;
