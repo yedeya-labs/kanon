@@ -1,0 +1,48 @@
+# Runs scripts/citation-shift.mjs on every pull request to Kanon, as advice (#377).
+#
+# `citation-shift` maps each source file the PR changes, old line to new line, and names every
+# `file:line` in docs/ or in a code comment that the PR moved and left as it was (K-SELF-3). On
+# Kanon it is ADVISORY, as the Owner decided for adopters in #343: a check becomes fatal only
+# when its false-positive rate, replayed over history, is about zero, and this one's isn't. So
+# the job never fails. When the script exits non-zero, the job turns that into one warning
+# annotation, which points at the run's log for the list and the `--fix` command.
+#
+# It runs the PR's own copy of the script, unlike the required citation guard in ci.yml: it
+# judges nothing, so there is nothing for a PR to weaken, and a PR that changes the script
+# sees the changed advice. For the same reason it is not a required check, and it runs on
+# pull requests only, never in the merge queue.
+#
+# The checkout is GitHub's merge commit, and the script diffs against its first parent, the
+# base the PR merges into. `fetch-depth: 2` brings that parent.
+#
+# Read-only. It needs nothing but the code.
+name: Citation shift
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: citation-shift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  citation-shift:
+    name: Citation shift (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: citation-shift (advisory, never fails)
+        run: |
+          if ! node scripts/citation-shift.mjs; then
+            echo "::warning title=citation-shift (advisory)::This PR moved lines that a doc or a code comment cites, and left the coordinate as it was. The log of this step lists each one; run 'node scripts/citation-shift.mjs --fix' to re-point them. Advisory only (#343, #377): it doesn't block the merge."
+          fi

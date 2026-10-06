@@ -17,6 +17,14 @@
 # yet. The shim is what makes it check each `$/` call's inputs against the action's own
 # `action.yml`; without it, those calls are parse errors and their inputs go unchecked.
 #
+# The `citation-guard` job runs scripts/citation-guard.mjs over Kanon's own docs/ (#377,
+# K-SELF-3): every `file:line` there must resolve, and point at what its sentence names. It is
+# meant to be a required check, so it judges with the script at the PR's BASE commit, never the
+# PR's own copy (#47), as public-text.yml does: a PR that weakened the guard must not be judged
+# by the weakened guard. The PR's copy is tested by tests/library/citation-guard.test.ts. It
+# runs on merge_group under the same job name, against the queue's base, so the queue gets a
+# result. Its sibling, `citation-shift`, is advisory and runs in citation-shift.yml.
+#
 # Read-only on purpose. This workflow needs nothing but the code, so it gets nothing else.
 name: CI
 
@@ -64,3 +72,26 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+
+  citation-guard:
+    name: Citation guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # The judge: the base's scripts/, beside the tree it reads. The guard reads `git ls-files`
+      # in the working directory, so it runs from the PR's checkout, and this nested, untracked
+      # copy is not part of what it reads.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+          path: .citation-guard-base
+          sparse-checkout: scripts
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: citation-guard (the base's copy)
+        run: node .citation-guard-base/scripts/citation-guard.mjs
