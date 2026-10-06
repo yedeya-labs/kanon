@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
-import { appIdentities, appsArgs, callsRelease, init, LANE_CHECK, lineDiff, registerRolesOf, RULESET_NAME, rulesetGaps, workflowName } from '../../cli/init.mjs';
+import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, USAGE, workflowName } from '../../cli/init.mjs';
 
 /**
  * `kanon init` (plan 0005 §5.4, step L9). Every case runs the command against a real git
@@ -138,7 +138,7 @@ const writes = (calls: Array<{ args: string[] }>) =>
 
 type Run = { status: number; out: string; err: string; appsCalls: string[][]; milestoneCalls: string[][] };
 
-const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: string[] = ['--yes'], answers?: Record<string, string>, requirements = REQ): Promise<Run> => {
+const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: string[] = ['--yes'], answers?: Record<string, string>, requirements = REQ, extra: NonNullable<Parameters<typeof init>[1]> = {}): Promise<Run> => {
   const out: string[] = [];
   const err: string[] = [];
   const appsCalls: string[][] = [];
@@ -179,6 +179,7 @@ const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: str
       github.st.milestones.add('Development Automation');
       return 0;
     },
+    ...extra,
   });
   return { status, out: out.join('\n'), err: err.join('\n'), appsCalls, milestoneCalls };
 };
@@ -560,5 +561,286 @@ describe('the helpers', () => {
     const full = [{ rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }, { type: 'pull_request', parameters: { allowed_merge_methods: ['squash'] } }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: LANE_CHECK }] } }] }];
     expect(rulesetGaps(full)).toEqual([]);
     expect(rulesetGaps([])).toEqual(['require a pull request before merging', 'block force pushes', 'restrict deletions', `require the status check "${LANE_CHECK}"`]);
+  });
+});
+
+/** docs/init.md, which documents the flags. */
+const INIT_DOC = readFileSync(join(ROOT, 'docs/init.md'), 'utf8');
+
+/** A column of the tables under a `### <heading>` (or `## <heading>`) of docs/init.md, header and rule rows left out. */
+const tableColumn = (heading: string, which = 0): string[] => {
+  const start = INIT_DOC.indexOf(`\n${heading}\n`);
+  if (start < 0) throw new Error(`docs/init.md has no "${heading}" heading`);
+  const rest = INIT_DOC.slice(start + heading.length + 2);
+  const end = rest.search(/\n#{2,3} /);
+  const section = end < 0 ? rest : rest.slice(0, end);
+  return [...section.matchAll(/^\|(.+)\|$/gm)]
+    .map((m) => m[1]!.split(/(?<!\\)\|/).map((c) => c.trim()))
+    .filter((c) => !/^-+$/.test(c[0]!) && !['Field', 'Status', 'Id', 'Question'].includes(c[0]!))
+    .map((c) => c[which]!);
+};
+
+/**
+ * `kanon init --json` (#365, ADR 0014 decision 2): one document on standard output, its shape
+ * held to docs/init.md's tables, which docs/cli-json.md's convention frames.
+ */
+/** The first table of a section: the document's own fields, not the status table after it. */
+const fields = (heading: string) => tableColumn(heading).map((c) => /^`([^`]+)`$/.exec(c)?.[1] ?? c);
+
+type Doc = Record<string, unknown> & {
+  schema: string; status: string; exitCode: number; dryRun: boolean;
+  inspection: Record<string, unknown>; answers: Record<string, unknown>;
+  files: Array<Record<string, unknown>>; changes: Array<Record<string, unknown>>; apps: Record<string, unknown>;
+  findings: Array<{ id: string; category: string; blocking: boolean; subject: string; message: string; fix: { text: string; commands: string[]; url: string | null } }>;
+  notes: string[]; failures: string[];
+};
+const parse = (r: Run): Doc => JSON.parse(r.out) as Doc;
+const keys = (o: object) => Object.keys(o).sort();
+
+describe('kanon init --json, the contract (docs/init.md)', () => {
+  const STATUSES = ['complete', 'steps-left', 'failed', 'error'];
+  // The document's own fields are the rows of its table that come before the status table.
+  const DOC_FIELDS = fields('### The document').filter((f) => !STATUSES.includes(f));
+
+  it('prints one document on standard output, the prose on standard error, with every field docs/init.md lists and no other', async () => {
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub(), ['--yes', '--json']);
+    expect(r.status, r.err).toBe(0);
+    const d = parse(r);
+    expect(r.err).toContain('== Summary ==');
+    expect(r.out).not.toContain('== Summary ==');
+    expect(keys(d)).toEqual([...DOC_FIELDS].sort());
+    expect(d.schema).toBe(SCHEMA);
+    expect(SCHEMA).toBe('kanon-init/v1');
+    expect(d.kanon).toBe(`v${JSON.parse(read(ROOT, 'package.json')).version}`);
+    expect(d.status).toBe('steps-left');
+    expect(d.exitCode).toBe(0);
+    expect(d.repository).toBe(REPO);
+    expect(d.token).toEqual({ source: 'gh', login: 'octo' });
+    expect(keys(d.inspection)).toEqual(fields('### The inspection').sort());
+    expect(keys(d.answers)).toEqual(fields('### The answers').sort());
+    expect(keys(d.apps)).toEqual(fields('### The Apps').sort());
+    expect(d.files.length).toBeGreaterThan(0);
+    for (const f of d.files) expect(keys(f)).toEqual(fields('### A file').sort());
+    for (const c of d.changes) expect(keys(c)).toEqual(fields('### A change').sort());
+    for (const f of d.findings) {
+      expect(keys(f)).toEqual(['blocking', 'category', 'fix', 'id', 'message', 'subject']);
+      expect(keys(f.fix)).toEqual(['commands', 'text', 'url']);
+    }
+    expect(d.inspection).toMatchObject({ owner: 'acme', ownerKind: 'user', private: false, defaultBranch: 'main', rulesets: 'yes', installedLanes: [], callsRelease: false });
+    expect(d.answers).toEqual({ projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false });
+    expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
+    expect(d.files.find((f) => f.path === '.github/workflows/agent-review.yml')).toMatchObject({ status: 'new', content: read(dir, '.github/workflows/agent-review.yml'), diff: [] });
+    expect(d.findings.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token']);
+    expect(d.findings[0]!.fix.commands).toEqual(['gh secret set CLAUDE_CODE_OAUTH_TOKEN -R acme/widgets   # paste it on standard input']);
+    expect(d.notes).toContain('init commits nothing: review the files, then commit them on a branch and open a pull request.');
+  });
+
+  it('is the same run as the prose: the same exit code, changes in the summary\'s order, findings in its numbering', async () => {
+    const opts = { admin: false, labelCreateFails: true };
+    const prose = await run(checkout(), fakeGitHub(opts), ['--yes']);
+    const json = await run(checkout(), fakeGitHub(opts), ['--yes', '--json']);
+    expect(json.status).toBe(prose.status);
+    expect(json.err.replace(/kanon-init-[^/\s]+/g, '<dir>')).toBe(prose.out.replace(/kanon-init-[^/\s]+/g, '<dir>'));
+    const d = parse(json);
+    const summary = prose.out.split('== Summary ==\n')[1]!;
+    expect(d.changes.map((c) => `- ${c.message}`)).toEqual(summary.split('\n').filter((l) => l.startsWith('- ')));
+    const numbered = [...summary.matchAll(/^\d+\. (.*)$/gm)].map((m) => m[1]);
+    expect(d.findings).toHaveLength(numbered.length);
+    expect(d.findings.map((f) => f.id)).toEqual(['label.create', 'merge.settings', 'ruleset.create', 'secret.claude-code-oauth-token']);
+    expect(numbered[0]).toBe('Create the labels the token could not (it needs Issues: write):');
+  });
+
+  it('says what a dry run would do, and does nothing', async () => {
+    const dir = checkout();
+    const github = fakeGitHub();
+    const r = await run(dir, github, ['--json', '--dry-run']);
+    const d = parse(r);
+    expect(d.dryRun).toBe(true);
+    expect(writes(github.calls)).toEqual([]);
+    expect(r.appsCalls).toEqual([]);
+    expect(d.apps.outcome).toBe('would-run');
+    expect(d.files.every((f) => f.status === 'new')).toBe(true);
+    expect(d.changes.map((c) => c.kind)).toContain('ruleset');
+    expect(execFileSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('');
+  });
+
+  it('reports complete when nothing is left, and the files already as init writes them', async () => {
+    const dir = checkout();
+    const github = fakeGitHub();
+    await run(dir, github);
+    github.st.secrets!.add('CLAUDE_CODE_OAUTH_TOKEN');
+    const d = parse(await run(dir, github, ['--json']));
+    expect(d.status).toBe('complete');
+    expect(d.findings).toEqual([]);
+    expect(d.changes).toEqual([]);
+    expect(d.apps.outcome).toBe('registered');
+    expect(new Set(d.files.map((f) => f.status))).toEqual(new Set(['same']));
+  });
+
+  it('reports failed, exit 1, and a blocking finding when kanon apps does not finish', async () => {
+    const r = await run(checkout(), fakeGitHub(), ['--json'], undefined, REQ, { apps: async () => 3 });
+    expect(r.status).toBe(1);
+    const d = parse(r);
+    expect(d).toMatchObject({ status: 'failed', exitCode: 1, failures: ['kanon apps did not finish (exit 3).'] });
+    expect(d.apps).toMatchObject({ outcome: 'failed', exitCode: 3 });
+    expect(d.findings.find((f) => f.id === 'app.failed')).toMatchObject({ blocking: true, category: 'app', subject: 'judge' });
+  });
+
+  it('prints the error document, and nothing else, when it cannot start', async () => {
+    const bad = await run(checkout(), fakeGitHub(), ['--json', '--bogus']);
+    expect(bad.status).toBe(2);
+    const d = JSON.parse(bad.out);
+    expect(keys(d)).toEqual(['error', 'exitCode', 'kanon', 'schema', 'status']);
+    expect(d).toMatchObject({ schema: SCHEMA, status: 'error', exitCode: 2, error: 'unknown argument "--bogus"' });
+    const none = mkdtempSync(join(tmpdir(), 'kanon-init-json-none-'));
+    dirs.push(none);
+    const notCheckout = await run(none, fakeGitHub(), ['--json']);
+    expect(notCheckout.status).toBe(1);
+    expect(JSON.parse(notCheckout.out)).toMatchObject({ status: 'error', exitCode: 1, error: expect.stringContaining('is not a git checkout') });
+  });
+
+  it('sends the prose of kanon apps and kanon milestones to standard error too', async () => {
+    const r = await run(checkout(), fakeGitHub(), ['--json'], undefined, REQ, {
+      apps: async (_argv: string[], io?: { out: (l: string) => void }) => (io?.out('APPS PROSE'), 0),
+      milestones: async (_argv: string[], io?: { out: (l: string) => void }) => (io?.out('MILESTONES PROSE'), 0),
+    });
+    expect(() => JSON.parse(r.out)).not.toThrow();
+    expect(r.err).toContain('APPS PROSE');
+    expect(r.err).toContain('MILESTONES PROSE');
+  });
+
+  it('gives every finding a documented id, and documents only ids the code gives', async () => {
+    const source = readFileSync(join(ROOT, 'cli/init.mjs'), 'utf8');
+    const inCode = [...source.matchAll(/\bid: '([a-z-]+\.[a-z-]+)'/g)].map((m) => m[1]!).sort();
+    const documented = fields('### The findings').sort();
+    expect(inCode).toEqual(documented);
+    const categories = new Map(tableColumn('### The findings').map((id, i) => [id.replace(/`/g, ''), tableColumn('### The findings', 1)[i]!.replace(/`/g, '')]));
+    // The findings these fixtures produce carry their documented category.
+    const dep = checkout({ '.github/dependabot.yml': 'version: 2\nupdates: []\n' });
+    const d = parse(await run(dep, fakeGitHub({ admin: false, labelCreateFails: true, secrets: null }), ['--json', '--no-apps']));
+    expect(d.findings.map((f) => f.id)).toEqual(['dependabot.kanon-entry', 'label.create', 'merge.settings', 'ruleset.create', 'app.create', 'secret.unreadable']);
+    for (const f of d.findings) expect(f.category, f.id).toBe(categories.get(f.id));
+    expect(d.apps.outcome).toBe('left-to-you');
+  });
+
+  it('documents each status the document can carry', () => {
+    expect(tableColumn('### The document').filter((c) => /^`[a-z-]+`$/.test(c) && STATUSES.includes(c.replace(/`/g, '')))).toHaveLength(STATUSES.length);
+  });
+});
+
+describe('kanon init, a flag for each question (#367)', () => {
+  const never = async (q: string): Promise<string> => {
+    throw new Error(`asked "${q}"`);
+  };
+  const RELEASE_CALLER = 'name: Release\non:\n  push:\n    branches: [main]\npermissions: {}\njobs:\n  release:\n    uses: yedeya-labs/kanon/.github/workflows/release.yml@v1.2.3\n';
+
+  it('answers every question from its flag with --yes, asking nothing', async () => {
+    const dir = checkout({ '.github/workflows/release.yml': RELEASE_CALLER });
+    const github = fakeGitHub();
+    const r = await run(dir, github, [
+      '--yes', '--project-owner', 'grace', '--maintainer', 'linus', '--stakeholder=ada', '--lanes', 'review', '--gates', 'make check, make lint',
+      '--test-database', 'hook', '--delegate-name', 'Grace Hopper', '--delegate-email', 'grace@example.com', '--delete-default-labels', '--releaser', '--create-apps',
+    ], undefined, REQ, { ask: never });
+    expect(r.status, r.err).toBe(0);
+    const adoption = read(dir, 'docs/qa/adoption.md');
+    for (const row of ['| Owner | `@grace` |', '| Maintainer | `@linus` |', '| Stakeholder | `@ada` |']) expect(adoption).toContain(row);
+    expect(read(dir, 'docs/qa/stack.md')).toContain('1. `make check`\n2. `make lint`');
+    expect(read(dir, 'docs/qa/test-database.md')).toContain('**Test database:** `hook`');
+    expect(read(dir, 'docs/qa/sign-off-delegation.md')).toContain('| Grace Hopper | grace@example.com | 2026-10-05 |');
+    expect(github.st.labels.has('question')).toBe(false);
+    expect(r.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge,releaser', '--dir', expect.any(String)]]);
+  });
+
+  it('answers the other way from the negative flags, and with --gates none', async () => {
+    const dir = checkout({ '.github/workflows/release.yml': RELEASE_CALLER, 'package.json': JSON.stringify({ scripts: { test: 'vitest' } }) });
+    const github = fakeGitHub();
+    const r = await run(dir, github, ['--yes', '--gates', 'none', '--test-database', 'none', '--no-delegation', '--keep-default-labels', '--no-releaser', '--no-apps'], undefined, REQ, { ask: never });
+    expect(r.status, r.err).toBe(0);
+    expect(read(dir, 'docs/qa/stack.md')).toContain('None yet');
+    expect(existsSync(join(dir, 'docs/qa/sign-off-delegation.md'))).toBe(false);
+    expect(existsSync(join(dir, 'docs/qa/test-database.md'))).toBe(false);
+    expect(github.st.labels.has('question')).toBe(true);
+    expect(r.appsCalls).toEqual([]);
+    expect(r.out).toContain('Create the Apps the lanes run as, from this checkout');
+  });
+
+  it('asks, without --yes, only the questions no flag answers', async () => {
+    const asked: string[] = [];
+    const r = await run(checkout(), fakeGitHub(), ['--project-owner', 'grace', '--gates', 'none', '--no-delegation', '--create-apps'], undefined, REQ, {
+      ask: async (q: string, d: string) => (asked.push(q), d),
+    });
+    expect(r.status, r.err).toBe(0);
+    expect(asked.some((q) => q.includes('Who is the Owner'))).toBe(false);
+    expect(asked.some((q) => q.includes("stack's gates"))).toBe(false);
+    expect(asked.some((q) => q.includes('sign-off delegation'))).toBe(false);
+    expect(asked.some((q) => q.includes('Create the Apps'))).toBe(false);
+    expect(asked.some((q) => q.includes('Who is the Maintainer'))).toBe(true);
+    expect(asked.some((q) => q.includes('test database'))).toBe(true);
+    expect(r.appsCalls).toHaveLength(1);
+  });
+
+  it('holds a negative flag against a person who would say yes, without --yes', async () => {
+    const dir = checkout({ '.github/workflows/release.yml': RELEASE_CALLER });
+    const github = fakeGitHub();
+    const asked: string[] = [];
+    const r = await run(dir, github, ['--no-releaser', '--keep-default-labels', '--no-delegation', '--no-apps'], undefined, REQ, {
+      ask: async (q: string, d: string) => (asked.push(q), q.endsWith('(y/n)') ? 'y' : d),
+    });
+    expect(r.status, r.err).toBe(0);
+    expect(asked.filter((q) => q.endsWith('(y/n)'))).toEqual([]);
+    expect(github.st.labels.has('question')).toBe(true);
+    expect(existsSync(join(dir, 'docs/qa/sign-off-delegation.md'))).toBe(false);
+    expect(read(dir, '.github/workflows/apps-check.yml')).not.toContain('RELEASER_APP_ID');
+    expect(r.appsCalls).toEqual([]);
+  });
+
+  it('fails by name on an unknown flag, a value flag given twice, a bad value, or a flag that takes none', () => {
+    expect(() => parseArgs(['--maintainers', 'x'], REQ)).toThrow('unknown argument "--maintainers"');
+    expect(() => parseArgs(['--project-owner', 'a', '--project-owner', 'b'], REQ)).toThrow('--project-owner is given twice');
+    expect(() => parseArgs(['--owner', 'grace'], REQ)).toThrow('unknown argument "--owner": the project\'s Owner is --project-owner');
+    expect(() => parseArgs(['--gates=x', '--gates', 'y'], REQ)).toThrow('--gates is given twice');
+    expect(() => parseArgs(['--test-database', 'docker'], REQ)).toThrow('--test-database takes none or hook, not "docker"');
+    expect(() => parseArgs(['--lanes', 'reviews'], REQ)).toThrow('"agent-reviews" is not a Kanon lane');
+    expect(() => parseArgs(['--releaser=yes'], REQ)).toThrow('--releaser takes no value, not "yes"');
+    expect(() => parseArgs(['--delegate-name'], REQ)).toThrow('--delegate-name needs a value');
+  });
+
+  it('fails by name on each pair of flags that contradict each other', () => {
+    expect(CONFLICTS.length).toBe(6);
+    for (const [x, y] of CONFLICTS) {
+      const argv = [x, y].flatMap((f) => (f.startsWith('--delegate-') ? [f, 'v'] : [f]));
+      expect(() => parseArgs(argv, REQ), `${x} ${y}`).toThrow(`${x} and ${y} contradict each other; give one`);
+    }
+    expect(parseArgs(['--delegate-email', 'e@x'], REQ).given.delegation).toBe(true);
+    expect(parseArgs(['--json'], REQ).yes).toBe(true);
+  });
+
+  it('exits 2 on a contradiction and touches nothing', async () => {
+    const github = fakeGitHub();
+    const r = await run(checkout(), github, ['--yes', '--releaser', '--no-releaser']);
+    expect(r.status).toBe(2);
+    expect(r.err).toContain('kanon init: --releaser and --no-releaser contradict each other; give one');
+    expect(github.calls).toEqual([]);
+  });
+
+  it("refuses --releaser for a repository that doesn't call Kanon's release workflow, before any call to GitHub", async () => {
+    const github = fakeGitHub();
+    const r = await run(checkout(), github, ['--yes', '--releaser']);
+    expect(r.status).toBe(2);
+    expect(r.err).toContain("kanon init: --releaser is for a repository that calls Kanon's release workflow");
+    expect(github.calls).toEqual([]);
+    expect(writes(github.calls)).toEqual([]);
+  });
+
+  it('lists every flag it takes in its usage text and in docs/init.md, and only those', () => {
+    const source = readFileSync(join(ROOT, 'cli/init.mjs'), 'utf8');
+    // `--owner` is matched only to be refused with a hint (Owner, 2026-10-06), so it is not a flag init takes.
+    const parsed = new Set([...source.matchAll(/flag === '(--[a-z-]+)'/g)].map((m) => m[1]!).filter((f) => f !== '--owner'));
+    const usage = new Set([...USAGE.matchAll(/^ {2}(?:-h, )?(--[a-z-]+)/gm)].map((m) => m[1]!));
+    expect([...usage].sort()).toEqual([...parsed].sort());
+    const documented = new Set(tableColumn('## Answering without a terminal', 1).flatMap((c) => [...c.matchAll(/`(--[a-z-]+)/g)].map((m) => m[1]!)));
+    const answers = [...parsed].filter((f) => !['--repo', '--dir', '--yes', '--dry-run', '--json', '--help'].includes(f));
+    expect([...documented].sort()).toEqual(answers.sort());
   });
 });
