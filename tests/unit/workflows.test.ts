@@ -553,6 +553,7 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
       'package-ecosystem': string;
       directories?: string[];
       groups?: Record<string, { patterns?: string[] }>;
+      schedule?: { interval?: string };
       cooldown?: { 'default-days'?: number; exclude?: string[] };
       'commit-message'?: Record<string, unknown>;
     }[];
@@ -579,6 +580,9 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
     // pins on v0.10.0 through 13 releases (#233). So the cooldown is written out, and excludes
     // Kanon; third-party actions keep the 3 days.
     expect(actions?.cooldown).toEqual({ 'default-days': 3, exclude: ['yedeya-labs/kanon*'] });
+    // Checked daily, as adopters are told to: a weekly entry reached each Kanon release up to
+    // a week late, and the cooldown exemption only helps once Dependabot looks.
+    expect(actions?.schedule?.interval).toBe('daily');
     // Titled `ci(deps): …`, so the PR passes K-SHIP-4.
     expect(actions?.['commit-message']).toEqual({ prefix: 'ci', include: 'scope' });
   });
