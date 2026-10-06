@@ -54,6 +54,7 @@ import { whoami } from './gh-token.mjs';
 import { appsArgs, inspect, registerRolesOf, registerRows, rulesetGaps, RULESET_NAME } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
+import { parseUpstreamFindings } from '../scripts/lib/upstream-findings.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
 /** @typedef {import('./init.mjs').Inspection} Inspection */
@@ -982,6 +983,17 @@ export const diagnose = async (deps, opts) => {
     if (used.has(key) || unchecked.some((u) => u.check === 'workflow' && u.subject === `.github/workflows/${key.split('#')[0]}`)) continue;
     const [wfFile, job] = key.split('#');
     find('id-token.stale-acceptance', ADOPTION_RECORD, `accepts ${wfFile}'s job ${job} as an id-token holder, but no such job holds the grant.`, { text: `Remove the bullet, so the record says only what is true.` });
+  }
+  // ── Where the Overseer's upstream findings go (`K-LAYOUT-10`, kanon#423) ──────────────────────
+  // The lane reads it from the default branch and stops before its agent on a malformed one; this
+  // names it first, from the checkout, as lane-check does.
+  const recordText = read(ADOPTION_RECORD);
+  if (recordText !== null) {
+    try {
+      parseUpstreamFindings(recordText);
+    } catch (e) {
+      find('declaration.malformed', ADOPTION_RECORD, /** @type {Error} */ (e).message, { text: 'Write it under ## Choices as `- **Upstream findings:** `filed here`` or `drafted`, or remove it for Kanon\'s default, `drafted` (K-LAYOUT-10).' });
+    }
   }
   // ── The waivers ─────────────────────────────────────────────────────────────────────────────
   // Last, over every finding: one bullet waives one id on one subject, as doctor reported it.

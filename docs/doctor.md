@@ -186,7 +186,7 @@ It is the finding, whole, as it would have been listed, with the waiver's reason
 | `secret.stale` | `secret` | no | An App secret nothing at the checked release reads. |
 | `declaration.missing` | `declaration` | yes | A project document a lane reads, with no default, is missing. |
 | `declaration.section-missing` | `declaration` | yes | A section with no default is missing, or written more than once. |
-| `declaration.malformed` | `declaration` | yes | An id-token holder's acceptance or a waiver in the adoption record is malformed, or waives a finding that can't be waived. |
+| `declaration.malformed` | `declaration` | yes | An id-token holder's acceptance, a waiver or the `Upstream findings:` choice in the adoption record is malformed, or a waiver waives a finding that can't be waived. |
 | `waiver.stale` | `declaration` | no | The adoption record waives a finding doctor doesn't report. |
 | `hook.missing` | `declaration` | yes | The project-setup hook, or a hook a lane calls, is missing. |
 | `hook.input-missing` | `declaration` | yes | The project-setup hook does not declare an input the lanes pass it. |
