@@ -23,10 +23,10 @@
 # What a lane declares (its inputs, secrets and permissions, and the hook's inputs) is read
 # from Kanon's own files at the pinned version, through $GITHUB_ACTION_PATH, never restated.
 #
-# Needs a checkout of the adopter's repository first, and `yq` (mikefarah v4) and `jq` on the
-# runner. GitHub's hosted runners have both (plan 0001, decision 6). Node is Kanon's own: the
-# first step is `kanon-path`, which puts the Node major Kanon declares on the PATH (kanon#110),
-# so the library's readers never run on whatever Node the runner's image shipped.
+# Needs a checkout of the adopter's repository first, and `yq` (mikefarah v4) on the runner.
+# GitHub's hosted runners have it (plan 0001, decision 6). The checks run in one Node process
+# (kanon#381), and Node is Kanon's own: the first step is `kanon-path`, which puts the Node major
+# Kanon declares on the PATH (kanon#110), so they never run on whatever Node the image shipped.
 name: Kanon lane check
 description: Fails unless the repository's Kanon lane callers, project-setup hook, App register and Dependabot entry follow Kanon's lane rules.
 author: yedeya-labs
