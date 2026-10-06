@@ -45,8 +45,11 @@ const LITERALS: ReadonlyArray<readonly [string, RegExp]> = [
   ["its product's routes", /\/admin\/courses\b/i],
   // Its framework's and its domain's audit areas: `K-LAYOUT-17`'s `audit` descriptions are the project's.
   ["its framework's and domain's audit areas", /\b(?:payment paths|server actions)\b/i],
-  // Its escalation file's categories (`K-MERGE-4`): which areas escalate is the project's.
-  ['its escalation categories', /\besc_(?:payments|auth)\b/],
+  // Its escalation paths (`K-LAYOUT-8`): where its payments and auth code live is the project's.
+  // `payments` and `auth` themselves are two of Kanon's generic escalation categories (plan 0003
+  // decision 14), so the category names, and the telemetry's `esc_payments` and `esc_auth`, are
+  // not adopter facts and aren't matched: only a path into such code is.
+  ['its payments and auth paths', /\b(?:src|app|lib|server)\\?\/\S*?(?:payments?|auth)/i],
   // Its test trees and the runner it gave each (ADR 0012's JavaScript row).
   ['its test trees', /\btests\|e2e\b|['"`]e2e\/['"`]|startsWith\(['"`](?:tests|e2e)\/['"`]\)/],
   // Its import alias, `@/` for `src/`.
@@ -62,10 +65,6 @@ const ALLOWED: ReadonlyArray<readonly [string, string, string]> = [
     'the generic environment words the digest must not use ("staging", "production"): vocabulary, not a declaration'],
   ['infra/qa-store/aws/provision.mjs', 'its environment name',
     "the generic stage words a store resource's lifecycle must not name: vocabulary, not a declaration"],
-  ['actions/agent-telemetry/schema.mjs', 'its escalation categories',
-    "the telemetry schema's fixed escalation categories, left for the telemetry batch, which owns the file (kanon#54)"],
-  ['infra/telemetry/function/schema.mjs', 'its escalation categories',
-    "the collector's copy of the same schema, which must match the action's (kanon#54)"],
   ['scripts/lib/test-conventions.mjs', 'its test trees',
     "ADR 0012's JavaScript row: tests under `tests/` and `e2e/`, run by Vitest and Playwright. Changing it revises the ADR, an Owner decision (kanon#54)"],
 ];
@@ -147,6 +146,15 @@ describe('the scan reads code and skips comments', () => {
   it("blanks a YAML comment and keeps a prompt's text", () => {
     const yml = '# staging\n  prompt: |\n    deploy to staging\n';
     expect(hashCode(yml)).toBe('\n  prompt: |\n    deploy to staging\n');
+  });
+
+  it("allows Kanon's escalation categories as names, and still catches a path into a project's payments or auth code", () => {
+    const named = (line: string) => LITERALS.filter(([, re]) => re.test(line)).map(([n]) => n);
+    expect(named("export const ESCALATION_CATEGORIES = Object.freeze(['pipeline', 'playbooks', 'infra', 'migrations', 'schema', 'payments', 'auth', 'other']);")).toEqual([]);
+    expect(named('  esc_payments: bool, esc_auth: bool,')).toEqual([]);
+    for (const line of ["const PAY = /^src\\/.*payments?/i;", "'src/lib/payments/charge.ts'", "if (f.startsWith('app/auth/')) return true;", "'server/session/auth.ts'"]) {
+      expect(named(line), line).toEqual(['its payments and auth paths']);
+    }
   });
 
   it('sees a known code line: the scan is not empty', () => {

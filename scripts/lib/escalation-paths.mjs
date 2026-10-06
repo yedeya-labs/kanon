@@ -10,14 +10,16 @@
 // TWO FIXED HEADINGS, each optional:
 //
 //   ## Escalation paths
-//   - `^migrations/` — database migrations
-//   - `/^src/.*payments?/i` — payments
+//   - `^migrations/` `migrations` — database migrations
+//   - `/^src/.*payments?/i` `payments` — payments
 //
 //   ## Pipeline code
 //   - `scripts/pipeline/` — the project's own pipeline scripts
 //
 // An escalation path is a regular expression over repository-relative paths, in backticks,
-// optionally written `/…/i` to match without regard to case. A pipeline-code entry is a
+// optionally written `/…/i` to match without regard to case, then optionally its category from
+// Kanon's closed list (`ESCALATION_CATEGORIES`, below), in backticks too; an entry without one
+// is `other`. A pipeline-code entry is a
 // repository-relative directory ending in `/`. Each bullet is followed by an em dash and the
 // reason. Prose between the bullets is allowed. A list item that isn't an entry is not: an
 // indented, `+` or numbered item, or a bullet that doesn't parse, would otherwise be read as
@@ -70,14 +72,39 @@ export const PIPELINE_HEADING = '## Pipeline code';
  * the reference adopter it is the project's ordinary documentation, which feature changes
  * update. The parity test names it as the one exception. `docs/qa/specs/` is
  * deliberately not here: specs are the project's deliverable, reviewed against its brief.
+ *
+ * Each carries its escalation category (`ESCALATION_CATEGORIES`, below): `playbooks` for the
+ * instructions an agent reads, `pipeline` for the rest.
+ */
+const PIPELINE_OWN = Object.freeze([
+  { re: /^\.github\//, reason: 'the CI and agent pipeline', category: 'pipeline' },
+  { re: /^docs\/qa\/[^/]+\.md$/, reason: 'the pipeline documents, which are agent instructions', category: 'playbooks' },
+  { re: /^(?:AGENTS|CLAUDE)\.md$/, reason: 'the agent instructions', category: 'playbooks' },
+  { re: /^\.claude\//, reason: 'the agent configuration', category: 'pipeline' },
+]);
+
+/**
+ * The pipeline's own paths as `[pattern, reason]` pairs, the shape every reader takes.
  * @type {ReadonlyArray<readonly [RegExp, string]>}
  */
-export const PIPELINE_ESCALATIONS = Object.freeze([
-  Object.freeze(/** @type {const} */ ([/^\.github\//, 'the CI and agent pipeline'])),
-  Object.freeze(/** @type {const} */ ([/^docs\/qa\/[^/]+\.md$/, 'the pipeline documents, which are agent instructions'])),
-  Object.freeze(/** @type {const} */ ([/^(?:AGENTS|CLAUDE)\.md$/, 'the agent instructions'])),
-  Object.freeze(/** @type {const} */ ([/^\.claude\//, 'the agent configuration'])),
-]);
+export const PIPELINE_ESCALATIONS = Object.freeze(PIPELINE_OWN.map(({ re, reason }) => Object.freeze(/** @type {const} */ ([re, reason]))));
+
+/** The category of the project's `## Pipeline code`: it is pipeline like Kanon's own. */
+const PIPELINE_CODE_CATEGORY = 'pipeline';
+/** The category of a declared escalation path that names none. */
+const UNCATEGORISED = 'other';
+
+/**
+ * THE ESCALATION CATEGORIES (plan 0003 §3.7 and decision 14, kanon#54): Kanon's closed list,
+ * which each escalating path reports under. The pipeline's own paths carry `pipeline` or
+ * `playbooks` (above), the project's `## Pipeline code` is `pipeline`, and each of its
+ * `## Escalation paths` entries names one, or is `other`. The names are generic risk areas,
+ * Kanon's, so a work item's telemetry row can carry one boolean per category,
+ * `esc_<category>`, and nothing else about its paths. The telemetry schema imports nothing (it
+ * runs in the ingest function), so its test holds the schema's copy to this one.
+ * @type {readonly string[]}
+ */
+export const ESCALATION_CATEGORIES = Object.freeze(['pipeline', 'playbooks', 'infra', 'migrations', 'schema', 'payments', 'auth', UNCATEGORISED]);
 
 export { DeclarationError };
 
@@ -85,7 +112,9 @@ export { DeclarationError };
 const FILE = { file: ESCALATION_FILE, rule: 'K-LAYOUT-8' };
 
 /**
- * @typedef {{ pattern: RegExp, reason: string }} EscalationPath
+ * @typedef {{ pattern: RegExp, reason: string, category?: string }} EscalationPath
+ *   `category`: one of `ESCALATION_CATEGORIES`; the parser sets `other` when the entry names
+ *   none, and an entry built without one counts as `other` too
  * @typedef {{ dir: string, reason: string }} PipelineDir
  * @typedef {{ paths: EscalationPath[], pipeline: PipelineDir[], defaults: string[] }} EscalationFile
  *   `defaults`: one line per omitted file or section, naming the default it means
@@ -113,23 +142,24 @@ export function printDefaults(reader, file, print = (line) => console.error(line
   for (const d of file.defaults ?? []) print(`${reader}: ${d}`);
 }
 
-const ENTRY = /^`([^`]+)`\s+—\s+(\S.*)$/;
+const ENTRY = /^`([^`]+)`(?:\s+`([^`]+)`)?\s+—\s+(\S.*)$/;
 
 /**
- * The bullets of a section, each split into its code span and its reason.
+ * The bullets of a section, each split into its code span, its category's code span if it has
+ * one, and its reason.
  * @param {import('./declarations.mjs').Line[]} body
  * @param {string} heading
- * @returns {{ line: number, value: string, reason: string }[]}
+ * @returns {{ line: number, value: string, category: string | undefined, reason: string }[]}
  */
 function entries(body, heading) {
   return bulletsOf(FILE, body, heading).map(({ line, text }) => {
     const entry = ENTRY.exec(text);
     if (!entry) {
       throw new DeclarationError(
-        `${ESCALATION_FILE}:${line}, under \`${heading}\`, isn't an entry: write a pattern in backticks, an em dash, then the reason (K-LAYOUT-8)`,
+        `${ESCALATION_FILE}:${line}, under \`${heading}\`, isn't an entry: write a pattern in backticks, optionally its category in backticks, an em dash, then the reason (K-LAYOUT-8)`,
       );
     }
-    return { line, value: /** @type {string} */ (entry[1]), reason: /** @type {string} */ (entry[2]).trim() };
+    return { line, value: /** @type {string} */ (entry[1]), category: entry[2], reason: /** @type {string} */ (entry[3]).trim() };
   });
 }
 
@@ -154,6 +184,23 @@ function pattern(value, line) {
   } catch (e) {
     throw new DeclarationError(`${ESCALATION_FILE}:${line}: \`${value}\` isn't a regular expression (${/** @type {Error} */ (e).message}) (K-LAYOUT-8)`);
   }
+}
+
+/**
+ * One escalation path's category: one of Kanon's closed list, or `other` when the entry names
+ * none (plan 0003 §3.7). A name outside the list fails, because the category leaves the
+ * repository in the telemetry row and must never carry the project's own words.
+ * @param {string | undefined} value
+ * @param {number} line
+ */
+function category(value, line) {
+  if (value === undefined) return UNCATEGORISED;
+  if (!ESCALATION_CATEGORIES.includes(value)) {
+    throw new DeclarationError(
+      `${ESCALATION_FILE}:${line}: \`${value}\` isn't an escalation category: write one of ${ESCALATION_CATEGORIES.map((c) => `\`${c}\``).join(', ')}, or none for \`${UNCATEGORISED}\` (K-LAYOUT-8)`,
+    );
+  }
+  return value;
 }
 
 /**
@@ -197,14 +244,20 @@ export function parseEscalationFile(text) {
     defaults.push(`${ESCALATION_FILE} has no \`${heading}\` heading, so Kanon's default applies: ${means} (K-LAYOUT-8)`);
     return [];
   };
-  const paths = section(PATHS_HEADING, 'the project declares no high-risk paths').map(({ line, value, reason }) => ({
+  const paths = section(PATHS_HEADING, 'the project declares no high-risk paths').map(({ line, value, category: c, reason }) => ({
     pattern: pattern(value, line),
     reason,
+    category: category(c, line),
   }));
-  const pipeline = section(PIPELINE_HEADING, 'the project declares no pipeline code of its own').map(({ line, value, reason }) => ({
-    dir: directory(value, line),
-    reason,
-  }));
+  const pipeline = section(PIPELINE_HEADING, 'the project declares no pipeline code of its own').map(({ line, value, category: c, reason }) => {
+    // Pipeline code is always `pipeline`, so it names no category.
+    if (c !== undefined) {
+      throw new DeclarationError(
+        `${ESCALATION_FILE}:${line}, under \`${PIPELINE_HEADING}\`, names a category: pipeline code is always \`${PIPELINE_CODE_CATEGORY}\`, so write the directory, an em dash, then the reason (K-LAYOUT-8)`,
+      );
+    }
+    return { dir: directory(value, line), reason };
+  });
   return { paths, pipeline, defaults };
 }
 
@@ -293,4 +346,27 @@ export function escalatingPaths(file, promotion = null) {
         : [];
     }),
   ];
+}
+
+/**
+ * The escalation categories a change touches (plan 0003 §3.7): each category one of
+ * `changedPaths` matches an entry of, in `ESCALATION_CATEGORIES`' order. The pipeline's own
+ * paths carry theirs, the project's pipeline code is `pipeline`, and each declared escalation
+ * path carries the category its entry names, or `other`. It reads the file's entries, not
+ * `escalatingPaths`, so a declared path still counts when a human-gated promotion stops it
+ * escalating: the category says what the change touched, and the promotion is the project's
+ * choice about who approves it.
+ * @param {EscalationFile} file
+ * @param {readonly string[]} changedPaths repository-relative
+ * @returns {string[]}
+ */
+export function escalationCategories(file, changedPaths) {
+  /** @type {Array<readonly [RegExp, string]>} */
+  const entries = [
+    ...PIPELINE_OWN.map(({ re, category: c }) => /** @type {const} */ ([re, c])),
+    ...file.pipeline.map(({ dir }) => /** @type {const} */ ([new RegExp(`^${escape(dir)}`), PIPELINE_CODE_CATEGORY])),
+    ...file.paths.map(({ pattern: re, category: c }) => /** @type {const} */ ([re, c ?? UNCATEGORISED])),
+  ];
+  const hit = new Set(entries.filter(([re]) => changedPaths.some((p) => re.test(p))).map(([, c]) => c));
+  return ESCALATION_CATEGORIES.filter((c) => hit.has(c));
 }
