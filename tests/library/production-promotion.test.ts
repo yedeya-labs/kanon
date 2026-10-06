@@ -7,6 +7,7 @@ import { ESCALATION_FILE, PIPELINE_ESCALATIONS, escalatingPaths, readEscalationF
 import { parseProductionPromotion, readProductionPromotion, readProductionPromotionAt } from '../../scripts/lib/production-promotion.mjs';
 import { ADOPTION_RECORD } from '../../scripts/lib/reference-deploy.mjs';
 import { IMPLEMENTER_LOGIN, REVIEWER_LOGIN, mergeVerdict, readEscalations } from '../../scripts/merge-gate.mjs';
+import { IMPLEMENTER_STATUS, headerLine } from '../../scripts/lib/role-marker.mjs';
 
 /**
  * kanon#158, the Owner's decision of 2026-10-06: an adopter whose production promotion is
@@ -100,12 +101,15 @@ describe('the production-promotion declaration (K-LAYOUT-10)', () => {
 const pr = (files: string[]) => ({
   number: 1,
   author: IMPLEMENTER_LOGIN,
+  // The Implementer's role marker and head status, which the green zone requires (#333).
+  body: headerLine('Implementer'),
+  headStatuses: [{ context: IMPLEMENTER_STATUS, state: 'success', creator: `${IMPLEMENTER_LOGIN}[bot]` }],
   state: 'OPEN',
   isDraft: false,
   labels: ['agent:implement'],
   files,
   headSha: 'abc1234',
-  reviews: [{ state: 'APPROVED', sha: 'abc1234', author: REVIEWER_LOGIN }],
+  reviews: [{ state: 'APPROVED', sha: 'abc1234', author: REVIEWER_LOGIN, body: headerLine('Reviewer') }],
   checks: [{ name: 'Test', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
   mergeStateStatus: 'CLEAN',
   mergeable: 'MERGEABLE',
