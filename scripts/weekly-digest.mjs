@@ -47,6 +47,7 @@ import { digestWebhook } from './lib/digest-webhook.mjs';
 import { GATE_CANDIDATE_LABEL, SEVERITY_LABELS, severityOf as severityOfLabels } from './issue-triage-defaults.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { GATE_CANDIDATE_QUERY, GATE_DECLINED_LABEL, gateCandidateDecision } from './gate-candidate-exit.mjs';
+import { declaredEnvironmentFrom } from './lib/reference-deploy.mjs';
 
 /**
  * Scopes that are real engineering work but have no stakeholder-facing surface.
@@ -825,6 +826,34 @@ export const NARRATIVE_RULES = [
 ];
 
 /**
+ * The environment rule for the name the project gives its reference environment, in its
+ * adoption record (`K-LAYOUT-10`). The words in `NARRATIVE_RULES` are the generic ones every
+ * project has; the name a project chose (`qa`, `uat`, `preprod`) is the project's content, so
+ * it is read from the record rather than listed here (kanon#54).
+ *
+ * Only the ENVIRONMENT-SHAPED uses of the name trip it ("deployed to uat", "the qa server"),
+ * the generic rule's first two forms. A chosen name is often an ordinary word too, and a bare
+ * match would drop every narrative that said "the QA pipeline". A name the generic words
+ * already reject on its own adds nothing.
+ * @param {string | null | undefined} environment the declared name, or none
+ */
+export function environmentRules(environment) {
+  const name = String(environment ?? '').trim();
+  if (!name) return [];
+  const generic = NARRATIVE_RULES.find((r) => r.rule === 'environment')?.patterns ?? [];
+  if (generic.some((p) => p.test(name))) return [];
+  const n = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return [{
+    rule: 'environment',
+    why: `names the project's reference environment, \`${name}\` (docs/qa/adoption.md, K-LAYOUT-10)`,
+    patterns: [
+      new RegExp(String.raw`\b(?:to|in|on|onto|into|from|against)\s+(?:the\s+)?${n}(?![\w-])`, 'i'),
+      new RegExp(String.raw`(?<![\w-])${n}\s+(?:environment|server|instance|database|deploy\w*|release\w*)`, 'i'),
+    ],
+  }];
+}
+
+/**
  * Screen the model's narrative against the rules above.
  *
  * Returns `{ narrative, violations }` — the narrative to USE (empty when it
@@ -847,12 +876,16 @@ export const NARRATIVE_RULES = [
  *
  * Pure and idempotent, so `buildMessage` can call it for the fail-closed
  * guarantee while the I/O half calls it to emit the annotation.
+ *
+ * @param {string | undefined} narrative the model's prose
+ * @param {{ environment?: string | null }} [opts] the declared reference environment's name,
+ *   which joins the environment rule (`environmentRules`)
  */
-export function sanitiseNarrative(narrative) {
+export function sanitiseNarrative(narrative, { environment } = {}) {
   const text = (narrative ?? '').trim();
   if (!text) return { narrative: '', violations: [] };
   const violations = [];
-  for (const { rule, why, patterns } of NARRATIVE_RULES) {
+  for (const { rule, why, patterns } of [...NARRATIVE_RULES, ...environmentRules(environment)]) {
     for (const pattern of patterns) {
       const m = text.match(pattern);
       if (m) violations.push({ rule, why, match: m[0] });
@@ -870,10 +903,12 @@ export function sanitiseNarrative(narrative) {
  * renders the section as UNREADABLE (see `renderGateCandidates`), never drops it.
  *
  * @param {{weekStart: Date, narrative?: string, milestones: any[], grouped: any, stats: any,
- *          gateCandidates?: {ok: boolean, candidates?: any[], reason?: string}}} args
+ *          gateCandidates?: {ok: boolean, candidates?: any[], reason?: string},
+ *          environment?: string | null}} args  `environment` is the declared reference
+ *          environment's name (`environmentRules`), or none
  */
-export function buildMessage({ weekStart, narrative, milestones, grouped, stats, gateCandidates }) {
-  const { narrative: screened } = sanitiseNarrative(narrative);
+export function buildMessage({ weekStart, narrative, milestones, grouped, stats, gateCandidates, environment }) {
+  const { narrative: screened } = sanitiseNarrative(narrative, { environment });
   let text = `:bar_chart: *Week of ${formatWeek(weekStart)}*\n`;
   if (screened) text += `\n${screened}\n`;
   text += renderCompletions(milestones);
@@ -964,6 +999,11 @@ if (isCliEntry(import.meta.url)) {
     // still shows today's queue, and its ages must be measured from today.
     readGateCandidates({ api, repo, now: new Date() }),
   ]);
+  // The name the project gives its reference environment, from the adoption record on the
+  // default branch (`environmentRules`). It never throws: a record that is missing, declares
+  // none or can't be read leaves the generic words, which every project has (kanon#54).
+  const environment = declaredEnvironmentFrom(repo);
+
   if (!gateCandidates.ok) {
     console.warn(
       `::warning title=gate candidates unreadable::The digest posts saying so. ${JSON.stringify(gateCandidates.reason)}`,
@@ -1005,7 +1045,7 @@ if (isCliEntry(import.meta.url)) {
    * nobody watches a green run's annotations weekly, so this is a trace to find
    * when asking "why is there no prose?", not a detector that will page anyone.
    */
-  const { violations } = sanitiseNarrative(NARRATIVE);
+  const { violations } = sanitiseNarrative(NARRATIVE, { environment });
   if (violations.length) {
     const tripped = violations.map((v) => `${v.rule}: "${v.match}" — ${v.why}`).join('; ');
     console.warn(
@@ -1021,6 +1061,7 @@ if (isCliEntry(import.meta.url)) {
     grouped,
     stats: { prsMerged, issuesClosed, releases: releases.length },
     gateCandidates,
+    environment,
   });
 
   if (DRY_RUN) {

@@ -65,9 +65,18 @@ describe('what the map extracts', () => {
       'src/lib/seo.ts',
       'src/app/(portal)/[slug]/page.tsx',
       'scripts/qa/x.mjs',
-      'src/server/kiosk.ts',
+      'server/kiosk.ts',
       'lib/y.ts',
     ]);
+  });
+
+  it('resolves an `@/` alias by suffix wherever the alias points, never as one tree (kanon#54)', () => {
+    for (const tree of ['src/', 'app/', '']) {
+      const file = `${tree}server/orders.ts`;
+      expect(resolvePaths(pathMentions('see @/server/orders.ts'), [file, 'docs/a.md']).resolved, tree).toEqual([
+        { named: 'server/orders.ts', files: [file] },
+      ]);
+    }
   });
 
   it('resolves exact, suffix and bare names, drops a bare duplicate, and does not list an ambiguous name', () => {

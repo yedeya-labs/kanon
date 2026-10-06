@@ -123,9 +123,12 @@ export function pathMentions(text) {
     const count = (c) => p.split(c).length - 1;
     while (p.startsWith('(') && count('(') > count(')')) p = p.slice(1);
     while (p.startsWith('[') && count('[') > count(']')) p = p.slice(1);
-    // `@/x` is the tsconfig alias for `src/x`; `../` and `./` are relative to somewhere
-    // the issue does not say, so the suffix match below is the honest resolution.
-    p = p.replace(/^@\//, 'src/').replace(/^(?:\.\.?\/)+/, '').replace(/^\/+/, '');
+    // `@/x` is an import alias, and where it points is the project's tsconfig, not Kanon's
+    // (it was read as `src/x` here, one adopter's alias, kanon#54). `../` and `./` are
+    // relative to somewhere the issue does not say. All three are dropped, so the suffix
+    // match in `resolvePaths` is the honest resolution: `server/x.ts` finds `src/server/x.ts`
+    // wherever the alias points.
+    p = p.replace(/^@\//, '').replace(/^(?:\.\.?\/)+/, '').replace(/^\/+/, '');
     if (p) seen.add(p);
   }
   return [...seen];
