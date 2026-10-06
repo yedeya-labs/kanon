@@ -12,6 +12,9 @@ import { classifyResult } from '../../actions/agent-classify/classify-agent-resu
 type Attr = { S: string } | { N: string } | { BOOL: boolean };
 type V1 = Record<string, string | number | boolean | undefined>;
 
+/** A placeholder account id, built rather than written, as the other telemetry tests do. */
+const ACCOUNT = '4'.repeat(12);
+
 /** A version-1 `COST#` item in DynamoDB's attribute-value form, as `aws dynamodb scan` prints it. */
 const item = (over: V1 = {}): Record<string, Attr> => {
   const v: V1 = {
@@ -50,6 +53,20 @@ describe('§7 step 2: the transform', () => {
   it('converts the three version-1 strings to integers', () => {
     const row = rowOf({ outcome: 'failed', reason: 'the agent ran and did not finish (num_turns 3, total_cost_usd 0.10)', api_error_status: '529', run_attempt: '2' });
     expect(row).toMatchObject({ run_id: 17795526731, run_attempt: 2, api_error_status: 529 });
+  });
+
+  it('gives a failed row failed_stage agent, and a not-reached row none (decision 19)', () => {
+    const failed = rowOf({ outcome: 'failed', reason: undefined });
+    expect(failed).toMatchObject({ failed_stage: 'agent', reason: 'did_not_finish' });
+    expect(validate(failed, { imported: true })).toEqual({ ok: true });
+    const notReached = rowOf({ outcome: 'not-reached', reason: 'the agent produced no result file' });
+    expect(notReached).not.toHaveProperty('failed_stage');
+    expect(validate(notReached, { imported: true })).toEqual({ ok: true });
+    // Only an imported row may leave it out: a writer's not-reached row still needs it.
+    expect(validate({ ...notReached, kanon_version: '0.27.0' })).toEqual({ ok: false, errors: [{ field: 'failed_stage', problem: 'required' }] });
+    for (const outcome of ['ok', 'exhausted']) {
+      expect(rowOf({ outcome, reason: undefined, terminal_reason: 'max_turns' })).not.toHaveProperty('failed_stage');
+    }
   });
 
   it('maps every agent in §7\'s table to a lane in the enum, with that lane\'s role', () => {
@@ -118,12 +135,13 @@ describe('§7 step 3: the dry run', () => {
       item({ outcome: 'unavailable', reason: undefined }),
       item({ agent: 'mystery' }),
       item({ agent: 'implementer', pk: 'COST#implementer', terminal_reason: 'prompt_too_long' }),
-      // Plan 0002 decision 19 (open): a failed row needs a `failed_stage` no version-1 row has.
       item({ outcome: 'failed', reason: undefined }),
+      // A row the transform passes but `validate` refuses: counted by field name.
+      item({ effort: 'enormous' }),
     ]);
-    expect(d.rows).toHaveLength(3);
+    expect(d.rows).toHaveLength(4);
     expect(d.stopped).toBe(3);
-    expect(d.lanes.review).toMatchObject({ exported: 4, toImport: 2, reasonsDerived: 2, stopped: { reason: 1, invalid: 1 }, invalid: { 'failed_stage (required)': 1 } });
+    expect(d.lanes.review).toMatchObject({ exported: 5, toImport: 3, reasonsDerived: 2, stopped: { reason: 1, invalid: 1 }, invalid: { 'effort (enum)': 1 } });
     expect(d.lanes['(unmapped)']).toMatchObject({ exported: 1, toImport: 0, stopped: { agent: 1 } });
     const text = report(d).join('\n');
     expect(text).toContain('implement: exported 1, to import 1, stopped none, reasons derived 0, terminal_reason [prompt_too_long]');
@@ -138,7 +156,7 @@ describe('§7 step 4: send', () => {
     const calls: string[][] = [];
     const aws = (args: string[]) => {
       calls.push(args);
-      const out = args[1] === 'get-caller-identity' ? { Account: '123456789012' }
+      const out = args[1] === 'get-caller-identity' ? { Account: ACCOUNT }
         : args[1] === 'describe-stacks' ? { Stacks: [{ Outputs: [{ OutputKey: 'IngestUrl', OutputValue: 'https://u.example/' }] }] }
           : { Credentials: { AccessKeyId: 'a', SecretAccessKey: 's', SessionToken: 't' } };
       return { code: 0, stdout: JSON.stringify(out), stderr: '' };
@@ -153,7 +171,7 @@ describe('§7 step 4: send', () => {
     const r = await send(rows, 'k2', { aws, post, profile: 'kanon' });
     expect(posts).toEqual([{ url: 'https://u.example/?key=k2', n: 25 }, { url: 'https://u.example/?key=k2', n: 5 }]);
     expect(r).toEqual({ stored: 29, refused: { 'recorded_at (window)': 1 } });
-    expect(calls.find((c) => c[1] === 'assume-role')).toContain('arn:aws:iam::123456789012:role/kanon-telemetry-importer');
+    expect(calls.find((c) => c[1] === 'assume-role')).toContain(`arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-importer`);
   });
 
   it('refuses to send when the importer role is not deployed', async () => {

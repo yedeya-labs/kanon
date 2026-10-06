@@ -235,6 +235,13 @@ describe('an imported run row carries no kanon_version (plan 0002 decision 17)',
     }
   });
 
+  it('lets an imported not-reached row omit failed_stage, and nothing else (decision 19)', () => {
+    const row = (outcome: string, reason: string) => { const r: Row = { ...without(), outcome, reason }; delete r.failed_stage; return r; };
+    expect(validate(row('not-reached', 'no_result_file'), { imported: true })).toEqual({ ok: true });
+    expect(validate(row('failed', 'did_not_finish'), { imported: true })).toEqual({ ok: false, errors: [{ field: 'failed_stage', problem: 'required' }] });
+    expect(validate({ ...row('not-reached', 'no_result_file'), kanon_version: '0.27.0' })).toEqual({ ok: false, errors: [{ field: 'failed_stage', problem: 'required' }] });
+  });
+
   it('changes nothing else an imported row is checked for', () => {
     expect(validate({ ...without(), surplus: 1 }, { imported: true })).toEqual({ ok: false, errors: [{ field: 'surplus', problem: 'unknown' }] });
     const noReason = without();

@@ -13,11 +13,13 @@
 // harmless.
 //
 // NOTHING IS GUESSED. An `agent` outside §7's table stops the row, and so does a required field
-// the version-1 row can't decide. The Owner's decisions 17 (2026-10-06) settle two of them:
+// the version-1 row can't decide. The Owner's decision 17 (2026-10-06) settles two of them:
 // `kanon_version` is ABSENT on an imported row (no Kanon release ran it; the function refuses one
 // that has it), and a `reason` that matches no classifier template is DERIVED where the row
 // decides it — `outcome` alone for `ok`, `failed` and `not-reached`, and `terminal_reason` for
 // `exhausted`. `unavailable` has two codes and nothing else to tell them apart, so it stops.
+// Decision 19 settles the third: `failed_stage` is `agent` on a `failed` row, because that run
+// reached the model, and absent on a `not-reached` one, which only an imported row may be.
 
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
@@ -122,6 +124,9 @@ export function transform(item) {
   // the raw values.
   const terminalReason = typeof row.terminal_reason === 'string' ? row.terminal_reason : undefined;
   if (terminalReason !== undefined && !TERMINAL_REASONS.includes(terminalReason)) row.terminal_reason = 'other';
+  // Decision 19: a `failed` run reached the model, so the agent stage is where it failed. A
+  // `not-reached` one leaves `failed_stage` absent: the history doesn't say where it stopped.
+  if (row.outcome === 'failed') row.failed_stage = 'agent';
   const verdict = verdictOf(v1.outcome_label);
   if (verdict) row.verdict = verdict;
   Object.assign(row, parseSeverities(v1.severities));

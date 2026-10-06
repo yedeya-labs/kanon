@@ -409,9 +409,11 @@ function problemOf(f, v) {
  * `failed_stage` is required when the outcome is `not-reached` or `failed` and absent
  * otherwise (§2.6).
  * @param {Record<string, unknown>} row
+ * @param {boolean} importedRun the history import's run row (decision 19): a `not-reached` one
+ *   may omit `failed_stage`, because the history doesn't record which stage the run stopped at
  * @returns {{ field: string, problem: string }[]}
  */
-function runPairings(row) {
+function runPairings(row, importedRun) {
   /** @type {{ field: string, problem: string }[]} */
   const out = [];
   const outcome = typeof row.outcome === 'string' ? row.outcome : null;
@@ -421,7 +423,8 @@ function runPairings(row) {
   }
   if (outcome && OUTCOMES.includes(outcome)) {
     const needsStage = outcome === 'not-reached' || outcome === 'failed';
-    if (needsStage && !Object.hasOwn(row, 'failed_stage')) out.push({ field: 'failed_stage', problem: 'required' });
+    const exempt = importedRun && outcome === 'not-reached';
+    if (needsStage && !exempt && !Object.hasOwn(row, 'failed_stage')) out.push({ field: 'failed_stage', problem: 'required' });
     if (!needsStage && Object.hasOwn(row, 'failed_stage')) out.push({ field: 'failed_stage', problem: 'outcome-mismatch' });
   }
   if (typeof row.lane === 'string' && typeof row.role === 'string'
@@ -439,7 +442,8 @@ export const IMPORT_ABSENT = 'kanon_version';
  * its `schema_version`. Rejects the WHOLE row on any problem, and names fields only.
  *
  * `imported` is the history import's run row (plan 0002 §7, decision 17): it ran before Kanon
- * existed, so it carries NO `kanon_version`, and one that does is refused. A release or `dev`
+ * existed, so it carries NO `kanon_version`, and one that does is refused. A `not-reached` one may
+ * also omit `failed_stage` (decision 19): the history doesn't say where the run stopped. A release or `dev`
  * would claim a Kanon version the run never had. Only the ingest function sets it, and only for
  * the importer role; every other caller validates a run row with `kanon_version` required.
  *
@@ -477,7 +481,7 @@ export function validate(row, { imported = false } = {}) {
     if (f.required && !Object.hasOwn(r, name)) errors.push({ field: name, problem: 'required' });
   }
   if (importedRun && Object.hasOwn(r, IMPORT_ABSENT)) errors.push({ field: IMPORT_ABSENT, problem: 'not-allowed' });
-  if (kind === 'run') errors.push(...runPairings(r));
+  if (kind === 'run') errors.push(...runPairings(r, importedRun));
   return errors.length ? { ok: false, errors } : { ok: true };
 }
 
