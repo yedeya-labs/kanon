@@ -420,6 +420,10 @@ const BASE_JUDGES = ['No reference-adopter names'];
 // A required check that reads the PR's tree and judges it with a script from the base commit,
 // checked out beside it: the tree is the PR's, the judge is not (#377).
 const BASE_SCRIPT_JUDGES: Record<string, string> = { 'Citation guard': 'citation-guard.mjs' };
+// The Markdown Kanon's citation guard and shift helper read (#388): `docs/`, the rulebook and the
+// READMEs, passed with `--path` as an adopter passes its own. Both workflows pass exactly this.
+const CITED_DOCS = ['docs/**/*.md', 'rulebook/**/*.md', 'README.md', 'actions/*/README.md'];
+const pathArgs = (run: string | undefined) => [...(run ?? '').matchAll(/--path (?:'([^']+)'|(\S+))/g)].map((m) => m[1] ?? m[2]);
 
 describe('#47 no required check judges a PR with the PR\'s own copy of its action', () => {
   const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
@@ -445,7 +449,8 @@ describe('#47 no required check judges a PR with the PR\'s own copy of its actio
     expect(base.with?.ref).toContain('github.event.merge_group.base_sha');
     expect(base.with?.path).toMatch(/^\.[\w-]+$/);
     const runs = steps.map((s) => s.run).filter((r): r is string => typeof r === 'string');
-    expect(runs).toEqual([`node ${base.with?.path}/scripts/${script}`]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.startsWith(`node ${base.with?.path}/scripts/${script} `)).toBe(true);
     expect(usesOf(job).filter((u) => !u.startsWith('actions/checkout@') && !u.startsWith('actions/setup-node@'))).toEqual([]);
     expect(steps.filter((s) => s['continue-on-error'])).toEqual([]);
   });
@@ -526,7 +531,7 @@ describe('#377 citation-shift runs on every pull request to Kanon, as advice', (
   });
 
   it('never fails the job: a red run of the script becomes one warning annotation', () => {
-    expect(run?.run).toMatch(/^if ! node scripts\/citation-shift\.mjs; then\n\s*echo "::warning /);
+    expect(run?.run).toMatch(/^if ! node scripts\/citation-shift\.mjs [^;\n]*; then\n\s*echo "::warning /);
     expect(run?.run).not.toContain('exit');
     expect(steps.filter((s) => s['continue-on-error'])).toEqual([]);
   });
@@ -534,6 +539,21 @@ describe('#377 citation-shift runs on every pull request to Kanon, as advice', (
   it('reads contents only', () => {
     expect(wf.permissions).toEqual({ contents: 'read' });
     for (const job of jobs) expect(job.permissions).toBeUndefined();
+  });
+});
+
+describe('#388 the citation guard and the shift helper read the same Markdown: docs/, the rulebook and the READMEs', () => {
+  const guard = stepsOf(load('ci.yml').wf).find((s) => s.run?.includes('citation-guard.mjs'))?.run;
+  // The command, which is the run's first line; the warning below it quotes the flag in prose.
+  const shift = stepsOf(load('citation-shift.yml').wf).find((s) => s.run?.includes('citation-shift.mjs'))?.run?.split('\n')[0];
+
+  it('the guard passes the list as `--path` globs, and nothing else', () => {
+    expect(pathArgs(guard)).toEqual(CITED_DOCS);
+    expect(guard?.replace(/ --path (?:'[^']+'|\S+)/g, '')).toBe('node .citation-guard-base/scripts/citation-guard.mjs');
+  });
+
+  it('the shift helper passes the same list', () => {
+    expect(pathArgs(shift)).toEqual(CITED_DOCS);
   });
 });
 
