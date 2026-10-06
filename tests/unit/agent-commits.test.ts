@@ -111,7 +111,10 @@ const IDENTITY = {
   GIT_COMMITTER_EMAIL: `${BOT_ID}+${SLUG}[bot]@users.noreply.github.com`,
 };
 
-describe("an agent's commits pass the adopter's dco check (agent-commits.sh, K-AGENT-44)", () => {
+// Each case runs agent-commits.sh and then git init and commits through its hooks: a dozen spawns,
+// about a second alone. Under a loaded full `npm test` the husky case took 5.1s and failed on the
+// 5s default (kanon#381), so the block gets 15s.
+describe("an agent's commits pass the adopter's dco check (agent-commits.sh, K-AGENT-44)", { timeout: 15_000 }, () => {
   it('authors each commit as the App and signs it off as the delegate, under claude-code-action\'s git config', () =>
     within(run(), (r) => {
       expect(r.status, r.out).toBe(0);
@@ -289,14 +292,14 @@ describe("Kanon's own records (K-LAYOUT-14, K-LAYOUT-6, K-LAYOUT-16)", () => {
 
   it('delegate a person, and register the Implementer by the slug the lanes commit as', () => {
     const trust = kanonTrust();
-    expect(trust.slugs).toContain('kanon-implementer');
+    expect(trust.slugs).toContain('yedeya-labs-author');
     expect(trust.delegate.name).not.toMatch(/bot|claude/i);
   });
 
   it("pass Kanon's Implementer commit, made by the block, against Kanon's real register and record", () =>
-    within(run({ record: readFileSync(join(ROOT, RECORD), 'utf8'), slug: 'kanon-implementer' }), (r) => {
+    within(run({ record: readFileSync(join(ROOT, RECORD), 'utf8'), slug: 'yedeya-labs-author' }), (r) => {
       expect(r.status, r.out).toBe(0);
-      expect(checkCommit(commitAs(r, AGENT_MESSAGE), kanonTrust())).toEqual({ ok: true, delegated: 'kanon-implementer' });
+      expect(checkCommit(commitAs(r, AGENT_MESSAGE), kanonTrust())).toEqual({ ok: true, delegated: 'yedeya-labs-author' });
     }));
 
   it('declare no test database, which the lanes read as none (K-LAYOUT-16)', () => {
