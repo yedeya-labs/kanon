@@ -253,7 +253,7 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
  *
  * A HUMAN-GATED PRODUCTION PROMOTION (`K-MERGE-4`, kanon#158). When the adoption record on the
  * default branch declares one, `promotion` is given, and the project's high-risk paths
- * (`## Escalation paths`) no longer escalate on their own: the human gate is the promotion,
+ * (`## Escalation paths`) are no longer escalation paths: the human gate is the promotion,
  * which every deploy of them still waits for. Everything that decides how a PR is judged, or
  * whether the promotion is gated at all, still escalates, because a PR must never be able to
  * change its own rules:
@@ -263,7 +263,9 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
  *     inside `docs/qa/` (the adoption record that makes this declaration, the escalation file,
  *     the identity register, the sign-off delegation and the playbooks), and the agent
  *     instructions and configuration (`AGENTS.md`, `CLAUDE.md`, `.claude/`);
- *   · the project's own pipeline code (`## Pipeline code`), the scripts its lanes run;
+ *   · the project's own pipeline code (`## Pipeline code`), the scripts its lanes run, and
+ *     anything else outside `.github/` that keeps the promotion gated, which the project must
+ *     list there to keep (kanon#344);
  *   · a declared high-risk path that is also a judging input on the default branch
  *     (`K-MERGE-17`'s delegation row): a document the instructions link to, which a project
  *     declared because it wanted a human to approve changes to it. `judgingInputs` is that
