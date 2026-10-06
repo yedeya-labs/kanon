@@ -275,8 +275,8 @@ describe('main check, with GitHub mocked', () => {
 
   it('prints the Apps for $GITHUB_OUTPUT', async () => {
     const out: string[] = [];
-    const dir = join(ROOT, 'tests/fixtures/lane-check/adopter');
-    expect(await main(['apps'], { env: { REGISTER_DIR: dir }, out: (l) => out.push(l) })).toBe(0);
+    const adopter = join(ROOT, 'tests/fixtures/lane-check/adopter');
+    expect(await main(['apps'], { env: { REGISTER_DIR: adopter }, out: (l) => out.push(l) })).toBe(0);
     expect(out).toEqual(['apps=[{"key":"author","app":"Author","slug":"example-author","roles":["Implementer","Lead"],"secret":"AUTHOR"}]']);
   });
 
