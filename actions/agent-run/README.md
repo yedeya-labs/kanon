@@ -16,7 +16,7 @@ Call it with `id: agent`, so the lane reads `steps.agent.outputs.execution_file`
 
 ```yaml
 - id: agent
-  uses: yedeya-labs/kanon/actions/agent-run@v0.29.0
+  uses: yedeya-labs/kanon/actions/agent-run@v0.30.0
   with:
     prompt: ${{ env.PROMPT }}
     claude_args: ${{ env.CLAUDE_ARGS }}

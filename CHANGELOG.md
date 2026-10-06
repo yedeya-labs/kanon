@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.30.0](https://github.com/yedeya-labs/kanon/compare/v0.29.0...v0.30.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **citation-guard:** report a citation that names no identifier as unanchored, not as a broken guard ([#398](https://github.com/yedeya-labs/kanon/issues/398))
+
+### Features
+
+* **doctor:** waive a finding under ## Choices, the same for every repository ([#396](https://github.com/yedeya-labs/kanon/issues/396)) ([ae42ed0](https://github.com/yedeya-labs/kanon/commit/ae42ed0f3771fbed1b201ca27d92ebeb4f8c706f))
+
+
+### Bug Fixes
+
+* **citation-guard:** report a citation that names no identifier as unanchored, not as a broken guard ([#398](https://github.com/yedeya-labs/kanon/issues/398)) ([89d54dc](https://github.com/yedeya-labs/kanon/commit/89d54dca43b2963073a5a1fb66374bf9c99be4e0))
+* **init:** keep a # inside a quoted CI name ([#384](https://github.com/yedeya-labs/kanon/issues/384)) ([aa80425](https://github.com/yedeya-labs/kanon/commit/aa8042579ce2d6d7d5f03c411ce8b086c5ac164a))
+* judge the blocks smoke's sign-off by the default branch's record, and give the Lead no symlink to write through ([#392](https://github.com/yedeya-labs/kanon/issues/392)) ([f590855](https://github.com/yedeya-labs/kanon/commit/f590855cd7407697fe791ceb7cc6fcce747f47c0))
+* **lanes:** give the Reviewer a user scope its job made, and re-probe its grant on every claude-code-action bump ([#399](https://github.com/yedeya-labs/kanon/issues/399)) ([71d8735](https://github.com/yedeya-labs/kanon/commit/71d87350748b2e7c74ecadcca75233b61d9e39b0))
+* **lanes:** spec-patch listing waits, Overseer partial re-run says why, agents can commit a first playbook ([#395](https://github.com/yedeya-labs/kanon/issues/395)) ([0f63b51](https://github.com/yedeya-labs/kanon/commit/0f63b51582d1a87ac1223e432a6e2d04f07f2f0d))
+* **qa:** name an unmarked Implementer comment in dispatch-sweep and project-digest ([#383](https://github.com/yedeya-labs/kanon/issues/383)) ([7ca2b84](https://github.com/yedeya-labs/kanon/commit/7ca2b84162c99c0335f931eaf4d8be29fe212d1e))
+
+
+### Performance
+
+* **lane-check:** run the checks in one Node process instead of a yq and jq per value ([#402](https://github.com/yedeya-labs/kanon/issues/402)) ([4ede4ad](https://github.com/yedeya-labs/kanon/commit/4ede4ad72f259f767119a2b8f187490ed55c56ce))
+
+
+### Refactoring
+
+* **telemetry:** give each escalation path a category and derive the esc_* fields from it ([#391](https://github.com/yedeya-labs/kanon/issues/391)) ([36c5f11](https://github.com/yedeya-labs/kanon/commit/36c5f1143abef534582cc4f474ef00138b7f123f))
+
+
+### Tests
+
+* split the slow unit suites by area, and time out the spawn-heavy blocks explicitly ([#400](https://github.com/yedeya-labs/kanon/issues/400)) ([db04b2a](https://github.com/yedeya-labs/kanon/commit/db04b2a16e992432ca55f63661b1e69f55148cd0))
+
+
+### CI
+
+* **deps:** upgrade Kanon to v0.29.0 ([#394](https://github.com/yedeya-labs/kanon/issues/394)) ([c5959a6](https://github.com/yedeya-labs/kanon/commit/c5959a61e8779f32c09fc5422aaa64a993453351))
+* run citation-guard and citation-shift on Kanon's own tree ([#385](https://github.com/yedeya-labs/kanon/issues/385)) ([38e779b](https://github.com/yedeya-labs/kanon/commit/38e779bd512a5075a712107c94de5b86fb486ab8))
+
 ## [0.29.0](https://github.com/yedeya-labs/kanon/compare/v0.28.0...v0.29.0) (2026-10-06)
 
 
