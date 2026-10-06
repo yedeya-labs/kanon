@@ -34,7 +34,10 @@
 // WHAT IT DELIBERATELY DOES NOT FLAG, each for a reason:
 //   • A coordinate the diff CHANGED. Its author re-derived it — or took one side of a
 //     conflict, which this cannot tell from a deliberate correction (the rest of RA-1992).
-//     `citation-guard` still judges it against the tree, as it judges every coordinate.
+//     In a doc, `citation-guard` still judges it against the tree. In a CODE COMMENT nothing
+//     else does — `citation-guard` reads `docs/` only — so it is read here as ADVICE
+//     (kanon#175, `rewritten`): a re-point the diff's own map disagrees with, or a line past
+//     the end of the file. Advisory, not fatal, for the reason the measurement gave.
 //   • A coordinate whose cited lines the diff EDITED rather than moved. There is no
 //     mechanical answer — whether a rewritten line still says what the sentence claims
 //     is a reading question — so these are LISTED as advisory, never fatal.
@@ -101,6 +104,8 @@ import { TABLE_EXT, conventionFor } from './lib/test-conventions.mjs';
  * @typedef {{at: string, doc: string, line: number, index: number, citation: string, path: string,
  *            from: number[], to: number[], replacement: string, kind: 'doc'|'code'}} Moved
  * @typedef {{at: string, doc: string, line: number, citation: string, path: string, kind: 'doc'|'code'}} Edited
+ * @typedef {{at: string, doc: string, line: number, citation: string, path: string,
+ *            shape: 'off-map'|'past-eof', base?: number[], mapped?: number[], length?: number}} Rewritten
  */
 
 // WHERE A CODE COMMENT can carry a coordinate worth mapping (RA-2293): the project's code and
@@ -241,7 +246,7 @@ export const retarget = (text, a, b) =>
  * @param {string[]} p.trackedBase
  * @param {Map<string, Hunk[]>} p.diff
  * @param {string[]} [p.code]          code files whose COMMENTS are read too (RA-2293)
- * @returns {{moved: Moved[], edited: Edited[], pointing: number, pointingCode: number, ambiguous: number, unmapped: number, changedSources: number}}
+ * @returns {{moved: Moved[], edited: Edited[], rewritten: Rewritten[], pointing: number, pointingCode: number, ambiguous: number, unmapped: number, changedSources: number}}
  */
 export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, diff, code = [] }) => {
   const changed = new Set([...diff.keys()].filter((f) => !f.endsWith('.md')));
@@ -250,6 +255,36 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
   const moved = [];
   /** @type {Edited[]} */
   const edited = [];
+  // A CODE-COMMENT coordinate this diff wrote or rewrote (kanon#175) — ADVISORY. The skip
+  // below ("not ours to judge") rested on `citation-guard` judging it against the tree, and
+  // that guard reads `docs/` only, so nothing checked these. Two shapes, each read from the
+  // diff and the head alone, neither ever fatal:
+  //   • `off-map`: the hunk replaced a coordinate into the same file, and the diff's own line
+  //     map sends the old one somewhere other than where the new one points. That is a
+  //     re-point made against an intermediate state — a `--fix` in commit 1, then lines added
+  //     above the target in commit 2 — which is the case kanon#175 replayed. It is ALSO what a
+  //     deliberate correction of an already-wrong coordinate looks like (RA-1992), so it says
+  //     where the map puts it and leaves the reading to the author.
+  //   • `past-eof`: it names a line the head's file does not have.
+  //
+  // MEASURED BEFORE CHOOSING ADVISORY (2026-10-06), replayed with `--head` over first-parent
+  // history. Kanon, all 107 non-release commits: 1 advisory, a `past-eof` on an illustrative
+  // `core.py:12` that resolved to a test fixture by basename, so false. The reference adopter,
+  // its 150 most recent non-release commits: 16 `off-map` advisories in 11 commits, 4 true (an
+  // off-by-one range, and three coordinates pointing at a different line from the one they name) and 12 false, each a
+  // deliberate correction of a coordinate already wrong on the base or a range widened on
+  // purpose. 12 of 16 false is not ~0, so neither shape may fail a run.
+  /** @type {Rewritten[]} */
+  const rewritten = [];
+  const lengths = new Map();
+  const lengthOf = (path) => {
+    if (!lengths.has(path)) {
+      let text = '';
+      try { text = readHead(path); } catch { text = null; }
+      lengths.set(path, text === null ? null : text.split('\n').length - (text.endsWith('\n') ? 1 : 0));
+    }
+    return lengths.get(path);
+  };
   let pointing = 0;
   let pointingCode = 0;
   // A bare basename matching several files cannot be mapped without an anchor to pick
@@ -306,6 +341,12 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
       const h = hunkOf(n);
       for (const c of extract(line)) {
         const path = resolved(c, trackedHead, true);
+        if (kind === 'code' && h && path) {
+          const len = lengthOf(path);
+          if (len !== null && c.b > len) {
+            rewritten.push({ at: `${doc}:${n}`, doc, line: n, citation: c.text, path, shape: 'past-eof', length: len });
+          }
+        }
         if (!path || !changed.has(path)) continue;
         pointing += 1;
         if (kind === 'code') pointingCode += 1;
@@ -313,7 +354,27 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
         if (h) {
           const pool = poolFor(h, n);
           const k = pool.indexOf(`${resolved(c, trackedBase) ?? path}:${c.a}-${c.b}`);
-          if (k === -1) continue; // written or rewritten by this diff — not ours to judge
+          if (k === -1) {
+            // Written or rewritten by this diff — not ours to MOVE. A code comment's is
+            // still read against the diff's map, as advice (kanon#175).
+            if (kind === 'code') {
+              const paired = h.removed.length === h.nc;
+              const before = (paired ? [h.removed[n - h.ns]] : h.removed)
+                .flatMap((l) => extract(l))
+                .filter((r) => resolved(r, trackedBase) === path);
+              const olds = [...new Set(before.map((r) => `${r.a}-${r.b}`))];
+              if (olds.length === 1) {
+                const [oa, ob] = olds[0].split('-').map(Number);
+                const map = mappers.get(path);
+                const ma = map(oa);
+                const mb = map(ob);
+                if (ma !== null && mb !== null && (ma !== c.a || mb !== c.b) && (oa !== c.a || ob !== c.b)) {
+                  rewritten.push({ at: `${doc}:${n}`, doc, line: n, citation: c.text, path, shape: 'off-map', base: [oa, ob], mapped: [ma, mb] });
+                }
+              }
+            }
+            continue;
+          }
           pool.splice(k, 1);
         }
         const map = mappers.get(path);
@@ -328,8 +389,26 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
       }
     });
   }
-  return { moved, edited, pointing, pointingCode, ambiguous, unmapped, changedSources: changed.size };
+  return { moved, edited, rewritten, pointing, pointingCode, ambiguous, unmapped, changedSources: changed.size };
 };
+
+/**
+ * The advisory lines for `shiftedCoordinates`'s `rewritten` (kanon#175): one per coordinate,
+ * as a GitHub annotation in CI so it reaches the checks page. Never a failure.
+ *
+ * @param {Rewritten[]} list
+ * @param {boolean} ci
+ */
+export const rewrittenLines = (list, ci) =>
+  list.map((x) => {
+    const span = (ab) => (ab[0] === ab[1] ? `${ab[0]}` : `${ab[0]}-${ab[1]}`);
+    const why = x.shape === 'past-eof'
+      ? `names a line past the end of ${x.path}, which has ${x.length}`
+      : `replaced :${span(x.base)}, which this diff's own line map sends to :${span(x.mapped)}, not here — ` +
+        're-derive it against the head (it may have been re-pointed before a later commit moved the lines again), ' +
+        'unless the old coordinate was already wrong and this is the correction';
+    return `${ci ? '::warning::' : ''}citation-shift (advisory): ${x.at}  ${x.citation} — this diff wrote this code-comment coordinate, and it ${why}.`;
+  });
 
 const git = (args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 1e9, stdio: ['ignore', 'pipe', 'pipe'] });
 const tryGit = (args) => { try { return git(args).trim(); } catch { return null; } };
@@ -411,6 +490,9 @@ const main = () => {
   const code = grep.split('\n').filter(Boolean).map((l) => (head ? l.slice(head.length + 1) : l))
     .filter((f) => readsCodeComments(f, readHead(f), pipelineDirs, areas));
   const r = shiftedCoordinates({ docs, code, readHead, trackedHead, trackedBase, diff });
+  // ADVISORY, and printed on every path — a red run, a `--fix` and the all-clear alike. It
+  // never sets the exit code (kanon#175; the measurement is in the PR that added it).
+  for (const l of rewrittenLines(r.rewritten, Boolean(process.env.GITHUB_ACTIONS))) console.log(l);
 
   if (FIX && r.moved.length) {
     const byDoc = new Map();
