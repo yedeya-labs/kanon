@@ -227,7 +227,7 @@ Each can write rows under its own adopter's key that pass the function's validat
 
 Plan 0002 §10. Deletion is immediate in the table, and complete in backups within 35 days, which is how long point-in-time recovery keeps them.
 
-1. Remove the adopter's entry from the register, then render, package and deploy. That deletes both roles, so its writes and reads stop at once.
+1. Remove the adopter's entry from the register, and in the same edit its time from install to first review, which sits beside the key (plan 0003). Record the date and the key there, not the repository. Then render, package and deploy. That deletes both roles, so its writes and reads stop at once.
 2. Count the rows, then delete them. The script walks `<key>#<lane>` for every lane in the schema's enum and `<key>#work`, so it needs no scan. It runs as your role, which is the one role besides the function's that the table lets delete.
 
    ```sh
@@ -235,7 +235,6 @@ Plan 0002 §10. Deletion is immediate in the table, and complete in backups with
    node infra/telemetry/erase.mjs --key <key> --profile kanon --apply
    ```
 
-3. Remove the key's time from install to first review from the register, and record the date and the key there, not the repository.
 
 ## The importer and the backfill role
 
