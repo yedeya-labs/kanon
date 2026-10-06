@@ -126,25 +126,27 @@ describe("Kanon's own suite runs its files concurrently, so none writes into the
 });
 
 describe('the scan reads a destination, not a source', () => {
-  // Built, not written out, so this file doesn't trip the guard it tests.
+  // Built, not written out, so this file doesn't trip the guard it tests: the scan reads source
+  // as text, and these fixtures ARE writes into the tree, spelled out.
   const R = `RO${'OT'}`;
+  const W = `writeFile${'Sync'}`;
   const line = (text: string) => `const ROO${'T'} = process.cwd();\n${text}\n`;
 
   it('flags a write into the source tree, and a copy of a name built from the root', () => {
-    expect(writes(line(`writeFileSync(join(${R}, 'scripts', '.x.sh'), text);`)))
-      .toEqual([`2: writeFileSync(join(${R}, 'scripts', '.x.sh'))`]);
+    expect(writes(line(`${W}(join(${R}, 'scripts', '.x.sh'), text);`)))
+      .toEqual([`2: ${W}(join(${R}, 'scripts', '.x.sh'))`]);
     expect(writes(line(`const SCRIPT = join(${R}, 'scripts/a.sh');\nconst ALIAS = SCRIPT;\nrmSync(ALIAS, { force: true });`)))
       .toEqual(['4: rmSync(ALIAS)']);
   });
 
   it('flags a destination written out relative to the working directory', () => {
     // Which is Kanon's root, or the fixture adopter the library tests run in.
-    expect(writes(line("writeFileSync('docs/qa/stack.md', text);"))).toEqual(["2: writeFileSync('docs/qa/stack.md')"]);
+    expect(writes(line(`${W}('docs/qa/stack.md', text);`))).toEqual([`2: ${W}('docs/qa/stack.md')`]);
     expect(writes(line('mkdirSync(`${dir}/a`, { recursive: true });'))).toEqual([]);
   });
 
   it('allows a write into a temporary directory, and a read from the source tree', () => {
-    expect(writes(line("const dir = mkdtempSync(join(tmpdir(), 'x-'));\nwriteFileSync(join(dir, 'a.sh'), text);")))
+    expect(writes(line(`const dir = mkdtempSync(join(tmpdir(), 'x-'));\n${W}(join(dir, 'a.sh'), text);`)))
       .toEqual([]);
     // `cpSync` and `symlinkSync` name the destination second: copying Kanon's own fixture into a
     // temporary directory is what most of these suites do.
