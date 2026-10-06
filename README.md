@@ -64,7 +64,7 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.26.0 kanon init --dry-run
+npx --yes --package github:yedeya-labs/kanon#v0.27.0 kanon init --dry-run
 ```
 
 <!-- x-release-please-end -->

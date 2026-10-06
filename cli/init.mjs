@@ -826,7 +826,8 @@ const run = async (deps, opts, req) => {
     if (r?.status === 0) changed.push(`Created the ruleset "${RULESET_NAME}" on ${s.defaultBranch}, requiring "${LANE_CHECK}"${s.mergeQueue === 'yes' ? ', with the merge queue' : ''}`);
     else manual.push([`Create the default branch's ruleset (K-ADOPT-1 step 8); it needs Administration: write:`, ...rulesetCmd]);
   }
-  if (s.rulesets !== 'no' && s.mergeQueue !== 'yes') out('No merge queue on this plan: "require branches to be up to date" stays off (K-MERGE-7).');
+  if (s.rulesets !== 'no' && s.mergeQueue === 'unknown') out('Merge queue not known: the token can\'t read the organisation\'s plan. Without one, "require branches to be up to date" stays off (K-MERGE-7).');
+  else if (s.rulesets !== 'no' && s.mergeQueue !== 'yes') out('No merge queue on this plan: "require branches to be up to date" stays off (K-MERGE-7).');
 
   // 5. The Apps.
   out('');

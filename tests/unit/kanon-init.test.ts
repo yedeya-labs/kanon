@@ -316,8 +316,10 @@ describe('kanon init, on what the plan and the token allow', () => {
 
   it('says it does not know the merge queue when the token cannot read an organisation\'s plan', async () => {
     const dir = checkout();
-    await run(dir, fakeGitHub({ kind: 'Organization', private: true }));
+    const r = await run(dir, fakeGitHub({ kind: 'Organization', private: true }));
     expect(read(dir, 'docs/qa/adoption.md')).toContain("**Merge queue:** not known: the token can't read the organisation's plan.");
+    expect(r.out).toContain("Merge queue not known: the token can't read the organisation's plan.");
+    expect(r.out).not.toContain('No merge queue on this plan');
   });
 
   it('stops with its own message, not a stack trace, when a release\'s lanes mix roles and Apps', async () => {
