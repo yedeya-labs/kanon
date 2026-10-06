@@ -37,13 +37,16 @@
 //   • A coordinate the diff CHANGED. Its author re-derived it — or took one side of a
 //     conflict, which this cannot tell from a deliberate correction (the rest of RA-1992).
 //     In a doc, `citation-guard` still judges it against the tree. In a CODE COMMENT nothing
-//     else does — `citation-guard` reads `docs/` only — so it is read here as ADVICE
+//     else does — `citation-guard` reads Markdown only — so it is read here as ADVICE
 //     (kanon#175, `rewritten`): a re-point the diff's own map disagrees with, or a line past
 //     the end of the file. Advisory, not fatal, for the reason the measurement gave.
 //   • A coordinate whose cited lines the diff EDITED rather than moved. There is no
 //     mechanical answer — whether a rewritten line still says what the sentence claims
 //     is a reading question — so these are LISTED as advisory, never fatal.
 //   • `docs/projects/**`, as in `citation-guard`: a brief carries no coordinate (RA-1742).
+//   • A doc outside the corpus `citation-guard` reads. The two take the same `--path <glob>`
+//     list, `docs/**/*.md` by default (kanon#388), so pass the shift helper the list its guard
+//     is given: a coordinate the guard judges is then one a diff can't move in silence.
 //   • The QA tooling's own comments — the adopter's declared pipeline code (`## Pipeline
 //     code` in `docs/qa/escalation-paths.md`, kanon#54) and every test that imports it
 //     (`readsCodeComments`). The two verbatim quotations of `course-wizard.tsx:797-800`
@@ -93,12 +96,12 @@
 // `--head <rev>` compares two commits instead of the working tree — how the history
 // cases (RA-811, RA-873, RA-2208) are replayed.
 //
-// Usage: node scripts/citation-shift.mjs [--base <rev>] [--head <rev>] [--fix]
+// Usage: node scripts/citation-shift.mjs [--base <rev>] [--head <rev>] [--path <glob>]... [--fix]
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { PROJECTS_TREE, SOURCE_EXT, coordinatesIn, isOracleSpec, resolvePath } from './citation-guard.mjs';
+import { SOURCE_EXT, coordinatesIn, docPatternsFrom, isOracleSpec, resolvePath, selectDocs, unmatchedMessage } from './citation-guard.mjs';
 import { qaToolingImport } from './spec-lib.mjs';
 import { ESCALATION_FILE, defaultEscalationFile, parseEscalationFile, printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
 import { STACK_FILE, UNDECLARED, codeAreasDefaults, codeTrees, isCodePath, isTestPath, parseCodeAreas, readCodeAreas } from './lib/code-areas.mjs';
@@ -262,7 +265,7 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
   const edited = [];
   // A CODE-COMMENT coordinate this diff wrote or rewrote (kanon#175) — ADVISORY. The skip
   // below ("not ours to judge") rested on `citation-guard` judging it against the tree, and
-  // that guard reads `docs/` only, so nothing checked these. Two shapes, each read from the
+  // that guard reads Markdown only, so nothing checked these. Two shapes, each read from the
   // diff and the head alone, neither ever fatal:
   //   • `off-map`: the hunk replaced a coordinate into the same file, and the diff's own line
   //     map sends the old one somewhere other than where the new one points. That is a
@@ -440,6 +443,14 @@ const resolveBase = () => {
 
 const main = () => {
   const FIX = process.argv.includes('--fix');
+  let selection;
+  try {
+    selection = docPatternsFrom(process.argv.slice(2));
+  } catch (e) {
+    console.error(`citation-shift: ${e.message}`);
+    process.exitCode = 1;
+    return;
+  }
   const { base, how } = resolveBase();
   if (!base || !tryGit(['rev-parse', '--verify', '--quiet', `${base}^{commit}`])) {
     // Reported, not fatal — the same rule `locked-merge-check.mjs` states for a base it
@@ -489,7 +500,13 @@ const main = () => {
   const diff = parseDiff(git(['diff', '-U0', '--no-renames', '--no-color', base, ...(head ? [head] : [])]));
   const trackedHead = (head ? git(['ls-tree', '-r', '-z', '--name-only', head]) : git(['ls-files', '-z'])).split('\0').filter(Boolean);
   const trackedBase = git(['ls-tree', '-r', '-z', '--name-only', base]).split('\0').filter(Boolean);
-  const docs = trackedHead.filter((f) => f.startsWith('docs/') && f.endsWith('.md') && !f.startsWith(PROJECTS_TREE));
+  // The guard's corpus, from the same `--path` list (kanon#388).
+  const { docs, unmatched } = selectDocs(trackedHead, selection);
+  if (unmatched.length) {
+    console.error(unmatchedMessage('citation-shift', unmatched));
+    process.exitCode = 1;
+    return;
+  }
   const readHead = head ? (p) => git(['show', `${head}:${p}`]) : (p) => readFileSync(p, 'utf8');
   // Code files are read only when they contain something coordinate-shaped at all — a
   // `git grep` prefilter, so the replay (`--head`) does not `git show` every source file.
