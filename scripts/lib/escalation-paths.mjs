@@ -70,13 +70,41 @@ export const PIPELINE_HEADING = '## Pipeline code';
  * the reference adopter it is the project's ordinary documentation, which feature changes
  * update. The parity test names it as the one exception. `docs/qa/specs/` is
  * deliberately not here: specs are the project's deliverable, reviewed against its brief.
+ *
+ * Each carries its escalation category (`ESCALATION_CATEGORIES`, below): `playbooks` for the
+ * instructions an agent reads, `pipeline` for the rest.
+ */
+const PIPELINE_OWN = Object.freeze([
+  { re: /^\.github\//, reason: 'the CI and agent pipeline', category: 'pipeline' },
+  { re: /^docs\/qa\/[^/]+\.md$/, reason: 'the pipeline documents, which are agent instructions', category: 'playbooks' },
+  { re: /^(?:AGENTS|CLAUDE)\.md$/, reason: 'the agent instructions', category: 'playbooks' },
+  { re: /^\.claude\//, reason: 'the agent configuration', category: 'pipeline' },
+]);
+
+/**
+ * The pipeline's own paths as `[pattern, reason]` pairs, the shape every reader takes.
  * @type {ReadonlyArray<readonly [RegExp, string]>}
  */
-export const PIPELINE_ESCALATIONS = Object.freeze([
-  Object.freeze(/** @type {const} */ ([/^\.github\//, 'the CI and agent pipeline'])),
-  Object.freeze(/** @type {const} */ ([/^docs\/qa\/[^/]+\.md$/, 'the pipeline documents, which are agent instructions'])),
-  Object.freeze(/** @type {const} */ ([/^(?:AGENTS|CLAUDE)\.md$/, 'the agent instructions'])),
-  Object.freeze(/** @type {const} */ ([/^\.claude\//, 'the agent configuration'])),
+export const PIPELINE_ESCALATIONS = Object.freeze(PIPELINE_OWN.map(({ re, reason }) => Object.freeze(/** @type {const} */ ([re, reason]))));
+
+/** The category of the project's `## Pipeline code`: it is pipeline like Kanon's own. */
+const PIPELINE_CODE_CATEGORY = 'pipeline';
+/** The category of the project's `## Escalation paths`: which of its areas they are is its content. */
+const HIGH_RISK_CATEGORY = 'high_risk';
+
+/**
+ * THE ESCALATION CATEGORIES (plan 0003 §3.7, kanon#54): which part of this file an escalating
+ * path comes from, in the order above. A work item's telemetry row reports one boolean per
+ * category, `esc_<category>`, and nothing else about its paths. They are derived from this
+ * file's sources, not listed beside them: a project's own areas (its payments, its auth) are
+ * its content, so they all report as `high_risk`, and the categories say only whether a change
+ * touched Kanon's pipeline, its agent instructions, or a path the project declared. The
+ * telemetry schema imports nothing (it runs in the ingest function), so its test holds the
+ * schema's copy to this one.
+ * @type {readonly string[]}
+ */
+export const ESCALATION_CATEGORIES = Object.freeze([
+  ...new Set([...PIPELINE_OWN.map((e) => e.category), PIPELINE_CODE_CATEGORY, HIGH_RISK_CATEGORY]),
 ]);
 
 export { DeclarationError };
@@ -293,4 +321,25 @@ export function escalatingPaths(file, promotion = null) {
         : [];
     }),
   ];
+}
+
+/**
+ * The escalation categories a change touches (plan 0003 §3.7): each category one of
+ * `changedPaths` matches an entry of, in `ESCALATION_CATEGORIES`' order. It reads the file's
+ * entries, not `escalatingPaths`, so a declared high-risk path counts as `high_risk` even
+ * when a human-gated promotion stops it escalating: the category says what the change
+ * touched, and the promotion is the project's choice about who approves it.
+ * @param {EscalationFile} file
+ * @param {readonly string[]} changedPaths repository-relative
+ * @returns {string[]}
+ */
+export function escalationCategories(file, changedPaths) {
+  /** @type {Array<readonly [RegExp, string]>} */
+  const entries = [
+    ...PIPELINE_OWN.map(({ re, category }) => /** @type {const} */ ([re, category])),
+    ...file.pipeline.map(({ dir }) => /** @type {const} */ ([new RegExp(`^${escape(dir)}`), PIPELINE_CODE_CATEGORY])),
+    ...file.paths.map(({ pattern: re }) => /** @type {const} */ ([re, HIGH_RISK_CATEGORY])),
+  ];
+  const hit = new Set(entries.filter(([re]) => changedPaths.some((p) => re.test(p))).map(([, category]) => category));
+  return ESCALATION_CATEGORIES.filter((c) => hit.has(c));
 }

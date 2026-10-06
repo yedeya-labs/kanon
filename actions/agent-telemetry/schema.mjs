@@ -133,6 +133,16 @@ export const ESCALATION_REASONS = Object.freeze([
 ]);
 
 /**
+ * The escalation categories (plan 0003 §3.7): which part of the escalation file (`K-LAYOUT-8`)
+ * an escalating path comes from. `ESCALATION_CATEGORIES` in `scripts/lib/escalation-paths.mjs`
+ * derives them from that file's sources; this module imports nothing, so the schema test holds
+ * this list to that one (kanon#54). A work item's `esc_<category>` booleans are built from it.
+ * They replaced plan 0003's eight hand-listed categories inside version 1, because nothing
+ * writes a work-item row yet; once something does, a new category is a new version.
+ */
+export const ESCALATION_CATEGORIES = Object.freeze(['pipeline', 'playbooks', 'high_risk']);
+
+/**
  * Kanon's guards, as `guard_failures` names them (plan 0003 §3.3, group 9; decision 16). Each
  * is a guard Kanon ships, and the schema test fails when one names no file. The list grows
  * with Kanon's releases; a new guard is a new entry, never a new field.
@@ -243,7 +253,7 @@ const RUN_V2 = Object.freeze({
 const ACTOR = oneOf(ACTOR_CLASSES);
 const CHECK = oneOf(['pass', 'fail', 'absent']);
 
-/** The work-item row, version 1: eighty-four fields (plan 0003 §3.3). */
+/** The work-item row, version 1: seventy-nine fields (plan 0003 §3.3, kanon#54's escalation categories). */
 const WORK_ITEM_V1 = Object.freeze({
   // Row and join
   schema_version: req(oneOf([1])),
@@ -270,14 +280,7 @@ const WORK_ITEM_V1 = Object.freeze({
   files_specs: count,
   files_config: count,
   files_deps: count,
-  esc_pipeline: bool,
-  esc_playbooks: bool,
-  esc_infra: bool,
-  esc_migrations: bool,
-  esc_schema: bool,
-  esc_payments: bool,
-  esc_auth: bool,
-  esc_other: bool,
+  ...Object.fromEntries(ESCALATION_CATEGORIES.map((c) => [`esc_${c}`, bool])),
   tests_added: count,
   tests_changed: count,
   ac_count: count,

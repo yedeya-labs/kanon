@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 import {
+  ESCALATION_CATEGORIES,
   ESCALATION_REASONS,
   GUARDS,
   KANON_ERRORS,
@@ -30,6 +31,7 @@ import {
   transcriptCounts,
 } from '../../actions/agent-telemetry/agent-telemetry.mjs';
 import { classifyResult, parseObjects } from '../../actions/agent-classify/classify-agent-result.mjs';
+import { ESCALATION_CATEGORIES as FILE_CATEGORIES } from '../../scripts/lib/escalation-paths.mjs';
 
 /**
  * Plan 0002 step S1 and plan 0003 step M1: the schema module, the reason codes, the
@@ -106,9 +108,9 @@ const both = (execution: string | null, env: Record<string, string> = {}) =>
 const finished = () => both('tests/fixtures/agent-blocks/finished.json').v2 as Row;
 
 describe('the field lists (plan 0002 §2.1, plan 0003 §3.3)', () => {
-  it('a run row has fifty-nine fields and a work-item row eighty-four', () => {
+  it('a run row has fifty-nine fields and a work-item row seventy-nine', () => {
     expect(Object.keys(RUN)).toHaveLength(59);
-    expect(Object.keys(WORK)).toHaveLength(84);
+    expect(Object.keys(WORK)).toHaveLength(79);
   });
 
   it('marks exactly the plans\' required fields', () => {
@@ -143,6 +145,17 @@ describe('the field lists (plan 0002 §2.1, plan 0003 §3.3)', () => {
     const rules = [...new Set([...src.matchAll(/\bstop\('([a-z-]+)'/g)].map((m) => m[1]))].sort();
     expect(rules.length).toBeGreaterThan(0);
     expect([...ESCALATION_REASONS].sort()).toEqual(rules);
+  });
+
+  it('holds the escalation categories to the ones the escalation file derives, and builds one boolean per category (kanon#54)', () => {
+    expect(FILE_CATEGORIES.length).toBeGreaterThan(0);
+    expect([...ESCALATION_CATEGORIES]).toEqual([...FILE_CATEGORIES]);
+    expect(Object.keys(WORK).filter((k) => k.startsWith('esc_'))).toEqual(FILE_CATEGORIES.map((c) => `esc_${c}`));
+    for (const c of FILE_CATEGORIES) expect(WORK[`esc_${c}`]).toEqual({ type: 'bool' });
+    const item = { schema_version: 1, row_kind: 'work_item', tag: 'run', recorded_at: '2026-10-02T10:00:00Z', pr_number: 7, closed_at: '2026-10-01T09:00:00Z', fate: 'merged' };
+    expect(validate({ ...item, esc_pipeline: true, esc_high_risk: false })).toEqual({ ok: true });
+    // A project's own area is never a category: it is the project's content.
+    expect(validate({ ...item, esc_payments: true })).toEqual({ ok: false, errors: [{ field: 'esc_payments', problem: 'unknown' }] });
   });
 
   it('names a guard Kanon ships for every entry of the guard list', () => {

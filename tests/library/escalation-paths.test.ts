@@ -4,9 +4,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   DeclarationError,
+  ESCALATION_CATEGORIES,
   ESCALATION_FILE,
   PIPELINE_ESCALATIONS,
+  defaultEscalationFile,
   escalatingPaths,
+  escalationCategories,
   parseEscalationFile,
   readEscalationFile,
   readEscalationFileAt,
@@ -221,6 +224,52 @@ describe('the escalating paths', () => {
     for (const f of ['docs/qa/specs/kiosk.md', 'docs/AGENTS.md', 'AGENTS.md.bak', 'MY-CLAUDE.md', 'src/.claude/x', '.claudeignore', 'scripts/qa/x.mjs', 'drizzle/0001.sql', 'sst.config.ts', 'scripts/pipelines/x.mjs', 'src/lib/authors.ts']) {
       expect(reasonFor(f), f).toBeNull();
     }
+  });
+});
+
+describe('the escalation categories are derived from the file (plan 0003 §3.7, kanon#54)', () => {
+  const file = readEscalationFile();
+  const of = (...paths: string[]) => escalationCategories(file, paths);
+
+  it("are the pipeline, the agent instructions and the project's declared paths, in that order", () => {
+    expect([...ESCALATION_CATEGORIES]).toEqual(['pipeline', 'playbooks', 'high_risk']);
+  });
+
+  it("put each of the pipeline's own paths in a category", () => {
+    expect(of('.github/workflows/ci.yml')).toEqual(['pipeline']);
+    expect(of('.claude/settings.json')).toEqual(['pipeline']);
+    expect(of('docs/qa/reviewer-playbook.md')).toEqual(['playbooks']);
+    expect(of('AGENTS.md')).toEqual(['playbooks']);
+    expect(of('CLAUDE.md')).toEqual(['playbooks']);
+  });
+
+  it("report the declared pipeline code as pipeline, and every declared high-risk path as high_risk, whatever its area", () => {
+    expect(of('scripts/pipeline/file-follow-up.mjs')).toEqual(['pipeline']);
+    expect(of('migrations/0001.sql')).toEqual(['high_risk']);
+    expect(of('src/server/session.ts')).toEqual(['high_risk']);
+  });
+
+  it('report every category a change touches once, in their order, and none for a path nothing declares', () => {
+    expect(of('migrations/0001.sql', 'AGENTS.md', '.github/x.yml', 'src/auth.ts')).toEqual(['pipeline', 'playbooks', 'high_risk']);
+    expect(of('AGENTS.md', '.claude/settings.json')).toEqual(['pipeline', 'playbooks']);
+    expect(of('src/app.ts', 'docs/qa/specs/kiosk.md', 'README.md')).toEqual([]);
+    expect(of()).toEqual([]);
+  });
+
+  it('put every escalating path in exactly one category, so no escalation goes unreported', () => {
+    for (const f of ['.github/x', 'docs/qa/x.md', 'AGENTS.md', 'CLAUDE.md', '.claude/x', 'scripts/pipeline/x.mjs', 'migrations/x.sql', 'src/auth.ts']) {
+      expect(escalatingPaths(file).some(([re]) => re.test(f)), f).toBe(true);
+      expect(of(f), f).toHaveLength(1);
+    }
+  });
+
+  it('still report a declared path under a human-gated promotion, which only changes who approves it (K-MERGE-4)', () => {
+    expect(escalatingPaths(file, { judgingInputs: [] }).some(([re]) => re.test('migrations/x.sql'))).toBe(false);
+    expect(of('migrations/x.sql')).toEqual(['high_risk']);
+  });
+
+  it("report no project category without the file: Kanon's default declares none", () => {
+    expect(escalationCategories(defaultEscalationFile(), ['src/auth.ts', 'migrations/x.sql', '.github/x'])).toEqual(['pipeline']);
   });
 });
 
