@@ -27,8 +27,8 @@
 name: Agent lane — classify
 description: >-
   Explain a red agent run from the result file claude-code-action writes: whether the model
-  was unreachable, ran out of turns or dollars, or genuinely failed. Outputs the kind, its
-  reason code and the retry class.
+  was unreachable, ran out of turns or dollars, or genuinely failed. Outputs the kind and the
+  retry class.
 
 inputs:
   arm:
@@ -54,12 +54,12 @@ outputs:
       The classifier's verdict: `unavailable`, `exhausted`, `failed`, `ok` or
       `not-reached`.
     value: ${{ steps.classify.outputs.kind }}
-  code:
-    description: >-
-      The reason code beside the kind (plan 0002 §2.3): `none`, `model_never_ran`,
-      `no_model_ran`, `turn_cap`, `budget_cap`, `did_not_finish` or `no_result_file`. The
-      telemetry row stores this; the sentence stays in the annotation and step summary.
-    value: ${{ steps.classify.outputs.code }}
+  # NO `code` OUTPUT (#314). The classifier returns a reason code beside each kind (plan 0002
+  # §2.3), and it is what the telemetry row's `reason` column stores — but not through this
+  # block: `agent-telemetry` imports `classifyResult` from here and reads the code off the
+  # return, which it has to, because it records a GREEN run's code too and this block runs
+  # only on a red one. Publishing the code here as well would be a second expression for one
+  # column, and the output this block used to declare was read by nothing at all.
   retry:
     description: >-
       The retry class the RA-2519 breadcrumbs read: `unreachable` or `api_error` when waiting

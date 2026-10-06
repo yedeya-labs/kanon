@@ -46,6 +46,59 @@ describe('the blocks are composite actions that reach each other only through `$
   });
 });
 
+// #314 — a block's `action.yml` and its README are an adopter-facing contract, so an output
+// nothing reads is a claim the next reader has to disprove by tracing every caller, and its
+// description is free to drift: `agent-classify` declared `code` and said "the telemetry row
+// stores this", while the row's reason code was derived inside `agent-telemetry` instead.
+describe('every output a block declares is read by a caller (#314)', () => {
+  // Where a block is called from in here: the lanes, and the blocks themselves (`agent-finish`
+  // calls two). An adopter calls one at a release tag; every call in this repository is `$/`.
+  const CALLERS = [
+    ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => join('.github/workflows', f)),
+    ...PIPELINE.map((b) => join('actions', b, 'action.yml')),
+  ];
+
+  /**
+   * Which of `block`'s outputs a caller reads. A block's output is reached through the id of
+   * the step that calls it, so the readers are the `steps.<id>.outputs.<name>` expressions in
+   * the SAME file as the call — an id is scoped to its job, so a name-wide search would let
+   * one file's reader of `steps.classify.outputs.x` cover another file's dead output.
+   */
+  const readOutputsOf = (block: string): Set<string> => {
+    const read = new Set<string>();
+    for (const file of CALLERS) {
+      const text = readFileSync(file, 'utf8');
+      const doc = parse(text) as { jobs?: Record<string, { steps?: WorkflowStep[] }>; runs?: { steps?: WorkflowStep[] } };
+      const steps = doc.jobs ? Object.values(doc.jobs).flatMap((j) => j.steps ?? []) : (doc.runs?.steps ?? []);
+      for (const st of steps) {
+        if (selfRefOf(st.uses) !== block || !st.id) continue;
+        for (const [, name] of text.matchAll(new RegExp(String.raw`steps\.${st.id}\.outputs\.([\w-]+)`, 'g'))) read.add(String(name));
+      }
+    }
+    return read;
+  };
+
+  it.each([...PIPELINE])('%s declares no output that nothing reads', (name) => {
+    const read = readOutputsOf(name);
+    const declared = Object.keys(readBlock(name).outputs ?? {});
+    expect(declared.filter((o) => !read.has(o)), `${name} declares these and nothing reads them`).toEqual([]);
+  });
+
+  it('finds the readers it checks against, and says which they are', () => {
+    // A `uses:` form or a parse that stopped matching would find no readers at all. The rule
+    // above reds for a block that declares something, but says only "nothing reads them" — it
+    // cannot tell a dead output from a blind matcher, and it passes `agent-telemetry`, which
+    // declares none, either way. So the reader sets are pinned here, named per block.
+    expect(PIPELINE.map((b) => `${b}: ${[...readOutputsOf(b)].sort().join(' ') || 'nothing'}`)).toEqual([
+      'agent-setup: kanon-error',
+      'agent-run: execution_file started-at',
+      'agent-finish: kind retry',
+      'agent-classify: kind retry',
+      'agent-telemetry: nothing',
+    ]);
+  });
+});
+
 describe('the composite-action rules each block has to live with', () => {
   it.each([...LANE_BLOCKS])('%s runs every `run` step under the workflow default shell, `bash -e {0}`', (name) => {
     // A composite `run` step MUST name its shell, and `bash` adds `pipefail` — which the

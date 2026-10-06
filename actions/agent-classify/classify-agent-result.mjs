@@ -98,9 +98,11 @@ const configuredModelRan = (usage, model) => {
  *
  * EVERY RETURN CARRIES A REASON `code` BESIDE ITS SENTENCE (plan 0002 §2.3): one code per
  * sentence template, from the closed list in `agent-telemetry/schema.mjs` (`REASON_OUTCOME`),
- * each valid only with its kind. The code is what the telemetry row stores. The sentence,
- * which carries model ids and numbers, stays in the annotation and the step summary and
- * never leaves the run (ADR 0007, `K-OBS-16`).
+ * each valid only with its kind. The code is what the telemetry row stores, and
+ * `agent-telemetry` reads it HERE, off this return — it imports this function and calls it
+ * on every run, green ones included, where the `agent-classify` block does not run at all
+ * (#314). The sentence, which carries model ids and numbers, stays in the annotation and the
+ * step summary and never leaves the run (ADR 0007, `K-OBS-16`).
  *
  * There is no `unknown` return. `renderNotice` keeps an arm for it as a fall-through
  * for an unexpected caller, but every path above returns one of the five.
@@ -449,15 +451,17 @@ function cli() {
 
   const result = readResult(file);
   const model = readConfiguredModel(file);
-  const { kind, code, why } = classifyResult(result, model);
+  const { kind, why } = classifyResult(result, model);
   const { level, title, body } = renderNotice(kind, why, { arm, recover, nonFatal });
 
   console.log(`::${level} title=${title}::${body}`);
   if (process.env.GITHUB_OUTPUT) {
     // `retry` is read by the PR lanes' breadcrumb steps (scripts/lane-retry.mjs):
     // empty when waiting would not help.
-    // `code` is the reason code the telemetry row stores; the sentence is only for people.
-    appendFileSync(process.env.GITHUB_OUTPUT, `kind=${kind}\ncode=${code}\nretry=${retryClass(result, model) ?? ''}\n`);
+    // NOT THE REASON CODE (#314). `agent-telemetry` reads it off `classifyResult`'s return
+    // instead, so emitting it here would be a step output with no reader — the block
+    // declares only what a caller reads.
+    appendFileSync(process.env.GITHUB_OUTPUT, `kind=${kind}\nretry=${retryClass(result, model) ?? ''}\n`);
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
     const icon = {
