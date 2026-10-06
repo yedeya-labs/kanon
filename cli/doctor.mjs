@@ -85,7 +85,7 @@ export const FINDINGS = {
   'register.split-slug': { category: 'app', blocking: true },
   'register.shared-slug': { category: 'app', blocking: true },
   'app.permission-missing': { category: 'app', blocking: true },
-  'app.permission-extra': { category: 'app', blocking: true },
+  'app.permission-extra': { category: 'app', blocking: false },
   'secret.missing': { category: 'secret', blocking: true },
   'secret.stale': { category: 'secret', blocking: false },
   'declaration.missing': { category: 'declaration', blocking: true },
@@ -660,7 +660,7 @@ export const diagnose = async (deps, opts) => {
       });
     }
     if (extra.length) {
-      find('app.permission-extra', slug, `The ${id} App \`${slug}\` holds ${extra.map(([k, v]) => `${k}: ${v}`).join(', ')}, beyond what Kanon ${checked} grants it (${extra.map(([k]) => `${k}: ${need[k] ?? 'none'}`).join(', ')}); apps-check fails an App whose permissions are not exactly its own (K-ADOPT-8).`, {
+      find('app.permission-extra', slug, `The ${id} App \`${slug}\` holds ${extra.map(([k, v]) => `${k}: ${v}`).join(', ')}, beyond what Kanon ${checked} grants it (${extra.map(([k]) => `${k}: ${need[k] ?? 'none'}`).join(', ')}). Each lane narrows its token to what it uses (K-AGENT-46), so this blocks nothing, but the App holds more than it needs (K-ADOPT-8).`, {
         text: `Narrow the App's permissions on its settings page.`,
         url,
       });

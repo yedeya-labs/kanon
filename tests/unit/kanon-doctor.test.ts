@@ -279,13 +279,16 @@ describe('kanon doctor on what an installation lacks', () => {
     expect(r.json.findings[2]).toMatchObject({ blocking: false, fix: { commands: [`gh secret delete ${appSecrets(staleRole)[0]} -R ${REPO}`] } });
   });
 
-  it("names an App that holds more than the release grants, as apps-check would", async () => {
+  it('warns, without blocking, about an App that holds more than the release grants (the Owner, 2026-10-06)', async () => {
     const dir = checkout(healthyFiles());
     const github = fakeGitHub();
     const id = REQ.lanes['agent-code-audit']!.identities[0]!;
     github.st.apps[`widgets-${id}`]!.permissions.administration = 'write';
     const r = await run(dir, github, ['--json']);
     expect(ids(r)).toEqual([`app.permission-extra widgets-${id}`]);
+    expect(r.json.findings[0]).toMatchObject({ blocking: false, fix: { text: expect.stringContaining('Narrow') } });
+    expect(r.json.findings[0].message).toContain('blocks nothing');
+    expect(r.status).toBe(EXIT.healthy);
   });
 
   it('names a missing hook input, a missing ruleset rule and missing labels (the labels not blocking)', async () => {
