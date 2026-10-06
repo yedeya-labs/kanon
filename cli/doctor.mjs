@@ -18,6 +18,13 @@
 // is accepted only by a bullet in the adoption record that names it and gives a reason
 // (`K-LAYOUT-10`), or by narrowing its grant.
 //
+// ANY OTHER FINDING CAN BE WAIVED the same way, by the repository and not by doctor: a bullet
+// under `## Choices` names one finding id, the one subject it applies to, and the reason
+// (`WAIVER_LABEL`). A waived finding moves from `findings` to `waived`, so it no longer counts
+// toward the exit code but stays in the document. Doctor knows no repository's special case:
+// every finding and every repository is waived alike, except the ids `UNWAIVABLE` lists. A waiver
+// that matches no finding is listed as stale, and one in another shape is malformed.
+//
 // IT WRITES NOTHING: every GitHub call is a read, and no file is written. `kanon init` fixes
 // what can be fixed from the checkout.
 //
@@ -67,6 +74,35 @@ export const ADOPTION_RECORD = 'docs/qa/adoption.md';
 /** The bullet's bold label that accepts an id-token holder, under `## Choices`. */
 export const HOLDER_LABEL = 'Accepted id-token holder';
 
+/** The bullet's bold label that waives one finding, under `## Choices`. */
+export const WAIVER_LABEL = 'Waived doctor finding';
+
+/**
+ * The finding ids no waiver waives, each with why (docs/doctor.md, "Waiving a finding"). A
+ * waiver of one is malformed. The record's own findings can't be waived, or a waiver could hide
+ * a broken or stale waiver; an id-token holder has its own form of waiver, the acceptance above;
+ * and the rest protect a rule that keeps review independent or keeps secrets in their place.
+ * @type {Record<string, string>}
+ */
+export const UNWAIVABLE = {
+  'declaration.malformed': 'it is about the adoption record itself, so a waiver could hide a malformed waiver',
+  'waiver.stale': 'it is about the adoption record itself, so a waiver could keep a stale waiver alive',
+  'id-token.stale-acceptance': 'it is about the adoption record itself; remove the stale acceptance instead',
+  'id-token.unaccepted': `a job is accepted as an id-token holder by its own bullet, \`- **${HOLDER_LABEL}:** \`<workflow>.yml\` job \`<job>\` (<why>)\``,
+  'register.shared-slug': 'one App authoring and approving its own work defeats independent review (K-LAYOUT-6)',
+  'caller.secrets-inherited': 'it hands the lane every secret of the repository (plan 0001 decision 7)',
+  'ruleset.missing': 'without it nothing enforces review on the default branch (K-ADOPT-1 step 8)',
+  'ruleset.rule-missing': 'without it nothing enforces that rule of review on the default branch (K-ADOPT-1 step 8)',
+  'ruleset.bypass-extra': 'it lets an actor other than the Releaser merge around review (K-MERGE-8)',
+};
+
+/**
+ * The categories of the findings a check that could not run would have reported, by the
+ * `unchecked[].check` it is listed under: a waiver of such a finding can't be called stale.
+ * @type {Record<string, string>}
+ */
+const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset' };
+
 /**
  * The finding categories, in the order a finding is listed and fixed: the pin decides which
  * release's requirements apply; an App's rows and permissions come before the secrets that name
@@ -96,6 +132,7 @@ export const FINDINGS = {
   'hook.missing': { category: 'declaration', blocking: true },
   'hook.input-missing': { category: 'declaration', blocking: true },
   'workflow.missing': { category: 'declaration', blocking: true },
+  'waiver.stale': { category: 'declaration', blocking: false },
   'caller.lane-removed': { category: 'caller', blocking: true },
   'caller.misplaced': { category: 'caller', blocking: true },
   'caller.secrets-inherited': { category: 'caller', blocking: true },
@@ -314,6 +351,44 @@ export const readHolderAcceptances = (text) => {
   return { accepted, errors };
 };
 
+/**
+ * The waivers the adoption record declares under `## Choices`, one bullet each:
+ * `- **Waived doctor finding:** \`caller.misplaced\` on \`.github/workflows/review.yml\` (why)`.
+ * Each names one finding id, one subject exactly as doctor reports it, and the reason. A bullet in
+ * another shape, outside `## Choices`, with no reason, naming an id doctor doesn't report or one
+ * it doesn't waive (`UNWAIVABLE`), or waiving the same finding twice, is returned as an error
+ * naming its line.
+ * @param {string | null} text
+ * @returns {{ waivers: Array<{ id: string, subject: string, reason: string, line: number }>, errors: string[] }}
+ */
+export const readWaivers = (text) => {
+  /** @type {Array<{ id: string, subject: string, reason: string, line: number }>} */
+  const waivers = [];
+  /** @type {string[]} */
+  const errors = [];
+  if (!text) return { waivers, errors };
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const inFence = fenced(lines);
+  const mention = new RegExp(`^\\s*(?:>\\s*)*(?:(?:[-*+]|\\d+[.)])\\s+)?\\*\\*${WAIVER_LABEL}:\\*\\*`, 'i');
+  const entry = new RegExp(`^[-*] \\*\\*${WAIVER_LABEL}:\\*\\* \`([^\`\\s]+)\` on \`([^\`]*\\S[^\`]*)\` \\((.*\\S.*)\\)\\s*$`);
+  let section = '';
+  lines.forEach((line, i) => {
+    if (inFence.has(i)) return;
+    if (/^#{1,6} /.test(line)) section = line.trimEnd();
+    if (!mention.test(line)) return;
+    const m = entry.exec(line);
+    const where = `${ADOPTION_RECORD}:${i + 1}`;
+    if (!m) return errors.push(`${where} is not \`- **${WAIVER_LABEL}:** \`<finding id>\` on \`<subject>\` (<why the finding stands>)\``);
+    if (section !== '## Choices') return errors.push(`${where} waives a finding outside \`## Choices\``);
+    const [id, subject, reason] = [/** @type {string} */ (m[1]), /** @type {string} */ (m[2]), /** @type {string} */ (m[3]).trim()];
+    if (!FINDINGS[id]) return errors.push(`${where} waives \`${id}\`, which is no finding doctor reports`);
+    if (UNWAIVABLE[id]) return errors.push(`${where} waives \`${id}\`, which can't be waived: ${UNWAIVABLE[id]}`);
+    if (waivers.some((w) => w.id === id && w.subject === subject)) return errors.push(`${where} waives \`${id}\` on \`${subject}\` a second time`);
+    waivers.push({ id, subject, reason, line: i + 1 });
+  });
+  return { waivers, errors };
+};
+
 /** @param {unknown} p a `permissions:` value */
 const grantsIdToken = (p) => p === 'write-all' || (isMap(p) && 'id-token' in p && p['id-token'] !== 'none');
 
@@ -372,6 +447,7 @@ export const requirementsAt = async (deps, release) => {
 /**
  * @typedef {{ id: string, category: string, blocking: boolean, subject: string, message: string,
  *   fix: { text: string, commands: string[], url: string | null } }} Finding
+ * @typedef {Finding & { reason: string }} Waived
  * @typedef {{ workflow: string, job: string, grant: 'job' | 'workflow', how: 'id-token' | 'write-all',
  *   calls: string | null, status: 'kanon-lane' | 'accepted' | 'unaccepted', reason: string | null }} Holder
  */
@@ -907,10 +983,32 @@ export const diagnose = async (deps, opts) => {
     const [wfFile, job] = key.split('#');
     find('id-token.stale-acceptance', ADOPTION_RECORD, `accepts ${wfFile}'s job ${job} as an id-token holder, but no such job holds the grant.`, { text: `Remove the bullet, so the record says only what is true.` });
   }
+  // ── The waivers ─────────────────────────────────────────────────────────────────────────────
+  // Last, over every finding: one bullet waives one id on one subject, as doctor reported it.
+  const waiverRecord = readWaivers(read(ADOPTION_RECORD));
+  for (const e of waiverRecord.errors) find('declaration.malformed', ADOPTION_RECORD, e, { text: `Write each waiver under ## Choices as \`- **${WAIVER_LABEL}:** \`<finding id>\` on \`<subject>\` (<why the finding stands>)\`, for a finding that can be waived (docs/doctor.md).` });
+  /** @type {Waived[]} */
+  const waived = [];
+  for (const w of waiverRecord.waivers) {
+    const hits = findings.filter((f) => f.id === w.id && f.subject === w.subject);
+    if (hits.length) {
+      for (const f of hits) {
+        findings.splice(findings.indexOf(f), 1);
+        waived.push({ ...f, reason: w.reason });
+      }
+      continue;
+    }
+    const category = /** @type {{ category: string }} */ (FINDINGS[w.id]).category;
+    const blind = unchecked.find((u) => u.subject === w.subject || UNCHECKED_CATEGORY[u.check] === category);
+    if (blind) notes.push(`${ADOPTION_RECORD}:${w.line} waives ${w.id} on ${w.subject}, which doctor did not report; the ${blind.check} check could not run, so it can't tell whether the waiver is still needed.`);
+    else find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${w.id} on ${w.subject}, but doctor reports no such finding.`, { text: `Remove the bullet, so the record says only what is true.` });
+  }
+
   const branchName = branch.status === 0 ? branch.stdout.trim() : null;
   if (branchName !== s.defaultBranch) notes.push(`The id-token holders are counted on ${branchName && branchName !== 'HEAD' ? branchName : 'this checkout'}, not on ${s.defaultBranch}; the roles trust ${s.defaultBranch}'s jobs, so run it there for their count.`);
 
   findings.sort((a, b) => CATEGORIES.indexOf(a.category) - CATEGORIES.indexOf(b.category));
+  waived.sort((a, b) => CATEGORIES.indexOf(a.category) - CATEGORIES.indexOf(b.category));
   const blocking = findings.some((f) => f.blocking);
   const status = blocking ? 'findings' : unchecked.length ? 'incomplete' : 'healthy';
   return {
@@ -927,6 +1025,7 @@ export const diagnose = async (deps, opts) => {
       lanes: installed,
       apps: identities.map((id) => ({ identity: id, slug: slugOf.get(id) ?? null })),
       findings,
+      waived,
       idTokenHolders: holders,
       unchecked,
       notes,
@@ -961,6 +1060,11 @@ export const prose = (r) => {
       for (const c of f.fix.commands) out.push(`     ${c}`);
     });
   }
+  if (r.waived.length) {
+    out.push('');
+    out.push(`Waived under ## Choices in ${ADOPTION_RECORD}, so they don't count:`);
+    for (const w of r.waived) out.push(`- [${TITLES[w.category] ?? w.category}] ${w.id}, ${w.subject}: ${w.reason}.`);
+  }
   out.push('');
   if (!r.idTokenHolders.length) out.push('No job of your workflows holds id-token: write.');
   else {
@@ -982,12 +1086,13 @@ export const prose = (r) => {
   }
   out.push('');
   const blocking = r.findings.filter((f) => f.blocking).length;
+  const waivedToo = r.waived.length ? ` ${r.waived.length} finding(s) waived in ${ADOPTION_RECORD}.` : '';
   out.push(
-    r.status === 'healthy'
+    (r.status === 'healthy'
       ? 'Healthy. doctor wrote nothing.'
       : r.status === 'incomplete'
         ? `Nothing blocking found, but ${r.unchecked.length} check(s) could not run, so health can't be claimed (exit ${r.exitCode}). doctor wrote nothing.`
-        : `${blocking} blocking finding(s)${r.findings.length > blocking ? `, ${r.findings.length - blocking} not blocking` : ''} (exit ${r.exitCode}). doctor wrote nothing; kanon init fixes what it can from the checkout.`,
+        : `${blocking} blocking finding(s)${r.findings.length > blocking ? `, ${r.findings.length - blocking} not blocking` : ''} (exit ${r.exitCode}). doctor wrote nothing; kanon init fixes what it can from the checkout.`) + waivedToo,
   );
   return out;
 };

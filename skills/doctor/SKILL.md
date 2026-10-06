@@ -25,7 +25,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 
 - **Never merge.** Never approve a pull request, never push to the default branch, and never bypass or change a ruleset to get a change in. You open the pull request; a person merges it.
 - **Never print a secret.** Never run `gh auth token`, never echo or print an environment variable that holds a token, never read, print or move a private key (`*.pem`), and never put a secret's value in a command line. A doctor document names whose token it used (`.token.source`, `.token.login`), never the token: say whose it is, and nothing more.
-- **Only a person can** click **Create** and **Install** for a GitHub App, generate an App's private key, widen an App's permissions and accept the change on its installation, type a secret's value, and decide anything the rulebook gives to a person (an id-token holder to accept, an approval). Say so plainly, give them the exact step, and wait for them to say it's done. Never pretend to have done one of these, and never work around one.
+- **Only a person can** click **Create** and **Install** for a GitHub App, generate an App's private key, widen an App's permissions and accept the change on its installation, type a secret's value, and decide anything the rulebook gives to a person (an id-token holder to accept, a finding to waive, an approval). Say so plainly, give them the exact step, and wait for them to say it's done. Never pretend to have done one of these, and never work around one.
 - **Explain, then ask, then act.** Before a command or an edit that changes anything, say in plain words what it changes and why, show the diff, and get a yes.
 - **The person signs off.** Commit with `git commit -s` under the person's own git identity. Never sign off as yourself: Kanon's DCO check rejects an AI sign-off.
 - **The contract is `kanon-doctor/v1`.** If the document's `.schema` is anything else, stop and tell the person this skill and the command disagree, and to update the plugin. Ignore a field you don't know. The one exception is a `kanon init` you run to fix a finding (below): its document is init's, versioned as `kanon-init/v<N>`, and you read it as the adopt skill does. A finding whose `.findings[].id` is not in the table below is newer than this skill: show the person its `.findings[].message` and `.findings[].fix`, and do nothing else with it.
@@ -36,13 +36,13 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 
    | Code | Status | What you do |
    |---|---|---|
-   | 0 | `healthy` | Say so, list `.notes`, and stop. |
+   | 0 | `healthy` | Say so, list `.notes` and `.waived`, and stop. |
    | 1 | `findings` | Go on to step 2. |
    | 2 | `usage` | This skill passed something the command refused: show `.error`, and stop. It is a bug in the skill, not the repository. |
    | 3 | `error` | Show `.error` in plain words. Usually: not a checkout, a release's requirements file that can't be read, or nothing pins Kanon yet, which is the adopt skill's job. |
    | 4 | `incomplete` | Nothing blocking was found, but a check couldn't run. List each of `.unchecked`, with `.unchecked[].check`, `.unchecked[].subject` and `.unchecked[].reason`, and say what would let it run (often a token that can list the repository's secrets). Then go on to step 2 for any finding that doesn't block. |
 
-2. **Say what it checked.** The release (`.checking`), the lanes (`.lanes`), the Apps (`.apps[].identity` and `.apps[].slug`), and whose token it used. If `.checkout.branch` is not `.checkout.defaultBranch`, say that the id-token holders are counted on this branch, not the default one.
+2. **Say what it checked.** The release (`.checking`), the lanes (`.lanes`), the Apps (`.apps[].identity` and `.apps[].slug`), and whose token it used. If `.checkout.branch` is not `.checkout.defaultBranch`, say that the id-token holders are counted on this branch, not the default one. List what the adoption record waives (`.waived`): each `.waived[].id` on `.waived[].subject`, and the record's reason, `.waived[].reason`. A waived finding doesn't block, and you leave it alone unless the person asks.
 
 3. **Explain the findings, in their order.** `.findings` is already in the order to fix it. Blocking ones (`.findings[].blocking`) first. For each: what it means in plain words (from `.findings[].message` and the table below), who fixes it, and the exact fix (`.findings[].fix.text`, `.findings[].fix.commands`, `.findings[].fix.url`). Read the fix's commands this way:
    - one that starts `kanon ` you run as above, after saying what it does. A `kanon init` you always run as `kanon init --json --no-apps`, with the adopt skill's answer flags when the person has given them: without the JSON flag it refuses in a shell whose standard input isn't a terminal, and without the no-apps flag it would start the Apps' browser flow unannounced;
@@ -54,6 +54,18 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 5. **Run it again,** and repeat from step 1 until it exits 0, or until every finding left is one only a person can do. Then list those, each with its exact step, and stop.
 
 6. **Open the pull request** if you changed files: commit (signed off by the person), push the branch, and `gh pr create` with a title that passes the repository's PR-title check, such as `ci: fix the Kanon installation`. Never merge it.
+
+## Waiving a finding
+
+Some findings the repository keeps on purpose. The usual one is a caller whose lane's file name is already taken: if a file is already at the path a `git mv` would move a caller to, never move, overwrite or delete either file, and never pass `git mv -f`. Show the person both files and explain the collision.
+
+Then offer a waiver, the person's to make (`docs/doctor.md`, "Waiving a finding"): one bullet under `## Choices` in `docs/qa/adoption.md`, naming the finding's `.findings[].id` and its `.findings[].subject` exactly as doctor reports them, and why it stands:
+
+```markdown
+- **Waived doctor finding:** `caller.misplaced` on `.github/workflows/review.yml` (agent-review.yml is the lane's own definition in this repository)
+```
+
+Propose the bullet and ask for the reason; never invent one. Write it only once the person has given or accepted it, show the diff, and run doctor again: the finding moves to `.waived`. Never offer a waiver to get past a finding you could fix, and never for one `docs/doctor.md` says can't be waived ("What can't be waived"): those you fix. For `id-token.unaccepted`, the waiver is the fix's own `Accepted id-token holder` bullet.
 
 ## Who fixes each finding of `kanon doctor`
 
@@ -72,12 +84,13 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 | `secret.stale` | decision | Doesn't block. Offer the fix's `gh secret delete` command, and run it only on a yes. |
 | `declaration.missing` | agent | Run `kanon init --dry-run --json`, show the file it would write, then write it with `kanon init --json --no-apps` (with the adopt skill's answer flags), or by hand. |
 | `declaration.section-missing` | agent | Add the section, or remove the duplicate, as the fix says. Ask the person for content only they know, such as the stack's gates. |
-| `declaration.malformed` | agent | Rewrite the acceptance in the shape the fix shows, keeping the person's reason. |
+| `declaration.malformed` | agent, decision | Rewrite the acceptance or waiver in the shape the fix shows, keeping the person's reason. If it waives a finding that can't be waived, tell the person, remove the bullet once they agree, and fix the finding instead. |
+| `waiver.stale` | agent | Doesn't block. Offer to remove the bullet. |
 | `hook.missing` | agent | As `declaration.missing`. |
 | `hook.input-missing` | agent | Add the inputs the fix lists to the hook. |
 | `workflow.missing` | agent | Rename the project's CI workflow to the file name the fix gives, or let `kanon init --json --no-apps` write one. |
 | `caller.lane-removed` | decision | The release no longer ships that lane: ask the person whether to remove the caller, and read them the release notes. |
-| `caller.misplaced` | agent | Run the fix's `git mv`. |
+| `caller.misplaced` | agent, decision | If nothing is at the target path, run the fix's `git mv`. If a file is already there, never move or overwrite either one: show the person both files, and offer a waiver (above). |
 | `caller.secrets-inherited` | agent | Replace `secrets: inherit` with the lines the fix lists. |
 | `caller.secret-missing` | agent | Add the lines the fix lists under the job's `secrets:`. |
 | `caller.secret-stale` | agent | Remove the lines the fix lists. |

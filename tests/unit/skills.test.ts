@@ -150,6 +150,7 @@ const SHAPES: Record<Command, { top: Map<string, string>; nested: Record<string,
       findings: fieldTable('docs/doctor.md', 'A finding'),
       fix: fieldTable('docs/doctor.md', 'A fix'),
       idTokenHolders: fieldTable('docs/doctor.md', 'An id-token holder'),
+      waived: fieldTable('docs/doctor.md', 'A waived finding'),
     },
   },
   init: {
