@@ -84,11 +84,11 @@ describe("telemetry.yml, Kanon's caller (S7, S9)", () => {
     expect(caller.permissions).toEqual({ actions: 'read', 'id-token': 'write' });
   });
 
-  it('is inert: no live schedule until its pin ships the collector (kanon#304), with the hourly one written out', () => {
-    // GitHub resolves a called workflow before any `if:`, so a schedule at a pin that lacks the
-    // collector fails at startup every hour. kanon#304 removes the comment marks.
-    expect(Object.keys(caller.on)).toEqual(['workflow_dispatch']);
-    expect(CALLER_TEXT).toMatch(/^ {2}# schedule:\n {2}# {3}- cron: "40 \* \* \* \*"$/m);
+  it('runs hourly at minute 40 and on dispatch, now that its pin ships the collector (kanon#304)', () => {
+    // The collector's contract (plan 0002 §1.2): the two triggers, and nothing else, since a
+    // called workflow runs on whatever its caller is called on.
+    expect(Object.keys(caller.on).sort()).toEqual(['schedule', 'workflow_dispatch']);
+    expect(caller.on.schedule).toEqual([{ cron: '40 * * * *' }]);
     expect(caller.on.workflow_dispatch.inputs.window_minutes.default).toBe('');
   });
 

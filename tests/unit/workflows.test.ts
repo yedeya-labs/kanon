@@ -574,6 +574,7 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
       groups?: Record<string, { patterns?: string[] }>;
       schedule?: { interval?: string };
       cooldown?: { 'default-days'?: number; exclude?: string[] };
+      ignore?: { 'dependency-name'?: string; versions?: string[]; 'update-types'?: string[] }[];
       'commit-message'?: Record<string, unknown>;
     }[];
   };
@@ -604,5 +605,18 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
     expect(actions?.schedule?.interval).toBe('daily');
     // Titled `ci(deps): …`, so the PR passes K-SHIP-4.
     expect(actions?.['commit-message']).toEqual({ prefix: 'ci', include: 'scope' });
+  });
+
+  it("holds Kanon's own pins below v0.28.0 until plan 0005 L5, and lets v0.27.x patches through", () => {
+    const actions = dependabot.updates.find((u) => u['package-ecosystem'] === 'github-actions');
+    // v0.28.0 is the breaking two-App release (#333, #358): Kanon has no Author or Judge App
+    // until L5, so a bump to it breaks every Kanon lane. The hold is exactly one rule, on every
+    // Kanon reference, by version only: an `update-types` rule would also stop the patches.
+    // L5 removes it, and then this test with it.
+    expect(actions?.ignore).toEqual([{ 'dependency-name': 'yedeya-labs/kanon*', versions: ['>= 0.28.0'] }]);
+    // The plan's L5 step says to remove it, so the hold isn't forgotten there.
+    const plan = readFileSync(new URL('../../docs/plans/0005-lean-installation.md', import.meta.url), 'utf8');
+    const l5 = plan.split('\n').find((l) => l.startsWith('| **L5** |'));
+    expect(l5).toContain('removes the Dependabot hold');
   });
 });

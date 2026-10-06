@@ -6,15 +6,14 @@
 #
 # IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap, as review.yml does). The job
 # holds the store's writer credentials, so the code that runs with them is a released version.
-# Dependabot's `kanon` group proposes each release here with the other pins, and `lane-check`
-# (in CI) holds every Kanon reference to one version.
+# Dependabot's `kanon` group proposes each release here with the other pins, except v0.28.0 and
+# later, which it holds back until plan 0005's L5 (.github/dependabot.yml, ADR 0011), and
+# `lane-check` (in CI) holds every Kanon reference to one version.
 #
-# INERT UNTIL THE PIN REACHES A RELEASE THAT SHIPS THE COLLECTOR. The collector is new in the
-# release after v0.25.0, and lane-check doesn't let this file pin a different version from the
-# others. A schedule now would fail at startup every hour, because GitHub resolves a called
-# workflow before it reads any job's `if:`. So the schedule is commented out below, and a
-# dispatch fails at startup until Dependabot moves the pins. After that, a member removes the
-# comment marks (kanon#304).
+# HOURLY AT MINUTE 40, the collector's contract (plan 0002 §1.2). It touches no database: the
+# store is on-demand DynamoDB behind a function, so a sweep wakes nothing that scales to zero.
+# The schedule was held back until the pins reached a release that ships the collector, since
+# GitHub resolves a called workflow before it reads any job's `if:`; v0.27.0 does (kanon#304).
 #
 # THE VARIABLES (not secrets: neither is a credential), from the store's stack outputs:
 #   KANON_TELEMETRY_URL          the `IngestUrl` output
@@ -23,8 +22,8 @@
 name: Telemetry
 
 on:
-  # schedule:
-  #   - cron: "40 * * * *"
+  schedule:
+    - cron: "40 * * * *"
   workflow_dispatch:
     inputs:
       window_minutes:

@@ -1,5 +1,6 @@
 # Kanon's PR-title check (K-SHIP-4), run the way an adopter runs it: pinned to an exact
-# Kanon release (K-ADOPT-11), which Dependabot bumps. No checkout is needed.
+# Kanon release (K-ADOPT-11), which Dependabot bumps, except v0.28.0 and later, which it holds back until plan 0005's L5
+# (.github/dependabot.yml, ADR 0011). No checkout is needed.
 #
 # The check that judges a PR runs Kanon's LAST release, never this PR's copy through `$/`
 # (#47). Through `$/` a PR that weakened the check would be judged by the weakened check

@@ -6,8 +6,9 @@
 #
 # IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap). Through `$/` the audit would
 # run whatever lane code a branch dispatched it from, and a lane change would audit with itself.
-# Dependabot's `kanon` group proposes each release here, and `lane-check` (in CI) holds every
-# Kanon reference to one version.
+# Dependabot's `kanon` group proposes each release here, except v0.28.0 and later, which it holds back until plan 0005's L5
+# (.github/dependabot.yml, ADR 0011), and `lane-check` (in CI) holds every Kanon reference to
+# one version.
 #
 # WHAT IT READS is the `audit` areas of Kanon's stack document (docs/qa/stack.md): the rules,
 # the docs, the guards and the scripts, in that order. It looks for objective contradictions
