@@ -26,6 +26,8 @@ In the order it lists them, which is the order to fix them:
 7. **The ruleset** on the default branch (`K-ADOPT-1` step 8), where the plan has rulesets. A private repository on a plan without them is a note: nothing on the platform enforces review there (`K-ADOPT-3`). Where your release caller maps the Releaser, also its bypass (`K-MERGE-8`, [#49](https://github.com/yedeya-labs/kanon/issues/49)): the Releaser App must be a bypass actor of each ruleset on the default branch, and the only one. Another actor's bypass, such as the admin role's, is asked off only against a release whose `dco` check passes the release PR the Releaser opens (its requirements file's `release.dcoExemptsReleaser`, [#337](https://github.com/yedeya-labs/kanon/issues/337)); against an earlier one it is a note, because that bypass is still what merges the release PR. GitHub shows a ruleset's bypass list only to someone who can edit it, so with another token this check is `unchecked`.
 8. **The id-token holders,** below.
 
+Then it sets aside each finding the adoption record waives ([below](#waiving-a-finding)).
+
 `lane-check` checks the callers too, on every pull request, against the release they pin. What doctor adds is the release you are about to pin, and what only GitHub knows: the secrets, the Apps' permissions, the labels and the ruleset.
 
 ## The id-token holders
@@ -43,6 +45,33 @@ The QA store's role and the telemetry writer trust the default branch's ref, not
 
 Doctor counts the workflows of the checkout it runs from. Run it on your default branch for the count the roles see; it says so when you don't.
 
+## Waiving a finding
+
+Some findings your repository has decided to keep. A caller whose lane's file name is already taken by another workflow can't be renamed onto it, say: `git mv` would refuse, and forcing it would destroy that workflow. **Doctor knows no repository's special case.** Instead, any repository waives a finding it keeps, under `## Choices` in the adoption record (`K-LAYOUT-10`), one bullet per finding: the bold label, the finding's id as one code span, `on`, its subject as one code span, exactly as doctor reports it in `.findings[].subject`, and then in parentheses why the finding stands, on one line:
+
+```markdown
+- **Waived doctor finding:** `caller.misplaced` on `.github/workflows/review.yml` (agent-review.yml is the lane's own definition in this repository)
+```
+
+- **A waived finding doesn't count.** It moves from `findings` to `waived`, with the bullet's reason, so it no longer sets the exit code, and it stays in the document for whoever reads it.
+- **A waiver is narrow.** It waives one finding id on one subject; nothing waives an id everywhere, or every finding on a subject. Where doctor reports more than one finding of an id on one subject, such as each missing secret on the repository, the waiver covers each of them, and `waived` lists each.
+- **A waiver that matches nothing is listed as stale** (`waiver.stale`), without blocking, so a waiver doesn't outlive its finding. When the check that would report its finding couldn't run, doctor can't tell, and says so in a note instead.
+- **A waiver in another shape is malformed, and blocks** (`declaration.malformed`): outside `## Choices`, with nothing in its parentheses, naming an id doctor doesn't report, waiving one finding twice, or waiving a finding that can't be waived.
+- **The person decides.** A waiver is a decision the rulebook gives to the project, in a file on its escalation path (`K-MERGE-4`). An agent may propose one; the person writes it, or accepts it with its reason.
+
+An accepted id-token holder is this waiver's own form for `id-token.unaccepted`: the same `## Choices`, one bullet per job, a reason, malformed and stale alike. It keeps its own shape because doctor lists every holder with its status (`.idTokenHolders[].status`), and the acceptance is what makes one `accepted`.
+
+### What can't be waived
+
+Each of these is reported as before, whatever the record says, and a waiver of one is malformed:
+
+- `declaration.malformed`, `waiver.stale` and `id-token.stale-acceptance`: they are about the adoption record itself, so a waiver could hide a broken or stale waiver.
+- `id-token.unaccepted`: accept the holder with its own bullet, above.
+- `register.shared-slug`: one App would author and approve its own work, which defeats independent review (`K-LAYOUT-6`).
+- `caller.secrets-inherited`: the lane would receive every secret of the repository (plan 0001 decision 7).
+- `ruleset.missing` and `ruleset.rule-missing`: nothing would enforce review on the default branch (`K-ADOPT-1` step 8).
+- `ruleset.bypass-extra`: an actor other than the Releaser could merge around review (`K-MERGE-8`).
+
 ## Decided by the Owner, 2026-10-06
 
 1. **An id-token holder is accepted by one bullet per job** under `## Choices` in the adoption record (`K-LAYOUT-10`), as above.
@@ -51,6 +80,7 @@ Doctor counts the workflows of the checkout it runs from. Run it on your default
 4. **`--to` checks the target release only.** What the pinned release already needed shows up too, because it fails the target as well.
 5. **The holders are counted on the checkout's workflows,** not on the default branch read through the API; doctor adds a note when the checkout is on another branch.
 6. **A per-role App left installed after the two-App move is listed, without blocking** (`app.unused`), with the steps to uninstall and delete it in its fix.
+7. **Any repository waives a finding it keeps with one bullet under `## Choices`,** one finding id on one subject with its reason, as above ([#390](https://github.com/yedeya-labs/kanon/issues/390)); doctor learns no repository's special case ([#389](https://github.com/yedeya-labs/kanon/issues/389)). A waived finding doesn't count toward the exit code and stays in `waived`; a stale waiver is listed; a malformed one blocks. Which findings can't be waived is listed above.
 
 ## Exit codes
 
@@ -58,8 +88,8 @@ The same in both outputs.
 
 | Code | Status | Meaning |
 |---|---|---|
-| 0 | `healthy` | Every check ran, and nothing blocking was found. |
-| 1 | `findings` | At least one blocking finding, an id-token holder neither accepted nor narrowed included. |
+| 0 | `healthy` | Every check ran, and nothing blocking was found, or only findings the adoption record waives. |
+| 1 | `findings` | At least one blocking finding that isn't waived, an id-token holder neither accepted nor narrowed included. |
 | 2 | `usage` | A usage error: an unknown argument, or `--to` that is not an exact release. |
 | 3 | `error` | It could not run: no checkout, the repository or a release's requirements file could not be read, or nothing pins Kanon. |
 | 4 | `incomplete` | Nothing blocking was found, but at least one check could not run (the token can't list the secrets, say), so health can't be claimed. |
@@ -88,7 +118,8 @@ The same in both outputs.
 | `exitCode` | number | The exit code, 0, 1 or 4. |
 | `lanes` | array | The lanes the repository calls that the checked release ships, by file name without `.yml`. |
 | `apps` | array | Each App the lanes run as: `identity` (`author`, `judge`, `releaser`, or a role before plan 0005's L4) and `slug` (the register's, or null). |
-| `findings` | array | What is missing or stale, in the order to fix it. |
+| `findings` | array | What is missing or stale, in the order to fix it. A waived finding is not here. |
+| `waived` | array | Each finding the adoption record waives, in the same order: it doesn't count toward the exit code. |
 | `idTokenHolders` | array | Every job of the checkout's workflows that holds `id-token: write`. |
 | `unchecked` | array | Each check that could not run: `check`, `subject` and `reason`. |
 | `notes` | array | Strings: defaults taken and facts that block nothing. |
@@ -113,6 +144,20 @@ When it can't run, or on a usage error with `--json`, the document is `{ "schema
 | `text` | string | What to do, in a sentence. |
 | `commands` | array | Strings: the commands to run, or the lines to add to the file the finding names, in order. Possibly empty. |
 | `url` | string or null | The page to do it on, such as an App's permissions page. |
+
+### A waived finding
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | The finding's id. |
+| `category` | string | Its category. |
+| `blocking` | boolean | Whether it would have blocked, had it not been waived. |
+| `subject` | string | What it is about, as the waiver names it. |
+| `message` | string | What is missing or stale, in a sentence. |
+| `fix` | object | The fix it would have had. |
+| `reason` | string | Why the finding stands: the waiver's parentheses in the adoption record. |
+
+It is the finding, whole, as it would have been listed, with the waiver's reason.
 
 ### An id-token holder
 
@@ -141,7 +186,8 @@ When it can't run, or on a usage error with `--json`, the document is `{ "schema
 | `secret.stale` | `secret` | no | An App secret nothing at the checked release reads. |
 | `declaration.missing` | `declaration` | yes | A project document a lane reads, with no default, is missing. |
 | `declaration.section-missing` | `declaration` | yes | A section with no default is missing, or written more than once. |
-| `declaration.malformed` | `declaration` | yes | An id-token holder's acceptance in the adoption record is malformed. |
+| `declaration.malformed` | `declaration` | yes | An id-token holder's acceptance or a waiver in the adoption record is malformed, or waives a finding that can't be waived. |
+| `waiver.stale` | `declaration` | no | The adoption record waives a finding doctor doesn't report. |
 | `hook.missing` | `declaration` | yes | The project-setup hook, or a hook a lane calls, is missing. |
 | `hook.input-missing` | `declaration` | yes | The project-setup hook does not declare an input the lanes pass it. |
 | `workflow.missing` | `declaration` | yes | A workflow a lane reads by file name is missing. |

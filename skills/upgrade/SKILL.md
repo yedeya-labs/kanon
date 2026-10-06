@@ -48,6 +48,6 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 
 4. **Bump every pin.** Create the branch `kanon/upgrade-<the target>`. Replace the pinned release with the target in every `yedeya-labs/kanon` reference under `.github/`: each `@vX.Y.Z` of a `uses:` line, and each `#vX.Y.Z` of an `npx` line. Change nothing else on those lines. Show the diff.
 
-5. **Fix what it needs.** Hand over to the doctor skill on this branch. Doctor now reads the target as the pinned release, so it lists what is left. Fix the findings there, in order, until it exits 0 or only a person's steps are left.
+5. **Fix what it needs.** Hand over to the doctor skill on this branch. Doctor now reads the target as the pinned release, so it lists what is left. Fix the findings there, in order, until it exits 0 or only a person's steps are left. Never force a fix the repository can't take, such as a `git mv` onto a file name another workflow already holds: the doctor skill offers the person a waiver instead, which they write or accept with its reason. What the record already waives is in `.waived`; say so, and leave it alone.
 
 6. **Open the pull request.** Commit (signed off by the person), push the branch, and `gh pr create` titled `ci(deps): upgrade Kanon to <the target>`. If Dependabot already has a pull request bumping Kanon to the target, say that this one replaces it, link it, and leave it for the person to close. Never merge.

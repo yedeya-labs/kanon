@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { appSecrets, appsCheckFile, callerFile, ciFile, dependabotFile, hookFile, loadRequirements } from '../../cli/callers.mjs';
-import { CATEGORIES, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, kanonPins, readHolderAcceptances, SCHEMA } from '../../cli/doctor.mjs';
+import { CATEGORIES, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { registerRolesOf, rulesetBody } from '../../cli/init.mjs';
 import { laneFiles, laneTree } from './helpers/requirements.js';
 
@@ -174,6 +174,7 @@ describe('kanon doctor on a healthy installation', () => {
     const r = await run(dir, fakeGitHub(), ['--json']);
     expect(r.status, r.out).toBe(EXIT.healthy);
     expect(r.json.findings).toEqual([]);
+    expect(r.json.waived).toEqual([]);
     expect(r.json.status).toBe('healthy');
     expect(r.json.releases).toEqual({ pins: [PINNED], pinned: PINNED, to: null, checked: PINNED });
     expect(r.json.lanes).toEqual([...LANES].sort());
@@ -467,6 +468,136 @@ ${jobPerms}    steps:
   });
 });
 
+// #390: any repository waives a finding it has decided to keep, one bullet per finding id and
+// subject under `## Choices`, with its reason. Doctor knows no repository's special case: the
+// fixtures below are Kanon's (callers that can't take their lane's name, because the lane's own
+// definition holds it) and an ordinary adopter's, and the same rules apply to both.
+describe('kanon doctor and the waivers under ## Choices (#390)', () => {
+  const waive = (id: string, subject: string, reason = 'the lane itself holds that name') => `- **${WAIVER_LABEL}:** \`${id}\` on \`${subject}\` (${reason})\n`;
+  const record = (bullets: string) => healthyFiles()['docs/qa/adoption.md']! + bullets;
+  const definition = 'name: Lane\non:\n  workflow_call:\njobs:\n  run:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./lane.sh\n';
+  /** Kanon's shape: each lane's definition at the lane's file name, and its caller beside it under another. */
+  const laneHost = () => {
+    const files = healthyFiles();
+    for (const lane of LANES) {
+      const short = lane.slice('agent-'.length);
+      files[`.github/workflows/${short}.yml`] = files[`.github/workflows/${lane}.yml`]!;
+      files[`.github/workflows/${lane}.yml`] = definition;
+    }
+    return files;
+  };
+  const misplaced = ['caller.misplaced .github/workflows/code-audit.yml', 'caller.misplaced .github/workflows/review.yml'];
+
+  it('turns each waived caller.misplaced into a waived finding, and the run healthy', async () => {
+    const files = laneHost();
+    const dir = checkout(files);
+    const github = fakeGitHub();
+    const before = await run(dir, github, ['--json']);
+    expect(before.status, before.out).toBe(EXIT.findings);
+    expect(ids(before).sort()).toEqual(misplaced);
+    expect(before.json.waived).toEqual([]);
+
+    put(dir, { 'docs/qa/adoption.md': record(waive('caller.misplaced', '.github/workflows/review.yml') + waive('caller.misplaced', '.github/workflows/code-audit.yml', "agent-code-audit.yml is the lane's definition")) });
+    const after = await run(dir, github, ['--json']);
+    expect(after.status, after.out).toBe(EXIT.healthy);
+    expect(after.json.findings).toEqual([]);
+    const byFile = Object.fromEntries(after.json.waived.map((w: { subject: string; reason: string }) => [w.subject, w.reason]));
+    expect(byFile).toEqual({ '.github/workflows/review.yml': 'the lane itself holds that name', '.github/workflows/code-audit.yml': "agent-code-audit.yml is the lane's definition" });
+    // The waived finding is the finding, whole: what it was, and the fix it would have had.
+    const review = before.json.findings.find((f: { subject: string }) => f.subject === '.github/workflows/review.yml');
+    expect(after.json.waived.find((w: { subject: string }) => w.subject === review.subject)).toEqual({ ...review, reason: 'the lane itself holds that name' });
+
+    const prose = await run(dir, github);
+    expect(prose.status).toBe(EXIT.healthy);
+    expect(prose.out).toContain("Waived under ## Choices in docs/qa/adoption.md, so they don't count:");
+    expect(prose.out).toContain('- [Caller] caller.misplaced, .github/workflows/review.yml: the lane itself holds that name.');
+    expect(prose.out).toContain('Healthy. doctor wrote nothing. 2 finding(s) waived in docs/qa/adoption.md.');
+  });
+
+  it('waives only the finding id and the subject it names (mutations: another path, another id)', async () => {
+    const dir = checkout({ ...laneHost(), 'docs/qa/adoption.md': record(waive('caller.misplaced', '.github/workflows/implement.yml') + waive('caller.name', '.github/workflows/review.yml') + waive('caller.misplaced', '.github/workflows/code-audit.yml')) });
+    const r = await run(dir, fakeGitHub(), ['--json']);
+    expect(r.status, r.out).toBe(EXIT.findings);
+    expect(ids(r)).toEqual(['waiver.stale docs/qa/adoption.md', 'waiver.stale docs/qa/adoption.md', 'caller.misplaced .github/workflows/review.yml']);
+    expect(r.json.waived.map((w: { id: string; subject: string }) => `${w.id} ${w.subject}`)).toEqual(['caller.misplaced .github/workflows/code-audit.yml']);
+    expect(r.json.findings[0].message).toContain('waives caller.misplaced on .github/workflows/implement.yml, but doctor reports no such finding');
+    expect(r.json.findings[1].message).toContain('waives caller.name on .github/workflows/review.yml');
+  });
+
+  it('names a stale waiver, without blocking, once the finding is gone', async () => {
+    const dir = checkout({ ...healthyFiles(), 'docs/qa/adoption.md': record(waive('caller.misplaced', '.github/workflows/review.yml')) });
+    const r = await run(dir, fakeGitHub(), ['--json']);
+    expect(ids(r)).toEqual(['waiver.stale docs/qa/adoption.md']);
+    expect(r.json.findings[0]).toMatchObject({ blocking: false, fix: { text: 'Remove the bullet, so the record says only what is true.' } });
+    expect(r.status, r.out).toBe(EXIT.healthy);
+    expect(r.json.waived).toEqual([]);
+  });
+
+  it("doesn't call a waiver stale when the check that would report its finding could not run", async () => {
+    const dir = checkout({ ...healthyFiles(), 'docs/qa/adoption.md': record(waive('secret.missing', REPO, 'set in the organisation')) });
+    const blind = await run(dir, fakeGitHub({ secrets: null }), ['--json']);
+    expect(blind.status).toBe(EXIT.incomplete);
+    expect(ids(blind)).toEqual([]);
+    expect(blind.json.notes.join('\n')).toContain(`waives secret.missing on ${REPO}, which doctor did not report; the secrets check could not run`);
+    const seeing = await run(dir, fakeGitHub(), ['--json']);
+    expect(ids(seeing)).toEqual(['waiver.stale docs/qa/adoption.md']);
+  });
+
+  it('waives a finding that does not block too, and every finding of that id on that subject', async () => {
+    const github = fakeGitHub({ secrets: new Set() });
+    github.st.labels = new Set();
+    const dir = checkout({ ...healthyFiles(), 'docs/qa/adoption.md': record(waive('label.missing', REPO, 'we keep our own labels') + waive('secret.missing', REPO, 'set in the organisation')) });
+    const r = await run(dir, github, ['--json']);
+    expect(r.json.findings).toEqual([]);
+    expect(r.status, r.out).toBe(EXIT.healthy);
+    const waived = r.json.waived.map((w: { id: string; blocking: boolean }) => `${w.id} ${w.blocking}`);
+    expect(waived.filter((w: string) => w === 'secret.missing true').length).toBeGreaterThan(1);
+    expect(waived).toContain('label.missing false');
+  });
+
+  it('fails a malformed waiver by its line, and one of a finding that cannot be waived, so neither is ignored', async () => {
+    const bad = [
+      `- **${WAIVER_LABEL}:** caller.misplaced on .github/workflows/review.yml\n`,
+      waive('caller.misplaced', '.github/workflows/review.yml', ' '),
+      waive('caller.misplced', '.github/workflows/review.yml'),
+      waive('caller.secrets-inherited', '.github/workflows/review.yml'),
+      waive('caller.misplaced', '.github/workflows/review.yml') + waive('caller.misplaced', '.github/workflows/review.yml', 'again'),
+    ];
+    for (const b of bad) {
+      const dir = checkout({ ...laneHost(), 'docs/qa/adoption.md': record(b) });
+      const r = await run(dir, fakeGitHub(), ['--json']);
+      expect(r.status, b).toBe(EXIT.findings);
+      expect(r.json.findings.filter((f: { id: string }) => f.id === 'declaration.malformed'), b).toHaveLength(1);
+      expect(r.json.findings.find((f: { id: string }) => f.id === 'declaration.malformed').message, b).toMatch(/^docs\/qa\/adoption\.md:\d+ /);
+    }
+    const outside = checkout({ ...laneHost(), 'docs/qa/adoption.md': record('') .replace('## People\n', `## People\n\n${waive('caller.misplaced', '.github/workflows/review.yml')}`) });
+    const r = await run(outside, fakeGitHub(), ['--json']);
+    expect(ids(r).sort()).toEqual([...misplaced, 'declaration.malformed docs/qa/adoption.md']);
+  });
+
+  it('keeps the id-token holder its own form: a general waiver of one is malformed, and the holder stays unaccepted', async () => {
+    const files = healthyFiles();
+    files['.github/workflows/deploy.yml'] = 'on: push\njobs:\n  d:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: x\n';
+    const dir = checkout({ ...files, 'docs/qa/adoption.md': record(waive('id-token.unaccepted', '.github/workflows/deploy.yml#d')) });
+    const r = await run(dir, fakeGitHub(), ['--json']);
+    expect(ids(r)).toEqual(['declaration.malformed docs/qa/adoption.md', 'id-token.unaccepted .github/workflows/deploy.yml#d']);
+    expect(r.json.findings[0].message).toContain(HOLDER_LABEL);
+    expect(r.json.waived).toEqual([]);
+  });
+
+  it("leaves an ordinary adopter's findings exactly as they were", async () => {
+    const files = healthyFiles();
+    files['docs/qa/stack.md'] = '# Stack\n';
+    const dir = checkout(files);
+    const github = fakeGitHub();
+    github.st.labels = new Set();
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['declaration.section-missing docs/qa/stack.md', `label.missing ${REPO}`]);
+    expect(r.json.waived).toEqual([]);
+    expect(r.status).toBe(EXIT.findings);
+  });
+});
+
 describe('the readers doctor is built from', () => {
   it('counts an id-token grant as the guard does', () => {
     expect(idTokenGrant({}, { permissions: { 'id-token': 'write' } })).toEqual({ from: 'job', how: 'id-token' });
@@ -489,6 +620,25 @@ describe('the readers doctor is built from', () => {
     expect(readHolderAcceptances(`${ok}- **${HOLDER_LABEL}:** \`d.yml\` job \`j\` (again)\n`).errors[0]).toContain('a second time');
     expect(readHolderAcceptances(`## Choices\n\n- **${HOLDER_LABEL}:** \`d.yml\` job \`j\` ()\n`).errors).toHaveLength(1);
     expect(readHolderAcceptances(`## Choices\n\n\`\`\`\n- **${HOLDER_LABEL}:** nonsense\n\`\`\`\n`)).toEqual({ accepted: new Map(), errors: [] });
+  });
+
+  it('reads a waiver only under ## Choices, outside fences, of a finding doctor reports and may waive, once each', () => {
+    const line = (id: string, subject = 'a.yml', why = '(why)') => `- **${WAIVER_LABEL}:** \`${id}\` on \`${subject}\` ${why}\n`;
+    const ok = `## Choices\n\n${line('caller.misplaced')}`;
+    expect(readWaivers(ok)).toEqual({ waivers: [{ id: 'caller.misplaced', subject: 'a.yml', reason: 'why', line: 3 }], errors: [] });
+    expect(readWaivers(`${ok}${line('caller.misplaced', 'b.yml')}${line('caller.name')}`).waivers).toHaveLength(3);
+    expect(readWaivers(`## People\n\n${line('caller.misplaced')}`).errors[0]).toContain('outside `## Choices`');
+    expect(readWaivers(`${ok}${line('caller.misplaced', 'a.yml', '(again)')}`).errors[0]).toContain('a second time');
+    expect(readWaivers(`## Choices\n\n${line('caller.misplaced', 'a.yml', '()')}`).errors).toHaveLength(1);
+    expect(readWaivers(`## Choices\n\n${line('caller.misplaced', 'a.yml', '')}`).errors).toHaveLength(1);
+    expect(readWaivers(`## Choices\n\n${line('caller.misplaced', ' ')}`).errors).toHaveLength(1);
+    expect(readWaivers(`## Choices\n\n${line('caller.nope')}`).errors[0]).toContain('no finding doctor reports');
+    expect(readWaivers(`## Choices\n\n* **${WAIVER_LABEL.toLowerCase()}:** whatever\n`).errors).toHaveLength(1);
+    expect(readWaivers(`## Choices\n\n\`\`\`\n${line('caller.misplaced')}\`\`\`\n`)).toEqual({ waivers: [], errors: [] });
+    for (const id of Object.keys(UNWAIVABLE)) {
+      expect(FINDINGS[id], id).toBeDefined();
+      expect(readWaivers(`## Choices\n\n${line(id)}`).errors[0], id).toContain("can't be waived");
+    }
   });
 });
 
@@ -541,6 +691,14 @@ describe('the JSON contract (ADR 0014, docs/doctor.md)', () => {
     expect(Object.keys(r.json.findings[0]).sort()).toEqual(documented('A finding'));
     expect(Object.keys(r.json.findings[0].fix).sort()).toEqual(documented('A fix'));
     expect(Object.keys(r.json.idTokenHolders[0]).sort()).toEqual(documented('An id-token holder'));
+    put(dir, { 'docs/qa/adoption.md': files['docs/qa/adoption.md'] + `- **${WAIVER_LABEL}:** \`caller.misplaced\` on \`.github/workflows/x.yml\` (why)\n` });
+    const stale = await run(dir, fakeGitHub(), ['--json']);
+    expect(stale.json.findings.map((f: { id: string }) => f.id)).toContain('waiver.stale');
+    const github = fakeGitHub();
+    github.st.labels = new Set();
+    put(dir, { 'docs/qa/adoption.md': files['docs/qa/adoption.md'] + `- **${WAIVER_LABEL}:** \`label.missing\` on \`${REPO}\` (why)\n` });
+    const waived = await run(dir, github, ['--json']);
+    expect(Object.keys(waived.json.waived[0]).sort()).toEqual(documented('A waived finding'));
     expect(doc).toContain(`\`${SCHEMA}\``);
   });
 
@@ -548,6 +706,12 @@ describe('the JSON contract (ADR 0014, docs/doctor.md)', () => {
     const rows = [...doc.matchAll(/^\| `([a-z-]+\.[a-z-]+)` \| `([a-z-]+)` \| (yes|no) \|/gm)].map((m) => [m[1], { category: m[2], blocking: m[3] === 'yes' }]);
     expect(Object.fromEntries(rows)).toEqual(FINDINGS);
     for (const f of Object.values(FINDINGS)) expect(CATEGORIES).toContain(f.category);
+  });
+
+  it('documents every finding id no waiver waives, and nothing else', () => {
+    const section = doc.split('### What can\'t be waived')[1]!.split('\n## ')[0]!;
+    const listed = [...new Set([...section.matchAll(/`([a-z-]+\.[a-z-]+)`/g)].map((m) => m[1]))].sort();
+    expect(listed).toEqual(Object.keys(UNWAIVABLE).sort());
   });
 
   it('documents every exit code', () => {
