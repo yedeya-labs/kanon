@@ -131,6 +131,35 @@ type Value = string | number | boolean | null | unknown[] | Record<string, unkno
 const truthy = (v: unknown) => !(v === '' || v === 0 || v === false || v === null || v === undefined);
 const loose = (v: unknown) => (typeof v === 'string' ? v.toLowerCase() : v);
 
+/**
+ * A value as GitHub's expression comparison coerces it to a number when the two sides' types
+ * differ (kanon#238): `null` is 0, a boolean 0 or 1, a string its JSON number or NaN, the empty
+ * string 0, and an array or object NaN.
+ */
+const asNumber = (v: unknown): number => {
+  if (v === null || v === undefined) return 0;
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (t === '') return 0;
+    return /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(t) ? Number(t) : NaN;
+  }
+  return NaN;
+};
+
+/**
+ * GitHub's `==`, which is LOOSE (kanon#238): operands of one type compare as themselves
+ * (strings case-insensitively, arrays and objects only as the same instance); operands of
+ * different types are each coerced to a number first, so a refused gate's empty output equals
+ * `0`, `null` and `false`. NaN equals nothing.
+ */
+const equalsLoosely = (l: unknown, r: unknown): boolean => {
+  const kind = (v: unknown) => (v === null || v === undefined ? 'null' : typeof v);
+  if (kind(l) === kind(r)) return kind(l) === 'null' || l === r;
+  return asNumber(l) === asNumber(r);
+};
+
 /** A job the condition reads, in one world. */
 export type NeedWorld = { result: string; outputs: Record<string, string> };
 
@@ -248,8 +277,8 @@ const evaluate = (n: Node, world: Record<string, NeedWorld>, assigned: Map<Node,
         const l = loose(value(m.left));
         const r = loose(value(m.right));
         switch (m.op) {
-          case '==': return l === r;
-          case '!=': return l !== r;
+          case '==': return equalsLoosely(l, r);
+          case '!=': return !equalsLoosely(l, r);
           case '<': return Number(l) < Number(r);
           case '<=': return Number(l) <= Number(r);
           case '>': return Number(l) > Number(r);
