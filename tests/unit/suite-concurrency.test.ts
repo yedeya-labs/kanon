@@ -25,6 +25,11 @@ import { describe, expect, it } from 'vitest';
  * relative literal, which is a path under the working directory and so under one tree or the
  * other. There is no exemption list: a test that needs one argues for it by editing this guard.
  *
+ * One shape is argued for here: a write on a line that a `process.env.KANON_WRITE_<NAME>` check
+ * gates, before the call. That is a regenerate step a person runs on one file on purpose
+ * (`tests/unit/requirements.test.ts`); the suite never sets the variable, so it never runs
+ * beside another file's walk.
+ *
  * Its limits. It reads the source as text, so a write NAMED in a comment or a string reads as a
  * write — this file's own fixtures are built from pieces for that reason — and it sees no write a
  * spawned process makes: a script this suite runs with Kanon's root as its working directory is
@@ -92,6 +97,9 @@ const argsAt = (src: string, open: number): string[] => {
  */
 const RELATIVE_LITERAL = /^['"`](?!\/)(?![^'"`]*\$\{)/;
 
+/** A regenerate step a person opts into: the suite never sets a `KANON_WRITE_` variable. */
+const OPT_IN = /\bprocess\.env\.KANON_WRITE_[A-Z_]+\b/;
+
 /** Every write in `src` whose destination is a path inside Kanon's tree, as `<line>: <call>`. */
 const writes = (src: string): string[] => {
   const rooted = rootedNames(src);
@@ -104,6 +112,8 @@ const writes = (src: string): string[] => {
       const inTree = ROOTED.test(expr) || RELATIVE_LITERAL.test(expr)
         || rooted.some((n) => new RegExp(`\\b${n}\\b`).test(expr));
       if (!inTree) continue;
+      const lineStart = src.lastIndexOf('\n', m.index) + 1;
+      if (OPT_IN.test(src.slice(lineStart, m.index))) continue;
       hits.push(`${src.slice(0, m.index).split('\n').length}: ${fn}(${expr})`);
     }
   }
@@ -143,6 +153,14 @@ describe('the scan reads a destination, not a source', () => {
     // Which is Kanon's root, or the fixture adopter the library tests run in.
     expect(writes(line(`${W}('docs/qa/stack.md', text);`))).toEqual([`2: ${W}('docs/qa/stack.md')`]);
     expect(writes(line('mkdirSync(`${dir}/a`, { recursive: true });'))).toEqual([]);
+  });
+
+  it('allows an opt-in regenerate gated by KANON_WRITE_ on the same line, and nothing else gated', () => {
+    expect(writes(line(`if (process.env.KANON_WRITE_X) ${W}(join(${R}, 'x.json'), t);`))).toEqual([]);
+    expect(writes(line(`if (process.env.CI) ${W}(join(${R}, 'x.json'), t);`)))
+      .toEqual([`2: ${W}(join(${R}, 'x.json'))`]);
+    expect(writes(line(`${W}(join(${R}, 'x.json'), t); // process.env.KANON_WRITE_X`)))
+      .toEqual([`2: ${W}(join(${R}, 'x.json'))`]);
   });
 
   it('allows a write into a temporary directory, and a read from the source tree', () => {
