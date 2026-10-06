@@ -24,7 +24,10 @@
 //
 // SCRIPTABLE (ADR 0014 decision 2). Every question has a flag that answers it, and `--yes` takes
 // the default of each question no flag answers, so a program can run `init` with no terminal
-// (#367).
+// (#367). `--json` prints one JSON document on standard output, `kanon-init/v1` (docs/init.md,
+// following docs/cli-json.md's convention), and moves the prose to standard error: the same run,
+// the same exit code, read by the agent skills of plan 0005's L11 (#365). Its shape is a promise
+// each release keeps: a change to it is a breaking change.
 //
 // THE APPS. Which Apps a lane runs as is read from the secrets it declares, through the
 // requirements file (`<NAME>_APP_ID` names the identity). Since plan 0005's L4 those are the
@@ -85,6 +88,8 @@ Options:
   --dir <path>           the checkout (default: here)
   --yes                  take the default of every question no flag below answers
   --dry-run              read everything, change nothing, print what it would do
+  --json                 print one JSON document (docs/init.md) on standard output and the
+                         prose on standard error; asks nothing, as --yes
   -h, --help             this text
 
 The answers, one flag per question (without --yes, the questions no flag answers are asked):
@@ -127,8 +132,8 @@ which one it uses and whose it is.`;
  *   readFile: (path: string) => string | null,
  *   writeFile: (path: string, text: string) => void,
  *   ask: (question: string, fallback: string) => Promise<string>,
- *   apps: (argv: string[]) => Promise<number>,
- *   milestones: (argv: string[]) => Promise<number>,
+ *   apps: (argv: string[], io?: { out: (line: string) => void, err: (line: string) => void }) => Promise<number>,
+ *   milestones: (argv: string[], io?: { out: (line: string) => void, err: (line: string) => void }) => Promise<number>,
  *   today: () => string,
  *   requirements: () => Requirements,
  *   release: () => string,
@@ -169,8 +174,8 @@ export const realDeps = {
     const a = (await rl.question(`${question} [${fallback}] `)).trim();
     return a || fallback;
   },
-  apps: (argv) => runApps(argv),
-  milestones: (argv) => runMilestones(argv),
+  apps: (argv, io) => runApps(argv, io),
+  milestones: (argv, io) => runMilestones(argv, io),
   today: () => new Date().toISOString().slice(0, 10),
   requirements: loadRequirements,
   release: kanonRelease,
@@ -203,8 +208,8 @@ export const CONFLICTS = [
  * @param {string[]} argv @param {Requirements} req
  */
 export const parseArgs = (argv, req) => {
-  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, apps: boolean, help: boolean, given: Given }} */
-  const opts = { repo: '', dir: process.cwd(), lanes: null, yes: false, dryRun: false, apps: true, help: false, given: {} };
+  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, json: boolean, apps: boolean, help: boolean, given: Given }} */
+  const opts = { repo: '', dir: process.cwd(), lanes: null, yes: false, dryRun: false, json: false, apps: true, help: false, given: {} };
   const g = opts.given;
   /** @type {Set<string>} */
   const seen = new Set();
@@ -223,6 +228,7 @@ export const parseArgs = (argv, req) => {
     else if (flag === '--lanes') opts.lanes = parseLanes(value(), req);
     else if (flag === '--yes') opts.yes = true;
     else if (flag === '--dry-run') opts.dryRun = true;
+    else if (flag === '--json') opts.json = true;
     else if (flag === '--no-apps') opts.apps = false;
     else if (flag === '--create-apps') g.createApps = true;
     else if (flag === '--owner') g.owner = value();
@@ -250,6 +256,8 @@ export const parseArgs = (argv, req) => {
   for (const [x, y] of CONFLICTS) if (seen.has(x) && seen.has(y)) throw new Error(`${x} and ${y} contradict each other; give one`);
   if (g.delegateName !== undefined || g.delegateEmail !== undefined) g.delegation = true;
   if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
+  // `--json` asks nothing (docs/cli-json.md): each question takes its flag or its default.
+  if (opts.json) opts.yes = true;
   return opts;
 };
 
@@ -727,34 +735,76 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read }) => {
   return files;
 };
 
+/** The JSON output's contract (docs/init.md). A breaking change to it changes this. */
+export const SCHEMA = 'kanon-init/v1';
+
+/**
+ * Something left to a person or a program, in the finding shape every `kanon` command's JSON
+ * shares (docs/cli-json.md).
+ * @typedef {{ id: string, category: string, blocking: boolean, subject: string, message: string, fix: { text: string, commands: string[], url: string | null } }} Finding
+ */
+
+/**
+ * The JSON document `init` prints with `--json` (docs/init.md), filled in as it runs. `error` is
+ * set only when it stopped before inspecting the repository, so nothing changed.
+ * @typedef {{
+ *   repository: string | null,
+ *   token: { source: string, login: string | null } | null,
+ *   dryRun: boolean,
+ *   inspection: Record<string, unknown> | null,
+ *   answers: Record<string, unknown> | null,
+ *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'differs', content: string | null, diff: string[] }>,
+ *   changes: Array<{ kind: string, subject: string, message: string }>,
+ *   apps: { identities: string[], missing: string[], command: string | null, outcome: string, exitCode: number | null } | null,
+ *   findings: Finding[],
+ *   notes: string[],
+ *   failures: string[],
+ *   error: string | null,
+ * }} Report
+ */
+
 /**
  * `kanon init`. Returns the exit code: 0 when it ran (manual steps may remain, and are printed),
- * 1 when something failed, 2 on a usage error.
+ * 1 when something failed, 2 on a usage error. With `--json`, the same exit code, one JSON
+ * document on standard output, and the prose on standard error.
  * @param {string[]} argv @param {Partial<Deps>} [overrides]
  */
 export const init = async (argv, overrides = {}) => {
-  const deps = { ...realDeps, ...overrides };
+  const base = { ...realDeps, ...overrides };
+  // Under `--json` standard output holds the document alone: the prose moves to standard error.
+  const wantsJson = argv.includes('--json');
+  /** @type {Deps} */
+  const deps = wantsJson ? { ...base, out: base.err } : base;
   const { out, err } = deps;
   const req = deps.requirements();
+  /** @type {Report} */
+  const rep = { repository: null, token: null, dryRun: false, inspection: null, answers: null, files: [], changes: [], apps: null, findings: [], notes: [], failures: [], error: null };
+  const emit = (/** @type {number} */ code) => {
+    if (wantsJson) base.out(JSON.stringify(document(rep, code, deps.release()), null, 2));
+    return code;
+  };
   /** @type {ReturnType<typeof parseArgs>} */
   let opts;
   try {
     opts = parseArgs(argv, req);
   } catch (e) {
-    err(`kanon init: ${/** @type {Error} */ (e).message}`);
+    rep.error = /** @type {Error} */ (e).message;
+    err(`kanon init: ${rep.error}`);
     err(USAGE);
-    return 2;
+    return emit(2);
   }
   if (opts.help) {
     out(USAGE);
     return 0;
   }
+  rep.dryRun = opts.dryRun;
   if (!opts.yes && deps.ask === realDeps.ask && !process.stdin.isTTY) {
-    err("kanon init: standard input is not a terminal, so it can't ask; pass --yes to take every default, with a flag for each answer you want to give. Nothing was changed.");
-    return 2;
+    rep.error = "standard input is not a terminal, so it can't ask; pass --yes to take every default, with a flag for each answer you want to give. Nothing was changed.";
+    err(`kanon init: ${rep.error}`);
+    return emit(2);
   }
   try {
-    return await run(deps, opts, req);
+    return emit(await run(deps, opts, req, rep));
   } finally {
     rl?.close();
     rl = null;
@@ -762,49 +812,71 @@ export const init = async (argv, overrides = {}) => {
 };
 
 /**
- * @param {Deps} deps @param {ReturnType<typeof parseArgs>} opts @param {Requirements} req
+ * The JSON document (docs/init.md): the error document when `init` stopped before it inspected
+ * anything, otherwise the whole run. Exported for its test.
+ * @param {Report} rep @param {number} exitCode @param {string} release
  */
-const run = async (deps, opts, req) => {
+export const document = (rep, exitCode, release) => {
+  if (rep.error !== null || rep.inspection === null) return { schema: SCHEMA, kanon: release, status: 'error', exitCode, error: rep.error ?? `exit ${exitCode}` };
+  const status = exitCode !== 0 ? 'failed' : rep.findings.length ? 'steps-left' : 'complete';
+  return {
+    schema: SCHEMA,
+    kanon: release,
+    status,
+    exitCode,
+    repository: rep.repository,
+    token: rep.token,
+    dryRun: rep.dryRun,
+    inspection: rep.inspection,
+    answers: rep.answers,
+    files: rep.files,
+    changes: rep.changes,
+    apps: rep.apps,
+    findings: rep.findings,
+    notes: rep.notes,
+    failures: rep.failures,
+  };
+};
+
+/**
+ * @param {Deps} deps @param {ReturnType<typeof parseArgs>} opts @param {Requirements} req @param {Report} rep
+ */
+const run = async (deps, opts, req, rep) => {
   const { out, err } = deps;
   const dry = opts.dryRun;
   const release = deps.release();
+  /** Stops before anything changed: the prose on standard error, the sentence in the report. */
+  const stop = (/** @type {number} */ code, /** @type {string[]} */ lines) => {
+    for (const l of lines) err(`kanon init: ${l}`);
+    rep.error = lines.join(' ');
+    return code;
+  };
 
   // The checkout, and the repository it is of.
   const top = deps.git(['-C', resolve(opts.dir), 'rev-parse', '--show-toplevel']);
-  if (top.status !== 0) {
-    err(`kanon init: ${resolve(opts.dir)} is not a git checkout. Run it from your repository's checkout, or pass --dir. Nothing was changed.`);
-    return 1;
-  }
+  if (top.status !== 0) return stop(1, [`${resolve(opts.dir)} is not a git checkout. Run it from your repository's checkout, or pass --dir. Nothing was changed.`]);
   let repo = opts.repo;
   if (!repo) {
     const origin = deps.git(['-C', top.stdout.trim(), 'remote', 'get-url', 'origin']);
     repo = (origin.status === 0 && remoteRepo(origin.stdout)) || '';
-    if (!repo) {
-      err(`kanon init: ${top.stdout.trim()} has no origin remote on GitHub; pass --repo <owner>/<repo>. Nothing was changed.`);
-      return 1;
-    }
+    if (!repo) return stop(1, [`${top.stdout.trim()} has no origin remote on GitHub; pass --repo <owner>/<repo>. Nothing was changed.`]);
   }
+  rep.repository = repo;
   const [ownerName = '', repoName = ''] = repo.split('/');
   // checkoutCheck reads git only.
   const where = checkoutCheck(/** @type {import('./apps.mjs').Deps} */ (/** @type {unknown} */ ({ git: deps.git })), opts.dir, ownerName, repoName);
-  if (where.refusal) {
-    for (const l of where.refusal) err(`kanon init: ${l.replace('--register <path> to write the register somewhere else on purpose', '--repo <owner>/<repo> for the checkout\'s own repository')}`);
-    return 1;
-  }
+  if (where.refusal) return stop(1, where.refusal.map((l) => l.replace('--register <path> to write the register somewhere else on purpose', '--repo <owner>/<repo> for the checkout\'s own repository')));
   const root = where.root;
   const read = (/** @type {string} */ rel) => deps.readFile(join(root, rel));
   const releases = callsRelease(read('.github/workflows/release.yml'));
   if (opts.given.releaser && !releases) {
-    err("kanon init: --releaser is for a repository that calls Kanon's release workflow from .github/workflows/release.yml (docs/release.md), and this one doesn't. Nothing was changed.");
-    return 2;
+    return stop(2, ["--releaser is for a repository that calls Kanon's release workflow from .github/workflows/release.yml (docs/release.md), and this one doesn't. Nothing was changed."]);
   }
 
   const who = await whoami(deps.gh, deps.env);
   out(who.line);
-  if (who.refusal) {
-    for (const l of who.refusal) err(`kanon init: ${l}`);
-    return 1;
-  }
+  rep.token = { source: who.source, login: who.login };
+  if (who.refusal) return stop(1, who.refusal);
 
   // 1. Inspect.
   /** @type {Inspection} */
@@ -812,9 +884,28 @@ const run = async (deps, opts, req) => {
   try {
     s = await inspect(deps, repo);
   } catch (e) {
-    err(`kanon init: ${/** @type {Error} */ (e).message}. Nothing was changed.`);
-    return 1;
+    return stop(1, [`${/** @type {Error} */ (e).message}. Nothing was changed.`]);
   }
+  // A lane counts as installed when its caller calls it, not when a file has its name: in
+  // Kanon's own tree that path holds the lane itself.
+  const installed = Object.keys(req.lanes).filter((l) => (read(`.github/workflows/${l}.yml`) ?? '').includes(`uses: yedeya-labs/kanon/.github/workflows/${l}.yml@`));
+  rep.inspection = {
+    owner: s.owner,
+    ownerKind: s.kind === 'User' ? 'user' : 'organization',
+    private: s.isPrivate,
+    defaultBranch: s.defaultBranch,
+    hasCommits: s.hasCommits,
+    admin: s.admin,
+    rulesets: s.rulesets,
+    mergeQueue: s.mergeQueue,
+    defaultBranchRulesets: s.covering.map((c) => String(c.name)),
+    inactiveRulesets: s.inactive.map((c) => ({ name: String(c.name), enforcement: String(c.enforcement) })),
+    labels: [...s.labels].sort(),
+    milestones: [...s.milestones].sort(),
+    secrets: s.secrets ? [...s.secrets].sort() : null,
+    installedLanes: installed,
+    callsRelease: releases,
+  };
   out('');
   out(`== ${repo}, at Kanon ${release}${dry ? ' (dry run: nothing will change)' : ''} ==`);
   out(`- ${s.kind === 'User' ? 'A personal account' : 'An organisation'}'s ${s.isPrivate ? 'private' : 'public'} repository; default branch ${s.defaultBranch}${s.hasCommits ? '' : ', with no commit yet'}.`);
@@ -823,19 +914,49 @@ const run = async (deps, opts, req) => {
   out(`- ${s.labels.size} label(s); ${s.covering.length} ruleset(s) on the default branch; secrets ${s.secrets ? `readable (${s.secrets.size})` : 'not readable with this token'}.`);
 
   // 2. Ask.
-  /** @type {string[]} */
-  // A lane counts as installed when its caller calls it, not when a file has its name: in
-  // Kanon's own tree that path holds the lane itself.
-  const installed = Object.keys(req.lanes).filter((l) => (read(`.github/workflows/${l}.yml`) ?? '').includes(`uses: yedeya-labs/kanon/.github/workflows/${l}.yml@`));
   const gitName = deps.git(['-C', root, 'config', 'user.name']).stdout.trim();
   const gitEmail = deps.git(['-C', root, 'config', 'user.email']).stdout.trim();
   out('');
   const a = await askAll(deps, opts, { login: who.login ?? ownerName, gates: suggestGates(read), gitName, gitEmail, req, defaultLanes: installed.length ? installed : DEFAULT_LANES, releases });
+  rep.answers = {
+    owner: a.owner,
+    maintainer: a.maintainer,
+    stakeholder: a.stakeholder,
+    lanes: a.lanes,
+    gates: a.gates,
+    testDatabase: a.database,
+    delegation: a.delegation,
+    deleteDefaultLabels: a.deleteDefaults,
+    releaser: a.releaser,
+  };
 
   /** @type {string[]} what changed (or, in a dry run, would) */
   const changed = [];
+  /** @param {string} kind @param {string} subject @param {string} message */
+  const change = (kind, subject, message) => {
+    changed.push(message);
+    rep.changes.push({ kind, subject, message });
+  };
   /** @type {string[][]} the steps left to a person, each a few lines */
   const manual = [];
+  /**
+   * A step left to a person: its prose lines, and its finding.
+   * @param {{ id: string, category: string, subject: string, prose: string, message: string, text: string, commands: string[], lines?: string[], url?: string | null, blocking?: boolean }} f
+   */
+  const step = (f) => {
+    manual.push([f.prose, ...(f.lines ?? f.commands)]);
+    rep.findings.push({ id: f.id, category: f.category, blocking: f.blocking ?? false, subject: f.subject, message: f.message, fix: { text: f.text, commands: f.commands, url: f.url ?? null } });
+  };
+  /** A failure, said on standard error and kept in the report. @param {string} line */
+  const failed = (line) => {
+    err(`kanon init: ${line}`);
+    rep.failures.push(line);
+  };
+  /** A fact printed for a person, kept as a note. @param {string} line */
+  const note = (line) => {
+    out(line);
+    rep.notes.push(line);
+  };
   let failures = 0;
   const verb = dry ? 'Would create' : 'Created';
 
@@ -848,27 +969,42 @@ const run = async (deps, opts, req) => {
     const have = read(rel);
     if (have === text) {
       out(`${rel}: already as init writes it.`);
+      rep.files.push({ path: rel, status: 'same', content: null, diff: [] });
       continue;
     }
     if (have !== null && (rel.startsWith('docs/') || rel === req.hook.path)) {
       // A declaration, or the project-setup hook, is the project's once it exists: init never
       // rewrites one, and its content is the project's to say, so no difference is printed.
       out(`${rel}: exists, and is the project's; left unchanged.`);
+      rep.files.push({ path: rel, status: 'kept', content: null, diff: [] });
       continue;
     }
     if (have !== null) {
       out(`${rel}: exists and differs from what init would write; left unchanged. The difference:`);
-      for (const l of lineDiff(have, text)) if (!l.startsWith('  ')) out(`    ${l}`);
+      const diff = lineDiff(have, text).filter((l) => !l.startsWith('  '));
+      for (const l of diff) out(`    ${l}`);
+      rep.files.push({ path: rel, status: 'differs', content: null, diff });
       continue;
     }
     if (!dry) deps.writeFile(join(root, rel), text);
     wrote = true;
-    changed.push(`${verb} ${rel}`);
+    change('file', rel, `${verb} ${rel}`);
+    rep.files.push({ path: rel, status: 'new', content: text, diff: [] });
     out(`${dry ? 'would write' : 'wrote'} ${rel}:`);
     for (const l of text.replace(/\n$/, '').split('\n')) out(`    + ${l}`);
   }
   const dep = read('.github/dependabot.yml');
-  if (dep && !/yedeya-labs\/kanon\*/.test(dep)) manual.push(['Add the entry that proposes Kanon upgrades (K-ADOPT-11) under `updates:` in .github/dependabot.yml:', ...DEPENDABOT_ENTRY]);
+  if (dep && !/yedeya-labs\/kanon\*/.test(dep)) {
+    step({
+      id: 'dependabot.kanon-entry',
+      category: 'dependabot',
+      subject: '.github/dependabot.yml',
+      prose: 'Add the entry that proposes Kanon upgrades (K-ADOPT-11) under `updates:` in .github/dependabot.yml:',
+      message: '.github/dependabot.yml has no entry that proposes Kanon upgrades (K-ADOPT-11).',
+      text: 'Add these lines under `updates:` in .github/dependabot.yml.',
+      commands: [...DEPENDABOT_ENTRY],
+    });
+  }
 
   // 4. Labels, milestones, the merge setting and the ruleset.
   out('');
@@ -882,71 +1018,123 @@ const run = async (deps, opts, req) => {
   for (const l of missingLabels) {
     const cmd = ['label', 'create', l.name, '--color', l.color, '--description', l.description, '-R', repo];
     if (dry) {
-      changed.push(`Would create the label ${l.name}`);
+      change('label', l.name, `Would create the label ${l.name}`);
       continue;
     }
     const r = await deps.gh(cmd);
-    if (r.status === 0) changed.push(`Created the label ${l.name}`);
+    if (r.status === 0) change('label', l.name, `Created the label ${l.name}`);
     else labelSteps.push(`gh ${cmd.map((c) => (/^[\w:./-]+$/.test(c) ? c : JSON.stringify(c))).join(' ')}`);
   }
   out(missingLabels.length ? `${dry ? 'Would create' : 'Created'} ${missingLabels.length - labelSteps.length} of the ${missingLabels.length} missing taxonomy label(s).` : `All ${taxonomy.length} taxonomy labels exist.`);
-  if (labelSteps.length) manual.push(['Create the labels the token could not (it needs Issues: write):', ...labelSteps]);
+  if (labelSteps.length) {
+    step({
+      id: 'label.create',
+      category: 'label',
+      subject: repo,
+      prose: 'Create the labels the token could not (it needs Issues: write):',
+      message: `${labelSteps.length} of the taxonomy's labels are missing, and the token could not create them (it needs Issues: write).`,
+      text: 'Create them with a token that has Issues: write.',
+      commands: labelSteps,
+    });
+  }
   const extra = GITHUB_DEFAULT_LABELS.filter((n) => s.labels.has(n) && !taxonomy.some((l) => l.name === n));
   if (extra.length) {
     if (a.deleteDefaults && !dry) {
       for (const n of extra) {
         const r = await deps.gh(['label', 'delete', n, '--yes', '-R', repo]);
-        if (r.status === 0) changed.push(`Deleted GitHub's default label ${n}`);
-        else manual.push([`Delete GitHub's default label "${n}" (K-WORK-12): gh label delete ${JSON.stringify(n)} --yes -R ${repo}`]);
+        if (r.status === 0) change('label-deleted', n, `Deleted GitHub's default label ${n}`);
+        else {
+          const cmd = `gh label delete ${JSON.stringify(n)} --yes -R ${repo}`;
+          step({ id: 'label.delete-default', category: 'label', subject: n, prose: `Delete GitHub's default label "${n}" (K-WORK-12): ${cmd}`, message: `GitHub's default label "${n}" is outside Kanon's taxonomy, and the token could not delete it.`, text: 'Delete it with a token that has Issues: write (K-WORK-12).', commands: [cmd], lines: [] });
+        }
       }
-    } else if (a.deleteDefaults) changed.push(...extra.map((n) => `Would delete GitHub's default label ${n}`));
-    else out(`Kept GitHub's default labels outside the taxonomy, as asked: ${extra.join(', ')}.`);
+    } else if (a.deleteDefaults) for (const n of extra) change('label-deleted', n, `Would delete GitHub's default label ${n}`);
+    else note(`Kept GitHub's default labels outside the taxonomy, as asked: ${extra.join(', ')}.`);
   }
   const missingBuckets = BUCKETS.filter((b) => !s.milestones.has(b));
   if (!missingBuckets.length) out('Both bucket milestones exist.');
-  else if (dry) changed.push(...missingBuckets.map((b) => `Would create the milestone ${b}`));
+  else if (dry) for (const b of missingBuckets) change('milestone', b, `Would create the milestone ${b}`);
   else {
-    const code = await deps.milestones(['--repo', repo]);
-    if (code === 0) changed.push(...missingBuckets.map((b) => `Created the milestone ${b}`));
-    else manual.push([`Create the bucket milestones (K-WORK-4): kanon milestones --repo ${repo}`]);
+    const code = await deps.milestones(['--repo', repo], { out, err });
+    if (code === 0) for (const b of missingBuckets) change('milestone', b, `Created the milestone ${b}`);
+    else {
+      const cmd = `kanon milestones --repo ${repo}`;
+      step({ id: 'milestone.buckets', category: 'milestone', subject: repo, prose: `Create the bucket milestones (K-WORK-4): ${cmd}`, message: `The bucket milestones ${missingBuckets.join(' and ')} are missing (K-WORK-4), and kanon milestones did not create them.`, text: 'Run kanon milestones with a token that has Issues: write.', commands: [cmd], lines: [] });
+    }
   }
 
   out('');
   out('== Merging ==');
   const settingDiff = Object.entries(MERGE_SETTINGS).filter(([k, v]) => /** @type {Record<string, unknown>} */ (s.settings)[k] !== v);
   const patch = ['api', '-X', 'PATCH', `repos/${repo}`, ...settingDiff.flatMap(([k, v]) => [typeof v === 'boolean' ? '-F' : '-f', `${k}=${v}`])];
+  const settingList = settingDiff.map(([k, v]) => `${k}=${v}`).join(', ');
   if (!settingDiff.length) out('Squash merge only, with the PR\'s title and body: already set (K-SHIP-3).');
-  else if (dry) changed.push(`Would set ${settingDiff.map(([k, v]) => `${k}=${v}`).join(', ')} (K-SHIP-3)`);
+  else if (dry) change('merge-settings', repo, `Would set ${settingList} (K-SHIP-3)`);
   else {
     const r = s.admin ? await deps.gh(patch) : null;
-    if (r?.status === 0) changed.push(`Set ${settingDiff.map(([k, v]) => `${k}=${v}`).join(', ')} (K-SHIP-3)`);
-    else manual.push([`Make squash the only merge method, with the PR's title and body as the commit's (K-SHIP-3); it needs Administration: write:`, `gh ${patch.join(' ')}`]);
+    if (r?.status === 0) change('merge-settings', repo, `Set ${settingList} (K-SHIP-3)`);
+    else {
+      step({
+        id: 'merge.settings',
+        category: 'merge',
+        subject: repo,
+        prose: `Make squash the only merge method, with the PR's title and body as the commit's (K-SHIP-3); it needs Administration: write:`,
+        message: `The repository's merge settings differ from K-SHIP-3's (${settingList}), and the token could not change them.`,
+        text: 'Make squash the only merge method, with the PR\'s title and body as the commit\'s, with a token that has Administration: write.',
+        commands: [`gh ${patch.join(' ')}`],
+        url: `https://github.com/${repo}/settings`,
+      });
+    }
   }
 
   const body = rulesetBody(s.mergeQueue === 'yes');
   const rulesetCmd = [`gh api -X POST repos/${repo}/rulesets --input - <<'JSON'`, JSON.stringify(body), 'JSON'];
   if (s.inactive.length && s.rulesets !== 'no') {
-    out(`Not counted: the ruleset(s) ${s.inactive.map((c) => `"${c.name}" (${c.enforcement})`).join(', ')} on ${s.defaultBranch}, which enforce nothing.`);
+    note(`Not counted: the ruleset(s) ${s.inactive.map((c) => `"${c.name}" (${c.enforcement})`).join(', ')} on ${s.defaultBranch}, which enforce nothing.`);
   }
   if (s.rulesets === 'no') {
     out('');
-    out(`THE PLATFORM DOES NOT ENFORCE REVIEW ON ${repo}. A private repository on this plan has no rulesets, so it never leaves bootstrap: every lane runs, and the Merger merges only what the Reviewer approved, but a person can merge past the Reviewer and nothing on GitHub refuses it (K-ADOPT-3, K-ADOPT-6). Making the repository public, or a plan with rulesets, changes that. The adoption record says so.`);
+    note(`THE PLATFORM DOES NOT ENFORCE REVIEW ON ${repo}. A private repository on this plan has no rulesets, so it never leaves bootstrap: every lane runs, and the Merger merges only what the Reviewer approved, but a person can merge past the Reviewer and nothing on GitHub refuses it (K-ADOPT-3, K-ADOPT-6). Making the repository public, or a plan with rulesets, changes that. The adoption record says so.`);
   } else if (s.covering.length) {
     const gaps = rulesetGaps(s.covering);
     if (!gaps.length) out(`The default branch's ruleset has every rule of K-ADOPT-1 step 8.`);
-    else manual.push([`The ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) lacks some of K-ADOPT-1 step 8. In the repository's Settings, Rules, Rulesets:`, ...gaps.map((g) => `  - ${g}`)]);
+    else {
+      const names = s.covering.map((c) => c.name).join(', ');
+      step({
+        id: 'ruleset.gaps',
+        category: 'ruleset',
+        subject: names,
+        prose: `The ruleset on ${s.defaultBranch} (${names}) lacks some of K-ADOPT-1 step 8. In the repository's Settings, Rules, Rulesets:`,
+        lines: gaps.map((x) => `  - ${x}`),
+        message: `The ruleset on ${s.defaultBranch} (${names}) lacks some of K-ADOPT-1 step 8: ${gaps.join('; ')}.`,
+        text: "Add what it lacks in the repository's Settings, Rules, Rulesets; init doesn't change a ruleset it didn't create.",
+        commands: [],
+        url: `https://github.com/${repo}/settings/rules`,
+      });
+    }
   } else if (!s.hasCommits) {
-    manual.push([`Push the first commit straight to ${s.defaultBranch} (K-ADOPT-4), then run kanon init again: it creates the ruleset, which then requires a pull request.`]);
-  } else if (dry) changed.push(`Would create the ruleset "${RULESET_NAME}" on ${s.defaultBranch}, requiring "${LANE_CHECK}"`);
+    const prose = `Push the first commit straight to ${s.defaultBranch} (K-ADOPT-4), then run kanon init again: it creates the ruleset, which then requires a pull request.`;
+    step({ id: 'ruleset.first-commit', category: 'ruleset', subject: s.defaultBranch, prose, message: `${s.defaultBranch} has no commit yet, so init created no ruleset (K-ADOPT-4).`, text: prose, commands: [] });
+  } else if (dry) change('ruleset', s.defaultBranch, `Would create the ruleset "${RULESET_NAME}" on ${s.defaultBranch}, requiring "${LANE_CHECK}"`);
   else {
     const r = s.admin ? await deps.gh(['api', '-X', 'POST', `repos/${repo}/rulesets`, '--input', '-'], JSON.stringify(body)) : null;
-    if (r?.status === 0) changed.push(`Created the ruleset "${RULESET_NAME}" on ${s.defaultBranch}, requiring "${LANE_CHECK}"${s.mergeQueue === 'yes' ? ', with the merge queue' : ''}`);
-    else manual.push([`Create the default branch's ruleset (K-ADOPT-1 step 8); it needs Administration: write:`, ...rulesetCmd]);
+    if (r?.status === 0) change('ruleset', s.defaultBranch, `Created the ruleset "${RULESET_NAME}" on ${s.defaultBranch}, requiring "${LANE_CHECK}"${s.mergeQueue === 'yes' ? ', with the merge queue' : ''}`);
+    else {
+      step({
+        id: 'ruleset.create',
+        category: 'ruleset',
+        subject: s.defaultBranch,
+        prose: `Create the default branch's ruleset (K-ADOPT-1 step 8); it needs Administration: write:`,
+        message: `${s.defaultBranch} has no ruleset, and the token could not create one (K-ADOPT-1 step 8).`,
+        text: 'Create it with a token that has Administration: write; the command reads the ruleset from the lines after it.',
+        commands: rulesetCmd,
+      });
+    }
   }
-  if (s.rulesets !== 'no' && s.mergeQueue === 'unknown') out('Merge queue not known: the token can\'t read the organisation\'s plan. Without one, "require branches to be up to date" stays off (K-MERGE-7).');
-  else if (s.rulesets !== 'no' && s.mergeQueue !== 'yes') out('No merge queue on this plan: "require branches to be up to date" stays off (K-MERGE-7).');
+  if (s.rulesets !== 'no' && s.mergeQueue === 'unknown') note('Merge queue not known: the token can\'t read the organisation\'s plan. Without one, "require branches to be up to date" stays off (K-MERGE-7).');
+  else if (s.rulesets !== 'no' && s.mergeQueue !== 'yes') note('No merge queue on this plan: "require branches to be up to date" stays off (K-MERGE-7).');
 
-  // 5. The Apps.
+  // 5. The Apps. Under `--json`, `kanon apps` prints its prose on standard error too.
   out('');
   out('== Apps ==');
   const identities = appIdentities(a, req);
@@ -956,35 +1144,66 @@ const run = async (deps, opts, req) => {
   try {
     missing = identities.filter((i) => registerRolesOf(i, req).some((r) => !rows.has(r)));
   } catch (e) {
-    err(`kanon init: ${/** @type {Error} */ (e).message}`);
+    failed(/** @type {Error} */ (e).message);
     failures++;
   }
+  rep.apps = { identities, missing, command: null, outcome: failures ? 'failed' : 'none', exitCode: null };
+  const appsRep = rep.apps;
   if (!identities.length) out('The chosen lanes run as no App.');
-  else if (!missing.length) out(`The App register lists every App the lanes run as: ${identities.join(', ')}.`);
-  else {
+  else if (!missing.length) {
+    if (!failures) appsRep.outcome = 'registered';
+    out(`The App register lists every App the lanes run as: ${identities.join(', ')}.`);
+  } else {
     /** @type {string[]} */
     let flag;
     try {
       flag = appsArgs(missing, req);
     } catch (e) {
-      err(`kanon init: ${/** @type {Error} */ (e).message}`);
+      failed(/** @type {Error} */ (e).message);
+      appsRep.outcome = 'failed';
       return 1;
     }
     const argvApps = ['--owner', s.owner, '--repo', repoName, ...flag, '--dir', root];
     const cmd = `kanon apps ${argvApps.join(' ')}`;
+    appsRep.command = cmd;
+    const createStep = () =>
+      step({
+        id: 'app.create',
+        category: 'app',
+        subject: missing.join(', '),
+        prose: `Create the Apps the lanes run as, from this checkout, and commit the register rows it writes:`,
+        message: `The App register lacks ${missing.join(' and ')}, which the chosen lanes run as.`,
+        text: 'Run kanon apps from this checkout: it opens your browser for each App. Then commit the register rows it writes.',
+        commands: [cmd],
+      });
     if (dry) {
       out(`Would run: ${cmd}`);
-      changed.push(`Would run: ${cmd}`);
-    }
-    else if (!opts.apps || !(opts.given.createApps || /^y/i.test(opts.yes ? 'y' : await deps.ask(`Create the Apps for ${missing.join(', ')} now? It opens your browser for each. (y/n)`, 'y')))) {
-      manual.push([`Create the Apps the lanes run as, from this checkout, and commit the register rows it writes:`, cmd]);
+      change('apps', missing.join(', '), `Would run: ${cmd}`);
+      appsRep.outcome = 'would-run';
+    } else if (!opts.apps || !(opts.given.createApps || /^y/i.test(opts.yes ? 'y' : await deps.ask(`Create the Apps for ${missing.join(', ')} now? It opens your browser for each. (y/n)`, 'y')))) {
+      createStep();
+      appsRep.outcome = 'left-to-you';
     } else {
       out(`Running: ${cmd}`);
-      const code = await deps.apps(argvApps);
-      if (code === 0) changed.push(`Created the App(s) for ${missing.join(', ')} with kanon apps`);
-      else {
+      const code = await deps.apps(argvApps, { out, err });
+      appsRep.exitCode = code;
+      if (code === 0) {
+        change('apps', missing.join(', '), `Created the App(s) for ${missing.join(', ')} with kanon apps`);
+        appsRep.outcome = 'ran';
+      } else {
         failures++;
-        manual.push([`kanon apps did not finish (exit ${code}); fix what it said, then run it again:`, cmd]);
+        appsRep.outcome = 'failed';
+        rep.failures.push(`kanon apps did not finish (exit ${code}).`);
+        step({
+          id: 'app.failed',
+          category: 'app',
+          subject: missing.join(', '),
+          blocking: true,
+          prose: `kanon apps did not finish (exit ${code}); fix what it said, then run it again:`,
+          message: `kanon apps did not finish (exit ${code}), so ${missing.join(' and ')} may not exist yet.`,
+          text: 'Fix what kanon apps said, then run it again.',
+          commands: [cmd],
+        });
       }
     }
   }
@@ -994,14 +1213,42 @@ const run = async (deps, opts, req) => {
       if (lacks.length && !missing.includes(i)) {
         // One App per owner (plan 0005 §3.2): the App exists, so this repository joins it with
         // a key generated on its page, which `kanon apps --reuse` checks, stores and deletes.
-        const slug = registerRolesOf(i, req).map((r) => rows.get(r)).find(Boolean) ?? `<the ${i} App's slug>`;
-        manual.push([`The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}. Add ${repoName} to the App's installation, generate a private key on its settings page, then:`, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${i}:${slug}=<downloaded>.pem`]);
+        const known = registerRolesOf(i, req).map((r) => rows.get(r)).find(Boolean);
+        const slug = known ?? `<the ${i} App's slug>`;
+        step({
+          id: 'app.reuse',
+          category: 'app',
+          subject: i,
+          prose: `The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}. Add ${repoName} to the App's installation, generate a private key on its settings page, then:`,
+          message: `The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}.`,
+          text: `Add ${repoName} to the App's installation, generate a private key on its settings page, then run kanon apps --reuse with the downloaded key.`,
+          commands: [`kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${i}:${slug}=<downloaded>.pem`],
+          url: known ? (s.kind === 'User' ? `https://github.com/settings/apps/${known}` : `https://github.com/organizations/${s.owner}/settings/apps/${known}`) : null,
+        });
       }
     }
     const others = [...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))].filter((n) => !/_APP_(ID|PRIVATE_KEY)$/.test(n) && !s.secrets?.has(n));
-    if (others.includes('CLAUDE_CODE_OAUTH_TOKEN')) manual.push(['Store the token of the Claude subscription the agents run on, made with `claude setup-token` (docs/lanes.md):', `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R ${repo}   # paste it on standard input`]);
-    if (others.includes('DIGEST_WEBHOOK')) manual.push(['Store the chat webhook the digests post to:', `gh secret set DIGEST_WEBHOOK -R ${repo}   # paste it on standard input`]);
-  } else manual.push([`The token can't list ${repo}'s secret names, so init can't say which are missing. Each chosen lane maps: ${[...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))].join(', ')}.`]);
+    const secretsUrl = `https://github.com/${repo}/settings/secrets/actions`;
+    if (others.includes('CLAUDE_CODE_OAUTH_TOKEN')) {
+      const prose = 'Store the token of the Claude subscription the agents run on, made with `claude setup-token` (docs/lanes.md):';
+      step({ id: 'secret.claude-code-oauth-token', category: 'secret', subject: 'CLAUDE_CODE_OAUTH_TOKEN', prose, message: 'The repository lacks CLAUDE_CODE_OAUTH_TOKEN, which the chosen lanes map.', text: prose.replace(/:$/, '.'), commands: [`gh secret set CLAUDE_CODE_OAUTH_TOKEN -R ${repo}   # paste it on standard input`], url: secretsUrl });
+    }
+    if (others.includes('DIGEST_WEBHOOK')) {
+      step({ id: 'secret.digest-webhook', category: 'secret', subject: 'DIGEST_WEBHOOK', prose: 'Store the chat webhook the digests post to:', message: 'The repository lacks DIGEST_WEBHOOK, which the chosen lanes map.', text: 'Store the chat webhook the digests post to.', commands: [`gh secret set DIGEST_WEBHOOK -R ${repo}   # paste it on standard input`], url: secretsUrl });
+    }
+  } else {
+    const all = [...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))];
+    step({
+      id: 'secret.unreadable',
+      category: 'secret',
+      subject: repo,
+      prose: `The token can't list ${repo}'s secret names, so init can't say which are missing. Each chosen lane maps: ${all.join(', ')}.`,
+      message: `The token can't list ${repo}'s secret names, so init can't say which are missing.`,
+      text: `Check that the repository has each secret the chosen lanes map: ${all.join(', ')}.`,
+      commands: [],
+      url: `https://github.com/${repo}/settings/secrets/actions`,
+    });
+  }
 
   // 6. The summary.
   out('');
@@ -1018,7 +1265,7 @@ const run = async (deps, opts, req) => {
   }
   if (wrote) {
     out('');
-    out('init commits nothing: review the files, then commit them on a branch and open a pull request.');
+    note('init commits nothing: review the files, then commit them on a branch and open a pull request.');
   }
   return failures ? 1 : 0;
 };
