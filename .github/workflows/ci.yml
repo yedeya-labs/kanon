@@ -51,7 +51,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - uses: yedeya-labs/kanon/actions/lane-check@v0.29.0
+      - uses: yedeya-labs/kanon/actions/lane-check@v0.30.0
 
   checks:
     name: Lint, type-check and unit tests

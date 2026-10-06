@@ -41,7 +41,7 @@ permissions:
 
 jobs:
   implement:
-    uses: yedeya-labs/kanon/.github/workflows/agent-implement.yml@v0.29.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-implement.yml@v0.30.0
     with:
       issue_number: ${{ inputs.issue_number }}
     secrets:

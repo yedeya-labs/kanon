@@ -43,7 +43,7 @@ permissions:
 
 jobs:
   audit:
-    uses: yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@v0.29.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@v0.30.0
     secrets:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
