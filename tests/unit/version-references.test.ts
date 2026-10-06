@@ -74,7 +74,19 @@ describe('K-ADOPT-11 the version references an adopter copies stay current', () 
   });
 
   it('every file holding a reference is in extra-files, and nothing else is', () => {
-    expect([...extraFiles].sort()).toEqual(withRefs.map((d) => d.file).sort());
+    const markdownFiles = extraFiles.filter((f): f is string => typeof f === 'string');
+    expect(markdownFiles.sort()).toEqual(withRefs.map((d) => d.file).sort());
+  });
+
+  // The skills' plugin (docs/skills.md) carries the release as its own version, which an adopter
+  // installs it at (K-ADOPT-11's "an exact plugin version"). It is JSON, so release-please's
+  // json updater rewrites it, at the one path that holds it; it is the only non-Markdown entry.
+  it("the skills' plugin manifest carries package.json's version, and a release rewrites it", () => {
+    const manifest = JSON.parse(read('.claude-plugin/plugin.json')) as { version?: string };
+    expect(manifest.version).toBe(version);
+    expect(extraFiles.filter((f) => typeof f !== 'string')).toEqual([
+      { type: 'json', path: '.claude-plugin/plugin.json', jsonpath: '$.version' },
+    ]);
   });
 
   it('a release rewrites every reference and nothing else', () => {

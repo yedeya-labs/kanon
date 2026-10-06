@@ -1,0 +1,14 @@
+{
+  "name": "kanon",
+  "owner": {
+    "name": "Yedeya Labs"
+  },
+  "description": "Kanon's own marketplace: the kanon plugin, whose skills install Kanon and keep it healthy.",
+  "plugins": [
+    {
+      "name": "kanon",
+      "source": "./",
+      "description": "The agent-client skills that wrap kanon init and kanon doctor (ADR 0014)."
+    }
+  ]
+}

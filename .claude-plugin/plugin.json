@@ -1,0 +1,11 @@
+{
+  "name": "kanon",
+  "version": "0.28.0",
+  "description": "Install Kanon in a repository, keep it healthy, and move it to a new release, by driving the kanon command's JSON output: adopt, doctor and upgrade.",
+  "author": {
+    "name": "Yedeya Labs"
+  },
+  "homepage": "https://github.com/yedeya-labs/kanon/blob/main/docs/skills.md",
+  "repository": "https://github.com/yedeya-labs/kanon",
+  "license": "Apache-2.0"
+}
