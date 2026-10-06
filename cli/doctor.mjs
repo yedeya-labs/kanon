@@ -23,9 +23,9 @@
 //
 // TWO OUTPUTS, ONE RESULT. The default is prose for a person. `--json` prints one JSON document
 // and nothing else on standard output, whose shape is a versioned contract (`SCHEMA`, and
-// docs/doctor.md): the skills that wrap `kanon init` and `kanon doctor` (ADR 0014, decision 1)
-// and later integrators build on it, so a change to it is a breaking change. The exit code is the
-// same in both modes:
+// docs/doctor.md, following docs/cli-json.md's convention for every command): the skills that
+// wrap `kanon init` and `kanon doctor` (ADR 0014, decision 1) and later integrators build on it,
+// so a change to it is a breaking change. The exit code is the same in both modes:
 //   0  healthy: every check ran and found nothing that blocks
 //   1  findings: at least one blocking finding, an id-token holder neither accepted nor narrowed
 //      included

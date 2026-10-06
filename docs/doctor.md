@@ -56,7 +56,7 @@ The same in both outputs.
 
 ## The JSON output
 
-`--json` prints one JSON document on standard output, and nothing else there. **Its shape is a contract** ([ADR 0014](decisions/0014-adopter-audiences.md), decision 2): the agent skills that wrap `kanon init` and `kanon doctor`, and any integrator, build on it. The contract is versioned by the document's `schema` field, `kanon-doctor/v1`:
+`--json` prints one JSON document on standard output, and nothing else there. **Its shape is a contract** ([ADR 0014](decisions/0014-adopter-audiences.md), decision 2): the agent skills that wrap `kanon init` and `kanon doctor`, and any integrator, build on it. It follows the convention every `kanon` command's JSON shares ([`docs/cli-json.md`](cli-json.md): the opening fields, the error document, the finding's shape), and is versioned by its `schema` field, `kanon-doctor/v1`:
 
 - **Within a version,** fields and finding ids may be added, and a consumer ignores what it doesn't know. Nothing is removed, renamed, retyped or given another meaning.
 - **Anything else is a new version,** `kanon-doctor/v2`, shipped in a breaking release and named in its release notes.
