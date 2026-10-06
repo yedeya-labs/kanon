@@ -11,7 +11,8 @@ import { parse } from 'yaml';
  * two disagree.
  *
  * `kanon init` reads this file at the release it runs from, with Node's built-ins only, so it
- * never parses a lane's YAML itself; `kanon doctor` (step L10) compares two releases' copies.
+ * never parses a lane's YAML itself; `kanon doctor` (step L10) checks an installation against
+ * a release's copy, read at its tag.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a parsed workflow, read field by field
 type Doc = Record<string, any>;
@@ -29,7 +30,7 @@ export const laneFiles = (root: string): string[] =>
     .sort();
 
 /** A lane's file, then every Kanon workflow it calls through `$/`, transitively, as lane-check's `lane_files`. */
-const laneTree = (root: string, file: string, seen = new Set<string>()): string[] => {
+export const laneTree = (root: string, file: string, seen = new Set<string>()): string[] => {
   seen.add(file);
   const text = readFileSync(join(root, '.github/workflows', file), 'utf8');
   const called = [...text.matchAll(/^ *uses: \$\/\.github\/workflows\/([A-Za-z0-9_.-]+\.ya?ml) *$/gm)].map((m) => m[1]!);
@@ -88,9 +89,23 @@ export const buildRequirements = (root: string) => {
       ),
     ),
   ].sort();
+  // Each project document a lane reads (K-LAYOUT-17): whether Kanon ships a baseline a lane reads
+  // in its place when it is missing (plan 0005 §5.2), and the sections it must hold because they
+  // have no default, read from `lane-check` itself so the two can't disagree.
+  const baselines = readdirSync(join(root, 'rulebook/templates/playbooks'));
+  const stackSections = [...readFileSync(join(root, 'actions/lane-check/lane-check.sh'), 'utf8').matchAll(/^ {2}"(## [^|"]+)\|([^"]*)"$/gm)];
+  const declarations = Object.fromEntries(
+    [...new Set(Object.values(lanes).flatMap((l) => (l as { reads: string[] }).reads))].sort().map((d) => [
+      d,
+      {
+        baseline: baselines.includes(d.slice('docs/qa/'.length)),
+        requiredSections: d === 'docs/qa/stack.md' ? stackSections.filter((m) => m[2] === '').map((m) => m[1]!) : [],
+      },
+    ]),
+  );
   return {
     $comment:
-      "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` compares two releases' copies. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets.",
+      "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets.",
     lanes,
     hook: { path: '.github/actions/project-setup/action.yml', inputs: hookInputs },
     identities: {
@@ -98,5 +113,6 @@ export const buildRequirements = (root: string) => {
       apps: Object.fromEntries(Object.entries(permissions.apps as Record<string, Doc>).map(([k, v]) => [k, { name: v.app, roles: v.roles, permissions: v.permissions }])),
     },
     labels: labels.map((l) => l.name),
+    declarations,
   };
 };
