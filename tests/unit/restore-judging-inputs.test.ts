@@ -121,7 +121,10 @@ const PLAYBOOK_BASE = 'BASE: request changes on a data migration. See [the pipel
 
 // --- the guarantee ---------------------------------------------------------
 
-describe('RA-848 — restore-judging-inputs.sh pins the Reviewer’s inputs to the default branch', () => {
+// Each case builds a git repository and runs the script in it (git and bash, several spawns), well
+// under a second alone. Under a loaded full `npm test` a case reached 4.3s against the 5s default
+// (kanon#381), so the block gets 15s.
+describe('RA-848 — restore-judging-inputs.sh pins the Reviewer’s inputs to the default branch', { timeout: 15_000 }, () => {
   it('restores a playbook the PR rewrote, so the Reviewer runs the merged rules', () => {
     const { ok, output } = restore();
     expect(ok, output).toBe(true);
@@ -255,7 +258,8 @@ describe('RA-848 — restore-judging-inputs.sh pins the Reviewer’s inputs to t
  * through it would let the PR choose the destination of a write. These pin both halves: the
  * target is untouched, and the input ends up a regular file.
  */
-describe('RA-859 — restore-judging-inputs.sh never writes or parks through a symlink', () => {
+// As the RA-848 block above: a git repository and the script per case, so 15s (kanon#381).
+describe('RA-859 — restore-judging-inputs.sh never writes or parks through a symlink', { timeout: 15_000 }, () => {
   const VICTIM = 'IMPORTANT SOURCE FILE\n';
   const isLink = (p: string) => lstatSync(join(repo, p)).isSymbolicLink();
 

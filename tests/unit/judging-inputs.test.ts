@@ -231,7 +231,10 @@ const runStep = (pred: (s: WorkflowStep) => boolean, cwd: string, extra: Record<
   return runWorkflowStep(step, { cwd, env: { ...process.env, ...resolve(step.env, extra) } });
 };
 
-describe('a PR editing each input is still reviewed under the default branch’s copy', () => {
+// Each case builds a git repository and runs the review lane's restore and re-check steps in it.
+// Under a loaded full `npm test` these blocks were among the recurring 5s timeouts (kanon#381),
+// so each gets 15s.
+describe('a PR editing each input is still reviewed under the default branch’s copy', { timeout: 15_000 }, () => {
   let work = '';
   let restored: ReturnType<typeof runWorkflowStep>;
   beforeAll(() => {
@@ -274,7 +277,8 @@ describe('a PR editing each input is still reviewed under the default branch’s
   });
 });
 
-describe('the re-check refuses a tree the PR’s code changed after the restore', () => {
+// As the block above: a git repository and two workflow steps per case, so 15s (kanon#381).
+describe('the re-check refuses a tree the PR’s code changed after the restore', { timeout: 15_000 }, () => {
   const tampered = (change: (work: string) => void) => {
     const { work } = fixture();
     const restored = runStep(RESTORE, work);
