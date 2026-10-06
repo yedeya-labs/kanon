@@ -32,6 +32,7 @@ import { parse } from 'yaml';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 import { readRepositorySubject, subjectProblems } from '../../scripts/lib/oidc-subject.mjs';
 import { addMonths, RETENTION_MONTHS } from './function/index.mjs';
+import { ISO_UTC } from '../../actions/agent-telemetry/schema.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const TEMPLATE_PATH = join(HERE, 'template.yaml');
@@ -60,8 +61,6 @@ const READER = /^ref:refs\/heads\/[A-Za-z0-9._/-]+$/;
  */
 export const firstReviewExpired = (firstReview, now) =>
   addMonths(Date.parse(firstReview.review_recorded_at), RETENTION_MONTHS) <= now;
-
-const ISO_SECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
 /**
  * Check the register, and say what's wrong with it without echoing anything but its keys.
@@ -103,7 +102,7 @@ export function registerProblems(register, now = Date.now()) {
     const fr = r?.first_review;
     if (fr !== undefined) {
       if (!fr || typeof fr !== 'object' || !Number.isInteger(fr.minutes) || fr.minutes < 0
-        || typeof fr.review_recorded_at !== 'string' || !ISO_SECONDS.test(fr.review_recorded_at) || Number.isNaN(Date.parse(fr.review_recorded_at))) {
+        || typeof fr.review_recorded_at !== 'string' || !ISO_UTC.test(fr.review_recorded_at) || Number.isNaN(Date.parse(fr.review_recorded_at))) {
         out.push(`${at}.first_review must be { minutes, review_recorded_at }`);
       } else if (firstReviewExpired(fr, now)) {
         out.push(`${at}.first_review is past its ${RETENTION_MONTHS} months (decision 18): remove it`);

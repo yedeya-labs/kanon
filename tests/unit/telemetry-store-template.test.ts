@@ -259,6 +259,9 @@ describe('the register (§5)', () => {
     const now = Date.parse('2027-11-02T12:00:00Z');
     const one = (first_review: unknown) => registerProblems({ ...register, repositories: [{ key: 'k1', repository: 'o/r', readers: ['ref:refs/heads/main'], first_review }] }, now);
     expect(one({ minutes: 95, review_recorded_at: '2026-10-02T12:00:01Z' })).toEqual([]);
+    // A lane-written row's recorded_at has milliseconds, and the runbook says to copy it as it is.
+    expect(one({ minutes: 95, review_recorded_at: '2026-10-02T12:00:00.123Z' })).toEqual([]);
+    expect(one({ minutes: 95, review_recorded_at: '2026-10-02T12:00:00.000Z' })).toEqual(['repositories[0].first_review is past its 13 months (decision 18): remove it']);
     expect(one({ minutes: 95, review_recorded_at: '2026-10-02T12:00:00Z' })).toEqual(['repositories[0].first_review is past its 13 months (decision 18): remove it']);
     expect(one({ minutes: 95, review_recorded_at: '2026-09-01T00:00:00Z' })).toEqual(['repositories[0].first_review is past its 13 months (decision 18): remove it']);
     for (const bad of [{ minutes: -1, review_recorded_at: '2027-01-01T00:00:00Z' }, { minutes: 1.5, review_recorded_at: '2027-01-01T00:00:00Z' }, { minutes: 5 }, { minutes: 5, review_recorded_at: 'yesterday' }, 7]) {

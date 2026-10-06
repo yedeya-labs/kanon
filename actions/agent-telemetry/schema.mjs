@@ -356,7 +356,8 @@ export const STORE_FIELDS = Object.freeze(['pk', 'sk', 'source', 'received_at', 
 
 /** What a field name looks like. Anything else is never echoed. */
 const FIELD_NAME = /^[a-z][a-z0-9_]{0,63}$/;
-const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+/** The `time` type: ISO-8601 UTC, to the second or the millisecond. */
+export const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 
 /**
  * Why one value fails its field, or null. Returns a PROBLEM WORD, never the value.
