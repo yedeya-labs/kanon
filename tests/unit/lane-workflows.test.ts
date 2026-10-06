@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { RETRY_STEPS } from '../../scripts/lib/protocol-spellings.mjs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -159,10 +159,14 @@ describe('every arm passes the flags its run is measured and bounded by', () => 
     expect(arms.filter((a) => !flag(a.args, name)).map((a) => a.file)).toEqual([]);
   });
 
-  it('every arm falls back to claude-opus-5-5, the decided chain for the Opus 5 arms (RA-1880)', () => {
+  // kanon#189: the Opus arms moved to Opus 5.5, and the chain reversed. A fallback equal to
+  // the model is refused by the CLI, and `K-OBS-15` wants a checked-output arm to keep one of
+  // the same tier or cheaper, so each falls back to the model it ran on before (RA-1880's
+  // chain, the other way round).
+  it('every arm runs claude-opus-5-5 and falls back to claude-opus-5 (kanon#189, RA-1880)', () => {
     for (const a of arms) {
-      expect(flag(a.args, '--model'), a.file).toBe('claude-opus-5');
-      expect(flag(a.args, '--fallback-model'), a.file).toBe('claude-opus-5-5');
+      expect(flag(a.args, '--model'), a.file).toBe('claude-opus-5-5');
+      expect(flag(a.args, '--fallback-model'), a.file).toBe('claude-opus-5');
     }
   });
 
@@ -189,6 +193,32 @@ describe('every arm passes the flags its run is measured and bounded by', () => 
     for (const file of DIRECT_LANES) {
       for (const job of Object.values(lane(file).jobs)) expect((job as { 'timeout-minutes'?: number })['timeout-minutes'], file).toEqual(expect.any(Number));
     }
+  });
+});
+
+/**
+ * kanon#189: every Opus lane runs Opus 5.5. The arms above are the spine lanes only; this reads
+ * every workflow Kanon ships, the agent jobs a lane calls included, so a lane added later on the
+ * old model fails here too. Comment lines are dropped first: a comment naming the old model is
+ * history, not a setting. `claude-opus-5` may stay only as a `--fallback-model`.
+ */
+describe('no lane runs claude-opus-5 any more (kanon#189)', () => {
+  const FLAG = /(?:^|\s)--model[\s=]+(\S+)/g;
+  const models = readdirSync(join(process.cwd(), WF)).filter((f) => f.endsWith('.yml')).flatMap((file) => {
+    const code = text(file).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    return [...code.matchAll(FLAG)].map((m) => ({ file, model: (m[1] ?? '').replace(/^["']|["']$/g, '') }));
+  });
+
+  it('reads the --model of every agent workflow, so the check below is not vacuous', () => {
+    expect(models.length).toBeGreaterThanOrEqual(20);
+    expect(models.filter((m) => m.model === 'claude-opus-5-5').map((m) => m.file)).toEqual(expect.arrayContaining([
+      'review-agent-job.yml', 'agent-implement.yml', 'explore-agent-job.yml', 'code-audit-agent-job.yml', 'verify-acs-agent-job.yml',
+    ]));
+  });
+
+  it('names claude-opus-5 as no lane\'s model', () => {
+    // A dated id (`claude-opus-5-20260101`) is the old model too; only the `-5-5` family is new.
+    expect(models.filter((m) => m.model.startsWith('claude-opus-5') && !m.model.startsWith('claude-opus-5-5'))).toEqual([]);
   });
 });
 

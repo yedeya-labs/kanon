@@ -237,11 +237,11 @@ jobs:
             Do NOT edit code. In your final message summarize: tier swept, routes
             passed/failed, signals found, and what you filed or deduped.
           claude_args: |
-            --model claude-opus-5
+            --model claude-opus-5-5
             --effort high
             --max-turns 60
             --max-budget-usd 25
-            --fallback-model claude-opus-5-5
+            --fallback-model claude-opus-5
             --allowedTools Read,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
           # 5-MINUTE PROMPT CACHE, DELIBERATELY (RA-2058). Every run on the reference adopter
@@ -299,11 +299,11 @@ jobs:
           artifacts-filed: ${{ steps.quality.outputs.artifacts_filed }}
           severities: ${{ steps.quality.outputs.severities }}
           claude_args: |
-            --model claude-opus-5
+            --model claude-opus-5-5
             --effort high
             --max-turns 60
             --max-budget-usd 25
-            --fallback-model claude-opus-5-5
+            --fallback-model claude-opus-5
             --allowedTools Read,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
           # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
