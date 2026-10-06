@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
-import { auditCitations, codeSpans, resolvePath, tokensOf, clauseAt, enclosingDeclarations, anchorsFor, coordinatesIn, codeOnly, isOracleSpec, namesIdentifier, topLevelDeclarations, declarationShift, strongNames, BLOCK_MIN, discardedPhrase, gitIgnored } from '../../scripts/citation-guard.mjs';
+import { auditCitations, codeSpans, resolvePath, tokensOf, clauseAt, enclosingDeclarations, anchorsFor, coordinatesIn, codeOnly, isOracleSpec, namesIdentifier, topLevelDeclarations, declarationShift, strongNames, BLOCK_MIN, discardedPhrase, gitIgnored, externalSuspicion, suspectExternalLines } from '../../scripts/citation-guard.mjs';
 import { STATUSES } from '../../scripts/spec-lib.mjs';
 import { ROOT } from './helpers/adopter.js';
 
@@ -1065,6 +1065,117 @@ describe('isExternal: an untracked, git-ignored path, on any stack (#108)', () =
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // kanon#232: a placeholder force-added into an ignored dependency tree is not the
+  // repository's code, so the tree's coordinates stay external.
+  it('keeps a dependency external when a placeholder is force-added into its ignored directory (kanon#232)', () => {
+    const vendor = (p: string) => p.startsWith('vendor/');
+    for (const placeholder of ['vendor/.gitkeep', 'vendor/README.md']) {
+      const r = auditIgnoring(doc('Rack (`vendor/bundle/ruby/3.3.0/gems/rack/lib/rack.rb:12`).'), { [placeholder]: '' }, vendor);
+      expect(r.findings).toEqual([]);
+      expect(r.externalPaths).toEqual({ 'docs/x.md': ['vendor/bundle/ruby/3.3.0/gems/rack/lib/rack.rb'] });
+    }
+  });
+
+  it('with real git: a force-added `vendor/.gitkeep` leaves `vendor/bundle/…` external (kanon#232)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ignored-vendor-'));
+    const cwd = process.cwd();
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      writeFileSync(join(dir, '.gitignore'), 'vendor/\n');
+      mkdirSync(join(dir, 'vendor'), { recursive: true });
+      writeFileSync(join(dir, 'vendor/.gitkeep'), '');
+      execFileSync('git', ['add', '.gitignore'], { cwd: dir });
+      execFileSync('git', ['add', '-f', 'vendor/.gitkeep'], { cwd: dir });
+      process.chdir(dir);
+      const r = auditCitations(['docs/x.md'], () => 'Rack (`vendor/bundle/ruby/3.3.0/gems/rack/lib/rack.rb:12`).', ['docs/x.md', '.gitignore', 'vendor/.gitkeep'], { ignored: gitIgnored() });
+      expect(r.findings).toEqual([]);
+      expect(r.external).toBe(1);
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still judges a typo beside a tracked SOURCE file in the same ignored directory (kanon#120 after kanon#232)', () => {
+    const vendor = (p: string) => p.startsWith('vendor/');
+    const r = auditIgnoring(doc('`a` (`vendor/own/aa.rb:1`).'), { 'vendor/.gitkeep': '', 'vendor/own/a.rb': 'x\n' }, vendor);
+    expect(r.external).toBe(0);
+    expect(r.findings.map((f) => f.problem)).toEqual(['no such file in the repository']);
+  });
+});
+
+/**
+ * kanon#120's residuals, ADVISORY: an external path that looks like a typo is warned about,
+ * never failed. `absent` reads the working tree; `suffix` reads the index.
+ */
+describe('externalSuspicion: an external path that looks like a typo (kanon#120, advisory)', () => {
+  const pythonTemplate = (p: string) => /(^|\/)(lib|build)\//.test(p) || /^(node_modules|\.venv)\//.test(p);
+  const ownLib = { 'src/pkg/lib/a.py': 'def a():\n    pass\n' };
+
+  it('flags a typo cited by suffix under an ignored directory the repository keeps source in', () => {
+    const r = auditIgnoring(doc('`a` (`lib/aa.py:1`), (`pkg/lib/aa.py:1`), dep (`node_modules/x.mjs:3`).'), ownLib, pythonTemplate);
+    expect(r.findings).toEqual([]);
+    expect(r.external).toBe(3);
+    expect(r.suspectExternal).toEqual([
+      { doc: 'docs/x.md', path: 'lib/aa.py', reasons: ['suffix'] },
+      { doc: 'docs/x.md', path: 'pkg/lib/aa.py', reasons: ['suffix'] },
+    ]);
+  });
+
+  it('does not count a placeholder as source for the suffix reason', () => {
+    const r = auditIgnoring(doc('`a` (`lib/aa.py:1`).'), { 'src/pkg/lib/.gitkeep': '' }, pythonTemplate);
+    expect(r.suspectExternal).toEqual([]);
+  });
+
+  it('flags an allow-list top-level typo that is not on disk, and not an installed dependency', () => {
+    const allowList = (p: string) => !p.startsWith('src/') && p !== 'docs/x.md';
+    const installed = (p: string) => p.startsWith('node_modules/');
+    const r = auditCitations(
+      ['docs/x.md'],
+      () => '`a` (`scr/orders/a.ts:4`), dep (`node_modules/y.mjs:2`).',
+      ['docs/x.md', 'src/orders/a.ts'],
+      { ignored: allowList, exists: installed },
+    );
+    expect(r.findings).toEqual([]);
+    expect(r.external).toBe(2);
+    expect(r.suspectExternal).toEqual([{ doc: 'docs/x.md', path: 'scr/orders/a.ts', reasons: ['absent'] }]);
+  });
+
+  it('names a path once per doc, with every reason that applies', () => {
+    expect(externalSuspicion('lib/aa.py', ['src/pkg/lib/a.py'], pythonTemplate, () => false)).toEqual(['absent', 'suffix']);
+    expect(externalSuspicion('node_modules/x.mjs', ['src/pkg/lib/a.py'], pythonTemplate, () => true)).toEqual([]);
+    const r = auditIgnoring(doc('`a` (`lib/aa.py:1`, `lib/aa.py:2`).'), ownLib, pythonTemplate);
+    expect(r.suspectExternal).toHaveLength(1);
+  });
+
+  it('end to end: the CLI prints the advisory for an allow-list typo and still exits 0', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ignored-allow-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      writeFileSync(join(dir, '.gitignore'), '/*\n!/src/\n!/docs/\n!/.gitignore\n');
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      mkdirSync(join(dir, 'docs'), { recursive: true });
+      writeFileSync(join(dir, 'src/a.ts'), 'export const placeOrder = 1;\n');
+      writeFileSync(join(dir, 'docs/x.md'), '`placeOrder` (`src/a.ts:1`); a typo (`scr/a.ts:1`).\n');
+      execFileSync('git', ['add', '.'], { cwd: dir });
+      const out = execFileSync('node', [join(ROOT, 'scripts/citation-guard.mjs')], { cwd: dir, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: '' } });
+      expect(out).toContain('citation-guard (advisory): `scr/a.ts` in docs/x.md was counted as a dependency');
+      expect(out).toContain('1 citation(s) across 1 docs resolve');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('prints one warning per path, as an annotation in CI, and never changes a verdict', () => {
+    const list = [{ doc: 'docs/x.md', path: 'lib/aa.py', reasons: ['absent', 'suffix'] }];
+    const [local] = suspectExternalLines(list, false);
+    expect(local).toMatch(/^citation-guard \(advisory\): `lib\/aa\.py` in docs\/x\.md was counted as a dependency/);
+    expect(local).toContain('not in the working tree');
+    expect(local).toContain('one the repository keeps source files in');
+    expect(suspectExternalLines(list, true)[0]).toMatch(/^::warning::citation-guard \(advisory\)/);
+  });
+
 
 });
 
