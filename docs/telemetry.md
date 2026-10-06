@@ -145,6 +145,8 @@ It exits 1 on any FAIL, and never prints a credential, a row or a response body.
 2. Render, package and deploy, as above.
 3. In the repository, install the collector ([Collect the rows](#collect-the-rows)). It holds `id-token: write` in its collect job alone (`K-OBS-13`), and declares no environment, because an environment replaces the ref in the token's subject and the writer refuses it. Before the deploy, list the repository's default-branch jobs that already hold `id-token: write`, Kanon's QA-store jobs included. Each of them can assume the writer role (below).
 
+**The time from install to first review** (plan 0003, group 9) goes in the entry once the Owner's aggregate script has computed it, as `"first_review": { "minutes": <n>, "review_recorded_at": "<the review row's recorded_at>" }`. It is kept for 13 months after `review_recorded_at`, then removed (plan 0002 decision 18). `render.mjs` refuses a register that still holds one past that date, naming only the entry's index.
+
 A renamed repository fails closed: its `sub` stops matching, the collector turns red, and the register needs the new name. `render.mjs` refuses an entry whose `repository` differs from the name GitHub reports, a rename or a different case, so the next render says so before a deploy.
 
 ## Collect the rows

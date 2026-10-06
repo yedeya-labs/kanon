@@ -254,6 +254,20 @@ describe('the register (§5)', () => {
     expect(registerProblems({ ...register, owner_principal_arn: 'arn:aws:iam::*:role/x' })).not.toEqual([]);
     expect(() => render({ ...register, repositories: [] }, { gh })).toThrow(/register/);
   });
+
+  it('holds the time to first review for 13 months after its review row, and no longer (decision 18)', () => {
+    const now = Date.parse('2027-11-02T12:00:00Z');
+    const one = (first_review: unknown) => registerProblems({ ...register, repositories: [{ key: 'k1', repository: 'o/r', readers: ['ref:refs/heads/main'], first_review }] }, now);
+    expect(one({ minutes: 95, review_recorded_at: '2026-10-02T12:00:01Z' })).toEqual([]);
+    expect(one({ minutes: 95, review_recorded_at: '2026-10-02T12:00:00Z' })).toEqual(['repositories[0].first_review is past its 13 months (decision 18): remove it']);
+    expect(one({ minutes: 95, review_recorded_at: '2026-09-01T00:00:00Z' })).toEqual(['repositories[0].first_review is past its 13 months (decision 18): remove it']);
+    for (const bad of [{ minutes: -1, review_recorded_at: '2027-01-01T00:00:00Z' }, { minutes: 1.5, review_recorded_at: '2027-01-01T00:00:00Z' }, { minutes: 5 }, { minutes: 5, review_recorded_at: 'yesterday' }, 7]) {
+      expect(one(bad)).toEqual(['repositories[0].first_review must be { minutes, review_recorded_at }']);
+    }
+    // An expired value stops the render, and so the deploy.
+    const expired = { ...register, repositories: [{ ...register.repositories[0], first_review: { minutes: 1, review_recorded_at: '2026-09-01T00:00:00Z' } }] };
+    expect(() => render(expired, { gh, now })).toThrow(/first_review is past/);
+  });
 });
 
 describe('the subjects come from GitHub, in the form each repository issues (§3)', () => {
