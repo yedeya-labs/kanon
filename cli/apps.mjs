@@ -14,6 +14,10 @@
 // one App register row per role of the App, its roles sharing its slug (K-LAYOUT-6, §3.4). The
 // Owner clicks Create and Install; the command never creates an App or a key itself (K-AGENT-6).
 //
+// For the Releaser, which alone may bypass the default branch's ruleset (K-MERGE-8), it then
+// adds the App to each repository's ruleset bypass list through the rulesets API, since a
+// manifest can't (#49; `setReleaserBypass`), and prints any other bypass actor to remove.
+//
 // The key GitHub returns at creation is in memory once, so the repositories named at creation
 // get it in the same run. A repository added later uses a key the Owner generates on the App's
 // settings page: `--reuse <app>:<slug>=<key file>` reads it, checks it is that App's, stores
@@ -38,6 +42,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { URL, fileURLToPath } from 'node:url';
 import { writeRegisterRow } from './app-register.mjs';
 import { describeSource, isAuthFailure, tokenFix, tokenSource, whoami } from './gh-token.mjs';
+import { actorName, bypassCommand, readCovering, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 
 export const REGISTER_PATH = 'docs/qa/agent-identities.md';
 const API = 'https://api.github.com';
@@ -67,6 +72,9 @@ named, and writes one App register row per role of the App (plan 0005 §3.4). Yo
 "Create" and "Install" in the browser; the command never creates an App itself.
 Run it from a checkout of one of <login>/<repo>: it refuses anywhere else, before it changes
 anything, and writes that checkout's register. For the other repositories it prints the rows.
+For the Releaser it also adds the App to the bypass list of each repository's default-branch
+ruleset, for pull requests only (K-MERGE-8), when your token can edit the ruleset, and prints
+the step otherwise. It removes no other bypass actor: it prints that step.
 
 Options:
   --owner <login>        the account that owns the Apps: a personal account or an
@@ -594,7 +602,7 @@ const createApp = async ({ owner, pages, repos, key, name, spec, register, deps 
   const diff = writeAppRows({ spec, slug, register, deps });
   out(`6. Wrote the ${spec.app}'s rows (${appRoles(spec).join(', ')}) in ${register}. Commit them:`);
   for (const l of diff) out(`   ${l}`);
-  return { slug, warnings: inst.warnings };
+  return { slug, appId, warnings: inst.warnings };
 };
 
 /**
@@ -630,7 +638,62 @@ const reuseApp = async ({ owner, pages, repos, key, slug, file, spec, register, 
   const diff = writeAppRows({ spec, slug, register, deps });
   out(`5. Wrote the ${spec.app}'s rows in ${register}. Commit them:`);
   for (const l of diff) out(`   ${l}`);
-  return { slug, warnings: inst.warnings };
+  return { slug, appId, warnings: inst.warnings };
+};
+
+/**
+ * THE RELEASER'S BYPASS (`K-MERGE-8`, plan 0005 §3.1, #49). A manifest can't make an App a
+ * ruleset's bypass actor, so once the Releaser exists this adds it to every active ruleset on
+ * each repository's default branch, through a pull request only, when the Owner's token can
+ * edit the ruleset; otherwise it prints the step. It only ADDS: removing another actor's bypass
+ * (an admin role's, typically) is the Owner's step, printed with its command, because release
+ * PRs merge through it until the `dco` check the repository pins exempts the Releaser (#337).
+ * Returns the number of steps left to the Owner.
+ * @param {{ owner: string, repos: string[], slug: string, appId: number, deps: Deps }} a
+ */
+export const setReleaserBypass = async ({ owner, repos, slug, appId, deps }) => {
+  const { out } = deps;
+  let left = 0;
+  out('');
+  out(`== The Releaser's ruleset bypass (K-MERGE-8): the App ${slug}, through pull requests only ==`);
+  for (const repo of repos.map((r) => `${owner}/${r}`)) {
+    const read = await readCovering(deps.gh, repo);
+    if ('unreadable' in read) {
+      left += 1;
+      out(`${repo}: ${read.unreadable}. In its Settings, Rules, Rulesets, add the App ${slug} to the default branch's ruleset's bypass list, "For pull requests only".`);
+      continue;
+    }
+    if (!read.covering.length) {
+      left += 1;
+      out(`${repo}: no active ruleset covers ${read.defaultBranch} yet. When you create it (K-ADOPT-1 step 8; kanon init does), add the App ${slug} to its bypass list, "For pull requests only", and no other actor.`);
+      continue;
+    }
+    const where = releaserBypass(read.covering, appId);
+    for (const s of where.hidden) {
+      left += 1;
+      out(`${repo}: the token can't see the bypass list of the ruleset "${s.name}" (only someone who can edit it can). Add the App ${slug} there, "For pull requests only": ${rulesetUrl(repo, s)}`);
+    }
+    for (const s of where.lacking) {
+      const actors = [...s.bypass_actors, releaserActor(appId)];
+      const r = s.source_type === 'Organization' ? null : await deps.gh(['api', '-X', 'PUT', `repos/${repo}/rulesets/${s.id}`, '--input', '-'], JSON.stringify({ bypass_actors: actors }));
+      if (r?.status === 0) out(`${repo}: added the App ${slug} to the bypass list of the ruleset "${s.name}", for pull requests only.`);
+      else {
+        left += 1;
+        out(`${repo}: could not add the App ${slug} to the bypass list of the ruleset "${s.name}"${r ? ` (${r.stderr.trim() || `exit ${r.status}`})` : ', an organisation ruleset'}. Add it, "For pull requests only", at ${rulesetUrl(repo, s)}${r ? ', or with a token that can administer the repository:' : '.'}`);
+        if (r) for (const l of bypassCommand(repo, s, actors)) out(`   ${l}`);
+      }
+    }
+    const others = where.others;
+    if (others.length) {
+      left += 1;
+      out(`${repo}: ${others.map(({ ruleset, actor }) => `${actorName(actor)} on "${ruleset.name}"`).join(', ')} can bypass the ruleset too. K-MERGE-8 makes the Releaser the only bypass actor. Once your dco caller pins this release or later, so the Releaser's release PR passes it (#337), remove ${others.length > 1 ? 'them' : 'it'}, and merge release PRs through the front door:`);
+      for (const s of [...new Set(others.map((o) => o.ruleset))]) {
+        if (s.source_type === 'Organization') out(`   the organisation ruleset "${s.name}": ${rulesetUrl(repo, s)}`);
+        else for (const l of bypassCommand(repo, s, [releaserActor(appId)])) out(`   ${l}`);
+      }
+    }
+  }
+  return left;
 };
 
 /** The throwaway secret the pre-check sets and deletes. */
@@ -747,20 +810,20 @@ export const apps = async (argv, overrides = {}) => {
   }
 
   let warnings = 0;
-  /** @type {Array<{ spec: AppSpec, slug: string }>} */
+  /** @type {Array<{ spec: AppSpec, slug: string, appId: number }>} */
   const done = [];
   try {
     for (const key of opts.apps) {
       const spec = /** @type {AppSpec} */ (specs[key]);
       const r = await createApp({ owner, pages, repos, key, spec, name: opts.names[key] ?? `${owner}-${key}`.toLowerCase(), register, deps });
       warnings += r.warnings.length;
-      done.push({ spec, slug: r.slug });
+      done.push({ spec, slug: r.slug, appId: r.appId });
     }
     for (const { app: key, slug, file } of opts.reuse) {
       const spec = /** @type {AppSpec} */ (specs[key]);
       const r = await reuseApp({ owner, pages, repos, key, slug, file: resolve(file), spec, register, deps });
       warnings += r.warnings.length;
-      done.push({ spec, slug: r.slug });
+      done.push({ spec, slug: r.slug, appId: r.appId });
     }
   } catch (e) {
     deps.err(`kanon apps: ${/** @type {Error} */ (e).message}`);
@@ -774,9 +837,10 @@ export const apps = async (argv, overrides = {}) => {
     deps.out(`The App register of ${others.map((r) => `${owner}/${r}`).join(', ')} needs these rows too (one per role, ${here ? `as in ${owner}/${here}'s` : 'as written above'}):`);
     for (const { spec, slug } of done) for (const role of appRoles(spec)) deps.out(`  | ${role} | \`${slug}\` | …`);
   }
-  if (done.some(({ spec }) => spec.app === 'Releaser')) {
+  for (const { spec, slug, appId } of done.filter(({ spec }) => spec.app === 'Releaser')) {
+    warnings += await setReleaserBypass({ owner, repos, slug, appId, deps });
     deps.out('');
-    deps.out('The Releaser: map RELEASER_APP_ID and RELEASER_APP_PRIVATE_KEY in the job that calls the release workflow (docs/release.md, "With the Releaser"). Keep your admin bypass until the Releaser is what merges your release PRs (#337).');
+    deps.out(`The ${spec.app}: map RELEASER_APP_ID and RELEASER_APP_PRIVATE_KEY in the job that calls the release workflow (docs/release.md, "With the Releaser"), and commit its register row: the dco check exempts its release commits by that row on your default branch (#337).`);
   }
   deps.out('');
   deps.out(warnings ? `Done, with ${warnings} warning(s) above to act on.` : 'Done.');

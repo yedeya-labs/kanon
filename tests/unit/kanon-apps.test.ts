@@ -75,6 +75,8 @@ type Scenario = {
   deleteStatus?: Record<string, number>;
   /** `--reuse judge:<slug>=<file>` instead of `--apps`: the slug GitHub's `GET /app` answers for the key. */
   reuse?: { slug: string; keySlug?: string; keyText?: string };
+  /** The repository's rulesets, as `gh api` answers them (#49); unset, every such read fails. */
+  rulesets?: { list: Array<{ id: number; target: string }>; full: Record<number, unknown>; putStatus?: number };
 };
 
 let stdout: ReturnType<typeof vi.spyOn>;
@@ -158,6 +160,18 @@ const run = async (s: Scenario = {}): Promise<Run> => {
       if (args[0] === 'api' && args[1] === 'user') return s.user ?? { status: 0, stdout: 'octo\n', stderr: '' };
       if (args[0] === 'api' && args[1] === `users/${ORG}`) return { status: 0, stdout: JSON.stringify({ login: ORG, type: s.kind ?? 'Organization' }), stderr: '' };
       if (args[0] === 'api' && args[1] === `apps/${s.reuse?.slug}`) return { status: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'api' && String(args[1] ?? '').startsWith(`repos/${ORG}/${REPO}`)) {
+        const rs = s.rulesets;
+        if (!rs) return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
+        if (args[1] === `repos/${ORG}/${REPO}`) return { status: 0, stdout: JSON.stringify({ default_branch: 'main' }), stderr: '' };
+        if (String(args[1]).startsWith(`repos/${ORG}/${REPO}/rulesets?`)) return { status: 0, stdout: JSON.stringify(rs.list), stderr: '' };
+        const id = Number(String(args[1]).split('/').pop());
+        if (args.length === 2) return { status: 0, stdout: JSON.stringify(rs.full[id]), stderr: '' };
+      }
+      if (args[0] === 'api' && args[1] === '-X' && args[2] === 'PUT') {
+        const status = s.rulesets?.putStatus ?? 0;
+        return { status, stdout: status ? '' : '{}', stderr: status ? 'gh: Resource not accessible by integration (HTTP 403)' : '' };
+      }
       const by = args[1] === 'set' ? s.setStatus : args[1] === 'delete' ? s.deleteStatus : undefined;
       const status = by?.[args[2] ?? ''] ?? 0;
       return { status, stdout: '', stderr: status ? 'HTTP 403: Resource not accessible' : '' };
@@ -877,5 +891,67 @@ describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);
     expect(r.stdout).toBe(`${slug}\n`);
+  });
+});
+
+describe('the Releaser\'s ruleset bypass (#49, K-MERGE-8)', () => {
+  const ADMIN = { actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'pull_request' };
+  const RELEASER = { actor_id: 4242, actor_type: 'Integration', bypass_mode: 'pull_request' };
+  const ruleset = (bypass?: unknown[]) => ({
+    id: 9, name: 'main', target: 'branch', enforcement: 'active', source_type: 'Repository', source: `${ORG}/${REPO}`,
+    conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } }, rules: [{ type: 'pull_request' }],
+    ...(bypass ? { bypass_actors: bypass } : {}),
+  });
+  const releaser = (rulesets: Scenario['rulesets']) => run({ apps: 'releaser', conversion: { slug: `${ORG}-releaser` }, rulesets });
+  const puts = (r: Run) => r.gh.filter((c) => c.args[1] === '-X' && c.args[2] === 'PUT');
+
+  it('adds the Releaser to the default branch\'s ruleset, for pull requests only, keeping the admin bypass and printing its removal', async () => {
+    const r = await releaser({ list: [{ id: 9, target: 'branch' }], full: { 9: ruleset([ADMIN]) } });
+    expect(r.status, r.output).toBe(0);
+    expect(puts(r).map((c) => c.args)).toEqual([['api', '-X', 'PUT', `repos/${ORG}/${REPO}/rulesets/9`, '--input', '-']]);
+    expect(JSON.parse(puts(r)[0]!.input!)).toEqual({ bypass_actors: [ADMIN, RELEASER] });
+    expect(r.output).toContain(`added the App ${ORG}-releaser to the bypass list of the ruleset "main", for pull requests only`);
+    // The admin's bypass is the Owner's to remove, once the dco check exempts the Releaser.
+    expect(r.output).toContain('the admin role (pull requests only) on "main" can bypass the ruleset too');
+    expect(r.output).toMatch(/Once your dco caller pins this release or later.*#337/);
+    expect(r.output).toContain(`{"bypass_actors":[${JSON.stringify(RELEASER)}]}`);
+    expect(r.output).toContain('Done, with 1 warning(s)');
+  });
+
+  it('changes nothing when the Releaser is already the only bypass actor', async () => {
+    const r = await releaser({ list: [{ id: 9, target: 'branch' }], full: { 9: ruleset([RELEASER]) } });
+    expect(r.status, r.output).toBe(0);
+    expect(puts(r)).toEqual([]);
+    expect(r.output).not.toMatch(/can bypass the ruleset too|could not add/);
+    expect(r.output).toMatch(/Done\.\n/);
+  });
+
+  it('prints the command when the token can\'t edit the ruleset', async () => {
+    const r = await releaser({ list: [{ id: 9, target: 'branch' }], full: { 9: ruleset([]) }, putStatus: 1 });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toContain(`could not add the App ${ORG}-releaser to the bypass list of the ruleset "main" (gh: Resource not accessible by integration (HTTP 403))`);
+    expect(r.output).toContain(`gh api -X PUT repos/${ORG}/${REPO}/rulesets/9 --input - <<'JSON'`);
+  });
+
+  it('says so, and sets nothing, when the token can\'t see the bypass list or the rulesets', async () => {
+    const hidden = await releaser({ list: [{ id: 9, target: 'branch' }], full: { 9: ruleset() } });
+    expect(puts(hidden)).toEqual([]);
+    expect(hidden.output).toContain(`can't see the bypass list of the ruleset "main"`);
+    expect(hidden.output).toContain(`https://github.com/${ORG}/${REPO}/settings/rules/9`);
+    const unread = await releaser(undefined);
+    expect(unread.status).toBe(0);
+    expect(unread.output).toMatch(/could not read acme\/widgets .*add the App acme-releaser to the default branch's ruleset's bypass list/);
+  });
+
+  it('says what to do when no ruleset covers the default branch yet', async () => {
+    const r = await releaser({ list: [], full: {} });
+    expect(r.output).toContain('no active ruleset covers main yet');
+  });
+
+  it('touches no ruleset for the Author or the Judge', async () => {
+    const r = await run({ apps: 'judge', rulesets: { list: [{ id: 9, target: 'branch' }], full: { 9: ruleset([ADMIN]) } } });
+    expect(r.status, r.output).toBe(0);
+    expect(r.gh.filter((c) => String(c.args[1]).includes('rulesets') || c.args[2] === 'PUT')).toEqual([]);
+    expect(r.output).not.toContain('bypass');
   });
 });

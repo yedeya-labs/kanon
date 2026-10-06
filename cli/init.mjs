@@ -59,6 +59,7 @@ import {
   loadRequirements,
 } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
+import { coveringRulesets } from './ruleset-bypass.mjs';
 import { BUCKETS, milestones as runMilestones } from './milestones.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
@@ -478,18 +479,7 @@ export const inspect = async (deps, repo) => {
 
   // The rulesets that cover the default branch, read whole: the list carries no rules. Only an
   // `active` one enforces anything; a `disabled` or `evaluate` one is kept apart and reported.
-  /** @type {any[]} */
-  const covering = [];
-  /** @type {any[]} */
-  const inactive = [];
-  for (const s of rulesetList.filter((x) => x?.target === 'branch')) {
-    const full = await ghJson(deps, ['api', `repos/${repo}/rulesets/${s.id}`]);
-    if (!full.ok) continue;
-    const include = full.json?.conditions?.ref_name?.include ?? [];
-    if (include.some((/** @type {string} */ p) => p === '~DEFAULT_BRANCH' || p === '~ALL' || p === `refs/heads/${defaultBranch}`)) {
-      (full.json?.enforcement === 'active' ? covering : inactive).push(full.json);
-    }
-  }
+  const { covering, inactive } = await coveringRulesets(deps.gh, repo, rulesetList, defaultBranch);
 
   const labels = await ghJson(deps, ['api', '--paginate', '--slurp', `repos/${repo}/labels?per_page=100`]);
   if (!labels.ok) throw new Error(`could not list the labels of ${repo} (${why(labels.r)})`);
@@ -615,8 +605,9 @@ export const askAll = async (deps, opts, ctx) => {
   }
   const deleteDefaults = await yesNo("Delete GitHub's default labels that aren't in Kanon's taxonomy?", false, g.deleteDefaults);
   // THE OPTIONAL RELEASER (plan 0005 §3.1), asked only of a repository that calls Kanon's release
-  // workflow, and no by default: its release PRs fail a required dco check until #337, and the
-  // admin bypass stays until it can merge them (docs/release.md, "With the Releaser"). `init`
+  // workflow, and no by default: moving to it moves the ruleset's bypass too (`kanon apps` adds the
+  // Releaser's; the admin's goes once the pinned dco check exempts the Releaser, #337, #49), and
+  // release PRs then merge through the front door (docs/release.md, "With the Releaser"). `init`
   // refuses `--releaser` for a repository that doesn't call it, before asking anything.
   const releaser = ctx.releases
     ? await yesNo('Create the optional Releaser App, so the release PR runs CI (docs/release.md, "With the Releaser")?', false, g.releaser)
