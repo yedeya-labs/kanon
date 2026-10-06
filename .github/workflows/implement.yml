@@ -6,9 +6,8 @@
 #
 # IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap). Through `$/` an issue's
 # own branch could change the lane that builds it. Dependabot's `kanon` group proposes each
-# release here, except v0.28.0 and later, which it holds back until plan 0005's L5
-# (.github/dependabot.yml, ADR 0011), and `lane-check` (in CI) holds every Kanon reference to
-# one version.
+# release here (.github/dependabot.yml, ADR 0011), and `lane-check` (in CI) holds every Kanon
+# reference to one version.
 #
 # It starts on an `agent:implement` label or a dispatch, from a member only: the lane's first
 # job is its membership gate (K-AGENT-45), and an issue a stranger filed is never built until
@@ -18,7 +17,7 @@
 # issue `agent:implement` until the pin below includes #234: before it, the lane's commits are
 # authored `claude[bot]` with no sign-off and fail `dco`. ADR 0011 lists the remaining steps.
 #
-# The secrets: IMPLEMENTER_APP_ID and IMPLEMENTER_APP_PRIVATE_KEY (the Implementer's App, in
+# The secrets: AUTHOR_APP_ID and AUTHOR_APP_PRIVATE_KEY (the Author App, whose Implementer row is in
 # docs/qa/agent-identities.md) and CLAUDE_CODE_OAUTH_TOKEN, mapped by name, never inherited.
 name: Implement
 
@@ -42,10 +41,10 @@ permissions:
 
 jobs:
   implement:
-    uses: yedeya-labs/kanon/.github/workflows/agent-implement.yml@v0.27.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-implement.yml@v0.29.0
     with:
       issue_number: ${{ inputs.issue_number }}
     secrets:
-      IMPLEMENTER_APP_ID: ${{ secrets.IMPLEMENTER_APP_ID }}
-      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

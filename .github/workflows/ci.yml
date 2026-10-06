@@ -11,6 +11,9 @@
 # never `$/` (ADR 0011, #47): this is a required check, so a PR must not bring the check that
 # passes it. Released lane-check also reads the lanes at that release, which is the version
 # the caller pins, and fails unless every Kanon reference in .github/ names that one version.
+# It is a job of its own, `Lane check`, as the action's README gives it to adopters: that is
+# the status check the `main` ruleset requires (K-ADOPT-1 step 8, which `kanon doctor` checks
+# by name), and the action leaves Kanon's Node on the PATH for the rest of its job.
 #
 # It runs actionlint over .github/ through .github/scripts/actionlint.sh (#77), a pinned,
 # checksum-verified binary behind a shim that reads `$/` as `./`, which actionlint can't parse
@@ -42,13 +45,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lanes:
+    name: Lane check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: yedeya-labs/kanon/actions/lane-check@v0.29.0
+
   checks:
     name: Lint, type-check and unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: yedeya-labs/kanon/actions/lane-check@v0.27.0
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc

@@ -7,15 +7,14 @@
 # lane code would review that same PR, so a PR that weakened the Reviewer would be reviewed
 # by the weakened Reviewer. At the released tag, a change to the lane is first exercised one
 # release later. Dependabot's `kanon` group proposes each new release here, beside the DCO
-# and PR-title checks, except v0.28.0 and later, which it holds back until plan 0005's L5
-# (.github/dependabot.yml, ADR 0011), and `lane-check` (in CI) holds every Kanon reference to
-# one version.
+# and PR-title checks (.github/dependabot.yml, ADR 0011), and `lane-check` (in CI) holds every
+# Kanon reference to one version.
 #
 # Only members' PRs are reviewed (#24, K-AGENT-45): the lane's first step is its membership
 # gate, and this caller passes nothing that reaches it. `pr_number` is the only input, and
 # only someone with write access can dispatch.
 #
-# The secrets: REVIEWER_APP_ID and REVIEWER_APP_PRIVATE_KEY (the `kanon-reviewer` App, in
+# The secrets: JUDGE_APP_ID and JUDGE_APP_PRIVATE_KEY (the Judge App, whose Reviewer row is in
 # docs/qa/agent-identities.md) and CLAUDE_CODE_OAUTH_TOKEN, mapped by name, never inherited.
 name: Review
 
@@ -43,10 +42,10 @@ permissions:
 
 jobs:
   review:
-    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.27.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-review.yml@v0.29.0
     with:
       pr_number: ${{ inputs.pr_number }}
     secrets:
-      REVIEWER_APP_ID: ${{ secrets.REVIEWER_APP_ID }}
-      REVIEWER_APP_PRIVATE_KEY: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+      JUDGE_APP_ID: ${{ secrets.JUDGE_APP_ID }}
+      JUDGE_APP_PRIVATE_KEY: ${{ secrets.JUDGE_APP_PRIVATE_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

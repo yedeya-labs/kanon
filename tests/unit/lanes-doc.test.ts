@@ -155,7 +155,7 @@ describe('K-LAYOUT-17 names every playbook section a lane prompt sends the agent
 });
 
 describe("docs/lanes.md's example callers are ones lane-check passes", () => {
-  // tests/unit/lane-check.test.ts runs lane-check over the fixture callers, so a docs caller
+  // tests/unit/lane-check*.test.ts run lane-check over the fixture callers, so a docs caller
   // equal to its fixture (bar the version) is one an adopter can copy and see go green.
   const unpin = (text: string): unknown => parse(text.replace(/(yedeya-labs\/kanon\/[^@\s]+)@v\d+\.\d+\.\d+/g, '$1@vX'));
   const FIXTURES = ['tests/fixtures/lane-check/adopter/.github/workflows', 'tests/fixtures/lane-check/extra'];
