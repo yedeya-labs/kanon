@@ -104,7 +104,7 @@ This chapter holds the opinions every other chapter is built on: why Kanon has n
 
 **Why.** Permission-denied response bodies were read as data three times, and a negated search that silently returns zero results would have unlocked an interlock.
 
-**Enforced by.** Each gate individually: the merge gate waits when it cannot read run history, the dispatch sweep and the capability interlock refuse on an unreadable read. No general guard.
+**Enforced by.** Each gate individually: the merge gate waits when it cannot read run history or a spec's patch listing, the dispatch sweep and the capability interlock refuse on an unreadable read. No general guard.
 
 **Class.** framework
 
