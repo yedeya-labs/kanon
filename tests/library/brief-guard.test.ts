@@ -915,6 +915,8 @@ Acceptance criteria:
     ['Not in this issue: deciding whether Issue C1B follows this issue.'],
     ['Once Issue C1B lands in the future, a follow-up may extend this.'],
     ['It does not matter if Issue C1B has not landed.'],
+    ["It doesn't block if Issue C1B has not landed."],
+    ['Once Issue C1B lands, the follow-ups can widen it.'],
   ])('lints clean on a denied edge: %s', (prose) => {
     expect(problems(withIssueAProse(prose))).toEqual([]);
   });
@@ -932,6 +934,12 @@ Acceptance criteria:
     ['Not in this issue: widening, or a rewrite\n\nThis starts once Issue C1B lands.'],
     // The clause after the edge is this issue, not a follow-up.
     ['Once Issue C1B lands, this starts.'],
+    // kanon#272: a prohibition conditioned on the predecessor asserts the edge…
+    ["Don't deploy if Issue C1B has not landed."],
+    ['Do not ship if Issue C1B has not yet landed.'],
+    ['Never merge unless Issue C1B has not landed.'],
+    // …and `follow-up` as an adjective names this issue's own work.
+    ['Once Issue C1B lands, the follow-up check runs here and this issue wires it in.'],
   ])('still refuses a real edge beside a negation: %s', (prose) => {
     const found = problems(withIssueAProse(prose)).filter((p) => /does not name Issue C1B/.test(p));
     expect(found, prose).toHaveLength(1);

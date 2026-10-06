@@ -131,6 +131,35 @@ type Value = string | number | boolean | null | unknown[] | Record<string, unkno
 const truthy = (v: unknown) => !(v === '' || v === 0 || v === false || v === null || v === undefined);
 const loose = (v: unknown) => (typeof v === 'string' ? v.toLowerCase() : v);
 
+/**
+ * A value as GitHub's expression comparison coerces it to a number when the two sides' types
+ * differ (kanon#238): `null` is 0, a boolean 0 or 1, a string its JSON number or NaN, the empty
+ * string 0, and an array or object NaN.
+ */
+const asNumber = (v: unknown): number => {
+  if (v === null || v === undefined) return 0;
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (t === '') return 0;
+    return /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(t) ? Number(t) : NaN;
+  }
+  return NaN;
+};
+
+/**
+ * GitHub's `==`, which is LOOSE (kanon#238): operands of one type compare as themselves
+ * (strings case-insensitively, arrays and objects only as the same instance); operands of
+ * different types are each coerced to a number first, so a refused gate's empty output equals
+ * `0`, `null` and `false`. NaN equals nothing.
+ */
+const equalsLoosely = (l: unknown, r: unknown): boolean => {
+  const kind = (v: unknown) => (v === null || v === undefined ? 'null' : typeof v);
+  if (kind(l) === kind(r)) return kind(l) === 'null' || l === r;
+  return asNumber(l) === asNumber(r);
+};
+
 /** A job the condition reads, in one world. */
 export type NeedWorld = { result: string; outputs: Record<string, string> };
 
@@ -248,8 +277,8 @@ const evaluate = (n: Node, world: Record<string, NeedWorld>, assigned: Map<Node,
         const l = loose(value(m.left));
         const r = loose(value(m.right));
         switch (m.op) {
-          case '==': return l === r;
-          case '!=': return l !== r;
+          case '==': return equalsLoosely(l, r);
+          case '!=': return !equalsLoosely(l, r);
           case '<': return Number(l) < Number(r);
           case '<=': return Number(l) <= Number(r);
           case '>': return Number(l) > Number(r);
@@ -333,18 +362,35 @@ export const runsUnadmitted = (
  * A job with no status function tolerates none: it is skipped whenever any ancestor did not
  * succeed. A job with one (`!cancelled()`, `always()`, `failure()`) tolerates each ancestor for
  * which some world exists where that ancestor was skipped or failed and `cond` still holds.
- * Every job's result is free; a skipped job's outputs are empty and any other job's are free.
+ * Each ancestor's result is free, except where GitHub's own rule forbids it (kanon#268): an
+ * ancestor whose `if:` has no status function cannot have run, so cannot have succeeded or
+ * failed, unless every job in ITS `needs` chain succeeded. Worlds that break that are never
+ * produced, so they are not counted. A skipped job's outputs are empty and any other job's are
+ * free.
  *
  * @param cond the job's `if:` (absent = none)
  * @param ancestors every job it transitively needs
+ * @param graph the workflow's jobs, for each ancestor's own `if:` and `needs`
  * @returns each tolerated ancestor, in `ancestors` order, with the results (`skipped`,
  *   `failure`) it is tolerated in
  */
-export const startsDespite = (cond: string | undefined, ancestors: string[]): { job: string; results: string[] }[] => {
+export const startsDespite = (
+  cond: string | undefined,
+  ancestors: string[],
+  graph: Record<string, { needs?: string | string[]; if?: string } | undefined>,
+): { job: string; results: string[] }[] => {
   const tree = treeOf(cond);
   if (tree === null || !usesStatus(tree)) return [];
   const atoms = freeAtoms(tree, new Set(), new Set());
-  const worlds = worldsFor(ancestors, () => ['success', 'skipped', 'failure'].map((result) => ({ result, outputs: {} })));
+  const upstreamOf = (id: string, seen = new Set<string>()): string[] => {
+    for (const n of needsOf(graph[id]?.needs)) if (!seen.has(n)) { seen.add(n); upstreamOf(n, seen); }
+    return [...seen];
+  };
+  // The ancestors GitHub's implicit success() holds to their own chain, with that chain.
+  const implicit = ancestors.flatMap((j) => (hasStatusFunction(graph[j]?.if) ? [] : [{ job: j, chain: upstreamOf(j) }]));
+  const possible = (world: Record<string, NeedWorld>) => implicit.every(({ job, chain }) =>
+    world[job]!.result === 'skipped' || chain.every((a) => (world[a]?.result ?? 'success') === 'success'));
+  const worlds = worldsFor(ancestors, () => ['success', 'skipped', 'failure'].map((result) => ({ result, outputs: {} }))).filter(possible);
   const tolerated = new Set<string>();
   const key = (j: string, world: Record<string, NeedWorld>) => `${j}\0${world[j]!.result}`;
   for (const world of worlds) {

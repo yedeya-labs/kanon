@@ -212,6 +212,20 @@ describe('every lane carries the membership gate (K-AGENT-45)', () => {
       wf.jobs.resolve!.if = "needs.filter.outputs.prs != '[]'";
       expect(gateProblems(wf)).toEqual(['job resolve runs with no gate admitting, when filter success (member=false)']);
     });
+    // kanon#238: GitHub's `==` is loose, so a refused gate's empty output equals `0`, `null`
+    // and `false`, and a condition comparing one to them runs on a refused event.
+    it.each(['0', 'null', 'false'])('a job that compares an empty, refused output to %s', (rhs) => {
+      const wf = lane('agent-triage.yml');
+      wf.jobs['triage-fix']!.if = `needs.filter.outputs.member == 'true' || needs.filter.outputs.count == ${rhs}`;
+      expect(gateProblems(wf)).toEqual(['job triage-fix runs with no gate admitting, when filter success (member=false)']);
+    });
+    it('…but not one comparing it to a value an empty output never equals', () => {
+      const wf = lane('agent-triage.yml');
+      for (const rhs of ['1', 'true', "'0'"]) {
+        wf.jobs['triage-fix']!.if = `needs.filter.outputs.member == 'true' || needs.filter.outputs.count == ${rhs}`;
+        expect(gateProblems(wf), rhs).toEqual([]);
+      }
+    });
     /** The Merger lane with the `merge` job's own gate removed and its later steps ungated. */
     const mergeWithoutItsGate = () => {
       const wf = lane('agent-merge.yml');

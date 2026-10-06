@@ -39,7 +39,7 @@ const silentlySkipped = (wf: Workflow): string[] => {
   return Object.entries(jobs).flatMap(([id, job]) => {
     if (hasStatusFunction(job.if)) return [];
     return needsOf(job).flatMap((b) => {
-      const tolerated = startsDespite(jobs[b]?.if, ancestorsOf(b));
+      const tolerated = startsDespite(jobs[b]?.if, ancestorsOf(b), jobs);
       return tolerated.length === 0 ? [] : [
         `\`${id}\` has no status function in its \`if:\`, so GitHub skips it whenever ${tolerated.map((a) => `\`${a.job}\` ${a.results.map((r) => (r === 'failure' ? 'fails' : 'is skipped')).join(' or ')}`).join(', or ')}, although \`${b}\`, which it needs, runs then (\`${String(jobs[b]!.if).trim()}\`)`,
       ];
@@ -136,6 +136,66 @@ describe('the check, on real lane shapes', () => {
         down: { needs: 'mid' },
       },
     })).toEqual([]);
+  });
+
+  // kanon#268: an ancestor with no status function cannot succeed or fail while one of ITS
+  // ancestors did not succeed, so those worlds are not counted.
+  it('does not count a world GitHub cannot produce: a job between that ran although its own ancestor did not succeed', () => {
+    // `x` has no `if:`, so it succeeds only when `a` did; `b` reads `x`'s success, so a
+    // skipped or failed `a` holds `b` too, and `c` is never silently skipped.
+    expect(silentlySkipped({
+      jobs: {
+        a: { if: "github.event_name == 'schedule'" },
+        x: { needs: 'a' },
+        b: { needs: 'x', if: "!cancelled() && needs.x.result == 'success'" },
+        c: { needs: 'b' },
+      },
+    })).toEqual([]);
+  });
+
+  it('…and holds the job between to its WHOLE chain, grandparents included', () => {
+    // `y` has no `if:`, so a skipped `a` skips it, whatever `x` between them did: `x` has a
+    // status function, so its own result is free here.
+    expect(silentlySkipped({
+      jobs: {
+        a: { if: "github.event_name == 'schedule'" },
+        x: { needs: 'a', if: "!cancelled() && needs.a.result == 'success'" },
+        y: { needs: 'x' },
+        b: { needs: 'y', if: "!cancelled() && needs.y.result == 'success'" },
+        c: { needs: 'b' },
+      },
+    })).toEqual([]);
+  });
+
+  it('…but still counts it when the job between has a status function of its own', () => {
+    const found = silentlySkipped({
+      jobs: {
+        a: { if: "github.event_name == 'schedule'" },
+        x: { needs: 'a', if: '!cancelled()' },
+        b: { needs: 'x', if: "!cancelled() && needs.x.result == 'success'" },
+        c: { needs: 'b' },
+      },
+    });
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatch(/whenever `a` is skipped or fails, although `b`/);
+  });
+
+  it('names only the ancestors that can cause the skip', () => {
+    // The implement lane's tail: `crash-recovery` runs on `failure()`. A skipped `filter` skips
+    // `implement` and `empty-check` too, so nothing failed and `crash-recovery` does not run;
+    // only `implement` or `empty-check` failing is a world where it does.
+    const found = silentlySkipped({
+      jobs: {
+        filter: { if: "github.event_name == 'issues'" },
+        implement: { needs: 'filter', if: "needs.filter.outputs.act == 'true'" },
+        'empty-check': { needs: 'implement', if: "needs.implement.result == 'success'" },
+        'crash-recovery': { needs: ['implement', 'empty-check'], if: 'failure()' },
+        after: { needs: 'crash-recovery' },
+      },
+    });
+    expect(found).toHaveLength(1);
+    expect(found[0]).not.toMatch(/`filter` is skipped/);
+    expect(found[0]).toMatch(/whenever `implement` is skipped or fails, or `filter` fails, or `empty-check` is skipped or fails, although `crash-recovery`/);
   });
 
   it('reads `success()` and `failure()` in the job between transitively', () => {

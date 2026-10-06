@@ -10,8 +10,10 @@ import { describe, expect, it } from 'vitest';
 // What this can decide by reading, and so what it fails on:
 // - a link to an issue, a pull request, a commit or a file on GitHub (`github.com/o/r/issues/n`);
 // - a bare issue reference (`#233`);
-// - a path into the repository's own tests, workflows or scripts (`tests/…`, `.github/…`,
-//   `scripts/…`), or into `docs/` other than the three places a Why may cite.
+// - a path into the repository's own tests, workflows, scripts, CLI or infrastructure
+//   (`tests/…`, `.github/…`, `scripts/…`, `cli/…`, `infra/…`), or into `docs/` other than the
+//   three places a Why may cite. `actions/` is left out on purpose: an action's README is a
+//   contract an adopter reads, so a Why may point at it.
 // What it allows: another rule's id; a rulebook chapter; an ADR (`docs/decisions/`) or a plan
 // (`docs/plans/`), which record Kanon's reasoning rather than an incident; the `docs/qa/`
 // layout every adopter has; and the word "Kanon", since a Why about the framework has to
@@ -20,7 +22,7 @@ import { describe, expect, it } from 'vitest';
 
 const ISSUE_OR_FILE_LINK = /github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull|commit|blob|tree)\//;
 const BARE_ISSUE = /(?<![\w&/])#\d+\b/;
-const OWN_PATH = /(?<![\w-])(?:\.github|tests|scripts)\/[\w./-]+|(?<![\w-])docs\/(?!decisions\/|plans\/|qa\/)[\w./-]+/;
+const OWN_PATH = /(?<![\w-])(?:\.github|tests|scripts|cli|infra)\/[\w./-]+|(?<![\w-])docs\/(?!decisions\/|plans\/|qa\/)[\w./-]+/;
 
 /** The reasons a Why's text names the project's issues or files, one per kind found. */
 const projectReferences = (why: string): string[] =>
@@ -54,6 +56,8 @@ describe('#249 the guard fails a Why that names the project\'s issues or files',
     '**Why.** The workflow `.github/workflows/ci.yml` ran it twice.',
     '**Why.** The script `scripts/lane-gate.mjs` read it wrong.',
     '**Why.** As [the runbook](../docs/runbook.md) records.',
+    '**Why.** The CLI `cli/apps.mjs` read it wrong.',
+    '**Why.** See `infra/telemetry/collector.mjs`.',
   ];
   it.each(MUST_FAIL)('%s', (why) => {
     expect(projectReferences(why)).not.toEqual([]);

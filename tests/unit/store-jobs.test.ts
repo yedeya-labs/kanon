@@ -210,6 +210,37 @@ describe('a store job runs the block and nothing else (kanon#225)', () => {
       .toEqual(['export: a store job runs step 1 (actions/download-artifact@v7), which is neither the qa-store block nor the download of the report it puts']);
   });
 
+  // kanon#229: the download fetches this run's report into the runner's temp directory alone.
+  describe("the download's with: (kanon#229)", () => {
+    const download = (wf: Workflow) => job(wf, 'put').steps!.find((st) => String(st.uses).startsWith('actions/download-artifact@'))!;
+    const red = (p: string) => [`put: a store job's download of the report it puts ${p}; it fetches this run's report into \${{ runner.temp }} alone`];
+    it.each([
+      ['github-token', '${{ secrets.OTHER }}'],
+      ['repository', 'someone/else'],
+      ['run-id', '${{ github.event.workflow_run.id }}'],
+      ['pattern', '*'],
+      ['merge-multiple', true],
+    ])('refuses %s', (key, value) => {
+      expect(mutate((wf) => { download(wf).with![key] = value; })).toEqual(red(`sets '${key}'`));
+    });
+    it.each([
+      '/home/runner/work/_actions/yedeya-labs/kanon/main/actions/qa-store',
+      '${{ github.action_path }}',
+      '${{ runner.temp }}/../_actions',
+      '${{ runner.temp }}',
+      'report',
+    ])('refuses a path outside runner.temp: %s', (path) => {
+      expect(mutate((wf) => { download(wf).with!.path = path; })).toEqual(red(`writes to ${JSON.stringify(path)}, not a directory under \${{ runner.temp }}`));
+    });
+    it('refuses no path, which writes to the workspace, and no name, which fetches every artifact', () => {
+      expect(mutate((wf) => { delete download(wf).with!.path; })).toEqual(red('writes to "the workspace", not a directory under ${{ runner.temp }}'));
+      expect(mutate((wf) => { delete download(wf).with!.name; })).toEqual(red("names no artifact (no 'name')"));
+    });
+    it('allows the fixture\'s shape, spaced either way', () => {
+      expect(mutate((wf) => { download(wf).with!.path = '${{runner.temp}}/kanon-explore'; })).toEqual([]);
+    });
+  });
+
   it('a step may not set env, shell or continue-on-error', () => {
     expect(mutate((wf) => { job(wf, 'export').steps![0]!.env = { NODE_OPTIONS: '--require ./x.js' }; }))
       .toEqual(["export: a store job's step 1 (store) carries 'env'"]);
