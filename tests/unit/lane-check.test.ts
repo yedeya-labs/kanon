@@ -125,6 +125,11 @@ describe.skipIf(!hasYq)('lane-check', { timeout: 20_000 }, () => {
       red((t) => t.edit(TRIAGE, (d) => { job(d).with = { issue_number: '12' }; }), 'a caller only passes its own input through'));
     it('refuses another input\'s value', () =>
       red((t) => t.edit(IMPL, (d) => { job(d).with = { pr_number: '${{ inputs.reset }}', reset: '${{ inputs.reset }}' }; }), 'passes `pr_number: ${{ inputs.reset }}`'));
+    it('refuses the smoke-only `smoke` input, though every lane declares it (kanon#321)', () => {
+      const r = red((t) => t.edit(TRIAGE, (d) => { job(d).with = { issue_number: '${{ inputs.issue_number }}', smoke: '${{ inputs.smoke }}' }; }),
+        "passes `smoke`, which only Kanon's lanes smoke sets");
+      expect(r.out).toContain('docs/lanes.md');
+    });
     it('refuses an input the lane does not declare', () =>
       red((t) => t.edit(TRIAGE, (d) => { job(d).with = { issue_number: '${{ inputs.issue_number }}', bogus: '${{ inputs.bogus }}' }; }), 'passes `bogus`, which the Kanon lane agent-triage does not declare'));
   });

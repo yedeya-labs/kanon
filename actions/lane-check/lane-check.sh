@@ -209,6 +209,13 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
   declared="$(jq -c '.on.workflow_call.inputs // {} | keys' <<<"$lane_doc")"
   while IFS=$'\t' read -r k v; do
     [ -n "$k" ] || continue
+    # `smoke` is declared by every lane, but only Kanon's lanes smoke sets it: any value gives
+    # the run a concurrency group of its own, so a caller passing it would run beside its own
+    # real runs and lose each group's serialisation (kanon#321).
+    if [ "$k" = smoke ]; then
+      fail "$f" "passes \`smoke\`, which only Kanon's lanes smoke sets: any value gives the run a concurrency group of its own, beside your real runs. Remove it (docs/lanes.md, \"Inputs pass through, by name\")"
+      continue
+    fi
     jq -e --arg k "$k" 'index($k) != null' <<<"$declared" >/dev/null \
       || fail "$f" "passes \`$k\`, which the Kanon lane $lane does not declare"
     [[ "$v" =~ ^\$\{\{[[:space:]]*inputs\.${k}[[:space:]]*\}\}$ ]] \
