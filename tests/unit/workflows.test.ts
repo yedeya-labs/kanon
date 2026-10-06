@@ -423,6 +423,8 @@ const BASE_SCRIPT_JUDGES: Record<string, string> = { 'Citation guard': 'citation
 // The Markdown Kanon's citation guard and shift helper read (#388): `docs/`, the rulebook and the
 // READMEs, passed with `--path` as an adopter passes its own. Both workflows pass exactly this.
 const CITED_DOCS = ['docs/**/*.md', 'rulebook/**/*.md', 'README.md', 'actions/*/README.md'];
+// A run with its `--path` globs taken out: what a base-script judge must otherwise equal.
+const withoutPaths = (run: string | undefined) => run?.replace(/ --path (?:'[^']+'|\S+)/g, '');
 const pathArgs = (run: string | undefined) => [...(run ?? '').matchAll(/--path (?:'([^']+)'|(\S+))/g)].map((m) => m[1] ?? m[2]);
 
 describe('#47 no required check judges a PR with the PR\'s own copy of its action', () => {
@@ -450,7 +452,8 @@ describe('#47 no required check judges a PR with the PR\'s own copy of its actio
     expect(base.with?.path).toMatch(/^\.[\w-]+$/);
     const runs = steps.map((s) => s.run).filter((r): r is string => typeof r === 'string');
     expect(runs).toHaveLength(1);
-    expect(runs[0]!.startsWith(`node ${base.with?.path}/scripts/${script} `)).toBe(true);
+    // The base's script, with no argument but the Markdown globs it reads (#388): nothing after it runs.
+    expect(withoutPaths(runs[0])).toBe(`node ${base.with?.path}/scripts/${script}`);
     expect(usesOf(job).filter((u) => !u.startsWith('actions/checkout@') && !u.startsWith('actions/setup-node@'))).toEqual([]);
     expect(steps.filter((s) => s['continue-on-error'])).toEqual([]);
   });
@@ -549,7 +552,7 @@ describe('#388 the citation guard and the shift helper read the same Markdown: d
 
   it('the guard passes the list as `--path` globs, and nothing else', () => {
     expect(pathArgs(guard)).toEqual(CITED_DOCS);
-    expect(guard?.replace(/ --path (?:'[^']+'|\S+)/g, '')).toBe('node .citation-guard-base/scripts/citation-guard.mjs');
+    expect(withoutPaths(guard)).toBe('node .citation-guard-base/scripts/citation-guard.mjs');
   });
 
   it('the shift helper passes the same list', () => {
