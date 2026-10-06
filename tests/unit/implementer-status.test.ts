@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -20,8 +23,11 @@ const sha = (c: string) => c.repeat(40);
 const commitBy = (s: string, email = EMAIL, parents: string[] = []) => ({ sha: s, parents: parents.map((p) => ({ sha: p })), commit: { author: { email } } });
 const pr = (number: number, ref: string, head: string, created = '2026-10-05T10:30:00Z', repo = REPO) =>
   ({ number, created_at: created, head: { ref, sha: head, repo: { full_name: repo } } });
+// The heads this run's agent job held when the agent finished (#324). By default, the one head
+// `sha('a')`, on the branch the cases below call this run's.
+const ours = [{ ref: 'feat/1-new', sha: sha('a') }, { ref: 'HEAD', sha: sha('a') }];
 const opened = (prs: ReturnType<typeof pr>[], commits: Record<string, ReturnType<typeof commitBy>>, over: Record<string, unknown> = {}) =>
-  pickOpened({ prs, repo: REPO, since: SINCE, branchesBefore: before, email: EMAIL, headCommit: (s: string) => commits[s], ...over });
+  pickOpened({ prs, repo: REPO, since: SINCE, branchesBefore: before, email: EMAIL, heads: ours, headCommit: (s: string) => commits[s], ...over });
 
 describe('the summary an adopter reads when the App lacks Commit statuses write (L4)', () => {
   it('says what now requires the status, and no longer that nothing does', () => {
@@ -50,9 +56,37 @@ describe('open: the first status goes only on the pull request this run opened',
     expect(opened([pr(7, 'feat/1-new', sha('a'), '2026-10-05T09:59:59Z')], { [sha('a')]: commitBy(sha('a')) })).toHaveProperty('none');
   });
 
-  it('stamps neither of two candidates, and says so by number', () => {
-    const v = opened([pr(7, 'feat/1-new', sha('a')), pr(8, 'feat/1-other', sha('b'))], { [sha('a')]: commitBy(sha('a')), [sha('b')]: commitBy(sha('b')) });
+  it('stamps neither of two candidates its own job held, and says so by number', () => {
+    const v = opened([pr(7, 'feat/1-new', sha('a')), pr(8, 'feat/1-other', sha('b'))], { [sha('a')]: commitBy(sha('a')), [sha('b')]: commitBy(sha('b')) }, {
+      heads: [...ours, { ref: 'feat/1-other', sha: sha('b') }],
+    });
     expect(v).toEqual({ none: expect.stringContaining('2 pull requests match (#7, #8)') });
+  });
+
+  // #324: the App's email is every Author run's, so it binds no pull request to a run.
+  it('two overlapping runs of the shared App each stamp their own pull request, by the head their job pushed', () => {
+    // Run A started at SINCE, run B a little later; each opened one PR before either status job
+    // read the list, so each sees both: opened after its start, from a new branch, App-authored.
+    const both = [pr(7, 'feat/1-new', sha('a'), '2026-10-05T10:30:00Z'), pr(8, 'feat/2-new', sha('b'), '2026-10-05T10:31:00Z')];
+    const commits = { [sha('a')]: commitBy(sha('a')), [sha('b')]: commitBy(sha('b')) };
+    expect(opened(both, commits)).toEqual({ pr: 7, sha: sha('a') });
+    expect(opened(both, commits, { since: '2026-10-05T10:10:00Z', heads: [{ ref: 'feat/2-new', sha: sha('b') }] })).toEqual({ pr: 8, sha: sha('b') });
+  });
+
+  it('a run that pushed no pull request stamps nothing, though another Author lane opened one during it', () => {
+    const lanes = [pr(9, 'feat/3-lead', sha('c'))];
+    const commits = { [sha('c')]: commitBy(sha('c')) };
+    // Its job held only the default branch's head it checked out, or nothing at all.
+    expect(opened(lanes, commits, { heads: [{ ref: 'main', sha: sha('0') }, { ref: 'HEAD', sha: sha('0') }] })).toMatchObject({ none: expect.stringMatching(/at a head this run's agent job pushed \(it held main@0000000, HEAD@0000000\)/) });
+    expect(opened(lanes, commits, { heads: [] })).toMatchObject({ none: expect.stringMatching(/it held none/) });
+  });
+
+  it('matches the head, not the branch name: a PR whose branch the job held at another commit is not this run\'s', () => {
+    expect(opened([pr(7, 'feat/1-new', sha('d'))], { [sha('d')]: commitBy(sha('d')) })).toHaveProperty('none');
+  });
+
+  it('stamps nothing when the heads the agent\'s job held are unknown', () => {
+    expect(opened([pr(7, 'feat/1-new', sha('a'))], { [sha('a')]: commitBy(sha('a')) }, { heads: null })).toMatchObject({ none: expect.stringMatching(/heads the agent's job held are unknown/) });
   });
 
   it('refuses a head the App did not author, a fork\'s branch, and an unknown start or snapshot', () => {
@@ -141,10 +175,15 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
     if (mode === 'open') {
       expect(call.with?.since).toBe('${{ needs.filter.outputs.since }}');
       expect(call.with?.['branches-before']).toBe('${{ needs.filter.outputs.branches }}');
+      // The one input read from the agent's job (#324): the heads its fixed step recorded after
+      // the agent, which bind the pick to the head this run pushed. Nothing else of that job.
+      expect(call.with?.heads).toBe(`\${{ needs.${agent}.outputs.heads }}`);
+      const rest = Object.entries(call.with ?? {}).filter(([k]) => k !== 'heads').map(([, v]) => v).join(' ');
+      expect(rest).not.toMatch(new RegExp(`needs\\.${agent}\\.`));
     } else {
       expect(inputs).toMatch(/needs\.filter\.outputs\.(head_sha|heads)/);
+      expect(inputs).not.toMatch(new RegExp(`needs\\.${agent}\\.`));
     }
-    expect(inputs).not.toMatch(new RegExp(`needs\\.${agent}\\.`));
   });
 
   it('and no other job of any workflow calls the action', () => {
@@ -166,5 +205,58 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
     const filter = wf('agent-rebase.yml').jobs.filter!;
     expect(filter.outputs?.heads).toBe('${{ steps.heads.outputs.heads }}');
     expect((filter.steps ?? []).find((s) => s.id === 'heads')?.['continue-on-error']).toBe(true);
+  });
+});
+
+// #324: the binding the `open` pick matches on, recorded by a fixed step of the agent's job.
+describe('the spine records the branch heads the agent left, for the open pick', () => {
+  type SpineStep = Step & { name?: string; if?: string };
+  const spine = parse(readFileSync('.github/workflows/lane-agent-job.yml', 'utf8')) as {
+    on: { workflow_call: { outputs: Record<string, { value: string }> } }; jobs: { run: { outputs: Record<string, string>; steps: SpineStep[] } };
+  };
+  const steps = spine.jobs.run.steps;
+  const at = (id: string) => steps.findIndex((s) => s.id === id);
+  const record = steps[at('heads')]!;
+
+  it('after the agent, never failing the job, and passed up through both spines', () => {
+    expect(at('heads')).toBeGreaterThan(at('agent'));
+    expect(at('heads')).toBeLessThan(at('finish'));
+    expect(record.if).toMatch(/^always\(\)/);
+    expect(record['continue-on-error']).toBe(true);
+    expect(record.uses).toBeUndefined();
+    expect(spine.jobs.run.outputs.heads).toBe('${{ steps.heads.outputs.heads }}');
+    expect(spine.on.workflow_call.outputs.heads?.value).toBe('${{ jobs.run.outputs.heads }}');
+    const lane = parse(readFileSync('.github/workflows/agent-lane.yml', 'utf8')) as { on: { workflow_call: { outputs: Record<string, { value: string }> } } };
+    expect(lane.on.workflow_call.outputs.heads?.value).toBe('${{ jobs.run.outputs.heads }}');
+  });
+
+  it('lists the local branches and HEAD, and not a branch a `git fetch` brought in', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'implementer-heads-'));
+    try {
+      const git = (...a: string[]) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { encoding: 'utf8' }).trim();
+      git('init', '-q', '-b', 'main');
+      git('commit', '-q', '--allow-empty', '-m', 'base');
+      const base = git('rev-parse', 'HEAD');
+      git('checkout', '-q', '-b', 'feat/7-mine');
+      git('commit', '-q', '--allow-empty', '-m', 'mine');
+      const mine = git('rev-parse', 'HEAD');
+      // Another run's branch, as a fetch leaves it: a remote-tracking ref, no local branch.
+      git('commit', '-q', '--allow-empty', '-m', 'theirs');
+      git('update-ref', 'refs/remotes/origin/feat/8-theirs', 'HEAD');
+      const theirs = git('rev-parse', 'HEAD');
+      git('reset', '-q', '--hard', mine);
+      const out = join(dir, '.out');
+      execFileSync('bash', ['-c', record.run!], { cwd: dir, env: { ...process.env, GITHUB_OUTPUT: out } });
+      const line = readFileSync(out, 'utf8').trim();
+      expect(line.startsWith('heads=')).toBe(true);
+      const heads = JSON.parse(line.slice('heads='.length)) as Array<{ ref: string; sha: string }>;
+      expect(heads).toEqual(expect.arrayContaining([{ ref: 'main', sha: base }, { ref: 'feat/7-mine', sha: mine }, { ref: 'HEAD', sha: mine }]));
+      expect(heads.map((h) => h.sha)).not.toContain(theirs);
+      // And the pick reads exactly that shape.
+      const v = pickOpened({ prs: [pr(7, 'feat/7-mine', mine), pr(8, 'feat/8-theirs', theirs)], repo: REPO, since: SINCE, branchesBefore: ['main'], email: EMAIL, heads, headCommit: (x: string) => commitBy(x) });
+      expect(v).toEqual({ pr: 7, sha: mine });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -234,3 +234,5 @@ jobs:
           app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           since: ${{ needs.filter.outputs.since }}
           branches-before: ${{ needs.filter.outputs.branches }}
+          # The one thing read from the agent's job: the heads it held after the agent (#324).
+          heads: ${{ needs.triage-fix.outputs.heads }}
