@@ -684,6 +684,48 @@ describe('sanitiseNarrative', () => {
       expect(rejects('Card payments were promoted to production on Friday.')).toBe(true);
       expect(rejects('The change was rolled out to customers.')).toBe(true);
     });
+
+    // kanon#54: the generic words are every project's; the name a project gives its reference
+    // environment is its own, so it comes from the adoption record (K-LAYOUT-10), not a list.
+    describe("the project's declared environment name", () => {
+      const env = (s: string, environment: string | null) => sanitiseNarrative(s, { environment });
+
+      it('rejects the declared name where it names an environment', () => {
+        for (const s of ['Card payments were deployed to uat.', 'Tax at checkout landed on the UAT server.', 'The uat environment took the release.']) {
+          expect(env(s, 'uat').violations.map((v) => v.rule), s).toContain('environment');
+          expect(env(s, 'uat').narrative, s).toBe('');
+          // Without the declaration the same sentence passes: the name is not a generic word.
+          expect(env(s, null).violations, s).toEqual([]);
+        }
+      });
+
+      it('names the declaration in the reason, so a rejected run says where the rule came from', () => {
+        expect(env('Shipped to uat.', 'uat').violations[0]?.why).toMatch(/`uat`.*K-LAYOUT-10/);
+      });
+
+      it('keeps the name where it is an ordinary word, so a chosen name costs no prose', () => {
+        expect(env('The QA pipeline gained a guard.', 'qa').narrative).toBe('The QA pipeline gained a guard.');
+        expect(env('Card payments landed.', 'uat').violations).toEqual([]);
+      });
+
+      it('reads the name as text, never as a pattern', () => {
+        expect(env('Shipped to uat.eu today.', 'uat.eu').violations).toHaveLength(1);
+        expect(env('Shipped to uatXeu today.', 'uat.eu').violations).toEqual([]);
+      });
+
+      it('adds nothing for a name the generic words already reject, or for none', () => {
+        expect(env('Shipped to staging.', 'staging').violations).toHaveLength(sanitiseNarrative('Shipped to staging.').violations.length);
+        for (const none of [null, '', '  ']) expect(env('Shipped to uat.', none).violations).toEqual([]);
+      });
+
+      it('buildMessage passes the declaration through, so the post never carries the name', () => {
+        const text = buildMessage({
+          weekStart: new Date('2026-08-01T00:00:00Z'), narrative: 'Card payments were deployed to uat.', milestones: [],
+          grouped: { areas: [], internalScopes: [] }, stats: { prsMerged: 1, issuesClosed: 1, releases: 1 }, environment: 'uat',
+        });
+        expect(text).not.toMatch(/uat/i);
+      });
+    });
   });
 
   describe('open/pending/to-do framing (weekly-digest.yml:86)', () => {

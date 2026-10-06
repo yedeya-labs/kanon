@@ -41,6 +41,16 @@ const LITERALS: ReadonlyArray<readonly [string, RegExp]> = [
   ['its persona names', /\b(?:thomas|joshua|bezalel|oholiab)\b/i],
   // Its product's areas.
   ["its product's areas", /\b(?:storefront|kiosk|tenant)/i],
+  // Its product's routes, as a prompt's example.
+  ["its product's routes", /\/admin\/courses\b/i],
+  // Its framework's and its domain's audit areas: `K-LAYOUT-17`'s `audit` descriptions are the project's.
+  ["its framework's and domain's audit areas", /\b(?:payment paths|server actions)\b/i],
+  // Its escalation file's categories (`K-MERGE-4`): which areas escalate is the project's.
+  ['its escalation categories', /\besc_(?:payments|auth)\b/],
+  // Its test trees and the runner it gave each (ADR 0012's JavaScript row).
+  ['its test trees', /\btests\|e2e\b|['"`]e2e\/['"`]|startsWith\(['"`](?:tests|e2e)\/['"`]\)/],
+  // Its import alias, `@/` for `src/`.
+  ['its import alias', /['"`]src\/['"`]\)/],
 ];
 
 const ALLOWED: ReadonlyArray<readonly [string, string, string]> = [
@@ -54,6 +64,16 @@ const ALLOWED: ReadonlyArray<readonly [string, string, string]> = [
     "the generic stage words a store resource's lifecycle must not name: vocabulary, not a declaration"],
   ['.github/workflows/review-agent-job.yml', "its product's areas",
     "a severity example in the Reviewer's prompt, left for the review-lane batch, which owns the file (kanon#54)"],
+  ['.github/workflows/explore-agent-job.yml', "its product's routes",
+    "an example signal in the Explorer's sweep prompt, left for the lane batch, which owns the file (kanon#54)"],
+  ['.github/workflows/code-audit-agent-job.yml', "its framework's and domain's audit areas",
+    "the code audit's prompt lists one project's audit areas as prose, left for the lane batch, which owns the file (kanon#287)"],
+  ['actions/agent-telemetry/schema.mjs', 'its escalation categories',
+    "the telemetry schema's fixed escalation categories, left for the telemetry batch, which owns the file (kanon#54)"],
+  ['infra/telemetry/function/schema.mjs', 'its escalation categories',
+    "the collector's copy of the same schema, which must match the action's (kanon#54)"],
+  ['scripts/lib/test-conventions.mjs', 'its test trees',
+    "ADR 0012's JavaScript row: tests under `tests/` and `e2e/`, run by Vitest and Playwright. Changing it revises the ADR, an Owner decision (kanon#54)"],
 ];
 
 const SCANNED = /\.(?:mjs|cjs|js|yml|yaml|sh|awk)$/;
