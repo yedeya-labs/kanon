@@ -96,7 +96,7 @@ runs:
     # it, would be whatever the tag pointed at that day. An exact version fixes the CLI per
     # Kanon release, and Dependabot proposes each bump as a Kanon PR. This is the release
     # `@v1` resolved to when the block moved.
-    - uses: anthropics/claude-code-action@v1.0.239
+    - uses: anthropics/claude-code-action@v1.0.241
       id: agent
       env:
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}

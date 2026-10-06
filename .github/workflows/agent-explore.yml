@@ -216,7 +216,7 @@ jobs:
     steps:
       # Outside the workspace: the block's checkout cleans it.
       - name: Download the sweep's summary
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.explore.outputs.summary-artifact }}
           path: ${{ runner.temp }}/kanon-explore

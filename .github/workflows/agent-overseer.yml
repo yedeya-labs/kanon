@@ -173,7 +173,7 @@ jobs:
 
       - name: Download the agent's report
         if: needs.overseer.outputs.report-artifact-id != ''
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: qa-overseer-audit-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/report

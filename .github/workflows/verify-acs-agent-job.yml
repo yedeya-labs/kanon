@@ -140,7 +140,7 @@ jobs:
 
       # THE CRITERIA JOB'S REPORT, the only thing this job takes from the run of the code under
       # test. It is data the agent reads, never code: nothing here executes it.
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: qa-verify-acs-${{ inputs.project }}
 
