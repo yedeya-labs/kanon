@@ -343,6 +343,7 @@ describe('CI runs the wrapper with a pinned, cached binary and no credentials (#
   it('runs the wrapper in the lint job, which the required check needs', () => {
     expect(at, 'no step runs the wrapper').toBeGreaterThan(-1);
     expect([ci.jobs.checks.needs].flat()).toContain('lint');
+    expect(steps[at]?.env ?? {}, 'the step needs no token or secret').toEqual({});
   });
 
   it('provisions the binary in every test shard, before the tests, since a missing one is a red in CI', () => {
@@ -353,7 +354,7 @@ describe('CI runs the wrapper with a pinned, cached binary and no credentials (#
     const restore = unit.slice(0, wrapper).find((s) => s.uses?.startsWith('actions/cache/restore@'));
     expect(restore?.with?.key).toBe(steps.find((s) => s.id === 'actionlint-cache')?.with?.key);
     expect(restore?.with?.path).toBe('~/.cache/kanon-actionlint');
-    expect(steps[at]?.env ?? {}, 'the step needs no token or secret').toEqual({});
+    expect(unit[wrapper]?.env ?? {}, 'the step needs no token or secret').toEqual({});
   });
 
   it('restores the binary under a key that names the pinned version, and saves it even on a red', () => {
