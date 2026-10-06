@@ -143,11 +143,11 @@ jobs:
       # absent — a fix PR carries no `sev:*`, and the parent issue's is the INPUT's.
       quality-pr-label: agent:triage
       claude_args: |
-        --model claude-opus-5
+        --model claude-opus-5-5
         --effort high
         --max-turns 100
         --max-budget-usd 40
-        --fallback-model claude-opus-5-5
+        --fallback-model claude-opus-5
         --allowedTools Read,Edit,Write,Bash,Grep,Glob
         --exclude-dynamic-system-prompt-sections
       prompt: |

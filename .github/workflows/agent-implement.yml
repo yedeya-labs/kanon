@@ -193,11 +193,11 @@ jobs:
       # copy this warned about is gone — the spine takes `claude_args` once and hands
       # it to both the action and the telemetry row, so they cannot disagree (RA-2092).
       claude_args: |
-        --model claude-opus-5
+        --model claude-opus-5-5
         --effort high
         --max-turns 300
         --max-budget-usd 120
-        --fallback-model claude-opus-5-5
+        --fallback-model claude-opus-5
         --allowedTools Read,Edit,Write,Bash,Grep,Glob
         --exclude-dynamic-system-prompt-sections
         --autocompact 300000

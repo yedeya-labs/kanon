@@ -704,11 +704,11 @@ jobs:
       # `tests/unit/lead-shell.test.ts` pins the list. COST CUTOVER: `config_fingerprint`
       # hashes these flags, so this release starts a new fingerprint for this arm.
       claude_args: |
-        --model claude-opus-5
+        --model claude-opus-5-5
         --effort high
         --max-turns 90
         --max-budget-usd 40
-        --fallback-model claude-opus-5-5
+        --fallback-model claude-opus-5
         --allowedTools Read,Grep,Glob
         --allowedTools "Edit(/docs/**)"
         --allowedTools "Bash(kanon-brief-guard:*)" "Bash(kanon-spec-ids:*)" "Bash(kanon-spec-coverage:*)"

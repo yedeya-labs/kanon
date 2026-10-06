@@ -253,11 +253,11 @@ jobs:
             plainly what you want him to look at hardest. ALWAYS leave a comment, even if
             you did nothing.
           claude_args: |
-            --model claude-opus-5
+            --model claude-opus-5-5
             --effort high
             --max-turns 120
             --max-budget-usd 50
-            --fallback-model claude-opus-5-5
+            --fallback-model claude-opus-5
             --allowedTools Read,Edit,Write,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
           claude-token: ${{ secrets.claude-token }}
@@ -297,11 +297,11 @@ jobs:
           started-at: ${{ steps.agent.outputs.started-at }}
           github-token: ${{ steps.app-token.outputs.token }}
           claude_args: |
-            --model claude-opus-5
+            --model claude-opus-5-5
             --effort high
             --max-turns 120
             --max-budget-usd 50
-            --fallback-model claude-opus-5-5
+            --fallback-model claude-opus-5
             --allowedTools Read,Edit,Write,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
           # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
