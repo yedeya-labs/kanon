@@ -45,17 +45,17 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 
 | What | Use it as |
 |---|---|
-| [PR-title check](actions/pr-title/README.md) | `uses: yedeya-labs/kanon/actions/pr-title@v0.29.0` |
-| [DCO sign-off check](actions/dco/README.md) | `uses: yedeya-labs/kanon/actions/dco@v0.29.0` |
-| [Release workflow](docs/release.md) | `uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.29.0` |
-| [Agent lane: set up](actions/agent-setup/README.md) | `uses: yedeya-labs/kanon/actions/agent-setup@v0.29.0` |
-| [Agent lane: run the agent](actions/agent-run/README.md) | `uses: yedeya-labs/kanon/actions/agent-run@v0.29.0` |
-| [Agent lane: finish](actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@v0.29.0` |
-| [Agent lane: classify a red run](actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@v0.29.0` |
-| [Agent telemetry](actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@v0.29.0` |
-| [Agent lanes: review, triage, implement, implement-revise, lead, lead-revise, lead-reconcile, lead-split, merge, merge-reconcile, rebase, verify-acs, project-digest, weekly-digest, explore, dispatch-sweep, code-audit, overseer](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.29.0` in a job |
-| [Lane check](actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@v0.29.0` |
-| [Kanon's scripts from a workflow step](actions/kanon-path/README.md) | `uses: yedeya-labs/kanon/actions/kanon-path@v0.29.0` |
+| [PR-title check](actions/pr-title/README.md) | `uses: yedeya-labs/kanon/actions/pr-title@v0.30.0` |
+| [DCO sign-off check](actions/dco/README.md) | `uses: yedeya-labs/kanon/actions/dco@v0.30.0` |
+| [Release workflow](docs/release.md) | `uses: yedeya-labs/kanon/.github/workflows/release.yml@v0.30.0` |
+| [Agent lane: set up](actions/agent-setup/README.md) | `uses: yedeya-labs/kanon/actions/agent-setup@v0.30.0` |
+| [Agent lane: run the agent](actions/agent-run/README.md) | `uses: yedeya-labs/kanon/actions/agent-run@v0.30.0` |
+| [Agent lane: finish](actions/agent-finish/README.md) | `uses: yedeya-labs/kanon/actions/agent-finish@v0.30.0` |
+| [Agent lane: classify a red run](actions/agent-classify/README.md) | `uses: yedeya-labs/kanon/actions/agent-classify@v0.30.0` |
+| [Agent telemetry](actions/agent-telemetry/README.md) | `uses: yedeya-labs/kanon/actions/agent-telemetry@v0.30.0` |
+| [Agent lanes: review, triage, implement, implement-revise, lead, lead-revise, lead-reconcile, lead-split, merge, merge-reconcile, rebase, verify-acs, project-digest, weekly-digest, explore, dispatch-sweep, code-audit, overseer](docs/lanes.md) | `uses: yedeya-labs/kanon/.github/workflows/agent-<lane>.yml@v0.30.0` in a job |
+| [Lane check](actions/lane-check/README.md) | `uses: yedeya-labs/kanon/actions/lane-check@v0.30.0` |
+| [Kanon's scripts from a workflow step](actions/kanon-path/README.md) | `uses: yedeya-labs/kanon/actions/kanon-path@v0.30.0` |
 
 <!-- x-release-please-end -->
 
@@ -64,7 +64,7 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.29.0 kanon init --dry-run
+npx --yes --package github:yedeya-labs/kanon#v0.30.0 kanon init --dry-run
 ```
 
 <!-- x-release-please-end -->
@@ -76,7 +76,7 @@ Each release also ships [`requirements.json`](requirements.json): what its lanes
 <!-- x-release-please-start-version -->
 
 ```sh
-claude plugin marketplace add yedeya-labs/kanon#v0.29.0
+claude plugin marketplace add yedeya-labs/kanon#v0.30.0
 claude plugin install kanon@kanon
 ```
 
@@ -89,7 +89,7 @@ claude plugin install kanon@kanon
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.29.0 kanon milestones --repo <owner>/<repo>
+npx --yes --package github:yedeya-labs/kanon#v0.30.0 kanon milestones --repo <owner>/<repo>
 ```
 
 <!-- x-release-please-end -->
@@ -99,7 +99,7 @@ npx --yes --package github:yedeya-labs/kanon#v0.29.0 kanon milestones --repo <ow
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.29.0 kanon apps --owner <owner> --repo <repo> --apps author,judge
+npx --yes --package github:yedeya-labs/kanon#v0.30.0 kanon apps --owner <owner> --repo <repo> --apps author,judge
 ```
 
 <!-- x-release-please-end -->
