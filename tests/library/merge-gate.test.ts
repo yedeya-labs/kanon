@@ -443,14 +443,26 @@ describe('only a human confirms an invariant (K-SPEC-9, kanon#193)', () => {
     expect(mergeVerdict(pr({ files: ['docs/qa/specs/_id-registry.json'] })).action).toBe('merge');
   });
 
-  it('escalates when a changed spec\'s diff could not be read, never reading that as "no promotion"', () => {
-    expect(verdict(diff(SPEC, null, 4000)).rule).toBe('spec-diff-unreadable');
-    expect(mergeVerdict(pr({ files: [SPEC], specDiff: null })).rule).toBe('spec-diff-unreadable');
-    expect(mergeVerdict(pr({ files: [SPEC] })).rule).toBe('spec-diff-unreadable');
+  it('escalates when GitHub returned no diff for a changed spec, never reading that as "no promotion"', () => {
+    const v = verdict(diff(SPEC, null, 4000));
+    expect(v.action).toBe('escalate');
+    expect(v.rule).toBe('spec-diff-unreadable');
+    expect(v.why).toContain(`\`${SPEC}\``);
     // A rename with no content change has no patch and nothing to read.
     expect(verdict(diff(SPEC, null, 0)).action).toBe('merge');
     // A PR that changes no spec is never asked.
     expect(mergeVerdict(pr({ specDiff: null })).action).toBe('merge');
+  });
+
+  it('WAITS on a patch listing that failed, rather than stamping a sticky `needs:human` (kanon#273)', () => {
+    // A failed listing is likely transient, as the Actions listing's is (RA-2256): a `wait` is
+    // re-asked next sweep and named in its summary, where an escalation's label would stay on
+    // until the head moved. Null, absent and malformed are all "not read", and none merges.
+    for (const specDiff of [null, undefined, {}, { promotions: [] }, { promotions: 'x', unreadable: [] }]) {
+      const v = mergeVerdict(pr({ files: [SPEC], specDiff }));
+      expect(v.action, JSON.stringify(specDiff)).toBe('wait');
+      expect(v.rule).toBe('spec-diff-unlisted');
+    }
   });
 
   it('keeps a promotion sticky across a push, and lets an unreadable diff lapse with its head', () => {
@@ -491,9 +503,17 @@ esac
     expect(mergeVerdict(read).rule).toBe('spec-promotion');
   });
 
-  it('carries a failed patch read as null, which escalates', () => {
+  it('carries a failed patch read as null, which waits', () => {
     const read = readWith('fail');
     expect(read.specDiff).toBeNull();
+    const v = mergeVerdict(read);
+    expect(v.action).toBe('wait');
+    expect(v.rule).toBe('spec-diff-unlisted');
+  });
+
+  it('carries a listing that omits a changed spec\'s patch to an escalation', () => {
+    const read = readWith([JSON.stringify([SPEC, null, 4000])]);
+    expect(read.specDiff).toEqual({ promotions: [], unreadable: [SPEC] });
     expect(mergeVerdict(read).rule).toBe('spec-diff-unreadable');
   });
 });

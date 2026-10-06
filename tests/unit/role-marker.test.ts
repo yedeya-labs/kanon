@@ -8,6 +8,7 @@ import { parse } from 'yaml';
 const { asRole, headerLine, markedRole, personaHeader, roleMarker, setMarkerPhase, signed, signedAs, withPersona } = await import('../../scripts/lib/role-marker.mjs');
 const { personaEnv, resolvePersona, resolveRole, speaksAsNoRole } = await import('../../actions/agent-setup/persona.mjs');
 const { appPersona, parsePersonas } = await import('../../scripts/app-register.mjs');
+const { withBaselines } = await import('../../actions/agent-run/persona-prompt.mjs');
 
 /**
  * Plan 0005 §3.3, step L3: the persona header, the role marker, and the persona as the agent's
@@ -121,9 +122,20 @@ describe('the agent is asked to open every post with its header (agent-run)', ()
       expect(runIt({ PROMPT: 'line one\nline two', KANON_ROLE: 'Implementer', KANON_POST_HEADER: headerLine('Implementer') }))
         .toBe(withPersona('line one\nline two', 'Implementer', headerLine('Implementer')));
       expect(runIt({ PROMPT: 'line one', KANON_ROLE: '', KANON_POST_HEADER: '' })).toBe('line one');
+      expect(runIt({ PROMPT: 'line one', KANON_ROLE: 'Implementer', KANON_POST_HEADER: headerLine('Implementer'), KANON_BASELINE_PLAYBOOKS: 'docs/qa/lead-playbook.md' }))
+        .toBe(withBaselines(withPersona('line one', 'Implementer', headerLine('Implementer')), 'docs/qa/lead-playbook.md'));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('names the baseline playbooks agent-setup copied, with the remedy, and nothing when there are none (kanon#329)', () => {
+    const out = withBaselines('Do the work.\n', 'docs/qa/reviewer-playbook.md docs/qa/lead-playbook.md');
+    expect(out.startsWith('Do the work.\n\nKANON\'S BASELINE PLAYBOOKS')).toBe(true);
+    expect(out).toContain('`docs/qa/reviewer-playbook.md`, `docs/qa/lead-playbook.md` are not this');
+    expect(out).toContain('`git add -f <path>`');
+    expect(withBaselines('Do the work.', '')).toBe('Do the work.');
+    expect(withBaselines('Do the work.', ' ')).toBe('Do the work.');
   });
 
   it('agent-run falls back to the lane\'s prompt, and the prompt step can never stop the agent', () => {

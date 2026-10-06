@@ -17,6 +17,13 @@
 # checkout. Not a git checkout (a lane that checks nothing out): there is nothing to read, and it
 # says so and exits 0.
 #
+# THE AGENT IS TOLD WHICH PLAYBOOKS ARE THE BASELINE (kanon#329). A copy sits at the path the
+# project's own playbook takes, and git ignores it there, so an agent asked to write that
+# playbook edits the copy and then can't commit it: `git add <path>` is refused and `git add -A`
+# skips it without a word. So this writes `KANON_BASELINE_PLAYBOOKS` to `$GITHUB_ENV`, the
+# baseline copies in the checkout, whichever run made them, and `agent-run` names them in the
+# prompt with the remedy, `git add -f`. Written on every run, so the last one is the checkout's.
+#
 # The review lane's restore (`scripts/restore-judging-inputs.sh`) runs this too, before the lane
 # records its pin of the judging inputs, so the pin holds the baseline and this block's later run
 # copies nothing (kanon#316). It passes PLAYBOOKS_ONLY, so the stack lines are said once, here.
@@ -48,8 +55,18 @@ for baseline in "$BASELINES"/*-playbook.md; do
   mkdir -p docs/qa "$(dirname "$exclude")"
   cp "$baseline" "$f"
   grep -qxF "/$f" "$exclude" 2>/dev/null || echo "/$f" >> "$exclude"
-  say "$f doesn't exist, so the lane reads Kanon's baseline for it (plan 0005 §5.2, K-LAYOUT-17)"
+  say "$f doesn't exist, so the lane reads Kanon's baseline for it, at a path git ignores (plan 0005 §5.2, K-LAYOUT-17)"
 done
+
+# The baseline copies in the checkout: excluded by the line above, and not the project's.
+copies=()
+for baseline in "$BASELINES"/*-playbook.md; do
+  [ -f "$baseline" ] || continue
+  f="docs/qa/$(basename "$baseline")"
+  [ -f "$f" ] && grep -qxF "/$f" "$exclude" 2>/dev/null && ! git ls-files --error-unmatch -- "$f" >/dev/null 2>&1 \
+    && copies+=("$f")
+done
+[ -n "${GITHUB_ENV:-}" ] && echo "KANON_BASELINE_PLAYBOOKS=${copies[*]:-}" >> "$GITHUB_ENV"
 
 STACK=docs/qa/stack.md
 if [ "${PLAYBOOKS_ONLY:-}" != 1 ] && [ -f "$STACK" ]; then
