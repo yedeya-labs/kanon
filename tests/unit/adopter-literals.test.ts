@@ -66,8 +66,6 @@ const ALLOWED: ReadonlyArray<readonly [string, string, string]> = [
     "a severity example in the Reviewer's prompt, left for the review-lane batch, which owns the file (kanon#54)"],
   ['.github/workflows/explore-agent-job.yml', "its product's routes",
     "an example signal in the Explorer's sweep prompt, left for the lane batch, which owns the file (kanon#54)"],
-  ['.github/workflows/code-audit-agent-job.yml', "its framework's and domain's audit areas",
-    "the code audit's prompt lists one project's audit areas as prose, left for the lane batch, which owns the file (kanon#287)"],
   ['actions/agent-telemetry/schema.mjs', 'its escalation categories',
     "the telemetry schema's fixed escalation categories, left for the telemetry batch, which owns the file (kanon#54)"],
   ['infra/telemetry/function/schema.mjs', 'its escalation categories',

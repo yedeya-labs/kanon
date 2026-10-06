@@ -170,9 +170,9 @@ jobs:
 
             ${{ steps.areas.outputs.list }}
 
-            Sweep them for CODE-LEVEL bugs the runtime sweep cannot see: the data
-            schema, authentication, guards and sessions, payment paths, server actions,
-            jobs and webhooks, and the routes, wherever they are among those areas.
+            Sweep them for CODE-LEVEL bugs the runtime sweep cannot see. Each area's
+            description above is the project's own word on what to look for there:
+            start from it, and still read the area's code, not only what it names.
 
             WIDEN COVERAGE: don't re-mine the same hot files every run. First read the
             code-reading ledger, which the workflow exported from the QA store into
