@@ -32,10 +32,13 @@ const checkout = (files: Record<string, string> = {}, git = true) => {
 };
 const run = (cwd: string) => {
   const summary = join(cwd, '..', `${cwd.split('/').pop()}-summary.md`);
+  const env = join(cwd, '..', `${cwd.split('/').pop()}-env`);
   writeFileSync(summary, '');
-  const r = spawnSync('bash', [SCRIPT], { cwd, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, GITHUB_STEP_SUMMARY: summary } });
-  const out = { status: r.status, out: `${r.stdout}${r.stderr}`, summary: readFileSync(summary, 'utf8') };
+  writeFileSync(env, '');
+  const r = spawnSync('bash', [SCRIPT], { cwd, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, GITHUB_STEP_SUMMARY: summary, GITHUB_ENV: env } });
+  const out = { status: r.status, out: `${r.stdout}${r.stderr}`, summary: readFileSync(summary, 'utf8'), env: readFileSync(env, 'utf8') };
   rmSync(summary);
+  rmSync(env);
   return out;
 };
 const status = (cwd: string) => spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd, encoding: 'utf8' }).stdout;
@@ -82,7 +85,7 @@ describe('agent-setup takes the defaults before the agent starts', () => {
     expect(r.status, r.out).toBe(0);
     for (const f of PLAYBOOKS) {
       expect(readFileSync(join(cwd, 'docs/qa', f), 'utf8')).toBe(readFileSync(join(BASELINES, f), 'utf8'));
-      const line = `docs/qa/${f} doesn't exist, so the lane reads Kanon's baseline for it (plan 0005 §5.2, K-LAYOUT-17)`;
+      const line = `docs/qa/${f} doesn't exist, so the lane reads Kanon's baseline for it, at a path git ignores (plan 0005 §5.2, K-LAYOUT-17)`;
       expect(r.out).toContain(line);
       expect(r.summary).toContain(`- ${line}`);
     }
@@ -106,6 +109,40 @@ describe('agent-setup takes the defaults before the agent starts', () => {
     expect(again.out).not.toMatch(/baseline/);
     const exclude = readFileSync(join(cwd, '.git/info/exclude'), 'utf8').split('\n');
     expect(exclude.filter((l) => l === '/docs/qa/reviewer-playbook.md')).toHaveLength(1);
+  });
+
+  describe('tells the agent which playbooks are the baseline, so it can commit the project\'s first (kanon#329)', () => {
+    const exported = (env: string) => {
+      const lines = env.split('\n').filter((l) => l.startsWith('KANON_BASELINE_PLAYBOOKS='));
+      expect(lines).toHaveLength(1);
+      return lines[0]!.slice('KANON_BASELINE_PLAYBOOKS='.length).split(' ').filter(Boolean).sort();
+    };
+    const git = (cwd: string, ...args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+
+    it('exports every copy it made, and not the project\'s own playbook', () => {
+      const cwd = checkout({ 'docs/qa/reviewer-playbook.md': '# Ours\n' });
+      expect(exported(run(cwd).env)).toEqual(PLAYBOOKS.filter((f) => f !== 'reviewer-playbook.md').map((f) => `docs/qa/${f}`));
+    });
+
+    it('exports the copies an earlier run made, so the review lane\'s second run still names them', () => {
+      const cwd = checkout();
+      run(cwd);
+      expect(exported(run(cwd).env)).toEqual(PLAYBOOKS.map((f) => `docs/qa/${f}`));
+    });
+
+    it('drops a copy the project has since committed as its own', () => {
+      const cwd = checkout();
+      run(cwd);
+      // The case itself: the copy is ignored, so a plain add is refused, and `-f` is the remedy.
+      expect(git(cwd, 'add', 'docs/qa/reviewer-playbook.md').status).not.toBe(0);
+      expect(git(cwd, 'add', '-f', 'docs/qa/reviewer-playbook.md').status).toBe(0);
+      expect(exported(run(cwd).env)).not.toContain('docs/qa/reviewer-playbook.md');
+    });
+
+    it('exports an empty list when the project keeps every playbook', () => {
+      const cwd = checkout(Object.fromEntries(PLAYBOOKS.map((f) => [`docs/qa/${f}`, '# Ours\n'])));
+      expect(run(cwd).env).toBe('KANON_BASELINE_PLAYBOOKS=\n');
+    });
   });
 
   it.each([

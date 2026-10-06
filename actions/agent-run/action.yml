@@ -78,12 +78,14 @@ runs:
     # WHO THE AGENT SPEAKS AS (plan 0005 §3.3, step L3). `agent-setup` resolved the role and
     # exported its header line; this appends one instruction to the lane's prompt: open every
     # post with that line, whose hidden comment is the role marker. No role resolved, and the
-    # prompt goes through unchanged. The script is Kanon's, beside this block in the action
-    # cache, never the workspace's.
+    # prompt goes through unchanged. It also names the playbooks `agent-setup` put Kanon's
+    # baseline in place of, at a path git ignores, and how to commit the project's own there
+    # (kanon#329). The script is Kanon's, beside this block in the action cache, never the
+    # workspace's.
     #
     # `continue-on-error`, and the action falls back to the lane's own prompt: an instruction
     # about the header must never cost the run, and an empty prompt must never reach the agent.
-    - name: Ask the agent to open every post with its persona header
+    - name: Ask the agent to open every post with its persona header, and name the baseline playbooks
       id: prompt
       continue-on-error: true
       shell: bash -e {0}

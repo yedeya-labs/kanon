@@ -24,7 +24,7 @@ Call it with `id: agent`, so the lane reads `steps.agent.outputs.execution_file`
 
 | Input | Required | Meaning |
 |---|---|---|
-| `prompt` | yes | The agent's instructions. When `agent-setup` resolved the agent's role, one instruction is appended: open every post with the persona header and role marker (plan 0005 §3.3). If that step fails, the prompt goes through unchanged. |
+| `prompt` | yes | The agent's instructions. When `agent-setup` resolved the agent's role, one instruction is appended: open every post with the persona header and role marker (plan 0005 §3.3). When `agent-setup` put Kanon's baseline in place of a playbook you don't have, a note names it, says git ignores it there, and says to stage your own with `git add -f`. If that step fails, the prompt goes through unchanged. |
 | `claude_args` | yes | The flag block. Pass the same value to `agent-finish`, so the cost row records what ran. |
 | `claude-token` | yes | The Claude OAuth token. A composite action can't read secrets, so the lane passes it in. |
 | `github-token` | yes | The minted App token. The agent acts as the App, never as the default token. |
