@@ -362,18 +362,35 @@ export const runsUnadmitted = (
  * A job with no status function tolerates none: it is skipped whenever any ancestor did not
  * succeed. A job with one (`!cancelled()`, `always()`, `failure()`) tolerates each ancestor for
  * which some world exists where that ancestor was skipped or failed and `cond` still holds.
- * Every job's result is free; a skipped job's outputs are empty and any other job's are free.
+ * Each ancestor's result is free, except where GitHub's own rule forbids it (kanon#268): an
+ * ancestor whose `if:` has no status function cannot have run, so cannot have succeeded or
+ * failed, unless every job in ITS `needs` chain succeeded. Worlds that break that are never
+ * produced, so they are not counted. A skipped job's outputs are empty and any other job's are
+ * free.
  *
  * @param cond the job's `if:` (absent = none)
  * @param ancestors every job it transitively needs
+ * @param graph the workflow's jobs, for each ancestor's own `if:` and `needs`
  * @returns each tolerated ancestor, in `ancestors` order, with the results (`skipped`,
  *   `failure`) it is tolerated in
  */
-export const startsDespite = (cond: string | undefined, ancestors: string[]): { job: string; results: string[] }[] => {
+export const startsDespite = (
+  cond: string | undefined,
+  ancestors: string[],
+  graph: Record<string, { needs?: string | string[]; if?: string } | undefined>,
+): { job: string; results: string[] }[] => {
   const tree = treeOf(cond);
   if (tree === null || !usesStatus(tree)) return [];
   const atoms = freeAtoms(tree, new Set(), new Set());
-  const worlds = worldsFor(ancestors, () => ['success', 'skipped', 'failure'].map((result) => ({ result, outputs: {} })));
+  const upstreamOf = (id: string, seen = new Set<string>()): string[] => {
+    for (const n of needsOf(graph[id]?.needs)) if (!seen.has(n)) { seen.add(n); upstreamOf(n, seen); }
+    return [...seen];
+  };
+  // The ancestors GitHub's implicit success() holds to their own chain, with that chain.
+  const implicit = ancestors.flatMap((j) => (hasStatusFunction(graph[j]?.if) ? [] : [{ job: j, chain: upstreamOf(j) }]));
+  const possible = (world: Record<string, NeedWorld>) => implicit.every(({ job, chain }) =>
+    world[job]!.result === 'skipped' || chain.every((a) => (world[a]?.result ?? 'success') === 'success'));
+  const worlds = worldsFor(ancestors, () => ['success', 'skipped', 'failure'].map((result) => ({ result, outputs: {} }))).filter(possible);
   const tolerated = new Set<string>();
   const key = (j: string, world: Record<string, NeedWorld>) => `${j}\0${world[j]!.result}`;
   for (const world of worlds) {
