@@ -4,7 +4,8 @@
 # CALL IT WITH `id: agent`. The block's outputs mirror the action's own names, so the
 # lane reads `steps.agent.outputs.execution_file` exactly as it did when the action was
 # a step of its own — and `steps.agent.outcome` means what it meant then: the action is the
-# last step, and the start stamp before it cannot fail.
+# last step, and the start stamp before it cannot fail. The user-scope step can, only when the
+# runner gives it no usable temp directory, and then the agent must not start (kanon#283).
 #
 # NOTHING TO TAKE BACK OUT OF THE TREE (RA-2697). Lanes call this block as
 # `$/actions/agent-run`, which the runner downloads into its action cache at the
@@ -93,11 +94,32 @@ runs:
         PROMPT: ${{ inputs.prompt }}
       run: node "$GITHUB_ACTION_PATH/persona-prompt.mjs"
 
+    # A USER SCOPE THIS JOB MADE, for a lane whose flags load no project settings (kanon#283).
+    # `--setting-sources user` still loads `$HOME/.claude/` and `$HOME/.claude.json`, and on a
+    # persistent self-hosted runner an earlier job may have left a hook, a permission rule or an
+    # MCP server there, which would join a grant the lane's flags are meant to be the whole of.
+    # The script reads the flags the way the action does and, for such a lane only, points
+    # `CLAUDE_CONFIG_DIR` at a new directory under the runner's temp directory through
+    # `$GITHUB_ENV`. Never `continue-on-error`: a lane that can't get a clean user scope must not
+    # run its agent on the runner's. Every other lane is left exactly as it was.
+    - name: Give the agent a user scope this job made, if its flags load no project settings
+      shell: bash -e {0}
+      env:
+        CLAUDE_ARGS: ${{ inputs.claude_args }}
+      run: node "$GITHUB_ACTION_PATH/user-scope.mjs"
+
     # PINNED EXACTLY (plan 0001, decision 14). `@v1` moves under every adopter between two
     # Kanon releases, so the CLI an adopter runs, and the flags Kanon's tests check against
     # it, would be whatever the tag pointed at that day. An exact version fixes the CLI per
     # Kanon release, and Dependabot proposes each bump as a Kanon PR. This is the release
     # `@v1` resolved to when the block moved.
+    #
+    # A BUMP IS RED UNTIL THE REVIEWER'S GRANT IS RE-PROBED (kanon#284). What the Reviewer's
+    # flags allow, and which settings they load, is the CLI's behaviour, and this pin picks
+    # the CLI. `tests/unit/reviewer-grant-probe.test.ts` fails while
+    # `.github/scripts/reviewer-grant-record.json` names another version: a maintainer runs
+    # `.github/scripts/reviewer-grant-probe.mjs` against the CLI the new version installs and
+    # commits the record it writes.
     - uses: anthropics/claude-code-action@v1.0.241
       id: agent
       env:

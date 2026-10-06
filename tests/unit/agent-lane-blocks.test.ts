@@ -165,6 +165,7 @@ describe('the blocks run their scripts from the action cache, never from the wor
       'agent-classify: $GITHUB_ACTION_PATH/classify-agent-result.mjs',
       'agent-finish: $GITHUB_ACTION_PATH/agent-quality-prs.mjs',
       'agent-run: $GITHUB_ACTION_PATH/persona-prompt.mjs',
+      'agent-run: $GITHUB_ACTION_PATH/user-scope.mjs',
       'agent-setup: $GITHUB_ACTION_PATH/persona.mjs',
       'agent-telemetry: ${{ github.action_path }}/agent-telemetry.mjs',
     ]);
