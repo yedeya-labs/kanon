@@ -688,19 +688,44 @@ export function failedStage(stages, outcome) {
  * Tool and compaction counts from the execution file (plan 0003 §5.1). The file carries the
  * transcript only when it holds the assistant's messages; a file of just the `init` and
  * `result` events carries none, and then all three are ABSENT, never 0.
+ *
+ * Each count is kept only when the file shows it could have seen the events it counts (#97,
+ * `K-OBS-16`), so a file that lost them records an absence, not a false 0:
+ * - `tool_errors` needs the `tool_result` blocks: tool calls with no result at all leave it absent.
+ * - `compactions` needs the CLI's `system` events, which a `compact_boundary` is one of: a file
+ *   with none at all (the CLI writes `init` first) can't show that one would have reached it.
+ *
+ * Checked against real execution files at `claude-code-action@v1.0.239` (#97): the action writes
+ * every SDK message to the file unfiltered (`run-claude-sdk.ts` pushes each one), and the SDK's
+ * message union includes `compact_boundary`. In 207 real Reviewer files, each `tool_use` had its
+ * `tool_result`; none of those runs compacted, so a real `compact_boundary` is still unobserved.
+ * `tests/fixtures/telemetry/transcript-real.json` is one of those files with its content
+ * stripped. A subagent's tool calls arrive with `parent_tool_use_id` set (the SDK's docs) and are
+ * counted: the field is the file's `tool_use` blocks, by plan 0003's definition.
  */
 export function transcriptCounts(objects) {
   if (!objects.some((o) => o?.type === "assistant")) return {};
   const blocks = (o) => (Array.isArray(o?.message?.content) ? o.message.content : []);
   let toolCalls = 0;
+  let toolResults = 0;
   let toolErrors = 0;
   let compactions = 0;
+  let systemEvents = false;
   for (const o of objects) {
     if (o?.type === "assistant") toolCalls += blocks(o).filter((b) => b?.type === "tool_use").length;
-    if (o?.type === "user") toolErrors += blocks(o).filter((b) => b?.type === "tool_result" && b.is_error === true).length;
+    if (o?.type === "user") {
+      const results = blocks(o).filter((b) => b?.type === "tool_result");
+      toolResults += results.length;
+      toolErrors += results.filter((b) => b.is_error === true).length;
+    }
+    if (o?.type === "system") systemEvents = true;
     if (o?.type === "system" && o.subtype === "compact_boundary") compactions += 1;
   }
-  return { tool_calls: toolCalls, tool_errors: toolErrors, compactions };
+  return {
+    tool_calls: toolCalls,
+    ...(toolCalls === 0 || toolResults > 0 ? { tool_errors: toolErrors } : {}),
+    ...(systemEvents ? { compactions } : {}),
+  };
 }
 
 /** `critical:0,high:1,…` into the four counts. A severity the tally doesn't name stays absent. */

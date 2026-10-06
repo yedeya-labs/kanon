@@ -184,6 +184,7 @@ describe('every fixture\'s version-2 row validates (S1, M1)', () => {
   const fixtures = [
     ...readdirSync('tests/fixtures/agent-blocks').map((f) => join('tests/fixtures/agent-blocks', f)),
     'tests/fixtures/telemetry/transcript.json',
+    'tests/fixtures/telemetry/transcript-real.json',
   ];
 
   it.each(fixtures)('%s', (path) => {
@@ -416,6 +417,53 @@ describe('plan 0003 M1: the job and transcript fields', () => {
     const path = 'tests/fixtures/telemetry/transcript.json';
     expect(transcriptCounts(parseObjects(readFileSync(path, 'utf8')))).toEqual({ tool_calls: 3, tool_errors: 1, compactions: 1 });
     expect(both(path).v2).toMatchObject({ tool_calls: 3, tool_errors: 1, compactions: 1, subagents_spawned: 1, cache_write_5m_tokens: 2000 });
+  });
+
+  // #97: a real Reviewer run's execution file (claude-code-action@v1.0.239), with every text,
+  // thinking block, tool input and tool output stripped. Its run made 33 tool calls, and 6 of
+  // them failed (5 permission denials and one command that exited non-zero); it didn't compact.
+  const REAL = 'tests/fixtures/telemetry/transcript-real.json';
+  type Block = { type?: string; id?: string; tool_use_id?: string };
+  type Message = { type?: string; message?: { content?: unknown } };
+  const realObjects = () => parseObjects(readFileSync(REAL, 'utf8')) as Message[];
+
+  it('counts a real execution file: every tool call, every failed one, and no compaction', () => {
+    expect(transcriptCounts(realObjects())).toEqual({ tool_calls: 33, tool_errors: 6, compactions: 0 });
+    expect(both(REAL).v2).toMatchObject({ tool_calls: 33, tool_errors: 6, compactions: 0, permission_denials: 5 });
+  });
+
+  it('the real file carries a result for every tool call, so its tool_errors is a count, not a guess', () => {
+    const ids = (type: string, key: string) => realObjects()
+      .flatMap((o) => (Array.isArray(o.message?.content) ? (o.message.content as Block[]) : []))
+      .filter((b) => b.type === type)
+      .map((b) => b[key as 'id' | 'tool_use_id'])
+      .sort();
+    expect(ids('tool_use', 'id')).toHaveLength(33);
+    expect(ids('tool_result', 'tool_use_id')).toEqual(ids('tool_use', 'id'));
+  });
+
+  it('a file without the CLI\'s system events leaves compactions absent, not 0', () => {
+    const counts = transcriptCounts(realObjects().filter((o) => o.type !== 'system'));
+    expect(counts).toEqual({ tool_calls: 33, tool_errors: 6 });
+    expect(counts).not.toHaveProperty('compactions');
+  });
+
+  it('a compaction is evidence of itself, with or without the init event', () => {
+    const tool = { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1' }] } };
+    const result = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1' }] } };
+    expect(transcriptCounts([tool, { type: 'system', subtype: 'compact_boundary' }, result]))
+      .toEqual({ tool_calls: 1, tool_errors: 0, compactions: 1 });
+  });
+
+  it('tool calls with no tool results leave tool_errors absent, not 0', () => {
+    const counts = transcriptCounts(realObjects().filter((o) => o.type !== 'user'));
+    expect(counts).toEqual({ tool_calls: 33, compactions: 0 });
+    expect(counts).not.toHaveProperty('tool_errors');
+  });
+
+  it('a transcript with no tool calls records zero tool errors, which it can know', () => {
+    const counts = transcriptCounts([{ type: 'system', subtype: 'init' }, { type: 'assistant', message: { content: [{ type: 'text', text: '' }] } }]);
+    expect(counts).toEqual({ tool_calls: 0, tool_errors: 0, compactions: 0 });
   });
 
   it('maps a terminal reason the schema doesn\'t know to other, so a CLI release can\'t fail rows', () => {
