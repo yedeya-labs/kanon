@@ -4,8 +4,8 @@ The fixture adopter's escalation file (`K-LAYOUT-8`), for the pipeline library's
 
 ## Escalation paths
 
-- `^migrations/` — database migrations
-- `/^src/.*(auth|sessions?)([^a-z]|$)/i` — auth
+- `^migrations/` `migrations` — database migrations
+- `/^src/.*(auth|sessions?)([^a-z]|$)/i` `auth` — auth
 
 An example of a prose line between entries, which the parser leaves alone.
 

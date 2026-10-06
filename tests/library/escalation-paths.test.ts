@@ -4,9 +4,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   DeclarationError,
+  ESCALATION_CATEGORIES,
   ESCALATION_FILE,
   PIPELINE_ESCALATIONS,
+  defaultEscalationFile,
   escalatingPaths,
+  escalationCategories,
   parseEscalationFile,
   readEscalationFile,
   readEscalationFileAt,
@@ -41,6 +44,26 @@ describe('the escalation file parser', () => {
       ['^src\\/.*payments?', 'i', 'payments'],
     ]);
     expect(file.pipeline).toEqual([{ dir: 'scripts/pipeline/', reason: 'our pipeline' }]);
+  });
+
+  it("reads an entry's category from Kanon's closed list, and an entry with none as `other` (plan 0003 §3.7)", () => {
+    const file = parseEscalationFile(FILE('- `^migrations/` `migrations` — database migrations\n- `/^src/.*payments?/i` `payments` — payments\n- `^infra/` — no category\n', ''));
+    expect(file.paths.map((p) => [p.pattern.source, p.category, p.reason])).toEqual([
+      ['^migrations\\/', 'migrations', 'database migrations'],
+      ['^src\\/.*payments?', 'payments', 'payments'],
+      ['^infra\\/', 'other', 'no category'],
+    ]);
+    for (const c of ESCALATION_CATEGORIES) expect(parseEscalationFile(FILE(`- \`^a/\` \`${c}\` — a\n`, '')).paths[0]?.category).toBe(c);
+  });
+
+  it("fails by name on a category outside Kanon's list, which would carry the project's words into the telemetry", () => {
+    for (const c of ['billing', 'Payments', 'esc_auth', 'other area']) {
+      fails(FILE(`- \`^a/\` \`${c}\` — a\n`, ''), new RegExp(`escalation-paths\\.md:5: \`${c}\` isn't an escalation category: write one of \`pipeline\`, .*\`other\`, or none for \`other\``));
+    }
+  });
+
+  it('fails by name on a category on pipeline code, which is always `pipeline`', () => {
+    fails(FILE('', '- `scripts/pipeline/` `pipeline` — ours\n'), /escalation-paths\.md:8, under `## Pipeline code`, names a category: pipeline code is always `pipeline`/);
   });
 
   it('reads `/…/i` as a pattern that ignores case, and anything else as case-sensitive', () => {
@@ -124,6 +147,7 @@ describe('reading the escalation file', () => {
     const file = readEscalationFile();
     expect(file.pipeline.map((p) => p.dir)).toEqual(['scripts/pipeline/']);
     expect(file.paths.map((p) => p.reason)).toEqual(['database migrations', 'auth']);
+    expect(file.paths.map((p) => p.category)).toEqual(['migrations', 'auth']);
   });
 
   it("reads a tree with no escalation file as Kanon's default, the pipeline's own paths only, and names it (plan 0005 §5.2)", () => {
@@ -221,6 +245,60 @@ describe('the escalating paths', () => {
     for (const f of ['docs/qa/specs/kiosk.md', 'docs/AGENTS.md', 'AGENTS.md.bak', 'MY-CLAUDE.md', 'src/.claude/x', '.claudeignore', 'scripts/qa/x.mjs', 'drizzle/0001.sql', 'sst.config.ts', 'scripts/pipelines/x.mjs', 'src/lib/authors.ts']) {
       expect(reasonFor(f), f).toBeNull();
     }
+  });
+});
+
+describe("the escalation categories come from the file's entries (plan 0003 §3.7, kanon#54)", () => {
+  const file = readEscalationFile();
+  const of = (...paths: string[]) => escalationCategories(file, paths);
+
+  it("are Kanon's closed list of eight, in order", () => {
+    expect([...ESCALATION_CATEGORIES]).toEqual(['pipeline', 'playbooks', 'infra', 'migrations', 'schema', 'payments', 'auth', 'other']);
+  });
+
+  it("put each of the pipeline's own paths in pipeline or playbooks", () => {
+    expect(of('.github/workflows/ci.yml')).toEqual(['pipeline']);
+    expect(of('.claude/settings.json')).toEqual(['pipeline']);
+    expect(of('docs/qa/reviewer-playbook.md')).toEqual(['playbooks']);
+    expect(of('AGENTS.md')).toEqual(['playbooks']);
+    expect(of('CLAUDE.md')).toEqual(['playbooks']);
+  });
+
+  it('report the declared pipeline code as pipeline, and each declared path as the category its entry names', () => {
+    expect(of('scripts/pipeline/file-follow-up.mjs')).toEqual(['pipeline']);
+    expect(of('migrations/0001.sql')).toEqual(['migrations']);
+    expect(of('src/server/session.ts')).toEqual(['auth']);
+  });
+
+  it('report a declared path whose entry names no category as other', () => {
+    const plain = parseEscalationFile(FILE('- `^infra/` — infrastructure\n- `^db/` `schema` — the schema\n', ''));
+    expect(escalationCategories(plain, ['infra/main.tf'])).toEqual(['other']);
+    expect(escalationCategories(plain, ['infra/main.tf', 'db/schema.sql'])).toEqual(['schema', 'other']);
+    // An entry built without a category, by a caller that doesn't parse, counts as other too.
+    expect(escalationCategories({ paths: [{ pattern: /^x\//, reason: 'x' }], pipeline: [], defaults: [] }, ['x/a'])).toEqual(['other']);
+  });
+
+  it('report every category a change touches once, in their order, and none for a path nothing declares', () => {
+    expect(of('migrations/0001.sql', 'AGENTS.md', '.github/x.yml', 'src/auth.ts')).toEqual(['pipeline', 'playbooks', 'migrations', 'auth']);
+    expect(of('AGENTS.md', '.claude/settings.json')).toEqual(['pipeline', 'playbooks']);
+    expect(of('src/app.ts', 'docs/qa/specs/kiosk.md', 'README.md')).toEqual([]);
+    expect(of()).toEqual([]);
+  });
+
+  it('put every escalating path in exactly one category, so no escalation goes unreported', () => {
+    for (const f of ['.github/x', 'docs/qa/x.md', 'AGENTS.md', 'CLAUDE.md', '.claude/x', 'scripts/pipeline/x.mjs', 'migrations/x.sql', 'src/auth.ts']) {
+      expect(escalatingPaths(file).some(([re]) => re.test(f)), f).toBe(true);
+      expect(of(f), f).toHaveLength(1);
+    }
+  });
+
+  it('still report a declared path under a human-gated promotion, which only changes who approves it (K-MERGE-4)', () => {
+    expect(escalatingPaths(file, { judgingInputs: [] }).some(([re]) => re.test('migrations/x.sql'))).toBe(false);
+    expect(of('migrations/x.sql')).toEqual(['migrations']);
+  });
+
+  it("report no project category without the file: Kanon's default declares none", () => {
+    expect(escalationCategories(defaultEscalationFile(), ['src/auth.ts', 'migrations/x.sql', '.github/x'])).toEqual(['pipeline']);
   });
 });
 

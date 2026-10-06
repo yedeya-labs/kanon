@@ -133,6 +133,15 @@ export const ESCALATION_REASONS = Object.freeze([
 ]);
 
 /**
+ * The escalation categories (plan 0003 §3.7, decision 14): Kanon's closed list, which each
+ * entry of the escalation file (`K-LAYOUT-8`) carries, `other` when it names none. It is
+ * `ESCALATION_CATEGORIES` in `scripts/lib/escalation-paths.mjs`; this module imports nothing,
+ * so the schema test holds this copy to that one (kanon#54). A work item's `esc_<category>`
+ * booleans are built from it.
+ */
+export const ESCALATION_CATEGORIES = Object.freeze(['pipeline', 'playbooks', 'infra', 'migrations', 'schema', 'payments', 'auth', 'other']);
+
+/**
  * Kanon's guards, as `guard_failures` names them (plan 0003 §3.3, group 9; decision 16). Each
  * is a guard Kanon ships, and the schema test fails when one names no file. The list grows
  * with Kanon's releases; a new guard is a new entry, never a new field.
@@ -270,14 +279,7 @@ const WORK_ITEM_V1 = Object.freeze({
   files_specs: count,
   files_config: count,
   files_deps: count,
-  esc_pipeline: bool,
-  esc_playbooks: bool,
-  esc_infra: bool,
-  esc_migrations: bool,
-  esc_schema: bool,
-  esc_payments: bool,
-  esc_auth: bool,
-  esc_other: bool,
+  ...Object.fromEntries(ESCALATION_CATEGORIES.map((c) => [`esc_${c}`, bool])),
   tests_added: count,
   tests_changed: count,
   ac_count: count,
