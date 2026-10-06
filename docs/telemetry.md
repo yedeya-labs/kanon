@@ -205,7 +205,7 @@ Until both are set, the collector skips with a warning and stays green.
 
 **The check.** Dispatch the caller on the default branch. The run is green, and its summary says how many rows the store accepted. The rows are under `<key>#<lane>`, and the reader role can query them.
 
-**Kanon's own caller** is [`telemetry.yml`](../.github/workflows/telemetry.yml). It is pinned like Kanon's other callers ([ADR 0011](decisions/0011-kanon-runs-its-own-lanes.md)). It stays inert until that pin reaches a release that ships the collector ([#304](https://github.com/yedeya-labs/kanon/issues/304)).
+**Kanon's own caller** is [`telemetry.yml`](../.github/workflows/telemetry.yml). It is pinned like Kanon's other callers ([ADR 0011](decisions/0011-kanon-runs-its-own-lanes.md)). It runs hourly at minute 40, which it has done since its pin reached v0.27.0, the first release that ships the collector it calls ([#304](https://github.com/yedeya-labs/kanon/issues/304)).
 
 ## Who can write
 
