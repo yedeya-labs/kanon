@@ -304,9 +304,12 @@ jobs:
           # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
           # step CONCLUSION in the lane's own order, never a step's name or log. The hook ran in
           # the criteria job (kanon#243); `hook` is the step above that replays its conclusion.
+          # An empty `sha` means the criteria job never checked the ref out (its resolve or its
+          # checkout failed), so `checkout` is where the run ended, not the hook it then skipped,
+          # though this job's own checkout of the default ref succeeded (kanon#320).
           lane: verify-acs
           stages: >-
-            checkout=${{ steps.checkout.conclusion }}
+            checkout=${{ inputs.sha == '' && 'failure' || steps.checkout.conclusion }}
             hook=${{ steps.hook.conclusion }}
             setup=${{ steps.setup.conclusion }}
             token=${{ steps.app-token.conclusion }}
