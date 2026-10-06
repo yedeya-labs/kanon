@@ -281,8 +281,8 @@ describe('step 4b: Kanon reviews its own pull requests, through the lane at its 
   it('passes only the dispatch input, and maps the three secrets by name, never inheriting', () => {
     expect(job.with).toEqual({ pr_number: '${{ inputs.pr_number }}' });
     expect(job.secrets).toEqual({
-      REVIEWER_APP_ID: '${{ secrets.REVIEWER_APP_ID }}',
-      REVIEWER_APP_PRIVATE_KEY: '${{ secrets.REVIEWER_APP_PRIVATE_KEY }}',
+      JUDGE_APP_ID: '${{ secrets.JUDGE_APP_ID }}',
+      JUDGE_APP_PRIVATE_KEY: '${{ secrets.JUDGE_APP_PRIVATE_KEY }}',
       CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
     });
   });
@@ -311,8 +311,8 @@ describe('step 4b: Kanon reviews its own pull requests, through the lane at its 
 // then unset, and the lanes skip or fail at the mint.
 describe('stage 2: Kanon runs the Implementer on itself, through the lanes at its last release', () => {
   const SECRETS = {
-    IMPLEMENTER_APP_ID: '${{ secrets.IMPLEMENTER_APP_ID }}',
-    IMPLEMENTER_APP_PRIVATE_KEY: '${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}',
+    AUTHOR_APP_ID: '${{ secrets.AUTHOR_APP_ID }}',
+    AUTHOR_APP_PRIVATE_KEY: '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}',
     CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
   };
   it.each([
@@ -358,8 +358,8 @@ describe('step 11a: Kanon audits its own code, through the lane at its last rele
   it('passes no inputs, and maps the three secrets by name, never inheriting', () => {
     expect(jobs[0]?.with).toBeUndefined();
     expect(jobs[0]?.secrets).toEqual({
-      EXPLORER_APP_ID: '${{ secrets.EXPLORER_APP_ID }}',
-      EXPLORER_APP_PRIVATE_KEY: '${{ secrets.EXPLORER_APP_PRIVATE_KEY }}',
+      AUTHOR_APP_ID: '${{ secrets.AUTHOR_APP_ID }}',
+      AUTHOR_APP_PRIVATE_KEY: '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}',
       CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
     });
   });
@@ -675,16 +675,11 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
     expect(actions?.['commit-message']).toEqual({ prefix: 'ci', include: 'scope' });
   });
 
-  it("holds Kanon's own pins below v0.28.0 until plan 0005 L5, and lets v0.27.x patches through", () => {
+  it("holds back no Kanon release from Kanon's own pins", () => {
     const actions = dependabot.updates.find((u) => u['package-ecosystem'] === 'github-actions');
-    // v0.28.0 is the breaking two-App release (#333, #358): Kanon has no Author or Judge App
-    // until L5, so a bump to it breaks every Kanon lane. The hold is exactly one rule, on every
-    // Kanon reference, by version only: an `update-types` rule would also stop the patches.
-    // L5 removes it, and then this test with it.
-    expect(actions?.ignore).toEqual([{ 'dependency-name': 'yedeya-labs/kanon*', versions: ['>= 0.28.0'] }]);
-    // The plan's L5 step says to remove it, so the hold isn't forgotten there.
-    const plan = readFileSync(new URL('../../docs/plans/0005-lean-installation.md', import.meta.url), 'utf8');
-    const l5 = plan.split('\n').find((l) => l.startsWith('| **L5** |'));
-    expect(l5).toContain('removes the Dependabot hold');
+    // The hold below v0.28.0 (the two-App release, #358) ended at plan 0005's L5, which moved
+    // the pins itself. An ignore rule on Kanon would stop the release that judges the next PR.
+    const ignored = (actions?.ignore ?? []).map((r) => r['dependency-name'] ?? '');
+    expect(ignored.filter((n) => n.startsWith('yedeya-labs/kanon'))).toEqual([]);
   });
 });
