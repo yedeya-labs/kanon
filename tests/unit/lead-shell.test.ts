@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -144,5 +146,113 @@ describe('the rule check', () => {
       expect(badBashRules([t]), t).toEqual([t]);
     }
     expect(badBashRules(EXPECTED)).toEqual([]);
+  });
+});
+
+/**
+ * kanon#327: `Edit(/docs/**)` must not write outside `docs/` through a symlink the tree carries,
+ * such as `docs/x -> ../.git/config`. Whether Claude Code matches the rule against the named
+ * path or the link's target is its own behaviour, so the spine takes the link away instead: for
+ * a lane with the project setup off, git checks every symlink out as a plain file, now and on
+ * every later checkout, and the step fails if a link is left. Its body runs here on a scratch
+ * repository whose commits carry the links an attacker would plant.
+ */
+describe('the spine leaves the agent no symlink to write through (kanon#327)', () => {
+  const steps = read('lane-agent-job.yml').jobs.run!.steps!;
+  const step = steps.find((s) => s.name === "Check the tree's symlinks out as plain files")!;
+  const ENV = { ...process.env, HOME: tmpdir(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (dir: string, ...args: string[]) => {
+    const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: dir, encoding: 'utf8', env: ENV });
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout;
+  };
+  const isLink = (p: string) => lstatSync(p).isSymbolicLink();
+  // The links a pull request's head could commit: to `.git/config`, to the hooks directory,
+  // to the top of the tree, `docs/` itself, and a name with a space and a newline in it.
+  const LINKS: [string, string][] = [['docs/x', '../.git/config'], ['docs/a b', '../.git/hooks'], ['docs/up', '..'], ['docs/new\nline', '../.git/config']];
+  const repo = (links: [string, string][] = LINKS) => {
+    const dir = mkdtempSync(join(tmpdir(), 'lane-symlinks-'));
+    git(dir, 'init', '-q', '-b', 'main');
+    mkdirSync(join(dir, 'docs'));
+    writeFileSync(join(dir, 'docs/brief.md'), 'a brief\n');
+    for (const [path, target] of links) symlinkSync(target, join(dir, path));
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'a tree with links');
+    return dir;
+  };
+  const runStep = (dir: string) => {
+    const r = spawnSync('bash', ['-e', '-c', String(step.run)], { cwd: dir, encoding: 'utf8', env: ENV });
+    return { status: r.status, out: `${r.stdout}${r.stderr}` };
+  };
+
+  it('runs only for a lane with the setup off, after the checkout and before the agent', () => {
+    expect(step, 'the step').toBeDefined();
+    expect(step.if).toBe('${{ !inputs.project-setup }}');
+    expect(steps.indexOf(step)).toBeGreaterThan(steps.findIndex((s) => s.uses === 'actions/checkout@v7'));
+    expect(steps.indexOf(step)).toBeLessThan(steps.findIndex((s) => s.id === 'agent'));
+  });
+
+  it('checks each link out as a plain file holding its target, and leaves the status clean', () => {
+    const dir = repo();
+    try {
+      const r = runStep(dir);
+      expect(r.status, r.out).toBe(0);
+      for (const [path, target] of LINKS) {
+        expect(isLink(join(dir, path)), path).toBe(false);
+        expect(readFileSync(join(dir, path), 'utf8'), path).toBe(target);
+      }
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+      expect(r.out).toContain("::notice title=agent-lane::docs/x is a symlink in this tree");
+      // The newline is escaped, so the path can't open a workflow command of its own.
+      expect(r.out.split('\n').filter((l) => l.startsWith('line'))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('so a write to the link\'s path leaves .git/config alone, and a commit keeps the link a link', () => {
+    const dir = repo();
+    try {
+      expect(runStep(dir).status).toBe(0);
+      const config = readFileSync(join(dir, '.git/config'), 'utf8');
+      writeFileSync(join(dir, 'docs/x'), '[core]\n\tfsmonitor = ./evil\n');
+      expect(readFileSync(join(dir, '.git/config'), 'utf8')).toBe(config);
+      git(dir, 'add', 'docs/x');
+      expect(git(dir, 'ls-files', '-s', 'docs/x')).toMatch(/^120000 /);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('and a branch the agent checks out later brings no link either', () => {
+    const dir = repo([]);
+    try {
+      git(dir, 'checkout', '-q', '-b', 'planted');
+      symlinkSync('../.git/config', join(dir, 'docs/x'));
+      symlinkSync('.git', join(dir, 'gitdir'));
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'plant links');
+      git(dir, 'checkout', '-q', 'main');
+      expect(runStep(dir).status).toBe(0);
+      git(dir, 'checkout', '-q', 'planted');
+      expect(isLink(join(dir, 'docs/x'))).toBe(false);
+      expect(isLink(join(dir, 'gitdir'))).toBe(false);
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails when a link is left in the work tree, tracked or not', () => {
+    const dir = repo([]);
+    try {
+      symlinkSync('../.git/config', join(dir, 'docs/x'));
+      const r = runStep(dir);
+      expect(r.status).not.toBe(0);
+      expect(r.out).toContain('the work tree still holds a symlink');
+      expect(r.out).toContain('./docs/x');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
