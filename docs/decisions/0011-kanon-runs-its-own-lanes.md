@@ -5,6 +5,7 @@
 - **Decided in:** [#22](https://github.com/yedeya-labs/kanon/issues/22)
 - **Amended:** 2026-10-04, stage 2 ([#195](https://github.com/yedeya-labs/kanon/issues/195))
 - **Amended:** 2026-10-05, the Explorer's code audit (plan 0004 step 11a, [#275](https://github.com/yedeya-labs/kanon/issues/275))
+- **Amended:** 2026-10-06, the cost bound does not hold until plan 0005's L6 ([#294](https://github.com/yedeya-labs/kanon/issues/294))
 
 ## Context
 
@@ -33,6 +34,7 @@ If Kanon can't adopt Kanon, then either a rule is wrong or Kanon is narrower tha
 
 - **What it costs:** a lane change is first exercised one release later, not on its own PR.
 - **What bounds that cost:** Kolophon takes every release through Dependabot, so it runs each release first, and Kanon's next PR runs it too. A broken release therefore shows up within one PR, and is rolled back by pinning the previous tag.
+  - **That premise does not hold today (amended 2026-10-06, [#294](https://github.com/yedeya-labs/kanon/issues/294)).** Kolophon runs no Kanon release: [plan 0001](../plans/0001-move-the-agent-lanes.md)'s step 6 was paused by the Owner on 2026-10-03, and Kolophon has no Apps. The Owner then decided on 2026-10-05 that Kanon is applied to its adopters only after [plan 0005](../plans/0005-lean-installation.md) is implemented (its decision 7, step L6), so no adopter runs each release first: the reference adopter's lane callers were still pinned to v0.23.0 on 2026-10-06, four releases behind. Until L6, what bounds the cost is weaker. Kanon's own pinned callers run a release only once Dependabot's bump of them merges, so a broken release shows up one release late, on Kanon's next PR after the bump, and only in what Kanon runs: the PR-title, DCO and `lane-check` checks, the review, implement and code-audit lanes, and telemetry. The lanes Kanon doesn't run (among them merge, lead, dispatch-sweep, triage, the Explorer's live mode and the digests) are run by nobody between releases, so a break in one of them stays unseen until an adopter takes that release. Rolling back is unchanged: pin the previous tag. The bound returns at L6, when Kolophon starts on the lean model and runs Kanon's releases again.
 - **Why not `$/`:** through `$/`, a PR's lane code would review that same PR. A PR that weakened the Reviewer would be reviewed by the weakened Reviewer, with only the Owner's merge left to catch it.
 
 ## Consequences
