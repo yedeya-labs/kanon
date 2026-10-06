@@ -49,7 +49,7 @@ jobs:
 <!-- x-release-please-end -->
 
 - **Check out first.** It reads your repository's files.
-- **`yq` and `jq`.** It parses YAML with `yq` (mikefarah v4) and checks it with `jq`. GitHub's hosted runners have both; a self-hosted runner must provide them. Node is Kanon's own: the action's first step puts the Node major Kanon declares on the `PATH`, as every lane does. That Node, and `KANON`, stay set for the rest of the job, so run the check in a job of its own, as above, or before your own toolchain's setup.
+- **`yq`.** It parses YAML with `yq` (mikefarah v4), and checks it in one Node process. GitHub's hosted runners have `yq`; a self-hosted runner must provide it. Node is Kanon's own: the action's first step puts the Node major Kanon declares on the `PATH`, as every lane does. That Node, and `KANON`, stay set for the rest of the job, so run the check in a job of its own, as above, or before your own toolchain's setup.
 - **No inputs.** Everything it checks is a fixed path or is read from the lanes ([ADR 0002](../../docs/decisions/0002-standardise-dont-parameterise.md)).
 - Pin the same exact Kanon version as your lanes, and let Dependabot propose upgrades (`K-ADOPT-11`).
-- **Run it locally** from a Kanon checkout at your pinned tag, in your repository's root: `KANON_ROOT=<kanon checkout> ACTION_REF=<tag> bash <kanon checkout>/actions/lane-check/lane-check.sh`. It needs `yq` (mikefarah v4) and `jq` on your `PATH`, and Node 24 when you keep an escalation or exemptions file or an adoption record, or call the Overseer.
+- **Run it locally** from a Kanon checkout at your pinned tag, in your repository's root: `KANON_ROOT=<kanon checkout> ACTION_REF=<tag> bash <kanon checkout>/actions/lane-check/lane-check.sh`. It needs `yq` (mikefarah v4) and Node 24 on your `PATH`.
