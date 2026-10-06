@@ -717,10 +717,10 @@ jobs:
             gets. Use the rubric in docs/qa/explorer-playbook.md: `sev:critical` = data
             loss / security / data isolation / outage; `sev:high` = core flow broken,
             no workaround; `sev:medium` = degraded, workaround exists; `sev:low` =
-            cosmetic. Judge the REACHABLE impact, not the title's shape — RA-585
-            ("a public/student caller can select gateway:'fake'" — register or pay for
-            FREE) is critical and RA-622 ("kiosk_code has no unique index") is low,
-            and they read alike. Filing with no severity leaves the issue
+            cosmetic. Judge the REACHABLE impact, not the title's shape: two
+            findings that read alike can sit at opposite ends of the rubric, and the
+            playbook's `## Severity rubric` says what each level looks like on THIS
+            project. Filing with no severity leaves the issue
             indistinguishable from a stale doc comment; it now gets flagged
             `qa:needs-severity` and comes back to you.
 

@@ -206,7 +206,7 @@ jobs:
             `qa-explore-summary.json`: one JSON object whose `routes` array holds one
             `{route, status, signal}` per route swept. `status` is `passed` or `failed`,
             and a failed route's `signal` is the first objective signal the sweep
-            recorded on it (for example "objective signals on /admin/courses:
+            recorded on it (for example "objective signals on /some/route:
             [pageerror] ..."). `tier` is the tier swept, `commit` the commit, and
             `passed` and `failed` the counts. Do NOT run the sweep yourself, and read
             no other report: the summary is the sweep's result.
