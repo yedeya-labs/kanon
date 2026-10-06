@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.31.0](https://github.com/yedeya-labs/kanon/compare/v0.30.0...v0.31.0) (2026-10-06)
+
+
+### Features
+
+* **citation-guard:** read a configurable list of Markdown globs, docs/**/*.md by default ([#408](https://github.com/yedeya-labs/kanon/issues/408)) ([24385b6](https://github.com/yedeya-labs/kanon/commit/24385b6076d3c136d62cac22ed943a5b0d06fb3e))
+
+
+### Tests
+
+* **workflows:** hold each base-script judge to its bare command once --path globs are removed ([#421](https://github.com/yedeya-labs/kanon/issues/421)) ([2dffd8e](https://github.com/yedeya-labs/kanon/commit/2dffd8e05de0140f311d6ee8eba3988d7bce96bc))
+
+
+### CI
+
+* **deps:** upgrade Kanon to v0.30.0 ([#412](https://github.com/yedeya-labs/kanon/issues/412)) ([1d6e310](https://github.com/yedeya-labs/kanon/commit/1d6e3107655d1540f8dad0a66a47ffd4699734a3))
+* run the citation guard and citation-shift over rulebook/ and the READMEs too ([#409](https://github.com/yedeya-labs/kanon/issues/409)) ([7675d06](https://github.com/yedeya-labs/kanon/commit/7675d064674afbd0e85dbc713cf3d05d1ae09285))
+* shard the unit suite over four jobs and run lint, type-check and actionlint beside them ([#410](https://github.com/yedeya-labs/kanon/issues/410)) ([3f2f197](https://github.com/yedeya-labs/kanon/commit/3f2f197ff02f64125a501b8f33bb453893a37918))
+
 ## [0.30.0](https://github.com/yedeya-labs/kanon/compare/v0.29.0...v0.30.0) (2026-10-06)
 
 
