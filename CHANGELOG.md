@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.28.0](https://github.com/yedeya-labs/kanon/compare/v0.27.0...v0.28.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **lanes:** run the lanes as two Apps, Author and Judge, with fixed secrets and the register's shared-slug rows ([#358](https://github.com/yedeya-labs/kanon/issues/358))
+* **lanes:** require the role marker and the implementer status, and refuse revise and rebase outside the status chain ([#333](https://github.com/yedeya-labs/kanon/issues/333))
+
+### Features
+
+* **cli:** kanon init, and the requirements file each release ships ([#328](https://github.com/yedeya-labs/kanon/issues/328)) ([fc86c2d](https://github.com/yedeya-labs/kanon/commit/fc86c2d10d0f9bfd11a0d1a5994c27ea90cef0a0))
+* **declarations:** screen the digest for the declared environment name, and resolve `@/` by suffix ([#350](https://github.com/yedeya-labs/kanon/issues/350)) ([6843b8a](https://github.com/yedeya-labs/kanon/commit/6843b8a910e4bde010dc33a53c3ef77fe8f2cc03))
+* **lanes:** move the remaining Opus lanes to Opus 5.5 and take gate-candidate off decided issues ([#334](https://github.com/yedeya-labs/kanon/issues/334)) ([21e7506](https://github.com/yedeya-labs/kanon/commit/21e7506344b8accfbdfb514db207a755d5d9f2d7))
+* **lanes:** require the role marker and the implementer status, and refuse revise and rebase outside the status chain ([#333](https://github.com/yedeya-labs/kanon/issues/333)) ([4ea8de2](https://github.com/yedeya-labs/kanon/commit/4ea8de22138d0268c085bb39bd1ff1994543be0a))
+* **lanes:** run the lanes as two Apps, Author and Judge, with fixed secrets and the register's shared-slug rows ([#358](https://github.com/yedeya-labs/kanon/issues/358)) ([bad955a](https://github.com/yedeya-labs/kanon/commit/bad955adb81292bcd853bf42b4c616f62036e69e))
+* **merge:** let a human-gated production promotion widen the green zone to high-risk paths ([#340](https://github.com/yedeya-labs/kanon/issues/340)) ([31141a6](https://github.com/yedeya-labs/kanon/commit/31141a667847d2979a2748f3d9906baca8135373))
+* **telemetry:** implement plan 0002 decisions 17 to 19 in the importer, the schema, the function and the register ([#362](https://github.com/yedeya-labs/kanon/issues/362)) ([87be69c](https://github.com/yedeya-labs/kanon/commit/87be69cebc064296f73211cd0f41d734cce3c808))
+
+
+### Bug Fixes
+
+* **agent-classify:** drop the `code` output nothing reads ([#339](https://github.com/yedeya-labs/kanon/issues/339)) ([00f11dc](https://github.com/yedeya-labs/kanon/commit/00f11dcdbef822c9420c588c6cf305cb69672887))
+* **citation:** advisory checks for a typo counted as a dependency and a code-comment coordinate the diff wrote ([#343](https://github.com/yedeya-labs/kanon/issues/343)) ([e4edc3f](https://github.com/yedeya-labs/kanon/commit/e4edc3f367b053a67899ae4763adf0afc555ff22))
+* close five guard reviewer follow-ups ([#349](https://github.com/yedeya-labs/kanon/issues/349)) ([4a58180](https://github.com/yedeya-labs/kanon/commit/4a581806f9fc83e518ab9a4661443b7957ae846a))
+* credit only a named re-land, judge the release PR's confirmed head, and correct three stale claims ([#355](https://github.com/yedeya-labs/kanon/issues/355)) ([58bb949](https://github.com/yedeya-labs/kanon/commit/58bb94949b67986f4a382c4307a7f463f0955175))
+* **telemetry:** close five telemetry reviewer follow-ups before the collector goes live ([#346](https://github.com/yedeya-labs/kanon/issues/346)) ([3941342](https://github.com/yedeya-labs/kanon/commit/39413422e74d0533b9562305bb870aaf43fd8508))
+* **telemetry:** close the plan 0002 import, ingest and transcript-count gaps before the collector goes live ([#359](https://github.com/yedeya-labs/kanon/issues/359)) ([9b9cf5b](https://github.com/yedeya-labs/kanon/commit/9b9cf5b39bf9cb0bd934f27379e4f4e915a0cc90))
+
+
+### Tests
+
+* keep every test's writes out of Kanon's own tree ([#341](https://github.com/yedeya-labs/kanon/issues/341)) ([d9c7256](https://github.com/yedeya-labs/kanon/commit/d9c72565612afbe1e1da5c37732e8fa22026a6fe))
+
+
+### CI
+
+* **deps:** Bump the kanon group across 1 directory with 6 updates ([#353](https://github.com/yedeya-labs/kanon/issues/353)) ([8f3c2cd](https://github.com/yedeya-labs/kanon/commit/8f3c2cd02167626dd22e8664e4bebb76ec5ab797))
+* **deps:** check Kanon's own pins daily ([#332](https://github.com/yedeya-labs/kanon/issues/332)) ([b1caa6d](https://github.com/yedeya-labs/kanon/commit/b1caa6d98d7fb031cd545c98d24b244b71280b81))
+
 ## [0.27.0](https://github.com/yedeya-labs/kanon/compare/v0.26.0...v0.27.0) (2026-10-05)
 
 
