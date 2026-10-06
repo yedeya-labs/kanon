@@ -111,7 +111,10 @@ const IDENTITY = {
   GIT_COMMITTER_EMAIL: `${BOT_ID}+${SLUG}[bot]@users.noreply.github.com`,
 };
 
-describe("an agent's commits pass the adopter's dco check (agent-commits.sh, K-AGENT-44)", () => {
+// Each case runs agent-commits.sh and then git init and commits through its hooks: a dozen spawns,
+// about a second alone. Under a loaded full `npm test` the husky case took 5.1s and failed on the
+// 5s default (kanon#381), so the block gets 15s.
+describe("an agent's commits pass the adopter's dco check (agent-commits.sh, K-AGENT-44)", { timeout: 15_000 }, () => {
   it('authors each commit as the App and signs it off as the delegate, under claude-code-action\'s git config', () =>
     within(run(), (r) => {
       expect(r.status, r.out).toBe(0);

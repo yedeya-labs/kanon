@@ -32,7 +32,9 @@ describe('the public tree names nothing from the private extraction', () => {
   it("no tracked file contains a forbidden name (compared by hash)", () => {
     const hits = tracked.filter((f) => namesForbiddenWord(readFileSync(f, 'utf8')));
     expect(hits).toEqual([]);
-  });
+  // It reads and hashes every word of every tracked file, in-process: about 4.7s under a loaded
+  // full `npm test` against the 5s default (kanon#381), so this one case gets 15s.
+  }, 15_000);
 
   for (const [what, pattern] of FORBIDDEN_PATTERNS) {
     it(`no tracked file contains ${what}`, () => {
