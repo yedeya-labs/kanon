@@ -356,7 +356,8 @@ export const STORE_FIELDS = Object.freeze(['pk', 'sk', 'source', 'received_at', 
 
 /** What a field name looks like. Anything else is never echoed. */
 const FIELD_NAME = /^[a-z][a-z0-9_]{0,63}$/;
-const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+/** The `time` type: ISO-8601 UTC, to the second or the millisecond. */
+export const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 
 /**
  * Why one value fails its field, or null. Returns a PROBLEM WORD, never the value.
@@ -409,9 +410,11 @@ function problemOf(f, v) {
  * `failed_stage` is required when the outcome is `not-reached` or `failed` and absent
  * otherwise (§2.6).
  * @param {Record<string, unknown>} row
+ * @param {boolean} importedRun the history import's run row (decision 19): a `not-reached` one
+ *   may omit `failed_stage`, because the history doesn't record which stage the run stopped at
  * @returns {{ field: string, problem: string }[]}
  */
-function runPairings(row) {
+function runPairings(row, importedRun) {
   /** @type {{ field: string, problem: string }[]} */
   const out = [];
   const outcome = typeof row.outcome === 'string' ? row.outcome : null;
@@ -421,7 +424,8 @@ function runPairings(row) {
   }
   if (outcome && OUTCOMES.includes(outcome)) {
     const needsStage = outcome === 'not-reached' || outcome === 'failed';
-    if (needsStage && !Object.hasOwn(row, 'failed_stage')) out.push({ field: 'failed_stage', problem: 'required' });
+    const exempt = importedRun && outcome === 'not-reached';
+    if (needsStage && !exempt && !Object.hasOwn(row, 'failed_stage')) out.push({ field: 'failed_stage', problem: 'required' });
     if (!needsStage && Object.hasOwn(row, 'failed_stage')) out.push({ field: 'failed_stage', problem: 'outcome-mismatch' });
   }
   if (typeof row.lane === 'string' && typeof row.role === 'string'
@@ -431,14 +435,24 @@ function runPairings(row) {
   return out;
 }
 
+/** The run field an imported row leaves absent (decision 17): no Kanon version ran it. */
+export const IMPORT_ABSENT = 'kanon_version';
+
 /**
  * Validate one row. Reads `row_kind` first, then checks the row against that kind's list at
  * its `schema_version`. Rejects the WHOLE row on any problem, and names fields only.
  *
+ * `imported` is the history import's run row (plan 0002 §7, decision 17): it ran before Kanon
+ * existed, so it carries NO `kanon_version`, and one that does is refused. A `not-reached` one may
+ * also omit `failed_stage` (decision 19): the history doesn't say where the run stopped. A release or `dev`
+ * would claim a Kanon version the run never had. Only the ingest function sets it, and only for
+ * the importer role; every other caller validates a run row with `kanon_version` required.
+ *
  * @param {unknown} row
+ * @param {{ imported?: boolean }} [opts]
  * @returns {{ ok: true } | { ok: false, errors: { field: string, problem: string }[] }}
  */
-export function validate(row) {
+export function validate(row, { imported = false } = {}) {
   if (row === null || typeof row !== 'object' || Array.isArray(row)) {
     return { ok: false, errors: [{ field: '(row)', problem: 'type' }] };
   }
@@ -462,10 +476,13 @@ export function validate(row) {
     const p = problemOf(f, r[name]);
     if (p) errors.push({ field: name, problem: p });
   }
+  const importedRun = imported && kind === 'run';
   for (const [name, f] of Object.entries(fields)) {
+    if (importedRun && name === IMPORT_ABSENT) continue;
     if (f.required && !Object.hasOwn(r, name)) errors.push({ field: name, problem: 'required' });
   }
-  if (kind === 'run') errors.push(...runPairings(r));
+  if (importedRun && Object.hasOwn(r, IMPORT_ABSENT)) errors.push({ field: IMPORT_ABSENT, problem: 'not-allowed' });
+  if (kind === 'run') errors.push(...runPairings(r, importedRun));
   return errors.length ? { ok: false, errors } : { ok: true };
 }
 

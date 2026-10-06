@@ -160,11 +160,29 @@ describe('the recorded_at window (§4): 8 days back, 10 minutes ahead', () => {
   it('the importer may backdate to 13 months, and no further', async () => {
     const importer = { IMPORTER_ROLE: 'kanon-telemetry-importer' };
     const opts = { role: 'kanon-telemetry-importer', key: 'k2' };
-    const ok = await call(event([runRow({ recorded_at: iso(addMonths(NOW, -13) + 60_000) })], opts), importer);
+    const ok = await call(event([runRow({ kanon_version: undefined, recorded_at: iso(addMonths(NOW, -13) + 60_000) })], opts), importer);
     expect(ok.status).toBe(200);
     expect(ok.puts[0]).toMatchObject({ pk: 'k2#review', source: 'import' });
-    const old = await call(event([runRow({ recorded_at: iso(addMonths(NOW, -13) - 60_000) })], opts), importer);
+    const old = await call(event([runRow({ kanon_version: undefined, recorded_at: iso(addMonths(NOW, -13) - 60_000) })], opts), importer);
     expect(old.body.results[0].errors).toEqual([{ field: 'recorded_at', problem: 'window' }]);
+  });
+
+  it('an imported row carries no kanon_version, and every other row must (decision 17)', async () => {
+    const importer = { IMPORTER_ROLE: 'kanon-telemetry-importer' };
+    const opts = { role: 'kanon-telemetry-importer', key: 'k2' };
+    const imported = await call(event([runRow({ kanon_version: undefined })], opts), importer);
+    expect(imported.status).toBe(200);
+    expect(imported.puts[0]).not.toHaveProperty('kanon_version');
+    // A version on an imported row would claim a Kanon release the run never had.
+    for (const v of ['0.12.0', 'dev']) {
+      const r = await call(event([runRow({ kanon_version: v })], opts), importer);
+      expect(r.status).toBe(422);
+      expect(r.body.results[0].errors).toEqual([{ field: 'kanon_version', problem: 'not-allowed' }]);
+    }
+    // A writer's row without one is refused, as before.
+    const writer = await call(event([runRow({ kanon_version: undefined })]));
+    expect(writer.status).toBe(422);
+    expect(writer.body.results[0].errors).toEqual([{ field: 'kanon_version', problem: 'required' }]);
   });
 
   it('the backfill role writes work items only, in the normal window', async () => {

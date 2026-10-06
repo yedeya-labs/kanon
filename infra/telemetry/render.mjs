@@ -31,6 +31,8 @@ import { parseArgs } from 'node:util';
 import { parse } from 'yaml';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 import { readRepositorySubject, subjectProblems } from '../../scripts/lib/oidc-subject.mjs';
+import { addMonths, RETENTION_MONTHS } from './function/index.mjs';
+import { ISO_UTC } from '../../actions/agent-telemetry/schema.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const TEMPLATE_PATH = join(HERE, 'template.yaml');
@@ -44,17 +46,31 @@ const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const READER = /^ref:refs\/heads\/[A-Za-z0-9._/-]+$/;
 
 /**
- * @typedef {{ key: string, repository: string, readers?: string[], writer_subjects?: string[], reader_subjects?: string[] }} Entry
+ * @typedef {{ minutes: number, review_recorded_at: string }} FirstReview
+ * @typedef {{ key: string, repository: string, readers?: string[], writer_subjects?: string[], reader_subjects?: string[], first_review?: FirstReview }} Entry
  * @typedef {{ writer: string[], readers: string[] }} Subjects
  * @typedef {{ owner_principal_arn: string, create_oidc_provider?: boolean, reserved_concurrency?: number, repositories: Entry[] }} Register
  */
 
 /**
+ * Whether an entry's time from install to first review is past its bound (plan 0002 decision 18):
+ * 13 months after the review row it was computed from, the same retention as the row itself.
+ * Past it, the value comes out of the register, and so out of the published distribution.
+ * @param {FirstReview} firstReview
+ * @param {number} now
+ */
+export const firstReviewExpired = (firstReview, now) =>
+  addMonths(Date.parse(firstReview.review_recorded_at), RETENTION_MONTHS) <= now;
+
+/**
  * Check the register, and say what's wrong with it without echoing anything but its keys.
+ * A time to first review past its 13 months is a problem too (decision 18), so no render, and so
+ * no deploy, goes out while the register still holds one.
  * @param {any} register
+ * @param {number} [now]
  * @returns {string[]}
  */
-export function registerProblems(register) {
+export function registerProblems(register, now = Date.now()) {
   const out = [];
   if (!register || typeof register !== 'object') return ['the register is not an object'];
   if (typeof register.owner_principal_arn !== 'string' || !OWNER.test(register.owner_principal_arn)) {
@@ -81,6 +97,15 @@ export function registerProblems(register) {
     else if (r?.reader_subjects === undefined) {
       if (!Array.isArray(r?.readers) || r.readers.length === 0 || !r.readers.every((/** @type {unknown} */ s) => typeof s === 'string' && READER.test(s))) {
         out.push(`${at}.readers must list ref:refs/heads/<branch> subjects, and nothing else (no environment)`);
+      }
+    }
+    const fr = r?.first_review;
+    if (fr !== undefined) {
+      if (!fr || typeof fr !== 'object' || !Number.isInteger(fr.minutes) || fr.minutes < 0
+        || typeof fr.review_recorded_at !== 'string' || !ISO_UTC.test(fr.review_recorded_at) || Number.isNaN(Date.parse(fr.review_recorded_at))) {
+        out.push(`${at}.first_review must be { minutes, review_recorded_at }`);
+      } else if (firstReviewExpired(fr, now)) {
+        out.push(`${at}.first_review is past its ${RETENTION_MONTHS} months (decision 18): remove it`);
       }
     }
     for (const field of ['writer_subjects', 'reader_subjects']) {
@@ -218,12 +243,12 @@ export function repositoryResources(entry, invokePolicy, subjects) {
 /**
  * The deployable template and its parameter overrides.
  * @param {Register} register
- * @param {{ verify?: boolean, importer?: boolean, backfill?: boolean, templateText?: string, functionDir?: string, gh?: (args: string[]) => string }} [opts]
+ * @param {{ verify?: boolean, importer?: boolean, backfill?: boolean, templateText?: string, functionDir?: string, gh?: (args: string[]) => string, now?: number }} [opts]
  *   `gh` runs `gh` for GitHub's API; the default is the real one
  * @returns {{ template: any, parameters: string[], subjects: Record<string, Subjects> }} `subjects` by key
  */
 export function render(register, opts = {}) {
-  const problems = registerProblems(register);
+  const problems = registerProblems(register, opts.now);
   if (problems.length) throw new Error(`register: ${problems.join('; ')}`);
   /** @type {Record<string, Subjects>} */
   const subjects = {};

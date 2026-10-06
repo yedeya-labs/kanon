@@ -114,7 +114,8 @@ export function expiresOf(row) {
  * @returns {{ ok: true, item: Record<string, any> } | { ok: false, errors: { field: string, problem: string }[] }}
  */
 export function stamp(row, { caller, key, now }) {
-  const v = validate(row);
+  // The importer's rows predate Kanon, so they carry no `kanon_version` (decision 17).
+  const v = validate(row, { imported: caller.kind === 'importer' });
   if (!v.ok) return v;
   const r = /** @type {Record<string, any>} */ (row);
   /** @type {{ field: string, problem: string }[]} */
