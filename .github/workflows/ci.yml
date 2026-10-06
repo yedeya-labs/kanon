@@ -104,6 +104,16 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      # tests/unit/actionlint.test.ts runs the real binary, and in CI a missing one is a red, so
+      # every shard provisions it: whichever shard draws that file needs it. From the cache the
+      # wrapper verifies the binary and lints .github/ in about a second; the lint job saves it.
+      - name: Restore the pinned actionlint
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/kanon-actionlint
+          key: actionlint-1.7.12-${{ runner.os }}-${{ runner.arch }}
+      - name: Provision the pinned actionlint for its tests
+        run: bash .github/scripts/actionlint.sh
       - run: npm test -- --shard=${{ matrix.shard }}/3
 
   checks:

@@ -49,8 +49,9 @@
 #         ACTIONLINT_CACHE_DIR  where the verified binary is kept
 #                               (default: $HOME/.cache/kanon-actionlint — deliberately not
 #                               XDG_CACHE_HOME, so it is always the path CI caches)
-# CI      `.github/workflows/ci.yml`, the actionlint step of the checks job, restores and
-#         saves $HOME/.cache/kanon-actionlint keyed on the version below.
+# CI      `.github/workflows/ci.yml`, the actionlint step of the lint job, restores and
+#         saves $HOME/.cache/kanon-actionlint keyed on the version below. Each unit-test
+#         shard restores it too, for tests/unit/actionlint.test.ts's real-binary cases.
 set -euo pipefail
 
 ACTIONLINT_VERSION=1.7.12
