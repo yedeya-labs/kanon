@@ -24,3 +24,8 @@ jobs:
       contents: write
       pull-requests: write
     uses: $/.github/workflows/release.yml
+    # The Releaser App (plan 0005 L5): it opens the release PR, so CI runs on it, and is the
+    # ruleset's only bypass. Mapped by name, never inherited; unset, the workflow token.
+    secrets:
+      RELEASER_APP_ID: ${{ secrets.RELEASER_APP_ID }}
+      RELEASER_APP_PRIVATE_KEY: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}

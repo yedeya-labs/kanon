@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
-import { apps, buildManifest, checkoutCheck, loadApps, loadRoles, realDeps, remoteRepo } from '../../cli/apps.mjs';
+import { appRoles, apps, buildManifest, checkoutCheck, loadApps, loadRoles, realDeps, remoteRepo } from '../../cli/apps.mjs';
 import { appsTable, grantsOf } from './helpers/roles-table.js';
 
 /**
@@ -864,20 +864,24 @@ describe('the register row (K-LAYOUT-6)', () => {
 describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
   const OWN = join(ROOT, 'docs/qa/agent-identities.md');
 
-  // Each row is exactly what the tool wrote, in the order the Owner created the Apps: the
-  // Reviewer (2026-10-02), then the Implementer and the Explorer (2026-10-05).
-  it('is exactly what kanon apps writes for the Reviewer, the Implementer and the Explorer it created, plus the one broadening', () => {
+  // Each row is exactly what the tool wrote: the per-role Reviewer (2026-10-02), Implementer and
+  // Explorer (2026-10-05), then plan 0005's L5 (2026-10-06) rewrote them in place as the Author,
+  // the Judge and the Releaser, in that order, adding the roles they lacked.
+  it('is exactly what kanon apps writes for the per-role Apps and then the Author, the Judge and the Releaser, plus the one footnote', () => {
     const roles = loadRoles();
-    const reviewer = writeRegisterRow(null, { role: 'Reviewer', slug: 'kanon-reviewer', permissions: roles.reviewer!.permissions }).text;
-    const both = writeRegisterRow(reviewer, { role: 'Implementer', slug: 'kanon-implementer', permissions: roles.implementer!.permissions }).text;
-    const all = writeRegisterRow(both, { role: 'Explorer', slug: 'kanon-explorer', permissions: roles.explorer!.permissions }).text;
-    // The Owner granted the Implementer Commit statuses write on 2026-10-05 (plan 0005 §3.3,
-    // question 6), recorded by hand with its reason as `K-AGENT-3` asks: the Implementer row's
-    // `Other` cell and one footnote. Nothing else differs from what the tool wrote.
+    let text = writeRegisterRow(null, { role: 'Reviewer', slug: 'kanon-reviewer', permissions: roles.reviewer!.permissions }).text;
+    text = writeRegisterRow(text, { role: 'Implementer', slug: 'kanon-implementer', permissions: roles.implementer!.permissions }).text;
+    text = writeRegisterRow(text, { role: 'Explorer', slug: 'kanon-explorer', permissions: roles.explorer!.permissions }).text;
+    const all = loadApps();
+    for (const [app, slug] of [['author', 'yedeya-labs-author'], ['judge', 'yedeya-labs-judge'], ['releaser', 'yedeya-labs-releaser']] as const) {
+      for (const role of appRoles(all[app]!)) text = writeRegisterRow(text, { role, slug, permissions: all[app]!.permissions }).text;
+    }
+    // The Author's Commit statuses write (`K-AGENT-3`) keeps its reason by hand, as that rule
+    // asks: a marker on the Implementer row and one footnote. Nothing else differs.
     const own = readFileSync(OWN, 'utf8');
     const [table, footnote] = own.split(/\n(?=\[\^1\]: )/);
     expect(footnote).toMatch(/^\[\^1\]: \*\*Commit statuses: Read & write, broadened beyond the Implementer's row\*\* \(`K-AGENT-3`/);
-    expect(`${table!.replace('| No access | Commit statuses: Read & write [^1] |', '| No access | None |').trimEnd()}\n`).toBe(all);
+    expect(`${table!.replace('| Commit statuses: Read & write [^1] |', '| Commit statuses: Read & write |').trimEnd()}\n`).toBe(text);
   });
 
   it('keeps the Implementer as one row when kanon apps writes the slug GitHub gave it', () => {
@@ -886,7 +890,7 @@ describe("Kanon's own App register (#39, plan 0001 step 4a)", () => {
     expect(text).toContain('| Implementer | `kanon-implementer-2` |');
   });
 
-  it.each([['Reviewer', 'kanon-reviewer'], ['Implementer', 'kanon-implementer'], ['Explorer', 'kanon-explorer']])('gives the lanes the %s slug', (role, slug) => {
+  it.each([['Reviewer', 'yedeya-labs-judge'], ['Merger', 'yedeya-labs-judge'], ['Implementer', 'yedeya-labs-author'], ['Explorer', 'yedeya-labs-author'], ['Lead', 'yedeya-labs-author'], ['Overseer', 'yedeya-labs-author'], ['Releaser', 'yedeya-labs-releaser']])('gives the lanes the %s slug', (role, slug) => {
     const r = spawnSync('awk', ['-v', `role=${role}`, '-f', AWK, OWN], { encoding: 'utf8' });
     expect(r.stderr).toBe('');
     expect(r.status).toBe(0);

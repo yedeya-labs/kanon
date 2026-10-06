@@ -292,14 +292,14 @@ describe("Kanon's own records (K-LAYOUT-14, K-LAYOUT-6, K-LAYOUT-16)", () => {
 
   it('delegate a person, and register the Implementer by the slug the lanes commit as', () => {
     const trust = kanonTrust();
-    expect(trust.slugs).toContain('kanon-implementer');
+    expect(trust.slugs).toContain('yedeya-labs-author');
     expect(trust.delegate.name).not.toMatch(/bot|claude/i);
   });
 
   it("pass Kanon's Implementer commit, made by the block, against Kanon's real register and record", () =>
-    within(run({ record: readFileSync(join(ROOT, RECORD), 'utf8'), slug: 'kanon-implementer' }), (r) => {
+    within(run({ record: readFileSync(join(ROOT, RECORD), 'utf8'), slug: 'yedeya-labs-author' }), (r) => {
       expect(r.status, r.out).toBe(0);
-      expect(checkCommit(commitAs(r, AGENT_MESSAGE), kanonTrust())).toEqual({ ok: true, delegated: 'kanon-implementer' });
+      expect(checkCommit(commitAs(r, AGENT_MESSAGE), kanonTrust())).toEqual({ ok: true, delegated: 'yedeya-labs-author' });
     }));
 
   it('declare no test database, which the lanes read as none (K-LAYOUT-16)', () => {
