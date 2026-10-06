@@ -118,7 +118,14 @@ jobs:
 
       # THE AGENT'S COMMITS PASS DCO (K-AGENT-44, kanon#234), on a runner: authored as the bot
       # the block was given, and signed off by the delegate Kanon's default branch records.
+      # THE RECORD IS READ WHERE THE BLOCK READS IT (kanon#251): from the default branch, over
+      # the API, with the token the block was left (the workflow token), not from this checkout.
+      # On a pull request the checkout is the PR's merge ref, so a PR that changes or removes
+      # the delegate would fail here while the block, rightly, still signs off as the default
+      # branch's. Whatever token lets the block read the record lets this step read it too.
       - name: Check a commit is the App's, signed off by the delegate
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$GIT_AUTHOR_NAME" = 'github-actions[bot]'
@@ -130,8 +137,12 @@ jobs:
           test "$(git -C "$d" log -1 --format=%an)" = 'github-actions[bot]'
           signoff="$(git -C "$d" log -1 --format='%(trailers:key=Signed-off-by,valueonly)')"
           name="${signoff% <*}"
+          email="${signoff##*<}"
+          email="${email%>}"
           test -n "$name"
-          grep -qF "| $name |" docs/qa/sign-off-delegation.md
+          test -n "$email"
+          record="$(gh api "repos/$GITHUB_REPOSITORY/contents/docs/qa/sign-off-delegation.md" -H 'Accept: application/vnd.github.raw')"
+          grep -qF "| $name | $email |" <<<"$record"
 
       # Never runs: it would call the model. Resolved and downloaded during `Set up job`.
       # A run id is never 0. The literal `false` says the same, but actionlint rejects a
