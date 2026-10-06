@@ -336,12 +336,23 @@ describe('the actionlint wrapper rewrites `$/` in a copy only, and maps the outp
 describe('CI runs the wrapper with a pinned, cached binary and no credentials (#77)', () => {
   type Step = { id?: string; name?: string; run?: string; uses?: string; if?: string; with?: Record<string, string>; env?: Record<string, string> };
   const ci = parse(readFileSync(join(REPO, '.github/workflows/ci.yml'), 'utf8'));
-  const steps = ci.jobs.checks.steps as Step[];
+  // The lint job (#407), whose result the required `Lint, type-check and unit tests` check reads.
+  const steps = ci.jobs.lint.steps as Step[];
   const at = steps.findIndex((s) => s.run === 'bash .github/scripts/actionlint.sh');
 
-  it('runs the wrapper in the checks job, before the unit tests', () => {
+  it('runs the wrapper in the lint job, which the required check needs', () => {
     expect(at, 'no step runs the wrapper').toBeGreaterThan(-1);
-    expect(at).toBeLessThan(steps.findIndex((s) => s.run === 'npm test'));
+    expect([ci.jobs.checks.needs].flat()).toContain('lint');
+  });
+
+  it('provisions the binary in every test shard, before the tests, since a missing one is a red in CI', () => {
+    const unit = ci.jobs.unit.steps as Step[];
+    const wrapper = unit.findIndex((s) => s.run === 'bash .github/scripts/actionlint.sh');
+    expect(wrapper, 'the shard job never provisions the binary').toBeGreaterThan(-1);
+    expect(wrapper).toBeLessThan(unit.findIndex((s) => s.run?.startsWith('npm test')));
+    const restore = unit.slice(0, wrapper).find((s) => s.uses?.startsWith('actions/cache/restore@'));
+    expect(restore?.with?.key).toBe(steps.find((s) => s.id === 'actionlint-cache')?.with?.key);
+    expect(restore?.with?.path).toBe('~/.cache/kanon-actionlint');
     expect(steps[at]?.env ?? {}, 'the step needs no token or secret').toEqual({});
   });
 

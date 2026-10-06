@@ -1,5 +1,11 @@
 # Kanon's own checks on every pull request: lint, type-check and unit tests.
 #
+# The unit suite runs in four shards, in parallel with a job for lint, type-check and
+# actionlint (#407): one runner is CPU-bound on the suite, so splitting it is what brings the
+# check's wall-clock down. The required check, `Lint, type-check and unit tests`, is the `checks`
+# job that `needs` them all and passes only when every one of them succeeded, so the `main`
+# ruleset names one check however the work under it is split.
+#
 # It also runs on merge_group (K-MERGE-7). The merge queue tests each queued PR on top of
 # main and whatever is ahead of it in the queue, and this is the check that makes that
 # test mean something: it runs the full suite on the combined commit. Without the
@@ -55,8 +61,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: yedeya-labs/kanon/actions/lane-check@v0.30.0
 
-  checks:
-    name: Lint, type-check and unit tests
+  lint:
+    name: Lint, type-check and actionlint
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -83,7 +89,51 @@ jobs:
           key: ${{ steps.actionlint-cache.outputs.cache-primary-key }}
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
+
+  unit:
+    name: Unit tests (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      # Every shard reports, so one red shard doesn't hide what the others would have found.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      # tests/unit/actionlint.test.ts runs the real binary, and in CI a missing one is a red, so
+      # every shard provisions it: whichever shard draws that file needs it. From the cache the
+      # wrapper verifies the binary and lints .github/ in about a second; the lint job saves it.
+      - name: Restore the pinned actionlint
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/kanon-actionlint
+          key: actionlint-1.7.12-${{ runner.os }}-${{ runner.arch }}
+      - name: Provision the pinned actionlint for its tests
+        run: bash .github/scripts/actionlint.sh
+      - run: npm test -- --shard=${{ matrix.shard }}/4
+
+  checks:
+    name: Lint, type-check and unit tests
+    needs: [lint, unit]
+    # `always()`, so a failed or cancelled need runs this job red instead of skipping it: a
+    # skipped required check counts as passing. Only `success` passes, from every need: a
+    # matrix need is `success` only when every shard succeeded.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the lint job and every test shard succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"'
+          echo "$RESULTS" | jq -e 'to_entries | length == 2 and all(.value.result == "success")'
 
   citation-guard:
     name: Citation guard
