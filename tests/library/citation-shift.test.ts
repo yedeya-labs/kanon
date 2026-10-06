@@ -406,6 +406,16 @@ describe('a code-comment coordinate this diff wrote is read as advice (kanon#175
 `;
     expect(runRw('// see review.yml:40\n', add).rewritten.map((x: { shape: string; length?: number }) => [x.shape, x.length])).toEqual([['past-eof', 24]]);
     expect(runRw('// see review.yml:24\n', add).rewritten).toEqual([]);
+    // A target the diff did NOT change: only the comment's own hunk is in the diff.
+    const unchanged = shiftedCoordinates({
+      docs: [],
+      code: ['tests/a.test.ts'],
+      readHead: (p: string) => (p === 'tests/a.test.ts' ? '// see review.yml:40\n' : lines(24)),
+      trackedHead: ['tests/a.test.ts', '.github/workflows/review.yml'],
+      trackedBase: ['tests/a.test.ts', '.github/workflows/review.yml'],
+      diff: parseDiff(add),
+    });
+    expect(unchanged.rewritten.map((x: { shape: string; path: string }) => [x.shape, x.path])).toEqual([['past-eof', '.github/workflows/review.yml']]);
   });
 
   it('never reads a doc this way — citation-guard judges those', () => {

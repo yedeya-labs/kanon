@@ -294,7 +294,9 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
   // map to apply (RA-2294 review). `--no-renames` shows a moved file as a delete plus a
   // whole-file add, `@@ -0,0 +1,N @@`, whose mapper sends every line n to n+N — so a
   // basename coordinate into a moved file was flagged fatal and `--fix` wrote a line
-  // past EOF. Skipped, never flagged (citation-guard still judges it), and COUNTED.
+  // past EOF. Skipped, never flagged, and COUNTED. In a doc, citation-guard still judges it;
+  // in a code comment nothing else does, and only a line this diff wrote gets the `past-eof`
+  // advice below (kanon#175, kanon#347).
   let unmapped = 0;
   const baseSet = new Set(trackedBase);
 
