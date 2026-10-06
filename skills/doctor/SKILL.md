@@ -67,6 +67,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 | `register.shared-slug` | person | Each App needs its own. Ask the person which identity gets a new App, run `kanon apps --owner <owner> --repo <repo> --apps <identity>` for it (they click **Create** and **Install**), and commit the register rows it writes. |
 | `app.permission-missing` | person | The person widens the App's permissions on `.findings[].fix.url`, then accepts the new permissions on the App's installation. |
 | `app.permission-extra` | decision | Doesn't block. Say that `apps-check` fails it; the person may narrow it on `.findings[].fix.url`, or leave it. |
+| `app.unused` | person | Doesn't block. Once the replacing Apps have run green for a week, and no other repository's register still names it, the person uninstalls the App on `.findings[].fix.url` and deletes it on its Advanced page. |
 | `secret.missing` | person | If the fix is a `kanon apps` command, run it (for `kanon apps --reuse`, the person first generates a key on the App's page and gives you only the file's path; the command deletes the file). If it is `gh secret set`, the person runs it. |
 | `secret.stale` | decision | Doesn't block. Offer the fix's `gh secret delete` command, and run it only on a yes. |
 | `declaration.missing` | agent | Run `kanon init --dry-run --json`, show the file it would write, then write it with `kanon init --json --no-apps` (with the adopt skill's answer flags), or by hand. |
@@ -89,5 +90,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 | `label.missing` | agent | Doesn't block. Run the fix's `gh label create` commands, or `kanon init --json --no-apps`. |
 | `ruleset.missing` | agent, person | `kanon init --json --no-apps` creates it when the token can administer the repository; otherwise the person creates it as the fix says, or runs `kanon init` in their own terminal with such a token. |
 | `ruleset.rule-missing` | person | The person adds the rule on the ruleset's page. |
+| `ruleset.releaser-bypass-missing` | person | The person adds the Releaser to the ruleset's bypass list, "For pull requests only", with the fix's command or on the ruleset's page; `kanon apps` adds it when it creates the Releaser. |
+| `ruleset.bypass-extra` | person | Once the `dco` caller pins the checked release, the person removes the other bypass actors with the fix's command; release PRs then merge through the front door. |
 | `id-token.unaccepted` | decision | Ask the person whether that job needs `id-token: write`. If not, narrow its grant. If it does, ask why, and add the fix's bullet under `## Choices` in the adoption record with their reason. |
 | `id-token.stale-acceptance` | agent | Doesn't block. Offer to remove the bullet. |
