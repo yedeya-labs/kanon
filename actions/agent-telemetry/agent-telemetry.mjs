@@ -173,6 +173,16 @@ export function parseAutocompact(claudeArgs) {
   // is deliberately NOT enforced here: the CLI already rejects an out-of-range value at
   // startup, and a parser that silently dropped one would re-create the truncation this
   // comment exists to record.
+  //
+  // THE CLI IS LENIENT PAST THIS DOMAIN, AND THAT GAP IS KEPT (kanon#188, decided). The same
+  // probe found `0.5M`, `500KB`, `300k5` and `300kk` accepted too: the CLI reads a leading
+  // number and an optional unit, ignores trailing junk, then range-checks. Such a spelling
+  // returns null here, which the row records as "no window chosen". That is fail-closed and
+  // stays: recording it verbatim would put a value outside the schema's `autocompact` pattern
+  // into the row, failing the whole row, and widening this regex to chase the CLI would be a
+  // second copy of a value domain Kanon doesn't own. So no check may ask "does this lane set
+  // `--autocompact`?" by whether this returns non-null: it asks by the flag's PRESENCE,
+  // value-agnostic, as `tests/unit/lane-workflows.test.ts`'s experiment-scope guard does.
   const m = claudeArgs.match(/--autocompact[\s=]+(auto|\d+[km]?)(?=\s|$)/i);
   return m ? m[1].toLowerCase() : null;
 }
