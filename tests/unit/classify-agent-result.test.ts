@@ -633,6 +633,10 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', () => 
     expect(String(step.run), 'no input is spliced into the script text').not.toMatch(/\$\{\{/);
     expect(block.outputs?.kind?.value).toBe('${{ steps.classify.outputs.kind }}');
     expect(block.outputs?.retry?.value).toBe('${{ steps.classify.outputs.retry }}');
+    // TWO OUTPUTS, AS THIS SUITE'S HEADER SAYS (#314). It said two while the block declared
+    // three, because nothing asserted the SET: the third, `code`, was read by no caller and
+    // its description sent the reader to `agent-telemetry`, which derives that value itself.
+    expect(Object.keys(block.outputs ?? {})).toEqual(['kind', 'retry']);
     expect(Object.keys(block.inputs ?? {}).sort()).toEqual(['arm', 'non-fatal', 'recover']);
     expect(block.inputs?.recover?.default).toBe('');
     expect(block.inputs?.['non-fatal']?.default).toBe('false');
@@ -647,6 +651,9 @@ describe('the agent-classify block, run as the runner runs it (RA-2691)', () => 
   });
 
   it('prints the same kind and retry as the CLI run by hand, for each retry class', () => {
+    // And writes NOTHING ELSE to `$GITHUB_OUTPUT` (#314): a step output the block does not
+    // publish has no reader, inside the block or outside it.
+    expect(Object.keys(run(CAPPED).outputs).sort()).toEqual(['kind', 'retry']);
     expect(run(CAPPED).outputs).toMatchObject({ kind: 'unavailable', retry: 'unreachable' });
     expect(run({ ...MID_RUN, terminal_reason: 'api_error' }).outputs).toMatchObject({ kind: 'failed', retry: 'api_error' });
     expect(run(MID_RUN).outputs).toMatchObject({ kind: 'failed', retry: '' });

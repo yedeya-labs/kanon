@@ -29,8 +29,9 @@ The block has no `if:` of its own, because the right gate depends on the lane. G
 | Output | Meaning |
 |---|---|
 | `kind` | `unavailable`, `exhausted`, `failed`, `ok` or `not-reached`. |
-| `code` | The reason code beside the kind, from a fixed list: `none` (ok), `model_never_ran` or `no_model_ran` (unavailable), `turn_cap` or `budget_cap` (exhausted), `did_not_finish` (failed), `no_result_file` (not-reached). |
 | `retry` | `unreachable` or `api_error` when waiting would help, empty otherwise. |
+
+- **The reason code is not an output of this block** (#314). The classifier returns one beside each kind — `none` (ok), `model_never_ran` or `no_model_ran` (unavailable), `turn_cap` or `budget_cap` (exhausted), `did_not_finish` (failed), `no_result_file` (not-reached) — and it is what the telemetry row's `reason` column stores, but [`agent-telemetry`](../agent-telemetry/README.md) imports [`classify-agent-result.mjs`](classify-agent-result.mjs) and reads the code off the return. It has to: it records a green run's code too, and this block runs only on a red run. So there is one expression for that column, not two.
 
 - **The code, not the sentence, is what telemetry stores** (`K-OBS-16`). The sentence names the model and the numbers, so it stays in the annotation and the step summary.
 
