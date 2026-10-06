@@ -108,12 +108,14 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
     apps: Object.fromEntries(ids.map((id) => [`widgets-${id}`, { owner: { login: 'acme', type: 'User' }, permissions: permissionsOf(REQ, id) }])) as Record<string, { id?: number; owner: object; permissions: Record<string, string> }>,
     rulesets: [{ id: 7, ...rulesetBody(false) }] as Array<ReturnType<typeof rulesetBody> & { id: number; bypass_actors?: unknown[]; source_type?: string }>,
     releases: over.releases ?? {},
+    installations: null as Array<{ id: number; app_slug: string; account: { login: string } }> | null,
   };
   const calls: string[][] = [];
   const gh = async (args: string[]): Promise<Gh> => {
     calls.push(args);
     const [a0, a1] = args;
     if (a0 === 'api' && a1 === 'user') return ok('octo\n');
+    if (a0 === 'api' && a1 === 'user/installations?per_page=100') return st.installations ? ok({ total_count: st.installations.length, installations: st.installations }) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 === 'secret' && a1 === 'list') return st.secrets ? ok([...st.secrets].map((name) => ({ name }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 !== 'api' || args.includes('-X')) return no(`unexpected gh ${args.join(' ')}`);
     const path = args.find((x, i) => i > 0 && /^(repos|orgs|apps)\//.test(x)) ?? '';
@@ -638,5 +640,46 @@ describe('kanon doctor and the Releaser\'s ruleset bypass (#49)', () => {
     const r = await run(dir, github, ['--json']);
     expect(ids(r)).toEqual([]);
     expect(r.status).toBe(EXIT.healthy);
+  });
+});
+
+// The Owner, 2026-10-06: per-role Apps left installed after the two-App move are listed, not blocking.
+describe('kanon doctor and Apps no lane uses any more', () => {
+  /** A checkout whose register once named the per-role App `widgets-reviewer`, then moved on. */
+  const migrated = () => {
+    const files = healthyFiles();
+    const now = files['docs/qa/agent-identities.md']!;
+    files['docs/qa/agent-identities.md'] = `${now.trimEnd()}\n| Reviewer | \`widgets-reviewer\` | Read & write | Read & write | Read & write | No access | No access | None |\n`;
+    const dir = checkout(files);
+    put(dir, { 'docs/qa/agent-identities.md': now });
+    execFileSync('git', ['-C', dir, 'commit', '-q', '-am', 'move to two Apps']);
+    return dir;
+  };
+
+  it('names an App the register once named that is still installed, without blocking, with the delete steps', async () => {
+    const github = fakeGitHub();
+    github.st.installations = [{ id: 31, app_slug: 'widgets-reviewer', account: { login: 'acme' } }, { id: 32, app_slug: 'some-other-app', account: { login: 'acme' } }];
+    const r = await run(migrated(), github, ['--json']);
+    expect(ids(r)).toEqual(['app.unused widgets-reviewer']);
+    expect(r.json.findings[0]).toMatchObject({ category: 'app', blocking: false, fix: { url: 'https://github.com/settings/installations/31' } });
+    expect(r.json.findings[0].fix.text).toContain('https://github.com/settings/apps/widgets-reviewer/advanced');
+    expect(r.status).toBe(EXIT.healthy);
+  });
+
+  it('says nothing of one already uninstalled, or one the register still names', async () => {
+    const github = fakeGitHub();
+    github.st.installations = [{ id: 33, app_slug: `widgets-${identitiesOf(LANES)[0]}`, account: { login: 'acme' } }];
+    const r = await run(migrated(), github, ['--json']);
+    expect(ids(r)).toEqual([]);
+  });
+
+  it('is incomplete when the installations can\'t be listed, and asks nothing without a former App', async () => {
+    const r = await run(migrated(), fakeGitHub(), ['--json']);
+    expect(r.json.unchecked).toEqual([expect.objectContaining({ check: 'unused-apps', subject: 'acme' })]);
+    expect(r.status).toBe(EXIT.incomplete);
+    const github = fakeGitHub();
+    const plain = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(plain.status).toBe(EXIT.healthy);
+    expect(github.calls.some((c) => String(c[1]).includes('installations'))).toBe(false);
   });
 });

@@ -87,6 +87,7 @@ export const FINDINGS = {
   'register.shared-slug': { category: 'app', blocking: true },
   'app.permission-missing': { category: 'app', blocking: true },
   'app.permission-extra': { category: 'app', blocking: false },
+  'app.unused': { category: 'app', blocking: false },
   'secret.missing': { category: 'secret', blocking: true },
   'secret.stale': { category: 'secret', blocking: false },
   'declaration.missing': { category: 'declaration', blocking: true },
@@ -670,6 +671,42 @@ export const diagnose = async (deps, opts) => {
         text: `Narrow the App's permissions on its settings page.`,
         url,
       });
+    }
+  }
+
+  // ── Apps the register no longer names, still installed ───────────────────────────────────────
+  // After the move to two Apps (plan 0005 §3.1, L5/L6), the per-role Apps of earlier releases stay
+  // installed until someone deletes them, holding keys no lane reads (the Owner, 2026-10-06). An
+  // App counts when the register's own history on this checkout once named it and its current
+  // copy doesn't, and the owner still has an installation of it. Never blocking: deleting an App
+  // is the Owner's, after a week of green runs on the new ones (L5).
+  const nowSlugs = new Set(rows.values());
+  const history = deps.git(['-C', root, 'log', '--format=', '-p', '--', REGISTER_PATH]);
+  const formerSlugs = history.status === 0
+    ? [...new Set([...history.stdout.matchAll(/^[+-][ \t]*\|[^|\n]*\|[ \t]*\*{0,2}`([a-z0-9]+(?:-[a-z0-9]+)*)`/gm)].map((m) => /** @type {string} */ (m[1])))].filter((x) => !nowSlugs.has(x)).sort()
+    : [];
+  if (formerSlugs.length) {
+    const listed = await deps.gh(['api', s.kind === 'Organization' ? `orgs/${s.owner}/installations?per_page=100` : 'user/installations?per_page=100']);
+    /** @type {any[] | null} */
+    const installs = (() => {
+      try {
+        const j = listed.status === 0 ? JSON.parse(listed.stdout) : null;
+        return Array.isArray(j?.installations) ? j.installations : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (!installs) unchecked.push({ check: 'unused-apps', subject: s.owner, reason: `the token can't list ${s.owner}'s App installations (${listed.stderr.trim() || `exit ${listed.status}`}), so ${formerSlugs.join(', ')}, which the register once named, can't be looked for` });
+    else {
+      for (const slug of formerSlugs) {
+        const inst = installs.find((i) => i?.app_slug === slug && String(i?.account?.login ?? '').toLowerCase() === s.owner.toLowerCase());
+        if (!inst) continue;
+        const base = s.kind === 'Organization' ? `https://github.com/organizations/${s.owner}/settings` : 'https://github.com/settings';
+        find('app.unused', slug, `The App \`${slug}\` is still installed for ${s.owner}, but ${REGISTER_PATH} no longer names it, so no lane of ${checked} runs as it; it holds a key nothing reads (plan 0005 §3.1).`, {
+          text: `Once the Apps that replaced it have run green for a week (plan 0005 L5), uninstall it on its installation page, delete it on its Advanced page (${base}/apps/${slug}/advanced, "Delete GitHub App"), and delete its secrets if secret.stale lists them. Keep it while another repository's register still names it.`,
+          url: `${base}/installations/${inst.id}`,
+        });
+      }
     }
   }
 
