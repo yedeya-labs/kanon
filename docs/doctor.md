@@ -21,7 +21,7 @@ In the order it lists them, which is the order to fix them:
    It also lists, without blocking, **an App left installed that no lane uses any more** (`app.unused`): one the App register's git history on the checkout once named, that its current copy doesn't, and that the owner still has an installation of, such as a per-role App left from before the two-App move (decided by the Owner, 2026-10-06). Delete it once the Apps that replaced it have run green for a week, and not while another repository's register still names it. If the token can't list the owner's installations, this check is `unchecked`.
 3. **The secrets,** by name: each lane's, and each App's two (plan 0005 §3.5). A per-role or retired App secret that nothing reads any more is listed as stale, without blocking.
 4. **The declarations** each lane reads (`K-LAYOUT-17`): a file that has no default must exist, and the stack document must hold `## Gates` exactly once. A missing playbook is Kanon's baseline, and is a note, not a finding (plan 0005 §5.2). Also the project-setup hook and every input the lanes pass it, the hooks only some lanes call, and the workflows a lane reads by file name (`ci.yml`).
-5. **The callers:** each at its lane's file name (`K-LAYOUT-18`), mapping exactly the lane's secrets by name, passing only inputs the lane declares, granting at least the lane's permissions, and with the name or run-name a lane asks of its caller. The `apps-check` caller maps each App's secrets, and nothing its release doesn't take.
+5. **The callers:** each at its lane's file name (`K-LAYOUT-18`), mapping exactly the lane's secrets by name, passing only inputs the lane declares, granting at least the lane's permissions, and with the name or run-name a lane asks of its caller. The `apps-check` caller maps each App's secrets, and nothing its release doesn't take. A caller of Kanon's telemetry collector, which `kanon init --telemetry` writes, needs the two repository variables the Kanon operator gives; while either is unset it sends nothing, which doctor lists without blocking (`telemetry.unconfigured`), and, when the token can't list the variables, says in a note.
 6. **The labels** of the taxonomy (`K-WORK-12`). A lane creates a label it needs on first use (plan 0005 §5.3), so a missing one doesn't block.
 7. **The ruleset** on the default branch (`K-ADOPT-1` step 8), where the plan has rulesets. A private repository on a plan without them is a note: nothing on the platform enforces review there (`K-ADOPT-3`). Where your release caller maps the Releaser, also its bypass (`K-MERGE-8`, [#49](https://github.com/yedeya-labs/kanon/issues/49)): the Releaser App must be a bypass actor of each ruleset on the default branch, and the only one. Another actor's bypass, such as the admin role's, is asked off only against a release whose `dco` check passes the release PR the Releaser opens (its requirements file's `release.dcoExemptsReleaser`, [#337](https://github.com/yedeya-labs/kanon/issues/337)); against an earlier one it is a note, because that bypass is still what merges the release PR. GitHub shows a ruleset's bypass list only to someone who can edit it, so with another token this check is `unchecked`.
 8. **The id-token holders,** below.
@@ -34,7 +34,7 @@ Then it sets aside each finding the adoption record waives ([below](#waiving-a-f
 
 The QA store's role and the telemetry writer trust the default branch's ref, not an environment ([`docs/qa-store.md`](qa-store.md#who-can-reach-the-store), [`docs/telemetry.md`](telemetry.md#who-can-write)), so **every job on your default branch that holds `id-token: write` can assume them**, including your own jobs that hold it for another cloud. Kanon's guard holds Kanon's own workflows; yours are yours to check, and doctor lists them, counted as the guard counts them: a job's own grant, the workflow's when the job declares none, `permissions: write-all` at either level, and a job that calls a reusable workflow with such a grant.
 
-- **A caller of one of Kanon's store-coupled lanes at the pinned release** is listed as Kanon's, and accepted: the grant reaches only the lane's store jobs, which Kanon's guard holds.
+- **A caller of one of Kanon's store-coupled lanes at the pinned release** is listed as Kanon's, and accepted: the grant reaches only the lane's store jobs, which Kanon's guard holds. So is **a caller of Kanon's telemetry collector at the pinned release** (`kanon init --telemetry` writes one), whose one job that holds the grant the same guard holds; both are `kanon-lane` in `.idTokenHolders[].status`.
 - **Any other holder** blocks until you either narrow its grant, or accept it under `## Choices` in the adoption record (`K-LAYOUT-10`), one bullet per job, naming the workflow file and the job's key, with the reason it holds the grant:
 
   ```markdown
@@ -169,7 +169,7 @@ It is the finding, whole, as it would have been listed, with the waiver's reason
 | `grant` | string | `job` when the job's own `permissions:` grants it, `workflow` when it inherits the workflow's. |
 | `how` | string | `id-token` for `id-token: write`, `write-all` for `permissions: write-all`. |
 | `calls` | string or null | The reusable workflow the job calls and passes the grant to. |
-| `status` | string | `kanon-lane` (a store-coupled Kanon lane at the pinned release), `accepted` (by the adoption record) or `unaccepted`. |
+| `status` | string | `kanon-lane` (a store-coupled Kanon lane, or Kanon's telemetry collector, at the pinned release), `accepted` (by the adoption record) or `unaccepted`. |
 | `reason` | string or null | The adoption record's reason, when accepted there. |
 
 ### The finding ids
@@ -204,6 +204,7 @@ It is the finding, whole, as it would have been listed, with the waiver's reason
 | `caller.run-name` | `caller` | yes | A caller's run-name does not end as its lane asks. |
 | `apps-check.secret-missing` | `caller` | yes | The `apps-check` caller does not map an App's secrets. |
 | `apps-check.secret-stale` | `caller` | yes | The `apps-check` caller maps a secret its release does not take. |
+| `telemetry.unconfigured` | `caller` | no | A workflow calls Kanon's telemetry collector, and the repository doesn't set `KANON_TELEMETRY_URL` or `KANON_TELEMETRY_WRITER_ROLE`, so it sends nothing: the collector skips with a warning and stays green. The fix says how to ask Kanon's operator for registration and the two values ([`docs/telemetry.md`](telemetry.md#add-a-repository)). It can be waived. |
 | `label.missing` | `label` | no | Labels of the taxonomy are missing. |
 | `ruleset.missing` | `ruleset` | yes | No active ruleset covers the default branch. |
 | `ruleset.rule-missing` | `ruleset` | yes | The default branch's ruleset lacks a rule of `K-ADOPT-1` step 8. |

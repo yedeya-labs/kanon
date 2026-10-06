@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
-import { appSecrets, appsCheckFile, callerFile, ciFile, dependabotFile, hookFile, loadRequirements } from '../../cli/callers.mjs';
+import { appSecrets, appsCheckFile, callerFile, ciFile, dependabotFile, hookFile, loadRequirements, TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
 import { CATEGORIES, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { registerRolesOf, rulesetBody } from '../../cli/init.mjs';
 import { isKanonSource, pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
@@ -101,7 +101,7 @@ const ok = (v: unknown): Gh => ({ status: 0, stdout: typeof v === 'string' ? v :
 const no = (stderr: string): Gh => ({ status: 1, stdout: '', stderr });
 
 /** A fake GitHub: the repository, its Apps, and Kanon's requirements file at each release. */
-const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<string, Req | null> } = {}) => {
+const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<string, Req | null>; variables?: Set<string> | null } = {}) => {
   const ids = identitiesOf(LANES);
   const st = {
     labels: new Set(TAXONOMY),
@@ -110,6 +110,7 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
     rulesets: [{ id: 7, ...rulesetBody(false) }] as Array<ReturnType<typeof rulesetBody> & { id: number; bypass_actors?: unknown[]; source_type?: string }>,
     releases: over.releases ?? {},
     installations: null as Array<{ id: number; app_slug: string; account: { login: string } }> | null,
+    variables: over.variables === undefined ? new Set<string>() : over.variables,
   };
   const calls: string[][] = [];
   const gh = async (args: string[]): Promise<Gh> => {
@@ -118,6 +119,7 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
     if (a0 === 'api' && a1 === 'user') return ok('octo\n');
     if (a0 === 'api' && a1 === 'user/installations?per_page=100') return st.installations ? ok({ total_count: st.installations.length, installations: st.installations }) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 === 'secret' && a1 === 'list') return st.secrets ? ok([...st.secrets].map((name) => ({ name }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
+    if (a0 === 'variable' && a1 === 'list') return st.variables ? ok([...st.variables].map((name) => ({ name }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 !== 'api' || args.includes('-X')) return no(`unexpected gh ${args.join(' ')}`);
     const path = args.find((x, i) => i > 0 && /^(repos|orgs|apps)\//.test(x)) ?? '';
     if (path === `repos/${REPO}`) return ok({ private: false, default_branch: 'main', owner: { login: 'acme', type: 'User' }, permissions: { admin: true } });
@@ -193,7 +195,7 @@ describe('kanon doctor on a healthy installation', () => {
     await run(dir, github, ['--json']);
     expect(github.calls.length).toBeGreaterThan(5);
     for (const c of github.calls) {
-      expect(c[0] === 'api' ? !c.includes('-X') && !c.includes('--method') && !c.includes('-f') && !c.includes('-F') : c[0] === 'secret' && c[1] === 'list', c.join(' ')).toBe(true);
+      expect(c[0] === 'api' ? !c.includes('-X') && !c.includes('--method') && !c.includes('-f') && !c.includes('-F') : (c[0] === 'secret' || c[0] === 'variable') && c[1] === 'list', c.join(' ')).toBe(true);
     }
     expect(execFileSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('');
   });
@@ -984,5 +986,68 @@ describe('the reader of the kanon plugin\'s declaration (cli/plugin.mjs)', () =>
 
   it('treats an empty ref as none', () => {
     expect(at({ extraKnownMarketplaces: { kanon: { source: { source: 'github', repo: 'yedeya-labs/kanon', ref: ' ' } } }, enabledPlugins: { 'kanon@kanon': true } })).toEqual({ status: 'declared', name: 'kanon', ref: null, enabled: true });
+  });
+});
+
+// #428: a caller of Kanon's telemetry collector, as `kanon init --telemetry` writes it, is Kanon's
+// id-token holder, and sends nothing until the repository sets the two variables the operator
+// gives it, which doctor lists without blocking.
+describe("kanon doctor and the telemetry collector's caller (#428)", () => {
+  const VARS = ['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE'];
+  const withCollector = (release = PINNED) => ({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: telemetryCallerFile(release) });
+  const holderOf = (r: Result) => r.json.idTokenHolders.find((h: { workflow: string }) => h.workflow === TELEMETRY_CALLER_PATH);
+
+  it('lists the caller init writes as Kanon\'s holder, and is healthy once both variables are set', async () => {
+    const dir = checkout(withCollector());
+    const r = await run(dir, fakeGitHub({ variables: new Set(VARS) }), ['--json']);
+    expect(r.status, r.out).toBe(EXIT.healthy);
+    expect(r.json.findings).toEqual([]);
+    expect(holderOf(r)).toMatchObject({ job: 'collect', status: 'kanon-lane', reason: null });
+  });
+
+  it('reports each unset variable without blocking, with the operator step as its fix, and lets it be waived', async () => {
+    const dir = checkout(withCollector());
+    const r = await run(dir, fakeGitHub({ variables: new Set(['KANON_TELEMETRY_URL']) }), ['--json']);
+    expect(r.status, r.out).toBe(EXIT.healthy);
+    expect(ids(r)).toEqual([`telemetry.unconfigured ${TELEMETRY_CALLER_PATH}`]);
+    const f = r.json.findings[0];
+    expect(f).toMatchObject({ category: 'caller', blocking: false });
+    expect(f.message).toContain("doesn't set KANON_TELEMETRY_WRITER_ROLE,");
+    expect(f.fix.url).toMatch(/template=telemetry-registration\.yml$/);
+    expect(f.fix.commands).toHaveLength(2);
+    const none = await run(dir, fakeGitHub(), ['--json']);
+    expect(none.json.findings[0].message).toContain("doesn't set KANON_TELEMETRY_URL or KANON_TELEMETRY_WRITER_ROLE");
+    put(dir, { 'docs/qa/adoption.md': healthyFiles()['docs/qa/adoption.md'] + `- **${WAIVER_LABEL}:** \`telemetry.unconfigured\` on \`${TELEMETRY_CALLER_PATH}\` (registration requested)\n` });
+    const waived = await run(dir, fakeGitHub(), ['--json']);
+    expect(waived.json.findings).toEqual([]);
+    expect(waived.json.waived.map((w: { id: string }) => w.id)).toEqual(['telemetry.unconfigured']);
+  });
+
+  it("says in a note, not as unchecked, when the token can't list the variables", async () => {
+    const r = await run(checkout(withCollector()), fakeGitHub({ variables: null }), ['--json']);
+    expect(r.status, r.out).toBe(EXIT.healthy);
+    expect(r.json.unchecked).toEqual([]);
+    expect(r.json.notes.some((n: string) => n.includes("the token can't list acme/widgets's variables"))).toBe(true);
+  });
+
+  it("asks nothing of a repository without the collector's caller", async () => {
+    const github = fakeGitHub({ variables: null });
+    const r = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(r.status).toBe(EXIT.healthy);
+    expect(github.calls.some((c) => c[0] === 'variable')).toBe(false);
+  });
+
+  it('accepts the collector only from a release whose requirements name it', async () => {
+    const old = clone(REQ);
+    delete (old as { telemetry?: unknown }).telemetry;
+    const github = fakeGitHub({ variables: new Set(VARS) });
+    const r = await run(checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: telemetryCallerFile(PINNED) }), github, ['--json']);
+    expect(holderOf(r).status).toBe('kanon-lane');
+    // Against a release whose requirements file doesn't name the collector, it is unaccepted.
+    const out: string[] = [];
+    await doctor(['--dir', checkout(withCollector()), '--json'], { gh: github.gh, env: {}, out: (l: string) => out.push(l), err: () => {}, requirements: () => old, release: () => PINNED });
+    const doc = JSON.parse(out.join('\n'));
+    expect(doc.idTokenHolders.find((h: { workflow: string }) => h.workflow === TELEMETRY_CALLER_PATH).status).toBe('unaccepted');
+    expect(doc.findings.map((f: { id: string }) => f.id)).not.toContain('telemetry.unconfigured');
   });
 });

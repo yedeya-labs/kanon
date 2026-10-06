@@ -103,6 +103,16 @@ export const buildRequirements = (root: string) => {
       },
     ]),
   );
+  // The telemetry collector (plan 0002 S7, #428): a caller `kanon init --telemetry` writes, and
+  // `kanon doctor` recognises as Kanon's, with the repository variables it passes. Read from the
+  // collector's own workflow and from the caller docs/telemetry.md gives, which init writes byte
+  // for byte, so the file can't name a variable the caller doesn't pass.
+  const collector = 'telemetry-collect';
+  const collectorDoc = parse(readFileSync(join(root, '.github/workflows', `${collector}.yml`), 'utf8')) as Doc;
+  const callerBlock = readFileSync(join(root, 'docs/telemetry.md'), 'utf8').split('**The caller.**')[1]!.split('```yaml\n')[1]!.split('```')[0]!;
+  const telemetry = collectorDoc.on && typeof collectorDoc.on === 'object' && 'workflow_call' in collectorDoc.on
+    ? { collector, variables: [...new Set([...callerBlock.matchAll(/\$\{\{ vars\.([A-Z0-9_]+) \}\}/g)].map((m) => m[1]!))].sort() }
+    : undefined;
   return {
     $comment:
       "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. `catalogue` is the lane catalogue, copied from docs/lanes.json.",
@@ -124,5 +134,6 @@ export const buildRequirements = (root: string) => {
     // against a release whose `dco` passes the release PR the Releaser opens. Read from the action
     // itself, so the file can't claim an exemption the action doesn't make.
     release: { dcoExemptsReleaser: /^export const RELEASER_ROLE = 'Releaser';$/m.test(readFileSync(join(root, 'actions/dco/dco.mjs'), 'utf8')) },
+    telemetry,
   };
 };

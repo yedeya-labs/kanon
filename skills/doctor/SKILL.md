@@ -101,6 +101,7 @@ Propose the bullet and ask for the reason; never invent one. Write it only once 
 | `caller.run-name` | agent | Set the `run-name:` as the fix says. |
 | `apps-check.secret-missing` | agent | Add the lines the fix lists to the `apps-check` caller. |
 | `apps-check.secret-stale` | agent | Remove the lines the fix lists. |
+| `telemetry.unconfigured` | person | Kanon's operator registers the repository and gives the two variables' values: the person files the issue the fix's page opens, then runs the fix's `gh variable set` lines with the values. Or, if they no longer want telemetry, you delete the caller the finding's subject names, on a yes. |
 | `label.missing` | agent | Doesn't block. Run the fix's `gh label create` commands, or `kanon init --json --no-apps`. |
 | `ruleset.missing` | agent, person | `kanon init --json --no-apps` creates it when the token can administer the repository; otherwise the person creates it as the fix says, or runs `kanon init` in their own terminal with such a token. |
 | `ruleset.rule-missing` | person | The person adds the rule on the ruleset's page. |

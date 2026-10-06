@@ -125,6 +125,8 @@ It exits 1 on any FAIL, and never prints a credential, a row or a response body.
 
 ## Add a repository
 
+An adopter opts in when it installs Kanon: `kanon init --telemetry`, or a yes to its question, writes the caller below and asks for registration with an issue from Kanon's [telemetry registration template](https://github.com/yedeya-labs/kanon/issues/new?template=telemetry-registration.yml), which names the repository, its default branch and its reader refs ([`docs/init.md`](init.md#telemetry), #428). Telemetry is off without that yes. Until the two variables are set, `kanon init` reports `telemetry.register` and `kanon doctor` reports `telemetry.unconfigured`, neither blocking. Then:
+
 1. Add an entry to the register:
 
    ```json
@@ -161,11 +163,13 @@ Plan 0002 S7. The lanes hold no store credentials. Each run uploads its version-
 
 **Cadence and cost.** The caller schedules it hourly, at minute 40 (§1.2), so 24 runs a day. It touches no database, and nothing it calls scales to zero. On a public repository its Actions minutes are free. On a private one it is about a minute a run. Each run calls the function only when it has rows, once per 25 rows. For Kanon that is at most 720 calls a month, inside Lambda's free tier, plus 2 DynamoDB write units per row. That is inside §9's estimate of about $0.05 a month.
 
-**The caller.** Write it as a trigger-only workflow. Pin it to the Kanon version every other Kanon reference uses, and pass the two values as repository variables. Neither is a credential: the role can be assumed only by the repository's own default-branch token. Name the caller as you like; the collector finds its own runs from `GITHUB_WORKFLOW_REF`.
+**The caller.** `kanon init --telemetry` writes it as `.github/workflows/telemetry.yml`, byte for byte as below; `tests/unit/kanon-init.test.ts` holds the two to each other. Written by hand, it is a trigger-only workflow. Pin it to the Kanon version every other Kanon reference uses, and pass the two values as repository variables. Neither is a credential: the role can be assumed only by the repository's own default-branch token. Name the caller as you like; the collector finds its own runs from `GITHUB_WORKFLOW_REF`.
 
 <!-- x-release-please-start-version -->
 
 ```yaml
+# Sends this repository's agent-run rows to Kanon's hosted telemetry store (docs/telemetry.md).
+# Delete this file to stop; the operator erases what was sent on request.
 name: Telemetry
 on:
   schedule:

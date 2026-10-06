@@ -31,6 +31,12 @@ describe('requirements.json', () => {
     expect(built.release).toEqual({ dcoExemptsReleaser: true });
   });
 
+  it("names the telemetry collector and the variables its documented caller passes (#428)", () => {
+    // `kanon init --telemetry` writes that caller, and `kanon doctor` lists its job as Kanon's
+    // id-token holder and reports either variable unset: both read these names from here.
+    expect(built.telemetry).toEqual({ collector: 'telemetry-collect', variables: ['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE'] });
+  });
+
   it("lists every lane of docs/lanes.md's table, and no other workflow", () => {
     const table = [...readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8').split('## Which lanes are available')[1]!.split('\n## ')[0]!.matchAll(/^\| [^|]+\| `(agent-[a-z-]+\.yml)` \|/gm)].map((m) => m[1]);
     expect(table.length).toBe(18);

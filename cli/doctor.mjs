@@ -51,7 +51,7 @@ import { URL } from 'node:url';
 import { checkoutCheck, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, inspect, registerRolesOf, registerRows, rulesetGaps, RULESET_NAME } from './init.mjs';
+import { appsArgs, inspect, registerRolesOf, registerRows, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -147,6 +147,7 @@ export const FINDINGS = {
   'caller.run-name': { category: 'caller', blocking: true },
   'apps-check.secret-missing': { category: 'caller', blocking: true },
   'apps-check.secret-stale': { category: 'caller', blocking: true },
+  'telemetry.unconfigured': { category: 'caller', blocking: false },
   'label.missing': { category: 'label', blocking: false },
   'ruleset.missing': { category: 'ruleset', blocking: true },
   'ruleset.rule-missing': { category: 'ruleset', blocking: true },
@@ -971,6 +972,37 @@ export const diagnose = async (deps, opts) => {
     }
   }
 
+  // ── The telemetry collector (#428) ──────────────────────────────────────────────────────────
+  // A caller of Kanon's collector sends nothing until the repository has the two variables the
+  // Kanon operator gives it (docs/telemetry.md): the collector skips with a warning and stays
+  // green, so nothing else would say so. Not blocking: no lane needs it. Variables the token
+  // can't list are a note, not an unchecked check, for the same reason.
+  const collector = req.telemetry?.collector;
+  const collectorCallers = collector
+    ? [...workflows].filter(([, wf]) => Object.values(isMap(wf.jobs) ? wf.jobs : {}).some((j) => isMap(j) && kanonCall(j.uses)?.workflow === collector)).map(([f]) => f)
+    : [];
+  if (collectorCallers.length) {
+    const wanted = req.telemetry?.variables ?? [];
+    const listed = await deps.gh(['variable', 'list', '-R', repo, '--json', 'name']);
+    /** @type {Set<string> | null} */
+    let have = null;
+    try {
+      if (listed.status === 0) have = new Set(JSON.parse(listed.stdout).map((/** @type {any} */ v) => String(v.name)));
+    } catch {
+      have = null;
+    }
+    if (!have) notes.push(`${collectorCallers.join(', ')} ${collectorCallers.length > 1 ? 'call' : 'calls'} Kanon's telemetry collector, and the token can't list ${repo}'s variables, so doctor can't tell whether ${wanted.join(' and ')} are set; until both are, it sends nothing (docs/telemetry.md).`);
+    else {
+      const unset = wanted.filter((v) => !have?.has(v));
+      if (unset.length) {
+        const fix = telemetryStep(repo, unset, true);
+        for (const file of collectorCallers) {
+          find('telemetry.unconfigured', file, `calls Kanon's telemetry collector, and ${repo} doesn't set ${unset.join(' or ')}, so it sends nothing: the collector skips with a warning and stays green.`, { text: fix.text, commands: fix.commands, url: fix.url });
+        }
+      }
+    }
+  }
+
   // ── The id-token holders ────────────────────────────────────────────────────────────────────
   const record = readHolderAcceptances(read(ADOPTION_RECORD));
   for (const e of record.errors) find('declaration.malformed', ADOPTION_RECORD, e, { text: `Write each acceptance under ## Choices as \`- **${HOLDER_LABEL}:** \`<workflow>.yml\` job \`<job>\` (<why it holds the grant>)\` (K-LAYOUT-10).` });
@@ -991,6 +1023,9 @@ export const diagnose = async (deps, opts) => {
       /** @type {Holder['status']} */
       let status = reason !== null ? 'accepted' : 'unaccepted';
       if (call && call.ref === pinned && req.lanes[call.workflow]?.grant['id-token'] === 'write') status = 'kanon-lane';
+      // Kanon's telemetry collector (#428): its one job that holds the grant is held by Kanon's
+      // id-token guard, as a store-coupled lane's store jobs are.
+      if (call && call.ref === pinned && req.telemetry && call.workflow === req.telemetry.collector) status = 'kanon-lane';
       holders.push({ workflow: file, job, grant: g.from, how: g.how, calls, status, reason: status === 'kanon-lane' ? null : reason });
       if (status === 'unaccepted') {
         const source = `${g.how === 'write-all' ? 'permissions: write-all' : 'id-token: write'} ${g.from === 'job' ? 'in its own permissions' : "inherited from the workflow's permissions"}`;
