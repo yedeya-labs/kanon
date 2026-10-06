@@ -7,7 +7,9 @@
 # lane code would review that same PR, so a PR that weakened the Reviewer would be reviewed
 # by the weakened Reviewer. At the released tag, a change to the lane is first exercised one
 # release later. Dependabot's `kanon` group proposes each new release here, beside the DCO
-# and PR-title checks, and `lane-check` (in CI) holds every Kanon reference to one version.
+# and PR-title checks, except v0.28.0 and later, which it holds back until plan 0005's L5
+# (.github/dependabot.yml, ADR 0011), and `lane-check` (in CI) holds every Kanon reference to
+# one version.
 #
 # Only members' PRs are reviewed (#24, K-AGENT-45): the lane's first step is its membership
 # gate, and this caller passes nothing that reaches it. `pr_number` is the only input, and

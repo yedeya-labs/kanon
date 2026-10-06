@@ -11,7 +11,8 @@
 # each new release to them and to the review lane's caller (review.yml) and CI's lane-check
 # (ADR 0011, plan 0001 step 4b), as K-ADOPT-11 has it for any adopter: Kanon's own references in
 # a group of their own, and never held back by a cooldown. Kanon is first-party, so a
-# cooldown would only delay the release that judges the next PR.
+# cooldown would only delay the release that judges the next PR. The one exception is v0.28.0
+# and later, which the `ignore` below holds back until plan 0005's L5.
 #
 # THE EXEMPTION MUST BE WRITTEN OUT (#233). An entry that sets no `cooldown` is not free of
 # one: Dependabot then applies its default of 3 days, and this entry, which set none, held
