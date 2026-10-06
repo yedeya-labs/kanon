@@ -189,12 +189,12 @@ describe('the workflow around it (moved from the reference adopter)', () => {
     const minter = mintFor(LANE_FILE, 'audit');
     expect(minter.uses).toBe('actions/create-github-app-token@v3');
     expect(minter.with).toMatchObject({
-      'client-id': '${{ secrets.EXPLORER_APP_ID }}',
-      'private-key': '${{ secrets.EXPLORER_APP_PRIVATE_KEY }}',
+      'client-id': '${{ secrets.AUTHOR_APP_ID }}',
+      'private-key': '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}',
       'permission-contents': 'read',
       'permission-issues': 'write',
     });
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'EXPLORER_APP_ID', 'EXPLORER_APP_PRIVATE_KEY']);
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
   });
 
   it('keeps the schedule every three days at 07:30, and a dispatch with no inputs', () => {

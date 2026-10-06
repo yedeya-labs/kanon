@@ -255,7 +255,7 @@ describe('the wiring', () => {
     // script as LABEL_TOKEN — never as GH_TOKEN, which would put the comment on it.
     const mint = steps.find((s) => (s.uses ?? '').startsWith('actions/create-github-app-token')) as
       { id?: string; with?: Record<string, string> } | undefined;
-    expect(mint?.with?.['client-id']).toBe('${{ secrets.IMPLEMENTER_APP_ID }}');
+    expect(mint?.with?.['client-id']).toBe('${{ secrets.AUTHOR_APP_ID }}');
     expect(mint?.with?.['permission-issues']).toBe('write');
     expect(Object.keys(mint?.with ?? {}).filter((k) => k.startsWith('permission-'))).toEqual(['permission-issues']);
     expect(steps.indexOf(mint as never)).toBeLessThan(steps.indexOf(step!));

@@ -52,7 +52,7 @@ describe('a Kanon lane, called by a trigger-only caller', () => {
     const inputs = callerInputs(wf.on.workflow_call.inputs)!;
     expect(Object.keys(inputs).sort()).toEqual(['project', 'ref']);
     for (const i of Object.values(inputs)) expect(i).toMatchObject({ required: false, type: 'string' });
-    expect(Object.keys(secrets).sort()).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'EXPLORER_APP_ID', 'EXPLORER_APP_PRIVATE_KEY']);
+    expect(Object.keys(secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
     for (const s of Object.values(secrets)) expect(s.required).toBe(true);
     expect(raw).not.toMatch(/QA_EXPLORER/);
   });
@@ -322,8 +322,8 @@ describe('the criteria run in a job of its own, the agent in the token\'s (kanon
     const receive = steps[idx(steps, (s) => s.id === 'app-token')]!;
     expect(receive.name).toBe('Receive the App token');
     const laneCall = (parse(readFileSync(FILE, 'utf8')) as { jobs: Record<string, { secrets?: Record<string, string> }> }).jobs.verify!;
-    expect(laneCall.secrets?.['app-id']).toBe('${{ secrets.EXPLORER_APP_ID }}');
-    expect(laneCall.secrets?.['app-private-key']).toBe('${{ secrets.EXPLORER_APP_PRIVATE_KEY }}');
+    expect(laneCall.secrets?.['app-id']).toBe('${{ secrets.AUTHOR_APP_ID }}');
+    expect(laneCall.secrets?.['app-private-key']).toBe('${{ secrets.AUTHOR_APP_PRIVATE_KEY }}');
     expect(steps[call('agent-run')]!.with?.['github-token']).toBe('${{ steps.app-token.outputs.token }}');
   });
 

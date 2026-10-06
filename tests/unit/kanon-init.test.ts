@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
-import { appsArgs, init, LANE_CHECK, lineDiff, registerRolesOf, RULESET_NAME, rulesetGaps, workflowName } from '../../cli/init.mjs';
+import { appIdentities, appsArgs, callsRelease, init, LANE_CHECK, lineDiff, registerRolesOf, RULESET_NAME, rulesetGaps, workflowName } from '../../cli/init.mjs';
 
 /**
  * `kanon init` (plan 0005 §5.4, step L9). Every case runs the command against a real git
@@ -158,13 +158,16 @@ const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: str
     // clicks Create and Install, and sets the App secrets, and nothing else.
     apps: async (args: string[]) => {
       appsCalls.push(args);
-      const roles = args[args.indexOf('--roles') + 1]!.split(',');
+      // One row per role of each App, the rows sharing the App's slug (plan 0005 §3.4).
+      const apps = args[args.indexOf('--apps') + 1]!.split(',');
       const register = join(dir, 'docs/qa/agent-identities.md');
       let text = existsSync(register) ? readFileSync(register, 'utf8') : null;
-      for (const r of roles) {
-        const spec = REQ.identities.roles[r]!;
-        text = writeRegisterRow(text, { role: spec.name, slug: `widgets-${r}`, permissions: spec.permissions }).text;
-        for (const s of [`${r.toUpperCase()}_APP_ID`, `${r.toUpperCase()}_APP_PRIVATE_KEY`]) github.st.secrets?.add(s);
+      for (const app of apps) {
+        const spec = REQ.identities.apps[app]!;
+        for (const r of registerRolesOf(app, REQ)) {
+          text = writeRegisterRow(text, { role: r, slug: `acme-${app}`, permissions: spec.permissions }).text;
+        }
+        for (const s of [`${app.toUpperCase()}_APP_ID`, `${app.toUpperCase()}_APP_PRIVATE_KEY`]) github.st.secrets?.add(s);
       }
       mkdirSync(dirname(register), { recursive: true });
       writeFileSync(register, text!);
@@ -215,7 +218,7 @@ describe('kanon init, on an empty repository with every default (plan 0005 L9)',
     expect(new Set(refs)).toEqual(new Set([release]));
   });
 
-  it('creates the taxonomy, the buckets, the merge setting and the ruleset, and runs kanon apps for the Reviewer', async () => {
+  it('creates the taxonomy, the buckets, the merge setting and the ruleset, and runs kanon apps for the Judge, the Reviewer\'s App', async () => {
     const dir = checkout();
     const github = fakeGitHub();
     const r = await run(dir, github);
@@ -230,7 +233,7 @@ describe('kanon init, on an empty repository with every default (plan 0005 L9)',
     expect(rules.map((x) => x.type)).toEqual(['deletion', 'non_fast_forward', 'pull_request', 'required_status_checks']);
     expect(rules[2]!.parameters).toMatchObject({ required_approving_review_count: 0, allowed_merge_methods: ['squash'] });
     expect(rules[3]!.parameters).toMatchObject({ required_status_checks: [{ context: LANE_CHECK }] });
-    expect(r.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--roles', 'reviewer', '--dir', expect.any(String)]]);
+    expect(r.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge', '--dir', expect.any(String)]]);
     expect(r.out).toContain('gh secret set CLAUDE_CODE_OAUTH_TOKEN -R acme/widgets');
   });
 
@@ -322,13 +325,13 @@ describe('kanon init, on what the plan and the token allow', () => {
     expect(r.out).not.toContain('No merge queue on this plan');
   });
 
-  it('stops with its own message, not a stack trace, when a release\'s lanes mix roles and Apps', async () => {
+  it('stops with its own message, not a stack trace, when a release\'s lanes name a role rather than an App', async () => {
     const mixed = structuredClone(REQ);
     mixed.lanes['agent-review']!.identities = ['judge'];
     mixed.lanes['agent-triage']!.identities = ['implementer'];
     const r = await run(checkout(), fakeGitHub(), ['--yes', '--lanes', 'review,triage'], undefined, mixed);
     expect(r.status).toBe(1);
-    expect(r.err).toContain('kanon init: the lanes mix roles and Apps (implementer, judge)');
+    expect(r.err).toContain("kanon init: the lanes run as implementer, which is not one of Kanon's Apps (author, judge, releaser)");
     expect(r.appsCalls).toEqual([]);
   });
 
@@ -354,7 +357,7 @@ describe('kanon init, safely', () => {
     expect(r.milestoneCalls).toEqual([]);
     expect(execFileSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('');
     expect(r.out).toContain('- Would create .github/workflows/agent-review.yml');
-    expect(r.out).toContain('- Would run: kanon apps --owner acme --repo widgets --roles reviewer');
+    expect(r.out).toContain('- Would run: kanon apps --owner acme --repo widgets --apps judge');
     expect(r.out).toContain(`- Would create the ruleset "${RULESET_NAME}"`);
   });
 
@@ -388,7 +391,7 @@ describe('kanon init, safely', () => {
     const implement = 'name: Implement\njobs:\n  implement:\n    uses: yedeya-labs/kanon/.github/workflows/agent-implement.yml@v0.1.0\n';
     const dir = checkout({ '.github/workflows/agent-implement.yml': implement, '.github/workflows/agent-lead.yml': 'name: my own lead workflow\n' });
     const r = await run(dir, fakeGitHub());
-    expect(r.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--roles', 'implementer', '--dir', expect.any(String)]]);
+    expect(r.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'author', '--dir', expect.any(String)]]);
     expect(existsSync(join(dir, '.github/workflows/agent-review.yml'))).toBe(false);
   });
 
@@ -483,7 +486,7 @@ describe('the callers kanon init writes', () => {
     const github = fakeGitHub();
     const r = await run(dir, github, ['--yes', '--lanes', all]);
     expect(r.status, r.err).toBe(0);
-    expect(r.appsCalls[0]).toContain('explorer,implementer,lead,merger,overseer,reviewer');
+    expect(r.appsCalls[0]).toContain('author,judge');
     const lc = laneCheck(dir);
     expect(lc.status, lc.out).toBe(0);
     expect(lc.out).toContain(`${Object.keys(REQ.lanes).length} lane caller(s) pass`);
@@ -491,16 +494,60 @@ describe('the callers kanon init writes', () => {
   }, 60_000);
 });
 
-describe('the Apps, today and after plan 0005 step L4', () => {
-  it('passes --roles while the lanes run one App per role', () => {
-    expect(appsArgs(['reviewer'], REQ)).toEqual(['--roles', 'reviewer']);
-    expect(registerRolesOf('reviewer', REQ)).toEqual(['Reviewer']);
-  });
-
-  it('passes --apps, and needs every row of the App\'s roles, once the lanes take the Apps\' secrets', () => {
+describe('the Apps (plan 0005 step L4)', () => {
+  it('reads the Author and the Judge from the lanes\' secrets, and passes --apps', () => {
+    expect(REQ.lanes['agent-review']!.identities).toEqual(['judge']);
+    expect(REQ.lanes['agent-implement']!.identities).toEqual(['author']);
     expect(appsArgs(['author', 'judge'], REQ)).toEqual(['--apps', 'author,judge']);
     expect(registerRolesOf('author', REQ)).toEqual(['Implementer', 'Lead', 'Explorer', 'Overseer']);
-    expect(() => appsArgs(['author', 'reviewer'], REQ)).toThrow(/mix roles and Apps/);
+    expect(registerRolesOf('judge', REQ)).toEqual(['Reviewer', 'Merger']);
+    expect(registerRolesOf('releaser', REQ)).toEqual(['Releaser']);
+  });
+
+  it('joins an App the owner already has with kanon apps --reuse, never by a bare gh secret set', async () => {
+    const register = '| Role | App slug |\n|---|---|\n| Reviewer | `acme-judge` |\n| Merger | `acme-judge` |\n';
+    const dir = checkout({ 'docs/qa/agent-identities.md': register });
+    const r = await run(dir, fakeGitHub(), ['--yes', '--lanes', 'review']);
+    expect(r.status, r.err).toBe(0);
+    expect(r.appsCalls).toEqual([]);
+    expect(r.out).toContain('kanon apps --owner acme --repo widgets --reuse judge:acme-judge=<downloaded>.pem');
+    expect(r.out).not.toMatch(/gh secret set JUDGE_APP/);
+  });
+
+  it('creates the Releaser beside the Judge when the repository calls the release workflow and the adopter says yes', async () => {
+    const caller = 'name: Release\non:\n  push:\n    branches: [main]\npermissions: {}\njobs:\n  release:\n    uses: yedeya-labs/kanon/.github/workflows/release.yml@v1.2.3\n';
+    const yes = await run(checkout({ '.github/workflows/release.yml': caller }), fakeGitHub(), ['--lanes', 'review'], { 'optional Releaser': 'y' });
+    expect(yes.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge,releaser', '--dir', expect.any(String)]]);
+    const no = await run(checkout({ '.github/workflows/release.yml': caller }), fakeGitHub(), ['--yes', '--lanes', 'review']);
+    expect(no.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge', '--dir', expect.any(String)]]);
+    const none = await run(checkout(), fakeGitHub(), ['--lanes', 'review'], { 'optional Releaser': 'y' });
+    expect(none.appsCalls[0]).toContain('judge');
+    expect(none.out).not.toContain('Releaser');
+  }, 60_000);
+
+  it('maps the Releaser\'s secrets in the apps-check caller it writes, when it creates the Releaser', async () => {
+    const caller = 'name: Release\non:\n  push:\n    branches: [main]\npermissions: {}\njobs:\n  release:\n    uses: yedeya-labs/kanon/.github/workflows/release.yml@v1.2.3\n';
+    const dir = checkout({ '.github/workflows/release.yml': caller });
+    await run(dir, fakeGitHub(), ['--lanes', 'review'], { 'optional Releaser': 'y' });
+    const check = read(dir, '.github/workflows/apps-check.yml');
+    for (const s of ['JUDGE_APP_ID', 'JUDGE_APP_PRIVATE_KEY', 'RELEASER_APP_ID', 'RELEASER_APP_PRIVATE_KEY']) expect(check).toContain(`${s}: \${{ secrets.${s} }}`);
+  }, 60_000);
+
+  it('refuses a role where an App belongs: kanon apps takes no --roles since L4', () => {
+    expect(() => appsArgs(['author', 'reviewer'], REQ)).toThrow(/the lanes run as reviewer, which is not one of Kanon's Apps/);
+  });
+
+  it("asks for the Author's broadened Commit statuses write through the App's manifest, not a role's", () => {
+    expect(REQ.identities.apps.author!.permissions.statuses).toBe('write');
+    expect(REQ.identities.apps.judge!.permissions.statuses).toBe('read');
+  });
+
+  it('adds the Releaser only when asked, and only for a repository that calls Kanon\'s release workflow', () => {
+    expect(appIdentities({ lanes: ['agent-review'] }, REQ)).toEqual(['judge']);
+    expect(appIdentities({ lanes: ['agent-review'], releaser: true }, REQ)).toEqual(['judge', 'releaser']);
+    expect(callsRelease('jobs:\n  release:\n    uses: yedeya-labs/kanon/.github/workflows/release.yml@v1.2.3\n')).toBe(true);
+    expect(callsRelease('# uses: yedeya-labs/kanon/.github/workflows/release.yml@v1\n')).toBe(false);
+    expect(callsRelease(null)).toBe(false);
   });
 });
 

@@ -222,14 +222,25 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
     want="$(jq -r '.on.workflow_call.secrets // {} | keys | sort | join(",")' <<<"$lane_doc")"
     got="$(jq -r '.secrets | keys | sort | join(",")' <<<"$job")"
     [ "$want" = "$got" ] || fail "$f" "maps secrets [$got]; the Kanon lane $lane takes exactly [$want]"
+    # THE ROLE-NAMED SECRETS ARE GONE (plan 0005 §3.5, step L4): the lanes mint as the Author or
+    # the Judge, by fixed names. Named on its own, so an adopter moving the pin reads the rename
+    # it has to make rather than only a set difference.
+    for old in $(jq -r '.secrets | keys[] | select(test("^(EXPLORER|IMPLEMENTER|REVIEWER|MERGER|LEAD|OVERSEER)_APP_(ID|PRIVATE_KEY)$"))' <<<"$job"); do
+      case "$old" in
+        EXPLORER_*|IMPLEMENTER_*|LEAD_*|OVERSEER_*) new="AUTHOR_${old#*_}" app=Author ;;
+        *) new="JUDGE_${old#*_}" app=Judge ;;
+      esac
+      fail "$f" "maps the role-named secret \`$old\`; since plan 0005's two Apps the lane takes \`$new\` (the $app App's). Rename the secret and its mapping (docs/apps.md)"
+    done
     while IFS=$'\t' read -r k v; do
       [ -n "$k" ] || continue
       [[ "$v" =~ ^\$\{\{[[:space:]]*secrets\.[A-Za-z0-9_]+[[:space:]]*\}\}$ ]] \
         || fail "$f" "maps \`$k\` to \`$v\`; map each one to a single repository secret"
     done < <(jq -r '.secrets | to_entries[] | [.key, (.value | tostring)] | @tsv' <<<"$job")
-    for s in $(jq -r '.on.workflow_call.secrets // {} | keys[] | select(endswith("_APP_ID")) | sub("_APP_ID$"; "")' <<<"$lane_doc"); do
-      ROLES="$ROLES $(printf '%s' "${s:0:1}")$(printf '%s' "${s:1}" | tr '[:upper:]' '[:lower:]')"
-    done
+    # The role the lane mints for: its `# KANON ROLE:` line (plan 0005 §3.5). The App secrets
+    # name the Author or the Judge, which two or four roles share, so they no longer say it.
+    lane_role="$(sed -n 's/^# KANON ROLE: //p' "$lane_file" | head -1)"
+    if [ -n "$lane_role" ]; then ROLES="$ROLES $lane_role"; fi
   fi
 
   # The permissions ceiling: the calling job must grant at least what the lane declares, at

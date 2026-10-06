@@ -30,12 +30,21 @@ describe('requirements.json', () => {
 
   it("names each lane's identities from its App secrets, and its review caller's fixed name and run-name", () => {
     expect(built.lanes['agent-review']).toMatchObject({
-      identities: ['reviewer'],
-      secrets: ['CLAUDE_CODE_OAUTH_TOKEN', 'REVIEWER_APP_ID', 'REVIEWER_APP_PRIVATE_KEY'],
+      // The Judge's, since plan 0005's L4: the Reviewer and the Merger share it (§3.5).
+      identities: ['judge'],
+      secrets: ['CLAUDE_CODE_OAUTH_TOKEN', 'JUDGE_APP_ID', 'JUDGE_APP_PRIVATE_KEY'],
       readsWorkflows: ['ci.yml'],
       callerRunNameEndsWith: '${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}',
     });
-    expect(built.lanes['agent-merge']).toMatchObject({ callerName: 'Merge (Merger)', identities: ['merger'] });
+    expect(built.lanes['agent-merge']).toMatchObject({ callerName: 'Merge (Merger)', identities: ['judge'] });
+    expect(built.lanes['agent-implement']).toMatchObject({ identities: ['author'], grant: expect.objectContaining({ 'issues': 'write' }) });
+    expect(built.lanes['agent-implement-revise']).toMatchObject({ identities: ['author'], grant: expect.objectContaining({ statuses: 'read' }) });
+    expect(built.lanes['agent-rebase']).toMatchObject({ identities: ['author'], grant: expect.objectContaining({ statuses: 'read' }) });
+    // Every lane's identity is one of Kanon's Apps, never a role, and none is the Releaser's.
+    for (const [lane, l] of Object.entries(built.lanes as Record<string, { identities: string[] }>)) {
+      for (const i of l.identities) expect(['author', 'judge'], lane).toContain(i);
+    }
+    expect((built.identities.apps as Record<string, { permissions: Record<string, string> }>).author!.permissions.statuses).toBe('write');
     expect(built.lanes['agent-weekly-digest']).toMatchObject({ identities: [] });
     expect(built.hook.inputs).toEqual(['app-slug', 'browsers', 'database', 'github-token', 'install', 'issue-number', 'lane']);
   });

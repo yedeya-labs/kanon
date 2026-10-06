@@ -27,8 +27,12 @@
 #
 # INERT until: (1) the caller + the docs/qa playbooks are on the default branch,
 # (2) the GitHub Apps exist + are installed, and (3) these secrets are set (plan 0001 §8):
-#   IMPLEMENTER_APP_ID, IMPLEMENTER_APP_PRIVATE_KEY   (the Implementer's App)
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY   (the Implementer's App)
 #   CLAUDE_CODE_OAUTH_TOKEN                            (Claude subscription; `claude setup-token`)
+# KANON ROLE: Implementer
+# The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
+# role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
+# in the App register must exist, and this lane's tokens fit inside that role's row.
 name: Implement (Implementer)
 
 on:
@@ -47,9 +51,9 @@ on:
         type: string
         default: ""
     secrets:
-      IMPLEMENTER_APP_ID:
+      AUTHOR_APP_ID:
         required: true
-      IMPLEMENTER_APP_PRIVATE_KEY:
+      AUTHOR_APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -118,6 +122,7 @@ jobs:
     uses: $/.github/workflows/agent-lane.yml
     with:
       agent: implementer
+      role: Implementer
       lane: implement
       labels: agent:implement review:please
       arm: implementer agent
@@ -270,8 +275,8 @@ jobs:
       permission-pull-requests: write
       permission-workflows: write
     secrets:
-      app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
-      app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      app-id: ${{ secrets.AUTHOR_APP_ID }}
+      app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   # THE IMPLEMENTER STATUS (plan 0005 §3.3, question 6; step L3). A fixed job after the agent's,
@@ -289,8 +294,8 @@ jobs:
         continue-on-error: true
         with:
           mode: open
-          app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
-          app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.AUTHOR_APP_ID }}
+          app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           since: ${{ needs.filter.outputs.since }}
           branches-before: ${{ needs.filter.outputs.branches }}
 
@@ -395,8 +400,8 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.IMPLEMENTER_APP_ID }}
-          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           permission-issues: write
       - name: Free the WIP slot a crashed run would otherwise hold
         env:

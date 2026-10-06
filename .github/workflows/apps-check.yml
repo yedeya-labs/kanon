@@ -1,11 +1,12 @@
-# Checks every agent App in the register against its installation (#39, K-AGENT-5).
+# Checks each of Kanon's Apps in the register against its installation (#39, K-AGENT-5).
 #
 # The register (docs/qa/agent-identities.md, K-LAYOUT-6) is a claim, and a person's token
-# can't list an organisation's installations. Each App can read its own, so for every role
-# the register lists, this mints that role's token and checks, with cli/apps-check.mjs:
-# the minted slug is the register's, the installation covers this repository (a warning
-# when it covers others, or all), and its permissions are exactly the role's in
-# rulebook/agent-permissions.json. Each role's job writes a summary table.
+# can't list an organisation's installations. Each App can read its own, so for each of the
+# Author, the Judge and the Releaser the register lists (plan 0005 §3.4: one row per role, an
+# App's roles sharing its slug), this mints that App's token and checks, with
+# cli/apps-check.mjs: its roles name one slug, the minted slug is that one, the installation
+# covers this repository (a warning when it covers all of its owner's), and its permissions
+# are exactly the App's in rulebook/agent-permissions.json. Each App's job writes a summary.
 #
 # Run by hand, after creating or changing an App; it is not a required check. Kanon runs it
 # on itself:
@@ -20,39 +21,27 @@
 #
 # Permissions: nothing at the top. Reading the register needs `contents: read` on that one
 # job. The check jobs grant nothing: the App token carries its own permissions. Each job
-# names the two secrets of its own role, looked up by the register's role, so no job reads
-# another role's key and none inherits secrets. Called, it takes each role's two secrets by
-# their fixed names, all optional: a caller maps the roles its register lists, and a role
-# the register lists whose secrets are not mapped fails at the mint.
+# names the two secrets of its own App, so no job reads another App's key and none inherits
+# secrets. Called, it takes each App's two secrets by their fixed names (plan 0005 §3.5),
+# all optional: a caller maps the Apps its register lists, and an App the register lists
+# whose secrets are not mapped fails at the mint.
 name: apps-check
 
 on:
   workflow_dispatch:
   workflow_call:
     secrets:
-      EXPLORER_APP_ID:
+      AUTHOR_APP_ID:
         required: false
-      EXPLORER_APP_PRIVATE_KEY:
+      AUTHOR_APP_PRIVATE_KEY:
         required: false
-      IMPLEMENTER_APP_ID:
+      JUDGE_APP_ID:
         required: false
-      IMPLEMENTER_APP_PRIVATE_KEY:
+      JUDGE_APP_PRIVATE_KEY:
         required: false
-      REVIEWER_APP_ID:
+      RELEASER_APP_ID:
         required: false
-      REVIEWER_APP_PRIVATE_KEY:
-        required: false
-      MERGER_APP_ID:
-        required: false
-      MERGER_APP_PRIVATE_KEY:
-        required: false
-      LEAD_APP_ID:
-        required: false
-      LEAD_APP_PRIVATE_KEY:
-        required: false
-      OVERSEER_APP_ID:
-        required: false
-      OVERSEER_APP_PRIVATE_KEY:
+      RELEASER_APP_PRIVATE_KEY:
         required: false
 
 permissions: {}
@@ -65,17 +54,17 @@ jobs:
     permissions:
       contents: read
     outputs:
-      roles: ${{ steps.roles.outputs.roles }}
+      apps: ${{ steps.apps.outputs.apps }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: $/actions/kanon-path
-      - id: roles
-        run: node "$KANON/cli/apps-check.mjs" roles >> "$GITHUB_OUTPUT"
+      - id: apps
+        run: node "$KANON/cli/apps-check.mjs" apps >> "$GITHUB_OUTPUT"
 
   check:
-    name: ${{ matrix.app.role }}
+    name: ${{ matrix.app.app }}
     needs: register
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -83,11 +72,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: ${{ fromJSON(needs.register.outputs.roles) }}
+        app: ${{ fromJSON(needs.register.outputs.apps) }}
     steps:
       # Scoped to the owner, not the repository, so an installation that misses this
       # repository still mints, and the check below can say so.
-      - name: Mint the role's App token
+      - name: Mint the App's token
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
@@ -97,7 +86,8 @@ jobs:
       - uses: $/actions/kanon-path
       - name: Check the installation
         env:
-          ROLE: ${{ matrix.app.key }}
+          APP: ${{ matrix.app.key }}
+          ROLES: ${{ join(matrix.app.roles, ',') }}
           REGISTER_SLUG: ${{ matrix.app.slug }}
           REPOSITORY: ${{ github.repository }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}

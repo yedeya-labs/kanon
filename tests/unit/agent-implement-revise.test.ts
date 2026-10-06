@@ -65,7 +65,7 @@ ${GH_REGISTER_ARM}
 # Before the compare arm, which answers every other api call.
 # The head's commit statuses, for the implementer-status chain (plan 0005 §3.3, L4): by
 # default the Author App's \`kanon/role: implementer\` success; a test sets STUB_STATUSES.
-DEFAULT_STATUSES='[{"context":"kanon/role: implementer","state":"success","creator":{"login":"example-implementer[bot]"}}]'
+DEFAULT_STATUSES='[{"context":"kanon/role: implementer","state":"success","creator":{"login":"example-author[bot]"}}]'
 if [ "\${1:-}" = "api" ] && [[ "\${2:-}" == */statuses* ]]; then
   [ "\${STUB_STATUSES:-}" = "fail" ] && { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
   printf '%s' "\${STUB_STATUSES:-$DEFAULT_STATUSES}"; exit 0
@@ -96,7 +96,7 @@ if [ -n "$jqexpr" ]; then printf '%s' "$payload" | jq -r "\${args[@]}" "$jqexpr"
 const HEAD_OID = 'deadbeefcafe1234';
 
 const runFilter = ({
-  author = 'app/example-implementer',
+  author = 'app/example-author',
   labels = ['agent:implement'],
   prState = 'OPEN',
   reviewState = 'changes_requested',
@@ -184,7 +184,7 @@ const runFilter = ({
       STUB_COMMENTS: JSON.stringify({
         // Authored by the implementer — the cap counts HIS markers, not anyone's.
         comments: Array.from({ length: rounds }, () => ({
-          author: { login: 'example-implementer' },
+          author: { login: 'example-author' },
           body: '<!-- qa:implement-revise -->',
         })),
       }),
@@ -245,10 +245,10 @@ describe('what it acts on', () => {
   });
 
   it.each([
-    ['app/example-implementer', true],
-    ['example-implementer', true],
-    ['example-implementer[bot]', true],
-    ['app/example-lead', false],
+    ['app/example-author', true],
+    ['example-author', true],
+    ['example-author[bot]', true],
+    ['app/example-judge', false], // the Judge's: another App
     ['a-developer', false],
   ])('author %s -> acts: %s', (author, expected) => {
     // One identity, three spellings, three endpoints. RA-1007 was exactly this and
@@ -307,11 +307,11 @@ describe('the round cap', () => {
         PATH: `${dir}:${process.env.PATH}`, KANON: process.cwd(),
         REPO: 'r', ...registerEnv(filter), PR: '1',
         STATE: 'changes_requested', IS_DISPATCH: 'false', RESET: 'true',
-        STUB_META: JSON.stringify({ author: { login: 'app/example-implementer' }, state: 'OPEN', headRefName: 'b', labels: [{ name: 'agent:implement' }] }),
+        STUB_META: JSON.stringify({ author: { login: 'app/example-author' }, state: 'OPEN', headRefName: 'b', labels: [{ name: 'agent:implement' }] }),
         STUB_REVIEWS: JSON.stringify({ reviews: [{ state: 'CHANGES_REQUESTED' }] }),
         STUB_COMMENTS: JSON.stringify({ comments: [
-          { author: { login: 'example-implementer' }, body: '<!-- qa:implement-revise -->' },
-          { author: { login: 'example-implementer' }, body: '<!-- qa:implement-revise -->' },
+          { author: { login: 'example-author' }, body: '<!-- qa:implement-revise -->' },
+          { author: { login: 'example-author' }, body: '<!-- qa:implement-revise -->' },
         ] }),
       },
     });
@@ -440,7 +440,7 @@ describe('revise in place', () => {
       .toBeLessThan(names.findIndex((n) => n?.startsWith('actions/checkout')));
     expect(checkout?.with?.token).toBe('${{ steps.app-token.outputs.token }}');
     // And it is THIS lane's App: the Implementer's identity, which the round count filters on.
-    expect(wf.jobs.revise.secrets['app-id']).toBe('${{ secrets.IMPLEMENTER_APP_ID }}');
+    expect(wf.jobs.revise.secrets['app-id']).toBe('${{ secrets.AUTHOR_APP_ID }}');
   });
 
   it('serialises revisions of one PR', () => {
@@ -462,7 +462,7 @@ describe('plan 0005 L4: it revises only a PR in the implementer-status chain', (
     JSON.stringify([{ context: 'kanon/role: implementer', state, creator: { login: creator } }]);
 
   it('acts on a head that carries the Author App\'s implementer status (the control)', () => {
-    expect(runFilter({ statuses: status('example-implementer[bot]') }).act).toBe(true);
+    expect(runFilter({ statuses: status('example-author[bot]') }).act).toBe(true);
   });
 
   it('refuses a FORGED one by name: the Author\'s login, the label, and no status on its head', () => {
@@ -473,7 +473,7 @@ describe('plan 0005 L4: it revises only a PR in the implementer-status chain', (
 
   it('refuses one whose newest status another App created, or failed', () => {
     expect(runFilter({ statuses: status('example-ci[bot]') }).act).toBe(false);
-    expect(runFilter({ statuses: status('example-implementer[bot]', 'failure') }).act).toBe(false);
+    expect(runFilter({ statuses: status('example-author[bot]', 'failure') }).act).toBe(false);
   });
 
   it('refuses when the statuses can\'t be read, rather than revising on an unread answer', () => {
@@ -610,7 +610,7 @@ describe('the round cap counts THE IMPLEMENTER', () => {
         PATH: `${dir}:${process.env.PATH}`, KANON: process.cwd(),
         REPO: 'r', ...registerEnv(filter), PR: '1',
         STATE: 'changes_requested', IS_DISPATCH: 'false', RESET: '',
-        STUB_META: JSON.stringify({ author: { login: 'app/example-implementer' }, state: 'OPEN', headRefName: 'b', labels: [{ name: 'agent:implement' }] }),
+        STUB_META: JSON.stringify({ author: { login: 'app/example-author' }, state: 'OPEN', headRefName: 'b', labels: [{ name: 'agent:implement' }] }),
         // Two markers, neither from the Implementer: a human discussing the cap, and the
         // reviewer quoting it. Under the old count this read as "cap reached".
         STUB_REVIEWS: JSON.stringify({ reviews: [{ state: 'CHANGES_REQUESTED' }] }),
@@ -699,11 +699,11 @@ describe('a deleted author does not abort the round count', () => {
         PATH: `${dir}:${process.env.PATH}`, KANON: process.cwd(),
         REPO: 'r', ...registerEnv(filter), PR: '1',
         STATE: 'changes_requested', IS_DISPATCH: 'false', RESET: '',
-        STUB_META: JSON.stringify({ author: { login: 'app/example-implementer' }, state: 'OPEN', headRefName: 'b', labels: [{ name: 'agent:implement' }] }),
+        STUB_META: JSON.stringify({ author: { login: 'app/example-author' }, state: 'OPEN', headRefName: 'b', labels: [{ name: 'agent:implement' }] }),
         STUB_REVIEWS: JSON.stringify({ reviews: [{ state: 'CHANGES_REQUESTED' }] }),
         STUB_COMMENTS: JSON.stringify({ comments: [
           { author: null, body: 'a comment whose author deleted their account' },
-          { author: { login: 'example-implementer' }, body: '<!-- qa:implement-revise -->' },
+          { author: { login: 'example-author' }, body: '<!-- qa:implement-revise -->' },
         ] }),
       },
     });
@@ -948,7 +948,7 @@ describe('the login is read from the App register (plan 0001 §5)', () => {
   });
 
   it('follows the register, not a constant: another slug there turns the same author away', () => {
-    const r = runWith(REGISTER_FIXTURE.replace(`\`${IMPLEMENTER_LOGIN}\``, '`someone-else`'));
+    const r = runWith(REGISTER_FIXTURE.replaceAll(`\`${IMPLEMENTER_LOGIN}\``, '`someone-else`'));
     expect(r.status, r.output).toBe(0);
     expect(r.outputFile).toContain('act=false');
     expect(r.stdout).toContain('not someone-else');

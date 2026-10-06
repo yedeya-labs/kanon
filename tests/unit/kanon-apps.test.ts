@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
-import { apps, buildManifest, checkoutCheck, loadRoles, realDeps, remoteRepo } from '../../cli/apps.mjs';
-import { agentRows, expectedManifestPermissions } from './helpers/roles-table.js';
+import { apps, buildManifest, checkoutCheck, loadApps, loadRoles, realDeps, remoteRepo } from '../../cli/apps.mjs';
+import { appsTable, grantsOf } from './helpers/roles-table.js';
 
 /**
  * `kanon apps` (#39). GitHub and `gh` are mocked; the local listener is real, and a fake
@@ -40,13 +40,16 @@ type Run = {
   api: string[];
   writes: string[];
   opened: string[];
+  removed: string[];
   dir: string;
 };
 
 type Git = { status: number | null; stdout: string; stderr: string };
 
 type Scenario = {
-  roles?: string;
+  apps?: string;
+  /** The repositories --repo names (default the one checkout's). */
+  repoList?: string[];
   /** The owner's account type, as `GET /users/<login>` answers it (default Organization). */
   kind?: 'User' | 'Organization';
   /** The owner flag: `--owner` (default) or the deprecated `--org`. */
@@ -70,6 +73,8 @@ type Scenario = {
   setStatus?: Record<string, number>;
   /** gh's exit status for `gh secret delete <name>`. */
   deleteStatus?: Record<string, number>;
+  /** `--reuse judge:<slug>=<file>` instead of `--apps`: the slug GitHub's `GET /app` answers for the key. */
+  reuse?: { slug: string; keySlug?: string; keyText?: string };
 };
 
 let stdout: ReturnType<typeof vi.spyOn>;
@@ -118,12 +123,18 @@ const run = async (s: Scenario = {}): Promise<Run> => {
   printed = '';
   const dir = mkdtempSync(join(tmpdir(), 'kanon-apps-'));
   if (s.register !== undefined) realDeps.writeFile(join(dir, 'docs/qa/agent-identities.md'), s.register);
-  const r: Run = { status: -1, output: '', manifest: null, action: '', callbackStatus: 0, gh: [], git: [], api: [], writes: [], opened: [], dir };
-  let installed = false;
+  let installed = false as boolean;
+  const r: Run = { status: -1, output: '', manifest: null, action: '', callbackStatus: 0, gh: [], git: [], api: [], writes: [], opened: [], removed: [], dir };
+  const keyFile = join(dir, 'judge.pem');
+  if (s.reuse) {
+    realDeps.writeFile(keyFile, s.reuse.keyText ?? PEM);
+    // The App is already installed: --reuse never opens a page.
+    installed = true;
+  }
   let pending: Promise<unknown> = Promise.resolve();
   let n = 0;
 
-  const argv = [s.ownerFlag ?? '--owner', ORG, '--repo', REPO, '--roles', s.roles ?? 'reviewer', ...(s.noDir ? [] : ['--dir', dir]), ...(s.extraArgs ?? [])];
+  const argv = [s.ownerFlag ?? '--owner', ORG, '--repo', (s.repoList ?? [REPO]).join(','), ...(s.reuse ? ['--reuse', `judge:${s.reuse.slug}=${keyFile}`] : ['--apps', s.apps ?? 'judge']), ...(s.noDir ? [] : ['--dir', dir]), ...(s.extraArgs ?? [])];
   const status = await apps(argv, {
     env: s.env ?? {},
     git: (args) => {
@@ -138,10 +149,15 @@ const run = async (s: Scenario = {}): Promise<Run> => {
       r.writes.push(path);
       realDeps.writeFile(path, text);
     },
+    remove: (path) => {
+      r.removed.push(path);
+      realDeps.remove(path);
+    },
     gh: async (args, input) => {
       r.gh.push({ args, input });
       if (args[0] === 'api' && args[1] === 'user') return s.user ?? { status: 0, stdout: 'octo\n', stderr: '' };
       if (args[0] === 'api' && args[1] === `users/${ORG}`) return { status: 0, stdout: JSON.stringify({ login: ORG, type: s.kind ?? 'Organization' }), stderr: '' };
+      if (args[0] === 'api' && args[1] === `apps/${s.reuse?.slug}`) return { status: 0, stdout: '4242\n', stderr: '' };
       const by = args[1] === 'set' ? s.setStatus : args[1] === 'delete' ? s.deleteStatus : undefined;
       const status = by?.[args[2] ?? ''] ?? 0;
       return { status, stdout: '', stderr: status ? 'HTTP 403: Resource not accessible' : '' };
@@ -175,7 +191,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
         if (auth) throw new Error('the conversion needs no auth');
         return json(201, {
           id: 4242,
-          slug: `${REPO}-reviewer`,
+          slug: `${ORG}-judge`,
           owner: { login: ORG },
           permissions: (r.manifest as { default_permissions: Record<string, string> }).default_permissions,
           pem: PEM,
@@ -183,6 +199,10 @@ const run = async (s: Scenario = {}): Promise<Run> => {
           webhook_secret: null,
           ...s.conversion,
         });
+      }
+      if (method === 'GET' && u.pathname === '/app') {
+        verifyJwt(auth, '4242');
+        return json(200, { id: 4242, slug: s.reuse?.keySlug ?? s.reuse?.slug });
       }
       if (u.pathname === '/app/installations') {
         verifyJwt(auth, '4242');
@@ -216,14 +236,16 @@ const allFiles = (dir: string): Array<[string, string]> =>
 const parseSlug = (dir: string, role: string) =>
   spawnSync('awk', ['-v', `role=${role}`, '-f', AWK, join(dir, 'docs/qa/agent-identities.md')], { encoding: 'utf8' });
 
-describe('the manifest (K-ADOPT-8)', () => {
-  const roles = loadRoles();
-  for (const row of agentRows()) {
-    it(`${row.role}: exactly the row's permissions plus Metadata: read, private, no webhook`, () => {
-      const m = buildManifest({ owner: ORG, repo: REPO, role: row.role.toLowerCase(), name: 'n', redirectUrl: 'http://127.0.0.1:1/callback', spec: roles[row.role.toLowerCase()]! });
-      // Compared with the roles table itself, not with the JSON the builder reads, so an
+describe('the manifest (K-ADOPT-8, plan 0005 §3.1)', () => {
+  for (const spec of Object.values(loadApps())) {
+    it(`the ${spec.app}: exactly its roles' rows, plus Metadata: read and any broadened permission, private, no webhook`, () => {
+      const m = buildManifest({ owner: ORG, repo: REPO, name: 'n', redirectUrl: 'http://127.0.0.1:1/callback', spec });
+      // Compared with chapter 03's Apps table itself, not with the JSON the builder reads, so an
       // extra permission from either the data or the builder fails here.
-      expect(m.default_permissions).toEqual(expectedManifestPermissions(row));
+      const row = appsTable().find((r) => r.app === spec.app);
+      expect(row, `chapter 03 has no ${spec.app} row`).toBeDefined();
+      expect(m.default_permissions).toEqual({ ...grantsOf(row!.prose), metadata: 'read' });
+      expect(m.description).toContain(spec.app);
       expect(m.public).toBe(false);
       expect(m.hook_attributes.active).toBe(false);
       expect(m.default_events).toEqual([]);
@@ -232,11 +254,11 @@ describe('the manifest (K-ADOPT-8)', () => {
 });
 
 describe('kanon apps, end to end with GitHub mocked', () => {
-  it('creates, stores, checks and registers the Reviewer', async () => {
+  it('creates, stores, checks and registers the Judge', async () => {
     const r = await run();
     expect(r.status, r.output).toBe(0);
     expect(r.action).toBe(`https://github.com/organizations/${ORG}/settings/apps/new?state=state-1`);
-    expect(r.manifest).toMatchObject({ name: `${REPO}-reviewer`, public: false, hook_attributes: { active: false } });
+    expect(r.manifest).toMatchObject({ name: `${ORG}-judge`, public: false, hook_attributes: { active: false } });
     expect(r.manifest?.redirect_url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/);
     expect(r.callbackStatus).toBe(200);
     expect(r.gh.map((c) => c.args.join(' '))).toEqual([
@@ -244,8 +266,8 @@ describe('kanon apps, end to end with GitHub mocked', () => {
       `api users/${ORG}`,
       `secret set KANON_APPS_PREFLIGHT -R ${ORG}/${REPO}`,
       `secret delete KANON_APPS_PREFLIGHT -R ${ORG}/${REPO}`,
-      `secret set REVIEWER_APP_ID -R ${ORG}/${REPO}`,
-      `secret set REVIEWER_APP_PRIVATE_KEY -R ${ORG}/${REPO}`,
+      `secret set JUDGE_APP_ID -R ${ORG}/${REPO}`,
+      `secret set JUDGE_APP_PRIVATE_KEY -R ${ORG}/${REPO}`,
     ]);
     expect(r.gh[4]?.input).toBe('4242');
     expect(r.gh[5]?.input).toBe(PEM);
@@ -284,10 +306,10 @@ describe('kanon apps, end to end with GitHub mocked', () => {
   });
 
   it('prints no key, and says how to recover, when gh cannot store it', async () => {
-    const r = await run({ setStatus: { REVIEWER_APP_PRIVATE_KEY: 1 } });
+    const r = await run({ setStatus: { JUDGE_APP_PRIVATE_KEY: 1 } });
     expect(r.status).toBe(1);
     expect(r.gh.at(-1)?.input).toBe(PEM);
-    expect(r.output).toMatch(/gh could not set REVIEWER_APP_PRIVATE_KEY .*it is lost: generate a new one/);
+    expect(r.output).toMatch(/gh could not set JUDGE_APP_PRIVATE_KEY on acme\/widgets .*it is lost: generate a new one .* --reuse judge:acme-judge=<file>\.pem/);
     expect(leaks(r.output)).toBe(false);
     expect(r.writes).toEqual([]);
     rmSync(r.dir, { recursive: true, force: true });
@@ -304,15 +326,19 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     rmSync(r.dir, { recursive: true, force: true });
   });
 
-  it('writes a register row the lanes can read', async () => {
+  it('writes one register row per role of the App, its roles sharing the slug, which the lanes can read (§3.4)', async () => {
     const r = await run();
     expect(r.status, r.output).toBe(0);
     const register = readFileSync(join(r.dir, 'docs/qa/agent-identities.md'), 'utf8');
-    expect(register).toContain(`| Reviewer | \`${REPO}-reviewer\` | Read & write | Read & write | Read & write | No access | No access | None |`);
-    const parsed = parseSlug(r.dir, 'Reviewer');
-    expect(parsed.stderr).toBe('');
-    expect(parsed.stdout.trim()).toBe(`${REPO}-reviewer`);
-    expect(r.output).toContain(`+| Reviewer | \`${REPO}-reviewer\``);
+    for (const role of ['Reviewer', 'Merger']) {
+      expect(register).toContain(`| ${role} | \`${ORG}-judge\` | Read & write | Read & write | Read & write | No access | Read & write | Checks: Read, Commit statuses: Read |`);
+      const parsed = parseSlug(r.dir, role);
+      expect(parsed.stderr).toBe('');
+      expect(parsed.stdout.trim()).toBe(`${ORG}-judge`);
+      expect(r.output).toContain(`+| ${role} | \`${ORG}-judge\``);
+    }
+    const { parseAppRegister, appShape } = await import('../../scripts/app-register.mjs');
+    expect(appShape(parseAppRegister(register))).toEqual([]);
     rmSync(r.dir, { recursive: true, force: true });
   });
 
@@ -323,10 +349,10 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     rmSync(r.dir, { recursive: true, force: true });
   });
 
-  it('warns when the installation covers other repositories too', async () => {
+  it('does not warn when the installation covers other repositories too: one App per owner (§3.2)', async () => {
     const r = await run({ repos: [`${ORG}/${REPO}`, `${ORG}/gadgets`] });
     expect(r.status, r.output).toBe(0);
-    expect(r.output).toMatch(/warning: The App is also installed on acme\/gadgets/);
+    expect(r.output).not.toMatch(/warning/);
     rmSync(r.dir, { recursive: true, force: true });
   });
 
@@ -351,7 +377,7 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     const calls: string[] = [];
     const out: string[] = [];
     let opened = 0;
-    const status = await apps(['--owner', ORG, '--repo', REPO, '--roles', 'reviewer'], {
+    const status = await apps(['--owner', ORG, '--repo', REPO, '--apps', 'judge'], {
       env,
       git: (args) => checkoutOf(`https://github.com/${ORG}/${REPO}.git`, '/work/widgets')(args, ''),
       gh: async (args) => {
@@ -417,18 +443,84 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     expect(r.output).not.toContain('unset GH_TOKEN');
   });
 
-  it('refuses an unknown role, and a name for a role it was not asked for', async () => {
+  it('refuses a role where an App belongs, --roles itself, and a name for an App it was not asked for', async () => {
     const out: string[] = [];
     const err = (l: string) => out.push(l);
-    expect(await apps(['--owner', ORG, '--repo', REPO, '--roles', 'releaser'], { err })).toBe(2);
-    expect(await apps(['--owner', ORG, '--repo', REPO, '--roles', 'reviewer', '--name', 'lead=x'], { err })).toBe(2);
-    expect(out.join('\n')).toMatch(/"releaser" is not an agent role/);
-    expect(out.join('\n')).toMatch(/--name names the role "lead"/);
+    expect(await apps(['--owner', ORG, '--repo', REPO, '--apps', 'reviewer'], { err })).toBe(2);
+    expect(await apps(['--owner', ORG, '--repo', REPO, '--roles', 'reviewer'], { err })).toBe(2);
+    expect(await apps(['--owner', ORG, '--repo', REPO, '--apps', 'judge', '--name', 'author=x'], { err })).toBe(2);
+    expect(await apps(['--owner', ORG, '--repo', REPO, '--apps', 'judge', '--reuse', 'author:a-b=k.pem'], { err })).toBe(2);
+    expect(await apps(['--owner', ORG, '--repo', `${REPO},${ORG}/gadgets`, '--apps', 'judge'], { err })).toBe(2);
+    const text = out.join('\n');
+    expect(text).toMatch(/"reviewer" is not one of Kanon's Apps; they are author, judge, releaser/);
+    expect(text).toMatch(/--roles is gone since plan 0005's L4: .* Pass --apps author,judge/);
+    expect(text).toMatch(/--name names the App "author"/);
+    expect(text).toMatch(/run them separately/);
+    expect(text).toMatch(/--repo takes repository names alone/);
   });
 
-  it('uses the name given with --name', async () => {
-    const r = await run({ extraArgs: ['--name', 'reviewer=Acme Reviewer'] });
-    expect(r.manifest?.name).toBe('Acme Reviewer');
+  it('uses the name given with --name, and <owner>-<app> by default', async () => {
+    const r = await run({ extraArgs: ['--name', 'judge=Acme Judge'] });
+    expect(r.manifest?.name).toBe('Acme Judge');
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+});
+
+describe('one App per owner, reused across its repositories (plan 0005 §3.2)', () => {
+  it('stores the App\'s secrets on every repository named, checks the installation covers each, and prints the rows for the others', async () => {
+    const r = await run({ repoList: [REPO, 'gadgets'], repos: [`${ORG}/${REPO}`, `${ORG}/gadgets`] });
+    expect(r.status, r.output).toBe(0);
+    const sets = r.gh.filter((c) => c.args[1] === 'set').map((c) => c.args.slice(2).join(' '));
+    expect(sets).toEqual([
+      `KANON_APPS_PREFLIGHT -R ${ORG}/${REPO}`, `KANON_APPS_PREFLIGHT -R ${ORG}/gadgets`,
+      `JUDGE_APP_ID -R ${ORG}/${REPO}`, `JUDGE_APP_PRIVATE_KEY -R ${ORG}/${REPO}`,
+      `JUDGE_APP_ID -R ${ORG}/gadgets`, `JUDGE_APP_PRIVATE_KEY -R ${ORG}/gadgets`,
+    ]);
+    expect(r.output).toContain(`pick ${REPO}, gadgets, and click "Install"`);
+    expect(r.output).toContain(`The App register of ${ORG}/gadgets needs these rows too`);
+    expect(r.output).toContain(`  | Reviewer | \`${ORG}-judge\` | …`);
+    expect(r.output).toContain(`  | Merger | \`${ORG}-judge\` | …`);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('fails, naming the repository, when the installation misses one of them', async () => {
+    const r = await run({ repoList: [REPO, 'gadgets'], repos: [`${ORG}/${REPO}`] });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/installed on acme, but not on gadgets/);
+    expect(r.writes).toEqual([]);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('--reuse adds a repository from a key file: checks it is the App\'s, stores it, writes the rows, deletes the file', async () => {
+    const r = await run({ reuse: { slug: `${ORG}-judge` } });
+    expect(r.status, r.output).toBe(0);
+    expect(r.opened).toEqual([]);
+    expect(r.api).toContain('GET /app');
+    const sets = r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT');
+    expect(sets.map((c) => c.args[2])).toEqual(['JUDGE_APP_ID', 'JUDGE_APP_PRIVATE_KEY']);
+    expect(sets[1]?.input).toBe(PEM);
+    expect(r.removed).toEqual([join(r.dir, 'judge.pem')]);
+    expect(() => statSync(join(r.dir, 'judge.pem'))).toThrow();
+    expect(parseSlug(r.dir, 'Merger').stdout.trim()).toBe(`${ORG}-judge`);
+    expect(r.output).not.toContain(KEY_BODY);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('--reuse refuses a key that is another App\'s, stores nothing and keeps the file', async () => {
+    const r = await run({ reuse: { slug: `${ORG}-judge`, keySlug: `${ORG}-author` } });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/is not a key of acme-judge .* the file is kept/);
+    expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT')).toEqual([]);
+    expect(r.removed).toEqual([]);
+    expect(statSync(join(r.dir, 'judge.pem')).isFile()).toBe(true);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('--reuse refuses a file that holds no private key', async () => {
+    const r = await run({ reuse: { slug: `${ORG}-judge`, keyText: 'not a key' } });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/is not a private key file/);
+    expect(r.removed).toEqual([]);
     rmSync(r.dir, { recursive: true, force: true });
   });
 });
@@ -456,7 +548,7 @@ describe('kanon apps for a personal account or an organisation (plan 0005 §5.1,
     const urls = owned(githubUrls(r));
     // So the check below is not vacuous: the create page, the App's settings, its installation.
     expect(urls.some((u) => u.startsWith('https://github.com/settings/apps/new'))).toBe(true);
-    expect(urls.some((u) => u.startsWith(`https://github.com/settings/apps/${REPO}-reviewer/permissions`))).toBe(true);
+    expect(urls.some((u) => u.startsWith(`https://github.com/settings/apps/${ORG}-judge/permissions`))).toBe(true);
     expect(urls.some((u) => u.startsWith('https://github.com/settings/installations/77'))).toBe(true);
     expect(urls.some((u) => u.startsWith('https://github.com/settings/apps/<slug>'))).toBe(true);
     for (const u of urls) expect(u).toMatch(/^https:\/\/github\.com\/settings\//);
@@ -477,7 +569,7 @@ describe('kanon apps for a personal account or an organisation (plan 0005 §5.1,
   it('refuses an owner GitHub does not know, before the preflight', async () => {
     const out: string[] = [];
     const calls: string[] = [];
-    const status = await apps(['--owner', 'nobody-here', '--repo', REPO, '--roles', 'reviewer', '--register', '/dev/null/x'], {
+    const status = await apps(['--owner', 'nobody-here', '--repo', REPO, '--apps', 'judge', '--register', '/dev/null/x'], {
       env: {},
       git: () => notACheckout(),
       gh: async (args) => {
@@ -505,9 +597,9 @@ describe('kanon apps for a personal account or an organisation (plan 0005 §5.1,
   it('refuses --owner and --org naming different accounts, and a slash in --owner', async () => {
     const out: string[] = [];
     const err = (l: string) => out.push(l);
-    expect(await apps(['--owner', ORG, '--org', 'other', '--repo', REPO, '--roles', 'reviewer'], { err })).toBe(2);
-    expect(await apps(['--owner', `${ORG}/${REPO}`, '--repo', REPO, '--roles', 'reviewer'], { err })).toBe(2);
-    expect(await apps(['--repo', REPO, '--roles', 'reviewer'], { err })).toBe(2);
+    expect(await apps(['--owner', ORG, '--org', 'other', '--repo', REPO, '--apps', 'judge'], { err })).toBe(2);
+    expect(await apps(['--owner', `${ORG}/${REPO}`, '--repo', REPO, '--apps', 'judge'], { err })).toBe(2);
+    expect(await apps(['--repo', REPO, '--apps', 'judge'], { err })).toBe(2);
     expect(out.join('\n')).toContain('--owner and --org name different accounts, "acme" and "other"');
     expect(out.join('\n')).toContain('--owner takes a GitHub login, not "acme/widgets"');
     expect(out.join('\n')).toContain('--owner is required');
@@ -582,7 +674,7 @@ describe('kanon apps refuses outside a checkout of --repo (plan 0005 §5.1)', ()
     expect(r.git).toEqual([]);
     expect(r.writes).toEqual([target]);
     expect(parseSlug(dir, 'Reviewer').status).not.toBe(0); // nothing in the usual place
-    expect(readFileSync(target, 'utf8')).toContain(`| Reviewer | \`${REPO}-reviewer\``);
+    expect(readFileSync(target, 'utf8')).toContain(`| Reviewer | \`${ORG}-judge\``);
     rmSync(dir, { recursive: true, force: true });
     rmSync(r.dir, { recursive: true, force: true });
   });
@@ -667,7 +759,18 @@ describe('kanon apps names the token it uses (plan 0005 §5.1)', () => {
 });
 
 describe('the register row (K-LAYOUT-6)', () => {
-  const FIXTURE = readFileSync(join(ROOT, 'tests/fixtures/lane-check/adopter/docs/qa/agent-identities.md'), 'utf8');
+  // The writer's own cases, on a register of distinct slugs: the writer keys on the role, so
+  // what it does to a row is the same whichever App the slug is (the lane-check fixture now
+  // holds the two-App shape, plan 0005 §3.4).
+  const FIXTURE = [
+    '# Agent identities',
+    '',
+    '| Role | App slug | Contents | Issues | Pull requests | Workflows |',
+    '|---|---|---|---|---|---|',
+    '| Implementer | `example-implementer` | Read & write | Read & write | Read & write | Read & write |',
+    '| Lead | **`example-lead`** | Read & write | Read & write | Read & write | No access |',
+    '',
+  ].join('\n');
   const write = (text: string | null, role: string, slug: string) =>
     writeRegisterRow(text, { role, slug, permissions: loadRoles()[role.toLowerCase()]!.permissions });
 

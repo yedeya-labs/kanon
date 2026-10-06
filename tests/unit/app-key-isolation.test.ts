@@ -220,7 +220,7 @@ describe('the spine\'s own handoff (kanon#274)', () => {
 
 describe('the check catches what it is for', () => {
   const agent: Step = { uses: '$/actions/agent-run' };
-  const mint: Step = { uses: 'actions/create-github-app-token@v3', with: { 'private-key': '${{ secrets.LEAD_APP_PRIVATE_KEY }}' } };
+  const mint: Step = { uses: 'actions/create-github-app-token@v3', with: { 'private-key': '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}' } };
 
   it('a mint in the agent\'s job, before or after the agent', () => {
     expect(violations({ 'x.yml': { jobs: { a: { steps: [mint, agent] }, b: { steps: [agent, mint] } } } })).toEqual({ 'x.yml:a': 'runs the agent', 'x.yml:b': 'runs the agent' });
@@ -240,7 +240,7 @@ describe('the check catches what it is for', () => {
   });
 
   it('the key in a step\'s env, the job\'s env, or a reusable call\'s secrets', () => {
-    const run = { run: 'true', env: { K: '${{ secrets.EXPLORER_APP_PRIVATE_KEY }}' } };
+    const run = { run: 'true', env: { K: '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}' } };
     expect(Object.keys(violations({ 'x.yml': { jobs: { a: { steps: [agent, run] } } } }))).toEqual(['x.yml:a']);
     expect(Object.keys(violations({ 'x.yml': { jobs: { a: { env: { K: '${{ secrets.X_PRIVATE_KEY }}' }, steps: [agent] } as Job } } }))).toEqual(['x.yml:a']);
   });

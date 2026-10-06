@@ -19,6 +19,6 @@ jobs:
   audit:
     uses: yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@v1.2.3
     secrets:
-      EXPLORER_APP_ID: ${{ secrets.EXPLORER_APP_ID }}
-      EXPLORER_APP_PRIVATE_KEY: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

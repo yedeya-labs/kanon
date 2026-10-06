@@ -109,7 +109,7 @@ describe('the Merger lane is called, with its caller’s name fixed (plan 0004 s
   });
 
   it('takes the Merger’s two secrets and no Claude token: it runs no model', () => {
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['MERGER_APP_ID', 'MERGER_APP_PRIVATE_KEY']);
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['JUDGE_APP_ID', 'JUDGE_APP_PRIVATE_KEY']);
     expect(LANE_TEXT).not.toMatch(/claude-code-action|agent-run|CLAUDE_CODE_OAUTH_TOKEN:/);
   });
 

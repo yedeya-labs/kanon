@@ -10,8 +10,9 @@ export const REGISTER_FIXTURE = readFileSync(
   join(process.cwd(), 'tests/fixtures/lane-check/adopter/docs/qa/agent-identities.md'),
   'utf8',
 );
-export const IMPLEMENTER_LOGIN = 'example-implementer';
-export const LEAD_LOGIN = 'example-lead';
+/** The Author App's slug, which the fixture's Implementer and Lead rows share (plan 0005 §3.4). */
+export const IMPLEMENTER_LOGIN = 'example-author';
+export const LEAD_LOGIN = 'example-author';
 
 /**
  * The stub's arm for `gh api repos/O/R/contents/docs/qa/agent-identities.md`: the register in

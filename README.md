@@ -59,7 +59,7 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 
 <!-- x-release-please-end -->
 
-**Or let `kanon init` do the installation** ([plan 0005](docs/plans/0005-lean-installation.md) §5.4). Run from your repository's checkout, it inspects the repository and its owner, asks what it can't infer (the people, the stack's gates, the test database, a sign-off delegation, the lanes), each with a default, and writes only the declarations that differ from their documented defaults, the lane callers, the `apps-check` caller, `lane-check` in CI and the Dependabot entry, all pinned to the release it runs from. It creates the taxonomy's labels, the bucket milestones and, where the plan has rulesets and your token can administer the repository, the default branch's ruleset, then runs `kanon apps` for the lanes' Apps. It commits nothing, prints as exact steps whatever your token or plan can't do, and changes nothing on a second run. `--dry-run` shows it all first:
+**Or let `kanon init` do the installation** ([plan 0005](docs/plans/0005-lean-installation.md) §5.4). Run from your repository's checkout, it inspects the repository and its owner, asks what it can't infer (the people, the stack's gates, the test database, a sign-off delegation, the lanes), each with a default, and writes only the declarations that differ from their documented defaults, the lane callers, the `apps-check` caller, `lane-check` in CI and the Dependabot entry, all pinned to the release it runs from. It creates the taxonomy's labels, the bucket milestones and, where the plan has rulesets and your token can administer the repository, the default branch's ruleset, then runs `kanon apps --apps` for the Apps the lanes run as, the Author and the Judge, and the optional Releaser if you call Kanon's release workflow and ask for it. A repository joining Apps the owner already has gets the `kanon apps --reuse` step instead. It commits nothing, prints as exact steps whatever your token or plan can't do, and changes nothing on a second run. `--dry-run` shows it all first:
 
 <!-- x-release-please-start-version -->
 
@@ -81,12 +81,12 @@ npx --yes --package github:yedeya-labs/kanon#v0.27.0 kanon milestones --repo <ow
 
 <!-- x-release-please-end -->
 
-**Create the agent Apps with [`kanon apps`](docs/apps.md)** (step 12 of the checklist). It builds each role's App from a manifest with exactly that role's permissions, stores the App's id and key as Actions secrets with your own `gh`, and writes the App register row. You click **Create** and **Install** in GitHub for each App; the command never creates one itself. The owner may be a personal account or an organisation; the command asks GitHub which, and refuses to run anywhere but your repository's checkout. Run it straight from a Kanon release tag, inside that checkout:
+**Create the Apps with [`kanon apps`](docs/apps.md)** (step 12 of the checklist): two per owner, reused across its repositories, the **Author** (Implementer, Lead, Explorer, Overseer) and the **Judge** (Reviewer, Merger), and the optional **Releaser** for releases. It builds each App from a manifest with exactly its permissions, stores its id and key as Actions secrets with your own `gh`, and writes one App register row per role. You click **Create** and **Install** in GitHub for each App; the command never creates one itself. The owner may be a personal account or an organisation; the command asks GitHub which, and refuses to run anywhere but your repository's checkout. Run it straight from a Kanon release tag, inside that checkout:
 
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.27.0 kanon apps --owner <owner> --repo <repo> --roles reviewer
+npx --yes --package github:yedeya-labs/kanon#v0.27.0 kanon apps --owner <owner> --repo <repo> --apps author,judge
 ```
 
 <!-- x-release-please-end -->

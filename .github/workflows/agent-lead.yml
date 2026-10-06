@@ -44,7 +44,11 @@
 #
 # INERT until: the caller is on the default branch + the Lead's App installed + these
 # secrets (plan 0001 §8):
-#   LEAD_APP_ID, LEAD_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+# KANON ROLE: Lead
+# The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
+# role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
+# in the App register must exist, and this lane's tokens fit inside that role's row.
 name: Lead — brief
 
 # THE CALLER'S TRIGGER — this lane's contract with it:
@@ -72,9 +76,9 @@ on:
         type: string
         default: ""
     secrets:
-      LEAD_APP_ID:
+      AUTHOR_APP_ID:
         required: true
-      LEAD_APP_PRIVATE_KEY:
+      AUTHOR_APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -128,6 +132,7 @@ jobs:
     uses: $/.github/workflows/agent-lane.yml
     with:
       agent: lead
+      role: Lead
       lane: lead
       labels: sev:critical follow-up pipeline-improvement review:please
       arm: lead agent
@@ -405,6 +410,6 @@ jobs:
       permission-issues: write
       permission-pull-requests: write
     secrets:
-      app-id: ${{ secrets.LEAD_APP_ID }}
-      app-private-key: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
+      app-id: ${{ secrets.AUTHOR_APP_ID }}
+      app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

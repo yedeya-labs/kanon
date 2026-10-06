@@ -25,30 +25,30 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Code audit | `agent-code-audit.yml` | Explorer | `schedule` (every few days); `workflow_dispatch` |
 | Overseer (optional) | `agent-overseer.yml` | Overseer | `schedule` (weekly); `workflow_dispatch` |
 
-**What each caller maps, grants and needs.** Every caller maps its role's two App secrets, by name, and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger, the reconciler and the dispatch sweep run no model, so their callers map only the two. The digests run as no App, so their callers map `CLAUDE_CODE_OAUTH_TOKEN` and `DIGEST_WEBHOOK`. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
+**What each caller maps, grants and needs.** Every caller maps its App's two secrets, by name (the Author's for the Implementer's, the Lead's, the Explorer's and the Overseer's lanes, the Judge's for the Reviewer's and the Merger's), and so does every lane that runs a model with `CLAUDE_CODE_OAUTH_TOKEN`. The Merger, the reconciler and the dispatch sweep run no model, so their callers map only the two. The digests run as no App, so their callers map `CLAUDE_CODE_OAUTH_TOKEN` and `DIGEST_WEBHOOK`. It grants at least the permissions below, which are the most any of the lane's jobs declares for the workflow token (the App token's permissions are the App's, narrowed per lane by `K-AGENT-46`, and need nothing from the caller), and it needs the project documents below on your default branch (`K-LAYOUT-17`). A lane that reads no document still needs the project-setup hook if it checks out. [`tests/unit/lanes-doc.test.ts`](../tests/unit/lanes-doc.test.ts) fails when this table and the lanes disagree.
 
 <!-- lane-contract:table -->
 
 | Lane | Secrets, besides the Claude token | Grant at least | Reads |
 |---|---|---|---|
-| `agent-triage.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
-| `agent-implement.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
-| `agent-implement-revise.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read`, `statuses: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
-| `agent-lead-revise.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: write` | none |
-| `agent-merge-reconcile.yml` | `REVIEWER_APP_ID`, `REVIEWER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read` | `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` |
-| `agent-review.yml` | `REVIEWER_APP_ID`, `REVIEWER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: write`, `actions: read` | `docs/qa/stack.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` |
-| `agent-verify-acs.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read` | `docs/qa/explorer-playbook.md` |
-| `agent-lead.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/lead-playbook.md` |
-| `agent-lead-split.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read` | `docs/qa/lead-playbook.md` |
-| `agent-rebase.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read`, `actions: read`, `statuses: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
-| `agent-merge.yml` | `MERGER_APP_ID`, `MERGER_APP_PRIVATE_KEY` | `contents: read` | none |
-| `agent-lead-reconcile.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read`, `checks: read`, `statuses: read`, `actions: read` | none |
+| `agent-triage.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-implement.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-implement-revise.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read`, `statuses: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-lead-revise.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: write` | none |
+| `agent-merge-reconcile.yml` | `JUDGE_APP_ID`, `JUDGE_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read` | `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` |
+| `agent-review.yml` | `JUDGE_APP_ID`, `JUDGE_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: write`, `actions: read` | `docs/qa/stack.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` |
+| `agent-verify-acs.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read`, `issues: read` | `docs/qa/explorer-playbook.md` |
+| `agent-lead.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/lead-playbook.md` |
+| `agent-lead-split.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read` | `docs/qa/lead-playbook.md` |
+| `agent-rebase.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read`, `actions: read`, `statuses: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-merge.yml` | `JUDGE_APP_ID`, `JUDGE_APP_PRIVATE_KEY` | `contents: read` | none |
+| `agent-lead-reconcile.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read`, `checks: read`, `statuses: read`, `actions: read` | none |
 | `agent-project-digest.yml` | `DIGEST_WEBHOOK` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read` | none |
 | `agent-weekly-digest.yml` | `DIGEST_WEBHOOK` | `contents: read`, `issues: read`, `pull-requests: read` | none |
-| `agent-explore.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: read`, `id-token: write` | `docs/qa/explorer-playbook.md` |
-| `agent-dispatch-sweep.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `id-token: write` | none |
-| `agent-code-audit.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: write`, `id-token: write` | `docs/qa/stack.md`, `docs/qa/explorer-playbook.md` |
-| `agent-overseer.yml` | `OVERSEER_APP_ID`, `OVERSEER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: write`, `id-token: write` | `docs/qa/capability-ledger.md`, `docs/qa/overseer-playbook.md` |
+| `agent-explore.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: read`, `id-token: write` | `docs/qa/explorer-playbook.md` |
+| `agent-dispatch-sweep.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read`, `id-token: write` | none |
+| `agent-code-audit.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: write`, `id-token: write` | `docs/qa/stack.md`, `docs/qa/explorer-playbook.md` |
+| `agent-overseer.yml` | `AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `actions: write`, `id-token: write` | `docs/qa/capability-ledger.md`, `docs/qa/overseer-playbook.md` |
 
 <!-- /lane-contract:table -->
 
@@ -139,8 +139,8 @@ jobs:
       pr_number: ${{ inputs.pr_number }}
       reset: ${{ inputs.reset }}
     secrets:
-      IMPLEMENTER_APP_ID: ${{ secrets.IMPLEMENTER_APP_ID }}
-      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
@@ -151,7 +151,7 @@ jobs:
 - **Triggers are yours.** A reusable workflow can't declare its caller's events. The `github` context in a called workflow is the caller's, so the lane reads the triggering event exactly as it would in your own file.
 - **Inputs pass through, by name.** `with:` passes your `workflow_dispatch` inputs as `${{ inputs.<name> }}`, and nothing else. On the other triggers they arrive empty, which the lane expects. Every lane also declares `smoke`, which your caller never passes: Kanon's lanes smoke sets it so that its runs take concurrency groups of their own and never queue behind, or cancel, your real runs.
 - **`permissions:` is the ceiling.** Each lane declares the permissions it needs, and a called workflow can only narrow what its caller grants. Grant at least what the lane declares, or the run fails to start.
-- **Secrets are mapped explicitly, by their fixed names** ([plan 0001 §8](plans/0001-move-the-agent-lanes.md)): `<ROLE>_APP_ID`, `<ROLE>_APP_PRIVATE_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`. Never `secrets: inherit`, which would hand every secret in your repository to Kanon's code. [`kanon apps`](apps.md) stores the two App secrets. `CLAUDE_CODE_OAUTH_TOKEN` is the token of the Claude subscription the agents run on. Make it with `claude setup-token`, signed in to that subscription, and store it yourself with `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R <owner>/<repo>`, pasting it on standard input.
+- **Secrets are mapped explicitly, by their fixed names** ([plan 0001 §8](plans/0001-move-the-agent-lanes.md)): the App's `AUTHOR_APP_ID` and `AUTHOR_APP_PRIVATE_KEY` (the Implementer's, the Lead's, the Explorer's and the Overseer's lanes) or `JUDGE_APP_ID` and `JUDGE_APP_PRIVATE_KEY` (the Reviewer's and the Merger's), and `CLAUDE_CODE_OAUTH_TOKEN` (plan 0005 §3.5). The role-named secrets of earlier releases (`IMPLEMENTER_APP_ID`, `REVIEWER_APP_ID`, …) are gone: `lane-check` fails a caller that maps one, naming the secret it takes instead. Never `secrets: inherit`, which would hand every secret in your repository to Kanon's code. [`kanon apps`](apps.md) stores the two App secrets. `CLAUDE_CODE_OAUTH_TOKEN` is the token of the Claude subscription the agents run on. Make it with `claude setup-token`, signed in to that subscription, and store it yourself with `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R <owner>/<repo>`, pasting it on standard input.
 - **No `concurrency:`.** Each lane holds its own concurrency group. The same group on the caller would have the caller wait for itself.
 - **One version.** Every Kanon reference in your repository pins the same exact version, and Dependabot proposes upgrades (`K-ADOPT-11`). Write the `cooldown` out with `yedeya-labs/kanon*` excluded: an entry with none still gets Dependabot's default of 3 days, which holds back every release made in the last 3 days, and `lane-check` fails it ([#233](https://github.com/yedeya-labs/kanon/issues/233)).
 - **An agent's commits pass your `dco` check with no hook code of yours** (`K-AGENT-44`). The lanes author each one as the lane's App, and add the `Signed-off-by:` of the person your default branch's `docs/qa/sign-off-delegation.md` names (`K-LAYOUT-14`). Recording that delegation is your decision; with none, an agent's commits fail the check ([`agent-setup`](../actions/agent-setup/README.md), [#234](https://github.com/yedeya-labs/kanon/issues/234)).
@@ -201,15 +201,15 @@ jobs:
     with:
       pr_number: ${{ inputs.pr_number }}
     secrets:
-      REVIEWER_APP_ID: ${{ secrets.REVIEWER_APP_ID }}
-      REVIEWER_APP_PRIVATE_KEY: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+      JUDGE_APP_ID: ${{ secrets.JUDGE_APP_ID }}
+      JUDGE_APP_PRIVATE_KEY: ${{ secrets.JUDGE_APP_PRIVATE_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
 <!-- x-release-please-end -->
 
 4. **[`lane-check`](../actions/lane-check/README.md) in CI**, and the Dependabot entry it asks for.
-5. **The Reviewer's App:** run [`kanon apps --roles reviewer`](apps.md) from that branch's checkout, and commit the register row it writes. `lane-check` fails a caller whose role has no row in the App register, so create the App before you push, or the branch is red until you do. If you must push first, a row for the role with the slug `kanon apps` will give it (`<repo>-reviewer`) passes `lane-check`. `kanon apps` rewrites an existing row for its role in place, so mark that row as a placeholder and never merge it.
+5. **The Apps:** run [`kanon apps --apps author,judge`](apps.md) from that branch's checkout, and commit the register rows it writes, one per role, each App's rows sharing its slug. The Reviewer is a role of the Judge. `lane-check` fails a caller whose role has no row in the App register, so create the Apps before you push, or the branch is red until you do. If you must push first, rows with the slugs `kanon apps` will give them (`<owner>-author`, `<owner>-judge`) pass `lane-check`. `kanon apps` rewrites an existing row for its role in place, so mark those rows as placeholders and never merge them.
 6. **`CLAUDE_CODE_OAUTH_TOKEN`**, as above.
 
 Then merge. **The first review comes on the next pull request, not this one.** Both automatic triggers run the default branch's copy of the caller (`pull_request_target` runs the base's, `workflow_run` the default branch's), so a pull request that adds the caller is never reviewed by it. In bootstrap, a human merges that one (`K-ADOPT-4`). Then apply `review:please` to any open pull request whose CI has finished, or dispatch the lane (`gh workflow run <your caller> -f pr_number=N`), and the Reviewer's App posts a verdict.
@@ -254,11 +254,11 @@ A `code` tree is your own source: `citation-shift` reads its comments, and the s
 
 ## The App register
 
-The revise lanes find their own App's login in the App register, and the scripts the lanes run read every role's login from it, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks.
+The revise lanes find their own App's login in the App register, and the scripts the lanes run read every role's login from it, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks. Since plan 0005's L4 the rows of one App's roles name that App's slug: the Author's four one, the Judge's two another, and the Releaser's, if you have one, a third. `lane-check` fails a register in which one App's roles name two slugs, or two of those Apps share one (§3.4). Each lane says which role it runs as on a `# KANON ROLE:` line, which `lane-check` reads.
 
 Every post a lane writes as one of your Apps opens with a persona header and a hidden role marker, `**Implementer** <!-- kanon:role=implementer -->`, and every agent commit has the persona as its author name (plan 0005 §3.3). The Implementer's lanes also set a `kanon/role: implementer` commit status, from a job after the agent's, with a token narrowed to Commit statuses write. To have it set, grant your Implementer App **Commit statuses: Read & write** and record that broadened permission in the register (`K-AGENT-3`). Until then the job says so in the run's summary and changes nothing.
 
-**Since plan 0005's step L4 both are required.** Every reader that tells two roles apart needs the role's marker beside the App's login. The Merger merges only a pull request whose head carries a `success` `kanon/role: implementer` status created by the Implementer's App, and otherwise skips it as `not-the-implementer`; an unreadable status list waits. The revise and rebase lanes act only on a pull request whose head carries that status, and refuse any other by name, so a person's push takes a pull request out of the green zone and a person merges it. Both callers now grant `statuses: read`. Grant the permission to your Implementer App before you move the pin to this release, or every Implementer pull request waits for a person.
+**Since plan 0005's step L4 both are required.** Every reader that tells two roles apart needs the role's marker beside the App's login. The Merger merges only a pull request whose head carries a `success` `kanon/role: implementer` status created by the Implementer's App, and otherwise skips it as `not-the-implementer`; an unreadable status list waits. The revise and rebase lanes act only on a pull request whose head carries that status, and refuse any other by name, so a person's push takes a pull request out of the green zone and a person merges it. Both callers now grant `statuses: read`. Grant the permission to your Author App (the Implementer's) before you move the pin to this release, or every Implementer pull request waits for a person.
 
 ## The reference environment's deploy
 
@@ -370,4 +370,4 @@ It needs the Overseer's App, with `Contents: Read`, `Issues: Read & write`, `Pul
 
 ## Checking it
 
-Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a caller that isn't at its lane's file name, a review or reconciler caller without `.github/workflows/ci.yml`, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook, or a missing sweep hook for an explore caller; on a missing stack document or capability ledger, or a stack document without `## Gates` or with a section twice; on a malformed test-database declaration, escalation file, exemptions file, reference-deploy declaration or production-promotion declaration; on an adoption record whose Overseer bullet, or its default `not installed`, the callers contradict; on a role missing from the App register; and on a missing Dependabot entry.
+Run [`lane-check`](../actions/lane-check/README.md) in CI. It fails on a caller that holds more than the above, a caller that isn't at its lane's file name, a review or reconciler caller without `.github/workflows/ci.yml`, a review caller whose `run-name` doesn't end with the head SHA, or a Merger caller not named `Merge (Merger)`, passes a setting instead of an input, maps the wrong secrets, grants too little, or pins a second version; on a missing or incomplete hook, or a missing sweep hook for an explore caller; on a missing stack document or capability ledger, or a stack document without `## Gates` or with a section twice; on a malformed test-database declaration, escalation file, exemptions file, reference-deploy declaration or production-promotion declaration; on an adoption record whose Overseer bullet, or its default `not installed`, the callers contradict; on a role missing from the App register, a register whose Apps' roles name two slugs or share one, or a caller that maps a role-named App secret; and on a missing Dependabot entry.

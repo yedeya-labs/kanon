@@ -52,8 +52,8 @@ jobs:
       prompt: Read the export.
       issue-number: ${{ inputs.issue }}
     secrets:
-      app-id: ${{ secrets.EXPLORER_APP_ID }}
-      app-private-key: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
+      app-id: ${{ secrets.AUTHOR_APP_ID }}
+      app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   put:

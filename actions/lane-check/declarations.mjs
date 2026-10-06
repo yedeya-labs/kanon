@@ -14,8 +14,9 @@
 //
 //   node declarations.mjs <overseer> <register>
 //     overseer  `true` when a workflow calls the Overseer's lane, else `false`
-//     register  `true` to read the App register's `Persona` column (plan 0005 §3.3): when a
-//               caller's lane runs as a role and the register exists, else `false`
+//     register  `true` to read the App register's `Persona` column (plan 0005 §3.3) and its
+//               shape (§3.4: one slug per App, none shared between Apps): when a caller's lane
+//               runs as a role and the register exists, else `false`
 //
 // Run from the root of the adopter's checkout. Runs every reader, in one process (one Node start
 // per lane-check run, not one per reader), and prints one tab-separated line per finding:
@@ -32,7 +33,7 @@ import { readProductionPromotion } from '../../scripts/lib/production-promotion.
 import { readReferenceDeploy } from '../../scripts/lib/reference-deploy.mjs';
 import { codeAreasDefaults, readCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { checkOverseerInstall } from '../../scripts/lib/overseer-install.mjs';
-import { APP_REGISTER, parsePersonas } from '../../scripts/app-register.mjs';
+import { APP_REGISTER, appShape, parseAppRegister, parsePersonas } from '../../scripts/app-register.mjs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -65,7 +66,12 @@ const READERS = [
   // name here, where the lanes would only warn. The slugs are the awk reader's, per role.
   ...(register === 'true'
     ? [/** @type {[string, (root: string) => string[]]} */ ([APP_REGISTER, (root) => {
-        parsePersonas(readFileSync(join(root, APP_REGISTER), 'utf8'));
+        const text = readFileSync(join(root, APP_REGISTER), 'utf8');
+        parsePersonas(text);
+        // The register's shape since plan 0005's L4 (§3.4): no slug shared across the Author,
+        // the Judge and the Releaser (the parser refuses it), and one slug per App.
+        const shape = appShape(parseAppRegister(text));
+        if (shape.length) throw new Error(shape.join(' Also, '));
         return [];
       }])]
     : []),

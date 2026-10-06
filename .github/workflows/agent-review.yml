@@ -56,10 +56,14 @@
 #
 # INERT until: (1) the caller + the docs/qa playbooks are on the default branch,
 # (2) the GitHub Apps exist + are installed, and (3) these secrets are set (plan 0001 §8):
-#   REVIEWER_APP_ID, REVIEWER_APP_PRIVATE_KEY   (the Reviewer's App)
+#   JUDGE_APP_ID, JUDGE_APP_PRIVATE_KEY   (the Reviewer's App)
 #   CLAUDE_CODE_OAUTH_TOKEN                      (Claude subscription; `claude setup-token`)
 # Auth starts on the Claude subscription; graduate to API-key billing later — see the
 # note at the claude-code-action step.
+# KANON ROLE: Reviewer
+# The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
+# role this lane mints for, as the Judge App's `JUDGE_APP_*` secrets no longer say. Its row
+# in the App register must exist, and this lane's tokens fit inside that role's row.
 name: Review (Reviewer)
 # THE RUN RECORDS WHAT TRIGGERED IT, AT CREATION (RA-1717). A `workflow_run` run is
 # recorded against the DEFAULT branch's SHA with an empty `pull_requests`, so nothing
@@ -141,9 +145,9 @@ on:
         type: string
         default: ""
     secrets:
-      REVIEWER_APP_ID:
+      JUDGE_APP_ID:
         required: true
-      REVIEWER_APP_PRIVATE_KEY:
+      JUDGE_APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -1175,6 +1179,6 @@ jobs:
       pr: ${{ needs.filter.outputs.pr }}
       pr_number: ${{ inputs.pr_number }}
     secrets:
-      app-id: ${{ secrets.REVIEWER_APP_ID }}
-      app-private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+      app-id: ${{ secrets.JUDGE_APP_ID }}
+      app-private-key: ${{ secrets.JUDGE_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

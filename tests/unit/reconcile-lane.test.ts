@@ -68,7 +68,7 @@ describe('the reconciler is a called lane, with the caller’s four triggers', (
   });
 
   it('takes the Lead’s two secrets and no Claude token: it runs no model', () => {
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['LEAD_APP_ID', 'LEAD_APP_PRIVATE_KEY']);
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY']);
     expect(LANE_TEXT).not.toMatch(/claude-code-action|agent-run|CLAUDE_CODE_OAUTH_TOKEN:/);
   });
 

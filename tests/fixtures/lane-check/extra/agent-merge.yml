@@ -30,5 +30,5 @@ jobs:
       pr_number: ${{ inputs.pr_number }}
       apply: ${{ inputs.apply }}
     secrets:
-      MERGER_APP_ID: ${{ secrets.MERGER_APP_ID }}
-      MERGER_APP_PRIVATE_KEY: ${{ secrets.MERGER_APP_PRIVATE_KEY }}
+      JUDGE_APP_ID: ${{ secrets.JUDGE_APP_ID }}
+      JUDGE_APP_PRIVATE_KEY: ${{ secrets.JUDGE_APP_PRIVATE_KEY }}

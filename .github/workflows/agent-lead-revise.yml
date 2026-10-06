@@ -80,6 +80,10 @@
 # changes-requests) — derived from the world, not incremented per run — so a
 # re-delivered event adds neither a patch nor a marker and re-delivers the SAME round.
 # Asserted, not assumed: see `tests/unit/agent-lead-revise.test.ts`.
+# KANON ROLE: Lead
+# The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
+# role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
+# in the App register must exist, and this lane's tokens fit inside that role's row.
 name: Lead — revise
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -112,9 +116,9 @@ on:
         type: string
         default: ""
     secrets:
-      LEAD_APP_ID:
+      AUTHOR_APP_ID:
         required: true
-      LEAD_APP_PRIVATE_KEY:
+      AUTHOR_APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -619,6 +623,7 @@ jobs:
     uses: $/.github/workflows/agent-lane.yml
     with:
       agent: lead-revise
+      role: Lead
       lane: lead-revise
       labels: agent:lead-revise
       arm: lead (revise) agent
@@ -724,8 +729,8 @@ jobs:
       permission-pull-requests: write
       permission-actions: read
     secrets:
-      app-id: ${{ secrets.LEAD_APP_ID }}
-      app-private-key: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
+      app-id: ${{ secrets.AUTHOR_APP_ID }}
+      app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   # ── A RUN THAT PUSHED IS A ROUND (RA-1981) ───────────────────────────────────
@@ -760,8 +765,8 @@ jobs:
         id: round-app-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.LEAD_APP_ID }}
-          private-key: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           # Narrowed to what this step uses (#48, `K-AGENT-46`): it reads the pull request and comments the round marker on it; GitHub accepts a pull request comment on either permission, so both.
           permission-issues: write
           permission-pull-requests: write

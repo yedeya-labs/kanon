@@ -33,7 +33,7 @@ describe("Kanon mints App tokens with create-github-app-token's `client-id` inpu
 
   it('every mint passes `client-id`, from an `_APP_ID` secret, and none passes `app-id`', () => {
     // `actions/implementer-status` mints from its `app-id` input, which every caller fills from
-    // the `IMPLEMENTER_APP_ID` secret (`tests/unit/implementer-status.test.ts` holds them to it).
+    // the `AUTHOR_APP_ID` secret (`tests/unit/implementer-status.test.ts` holds them to it).
     const viaInput = (file: string, id: string) => file === 'actions/implementer-status/action.yml' && id === '${{ inputs.app-id }}';
     const wrong = mints
       .filter(({ file, step }) => 'app-id' in (step.with ?? {})

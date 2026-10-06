@@ -56,7 +56,11 @@
 #
 # INERT until: the caller is on the default branch + the Overseer's App installed, with a row in
 # the App register + these secrets (plan 0001 §8):
-#   OVERSEER_APP_ID, OVERSEER_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+# KANON ROLE: Overseer
+# The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
+# role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
+# in the App register must exist, and this lane's tokens fit inside that role's row.
 name: Overseer
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -71,9 +75,9 @@ on:
         type: string
         default: ""
     secrets:
-      OVERSEER_APP_ID:
+      AUTHOR_APP_ID:
         required: true
-      OVERSEER_APP_PRIVATE_KEY:
+      AUTHOR_APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -149,8 +153,8 @@ jobs:
     with:
       artifact-name: ${{ needs.export.outputs.artifact-name }}
     secrets:
-      app-id: ${{ secrets.OVERSEER_APP_ID }}
-      app-private-key: ${{ secrets.OVERSEER_APP_PRIVATE_KEY }}
+      app-id: ${{ secrets.AUTHOR_APP_ID }}
+      app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   file:
@@ -179,8 +183,8 @@ jobs:
         id: file-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.OVERSEER_APP_ID }}
-          private-key: ${{ secrets.OVERSEER_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           permission-issues: write
           # The interlock's count reads each linked pull request's state.
           permission-pull-requests: read

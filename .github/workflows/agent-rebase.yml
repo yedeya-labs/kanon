@@ -35,7 +35,11 @@
 #
 # INERT until: the caller is on the default branch + the Implementer's App installed + these
 # secrets (plan 0001 §8):
-#   IMPLEMENTER_APP_ID, IMPLEMENTER_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+# KANON ROLE: Implementer
+# The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
+# role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
+# in the App register must exist, and this lane's tokens fit inside that role's row.
 name: Rebase lane (Implementer)
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -58,9 +62,9 @@ on:
         type: string
         default: ""
     secrets:
-      IMPLEMENTER_APP_ID:
+      AUTHOR_APP_ID:
         required: true
-      IMPLEMENTER_APP_PRIVATE_KEY:
+      AUTHOR_APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -221,8 +225,8 @@ jobs:
     with:
       pr: ${{ matrix.pr }}
     secrets:
-      app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
-      app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+      app-id: ${{ secrets.AUTHOR_APP_ID }}
+      app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   # THE IMPLEMENTER STATUS IS A CHAIN (plan 0005 §3.3, question 6; step L3). A fixed job after
@@ -247,7 +251,7 @@ jobs:
         continue-on-error: true
         with:
           mode: carry
-          app-id: ${{ secrets.IMPLEMENTER_APP_ID }}
-          app-private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.AUTHOR_APP_ID }}
+          app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           pr: ${{ matrix.pr }}
           start-head: ${{ fromJson(needs.filter.outputs.heads || '{}')[format('{0}', matrix.pr)] }}

@@ -188,7 +188,9 @@ export function decide(actor, { registeredApps, permissionOf }) {
   const bot = /^(.+)\[bot\]$/.exec(actor.login);
   if (bot) {
     const slug = bot[1];
-    const role = [...registeredApps()].find(([, s]) => s === slug)?.[0];
+    // Since plan 0005's L4 several roles share one App's slug (§3.4): name them all.
+    const roles = [...registeredApps()].filter(([, s]) => s === slug).map(([r]) => r);
+    const role = roles.length ? roles.join(', ') : undefined;
     return role
       ? { member: true, reason: `it is the repository's ${role} App in the App register` }
       : { member: false, reason: `it is an App that is not in the App register (docs/qa/agent-identities.md on the default branch)` };
