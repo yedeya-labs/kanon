@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { RETRY_STEPS } from '../../scripts/lib/protocol-spellings.mjs';
+import { parseAutocompact } from '../../actions/agent-telemetry/agent-telemetry.mjs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -181,8 +182,20 @@ describe('every arm passes the flags its run is measured and bounded by', () => 
     expect(run?.with?.['prompt-cache-ttl']).toBe('5m');
   });
 
+  // By the flag's PRESENCE, never by `parseAutocompact` returning a value: the CLI accepts
+  // spellings the parser records as null, so a parser-based check would miss them (kanon#188).
+  const setsAutocompact = (args: string) => /--autocompact(?:[\s=]|$)/.test(args);
+
   it('only the implement lane sets an --autocompact window: that experiment is its alone (RA-1949)', () => {
-    expect(arms.filter((a) => /--autocompact/.test(a.args)).map((a) => a.file)).toEqual(['agent-implement.yml']);
+    expect(arms.filter((a) => setsAutocompact(a.args)).map((a) => a.file)).toEqual(['agent-implement.yml']);
+  });
+
+  it('detects --autocompact in a spelling the CLI accepts and the parser does not (kanon#188)', () => {
+    for (const args of ['--model claude-opus-5-5\n--autocompact 0.5M', '--autocompact=500KB', '--autocompact 300k5\n--max-turns 40', '--autocompact 300kk']) {
+      expect(parseAutocompact(args), args).toBeNull();
+      expect(setsAutocompact(args), args).toBe(true);
+    }
+    expect(setsAutocompact('--model claude-opus-5-5\n--max-turns 40')).toBe(false);
   });
 
   it('every arm sets its own timeout, never the spine default', () => {

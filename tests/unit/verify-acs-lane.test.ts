@@ -311,6 +311,9 @@ describe('the criteria run in a job of its own, the agent in the token\'s (kanon
     expect(runWorkflowStep(relay, { env: { HOOK: 'failure', KANON_ERROR: 'hook_missing' } }).outputs['kanon-error']).toBe('hook_missing');
     const finish = steps[call('agent-finish')]!;
     expect(String(finish.with?.stages)).toContain('hook=${{ steps.hook.conclusion }}');
+    // A criteria job that never checked the ref out hands no sha: that is the checkout, not the
+    // hook it skipped (kanon#320).
+    expect(String(finish.with?.stages)).toContain("checkout=${{ inputs.sha == '' && 'failure' || steps.checkout.conclusion }}");
   });
 
   it('keeps the App identity: the Explorer\'s, received for the agent alone', () => {

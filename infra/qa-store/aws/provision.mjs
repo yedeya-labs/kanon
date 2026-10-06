@@ -36,6 +36,7 @@ import { parseArgs } from 'node:util';
 import { parse } from 'yaml';
 
 import { isCliEntry } from '../../../scripts/lib/cli-entry.mjs';
+import { readRepositorySubject, subjectProblems } from '../../../scripts/lib/oidc-subject.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const TEMPLATE_PATH = join(HERE, 'template.yaml');
@@ -49,10 +50,6 @@ const OIDC_SUB = 'token.actions.githubusercontent.com:sub';
 const OIDC_AUD = 'token.actions.githubusercontent.com:aud';
 /** The template parameter that carries the subjects. */
 export const SUBJECTS_PARAMETER = 'Subjects';
-/** A branch name as a subject may carry it: no pattern characters, no spaces, no commas. */
-const BRANCH = /^[A-Za-z0-9._/-]+$/;
-/** The immutable subject prefix GitHub gives a repository created after 2026-07-15. */
-const IMMUTABLE_PREFIX = /^repo:([A-Za-z0-9_.-]+)@(\d+)\/([A-Za-z0-9_.-]+)@(\d+)$/;
 /** A word that names an application stage, wherever it appears in a store resource's lifecycle. */
 const STAGE_WORD = /(^|[^a-z])(stages?|staging|prod|production|dev|development|preview)([^a-z]|$)/i;
 
@@ -127,83 +124,23 @@ export function trustProblems(template) {
 }
 
 /**
- * What's wrong with the subjects a store would trust. Each must be exact (no pattern character,
- * comma or space), carry the claim `ref:refs/heads/<branch>` and no environment or pull request,
- * and name the repository in its `repo` claim, in the classic (`repo:<owner>/<repo>`) or the
- * immutable (`repo:<owner>@<id>/<repo>@<id>`) form. GitHub's default subject is
- * `<repo claim>:ref:refs/heads/<branch>`; a custom template's, passed with `--subject`, may carry
- * other claims beside those two, but never trusts another repository or a pattern.
- * The branch must be the repository's default branch, as GitHub's API reports it: trusting
- * another branch would let anyone who can push to it reach the store.
- * @param {string[]} subjects
+ * The repository's default branch and the subjects the store trusts: `given` when there are any,
+ * else the default branch's ref subject in the repository's own form. Both are read from GitHub's
+ * API through `scripts/lib/oidc-subject.mjs`, the one reading the telemetry store's `render.mjs`
+ * uses too, so the two stores can't come to trust different subjects (kanon#295). The default
+ * branch is read even when every subject is given, so a `--subject` naming another branch is
+ * refused; so is a `--repository` GitHub spells differently (a rename's redirect, another case),
+ * since IAM compares the subject case-sensitively.
  * @param {string} repository owner/name
- * @param {string} defaultBranch the repository's default branch
- * @returns {string[]}
- */
-export function subjectProblems(subjects, repository, defaultBranch) {
-  /** @type {string[]} */
-  const out = [];
-  if (subjects.length === 0) out.push('no subject to trust');
-  const [owner, repo] = repository.toLowerCase().split('/');
-  for (const s of subjects) {
-    if (/[*?,\s[\]]/.test(s)) { out.push(`'${s}' carries a pattern character, a comma or a space`); continue; }
-    if (!/(^|:)ref:refs\/heads\/[A-Za-z0-9._/-]+(:|$)/.test(s)) { out.push(`'${s}' is not a branch ref subject (<prefix>:ref:refs/heads/<branch>)`); continue; }
-    if (/(^|:)(environment|pull_request)(:|$)/.test(s)) { out.push(`'${s}' names an environment or a pull request`); continue; }
-    const branch = /(?:^|:)ref:refs\/heads\/([A-Za-z0-9._/-]+)(?::|$)/.exec(s)?.[1];
-    if (branch !== defaultBranch) { out.push(`'${s}' names the branch '${branch}', not ${repository}'s default branch '${defaultBranch}'`); continue; }
-    const claim = /(?:^|:)repo:([^:]+)/.exec(s)?.[1];
-    if (claim === undefined) { out.push(`'${s}' names no repository, so it would trust others`); continue; }
-    const immutable = IMMUTABLE_PREFIX.exec(`repo:${claim}`);
-    const names = immutable ? [immutable[1], immutable[3]] : claim.split('/');
-    if (names.length !== 2 || names[0]?.toLowerCase() !== owner || names[1]?.toLowerCase() !== repo) out.push(`'${s}' is not a subject of ${repository}`);
-  }
-  return out;
-}
-
-/**
- * The subject prefix GitHub puts in the repository's OIDC tokens, from
- * `repos/<o>/<r>/actions/oidc/customization/sub`. A custom template (`use_default: false`) makes
- * the subject something else entirely, so it is refused: pass `--subject` for it.
- * @param {string} repository owner/name
- * @param {{ use_default?: boolean, use_immutable_subject?: boolean, sub_claim_prefix?: string, include_claim_keys?: string[] }} customization
- * @returns {string}
- */
-export function subjectPrefix(repository, customization) {
-  if (customization.use_default === false) {
-    throw new Error(`${repository} customizes its OIDC subject (include_claim_keys: ${JSON.stringify(customization.include_claim_keys ?? [])}), so its subject is not <prefix>:ref:refs/heads/<branch>; pass the exact subject with --subject`);
-  }
-  if (customization.use_immutable_subject) {
-    const prefix = customization.sub_claim_prefix ?? '';
-    if (!IMMUTABLE_PREFIX.test(prefix)) throw new Error(`${repository} has an immutable OIDC subject, but GitHub reported its prefix as '${prefix}', not repo:<owner>@<id>/<repo>@<id>`);
-    return prefix;
-  }
-  return `repo:${repository}`;
-}
-
-const ghApi = /** @param {string[]} args */ (args) => execFileSync('gh', args, { encoding: 'utf8' });
-
-/**
- * The repository's default branch, from GitHub's API through `gh`.
- * @param {string} repository owner/name
+ * @param {string[]} given the `--subject` values
  * @param {(args: string[]) => string} [gh]
- * @returns {string}
+ * @returns {{ defaultBranch: string, subjects: string[] }}
  */
-export function defaultBranch(repository, gh = ghApi) {
-  const branch = gh(['api', `repos/${repository}`, '--jq', '.default_branch']).trim();
-  if (!BRANCH.test(branch)) throw new Error(`GitHub reported ${repository}'s default branch as '${branch}'`);
-  return branch;
-}
-
-/**
- * The default-branch subject the store trusts, from GitHub's API through `gh`.
- * @param {string} repository owner/name
- * @param {(args: string[]) => string} [gh]
- * @returns {string}
- */
-export function defaultBranchSubject(repository, gh = ghApi) {
-  const branch = defaultBranch(repository, gh);
-  const customization = JSON.parse(gh(['api', `repos/${repository}/actions/oidc/customization/sub`]));
-  return `${subjectPrefix(repository, customization)}:ref:refs/heads/${branch}`;
+export function trustedSubjects(repository, given, gh) {
+  const { defaultBranch, prefix, problem } = readRepositorySubject(repository, gh);
+  if (given.length) return { defaultBranch, subjects: given };
+  if (prefix === null) throw new Error(`${problem} (pass each with --subject)`);
+  return { defaultBranch, subjects: [`${prefix}:ref:refs/heads/${defaultBranch}`] };
 }
 
 /**
@@ -245,10 +182,7 @@ if (isCliEntry(import.meta.url)) {
     const problems = [...lifecycleProblems(readTemplate()), ...trustProblems(readTemplate())];
     if (problems.length) throw new Error(`the template fails its checks: ${problems.join('; ')}`);
     if (!REPOSITORY.test(values.repository)) throw new Error(`--repository '${values.repository}' is not owner/name`);
-    // The default branch is read even when every subject is given, so a `--subject` naming any
-    // other branch is refused.
-    const branch = defaultBranch(values.repository);
-    const subjects = values.subject?.length ? values.subject : [defaultBranchSubject(values.repository)];
+    const { defaultBranch: branch, subjects } = trustedSubjects(values.repository, values.subject ?? []);
     console.log(`trusting ${subjects.join(', ')}`);
     const commands = deployCommands({ repository: values.repository, subjects, defaultBranch: branch, region: values.region, profile: values.profile, oidcProvider: !values['no-oidc-provider'] });
     for (const c of commands) {

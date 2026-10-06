@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { writeStub } from './helpers/stub-bin.js';
-import { STACK_NAME, TEMPLATE_PATH, defaultBranchSubject, deployCommands, lifecycleProblems, readTemplate, subjectPrefix, subjectProblems, trustProblems } from '../../infra/qa-store/aws/provision.mjs';
+import { STACK_NAME, TEMPLATE_PATH, deployCommands, lifecycleProblems, readTemplate, trustProblems, trustedSubjects } from '../../infra/qa-store/aws/provision.mjs';
 import { toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
 import { readCostRowsFile } from '../../actions/qa-store/qa-store.mjs';
 
@@ -110,63 +110,33 @@ describe('the role trusts exactly the default branch\'s ref subjects it is given
 });
 
 describe('the subjects: the default branch\'s ref, in the repository\'s own subject form', () => {
+  // The checks themselves live in `scripts/lib/oidc-subject.mjs`, shared with the telemetry store,
+  // and are tested in `oidc-subject.test.ts` (kanon#295). This is how `provision.mjs` calls them.
   const IMMUTABLE = 'repo:yedeya-labs@335343289/qa-store-sandbox@1405862401';
+  const gh = (asked: string[][], repo: Record<string, unknown>, customization: Record<string, unknown>) => (args: string[]) => {
+    asked.push(args);
+    return JSON.stringify(args[1]!.endsWith('/actions/oidc/customization/sub') ? customization : repo);
+  };
 
-  it('accepts the classic and the immutable form of a default-branch ref subject', () => {
-    expect(subjectProblems(['repo:o/r:ref:refs/heads/main'], 'o/r', 'main')).toEqual([]);
-    expect(subjectProblems([`${IMMUTABLE}:ref:refs/heads/main`], 'yedeya-labs/qa-store-sandbox', 'main')).toEqual([]);
-    // Both at once, while a repository migrates between the forms.
-    expect(subjectProblems(['repo:O/R:ref:refs/heads/trunk', 'repo:o@1/r@2:ref:refs/heads/trunk'], 'o/r', 'trunk')).toEqual([]);
-  });
-
-  it('refuses an environment, a pull request, a tag, a pattern or another repository', () => {
-    expect(subjectProblems([], 'o/r', 'main')).toEqual(['no subject to trust']);
-    for (const s of ['repo:o/r:environment:kanon-qa-store', 'repo:o/r:pull_request', 'repo:o/r:ref:refs/tags/v1', 'repo:o/r:ref:refs/heads/']) {
-      expect(subjectProblems([s], 'o/r', 'main')).toEqual([`'${s}' is not a branch ref subject (<prefix>:ref:refs/heads/<branch>)`]);
-    }
-    for (const s of ['repo:o/r:*', 'repo:o/r:ref:refs/heads/*', 'repo:o/r:ref:refs/heads/a,b', 'repo:o/r:ref:refs/heads/ma?n', 'repo:o/r:ref:refs/heads/[m]ain']) {
-      expect(subjectProblems([s], 'o/r', 'main')).toEqual([`'${s}' carries a pattern character, a comma or a space`]);
-    }
-    expect(subjectProblems(['repo:o/r:environment:qa:ref:refs/heads/main'], 'o/r', 'main')).toEqual(["'repo:o/r:environment:qa:ref:refs/heads/main' names an environment or a pull request"]);
-    expect(subjectProblems(['repo:x/r:ref:refs/heads/main'], 'o/r', 'main')).toEqual(["'repo:x/r:ref:refs/heads/main' is not a subject of o/r"]);
-    expect(subjectProblems(['repo:o@1/x@2:ref:refs/heads/main'], 'o/r', 'main')).toEqual(["'repo:o@1/x@2:ref:refs/heads/main' is not a subject of o/r"]);
-    expect(subjectProblems(['repository_owner:o:context:ref:refs/heads/main'], 'o/r', 'main')).toEqual(["'repository_owner:o:context:ref:refs/heads/main' names no repository, so it would trust others"]);
-  });
-
-  it('refuses a branch that is not the default branch, given explicitly or not (K-OBS-17)', () => {
-    expect(subjectProblems(['repo:o/r:ref:refs/heads/feature-x'], 'o/r', 'main'))
-      .toEqual(["'repo:o/r:ref:refs/heads/feature-x' names the branch 'feature-x', not o/r's default branch 'main'"]);
-    expect(subjectProblems(['repo:o/r:ref:refs/heads/main', 'repo:o@1/r@2:ref:refs/heads/main'], 'o/r', 'trunk')).toHaveLength(2);
-    // A branch whose name extends the default's is another branch.
-    expect(subjectProblems(['repo:o/r:ref:refs/heads/main/x'], 'o/r', 'main')).toHaveLength(1);
-    expect(subjectProblems(['repo:o/r:context:ref:refs/heads/dev:job_workflow_ref:o/r/.github/workflows/x.yml@refs/heads/main'], 'o/r', 'main')).toHaveLength(1);
-  });
-
-  it('accepts a custom template\'s exact subject that names the repository and the branch', () => {
-    expect(subjectProblems(['repo:o/r:context:ref:refs/heads/main:job_workflow_ref:o/r/.github/workflows/x.yml@refs/heads/main'], 'o/r', 'main')).toEqual([]);
-  });
-
-  it('reads the prefix from GitHub\'s customization answer', () => {
-    // Measured on the sandbox, 2026-10-05: a repository created after 2026-07-15.
-    expect(subjectPrefix('yedeya-labs/qa-store-sandbox', { use_default: true, use_immutable_subject: true, sub_claim_prefix: IMMUTABLE })).toBe(IMMUTABLE);
-    expect(subjectPrefix('o/r', { use_default: true })).toBe('repo:o/r');
-    expect(subjectPrefix('o/r', { use_default: true, use_immutable_subject: false, sub_claim_prefix: 'repo:o@1/r@2' })).toBe('repo:o/r');
-    expect(() => subjectPrefix('o/r', { use_default: false, include_claim_keys: ['repo', 'context', 'job_workflow_ref'] })).toThrow(/customizes its OIDC subject.*--subject/);
-    expect(() => subjectPrefix('o/r', { use_default: true, use_immutable_subject: true, sub_claim_prefix: 'repo:o/r' })).toThrow(/immutable/);
-  });
-
-  it('asks GitHub for the default branch and the prefix', () => {
+  it('asks GitHub for the default branch and the prefix, through the shared reading', () => {
     const asked: string[][] = [];
-    const gh = (answers: Record<string, string>) => (args: string[]) => { asked.push(args); return answers[args[1]!]!; };
-    expect(defaultBranchSubject('yedeya-labs/qa-store-sandbox', gh({
-      'repos/yedeya-labs/qa-store-sandbox': 'main\n',
-      'repos/yedeya-labs/qa-store-sandbox/actions/oidc/customization/sub': JSON.stringify({ use_default: true, use_immutable_subject: true, sub_claim_prefix: IMMUTABLE }),
-    }))).toBe(`${IMMUTABLE}:ref:refs/heads/main`);
+    expect(trustedSubjects('yedeya-labs/qa-store-sandbox', [], gh(asked, { full_name: 'yedeya-labs/qa-store-sandbox', default_branch: 'main' }, { use_default: true, use_immutable_subject: true, sub_claim_prefix: IMMUTABLE })))
+      .toEqual({ defaultBranch: 'main', subjects: [`${IMMUTABLE}:ref:refs/heads/main`] });
     expect(asked).toEqual([
-      ['api', 'repos/yedeya-labs/qa-store-sandbox', '--jq', '.default_branch'],
+      ['api', 'repos/yedeya-labs/qa-store-sandbox'],
       ['api', 'repos/yedeya-labs/qa-store-sandbox/actions/oidc/customization/sub'],
     ]);
-    expect(defaultBranchSubject('o/r', gh({ 'repos/o/r': 'trunk', 'repos/o/r/actions/oidc/customization/sub': '{"use_default":true}' }))).toBe('repo:o/r:ref:refs/heads/trunk');
+    expect(trustedSubjects('o/r', [], gh([], { full_name: 'o/r', default_branch: 'trunk' }, { use_default: true }))).toEqual({ defaultBranch: 'trunk', subjects: ['repo:o/r:ref:refs/heads/trunk'] });
+  });
+
+  it('keeps the given subjects, but still reads the default branch they must name', () => {
+    const given = ['repo:o/r:context:ref:refs/heads/trunk:job_workflow_ref:o/r/.github/workflows/x.yml@refs/heads/trunk'];
+    expect(trustedSubjects('o/r', given, gh([], { full_name: 'o/r', default_branch: 'trunk' }, { use_default: false }))).toEqual({ defaultBranch: 'trunk', subjects: given });
+  });
+
+  it('refuses a custom subject template without --subject, and a repository GitHub spells differently', () => {
+    expect(() => trustedSubjects('o/r', [], gh([], { full_name: 'o/r', default_branch: 'main' }, { use_default: false, include_claim_keys: ['repo', 'context'] }))).toThrow(/customizes its OIDC subject.*--subject/);
+    expect(() => trustedSubjects('o/r', [], gh([], { full_name: 'O/R', default_branch: 'main' }, { use_default: true }))).toThrow(/GitHub calls o\/r 'O\/R'/);
   });
 });
 
@@ -228,7 +198,7 @@ describe('the provisioning script', () => {
   const withGh = <T>(customization: string, body: (run: (...extra: string[]) => ReturnType<typeof spawnSync>) => T): T => {
     const work = mkdtempSync(join(tmpdir(), 'qa-store-provision-'));
     try {
-      writeStub(join(work, 'gh'), `#!/usr/bin/env bash\ncase "$2" in\n  repos/o/r) echo trunk ;;\n  *) echo '${customization}' ;;\nesac\n`);
+      writeStub(join(work, 'gh'), `#!/usr/bin/env bash\ncase "$2" in\n  repos/o/r) echo '{"full_name":"o/r","default_branch":"trunk"}' ;;\n  *) echo '${customization}' ;;\nesac\n`);
       return body((...extra) => spawnSync(process.execPath, ['infra/qa-store/aws/provision.mjs', '--repository', 'o/r', '--region', 'eu-central-1', '--dry-run', ...extra],
         { encoding: 'utf8', env: { ...process.env, PATH: `${work}:/usr/bin:/bin` } }));
     } finally {

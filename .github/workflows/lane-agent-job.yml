@@ -420,12 +420,13 @@ jobs:
           # spine runs them, so the row can say where a red run failed. The hook's is the
           # presence check's when that failed, else the test database's when that failed (its
           # declaration is the project's), else the hook's own: a conclusion only, never the
-          # adopter's step names.
+          # adopter's step names. A lane that turns `project-setup` off runs no hook by design,
+          # so its hook is a stage it runs on past, `success`, and never its failed stage (kanon#326).
           lane: ${{ inputs.lane }}
           stages: >-
             token=${{ steps.app-token.conclusion }}
             checkout=${{ steps.checkout.conclusion }}
-            hook=${{ steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.database.conclusion != 'success' && steps.database.conclusion || steps.project.conclusion }}
+            hook=${{ !inputs.project-setup && 'success' || steps.hook.conclusion != 'success' && steps.hook.conclusion || steps.database.conclusion != 'success' && steps.database.conclusion || steps.project.conclusion }}
             setup=${{ steps.setup.conclusion }}
             agent=${{ steps.agent.conclusion }}
           kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}

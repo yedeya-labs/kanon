@@ -520,6 +520,15 @@ describe('where the rows go', () => {
     expect(spine.lane).toBe('${{ inputs.lane }}');
   });
 
+  it('the spine reports no hook failure for a lane that runs no hook (kanon#326)', () => {
+    const spine = laneJobs.find((c) => c.f === 'lane-agent-job.yml')!.with;
+    expect(String(spine.stages)).toContain("hook=${{ !inputs.project-setup && 'success' || steps.hook.conclusion");
+    // A Lead run whose label step (after agent-setup) fails ends at the agent, and one whose
+    // PATH step (before it) fails ends at the set-up: never at the hook it never runs.
+    expect(failedStage(parseStages('token=success checkout=success hook=success setup=success agent=skipped finish=success'), 'not-reached')).toBe('agent');
+    expect(failedStage(parseStages('token=success checkout=success hook=success setup=skipped agent=skipped finish=success'), 'not-reached')).toBe('setup');
+  });
+
   it('the finish block hands all of it to the telemetry action', () => {
     const finish = parse(readFileSync('actions/agent-finish/action.yml', 'utf8')) as { runs: { steps: Step[] } };
     const t = finish.runs.steps.find((s) => s.uses === '$/actions/agent-telemetry')!.with!;

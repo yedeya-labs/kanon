@@ -187,7 +187,7 @@ jobs:
 
 <!-- x-release-please-end -->
 
-Give `window_minutes` no default. Empty means "no operator instruction", and a default would make every scheduled run an override and switch the watermark off.
+Give `window_minutes` no default. Empty means "no operator instruction", and a default would make every scheduled run an override and switch the watermark off. A run with an override never becomes the watermark either: its collect job is named `Collect telemetry rows (window override)`, and the next scheduled sweep still reaches back to the last full one, so a short override can't hide the rows before its span.
 
 **The variables.** The Owner reads them from the stack's outputs. `IngestUrl` is the URL. `WriterRole<key>` is the repository's writer role, with the register key's non-alphanumeric characters dropped (`render.mjs`):
 

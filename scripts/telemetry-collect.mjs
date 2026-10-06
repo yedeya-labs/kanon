@@ -15,7 +15,8 @@
 //   - only this repository's own runs count (`listTelemetryArtifacts`): a fork's run can upload
 //     any row under any name, and this job holds the writer.
 // What is kept as it was: the watermark, the floor and the override, the one paginated artifact
-// scan, the download by id, and the red run as the page.
+// scan, the download by id, and the red run as the page. One thing changed since (kanon#315): an
+// override's run is no longer a watermark, so a short override can't hide the rows before it.
 //
 // AN ANCHOR, NOT A PERSISTED CURSOR. The function keys a row from its own fields (`recorded_at`,
 // run, attempt, number), so re-sending an artifact overwrites its row identically. Over-sweeping
@@ -50,6 +51,12 @@ export const SWEEP_CAP_DAYS = 7;
 export const MAX_ROWS = 25;
 /** The collect job's name in `telemetry-collect.yml`, by which a run's success is judged. */
 export const COLLECT_JOB = 'Collect telemetry rows';
+/**
+ * The same job's name on a `window_minutes` override. Never a watermark: an override sweeps the
+ * operator's span, which may start after the last full sweep, so anchoring on it would drop the
+ * rows in between without a warning (kanon#315).
+ */
+export const COLLECT_JOB_OVERRIDE = `${COLLECT_JOB} (window override)`;
 
 /**
  * @typedef {import('./lib/telemetry-artifacts.mjs').Api} Api
@@ -97,6 +104,8 @@ export function workflowFileOf(ref) {
  * The RUN's success isn't enough: a run that skipped collecting because the store isn't set up
  * yet also succeeds, and anchoring on it would drop the rows of the time before. So each
  * successful run on the branch is checked for the collect job's own success, newest first.
+ * A `window_minutes` override's run is passed over the same way: its job is named
+ * `COLLECT_JOB_OVERRIDE`, which matches neither form below (kanon#315).
  *
  * @param {{ api: Api, repo: string, file: string, branch: string, selfRunId: string, limit?: number }} opts
  */
