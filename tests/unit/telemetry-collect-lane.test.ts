@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { COLLECT_JOB } from '../../scripts/telemetry-collect.mjs';
+import { COLLECT_JOB, COLLECT_JOB_OVERRIDE } from '../../scripts/telemetry-collect.mjs';
 
 /**
  * Plan 0002 S7: the collector's reusable workflow, and Kanon's own caller of it.
@@ -33,8 +33,8 @@ describe('telemetry-collect.yml, the lane', () => {
     expect(lane.permissions).toEqual({});
   });
 
-  it('names the collect job as the watermark looks for it', () => {
-    expect(collect.name).toBe(COLLECT_JOB);
+  it('names the collect job as the watermark looks for it, and an override run otherwise (kanon#315)', () => {
+    expect(collect.name).toBe(`\${{ inputs.window_minutes == '' && '${COLLECT_JOB}' || '${COLLECT_JOB_OVERRIDE}' }}`);
   });
 
   it("collects on the caller's two triggers, on the default branch only, once both values are passed", () => {

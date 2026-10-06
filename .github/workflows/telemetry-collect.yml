@@ -82,8 +82,12 @@ jobs:
           echo "Telemetry collector **skipped**: the store's URL or the writer role is not set." >> "$GITHUB_STEP_SUMMARY"
 
   collect:
-    # The name is what the watermark looks for: a run counts as a sweep only when this job succeeded.
-    name: Collect telemetry rows
+    # The name is what the watermark looks for: a run counts as a sweep only when this job succeeded
+    # under exactly this name. A `window_minutes` override renames it, because an override's span
+    # is the operator's, not "back to the last sweep": anchoring the next sweep on it would drop
+    # the rows before its span when it was shorter than the gap (kanon#315). The runs API carries
+    # no dispatch inputs, so the job's name is where the watermark can read it without logs.
+    name: ${{ inputs.window_minutes == '' && 'Collect telemetry rows' || 'Collect telemetry rows (window override)' }}
     # The default branch only: the writer role refuses any other ref, so a dispatch elsewhere is
     # skipped rather than turned red at the credentials step. A schedule always runs there.
     if: >-

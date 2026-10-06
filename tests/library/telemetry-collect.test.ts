@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MAX_ROWS as FUNCTION_MAX_ROWS } from '../../infra/telemetry/function/index.mjs';
 import {
   COLLECT_JOB,
+  COLLECT_JOB_OVERRIDE,
   MAX_ROWS,
   SWEEP_CAP_DAYS,
   WINDOW_MINUTES,
@@ -155,6 +156,16 @@ describe('the run listing finds the caller by GITHUB_WORKFLOW_REF, and judges th
     ]);
     expect(lastSuccessfulSweep({ api: gh.api, repo: REPO, file: 'telemetry.yml', branch: 'main', selfRunId: '9' })).toBe('2026-10-05T10:40:00Z');
     expect(gh.paths[0]).toBe('repos/example/adopter/actions/workflows/telemetry.yml/runs?status=success&branch=main&per_page=20');
+  });
+
+  it('passes over an override run, so a short window never becomes the watermark (kanon#315)', () => {
+    // Sweeps were red for hours; an operator's 30-minute check went green. The next sweep must
+    // still reach back to the last FULL sweep, not to the start of the check.
+    const gh = runs([
+      { id: 8, created_at: '2026-10-05T14:00:00Z', jobs: [{ name: `collect / ${COLLECT_JOB_OVERRIDE}`, conclusion: 'success' }] },
+      { id: 7, created_at: '2026-10-05T10:40:00Z', jobs: [{ name: `collect / ${COLLECT_JOB}`, conclusion: 'success' }] },
+    ]);
+    expect(lastSuccessfulSweep({ api: gh.api, repo: REPO, file: 'telemetry.yml', branch: 'main', selfRunId: '9' })).toBe('2026-10-05T10:40:00Z');
   });
 
   it('returns null when no sweep collected', () => {
