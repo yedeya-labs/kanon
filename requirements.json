@@ -1,5 +1,5 @@
 {
-  "$comment": "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` compares two releases' copies. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets.",
+  "$comment": "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets.",
   "lanes": {
     "agent-code-audit": {
       "identities": [
@@ -648,5 +648,37 @@
     "from-app",
     "autorelease: pending",
     "autorelease: tagged"
-  ]
+  ],
+  "declarations": {
+    "docs/qa/capability-ledger.md": {
+      "baseline": false,
+      "requiredSections": []
+    },
+    "docs/qa/explorer-playbook.md": {
+      "baseline": true,
+      "requiredSections": []
+    },
+    "docs/qa/lead-playbook.md": {
+      "baseline": true,
+      "requiredSections": []
+    },
+    "docs/qa/overseer-playbook.md": {
+      "baseline": true,
+      "requiredSections": []
+    },
+    "docs/qa/reviewer-playbook.md": {
+      "baseline": true,
+      "requiredSections": []
+    },
+    "docs/qa/stack.md": {
+      "baseline": false,
+      "requiredSections": [
+        "## Gates"
+      ]
+    },
+    "docs/qa/triage-fix-playbook.md": {
+      "baseline": true,
+      "requiredSections": []
+    }
+  }
 }

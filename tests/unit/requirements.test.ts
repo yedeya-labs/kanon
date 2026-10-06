@@ -48,4 +48,10 @@ describe('requirements.json', () => {
     expect(built.lanes['agent-weekly-digest']).toMatchObject({ identities: [] });
     expect(built.hook.inputs).toEqual(['app-slug', 'browsers', 'database', 'github-token', 'install', 'issue-number', 'lane']);
   });
+
+  it("says which documents a lane reads have a baseline, and the stack document's sections without a default, as lane-check does", () => {
+    expect(built.declarations['docs/qa/stack.md']).toEqual({ baseline: false, requiredSections: ['## Gates'] });
+    expect(built.declarations['docs/qa/reviewer-playbook.md']).toEqual({ baseline: true, requiredSections: [] });
+    expect(built.declarations['docs/qa/capability-ledger.md']).toEqual({ baseline: false, requiredSections: [] });
+  });
 });
