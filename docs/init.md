@@ -1,6 +1,6 @@
 # `kanon init`
 
-`kanon init` installs Kanon in the repository whose checkout you run it from ([plan 0005](plans/0005-lean-installation.md) §5.4). It inspects the repository and its owner, asks what it can't infer, writes the declarations and the lane callers pinned to the release it runs from, creates the labels, the bucket milestones and, where the plan has rulesets, the default branch's ruleset, and runs [`kanon apps`](apps.md) for the Apps the lanes run as. It commits nothing, prints as exact steps whatever its token or plan can't do, and changes nothing on a second run. `kanon init --help` lists every option.
+`kanon init` installs Kanon in the repository whose checkout you run it from ([plan 0005](plans/0005-lean-installation.md) §5.4). It inspects the repository and its owner, asks what it can't infer, writes the declarations and the lane callers pinned to the release it runs from, and the [kanon plugin's](skills.md#declare-it-in-the-repository) declaration if you want it, creates the labels, the bucket milestones and, where the plan has rulesets, the default branch's ruleset, and runs [`kanon apps`](apps.md) for the Apps the lanes run as. It commits nothing, prints as exact steps whatever its token or plan can't do, and changes nothing on a second run. `kanon init --help` lists every option.
 
 It is **scriptable** ([ADR 0014](decisions/0014-adopter-audiences.md), decision 2): every question has a flag that answers it, and `--json` prints the result as one JSON document. The agent skills of plan 0005's L11 drive it that way, and so can any program.
 
@@ -21,9 +21,10 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 | The delegate's email | `--delegate-email <email>` (implies `--delegation`) | `git config user.email` |
 | Delete GitHub's default labels outside the taxonomy? | `--delete-default-labels`, `--keep-default-labels` | keep |
 | Create the optional Releaser App? (asked only of a repository that calls Kanon's release workflow) | `--releaser`, `--no-releaser` | no |
+| Declare the kanon plugin in `.claude/settings.json`? | `--plugin`, `--no-plugin` | yes |
 | Create the Apps now? | `--create-apps`, `--no-apps` | yes |
 
-**What fails, by name, before anything changes:** a flag `init` doesn't know, `--owner` among them, with a hint naming `--project-owner`; a value flag given twice; a value `init` doesn't take (`--test-database` other than `none` or `hook`, a lane Kanon doesn't ship); two flags that contradict each other (`--delegation` and `--no-delegation`, `--delegate-name` or `--delegate-email` with `--no-delegation`, `--delete-default-labels` and `--keep-default-labels`, `--releaser` and `--no-releaser`, `--create-apps` and `--no-apps`); and `--releaser` for a repository that doesn't call Kanon's release workflow. Each exits 2.
+**What fails, by name, before anything changes:** a flag `init` doesn't know, `--owner` among them, with a hint naming `--project-owner`; a value flag given twice; a value `init` doesn't take (`--test-database` other than `none` or `hook`, a lane Kanon doesn't ship); two flags that contradict each other (`--delegation` and `--no-delegation`, `--delegate-name` or `--delegate-email` with `--no-delegation`, `--delete-default-labels` and `--keep-default-labels`, `--releaser` and `--no-releaser`, `--plugin` and `--no-plugin`, `--create-apps` and `--no-apps`); and `--releaser` for a repository that doesn't call Kanon's release workflow. Each exits 2.
 
 **Why `--project-owner`, not `--owner`** (the Owner, 2026-10-06): `--owner` names the GitHub account that owns the repository, in `kanon apps` and everywhere else, so the person who is the project's Owner gets a flag of their own, and `answers.projectOwner` in the JSON.
 
@@ -107,6 +108,7 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 | `delegation` | object or null | The sign-off delegation, `name` and `email`, or null. |
 | `deleteDefaultLabels` | boolean | Whether to delete GitHub's default labels outside the taxonomy. |
 | `releaser` | boolean | Whether to create the optional Releaser. |
+| `plugin` | boolean | Whether to declare the kanon plugin in `.claude/settings.json`, pinned to this release. |
 
 ### A file
 
@@ -155,3 +157,4 @@ Every finding is non-blocking, except `app.failed`: `blocking` means it makes th
 | `secret.claude-code-oauth-token` | `secret` | The repository lacks `CLAUDE_CODE_OAUTH_TOKEN`. |
 | `secret.digest-webhook` | `secret` | The repository lacks `DIGEST_WEBHOOK`. |
 | `secret.unreadable` | `secret` | The token can't list the repository's secret names. |
+| `plugin.declare` | `plugin` | `.claude/settings.json` exists, and doesn't declare the kanon plugin at this release: the file is the project's, so `init` leaves it alone, and the fix lists the keys to merge into it. |

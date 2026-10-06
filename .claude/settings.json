@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "kanon": {
+      "source": {
+        "source": "github",
+        "repo": "yedeya-labs/kanon",
+        "ref": "v0.30.0"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "kanon@kanon": true
+  }
+}

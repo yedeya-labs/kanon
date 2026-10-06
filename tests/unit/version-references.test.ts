@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 
 // K-ADOPT-11: an adopter pins Kanon to an exact version, and copies the `uses:` line from
 // Kanon's documentation to do it. A stale version there sends a new adopter to an old
@@ -27,8 +28,9 @@ const extraFiles = config.packages['.']?.['extra-files'] ?? [];
 const HISTORY = /^(CHANGELOG\.md|docs\/(decisions|plans)\/)/;
 const FORM_ONLY = /^rulebook\//;
 // `uses:` paths pin with `@`; the `npx` line that runs `kanon apps` (docs/apps.md) pins the
-// git package with `#`.
-const REF = /yedeya-labs\/kanon(?:\/[^\s`'"@]+@|#)([^\s`'")|]+)/g;
+// git package with `#`; the kanon plugin's declaration in `.claude/settings.json` (docs/skills.md,
+// #376) pins its marketplace with a `"ref"` beside the repository, on one line.
+const REF = /yedeya-labs\/kanon(?:\/[^\s`'"@]+@|#|", "ref": ")([^\s`'")|]+)/g;
 const SEMVER = /\d+\.\d+\.\d+/g;
 const INLINE = /x-release-please-version/;
 const START = /x-release-please-start-version/;
@@ -86,7 +88,19 @@ describe('K-ADOPT-11 the version references an adopter copies stay current', () 
     expect(manifest.version).toBe(version);
     expect(extraFiles.filter((f) => typeof f !== 'string')).toEqual([
       { type: 'json', path: '.claude-plugin/plugin.json', jsonpath: '$.version' },
+      { type: 'json', path: '.claude/settings.json', jsonpath: '$.extraKnownMarketplaces.kanon.source.ref' },
     ]);
+  });
+
+  // Kanon declares its own plugin as any adopter can (docs/skills.md, #376), and release-please
+  // moves the declaration's `ref` with each release. Its json updater replaces the X.Y.Z inside
+  // the value and keeps the `v`; the file must hold the declaration `kanon doctor` reads, at the
+  // jsonpath above, or the updater would skip it with only a warning.
+  it("Kanon's own declaration of the plugin pins package.json's version, where a release rewrites it", () => {
+    const settings = JSON.parse(read('.claude/settings.json')) as { extraKnownMarketplaces: { kanon: { source: { ref: string } } } };
+    expect(settings.extraKnownMarketplaces.kanon.source.ref).toBe(`v${version}`);
+    expect(readPluginDeclaration(read('.claude/settings.json'))).toEqual({ status: 'declared', name: 'kanon', ref: `v${version}`, enabled: true });
+    expect(read('.claude/settings.json')).toBe(pluginSettingsFile(`v${version}`));
   });
 
   it('a release rewrites every reference and nothing else', () => {
@@ -97,7 +111,7 @@ describe('K-ADOPT-11 the version references an adopter copies stay current', () 
     for (const { lines } of withRefs) {
       for (const l of lines.filter((x) => x.covered)) {
         const after = l.text.replace(/\d+\.\d+\.\d+/, next);
-        const expected = l.refs.length > 0 ? l.text.replace(new RegExp(`([@#])v${version.replaceAll('.', '\\.')}`, 'g'), `$1v${next}`) : l.text;
+        const expected = l.refs.length > 0 ? l.text.replace(new RegExp(`([@#]|"ref": ")v${version.replaceAll('.', '\\.')}`, 'g'), `$1v${next}`) : l.text;
         expect(after, l.at).toBe(expected);
         expect((l.text.match(SEMVER) ?? []).length, l.at).toBeLessThanOrEqual(1);
       }

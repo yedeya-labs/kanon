@@ -8,7 +8,8 @@
 //    the stack's gates, the test database, a sign-off delegation, which lanes to install.
 // 3. WRITES the declarations, only the sections that differ from their documented defaults (an
 //    omitted section means its default, plan 0005 §5.2), the lane callers, the `apps-check`
-//    caller, `lane-check` in CI, the Dependabot entry and a starting project-setup hook, every
+//    caller, `lane-check` in CI, the Dependabot entry, a starting project-setup hook and, when the
+//    person says yes, the kanon plugin's declaration in `.claude/settings.json` (#376), every
 //    Kanon reference pinned to the release it runs from, and prints the diff. It commits nothing.
 // 4. CREATES the taxonomy's labels (rulebook/labels.json), the bucket milestones (`kanon
 //    milestones`), the squash-only merge setting and, where the plan has rulesets and the token
@@ -59,6 +60,7 @@ import {
   loadRequirements,
 } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
+import { pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { coveringRulesets } from './ruleset-bypass.mjs';
 import { BUCKETS, milestones as runMilestones } from './milestones.mjs';
 
@@ -113,6 +115,9 @@ The answers, one flag per question (without --yes, the questions no flag answers
   --releaser             create the optional Releaser App; only for a repository that
                          calls Kanon's release workflow
   --no-releaser          don't (the default)
+  --plugin               declare the kanon plugin in .claude/settings.json, pinned to this
+                         release, for everyone who uses Claude Code here (the default)
+  --no-plugin            don't
   --create-apps          run \`kanon apps\` for the Apps the lanes lack (the default)
   --no-apps              don't run \`kanon apps\`; print the command instead
 
@@ -189,7 +194,7 @@ export const realDeps = {
  * @typedef {{
  *   projectOwner?: string, maintainer?: string, stakeholder?: string, gates?: string, testDatabase?: 'none' | 'hook',
  *   delegation?: boolean, delegateName?: string, delegateEmail?: string, deleteDefaults?: boolean,
- *   releaser?: boolean, createApps?: boolean,
+ *   releaser?: boolean, plugin?: boolean, createApps?: boolean,
  * }} Given
  */
 
@@ -201,6 +206,7 @@ export const CONFLICTS = [
   ['--delegate-email', '--no-delegation'],
   ['--delete-default-labels', '--keep-default-labels'],
   ['--releaser', '--no-releaser'],
+  ['--plugin', '--no-plugin'],
   ['--create-apps', '--no-apps'],
 ];
 
@@ -249,6 +255,8 @@ export const parseArgs = (argv, req) => {
     else if (flag === '--keep-default-labels') g.deleteDefaults = false;
     else if (flag === '--releaser') g.releaser = true;
     else if (flag === '--no-releaser') g.releaser = false;
+    else if (flag === '--plugin') g.plugin = true;
+    else if (flag === '--no-plugin') g.plugin = false;
     // `--owner` names the GitHub account everywhere else (`kanon apps --owner`), so init's Owner
     // question is `--project-owner`, and a bare `--owner` is refused with that name (Owner, 2026-10-06).
     else if (flag === '--owner') throw new Error('unknown argument "--owner": the project\'s Owner is --project-owner; --owner names the GitHub account, in kanon apps');
@@ -612,7 +620,11 @@ export const askAll = async (deps, opts, ctx) => {
   const releaser = ctx.releases
     ? await yesNo('Create the optional Releaser App, so the release PR runs CI (docs/release.md, "With the Releaser")?', false, g.releaser)
     : false;
-  return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser };
+  // THE KANON PLUGIN (#376), declared at project scope so its release is in the repository, where
+  // Dependabot's bump and doctor's check can be read beside it (docs/skills.md). Yes by default:
+  // the declaration does nothing until each person trusts the folder in Claude Code.
+  const plugin = await yesNo("Declare the kanon plugin in .claude/settings.json, pinned to this release, so everyone who uses Claude Code here gets Kanon's skills (docs/skills.md)?", true, g.plugin);
+  return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser, plugin };
 };
 
 /** @typedef {Awaited<ReturnType<typeof askAll>>} Answers */
@@ -735,6 +747,10 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read }) => {
   if (!ci) files.set('.github/workflows/ci.yml', ciFile(release, s.defaultBranch));
   else if (!/yedeya-labs\/kanon\/actions\/lane-check@/.test(ci)) files.set('.github/workflows/lane-check.yml', laneCheckFile(release));
   if (!read('.github/dependabot.yml')) files.set('.github/dependabot.yml', dependabotFile());
+  // The plugin's declaration is written only into a project that has no settings file yet; one it
+  // has is the project's, and the keys to merge into it are a finding (`plugin.declare`).
+  const settings = read(SETTINGS_PATH);
+  if (a.plugin && (settings === null || settings === pluginSettingsFile(release))) files.set(SETTINGS_PATH, pluginSettingsFile(release));
   return files;
 };
 
@@ -931,6 +947,7 @@ const run = async (deps, opts, req, rep) => {
     delegation: a.delegation,
     deleteDefaultLabels: a.deleteDefaults,
     releaser: a.releaser,
+    plugin: a.plugin,
   };
 
   /** @type {string[]} what changed (or, in a dry run, would) */
@@ -1006,6 +1023,22 @@ const run = async (deps, opts, req, rep) => {
       message: '.github/dependabot.yml has no entry that proposes Kanon upgrades (K-ADOPT-11).',
       text: 'Add these lines under `updates:` in .github/dependabot.yml.',
       commands: [...DEPENDABOT_ENTRY],
+    });
+  }
+  const settings = read(SETTINGS_PATH);
+  const declared = readPluginDeclaration(settings);
+  if (a.plugin && settings !== null && !(declared.status === 'declared' && declared.ref === release && declared.enabled)) {
+    const lines = JSON.stringify(pluginSettings(release), null, 2).split('\n').slice(1, -1);
+    step({
+      id: 'plugin.declare',
+      category: 'plugin',
+      subject: SETTINGS_PATH,
+      prose: `${SETTINGS_PATH} is the project's, so init leaves it alone. To declare the kanon plugin at ${release}, merge these keys into it, or set the kanon marketplace's ref to ${release} where it is declared already:`,
+      message: declared.status === 'declared'
+        ? `${SETTINGS_PATH} declares the kanon plugin's marketplace "${declared.name}" ${[...(declared.ref === release ? [`at ${release}`] : [`${declared.ref ? `at ${declared.ref}` : 'with no ref'}, not at ${release}`]), ...(declared.enabled ? [] : [`and doesn't enable kanon@${declared.name}`])].join(', ')}.`
+        : `${SETTINGS_PATH} exists, and doesn't declare the kanon plugin${declared.status === 'unreadable' ? ` (${declared.reason})` : ''}.`,
+      text: `Merge these keys into ${SETTINGS_PATH}, keeping its own, or set the kanon marketplace's ref there to ${release} and enable its plugin.`,
+      commands: lines,
     });
   }
 

@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 You move the repository's Kanon references to one new release, after finding out what that release needs, so the first red run of a lane never has to tell the person. You drive `kanon doctor` through its JSON output only (`docs/doctor.md` in Kanon's repository, read at the release in the `npx` line below, `https://github.com/yedeya-labs/kanon/blob/<release>/docs/doctor.md`, never at `main`, whose contract may be newer), and you never read its prose to decide anything.
 
-**The release you upgrade to is the one this skill ships in,** the version in the `npx` line below. To move to another release, the person first moves this plugin to it (`docs/skills.md` in Kanon's repository says how), so the skill, the command and the release always agree.
+**The release you upgrade to is the one this skill ships in,** the version in the `npx` line below. To move to another release, the person first moves this plugin to it ("Moving the plugin", below), so the skill, the command and the release always agree.
 
 ## How to run `kanon`
 
@@ -35,19 +35,38 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 
 ## Steps
 
-1. **Where you start.** On the default branch, up to date, with a clean working tree. If the working tree has changes, ask the person to commit or stash them first; never do either yourself.
+1. **Where you start.** On the default branch, up to date, with a clean working tree; or on `kanon/upgrade-<the target>`, made from it, when the only change there is the plugin's `ref` in `.claude/settings.json` (step 2). If the working tree has other changes, ask the person to commit or stash them first; never do either yourself.
 
 2. **What the repository pins now.** Run `kanon doctor --to <the target> --json` and read `.releases.pinned` and `.releases.pins`:
-   - pinned at the target already: there is nothing to move; hand over to the doctor skill without `--to`, and stop here;
-   - pinned at a later release than the target: this plugin is older than the repository's pins. Tell the person to move the plugin to that release first, and stop;
+   - pinned at the target already: there is nothing to move to this plugin's release. Look up Kanon's latest release with `gh release view --repo yedeya-labs/kanon --json tagName --jq .tagName`. If it is later than the target and the person wants it, they move the plugin to it first ("Moving the plugin", below, with that release in place of the target), and run this skill again. Otherwise hand over to the doctor skill without `--to`, and stop here;
+   - pinned at a later release than the target: this plugin is older than the repository's pins. Tell the person to move the plugin to `.releases.pinned` first ("Moving the plugin", below, with that release in place of the target), and stop;
    - more than one release in `.releases.pins`: say so; the bump below makes them one (`K-ADOPT-11`).
 
    Exit code 3 with nothing pinned means Kanon isn't installed: that is the adopt skill's job.
 
 3. **What the target needs.** From the same document, explain each of `.findings` in plain words, in its order, saying which the person will have to do (the doctor skill's table). Point the person at the release notes of each release between the pin and the target, on `https://github.com/yedeya-labs/kanon/releases`, especially any marked breaking. Ask whether to go on.
 
-4. **Bump every pin.** Create the branch `kanon/upgrade-<the target>`. Replace the pinned release with the target in every `yedeya-labs/kanon` reference under `.github/`: each `@vX.Y.Z` of a `uses:` line, and each `#vX.Y.Z` of an `npx` line. Change nothing else on those lines. Show the diff.
+4. **Bump every pin.** Create the branch `kanon/upgrade-<the target>`, unless you are on it. Replace the pinned release with the target in every `yedeya-labs/kanon` reference under `.github/`: each `@vX.Y.Z` of a `uses:` line, and each `#vX.Y.Z` of an `npx` line. Where `.claude/settings.json` declares this plugin, set its marketplace's `ref` to the target too: doctor's `plugin.version-mismatch` finding names it. Where it doesn't, offer to declare it, with its `ref` at the target (`docs/skills.md` in Kanon's repository, "Declare it in the repository", gives the keys), so that the next move is one edit; write it only on a yes. Change nothing else on those lines. Show the diff.
 
 5. **Fix what it needs.** Hand over to the doctor skill on this branch. Doctor now reads the target as the pinned release, so it lists what is left. Fix the findings there, in order, until it exits 0 or only a person's steps are left. Never force a fix the repository can't take, such as a `git mv` onto a file name another workflow already holds: the doctor skill offers the person a waiver instead, which they write or accept with its reason. What the record already waives is in `.waived`; say so, and leave it alone.
 
 6. **Open the pull request.** Commit (signed off by the person), push the branch, and `gh pr create` titled `ci(deps): upgrade Kanon to <the target>`. If Dependabot already has a pull request bumping Kanon to the target, say that this one replaces it, link it, and leave it for the person to close. Never merge.
+
+7. **Say how everyone's plugin moves.** Where `.claude/settings.json` declares the plugin, merging the pull request moves it: each person pulls and runs `/reload-plugins`. Where it doesn't, each person who installed the plugin themselves runs the lines under "Moving the plugin", as printed there.
+
+## Moving the plugin
+
+`claude plugin marketplace update` and `claude plugin update` don't move the plugin to a new release: its marketplace is pinned to a release tag, and an update fetches that same tag again. The move is one of these two, with the release it moves to:
+
+- **Declared in the repository,** in `.claude/settings.json`: set the kanon marketplace's `ref` to the release, and run `/reload-plugins`. Claude Code fetches a declared marketplace again when its source changes. To upgrade, make that edit on the branch `kanon/upgrade-<the release>`, made from the default branch, so the upgrade's pull request carries it; the entry in the repository's file takes precedence over one the person added themselves under the same name.
+- **Installed by the person,** in their own Claude Code configuration: they run the lines below in their own terminal, then start a new session or run `/reload-plugins`. The lines name the target; for another release, its tag takes the target's place in the second line. Removing the marketplace uninstalls its plugin, which is why the install follows.
+
+<!-- x-release-please-start-version -->
+
+```sh
+claude plugin marketplace remove kanon
+claude plugin marketplace add yedeya-labs/kanon#v0.30.0
+claude plugin install kanon@kanon
+```
+
+<!-- x-release-please-end -->

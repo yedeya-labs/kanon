@@ -34,6 +34,11 @@
           "type": "json",
           "path": ".claude-plugin/plugin.json",
           "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": ".claude/settings.json",
+          "jsonpath": "$.extraKnownMarketplaces.kanon.source.ref"
         }
       ],
       "changelog-sections": [
