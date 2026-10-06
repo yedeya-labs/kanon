@@ -97,7 +97,8 @@
       "grant": {
         "contents": "read",
         "issues": "read",
-        "pull-requests": "read"
+        "pull-requests": "read",
+        "statuses": "read"
       },
       "reads": [
         "docs/qa/stack.md",
@@ -363,7 +364,8 @@
       "grant": {
         "actions": "read",
         "contents": "read",
-        "pull-requests": "read"
+        "pull-requests": "read",
+        "statuses": "read"
       },
       "reads": [
         "docs/qa/stack.md",
@@ -639,6 +641,7 @@
     "signal:<name>",
     "review:please",
     "gate-candidate",
+    "gate:declined",
     "needs:human",
     "blocked",
     "project:<n>",
