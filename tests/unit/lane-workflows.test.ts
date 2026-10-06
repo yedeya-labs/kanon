@@ -50,17 +50,18 @@ const lane = (file: string) => readFlattened(join(process.cwd(), WF, file)) as L
 const spineCalls = (file: string) => Object.entries(lane(file).jobs).filter(([, j]) => callsSpine(j as never));
 
 /** The role each lane runs as, and so the fixed secret names it takes (plan 0001 §8). */
+/** The App whose fixed-name secrets each lane takes (plan 0005 §3.5): the Author or the Judge. */
 const ROLE: Record<(typeof LANES)[number], string> = {
-  'agent-triage.yml': 'IMPLEMENTER',
-  'agent-implement.yml': 'IMPLEMENTER',
-  'agent-implement-revise.yml': 'IMPLEMENTER',
-  'agent-lead-revise.yml': 'LEAD',
-  'agent-merge-reconcile.yml': 'REVIEWER',
-  'agent-lead.yml': 'LEAD',
-  'agent-lead-split.yml': 'LEAD',
-  'agent-rebase.yml': 'IMPLEMENTER',
-  'agent-merge.yml': 'MERGER',
-  'agent-lead-reconcile.yml': 'LEAD',
+  'agent-triage.yml': 'AUTHOR',
+  'agent-implement.yml': 'AUTHOR',
+  'agent-implement-revise.yml': 'AUTHOR',
+  'agent-lead-revise.yml': 'AUTHOR',
+  'agent-merge-reconcile.yml': 'JUDGE',
+  'agent-lead.yml': 'AUTHOR',
+  'agent-lead-split.yml': 'AUTHOR',
+  'agent-rebase.yml': 'AUTHOR',
+  'agent-merge.yml': 'JUDGE',
+  'agent-lead-reconcile.yml': 'AUTHOR',
 };
 
 describe('plan 0001 §3: each lane is a reusable workflow, called with its inputs and its secrets', () => {

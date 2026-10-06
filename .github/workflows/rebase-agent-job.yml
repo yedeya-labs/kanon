@@ -171,6 +171,8 @@ jobs:
         with:
           arm: rebase lane
           app-slug: ${{ steps.app-token.outputs.app-slug }}
+          # The role, since the Author and the Judge each hold several (plan 0005 §3.3).
+          role: Implementer
 
       # CREATE-BEFORE-APPLY (plan 0005 §5.3, `K-WORK-12`): each label this lane's agent may
       # apply and the repository lacks is created first, with the taxonomy's colour and

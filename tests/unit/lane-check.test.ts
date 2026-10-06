@@ -76,14 +76,28 @@ type Caller = { on?: unknown; concurrency?: unknown; env?: unknown; permissions?
 const job = (doc: Record<string, unknown>) => Object.values((doc as Caller).jobs)[0]!;
 
 describe.skipIf(!hasYq)('lane-check', () => {
-  it('passes Kanon itself, which calls its own review, implement and code-audit lanes (ADR 0011)', () => {
-    // In this tree, not a copy: Kanon is its own adopter. CI also runs the released action on
-    // it; this run reads the lanes as this PR leaves them, so a lane change that would break
-    // Kanon's own caller is red here before it is released.
+  it('fails Kanon itself on exactly what plan 0005\'s L5 migrates, and on nothing else (ADR 0011)', () => {
+    // In this tree, not a copy: Kanon is its own adopter. CI runs the RELEASED action on it, at
+    // the version its callers pin; this run reads the lanes as this PR leaves them. Since L4
+    // the lanes take the Author's and the Judge's secrets and the register names one slug per
+    // App, and Kanon moves onto both only at L5, after #279 (plan 0005, question 4). Until then
+    // its own callers fail here on the L5 migration and on nothing else: the role-named
+    // secrets its three callers map, and its per-role register. Any other error is a lane
+    // change that would break Kanon's caller, and is red here before it is released.
+    // At L5 this goes back to `status 0` and `4 lane caller(s) pass`.
     const r = spawnSync('bash', [SCRIPT], { cwd: ROOT, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '' } });
-    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
-    expect(r.stdout).toContain('4 lane caller(s) pass');
-  });
+    expect(r.status).toBe(1);
+    const errors = r.stdout.split('\n').filter((l) => l.startsWith('::error'));
+    const l5 = errors.filter((l) => /maps the role-named secret `(EXPLORER|IMPLEMENTER|REVIEWER)_APP_(ID|PRIVATE_KEY)`/.test(l)
+      || /maps secrets \[CLAUDE_CODE_OAUTH_TOKEN,(EXPLORER|IMPLEMENTER|REVIEWER)_APP_ID,\1_APP_PRIVATE_KEY\]; the Kanon lane agent-[a-z-]+ takes exactly \[[A-Z_,]*(AUTHOR|JUDGE)_APP_ID/.test(l)
+      || /agent-identities\.md,title=lane-check::the Author's roles name 2 App slugs \(Implementer `kanon-implementer`, Explorer `kanon-explorer`\)/.test(l));
+    expect(errors.filter((l) => !l5.includes(l)), r.stdout).toEqual([]);
+    // Four callers (code-audit, implement, implement-revise, review), each two renames and a set
+    // difference, and the register.
+    expect(l5).toHaveLength(13);
+    // One lane-check run over Kanon's whole tree: under a loaded full run it outlasted the 5s
+    // default once, as the three-run test below did.
+  }, 30_000);
 
   it('passes the fixture adopter whole, and counts its four callers', () => {
     const r = check(adopter());
@@ -116,15 +130,44 @@ describe.skipIf(!hasYq)('lane-check', () => {
     it('refuses `secrets: inherit` (decision 7)', () =>
       red((t) => t.edit(TRIAGE, (d) => { job(d).secrets = 'inherit'; }), 'maps no secrets explicitly'));
     it('refuses a missing secret', () =>
-      red((t) => t.edit(TRIAGE, (d) => { delete (job(d).secrets as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN; }), 'takes exactly [CLAUDE_CODE_OAUTH_TOKEN,IMPLEMENTER_APP_ID,IMPLEMENTER_APP_PRIVATE_KEY]'));
+      red((t) => t.edit(TRIAGE, (d) => { delete (job(d).secrets as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN; }), 'takes exactly [AUTHOR_APP_ID,AUTHOR_APP_PRIVATE_KEY,CLAUDE_CODE_OAUTH_TOKEN]'));
     it('refuses a secret under a name the lane does not take', () =>
       red((t) => t.edit(TRIAGE, (d) => { (job(d).secrets as Record<string, string>).QA_TRIAGE_APP_ID = '${{ secrets.QA_TRIAGE_APP_ID }}'; }), 'the Kanon lane agent-triage takes exactly'));
     it('refuses a secret mapped to anything but one repository secret', () =>
-      red((t) => t.edit(TRIAGE, (d) => { (job(d).secrets as Record<string, string>).IMPLEMENTER_APP_ID = '${{ github.token }}'; }), 'map each one to a single repository secret'));
+      red((t) => t.edit(TRIAGE, (d) => { (job(d).secrets as Record<string, string>).AUTHOR_APP_ID = '${{ github.token }}'; }), 'map each one to a single repository secret'));
     it('accepts a secret mapped from another repository secret, as during the renaming (§8)', () => {
       const t = adopter();
-      t.edit(TRIAGE, (d) => { (job(d).secrets as Record<string, string>).IMPLEMENTER_APP_ID = '${{ secrets.QA_TRIAGE_APP_ID }}'; });
+      t.edit(TRIAGE, (d) => { (job(d).secrets as Record<string, string>).AUTHOR_APP_ID = '${{ secrets.QA_TRIAGE_APP_ID }}'; });
       expect(check(t).status).toBe(0);
+    });
+  });
+
+  describe('plan 0005 L4: the two Apps, by their secrets and the register (§3.4, §3.5)', () => {
+    const rename = (t: Tree) => t.edit(TRIAGE, (d) => {
+      const sec = job(d).secrets as Record<string, string>;
+      delete sec.AUTHOR_APP_ID; delete sec.AUTHOR_APP_PRIVATE_KEY;
+      sec.IMPLEMENTER_APP_ID = '${{ secrets.IMPLEMENTER_APP_ID }}';
+      sec.IMPLEMENTER_APP_PRIVATE_KEY = '${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}';
+    });
+    it('fails a caller mapping a role-named secret, naming the Author\'s it takes instead', () =>
+      red(rename, 'maps the role-named secret `IMPLEMENTER_APP_ID`; since plan 0005\'s two Apps the lane takes `AUTHOR_APP_ID` (the Author App\'s)'));
+    it('names the Judge\'s for a Reviewer or Merger secret', () =>
+      red((t) => t.edit(TRIAGE, (d) => { (job(d).secrets as Record<string, string>).MERGER_APP_ID = '${{ secrets.MERGER_APP_ID }}'; }), 'takes `JUDGE_APP_ID` (the Judge App\'s)'));
+    const rows = (t: Tree, extra: string) => t.write(REGISTER, `${t.read(REGISTER)}${extra}`);
+    it('fails a register whose Author roles name two slugs', () =>
+      red((t) => rows(t, '| Explorer | `example-explorer` | Read | Read & write | Read | No access |\n'),
+        /the Author's roles name 2 App slugs \(Implementer `example-author`, Lead `example-author`, Explorer `example-explorer`\)/));
+    it('fails a register whose Judge roles name two slugs', () =>
+      red((t) => rows(t, '| Reviewer | `example-judge` | x | x | x | x |\n| Merger | `example-merger` | x | x | x | x |\n'), /the Judge's roles name 2 App slugs/));
+    it('fails a register in which the Author and the Judge share a slug: the self-approval case', () =>
+      red((t) => rows(t, '| Reviewer | `example-author` | x | x | x | x |\n'), /the Reviewer row names `example-author`, the App the Implementer row names .*, but the Reviewer belongs to the Judge and the Implementer to the Author/));
+    it('fails a register in which the Releaser shares a slug with another App', () =>
+      red((t) => rows(t, '| Releaser | `example-author` | x | x | x | x |\n'), /the Releaser belongs to the Releaser and the Implementer to the Author/));
+    it('passes the Author\'s four rows on one slug, the Judge\'s two on another and the Releaser on a third', () => {
+      const t = adopter();
+      rows(t, '| Explorer | `example-author` | x | x | x | x |\n| Overseer | `example-author` | x | x | x | x |\n| Reviewer | `example-judge` | x | x | x | x |\n| Merger | `example-judge` | x | x | x | x |\n| Releaser | `example-releaser` | x | x | x | x |\n');
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
     });
   });
 
@@ -239,7 +282,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
     it('accepts it once the role has a row', () => {
       const t = adopter();
       addCaller(t);
-      t.write(REGISTER, `${t.read(REGISTER)}| Reviewer | \`example-reviewer\` | Read | Read & write | Read & write | No access |\n`);
+      t.write(REGISTER, `${t.read(REGISTER)}| Reviewer | \`example-judge\` | Read | Read & write | Read & write | No access |\n`);
       const r = check(t);
       expect(r.status, r.out).toBe(0);
       expect(r.out).toContain('5 lane caller(s) pass');
@@ -250,7 +293,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
     const REVIEW = '.github/workflows/agent-review.yml';
     const VERIFY = '.github/workflows/agent-verify-acs.yml';
     const extra = (t: Tree, f: string) => t.write(f, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra', f.split('/').pop()!), 'utf8'));
-    const roles = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Reviewer | \`example-reviewer\` | Read | Read & write | Read & write | No access |\n| Explorer | \`example-explorer\` | Read | Read & write | Read | No access |\n`);
+    const roles = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Reviewer | \`example-judge\` | Read | Read & write | Read & write | No access |\n| Explorer | \`example-author\` | Read | Read & write | Read | No access |\n`);
     it('accepts both callers, with the roles they run as registered', () => {
       const t = adopter();
       extra(t, REVIEW);
@@ -282,7 +325,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
     const EXPLORE = '.github/workflows/agent-explore.yml';
     const HOOK = '.github/actions/explore-sweep/action.yml';
     const caller = (t: Tree) => t.write(EXPLORE, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-explore.yml'), 'utf8'));
-    const explorer = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Explorer | \`example-explorer\` | Read | Read & write | Read | No access |\n`);
+    const explorer = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Explorer | \`example-author\` | Read | Read & write | Read | No access |\n`);
     const sweep = (t: Tree, body = 'name: Explore sweep\ninputs:\n  tier: { required: false, default: "" }\nruns:\n  using: composite\n  steps:\n    - run: echo sweep\n      shell: bash\n') => {
       mkdirSync(join(t.dir, '.github/actions/explore-sweep'), { recursive: true });
       t.write(HOOK, body);
@@ -327,7 +370,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
   describe('the Merger lane (plan 0004 step 7)', () => {
     const MERGE = '.github/workflows/agent-merge.yml';
     const extra = (t: Tree) => t.write(MERGE, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-merge.yml'), 'utf8'));
-    const merger = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Merger | \`example-merger\` | Read & write | Read & write | Read & write | No access |\n`);
+    const merger = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Merger | \`example-judge\` | Read & write | Read & write | Read & write | No access |\n`);
     it('accepts the caller, named `Merge (Merger)`, with the Merger registered', () => {
       const t = adopter();
       extra(t);
@@ -359,7 +402,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
         extra(t);
         merger(t);
         t.edit(MERGE, (d) => { (job(d).secrets as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN = '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}'; });
-      }, 'the Kanon lane agent-merge takes exactly [MERGER_APP_ID,MERGER_APP_PRIVATE_KEY]'));
+      }, 'the Kanon lane agent-merge takes exactly [JUDGE_APP_ID,JUDGE_APP_PRIVATE_KEY]'));
   });
 
   describe('the reconciler lane (plan 0004 step 8)', () => {
@@ -399,7 +442,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
       red((t) => {
         extra(t);
         t.edit(SWEEP, (d) => { (job(d).secrets as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN = '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}'; });
-      }, 'the Kanon lane agent-dispatch-sweep takes exactly [LEAD_APP_ID,LEAD_APP_PRIVATE_KEY]'));
+      }, 'the Kanon lane agent-dispatch-sweep takes exactly [AUTHOR_APP_ID,AUTHOR_APP_PRIVATE_KEY]'));
     it('refuses a caller that passes apply as a setting', () =>
       red((t) => { extra(t); t.edit(SWEEP, (d) => { (job(d).with as Record<string, string>).apply = 'true'; }); }, 'passes `apply: true`'));
   });
@@ -438,7 +481,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
     const STACK = 'docs/qa/stack.md';
     const extra = (t: Tree) => {
       t.write(AUDIT, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-code-audit.yml'), 'utf8'));
-      t.write(REGISTER, `${t.read(REGISTER)}| Explorer | \`example-explorer\` | Read | Read & write | Read | No access |\n`);
+      t.write(REGISTER, `${t.read(REGISTER)}| Explorer | \`example-author\` | Read | Read & write | Read | No access |\n`);
     };
     it('accepts the caller, run as the Explorer the register lists, under 40 lines and naming no cloud or environment', () => {
       const t = adopter();
@@ -463,7 +506,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
   describe('each caller has its lane\'s file name, and CI is ci.yml (K-LAYOUT-18, kanon#207)', () => {
     const EXTRA = join(ROOT, 'tests/fixtures/lane-check/extra');
     const fixture = (lane: string) => readFileSync(join(EXTRA, lane), 'utf8');
-    const reviewer = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Reviewer | \`example-reviewer\` | Read | Read & write | Read & write | No access |\n`);
+    const reviewer = (t: Tree) => t.write(REGISTER, `${t.read(REGISTER)}| Reviewer | \`example-judge\` | Read | Read & write | Read & write | No access |\n`);
     /** A caller of `lane`, written at `.github/workflows/<file>` instead of its own name. */
     const at = (t: Tree, file: string, lane: string) => t.write(`.github/workflows/${file}`, fixture(lane));
 
@@ -628,7 +671,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
       const t = adopter();
       lean(t);
       t.write('.github/workflows/agent-review.yml', readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-review.yml'), 'utf8'));
-      t.write(REGISTER, `${t.read(REGISTER)}| Reviewer | \`example-reviewer\` | Read | Read & write | Read & write | No access |\n`);
+      t.write(REGISTER, `${t.read(REGISTER)}| Reviewer | \`example-judge\` | Read | Read & write | Read & write | No access |\n`);
       const r = check(t);
       expect(r.status, r.out).toBe(0);
       expect(r.out).toMatch(/::notice file=docs\/qa\/reviewer-playbook\.md,title=lane-check::doesn't exist, so the Kanon lane\(s\) agent-review read Kanon's baseline/);
@@ -761,7 +804,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
     const record = (value: string | null) => `# Adoption record\n\n## Choices\n\n- **Chat channel:** none yet.\n${value === null ? '' : `- **Overseer:** \`${value}\`\n`}`;
     const install = (t: Tree, value: string | null = 'installed') => {
       t.write(OVERSEER, readFileSync(join(ROOT, 'tests/fixtures/lane-check/extra/agent-overseer.yml'), 'utf8'));
-      t.write(REGISTER, `${t.read(REGISTER)}| Overseer | \`example-overseer\` | Read | Read & write | Read | No access |\n`);
+      t.write(REGISTER, `${t.read(REGISTER)}| Overseer | \`example-author\` | Read | Read & write | Read | No access |\n`);
       t.write('docs/qa/overseer-playbook.md', '# Overseer playbook\n\n## Liveness queries\n\n## Backlog dynamics\n\n## Capability review\n');
       t.write('docs/qa/capability-ledger.md', '# Capability ledger\n');
       t.write(REC, record(value));
@@ -816,7 +859,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
       expect(check(t).status).toBe(0);
     });
     it('refuses a slug that is not in backticks', () =>
-      red((t) => t.write(REG, t.read(REG).replace('`example-implementer`', 'example-implementer')), 'gives the role Implementer no App slug in backticks'));
+      red((t) => t.write(REG, t.read(REG).replace('`example-author`', 'example-author')), 'gives the role Implementer no App slug in backticks'));
 
     // The optional `Persona` column (plan 0005 §3.3): blank is the role's name, and a
     // malformed persona fails by name, on the pull request that wrote it.

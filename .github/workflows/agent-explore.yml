@@ -40,7 +40,11 @@
 #
 # INERT until: the caller is on the default branch + the Explorer's App installed, with a row in
 # the App register + the sweep hook + these secrets (plan 0001 §8):
-#   EXPLORER_APP_ID, EXPLORER_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+# KANON ROLE: Explorer
+# The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
+# role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
+# in the App register must exist, and this lane's tokens fit inside that role's row.
 name: Explore (Explorer)
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -68,9 +72,9 @@ on:
         type: string
         default: ""
     secrets:
-      EXPLORER_APP_ID:
+      AUTHOR_APP_ID:
         required: true
-      EXPLORER_APP_PRIVATE_KEY:
+      AUTHOR_APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -197,8 +201,8 @@ jobs:
     with:
       tier: ${{ inputs.tier }}
     secrets:
-      app-id: ${{ secrets.EXPLORER_APP_ID }}
-      app-private-key: ${{ secrets.EXPLORER_APP_PRIVATE_KEY }}
+      app-id: ${{ secrets.AUTHOR_APP_ID }}
+      app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   put:

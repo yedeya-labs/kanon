@@ -28,10 +28,10 @@ inputs:
     description: "`open` (implement, triage) or `carry` (implement-revise, rebase)."
     required: true
   app-id:
-    description: The Implementer App's id (its `IMPLEMENTER_APP_ID` secret).
+    description: The Implementer App's id (its `AUTHOR_APP_ID` secret).
     required: true
   app-private-key:
-    description: The Implementer App's private key (its `IMPLEMENTER_APP_PRIVATE_KEY` secret).
+    description: The Implementer App's private key (its `AUTHOR_APP_PRIVATE_KEY` secret).
     required: true
   since:
     description: "`open`: when the run started, stamped by the lane's filter job before the agent."

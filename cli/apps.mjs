@@ -1,18 +1,27 @@
-// `kanon apps`: creates an adopter's agent Apps from manifests (K-ADOPT-1 step 12, #39).
+// `kanon apps`: creates an adopter's Kanon Apps from manifests (K-ADOPT-1 step 12, #39), or
+// adds a repository to an App that already exists (`--reuse`).
 //
-// For each role it builds a GitHub App manifest holding exactly the role's permissions
-// (rulebook/agent-permissions.json, the roles table's machine-readable twin, K-ADOPT-8),
-// opens the owner's "create App" page with the manifest filled in (a personal account's or an
-// organisation's, detected from the owner's account type: plan 0005, decision 1), exchanges the
-// one-time code for the App's id and private key, stores both as Actions secrets with the
-// Owner's own `gh`, waits for the Owner to install the App, checks the installation covers
-// the repository and nothing else, and writes the role's row in the App register
-// (K-LAYOUT-6). The Owner clicks Create and Install; the command never creates an App or a
-// key itself (K-AGENT-6).
+// Since plan 0005's L4 an owner has two Apps, three with releases, reused across its
+// repositories (ADR 0013, decision 2): the Author (Implementer, Lead, Explorer, Overseer), the
+// Judge (Reviewer, Merger) and the optional Releaser. For each App it builds a manifest holding
+// exactly the App's permissions (the `apps` block of rulebook/agent-permissions.json: the union
+// of its roles' rows, plus any broadened permission, K-ADOPT-8), opens the owner's "create App"
+// page with it filled in (a personal account's or an organisation's, detected from the owner's
+// account type: plan 0005, decision 1), exchanges the one-time code for the App's id and
+// private key, stores both as Actions secrets on EVERY repository named in --repo with the
+// Owner's own `gh` (`AUTHOR_APP_ID`, `AUTHOR_APP_PRIVATE_KEY`, ...: §3.5), waits for the Owner
+// to install the App, checks the installation covers each of those repositories, and writes
+// one App register row per role of the App, its roles sharing its slug (K-LAYOUT-6, §3.4). The
+// Owner clicks Create and Install; the command never creates an App or a key itself (K-AGENT-6).
 //
-// Before anything else it refuses to run outside a checkout of the repository it is for (the
-// register would land wherever it ran), and says which token `gh` uses and whose it is
-// (cli/gh-token.mjs), because a stale GH_TOKEN otherwise shows up only as a 401 (plan 0005 §5.1).
+// The key GitHub returns at creation is in memory once, so the repositories named at creation
+// get it in the same run. A repository added later uses a key the Owner generates on the App's
+// settings page: `--reuse <app>:<slug>=<key file>` reads it, checks it is that App's, stores
+// it, and deletes the file (plan 0005 §3.2).
+//
+// Before anything else it refuses to run outside a checkout of one of the repositories it is
+// for (the register would land wherever it ran), and says which token `gh` uses and whose it
+// is (cli/gh-token.mjs), because a stale GH_TOKEN otherwise shows up only as a 401 (§5.1).
 //
 // The private key lives in one variable. It goes to `gh secret set` on stdin and is used to
 // sign the App's JWTs in memory; it is never written to disk, printed or passed as an argument.
@@ -22,7 +31,7 @@
 import { Buffer } from 'node:buffer';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, sign } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { clearTimeout, setTimeout } from 'node:timers';
@@ -35,34 +44,56 @@ const API = 'https://api.github.com';
 const PERMISSIONS_FILE = join(dirname(fileURLToPath(import.meta.url)), '../rulebook/agent-permissions.json');
 
 /** @typedef {{ role: string, permissions: Record<string, string> }} RoleSpec */
+/** @typedef {{ app: string, roles: string[], permissions: Record<string, string>, optional?: boolean, broadened?: Record<string, string> }} AppSpec */
 
 /** @returns {Record<string, RoleSpec>} */
 export const loadRoles = () => JSON.parse(readFileSync(PERMISSIONS_FILE, 'utf8')).roles;
 
-export const USAGE = `Usage: kanon apps --owner <login> --repo <repo> --roles <role>[,<role>...] [options]
+/** @returns {Record<string, AppSpec>} Kanon's Apps, the `apps` block (ADR 0013). */
+export const loadApps = () => JSON.parse(readFileSync(PERMISSIONS_FILE, 'utf8')).apps;
 
-Creates one GitHub App per role from a manifest, with exactly the role's permissions
-(K-ADOPT-8), stores its id and key as Actions secrets, and writes its App register row.
-You click "Create" and "Install" in the browser; the command never creates an App itself.
-Run it from a checkout of <login>/<repo>: it refuses anywhere else, before it changes anything.
+/** The role names an App holds, as the register spells them. @param {AppSpec} spec */
+export const appRoles = (spec) => {
+  const roles = loadRoles();
+  return spec.roles.map((k) => roles[k]?.role ?? k.charAt(0).toUpperCase() + k.slice(1));
+};
+
+export const USAGE = `Usage: kanon apps --owner <login> --repo <repo>[,<repo>...] --apps <app>[,<app>...] [options]
+       kanon apps --owner <login> --repo <repo>[,<repo>...] --reuse <app>:<slug>=<key file> [options]
+
+Creates Kanon's GitHub Apps for an owner, one manifest flow each, with exactly each App's
+permissions (K-ADOPT-8), stores each App's id and key as Actions secrets on every repository
+named, and writes one App register row per role of the App (plan 0005 §3.4). You click
+"Create" and "Install" in the browser; the command never creates an App itself.
+Run it from a checkout of one of <login>/<repo>: it refuses anywhere else, before it changes
+anything, and writes that checkout's register. For the other repositories it prints the rows.
 
 Options:
-  --owner <login>        the account that will own the Apps: a personal account or an
+  --owner <login>        the account that owns the Apps: a personal account or an
                          organisation (the command asks GitHub which)
-  --repo <repo>          the repository, owned by that account, the Apps are for
-  --roles <list>         comma-separated: ${Object.keys(loadRoles()).join(', ')}
-  --name <role>=<name>   the App's name (default <repo>-<role>); repeatable
-  --dir <path>           the checkout of <login>/<repo> (default: here)
+  --repo <list>          comma-separated: the repositories, owned by that account, the Apps
+                         are for. Each gets the Apps' secrets in this run
+  --apps <list>          comma-separated: ${Object.keys(loadApps()).join(', ')}. The Author and the
+                         Judge run the lanes; the Releaser is optional, for releases alone
+  --reuse <app>:<slug>=<file>
+                         add these repositories to an App that exists: the key file is one you
+                         generated on the App's settings page. It is checked against the App,
+                         stored, and deleted. Repeatable; takes the place of --apps
+  --name <app>=<name>    the App's name (default <owner>-<app>); repeatable
+  --dir <path>           the checkout (default: here)
   --register <path>      write the App register here instead of the checkout's
                          ${REGISTER_PATH}; no checkout is needed then
   --org <org>            deprecated: the old spelling of --owner, removed in a later release
   -h, --help             this text
 
-Needs \`gh\`, with a token that can set the repository's Actions secrets (Secrets: read and
+--roles, the per-role Apps before plan 0005's L4, is gone: an owner has the Author and the
+Judge, and the Releaser if it makes releases.
+
+Needs \`gh\`, with a token that can set each repository's Actions secrets (Secrets: read and
 write). gh takes its token from GH_TOKEN, then GITHUB_TOKEN, then its stored login, so a
 stale GH_TOKEN wins over \`gh auth login\`; the command prints which one it uses and whose it
 is. It proves the token can write by setting and deleting a throwaway secret,
-KANON_APPS_PREFLIGHT, before it opens any page.`;
+KANON_APPS_PREFLIGHT, on each repository before it opens any page.`;
 
 /**
  * @typedef {{
@@ -75,6 +106,7 @@ KANON_APPS_PREFLIGHT, before it opens any page.`;
  *   err: (line: string) => void,
  *   readFile: (path: string) => string | null,
  *   writeFile: (path: string, text: string) => void,
+ *   remove: (path: string) => void,
  *   sleep: (ms: number) => Promise<void>,
  *   now: () => number,
  *   state: () => string,
@@ -118,6 +150,7 @@ export const realDeps = {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, text);
   },
+  remove: (path) => rmSync(path, { force: true }),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   now: () => Date.now(),
   state: () => randomBytes(16).toString('hex'),
@@ -128,11 +161,12 @@ export const realDeps = {
 /**
  * Parses `kanon apps`'s arguments. Throws with a message naming the problem.
  * @param {string[]} argv
- * @param {Record<string, RoleSpec>} roles
+ * @param {Record<string, AppSpec>} apps
  */
-export const parseArgs = (argv, roles) => {
-  /** @type {{ owner: string, viaOrg: boolean, repo: string, roles: string[], names: Record<string, string>, dir: string, register: string, help: boolean }} */
-  const opts = { owner: '', viaOrg: false, repo: '', roles: [], names: {}, dir: process.cwd(), register: '', help: false };
+export const parseArgs = (argv, apps) => {
+  /** @type {{ owner: string, viaOrg: boolean, repos: string[], apps: string[], reuse: Array<{ app: string, slug: string, file: string }>, names: Record<string, string>, dir: string, register: string, help: boolean }} */
+  const opts = { owner: '', viaOrg: false, repos: [], apps: [], reuse: [], names: {}, dir: process.cwd(), register: '', help: false };
+  const list = (/** @type {string} */ v) => [...new Set(v.split(',').map((r) => r.trim()).filter(Boolean))];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
     const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
@@ -148,28 +182,38 @@ export const parseArgs = (argv, roles) => {
       opts.owner = v;
       if (flag === '--org') opts.viaOrg = true;
     } else if (flag === '--register') opts.register = value();
-    else if (flag === '--repo') opts.repo = value();
+    else if (flag === '--repo') opts.repos = list(value());
     else if (flag === '--dir') opts.dir = value();
-    else if (flag === '--roles') opts.roles = [...new Set(value().split(',').map((r) => r.trim().toLowerCase()).filter(Boolean))];
-    else if (flag === '--name') {
+    else if (flag === '--apps') opts.apps = list(value().toLowerCase());
+    else if (flag === '--roles') {
+      throw new Error('--roles is gone since plan 0005\'s L4: the lanes run as two Apps per owner, the Author and the Judge, and the Releaser for releases. Pass --apps author,judge (and ,releaser)');
+    } else if (flag === '--reuse') {
+      const v = value();
+      const m = /^([a-z]+):([a-z0-9]+(?:-[a-z0-9]+)*)=(.+)$/.exec(v);
+      if (!m) throw new Error(`--reuse takes <app>:<slug>=<key file>, not "${v}"`);
+      opts.reuse.push({ app: /** @type {string} */ (m[1]), slug: /** @type {string} */ (m[2]), file: /** @type {string} */ (m[3]) });
+    } else if (flag === '--name') {
       const v = value();
       const eq = v.indexOf('=');
-      if (eq < 1 || eq === v.length - 1) throw new Error(`--name takes <role>=<name>, not "${v}"`);
+      if (eq < 1 || eq === v.length - 1) throw new Error(`--name takes <app>=<name>, not "${v}"`);
       opts.names[v.slice(0, eq).toLowerCase()] = v.slice(eq + 1);
     } else throw new Error(`unknown argument "${arg}"`);
   }
   if (opts.help) return opts;
   if (!opts.owner) throw new Error('--owner is required');
   if (!/^[A-Za-z0-9-]+$/.test(opts.owner)) throw new Error(`--owner takes a GitHub login, not "${opts.owner}"`);
-  if (!opts.repo) throw new Error('--repo is required');
-  if (opts.repo.includes('/')) throw new Error('--repo is the repository name alone; the owner goes in --owner');
-  if (!opts.roles.length) throw new Error('--roles is required');
-  for (const r of [...opts.roles, ...Object.keys(opts.names)]) {
-    if (!roles[r]) throw new Error(`"${r}" is not an agent role; the roles are ${Object.keys(roles).join(', ')}`);
+  if (!opts.repos.length) throw new Error('--repo is required');
+  for (const r of opts.repos) if (r.includes('/')) throw new Error('--repo takes repository names alone; the owner goes in --owner');
+  if (!opts.apps.length && !opts.reuse.length) throw new Error('--apps or --reuse is required');
+  if (opts.apps.length && opts.reuse.length) throw new Error('--apps creates Apps and --reuse adds repositories to existing ones: run them separately');
+  for (const a of [...opts.apps, ...opts.reuse.map((r) => r.app), ...Object.keys(opts.names)]) {
+    if (!apps[a]) throw new Error(`"${a}" is not one of Kanon's Apps; they are ${Object.keys(apps).join(', ')}`);
   }
-  for (const r of Object.keys(opts.names)) {
-    if (!opts.roles.includes(r)) throw new Error(`--name names the role "${r}", which --roles doesn't include`);
+  for (const a of Object.keys(opts.names)) {
+    if (!opts.apps.includes(a)) throw new Error(`--name names the App "${a}", which --apps doesn't include`);
   }
+  const reused = opts.reuse.map((r) => r.app);
+  if (new Set(reused).size !== reused.length) throw new Error('--reuse names one App twice');
   return opts;
 };
 
@@ -231,11 +275,12 @@ export const remoteRepo = (url) => {
  * be written wherever the command ran (plan 0005 §5.1). Returns the checkout's top level,
  * where the register goes, or the lines that explain the refusal. Reads git only; it runs
  * before the token is used for anything.
- * @param {Deps} deps @param {string} dir @param {string} owner @param {string} repo
- * @returns {{ root: string, refusal: null } | { root: null, refusal: string[] }}
+ * @param {Deps} deps @param {string} dir @param {string} owner @param {string | string[]} repo
+ * @returns {{ root: string, refusal: null, repo: string } | { root: null, refusal: string[] }}
  */
 export const checkoutCheck = (deps, dir, owner, repo) => {
-  const want = `${owner}/${repo}`;
+  const wanted = (Array.isArray(repo) ? repo : [repo]).map((r) => `${owner}/${r}`);
+  const want = wanted.join(' or ');
   const where = resolve(dir);
   const fix = `cd into your checkout of ${want} and run the command again, or pass --dir <that checkout>, or --register <path> to write the register somewhere else on purpose. Nothing was changed.`;
   const top = deps.git(['-C', where, 'rev-parse', '--show-toplevel']);
@@ -246,21 +291,23 @@ export const checkoutCheck = (deps, dir, owner, repo) => {
   const remotes = deps.git(['-C', root, 'remote', '-v']);
   const urls = [...new Set(remotes.stdout.split('\n').map((l) => l.split(/\s+/)[1] ?? '').filter(Boolean))];
   const repos = urls.map(remoteRepo).filter((r) => r !== null);
-  if (repos.some((r) => r.toLowerCase() === want.toLowerCase())) return { root, refusal: null };
+  const hit = repos.find((r) => wanted.some((w) => r.toLowerCase() === w.toLowerCase()));
+  if (hit) return { root, refusal: null, repo: /** @type {string} */ (hit.split('/')[1]) };
   const has = [...new Set(repos)].join(', ') || 'no GitHub remote';
   return { root: null, refusal: [`${root} is a checkout of ${has}, not of ${want}, which --owner and --repo name.`, fix] };
 };
 
 /**
- * The App manifest for one role: exactly the role's permissions, private, no webhook.
- * @param {{ owner: string, repo: string, role: string, name: string, redirectUrl: string, spec: RoleSpec }} a
+ * The App manifest for one of Kanon's Apps: exactly the App's permissions, private, no webhook.
+ * @param {{ owner: string, repo: string, name: string, redirectUrl: string, spec: AppSpec | RoleSpec }} a
  */
 export const buildManifest = ({ owner, repo, name, redirectUrl, spec }) => {
   const home = `https://github.com/${owner}/${repo}`;
+  const what = 'app' in spec ? `${spec.app} (${appRoles(spec).join(', ')})` : spec.role;
   return {
     name,
     url: home,
-    description: `Kanon ${spec.role} for ${owner}/${repo}.`,
+    description: `Kanon's ${what} for ${owner}.`,
     public: false,
     // GitHub's manifest schema asks for a hook URL even when the hook is off. Nothing is
     // ever delivered to it, because `active` is false.
@@ -391,27 +438,31 @@ const api = async (deps, path, o = {}) => {
   return { status: res.status, json };
 };
 
-/** @param {string} role */
-export const secretNames = (role) => ({ id: `${role.toUpperCase()}_APP_ID`, key: `${role.toUpperCase()}_APP_PRIVATE_KEY` });
+/** The fixed secret names of one of Kanon's Apps (plan 0005 §3.5). @param {string} app */
+export const secretNames = (app) => ({ id: `${app.toUpperCase()}_APP_ID`, key: `${app.toUpperCase()}_APP_PRIVATE_KEY` });
 
 /**
  * The steps that stay manual, printed at the end of every run.
- * @param {OwnerPages} pages @param {string} owner @param {string} repo @param {string[]} roles
+ * @param {OwnerPages} pages @param {string} owner @param {string[]} repos @param {string[]} apps
  */
-export const rotationSteps = (pages, owner, repo, roles) => [
+export const rotationSteps = (pages, owner, repos, apps) => [
   'Key rotation stays manual: GitHub has no API that makes a new private key for an existing App.',
-  `To rotate a role's key: open ${pages.app('<slug>')}, choose`,
-  '"Generate a private key", then store it and delete the downloaded file:',
-  ...roles.map((r) => `  gh secret set ${secretNames(r).key} -R ${owner}/${repo} < <downloaded>.pem && rm <downloaded>.pem`),
-  'Then delete the old key on the same page.',
+  `To rotate an App's key: open ${pages.app('<slug>')}, choose`,
+  '"Generate a private key", then store it on every repository the App covers and delete the downloaded file:',
+  ...apps.flatMap((a) => repos.map((r) => `  gh secret set ${secretNames(a).key} -R ${owner}/${r} < <downloaded>.pem`)),
+  '  rm <downloaded>.pem',
+  'Then delete the old key on the same page. To add a repository later, generate a key the same way and run',
+  `  kanon apps --owner ${owner} --repo <repo> --reuse <app>:<slug>=<downloaded>.pem`,
 ];
 
 /**
- * Waits until the App is installed on the owner's account, then checks what it covers.
- * @param {{ owner: string, pages: OwnerPages, repo: string, appId: number, pem: string, deps: Deps }} a
+ * Waits until the App is installed on the owner's account, then checks what it covers: every
+ * repository named. One App per owner covers several (plan 0005 §3.2), so only an installation
+ * on ALL of the owner's repositories warns (K-ADOPT-8, amended).
+ * @param {{ owner: string, pages: OwnerPages, repos: string[], appId: number, pem: string, deps: Deps, wait?: boolean }} a
  * @returns {Promise<{ id: number, warnings: string[] }>}
  */
-const awaitInstallation = async ({ owner, pages, repo, appId, pem, deps }) => {
+const awaitInstallation = async ({ owner, pages, repos, appId, pem, deps, wait = true }) => {
   const deadline = deps.now() + deps.timeoutMs;
   for (;;) {
     const r = await api(deps, '/app/installations?per_page=100', { jwt: appJwt(appId, pem, deps.now()) });
@@ -422,7 +473,7 @@ const awaitInstallation = async ({ owner, pages, repo, appId, pem, deps }) => {
       const warnings = [];
       const settings = pages.installation(inst.id);
       if (inst.repository_selection === 'all') {
-        warnings.push(`The App is installed on ALL repositories of ${owner}, not only ${repo} (K-ADOPT-8). Choose "Only select repositories" at ${settings}.`);
+        warnings.push(`The App is installed on ALL repositories of ${owner}, not only those that adopt Kanon (K-ADOPT-8). Choose "Only select repositories" at ${settings}.`);
         return { id: inst.id, warnings };
       }
       // The installation's repository list needs an installation token. This one can read
@@ -439,30 +490,73 @@ const awaitInstallation = async ({ owner, pages, repo, appId, pem, deps }) => {
       );
       if (list.status !== 200) throw new Error(`GitHub answered ${list.status} when listing the installation's repositories`);
       /** @type {string[]} */
-      const names = (list.json?.repositories ?? []).map((/** @type {any} */ x) => String(x.full_name));
-      const want = `${owner}/${repo}`.toLowerCase();
-      if (!names.some((n) => n.toLowerCase() === want)) {
-        throw new Error(`the App is installed on ${owner}, but not on ${repo} (it covers: ${names.join(', ') || 'nothing'}). Add ${repo} at ${settings}, then run the command again for this role.`);
+      const names = (list.json?.repositories ?? []).map((/** @type {any} */ x) => String(x.full_name).toLowerCase());
+      const missing = repos.filter((r) => !names.includes(`${owner}/${r}`.toLowerCase()));
+      if (missing.length) {
+        throw new Error(`the App is installed on ${owner}, but not on ${missing.join(', ')} (it covers: ${names.join(', ') || 'nothing'}). Add ${missing.length > 1 ? 'them' : 'it'} at ${settings}, then run the command again.`);
       }
-      const others = names.filter((n) => n.toLowerCase() !== want);
-      if (others.length) warnings.push(`The App is also installed on ${others.join(', ')} (K-ADOPT-8: one App per role per repository). Remove them at ${settings}, or record the sharing in the App register.`);
       return { id: inst.id, warnings };
     }
+    if (!wait) throw new Error(`the App is not installed on ${owner}. Install it at https://github.com/apps/<slug>/installations/new, choosing ${repos.join(', ')}, then run the command again.`);
     if (deps.now() >= deadline) throw new Error(`the App was not installed within ${Math.round(deps.timeoutMs / 60000)} minutes`);
     await deps.sleep(deps.pollMs);
   }
 };
 
 /**
- * One role, start to finish.
- * @param {{ owner: string, pages: OwnerPages, repo: string, role: string, name: string, spec: RoleSpec, register: string, deps: Deps }} a
+ * Stores an App's id and key on every repository. Throws, naming what to do, on the first
+ * failure: a key that is in memory only is lost if it can't be stored.
+ * @param {{ owner: string, repos: string[], app: string, appId: number, slug: string, pem: string, pages: OwnerPages, deps: Deps, keyFile?: string }} a
  */
-const createApp = async ({ owner, pages, repo, role, name, spec, register, deps }) => {
+const storeSecrets = async ({ owner, repos, app, appId, slug, pem, pages, deps, keyFile }) => {
+  const names = secretNames(app);
+  for (const repo of repos) {
+    for (const [secret, value] of /** @type {Array<[string, string]>} */ ([[names.id, String(appId)], [names.key, pem]])) {
+      const r = await deps.gh(['secret', 'set', secret, '-R', `${owner}/${repo}`], value);
+      if (r.status !== 0) {
+        throw new Error(
+          `gh could not set ${secret} on ${owner}/${repo} (${r.stderr.trim() || `exit ${r.status}`}). ` +
+            (keyFile
+              ? `The key file ${keyFile} is kept: fix the token and run the command again.`
+              : `The key was never saved anywhere, so it is lost: generate a new one at ${pages.app(slug)}, and run ` +
+                `"kanon apps --owner ${owner} --repo ${repos.join(',')} --reuse ${app}:${slug}=<file>.pem".`),
+        );
+      }
+    }
+  }
+  return names;
+};
+
+/**
+ * Writes one register row per role of the App, all naming its slug (plan 0005 §3.4), and
+ * prints the diff to commit. The rows carry the App's permissions: what each role's token can
+ * at most be minted with.
+ * @param {{ spec: AppSpec, slug: string, register: string, deps: Deps }} a
+ */
+const writeAppRows = ({ spec, slug, register, deps }) => {
+  let text = deps.readFile(register);
+  /** @type {string[]} */
+  const diff = [];
+  for (const role of appRoles(spec)) {
+    const w = writeRegisterRow(text, { role, slug, permissions: spec.permissions });
+    text = w.text;
+    diff.push(...w.diff);
+  }
+  deps.writeFile(register, /** @type {string} */ (text));
+  return diff;
+};
+
+/**
+ * One App, start to finish.
+ * @param {{ owner: string, pages: OwnerPages, repos: string[], key: string, name: string, spec: AppSpec, register: string, deps: Deps }} a
+ */
+const createApp = async ({ owner, pages, repos, key, name, spec, register, deps }) => {
   const { out } = deps;
   out('');
-  out(`== ${spec.role}: the App "${name}" ==`);
+  out(`== The ${spec.app} (${appRoles(spec).join(', ')}): the App "${name}" ==`);
   const state = deps.state();
-  const { url, code } = await listen({ newApp: pages.newApp, state, deps, manifestFor: (redirectUrl) => buildManifest({ owner, repo, role, name, redirectUrl, spec }) });
+  const home = /** @type {string} */ (repos[0]);
+  const { url, code } = await listen({ newApp: pages.newApp, state, deps, manifestFor: (redirectUrl) => buildManifest({ owner, repo: home, name, redirectUrl, spec }) });
   out(`1. Your browser is opening ${url}, which sends the manifest to GitHub.`);
   out(`   Check the name, then click "Create GitHub App for ${owner}". (If the name is taken, change it there.)`);
   deps.open(url);
@@ -483,33 +577,58 @@ const createApp = async ({ owner, pages, repo, role, name, spec, register, deps 
   const want = spec.permissions;
   const drift = [...new Set([...Object.keys(got), ...Object.keys(want)])].filter((k) => got[k] !== want[k]);
   if (drift.length) {
-    deps.err(`warning: the App's permissions differ from the ${spec.role}'s on ${drift.join(', ')}. Set them to the role's at ${pages.app(slug)}/permissions before installing it.`);
+    deps.err(`warning: the App's permissions differ from the ${spec.app}'s on ${drift.join(', ')}. Set them to the ${spec.app}'s at ${pages.app(slug)}/permissions before installing it.`);
   }
 
-  const names = secretNames(role);
-  for (const [secret, value] of /** @type {Array<[string, string]>} */ ([[names.id, String(appId)], [names.key, pem]])) {
-    const r = await deps.gh(['secret', 'set', secret, '-R', `${owner}/${repo}`], value);
-    if (r.status !== 0) {
-      throw new Error(
-        `gh could not set ${secret} (${r.stderr.trim() || `exit ${r.status}`}). The key was never saved anywhere, so it is lost: ` +
-          `generate a new one at ${pages.app(slug)}, run ` +
-          `"gh secret set ${names.key} -R ${owner}/${repo} < <file>.pem", delete the file, and set ${names.id} to ${appId}.`,
-      );
-    }
-  }
-  out(`3. Stored ${names.id} and ${names.key} as Actions secrets on ${owner}/${repo}.`);
+  const names = await storeSecrets({ owner, repos, app: key, appId, slug, pem, pages, deps });
+  out(`3. Stored ${names.id} and ${names.key} as Actions secrets on ${repos.map((r) => `${owner}/${r}`).join(', ')}.`);
 
   const install = `https://github.com/apps/${slug}/installations/new`;
   out(`4. Your browser is opening ${install}.`);
-  out(`   Choose ${owner}, then "Only select repositories", pick ${repo} alone, and click "Install".`);
+  out(`   Choose ${owner}, then "Only select repositories", pick ${repos.join(', ')}, and click "Install".`);
   deps.open(install);
-  const inst = await awaitInstallation({ owner, pages, repo, appId, pem, deps });
+  const inst = await awaitInstallation({ owner, pages, repos, appId, pem, deps });
   for (const w of inst.warnings) deps.err(`warning: ${w}`);
   out(`5. Installed (installation ${inst.id}).`);
 
-  const { text, diff } = writeRegisterRow(deps.readFile(register), { role: spec.role, slug, permissions: spec.permissions });
-  deps.writeFile(register, text);
-  out(`6. Wrote the ${spec.role}'s row in ${register}. Commit it:`);
+  const diff = writeAppRows({ spec, slug, register, deps });
+  out(`6. Wrote the ${spec.app}'s rows (${appRoles(spec).join(', ')}) in ${register}. Commit them:`);
+  for (const l of diff) out(`   ${l}`);
+  return { slug, warnings: inst.warnings };
+};
+
+/**
+ * Adds the repositories to an App that exists, from a key file the Owner generated on the
+ * App's settings page (plan 0005 §3.2): checks the key is that App's and the installation
+ * covers each repository, stores it, writes the rows, and deletes the file.
+ * @param {{ owner: string, pages: OwnerPages, repos: string[], key: string, slug: string, file: string, spec: AppSpec, register: string, deps: Deps }} a
+ */
+const reuseApp = async ({ owner, pages, repos, key, slug, file, spec, register, deps }) => {
+  const { out } = deps;
+  out('');
+  out(`== The ${spec.app} (${appRoles(spec).join(', ')}): the App ${slug}, from ${file} ==`);
+  const pem = deps.readFile(file);
+  if (pem === null || !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(pem)) throw new Error(`${file} is not a private key file`);
+  const app = await deps.gh(['api', `apps/${slug}`, '--jq', '.id']);
+  const appId = Number(app.stdout.trim());
+  if (app.status !== 0 || !Number.isInteger(appId) || appId <= 0) {
+    throw new Error(`GitHub could not say which App \`${slug}\` is (${app.stderr.trim() || `exit ${app.status}`}). Check the slug.`);
+  }
+  // The key is this App's only if GitHub accepts a JWT it signed as this App's id.
+  const me = await api(deps, '/app', { jwt: appJwt(appId, pem, deps.now()) });
+  if (me.status !== 200 || String(me.json?.slug) !== slug) {
+    throw new Error(`the key in ${file} is not a key of ${slug} (GitHub answered ${me.status}). Nothing was stored; the file is kept.`);
+  }
+  out(`1. ${file} is a key of ${slug} (id ${appId}).`);
+  const inst = await awaitInstallation({ owner, pages, repos, appId, pem, deps, wait: false });
+  for (const w of inst.warnings) deps.err(`warning: ${w}`);
+  out(`2. Its installation (${inst.id}) covers ${repos.join(', ')}.`);
+  const names = await storeSecrets({ owner, repos, app: key, appId, slug, pem, pages, deps, keyFile: file });
+  out(`3. Stored ${names.id} and ${names.key} as Actions secrets on ${repos.map((r) => `${owner}/${r}`).join(', ')}.`);
+  deps.remove(file);
+  out(`4. Deleted ${file}.`);
+  const diff = writeAppRows({ spec, slug, register, deps });
+  out(`5. Wrote the ${spec.app}'s rows in ${register}. Commit them:`);
   for (const l of diff) out(`   ${l}`);
   return { slug, warnings: inst.warnings };
 };
@@ -560,11 +679,11 @@ export const preflight = async (deps, owner, repo) => {
  */
 export const apps = async (argv, overrides = {}) => {
   const deps = { ...realDeps, ...overrides };
-  const roles = loadRoles();
+  const specs = loadApps();
   /** @type {ReturnType<typeof parseArgs>} */
   let opts;
   try {
-    opts = parseArgs(argv, roles);
+    opts = parseArgs(argv, specs);
   } catch (e) {
     deps.err(`kanon apps: ${/** @type {Error} */ (e).message}`);
     deps.err(USAGE);
@@ -574,7 +693,7 @@ export const apps = async (argv, overrides = {}) => {
     deps.out(USAGE);
     return 0;
   }
-  const { repo } = opts;
+  const { repos } = opts;
   if (opts.viaOrg) deps.err('kanon apps: warning: --org is deprecated; use --owner, which takes a personal account or an organisation. --org goes in a later release.');
 
   // Where the register goes, settled before anything else: run outside a checkout of the
@@ -582,14 +701,17 @@ export const apps = async (argv, overrides = {}) => {
   // register in the checkout's parent (plan 0005 §5.1). Only git is read here.
   /** @type {string} */
   let register;
+  /** @type {string | null} the repository whose checkout gets the register */
+  let here = null;
   if (opts.register) register = resolve(opts.register);
   else {
-    const where = checkoutCheck(deps, opts.dir, opts.owner, repo);
+    const where = checkoutCheck(deps, opts.dir, opts.owner, repos);
     if (where.refusal) {
       for (const l of where.refusal) deps.err(`kanon apps: ${l}`);
       return 1;
     }
     register = join(where.root, REGISTER_PATH);
+    here = where.repo;
   }
 
   // Which token gh uses, and whose it is, before it is used for anything that changes state.
@@ -613,28 +735,51 @@ export const apps = async (argv, overrides = {}) => {
   deps.out(`${owner} is ${account.kind === 'User' ? 'a personal account' : 'an organisation'}; its Apps are created at ${pages.newApp}.`);
   deps.out(`The App register is ${register}.`);
 
-  // Fail before any App exists if the key could not be stored: an App whose key has nowhere
-  // to go is one more App to delete by hand. Reading the secrets proves nothing about
-  // writing them (a token can hold Secrets: read alone), so the probe writes one.
-  const refusal = await preflight(deps, owner, repo);
-  if (refusal) {
-    for (const l of refusal) deps.err(`kanon apps: ${l}`);
-    return 1;
+  // Fail before any App exists if a key could not be stored: an App whose key has nowhere to
+  // go is one more App to delete by hand. Reading the secrets proves nothing about writing
+  // them (a token can hold Secrets: read alone), so the probe writes one, on each repository.
+  for (const repo of repos) {
+    const refusal = await preflight(deps, owner, repo);
+    if (refusal) {
+      for (const l of refusal) deps.err(`kanon apps: ${l}`);
+      return 1;
+    }
   }
 
   let warnings = 0;
+  /** @type {Array<{ spec: AppSpec, slug: string }>} */
+  const done = [];
   try {
-    for (const role of opts.roles) {
-      const spec = /** @type {RoleSpec} */ (roles[role]);
-      const r = await createApp({ owner, pages, repo, role, spec, name: opts.names[role] ?? `${repo}-${role}`, register, deps });
+    for (const key of opts.apps) {
+      const spec = /** @type {AppSpec} */ (specs[key]);
+      const r = await createApp({ owner, pages, repos, key, spec, name: opts.names[key] ?? `${owner}-${key}`.toLowerCase(), register, deps });
       warnings += r.warnings.length;
+      done.push({ spec, slug: r.slug });
+    }
+    for (const { app: key, slug, file } of opts.reuse) {
+      const spec = /** @type {AppSpec} */ (specs[key]);
+      const r = await reuseApp({ owner, pages, repos, key, slug, file: resolve(file), spec, register, deps });
+      warnings += r.warnings.length;
+      done.push({ spec, slug: r.slug });
     }
   } catch (e) {
     deps.err(`kanon apps: ${/** @type {Error} */ (e).message}`);
     return 1;
   }
+  // THE OTHER REPOSITORIES' REGISTERS. This run wrote one checkout's; each repository the
+  // Apps cover keeps its own register (K-LAYOUT-6), so it prints the rows to copy into each.
+  const others = repos.filter((r) => r !== here);
+  if (others.length && done.length) {
+    deps.out('');
+    deps.out(`The App register of ${others.map((r) => `${owner}/${r}`).join(', ')} needs these rows too (one per role, ${here ? `as in ${owner}/${here}'s` : 'as written above'}):`);
+    for (const { spec, slug } of done) for (const role of appRoles(spec)) deps.out(`  | ${role} | \`${slug}\` | …`);
+  }
+  if (done.some(({ spec }) => spec.app === 'Releaser')) {
+    deps.out('');
+    deps.out('The Releaser: map RELEASER_APP_ID and RELEASER_APP_PRIVATE_KEY in the job that calls the release workflow (docs/release.md, "With the Releaser"). Keep your admin bypass until the Releaser is what merges your release PRs (#337).');
+  }
   deps.out('');
   deps.out(warnings ? `Done, with ${warnings} warning(s) above to act on.` : 'Done.');
-  for (const l of rotationSteps(pages, owner, repo, opts.roles)) deps.out(l);
+  for (const l of rotationSteps(pages, owner, repos, [...opts.apps, ...opts.reuse.map((r) => r.app)])) deps.out(l);
   return 0;
 };

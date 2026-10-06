@@ -114,6 +114,8 @@ jobs:
         with:
           arm: merge-reconcile agent
           app-slug: ${{ steps.app-token.outputs.app-slug }}
+          # The role, since the Author and the Judge each hold several (plan 0005 §3.3).
+          role: Reviewer
 
       # Only the playbook sections this job uses (RA-2488 option 2). The whole reviewer
       # playbook is ~44 KB, and everything but its follow-up rules is about reviewing an

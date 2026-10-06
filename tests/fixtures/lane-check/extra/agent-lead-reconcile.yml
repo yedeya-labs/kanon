@@ -33,5 +33,5 @@ jobs:
       project: ${{ inputs.project }}
       apply: ${{ inputs.apply }}
     secrets:
-      LEAD_APP_ID: ${{ secrets.LEAD_APP_ID }}
-      LEAD_APP_PRIVATE_KEY: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}

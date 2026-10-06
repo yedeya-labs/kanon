@@ -60,8 +60,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   implement-revise:
@@ -74,8 +74,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   implement:
@@ -90,8 +90,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   merge-reconcile:
@@ -102,8 +102,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      REVIEWER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      REVIEWER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      JUDGE_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      JUDGE_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   lead-revise:
@@ -115,8 +115,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   review:
@@ -129,8 +129,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      REVIEWER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      REVIEWER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      JUDGE_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      JUDGE_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   verify-acs:
@@ -141,8 +141,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      EXPLORER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      EXPLORER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   lead:
@@ -152,8 +152,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   lead-split:
@@ -165,8 +165,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   rebase:
@@ -180,8 +180,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      IMPLEMENTER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      IMPLEMENTER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   merge:
@@ -192,8 +192,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      MERGER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      MERGER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      JUDGE_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      JUDGE_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
 
   lead-reconcile:
     # The reconciler runs no model either (plan 0004 step 8).
@@ -208,8 +208,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
 
   project-digest:
     # The digests run as no App: the Claude token, and the webhook they post to (plan 0004
@@ -250,8 +250,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      EXPLORER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      EXPLORER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   dispatch-sweep:
@@ -264,8 +264,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      LEAD_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      LEAD_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
 
   code-audit:
     # A store-coupled lane (plan 0004 step 11). `id-token: write` is for its store jobs alone,
@@ -280,8 +280,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      EXPLORER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      EXPLORER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   overseer:
@@ -297,8 +297,8 @@ jobs:
     with:
       smoke: agent-lanes-smoke
     secrets:
-      OVERSEER_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
-      OVERSEER_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
   smoke:

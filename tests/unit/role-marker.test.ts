@@ -300,12 +300,14 @@ describe('personas live in the App register\'s optional Persona column', () => {
 
 /**
  * EVERY AGENT IS ASKED TO WRITE ITS HEADER (#310's review). The persona step resolves the role
- * from a non-empty `app-slug` or from `role`; a call with neither asks its agent for nothing.
- * So every `agent-setup` call passes one, or is listed here with why its agent posts as no App.
+ * from `role`, or else from the App register's row for `app-slug`. Since plan 0005's L4 a slug
+ * is the Author's or the Judge's, which several roles share, so it resolves nothing: every
+ * `agent-setup` call passes its role, or is listed here with why its agent posts as no App.
  */
 const NO_PERSONA: Record<string, string> = {
   'agent-project-digest.yml': 'its agent writes a digest the workflow posts to a webhook, as no App',
   'agent-weekly-digest.yml': 'its agent writes a digest the workflow posts to a webhook, as no App',
+  'agent-blocks-smoke.yml': 'a smoke run of the blocks, as `github-actions`, which posts nothing and runs no agent',
   'overseer-agent-job.yml': 'its agent files nothing; `overseer-file.mjs` files on a token of its own, signed as the Overseer',
 };
 describe('every agent-setup call names the agent\'s role, or says why its agent posts as no App', () => {
@@ -318,8 +320,8 @@ describe('every agent-setup call names the agent\'s role, or says why its agent 
     expect(calls.length).toBeGreaterThanOrEqual(10);
   });
 
-  it('each passes an App slug or a role, or is listed', () => {
-    const silent = calls.filter((c) => !c.with['app-slug'] && !c.with.role).map((c) => c.file);
+  it('each passes its role, or is listed: since L4 an App slug names two or four roles (plan 0005 §3.3)', () => {
+    const silent = calls.filter((c) => !c.with.role).map((c) => c.file);
     expect(silent.sort()).toEqual(Object.keys(NO_PERSONA).sort());
   });
 
@@ -328,6 +330,10 @@ describe('every agent-setup call names the agent\'s role, or says why its agent 
     ['explore-agent-job.yml', 'Explorer'],
     ['verify-acs-agent-job.yml', 'Explorer'],
     ['code-audit-agent-job.yml', 'Explorer'],
+    ['rebase-agent-job.yml', 'Implementer'],
+    ['merge-reconcile-agent-job.yml', 'Reviewer'],
+    ['lead-split-agent-job.yml', 'Lead'],
+    ['lane-agent-job.yml', '${{ inputs.role }}'],
   ])('%s names the %s, whose App its agent posts as', (file, role) => {
     expect(calls.filter((c) => c.file === file).map((c) => c.with.role)).toEqual([role]);
   });

@@ -49,9 +49,13 @@
 #
 # INERT until: the caller is on the default branch + the Lead's App installed, with a row in
 # the App register + these secrets (plan 0001 §8):
-#   LEAD_APP_ID, LEAD_APP_PRIVATE_KEY
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY
 # A project closes only once its merges are deployed to the reference environment, which the
 # adoption record declares (`K-LAYOUT-10`, `K-PROJ-11`; `docs/lanes.md`).
+# KANON ROLE: Lead
+# The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
+# role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
+# in the App register must exist, and this lane's tokens fit inside that role's row.
 name: Lead (Lead) — reconcile
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -82,9 +86,9 @@ on:
         type: string
         default: ""
     secrets:
-      LEAD_APP_ID:
+      AUTHOR_APP_ID:
         required: true
-      LEAD_APP_PRIVATE_KEY:
+      AUTHOR_APP_PRIVATE_KEY:
         required: true
 
 concurrency:
@@ -337,8 +341,8 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.LEAD_APP_ID }}
-          private-key: ${{ secrets.LEAD_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           # Narrowed to what the steps below use (#48, `K-AGENT-46`): the reconcile files,
           # edits, labels, comments on and closes issues (`issues`), churns labels on pull
           # requests to re-deliver a review or a revise (`pull-requests`), reads the brief's

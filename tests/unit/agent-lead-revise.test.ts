@@ -221,7 +221,7 @@ const runFilter = ({
         // fixture carried no author at all and so proved the cap against a counter
         // that could not tell whose marker it was reading.
         comments: comments ?? Array.from({ length: rounds }, () => ({
-          author: { login: 'example-lead' },
+          author: { login: 'example-author' },
           body: '<!-- qa:lead-revise -->',
         })),
       }),
@@ -238,7 +238,7 @@ const runFilter = ({
 };
 
 describe('what it refuses to act on', () => {
-  const LEAD_AUTHOR = 'app/example-lead';
+  const LEAD_AUTHOR = 'app/example-author';
 
   it.each([
     // RA-378: the reviewer posts COMMENT while a check is pending, and that comment
@@ -295,9 +295,9 @@ describe('the author identity check', () => {
    * One identity, three spellings, three endpoints — and the filter compared
    * against none of the ones `gh pr view` produces:
    *
-   *   gh pr view --json author      -> app/example-lead
-   *   gh issue view --json comments -> example-lead
-   *   gh api .../reviews            -> example-lead[bot]
+   *   gh pr view --json author      -> app/example-author
+   *   gh issue view --json comments -> example-author
+   *   gh api .../reviews            -> example-author[bot]
    *
    * So revise mode never once acted on a review. It failed closed and said why,
    * which is precisely why nothing went wrong and why nobody noticed for two days.
@@ -308,22 +308,22 @@ describe('the author identity check', () => {
    * that gap; it does not close it, so RA-918 stays open.
    */
   it.each([
-    ['app/example-lead', true],       // what gh pr view really returns
-    ['example-lead', true],           // the comments shape
-    ['example-lead[bot]', true],      // the reviews-API shape
+    ['app/example-author', true],       // what gh pr view really returns
+    ['example-author', true],           // the comments shape
+    ['example-author[bot]', true],      // the reviews-API shape
     ['a-developer', false],                    // a human
-    ['app/example-implementer', false], // a different agent's PR
+    ['app/example-judge', false], // another App's PR
   ])('the workflow acts on a PR authored by %s: %s', (author, expected) => {
     expect(runFilter({ author }).act).toBe(expected);
   });
 
   it('names the raw login AND the derived slug in the reason it skipped', () => {
-    // "authored by 'app/example-lead', not the Lead" was true and useless — it
+    // "authored by 'app/example-judge', not the Lead" was true and useless — it
     // did not show that the comparison itself was the problem. Read off the real
     // step summary, so a reworded skip() that drops one of them fails here.
-    const { summary } = runFilter({ author: 'app/example-implementer' });
-    expect(summary).toContain("'app/example-implementer'");
-    expect(summary).toContain("slug 'example-implementer'");
+    const { summary } = runFilter({ author: 'app/example-judge' });
+    expect(summary).toContain("'app/example-judge'");
+    expect(summary).toContain("slug 'example-judge'");
   });
 
   it('strips both affixes in the workflow, not just one', () => {
@@ -344,7 +344,7 @@ describe('the author identity check', () => {
 });
 
 describe('the round cap', () => {
-  const LEAD_AUTHOR_CAP = 'app/example-lead';
+  const LEAD_AUTHOR_CAP = 'app/example-author';
 
   it('counts rounds from the Lead\'s own marker comments, not stored state', () => {
     // Same mechanism as the dispatch sweep (RA-912): the world already contains the
@@ -363,7 +363,7 @@ describe('the round cap', () => {
     // survives two pushes is substantive, and another iteration will not settle it.
     // Executed rather than grepped for `-ge 2`, because an off-by-one in the
     // comparison is invisible to a string match — the same reason as RA-1010.
-    expect(runFilter({ author: 'app/example-lead', rounds }).act).toBe(expected);
+    expect(runFilter({ author: 'app/example-author', rounds }).act).toBe(expected);
   });
 
   it.each([
@@ -412,7 +412,7 @@ describe('the round cap', () => {
   });
 
   it('warns loudly when it gives up, rather than skipping quietly', () => {
-    const { stdout } = runFilter({ author: 'app/example-lead', rounds: 2 });
+    const { stdout } = runFilter({ author: 'app/example-author', rounds: 2 });
     expect(stdout).toContain('::warning');
   });
 
@@ -423,7 +423,7 @@ describe('the round cap', () => {
 });
 
 describe('revise in place', () => {
-  const LEAD_AUTHOR_IN_PLACE = 'app/example-lead';
+  const LEAD_AUTHOR_IN_PLACE = 'app/example-author';
 
   it('checks out the PR branch, not the default branch', () => {
     // Both halves, or the invariant is only half-guarded: the consumer must read
@@ -464,7 +464,7 @@ describe('revise in place', () => {
     expect(names.indexOf('Receive the App token'))
       .toBeLessThan(names.findIndex((n) => n?.startsWith('actions/checkout')));
     // And the App is the Lead's — the identity the round count filters on.
-    expect(wf.jobs.revise.secrets['app-id']).toBe('${{ secrets.LEAD_APP_ID }}');
+    expect(wf.jobs.revise.secrets['app-id']).toBe('${{ secrets.AUTHOR_APP_ID }}');
   });
 
   it('serialises revisions of one brief', () => {
@@ -499,7 +499,7 @@ describe('the mandate the reset run actually receives', () => {
     // The one link that needs real execution. Without it the filter can emit a
     // hardcoded `reset=false` and the reset run silently takes the review branch —
     // the round-1 defect verbatim, suite green.
-    expect(runFilter({ author: 'app/example-lead', ...args }).outputs.reset).toBe(expected);
+    expect(runFilter({ author: 'app/example-author', ...args }).outputs.reset).toBe(expected);
   });
 
   it('tells him it is a developer decision, not a review round', () => {
@@ -667,7 +667,7 @@ describe('cost shape', () => {
   });
 });
 
-const CAP_AUTHOR = 'app/example-lead';
+const CAP_AUTHOR = 'app/example-author';
 
 describe('the cap binds on a round that left no marker (RA-969, RA-1099)', () => {
   /**
@@ -732,7 +732,7 @@ describe('a content-free rebase is neither an answer nor a round (RA-1841)', () 
    * PR is docs-only and `agent-review.yml` re-reviews every push, which makes the
    * exposure larger here, not smaller.
    */
-  const LEAD_AUTHOR = 'app/example-lead';
+  const LEAD_AUTHOR = 'app/example-author';
   const HEAD = 'ffffffffffffffffffffffffffffffffffffffff';
   const OLD = '1111111111111111111111111111111111111111';
 
@@ -877,7 +877,7 @@ describe('the cap escalation can actually post (RA-969, RA-1205 review)', () => 
 });
 
 describe('the re-delivery path for an unanswered changes-request (RA-1595)', () => {
-  const LEAD_AUTHOR = 'app/example-lead';
+  const LEAD_AUTHOR = 'app/example-author';
   const HEAD = 'ffffffffffffffffffffffffffffffffffffffff';
   const OLD = '1111111111111111111111111111111111111111';
 
@@ -974,7 +974,7 @@ describe('the login is read from the App register (plan 0001 §5)', () => {
   });
 
   it('follows the register, not a constant: another slug there turns the same author away', () => {
-    const r = runFilter({ author: LEAD, register: REGISTER_FIXTURE.replace(`\`${LEAD_LOGIN}\``, '`someone-else`') });
+    const r = runFilter({ author: LEAD, register: REGISTER_FIXTURE.replaceAll(`\`${LEAD_LOGIN}\``, '`someone-else`') });
     expect(r.act).toBe(false);
   });
 

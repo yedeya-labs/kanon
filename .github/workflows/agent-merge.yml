@@ -41,9 +41,13 @@
 #
 # INERT until: the caller is on the default branch + the Merger's App installed, with a row
 # in the App register + these secrets (plan 0001 §8):
-#   MERGER_APP_ID, MERGER_APP_PRIVATE_KEY
+#   JUDGE_APP_ID, JUDGE_APP_PRIVATE_KEY
 # The App must be a DIFFERENT identity from the Reviewer — GitHub lets an App merge a PR it
 # approved, but keeping them apart is what makes the audit trail readable.
+# KANON ROLE: Merger
+# The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
+# role this lane mints for, as the Judge App's `JUDGE_APP_*` secrets no longer say. Its row
+# in the App register must exist, and this lane's tokens fit inside that role's row.
 name: Merge (Merger)
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -88,9 +92,9 @@ on:
         type: string
         default: ""
     secrets:
-      MERGER_APP_ID:
+      JUDGE_APP_ID:
         required: true
-      MERGER_APP_PRIVATE_KEY:
+      JUDGE_APP_PRIVATE_KEY:
         required: true
 
 concurrency:
@@ -319,8 +323,8 @@ jobs:
         if: steps.gate.outputs.member == 'true'
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.MERGER_APP_ID }}
-          private-key: ${{ secrets.MERGER_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.JUDGE_APP_ID }}
+          private-key: ${{ secrets.JUDGE_APP_PRIVATE_KEY }}
           # Narrowed to what `merge-gate.mjs` uses (#48, `K-AGENT-46`), which is the Merger's
           # whole grant: it merges (`contents`, `pull-requests`), comments and labels
           # (`issues`), re-dispatches the review lane on a COMMENT verdict (`actions`), and

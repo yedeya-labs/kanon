@@ -1,18 +1,22 @@
-// `apps-check`: checks each agent App in the register against its installation (#39).
+// `apps-check`: checks each of Kanon's Apps in the register against its installation (#39).
 //
 // The App register (docs/qa/agent-identities.md, K-LAYOUT-6) is a claim; App scopes live in
 // the installation, not in any file (K-AGENT-3). This script, run by
 // .github/workflows/apps-check.yml, turns the claim into a check (K-AGENT-5). Two commands:
 //
-//   node cli/apps-check.mjs roles   prints `roles=<json>` for $GITHUB_OUTPUT: every agent
-//                                   role the register lists, with its slug and secret prefix.
-//   node cli/apps-check.mjs check   checks one role's installation, from the environment the
-//                                   workflow sets after minting the role's token.
+//   node cli/apps-check.mjs apps    prints `apps=<json>` for $GITHUB_OUTPUT: each of the
+//                                   Author, the Judge and the Releaser the register lists
+//                                   (plan 0005 §3.4: one row per role, its roles sharing a
+//                                   slug), with that slug, its roles and its secret prefix.
+//   node cli/apps-check.mjs check   checks one App's installation, from the environment the
+//                                   workflow sets after minting the App's token.
 //
-// A role fails when the minted App's slug isn't the register's, when the installation
-// doesn't cover this repository, or when its permissions differ from the role's in
-// rulebook/agent-permissions.json. It warns when the installation covers other
-// repositories too, or all of them (K-ADOPT-8: one App per role per repository).
+// An App fails when its roles name more than one slug, when the minted App's slug isn't the
+// register's, when the installation doesn't cover this repository, or when its permissions
+// differ from the App's in rulebook/agent-permissions.json (the `apps` block: the union of
+// its roles' rows, plus any broadened permission). It warns when the installation covers ALL
+// of its owner's repositories. Covering several is what one App per owner means (plan 0005
+// §3.2, `K-ADOPT-8` as amended), so it is no longer a warning.
 //
 // The register is read with actions/lane-check/app-register.awk, the one reader the lanes
 // use, so this check and the lanes can't disagree about what the register says.
@@ -21,7 +25,7 @@
 // that reads the installation's permissions; it is never printed or written.
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appJwt, loadRoles, REGISTER_PATH } from './apps.mjs';
@@ -32,39 +36,55 @@ const AWK = join(ROOT, 'actions/lane-check/app-register.awk');
 const API = 'https://api.github.com';
 const HEADERS = { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'kanon-apps-check' };
 
-/** @typedef {import('./apps.mjs').RoleSpec} RoleSpec */
-/** @typedef {{ key: string, role: string, slug: string, secret: string }} RegisteredRole */
+/** @typedef {{ app: string, roles: string[], permissions: Record<string, string>, optional?: boolean }} AppSpec */
+/** @typedef {{ key: string, app: string, slug: string, roles: string[], secret: string }} RegisteredApp */
+
+/** @returns {Record<string, AppSpec>} The `apps` block of rulebook/agent-permissions.json. */
+export const loadApps = () => JSON.parse(readFileSync(join(ROOT, 'rulebook/agent-permissions.json'), 'utf8')).apps;
 
 /**
- * Every agent role the register lists, in the order of agent-permissions.json. A role the
+ * Each App the register lists, in the order of agent-permissions.json's `apps` block: an App
+ * is listed when any of its roles has a row. Its roles must all name one slug. A role the
  * register doesn't list is skipped; any other complaint from the reader is an error.
  * @param {string} registerPath
- * @param {Record<string, RoleSpec>} roles
+ * @param {Record<string, AppSpec>} apps
+ * @param {Record<string, { role: string }>} roles
  * @param {(role: string) => { status: number | null, stdout: string, stderr: string }} [read]
- * @returns {RegisteredRole[]}
+ * @returns {RegisteredApp[]}
  */
-export const registeredRoles = (registerPath, roles, read = (role) => spawnSync('awk', ['-v', `role=${role}`, '-f', AWK, registerPath], { encoding: 'utf8' })) => {
-  /** @type {RegisteredRole[]} */
+export const registeredApps = (registerPath, apps, roles, read = (role) => spawnSync('awk', ['-v', `role=${role}`, '-f', AWK, registerPath], { encoding: 'utf8' })) => {
+  /** @type {RegisteredApp[]} */
   const found = [];
-  for (const [key, spec] of Object.entries(roles)) {
-    const r = read(spec.role);
-    if (r.status === 0) {
-      found.push({ key, role: spec.role, slug: r.stdout.trim(), secret: key.toUpperCase() });
-      continue;
+  for (const [key, spec] of Object.entries(apps)) {
+    /** @type {Array<[string, string]>} */
+    const rows = [];
+    for (const roleKey of spec.roles) {
+      const role = roles[roleKey]?.role ?? roleKey[0]?.toUpperCase() + roleKey.slice(1);
+      const r = read(role);
+      if (r.status === 0) {
+        rows.push([role, r.stdout.trim()]);
+        continue;
+      }
+      // No row for the role, or no table at all (a register that says "none installed").
+      if (new RegExp(`lists the role ${role} 0 times|has 0 tables headed`).test(r.stderr)) continue;
+      throw new Error(r.stderr.trim() || `the register reader exited ${r.status} for ${role}`);
     }
-    // No row for the role, or no table at all (a register that says "none installed").
-    if (new RegExp(`lists the role ${spec.role} 0 times|has 0 tables headed`).test(r.stderr)) continue;
-    throw new Error(r.stderr.trim() || `the register reader exited ${r.status} for ${spec.role}`);
+    if (!rows.length) continue;
+    const slugs = [...new Set(rows.map(([, s]) => s))];
+    if (slugs.length > 1) {
+      throw new Error(`${REGISTER_PATH}: the ${spec.app}'s roles name ${slugs.length} App slugs (${rows.map(([r, s]) => `${r} \`${s}\``).join(', ')}); one App, one slug (plan 0005 §3.4)`);
+    }
+    found.push({ key, app: spec.app, slug: /** @type {string} */ (slugs[0]), roles: rows.map(([r]) => r), secret: key.toUpperCase() });
   }
-  if (!found.length) throw new Error(`${REGISTER_PATH} lists no agent App, so there is nothing to check`);
+  if (!found.length) throw new Error(`${REGISTER_PATH} lists no App of Kanon's, so there is nothing to check`);
   return found;
 };
 
 /**
- * Compares one installation with the register and the role's permissions.
+ * Compares one installation with the register and the App's permissions.
  * @param {{
- *   role: string,
- *   spec: RoleSpec,
+ *   app: string,
+ *   spec: AppSpec,
  *   registerSlug: string,
  *   appSlug: string,
  *   repository: string,
@@ -74,28 +94,24 @@ export const registeredRoles = (registerPath, roles, read = (role) => spawnSync(
  * }} a
  * @returns {{ failures: string[], warnings: string[] }}
  */
-export const compare = ({ role, spec, registerSlug, appSlug, repository, selection, repositories, permissions }) => {
+export const compare = ({ app, spec, registerSlug, appSlug, repository, selection, repositories, permissions }) => {
   /** @type {string[]} */
   const failures = [];
   /** @type {string[]} */
   const warnings = [];
   if (appSlug !== registerSlug) {
-    failures.push(`${role}: the minted App is \`${appSlug}\`, but the register says \`${registerSlug}\` (K-AGENT-5).`);
+    failures.push(`${app}: the minted App is \`${appSlug}\`, but the register says \`${registerSlug}\` (K-AGENT-5).`);
   }
   const want = repository.toLowerCase();
   if (selection === 'all') {
-    warnings.push(`${role}: the installation covers ALL repositories of its owner, not only ${repository} (K-ADOPT-8).`);
-  } else {
-    if (!repositories.some((n) => n.toLowerCase() === want)) {
-      failures.push(`${role}: the installation doesn't cover ${repository} (it covers: ${repositories.join(', ') || 'nothing'}).`);
-    }
-    const others = repositories.filter((n) => n.toLowerCase() !== want);
-    if (others.length) warnings.push(`${role}: the installation also covers ${others.join(', ')} (K-ADOPT-8: one App per role per repository).`);
+    warnings.push(`${app}: the installation covers ALL repositories of its owner, not only those that adopt Kanon (K-ADOPT-8). Choose "Only select repositories".`);
+  } else if (!repositories.some((n) => n.toLowerCase() === want)) {
+    failures.push(`${app}: the installation doesn't cover ${repository} (it covers: ${repositories.join(', ') || 'nothing'}).`);
   }
   const expected = spec.permissions;
   const keys = [...new Set([...Object.keys(expected), ...Object.keys(permissions)])].sort();
   const drift = keys.filter((k) => permissions[k] !== expected[k]).map((k) => `${k}: ${permissions[k] ?? 'none'}, expected ${expected[k] ?? 'none'}`);
-  if (drift.length) failures.push(`${role}: the installation's permissions differ from rulebook/agent-permissions.json: ${drift.join('; ')}.`);
+  if (drift.length) failures.push(`${app}: the installation's permissions differ from the ${app}'s in rulebook/agent-permissions.json: ${drift.join('; ')}.`);
   return { failures, warnings };
 };
 
@@ -103,17 +119,17 @@ export const compare = ({ role, spec, registerSlug, appSlug, repository, selecti
 const cell = (s) => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
 /**
- * The step summary: one table row for the role, then its failures and warnings.
- * @param {{ role: string, slug: string, installation: string, selection: string, repositories: string[], permissions: Record<string, string>, failures: string[], warnings: string[] }} r
+ * The step summary: one table row for the App, then its failures and warnings.
+ * @param {{ app: string, roles: string[], slug: string, installation: string, selection: string, repositories: string[], permissions: Record<string, string>, failures: string[], warnings: string[] }} r
  */
 export const summary = (r) => {
   const verdict = r.failures.length ? 'Fail' : r.warnings.length ? 'Pass, with warnings' : 'Pass';
   const perms = Object.entries(r.permissions).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}: ${v}`).join(', ');
   const repos = r.selection === 'all' ? 'all' : r.repositories.join(', ') || 'none';
   return [
-    '| Role | App slug | Installation | Repositories | Permissions | Result |',
-    '| --- | --- | --- | --- | --- | --- |',
-    `| ${cell(r.role)} | \`${cell(r.slug)}\` | ${cell(r.installation)} | ${cell(repos)} | ${cell(perms || 'none')} | ${verdict} |`,
+    '| App | Roles | App slug | Installation | Repositories | Permissions | Result |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    `| ${cell(r.app)} | ${cell(r.roles.join(', '))} | \`${cell(r.slug)}\` | ${cell(r.installation)} | ${cell(repos)} | ${cell(perms || 'none')} | ${verdict} |`,
     '',
     ...r.failures.map((f) => `- **Fail:** ${f}`),
     ...r.warnings.map((w) => `- Warning: ${w}`),
@@ -148,17 +164,18 @@ const need = (deps, name) => {
 };
 
 /** @param {Deps} deps */
-const roleList = (deps) => {
-  const list = registeredRoles(join(deps.env.REGISTER_DIR ?? process.cwd(), REGISTER_PATH), loadRoles(), deps.read);
-  deps.out(`roles=${JSON.stringify(list)}`);
+const appList = (deps) => {
+  const list = registeredApps(join(deps.env.REGISTER_DIR ?? process.cwd(), REGISTER_PATH), loadApps(), loadRoles(), deps.read);
+  deps.out(`apps=${JSON.stringify(list)}`);
   return 0;
 };
 
 /** @param {Deps} deps */
 const check = async (deps) => {
-  const key = need(deps, 'ROLE');
-  const spec = loadRoles()[key];
-  if (!spec) throw new Error(`"${key}" is not an agent role`);
+  const key = need(deps, 'APP');
+  const spec = loadApps()[key];
+  if (!spec) throw new Error(`"${key}" is not one of Kanon's Apps (${Object.keys(loadApps()).join(', ')})`);
+  const roles = need(deps, 'ROLES').split(',').filter(Boolean);
   const repository = need(deps, 'REPOSITORY');
   const registerSlug = need(deps, 'REGISTER_SLUG');
   const appSlug = need(deps, 'APP_SLUG');
@@ -182,13 +199,13 @@ const check = async (deps) => {
     }
   }
 
-  const { failures, warnings } = compare({ role: spec.role, spec, registerSlug, appSlug, repository, selection, repositories, permissions });
+  const { failures, warnings } = compare({ app: spec.app, spec, registerSlug, appSlug, repository, selection, repositories, permissions });
   for (const w of warnings) deps.out(`::warning title=apps-check::${w}`);
   for (const f of failures) deps.out(`::error title=apps-check::${f}`);
   if (deps.env.GITHUB_STEP_SUMMARY) {
-    deps.append(deps.env.GITHUB_STEP_SUMMARY, summary({ role: spec.role, slug: appSlug, installation, selection, repositories, permissions, failures, warnings }));
+    deps.append(deps.env.GITHUB_STEP_SUMMARY, summary({ app: spec.app, roles, slug: appSlug, installation, selection, repositories, permissions, failures, warnings }));
   }
-  if (!failures.length) deps.out(`${spec.role}: the installation matches the register and the role's permissions.`);
+  if (!failures.length) deps.out(`${spec.app}: the installation matches the register and the App's permissions.`);
   return failures.length ? 1 : 0;
 };
 
@@ -207,9 +224,9 @@ export const main = async (argv, overrides = {}) => {
     ...overrides,
   };
   try {
-    if (argv[0] === 'roles') return roleList(deps);
+    if (argv[0] === 'apps') return appList(deps);
     if (argv[0] === 'check') return await check(deps);
-    throw new Error('usage: apps-check.mjs roles | check');
+    throw new Error('usage: apps-check.mjs apps | check');
   } catch (e) {
     deps.out(`::error title=apps-check::${/** @type {Error} */ (e).message}`);
     return 1;

@@ -28,6 +28,6 @@ jobs:
     with:
       pr_number: ${{ inputs.pr_number }}
     secrets:
-      REVIEWER_APP_ID: ${{ secrets.REVIEWER_APP_ID }}
-      REVIEWER_APP_PRIVATE_KEY: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+      JUDGE_APP_ID: ${{ secrets.JUDGE_APP_ID }}
+      JUDGE_APP_PRIVATE_KEY: ${{ secrets.JUDGE_APP_PRIVATE_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

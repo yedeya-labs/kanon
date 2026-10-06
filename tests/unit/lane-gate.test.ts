@@ -481,7 +481,7 @@ describe.each(CASES)('%s on a %s', (file, trigger) => {
     const r = runGate(file, trigger, { login: `${LEAD_LOGIN}[bot]`, association: 'NONE' });
     expect(r.status, r.output).toBe(0);
     expect(r.outputs.member).toBe('true');
-    expect(r.summary).toContain("the repository's Lead App");
+    expect(r.summary).toContain("the repository's Implementer, Lead App");
   });
   it('refuses a bot outside the App register', () => {
     // Even one the permission lookup would pass: a bot is judged by the register alone.
@@ -581,7 +581,7 @@ describe('who the actor is', () => {
 });
 
 describe('what a member is', () => {
-  const register = () => new Map([['Lead', 'example-lead']]);
+  const register = () => new Map([['Lead', 'example-author']]);
   const noLookup = () => {
     throw new Error('looked up a permission it did not need');
   };
@@ -592,10 +592,10 @@ describe('what a member is', () => {
     expect(decide({ login: 'u', association, source: 'reviewer' }, { registeredApps: noLookup, permissionOf: noLookup }).member).toBe(false);
   });
   it('a bot is judged by the register alone', () => {
-    expect(decide({ login: 'example-lead[bot]', association: 'NONE', source: 'reviewer' }, { registeredApps: register, permissionOf: noLookup }).member).toBe(true);
+    expect(decide({ login: 'example-author[bot]', association: 'NONE', source: 'reviewer' }, { registeredApps: register, permissionOf: noLookup }).member).toBe(true);
     expect(decide({ login: 'example-leader[bot]', association: 'MEMBER', source: 'reviewer' }, { registeredApps: register, permissionOf: noLookup }).member).toBe(false);
     // The slug, not the bare login: a user named like an App is not the App.
-    expect(decide({ login: 'example-lead', association: 'NONE', source: 'reviewer' }, { registeredApps: register, permissionOf: noLookup }).member).toBe(false);
+    expect(decide({ login: 'example-author', association: 'NONE', source: 'reviewer' }, { registeredApps: register, permissionOf: noLookup }).member).toBe(false);
   });
   it('a lookup admits triage or more, and nothing less', () => {
     const lookup = (permissions: Record<string, boolean>) => () => ({ permissions, role_name: 'custom' });

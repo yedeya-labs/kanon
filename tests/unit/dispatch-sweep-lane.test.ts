@@ -139,9 +139,9 @@ describe('the workflow that runs it (moved from the reference adopter)', () => {
 
   it('mints the LEAD\'s App, not the Implementer it watches, narrowed to what the sweep does', () => {
     const minter = sweepSteps.find((s) => s.uses?.startsWith('actions/create-github-app-token'))!;
-    expect(minter.with?.['client-id']).toBe('${{ secrets.LEAD_APP_ID }}');
-    expect(minter.with?.['private-key']).toBe('${{ secrets.LEAD_APP_PRIVATE_KEY }}');
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['LEAD_APP_ID', 'LEAD_APP_PRIVATE_KEY']);
+    expect(minter.with?.['client-id']).toBe('${{ secrets.AUTHOR_APP_ID }}');
+    expect(minter.with?.['private-key']).toBe('${{ secrets.AUTHOR_APP_PRIVATE_KEY }}');
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY']);
   });
 
   it('asserts the minted App slug against the script constant (RA-918)', () => {
@@ -166,7 +166,7 @@ describe('the workflow that runs it (moved from the reference adopter)', () => {
     // require its output.
     const app = wf.jobs.gate!.steps!.find((s) => s.id === 'app')!;
     expect(app.if).toBe("steps.gate.outputs.member == 'true'");
-    expect(app.env?.APP_ID).toBe('${{ secrets.LEAD_APP_ID }}');
+    expect(app.env?.APP_ID).toBe('${{ secrets.AUTHOR_APP_ID }}');
     expect(app.run).toContain('::warning title=agent-dispatch-sweep::');
     expect(app.run).toContain('ready=false');
     expect(wf.jobs.gate!.outputs?.ready).toBe('${{ steps.app.outputs.ready }}');

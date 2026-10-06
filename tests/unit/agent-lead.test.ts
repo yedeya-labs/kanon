@@ -61,8 +61,8 @@ describe('trigger surface', () => {
   it('mints as the Lead — its App, not another arm’s', () => {
     // The spine mints from whatever the caller hands it, so the identity is decided HERE.
     expect(wf.jobs.brief.secrets).toEqual({
-      'app-id': '${{ secrets.LEAD_APP_ID }}',
-      'app-private-key': '${{ secrets.LEAD_APP_PRIVATE_KEY }}',
+      'app-id': '${{ secrets.AUTHOR_APP_ID }}',
+      'app-private-key': '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}',
       'claude-token': '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
     });
   });

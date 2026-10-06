@@ -21,8 +21,16 @@
 //   App's slug exactly as GitHub derives it from the App's name — lowercase letters,
 //   digits and single hyphens — in backticks, optionally in bold. That is the login a
 //   comment's author reads as (plus `[bot]` / `app/` decorations the callers strip).
-// - A role appears once and a slug appears once: one identity per role is `K-AGENT-2`, and
-//   a repeated row is a register that says two things.
+// - A role appears once: a repeated row is a register that says two things. A slug may
+//   appear on several rows, but only on the roles of ONE App (plan 0005 §3.4, decision 2):
+//   the Author's four rows name one slug, the Judge's two another, the Releaser's a third.
+//   Any two of the Author, the Judge and the Releaser sharing one is an error here, at run
+//   time: Author and Judge sharing a slug would let an App approve what it authored, and the
+//   Releaser sharing one would make its release bypass another role's. A role outside Kanon's
+//   three Apps (Intake) shares no slug. The Author's roles naming TWO slugs (the per-role
+//   Apps before L4) still reads, since every reader keys on a role's own row: `appShape`
+//   reports it, and lane-check fails it by name, so a register is migrated on the adopter's
+//   pull request rather than by a lane crashing.
 // - A table inside a fenced code block is an example and is not read.
 //
 // FAIL LOUDLY. Every one of those is a thrown error naming the register's path and line,
@@ -55,6 +63,22 @@ export const APP_REGISTER = 'docs/qa/agent-identities.md';
 export const ROLES = /** @type {const} */ ([
   'Explorer', 'Implementer', 'Reviewer', 'Merger', 'Lead', 'Overseer', 'Releaser', 'Intake',
 ]);
+
+/**
+ * Which of Kanon's three Apps each role belongs to (ADR 0013, decision 2), from the `apps`
+ * block of `rulebook/agent-permissions.json`, read from this Kanon tree: role name → App name.
+ * A role in no App (Intake) is absent.
+ * @type {Record<string, string>}
+ */
+export const APP_OF = (() => {
+  const json = JSON.parse(readFileSync(new URL('../rulebook/agent-permissions.json', import.meta.url), 'utf8'));
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const app of Object.values(json.apps)) {
+    for (const key of app.roles) out[json.roles[key]?.role ?? key[0].toUpperCase() + key.slice(1)] = app.app;
+  }
+  return out;
+})();
 
 /** A slug as GitHub derives it from an App's name. */
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -110,12 +134,40 @@ export function parseAppRegister(text, source = APP_REGISTER) {
     }
     const slug = m[1];
     if (roles.has(role)) throw new Error(`${where(i)}: role ${role} is listed twice (also ${where(roles.get(role).line)}). One identity per role.`);
-    if (slugs.has(slug)) throw new Error(`${where(i)}: App \`${slug}\` is listed twice (also ${where(slugs.get(slug))}). One role per App.`);
+    const app = APP_OF[role] ?? role;
+    const first = slugs.get(slug);
+    if (first && first.app !== app) {
+      const of = (/** @type {string} */ r) => (APP_OF[r] ? `the ${APP_OF[r]}` : 'no App of Kanon\'s three');
+      throw new Error(`${where(i)}: the ${role} row names \`${slug}\`, the App the ${first.role} row names (${where(first.line)}), but the ${role} belongs to ${of(role)} and the ${first.role} to ${of(first.role)}. Each of the Author, the Judge and the Releaser is its own App (plan 0005 §3.4).`);
+    }
     roles.set(role, { slug, line: i });
-    slugs.set(slug, i);
+    if (!first) slugs.set(slug, { app, role, line: i });
   }
   if (roles.size === 0) throw new Error(`${where(start)}: the App register table has no rows.`);
   return new Map([...roles].map(([role, { slug }]) => [role, slug]));
+}
+
+/**
+ * What `parseAppRegister` reads but a register after plan 0005's L4 must not say: roles of one
+ * App (the Author's four, the Judge's two) naming more than one slug. One message per App,
+ * naming each role's slug. lane-check fails each (`actions/lane-check/declarations.mjs`).
+ *
+ * @param {Map<string, string>} register role → slug, as `parseAppRegister` returns it
+ * @returns {string[]}
+ */
+export function appShape(register) {
+  /** @type {Map<string, Array<[string, string]>>} */
+  const byApp = new Map();
+  for (const [role, slug] of register) {
+    const app = APP_OF[role];
+    if (!app) continue;
+    byApp.set(app, [...(byApp.get(app) ?? []), [role, slug]]);
+  }
+  return [...byApp].flatMap(([app, rows]) => {
+    const slugs = [...new Set(rows.map(([, s]) => s))];
+    if (slugs.length < 2) return [];
+    return [`the ${app}'s roles name ${slugs.length} App slugs (${rows.map(([r, s]) => `${r} \`${s}\``).join(', ')}): one App, one slug, on every one of its roles' rows (plan 0005 §3.4). Since L4 the ${app} is one GitHub App; run \`kanon apps --apps ${app.toLowerCase()}\` and write its slug on each row.`];
+  });
 }
 
 const cache = new Map();

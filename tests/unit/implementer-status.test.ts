@@ -134,8 +134,8 @@ describe('every Implementer lane sets it in a fixed job after its agent\'s, neve
     const call = steps[1]!;
     expect(call['continue-on-error']).toBe(true);
     expect(call.with?.mode).toBe(mode);
-    expect(call.with?.['app-id']).toBe('${{ secrets.IMPLEMENTER_APP_ID }}');
-    expect(call.with?.['app-private-key']).toBe('${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}');
+    expect(call.with?.['app-id']).toBe('${{ secrets.AUTHOR_APP_ID }}');
+    expect(call.with?.['app-private-key']).toBe('${{ secrets.AUTHOR_APP_PRIVATE_KEY }}');
     // What the chain or the pick reads was recorded by the filter job, before any agent ran.
     const inputs = Object.values(call.with ?? {}).join(' ');
     if (mode === 'open') {

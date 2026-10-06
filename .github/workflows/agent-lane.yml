@@ -98,6 +98,13 @@ on:
         description: Telemetry agent name — the `agent` column in the run row.
         required: true
         type: string
+      role:
+        description: >-
+          The agent role the lane runs as (plan 0005 §3.3): `Implementer`, `Lead`, ... Since L4
+          the Author and the Judge Apps each hold several roles, so the minted App's slug no
+          longer says which; every lane names it.
+        required: true
+        type: string
       lane:
         description: >-
           Kanon's lane name for the version-2 telemetry row (plan 0002 §2; `LANES` in
@@ -356,6 +363,7 @@ jobs:
     uses: $/.github/workflows/lane-agent-job.yml
     with:
       agent: ${{ inputs.agent }}
+      role: ${{ inputs.role }}
       lane: ${{ inputs.lane }}
       arm: ${{ inputs.arm }}
       prompt: ${{ inputs.prompt }}

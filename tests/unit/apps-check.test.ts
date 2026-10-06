@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { compare, main, registeredRoles, summary } from '../../cli/apps-check.mjs';
+import { compare, loadApps, main, registeredApps, summary } from '../../cli/apps-check.mjs';
 import { loadRoles, realDeps } from '../../cli/apps.mjs';
 
 /**
@@ -13,7 +13,9 @@ import { loadRoles, realDeps } from '../../cli/apps.mjs';
  */
 const ROOT = process.cwd();
 const ROLES = loadRoles();
-const REVIEWER = ROLES.reviewer!;
+const APPS = loadApps();
+const JUDGE = APPS.judge!;
+const REVIEWER = JUDGE;
 const REPO = 'acme/widgets';
 
 const { privateKey: PEM } = generateKeyPairSync('rsa', {
@@ -34,42 +36,45 @@ const withRegister = <T>(text: string, fn: (dir: string) => T): T => {
 };
 const FIXTURE = readFileSync(join(ROOT, 'tests/fixtures/lane-check/adopter/docs/qa/agent-identities.md'), 'utf8');
 
-describe('registeredRoles reads the register with the lanes\' reader', () => {
-  it("lists Kanon's own Reviewer, Implementer and Explorer", () => {
-    expect(registeredRoles(join(ROOT, 'docs/qa/agent-identities.md'), ROLES)).toEqual([
-      { key: 'explorer', role: 'Explorer', slug: 'kanon-explorer', secret: 'EXPLORER' },
-      { key: 'implementer', role: 'Implementer', slug: 'kanon-implementer', secret: 'IMPLEMENTER' },
-      { key: 'reviewer', role: 'Reviewer', slug: 'kanon-reviewer', secret: 'REVIEWER' },
+describe('registeredApps reads the register with the lanes\' reader (plan 0005 §3.4)', () => {
+  const REG = (dir: string) => join(dir, 'docs/qa/agent-identities.md');
+  const table = (...rows: string[]) => `| Role | App slug | x |\n|---|---|---|\n${rows.map((r) => `${r} x |`).join('\n')}\n`;
+
+  it('lists each App once, with its slug, the roles the register gives it and its secret prefix', () => {
+    const apps = withRegister(table('| Implementer | `o-author` |', '| Lead | `o-author` |', '| Reviewer | `o-judge` |', '| Merger | **`o-judge`** |', '| Releaser | `o-releaser` |', '| Intake | `o-intake` |'),
+      (dir) => registeredApps(REG(dir), APPS, ROLES));
+    expect(apps).toEqual([
+      { key: 'author', app: 'Author', slug: 'o-author', roles: ['Implementer', 'Lead'], secret: 'AUTHOR' },
+      { key: 'judge', app: 'Judge', slug: 'o-judge', roles: ['Reviewer', 'Merger'], secret: 'JUDGE' },
+      { key: 'releaser', app: 'Releaser', slug: 'o-releaser', roles: ['Releaser'], secret: 'RELEASER' },
     ]);
   });
 
-  it('lists every agent role the register has, bold slugs included, and skips the rest', () => {
-    const roles = withRegister(FIXTURE, (dir) => registeredRoles(join(dir, 'docs/qa/agent-identities.md'), ROLES));
-    expect(roles).toEqual([
-      { key: 'implementer', role: 'Implementer', slug: 'example-implementer', secret: 'IMPLEMENTER' },
-      { key: 'lead', role: 'Lead', slug: 'example-lead', secret: 'LEAD' },
-    ]);
+  it('skips an App none of whose roles the register lists: the Releaser is optional', () => {
+    const apps = withRegister(FIXTURE, (dir) => registeredApps(REG(dir), APPS, ROLES));
+    expect(apps).toEqual([{ key: 'author', app: 'Author', slug: 'example-author', roles: ['Implementer', 'Lead'], secret: 'AUTHOR' }]);
+  });
+
+  it('fails on an App whose roles name two slugs, as the per-role register before L4 does', () => {
+    expect(() => registeredApps(join(ROOT, 'docs/qa/agent-identities.md'), APPS, ROLES))
+      .toThrow(/the Author's roles name 2 App slugs \(Implementer `kanon-implementer`, Explorer `kanon-explorer`\); one App, one slug/);
   });
 
   it('fails on a register the lanes would refuse, rather than skipping the role', () => {
-    expect(() => withRegister(`${FIXTURE}\n${FIXTURE}`, (dir) => registeredRoles(join(dir, 'docs/qa/agent-identities.md'), ROLES))).toThrow(
-      /2 tables headed/,
-    );
-    const noSlug = FIXTURE.replace('`example-implementer`', 'example-implementer');
-    expect(() => withRegister(noSlug, (dir) => registeredRoles(join(dir, 'docs/qa/agent-identities.md'), ROLES))).toThrow(/no App slug in backticks/);
+    expect(() => withRegister(`${FIXTURE}\n${FIXTURE}`, (dir) => registeredApps(REG(dir), APPS, ROLES))).toThrow(/2 tables headed/);
+    const noSlug = FIXTURE.replace('`example-author`', 'example-author');
+    expect(() => withRegister(noSlug, (dir) => registeredApps(REG(dir), APPS, ROLES))).toThrow(/no App slug in backticks/);
   });
 
-  it('fails when the register lists no agent App', () => {
-    expect(() => withRegister('# Agent identities\n\nNone installed.\n', (dir) => registeredRoles(join(dir, 'docs/qa/agent-identities.md'), ROLES))).toThrow(
-      /lists no agent App/,
-    );
+  it('fails when the register lists none of Kanon\'s Apps', () => {
+    expect(() => withRegister('# Agent identities\n\nNone installed.\n', (dir) => registeredApps(REG(dir), APPS, ROLES))).toThrow(/lists no App of Kanon's/);
   });
 });
 
 describe('compare', () => {
   const base = {
-    role: 'Reviewer',
-    spec: REVIEWER,
+    app: 'Judge',
+    spec: JUDGE,
     registerSlug: 'kanon-reviewer',
     appSlug: 'kanon-reviewer',
     repository: REPO,
@@ -78,7 +83,7 @@ describe('compare', () => {
     permissions: { ...REVIEWER.permissions },
   };
 
-  it('passes an installation on this repository alone, with exactly the role\'s permissions', () => {
+  it('passes an installation on this repository alone, with exactly the App\'s permissions', () => {
     expect(compare(base)).toEqual({ failures: [], warnings: [] });
   });
 
@@ -89,44 +94,51 @@ describe('compare', () => {
 
   it('fails when the minted slug is not the register\'s', () => {
     expect(compare({ ...base, appSlug: 'other-reviewer' }).failures).toEqual([
-      'Reviewer: the minted App is `other-reviewer`, but the register says `kanon-reviewer` (K-AGENT-5).',
+      'Judge: the minted App is `other-reviewer`, but the register says `kanon-reviewer` (K-AGENT-5).',
     ]);
   });
 
   it('fails when the installation misses this repository', () => {
     const r = compare({ ...base, repositories: ['acme/gadgets'] });
-    expect(r.failures).toEqual(["Reviewer: the installation doesn't cover acme/widgets (it covers: acme/gadgets)."]);
-    expect(r.warnings).toEqual(['Reviewer: the installation also covers acme/gadgets (K-ADOPT-8: one App per role per repository).']);
+    expect(r.failures).toEqual(["Judge: the installation doesn't cover acme/widgets (it covers: acme/gadgets)."]);
+    expect(r.warnings).toEqual([]);
   });
 
-  it('warns, and does not fail, when it covers other repositories too', () => {
-    const r = compare({ ...base, repositories: [REPO, 'acme/gadgets'] });
-    expect(r.failures).toEqual([]);
-    expect(r.warnings).toEqual(['Reviewer: the installation also covers acme/gadgets (K-ADOPT-8: one App per role per repository).']);
+  it('neither fails nor warns when it covers other repositories too: one App per owner (plan 0005 §3.2)', () => {
+    expect(compare({ ...base, repositories: [REPO, 'acme/gadgets'] })).toEqual({ failures: [], warnings: [] });
   });
 
   it('warns, and does not fail, when it covers all repositories', () => {
     const r = compare({ ...base, selection: 'all', repositories: [] });
     expect(r.failures).toEqual([]);
-    expect(r.warnings).toEqual(['Reviewer: the installation covers ALL repositories of its owner, not only acme/widgets (K-ADOPT-8).']);
+    expect(r.warnings).toEqual(['Judge: the installation covers ALL repositories of its owner, not only those that adopt Kanon (K-ADOPT-8). Choose "Only select repositories".']);
   });
 
-  it('fails on a permission the role does not hold', () => {
-    expect(compare({ ...base, permissions: { ...REVIEWER.permissions, actions: 'read' } }).failures).toEqual([
-      "Reviewer: the installation's permissions differ from rulebook/agent-permissions.json: actions: read, expected none.",
+  it('fails on a permission the App does not hold', () => {
+    expect(compare({ ...base, permissions: { ...REVIEWER.permissions, workflows: 'write' } }).failures).toEqual([
+      "Judge: the installation's permissions differ from the Judge's in rulebook/agent-permissions.json: workflows: write, expected none.",
     ]);
+  });
+
+  it('holds the Author to its broadened Commit statuses write, and the Judge to read', () => {
+    const author = { ...base, app: 'Author', spec: APPS.author! };
+    expect(compare({ ...author, permissions: { ...APPS.author!.permissions } }).failures).toEqual([]);
+    expect(compare({ ...author, permissions: { ...APPS.author!.permissions, statuses: 'read' } }).failures).toEqual([
+      "Author: the installation's permissions differ from the Author's in rulebook/agent-permissions.json: statuses: read, expected write.",
+    ]);
+    expect(compare({ ...base, permissions: { ...JUDGE.permissions, statuses: 'write' } }).failures).toHaveLength(1);
   });
 
   it('fails on a permission held at a different level', () => {
     expect(compare({ ...base, permissions: { ...REVIEWER.permissions, contents: 'read' } }).failures).toEqual([
-      "Reviewer: the installation's permissions differ from rulebook/agent-permissions.json: contents: read, expected write.",
+      "Judge: the installation's permissions differ from the Judge's in rulebook/agent-permissions.json: contents: read, expected write.",
     ]);
   });
 
-  it('fails on a permission the role holds and the installation lacks', () => {
+  it('fails on a permission the App holds and the installation lacks', () => {
     const rest = Object.fromEntries(Object.entries(REVIEWER.permissions).filter(([k]) => k !== 'issues'));
     expect(compare({ ...base, permissions: rest }).failures).toEqual([
-      "Reviewer: the installation's permissions differ from rulebook/agent-permissions.json: issues: none, expected write.",
+      "Judge: the installation's permissions differ from the Judge's in rulebook/agent-permissions.json: issues: none, expected write.",
     ]);
   });
 });
@@ -134,7 +146,8 @@ describe('compare', () => {
 describe('summary', () => {
   it('writes one table row, then the failures and warnings', () => {
     const text = summary({
-      role: 'Reviewer',
+      app: 'Judge',
+      roles: ['Reviewer', 'Merger'],
       slug: 'kanon-reviewer',
       installation: '9',
       selection: 'selected',
@@ -144,17 +157,17 @@ describe('summary', () => {
       warnings: ['w'],
     });
     expect(text.split('\n').slice(0, 3)).toEqual([
-      '| Role | App slug | Installation | Repositories | Permissions | Result |',
-      '| --- | --- | --- | --- | --- | --- |',
-      '| Reviewer | `kanon-reviewer` | 9 | acme/widgets | contents: write, metadata: read | Fail |',
+      '| App | Roles | App slug | Installation | Repositories | Permissions | Result |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
+      '| Judge | Reviewer, Merger | `kanon-reviewer` | 9 | acme/widgets | contents: write, metadata: read | Fail |',
     ]);
     expect(text).toContain('- **Fail:** f');
     expect(text).toContain('- Warning: w');
   });
 
   it('says Pass, with warnings, and Pass', () => {
-    const r = { role: 'R', slug: 's', installation: '1', selection: 'all', repositories: [], permissions: {}, failures: [] };
-    expect(summary({ ...r, warnings: ['w'] })).toContain('| R | `s` | 1 | all | none | Pass, with warnings |');
+    const r = { app: 'A', roles: ['R'], slug: 's', installation: '1', selection: 'all', repositories: [], permissions: {}, failures: [] };
+    expect(summary({ ...r, warnings: ['w'] })).toContain('| A | R | `s` | 1 | all | none | Pass, with warnings |');
     expect(summary({ ...r, warnings: [] })).toContain('| Pass |');
   });
 });
@@ -169,7 +182,8 @@ describe('main check, with GitHub mocked', () => {
     const total = pages.flat().length;
     const status = await main(['check'], {
       env: {
-        ROLE: 'reviewer',
+        APP: 'judge',
+        ROLES: 'Reviewer,Merger',
         REPOSITORY: REPO,
         REGISTER_SLUG: 'kanon-reviewer',
         APP_SLUG: 'kanon-reviewer',
@@ -211,9 +225,9 @@ describe('main check, with GitHub mocked', () => {
     expect(r.status, r.output).toBe(0);
     expect(r.calls).toEqual(['/app/installations/9 Bearer', '/installation/repositories?per_page=100&page=1 token']);
     expect(r.summaries).toHaveLength(1);
-    expect(r.summaries[0]).toMatch(/^\/summary\n\| Role \| App slug/);
-    expect(r.summaries[0]).toContain('| Reviewer | `kanon-reviewer` | 9 | acme/widgets |');
-    expect(r.output).toContain('Reviewer: the installation matches the register');
+    expect(r.summaries[0]).toMatch(/^\/summary\n\| App \| Roles \| App slug/);
+    expect(r.summaries[0]).toContain('| Judge | Reviewer, Merger | `kanon-reviewer` | 9 | acme/widgets |');
+    expect(r.output).toContain('Judge: the installation matches the register');
   });
 
   it('reads every page of repositories', async () => {
@@ -221,13 +235,13 @@ describe('main check, with GitHub mocked', () => {
     const r = await run({ pages: [first, [REPO]] });
     expect(r.status, r.output).toBe(0);
     expect(r.calls).toHaveLength(3);
-    expect(r.output).toMatch(/::warning title=apps-check::Reviewer: the installation also covers acme\/r0/);
+    expect(r.output).not.toMatch(/::warning/);
   });
 
   it('fails, as an error annotation, on drifted permissions', async () => {
     const r = await run({ permissions: { ...REVIEWER.permissions, workflows: 'write' } });
     expect(r.status).toBe(1);
-    expect(r.output).toContain("::error title=apps-check::Reviewer: the installation's permissions differ");
+    expect(r.output).toContain("::error title=apps-check::Judge: the installation's permissions differ");
     expect(r.summaries[0]).toContain('| Fail |');
   });
 
@@ -259,10 +273,17 @@ describe('main check, with GitHub mocked', () => {
     }
   });
 
-  it('prints the roles for $GITHUB_OUTPUT', async () => {
+  it('prints the Apps for $GITHUB_OUTPUT', async () => {
     const out: string[] = [];
-    expect(await main(['roles'], { env: { REGISTER_DIR: ROOT }, out: (l) => out.push(l) })).toBe(0);
-    expect(out).toEqual(['roles=[{"key":"explorer","role":"Explorer","slug":"kanon-explorer","secret":"EXPLORER"},{"key":"implementer","role":"Implementer","slug":"kanon-implementer","secret":"IMPLEMENTER"},{"key":"reviewer","role":"Reviewer","slug":"kanon-reviewer","secret":"REVIEWER"}]']);
+    const dir = join(ROOT, 'tests/fixtures/lane-check/adopter');
+    expect(await main(['apps'], { env: { REGISTER_DIR: dir }, out: (l) => out.push(l) })).toBe(0);
+    expect(out).toEqual(['apps=[{"key":"author","app":"Author","slug":"example-author","roles":["Implementer","Lead"],"secret":"AUTHOR"}]']);
+  });
+
+  it('refuses an App key that is not one of Kanon\'s three', async () => {
+    const r = await run({}, { APP: 'reviewer' });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/"reviewer" is not one of Kanon's Apps \(author, judge, releaser\)/);
   });
 });
 
@@ -278,9 +299,9 @@ describe('the apps-check workflow', () => {
     expect(Object.keys(wf.on)).toEqual(['workflow_dispatch', 'workflow_call']);
   });
 
-  it('takes exactly each agent role\'s two secrets, by their fixed names, all optional', () => {
+  it('takes exactly each App\'s two secrets, by their fixed names, all optional (plan 0005 §3.5)', () => {
     const declared = (wf.on.workflow_call as { secrets: Record<string, { required: boolean }> }).secrets;
-    const want = Object.keys(loadRoles()).flatMap((k) => [`${k.toUpperCase()}_APP_ID`, `${k.toUpperCase()}_APP_PRIVATE_KEY`]);
+    const want = Object.keys(APPS).flatMap((k) => [`${k.toUpperCase()}_APP_ID`, `${k.toUpperCase()}_APP_PRIVATE_KEY`]);
     expect(Object.keys(declared).sort()).toEqual(want.sort());
     for (const v of Object.values(declared)) expect(v).toEqual({ required: false });
     expect((wf.on.workflow_call as { inputs?: unknown }).inputs).toBeUndefined();
@@ -302,13 +323,13 @@ describe('the apps-check workflow', () => {
     expect(register.permissions).toEqual({ contents: 'read' });
   });
 
-  it('runs the check once per registered role, without stopping at the first failure', () => {
+  it('runs the check once per registered App, without stopping at the first failure', () => {
     expect(check.needs).toBe('register');
-    expect(check.strategy).toEqual({ 'fail-fast': false, matrix: { app: '${{ fromJSON(needs.register.outputs.roles) }}' } });
-    expect(register.steps.map((s) => s.run).filter(Boolean)).toEqual(['node "$KANON/cli/apps-check.mjs" roles >> "$GITHUB_OUTPUT"']);
+    expect(check.strategy).toEqual({ 'fail-fast': false, matrix: { app: '${{ fromJSON(needs.register.outputs.apps) }}' } });
+    expect(register.steps.map((s) => s.run).filter(Boolean)).toEqual(['node "$KANON/cli/apps-check.mjs" apps >> "$GITHUB_OUTPUT"']);
   });
 
-  it("mints with the create-github-app-token Kanon's lanes pin, from the role's own two secrets, scoped to the owner", () => {
+  it("mints with the create-github-app-token Kanon's lanes pin, from the App's own two secrets, scoped to the owner", () => {
     const lane = readFileSync(join(ROOT, '.github/workflows/agent-lane.yml'), 'utf8');
     const pinned = /uses: (actions\/create-github-app-token@\S+)/.exec(lane)?.[1];
     const mint = check.steps[0]!;
@@ -330,7 +351,7 @@ describe('the apps-check workflow', () => {
   it('keeps the logic in the script: one run line per job', () => {
     expect(check.steps.map((s) => s.run).filter(Boolean)).toEqual(['node "$KANON/cli/apps-check.mjs" check']);
     const env = check.steps.at(-1)!.env!;
-    expect(Object.keys(env).sort()).toEqual(['APP_ID', 'APP_PRIVATE_KEY', 'APP_SLUG', 'INSTALLATION_ID', 'REGISTER_SLUG', 'REPOSITORY', 'ROLE', 'TOKEN']);
+    expect(Object.keys(env).sort()).toEqual(['APP', 'APP_ID', 'APP_PRIVATE_KEY', 'APP_SLUG', 'INSTALLATION_ID', 'REGISTER_SLUG', 'REPOSITORY', 'ROLES', 'TOKEN']);
     expect(env.APP_SLUG).toBe('${{ steps.app-token.outputs.app-slug }}');
     expect(env.INSTALLATION_ID).toBe('${{ steps.app-token.outputs.installation-id }}');
     expect(env.REGISTER_SLUG).toBe('${{ matrix.app.slug }}');

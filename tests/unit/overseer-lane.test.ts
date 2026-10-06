@@ -111,7 +111,7 @@ describe('who files what (decision 12)', () => {
     expect(byId('app-token').name).toBe('Receive the App token');
     const mint = mintFor(LANE_FILE, 'overseer');
     expect(mint.with).toMatchObject({
-      'client-id': '${{ secrets.OVERSEER_APP_ID }}',
+      'client-id': '${{ secrets.AUTHOR_APP_ID }}',
       'permission-contents': 'read',
       'permission-issues': 'read',
       'permission-pull-requests': 'read',
@@ -320,7 +320,7 @@ describe('the capability anchor query, run as composed (RA-899)', () => {
 
 describe('the workflow around it', () => {
   it('maps the Overseer\'s App secrets and the Claude token, by name', () => {
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'OVERSEER_APP_ID', 'OVERSEER_APP_PRIVATE_KEY']);
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
   });
 
   it('keeps the weekly schedule, and a dispatch with no inputs', () => {

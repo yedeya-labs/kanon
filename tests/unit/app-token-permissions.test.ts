@@ -141,19 +141,37 @@ const mints = yamls.flatMap((file) => {
 const requested = (w: Record<string, unknown> = {}): Perms =>
   Object.fromEntries(Object.entries(w).filter(([k, v]) => k.startsWith('permission-') && String(v ?? '') !== '')
     .map(([k, v]) => [k.slice('permission-'.length), String(v)]));
-const grants = (JSON.parse(readFileSync(join(root, 'rulebook/agent-permissions.json'), 'utf8')) as {
+const permissionsJson = JSON.parse(readFileSync(join(root, 'rulebook/agent-permissions.json'), 'utf8')) as {
   roles: Record<string, { permissions: Perms }>;
-}).roles;
-/** The role whose App the step mints, from the secret it passes (`<ROLE>_APP_ID`). */
-const roleOf = (clientId: unknown) => /secrets\.([A-Z]+)_APP_ID\b/.exec(String(clientId))?.[1]?.toLowerCase();
-const withinGrant = (role: string | undefined, perms: Perms) => {
+  apps: Record<string, { app: string; roles: string[]; permissions: Perms }>;
+};
+const grants = permissionsJson.roles;
+/**
+ * The role a lane mints for: its `# KANON ROLE:` line (plan 0005 §3.5). Since L4 the secret
+ * names the Author or the Judge, which several roles share, so the role is the lane's to say.
+ */
+const laneRole = (name: string) =>
+  /^# KANON ROLE: (\w+)$/m.exec(readFileSync(join(root, '.github/workflows', name), 'utf8'))?.[1]?.toLowerCase();
+/** The App whose secrets the step mints with (`AUTHOR_APP_ID`, `JUDGE_APP_ID`). */
+const appOf = (clientId: unknown) => /secrets\.([A-Z]+)_APP_ID\b/.exec(String(clientId))?.[1]?.toLowerCase();
+/**
+ * A list fits inside its App's grant AND its role's row (plan 0005 §3.1): the App's, or the
+ * mint fails; the role's, so least privilege stays at the token when several roles share an App.
+ */
+const fits = (label: string, role: string | undefined, app: string | undefined, perms: Perms) => {
   const grant = grants[role ?? ''];
-  expect(grant, `no role ${role} in agent-permissions.json`).toBeTruthy();
+  expect(grant, `${label}: no role ${role} in agent-permissions.json (its # KANON ROLE: line)`).toBeTruthy();
+  const appGrant = permissionsJson.apps[app ?? ''];
+  expect(appGrant, `${label}: mints for ${app}, which is no App of agent-permissions.json`).toBeTruthy();
+  expect(appGrant!.roles, `${label}: the ${role} is not a role of the ${appGrant!.app}`).toContain(role);
   for (const [k, v] of Object.entries(perms)) {
-    const held = grant!.permissions[k.replace(/-/g, '_')];
-    expect(held === 'write' || held === v, `${role} holds ${k}: ${held ?? 'none'}, asked for ${v}`).toBe(true);
+    for (const [who, g] of [[role, grant!.permissions], [appGrant!.app, appGrant!.permissions]] as const) {
+      const held = g[k.replace(/-/g, '_')];
+      expect(held === 'write' || held === v, `${label}: the ${who} holds ${k}: ${held ?? 'none'}, asked for ${v}`).toBe(true);
+    }
   }
 };
+const withinGrant = (lane: string, clientId: unknown, perms: Perms) => fits(lane, laneRole(lane), appOf(clientId), perms);
 
 describe('every token a lane mints is narrowed to what its step uses (#48, K-AGENT-46)', () => {
   it('finds every minting step, and each one has a list or an exemption', () => {
@@ -170,7 +188,7 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
   it.each(Object.entries(DIRECT))('%s requests exactly its list, within its role', (name, { step, perms }) => {
     const mint = mints.find((m) => m.name === name && m.step.id === step)!;
     expect(requested(mint.step.with)).toEqual(perms);
-    withinGrant(roleOf(mint.step.with?.['client-id']), perms);
+    withinGrant(name, mint.step.with?.['client-id'], perms);
   });
 
   it.each(Object.entries(MORE))('%s requests exactly its list, within its role', (key, perms) => {
@@ -178,7 +196,7 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     const mint = mints.find((m) => m.name === name && m.step.id === step);
     expect(mint, `${key} mints nothing`).toBeDefined();
     expect(requested(mint!.step.with)).toEqual(perms);
-    withinGrant(roleOf(mint!.step.with?.['client-id']), perms);
+    withinGrant(name!, mint!.step.with?.['client-id'], perms);
   });
 
   it.each(Object.entries(STATUS))('%s requests exactly its list', (key, perms) => {
@@ -186,7 +204,7 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     const mint = mints.find((m) => m.file === file && m.step.id === step);
     expect(mint, `${key} mints nothing`).toBeDefined();
     expect(requested(mint!.step.with)).toEqual(perms);
-    if (!('statuses' in perms)) withinGrant('implementer', perms);
+    if (!('statuses' in perms)) fits(key, 'implementer', 'author', perms);
     // The write is exactly the Author App's one broadened permission (ADR 0013, `K-AGENT-3`).
     else expect(perms).toEqual({ statuses: authorBroadened.statuses });
   });
@@ -246,7 +264,39 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     expect(jobs.length).toBeGreaterThan(0);
     for (const job of jobs) {
       expect(requested(job.with)).toEqual(perms);
-      withinGrant(roleOf(job.secrets?.['app-id']), perms);
+      withinGrant(name, job.secrets?.['app-id'], perms);
     }
   });
 });
+
+describe('plan 0005 L4: each lane names the role it mints for, inside the App whose secrets it takes (§3.5)', () => {
+  const lanes = yamls.filter((f) => /^\.github\/workflows\/agent-[\w-]+\.yml$/.test(f))
+    .filter((f) => Object.keys((read(f) as { on?: { workflow_call?: { secrets?: Record<string, unknown> } } }).on?.workflow_call?.secrets ?? {}).some((k) => k.endsWith('_APP_ID')));
+
+  it('finds the lanes that take an App\'s secrets, so the rule below is not vacuous', () => {
+    expect(lanes.length).toBeGreaterThanOrEqual(16);
+  });
+
+  it.each(lanes.map((f) => [f.split('/').pop()!]))('%s: one # KANON ROLE line, a role of the App its secrets name, and the role it passes', (name) => {
+    const text = readFileSync(join(root, '.github/workflows', name), 'utf8');
+    expect(text.match(/^# KANON ROLE: /gm), name).toHaveLength(1);
+    const role = laneRole(name);
+    const secrets = Object.keys((parse(text) as { on: { workflow_call: { secrets: Record<string, unknown> } } }).on.workflow_call.secrets);
+    const apps = [...new Set(secrets.filter((k) => k.endsWith('_APP_ID')).map((k) => k.replace(/_APP_ID$/, '').toLowerCase()))];
+    expect(apps, `${name} takes one App's secrets`).toHaveLength(1);
+    expect(['author', 'judge'], `${name}: a lane takes the Author's or the Judge's secrets, never the Releaser's`).toContain(apps[0]);
+    expect(permissionsJson.apps[apps[0]!]!.roles, `${name}: the ${role} is not a role of the ${apps[0]}`).toContain(role);
+    // The role it hands the agent (the spine's `role:` input, or an agent job's `agent-setup`), when it hands one.
+    const passed = [...text.matchAll(/^\s+role: ([A-Z]\w+)$/gm)].map((m) => m[1]!.toLowerCase());
+    for (const p of passed) expect(p, `${name} passes role ${p} but mints for the ${role}`).toBe(role);
+  });
+
+  it('no lane declares a role-named secret, and only the release workflow takes the Releaser\'s', () => {
+    const named = yamls.filter((f) => /(EXPLORER|IMPLEMENTER|REVIEWER|MERGER|LEAD|OVERSEER)_APP_(ID|PRIVATE_KEY)/.test(
+      JSON.stringify((read(f) as { on?: { workflow_call?: unknown } }).on?.workflow_call ?? {})));
+    expect(named).toEqual([]);
+    const releaser = yamls.filter((f) => /RELEASER_APP_ID/.test(JSON.stringify((read(f) as { on?: { workflow_call?: unknown } }).on?.workflow_call ?? {})));
+    expect(releaser.sort()).toEqual(['.github/workflows/apps-check.yml', '.github/workflows/release.yml']);
+  });
+});
+
