@@ -59,7 +59,7 @@ A human approves a **brief** that decides and decomposes a piece of work. The ag
 
 <!-- x-release-please-end -->
 
-**Or let `kanon init` do the installation** ([plan 0005](docs/plans/0005-lean-installation.md) §5.4). Run from your repository's checkout, it inspects the repository and its owner, asks what it can't infer (the people, the stack's gates, the test database, a sign-off delegation, the lanes), each with a default, and writes only the declarations that differ from their documented defaults, the lane callers, the `apps-check` caller, `lane-check` in CI and the Dependabot entry, all pinned to the release it runs from. It creates the taxonomy's labels, the bucket milestones and, where the plan has rulesets and your token can administer the repository, the default branch's ruleset, then runs `kanon apps --apps` for the Apps the lanes run as, the Author and the Judge, and the optional Releaser if you call Kanon's release workflow and ask for it. A repository joining Apps the owner already has gets the `kanon apps --reuse` step instead. It commits nothing, prints as exact steps whatever your token or plan can't do, and changes nothing on a second run. `--dry-run` shows it all first:
+**Or let `kanon init` do the installation** ([plan 0005](docs/plans/0005-lean-installation.md) §5.4). Run from your repository's checkout, it inspects the repository and its owner, asks what it can't infer (the people, the stack's gates, the test database, a sign-off delegation, the lanes), each with a default, and writes only the declarations that differ from their documented defaults, the lane callers, the `apps-check` caller, `lane-check` in CI and the Dependabot entry, all pinned to the release it runs from. It creates the taxonomy's labels, the bucket milestones and, where the plan has rulesets and your token can administer the repository, the default branch's ruleset, then runs `kanon apps --apps` for the Apps the lanes run as, the Author and the Judge, and the optional Releaser if you call Kanon's release workflow and ask for it. A repository joining Apps the owner already has gets the `kanon apps --reuse` step instead. It commits nothing, prints as exact steps whatever your token or plan can't do, and changes nothing on a second run. A program can drive it too: a flag answers each question ([docs/init.md](docs/init.md)). `--dry-run` shows it all first:
 
 <!-- x-release-please-start-version -->
 
@@ -113,7 +113,7 @@ See the [roadmap](ROADMAP.md) for what comes next.
 |---|---|
 | [`rulebook/`](rulebook/) | The rules. This is Kanon's specification. |
 | [`docs/decisions/`](docs/decisions/) | Architecture decision records: why Kanon is shaped the way it is. |
-| [`cli/`](cli/) | The `kanon` command: `kanon init`, [`kanon doctor`](docs/doctor.md), `kanon milestones` and [`kanon apps`](docs/apps.md). |
+| [`cli/`](cli/) | The `kanon` command: [`kanon init`](docs/init.md), [`kanon doctor`](docs/doctor.md), `kanon milestones` and [`kanon apps`](docs/apps.md). |
 | [`actions/`](actions/) | Kanon's checks, the lane check and the agent-lane blocks, each a versioned composite action. |
 | [`scripts/`](scripts/) | The pipeline library: the scripts the lanes run, through [`kanon-path`](actions/kanon-path/README.md). |
 | [`.github/workflows/`](.github/workflows/) | Kanon's agent lanes and the shared lane workflow they call, the reusable release workflow, and Kanon's own CI, including smoke runs of the blocks and the lanes. |

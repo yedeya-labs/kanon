@@ -22,6 +22,10 @@
 // changes nothing that is already right, never overwrites a file, and names what differs.
 // `--dry-run` reads everything and changes nothing.
 //
+// SCRIPTABLE (ADR 0014 decision 2). Every question has a flag that answers it, and `--yes` takes
+// the default of each question no flag answers, so a program can run `init` with no terminal
+// (#367).
+//
 // THE APPS. Which Apps a lane runs as is read from the secrets it declares, through the
 // requirements file (`<NAME>_APP_ID` names the identity). Since plan 0005's L4 those are the
 // Author (`AUTHOR_APP_ID`: the Implementer's, Lead's, Explorer's and Overseer's lanes) and the
@@ -79,12 +83,34 @@ whatever its token can't do. Safe to run again.
 Options:
   --repo <owner>/<repo>  the repository (default: the checkout's origin remote)
   --dir <path>           the checkout (default: here)
-  --lanes <list>         comma-separated lanes to install, e.g. review,implement
-                         (default: review)
-  --yes                  take every default without asking
+  --yes                  take the default of every question no flag below answers
   --dry-run              read everything, change nothing, print what it would do
-  --no-apps              don't run \`kanon apps\`; print the command instead
   -h, --help             this text
+
+The answers, one flag per question (without --yes, the questions no flag answers are asked):
+  --owner <who>          the Owner, a GitHub login or a name (default: the token's login)
+  --maintainer <who>     the Maintainer (default: the Owner)
+  --stakeholder <who>    the Stakeholder (default: the Owner)
+  --lanes <list>         comma-separated lanes to install, e.g. review,implement
+                         (default: the lanes already called, or review)
+  --gates <list>         the stack's gates, comma-separated commands, or none
+                         (default: suggested from what the repository holds)
+  --test-database <how>  none, or hook: the project-setup hook starts one (default: none)
+  --delegation           record a sign-off delegation (K-AGENT-44)
+  --no-delegation        don't (the default)
+  --delegate-name <name> the delegate, as their sign-off writes their name; implies
+                         --delegation (default: git config user.name)
+  --delegate-email <e>   the delegate's email; implies --delegation (default: user.email)
+  --delete-default-labels  delete GitHub's default labels outside Kanon's taxonomy
+  --keep-default-labels  keep them (the default)
+  --releaser             create the optional Releaser App; only for a repository that
+                         calls Kanon's release workflow
+  --no-releaser          don't (the default)
+  --create-apps          run \`kanon apps\` for the Apps the lanes lack (the default)
+  --no-apps              don't run \`kanon apps\`; print the command instead
+
+A flag init doesn't know, a value flag given twice, or two flags that contradict each other
+fail by name, and change nothing.
 
 Needs \`gh\`. Reading needs a token that can read the repository; creating labels and
 milestones needs Issues: write; the merge setting and the ruleset need Administration: write.
@@ -151,16 +177,42 @@ export const realDeps = {
 };
 
 /**
- * Parses `kanon init`'s arguments. Throws with a message naming the problem.
+ * The answer flags (#367), one per question `askAll` asks, and the Apps' question. Unset means
+ * "not answered": the question takes its default with `--yes`, and is asked without it.
+ * @typedef {{
+ *   owner?: string, maintainer?: string, stakeholder?: string, gates?: string, testDatabase?: 'none' | 'hook',
+ *   delegation?: boolean, delegateName?: string, delegateEmail?: string, deleteDefaults?: boolean,
+ *   releaser?: boolean, createApps?: boolean,
+ * }} Given
+ */
+
+/** Pairs of flags that contradict each other, refused by name when both are given. */
+/** @type {Array<[string, string]>} */
+export const CONFLICTS = [
+  ['--delegation', '--no-delegation'],
+  ['--delegate-name', '--no-delegation'],
+  ['--delegate-email', '--no-delegation'],
+  ['--delete-default-labels', '--keep-default-labels'],
+  ['--releaser', '--no-releaser'],
+  ['--create-apps', '--no-apps'],
+];
+
+/**
+ * Parses `kanon init`'s arguments. Throws with a message naming the problem: an unknown flag, a
+ * value flag given twice, a bad value, or two flags that contradict each other.
  * @param {string[]} argv @param {Requirements} req
  */
 export const parseArgs = (argv, req) => {
-  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, apps: boolean, help: boolean }} */
-  const opts = { repo: '', dir: process.cwd(), lanes: null, yes: false, dryRun: false, apps: true, help: false };
+  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, apps: boolean, help: boolean, given: Given }} */
+  const opts = { repo: '', dir: process.cwd(), lanes: null, yes: false, dryRun: false, apps: true, help: false, given: {} };
+  const g = opts.given;
+  /** @type {Set<string>} */
+  const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
     const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
     const value = () => {
+      if (seen.has(flag)) throw new Error(`${flag} is given twice`);
       const v = inline ?? argv[++i];
       if (v === undefined || v === '') throw new Error(`${flag} needs a value`);
       return v;
@@ -172,8 +224,31 @@ export const parseArgs = (argv, req) => {
     else if (flag === '--yes') opts.yes = true;
     else if (flag === '--dry-run') opts.dryRun = true;
     else if (flag === '--no-apps') opts.apps = false;
+    else if (flag === '--create-apps') g.createApps = true;
+    else if (flag === '--owner') g.owner = value();
+    else if (flag === '--maintainer') g.maintainer = value();
+    else if (flag === '--stakeholder') g.stakeholder = value();
+    else if (flag === '--gates') g.gates = value();
+    else if (flag === '--test-database') {
+      const v = value();
+      if (v !== 'none' && v !== 'hook') throw new Error(`--test-database takes none or hook, not "${v}"`);
+      g.testDatabase = v;
+    } else if (flag === '--delegation') g.delegation = true;
+    else if (flag === '--no-delegation') g.delegation = false;
+    else if (flag === '--delegate-name') g.delegateName = value();
+    else if (flag === '--delegate-email') g.delegateEmail = value();
+    else if (flag === '--delete-default-labels') g.deleteDefaults = true;
+    else if (flag === '--keep-default-labels') g.deleteDefaults = false;
+    else if (flag === '--releaser') g.releaser = true;
+    else if (flag === '--no-releaser') g.releaser = false;
     else throw new Error(`unknown argument "${arg}"`);
+    if (inline !== undefined && !['--repo', '--dir', '--lanes', '--owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email'].includes(flag)) {
+      throw new Error(`${flag} takes no value, not "${inline}"`);
+    }
+    seen.add(flag);
   }
+  for (const [x, y] of CONFLICTS) if (seen.has(x) && seen.has(y)) throw new Error(`${x} and ${y} contradict each other; give one`);
+  if (g.delegateName !== undefined || g.delegateEmail !== undefined) g.delegation = true;
   if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
   return opts;
 };
@@ -504,30 +579,35 @@ export const rulesetGaps = (covering) => {
 };
 
 /**
- * The answers, asked one by one with a default each, or all defaults with `--yes`.
- * @param {Deps} deps @param {{ yes: boolean, lanes: string[] | null }} opts @param {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements, defaultLanes: string[], releases?: boolean }} ctx
+ * The answers: each from its flag when one was given (#367), else asked with a default, or the
+ * default itself with `--yes`.
+ * @param {Deps} deps @param {{ yes: boolean, lanes: string[] | null, given?: Given }} opts @param {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements, defaultLanes: string[], releases?: boolean }} ctx
  */
 export const askAll = async (deps, opts, ctx) => {
-  const ask = (/** @type {string} */ q, /** @type {string} */ d) => (opts.yes ? Promise.resolve(d) : deps.ask(q, d));
-  const yesNo = async (/** @type {string} */ q, /** @type {boolean} */ d) => /^y/i.test(await ask(`${q} (y/n)`, d ? 'y' : 'n'));
-  const owner = await ask('Who is the Owner (K-ADOPT-1 step 2)?', ctx.login);
-  const maintainer = await ask('Who is the Maintainer?', owner);
-  const stakeholder = await ask('Who is the Stakeholder?', owner);
-  const lanes = opts.lanes ?? parseLanes(await ask(`Which lanes to install? (${Object.keys(ctx.req.lanes).map((l) => l.slice(6)).join(', ')})`, ctx.defaultLanes.map((l) => l.slice(6)).join(',')), ctx.req);
-  const gatesAnswer = await ask("The stack's gates, the commands a change must pass, comma-separated", ctx.gates.join(', ') || 'none yet');
-  const gates = /^none( yet)?$/i.test(gatesAnswer.trim()) ? [] : gatesAnswer.split(',').map((g) => g.trim()).filter(Boolean);
-  const database = /^hook$/i.test(await ask('Does a lane need a test database your project-setup hook starts? (none/hook)', 'none')) ? 'hook' : 'none';
-  const delegate = await yesNo("Record a sign-off delegation, so agents' commits pass a required dco check (K-AGENT-44)?", false);
+  const g = opts.given ?? {};
+  const ask = (/** @type {string} */ q, /** @type {string} */ d, /** @type {string | undefined} */ given) =>
+    given !== undefined ? Promise.resolve(given) : opts.yes ? Promise.resolve(d) : deps.ask(q, d);
+  const yesNo = async (/** @type {string} */ q, /** @type {boolean} */ d, /** @type {boolean | undefined} */ given) =>
+    given !== undefined ? given : /^y/i.test(await ask(`${q} (y/n)`, d ? 'y' : 'n', undefined));
+  const owner = await ask('Who is the Owner (K-ADOPT-1 step 2)?', ctx.login, g.owner);
+  const maintainer = await ask('Who is the Maintainer?', owner, g.maintainer);
+  const stakeholder = await ask('Who is the Stakeholder?', owner, g.stakeholder);
+  const lanes = opts.lanes ?? parseLanes(await ask(`Which lanes to install? (${Object.keys(ctx.req.lanes).map((l) => l.slice(6)).join(', ')})`, ctx.defaultLanes.map((l) => l.slice(6)).join(','), undefined), ctx.req);
+  const gatesAnswer = await ask("The stack's gates, the commands a change must pass, comma-separated", ctx.gates.join(', ') || 'none yet', g.gates);
+  const gates = /^none( yet)?$/i.test(gatesAnswer.trim()) ? [] : gatesAnswer.split(',').map((x) => x.trim()).filter(Boolean);
+  const database = /^hook$/i.test(await ask('Does a lane need a test database your project-setup hook starts? (none/hook)', 'none', g.testDatabase)) ? 'hook' : 'none';
+  const delegate = await yesNo("Record a sign-off delegation, so agents' commits pass a required dco check (K-AGENT-44)?", false, g.delegation);
   let delegation = null;
   if (delegate) {
-    delegation = { name: await ask('The delegate, as their sign-off writes their name', ctx.gitName), email: await ask("The delegate's email", ctx.gitEmail) };
+    delegation = { name: await ask('The delegate, as their sign-off writes their name', ctx.gitName, g.delegateName), email: await ask("The delegate's email", ctx.gitEmail, g.delegateEmail) };
   }
-  const deleteDefaults = await yesNo("Delete GitHub's default labels that aren't in Kanon's taxonomy?", false);
+  const deleteDefaults = await yesNo("Delete GitHub's default labels that aren't in Kanon's taxonomy?", false, g.deleteDefaults);
   // THE OPTIONAL RELEASER (plan 0005 §3.1), asked only of a repository that calls Kanon's release
   // workflow, and no by default: its release PRs fail a required dco check until #337, and the
-  // admin bypass stays until it can merge them (docs/release.md, "With the Releaser").
+  // admin bypass stays until it can merge them (docs/release.md, "With the Releaser"). `init`
+  // refuses `--releaser` for a repository that doesn't call it, before asking anything.
   const releaser = ctx.releases
-    ? await yesNo('Create the optional Releaser App, so the release PR runs CI (docs/release.md, "With the Releaser")?', false)
+    ? await yesNo('Create the optional Releaser App, so the release PR runs CI (docs/release.md, "With the Releaser")?', false, g.releaser)
     : false;
   return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser };
 };
@@ -670,7 +750,7 @@ export const init = async (argv, overrides = {}) => {
     return 0;
   }
   if (!opts.yes && deps.ask === realDeps.ask && !process.stdin.isTTY) {
-    err('kanon init: standard input is not a terminal, so it can\'t ask; pass --yes to take every default. Nothing was changed.');
+    err("kanon init: standard input is not a terminal, so it can't ask; pass --yes to take every default, with a flag for each answer you want to give. Nothing was changed.");
     return 2;
   }
   try {
@@ -713,6 +793,11 @@ const run = async (deps, opts, req) => {
   }
   const root = where.root;
   const read = (/** @type {string} */ rel) => deps.readFile(join(root, rel));
+  const releases = callsRelease(read('.github/workflows/release.yml'));
+  if (opts.given.releaser && !releases) {
+    err("kanon init: --releaser is for a repository that calls Kanon's release workflow from .github/workflows/release.yml (docs/release.md), and this one doesn't. Nothing was changed.");
+    return 2;
+  }
 
   const who = await whoami(deps.gh, deps.env);
   out(who.line);
@@ -745,7 +830,7 @@ const run = async (deps, opts, req) => {
   const gitName = deps.git(['-C', root, 'config', 'user.name']).stdout.trim();
   const gitEmail = deps.git(['-C', root, 'config', 'user.email']).stdout.trim();
   out('');
-  const a = await askAll(deps, opts, { login: who.login ?? ownerName, gates: suggestGates(read), gitName, gitEmail, req, defaultLanes: installed.length ? installed : DEFAULT_LANES, releases: callsRelease(read('.github/workflows/release.yml')) });
+  const a = await askAll(deps, opts, { login: who.login ?? ownerName, gates: suggestGates(read), gitName, gitEmail, req, defaultLanes: installed.length ? installed : DEFAULT_LANES, releases });
 
   /** @type {string[]} what changed (or, in a dry run, would) */
   const changed = [];
@@ -891,7 +976,7 @@ const run = async (deps, opts, req) => {
       out(`Would run: ${cmd}`);
       changed.push(`Would run: ${cmd}`);
     }
-    else if (!opts.apps || !/^y/i.test(opts.yes ? 'y' : await deps.ask(`Create the Apps for ${missing.join(', ')} now? It opens your browser for each. (y/n)`, 'y'))) {
+    else if (!opts.apps || !(opts.given.createApps || /^y/i.test(opts.yes ? 'y' : await deps.ask(`Create the Apps for ${missing.join(', ')} now? It opens your browser for each. (y/n)`, 'y')))) {
       manual.push([`Create the Apps the lanes run as, from this checkout, and commit the register rows it writes:`, cmd]);
     } else {
       out(`Running: ${cmd}`);
