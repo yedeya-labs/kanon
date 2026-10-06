@@ -1,6 +1,6 @@
 # Kanon's own checks on every pull request: lint, type-check and unit tests.
 #
-# The unit suite runs in three shards, in parallel with a job for lint, type-check and
+# The unit suite runs in four shards, in parallel with a job for lint, type-check and
 # actionlint (#407): one runner is CPU-bound on the suite, so splitting it is what brings the
 # check's wall-clock down. The required check, `Lint, type-check and unit tests`, is the `checks`
 # job that `needs` them all and passes only when every one of them succeeded, so the `main`
@@ -89,14 +89,14 @@ jobs:
       - run: npm run typecheck
 
   unit:
-    name: Unit tests (shard ${{ matrix.shard }}/3)
+    name: Unit tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       # Every shard reports, so one red shard doesn't hide what the others would have found.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -114,7 +114,7 @@ jobs:
           key: actionlint-1.7.12-${{ runner.os }}-${{ runner.arch }}
       - name: Provision the pinned actionlint for its tests
         run: bash .github/scripts/actionlint.sh
-      - run: npm test -- --shard=${{ matrix.shard }}/3
+      - run: npm test -- --shard=${{ matrix.shard }}/4
 
   checks:
     name: Lint, type-check and unit tests

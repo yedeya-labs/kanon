@@ -73,7 +73,7 @@ describe('CI runs lint, type-check and unit tests on every pull request', () => 
 
   it('runs all three, none of them allowed to fail', () => {
     for (const command of ['npm run lint', 'npm run typecheck']) expect(runs).toContain(command);
-    expect(runs.filter((r) => r.startsWith('npm test'))).toEqual(['npm test -- --shard=${{ matrix.shard }}/3']);
+    expect(runs.filter((r) => r.startsWith('npm test'))).toEqual(['npm test -- --shard=${{ matrix.shard }}/4']);
     const steps = stepsOf(wf);
     expect(steps.filter((s) => s['continue-on-error'])).toEqual([]);
   });
