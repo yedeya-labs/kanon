@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
  */
 const REPO = 'example-org/example-repo';
 process.env.GITHUB_REPOSITORY = REPO;
-const { readDeploy, revertTargets, revertedMerges, relandedReverts, closingMergeShas, closingMergesByIssue, REVERT_PREFILTER } = await import('../../scripts/lead-reconcile.mjs');
+const { readDeploy, revertTargets, revertedMerges, relandedReverts, namesReverted, closingMergeShas, closingMergesByIssue, REVERT_PREFILTER } = await import('../../scripts/lead-reconcile.mjs');
 
 /** The production prefilter, evaluated with the one flag it is passed to gojq with. */
 const prefilter = new RegExp(REVERT_PREFILTER, 'i');
@@ -28,7 +28,7 @@ type Release = { tag: string; deploy: 'success' | 'skipped'; after?: Array<{ sha
  * from a merge to a tag is every earlier release's `after` plus its own, filtered as the
  * `--jq` filter would.
  */
-const world = (releases: Release[], { closing = [[9, SHA1]] as Array<[number, string]>, issues = undefined as Record<number, Array<[number, string]>> | undefined, prs = {} as Record<number, string>, unreadable = false, raw = undefined as string | undefined } = {}) => {
+const world = (releases: Release[], { closing = [[9, SHA1]] as Array<[number, string]>, issues = undefined as Record<number, Array<[number, string]>> | undefined, prs = {} as Record<number, string>, bodies = {} as Record<number, string>, unreadable = false, raw = undefined as string | undefined } = {}) => {
   const calls: string[][] = [];
   const ids = new Map(releases.map((r, i) => [r.tag, i + 1]));
   // Which pull requests close which issue: `closing` is issue 1's, unless `issues` says.
@@ -39,8 +39,8 @@ const world = (releases: Release[], { closing = [[9, SHA1]] as Array<[number, st
     json: (args: string[]) => {
       calls.push(args);
       if (args[0] === 'issue') return { closedByPullRequestsReferences: (byIssue[Number(args[2])] ?? []).map(([n]) => ({ number: n })) };
-      if (args[0] === 'pr' && args.includes('state,mergeCommit')) {
-        return { state: 'MERGED', mergeCommit: { oid: allClosing.find(([n]) => String(n) === args[2])![1] } };
+      if (args[0] === 'pr' && args.includes('state,mergeCommit,title,body')) {
+        return { state: 'MERGED', mergeCommit: { oid: allClosing.find(([n]) => String(n) === args[2])![1] }, title: `PR ${args[2]}`, body: bodies[Number(args[2])] ?? '' };
       }
       if (args[0] === 'pr') return { mergeCommit: { oid: prs[Number(args[2])] ?? null } };
       if (args[0] === 'api') return [...releases].reverse().map((r) => ({ tag: r.tag }));
@@ -169,10 +169,22 @@ describe('work re-landed through a NEW pull request that closes the same issue (
     const { io } = world([
       { tag: 'v1.0.0', deploy: 'success', after: [revertOf(SHA1, REV1)] },
       { tag: 'v1.0.1', deploy: 'success', after: [merge(RELAND)] },
-    ], { closing: [[9, SHA1], [11, RELAND]] });
+    ], { closing: [[9, SHA1], [11, RELAND]], bodies: { 11: 'Re-lands #9, which was reverted.' } });
     const d = readDeploy(CLOSED, io);
     expect(d.state).toBe('deployed');
     expect(d.tag).toBe('v1.0.1');
+  });
+
+  it('a later merge of the same issue that does not name the reverted work is a different part, and the revert holds (kanon#280)', () => {
+    // #9 and #11 each delivered part of issue 1; #11 was in flight when #9 was reverted,
+    // and merged after the revert. History alone reads it exactly like a re-land.
+    const { io } = world([
+      { tag: 'v1.0.0', deploy: 'success', after: [revertOf(SHA1, REV1)] },
+      { tag: 'v1.0.1', deploy: 'success', after: [merge(RELAND)] },
+    ], { closing: [[9, SHA1], [11, RELAND]], bodies: { 11: 'The other half of the issue. Unrelated to #90.' } });
+    const d = readDeploy(CLOSED, io);
+    expect(d.state).toBe('reverted');
+    expect(d.reverted).toEqual([{ sha: SHA1, by: REV1 }]);
   });
 
   it('a second merge that landed BEFORE the revert re-lands nothing: a partial revert still holds', () => {
@@ -205,7 +217,7 @@ describe('work re-landed through a NEW pull request that closes the same issue (
   it('the re-land costs no extra call: one paginated compare per closing merge, as before', () => {
     const { io, calls } = world([
       { tag: 'v1.0.0', deploy: 'success', after: [revertOf(SHA1, REV1), merge(RELAND)] },
-    ], { closing: [[9, SHA1], [11, RELAND]] });
+    ], { closing: [[9, SHA1], [11, RELAND]], bodies: { 11: `Re-lands ${SHA1.slice(0, 7)}.` } });
     expect(readDeploy(CLOSED, io).state).toBe('deployed');
     expect(calls.filter((a) => a.includes('--paginate')).map((a) => a[2])).toEqual([
       `repos/${REPO}/compare/${SHA1}...v1.0.0?per_page=100`,
@@ -216,7 +228,10 @@ describe('work re-landed through a NEW pull request that closes the same issue (
   it('keeps the merges per issue, and the flat list is their concatenation', () => {
     const { io } = world([], { issues: { 1: [[9, SHA1], [11, RELAND]], 2: [[10, SHA2]], 3: [] } });
     const issues = [{ number: 1, state: 'CLOSED' }, { number: 2, state: 'CLOSED' }, { number: 3, state: 'CLOSED' }, { number: 4, state: 'OPEN' }];
-    expect(closingMergesByIssue(issues, io)).toEqual([{ issue: 1, shas: [SHA1, RELAND] }, { issue: 2, shas: [SHA2] }]);
+    expect(closingMergesByIssue(issues, io).map(({ issue, shas }: { issue: number; shas: string[] }) => ({ issue, shas }))).toEqual([{ issue: 1, shas: [SHA1, RELAND] }, { issue: 2, shas: [SHA2] }]);
+    expect(closingMergesByIssue(issues, io)[0].prs).toEqual([
+      { number: 9, sha: SHA1, text: 'PR 9\n' }, { number: 11, sha: RELAND, text: 'PR 11\n' },
+    ]);
     expect(closingMergeShas(issues, io)).toEqual([SHA1, RELAND, SHA2]);
   });
 });
@@ -224,8 +239,13 @@ describe('work re-landed through a NEW pull request that closes the same issue (
 describe('which reverts a re-land answers', () => {
   const r1 = { sha: SHA1, by: REV1 };
   const ranges = (entries: Array<[string, string[]]>) => new Map(entries.map(([k, v]) => [k, new Set(v)]));
-  it('a later, unreverted merge of the same issue answers the revert', () => {
-    expect(relandedReverts([r1], [{ issue: 1, shas: [SHA1, RELAND] }], ranges([[SHA1, [REV1]], [RELAND, []]]))).toEqual([]);
+  const prs = (relandText: string) => [{ number: 9, sha: SHA1, text: '' }, { number: 11, sha: RELAND, text: relandText }];
+  it('a later, unreverted merge of the same issue that names the reverted work answers the revert', () => {
+    expect(relandedReverts([r1], [{ issue: 1, shas: [SHA1, RELAND], prs: prs('re-land #9') }], ranges([[SHA1, [REV1]], [RELAND, []]]))).toEqual([]);
+  });
+  it('the same merge naming nothing answers nothing: it may be a different part of the issue (kanon#280)', () => {
+    expect(relandedReverts([r1], [{ issue: 1, shas: [SHA1, RELAND], prs: prs('the other part') }], ranges([[SHA1, [REV1]], [RELAND, []]]))).toEqual([r1]);
+    expect(relandedReverts([r1], [{ issue: 1, shas: [SHA1, RELAND] }], ranges([[SHA1, [REV1]], [RELAND, []]]))).toEqual([r1]);
   });
   it('an earlier merge (the revert is in its range) answers nothing', () => {
     expect(relandedReverts([r1], [{ issue: 1, shas: [SHA1, SHA2] }], ranges([[SHA1, [REV1]], [SHA2, [REV1]]]))).toEqual([r1]);
@@ -239,6 +259,23 @@ describe('which reverts a re-land answers', () => {
   });
   it('a merge with no range read answers nothing', () => {
     expect(relandedReverts([r1], [{ issue: 1, shas: [SHA1, RELAND] }], ranges([[SHA1, [REV1]]]))).toEqual([r1]);
+  });
+});
+
+describe('what a re-land must name (kanon#280)', () => {
+  const target = { pr: 9, sha: SHA1, by: REV1 };
+  it('names the reverted pull request, its merge or the revert', () => {
+    for (const t of ['Re-lands #9', '#9', `Re-lands ${REPO}#9`, `see https://github.com/${REPO}/pull/9`,
+      `re-land of ${SHA1.slice(0, 7)}`, `after ${REV1.slice(0, 12).toUpperCase()}`]) {
+      expect(namesReverted(t, target, REPO), t).toBe(true);
+    }
+  });
+  it('a different number, another repository\'s #9, a short or foreign hash names nothing', () => {
+    for (const t of ['', '#90', '#19', 'other-org/other-repo#9', `https://github.com/other/repo/pull/9`,
+      SHA1.slice(0, 6), 'f6'.repeat(4), 'issue9']) {
+      expect(namesReverted(t, target, REPO), t).toBe(false);
+    }
+    expect(namesReverted('#9', { ...target, pr: null }, REPO)).toBe(false);
   });
 });
 

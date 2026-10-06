@@ -799,7 +799,7 @@ function nextActionsCore(world, {
     'deploy-gate-declined': () => `\`${world.deploy?.tag}\` was released but its deploy job was SKIPPED: ${deployWorkflow(world)}'s gate found nothing to deploy in the range, so ${deployEnvironment(world)} was never touched${walked(world)}. The project is not closed on a deploy that did not happen`,
     // A REVERT IS NOT A DEPLOY (kanon#161). Ancestry credited a release whose tree no
     // longer held the work, because a reverted merge stays an ancestor of every later tag.
-    'deploy-reverted': () => `every containing release that deployed also contains a revert of this project's work: ${(world.deploy?.reverted ?? []).map((r) => `\`${String(r.sha).slice(0, 7)}\` reverted by \`${String(r.by).slice(0, 7)}\``).join(', ') || 'a closing merge'}, so ${deployEnvironment(world)} does not hold it — the newest examined is \`${world.deploy?.tag}\`${walked(world)}. A later release that re-lands the work clears this, by a revert of the revert or by a later merged pull request that closes the same issue; if it was re-landed another way, a human decides whether the project is done`,
+    'deploy-reverted': () => `every containing release that deployed also contains a revert of this project's work: ${(world.deploy?.reverted ?? []).map((r) => `\`${String(r.sha).slice(0, 7)}\` reverted by \`${String(r.by).slice(0, 7)}\``).join(', ') || 'a closing merge'}, so ${deployEnvironment(world)} does not hold it — the newest examined is \`${world.deploy?.tag}\`${walked(world)}. A later release that re-lands the work clears this, by a revert of the revert or by a later merged pull request that closes the same issue and names the reverted pull request, its merge or the revert; if it was re-landed another way, a human decides whether the project is done`,
     'deploy-history-unreadable': () => `\`${world.deploy?.tag}\` deployed (${world.deploy?.url ?? 'no url'}), but the commits after this project's merges could not be read, so whether one of them reverts the work is UNKNOWN — refusing to treat unknown as deployed. A read failure is transient: the next tick re-issues it`,
     'deploy-unknown': () => `readDeploy returned a state this tick does not know how to act on — refusing to guess`,
   };
@@ -1313,9 +1313,12 @@ export function closingMergeShas(issues, io = {}) {
  * presence needs that: see `relandedReverts`. Only closed issues with at least one
  * merged closing pull request appear.
  *
+ * Each merge's pull request is kept beside it (`prs`), with its title and body, so a
+ * re-land can be told from a different part of the same issue (kanon#280).
+ *
  * @param {object[]} issues
  * @param {{json?: (args: string[]) => any}} [io]
- * @returns {{issue: number, shas: string[]}[]}
+ * @returns {{issue: number, shas: string[], prs: {number: number, sha: string, text: string}[]}[]}
  */
 export function closingMergesByIssue(issues, { json = ghJson } = {}) {
   // `closedByPullRequestsReferences` is GitHub's OWN join, the same reasoning as
@@ -1331,15 +1334,18 @@ export function closingMergesByIssue(issues, { json = ghJson } = {}) {
     } catch {
       return [];
     }
-    const shas = refs.flatMap((r) => {
+    // The title and body come back on the same read, for `relandedReverts` (kanon#280).
+    const prs = refs.flatMap((r) => {
       try {
-        const pr = json(['pr', 'view', String(r.number), '--repo', REPO, '--json', 'state,mergeCommit']);
-        return pr.state === 'MERGED' && pr.mergeCommit?.oid ? [pr.mergeCommit.oid] : [];
+        const pr = json(['pr', 'view', String(r.number), '--repo', REPO, '--json', 'state,mergeCommit,title,body']);
+        return pr.state === 'MERGED' && pr.mergeCommit?.oid
+          ? [{ number: r.number, sha: pr.mergeCommit.oid, text: `${pr.title ?? ''}\n${pr.body ?? ''}` }]
+          : [];
       } catch {
         return [];
       }
     });
-    return shas.length ? [{ issue: i.number, shas }] : [];
+    return prs.length ? [{ issue: i.number, shas: prs.map((p) => p.sha), prs }] : [];
   });
 }
 
@@ -1450,19 +1456,51 @@ export function revertedMerges(shas, commits) {
  * tag (it was in the reverted merge's range), so it is missing from the other merge's
  * range exactly when that merge's history holds it.
  *
+ * AND IT MUST NAME WHAT IT RE-LANDS (kanon#280). History alone cannot tell a re-land from
+ * a later, DIFFERENT part of the same issue: a second pull request that was in flight when
+ * the first one was reverted, and merged after the revert, has the same shape. Crediting it
+ * closed the project on a release that lacked the reverted part. So the later pull
+ * request's title or body must name the reverted pull request (`#N`, `<owner>/<repo>#N` or
+ * its URL) or a 7+ character prefix of the reverted merge or of the revert
+ * (`namesReverted`). A re-land that names nothing keeps the project at `reverted`, which
+ * waits for a human: the wrong answer in that direction is a page, not a silent close.
+ * The text is read on the call `closingMergesByIssue` already makes, so this adds none.
+ *
  * A merge that landed BEFORE the revert re-lands nothing: two pull requests that each
  * closed part of an issue, one of them reverted, is a partial revert and still holds. So
  * does a merge closing a DIFFERENT issue, since issues are not interchangeable.
  *
  * @param {{sha: string, by: string}[]} reverted from `revertedMerges`
- * @param {{issue: number, shas: string[]}[]} byIssue from `closingMergesByIssue`
+ * @param {{issue: number, shas: string[], prs?: {number: number, sha: string, text: string}[]}[]} byIssue
+ *   from `closingMergesByIssue`
  * @param {Map<string, Set<string>>} after each closing merge's reverts in its range to the tag
  * @returns {{sha: string, by: string}[]}
  */
 export function relandedReverts(reverted, byIssue, after) {
   const undone = new Set(reverted.map((r) => r.sha));
-  return reverted.filter((r) => !byIssue.some((i) => i.shas.includes(r.sha) && i.shas.some((n) =>
-    n !== r.sha && !undone.has(n) && after.has(n) && !after.get(n).has(r.by))));
+  return reverted.filter((r) => !byIssue.some((i) => {
+    if (!i.shas.includes(r.sha)) return false;
+    const pr = (sha) => (i.prs ?? []).find((p) => p.sha === sha);
+    const target = { pr: pr(r.sha)?.number ?? null, sha: r.sha, by: r.by };
+    return i.shas.some((n) => n !== r.sha && !undone.has(n) && after.has(n) && !after.get(n).has(r.by)
+      && namesReverted(pr(n)?.text ?? '', target, REPO));
+  }));
+}
+
+/**
+ * Whether a pull request's title and body name a reverted merge (kanon#280): its pull
+ * request as `#N`, `<repo>#N` or `<repo>/pull/N`, or a 7+ character prefix of the merge
+ * commit or of the revert. A `#N` of ANOTHER repository (`other/repo#N`) names nothing.
+ *
+ * @param {string} text @param {{pr: number|null, sha: string, by: string}} target @param {string} repo
+ */
+export function namesReverted(text, { pr, sha, by }, repo) {
+  const t = String(text);
+  const esc = String(repo).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (pr != null && (new RegExp(`(?:^|[^\\w/.-])#${pr}\\b`).test(t)
+    || new RegExp(`\\b${esc}(?:#|/pull/)${pr}\\b`, 'i').test(t))) return true;
+  return [...t.matchAll(/\b[0-9a-f]{7,40}\b/gi)].some(([h]) =>
+    [sha, by].some((s) => String(s).toLowerCase().startsWith(h.toLowerCase())));
 }
 
 /**
