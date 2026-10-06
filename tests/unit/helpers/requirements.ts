@@ -105,7 +105,7 @@ export const buildRequirements = (root: string) => {
   );
   return {
     $comment:
-      "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets.",
+      "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. `catalogue` is the lane catalogue, copied from docs/lanes.json.",
     lanes,
     hook: { path: '.github/actions/project-setup/action.yml', inputs: hookInputs },
     identities: {
@@ -114,6 +114,11 @@ export const buildRequirements = (root: string) => {
     },
     labels: labels.map((l) => l.name),
     declarations,
+    // The lane catalogue (kanon#428): what each lane does, its group, what it needs beyond what
+    // the lanes declare, its cost and when it is recommended. Hand-written in docs/lanes.json,
+    // the one source `kanon init`, the adopt skill and docs/lanes.md read, and copied here so a
+    // release's copy carries it; the test fails when a lane has no entry or an entry no lane.
+    catalogue: Object.fromEntries(Object.entries(JSON.parse(readFileSync(join(root, 'docs/lanes.json'), 'utf8')) as Doc).filter(([k]) => k !== '$comment')),
     // What this release's `dco` action does with the optional Releaser's release commits (#337):
     // `kanon doctor` asks an adopter to drop every other ruleset bypass actor (`K-MERGE-8`) only
     // against a release whose `dco` passes the release PR the Releaser opens. Read from the action

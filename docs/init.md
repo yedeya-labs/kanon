@@ -61,6 +61,7 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 | `dryRun` | boolean | Whether it ran with `--dry-run`: then `files` and `changes` say what it *would* do, and nothing changed. |
 | `inspection` | object | What it read, below. |
 | `answers` | object | The answer to each question, from its flag, its default or the person, below. |
+| `catalogue` | array | The lane catalogue, a group at a time, in the order the adopt skill asks them: what each lane does, needs and costs, and whether it is recommended for this repository, below. |
 | `files` | array | Each file `init` writes, in the order it considers them, below. |
 | `changes` | array | What it changed on the checkout and on GitHub, or in a dry run would, in the order the summary lists them, below. |
 | `apps` | object | The `kanon apps` step, below. |
@@ -109,6 +110,37 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 | `deleteDefaultLabels` | boolean | Whether to delete GitHub's default labels outside the taxonomy. |
 | `releaser` | boolean | Whether to create the optional Releaser. |
 | `plugin` | boolean | Whether to declare the kanon plugin in `.claude/settings.json`, pinned to this release. |
+
+### The lane catalogue
+
+What `--lanes` chooses from, so a person, or the adopt skill asking them, can choose knowing what each lane does ([#428](https://github.com/yedeya-labs/kanon/issues/428)). It is [`docs/lanes.json`](lanes.json), the one source `kanon init --help` and [`docs/lanes.md`](lanes.md#the-lane-catalogue) also read, with what the release's requirements file derives from each lane beside it. Each element is a group:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `group` | string | The group's id, such as `review`. |
+| `title` | string | Its name, such as `Implement and revise`. |
+| `header` | string | A short name for it, at most 12 characters. |
+| `lanes` | array | Its lanes, at most four, below. |
+
+### A catalogue lane
+
+| Field | Type | Meaning |
+|---|---|---|
+| `lane` | string | The lane, by file name without `.yml`, as `--lanes` and `answers.lanes` name it. |
+| `name` | string | Its name in docs/lanes.md. |
+| `does` | string | What it does, in one sentence. |
+| `app` | string or null | The App it runs as, `author` or `judge`, or null for none. |
+| `secrets` | array | The secrets its caller maps. |
+| `qaStore` | boolean | Whether it reaches the QA store, through a hook you write, and runs without memory when there is none. |
+| `hooks` | array | The hooks it calls besides the project-setup hook, by path. |
+| `reads` | array | The project documents it reads (`K-LAYOUT-17`). |
+| `schedule` | string or null | The cron its caller is written with, or null when it runs on events alone. |
+| `needs` | array | Strings: what else it needs, such as project briefs. |
+| `cost` | string | What it costs to run, in one sentence: whether it runs a model, and how often. |
+| `when` | string | When it is recommended, in one sentence. |
+| `recommendedWith` | array | The lanes whose choice makes it recommended; empty for none. |
+| `recommended` | boolean | Whether it is recommended for this repository: the repository calls it already, it is the review lane, or it is recommended with a lane that is. |
+| `installed` | boolean | Whether the repository calls it already (`inspection.installedLanes`). |
 
 ### A file
 

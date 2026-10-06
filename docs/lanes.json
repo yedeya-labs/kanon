@@ -1,0 +1,178 @@
+{
+  "$comment": "The lane catalogue (kanon#428): one entry per lane, the one source of what each lane does, its group, what it needs beyond what requirements.json derives from the lane (the App, the secrets, the QA store, the hooks, the documents it reads), what it costs, and when it is recommended. tests/unit/requirements.test.ts copies it into requirements.json as `catalogue`, and fails when a lane has no entry or an entry no lane; `kanon init` prints it in --help and in its JSON's `catalogue` (docs/init.md), and the adopt skill asks a question per group from it; docs/lanes.md's catalogue table is built from it (tests/unit/lanes-doc.test.ts). `recommend` is \"always\", or the lanes whose choice makes this one recommended (an empty list: recommended only when the repository already calls it). A group holds at most four lanes, the options a multiple-choice question offers in Claude Code.",
+  "groups": [
+    { "id": "review", "title": "Review", "header": "Review" },
+    { "id": "implement", "title": "Implement and revise", "header": "Implement" },
+    { "id": "explore", "title": "Explore and code audit", "header": "Explore" },
+    { "id": "triage", "title": "Triage", "header": "Triage" },
+    { "id": "lead", "title": "The Lead's briefs", "header": "Lead" },
+    { "id": "projects", "title": "Projects", "header": "Projects" },
+    { "id": "oversight", "title": "Overseer and digests", "header": "Oversight" },
+    { "id": "merge", "title": "Merge", "header": "Merge" },
+    { "id": "sweeps", "title": "Rebase and sweeps", "header": "Sweeps" }
+  ],
+  "lanes": {
+    "agent-review": {
+      "name": "Review",
+      "group": "review",
+      "does": "Reviews each pull request once CI finishes on its head, and approves it or requests changes.",
+      "needs": ["your CI at `.github/workflows/ci.yml`, whose runs it reads"],
+      "cost": "A model run per reviewed head.",
+      "recommend": "always",
+      "when": "Always, and first: its App's approval is what ends bootstrap (`K-ADOPT-6`)."
+    },
+    "agent-merge-reconcile": {
+      "name": "Merge reconcile",
+      "group": "review",
+      "does": "After a reviewed pull request merges, files a follow-up issue for each review suggestion it didn't apply.",
+      "needs": [],
+      "cost": "A model run per merged pull request the Reviewer reviewed.",
+      "recommend": [],
+      "when": "When the Reviewer's suggestions that a merge left out should become issues rather than be lost."
+    },
+    "agent-implement": {
+      "name": "Implement",
+      "group": "implement",
+      "does": "Builds a feature or resolves a spec delta from an issue labelled `agent:implement`, and opens a pull request.",
+      "needs": [],
+      "cost": "A model run per labelled issue.",
+      "recommend": [],
+      "when": "When you want agents to write code from the issues you label, once the Reviewer runs green."
+    },
+    "agent-implement-revise": {
+      "name": "Implement, revise",
+      "group": "implement",
+      "does": "Revises the Implementer's own pull request when the Reviewer requests changes.",
+      "needs": [],
+      "cost": "A model run per change request, capped in rounds.",
+      "recommend": ["agent-implement"],
+      "when": "With implement: without it, a change request on the Implementer's pull request waits for a person."
+    },
+    "agent-explore": {
+      "name": "Explore (the sweep)",
+      "group": "explore",
+      "does": "Sweeps your running product with a sweep hook you write, and files what it finds.",
+      "needs": ["a sweep hook you write (docs/explore-sweep.md)"],
+      "cost": "A model run daily, skipped on a commit the QA store already holds a green sweep of.",
+      "recommend": [],
+      "when": "When you can write a sweep hook that exercises your product, such as a Playwright run."
+    },
+    "agent-code-audit": {
+      "name": "Code audit",
+      "group": "explore",
+      "does": "Reads your code and specs every few days, and files a bug only on an objective contradiction.",
+      "needs": [],
+      "cost": "A model run every three days.",
+      "recommend": [],
+      "when": "When you want a periodic second reading of the code, guided by `## Code areas` in your stack document."
+    },
+    "agent-triage": {
+      "name": "Triage and fix",
+      "group": "triage",
+      "does": "Reproduces a bug labelled `qa:needs-triage`, rates it, and proposes a fix as a pull request.",
+      "needs": [],
+      "cost": "A model run per labelled issue.",
+      "recommend": ["agent-explore", "agent-code-audit"],
+      "when": "When you file bugs for the agents to fix, or with explore or the code audit, whose findings it triages."
+    },
+    "agent-lead": {
+      "name": "Lead, brief",
+      "group": "lead",
+      "does": "Turns a mandate you dispatch into a project brief, opened as a pull request.",
+      "needs": ["project briefs under `docs/projects/`, from the brief template (`K-PROJ-1`)"],
+      "cost": "A model run per dispatch.",
+      "recommend": [],
+      "when": "When you want agents to plan work that spans several issues."
+    },
+    "agent-lead-revise": {
+      "name": "Lead, revise",
+      "group": "lead",
+      "does": "Revises the Lead's own brief pull request when the Reviewer requests changes.",
+      "needs": [],
+      "cost": "A model run per change request, capped in rounds.",
+      "recommend": ["agent-lead"],
+      "when": "With the Lead's brief: without it, a change request on a brief waits for a person."
+    },
+    "agent-lead-split": {
+      "name": "Lead, split",
+      "group": "lead",
+      "does": "Proposes splitting a project issue too big for one Implementer run, as a pull request against its brief.",
+      "needs": ["project briefs under `docs/projects/`"],
+      "cost": "A model run per labelled issue.",
+      "recommend": ["agent-lead"],
+      "when": "With the Lead's brief, so an issue too big for one run is split rather than stalled."
+    },
+    "agent-lead-reconcile": {
+      "name": "Lead, reconcile",
+      "group": "projects",
+      "does": "Drives an approved brief to done: files its issues, labels them for the Implementer in order, and closes the project once its merges are deployed.",
+      "needs": ["project briefs under `docs/projects/`", "your reference environment's deploy declaration (docs/lanes.md)"],
+      "cost": "No model; a short job on each merge and an hourly heartbeat.",
+      "recommend": ["agent-lead"],
+      "when": "With the Lead's brief: it is what turns an approved brief into work."
+    },
+    "agent-verify-acs": {
+      "name": "Verify acceptance criteria",
+      "group": "projects",
+      "does": "Runs the tests that cite a project's acceptance criteria, and has the Explorer file what fails.",
+      "needs": ["project briefs under `docs/projects/`"],
+      "cost": "A model run per project verified.",
+      "recommend": ["agent-lead-reconcile"],
+      "when": "With the reconciler, which asks it to verify a project before closing it."
+    },
+    "agent-overseer": {
+      "name": "Overseer (optional)",
+      "group": "oversight",
+      "does": "Audits the pipeline weekly from its aggregate, and files what you can act on as `pipeline-improvement` issues.",
+      "needs": [],
+      "cost": "A model run weekly.",
+      "recommend": [],
+      "when": "Once several lanes have run for a few weeks, so it has something to audit."
+    },
+    "agent-project-digest": {
+      "name": "Daily project digest",
+      "group": "oversight",
+      "does": "Posts each open project's progress to a chat channel daily, and files an issue for a lane caller that keeps failing.",
+      "needs": [],
+      "cost": "A model run daily.",
+      "recommend": ["agent-lead-reconcile"],
+      "when": "With the reconciler, when you have a chat channel for the developers."
+    },
+    "agent-weekly-digest": {
+      "name": "Weekly digest",
+      "group": "oversight",
+      "does": "Posts the week's burndown and deliveries in plain language to a chat channel, for a stakeholder outside the day-to-day work.",
+      "needs": [],
+      "cost": "A model run weekly.",
+      "recommend": [],
+      "when": "When the Stakeholder is not the Owner and follows the project from outside, through a chat channel."
+    },
+    "agent-merge": {
+      "name": "Merge",
+      "group": "merge",
+      "does": "Merges, with no person, an Implementer pull request the Reviewer approved with every check green, inside the green zone (`K-MERGE-4`).",
+      "needs": [],
+      "cost": "No model; a short job per review, per CI run on the default branch, and hourly.",
+      "recommend": [],
+      "when": "Once you have merged the Implementer's approved pull requests by hand for a while, and trust the green zone."
+    },
+    "agent-rebase": {
+      "name": "Rebase (resolve a conflict)",
+      "group": "sweeps",
+      "does": "Resolves a merge conflict on an agent's pull request, so its CI and review can resume.",
+      "needs": [],
+      "cost": "A model run per conflicting agent pull request, checked on each CI run and daily.",
+      "recommend": ["agent-implement", "agent-triage"],
+      "when": "With implement or triage, whose pull requests otherwise wait for a person when they conflict."
+    },
+    "agent-dispatch-sweep": {
+      "name": "Dispatch sweep",
+      "group": "sweeps",
+      "does": "Re-dispatches, once a day, an implement or triage run that never happened, and reports what waits on a person.",
+      "needs": [],
+      "cost": "No model; a short job daily.",
+      "recommend": ["agent-implement", "agent-triage"],
+      "when": "With implement or triage, so a label whose event never arrived still starts its run."
+    }
+  }
+}

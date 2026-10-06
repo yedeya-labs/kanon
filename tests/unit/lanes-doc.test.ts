@@ -1,8 +1,10 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { workflowText } from './helpers/called-workflow.js';
+import { loadRequirements } from '../../cli/callers.mjs';
+import { laneCatalogue } from '../../cli/init.mjs';
 import { SECTIONS as EXCERPTED } from '../../scripts/playbook-excerpt.mjs';
 
 /**
@@ -16,7 +18,10 @@ import { SECTIONS as EXCERPTED } from '../../scripts/playbook-excerpt.mjs';
  *      permissions and documents are exactly what the lane declares and reads;
  *   2. the README's lane row names every shipped lane;
  *   3. every playbook section a lane prompt sends the agent to by name is one that
- *      `K-LAYOUT-17` tells the adopter to write.
+ *      `K-LAYOUT-17` tells the adopter to write;
+ *   4. docs/lanes.md's catalogue table is the lane catalogue (docs/lanes.json, kanon#428), as
+ *      `kanon init` reads it with the requirements beside it. Rebuild it with
+ *      `KANON_WRITE_LANES_DOC=1 npx vitest run tests/unit/lanes-doc.test.ts`.
  */
 
 const ROOT = process.cwd();
@@ -179,5 +184,46 @@ describe("docs/lanes.md's example callers are ones lane-check passes", () => {
     });
     expect(fixture).toHaveLength(1);
     expect(unpin(text)).toEqual(unpin(read(fixture[0]!)));
+  });
+});
+
+/**
+ * The catalogue table, built from what `kanon init --json` prints as `catalogue`: the catalogue's
+ * own words, and what the requirements derive from each lane (its App, its secrets beside the
+ * App's, the QA store, its hooks, its schedule).
+ */
+const catalogueTable = (): string => {
+  const req = loadRequirements();
+  const out = ['| Group | Lane | What it does | Needs | Cost | Recommended |', '|---|---|---|---|---|---|'];
+  for (const g of laneCatalogue(req, [])) {
+    for (const l of g.lanes) {
+      const needs = [
+        l.app ? `the ${req.identities.apps[l.app]!.name} App` : 'no App',
+        ...l.secrets.filter((x) => !/_APP_(ID|PRIVATE_KEY)$/.test(x)).map((x) => `\`${x}\``),
+        ...(l.qaStore ? ['the QA store, if you have one'] : []),
+        ...l.hooks.map((h) => `\`${h}\``),
+        ...(l.schedule ? [`a schedule (\`${l.schedule}\`)`] : []),
+        ...l.needs,
+      ];
+      out.push(`| ${g.title} | \`${l.lane}.yml\` | ${l.does} | ${needs.join('; ')} | ${l.cost} | ${l.when} |`);
+    }
+  }
+  return `\n\n${out.join('\n')}\n\n`;
+};
+
+describe("docs/lanes.md's catalogue table is the lane catalogue (kanon#428)", () => {
+  const OPEN = '<!-- lane-catalogue:table -->';
+  const CLOSE = '<!-- /lane-catalogue:table -->';
+  const doc = read('docs/lanes.md');
+  const rebuilt = `${doc.slice(0, doc.indexOf(OPEN) + OPEN.length)}${catalogueTable()}${doc.slice(doc.indexOf(CLOSE))}`;
+  if (process.env.KANON_WRITE_LANES_DOC) writeFileSync(join(ROOT, 'docs/lanes.md'), rebuilt);
+
+  it('is built from docs/lanes.json and the requirements, row for row', () => {
+    expect(between(read('docs/lanes.md'), OPEN, CLOSE), 'docs/lanes.md\'s catalogue table is stale: rebuild it with KANON_WRITE_LANES_DOC=1 npx vitest run tests/unit/lanes-doc.test.ts').toBe(catalogueTable());
+  });
+
+  it('has a row for every lane', () => {
+    const rows = between(read('docs/lanes.md'), OPEN, CLOSE).split('\n').filter((l) => /^\| [^-|][^|]* \| `agent-/.test(l));
+    expect(rows.map((r) => /`(agent-[a-z-]+)\.yml`/.exec(r)![1]).sort()).toEqual(LANES.map((f) => f.replace(/\.yml$/, '')).sort());
   });
 });

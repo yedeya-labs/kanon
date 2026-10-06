@@ -24,7 +24,9 @@ import { URL } from 'node:url';
  * @typedef {{ lanes: Record<string, Lane>, hook: { path: string, inputs: string[] },
  *   identities: { roles: Record<string, RoleIdentity>, apps: Record<string, AppIdentity> }, labels: string[],
  *   declarations?: Record<string, { baseline: boolean, requiredSections: string[] }>,
- *   release?: { dcoExemptsReleaser?: boolean } }} Requirements
+ *   release?: { dcoExemptsReleaser?: boolean }, catalogue?: Catalogue }} Requirements
+ * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, recommend: 'always' | string[], when: string }} CatalogueEntry
+ * @typedef {{ groups: Array<{ id: string, title: string, header: string }>, lanes: Record<string, CatalogueEntry> }} Catalogue
  */
 
 /** The requirements file of the Kanon tree this runs from. @returns {Requirements} */

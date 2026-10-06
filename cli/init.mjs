@@ -58,6 +58,7 @@ import {
   kanonRelease,
   laneCheckFile,
   loadRequirements,
+  TRIGGERS,
 } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
 import { pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
@@ -101,7 +102,8 @@ The answers, one flag per question (without --yes, the questions no flag answers
   --maintainer <who>     the Maintainer (default: the Owner)
   --stakeholder <who>    the Stakeholder (default: the Owner)
   --lanes <list>         comma-separated lanes to install, e.g. review,implement
-                         (default: the lanes already called, or review)
+                         (default: the lanes already called, or review; the lanes are
+                         listed below)
   --gates <list>         the stack's gates, comma-separated commands, or none
                          (default: suggested from what the repository holds)
   --test-database <how>  none, or hook: the project-setup hook starts one (default: none)
@@ -128,6 +130,74 @@ Needs \`gh\`. Reading needs a token that can read the repository; creating label
 milestones needs Issues: write; the merge setting and the ruleset need Administration: write.
 gh takes its token from GH_TOKEN, then GITHUB_TOKEN, then its stored login; the command prints
 which one it uses and whose it is.`;
+
+/**
+ * The lane catalogue (docs/lanes.json, kanon#428) as the adopt skill asks it: a group at a
+ * time, each lane with what it does, what it needs and costs, when it is recommended, and
+ * whether it is recommended for this repository. What the release's requirements derive from
+ * the lane itself (its App, its secrets, the QA store, its hooks, the documents it reads) comes
+ * from them, never from the catalogue. A lane is recommended when the repository already calls
+ * it, when the catalogue recommends it always (the review lane), or when it recommends it with a
+ * lane that is itself recommended.
+ * @param {Requirements} req @param {string[]} installed
+ */
+export const laneCatalogue = (req, installed) => {
+  const cat = req.catalogue;
+  if (!cat) return [];
+  const entries = Object.entries(cat.lanes).filter(([lane]) => req.lanes[lane]);
+  const recommended = new Set([...installed, ...entries.filter(([, e]) => e.recommend === 'always').map(([lane]) => lane)]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [lane, e] of entries) {
+      if (!recommended.has(lane) && Array.isArray(e.recommend) && e.recommend.some((w) => recommended.has(w))) {
+        recommended.add(lane);
+        grew = true;
+      }
+    }
+  }
+  return cat.groups.map((g) => ({
+    group: g.id,
+    title: g.title,
+    header: g.header,
+    lanes: entries
+      .filter(([, e]) => e.group === g.id)
+      .map(([lane, e]) => {
+        const spec = /** @type {import('./callers.mjs').Lane} */ (req.lanes[lane]);
+        return {
+          lane,
+          name: e.name,
+          does: e.does,
+          app: spec.identities[0] ?? null,
+          secrets: spec.secrets,
+          qaStore: spec.grant['id-token'] === 'write',
+          hooks: spec.hooks,
+          reads: spec.reads,
+          schedule: TRIGGERS[lane]?.schedule ?? null,
+          needs: e.needs,
+          cost: e.cost,
+          when: e.when,
+          recommendedWith: e.recommend === 'always' ? [] : e.recommend,
+          recommended: recommended.has(lane),
+          installed: installed.includes(lane),
+        };
+      }),
+  }));
+};
+
+/**
+ * The usage text, with the lane catalogue's groups and lanes after the options, one line each.
+ * @param {Requirements} req
+ */
+export const usage = (req) => {
+  const groups = laneCatalogue(req, []);
+  if (!groups.length) return USAGE;
+  const lines = ['', 'The lanes, by group (docs/lanes.md, "The lane catalogue"); --lanes takes their names:'];
+  for (const g of groups) {
+    lines.push(`  ${g.title}`);
+    for (const l of g.lanes) lines.push(`    ${l.lane.slice('agent-'.length).padEnd(18)} ${l.does}${l.recommendedWith.length ? ` (recommended with ${l.recommendedWith.map((w) => w.slice('agent-'.length)).join(' or ')})` : l.recommended ? ' (recommended)' : ''}`);
+  }
+  return `${USAGE}\n${lines.join('\n')}`;
+};
 
 /**
  * @typedef {{
@@ -772,6 +842,7 @@ export const SCHEMA = 'kanon-init/v1';
  *   dryRun: boolean,
  *   inspection: Record<string, unknown> | null,
  *   answers: Record<string, unknown> | null,
+ *   catalogue: ReturnType<typeof laneCatalogue>,
  *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'differs', content: string | null, diff: string[] }>,
  *   changes: Array<{ kind: string, subject: string, message: string }>,
  *   apps: { identities: string[], missing: string[], command: string | null, outcome: string, exitCode: number | null } | null,
@@ -797,7 +868,7 @@ export const init = async (argv, overrides = {}) => {
   const { out, err } = deps;
   const req = deps.requirements();
   /** @type {Report} */
-  const rep = { repository: null, token: null, dryRun: false, inspection: null, answers: null, files: [], changes: [], apps: null, findings: [], notes: [], failures: [], error: null };
+  const rep = { repository: null, token: null, dryRun: false, inspection: null, answers: null, catalogue: [], files: [], changes: [], apps: null, findings: [], notes: [], failures: [], error: null };
   const emit = (/** @type {number} */ code) => {
     if (wantsJson) base.out(JSON.stringify(document(rep, code, deps.release()), null, 2));
     return code;
@@ -809,11 +880,11 @@ export const init = async (argv, overrides = {}) => {
   } catch (e) {
     rep.error = /** @type {Error} */ (e).message;
     err(`kanon init: ${rep.error}`);
-    err(USAGE);
+    err(usage(req));
     return emit(2);
   }
   if (opts.help) {
-    out(USAGE);
+    out(usage(req));
     return 0;
   }
   rep.dryRun = opts.dryRun;
@@ -848,6 +919,7 @@ export const document = (rep, exitCode, release) => {
     dryRun: rep.dryRun,
     inspection: rep.inspection,
     answers: rep.answers,
+    catalogue: rep.catalogue,
     files: rep.files,
     changes: rep.changes,
     apps: rep.apps,
@@ -925,6 +997,7 @@ const run = async (deps, opts, req, rep) => {
     installedLanes: installed,
     callsRelease: releases,
   };
+  rep.catalogue = laneCatalogue(req, installed);
   out('');
   out(`== ${repo}, at Kanon ${release}${dry ? ' (dry run: nothing will change)' : ''} ==`);
   out(`- ${s.kind === 'User' ? 'A personal account' : 'An organisation'}'s ${s.isPrivate ? 'private' : 'public'} repository; default branch ${s.defaultBranch}${s.hasCommits ? '' : ', with no commit yet'}.`);

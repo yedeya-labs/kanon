@@ -63,4 +63,73 @@ describe('requirements.json', () => {
     expect(built.declarations['docs/qa/reviewer-playbook.md']).toEqual({ baseline: true, requiredSections: [] });
     expect(built.declarations['docs/qa/capability-ledger.md']).toEqual({ baseline: false, requiredSections: [] });
   });
+
+  // THE LANE CATALOGUE (kanon#428): the one source of what each lane does, its group, its needs,
+  // its cost and when it is recommended. `kanon init` prints it (--help, and its JSON's
+  // `catalogue`), the adopt skill asks a question per group from it, and docs/lanes.md's table is
+  // built from it, so a lane without an entry would be installed without anyone being told what
+  // it does.
+  describe('the lane catalogue (docs/lanes.json)', () => {
+    type Entry = { name: string; group: string; does: string; needs: string[]; cost: string; recommend: 'always' | string[]; when: string };
+    const cat = built.catalogue as { groups: Array<{ id: string; title: string; header: string }>; lanes: Record<string, Entry> };
+    const lanes = built.lanes as Record<string, { secrets: string[] }>;
+    const groupOf = (lane: string) => cat.groups.findIndex((g) => g.id === cat.lanes[lane]!.group);
+
+    it('has an entry for every lane, and none for a lane Kanon does not ship', () => {
+      expect(Object.keys(cat.lanes).sort()).toEqual(Object.keys(lanes).sort());
+    });
+
+    it('fills in every field of every entry', () => {
+      for (const [lane, e] of Object.entries(cat.lanes)) {
+        expect(Object.keys(e).sort(), lane).toEqual(['cost', 'does', 'group', 'name', 'needs', 'recommend', 'when']);
+        for (const k of ['name', 'does', 'cost', 'when'] as const) expect(e[k].trim().length, `${lane} ${k}`).toBeGreaterThan(3);
+        // One line each: --help prints it on one, and a question's option shows it as one.
+        for (const k of ['does', 'cost', 'when'] as const) expect(e[k], `${lane} ${k}`).toMatch(/^[A-Z][^\n]*\.$/);
+        expect(Array.isArray(e.needs), lane).toBe(true);
+      }
+    });
+
+    it("names each lane as docs/lanes.md's table does", () => {
+      const table = new Map([...readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8').split('## Which lanes are available')[1]!.split('\n## ')[0]!.matchAll(/^\| ([^|]+) \| `(agent-[a-z-]+)\.yml` \|/gm)].map((m) => [m[2]!, m[1]!]));
+      for (const [lane, e] of Object.entries(cat.lanes)) expect(e.name, lane).toBe(table.get(lane));
+    });
+
+    it('puts each lane in a group, at most four to a group, and every group holds one', () => {
+      // Four is what one multiple-choice question offers in Claude Code's question tool, which
+      // the adopt skill asks a group with.
+      for (const g of cat.groups) {
+        const members = Object.values(cat.lanes).filter((e) => e.group === g.id);
+        expect(members.length, g.id).toBeGreaterThanOrEqual(1);
+        expect(members.length, g.id).toBeLessThanOrEqual(4);
+        // A question's header in Claude Code's question tool holds twelve characters.
+        expect(g.header.length, g.id).toBeLessThanOrEqual(12);
+      }
+      for (const [lane, e] of Object.entries(cat.lanes)) expect(cat.groups.map((g) => g.id), lane).toContain(e.group);
+      expect(new Set(cat.groups.map((g) => g.id)).size).toBe(cat.groups.length);
+    });
+
+    it('recommends the review lane always and first, and no other lane always', () => {
+      expect(Object.entries(cat.lanes).filter(([, e]) => e.recommend === 'always').map(([l]) => l)).toEqual(['agent-review']);
+      expect(cat.lanes['agent-review']!.group).toBe(cat.groups[0]!.id);
+    });
+
+    it('recommends a lane only with lanes that are asked before it, or beside it', () => {
+      // The adopt skill asks the groups in order, so a lane can be recommended for a choice
+      // already made, never for one still to come.
+      for (const [lane, e] of Object.entries(cat.lanes)) {
+        if (e.recommend === 'always') continue;
+        for (const w of e.recommend) {
+          expect(Object.keys(lanes), `${lane} recommends with ${w}`).toContain(w);
+          expect(w, lane).not.toBe(lane);
+          expect(groupOf(w), `${lane} recommends with ${w}, asked after it`).toBeLessThanOrEqual(groupOf(lane));
+        }
+      }
+    });
+
+    it('says a lane runs no model exactly when it maps no Claude token', () => {
+      for (const [lane, e] of Object.entries(cat.lanes)) {
+        expect(e.cost.startsWith('No model'), lane).toBe(!lanes[lane]!.secrets.includes('CLAUDE_CODE_OAUTH_TOKEN'));
+      }
+    });
+  });
 });
