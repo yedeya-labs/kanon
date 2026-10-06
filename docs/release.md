@@ -146,9 +146,9 @@ With the Releaser's secrets mapped, release-please pushes the release branch and
 
 - **the release PR runs CI**, which the first limit below says it otherwise doesn't;
 - **the release tag triggers `on: push: tags` workflows**, which the last limit below says it otherwise doesn't;
-- **the ruleset's release bypass is the Releaser's**, and no other App's (`K-MERGE-8`, plan 0005 §3.1). Grant the bypass to the Releaser App, limited to release PRs, instead of to an admin.
+- **the release PR is the Releaser's, which plan 0005 makes the only release bypass actor** (`K-MERGE-8`, §3.1). Mapping the secrets doesn't move the bypass, and nothing in the release workflow merges as the Releaser: the bypass belongs to whoever merges the release PR.
 
-**One limit stays, for now:** the release PR's commits are the Releaser's, carry no sign-off, and the `dco` check exempts only `github-actions[bot]`, so a required `dco` check goes red on a Releaser's release PR ([#337](https://github.com/yedeya-labs/kanon/issues/337)). Until that is fixed, merge it through the bypass as today, or leave the Releaser unmapped.
+**Keep your admin bypass for now.** The release PR's commits are the Releaser's, carry no sign-off, and the `dco` check exempts only `github-actions[bot]`, so a required `dco` check goes red on a Releaser's release PR ([#337](https://github.com/yedeya-labs/kanon/issues/337)). The admin bypass is what merges it past that check. Move the bypass from the admin to the Releaser App, limited to release PRs, only once #337 is fixed and the Releaser is what merges the release PR. Plan 0005 schedules that as its own step (L5 for Kanon, L6 for an adopter). Until then, either keep the admin bypass with the Releaser mapped, or leave the Releaser unmapped.
 
 ## Known limits
 
