@@ -6,6 +6,8 @@ The action is pinned to an exact version, so each Kanon release fixes the Claude
 
 When the flags load no project settings (`--setting-sources user`, as the Reviewer's and the Lead's do), the block first points the agent's user settings (`CLAUDE_CONFIG_DIR`) at a new directory under the runner's temp directory. Claude Code would otherwise read `~/.claude` and `~/.claude.json`, and on a reused self-hosted runner an earlier job could have left a hook or an MCP server there ([#283](https://github.com/yedeya-labs/kanon/issues/283)). The block reads the flags the way the action does, and leaves every other lane as it was.
 
+In Kanon's own repository, a bump of the action's pin is red until a maintainer has re-probed the Reviewer's grant against the CLI the new version installs ([#284](https://github.com/yedeya-labs/kanon/issues/284)): `node .github/scripts/reviewer-grant-probe.mjs --version-only` names the version, and `--cli <binary>` runs the battery and writes `.github/scripts/reviewer-grant-record.json`, which is committed with the bump.
+
 ## Use it
 
 Call it with `id: agent`, so the lane reads `steps.agent.outputs.execution_file` and `steps.agent.outcome` as it would for the action itself.
