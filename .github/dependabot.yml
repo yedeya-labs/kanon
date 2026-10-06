@@ -38,6 +38,14 @@ updates:
     cooldown:
       default-days: 3
       exclude: ["yedeya-labs/kanon*"]
+    # HELD BELOW v0.28.0 UNTIL PLAN 0005 L5. REMOVE AT L5. v0.28.0 is the breaking two-App
+    # release (#333, #358): its lanes take AUTHOR_*, JUDGE_* and RELEASER_* secrets and read the
+    # register's one row per role. Kanon doesn't have the Author and Judge Apps until L5, so a
+    # bump to it would break every one of Kanon's own lanes. Patches to v0.27.x still flow. L5
+    # moves the pins itself and removes this block in the same change (plan 0005, L5).
+    ignore:
+      - dependency-name: "yedeya-labs/kanon*"
+        versions: [">= 0.28.0"]
     commit-message:
       prefix: ci
       include: scope
