@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 const { asRole, headerLine, markedRole, personaHeader, roleMarker, setMarkerPhase, signed, signedAs, withPersona } = await import('../../scripts/lib/role-marker.mjs');
-const { personaEnv, resolvePersona, resolveRole } = await import('../../actions/agent-setup/persona.mjs');
+const { personaEnv, resolvePersona, resolveRole, speaksAsNoRole } = await import('../../actions/agent-setup/persona.mjs');
 const { appPersona, parsePersonas } = await import('../../scripts/app-register.mjs');
 
 /**
@@ -307,6 +307,41 @@ describe('personas live in the App register\'s optional Persona column', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // Owner decision, 2026-10-06 (kanon#336): an unresolved role fails the step, by name.
+  it('the persona step FAILS by name when it cannot resolve the role, and passes a run that asks for none', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'persona-fail-'));
+    try {
+      writeFileSync(join(dir, 'register'), reg(ROWS));
+      writeFileSync(join(dir, 'gh'), `#!/usr/bin/env bash\ncat "${dir}/register"\n`);
+      chmodSync(join(dir, 'gh'), 0o755);
+      const envFile = join(dir, 'env');
+      const step = (ROLE: string, APP_SLUG: string) => {
+        writeFileSync(envFile, '');
+        const r = spawnSync(process.execPath, ['actions/agent-setup/persona.mjs'], { encoding: 'utf8',
+          env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_ENV: envFile, GITHUB_REPOSITORY: 'acme/widgets', ROLE, APP_SLUG } });
+        return { status: r.status, out: r.stdout + r.stderr, env: readFileSync(envFile, 'utf8') };
+      };
+      for (const [role, slug] of [['Releaser', ''], ['', 'acme-unregistered']] as const) {
+        const r = step(role, slug);
+        expect(r.status, `${role}/${slug}: ${r.out}`).toBe(1);
+        expect(r.out).toMatch(/::error title=agent-setup::cannot tell which role this agent speaks as: /);
+        expect(r.env, 'and exports nothing').toBe('');
+      }
+      for (const [role, slug] of [['', ''], ['', 'github-actions']] as const) {
+        const r = step(role, slug);
+        expect(r.status, `${role}/${slug}: ${r.out}`).toBe(0);
+        expect(r.out).toMatch(/speaks as no persona/);
+      }
+      expect(step('Reviewer', '').status).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(speaksAsNoRole({})).toBe(true);
+    expect(speaksAsNoRole({ slug: 'github-actions' })).toBe(true);
+    expect(speaksAsNoRole({ slug: 'acme-implementer' })).toBe(false);
+    expect(speaksAsNoRole({ role: 'Reviewer', slug: 'github-actions' })).toBe(false);
   });
 
   it('the shell writers read it from a register on standard input, and never fail', () => {

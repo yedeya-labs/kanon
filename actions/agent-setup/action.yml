@@ -82,9 +82,10 @@ runs:
     # line every post opens with, written to `$GITHUB_ENV` for the steps after this one:
     # `agent-commits.sh` authors the agent's commits with the persona as their name, and
     # `agent-run` asks the agent to open every post with the header and its role marker. A
-    # role that can't be resolved warns and changes nothing, though since L4 every reader requires
-    # the marker, so that run's posts read as no role's. Script beside this block, read from the
-    # action cache, never the workspace.
+    # role that can't be resolved FAILS this step by name (kanon#336): since L4 every reader
+    # requires the marker, so that run's posts would read as no role's and stall in silence. A
+    # run with no role and no App slug (or `github-actions`) posts as no App and passes. Script
+    # beside this block, read from the action cache, never the workspace.
     - name: Say who the agent speaks as
       shell: bash -e {0}
       env:

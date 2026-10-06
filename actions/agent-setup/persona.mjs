@@ -16,11 +16,15 @@
 //   KANON_POST_HEADER  the header line that opens every post: `**<persona> (<Role>)**` and the marker
 // `agent-run` asks the agent to open every post with KANON_POST_HEADER.
 //
-// NO ROLE AND NO SLUG (a smoke run of the block) writes nothing, and says so.
+// NO ROLE, AND NO SLUG OR THE WORKFLOW TOKEN'S OWN (`github-actions`), writes nothing and says
+// so: an agent that posts as no App (the digests, the Overseer's files-nothing agent, the
+// blocks smoke) has no role to speak as (`NO_PERSONA` in `tests/unit/role-marker.test.ts`).
 //
-// NEVER FAILS THE STEP. A role it can't resolve is a warning, and the agent then runs as
-// before L3: unsigned posts, and commits named for the App's bot account. Since L4 every
-// reader requires the marker, so such a run's posts read as no role's: the warning says so.
+// A ROLE IT CAN'T RESOLVE FAILS THE STEP, by name (Owner decision, 2026-10-06, kanon#336). It
+// used to warn and let the agent run unsigned. Since L4 every reader requires the role's
+// marker, so such a run's posts read as no role's and the work it produced stalls in silence.
+// A malformed `Persona` cell still only warns: the header falls back to the role's own name,
+// which every reader accepts, and lane-check fails the cell by name.
 //
 // Inputs, by environment only: ROLE, APP_SLUG, GH_TOKEN, GITHUB_REPOSITORY, GITHUB_ENV.
 
@@ -55,6 +59,18 @@ export function resolveRole({ role = '', slug = '', register = () => '' }) {
   return { role: /** @type {string} */ (roles[0]) };
 }
 
+/** The workflow token's own login: a run that mints no App and posts as no role. */
+const WORKFLOW_TOKEN_SLUG = 'github-actions';
+
+/**
+ * Whether the run asks for no role at all: no role, and no App slug or the workflow token's.
+ * Such a run's agent posts as no App, so it has no persona to resolve and nothing to fail.
+ * @param {{ role?: string, slug?: string }} input
+ */
+export function speaksAsNoRole({ role = '', slug = '' }) {
+  return !role && (!slug || slug === WORKFLOW_TOKEN_SLUG);
+}
+
 /**
  * The role's persona from the register's optional `Persona` column, or null for the role's own
  * name. A register that can't be read, or a malformed column, gives null and says why: the
@@ -84,7 +100,7 @@ export function personaEnv(role, persona = null) {
   ];
 }
 
-if (isCliEntry(import.meta.url) && !process.env.ROLE && !process.env.APP_SLUG) {
+if (isCliEntry(import.meta.url) && speaksAsNoRole({ role: process.env.ROLE ?? '', slug: process.env.APP_SLUG ?? '' })) {
   console.log('No role and no App slug were passed, so the agent speaks as no persona (plan 0005 §3.3).');
 } else if (isCliEntry(import.meta.url)) {
   // Read once, from the default branch, for both the role and the persona.
@@ -94,7 +110,8 @@ if (isCliEntry(import.meta.url) && !process.env.ROLE && !process.env.APP_SLUG) {
     '-H', 'Accept: application/vnd.github.raw'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   const r = resolveRole({ role: process.env.ROLE ?? '', slug: process.env.APP_SLUG ?? '', register });
   if ('problem' in r) {
-    console.log(`::warning title=agent-setup::no persona for this agent: ${r.problem.split('\n')[0]}. Its posts carry no role marker, so since L4 no reader counts them as any role's, and its commits keep the App's bot name (plan 0005 §3.3, kanon#336).`);
+    console.log(`::error title=agent-setup::cannot tell which role this agent speaks as: ${r.problem.split('\n')[0]}. Its posts would carry no role marker, and since plan 0005's L4 no reader counts an unmarked post as any role's, so its work would stall with no signal. Pass the lane's \`role\` to agent-setup, or fix the App register (plan 0005 §3.3, kanon#336).`);
+    process.exitCode = 1;
   } else {
     const p = resolvePersona(r.role, register);
     if (p.problem) console.log(`::warning title=agent-setup::the ${r.role} speaks under its role's own name: ${p.problem}`);
