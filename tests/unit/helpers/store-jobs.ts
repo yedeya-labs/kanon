@@ -11,7 +11,7 @@ import { parse } from 'yaml';
  *   explicit `permissions:` that grants `id-token: write`, and no environment. The store's role
  *   trusts the default branch's ref subject alone (decision 9, as the Owner changed it on
  *   2026-10-05), and an environment would replace the ref in the subject. Their steps are the block's, plus `actions/download-artifact` in a job that `put`s, to fetch the
- *   report it writes; nothing else runs with the store's credentials (kanon#225). A step
+ *   report it writes, with only `name` and a `path` under `${{ runner.temp }}` (kanon#229); nothing else runs with the store's credentials (kanon#225). A step
  *   carries only `uses`, `id`, `name`, `with`, `if` and `timeout-minutes`, and a job only the
  *   keys in `STORE_JOB_KEYS`: no `env:` (a `NODE_OPTIONS` would run code inside the block), no
  *   `container:`, `services:` or `defaults:`. The delete job is held to the same, with the
@@ -95,6 +95,23 @@ export const STORE_JOB_KEYS = ['name', 'needs', 'if', 'runs-on', 'permissions', 
 /** The keys a step of one may carry: no `env:`, `run:`, `shell:`, `working-directory:` or `continue-on-error:`. */
 export const STORE_STEP_KEYS = ['uses', 'id', 'name', 'with', 'if', 'timeout-minutes'];
 const downloadsArtifact = (s: Step) => typeof s.uses === 'string' && /^actions\/download-artifact@[^/\s]+$/.test(s.uses);
+/**
+ * kanon#229: the download a put job may run fetches this run's report into the runner's temp
+ * directory, and nothing more. It holds `id-token: write`, and the block runs its own script
+ * from outside the workspace in this same job, so a `path:` elsewhere could put the agent job's
+ * artifact where the credentialed job then executes it; `github-token`, `repository` and
+ * `run-id` would fetch a "report" from another run or repository; `pattern` and
+ * `merge-multiple` widen what is fetched. So its `with:` is `name` and a `path` under
+ * `${{ runner.temp }}` alone.
+ */
+const DOWNLOAD_PATH = /^\$\{\{\s*runner\.temp\s*\}\}(?:\/(?!\.\.?(?:\/|$))[\w.-]+)+$/;
+function downloadProblems(s: Step): string[] {
+  const w = s.with ?? {};
+  const out = Object.keys(w).filter((k) => k !== 'name' && k !== 'path').map((k) => `sets '${k}'`);
+  if (typeof w.name !== 'string' || w.name.trim() === '') out.push("names no artifact (no 'name')");
+  if (typeof w.path !== 'string' || !DOWNLOAD_PATH.test(w.path.trim())) out.push(`writes to ${JSON.stringify(w.path ?? 'the workspace')}, not a directory under \${{ runner.temp }}`);
+  return out;
+}
 const describeStep = (s: Step, i: number) => `step ${i + 1} (${s.name ?? s.id ?? s.uses ?? (s.run ? `run: ${s.run.split('\n')[0]!.slice(0, 40)}` : '?')})`;
 
 /**
@@ -119,6 +136,7 @@ function extraStepProblems(name: string, j: Job, kind: 'store' | 'delete'): stri
       return;
     }
     for (const key of Object.keys(s)) if (!STORE_STEP_KEYS.includes(key)) out.push(`${name}: ${what}'s ${describeStep(s, i)} carries '${key}'`);
+    if (download) for (const p of downloadProblems(s)) out.push(`${name}: ${what}'s download of the report it puts ${p}; it fetches this run's report into \${{ runner.temp }} alone`);
   });
   return out;
 }
