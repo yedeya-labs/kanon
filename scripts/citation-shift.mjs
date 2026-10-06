@@ -3,8 +3,10 @@
 // RA-1384 — the coordinates a diff MOVED, derived from the diff rather than guessed from prose.
 //
 // WHAT `citation-guard` CANNOT SEE. It judges each `file:line` against the current tree
-// alone, so a coordinate whose sentence names no identifier is range-checked only: it
-// proves the line exists, which stays true however far the code slides. Measured on
+// alone. A coordinate whose sentence named no identifier was range-checked only, which
+// proves the line exists and stays true however far the code slides; since kanon#387 it
+// fails as unanchored, but an anchor found in the enclosing scope still slides with the
+// block, and the guard can't say where the line went. Measured on
 // PR RA-811: three coordinates into `course-wizard.tsx`, correct on its base, pointed at a
 // Back button and a `)}` on its head — one on a `[confirmed]` clause — with every gate
 // green. On PR RA-873 the guard flagged 28 and ~144 had moved; 97 of the misses sat on

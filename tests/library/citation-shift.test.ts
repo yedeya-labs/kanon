@@ -14,7 +14,8 @@ import { ROOT } from './helpers/adopter.js';
  *
  *
  * `citation-guard` judges a coordinate against one tree, so the range-checked-only
- * majority drifts silently: RA-811's three `course-wizard.tsx` coordinates pointed at a
+ * majority drifted silently (until kanon#387, which fails a coordinate that names no
+ * identifier): RA-811's three `course-wizard.tsx` coordinates pointed at a
  * Back button on its head with every gate green, and RA-873's merge commit carried 50
  * coordinates it had moved and left. This check builds the old->new line map from the
  * hunks and pushes each coordinate the diff LEFT AS IT WAS through it.

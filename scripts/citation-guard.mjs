@@ -744,10 +744,16 @@ export const isOracleSpec = (path) => path.startsWith('docs/qa/specs/');
  * line exists, which stays true however far the code slides, so the coordinate is now a
  * finding like any other, and whether the guard itself works is `selfCheck`'s question.
  *
- * The remedy names a declaration when the file has one near the range: when the range is a doc
- * comment, the declaration it documents, with the range widened to reach it; otherwise the
- * nearest at or above its end. Either way the example it prints passes the guard as written, and the
- * author has a concrete identifier to check by content, not a placeholder.
+ * The remedy names a declaration when the file has one near the range: when the range opens on
+ * a doc comment, the declaration it documents, with the range widened to reach it (never
+ * narrowed); otherwise the nearest declaration at or above the range's START. Either way the
+ * example passes the guard as written, by construction: the name is declared within the range
+ * after only comment lines, or at or above its start, which is the enclosing scope the anchor
+ * check reads and the side of the range `declarationShift` accepts. (The one exception is a
+ * nested name that is also declared at the top level only below the range.) A test
+ * round-trips each shape. The author has a concrete identifier to check by content, not a placeholder.
+ * Measured from the start, the name is the block the range opens in, not the one it ends in;
+ * that is the one a citation is about when it reaches into the next.
  *
  * @param {string[]} anchors the backticked spans the segment names, none of them distinctive
  * @param {string[]} target the cited file's lines
@@ -757,12 +763,16 @@ export const isOracleSpec = (path) => path.startsWith('docs/qa/specs/');
  */
 export const unanchoredProblem = (anchors, target, cited, a, b) => {
   // A doc comment documents what follows it, so that comes first; otherwise the nearest name
-  // at or above the range's end.
-  const below = documentedBelow(target, a, b);
-  const near = below?.name ?? enclosingDeclarations(target, b).find((n) => tokensOf(n).length);
+  // at or above the range's start. A name the anchor would not read as written is never
+  // offered: one whose tokens are not the name itself (`$state`, `id`), or a plain word
+  // (`alpha`), which `looksLikeCode` takes for prose.
+  const anchorable = (n) => tokensOf(n).includes(n) && looksLikeCode(n);
+  const below = documentedBelow(target, a, b, anchorable);
+  const near = below?.name ?? enclosingDeclarations(target, a).find(anchorable);
   // A doc comment's coordinate is widened to the declaration it documents, so the example
-  // itself passes: the comment lines alone hold no code for the name to be found in.
-  const end = below?.line ?? b;
+  // itself passes: the comment lines alone hold no code for the name to be found in. Widened
+  // only: a range that already runs past the declaration keeps its end.
+  const end = Math.max(b, below?.line ?? b);
   const coordinate = `${cited}:${a}${end === a ? '' : `-${end}`}`;
   const example = `\`\` \`${near ?? 'theFunction'}\` (\`${coordinate}\`) \`\``;
   const short = anchors.length
@@ -778,20 +788,22 @@ export const unanchoredProblem = (anchors, target, cited, a, b) => {
 };
 
 /**
- * The declaration a range of comment lines documents: the first one within a few lines below
- * `b`, with only blank or comment lines from `a` down to it, the doc-comment shape
- * `declarationShift` admits, with its line. `undefined` when the range holds code, or nothing
- * is declared.
+ * The declaration a range OPENING on comment lines documents, with its line: the first line
+ * from `a` to a few lines past `b` that declares something, when every line before it from `a`
+ * is blank or a comment. That is the doc-comment shape `declarationShift` admits, and it
+ * includes a range that opens on the declaration itself. `undefined` when code comes first,
+ * when nothing is declared, or when the name is not `anchorable`.
  *
  * @param {string[]} target
  * @param {number} a
  * @param {number} b
+ * @param {(name: string) => boolean} anchorable
  */
-const documentedBelow = (target, a, b) => {
+const documentedBelow = (target, a, b, anchorable) => {
   const DECL = /^\s*(?:export\s+)?(?:async\s+)?(?:function|const|let|class|interface|type)\s+([A-Za-z_$][\w$]*)/;
   for (let i = a - 1; i < Math.min(target.length, b + 8); i += 1) {
     const m = DECL.exec(target[i]);
-    if (m) return tokensOf(m[1]).length ? { name: m[1], line: i + 1 } : undefined;
+    if (m) return anchorable(m[1]) ? { name: m[1], line: i + 1 } : undefined;
     if (!BLANK_OR_COMMENT.test(target[i])) return undefined;
   }
   return undefined;

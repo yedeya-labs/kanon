@@ -155,16 +155,26 @@ describe('the relaxations, each pinned by the false positive that forced it', ()
   });
 
   it('drops tokens too short to be distinctive rather than matching on noise', () => {
-    // `<li>` -> `li` would match almost any line. Yielding nothing correctly demotes
-    // the citation to range-checked, which the run reports.
+    // `<li>` -> `li` would match almost any line. Yielding nothing leaves the citation
+    // unanchored, which fails and names the span as too short to look for (kanon#387).
     expect(tokensOf('<li>')).toEqual([]);
     expect(tokensOf('orders.status')).toEqual(['orders', 'status']);
   });
 
   it.each([
-    ['a statement inside a function', 'export function placeOrder() {\n  const x = 1;\n  return x;\n}\n', 3, '`placeOrder` (`src/a.ts:3`)'],
-    ['a doc comment, widened to what it documents', 'const total = 1;\n/** Places the order. */\nexport const placeOrder = () => 1;\n', 2, '`placeOrder` (`src/a.ts:2-3`)'],
-    ['a line with nothing declared near it', 'x = 1\n', 1, '`theFunction` (`src/a.ts:1`)'],
+    ['a statement inside a function', 'export function placeOrder() {\n  const x = 1;\n  return x;\n}\n', '3', '`placeOrder` (`src/a.ts:3`)'],
+    ['a doc comment, widened to what it documents', 'const total = 1;\n/** Places the order. */\nexport const placeOrder = () => 1;\n', '2', '`placeOrder` (`src/a.ts:2-3`)'],
+    ['a line with nothing declared near it', 'x = 1\n', '1', '`theFunction` (`src/a.ts:1`)'],
+    // Review of #398: measured from the range's END this named `bravo`, declared below the
+    // start with code between, and the printed example failed as an insertion shift.
+    ['the block the range opens in, not the one it ends in', 'export function placeAlpha() {\n  return 1;\n}\nexport function placeBravo() {\n  return 2;\n', '2-5', '`placeAlpha` (`src/a.ts:2-5`)'],
+    // A plain word reads as prose to the anchor, so `alpha` as written would fail again.
+    // `a_b` looks like code but is too short to be a token, so as written it would not anchor.
+    ['the placeholder when the only name is too short to look for', 'export function a_b() {\n  return 1;\n}\n', '2', '`theFunction` (`src/a.ts:2`)'],
+    ['the placeholder when the only name is a plain word', 'export function alpha() {\n  return 1;\n}\n', '2', '`theFunction` (`src/a.ts:2`)'],
+    // Review of #398: the range is widened to the declaration, never narrowed to it.
+    ['a doc comment whose range runs past the declaration, keeping its end', '/** Places it. */\nexport function placeOrder() {\n  return 1;\n}\n', '1-4', '`placeOrder` (`src/a.ts:1-4`)'],
+    ['a range that opens on the declaration, keeping its end', 'export function placeOrder() {\n  return 1;\n}\n', '1-3', '`placeOrder` (`src/a.ts:1-3`)'],
   ])("an unanchored citation's remedy names %s, and the example passes the guard", (_, src, line, example) => {
     const r = audit(doc(`See \`src/a.ts:${line}\`.`), { 'src/a.ts': src });
     expect(r.findings[0].problem).toContain(`as in \`\` ${example} \`\``);
@@ -797,7 +807,8 @@ describe('the anchor was found — in the wrong place (RA-2211)', () => {
    * the file by +8, `setTenantStatus` was declared on line **274** — the LAST line of the
    * stale range — so an identifier WAS found in the range, the citation was reported as
    * anchor-checked, and it pointed overwhelmingly at `updateTenant`'s body. That is not
-   * the documented `range-checked only` degradation the run already prints a count for.
+   * the `range-checked only` degradation the run then printed a count for (a citation that
+   * names no identifier, which since kanon#387 fails as unanchored).
    *
    * The rule: a range that opens inside a different block and only reaches the
    * declaration its sentence names at its far end is the signature of an insertion.
@@ -904,8 +915,9 @@ describe('one edit shifts a BLOCK, and the block is what gets reported (RA-2211)
    * THE REASON THIS EXISTS IS THE CITATIONS IT CANNOT SEE. Of the 16 coordinates into
    * `tenancy.ts` that RA-2208 shifted, the per-citation rule above reaches the ones whose
    * sentence names a top-level declaration. The rest name nothing checkable — *"**Insert
-   * the tenant row** — `tenancy.ts:197-207`"* names no identifier at all — so they are
-   * range-checked only and no per-citation rule can ever judge them. They were stale by
+   * the tenant row** — `tenancy.ts:197-207`"* names no identifier at all — so no
+   * per-citation rule can say they shifted (since kanon#387 they fail as unanchored, which
+   * says nothing about a shift). They were stale by
    * exactly the same `k`. Naming the FILE is what carries the finding across to them.
    */
   const shifted = (n: number) =>
