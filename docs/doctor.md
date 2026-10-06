@@ -1,11 +1,11 @@
 # `kanon doctor`
 
-`kanon doctor` says what a Kanon installation lacks, before a lane's first red run says it for you ([plan 0005](plans/0005-lean-installation.md) §5.5). Run it from your repository's checkout:
+`kanon doctor` says what a Kanon installation lacks, before a lane's first red run says it for you ([plan 0005](plans/0005-lean-installation.md) §5.5). Run it from your repository's checkout, through `npx` as the [README](../README.md) runs `kanon init`:
 
 ```bash
-npx --yes --package github:yedeya-labs/kanon#<release> kanon doctor              # against the release your callers pin
-npx --yes --package github:yedeya-labs/kanon#<release> kanon doctor --to v1.4.0  # before you merge the pin bump to v1.4.0
-npx --yes --package github:yedeya-labs/kanon#<release> kanon doctor --json       # for a script or an agent
+kanon doctor              # against the release your callers pin
+kanon doctor --to v1.4.0  # before you merge the pin bump to v1.4.0
+kanon doctor --json       # for a script or an agent
 ```
 
 It reads the repository the way `kanon init` does, and compares it with the requirements file (`requirements.json`) that every release ships at its tag: the release your callers pin, or, with `--to`, the one you are moving to. It reads that file from Kanon's repository at the tag, so the doctor you run can be any release from v0.26.0 on.

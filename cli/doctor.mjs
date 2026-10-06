@@ -707,7 +707,7 @@ export const diagnose = async (deps, opts) => {
       else {
         find('declaration.missing', path, `is missing; ${by.join(', ')} read${by.length > 1 ? '' : 's'} it at ${checked} (K-LAYOUT-17).`, {
           text: path === 'docs/qa/stack.md' ? `Write it with its ## Gates, or let kanon init write it:` : `Write it (K-LAYOUT-17), or let kanon init write it where it can:`,
-          commands: [`npx --yes --package github:${KANON_REPO}#${checked} kanon init --dry-run`],
+          commands: ['kanon init --dry-run'],
         });
       }
       continue;
@@ -720,7 +720,7 @@ export const diagnose = async (deps, opts) => {
   if (installed.length) {
     const hook = read(req.hook.path);
     if (hook === null) {
-      find('hook.missing', req.hook.path, `the project-setup hook is missing; every lane that checks out calls it (plan 0001 §5).`, { text: `Write it, or let kanon init write a starting one that installs nothing yet.`, commands: [`npx --yes --package github:${KANON_REPO}#${checked} kanon init --dry-run`] });
+      find('hook.missing', req.hook.path, `the project-setup hook is missing; every lane that checks out calls it (plan 0001 §5).`, { text: `Write it, or let kanon init write a starting one that installs nothing yet.`, commands: ['kanon init --dry-run'] });
     } else {
       /** @type {unknown} */
       let doc = null;
@@ -782,7 +782,7 @@ export const diagnose = async (deps, opts) => {
   else if (!s.covering.length) {
     find('ruleset.missing', s.defaultBranch, `no active ruleset covers ${s.defaultBranch}${s.inactive.length ? ` (${s.inactive.map((c) => `"${c.name}" is ${c.enforcement}`).join(', ')})` : ''} (K-ADOPT-1 step 8).`, {
       text: `Let kanon init create "${RULESET_NAME}"; it needs Administration: write.`,
-      commands: [`npx --yes --package github:${KANON_REPO}#${checked} kanon init`],
+      commands: ['kanon init'],
     });
   } else {
     for (const gap of rulesetGaps(s.covering)) {
