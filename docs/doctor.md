@@ -18,11 +18,12 @@ In the order it lists them, which is the order to fix them:
 
 1. **The pin.** Every `yedeya-labs/kanon` reference under `.github/` names one exact release (`K-ADOPT-11`).
 2. **The Apps** the lanes you call run as, and the optional Releaser when your release caller maps its secrets: a register row for each of their roles, the roles of one App sharing one slug and no two Apps sharing one (`K-LAYOUT-6`, plan 0005 §3.4), and each App's permissions at least the release's grant for it, read from `GET /apps/<slug>`. An App that holds more is listed, without blocking: each lane narrows its token to what it uses (`K-AGENT-46`). **`apps-check` still fails such an App,** because it requires the App's permissions to be exactly its own; the two differ on purpose (the Owner's decision 3 below).
+   It also lists, without blocking, **an App left installed that no lane uses any more** (`app.unused`): one the App register's git history on the checkout once named, that its current copy doesn't, and that the owner still has an installation of, such as a per-role App left from before the two-App move (decided by the Owner, 2026-10-06). Delete it once the Apps that replaced it have run green for a week, and not while another repository's register still names it. If the token can't list the owner's installations, this check is `unchecked`.
 3. **The secrets,** by name: each lane's, and each App's two (plan 0005 §3.5). A per-role or retired App secret that nothing reads any more is listed as stale, without blocking.
 4. **The declarations** each lane reads (`K-LAYOUT-17`): a file that has no default must exist, and the stack document must hold `## Gates` exactly once. A missing playbook is Kanon's baseline, and is a note, not a finding (plan 0005 §5.2). Also the project-setup hook and every input the lanes pass it, the hooks only some lanes call, and the workflows a lane reads by file name (`ci.yml`).
 5. **The callers:** each at its lane's file name (`K-LAYOUT-18`), mapping exactly the lane's secrets by name, passing only inputs the lane declares, granting at least the lane's permissions, and with the name or run-name a lane asks of its caller. The `apps-check` caller maps each App's secrets, and nothing its release doesn't take.
 6. **The labels** of the taxonomy (`K-WORK-12`). A lane creates a label it needs on first use (plan 0005 §5.3), so a missing one doesn't block.
-7. **The ruleset** on the default branch (`K-ADOPT-1` step 8), where the plan has rulesets. A private repository on a plan without them is a note: nothing on the platform enforces review there (`K-ADOPT-3`).
+7. **The ruleset** on the default branch (`K-ADOPT-1` step 8), where the plan has rulesets. A private repository on a plan without them is a note: nothing on the platform enforces review there (`K-ADOPT-3`). Where your release caller maps the Releaser, also its bypass (`K-MERGE-8`, [#49](https://github.com/yedeya-labs/kanon/issues/49)): the Releaser App must be a bypass actor of each ruleset on the default branch, and the only one. Another actor's bypass, such as the admin role's, is asked off only against a release whose `dco` check passes the release PR the Releaser opens (its requirements file's `release.dcoExemptsReleaser`, [#337](https://github.com/yedeya-labs/kanon/issues/337)); against an earlier one it is a note, because that bypass is still what merges the release PR. GitHub shows a ruleset's bypass list only to someone who can edit it, so with another token this check is `unchecked`.
 8. **The id-token holders,** below.
 
 `lane-check` checks the callers too, on every pull request, against the release they pin. What doctor adds is the release you are about to pin, and what only GitHub knows: the secrets, the Apps' permissions, the labels and the ruleset.
@@ -49,6 +50,7 @@ Doctor counts the workflows of the checkout it runs from. Run it on your default
 3. **An App holding more than the release grants warns, and doesn't block** (`app.permission-extra`): each lane narrows its token to what it uses (`K-AGENT-46`). `apps-check`, which fails such an App, is unchanged; the divergence is deliberate.
 4. **`--to` checks the target release only.** What the pinned release already needed shows up too, because it fails the target as well.
 5. **The holders are counted on the checkout's workflows,** not on the default branch read through the API; doctor adds a note when the checkout is on another branch.
+6. **A per-role App left installed after the two-App move is listed, without blocking** (`app.unused`), with the steps to uninstall and delete it in its fix.
 
 ## Exit codes
 
@@ -134,6 +136,7 @@ When it can't run, or on a usage error with `--json`, the document is `{ "schema
 | `register.shared-slug` | `app` | yes | Two Apps name one slug. |
 | `app.permission-missing` | `app` | yes | An App holds less than the release grants it. |
 | `app.permission-extra` | `app` | no | An App holds more than the release grants it. It blocks nothing, since each lane narrows its token, though `apps-check` fails it. |
+| `app.unused` | `app` | no | An App the App register's history on the checkout once named, and its current copy doesn't, is still installed for the owner: a per-role App left from before the two-App move, say. Its fix gives the uninstall and delete steps. |
 | `secret.missing` | `secret` | yes | A secret a lane or an App needs is not set. |
 | `secret.stale` | `secret` | no | An App secret nothing at the checked release reads. |
 | `declaration.missing` | `declaration` | yes | A project document a lane reads, with no default, is missing. |
@@ -156,5 +159,7 @@ When it can't run, or on a usage error with `--json`, the document is `{ "schema
 | `label.missing` | `label` | no | Labels of the taxonomy are missing. |
 | `ruleset.missing` | `ruleset` | yes | No active ruleset covers the default branch. |
 | `ruleset.rule-missing` | `ruleset` | yes | The default branch's ruleset lacks a rule of `K-ADOPT-1` step 8. |
+| `ruleset.releaser-bypass-missing` | `ruleset` | yes | The release caller maps the Releaser, and a ruleset on the default branch does not list the Releaser App as a bypass actor (`K-MERGE-8`). |
+| `ruleset.bypass-extra` | `ruleset` | yes | The release caller maps the Releaser, the checked release's `dco` check passes the Releaser's release PR, and a ruleset on the default branch lets another actor bypass it, such as the admin role (`K-MERGE-8`). |
 | `id-token.unaccepted` | `id-token` | yes | A job holds `id-token: write`, and is neither Kanon's lane nor accepted. |
 | `id-token.stale-acceptance` | `id-token` | no | The adoption record accepts a job that no longer holds the grant. |

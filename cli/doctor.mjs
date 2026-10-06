@@ -45,6 +45,7 @@ import { checkoutCheck, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
 import { appsArgs, inspect, registerRolesOf, registerRows, rulesetGaps, RULESET_NAME } from './init.mjs';
+import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
@@ -86,6 +87,7 @@ export const FINDINGS = {
   'register.shared-slug': { category: 'app', blocking: true },
   'app.permission-missing': { category: 'app', blocking: true },
   'app.permission-extra': { category: 'app', blocking: false },
+  'app.unused': { category: 'app', blocking: false },
   'secret.missing': { category: 'secret', blocking: true },
   'secret.stale': { category: 'secret', blocking: false },
   'declaration.missing': { category: 'declaration', blocking: true },
@@ -108,6 +110,8 @@ export const FINDINGS = {
   'label.missing': { category: 'label', blocking: false },
   'ruleset.missing': { category: 'ruleset', blocking: true },
   'ruleset.rule-missing': { category: 'ruleset', blocking: true },
+  'ruleset.releaser-bypass-missing': { category: 'ruleset', blocking: true },
+  'ruleset.bypass-extra': { category: 'ruleset', blocking: true },
   'id-token.unaccepted': { category: 'id-token', blocking: true },
   'id-token.stale-acceptance': { category: 'id-token', blocking: false },
 };
@@ -633,6 +637,8 @@ export const diagnose = async (deps, opts) => {
       });
     }
   }
+  /** @type {Map<string, number>} identity → its App's id, read with its permissions */
+  const appIdOf = new Map();
   for (const [id, slug] of slugOf) {
     const need = req.identities.apps[id]?.permissions ?? req.identities.roles[id]?.permissions ?? {};
     const r = await deps.gh(['api', `apps/${slug}`]);
@@ -648,6 +654,7 @@ export const diagnose = async (deps, opts) => {
       unchecked.push({ check: 'app-permissions', subject: slug, reason: `could not read the App ${slug} (${r.stderr.trim() || `exit ${r.status}`})` });
       continue;
     }
+    if (Number.isInteger(app.id)) appIdOf.set(id, Number(app.id));
     const have = /** @type {Record<string, string>} */ (app.permissions);
     const ownerLogin = String(app.owner?.login ?? s.owner);
     const url = app.owner?.type === 'Organization' || (!app.owner && s.kind === 'Organization') ? `https://github.com/organizations/${ownerLogin}/settings/apps/${slug}/permissions` : `https://github.com/settings/apps/${slug}/permissions`;
@@ -664,6 +671,42 @@ export const diagnose = async (deps, opts) => {
         text: `Narrow the App's permissions on its settings page.`,
         url,
       });
+    }
+  }
+
+  // ── Apps the register no longer names, still installed ───────────────────────────────────────
+  // After the move to two Apps (plan 0005 §3.1, L5/L6), the per-role Apps of earlier releases stay
+  // installed until someone deletes them, holding keys no lane reads (the Owner, 2026-10-06). An
+  // App counts when the register's own history on this checkout once named it and its current
+  // copy doesn't, and the owner still has an installation of it. Never blocking: deleting an App
+  // is the Owner's, after a week of green runs on the new ones (L5).
+  const nowSlugs = new Set(rows.values());
+  const history = deps.git(['-C', root, 'log', '--format=', '-p', '--', REGISTER_PATH]);
+  const formerSlugs = history.status === 0
+    ? [...new Set([...history.stdout.matchAll(/^[+-][ \t]*\|[^|\n]*\|[ \t]*\*{0,2}`([a-z0-9]+(?:-[a-z0-9]+)*)`/gm)].map((m) => /** @type {string} */ (m[1])))].filter((x) => !nowSlugs.has(x)).sort()
+    : [];
+  if (formerSlugs.length) {
+    const listed = await deps.gh(['api', s.kind === 'Organization' ? `orgs/${s.owner}/installations?per_page=100` : 'user/installations?per_page=100']);
+    /** @type {any[] | null} */
+    const installs = (() => {
+      try {
+        const j = listed.status === 0 ? JSON.parse(listed.stdout) : null;
+        return Array.isArray(j?.installations) ? j.installations : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (!installs) unchecked.push({ check: 'unused-apps', subject: s.owner, reason: `the token can't list ${s.owner}'s App installations (${listed.stderr.trim() || `exit ${listed.status}`}), so ${formerSlugs.join(', ')}, which the register once named, can't be looked for` });
+    else {
+      for (const slug of formerSlugs) {
+        const inst = installs.find((i) => i?.app_slug === slug && String(i?.account?.login ?? '').toLowerCase() === s.owner.toLowerCase());
+        if (!inst) continue;
+        const base = s.kind === 'Organization' ? `https://github.com/organizations/${s.owner}/settings` : 'https://github.com/settings';
+        find('app.unused', slug, `The App \`${slug}\` is still installed for ${s.owner}, but ${REGISTER_PATH} no longer names it, so no lane of ${checked} runs as it; it holds a key nothing reads (plan 0005 §3.1).`, {
+          text: `Once the Apps that replaced it have run green for a week (plan 0005 L5), uninstall it on its installation page, delete it on its Advanced page (${base}/apps/${slug}/advanced, "Delete GitHub App"), and delete its secrets if secret.stale lists them. Keep it while another repository's register still names it.`,
+          url: `${base}/installations/${inst.id}`,
+        });
+      }
     }
   }
 
@@ -792,6 +835,40 @@ export const diagnose = async (deps, opts) => {
   } else {
     for (const gap of rulesetGaps(s.covering)) {
       find('ruleset.rule-missing', s.defaultBranch, `The ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) does not ${gap} (K-ADOPT-1 step 8).`, { text: `In the repository's Settings, Rules, Rulesets: ${gap}.`, url: `https://github.com/${repo}/settings/rules` });
+    }
+    // THE RELEASER'S BYPASS (K-MERGE-8, plan 0005 §3.1, #49), only where the release caller maps
+    // the Releaser: it is then the one bypass actor, through pull requests only. Without it, the
+    // admin's bypass is what merges a release PR that runs no CI (docs/release.md), so nothing
+    // is asked. Another actor's bypass is asked off only against a release whose dco check
+    // passes the Releaser's release PR (#337); before that, it is what merges that PR.
+    if (identities.includes('releaser')) {
+      const slug = slugOf.get('releaser');
+      const appId = appIdOf.get('releaser');
+      if (slug === undefined || appId === undefined) {
+        unchecked.push({ check: 'ruleset-bypass', subject: s.defaultBranch, reason: `the Releaser App ${slug ? `\`${slug}\` could not be read` : 'has no register row'}, so its bypass can't be looked for` });
+      } else {
+        const where = releaserBypass(s.covering, appId);
+        for (const r of where.hidden) unchecked.push({ check: 'ruleset-bypass', subject: s.defaultBranch, reason: `the token can't see the bypass list of the ruleset "${r.name}" (only someone who can edit it can)` });
+        for (const r of where.lacking) {
+          find('ruleset.releaser-bypass-missing', s.defaultBranch, `The ruleset "${r.name}" on ${s.defaultBranch} does not list the Releaser App \`${slug}\` as a bypass actor; K-MERGE-8 makes it the only one, through pull requests only.`, {
+            text: r.source_type === 'Organization' ? `Add the App to the organisation ruleset's bypass list, "For pull requests only".` : `Add it, through pull requests only, keeping the ruleset's other actors (kanon apps adds it when it creates the Releaser):`,
+            commands: r.source_type === 'Organization' ? [] : bypassCommand(repo, r, [...r.bypass_actors, releaserActor(appId)]),
+            url: rulesetUrl(repo, r),
+          });
+        }
+        if (where.others.length && req.release?.dcoExemptsReleaser) {
+          for (const r of [...new Set(where.others.map((o) => o.ruleset))]) {
+            const extra = where.others.filter((o) => o.ruleset === r).map((o) => actorName(o.actor));
+            find('ruleset.bypass-extra', s.defaultBranch, `The ruleset "${r.name}" on ${s.defaultBranch} lets ${extra.join(', ')} bypass it; K-MERGE-8 makes the Releaser App \`${slug}\` the only bypass actor. Kanon ${checked}'s dco check passes the Releaser's release PR (#337), so release PRs merge through the front door without it.`, {
+              text: r.source_type === 'Organization' ? `Remove the other actors from the organisation ruleset's bypass list.` : `Leave the Releaser as the ruleset's only bypass actor, once your dco caller pins ${checked}:`,
+              commands: r.source_type === 'Organization' ? [] : bypassCommand(repo, r, [releaserActor(appId)]),
+              url: rulesetUrl(repo, r),
+            });
+          }
+        } else if (where.others.length) {
+          notes.push(`The ruleset on ${s.defaultBranch} lets ${where.others.map((o) => actorName(o.actor)).join(', ')} bypass it beside the Releaser. Keep that while you pin ${checked}: its dco check fails the Releaser's release PR (#337), and that bypass is what merges it.`);
+        }
+      }
     }
   }
 

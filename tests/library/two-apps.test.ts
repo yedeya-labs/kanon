@@ -93,7 +93,8 @@ describe('L4: the implement lane stamps only the PR its own run opened', () => {
     // The forged PR was open before the run started, from a branch that already existed.
     const forged = pr(5, 'fix/3-forged', '2026-10-05T09:00:00Z', HEAD);
     const ours = pr(6, 'feat/3-thing', '2026-10-05T10:05:00Z', HEAD);
-    const picked = pickOpened({ prs: [forged, ours], repo: 'o/r', since, branchesBefore: ['main', 'fix/3-forged'], email: EMAIL, headCommit: appCommit });
+    // `heads`: what the run's agent job held after the agent (#324), its own branch's head.
+    const picked = pickOpened({ prs: [forged, ours], repo: 'o/r', since, branchesBefore: ['main', 'fix/3-forged'], email: EMAIL, heads: [{ ref: 'feat/3-thing', sha: HEAD }], headCommit: appCommit });
     expect(picked).toEqual({ pr: 6, sha: HEAD });
     // So the forged PR's head has no status, and the Merger still refuses it.
     expect(verdict(authorPr({ number: 5, headStatuses: [] })).rule).toBe('not-the-implementer');
@@ -102,7 +103,7 @@ describe('L4: the implement lane stamps only the PR its own run opened', () => {
   it('stamps neither of two candidates, and says so by number', () => {
     const a = pr(6, 'feat/3-a', '2026-10-05T10:05:00Z', HEAD);
     const b = pr(8, 'feat/3-b', '2026-10-05T10:06:00Z', HEAD);
-    const picked = pickOpened({ prs: [a, b], repo: 'o/r', since, branchesBefore: ['main'], email: EMAIL, headCommit: appCommit });
+    const picked = pickOpened({ prs: [a, b], repo: 'o/r', since, branchesBefore: ['main'], email: EMAIL, heads: [{ ref: 'feat/3-a', sha: HEAD }, { ref: 'feat/3-b', sha: HEAD }], headCommit: appCommit });
     expect(picked).toHaveProperty('none');
     expect(String((picked as { none: string }).none)).toMatch(/#6, #8/);
   });

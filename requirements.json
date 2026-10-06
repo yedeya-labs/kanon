@@ -680,5 +680,8 @@
       "baseline": true,
       "requiredSections": []
     }
+  },
+  "release": {
+    "dcoExemptsReleaser": true
   }
 }

@@ -206,6 +206,11 @@ on:
       outcome:
         description: The agent step's outcome, readable from the caller after the job.
         value: ${{ jobs.run.outputs.outcome }}
+      # THE BRANCH HEADS THIS JOB HELD WHEN THE AGENT FINISHED (#324), for the implementer
+      # status's `open` pick: see `Record the branch heads the agent left` below.
+      heads:
+        description: A JSON array of `{ ref, sha }`, the local branches and HEAD after the agent, or empty.
+        value: ${{ jobs.run.outputs.heads }}
     secrets:
       app-token:
         description: >-
@@ -227,6 +232,7 @@ jobs:
       # `agent` is the agent-run block, whose only step that can fail is the action, so its
       # outcome is the action's — see that block's header.
       outcome: ${{ steps.agent.outcome }}
+      heads: ${{ steps.heads.outputs.heads }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1): a cancelled
       # job that ran at least its `timeout-minutes` timed out. Nothing else in the job's
@@ -405,6 +411,30 @@ jobs:
           else
             echo "::warning title=agent-lane::could not put the project-setup hook back from $SHA; its post steps may fail"
           fi
+
+      # THE BRANCH HEADS THE AGENT LEFT (#324; plan 0005 §3.3, "at the head it pushed"). The
+      # implementer status's `open` pick stamps a pull request only when its head is one of
+      # these, so a run binds to the commit ITS job pushed, not to whatever the shared Author
+      # App pushed meanwhile: an overlapping run's pull request is not here, and a run that
+      # pushed nothing has nothing here to match. Local branches only, never `refs/remotes`:
+      # a `git fetch` brings in every other run's branches there, but creates no local branch.
+      # A fixed step, after the agent, holding no key (`K-AGENT-49`). The agent could rewrite
+      # what it reads, but only to point at a commit in its own job's repository, which it
+      # could as well have pushed as its own pull request: the record is as trustworthy as the
+      # agent whose pull request it binds, and no other lane's agent reaches this job.
+      # `core.fsmonitor` off, so no hook the agent configured runs here. Every lane records it;
+      # only the Implementer's lanes read it.
+      - name: Record the branch heads the agent left
+        id: heads
+        if: always() && steps.agent.outcome != 'skipped'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          {
+            git -c core.fsmonitor=false for-each-ref --count=100 --format='%(objectname) %(refname:strip=2)' refs/heads
+            if sha="$(git -c core.fsmonitor=false rev-parse --verify -q HEAD)"; then echo "$sha HEAD"; fi
+          } | jq -Rsc 'split("\n") | map(select(length > 0) | capture("^(?<sha>[0-9a-f]{40}) (?<ref>.+)$"))' \
+            | sed 's/^/heads=/' >> "$GITHUB_OUTPUT"
 
       # Explain a red run, count what it opened, record what it cost. `always()` and
       # `continue-on-error` for the reasons in the block's header; `job-status` because the

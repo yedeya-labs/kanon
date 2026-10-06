@@ -293,6 +293,12 @@ on:
       outcome:
         description: The agent step's outcome, readable from the caller after the job.
         value: ${{ jobs.run.outputs.outcome }}
+      # THE BRANCH HEADS THE AGENT'S JOB HELD WHEN IT FINISHED (#324): the implementer status's
+      # `open` pick stamps only a pull request whose head is one of them. See the spine's
+      # `Record the branch heads the agent left`.
+      heads:
+        description: A JSON array of `{ ref, sha }`, the agent's job's local branches and HEAD after the agent, or empty.
+        value: ${{ jobs.run.outputs.heads }}
     secrets:
       app-id:
         required: true

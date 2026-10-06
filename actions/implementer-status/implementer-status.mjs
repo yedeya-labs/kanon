@@ -13,8 +13,11 @@
 //          is never found by its link to the issue, its label or its author, all of which an
 //          agent can forge. It is the one pull request that was opened after the run started,
 //          from a branch that didn't exist before the run (the filter job's snapshot), whose
-//          head commit is authored by the App. None, or more than one, and it stamps nothing
-//          and says so by name.
+//          head commit is authored by the App, AT A HEAD THIS RUN'S AGENT JOB HELD when the
+//          agent finished (the lane spine's `heads` output, #324). The App's email alone binds
+//          nothing: every run of the shared Author App commits under it, so two overlapping
+//          runs would each see both pull requests, and a run that opened none would stamp
+//          another lane's. None, or more than one, and it stamps nothing and says so by name.
 //   carry  (implement-revise, rebase): the status moves to the new head only when the head the
 //          run started from carried one created by this App, the new head descends from it,
 //          and every commit between them is authored by the App. A person's push breaks the
@@ -25,7 +28,7 @@
 //
 // Inputs, by environment: MODE, GITHUB_REPOSITORY, READ_TOKEN (contents and pull requests
 // read), STATUS_TOKEN (Commit statuses write), APP_SLUG, RUN_URL, and SINCE + BRANCHES_BEFORE
-// (open) or PR + START_HEAD (carry).
+// + HEADS (open) or PR + START_HEAD (carry).
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
@@ -53,22 +56,28 @@ export const byApp = (commit, email) => String(commit?.commit?.author?.email ?? 
  * @param {{
  *   prs: Array<{ number: number, created_at: string, head: { ref: string, sha: string, repo?: { full_name?: string } | null } }>,
  *   repo: string, since: string, branchesBefore: string[] | null, email: string,
+ *   heads: Array<{ ref?: string, sha?: string }> | null,
  *   headCommit: (sha: string) => ApiCommit | undefined,
  * }} input
  * @returns {{ pr: number, sha: string } | { none: string }}
  */
-export function pickOpened({ prs, repo, since, branchesBefore, email, headCommit }) {
+export function pickOpened({ prs, repo, since, branchesBefore, email, heads, headCommit }) {
   const t = Date.parse(since);
   if (Number.isNaN(t)) return { none: 'the run\'s start time is unknown, so no pull request can be shown to be this run\'s' };
   if (!Array.isArray(branchesBefore)) return { none: 'the branches that existed before the run are unknown, so no branch can be shown to be first pushed in it' };
+  if (!Array.isArray(heads)) return { none: 'the heads the agent\'s job held are unknown, so no pull request\'s head can be shown to be the one this run pushed' };
   const before = new Set(branchesBefore);
+  // THE BINDING (#324): the head this run's agent job held. The App's email, checked below
+  // too, is shared by every run of the App and every Author lane, so it binds nothing alone.
+  const pushed = new Set(heads.map((h) => String(h?.sha ?? '').toLowerCase()).filter((x) => /^[0-9a-f]{40}$/.test(x)));
   const candidates = prs.filter((p) =>
     p.head?.repo?.full_name === repo
     && !before.has(p.head.ref)
     && Date.parse(p.created_at) >= t
+    && pushed.has(String(p.head.sha).toLowerCase())
     && byApp(headCommit(p.head.sha), email));
   if (candidates.length === 0) {
-    return { none: 'no open pull request was opened after the run started, from a branch first pushed in it, at a head commit the App authored' };
+    return { none: `no open pull request was opened after the run started, from a branch first pushed in it, at a head this run's agent job pushed (${pushed.size ? `it held ${heads.slice(0, 5).map((h) => `${h.ref}@${String(h.sha).slice(0, 7)}`).join(', ')}${heads.length > 5 ? ', …' : ''}` : 'it held none'}) and the App authored` };
   }
   if (candidates.length > 1) {
     return { none: `${candidates.length} pull requests match (#${candidates.map((p) => p.number).join(', #')}), so none is provably this run's` };
@@ -149,9 +158,12 @@ function main() {
     /** @type {string[] | null} */
     let branchesBefore;
     try { branchesBefore = JSON.parse(String(env.BRANCHES_BEFORE ?? '')); } catch { branchesBefore = null; }
+    /** @type {Array<{ ref?: string, sha?: string }> | null} */
+    let heads;
+    try { heads = JSON.parse(String(env.HEADS ?? '')); } catch { heads = null; }
     const prs = ghJson(['api', '--paginate', '--slurp', `repos/${repo}/pulls?state=open&per_page=100`], read).flat();
     const verdict = pickOpened({
-      prs, repo, since: String(env.SINCE ?? ''), branchesBefore, email,
+      prs, repo, since: String(env.SINCE ?? ''), branchesBefore, email, heads,
       headCommit: (sha) => ghJson(['api', `repos/${repo}/commits/${sha}`], read),
     });
     if ('none' in verdict) return say(`${lead} not set: ${verdict.none}.`);

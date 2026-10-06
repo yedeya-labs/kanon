@@ -23,7 +23,8 @@ import { URL } from 'node:url';
  * @typedef {{ name: string, roles: string[], permissions: Record<string, string> }} AppIdentity
  * @typedef {{ lanes: Record<string, Lane>, hook: { path: string, inputs: string[] },
  *   identities: { roles: Record<string, RoleIdentity>, apps: Record<string, AppIdentity> }, labels: string[],
- *   declarations?: Record<string, { baseline: boolean, requiredSections: string[] }> }} Requirements
+ *   declarations?: Record<string, { baseline: boolean, requiredSections: string[] }>,
+ *   release?: { dcoExemptsReleaser?: boolean } }} Requirements
  */
 
 /** The requirements file of the Kanon tree this runs from. @returns {Requirements} */

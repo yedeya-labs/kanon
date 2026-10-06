@@ -22,6 +22,15 @@ describe('requirements.json', () => {
     );
   });
 
+  it("says whether this release's dco check exempts the Releaser's release commits, from the action itself (#337, #49)", async () => {
+    // `kanon doctor` asks an adopter to drop every bypass actor but the Releaser only against a
+    // release that says so, so the claim must be the action's own.
+    const { RELEASER_ROLE, parseRegister } = await import('../../actions/dco/dco.mjs');
+    expect(RELEASER_ROLE).toBe('Releaser');
+    expect(parseRegister('| Role | App slug |\n|---|---|\n| Releaser | `acme-releaser` |\n')).toMatchObject({ releaser: 'acme-releaser' });
+    expect(built.release).toEqual({ dcoExemptsReleaser: true });
+  });
+
   it("lists every lane of docs/lanes.md's table, and no other workflow", () => {
     const table = [...readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8').split('## Which lanes are available')[1]!.split('\n## ')[0]!.matchAll(/^\| [^|]+\| `(agent-[a-z-]+\.yml)` \|/gm)].map((m) => m[1]);
     expect(table.length).toBe(18);

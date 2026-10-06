@@ -114,5 +114,10 @@ export const buildRequirements = (root: string) => {
     },
     labels: labels.map((l) => l.name),
     declarations,
+    // What this release's `dco` action does with the optional Releaser's release commits (#337):
+    // `kanon doctor` asks an adopter to drop every other ruleset bypass actor (`K-MERGE-8`) only
+    // against a release whose `dco` passes the release PR the Releaser opens. Read from the action
+    // itself, so the file can't claim an exemption the action doesn't make.
+    release: { dcoExemptsReleaser: /^export const RELEASER_ROLE = 'Releaser';$/m.test(readFileSync(join(root, 'actions/dco/dco.mjs'), 'utf8')) },
   };
 };

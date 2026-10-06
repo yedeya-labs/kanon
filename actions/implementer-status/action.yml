@@ -19,8 +19,8 @@
 # pull request for a person rather than failing a run.
 name: Implementer status
 description: >-
-  Set the `kanon/role: implementer` commit status on the pull request this run opened (mode
-  `open`), or carry it to a pull request's new head when the head the run started from had it
+  Set the `kanon/role: implementer` commit status on the pull request this run opened, at a
+  head its agent's job pushed (mode `open`), or carry it to a pull request's new head when the head the run started from had it
   (mode `carry`). Never fails the caller.
 
 inputs:
@@ -39,6 +39,13 @@ inputs:
     default: ""
   branches-before:
     description: "`open`: a JSON array of the branch names that existed before the agent ran."
+    required: false
+    default: ""
+  heads:
+    description: >-
+      `open`: a JSON array of `{ ref, sha }`, the branch heads the agent's job held when the
+      agent finished (the lane spine's `heads` output). Only a pull request at one of these
+      heads is this run's (#324).
     required: false
     default: ""
   pr:
@@ -81,6 +88,7 @@ runs:
         APP_SLUG: ${{ steps.read-token.outputs.app-slug }}
         SINCE: ${{ inputs.since }}
         BRANCHES_BEFORE: ${{ inputs.branches-before }}
+        HEADS: ${{ inputs.heads }}
         PR: ${{ inputs.pr }}
         START_HEAD: ${{ inputs.start-head }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

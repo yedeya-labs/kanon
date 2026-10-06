@@ -105,15 +105,17 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
   const st = {
     labels: new Set(TAXONOMY),
     secrets: over.secrets === undefined ? new Set(LANES.flatMap((l) => REQ.lanes[l]!.secrets)) : over.secrets,
-    apps: Object.fromEntries(ids.map((id) => [`widgets-${id}`, { owner: { login: 'acme', type: 'User' }, permissions: permissionsOf(REQ, id) }])) as Record<string, { owner: object; permissions: Record<string, string> }>,
-    rulesets: [{ id: 7, ...rulesetBody(false) }],
+    apps: Object.fromEntries(ids.map((id) => [`widgets-${id}`, { owner: { login: 'acme', type: 'User' }, permissions: permissionsOf(REQ, id) }])) as Record<string, { id?: number; owner: object; permissions: Record<string, string> }>,
+    rulesets: [{ id: 7, ...rulesetBody(false) }] as Array<ReturnType<typeof rulesetBody> & { id: number; bypass_actors?: unknown[]; source_type?: string }>,
     releases: over.releases ?? {},
+    installations: null as Array<{ id: number; app_slug: string; account: { login: string } }> | null,
   };
   const calls: string[][] = [];
   const gh = async (args: string[]): Promise<Gh> => {
     calls.push(args);
     const [a0, a1] = args;
     if (a0 === 'api' && a1 === 'user') return ok('octo\n');
+    if (a0 === 'api' && a1 === 'user/installations?per_page=100') return st.installations ? ok({ total_count: st.installations.length, installations: st.installations }) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 === 'secret' && a1 === 'list') return st.secrets ? ok([...st.secrets].map((name) => ({ name }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 !== 'api' || args.includes('-X')) return no(`unexpected gh ${args.join(' ')}`);
     const path = args.find((x, i) => i > 0 && /^(repos|orgs|apps)\//.test(x)) ?? '';
@@ -550,5 +552,134 @@ describe('the JSON contract (ADR 0014, docs/doctor.md)', () => {
 
   it('documents every exit code', () => {
     for (const [name, code] of Object.entries(EXIT)) expect(doc, name).toMatch(new RegExp(`^\\| ${code} \\| \`${name}\` \\|`, 'm'));
+  });
+});
+
+// #49, K-MERGE-8: where the release caller maps the Releaser, it is the ruleset's only bypass
+// actor, through pull requests only.
+describe('kanon doctor and the Releaser\'s ruleset bypass (#49)', () => {
+  const RELEASER_ID = 4242;
+  const ADMIN = { actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'pull_request' };
+  const RELEASER = { actor_id: RELEASER_ID, actor_type: 'Integration', bypass_mode: 'pull_request' };
+  const releaseCaller = [
+    'name: Release', 'on:', '  push:', '    branches: [main]', 'permissions: {}', 'jobs:', '  release:',
+    '    permissions:', '      contents: write', '      pull-requests: write',
+    `    uses: yedeya-labs/kanon/.github/workflows/release.yml@${PINNED}`,
+    '    secrets:', ...appSecrets('releaser').map((n) => `      ${n}: \${{ secrets.${n} }}`), '',
+  ].join('\n');
+  const withReleaser = (bypass: unknown[] | undefined, release = REQ) => {
+    const files = healthyFiles();
+    files['.github/workflows/release.yml'] = releaseCaller;
+    files['docs/qa/agent-identities.md'] = registerText([...identitiesOf(LANES), 'releaser']);
+    files['.github/workflows/apps-check.yml'] = appsCheckFile([...identitiesOf(LANES), 'releaser'], PINNED);
+    const github = fakeGitHub({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...appSecrets('releaser')]), releases: { [NEXT]: release } });
+    github.st.apps['widgets-releaser'] = { id: RELEASER_ID, owner: { login: 'acme', type: 'User' }, permissions: permissionsOf(REQ, 'releaser') };
+    github.st.rulesets = [{ ...github.st.rulesets[0]!, source_type: 'Repository', ...(bypass ? { bypass_actors: bypass } : {}) }];
+    return { dir: checkout(files), github };
+  };
+
+  it('is healthy with the Releaser as the one bypass actor', async () => {
+    const { dir, github } = withReleaser([RELEASER]);
+    const r = await run(dir, github, ['--json']);
+    expect(r.json.apps.map((a: { identity: string }) => a.identity)).toContain('releaser');
+    expect(ids(r)).toEqual([]);
+    expect(r.status).toBe(EXIT.healthy);
+  });
+
+  it('names a ruleset that lacks the Releaser, with the command that adds it beside the others', async () => {
+    const { dir, github } = withReleaser([ADMIN]);
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.releaser-bypass-missing main', 'ruleset.bypass-extra main']);
+    const [missing, extra] = r.json.findings;
+    expect(missing).toMatchObject({ category: 'ruleset', blocking: true, fix: { url: `https://github.com/${REPO}/settings/rules/7` } });
+    expect(missing.message).toContain('`widgets-releaser`');
+    expect(JSON.parse(missing.fix.commands[1])).toEqual({ bypass_actors: [ADMIN, RELEASER] });
+    expect(extra.message).toContain('the admin role (pull requests only)');
+    expect(JSON.parse(extra.fix.commands[1])).toEqual({ bypass_actors: [RELEASER] });
+    expect(r.status).toBe(EXIT.findings);
+  });
+
+  it('asks the admin bypass off only against a release whose dco passes the Releaser\'s release PR (#337)', async () => {
+    // A release without the exemption, or one from before the field existed: keep the bypass.
+    const without = clone(REQ);
+    without.release = { dcoExemptsReleaser: false };
+    const older = clone(REQ);
+    delete older.release;
+    for (const target of [without, older]) {
+      const { dir, github } = withReleaser([ADMIN, RELEASER], target);
+      const r = await run(dir, github, ['--json', '--to', NEXT]);
+      expect(ids(r)).toEqual([]);
+      expect(r.json.notes.join('\n')).toMatch(/lets the admin role \(pull requests only\) bypass it beside the Releaser\. Keep that while you pin v1\.1\.0/);
+      expect(r.status).toBe(EXIT.healthy);
+    }
+    // This release has it: the admin's bypass goes.
+    const { dir, github } = withReleaser([ADMIN, RELEASER]);
+    expect(ids(await run(dir, github, ['--json']))).toEqual(['ruleset.bypass-extra main']);
+  });
+
+  it('tells the Releaser from another App by its id', async () => {
+    const other = { actor_id: 99, actor_type: 'Integration', bypass_mode: 'pull_request' };
+    const { dir, github } = withReleaser([other]);
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.releaser-bypass-missing main', 'ruleset.bypass-extra main']);
+    expect(r.json.findings[1].message).toContain('the App 99 (pull requests only)');
+  });
+
+  it('is incomplete, not healthy, when the token can\'t see the bypass list', async () => {
+    const { dir, github } = withReleaser(undefined);
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual([]);
+    expect(r.json.unchecked).toEqual([expect.objectContaining({ check: 'ruleset-bypass', subject: 'main' })]);
+    expect(r.status).toBe(EXIT.incomplete);
+  });
+
+  it('asks nothing of the bypass where the release caller doesn\'t map the Releaser', async () => {
+    const dir = checkout(healthyFiles());
+    const github = fakeGitHub();
+    github.st.rulesets = [{ ...github.st.rulesets[0]!, bypass_actors: [ADMIN] }];
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual([]);
+    expect(r.status).toBe(EXIT.healthy);
+  });
+});
+
+// The Owner, 2026-10-06: per-role Apps left installed after the two-App move are listed, not blocking.
+describe('kanon doctor and Apps no lane uses any more', () => {
+  /** A checkout whose register once named the per-role App `widgets-reviewer`, then moved on. */
+  const migrated = () => {
+    const files = healthyFiles();
+    const now = files['docs/qa/agent-identities.md']!;
+    files['docs/qa/agent-identities.md'] = `${now.trimEnd()}\n| Reviewer | \`widgets-reviewer\` | Read & write | Read & write | Read & write | No access | No access | None |\n`;
+    const dir = checkout(files);
+    put(dir, { 'docs/qa/agent-identities.md': now });
+    execFileSync('git', ['-C', dir, 'commit', '-q', '-am', 'move to two Apps']);
+    return dir;
+  };
+
+  it('names an App the register once named that is still installed, without blocking, with the delete steps', async () => {
+    const github = fakeGitHub();
+    github.st.installations = [{ id: 31, app_slug: 'widgets-reviewer', account: { login: 'acme' } }, { id: 32, app_slug: 'some-other-app', account: { login: 'acme' } }];
+    const r = await run(migrated(), github, ['--json']);
+    expect(ids(r)).toEqual(['app.unused widgets-reviewer']);
+    expect(r.json.findings[0]).toMatchObject({ category: 'app', blocking: false, fix: { url: 'https://github.com/settings/installations/31' } });
+    expect(r.json.findings[0].fix.text).toContain('https://github.com/settings/apps/widgets-reviewer/advanced');
+    expect(r.status).toBe(EXIT.healthy);
+  });
+
+  it('says nothing of one already uninstalled, or one the register still names', async () => {
+    const github = fakeGitHub();
+    github.st.installations = [{ id: 33, app_slug: `widgets-${identitiesOf(LANES)[0]}`, account: { login: 'acme' } }];
+    const r = await run(migrated(), github, ['--json']);
+    expect(ids(r)).toEqual([]);
+  });
+
+  it('is incomplete when the installations can\'t be listed, and asks nothing without a former App', async () => {
+    const r = await run(migrated(), fakeGitHub(), ['--json']);
+    expect(r.json.unchecked).toEqual([expect.objectContaining({ check: 'unused-apps', subject: 'acme' })]);
+    expect(r.status).toBe(EXIT.incomplete);
+    const github = fakeGitHub();
+    const plain = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(plain.status).toBe(EXIT.healthy);
+    expect(github.calls.some((c) => String(c[1]).includes('installations'))).toBe(false);
   });
 });
