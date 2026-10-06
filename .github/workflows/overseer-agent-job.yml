@@ -38,6 +38,8 @@ on:
         value: ${{ jobs.overseer.outputs.agent-outcome }}
       report-artifact-id:
         value: ${{ jobs.overseer.outputs.report-artifact-id }}
+      report-attempt:
+        value: ${{ jobs.overseer.outputs.report-attempt }}
     secrets:
       app-token:
         description: >-
@@ -56,6 +58,9 @@ jobs:
     outputs:
       agent-outcome: ${{ steps.agent.outcome }}
       report-artifact-id: ${{ steps.report.outputs.artifact-id }}
+      # The attempt that uploaded the report. A partial re-run reuses this job's outputs, so the
+      # lane's `file` job compares it with its own attempt (kanon#286).
+      report-attempt: ${{ github.run_attempt }}
     steps:
       # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1).
       - name: Record when the job started

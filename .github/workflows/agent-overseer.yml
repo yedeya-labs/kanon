@@ -168,6 +168,21 @@ jobs:
     # own token, and every write is the filing App token's.
     permissions: {}
     steps:
+      # A PARTIAL RE-RUN (kanon#286). "Re-run failed jobs" after a failed `file` re-runs this job
+      # but not the overseer job, whose outputs it reuses: the report they name is an earlier
+      # attempt's, and that attempt's `delete-report` already deleted it. Say so, before the
+      # download reds with a bare "Artifact not found". The export's delete says the same for a
+      # partial re-run of the agent job (kanon#224).
+      - name: Refuse a report from an earlier attempt
+        env:
+          REPORT_ATTEMPT: ${{ needs.overseer.outputs.report-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$REPORT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error title=overseer::this is attempt $RUN_ATTEMPT, but the agent's report is from attempt ${REPORT_ATTEMPT:-unknown}, and was deleted when that attempt finished. Nothing was filed on this attempt. Use \"Re-run all jobs\", not \"Re-run failed jobs\": only a new audit writes a new report."
+            exit 1
+          fi
+
       - uses: $/actions/kanon-path
         id: kanon
 

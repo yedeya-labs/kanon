@@ -27,6 +27,8 @@ on:
         value: ${{ jobs.overseer.outputs.agent-outcome }}
       report-artifact-id:
         value: ${{ jobs.overseer.outputs.report-artifact-id }}
+      report-attempt:
+        value: ${{ jobs.overseer.outputs.report-attempt }}
     secrets:
       app-id:
         required: true

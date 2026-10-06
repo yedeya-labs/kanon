@@ -154,6 +154,51 @@ describe('who files what (decision 12)', () => {
     expect(del.steps).toEqual([{ uses: '$/actions/qa-store', with: { operation: 'delete-export', 'artifact-id': '${{ needs.overseer.outputs.report-artifact-id }}', 'export-attempt': '${{ needs.export.outputs.attempt }}', 'agent-result': '${{ needs.overseer.result }}' } }]);
   });
 
+  describe('a partial re-run of the file job says to re-run all jobs (kanon#286)', () => {
+    const guard = fileSteps[0]!;
+    const run = (reportAttempt: string, runAttempt: string) => {
+      try {
+        execFileSync('bash', ['-c', guard.run!], { env: { ...process.env, REPORT_ATTEMPT: reportAttempt, RUN_ATTEMPT: runAttempt }, encoding: 'utf8', stdio: 'pipe' });
+        return { code: 0, out: '' };
+      } catch (e) {
+        const err = e as { status: number, stdout: string };
+        return { code: err.status, out: err.stdout };
+      }
+    };
+
+    it('checks the report\'s attempt first, before anything is downloaded or minted', () => {
+      expect(guard.name).toBe('Refuse a report from an earlier attempt');
+      expect(guard.if).toBeUndefined();
+      expect(guard.env).toEqual({ REPORT_ATTEMPT: '${{ needs.overseer.outputs.report-attempt }}', RUN_ATTEMPT: '${{ github.run_attempt }}' });
+    });
+
+    it('carries the attempt that uploaded the report up through both called workflows', () => {
+      // Reused on a partial re-run, as the report's artifact id is: that is what makes it an
+      // earlier attempt's. An expression on the job, not a step's output, so the agent can't set it.
+      expect(overseer.outputs).toMatchObject({ 'report-attempt': '${{ github.run_attempt }}' });
+      for (const called of ['.github/workflows/overseer-run.yml', '.github/workflows/overseer-agent-job.yml']) {
+        const doc = parse(readFileSync(called, 'utf8')) as { on: { workflow_call: { outputs: Record<string, { value: string }> } } };
+        expect(doc.on.workflow_call.outputs['report-attempt'], called).toEqual({ value: '${{ jobs.overseer.outputs.report-attempt }}' });
+      }
+    });
+
+    it('passes on the attempt that wrote the report', () => {
+      expect(run('1', '1')).toEqual({ code: 0, out: '' });
+      expect(run('3', '3').code).toBe(0);
+    });
+
+    it('reds on a later attempt, saying the report is gone and to re-run all jobs', () => {
+      const r = run('1', '2');
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('::error title=overseer::this is attempt 2, but the agent\'s report is from attempt 1');
+      expect(r.out).toContain('Use "Re-run all jobs"');
+    });
+
+    it('reds on a report attempt it cannot read, rather than downloading on a guess', () => {
+      expect(run('', '1').code).toBe(1);
+    });
+  });
+
   it('files through overseer-file.mjs, on the filing token, from the downloaded report', () => {
     const step = fileSteps.find((s) => s.id === 'file')!;
     expect(step.name).toBe("Reconcile the agent's exit with what it durably produced"); // workflow-health.mjs names it
