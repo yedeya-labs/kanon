@@ -161,7 +161,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: qa-audit-summary-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/report

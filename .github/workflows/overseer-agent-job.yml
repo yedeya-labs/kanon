@@ -70,7 +70,7 @@ jobs:
       # THE STORE, as the export job read it, into the workspace, because the agent reads only
       # the workspace. `manifest.json` says whether the store was present, absent or degraded.
       - name: Download the QA store's export
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact-name }}
           path: qa-store-export
