@@ -205,6 +205,20 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
     expect(market.plugins.map((p) => [p.name, p.source])).toEqual([['kanon', './']]);
   });
 
+  // The marketplace's source is `./`, so the repository's root is the plugin's root, and Claude
+  // Code loads every component it finds there into each adopter's session. Only `skills/` may
+  // be one: a top-level `hooks/` or `.mcp.json` added later for Kanon's own use would otherwise
+  // ship to every adopter's agent unannounced (kanon#374 review). The manifest may not point
+  // at components elsewhere either.
+  it('ships only skills/: no other plugin component exists at the root, and the manifest adds none', () => {
+    const COMPONENTS = ['commands', 'agents', 'hooks', 'output-styles', 'monitors', 'bin', '.mcp.json', '.lsp.json', 'settings.json'];
+    const root = new Set(readdirSync(ROOT));
+    expect(COMPONENTS.filter((c) => root.has(c))).toEqual([]);
+    const manifest = JSON.parse(read('.claude-plugin/plugin.json')) as Record<string, unknown>;
+    expect(Object.keys(manifest).sort()).toEqual(['author', 'description', 'homepage', 'license', 'name', 'repository', 'version']);
+    expect(readdirSync(join(ROOT, '.claude-plugin')).sort()).toEqual(['marketplace.json', 'plugin.json']);
+  });
+
   it('has the skills docs/skills.md lists, and only those', () => {
     const listed = [...read('docs/skills.md').matchAll(/^\| \[([a-z-]+)\]\(\.\.\/skills\/([a-z-]+)\/SKILL\.md\) \| `\/kanon:([a-z-]+)`/gm)];
     for (const m of listed) expect(new Set([m[1], m[2], m[3]]).size, m[0]).toBe(1);

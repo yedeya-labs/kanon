@@ -25,7 +25,7 @@ claude plugin install kanon@kanon
 
 Or, inside a Claude Code session, the same two as `/plugin marketplace add …` and `/plugin install kanon@kanon`. Start a new session, or run `/reload-plugins`, and the skills are there. You need Claude Code, `gh` signed in as someone who can administer the repository, and Node 24 or later: the skills run `kanon` through `npx`, from the release's tag, so nothing is installed in your repository.
 
-**To move to a newer release,** run `claude plugin marketplace remove kanon`, then the two commands above as that release's copy of this page gives them, with its tag, and run `/kanon:upgrade`.
+**The plugin's pin lives in your Claude Code configuration, not in the repository,** so Dependabot doesn't propose it and `kanon doctor` doesn't check it (`K-ADOPT-11`); [#376](https://github.com/yedeya-labs/kanon/issues/376) tracks declaring it in the repository and having doctor report a skills and command mismatch. **To move to a newer release,** run `claude plugin marketplace remove kanon`, then the two commands above as that release's copy of this page gives them, with its tag, and run `/kanon:upgrade`.
 
 ## What they will and won't do
 
@@ -44,6 +44,7 @@ Each skill states these rules in its own instructions:
 - every `kanon` command a skill names is one the CLI has, and every flag it passes is one that command's parser takes;
 - each skill's table of findings lists exactly the finding ids of [`docs/init.md`](init.md#the-findings) or [`docs/doctor.md`](doctor.md#the-finding-ids), so a new finding can't go unhandled;
 - every field a skill reads, such as `.findings[].fix.commands`, is a field those pages document, and each skill's table of statuses and exit codes is theirs;
+- the plugin ships `skills/` and nothing else: the repository's root is the plugin's root, so a `hooks/`, `.mcp.json` or other plugin component added there would reach every adopter's agent, and fails the test instead;
 - each skill names the contract (`kanon-init/v1`, `kanon-doctor/v1`) its command prints, and runs `kanon` from the release it ships in.
 
 A skill step that a person still had to do by hand, when the skills ran Kanon's own migration (plan 0005 L5) or an adopter's (L6), is a gap in the skills, filed against L11 and fixed there.

@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Adopt Kanon
 
-You install Kanon in the repository whose checkout you are in, with the person deciding every choice. You drive `kanon init` through its JSON output only ([docs/init.md](https://github.com/yedeya-labs/kanon/blob/main/docs/init.md)), and you never read its prose to decide anything. A repository that already has its own CI, rulesets and labels is the normal case: `init` merges into what is there, and its dry run names every change before you make one.
+You install Kanon in the repository whose checkout you are in, with the person deciding every choice. You drive `kanon init` through its JSON output only (`docs/init.md` in Kanon's repository, read at the release in the `npx` line below, `https://github.com/yedeya-labs/kanon/blob/<release>/docs/init.md`, never at `main`, whose contract may be newer), and you never read its prose to decide anything. A repository that already has its own CI, rulesets and labels is the normal case: `init` merges into what is there, and its dry run names every change before you make one.
 
 ## How to run `kanon`
 

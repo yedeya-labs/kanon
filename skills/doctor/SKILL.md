@@ -5,7 +5,7 @@ description: Check a repository's Kanon installation with `kanon doctor --json`,
 
 # Kanon doctor
 
-You check a Kanon installation and help the person make it healthy. You drive `kanon doctor` through its JSON output only ([docs/doctor.md](https://github.com/yedeya-labs/kanon/blob/main/docs/doctor.md)), and you never read its prose to decide anything.
+You check a Kanon installation and help the person make it healthy. You drive `kanon doctor` through its JSON output only (`docs/doctor.md` in Kanon's repository, read at the release in the `npx` line below, `https://github.com/yedeya-labs/kanon/blob/<release>/docs/doctor.md`, never at `main`, whose contract may be newer), and you never read its prose to decide anything.
 
 ## How to run `kanon`
 
@@ -69,7 +69,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 | `app.permission-extra` | decision | Doesn't block. Say that `apps-check` fails it; the person may narrow it on `.findings[].fix.url`, or leave it. |
 | `secret.missing` | person | If the fix is a `kanon apps` command, run it (for `kanon apps --reuse`, the person first generates a key on the App's page and gives you only the file's path; the command deletes the file). If it is `gh secret set`, the person runs it. |
 | `secret.stale` | decision | Doesn't block. Offer the fix's `gh secret delete` command, and run it only on a yes. |
-| `declaration.missing` | agent | Run `kanon init --dry-run --json`, show the file it would write, then write it with `kanon init` (the adopt skill's flags) or by hand. |
+| `declaration.missing` | agent | Run `kanon init --dry-run --json`, show the file it would write, then write it with `kanon init --no-apps` and the adopt skill's other flags, so the Apps' browser flow doesn't start unannounced, or by hand. |
 | `declaration.section-missing` | agent | Add the section, or remove the duplicate, as the fix says. Ask the person for content only they know, such as the stack's gates. |
 | `declaration.malformed` | agent | Rewrite the acceptance in the shape the fix shows, keeping the person's reason. |
 | `hook.missing` | agent | As `declaration.missing`. |

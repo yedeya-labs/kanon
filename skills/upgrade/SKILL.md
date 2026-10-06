@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Upgrade Kanon
 
-You move the repository's Kanon references to one new release, after finding out what that release needs, so the first red run of a lane never has to tell the person. You drive `kanon doctor` through its JSON output only ([docs/doctor.md](https://github.com/yedeya-labs/kanon/blob/main/docs/doctor.md)), and you never read its prose to decide anything.
+You move the repository's Kanon references to one new release, after finding out what that release needs, so the first red run of a lane never has to tell the person. You drive `kanon doctor` through its JSON output only (`docs/doctor.md` in Kanon's repository, read at the release in the `npx` line below, `https://github.com/yedeya-labs/kanon/blob/<release>/docs/doctor.md`, never at `main`, whose contract may be newer), and you never read its prose to decide anything.
 
 **The release you upgrade to is the one this skill ships in,** the version in the `npx` line below. To move to another release, the person first moves this plugin to it (`docs/skills.md` in Kanon's repository says how), so the skill, the command and the release always agree.
 
