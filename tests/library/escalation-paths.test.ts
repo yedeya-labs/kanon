@@ -12,6 +12,7 @@ import {
   readEscalationFileAt,
 } from '../../scripts/lib/escalation-paths.mjs';
 import { IMPLEMENTER_LOGIN, mergeVerdict, readEscalations } from '../../scripts/merge-gate.mjs';
+import { IMPLEMENTER_STATUS, headerLine } from '../../scripts/lib/role-marker.mjs';
 import { reviewScope, sensitiveHits } from '../../scripts/ship-review-scope.mjs';
 import { KANON_SCAN, appliedLabels, scanDirs } from '../../scripts/label-guard.mjs';
 import { JUDGING_INPUTS } from '../../scripts/judging-inputs.mjs';
@@ -230,6 +231,9 @@ describe("the Merger's verdict takes the escalating paths as an argument (kanon#
     state: 'OPEN',
     isDraft: false,
     author: IMPLEMENTER_LOGIN,
+    // The Implementer's marker and status (plan 0005 §3.3, L4), so the path rule is reached.
+    body: headerLine('Implementer'),
+    headStatuses: [{ context: IMPLEMENTER_STATUS, state: 'success', creator: `${IMPLEMENTER_LOGIN}[bot]` }],
     labels: ['agent:implement'],
     headSha: 'abc',
     workflowRuns: [],

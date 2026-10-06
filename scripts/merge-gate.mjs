@@ -498,13 +498,29 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
 
   // The green zone is the implementer's work. Everything else — a human's PR, a
   // brief from the Lead, a dependabot bump — is somebody else's call.
-  // BY LOGIN AND, FROM L4, BY MARKER (plan 0005 §3.3): `asRole` reads the PR body's role
-  // marker beside the author's login, and answers what the login answers until L4.
+  // BY LOGIN AND BY MARKER (plan 0005 §3.3, step L4): the Implementer shares the Author App
+  // with the Lead, the Explorer and the Overseer, so the login says which App and the PR
+  // body's role marker which of its roles (`asRole`).
   if (!asRole('Implementer', { login: pr.author, expected: implementer, body: pr.body })) {
-    return skip('not-the-implementer', `authored by \`${pr.author}\`, not ${implementer}`);
+    return skip('not-the-implementer', `authored by \`${pr.author}\` without the Implementer's role marker, not ${implementer} as the Implementer`);
   }
   if (!IMPLEMENTER_LABELS.some((l) => pr.labels.includes(l))) {
     return skip('not-implementer-label', `carries no \`${IMPLEMENTER_LABELS.join('` / `')}\` label (has: ${pr.labels.join(', ') || 'none'})`);
+  }
+  // AND BY THE IMPLEMENTER STATUS ON THE HEAD (plan 0005 §3.3, question 6). The marker and
+  // the label are text any Author lane's agent can write, so a steered Lead agent could open
+  // a code PR wearing both. The status is set by a fixed step of the Implementer's lanes,
+  // after the agent, with a token narrowed to Commit statuses write that no agent's token
+  // holds (`K-AGENT-46`), and carried to a new head only along an unbroken chain of the App's
+  // own commits: a person's push ends it, and a person merges that PR. The NEWEST status of
+  // the context decides, so a later one from another App, or a failure, refuses rather than
+  // being outvoted. An unread list waits, as every unread answer in this file does.
+  if (!Array.isArray(pr.headStatuses)) {
+    return wait('statuses-unreadable', `the commit statuses of the head could not be read, so whether it carries \`${IMPLEMENTER_STATUS}\` is unknown — not merging on an unread answer`);
+  }
+  const stamped = implementerStatusOn(pr.headStatuses, implementer);
+  if (!stamped.ok) {
+    return skip('not-the-implementer', `the head \`${String(pr.headSha).slice(0, 7)}\` is not provably the Implementer's: ${stamped.why} (its lanes set it after their agent, and a person's push ends the chain)`);
   }
 
   // ── Escalations, before any approval is considered ────────────────────────
@@ -998,7 +1014,7 @@ import { evidenceSha, readTrailer } from './review-trailer.mjs';
 import { CONFLICT_JSON, CONFLICT_WHY, conflictState } from './conflict-state.mjs';
 import { marker as rebaseMarker } from './rebase-lane.mjs';
 import { appLogin, appPersona } from './app-register.mjs';
-import { asRole, signed } from './lib/role-marker.mjs';
+import { IMPLEMENTER_STATUS, asRole, implementerStatusOn, signed } from './lib/role-marker.mjs';
 import { escalatingPaths, printDefaults, readEscalationFileAt } from './lib/escalation-paths.mjs';
 import { defaultBranchFile } from './lib/declarations.mjs';
 import { isSpecFile, specPromotions } from './lib/spec-promotions.mjs';
@@ -1076,6 +1092,19 @@ export function readPr(number, repo, opts = {}) {
     console.log(`::warning title=merge-gate::#${number}: the Actions run listing could not be read, so this PR waits (runs-unreadable): ${String(e?.stderr || e?.message || e).trim().slice(0, 200)}`);
     workflowRuns = null;
   }
+  // THE HEAD'S COMMIT STATUSES, newest first as the API lists them, for the implementer
+  // status (plan 0005 §3.3). `null` on a failed read, which `mergeVerdict` waits on: an empty
+  // list would read as "no status", which only skips, but an unread one is not an answer.
+  let headStatuses = null;
+  try {
+    const listed = JSON.parse(gh(['api', `repos/${repo}/commits/${meta.headRefOid}/statuses?per_page=100`]));
+    headStatuses = Array.isArray(listed)
+      ? listed.map((s) => ({ context: s.context, state: s.state, creator: s.creator?.login ?? '' }))
+      : null;
+  } catch (e) {
+    console.log(`::warning title=merge-gate::#${number}: the head's commit statuses could not be read, so this PR waits (statuses-unreadable): ${String(e?.stderr || e?.message || e).trim().slice(0, 200)}`);
+    headStatuses = null;
+  }
   let issuesReadable = true;
   try {
     gh(['api', `repos/${repo}/issues?per_page=1`, '--jq', 'length'], { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -1092,6 +1121,7 @@ export function readPr(number, repo, opts = {}) {
     labels: meta.labels.map((l) => l.name),
     files,
     headSha: meta.headRefOid,
+    headStatuses,
     workflowRuns,
     // `body` is read for the TRAILER, not for prose (RA-1680/RA-1334). The reviewer job
     // stamps the SHA it checked out and the review ids it supersedes into the body it

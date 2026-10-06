@@ -37,7 +37,7 @@ import { execFileSync } from 'node:child_process';
 import { CONFLICT_JSON, conflictState } from './conflict-state.mjs';
 import { NO_RETRY_EVIDENCE, RETRY_COOL_DOWN_HOURS, describeRetry, makeRetryEvidenceReader, retryDecision } from './lane-retry.mjs';
 import { appLogin, appPersona } from './app-register.mjs';
-import { asRole, signed } from './lib/role-marker.mjs';
+import { asRole, implementerStatusOn, signed } from './lib/role-marker.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
@@ -140,6 +140,14 @@ export function ineligible(pr, { implementer = IMPLEMENTER_LOGIN } = {}) {
   // The Implementer's login and, from L4, its role marker in the PR body (plan 0005 §3.3).
   if (!asRole('Implementer', { login: normaliseLogin(pr.author?.login), expected: implementer, body: pr.body })) {
     return `authored by \`${normaliseLogin(pr.author?.login) || 'unknown'}\`, not this pipeline — a human's branch is theirs to resolve`;
+  }
+  // THE CHAIN (plan 0005 §3.3, question 6). Every Author lane's agent can write the
+  // Implementer's marker and label, so the lane moves a head only when it carries the
+  // implementer status the Author App set; otherwise resolving the conflict would launder a
+  // forged pull request into one the Implementer's status job then stamps.
+  const stamped = implementerStatusOn(pr.headStatuses, implementer);
+  if (!stamped.ok) {
+    return `its head is not provably the Implementer's: ${stamped.why} — a pull request outside the chain is a person's to resolve (plan 0005 §3.3)`;
   }
   if (pr.isDraft) return 'a draft — nothing downstream is waiting on it';
   if (!labels.some((l) => PIPELINE_LABELS.includes(l))) {
@@ -270,6 +278,16 @@ function main() {
   const only = process.argv.includes('--pr') ? process.argv[process.argv.indexOf('--pr') + 1] : null;
   const all = ghJson(['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '100', '--json', PR_FIELDS]);
   const prs = only ? all.filter((p) => String(p.number) === String(only)) : all;
+  // The head's commit statuses, for the chain in `ineligible`, read only for a conflicting PR
+  // (the only kind it is asked about). `null` on a failed read, which refuses.
+  for (const pr of prs) {
+    if (conflictState(pr) !== 'conflicting') continue;
+    try {
+      pr.headStatuses = ghJson(['api', `repos/${REPO}/commits/${pr.headRefOid}/statuses?per_page=100`]);
+    } catch {
+      pr.headStatuses = null;
+    }
+  }
 
   // ONE comment read per PR, shared by both questions below.
   const bodiesOf = new Map();

@@ -1,3 +1,4 @@
+import { asAgent } from './helpers/sign.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { asOneWorkflow } from './helpers/kanon-lane.js';
@@ -63,7 +64,7 @@ describe('redUnreviewed — the conjunction', () => {
   });
 
   it('is silent once the Reviewer has a VERDICT on this head — the revise lane owns it', () => {
-    const verdict = { author: { login: 'example-reviewer' }, state: 'CHANGES_REQUESTED', commit: { oid: HEAD }, body: '' };
+    const verdict = { author: { login: 'example-reviewer' }, state: 'CHANGES_REQUESTED', commit: { oid: HEAD }, body: asAgent('example-reviewer', '') };
     expect(redUnreviewed([pr({ reviews: [verdict] })], io()).flagged).toEqual([]);
   });
 

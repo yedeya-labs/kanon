@@ -6,7 +6,7 @@ import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ESCALATE_PATHS } from './helpers/escalations.js';
 
 const { appLogin } = await import('../../scripts/app-register.mjs');
-const { headerLine, setMarkerPhase } = await import('../../scripts/lib/role-marker.mjs');
+const { IMPLEMENTER_STATUS, headerLine, markerPhase, setMarkerPhase } = await import('../../scripts/lib/role-marker.mjs');
 const { mergeVerdict, holdOn, readPr, ESCALATION_HEADER } = await import('../../scripts/merge-gate.mjs');
 const { mergerMarker } = await import('../../scripts/lib/protocol-spellings.mjs');
 const { classify, isSweepComment, MARKER } = await import('../../scripts/dispatch-sweep.mjs');
@@ -19,16 +19,15 @@ const { agentSpokeSince } = await import('../../scripts/implement-crash.mjs');
 const { byImplementer, classifyDispatch } = await import('../../scripts/project-digest.mjs');
 
 /**
- * Plan 0005 step L3: every reader in §3.3's table reads the role marker beside today's login,
- * through `asRole` (`scripts/lib/role-marker.mjs`), and in this release answers exactly what
- * the login answers.
+ * Plan 0005 steps L3 and L4: every reader in §3.3's table reads the role marker beside the
+ * login, through `asRole` (`scripts/lib/role-marker.mjs`). L3 read it without requiring it;
+ * L4, which puts two roles in each App, requires it.
  *
  * Each reader runs against one object authored by the role's App three ways: with the role's
  * own marker, with ANOTHER role's marker, and with none. Under L3's phase (`additive`) the
- * three read the same, which is today's answer. The same three then run under L4's phase
- * (`required`): the role's own marker still reads as today, and the other two are what L4
- * flips, named per reader in `L4_FLIPS`. A reader that stops routing through `asRole` reads
- * the same under both phases and fails here.
+ * three read the same, the login's answer. Under L4's (`required`, shipped) the own marker
+ * still gives that answer, and the other two flip, named per reader in `L4_FLIPS`. A reader
+ * that stops routing through `asRole` reads the same under both phases and fails here.
  *
  * NOT IN THE TABLE, and why (§3.3): the reads of an event with no body carry no marker and stay
  * by login: the Merger's `needs:human` hold (`mergersHold`, the label's last actor), the
@@ -54,6 +53,8 @@ type Reader = { role: string; read: (body: string) => unknown };
 const NOW = Date.parse('2026-08-23T12:00:00Z');
 const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
 
+/** The implementer status on the head (L4), so each reader is judged on its marker alone. */
+const STAMPED = [{ context: IMPLEMENTER_STATUS, state: 'success', creator: login('Implementer') }];
 const gatePr = (over: Record<string, unknown> = {}) => ({
   number: 1234, author: login('Implementer'), body: own('Implementer'), state: 'OPEN', isDraft: false,
   labels: ['agent:implement'], files: ['src/app/page.tsx'], headSha: HEAD,
@@ -61,6 +62,7 @@ const gatePr = (over: Record<string, unknown> = {}) => ({
   checks: [{ name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
   mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE', rebaseAttempted: false,
   closing: { mergeClosesUndeclared: [], unverifiable: false }, workflowRuns: [],
+  headStatuses: STAMPED,
   ...over,
 });
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a fixture of the untyped library
@@ -124,7 +126,7 @@ const READERS: Record<string, Reader> = {
   },
   'rebase-lane: the Implementer\'s PRs (ineligible)': {
     role: 'Implementer',
-    read: (body) => ineligible({ state: 'OPEN', author: { login: `app/${appLogin('Implementer')}` }, body, isDraft: false, labels: [{ name: 'agent:implement' }] }) === null,
+    read: (body) => ineligible({ state: 'OPEN', author: { login: `app/${appLogin('Implementer')}` }, body, isDraft: false, labels: [{ name: 'agent:implement' }], headStatuses: STAMPED }) === null,
   },
   'incremental-review: the Reviewer\'s verdicts (reviewerVerdicts)': {
     role: 'Reviewer',
@@ -136,25 +138,25 @@ const READERS: Record<string, Reader> = {
   },
 };
 
-/** What L4 flips: the variants whose answer changes under `required`. The same for every reader. */
+/** What L4 flipped: the variants whose answer changed under `required`. The same for every reader. */
 const L4_FLIPS: Variant[] = ['other', 'none'];
 
-afterEach(() => { setMarkerPhase('additive'); });
+afterEach(() => { setMarkerPhase('required'); });
 
-describe('plan 0005 L3: each reader of §3.3 reads the marker beside the login, and answers as today', () => {
-  it.each(Object.entries(READERS))('%s: the three variants read the same in this release', (_, { role, read }) => {
-    const v = variants(role);
-    const today = read(v.none);
-    expect(read(v.own)).toEqual(today);
-    expect(read(v.other)).toEqual(today);
+describe('plan 0005 L4: each reader of §3.3 requires the role marker beside the login', () => {
+  it('ships the `required` phase (L4), not L3\'s `additive`', () => {
+    expect(markerPhase()).toBe('required');
   });
 
-  it.each(Object.entries(READERS))('%s: under L4\'s rule the own marker reads as today, and another\'s or none flips', (_, { role, read }) => {
+  it.each(Object.entries(READERS))('%s: the own marker reads as the role, and another\'s or none does not', (_, { role, read }) => {
     const v = variants(role);
-    const today = read(v.none);
+    // L3's answer, the login alone, is what the own marker still gives.
+    setMarkerPhase('additive');
+    const byLogin = read(v.none);
+    expect(read(v.other), 'under L3 the marker changed nothing').toEqual(byLogin);
     setMarkerPhase('required');
-    expect(read(v.own)).toEqual(today);
-    for (const flip of L4_FLIPS) expect(read(v[flip]), `${flip} must flip at L4`).not.toEqual(today);
+    expect(read(v.own)).toEqual(byLogin);
+    for (const flip of L4_FLIPS) expect(read(v[flip]), `${flip} flipped at L4`).not.toEqual(byLogin);
   });
 
   it('covers every reader §3.3 names that has a body to carry a marker', () => {

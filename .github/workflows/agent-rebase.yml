@@ -109,10 +109,14 @@ jobs:
     # jobs (`repos/{repo}/actions/runs/{id}/jobs`) to learn whether it died of its cause.
     # Denied, the read is "unknown" and nothing is retried — the pre-RA-2519 behaviour —
     # so a missing scope here fails quiet, which is why it is stated rather than assumed.
+    # `statuses: read` for the implementer-status chain (plan 0005 §3.3, step L4):
+    # `rebase-lane.mjs` refuses a conflicting PR whose head lacks the Author App's
+    # `kanon/role: implementer` status, and an unread list refuses too.
     permissions:
       actions: read
       contents: read
       pull-requests: read
+      statuses: read
     outputs:
       member: ${{ steps.gate.outputs.member }}
       prs: ${{ steps.decide.outputs.prs }}

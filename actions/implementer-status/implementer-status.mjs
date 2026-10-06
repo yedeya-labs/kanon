@@ -30,10 +30,10 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
-import { slugOf } from '../../scripts/lib/role-marker.mjs';
+import { IMPLEMENTER_STATUS, implementerStatusOn } from '../../scripts/lib/role-marker.mjs';
 
-/** The status context the Merger will require on the head at L4. */
-export const CONTEXT = 'kanon/role: implementer';
+/** The status context the Merger requires on the head since L4 (`mergeVerdict`). */
+export const CONTEXT = IMPLEMENTER_STATUS;
 
 /** What a GitHub API commit says about its author, as this module reads it. */
 /** @typedef {{ sha: string, parents?: Array<{ sha: string }>, commit?: { author?: { email?: string } } }} ApiCommit */
@@ -88,9 +88,11 @@ export function pickOpened({ prs, repo, since, branchesBefore, email, headCommit
  */
 export function carryDecision({ startHead, head, slug, email, startStatuses, compare }) {
   if (!/^[0-9a-f]{40}$/i.test(startHead)) return { none: 'the head the run started from is unknown' };
-  const had = startStatuses.some((s) => s.context === CONTEXT && s.state === 'success' && slugOf(s.creator?.login) === slug);
-  if (!had) {
-    return { none: `the head it started from, \`${startHead.slice(0, 7)}\`, carries no \`${CONTEXT}\` status created by \`${slug}\`, so the chain has no start` };
+  // The same question the Merger and the rebase lane ask (`implementerStatusOn`): the NEWEST
+  // status of the context is the App's success.
+  const had = implementerStatusOn(startStatuses, slug);
+  if (!had.ok) {
+    return { none: `the head it started from, \`${startHead.slice(0, 7)}\`, is not provably the Implementer's (${had.why}), so the chain has no start` };
   }
   if (head === startHead) return { none: `the head is still \`${startHead.slice(0, 7)}\`, which already carries the status` };
   if (!compare || compare.status !== 'ahead') {

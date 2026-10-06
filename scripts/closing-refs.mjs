@@ -92,9 +92,18 @@ export const declarationZone = (body) => {
   // paragraph" is boilerplate and the `Closes #N` lines are the second. Measured:
   // without this, RA-830 and RA-833 both flag — and agent PRs are the majority here,
   // so the rule would have false-blocked the class it most needs to hold.
+  //
+  // And skip a leading PERSONA HEADER (plan 0005 §3.3): every agent post opens with
+  // `**<persona> (<Role>)** <!-- kanon:role=<role> -->` and a blank line, so on an agent's
+  // pull request "the first paragraph" is the header and the `Closes #N` lines the next.
+  // Only a paragraph that is that one line and nothing else is skipped: a header with a
+  // declaration on the same paragraph is still the zone.
   const paras = (body ?? '').split(/\r?\n\s*\r?\n/);
-  return paras.find((p) => p.trim() && !/^\s*>/.test(p)) ?? '';
+  return paras.find((p) => p.trim() && !/^\s*>/.test(p) && !PERSONA_HEADER_RE.test(p)) ?? '';
 };
+
+/** A paragraph that is a persona header line alone (`scripts/lib/role-marker.mjs`). */
+const PERSONA_HEADER_RE = /^\s*\*\*[^*\r\n]+\*\*[ \t]*<!--\s*kanon:role=[a-z]+\s*-->\s*$/;
 
 /** Every `<keyword> <ref>` in a string, as numbers, deduped. Backticks are NOT stripped:
  *  a backticked keyword is exactly what GitHub does not see, and finding 1 is that

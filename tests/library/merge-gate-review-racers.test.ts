@@ -1,3 +1,4 @@
+import { asAgent } from './helpers/sign.js';
 import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,12 +32,15 @@ type Pr = Parameters<typeof kanonMergeVerdict>[0];
 const pr = (checks: Record<string, unknown>[]): Pr => ({
   number: 979,
   author: 'example-implementer[bot]',
+  // The Implementer's marker and status (plan 0005 §3.3, L4).
+  body: asAgent('example-implementer', 'Closes #1'),
+  headStatuses: [{ context: 'kanon/role: implementer', state: 'success', creator: 'example-implementer[bot]' }],
   state: 'OPEN',
   isDraft: false,
   labels: ['agent:implement'],
   files: ['src/app/page.tsx'],
   headSha: HEAD,
-  reviews: [{ state: 'APPROVED', sha: HEAD, author: 'example-reviewer[bot]' }],
+  reviews: [{ state: 'APPROVED', sha: HEAD, author: 'example-reviewer[bot]', body: asAgent('example-reviewer', 'Approved.') }],
   checks,
   mergeStateStatus: 'CLEAN',
   mergeable: 'MERGEABLE',

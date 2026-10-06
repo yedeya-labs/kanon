@@ -9,6 +9,7 @@ import { writeStub } from '../unit/helpers/stub-bin.js';
 import { ESCALATE_PATHS } from './helpers/escalations.js';
 import { ROOT } from './helpers/adopter.js';
 const { specPromotions } = await import('../../scripts/lib/spec-promotions.mjs');
+const { IMPLEMENTER_STATUS, headerLine } = await import('../../scripts/lib/role-marker.mjs');
 /** A value of the untyped library, as the reference adopter's helper named it. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type LibraryValue = any;
@@ -33,15 +34,26 @@ const mergeVerdict = (p: LibraryValue, opts: Record<string, unknown> = {}) =>
 const HEAD = 'ee4530d1111111111111111111111111111111111'.slice(0, 40);
 const OLD = 'aaaaaaa2222222222222222222222222222222222'.slice(0, 40);
 
+/** The persona headers the lanes write (plan 0005 §3.3), which the readers require since L4. */
+const IMPLEMENTER_HEADER = headerLine('Implementer');
+const REVIEWER_HEADER = headerLine('Reviewer');
+/** The implementer status a fixed step of the Implementer's lanes sets on the head (L4). */
+const STAMPED = [{ context: IMPLEMENTER_STATUS, state: 'success', creator: 'example-implementer[bot]' }];
+
+/** The same status as the REST list returns it, for the `readPr` stubs. */
+const STATUSES_API = [{ context: IMPLEMENTER_STATUS, state: 'success', creator: { login: 'example-implementer[bot]' } }];
+
 const pr = (over: Record<string, unknown> = {}) => ({
   number: 1234,
   author: 'example-implementer[bot]',
+  body: IMPLEMENTER_HEADER,
+  headStatuses: STAMPED,
   state: 'OPEN',
   isDraft: false,
   labels: ['agent:implement'],
   files: ['src/app/page.tsx'],
   headSha: HEAD,
-  reviews: [{ state: 'APPROVED', sha: HEAD, author: 'example-reviewer[bot]' }],
+  reviews: [{ state: 'APPROVED', sha: HEAD, author: 'example-reviewer[bot]', body: REVIEWER_HEADER }],
   checks: [{ name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
   mergeStateStatus: 'CLEAN',
   // DECLARED ON EVERY FIXTURE, like the four files RA-2152 swept (RA-2184). `mergeVerdict`
@@ -94,7 +106,7 @@ describe('the green zone', () => {
     // the same author test, the same escalating paths and the same approval-on-head.
     expect(mergeVerdict(pr({ labels: ['agent:triage'], files: ['migrations/0003_x.sql'] })).rule).toBe('escalating-path');
     expect(mergeVerdict(pr({ labels: ['agent:triage'], author: 'a-person' })).rule).toBe('not-the-implementer');
-    expect(mergeVerdict(pr({ labels: ['agent:triage'], reviews: [{ state: 'APPROVED', sha: OLD, author: 'example-reviewer[bot]' }] })).action)
+    expect(mergeVerdict(pr({ labels: ['agent:triage'], reviews: [{ state: 'APPROVED', sha: OLD, author: 'example-reviewer[bot]', body: REVIEWER_HEADER }] })).action)
       .not.toBe('merge');
   });
 
@@ -133,7 +145,7 @@ describe('what is silently not his', () => {
   it('skips a PR the Reviewer sent back, because the implementer owns it', () => {
     // Requested changes are the pipeline WORKING. Escalating here would label the
     // majority of PRs `needs:human` and train the developer to ignore the label.
-    const v = mergeVerdict(pr({ reviews: [{ state: 'CHANGES_REQUESTED', sha: HEAD, author: 'example-reviewer[bot]' }] }));
+    const v = mergeVerdict(pr({ reviews: [{ state: 'CHANGES_REQUESTED', sha: HEAD, author: 'example-reviewer[bot]', body: REVIEWER_HEADER }] }));
     expect(v.action).toBe('skip');
     expect(v.rule).toBe('changes-requested');
   });
@@ -453,13 +465,14 @@ describe('only a human confirms an invariant (K-SPEC-9, kanon#193)', () => {
       number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,
       labels: [{ name: 'agent:implement' }], headRefOid: HEAD,
       statusCheckRollup: [{ name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
-      mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE', title: 't', body: 'Closes #1',
+      mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE', title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`,
       closingIssuesReferences: [{ number: 1 }], commits: [{ messageHeadline: 'x', messageBody: '' }],
     };
     const listing = rows === 'fail' ? 'exit 1' : `printf '%s\\n' ${rows.map((r) => `'${r}'`).join(' ')}`;
     writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
 case "$*" in
   "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"/statuses"*)        printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
   *"/files"*"@json"*)   ${listing} ;;
   *"/files"*)           printf '%s\\n' 'src/a.ts' '${SPEC}' ;;
   *"/reviews"*)         printf '%s' '[]' ;;
@@ -493,7 +506,7 @@ describe('the approval is evidence about ONE commit', () => {
     // line. Kept regardless — it is cheap and local, and two independent answers
     // disagreeing is itself a finding. A stale approval reached the merge button
     // twice in a week (RA-964, RA-1057).
-    const v = mergeVerdict(pr({ reviews: [{ state: 'APPROVED', sha: OLD, author: 'example-reviewer[bot]' }] }));
+    const v = mergeVerdict(pr({ reviews: [{ state: 'APPROVED', sha: OLD, author: 'example-reviewer[bot]', body: REVIEWER_HEADER }] }));
     expect(v.action).not.toBe('merge');
     expect(v.rule).toBe('no-review-on-head');
     expect(v.why).toContain('stale');
@@ -519,8 +532,8 @@ describe('the approval is evidence about ONE commit', () => {
     // below for the case where it did not.
     const v = mergeVerdict(pr({
       reviews: [
-        { id: 11, state: 'CHANGES_REQUESTED', sha: HEAD, author: 'example-reviewer[bot]' },
-        { id: 12, state: 'APPROVED', sha: HEAD, author: 'example-reviewer[bot]', supersedes: ['11'] },
+        { id: 11, state: 'CHANGES_REQUESTED', sha: HEAD, author: 'example-reviewer[bot]', body: REVIEWER_HEADER },
+        { id: 12, state: 'APPROVED', sha: HEAD, author: 'example-reviewer[bot]', body: REVIEWER_HEADER, supersedes: ['11'] },
       ],
     }));
     expect(v.action).toBe('merge');
@@ -531,7 +544,7 @@ describe('the approval is evidence about ONE commit', () => {
     // reading the EVENT means the Merger stalls on them unless he repairs it. The
     // trigger change should make this unreachable — it stays because that change
     // runs only from the default branch and could not be tested before it merged.
-    const v = mergeVerdict(pr({ reviews: [{ state: 'COMMENTED', sha: HEAD, author: 'example-reviewer[bot]' }] }));
+    const v = mergeVerdict(pr({ reviews: [{ state: 'COMMENTED', sha: HEAD, author: 'example-reviewer[bot]', body: REVIEWER_HEADER }] }));
     expect(v.action).toBe('recover');
     expect(v.rule).toBe('comment-verdict');
   });
@@ -596,15 +609,14 @@ describe('it does not wait on itself', () => {
 });
 
 describe('the identity the workflow guards on', () => {
-  it("reads the actor guard in agent-merge.yml from the register row MERGER_LOGIN comes from (RA-2741)", () => {
-    // The guard stops the Merger from processing his own comments and merges. A slug
-    // that does not match never matches — no error, just an agent answering its own
-    // events. Since RA-2741 the guard holds no copy of the login: the `logins` job reads
-    // the register's Merger row, the row `MERGER_LOGIN` is read from, and
-    // `filter-job-if-2596.test.ts` executes that read. At runtime the workflow also
-    // asserts the MINTED token against both reads.
+  it("reads the slug it asserts from the register row MERGER_LOGIN comes from (RA-2741), and keeps no actor guard (L4)", () => {
+    // Since RA-2741 the lane holds no copy of the login: the `logins` job reads the
+    // register's Merger row, the row `MERGER_LOGIN` is read from. At runtime the workflow
+    // asserts the MINTED token against both reads. The actor guard that once compared a
+    // review's actor with that row is gone since plan 0005's L4: the Merger and the Reviewer
+    // share the Judge App, so it would decline every Reviewer review (merge-lane.test.ts).
     const wf = readFileSync(join(ROOT, '.github/workflows/agent-merge.yml'), 'utf8');
-    expect(wf).toContain("github.actor != format('{0}[bot]', needs.logins.outputs.merger)");
+    expect(wf).not.toMatch(/github\.actor\s*!=/);
     expect(wf).toContain('for role in Merger Implementer; do');
     expect(wf).not.toContain(`'${MERGER_LOGIN}[bot]'`);
     expect(wf).toContain('m.MERGER_LOGIN');
@@ -629,7 +641,7 @@ describe('a verdict is evidence about the commit the RUN READ (RA-1680)', () => 
    */
   it('refuses an approval GitHub filed under the head but whose run read an earlier commit', () => {
     const v = mergeVerdict(pr({
-      reviews: [{ id: 1, state: 'APPROVED', sha: HEAD, author: 'example-reviewer[bot]', reviewedSha: OLD }],
+      reviews: [{ id: 1, state: 'APPROVED', sha: HEAD, author: 'example-reviewer[bot]', body: REVIEWER_HEADER, reviewedSha: OLD }],
     }));
     expect(v.action, 'this is the merge #1680 is about').not.toBe('merge');
     expect(v.rule).toBe('review-misattributed');
@@ -642,7 +654,7 @@ describe('a verdict is evidence about the commit the RUN READ (RA-1680)', () => 
     // The inverse, and it is not hypothetical either: the same race can file a review
     // under the OLD head. What the run read is what counts, in both directions.
     const v = mergeVerdict(pr({
-      reviews: [{ id: 1, state: 'APPROVED', sha: OLD, author: 'example-reviewer[bot]', reviewedSha: HEAD }],
+      reviews: [{ id: 1, state: 'APPROVED', sha: OLD, author: 'example-reviewer[bot]', body: REVIEWER_HEADER, reviewedSha: HEAD }],
     }));
     expect(v.action).toBe('merge');
   });
@@ -668,7 +680,7 @@ describe('a verdict is evidence about the commit the RUN READ (RA-1680)', () => 
     // it must fall back rather than refuse: otherwise this change would have refused
     // every open PR the day it merged.
     expect(mergeVerdict(pr({
-      reviews: [{ id: 1, state: 'APPROVED', sha: HEAD, author: 'example-reviewer[bot]' }],
+      reviews: [{ id: 1, state: 'APPROVED', sha: HEAD, author: 'example-reviewer[bot]', body: REVIEWER_HEADER }],
     })).action).toBe('merge');
   });
 
@@ -685,12 +697,14 @@ describe('a verdict is evidence about the commit the RUN READ (RA-1680)', () => 
       number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,
       labels: [{ name: 'agent:implement' }], headRefOid: HEAD,
       statusCheckRollup: [{ name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
-      mergeStateStatus: 'CLEAN', title: 't', body: 'Closes #1',
+      mergeStateStatus: 'CLEAN', title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`,
       closingIssuesReferences: [{ number: 1 }], commits: [{ messageHeadline: 'x', messageBody: '' }],
     };
     const reviews = [{
       id: 88, user: { login: 'example-reviewer[bot]' }, state: 'APPROVED', commit_id: HEAD,
       body: [
+        REVIEWER_HEADER,
+        '',
         'The stamp is written as `<!-- reviewed: sha=' + OLD + ' run=1 -->`,',
         'which is how a review of #1680 describes it.',
         '',
@@ -700,6 +714,7 @@ describe('a verdict is evidence about the commit the RUN READ (RA-1680)', () => 
     writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
 case "$*" in
   "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"/statuses"*)        printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
   *"/files"*)           printf '%s\\n' 'src/a.ts' ;;
   *"/reviews"*)         printf '%s' '${JSON.stringify(reviews)}' ;;
   *"issues?per_page"*)  printf '%s' '0' ;;
@@ -723,16 +738,17 @@ esac
       // A real check, so the `never-started` / `no-checks-yet` gate above does not
       // answer first and hide what this test is about.
       statusCheckRollup: [{ name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
-      mergeStateStatus: 'CLEAN', title: 't', body: 'Closes #1',
+      mergeStateStatus: 'CLEAN', title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`,
       closingIssuesReferences: [{ number: 1 }], commits: [{ messageHeadline: 'x', messageBody: '' }],
     };
     const reviews = [{
       id: 77, user: { login: 'example-reviewer[bot]' }, state: 'APPROVED', commit_id: HEAD,
-      body: `Approve.\n\n<!-- reviewed: sha=${OLD} run=5 supersedes=76 -->`,
+      body: `${REVIEWER_HEADER}\n\nApprove.\n\n<!-- reviewed: sha=${OLD} run=5 supersedes=76 -->`,
     }];
     writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
 case "$*" in
   "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"/statuses"*)        printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
   *"/files"*)           printf '%s\\n' 'src/a.ts' ;;
   *"/reviews"*)         printf '%s' '${JSON.stringify(reviews)}' ;;
   *"issues?per_page"*)  printf '%s' '0' ;;
@@ -767,8 +783,8 @@ describe('two verdicts on one commit must not be decided by ordering (RA-1334)',
   it('refuses to merge on an approval that says nothing about a blocking sibling', () => {
     const v = mergeVerdict(pr({
       reviews: [
-        { id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer },
-        { id: 22, state: 'APPROVED', sha: HEAD, author: reviewer },
+        { id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER },
+        { id: 22, state: 'APPROVED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER },
       ],
     }));
     expect(v.action).toBe('escalate');
@@ -784,8 +800,8 @@ describe('two verdicts on one commit must not be decided by ordering (RA-1334)',
     // deliberate kind and the job records what it replaces.
     expect(mergeVerdict(pr({
       reviews: [
-        { id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer },
-        { id: 22, state: 'APPROVED', sha: HEAD, author: reviewer, supersedes: ['21'] },
+        { id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER },
+        { id: 22, state: 'APPROVED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER, supersedes: ['21'] },
       ],
     })).action).toBe('merge');
   });
@@ -806,17 +822,17 @@ describe('two verdicts on one commit must not be decided by ordering (RA-1334)',
     // accident away — and which used to merge.
     const asArrived = mergeVerdict(pr({
       reviews: [
-        { id: 5131526289, state: 'APPROVED', sha: HEAD, author: reviewer },
-        { id: 5131535858, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer },
-        { id: 5131555649, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer },
+        { id: 5131526289, state: 'APPROVED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER },
+        { id: 5131535858, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER },
+        { id: 5131555649, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER },
       ],
     }));
     expect(asArrived.action).not.toBe('merge');
     const approvalLast = mergeVerdict(pr({
       reviews: [
-        { id: 5131535858, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer },
-        { id: 5131555649, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer },
-        { id: 5131526289, state: 'APPROVED', sha: HEAD, author: reviewer },
+        { id: 5131535858, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER },
+        { id: 5131555649, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER },
+        { id: 5131526289, state: 'APPROVED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER },
       ],
     }));
     expect(approvalLast.rule).toBe('contradictory-verdicts');
@@ -831,8 +847,8 @@ describe('two verdicts on one commit must not be decided by ordering (RA-1334)',
     // concurrency key can reach the case, so the run id is the only thing that says so.
     expect(mergeVerdict(pr({
       reviews: [
-        { id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, runId: '900' },
-        { id: 22, state: 'APPROVED', sha: HEAD, author: reviewer, runId: '900' },
+        { id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER, runId: '900' },
+        { id: 22, state: 'APPROVED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER, runId: '900' },
       ],
     })).action).toBe('merge');
   });
@@ -842,8 +858,8 @@ describe('two verdicts on one commit must not be decided by ordering (RA-1334)',
     // ids, no supersession claimed.
     expect(mergeVerdict(pr({
       reviews: [
-        { id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, runId: '900' },
-        { id: 22, state: 'APPROVED', sha: HEAD, author: reviewer, runId: '901' },
+        { id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER, runId: '900' },
+        { id: 22, state: 'APPROVED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER, runId: '901' },
       ],
     })).rule).toBe('contradictory-verdicts');
   });
@@ -853,8 +869,8 @@ describe('two verdicts on one commit must not be decided by ordering (RA-1334)',
     // supersedes a review on a different commit has still said nothing about this one.
     const v = mergeVerdict(pr({
       reviews: [
-        { id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer },
-        { id: 22, state: 'APPROVED', sha: HEAD, author: reviewer, supersedes: ['19'] },
+        { id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER },
+        { id: 22, state: 'APPROVED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER, supersedes: ['19'] },
       ],
     }));
     expect(v.rule).toBe('contradictory-verdicts');
@@ -865,7 +881,7 @@ describe('two verdicts on one commit must not be decided by ordering (RA-1334)',
     // escalation. Requested changes are the pipeline working, and a surface that cries
     // about normal progress is one the developer stops reading.
     const v = mergeVerdict(pr({
-      reviews: [{ id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer }],
+      reviews: [{ id: 21, state: 'CHANGES_REQUESTED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER }],
     }));
     expect(v.rule).toBe('changes-requested');
     expect(v.quiet).toBe(true);
@@ -876,9 +892,9 @@ describe('two verdicts on one commit must not be decided by ordering (RA-1334)',
     // commit is history.
     const v = mergeVerdict(pr({
       reviews: [
-        { id: 21, state: 'CHANGES_REQUESTED', sha: OLD, author: reviewer },
-        { id: 22, state: 'APPROVED', sha: OLD, author: reviewer },
-        { id: 23, state: 'APPROVED', sha: HEAD, author: reviewer },
+        { id: 21, state: 'CHANGES_REQUESTED', sha: OLD, author: reviewer, body: REVIEWER_HEADER },
+        { id: 22, state: 'APPROVED', sha: OLD, author: reviewer, body: REVIEWER_HEADER },
+        { id: 23, state: 'APPROVED', sha: HEAD, author: reviewer, body: REVIEWER_HEADER },
       ],
     }));
     expect(v.action).toBe('merge');
@@ -901,7 +917,7 @@ describe('the file list the path rules are applied to', () => {
     const meta = {
       number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,
       labels: [{ name: 'agent:implement' }], headRefOid: 'a'.repeat(40),
-      statusCheckRollup: [], mergeStateStatus: 'CLEAN', title: 't', body: 'Closes #1',
+      statusCheckRollup: [], mergeStateStatus: 'CLEAN', title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`,
       closingIssuesReferences: [{ number: 1 }], commits: [{ messageHeadline: 'x', messageBody: '' }],
     };
     writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
@@ -909,6 +925,7 @@ describe('the file list the path rules are applied to', () => {
 printf '%s\\n' "$*" >> "${dir}/calls"
 case "$*" in
   "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"/statuses"*)        printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
   *"/files"*)           printf '%s\\n' ${files.map((f) => `'${f}'`).join(' ')} ;;
   *"/reviews"*)         printf '%s' '[]' ;;
   *"issues?per_page"*)  printf '%s' '0' ;;
@@ -1579,7 +1596,7 @@ describe('who owns a conflicting PR — the Merger or the rebase lane (RA-2218)'
     const meta = {
       number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,
       labels: [{ name: 'agent:implement' }], headRefOid: HEAD, statusCheckRollup: [],
-      title: 't', body: 'Closes #1', closingIssuesReferences: [{ number: 1 }],
+      title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`, closingIssuesReferences: [{ number: 1 }],
       commits: [{ messageHeadline: 'x', messageBody: '' }],
       mergeStateStatus: 'DIRTY', mergeable: 'CONFLICTING',
     };
@@ -1588,6 +1605,7 @@ describe('who owns a conflicting PR — the Merger or the rebase lane (RA-2218)'
 case "$*" in
   *"--json comments"*)  printf '%s' ${JSON.stringify(bodies.join('\n'))} ;;
   "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"/statuses"*)        printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
   *"/files"*)           printf '%s\\n' 'src/a.ts' ;;
   *"/reviews"*)         printf '%s' '[]' ;;
   *"issues?per_page"*)  printf '%s' '0' ;;
@@ -1612,7 +1630,7 @@ esac
     const meta = {
       number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,
       labels: [{ name: 'agent:implement' }], headRefOid: HEAD, statusCheckRollup: [],
-      title: 't', body: 'Closes #1', closingIssuesReferences: [{ number: 1 }],
+      title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`, closingIssuesReferences: [{ number: 1 }],
       commits: [{ messageHeadline: 'x', messageBody: '' }],
       mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE',
     };
@@ -1620,6 +1638,7 @@ esac
 case "$*" in
   *"--json comments"*)  echo 'the comments read should not happen here' >&2; exit 1 ;;
   "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"/statuses"*)        printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
   *"/files"*)           printf '%s\\n' 'src/a.ts' ;;
   *"/reviews"*)         printf '%s' '[]' ;;
   *"issues?per_page"*)  printf '%s' '0' ;;
@@ -1704,11 +1723,11 @@ const stubReadPr = (over: {
     number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,
     labels: [{ name: 'agent:implement' }], headRefOid: HEAD,
     statusCheckRollup: [{ name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
-    mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE', title: 't', body: 'Closes #1',
+    mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE', title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`,
     closingIssuesReferences: [{ number: 1 }], commits: [{ messageHeadline: 'x', messageBody: '' }],
     ...over.meta,
   };
-  const reviews = [{ id: 1, user: { login: 'example-reviewer[bot]' }, state: 'APPROVED', commit_id: HEAD, body: 'ok' }];
+  const reviews = [{ id: 1, user: { login: 'example-reviewer[bot]' }, state: 'APPROVED', commit_id: HEAD, body: `${REVIEWER_HEADER}\n\nok` }];
   // `null` for an endpoint = that call FAILS (non-zero exit), which is the case under test.
   const arm = (pattern: string, out: string | null | undefined, dflt: string) =>
     out === null
@@ -1721,6 +1740,7 @@ ${arm('"run list"*', over.runList, '[]')}
 ${arm('*"/events"*', over.events, '')}
 ${arm('*"/1234/comments"*', over.comments, '')}
   "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"/statuses"*)        printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
   *"/files"*)           printf '%s\\n' 'src/a.ts' ;;
   *"/reviews"*)         printf '%s' '${JSON.stringify(reviews)}' ;;
   *"issues?per_page"*)  printf '%s' '0' ;;
@@ -1975,9 +1995,9 @@ describe('readPr reads who holds needs:human, and only when it is on (RA-2097)',
       meta: labelled,
       events: ['a-member', MERGER_BOT].join('\n'),
       comments: lines(
-        { login: MERGER_BOT, body: `${ESCALATION_HEADER}\n\nRule: \`checks-failed\`\n\n<!-- merger:checks-failed:${OLD.slice(0, 12)} -->` },
+        { login: MERGER_BOT, body: `${headerLine('Merger')}\n\n${ESCALATION_HEADER}\n\nRule: \`checks-failed\`\n\n<!-- merger:checks-failed:${OLD.slice(0, 12)} -->` },
         // A recover marker has the same shape and is not an escalation.
-        { login: MERGER_BOT, body: `🔁 The Merger asked ... <!-- merger:no-review-on-head:${OLD.slice(0, 12)} -->` },
+        { login: MERGER_BOT, body: `${headerLine('Merger')}\n\n🔁 The Merger asked ... <!-- merger:no-review-on-head:${OLD.slice(0, 12)} -->` },
         // A person quoting a marker is not the Merger escalating.
         { login: 'a-member', body: `${ESCALATION_HEADER} <!-- merger:merge-state:${HEAD.slice(0, 12)} -->` },
       ),

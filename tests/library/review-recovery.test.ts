@@ -1,3 +1,4 @@
+import { asAgent } from './helpers/sign.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { asOneWorkflow } from './helpers/kanon-lane.js';
@@ -54,7 +55,7 @@ const pr = ({
 
 const review = (over: Record<string, unknown> = {}) => ({
   author: { login: 'example-reviewer' }, state: 'APPROVED',
-  commit: { oid: HEAD }, body: 'Approve.', submittedAt: ago(5), ...over,
+  commit: { oid: HEAD }, body: asAgent('example-reviewer', 'Approve.'), submittedAt: ago(5), ...over,
 });
 
 let seq = 0;

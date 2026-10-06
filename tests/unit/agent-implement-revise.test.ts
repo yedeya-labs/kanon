@@ -62,7 +62,17 @@ const GH_STUB = `#!/usr/bin/env bash
 # The App register, which the filter reads its login from (plan 0001 §5).
 ${GH_REGISTER_ARM}
 
+# Before the compare arm, which answers every other api call.
+# The head's commit statuses, for the implementer-status chain (plan 0005 §3.3, L4): by
+# default the Author App's \`kanon/role: implementer\` success; a test sets STUB_STATUSES.
+DEFAULT_STATUSES='[{"context":"kanon/role: implementer","state":"success","creator":{"login":"example-implementer[bot]"}}]'
+if [ "\${1:-}" = "api" ] && [[ "\${2:-}" == */statuses* ]]; then
+  [ "\${STUB_STATUSES:-}" = "fail" ] && { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
+  printf '%s' "\${STUB_STATUSES:-$DEFAULT_STATUSES}"; exit 0
+fi
+
 ${GH_COMPARE_ARM}
+
 
 json=""; jqexpr=""; prev=""; args=()
 while [ $# -gt 0 ]; do
@@ -114,11 +124,14 @@ const runFilter = ({
   // The compare API not answering — a deleted commit, a truncated diff. The
   // fingerprint must then degrade to the SHA, which is the pre-RA-1841 behaviour.
   readableDiffs = true,
+  // The head's commit statuses as the API lists them (plan 0005 §3.3, L4); unset is the
+  // Author App's implementer status, and `fail` a denied read.
+  statuses = '',
 }: Partial<{
   author: string; labels: string[]; prState: string; reviewState: string;
   rounds: number; changesRequested: number; isDispatch: boolean; reset: boolean;
   isLabel: boolean; labelAdded: string; headVerdict: string;
-  headMoved: false | 'content-free' | 'revised'; readableDiffs: boolean;
+  headMoved: false | 'content-free' | 'revised'; readableDiffs: boolean; statuses: string;
 }> = {}) => {
   // ONE HEAD PER CHANGES-REQUEST, because a review is filed against a commit and a
   // healthy loop reviews a new one each round. The old fixture put every review on the
@@ -137,7 +150,7 @@ const runFilter = ({
   const r = runStepOrThrow(filter, {
     dir,
     env: {
-      PATH: `${dir}:${process.env.PATH}`,
+      PATH: `${dir}:${process.env.PATH}`, KANON: process.cwd(),
       REPO: 'example-org/example-repo',
       ...registerEnv(filter),
       PR: '1057',
@@ -148,6 +161,7 @@ const runFilter = ({
       LABEL_ADDED: isLabel ? labelAdded : '',
       REVISE_LABEL: 'agent:revise',
       RESET: isDispatch ? String(reset) : '',
+      STUB_STATUSES: statuses,
       STUB_META: JSON.stringify({
         author: { login: author },
         state: prState,
@@ -290,7 +304,7 @@ describe('the round cap', () => {
     const r = runWorkflowStep(filter, {
       dir,
       env: {
-        PATH: `${dir}:${process.env.PATH}`,
+        PATH: `${dir}:${process.env.PATH}`, KANON: process.cwd(),
         REPO: 'r', ...registerEnv(filter), PR: '1',
         STATE: 'changes_requested', IS_DISPATCH: 'false', RESET: 'true',
         STUB_META: JSON.stringify({ author: { login: 'app/example-implementer' }, state: 'OPEN', headRefName: 'b', labels: [{ name: 'agent:implement' }] }),
@@ -438,7 +452,34 @@ describe('revise in place', () => {
     // A permissions block sets every unlisted scope to `none`, so the comment read
     // returns empty — which reads as "no prior rounds" and unbounds the loop.
     // Third occurrence of this shape in the repo (RA-957).
-    expect(wf.permissions).toEqual({ contents: 'read', 'pull-requests': 'read', issues: 'read' });
+    // `statuses: read` for the implementer-status chain (plan 0005 §3.3, L4).
+    expect(wf.permissions).toEqual({ contents: 'read', 'pull-requests': 'read', issues: 'read', statuses: 'read' });
+  });
+});
+
+describe('plan 0005 L4: it revises only a PR in the implementer-status chain', () => {
+  const status = (creator: string, state = 'success') =>
+    JSON.stringify([{ context: 'kanon/role: implementer', state, creator: { login: creator } }]);
+
+  it('acts on a head that carries the Author App\'s implementer status (the control)', () => {
+    expect(runFilter({ statuses: status('example-implementer[bot]') }).act).toBe(true);
+  });
+
+  it('refuses a FORGED one by name: the Author\'s login, the label, and no status on its head', () => {
+    const r = runFilter({ statuses: '[]' });
+    expect(r.act).toBe(false);
+    expect(r.summary).toMatch(/not provably the Implementer's: it carries no `kanon\/role: implementer` status/);
+  });
+
+  it('refuses one whose newest status another App created, or failed', () => {
+    expect(runFilter({ statuses: status('example-ci[bot]') }).act).toBe(false);
+    expect(runFilter({ statuses: status('example-implementer[bot]', 'failure') }).act).toBe(false);
+  });
+
+  it('refuses when the statuses can\'t be read, rather than revising on an unread answer', () => {
+    const r = runFilter({ statuses: 'fail' });
+    expect(r.act).toBe(false);
+    expect(r.summary).toMatch(/could not be read/);
   });
 });
 
@@ -566,7 +607,7 @@ describe('the round cap counts THE IMPLEMENTER', () => {
     const r = runWorkflowStep(filter, {
       dir,
       env: {
-        PATH: `${dir}:${process.env.PATH}`,
+        PATH: `${dir}:${process.env.PATH}`, KANON: process.cwd(),
         REPO: 'r', ...registerEnv(filter), PR: '1',
         STATE: 'changes_requested', IS_DISPATCH: 'false', RESET: '',
         STUB_META: JSON.stringify({ author: { login: 'app/example-implementer' }, state: 'OPEN', headRefName: 'b', labels: [{ name: 'agent:implement' }] }),
@@ -655,7 +696,7 @@ describe('a deleted author does not abort the round count', () => {
     const r = runWorkflowStep(filter, {
       dir,
       env: {
-        PATH: `${dir}:${process.env.PATH}`,
+        PATH: `${dir}:${process.env.PATH}`, KANON: process.cwd(),
         REPO: 'r', ...registerEnv(filter), PR: '1',
         STATE: 'changes_requested', IS_DISPATCH: 'false', RESET: '',
         STUB_META: JSON.stringify({ author: { login: 'app/example-implementer' }, state: 'OPEN', headRefName: 'b', labels: [{ name: 'agent:implement' }] }),
@@ -862,7 +903,7 @@ describe('the login is read from the App register (plan 0001 §5)', () => {
     return runWorkflowStep(filter, {
       dir,
       env: {
-        PATH: `${dir}:${process.env.PATH}`,
+        PATH: `${dir}:${process.env.PATH}`, KANON: process.cwd(),
         REPO: 'r', ...registerEnv(filter, register ?? ''), PR: '1',
         STATE: 'changes_requested', IS_DISPATCH: 'false', RESET: '',
         STUB_META: JSON.stringify({ author: { login: author }, state: 'OPEN', headRefName: 'b', labels: [{ name: 'agent:implement' }] }),
@@ -930,7 +971,7 @@ describe('the login is read from the App register (plan 0001 §5)', () => {
     writeStub(join(dir, 'gh'), GH_STUB);
     const r = runWorkflowStep(filter, {
       dir,
-      env: { PATH: `${dir}:${process.env.PATH}`, REPO: 'r', ...registerEnv(filter, ''), PR: '1', STATE: 'commented', IS_DISPATCH: 'false', RESET: '' },
+      env: { PATH: `${dir}:${process.env.PATH}`, KANON: process.cwd(), REPO: 'r', ...registerEnv(filter, ''), PR: '1', STATE: 'commented', IS_DISPATCH: 'false', RESET: '' },
     });
     expect(r.status, r.output).toBe(0);
     expect(r.outputFile).toContain('act=false');

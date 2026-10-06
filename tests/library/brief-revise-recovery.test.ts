@@ -1,3 +1,4 @@
+import { asAgent } from './helpers/sign.js';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 const { CONFLICT_WHY } = await import('../../scripts/conflict-state.mjs');
 import { tmpdir } from 'node:os';
@@ -46,6 +47,8 @@ const pr = ({
 } = {}) => ({
   number, author: { login }, state, files: files.map((path) => ({ path })), headRefOid, reviews,
   mergeStateStatus, mergeable,
+  // Signed as the role its author plays (plan 0005 §3.3), which `briefPrs` requires since L4.
+  body: asAgent(login, 'A brief.'),
 });
 
 /** No run has ever fired for this head — the state the recovery exists for. */

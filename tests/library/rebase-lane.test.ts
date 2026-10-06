@@ -7,6 +7,7 @@ const {
   attemptComment, ineligible, isResolveJob, marker, rebaseDecision, report,
 } = await import('../../scripts/rebase-lane.mjs');
 const { ConflictFieldsUnread } = await import('../../scripts/conflict-state.mjs');
+const { IMPLEMENTER_STATUS, headerLine } = await import('../../scripts/lib/role-marker.mjs');
 import { blockOf, effectiveSteps, laneBlockOf } from '../unit/helpers/spine.js';
 import { readFlattened, workflowText } from '../unit/helpers/called-workflow.js';
 
@@ -26,6 +27,7 @@ import { readFlattened, workflowText } from '../unit/helpers/called-workflow.js'
  */
 
 const HEAD = 'cafed00dbeef0000000000000000000000000000';
+const STAMPED = [{ context: IMPLEMENTER_STATUS, state: 'success', creator: { login: `${IMPLEMENTER_LOGIN}[bot]` } }];
 const pr = ({
   number = 55,
   login = IMPLEMENTER_LOGIN,
@@ -38,9 +40,12 @@ const pr = ({
   // an object that never asked (RA-1722), so a fixture cannot skip the gate silently.
   mergeStateStatus = 'DIRTY',
   mergeable = 'CONFLICTING',
+  headStatuses = STAMPED as unknown,
 } = {}) => ({
   number, author: { login }, state, isDraft, headRefOid, headRefName,
   labels: labels.map((name) => ({ name })), mergeStateStatus, mergeable,
+  // The Implementer's marker and the implementer status on the head (plan 0005 §3.3, L4).
+  body: headerLine('Implementer'), headStatuses,
 });
 
 const decide = (prs: unknown[], opts = {}) => rebaseDecision(prs, opts);

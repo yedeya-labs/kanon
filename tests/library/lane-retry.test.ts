@@ -1,3 +1,4 @@
+import { asAgent } from './helpers/sign.js';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -194,6 +195,9 @@ describe('the rebase lane, first half of PR RA-2446 (RA-2519)', () => {
     number, author: { login: 'example-implementer' }, state: 'OPEN', isDraft: false,
     headRefOid: HEAD, headRefName: `fix/${number}`, labels: [{ name: 'agent:implement' }],
     mergeStateStatus: 'DIRTY', mergeable: 'CONFLICTING',
+    // The Implementer's marker and status (plan 0005 §3.3, L4): the PR is in the chain.
+    body: asAgent('example-implementer', 'Closes #1'),
+    headStatuses: [{ context: 'kanon/role: implementer', state: 'success', creator: { login: 'example-implementer[bot]' } }],
   });
   const once = [attemptComment(HEAD, '36142146720')];
   const decide = (bodies: string[] | null, ev: ReturnType<typeof evidence>, now = NOW) => rebaseDecision([pr()], {
@@ -240,7 +244,7 @@ describe('the rebase lane, first half of PR RA-2446 (RA-2519)', () => {
 describe('the brief and standalone review lanes (RA-2519)', () => {
   it('re-churns a brief PR whose only revise run died on api_error', () => {
     const pr = {
-      number: 3, author: { login: 'app/example-lead' }, state: 'OPEN', files: [{ path: `${BRIEF_PATH}1.md` }],
+      number: 3, author: { login: 'app/example-lead' }, body: asAgent('example-lead', 'A brief.'), state: 'OPEN', files: [{ path: `${BRIEF_PATH}1.md` }],
       headRefOid: 'aaaaaaa1', mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE',
       reviews: [{ state: 'CHANGES_REQUESTED', commit: { oid: 'aaaaaaa1' }, submittedAt: ago(9) }],
     };

@@ -1,3 +1,4 @@
+import { asAgent } from './helpers/sign.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -116,10 +117,10 @@ esac
     const dir = mkdtempSync(join(tmpdir(), 'protocol-read-'));
     const bot = `${MERGER_LOGIN}[bot]`;
     const comments = [
-      { login: bot, body: `🚦 **Joshua — not merging.**\n\n<!-- joshua:checks-failed:${H12} -->` },
-      { login: bot, body: `🚦 **Merger — not merging.**\n\n<!-- merger:merge-state:${H12} -->` },
+      { login: bot, body: `${asAgent(bot, '')}🚦 **Joshua — not merging.**\n\n<!-- joshua:checks-failed:${H12} -->` },
+      { login: bot, body: `${asAgent(bot, '')}🚦 **Merger — not merging.**\n\n<!-- merger:merge-state:${H12} -->` },
       // A recover marker has the same shape and is not an escalation.
-      { login: bot, body: `🔁 the Merger asked … <!-- merger:no-review-on-head:${H12} -->` },
+      { login: bot, body: `${asAgent(bot, '')}🔁 the Merger asked … <!-- merger:no-review-on-head:${H12} -->` },
     ].map((c) => JSON.stringify(c)).join('\n');
     const meta = {
       number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,

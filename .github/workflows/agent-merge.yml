@@ -232,15 +232,19 @@ jobs:
     # the `logins` job's, so this expression reads whole on its own; the role clauses compare
     # against that job's outputs instead of literals.
     #
-    # The Merger must not answer his own REVIEW events. He posts comments and merges, and a
-    # merge closes a PR — without this, an escalation comment is one more event to process.
+    # NO ACTOR CLAUSE ON THE REVIEW EVENT (plan 0005 §3.3, step L4). It used to decline a review
+    # whose actor was the Merger's own App. Since L4 the Merger and the Reviewer share the Judge
+    # App, so that clause would decline EVERY Reviewer review, leaving the Merger to its hourly
+    # sweep, silently: a job `if:` can read no role marker. It is dropped because the Merger
+    # submits no reviews, so no `pull_request_review` event is his own; its comments and merges
+    # fire `issue_comment` and `pull_request`, which this lane is not called on.
+    # `tests/unit/merge-lane.test.ts` pins both halves: a Judge review starts the review path,
+    # and nothing the merge lane runs calls a review-submission endpoint.
     #
-    # SCOPED TO THE REVIEW EVENT, and the scoping is load-bearing (RA-1140). On a
-    # `workflow_run` event `github.actor` is the actor of the run that TRIGGERED it — so after
-    # the Merger merges, the resulting push to the default branch runs CI as the Merger, and a
-    # blanket actor guard would skip the sweep at the exact moment it is most useful: one merge
-    # has just changed every other open PR's mergeability. The guard would have failed
-    # silently — the `if:` simply never matching, a green run, nothing done.
+    # NOR, AS BEFORE, ON `workflow_run` (RA-1140). There `github.actor` is the actor of the run
+    # that TRIGGERED it — so after the Merger merges, the resulting push to the default branch
+    # runs CI as the Merger, and an actor guard would skip the sweep at the exact moment it is
+    # most useful: one merge has just changed every other open PR's mergeability.
     #
     # Letting `workflow_run` through does mean a merge can trigger a sweep that merges again.
     # That cascade is bounded by the set of mergeable PRs and drains it, which is the point; it
@@ -249,8 +253,11 @@ jobs:
     #
     # ── AND NEITHER DOES A REVIEW THAT WAS NEVER HIS (RA-2596) ───────────────────────
     #
-    # The fourth of `mergeVerdict`'s first rules, `not-the-implementer`, is decided here,
-    # because it needs the Implementer's login. The identity fields have no fail-open spelling
+    # The fourth of `mergeVerdict`'s first rules, `not-the-implementer`, is pre-filtered here,
+    # because it needs the Implementer's login. Since L4 that login is the Author App's, which
+    # every Author lane's PR carries, so this admits them all: it is a pre-filter only, and
+    # `mergeVerdict` then requires the Implementer's role marker and the implementer commit
+    # status on the head (plan 0005 §3.3). The identity fields have no fail-open spelling
     # — a gate that asks "is this the Implementer's" cannot be written so that an absent field
     # runs the job — and they read the same register row `merge-gate.mjs` reads for
     # `IMPLEMENTER_LOGIN`: rename the App and both stop matching together, which stops merging
@@ -269,7 +276,6 @@ jobs:
           || (github.event_name == 'pull_request_review'
               && needs.logins.result == 'success'
               && needs.logins.outputs.member == 'true'
-              && github.actor != format('{0}[bot]', needs.logins.outputs.merger)
               && github.event.pull_request.state != 'closed'
               && !github.event.pull_request.draft
               && (github.event.pull_request.user.login == format('{0}[bot]', needs.logins.outputs.implementer)

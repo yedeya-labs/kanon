@@ -16,6 +16,16 @@ describe('the declaration zone', () => {
     expect(declarationZone('Closes #1 · Refs #2\n\nbody text')).toBe('Closes #1 · Refs #2');
   });
 
+  it('skips an agent\'s persona header line, which opens every agent post (plan 0005 §3.3)', () => {
+    const header = '**Ada (Implementer)** <!-- kanon:role=implementer -->';
+    expect(declarationZone(`${header}\n\nCloses #4\n\nbody text`)).toBe('Closes #4');
+    expect(declarationZone(`**Implementer** <!-- kanon:role=implementer -->\n\n> banner\n\nCloses #5`)).toBe('Closes #5');
+    // A header sharing its paragraph with a declaration is still the zone.
+    expect(declarationZone(`${header}\nCloses #6\n\nbody`)).toBe(`${header}\nCloses #6`);
+    // Bold prose without the marker is a paragraph like any other.
+    expect(declarationZone('**Note**\n\nCloses #7')).toBe('**Note**');
+  });
+
   it('does not leak the skipped banner back in as "below the zone"', () => {
     // `belowZone` was `body.slice(zone.length)` — an offset counted from character 0
     // while the zone starts after the banner, so what landed below it depended on
