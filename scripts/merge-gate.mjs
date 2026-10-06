@@ -450,8 +450,9 @@ export function checkPartition(checks) {
  *   specDiff?: {promotions: {id: string, file: string, from: string|null}[], unreadable: string[]}|null,
  * }} pr
  * `specDiff` is `specPromotions` of the changed spec files' patches, and is read only when a
- * changed file is a spec (`isSpecFile`). Then anything but that shape, or a file it couldn't
- * read, escalates as `spec-diff-unreadable`: a promotion nobody could look for is not "none".
+ * changed file is a spec (`isSpecFile`). Then anything but that shape is a failed listing,
+ * which waits as `spec-diff-unlisted`, and a file it couldn't read escalates as
+ * `spec-diff-unreadable`: a promotion nobody could look for is not "none" (kanon#273).
  * `workflowRuns` IS REQUIRED TOO, and `null` is a value, not an omission (RA-2256): it
  * means the Actions listing could not be read, and anything that is not an array is
  * treated the same way — a `wait`, never "no startup failure".
@@ -651,9 +652,15 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
   // is a promotion, and a promotion is the human's. An edit that keeps `[confirmed]` is not.
   if (pr.files.some(isSpecFile)) {
     const spec = pr.specDiff;
-    if (!spec || !Array.isArray(spec.promotions) || !Array.isArray(spec.unreadable) || spec.unreadable.length) {
-      const which = spec?.unreadable?.length ? `: \`${spec.unreadable.join('`, `')}\`` : '';
-      return stop('spec-diff-unreadable', `this PR changes a spec, and its diff could not be read${which}, so whether it promotes an invariant to \`[confirmed]\` is unknown (K-SPEC-9)`);
+    // TWO DIFFERENT UNREADS (kanon#273). A listing that failed is the `runs-unreadable` case
+    // above: likely transient, so it WAITS, because an escalation would stamp a `needs:human`
+    // nothing lifts while the head stays put. A listing that came back without a changed
+    // spec's patch is deterministic on the commit, so that one escalates.
+    if (!spec || !Array.isArray(spec.promotions) || !Array.isArray(spec.unreadable)) {
+      return wait('spec-diff-unlisted', 'this PR changes a spec, and its patch listing could not be read, so whether it promotes an invariant to `[confirmed]` is unknown — not merging on an unread answer (K-SPEC-9)');
+    }
+    if (spec.unreadable.length) {
+      return stop('spec-diff-unreadable', `this PR changes a spec, and GitHub returned no diff for \`${spec.unreadable.join('`, `')}\`, so whether it promotes an invariant to \`[confirmed]\` is unknown (K-SPEC-9)`);
     }
     if (spec.promotions.length) {
       const list = spec.promotions.map((p) => `\`${p.id}\` in \`${p.file}\` (${p.from ? `was \`[${p.from}]\`` : 'new'})`);
@@ -1185,7 +1192,7 @@ export function readPr(number, repo, opts = {}) {
     // when the label is on, which is the only time `mergeVerdict` consults it.
     hold: meta.labels.some((l) => l.name === 'needs:human') ? holdOn(meta.number, repo, gh) : undefined,
     // THE SPEC PATCHES, read only when a spec changed (K-SPEC-9). `null` on a failed read,
-    // which `mergeVerdict` escalates rather than reading as "no promotion".
+    // which `mergeVerdict` waits on rather than reading as "no promotion" (kanon#273).
     specDiff: files.some(isSpecFile) ? specDiffOn(number, repo, gh) : undefined,
   };
 }
@@ -1204,7 +1211,7 @@ function specDiffOn(number, repo, gh) {
       .map(([file, patch, changes]) => ({ file, patch: patch ?? null, changes: Number(changes) || 0 }));
     return specPromotions(rows);
   } catch (e) {
-    console.log(`::warning title=merge-gate::#${number}: the spec diff could not be read, so this PR escalates (spec-diff-unreadable): ${String(e?.stderr || e?.message || e).trim().slice(0, 200)}`);
+    console.log(`::warning title=merge-gate::#${number}: the spec diff could not be read, so this PR waits (spec-diff-unlisted): ${String(e?.stderr || e?.message || e).trim().slice(0, 200)}`);
     return null;
   }
 }
