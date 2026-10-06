@@ -4,7 +4,8 @@
 // a claim any Author agent can write. The Merger's green zone needs a signal no other Author
 // lane's agent can produce: a commit status set by a FIXED step of the Implementer's lanes,
 // after the agent has finished, with a token narrowed to Commit statuses write, which no
-// agent's token holds (`K-AGENT-46`). L3 only writes it; nothing requires it until L4.
+// agent's token holds (`K-AGENT-46`). Since L4 the Merger requires it on a green-zone head, and
+// the revise and rebase lanes refuse a pull request whose head lacks it.
 //
 // TWO MODES, because the status is a chain, not a stamp:
 //
@@ -30,10 +31,10 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
-import { slugOf } from '../../scripts/lib/role-marker.mjs';
+import { IMPLEMENTER_STATUS, implementerStatusOn } from '../../scripts/lib/role-marker.mjs';
 
-/** The status context the Merger will require on the head at L4. */
-export const CONTEXT = 'kanon/role: implementer';
+/** The status context the Merger requires on the head since L4 (`mergeVerdict`). */
+export const CONTEXT = IMPLEMENTER_STATUS;
 
 /** What a GitHub API commit says about its author, as this module reads it. */
 /** @typedef {{ sha: string, parents?: Array<{ sha: string }>, commit?: { author?: { email?: string } } }} ApiCommit */
@@ -88,9 +89,11 @@ export function pickOpened({ prs, repo, since, branchesBefore, email, headCommit
  */
 export function carryDecision({ startHead, head, slug, email, startStatuses, compare }) {
   if (!/^[0-9a-f]{40}$/i.test(startHead)) return { none: 'the head the run started from is unknown' };
-  const had = startStatuses.some((s) => s.context === CONTEXT && s.state === 'success' && slugOf(s.creator?.login) === slug);
-  if (!had) {
-    return { none: `the head it started from, \`${startHead.slice(0, 7)}\`, carries no \`${CONTEXT}\` status created by \`${slug}\`, so the chain has no start` };
+  // The same question the Merger and the rebase lane ask (`implementerStatusOn`): the NEWEST
+  // status of the context is the App's success.
+  const had = implementerStatusOn(startStatuses, slug);
+  if (!had.ok) {
+    return { none: `the head it started from, \`${startHead.slice(0, 7)}\`, is not provably the Implementer's (${had.why}), so the chain has no start` };
   }
   if (head === startHead) return { none: `the head is still \`${startHead.slice(0, 7)}\`, which already carries the status` };
   if (!compare || compare.status !== 'ahead') {
@@ -135,7 +138,7 @@ function main() {
   const lead = `**Implementer status** (\`${CONTEXT}\`, plan 0005 §3.3):`;
   if (!read || !slug) return say(`${lead} not set: the Implementer's App could not mint a read token, so nothing could be checked.`);
   if (!write) {
-    return say(`${lead} not set: the Implementer's App could not mint a token with Commit statuses write. Grant it that permission (a broadened permission, recorded in the App register, \`K-AGENT-3\`); until L4 nothing requires the status.`);
+    return say(`${lead} not set: the Implementer's App could not mint a token with Commit statuses write. Grant it that permission (a broadened permission, recorded in the App register, \`K-AGENT-3\`). Without the status the Merger skips this pull request as \`not-the-implementer\`, and the revise and rebase lanes refuse it, so a person merges it.`);
   }
   const id = ghJson(['api', `users/${slug}%5Bbot%5D`], read).id;
   const host = String(env.GITHUB_SERVER_URL ?? 'https://github.com').replace(/^[a-z]+:\/\//, '').replace(/\/.*$/, '');

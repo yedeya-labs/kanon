@@ -109,10 +109,14 @@ jobs:
     # jobs (`repos/{repo}/actions/runs/{id}/jobs`) to learn whether it died of its cause.
     # Denied, the read is "unknown" and nothing is retried — the pre-RA-2519 behaviour —
     # so a missing scope here fails quiet, which is why it is stated rather than assumed.
+    # `statuses: read` for the implementer-status chain (plan 0005 §3.3, step L4):
+    # `rebase-lane.mjs` refuses a conflicting PR whose head lacks the Author App's
+    # `kanon/role: implementer` status, and an unread list refuses too.
     permissions:
       actions: read
       contents: read
       pull-requests: read
+      statuses: read
     outputs:
       member: ${{ steps.gate.outputs.member }}
       prs: ${{ steps.decide.outputs.prs }}
@@ -226,7 +230,8 @@ jobs:
   # implementer` to the resolved head only when the head recorded before the agent ran carried
   # one created by the Implementer's App, and every commit on the first-parent path between
   # them is the App's (the merge's second parent is the default branch). Otherwise it sets
-  # none and says why. Nothing requires the status until L4; it never reds the lane.
+  # none and says why. It never reds the lane. Since L4 the Merger requires the status, and this
+  # lane's filter refuses a pull request whose head lacks it (`rebase-lane.mjs`, `ineligible`).
   implementer-status:
     needs: [filter, resolve]
     if: ${{ !cancelled() && needs.filter.outputs.member == 'true' && needs.filter.outputs.prs != '[]' }}

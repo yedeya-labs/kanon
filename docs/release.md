@@ -17,7 +17,9 @@ On each push to the main branch it:
 
    It judges the head of the release branch itself, read from the branch ref ([#86](https://github.com/yedeya-labs/kanon/issues/86)). GitHub records a PR's new head after a push asynchronously, so right after release-please's push the PR can still name the previous one. The step re-reads the PR a few times, and if it still doesn't name the branch's head, it fails without judging it: re-run the Release workflow before you merge.
 
-It takes no inputs and no secrets ([ADR 0002](decisions/0002-standardise-dont-parameterise.md)). The file names are fixed, the branch is your default branch, and what really differs per repository (release type, package name) already lives in your own release configuration. The workflow's header comment gives the reasoning for each candidate input.
+It takes no inputs ([ADR 0002](decisions/0002-standardise-dont-parameterise.md)). The file names are fixed, the branch is your default branch, and what really differs per repository (release type, package name) already lives in your own release configuration. The workflow's header comment gives the reasoning for each candidate input.
+
+It takes one optional pair of secrets, `RELEASER_APP_ID` and `RELEASER_APP_PRIVATE_KEY`: the optional **Releaser** App (plan 0005 §3.1, [ADR 0013](decisions/0013-personal-accounts-and-two-apps.md)). Map them by name, never through `secrets: inherit`, and release-please runs on a Releaser token narrowed to Contents and Pull requests write. Leave them out and it runs on the workflow's own token, which is the default every section below describes. [With the Releaser](#with-the-releaser) says what changes.
 
 ## Use it
 
@@ -50,6 +52,7 @@ jobs:
 - **Grant the writes on the calling job only.** A reusable workflow can use no more than its caller grants, and nothing else in the file needs them.
 - **`contents: write` is also what lets the guard read your merge settings.** GitHub returns those fields to a workflow token only when it can push; with `metadata` or `contents: read` they come back empty. If they are unreadable, the guard fails and says so, rather than passing.
 - **With `lane-check`.** [`lane-check`](../actions/lane-check/README.md) passes this caller: a call to the release workflow is no lane caller, so it is held only to the one pin and never to pass `secrets: inherit`.
+- **The Releaser, if you have one.** Add `secrets:` to the job, mapping `RELEASER_APP_ID: ${{ secrets.RELEASER_APP_ID }}` and `RELEASER_APP_PRIVATE_KEY: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}`. See [With the Releaser](#with-the-releaser).
 - **Upgrades.** The Dependabot entry in the [`pr-title` README](../actions/pr-title/README.md#upgrades-dependabot) also updates this `uses:` line: Dependabot's `github-actions` ecosystem covers reusable workflows. Keep one entry.
 
 ### 2. Your release configuration
@@ -137,9 +140,19 @@ Made once, by an Owner:
    gh api -X PUT repos/<owner>/<repo>/actions/permissions/workflow -F can_approve_pull_request_reviews=true
    ```
 
+## With the Releaser
+
+With the Releaser's secrets mapped, release-please pushes the release branch and opens the release PR with the Releaser's token instead of the workflow's. GitHub runs workflows for an App's pushes, so:
+
+- **the release PR runs CI**, which the first limit below says it otherwise doesn't;
+- **the release tag triggers `on: push: tags` workflows**, which the last limit below says it otherwise doesn't;
+- **the release PR is the Releaser's, which plan 0005 makes the only release bypass actor** (`K-MERGE-8`, §3.1). Mapping the secrets doesn't move the bypass, and nothing in the release workflow merges as the Releaser: the bypass belongs to whoever merges the release PR.
+
+**Keep your admin bypass for now.** The release PR's commits are the Releaser's, carry no sign-off, and the `dco` check exempts only `github-actions[bot]`, so a required `dco` check goes red on a Releaser's release PR ([#337](https://github.com/yedeya-labs/kanon/issues/337)). The admin bypass is what merges it past that check. Move the bypass from the admin to the Releaser App, limited to release PRs, only once #337 is fixed and the Releaser is what merges the release PR. Plan 0005 schedules that as its own step (L5 for Kanon, L6 for an adopter). Until then, either keep the admin bypass with the Releaser mapped, or leave the Releaser unmapped.
+
 ## Known limits
 
-All are accepted while Kanon has no release App, and all go away when one exists.
+All are accepted on the workflow's own token, the default. Mapping the Releaser removes the first and the last (see [With the Releaser](#with-the-releaser)).
 
 - **The release PR runs no CI.** It is opened with the workflow's own token, and a PR opened with that token triggers no workflows. It changes only the changelog, the version, the manifest and any `extra-files` you list (Kanon lists the documents holding its `uses:` lines, so they always name the latest release), but a test that pins one of those can still go red on `main` after the release PR merges. Kanon's own did once, on its first release: a test had pinned the manifest's starting value.
 - **The stale-release-PR guard covers the release PR's diff, at the moment the workflow runs.** On 0.10.0, release-please rebuilt the release PR from stale copies of `docs/lanes.md` and `actions/lane-check/README.md`, and merging it (`db99870`) reverted the review lane's documentation that #67 had just merged. The guard reads the PR's diff after every push, so a PR in that state fails the Release run and gets a comment saying what it would revert. What it doesn't cover:

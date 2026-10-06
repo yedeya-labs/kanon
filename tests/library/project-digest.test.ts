@@ -22,6 +22,7 @@ const {
   stopReason,
   HELD_MARKER,
 } = await import('../../scripts/project-digest.mjs');
+const { signed } = await import('../../scripts/lib/role-marker.mjs');
 const { CONFLICT_SHORT } = await import('../../scripts/conflict-state.mjs');
 const { AGENT_LOGIN, classify: sweepClassify, LANES } = await import('../../scripts/dispatch-sweep.mjs');
 const reconciler = await import('../../scripts/lead-reconcile.mjs');
@@ -62,7 +63,10 @@ const NOW = new Date('2026-09-02T12:00:00Z');
 /** The Implementer's login, as the API returns it — with the `[bot]` suffix. */
 const IMPL = `${AGENT_LOGIN}[bot]`;
 /** A comment the way the API returns it, oldest first — by default the Implementer's. */
-const c = (body: string, createdAt = '2026-09-02T12:00:00Z', login: string = IMPL) => ({ login, body, createdAt });
+// The Implementer's own comments open with its persona header (plan 0005 §3.3), which the
+// digest's readers require beside the login since L4.
+const c = (body: string, createdAt = '2026-09-02T12:00:00Z', login: string = IMPL) =>
+  ({ login, body: login === IMPL ? signed(body, 'Implementer') : body, createdAt });
 /** A human's comment. */
 const h = (body: string, createdAt = '2026-09-02T12:00:00Z') => c(body, createdAt, 'maintainer');
 const BAIL = '## SCOPE-FIRST BAIL — credential change. Plan below; label kept; no PR opened.';
@@ -310,7 +314,7 @@ describe('classifyDispatch — the classification the digest must not get wrong'
   });
 
   it('falls back to the silence age when the bail comment carries no timestamp', () => {
-    expect(d({ comments: [{ login: IMPL, body: BAIL }], ageDays: 7 }).waitedDays).toBe(7);
+    expect(d({ comments: [{ login: IMPL, body: signed(BAIL, 'Implementer') }], ageDays: 7 }).waitedDays).toBe(7);
   });
 
   it('never reports a negative wait', () => {
@@ -852,7 +856,7 @@ describe('classifyDispatch is fed the NEWEST comments, not the oldest hundred (R
    * digest exists to make visible.
    */
   // The REST payload: `user.login` WITH the `[bot]` suffix, which `norm` strips.
-  const bail = { user: { login: IMPL }, body: 'SCOPE-FIRST BAIL — awaiting your decision', created_at: '2026-09-01T00:00:00Z' };
+  const bail = { user: { login: IMPL }, body: signed('SCOPE-FIRST BAIL — awaiting your decision', 'Implementer'), created_at: '2026-09-01T00:00:00Z' };
   const chat = (n: number) => ({ user: { login: 'maintainer' }, body: `comment ${n}`, created_at: '2026-09-02T00:00:00Z' });
 
   /** Pages as the API serves them: ascending, `page=1` oldest. */
@@ -889,7 +893,7 @@ describe('classifyDispatch is fed the NEWEST comments, not the oldest hundred (R
   });
 
   it('stops at the Implementer\'s last word even when it is not a bail (kanon#179)', async () => {
-    const stop = { ...bail, body: 'Stopped: needs a runbook only a human can run' };
+    const stop = { ...bail, body: signed('Stopped: needs a runbook only a human can run', 'Implementer') };
     const { api, seen } = apiOver([[chat(1)], [chat(2)], [stop]]);
     const comments = await dispatchCommentsOf(api, 'o/r', 1305, 250);
     expect(seen).toEqual([3]);

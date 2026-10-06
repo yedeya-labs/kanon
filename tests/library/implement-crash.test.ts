@@ -1,3 +1,4 @@
+import { asAgent } from './helpers/sign.js';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -136,7 +137,7 @@ describe('the inputs', () => {
     const since = '2026-09-19T18:06:00Z';
     expect(agentSpokeSince([{ login: AGENT_LOGIN, createdAt: '2026-09-18T00:00:00Z' }], since), 'an older comment').toBe(false);
     expect(agentSpokeSince([{ login: 'example-reviewer', createdAt: '2026-09-19T19:00:00Z' }], since), 'another bot').toBe(false);
-    expect(agentSpokeSince([{ login: `${AGENT_LOGIN}[bot]`, createdAt: '2026-09-19T19:00:00Z' }], since)).toBe(true);
+    expect(agentSpokeSince([{ login: `${AGENT_LOGIN}[bot]`, createdAt: '2026-09-19T19:00:00Z', body: asAgent(AGENT_LOGIN, 'done') }], since)).toBe(true);
     expect(agentSpokeSince([], null), 'no start time keeps the label').toBe(true);
   });
 
@@ -321,7 +322,7 @@ describe('emptyRun — a green run that left nothing (kanon#181)', () => {
 
   it('a GENUINE BAIL is not empty — the agent said why it stopped', () => {
     // Read through the same `agentSpokeSince` the script uses, from a real-shaped comment.
-    const bail = { login: `${AGENT_LOGIN}[bot]`, createdAt: during, body: 'SCOPE-FIRST BAIL: this needs a data migration. Plan: …' };
+    const bail = { login: `${AGENT_LOGIN}[bot]`, createdAt: during, body: asAgent(AGENT_LOGIN, 'SCOPE-FIRST BAIL: this needs a data migration. Plan: …') };
     const spoke = agentSpokeSince([bail], since);
     expect(spoke).toBe(true);
     expect(emptyRun({ ...nothing, spoke })).toMatchObject({ empty: false, why: expect.stringMatching(/commented/) });
@@ -428,7 +429,7 @@ describe('MODE=detect, run (kanon#181)', () => {
   });
 
   it('passes a run that left a genuine bail comment', () => {
-    const r = run({ comments: [{ author: { login: `${AGENT_LOGIN}[bot]` }, createdAt: '2026-10-02T01:00:00Z', body: 'Stopping: the acceptance criteria are ambiguous about X.' }] });
+    const r = run({ comments: [{ author: { login: `${AGENT_LOGIN}[bot]` }, createdAt: '2026-10-02T01:00:00Z', body: asAgent(AGENT_LOGIN, 'Stopping: the acceptance criteria are ambiguous about X.') }] });
     expect(r.status, r.out).toBe(0);
     expect(r.output).toBe('');
   });

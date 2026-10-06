@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { asAgent } from './helpers/sign.js';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { ROOT } from './helpers/adopter.js';
@@ -38,7 +39,7 @@ const issue = { number: 1, title: 't', createdAt: ago(1000) };
 const comment = (login: string, hours: number, body = 'hello') => ({
   login,
   createdAt: ago(hours),
-  body,
+  body: asAgent(login, body),
 });
 // The sweep runs as its OWN App, deliberately not as the implementer it watches.
 const sweepComment = (hours: number) => comment(SWEEP_LOGIN, hours, `${MARKER}\nre-dispatching`);
@@ -574,7 +575,7 @@ describe('the mass-strip circuit breaker (RA-916)', () => {
   const now = Date.now();
   const issue = (number: number) => ({ number, title: `t${number}`, createdAt: new Date(now - 500 * H).toISOString() });
   const sweepAt = (h: number) => ({ login: SWEEP_LOGIN, body: `x ${MARKER}`, createdAt: new Date(now - h * H).toISOString() });
-  const agentAt = (h: number) => ({ login: AGENT_LOGIN, body: 'built it', createdAt: new Date(now - h * H).toISOString() });
+  const agentAt = (h: number) => ({ login: AGENT_LOGIN, body: asAgent(AGENT_LOGIN, 'built it'), createdAt: new Date(now - h * H).toISOString() });
   const humanAt = (h: number) => ({ login: 'geoffry', body: 'stop, this needs design', createdAt: new Date(now - h * H).toISOString() });
 
   /** An issue the implementer never answered, at the re-dispatch cap -> exhausted/stop. */
@@ -848,7 +849,7 @@ describe('the qa:needs-triage lane (RA-1336)', () => {
 
   const [implement, triage] = LANES;
   const at = (login: string, hours: number, body = 'hello') =>
-    ({ login, createdAt: ago(hours), body });
+    ({ login, createdAt: ago(hours), body: asAgent(login, body) });
   const bug = { number: 903, title: 'bug(admin): …', createdAt: ago(300) };
   const v = (comments: ReturnType<typeof at>[], lane = triage, opts = {}) =>
     classify(bug, comments, false, { now: NOW, lane, ...opts });
@@ -981,7 +982,7 @@ describe('a terminal triage verdict leaves the lane (RA-1380)', () => {
   // Chromium on a closed question.
   const [implement, triage] = LANES;
   const at = (login: string, hours: number, body = 'hello') =>
-    ({ login, createdAt: ago(hours), body });
+    ({ login, createdAt: ago(hours), body: asAgent(login, body) });
   const bug = (labels: string[]) =>
     ({ number: 903, title: 'bug(x)', createdAt: ago(300), labels: labels.map((name) => ({ name })) });
   const v = (labels: string[], comments: ReturnType<typeof at>[] = [], hasPr = false) =>

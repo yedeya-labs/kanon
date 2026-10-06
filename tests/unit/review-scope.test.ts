@@ -53,7 +53,7 @@ function verdict(sha: string | null, extra: Record<string, unknown> = {}) {
     state: 'CHANGES_REQUESTED',
     submitted_at: '2026-09-25T10:00:00Z',
     commit_id: 'f'.repeat(40),
-    body: `Finding 1: fix the thing.${sha ? `\n\n${trailerFor({ sha, runId: 7 })}` : ''}`,
+    body: `**Reviewer** <!-- kanon:role=reviewer -->\n\nFinding 1: fix the thing.${sha ? `\n\n${trailerFor({ sha, runId: 7 })}` : ''}`,
     ...extra,
   };
 }

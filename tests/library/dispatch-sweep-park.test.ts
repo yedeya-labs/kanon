@@ -1,3 +1,4 @@
+import { asAgent } from './helpers/sign.js';
 import { describe, expect, it } from 'vitest';
 import { AGENT_LOGIN, LANES, classify, terminalVerdict } from '../../scripts/dispatch-sweep.mjs';
 
@@ -13,7 +14,7 @@ import { AGENT_LOGIN, LANES, classify, terminalVerdict } from '../../scripts/dis
 
 const [implement, triage] = LANES;
 const NOW = Date.parse('2026-10-04T12:00:00Z');
-const agent = { login: AGENT_LOGIN, createdAt: '2026-10-01T00:00:00Z', body: 'Plan: … SCOPE-FIRST BAIL' };
+const agent = { login: AGENT_LOGIN, createdAt: '2026-10-01T00:00:00Z', body: asAgent(AGENT_LOGIN, 'Plan: … SCOPE-FIRST BAIL') };
 const human = { login: 'maintainer', createdAt: '2026-10-02T00:00:00Z', body: 'Built by hand, do not re-dispatch.' };
 const issue = (labels: string[]) => ({ number: 7, title: 't', labels: labels.map((name) => ({ name })) });
 

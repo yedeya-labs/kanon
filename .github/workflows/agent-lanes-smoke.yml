@@ -69,6 +69,7 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
+      statuses: read
     uses: $/.github/workflows/agent-implement-revise.yml
     with:
       smoke: agent-lanes-smoke
@@ -174,6 +175,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
+      statuses: read
     uses: $/.github/workflows/agent-rebase.yml
     with:
       smoke: agent-lanes-smoke

@@ -10,12 +10,12 @@
 // which App, the marker which of its roles. A marker on its own proves nothing, because every
 // agent of an App can write the same bytes.
 //
-// L3 IS ADDITIVE. Today every role has its own App, so the login alone still tells the roles
-// apart, and `asRole` answers exactly what the login answers: the marker is written and read,
-// and nothing requires it. Step L4 (two Apps) flips `markerPhase` to `required`, and every
-// reader that routes through `asRole` then also needs the role's marker. That is the one
-// switch L4 throws: `tests/library/role-marker-readers.test.ts` runs each reader of §3.3's
-// table under both phases and names what the flip changes.
+// REQUIRED SINCE L4. L3 wrote and read the marker without requiring it, while every role still
+// had its own App and the login alone told the roles apart. Step L4 (two Apps: the Author and
+// the Judge) flipped `markerPhase` to `required`: two roles of one App share a login, so every
+// reader that routes through `asRole` needs the login AND the role's marker.
+// `tests/library/role-marker-readers.test.ts` runs each reader of §3.3's table under both
+// phases and holds the shipped phase to `required`.
 //
 // WHERE A PERSONA IS DECLARED is not settled by L3: `K-AGENT-2` says the project supplies the
 // display names of its personas, and no file carries them yet. Every writer here takes the
@@ -27,6 +27,9 @@
 // malformed or missing column gives the role's own header, which lane-check fails by name).
 //   node scripts/lib/role-marker.mjs header Implementer [persona]
 //   … | node scripts/lib/role-marker.mjs header-from-register Implementer
+// And it judges a head's commit statuses (the REST list, on standard input) for the
+// implementer status, for the revise lane's filter (plan 0005 §3.3, L4):
+//   … | node scripts/lib/role-marker.mjs implementer-status <author-slug>
 
 import { isCliEntry } from './cli-entry.mjs';
 
@@ -99,20 +102,21 @@ export function signed(body, role, persona = null) {
 }
 
 /**
- * What the readers require. `additive` (L3): the login decides, and the marker is read but
- * not required. `required` (L4): the login and the role's marker both.
+ * What the readers require. `additive` (L3, kept for the reader-table test): the login
+ * decides, and the marker is read but not required. `required` (L4, shipped): the login and
+ * the role's marker both.
  * @typedef {'additive' | 'required'} MarkerPhase
  */
 
 /** @type {MarkerPhase} */
-let phase = 'additive';
+let phase = 'required';
 
 /** The phase every reader runs under. */
 export const markerPhase = () => phase;
 
 /**
- * Set the phase, for the reader-table test only: it runs each reader under L4's rule before
- * L4 ships, to name what the flip changes. Returns the previous phase.
+ * Set the phase, for the reader-table test only: it runs each reader under L3's rule too, to
+ * name what L4's flip changed. Returns the previous phase.
  * @param {MarkerPhase} next
  * @returns {MarkerPhase}
  */
@@ -123,8 +127,37 @@ export function setMarkerPhase(next) {
   return was;
 }
 
+/**
+ * The implementer commit status's context (plan 0005 §3.3, question 6). Set by a fixed step of
+ * the Implementer's lanes (`actions/implementer-status`), never by an agent, and required by
+ * the Merger on the current head, created by the Author App (L4).
+ */
+export const IMPLEMENTER_STATUS = 'kanon/role: implementer';
+
 /** An App login as the APIs spell it, reduced to the slug: `app/x`, `x[bot]` and `x` are one. */
 export const slugOf = (/** @type {unknown} */ login) => String(login ?? '').replace(/^app\//, '').replace(/\[bot\]$/, '');
+
+/**
+ * Whether a commit's statuses carry the implementer status from the Author App (`expected`):
+ * the NEWEST status of the context, as the REST list orders them, is `success` and created by
+ * that App. The newest decides, so a later status from another App, or a failure, refuses
+ * rather than being outvoted. The Merger's green zone, and the revise and rebase lanes' chain,
+ * all ask this one question (plan 0005 §3.3, question 6).
+ *
+ * @param {unknown} statuses `[{ context, state, creator }]`, `creator` a login or `{ login }`
+ * @param {string} expected the Author App's login
+ * @returns {{ ok: true } | { ok: false, why: string }}
+ */
+export function implementerStatusOn(statuses, expected) {
+  if (!Array.isArray(statuses)) return { ok: false, why: 'its commit statuses could not be read' };
+  const newest = statuses.find((s) => s?.context === IMPLEMENTER_STATUS);
+  if (!newest) return { ok: false, why: `it carries no \`${IMPLEMENTER_STATUS}\` status` };
+  const by = typeof newest.creator === 'object' && newest.creator ? newest.creator.login : newest.creator;
+  if (newest.state !== 'success' || slugOf(by) !== slugOf(expected)) {
+    return { ok: false, why: `its newest \`${IMPLEMENTER_STATUS}\` status is \`${newest.state}\` from \`${slugOf(by) || 'unknown'}\`, not \`success\` from \`${slugOf(expected)}\`` };
+  }
+  return { ok: true };
+}
 
 /**
  * Whether an object was written by `role`: its author's login is the role's App (`expected`),
@@ -163,6 +196,17 @@ export function withPersona(prompt, role, header) {
 
 if (isCliEntry(import.meta.url)) {
   const [cmd, role, persona] = process.argv.slice(2);
+  if (cmd === 'implementer-status' && role) {
+    // `… statuses JSON on stdin | role-marker.mjs implementer-status <author-slug>`: exit 0
+    // when the newest implementer status is the Author App's success, else 1 with the reason.
+    const { readFileSync } = await import('node:fs');
+    let listed = null;
+    try { listed = JSON.parse(readFileSync(0, 'utf8')); } catch { listed = null; }
+    const v = implementerStatusOn(Array.isArray(listed) ? listed.flat() : null, role);
+    if (v.ok) process.exit(0);
+    console.log(v.why);
+    process.exit(1);
+  }
   if (cmd === 'header-from-register' && role) {
     const { readFileSync } = await import('node:fs');
     const { parsePersonas } = await import('../app-register.mjs');
@@ -172,7 +216,7 @@ if (isCliEntry(import.meta.url)) {
     process.exit(0);
   }
   if (cmd !== 'header' || !role) {
-    console.error('usage: role-marker.mjs header <Role> [persona] | header-from-register <Role>');
+    console.error('usage: role-marker.mjs header <Role> [persona] | header-from-register <Role> | implementer-status <author-slug>');
     process.exit(2);
   }
   try {

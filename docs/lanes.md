@@ -33,14 +33,14 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 |---|---|---|---|
 | `agent-triage.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
 | `agent-implement.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
-| `agent-implement-revise.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-implement-revise.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read`, `statuses: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
 | `agent-lead-revise.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: write` | none |
 | `agent-merge-reconcile.yml` | `REVIEWER_APP_ID`, `REVIEWER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read` | `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` |
 | `agent-review.yml` | `REVIEWER_APP_ID`, `REVIEWER_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: write`, `actions: read` | `docs/qa/stack.md`, `docs/qa/reviewer-playbook.md`, `docs/qa/explorer-playbook.md` |
 | `agent-verify-acs.yml` | `EXPLORER_APP_ID`, `EXPLORER_APP_PRIVATE_KEY` | `contents: read`, `issues: read` | `docs/qa/explorer-playbook.md` |
 | `agent-lead.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read` | `docs/qa/lead-playbook.md` |
 | `agent-lead-split.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: write`, `pull-requests: read` | `docs/qa/lead-playbook.md` |
-| `agent-rebase.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read`, `actions: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
+| `agent-rebase.yml` | `IMPLEMENTER_APP_ID`, `IMPLEMENTER_APP_PRIVATE_KEY` | `contents: read`, `pull-requests: read`, `actions: read`, `statuses: read` | `docs/qa/stack.md`, `docs/qa/triage-fix-playbook.md` |
 | `agent-merge.yml` | `MERGER_APP_ID`, `MERGER_APP_PRIVATE_KEY` | `contents: read` | none |
 | `agent-lead-reconcile.yml` | `LEAD_APP_ID`, `LEAD_APP_PRIVATE_KEY` | `contents: read`, `issues: read`, `pull-requests: read`, `checks: read`, `statuses: read`, `actions: read` | none |
 | `agent-project-digest.yml` | `DIGEST_WEBHOOK` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read` | none |
@@ -130,6 +130,7 @@ permissions:
   contents: read
   pull-requests: read
   issues: read
+  statuses: read
 
 jobs:
   revise:
@@ -255,7 +256,9 @@ A `code` tree is your own source: `citation-shift` reads its comments, and the s
 
 The revise lanes find their own App's login in the App register, and the scripts the lanes run read every role's login from it, `docs/qa/agent-identities.md` (`K-LAYOUT-6`), read from your default branch. Each role a lane runs as needs one row there with its App slug in backticks.
 
-Every post a lane writes as one of your Apps opens with a persona header and a hidden role marker, `**Implementer** <!-- kanon:role=implementer -->`, and every agent commit has the persona as its author name (plan 0005 §3.3). The Implementer's lanes also set a `kanon/role: implementer` commit status, from a job after the agent's, with a token narrowed to Commit statuses write. To have it set, grant your Implementer App **Commit statuses: Read & write** and record that broadened permission in the register (`K-AGENT-3`). Until then the job says so in the run's summary and changes nothing. Nothing requires the marker or the status yet.
+Every post a lane writes as one of your Apps opens with a persona header and a hidden role marker, `**Implementer** <!-- kanon:role=implementer -->`, and every agent commit has the persona as its author name (plan 0005 §3.3). The Implementer's lanes also set a `kanon/role: implementer` commit status, from a job after the agent's, with a token narrowed to Commit statuses write. To have it set, grant your Implementer App **Commit statuses: Read & write** and record that broadened permission in the register (`K-AGENT-3`). Until then the job says so in the run's summary and changes nothing.
+
+**Since plan 0005's step L4 both are required.** Every reader that tells two roles apart needs the role's marker beside the App's login. The Merger merges only a pull request whose head carries a `success` `kanon/role: implementer` status created by the Implementer's App, and otherwise skips it as `not-the-implementer`; an unreadable status list waits. The revise and rebase lanes act only on a pull request whose head carries that status, and refuse any other by name, so a person's push takes a pull request out of the green zone and a person merges it. Both callers now grant `statuses: read`. Grant the permission to your Implementer App before you move the pin to this release, or every Implementer pull request waits for a person.
 
 ## The reference environment's deploy
 

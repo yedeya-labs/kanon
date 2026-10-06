@@ -49,7 +49,9 @@ describe('every consumer reads the login it compared before the move', () => {
 
   it('incremental-review matches the reviewer by exact login, decorated or not, and nothing else', async () => {
     const { reviewerVerdicts } = await import('../../scripts/incremental-review.mjs');
-    const review = (login: string) => ({ id: 1, user: { login }, state: 'APPROVED', submitted_at: '2026-01-01T00:00:00Z' });
+    const { headerLine } = await import('../../scripts/lib/role-marker.mjs');
+    // Each carries the Reviewer's marker, so only the login decides here (plan 0005 §3.3).
+    const review = (login: string) => ({ id: 1, user: { login }, state: 'APPROVED', submitted_at: '2026-01-01T00:00:00Z', body: headerLine('Reviewer') });
     for (const login of ['example-reviewer', 'example-reviewer[bot]']) expect(reviewerVerdicts([review(login)]), login).toHaveLength(1);
     for (const login of ['example-reviewer-x', 'app/example-reviewer', 'example-lead']) expect(reviewerVerdicts([review(login)]), login).toHaveLength(0);
   });

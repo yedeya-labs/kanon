@@ -12,9 +12,11 @@
 # open pull requests, a commit, a comparison) are a second token with Contents and Pull
 # requests read, so the default token needs no grant an adopter's caller doesn't already give.
 #
-# ADDITIVE AT L3. The Implementer's App may not hold Commit statuses yet (Kanon's own didn't,
-# on 2026-10-05): the mint then fails, the script says so in the summary, and nothing reds.
-# Both mints are `continue-on-error` for that reason; the caller's `uses:` is too.
+# NEVER REDS THE LANE. The Implementer's App may not hold Commit statuses (Kanon's own didn't
+# until 2026-10-05): the mint then fails, the script says so in the summary, and nothing reds.
+# Both mints are `continue-on-error` for that reason; the caller's `uses:` is too. Since L4 the
+# Merger, the revise lane and the rebase lane require the status, so a missing one holds the
+# pull request for a person rather than failing a run.
 name: Implementer status
 description: >-
   Set the `kanon/role: implementer` commit status on the pull request this run opened (mode

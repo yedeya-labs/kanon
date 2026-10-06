@@ -276,8 +276,8 @@ jobs:
 
   # THE IMPLEMENTER STATUS (plan 0005 §3.3, question 6; step L3). A fixed job after the agent's,
   # never the agent: it sets `kanon/role: implementer` on the one pull request this run opened,
-  # with a token narrowed to Commit statuses write that no agent's token holds. Nothing
-  # requires the status until L4; it never reds the lane (`actions/implementer-status`).
+  # with a token narrowed to Commit statuses write that no agent's token holds. It never reds the
+  # lane (`actions/implementer-status`). Since L4 the Merger requires the status on the head.
   implementer-status:
     needs: [filter, implement]
     if: ${{ !cancelled() && needs.filter.outputs.member == 'true' }}

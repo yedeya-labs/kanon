@@ -103,6 +103,9 @@ permissions:
   # return empty on this private repo — which reads as "no prior rounds" and would
   # let the cap never fire. Third occurrence of that shape in this repo (RA-957).
   issues: read
+  # The head's commit statuses, for the implementer-status chain in the filter (plan 0005
+  # §3.3, step L4). Denied, the read is not a list and the filter refuses the PR by name.
+  statuses: read
 
 jobs:
   # THE CHEAP DECISION RUNS BEFORE THE JOB THAT SETS UP, and this trigger is
@@ -348,6 +351,16 @@ jobs:
           AUTHOR_SLUG="${AUTHOR#app/}"
           AUTHOR_SLUG="${AUTHOR_SLUG%\[bot\]}"
           [ "$AUTHOR_SLUG" = "$IMPL_LOGIN" ] || skip "PR #$PR is authored by '$AUTHOR' (slug '$AUTHOR_SLUG'), not $IMPL_LOGIN"
+
+          # THE CHAIN (plan 0005 §3.3, question 6; step L4). The Implementer shares the Author
+          # App with the Lead, the Explorer and the Overseer, and any of their agents can open a
+          # PR as the Author wearing the Implementer's marker and label. Only a head carrying the
+          # `kanon/role: implementer` status the Author App set (a fixed step, never an agent) is
+          # the Implementer's, so the lane revises nothing else: revising a forged PR would hand
+          # it to the status job, which would carry the status onto the new head.
+          STATUSES="$(gh api "repos/$REPO/commits/$HEAD_SHA/statuses?per_page=100" 2>/dev/null)" || STATUSES='null'
+          CHAIN="$(printf '%s' "$STATUSES" | node "$KANON/scripts/lib/role-marker.mjs" implementer-status "$IMPL_LOGIN")" \
+            || skip "PR #$PR is not provably the Implementer's: ${CHAIN:-its head could not be judged}. Refused: a pull request outside the implementer-status chain is a person's to revise (plan 0005 §3.3)"
 
           # Scoped to the label that CLAIMS this pipeline produced it. A human PR
           # never claimed an implementer wrote it, so there is nothing here to fix.
@@ -827,8 +840,8 @@ jobs:
   # the agent's, never the agent: it moves `kanon/role: implementer` to the pull request's new
   # head only when the head this run started from (`head_sha`, read before the agent ran)
   # carried one created by the Implementer's App, and every commit between them is the App's.
-  # Otherwise it sets none and says why. Nothing requires the status until L4, when this lane
-  # also refuses a pull request whose head has none; it never reds the lane.
+  # Otherwise it sets none and says why. It never reds the lane. Since L4 the Merger requires the
+  # status, and this lane's filter refuses a pull request whose head has none.
   implementer-status:
     needs: [filter, revise]
     if: ${{ !cancelled() && needs.filter.outputs.act == 'true' }}

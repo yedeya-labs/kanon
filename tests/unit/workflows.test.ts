@@ -145,8 +145,26 @@ describe('K-SHIP-7 the reusable release workflow', () => {
   const explain = steps.find((s) => s.name === 'Explain a failed release');
   const moveTag = steps.find((s) => s.run?.includes('git/refs'));
 
-  it('is called, never triggered, and takes no inputs or secrets (ADR 0002)', () => {
-    expect(wf.on).toEqual({ workflow_call: null });
+  it('is called, never triggered, takes no inputs (ADR 0002), and only the optional Releaser secrets (plan 0005 §3.5)', () => {
+    expect(wf.on).toEqual({ workflow_call: { secrets: {
+      RELEASER_APP_ID: { required: false },
+      RELEASER_APP_PRIVATE_KEY: { required: false },
+    } } });
+  });
+
+  it('opens the release PR as the Releaser when the caller maps its secrets, and with the workflow token otherwise', () => {
+    const mint = steps.find((s) => s.id === 'releaser');
+    expect(mint?.uses).toBe('actions/create-github-app-token@v3');
+    expect(mint?.if).toBe("env.RELEASER_SET == 'true'");
+    expect((jobs[0] as { env?: unknown } | undefined)?.env).toEqual({ RELEASER_SET: "${{ secrets.RELEASER_APP_ID != '' && 'true' || '' }}" });
+    // Narrowed to what release-please uses: the Releaser's whole grant, and no more.
+    expect(mint?.with).toEqual({
+      'client-id': '${{ secrets.RELEASER_APP_ID }}',
+      'private-key': '${{ secrets.RELEASER_APP_PRIVATE_KEY }}',
+      'permission-contents': 'write',
+      'permission-pull-requests': 'write',
+    });
+    expect(release?.with?.token).toBe('${{ steps.releaser.outputs.token || github.token }}');
   });
 
   it('grants nothing at the top, and exactly contents and pull-requests write on its one job', () => {
@@ -174,6 +192,7 @@ describe('K-SHIP-7 the reusable release workflow', () => {
     expect(release?.with).toEqual({
       'config-file': 'release-please-config.json',
       'manifest-file': '.release-please-manifest.json',
+      token: '${{ steps.releaser.outputs.token || github.token }}',
     });
     expect(steps.filter((s) => s['continue-on-error'] !== undefined)).toEqual([]);
   });

@@ -1,3 +1,4 @@
+import { asAgent } from './helpers/sign.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -19,7 +20,7 @@ import {
 const [implement, triage] = LANES;
 const NOW = Date.parse('2026-10-04T12:00:00Z');
 const RUN_AT = Date.parse('2026-10-04T10:00:00Z');
-const agent = (at: string) => ({ login: AGENT_LOGIN, createdAt: at, body: 'Progress: half done, continuing next run.' });
+const agent = (at: string) => ({ login: AGENT_LOGIN, createdAt: at, body: asAgent(AGENT_LOGIN, 'Progress: half done, continuing next run.') });
 const sweep = (at: string) => ({ login: 'example-lead', createdAt: at, body: `${MARKER}\n${laneTag(implement)}\nRe-dispatching` });
 const issue = { number: 7, title: 't', labels: [{ name: 'agent:implement' }] };
 const run = (comments: Array<{ login: string, createdAt: string, body: string }>, opts: Record<string, unknown> = {}) =>

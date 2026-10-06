@@ -146,7 +146,7 @@ describe.skipIf(!hasYq)('lane-check', () => {
       const t = adopter();
       t.edit(IMPL, (d) => {
         (d as Caller).permissions = {};
-        job(d).permissions = { contents: 'read', 'pull-requests': 'read', issues: 'read' };
+        job(d).permissions = { contents: 'read', 'pull-requests': 'read', issues: 'read', statuses: 'read' };
       });
       expect(check(t).status).toBe(0);
     });

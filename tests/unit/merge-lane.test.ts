@@ -288,8 +288,22 @@ describe("a review on a PR that was never the Merger's starts no runner (RA-2596
     }
   });
 
-  it('still refuses to answer its own review events', () => {
-    expect(runs({ ...review(), actor: MERGER })).toBe(false);
+  it('starts the review path for a review from the Judge App, which the Merger shares with the Reviewer (plan 0005 L4)', () => {
+    // The register gives both roles one slug; a review's actor is that App. The actor clause
+    // that used to decline the Merger's own App would decline every Reviewer review.
+    expect(runs({ ...review(), actor: MERGER })).toBe(true);
+    expect(String(merge.if)).not.toMatch(/github\.actor/);
+  });
+
+  it('submits no review, so no review event is its own (plan 0005 L4)', () => {
+    // Why the actor clause could go: the merge lane's code calls no review-submission
+    // endpoint, neither `gh pr review` nor a POST to a pull request's reviews.
+    const gate = readFileSync(join(process.cwd(), 'scripts/merge-gate.mjs'), 'utf8');
+    for (const [name, text] of [['merge-gate.mjs', gate], ['agent-merge.yml', LANE_TEXT]] as const) {
+      expect(text, name).not.toMatch(/\bpr['",\s]+review\b/);
+      expect(text, name).not.toMatch(/(-X|--method)['",\s]+POST[^\n]*\/reviews|\/reviews[^\n]*(-X|--method)['",\s]+POST/);
+      expect(text, name).not.toMatch(/\/reviews\/[^\n]*\/(events|dismissals)/);
+    }
   });
 
   it('never runs past a refusal of the membership gate, whose outputs are all empty', () => {
@@ -336,7 +350,6 @@ describe("a review on a PR that was never the Merger's starts no runner (RA-2596
       merger: '${{ steps.read.outputs.merger }}',
       implementer: '${{ steps.read.outputs.implementer }}',
     });
-    expect(String(merge.if)).toContain("github.actor != format('{0}[bot]', needs.logins.outputs.merger)");
     expect(String(merge.if)).toContain("format('{0}[bot]', needs.logins.outputs.implementer)");
     expect(String(merge.if)).toContain('== needs.logins.outputs.implementer');
     // No login of any kind outside a comment.

@@ -31,15 +31,22 @@
 #      bypass, so on 0.10.0 a release PR built from stale `extra-files` reverted #67's
 #      documentation (db99870) and nothing noticed.
 #
-# No inputs, no secrets, by ADR 0002 ("standardise, don't parameterise"). Each candidate
-# was checked and rejected:
+# One optional pair of secrets, RELEASER_APP_ID and RELEASER_APP_PRIVATE_KEY: the Releaser App
+# (plan 0005 §3.1, decision 2; ADR 0013), mapped by name by a caller that has one. With them,
+# release-please opens the release PR as the Releaser, so CI runs on it (a PR opened with the
+# workflow token triggers no workflows, #49), and the ruleset's release bypass is the
+# Releaser's alone, never another App's. Without them, the workflow token, as before. No
+# lane declares these secrets, and this workflow declares no other.
+#
+# No inputs, by ADR 0002 ("standardise, don't parameterise"). Each candidate was checked and
+# rejected:
 #   - config and manifest paths: fixed file names at the repository root, the same in
 #     every adopter, so a guard can find them without reading a setting;
 #   - the release branch: release-please targets the repository's default branch, which
 #     is where the caller's push trigger fires;
 #   - release type, package name, changelog sections: already per-repository, in the
 #     adopter's own release-please-config.json, which is data this workflow reads;
-#   - a token: the workflow's own token is the only one until a release App exists.
+#   - a token of the caller's choosing: the Releaser's fixed secrets above, or the workflow's.
 # The calling repository is the only thing that differs, and GitHub already supplies it.
 #
 # Permissions. The calling job grants exactly contents: write and pull-requests: write,
@@ -68,6 +75,12 @@ name: Release
 
 on:
   workflow_call:
+    secrets:
+      # The optional Releaser App (plan 0005 §3.5). Never inherited: the caller maps both by name.
+      RELEASER_APP_ID:
+        required: false
+      RELEASER_APP_PRIVATE_KEY:
+        required: false
 
 permissions: {}
 
@@ -82,6 +95,9 @@ jobs:
     concurrency:
       group: kanon-release
       cancel-in-progress: false
+    env:
+      # Whether the caller mapped the Releaser's secrets (plan 0005 §3.5), for the mint's `if:`.
+      RELEASER_SET: ${{ secrets.RELEASER_APP_ID != '' && 'true' || '' }}
     steps:
       - name: Check the merge settings (K-SHIP-3)
         id: merge-settings
@@ -138,11 +154,26 @@ jobs:
           console.log(`Merge settings OK: squash only, with the PR title as subject and the PR body as message.`);
           appendFileSync(process.env.GITHUB_OUTPUT, `started=${new Date().toISOString()}\n`);
 
+      # THE RELEASER'S TOKEN, when the caller maps its secrets (plan 0005 §3.1). Narrowed to what
+      # release-please uses: it pushes the release branch and the tag, and opens the release PR.
+      # A step `if:` can't read `secrets`, so the mint asks the job's `RELEASER_SET`.
+      - name: Mint the Releaser's token
+        id: releaser
+        if: env.RELEASER_SET == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASER_APP_ID }}
+          private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - id: release
         uses: googleapis/release-please-action@v5
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          # The Releaser's, so the release PR runs CI; else the workflow token, as before.
+          token: ${{ steps.releaser.outputs.token || github.token }}
 
       - name: Explain a failed release
         if: failure() && steps.release.conclusion == 'failure'

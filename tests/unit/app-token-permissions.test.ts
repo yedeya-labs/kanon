@@ -68,6 +68,14 @@ const MORE: Record<string, Perms> = {
  * the Author App's one broadened permission (`K-AGENT-3`). The read token is within the
  * Implementer's row. Every caller passes the Implementer's secrets (`implementer-status.test.ts`).
  */
+/**
+ * The Releaser's mint in the release workflow (plan 0005 §3.1, decision 2), keyed
+ * `<file>#<step id>`. The Releaser runs no agent and is no row of the roles table, so its list
+ * is held to the Releaser App's grant in `agent-permissions.json`'s `apps` block.
+ */
+const RELEASE: Record<string, Perms> = {
+  '.github/workflows/release.yml#releaser': { contents: 'write', 'pull-requests': 'write' },
+};
 const STATUS: Record<string, Perms> = {
   // Lists the open pull requests, reads a head commit and compares two heads.
   'actions/implementer-status/action.yml#read-token': { contents: 'read', 'pull-requests': 'read' },
@@ -152,7 +160,7 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     expect(mints.length).toBeGreaterThanOrEqual(10);
     const unlisted = mints.filter(({ file, name, step }) =>
       !(name in EXEMPT) && name !== SPINE && DIRECT[name]?.step !== step.id && !(`${name}#${step.id}` in MORE)
-      && !(`${file}#${step.id}` in STATUS));
+      && !(`${file}#${step.id}` in STATUS) && !(`${file}#${step.id}` in RELEASE));
     expect(unlisted.map(({ file, step }) => `${file}#${step.id}`)).toEqual([]);
     for (const [name, { step }] of Object.entries(DIRECT)) {
       expect(mints.some((m) => m.name === name && m.step.id === step), `${name}#${step} mints nothing`).toBe(true);
@@ -181,6 +189,20 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     if (!('statuses' in perms)) withinGrant('implementer', perms);
     // The write is exactly the Author App's one broadened permission (ADR 0013, `K-AGENT-3`).
     else expect(perms).toEqual({ statuses: authorBroadened.statuses });
+  });
+
+  it.each(Object.entries(RELEASE))('%s requests exactly its list, within the Releaser App\'s grant', (key, perms) => {
+    const [file, step] = key.split('#');
+    const mint = mints.find((m) => m.file === file && m.step.id === step);
+    expect(mint, `${key} mints nothing`).toBeDefined();
+    expect(requested(mint!.step.with)).toEqual(perms);
+    expect(String(mint!.step.with?.['client-id'])).toContain('secrets.RELEASER_APP_ID');
+    const releaser = (JSON.parse(readFileSync(join(root, 'rulebook/agent-permissions.json'), 'utf8')) as {
+      apps: Record<string, { permissions: Perms }>;
+    }).apps.releaser!.permissions;
+    for (const [scope, level] of Object.entries(perms)) {
+      expect(releaser[scope.replace('-', '_')], `${key} asks ${scope}: ${level}`).toBe(level);
+    }
   });
 
   it('no token but the implementer status\'s holds Commit statuses write, so no agent can set it (plan 0005 §3.3)', () => {

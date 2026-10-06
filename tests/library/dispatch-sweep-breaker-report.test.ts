@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { asAgent } from './helpers/sign.js';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 const { MARKER, actionCell, breakerTripped, classify, renderReport, SWEEP_LOGIN, AGENT_LOGIN } = await import('../../scripts/dispatch-sweep.mjs');
@@ -19,7 +20,7 @@ const H = 3600e3;
 const now = Date.now();
 const issue = (number: number) => ({ number, title: `t${number}`, createdAt: new Date(now - 500 * H).toISOString() });
 const sweepAt = (h: number) => ({ login: SWEEP_LOGIN, body: `x ${MARKER}`, createdAt: new Date(now - h * H).toISOString() });
-const agentAt = (h: number) => ({ login: AGENT_LOGIN, body: 'built it', createdAt: new Date(now - h * H).toISOString() });
+const agentAt = (h: number) => ({ login: AGENT_LOGIN, body: asAgent(AGENT_LOGIN, 'built it'), createdAt: new Date(now - h * H).toISOString() });
 /** Never answered, at the re-dispatch cap -> stop, agent-silent. */
 const fleetDown = (n: number) => classify(issue(n), [sweepAt(300), sweepAt(200)], false, { now });
 /** The agent HAS spoken, so the fleet-wide arm does not apply. */
