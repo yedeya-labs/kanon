@@ -6,8 +6,9 @@
 #
 # IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap, as review.yml does). The job
 # holds the store's writer credentials, so the code that runs with them is a released version.
-# Dependabot's `kanon` group proposes each release here with the other pins, and `lane-check`
-# (in CI) holds every Kanon reference to one version.
+# Dependabot's `kanon` group proposes each release here with the other pins, except v0.28.0 and
+# later, which it holds back until plan 0005's L5 (.github/dependabot.yml, ADR 0011), and
+# `lane-check` (in CI) holds every Kanon reference to one version.
 #
 # HOURLY AT MINUTE 40, the collector's contract (plan 0002 §1.2). It touches no database: the
 # store is on-demand DynamoDB behind a function, so a sweep wakes nothing that scales to zero.
