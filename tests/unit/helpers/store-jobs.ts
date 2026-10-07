@@ -462,7 +462,7 @@ export type IdTokenHolder = {
   is: (file: string | undefined, name: string, j: Job) => boolean;
   /** How `idTokenProblems`'s message names it. */
   says: string;
-  /** What each listing of the holders must contain: the template's comment on the store's role, and the docs'. */
+  /** What each listing of the holders must contain: the template's comment on the store's role, the docs' and `K-OBS-17`'s Enforced by. */
   cited: string;
 };
 
@@ -471,7 +471,7 @@ export type IdTokenHolder = {
  * grant one of them the token (kanon#531). `mayHoldIdToken` reads this list, so a holder added to
  * the guard is added here, and every listing of the holders that doesn't name it yet turns red
  * (`tests/unit/qa-store-aws.test.ts` for the template, `tests/unit/id-token-guard.test.ts` for
- * the docs), as does `idTokenProblems`'s message in each test that quotes it.
+ * the docs and `K-OBS-17`'s Enforced by), as does `idTokenProblems`'s message in each test that quotes it.
  */
 export const ID_TOKEN_HOLDERS: IdTokenHolder[] = [
   { is: (_file, _name, j) => isMaintenanceJob(j), says: 'the store maintenance job', cited: 'maintenance' },
