@@ -402,6 +402,37 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(section(skill('upgrade').body, /^## Steps$/)).toMatch(/\*\*Never ask the person to require a status check before this pull request merges\*\*.*`ruleset\.check-unreported`/);
   });
 
+  // #419, L5's G4, G11, G12 and G14: the steps that can only happen once the upgrade has merged
+  // are kept in a list the person is handed, each with who does it, when, and what to run.
+  it('keeps a post-merge checklist in the upgrade skill, built from doctor findings that exist', () => {
+    const after = section(skill('upgrade').body, /^## After the merge$/);
+    expect(after).not.toBeNull();
+    const table = rows(after!).filter((c) => c.length === 4 && !/^-+$/.test(c[0]!) && c[0] !== 'Step');
+    const ids = table.map((c) => /^`([a-z-]+\.[a-z-]+)`$/.exec(c[0]!)?.[1]).filter((x): x is string => !!x);
+    // Every finding id it names is one doctor documents: a renamed id fails here.
+    const documented = documentedIds('doctor');
+    expect(ids.filter((id) => !documented.includes(id))).toEqual([]);
+    for (const id of ['ruleset.check-unreported', 'ruleset.bypass-extra', 'app.unused', 'secret.stale']) expect(ids, id).toContain(id);
+    for (const c of table) {
+      expect(c[1], c[0]).toMatch(/^(agent|person|decision)(, (agent|person|decision))*$/);
+      expect(c[2], c[0]).toMatch(/merge|week|chooses/);
+      expect(c[3]!.length, c[0]).toBeGreaterThan(40);
+    }
+    // apps-check is plan 0005 L5's acceptance, and the live checks follow it.
+    expect(after).toContain('`gh workflow run apps-check.yml -R <owner>/<repo>`');
+    expect(after).toMatch(/Judge's App/);
+    // Requiring a check waits for the merge, and app.unused for a week of green runs.
+    expect(table.find((c) => c[0] === '`ruleset.check-unreported`')![2]).toMatch(/^On merge/);
+    expect(table.find((c) => c[0] === '`app.unused`')![2]).toMatch(/week/);
+    // Handed over in the pull request's body, walked through as the person's steps, and found again.
+    const steps = section(skill('upgrade').body, /^## Steps$/)!;
+    expect(steps).toMatch(/under `## After merging`/);
+    expect(steps).toMatch(/\*\*Hand over what waits for the merge\.\*\*/);
+    expect(after).toMatch(/\*\*Do it now\*\* \(Recommended\) or \*\*Skip it for now\*\*/);
+    expect(after).toMatch(/To get the list again/);
+    expect(section(skill('doctor').body, /^## Steps$/)).toMatch(/under `## After merging`/);
+  });
+
   it('reads only fields its command documents', () => {
     const problems: string[] = [];
     let seen = 0;

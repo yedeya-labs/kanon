@@ -52,9 +52,28 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 
 6. **Fix what it needs.** Hand over to the doctor skill on this branch. Doctor now reads the target as the pinned release, so it lists what is left. Fix the findings there, in order, until it exits 0 or only a person's steps are left. Never force a fix the repository can't take, such as a `git mv` onto a file name another workflow already holds: the doctor skill offers the person a waiver instead, which they write or accept with its reason. What the record already waives is in `.waived`; say so, and leave it alone. **Never ask the person to require a status check before this pull request merges** ([#418](https://github.com/yedeya-labs/kanon/issues/418)): when doctor reports `ruleset.check-unreported` and its fix says this checkout adds the job, the rule is a step after the merge, because a required check that nothing on the default branch reports blocks every other open pull request.
 
-7. **Open the pull request.** Commit (signed off by the person), push the branch, and `gh pr create` titled `ci(deps): upgrade Kanon to <the target>`. If Dependabot already has a pull request bumping Kanon to the target, say that this one replaces it, link it, and leave it for the person to close. Never merge.
+7. **Open the pull request.** Commit (signed off by the person), push the branch, and `gh pr create` titled `ci(deps): upgrade Kanon to <the target>`. Its body lists, under `## Left to do`, each step the person skipped with its finding's id, and under `## After merging`, the steps that wait for the merge ("After the merge", below), one checkbox each. If Dependabot already has a pull request bumping Kanon to the target, say that this one replaces it, link it, and leave it for the person to close. Never merge.
 
-8. **Say how everyone's plugin moves.** Where `.claude/settings.json` declares the plugin, merging the pull request moves it: each person pulls and runs `/reload-plugins`. Where it doesn't, each person who installed the plugin themselves runs the lines under "Moving the plugin", as printed there.
+8. **Hand over what waits for the merge.** Show the person the list under `## After merging`, and say that it stays in the pull request's body. When they say it has merged, or `gh pr view <number> --json state --jq .state` says `MERGED`, walk them through it ("After the merge", below).
+
+9. **Say how everyone's plugin moves.** Where `.claude/settings.json` declares the plugin, merging the pull request moves it: each person pulls and runs `/reload-plugins`. Where it doesn't, each person who installed the plugin themselves runs the lines under "Moving the plugin", as printed there.
+
+## After the merge
+
+Some steps can only happen once the upgrade is on the default branch ([#419](https://github.com/yedeya-labs/kanon/issues/419)). Build the list from doctor's last run on the branch (step 6), the release notes of the target and of each release before it (step 3), and what the person skipped, taking each row below that applies, in its order, and nothing that doesn't. Each step says who does it, when, and the exact command or page: the finding's `.findings[].fix.commands` and `.findings[].fix.url` where it has them.
+
+Walk the person through it when they come back after the merge, or whenever they ask, each step as the adopt skill walks a step only a person can do: **Do it now** (Recommended) or **Skip it for now**, a skip left unticked in the list. A step for later (a week of green runs) is said with its date. To get the list again: it is in the pull request's body, and the doctor skill, run on the default branch, reports each step that is still open by its finding.
+
+| Step | Who | When | What |
+|---|---|---|---|
+| `ruleset.check-unreported` | person | On merge: the job that reports the check is then on the default branch | Run the doctor skill on the default branch. It then reports `ruleset.rule-missing` for the check, and the person adds the rule on its page. Never before the merge: a required check that nothing on the default branch reports blocks every other pull request. |
+| `ruleset.bypass-extra` | person | On merge: the `dco` caller on the default branch then pins the target, whose check passes the Releaser's release pull request | The fix's command, leaving the Releaser as the ruleset's only bypass actor, or the same on the fix's page. `kanon apps` prints it and doesn't run it. |
+| `apps-check` | agent | On merge, when the repository has an `apps-check` caller | After a yes, run `gh workflow run apps-check.yml -R <owner>/<repo>`, then `gh run watch` its run: it passes for every App the lanes run as. A failure names the App and what it lacks; hand that to the doctor skill. |
+| The live checks | agent, person | On the next runs after the merge | Watch, with `gh pr checks <number>`, and tell the person what each showed: the next release pull request, opened by the Releaser where the release caller maps it, runs CI; the next pull request's verdict comes from the Judge's App; a commit of the Author's App passes `dco`. |
+| `/reload-plugins` | person | On merge, where `.claude/settings.json` declares the plugin | Each person pulls the default branch and runs `/reload-plugins` (step 9). |
+| `app.unused` | person | A week after the merge, if every run on the new Apps has been green | Uninstall and delete the App as the fix says, once no other repository's register names it. |
+| `secret.stale` | decision | With `app.unused`, a week of green runs after the merge | Offer the fix's `gh secret delete` commands, and run each only on a yes. |
+| `## Left to do` | person | When the person chooses | Each step skipped during the upgrade, by its finding's id, walked through as above. |
 
 ## Moving the plugin
 

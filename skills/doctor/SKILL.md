@@ -53,7 +53,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 
 5. **Run it again,** and repeat from step 1 until it exits 0, or until every finding left is one only a person can do. Then list those, each with its exact step, and stop.
 
-6. **Open the pull request** if you changed files: commit (signed off by the person), push the branch, and `gh pr create` with a title that passes the repository's PR-title check, such as `ci: fix the Kanon installation`. Never merge it.
+6. **Open the pull request** if you changed files: commit (signed off by the person), push the branch, and `gh pr create` with a title that passes the repository's PR-title check, such as `ci: fix the Kanon installation`. Its body lists, under `## Left to do`, each person's step that was skipped, with its finding's id, and under `## After merging`, each step that waits for the merge, as the upgrade skill's "After the merge" lists them, such as requiring a check whose job this pull request adds. Never merge it.
 
 ## Waiving a finding
 
