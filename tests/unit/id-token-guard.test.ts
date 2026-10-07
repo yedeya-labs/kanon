@@ -76,6 +76,16 @@ describe('every Kanon workflow', () => {
     expect(declared).toEqual([]);
   });
 
+  it("and docs/telemetry.md's writers list doesn't say the store jobs declare one (kanon#549)", () => {
+    // The bullet once said the writer refused the store jobs while they declared the store's
+    // environment, after the case above had made that false.
+    const bullet = readFileSync('docs/telemetry.md', 'utf8').split('\n').filter((l) => l.startsWith("- **Kanon's own QA-store jobs**"));
+    expect(bullet).toHaveLength(1);
+    expect(bullet[0]).not.toMatch(/`environment:|refuses/);
+    expect(bullet[0]).toContain('declare no environment');
+    expect(bullet[0]).toContain('is admitted');
+  });
+
   it('every holder it admits besides the store jobs and their callers is one ID_TOKEN_HOLDERS lists, and each it lists holds it (kanon#531)', () => {
     // The listings below read ID_TOKEN_HOLDERS, so a holder the guard admits some other way would
     // leave them stale: it fails here instead, by name.
