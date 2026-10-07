@@ -20,8 +20,9 @@
 //
 // The key GitHub returns at creation is in memory once, so the repositories named at creation
 // get it in the same run. A repository added later uses a key the Owner generates on the App's
-// settings page: `--reuse <app>:<slug>=<key file>` reads it, checks it is that App's, stores
-// it, and deletes the file (plan 0005 §3.2).
+// settings page: `--reuse <app>:<slug>=<key file>` reads it, checks it is a key of that slug
+// and that the slug's App holds the named App's permissions (#366), stores it, and deletes the
+// file (plan 0005 §3.2).
 //
 // Before anything else it refuses to run outside a checkout of one of the repositories it is
 // for (the register would land wherever it ran), and says which token `gh` uses and whose it
@@ -561,6 +562,48 @@ const writeAppRows = ({ spec, slug, register, deps }) => {
 };
 
 /**
+ * The permissions on which an App's, as GitHub reports them, differ from what it should hold.
+ * @param {Record<string, string>} got @param {Record<string, string>} want
+ */
+export const permissionDrift = (got, want) => [...new Set([...Object.keys(got), ...Object.keys(want)])].filter((k) => got[k] !== want[k]);
+
+/**
+ * The owner's App installations, as GitHub lists them: an organisation's to an owner of it, with
+ * its Administration permission (read); a personal account's only to a GitHub App's user token,
+ * never to gh's own (#417). `installs` is null when they can't be listed, and `listed` says why.
+ * `kanon doctor` (`app.unused`, the Releaser's id) and `kanon init` (an App the owner already
+ * has, #363) read them through this.
+ * @param {(args: string[]) => Promise<{ status: number | null, stdout: string, stderr: string }>} gh
+ * @param {string} owner @param {string} kind `Organization` or `User`
+ * @returns {Promise<{ listed: { status: number | null, stdout: string, stderr: string }, installs: any[] | null }>}
+ */
+export const ownerInstallations = async (gh, owner, kind) => {
+  const listed = await gh(['api', kind === 'Organization' ? `orgs/${owner}/installations?per_page=100` : 'user/installations?per_page=100']);
+  /** @type {any} */
+  let j;
+  try {
+    j = listed.status === 0 ? JSON.parse(listed.stdout) : null;
+  } catch {
+    j = null;
+  }
+  return { listed, installs: Array.isArray(j?.installations) ? j.installations : null };
+};
+
+/**
+ * Which of Kanon's Apps the owner already has: each of its installations whose permissions are
+ * exactly one App's in rulebook/agent-permissions.json (#363), as apps-check holds them. In the
+ * order of the Apps, then of the installations.
+ * @param {any[]} installs @param {string} owner @param {Record<string, { permissions: Record<string, string> }>} specs
+ * @returns {Array<{ app: string, slug: string, installation: number }>}
+ */
+export const ownerKanonApps = (installs, owner, specs) =>
+  Object.entries(specs).flatMap(([app, spec]) =>
+    installs
+      .filter((i) => String(i?.account?.login ?? '').toLowerCase() === owner.toLowerCase() && typeof i?.app_slug === 'string' && i?.permissions && typeof i.permissions === 'object' && !permissionDrift(i.permissions, spec.permissions).length)
+      .map((i) => ({ app, slug: String(i.app_slug), installation: Number(i.id) })),
+  );
+
+/**
  * One App, start to finish.
  * @param {{ owner: string, pages: OwnerPages, repos: string[], key: string, name: string, spec: AppSpec, register: string, deps: Deps }} a
  */
@@ -587,9 +630,7 @@ const createApp = async ({ owner, pages, repos, key, name, spec, register, deps 
   out(`2. Created the App ${slug} (id ${appId}).`);
   const holder = String(conv.json.owner?.login ?? '');
   if (holder.toLowerCase() !== owner.toLowerCase()) deps.err(`warning: GitHub says the App belongs to "${holder}", not ${owner}.`);
-  const got = conv.json.permissions ?? {};
-  const want = spec.permissions;
-  const drift = [...new Set([...Object.keys(got), ...Object.keys(want)])].filter((k) => got[k] !== want[k]);
+  const drift = permissionDrift(conv.json.permissions ?? {}, spec.permissions);
   if (drift.length) {
     deps.err(`warning: the App's permissions differ from the ${spec.app}'s on ${drift.join(', ')}. Set them to the ${spec.app}'s at ${pages.app(slug)}/permissions before installing it.`);
   }
@@ -615,9 +656,9 @@ const createApp = async ({ owner, pages, repos, key, name, spec, register, deps 
  * Adds the repositories to an App that exists, from a key file the Owner generated on the
  * App's settings page (plan 0005 §3.2): checks the key is that App's and the installation
  * covers each repository, stores it, writes the rows, and deletes the file.
- * @param {{ owner: string, pages: OwnerPages, repos: string[], key: string, slug: string, file: string, spec: AppSpec, register: string, deps: Deps }} a
+ * @param {{ owner: string, pages: OwnerPages, repos: string[], key: string, slug: string, file: string, spec: AppSpec, specs: Record<string, AppSpec>, register: string, deps: Deps }} a
  */
-const reuseApp = async ({ owner, pages, repos, key, slug, file, spec, register, deps }) => {
+const reuseApp = async ({ owner, pages, repos, key, slug, file, spec, specs, register, deps }) => {
   const { out } = deps;
   out('');
   out(`== The ${spec.app} (${appRoles(spec).join(', ')}): the App ${slug}, from ${file} ==`);
@@ -633,7 +674,24 @@ const reuseApp = async ({ owner, pages, repos, key, slug, file, spec, register, 
   if (me.status !== 200 || String(me.json?.slug) !== slug) {
     throw new Error(`the key in ${file} is not a key of ${slug} (GitHub answered ${me.status}). Nothing was stored; the file is kept.`);
   }
-  out(`1. ${file} is a key of ${slug} (id ${appId}).`);
+  // The App is the one named only if it holds that App's permissions (#366): a slug of the
+  // Author given as the Judge's would otherwise store the Author's key under JUDGE_ secrets and
+  // write the Reviewer's and Merger's rows naming it. apps-check fails on any difference, so an
+  // App that differs is refused here too, before anything is stored, with the file kept.
+  /** @type {Record<string, string>} */
+  const got = me.json?.permissions ?? {};
+  const drift = permissionDrift(got, spec.permissions);
+  if (drift.length) {
+    const other = Object.entries(specs).find(([, o]) => !permissionDrift(got, o.permissions).length);
+    throw new Error(
+      `${slug} does not hold the ${spec.app}'s permissions (${drift.map((k) => `${k}: ${got[k] ?? 'none'}, the ${spec.app}'s ${spec.permissions[k] ?? 'none'}`).join('; ')}). ` +
+        (other
+          ? `They are the ${other[1].app}'s: if ${slug} is your ${other[1].app}, give it as --reuse ${other[0]}:${slug}=<key file>. `
+          : `If ${slug} is your ${spec.app}, set its permissions to the ${spec.app}'s at ${pages.app(slug)}/permissions, then run the command again. `) +
+        'Nothing was stored; the file is kept.',
+    );
+  }
+  out(`1. ${file} is a key of ${slug} (id ${appId}), which holds the ${spec.app}'s permissions.`);
   const inst = await awaitInstallation({ owner, pages, repos, appId, pem, deps, wait: false });
   for (const w of inst.warnings) deps.err(`warning: ${w}`);
   out(`2. Its installation (${inst.id}) covers ${repos.join(', ')}.`);
@@ -833,7 +891,7 @@ export const apps = async (argv, overrides = {}) => {
     }
     for (const { app: key, slug, file } of opts.reuse) {
       const spec = /** @type {AppSpec} */ (specs[key]);
-      const r = await reuseApp({ owner, pages, repos, key, slug, file: resolve(file), spec, register, deps });
+      const r = await reuseApp({ owner, pages, repos, key, slug, file: resolve(file), spec, specs, register, deps });
       warnings += r.warnings.length;
       done.push({ spec, slug: r.slug, appId: r.appId });
     }

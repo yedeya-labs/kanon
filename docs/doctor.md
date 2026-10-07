@@ -118,7 +118,7 @@ The same in both outputs.
 | 0 | `healthy` | Every check ran, and nothing blocking was found, or only findings the adoption record waives. |
 | 1 | `findings` | At least one blocking finding that isn't waived, an id-token holder neither accepted nor narrowed included. |
 | 2 | `usage` | A usage error: an unknown argument, or `--to` that is not an exact release. |
-| 3 | `error` | It could not run: no checkout, the repository or a release's requirements file could not be read, or nothing pins Kanon. |
+| 3 | `error` | It could not run: no checkout, the repository or a release's requirements file could not be read, nothing pins Kanon, or it stopped on an error it didn't expect. |
 | 4 | `incomplete` | Nothing blocking was found, but at least one check could not run (the token can't list the secrets, say), so health can't be claimed. |
 
 ## The JSON output

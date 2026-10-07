@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
-import { callerFile, ciFile, loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
+import { callerFile, ciFile, DEPENDABOT_ENTRY, loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
 import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, laneCatalogue, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, usage, USAGE, workflowName } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
@@ -71,6 +72,8 @@ type State = {
   /** The workflows on the default branch, as GitHub has them (#444); null when the token can't read them. */
   defaultWorkflows: Record<string, string> | null;
   rulesetUpdateFails?: boolean;
+  /** The owner's App installations, as `GET orgs/<org>/installations` or `user/installations` lists them; unset, the token can't list them. */
+  installations?: Array<Record<string, unknown>>;
 };
 
 /** A fake GitHub for one repository. Every call is recorded; the mutating ones change the state. */
@@ -113,6 +116,9 @@ const fakeGitHub = (over: Partial<State> = {}) => {
       return ok('');
     }
     if (a0 !== 'api') return no(`unexpected gh ${args.join(' ')}`);
+    if (a1 === (st.kind === 'Organization' ? 'orgs/acme/installations?per_page=100' : 'user/installations?per_page=100')) {
+      return st.installations ? ok({ total_count: st.installations.length, installations: st.installations }) : no('gh: Resource not accessible by personal access token (HTTP 403)');
+    }
     const method = args.includes('-X') ? args[args.indexOf('-X') + 1] : 'GET';
     const path = args.find((x, i) => i > 0 && /^(repos|orgs)\//.test(x)) ?? '';
     if (method === 'PATCH' && path === `repos/${REPO}`) {
@@ -239,6 +245,24 @@ describe('kanon init, on an empty repository with every default (plan 0005 L9)',
     const refs = ['.github/workflows/agent-review.yml', '.github/workflows/apps-check.yml', '.github/workflows/ci.yml'].flatMap((f) => [...read(dir, f).matchAll(/yedeya-labs\/kanon\/[^@\s]+@(\S+)/g)].map((m) => m[1]));
     expect(refs.length).toBe(3);
     expect(new Set(refs)).toEqual(new Set([release]));
+  });
+
+  it("writes the Dependabot entry adopters are given: daily, and allowing only Kanon's dependencies (K-ADOPT-11, #360)", async () => {
+    const readme = read(ROOT, 'actions/pr-title/README.md');
+    const block = /## Upgrades: Dependabot[\s\S]*?```yaml\n([\s\S]*?)```/.exec(readme)?.[1];
+    expect(block).toBeDefined();
+    const documented = parseYaml(block!);
+    expect(documented.updates[0].schedule.interval).toBe('daily');
+    expect(documented.updates[0].allow).toEqual([{ 'dependency-name': 'yedeya-labs/kanon*' }]);
+    const dir = checkout();
+    await run(dir, fakeGitHub());
+    expect(parseYaml(read(dir, '.github/dependabot.yml'))).toEqual(documented);
+    // The step init prints for a dependabot.yml that lacks the entry is the same entry.
+    const github = fakeGitHub();
+    const other = checkout({ '.github/dependabot.yml': 'version: 2\nupdates: []\n' });
+    const r = await run(other, github);
+    expect(r.out).toContain(DEPENDABOT_ENTRY.join('\n   '));
+    expect(parseYaml(['updates:', ...DEPENDABOT_ENTRY].join('\n'))).toEqual({ updates: documented.updates });
   });
 
   it('creates the taxonomy, the buckets, the merge setting and the ruleset, and runs kanon apps for the Judge, the Reviewer\'s App', async () => {
@@ -713,6 +737,116 @@ describe('the callers kanon init writes', () => {
   }, 60_000);
 });
 
+// #363 (the Owner, 2026-10-07: "A + ask"): init lists the owner's App installations and offers
+// to reuse one whose permissions are exactly an App's, rather than create a second set.
+describe("kanon init and the Apps the owner already has (#363)", () => {
+  const APPS = REQ.identities.apps;
+  const install = (slug: string, app: string, over: Record<string, unknown> = {}) => ({ id: slug.length, app_id: 900 + slug.length, app_slug: slug, account: { login: 'acme', type: 'Organization' }, permissions: { ...APPS[app]!.permissions }, repository_selection: 'selected', ...over });
+  const installsCalls = (github: ReturnType<typeof fakeGitHub>) => github.calls.filter((c) => /installations/.test(c.args.join(' ')));
+
+  it('finds the Judge among an organisation\'s installations, reuses it by default, and prints the --reuse step with its slug', async () => {
+    const github = fakeGitHub({ kind: 'Organization', orgPlan: 'free', installations: [install('acme-kanon-judge', 'judge'), install('some-ci-bot', 'judge', { permissions: { contents: 'read', metadata: 'read' } })] });
+    const r = await run(checkout(), github, ['--json']);
+    expect(r.status, r.err).toBe(0);
+    const d = parse(r);
+    expect(d.inspection.ownerApps).toEqual([{ app: 'judge', slug: 'acme-kanon-judge' }]);
+    expect(d.answers.reuseApps).toBe(true);
+    expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], reuse: [{ app: 'judge', slug: 'acme-kanon-judge' }], command: null, outcome: 'reuse', exitCode: null });
+    expect(r.appsCalls).toEqual([]);
+    const f = d.findings.filter((x) => x.id.startsWith('app.'));
+    expect(f).toEqual([
+      {
+        id: 'app.reuse',
+        category: 'app',
+        blocking: false,
+        subject: 'judge',
+        message: 'acme already has the Judge App acme-kanon-judge, which the chosen lanes run as, and the register lacks it.',
+        fix: {
+          text: "Add widgets to the App's installation, generate a private key on its settings page, then run kanon apps --reuse with the downloaded key, and commit the register rows it writes.",
+          commands: ['kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge=<downloaded>.pem'],
+          url: 'https://github.com/organizations/acme/settings/apps/acme-kanon-judge',
+        },
+      },
+    ]);
+    expect(installsCalls(github).map((c) => c.args)).toEqual([['api', 'orgs/acme/installations?per_page=100']]);
+  });
+
+  it('creates the App anyway with --no-reuse-apps, and asks without --yes, taking the answer', async () => {
+    const owned = { kind: 'Organization' as const, orgPlan: 'free', installations: [install('acme-kanon-judge', 'judge')] };
+    const no = await run(checkout(), fakeGitHub(owned), ['--json', '--no-reuse-apps']);
+    expect(parse(no).answers.reuseApps).toBe(false);
+    expect(parse(no).apps).toMatchObject({ reuse: [], outcome: 'ran' });
+    expect(no.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge', '--dir', expect.any(String)]]);
+    const asked: string[] = [];
+    const said = await run(checkout(), fakeGitHub(owned), [], { 'Reuse it here': 'n' }, REQ, {
+      ask: async (q: string, d: string) => (asked.push(q), /Reuse it here/.test(q) ? 'n' : d),
+    });
+    expect(asked.find((q) => /Reuse/.test(q))).toBe('The owner already has the Judge (acme-kanon-judge), installed with exactly its permissions. Reuse it here with kanon apps --reuse, rather than create a second one? (y/n)');
+    expect(said.appsCalls).toHaveLength(1);
+    const yes = await run(checkout(), fakeGitHub(owned), [], undefined, REQ, { ask: async (_q: string, d: string) => d });
+    expect(yes.appsCalls).toEqual([]);
+    expect(yes.out).toContain('kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge=<downloaded>.pem');
+  });
+
+  it('reuses the Apps the owner has and creates the rest, and names a second match', async () => {
+    const github = fakeGitHub({ kind: 'Organization', orgPlan: 'free', installations: [install('acme-judge-a', 'judge'), install('acme-judge-b', 'judge')] });
+    const r = await run(checkout(), github, ['--json', '--lanes', 'review,implement']);
+    const d = parse(r);
+    expect(d.apps).toMatchObject({ missing: ['author', 'judge'], reuse: [{ app: 'judge', slug: 'acme-judge-a' }], outcome: 'ran' });
+    expect(r.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'author', '--dir', expect.any(String)]]);
+    const reuse = d.findings.find((x) => x.id === 'app.reuse')!;
+    expect(reuse.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-judge-a=<downloaded>.pem']);
+    expect(reuse.fix.text).toContain('(it also has acme-judge-b with the same permissions: give the one widgets should share)');
+  });
+
+  it("offers no installation whose permissions differ, of another account, whose App the register names, or whose App no chosen lane needs", async () => {
+    const register = '| Role | App slug |\n|---|---|\n| Reviewer | `acme-judge` |\n| Merger | `acme-judge` |\n';
+    const installations = [
+      install('acme-judge', 'judge'),
+      install('acme-author-wide', 'author', { permissions: { ...APPS.author!.permissions, administration: 'write' } }),
+      install('acme-author-narrow', 'author', { permissions: Object.fromEntries(Object.entries(APPS.author!.permissions).filter(([k]) => k !== 'workflows')) }),
+      install('other-author', 'author', { account: { login: 'other' } }),
+      install('acme-releaser', 'releaser'),
+    ];
+    const r = await run(checkout({ 'docs/qa/agent-identities.md': register }), fakeGitHub({ kind: 'Organization', orgPlan: 'free', installations }), ['--json', '--lanes', 'review,implement']);
+    const d = parse(r);
+    expect(d.inspection.ownerApps).toEqual([{ app: 'releaser', slug: 'acme-releaser' }]);
+    // The Releaser wasn't asked for, so there is nothing to ask about.
+    expect(d.answers.reuseApps).toBeNull();
+    expect(d.apps).toMatchObject({ missing: ['author'], reuse: [], outcome: 'ran' });
+  });
+
+  it("doesn't list the installations when the register names every App", async () => {
+    const register = ['| Role | App slug |', '|---|---|', ...['Reviewer', 'Merger'].map((r) => `| ${r} | \`acme-judge\` |`), ...registerRolesOf('author', REQ).map((r) => `| ${r} | \`acme-author\` |`), ...registerRolesOf('releaser', REQ).map((r) => `| ${r} | \`acme-releaser\` |`), ''].join('\n');
+    const github = fakeGitHub({ kind: 'Organization', orgPlan: 'free', installations: [install('acme-judge-2', 'judge')] });
+    const r = await run(checkout({ 'docs/qa/agent-identities.md': register }), github, ['--json']);
+    expect(installsCalls(github)).toEqual([]);
+    expect(parse(r).inspection.ownerApps).toEqual([]);
+    expect(parse(r).answers.reuseApps).toBeNull();
+  });
+
+  it('creates the Apps as before when the installations cannot be listed, and says why', async () => {
+    for (const kind of ['User', 'Organization'] as const) {
+      const github = fakeGitHub({ kind, orgPlan: 'free' });
+      const r = await run(checkout(), github, ['--json', '--no-apps']);
+      const d = parse(r);
+      expect(installsCalls(github).map((c) => c.args[1])).toEqual([kind === 'User' ? 'user/installations?per_page=100' : 'orgs/acme/installations?per_page=100']);
+      expect(d.inspection.ownerApps).toBeNull();
+      expect(d.answers.reuseApps).toBeNull();
+      expect(d.apps).toMatchObject({ reuse: [], outcome: 'left-to-you' });
+      const why = d.notes.find((n) => n.startsWith('Not looked for: '));
+      expect(why).toContain("the token can't list acme's App installations (gh: Resource not accessible by personal access token (HTTP 403)), so init can't tell whether acme already has Kanon's Apps.");
+      expect(why).toContain(kind === 'User' ? "On a personal account gh's token can't list them." : "Only an owner of acme can list them, with the organisation's Administration permission (read).");
+      expect(d.findings.find((x) => x.id === 'app.create')!.fix.text).toContain("If acme already has this App for another repository, don't create it again");
+    }
+    // Listed, with none of Kanon's Apps: no such caution, and nothing asked.
+    const none = parse(await run(checkout(), fakeGitHub({ kind: 'Organization', orgPlan: 'free', installations: [] }), ['--json', '--no-apps']));
+    expect(none.inspection.ownerApps).toEqual([]);
+    expect(none.notes.some((n) => n.startsWith('Not looked for'))).toBe(false);
+    expect(none.findings.find((x) => x.id === 'app.create')!.fix.text).not.toContain('already has');
+  });
+});
+
 describe('the Apps (plan 0005 step L4)', () => {
   it('reads the Author and the Judge from the lanes\' secrets, and passes --apps', () => {
     expect(REQ.lanes['agent-review']!.identities).toEqual(['judge']);
@@ -731,6 +865,15 @@ describe('the Apps (plan 0005 step L4)', () => {
     expect(r.appsCalls).toEqual([]);
     expect(r.out).toContain('kanon apps --owner acme --repo widgets --reuse judge:acme-judge=<downloaded>.pem');
     expect(r.out).not.toMatch(/gh secret set JUDGE_APP/);
+  });
+
+  it('says, where it leaves the Apps to create, to reuse an App the owner already has rather than create a second (#363)', async () => {
+    const r = await run(checkout(), fakeGitHub(), ['--json', '--no-apps', '--lanes', 'review,implement']);
+    const f = parse(r).findings.find((x) => x.id === 'app.create')!;
+    expect(f.subject).toBe('author, judge');
+    expect(f.fix.commands).toEqual([expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps author,judge --dir /)]);
+    expect(f.fix.text).toContain("If acme already has these Apps for another repository, don't create them again: add widgets to each installation, generate a private key on its settings page, and run kanon apps --owner acme --repo widgets --reuse <app>:<slug>=<key file> instead");
+    expect(r.err).toContain("If acme already has these Apps for another repository, don't create them again");
   });
 
   it('creates the Releaser beside the Judge when the repository calls the release workflow and the adopter says yes', async () => {
@@ -846,8 +989,8 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
       expect(keys(f.fix)).toEqual(['commands', 'text', 'url']);
     }
     expect(d.inspection).toMatchObject({ owner: 'acme', ownerKind: 'user', private: false, defaultBranch: 'main', rulesets: 'yes', installedLanes: [], callsRelease: false });
-    expect(d.answers).toEqual({ projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false, plugin: true, telemetry: false });
-    expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
+    expect(d.answers).toEqual({ projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false, reuseApps: null, plugin: true, telemetry: false });
+    expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], reuse: [], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
     expect(d.files.find((f) => f.path === '.github/workflows/agent-review.yml')).toMatchObject({ status: 'new', content: read(dir, '.github/workflows/agent-review.yml'), diff: [] });
     expect(d.findings.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token']);
     expect(d.findings[0]!.fix.commands).toEqual(['gh secret set CLAUDE_CODE_OAUTH_TOKEN -R acme/widgets   # paste it on standard input']);
@@ -918,6 +1061,72 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(JSON.parse(notCheckout.out)).toMatchObject({ status: 'error', exitCode: 1, error: expect.stringContaining('is not a git checkout') });
   });
 
+  it('prints a failed document listing the files already written when a write throws (#375)', async () => {
+    const dir = checkout();
+    const github = fakeGitHub();
+    let n = 0;
+    const r = await run(dir, github, ['--json'], undefined, REQ, {
+      writeFile: (path: string, text: string) => {
+        if (++n === 3) throw new Error(`EROFS: read-only file system, open '${path}'`);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, text);
+      },
+    });
+    expect(r.status).toBe(1);
+    const d = parse(r);
+    expect(d).toMatchObject({ schema: SCHEMA, status: 'failed', exitCode: 1, repository: REPO });
+    expect(d.failures).toEqual([expect.stringMatching(/^stopped on an unexpected error: EROFS: read-only file system/)]);
+    const written = d.files.filter((f) => f.status === 'new').map((f) => String(f.path));
+    expect(written).toHaveLength(2);
+    for (const f of written) expect(existsSync(join(dir, f)), f).toBe(true);
+    expect(d.changes.map((c) => c.subject)).toEqual(written);
+    expect(r.err).toContain('kanon init: stopped on an unexpected error: EROFS');
+    // Nothing after the throw ran: no label, ruleset or App.
+    expect(writes(github.calls)).toEqual([]);
+    expect(r.appsCalls).toEqual([]);
+  });
+
+  it('prints the error document when it throws before inspecting, or cannot read its requirements (#375)', async () => {
+    const early = await run(checkout(), fakeGitHub(), ['--json'], undefined, REQ, {
+      git: () => {
+        throw new Error('spawnSync git ENOENT');
+      },
+    });
+    expect(early.status).toBe(1);
+    expect(JSON.parse(early.out)).toEqual({ schema: SCHEMA, kanon: expect.any(String), status: 'error', exitCode: 1, error: 'stopped on an unexpected error: spawnSync git ENOENT. Nothing was changed.' });
+    const noReq = await run(checkout(), fakeGitHub(), ['--json'], undefined, REQ, {
+      requirements: () => {
+        throw new Error('ENOENT: requirements.json');
+      },
+    });
+    expect(noReq.status).toBe(1);
+    expect(JSON.parse(noReq.out)).toMatchObject({ status: 'error', exitCode: 1, error: expect.stringContaining("could not read this release's requirements file (ENOENT: requirements.json)") });
+    // Without --json, the same sentence on standard error, and no stack trace.
+    const prose = await run(checkout(), fakeGitHub(), ['--yes'], undefined, REQ, {
+      git: () => {
+        throw new Error('spawnSync git ENOENT');
+      },
+    });
+    expect(prose.status).toBe(1);
+    expect(prose.out).toBe('');
+    expect(prose.err).toBe('kanon init: stopped on an unexpected error: spawnSync git ENOENT');
+  });
+
+  it('prints the error document for --help with --json, not an empty standard output (#372)', async () => {
+    for (const h of ['--help', '-h']) {
+      const github = fakeGitHub();
+      const r = await run(checkout(), github, [h, '--json']);
+      expect(r.status, h).toBe(2);
+      expect(JSON.parse(r.out), h).toMatchObject({ schema: SCHEMA, status: 'error', exitCode: 2, error: '--help and --json contradict each other; give one' });
+      expect(r.err, h).toContain('Usage: kanon init');
+      expect(github.calls).toEqual([]);
+    }
+    // Without --json, --help prints the usage on standard output, as before.
+    const help = await run(checkout(), fakeGitHub(), ['--help']);
+    expect(help.status).toBe(0);
+    expect(help.out).toContain('Usage: kanon init');
+  });
+
   it('sends the prose of kanon apps and kanon milestones to standard error too', async () => {
     const r = await run(checkout(), fakeGitHub(), ['--json'], undefined, REQ, {
       apps: async (_argv: string[], io?: { out: (l: string) => void }) => (io?.out('APPS PROSE'), 0),
@@ -930,7 +1139,7 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
 
   it('gives every finding a documented id, and documents only ids the code gives', async () => {
     const source = readFileSync(join(ROOT, 'cli/init.mjs'), 'utf8');
-    const inCode = [...source.matchAll(/\bid: '([a-z-]+\.[a-z-]+)'/g)].map((m) => m[1]!).sort();
+    const inCode = [...new Set([...source.matchAll(/\bid: '([a-z-]+\.[a-z-]+)'/g)].map((m) => m[1]!))].sort();
     const documented = fields('### The findings').sort();
     expect(inCode).toEqual(documented);
     const categories = new Map(tableColumn('### The findings').map((id, i) => [id.replace(/`/g, ''), tableColumn('### The findings', 1)[i]!.replace(/`/g, '')]));
@@ -1027,13 +1236,35 @@ describe('kanon init, a flag for each question (#367)', () => {
   });
 
   it('fails by name on each pair of flags that contradict each other', () => {
-    expect(CONFLICTS.length).toBe(8);
+    expect(CONFLICTS.length).toBe(10);
     for (const [x, y] of CONFLICTS) {
       const argv = [x, y].flatMap((f) => (f.startsWith('--delegate-') ? [f, 'v'] : [f]));
       expect(() => parseArgs(argv, REQ), `${x} ${y}`).toThrow(`${x} and ${y} contradict each other; give one`);
     }
     expect(parseArgs(['--delegate-email', 'e@x'], REQ).given.delegation).toBe(true);
     expect(parseArgs(['--json'], REQ).yes).toBe(true);
+    // -h is --help.
+    expect(() => parseArgs(['-h', '--json'], REQ)).toThrow('--help and --json contradict each other; give one');
+  });
+
+  it('never takes the next flag as a value flag\'s value, and takes a value beginning with "-" inline (#372)', () => {
+    const valueFlags = ['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email'];
+    for (const f of valueFlags) {
+      expect(() => parseArgs([f, '--yes', '--json'], REQ), f).toThrow(`${f} needs a value, not the flag "--yes"; to give a value that begins with "-", write ${f}=<value>`);
+      expect(() => parseArgs([f, '-h'], REQ), f).toThrow(`${f} needs a value, not the flag "-h"`);
+    }
+    expect(parseArgs(['--gates=--fast-check', '--yes'], REQ).given.gates).toBe('--fast-check');
+    expect(parseArgs(['--project-owner', 'grace', '--yes'], REQ).given.projectOwner).toBe('grace');
+  });
+
+  it('records no flag as the Owner, and prints the error document, when a value flag is followed by a flag (#372)', async () => {
+    const github = fakeGitHub();
+    const dir = checkout();
+    const r = await run(dir, github, ['--project-owner', '--yes', '--json']);
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.out)).toMatchObject({ schema: SCHEMA, status: 'error', exitCode: 2, error: expect.stringContaining('--project-owner needs a value, not the flag "--yes"') });
+    expect(github.calls).toEqual([]);
+    expect(existsSync(join(dir, 'docs/qa/adoption.md'))).toBe(false);
   });
 
   it('exits 2 on a contradiction and touches nothing', async () => {

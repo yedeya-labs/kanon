@@ -226,12 +226,24 @@ export const ciFile = (release, defaultBranch) =>
 export const laneCheckFile = (release) =>
   ['# Kanon\'s lane check (actions/lane-check/README.md), written by `kanon init`.', 'name: Lane check', '', 'on:', '  pull_request:', '  merge_group:', '', 'permissions:', '  contents: read', '', 'jobs:', ...laneCheckJob(release), ''].join('\n');
 
-/** The Dependabot entry that proposes Kanon upgrades (`K-ADOPT-11`), cooldown written out. */
+/**
+ * The Dependabot entry that proposes Kanon upgrades (`K-ADOPT-11`), cooldown written out: the
+ * entry actions/pr-title/README.md gives adopters ("Upgrades: Dependabot"), which
+ * tests/unit/kanon-init.test.ts holds this to. Daily, since a weekly entry reaches a Kanon release
+ * up to a week late (#332), and allowing only Kanon's dependencies, so it proposes no third-party
+ * action (#360).
+ */
 export const DEPENDABOT_ENTRY = [
   '  - package-ecosystem: github-actions',
   '    directory: /',
   '    schedule:',
-  '      interval: weekly',
+  '      interval: daily',
+  '    allow:',
+  '      - dependency-name: "yedeya-labs/kanon*"',
+  '    groups:',
+  '      kanon:',
+  '        patterns:',
+  '          - "yedeya-labs/kanon*"',
   '    cooldown:',
   '      default-days: 3',
   '      exclude:',
@@ -239,10 +251,6 @@ export const DEPENDABOT_ENTRY = [
   '    commit-message:',
   '      prefix: ci',
   '      include: scope',
-  '    groups:',
-  '      kanon:',
-  '        patterns:',
-  '          - "yedeya-labs/kanon*"',
 ];
 
 export const dependabotFile = () => ['version: 2', 'updates:', ...DEPENDABOT_ENTRY, ''].join('\n');

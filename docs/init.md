@@ -21,11 +21,12 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 | The delegate's email | `--delegate-email <email>` (implies `--delegation`) | `git config user.email` |
 | Delete GitHub's default labels outside the taxonomy? | `--delete-default-labels`, `--keep-default-labels` | keep |
 | Create the optional Releaser App? (asked only of a repository that calls Kanon's release workflow) | `--releaser`, `--no-releaser` | no |
+| Reuse an App the owner already has, rather than create a second? (asked only when the owner's installations hold one the chosen lanes need and the register lacks, `inspection.ownerApps`) | `--reuse-apps`, `--no-reuse-apps` | yes |
 | Declare the kanon plugin in `.claude/settings.json`? | `--plugin`, `--no-plugin` | yes |
 | Send this repository's agent-run rows to Kanon's hosted telemetry store? | `--telemetry`, `--no-telemetry` | no |
 | Create the Apps now? | `--create-apps`, `--no-apps` | yes |
 
-**What fails, by name, before anything changes:** a flag `init` doesn't know, `--owner` among them, with a hint naming `--project-owner`; a value flag given twice; a value `init` doesn't take (`--test-database` other than `none` or `hook`, a lane Kanon doesn't ship); two flags that contradict each other (`--delegation` and `--no-delegation`, `--delegate-name` or `--delegate-email` with `--no-delegation`, `--delete-default-labels` and `--keep-default-labels`, `--releaser` and `--no-releaser`, `--plugin` and `--no-plugin`, `--telemetry` and `--no-telemetry`, `--create-apps` and `--no-apps`); and `--releaser` for a repository that doesn't call Kanon's release workflow. Each exits 2.
+**What fails, by name, before anything changes:** a flag `init` doesn't know, `--owner` among them, with a hint naming `--project-owner`; a value flag given twice, or followed by another flag where its value belongs (`--project-owner --yes`, as an unset, unquoted variable leaves it: a value that begins with `-` is given as `--project-owner=<value>`); a value `init` doesn't take (`--test-database` other than `none` or `hook`, a lane Kanon doesn't ship); two flags that contradict each other (`--delegation` and `--no-delegation`, `--delegate-name` or `--delegate-email` with `--no-delegation`, `--delete-default-labels` and `--keep-default-labels`, `--releaser` and `--no-releaser`, `--reuse-apps` and `--no-reuse-apps`, `--plugin` and `--no-plugin`, `--telemetry` and `--no-telemetry`, `--create-apps` and `--no-apps`, and `--help` and `--json`, since the usage text is no document); and `--releaser` for a repository that doesn't call Kanon's release workflow. Each exits 2.
 
 **Why `--project-owner`, not `--owner`** (the Owner, 2026-10-06): `--owner` names the GitHub account that owns the repository, in `kanon apps` and everywhere else, so the person who is the project's Owner gets a flag of their own, and `answers.projectOwner` in the JSON.
 
@@ -80,8 +81,8 @@ The store's side is the operator's: the register entry, and the values of the re
 |---|---|---|
 | `complete` | 0 | It ran, and nothing is left to a person. |
 | `steps-left` | 0 | It ran, and `findings` lists what is left to a person. |
-| `failed` | 1 | Something failed after it started changing things; `failures` says what. What it did is still listed. |
-| `error` | 1 or 2 | It stopped before inspecting the repository, so nothing changed: the error document of [`docs/cli-json.md`](cli-json.md), `{ "schema", "kanon", "status", "exitCode", "error" }`. 2 is a usage error. |
+| `failed` | 1 | Something failed after it started changing things, or it stopped on an error it didn't expect (a file it couldn't write) once it had inspected the repository; `failures` says what. What it did before is still listed. |
+| `error` | 1 or 2 | It stopped before inspecting the repository, on a usage error, an unreadable requirements file or an error it didn't expect, so nothing changed: the error document of [`docs/cli-json.md`](cli-json.md), `{ "schema", "kanon", "status", "exitCode", "error" }`. 2 is a usage error. |
 
 ### The inspection
 
@@ -102,6 +103,7 @@ The store's side is the operator's: the register entry, and the values of the re
 | `secrets` | array or null | Its secret names, sorted, or null when the token can't list them. |
 | `installedLanes` | array | The lanes its callers already call, by file name without `.yml`. |
 | `callsRelease` | boolean | Whether it calls Kanon's release workflow, which is what offers the Releaser. |
+| `ownerApps` | array or null | Kanon's Apps the owner already has ([#363](https://github.com/yedeya-labs/kanon/issues/363)): each of its App installations whose permissions are exactly an App's in `rulebook/agent-permissions.json`, and whose App this register doesn't name, as `app` (`author`, `judge` or `releaser`) and `slug`. Looked for only when the register lacks one of the Apps, so empty otherwise. Null when the token can't list the installations: only an organisation's owner can, with its Administration permission (read), and on a personal account gh's token can't; `notes` then says so, and `init` creates the Apps as before. |
 
 ### The answers
 
@@ -116,6 +118,7 @@ The store's side is the operator's: the register entry, and the values of the re
 | `delegation` | object or null | The sign-off delegation, `name` and `email`, or null. |
 | `deleteDefaultLabels` | boolean | Whether to delete GitHub's default labels outside the taxonomy. |
 | `releaser` | boolean | Whether to create the optional Releaser. |
+| `reuseApps` | boolean or null | Whether to reuse the Apps in `inspection.ownerApps` that the chosen lanes need, with `kanon apps --reuse`, rather than create a second set; null when there was none to ask about. |
 | `plugin` | boolean | Whether to declare the kanon plugin in `.claude/settings.json`, pinned to this release. |
 | `telemetry` | boolean | Whether to send the repository's agent-run rows to Kanon's hosted telemetry store, by writing the collector's caller, `.github/workflows/telemetry.yml` ([below](#telemetry)). |
 
@@ -173,8 +176,9 @@ What `--lanes` chooses from, so a person, or the adopt skill asking them, can ch
 |---|---|---|
 | `identities` | array | The Apps the chosen lanes run as, and the Releaser if asked for. |
 | `missing` | array | Those the App register lacks. |
-| `command` | string or null | The `kanon apps` command for the missing ones. |
-| `outcome` | string | `none` (the lanes run as no App), `registered` (the register lists them all), `would-run` (a dry run), `ran`, `left-to-you` (`--no-apps`, or the person said no: the finding `app.create`) or `failed`. |
+| `reuse` | array | Those of the missing ones the owner already has and the person chose to reuse, each `app` and `slug`: each is a finding `app.reuse`, its `kanon apps --reuse` command with the slug filled in. |
+| `command` | string or null | The `kanon apps` command for the missing ones it creates. |
+| `outcome` | string | `none` (the lanes run as no App), `registered` (the register lists them all), `reuse` (the owner has every missing one, and the person chose to reuse them: the findings `app.reuse`), `would-run` (a dry run), `ran`, `left-to-you` (`--no-apps`, or the person said no: the finding `app.create`) or `failed`. With some reused and some created, it is the outcome of creating them. |
 | `exitCode` | number or null | `kanon apps`'s exit code, when `init` ran it. |
 
 ### The findings
@@ -194,7 +198,7 @@ Every finding is non-blocking, except `app.failed`: `blocking` means it makes th
 | `ruleset.require-check` | `ruleset` | No job of a workflow on the default branch reports the status check `Lane check` on every pull request yet, or the token can't read the default branch's workflows, so the ruleset doesn't require it: a required check that nothing reports blocks every other pull request ([#444](https://github.com/yedeya-labs/kanon/issues/444)). Its subject is the check's name. It is a step for after the merge of the pull request that adds the job, never before: run `kanon init` again with a token that can administer the repository, which adds only that rule, or add it on the fix's page. |
 | `app.create` | `app` | The Apps the lanes need were not created: `--no-apps`, or the person said no. |
 | `app.failed` | `app` | `kanon apps` did not finish. |
-| `app.reuse` | `app` | The register lists an App, but the repository lacks its secrets. |
+| `app.reuse` | `app` | The register lists an App, but the repository lacks its secrets; or the owner already has an App the register lacks, and the person chose to reuse it. |
 | `secret.claude-code-oauth-token` | `secret` | The repository lacks `CLAUDE_CODE_OAUTH_TOKEN`. |
 | `secret.digest-webhook` | `secret` | The repository lacks `DIGEST_WEBHOOK`. |
 | `secret.unreadable` | `secret` | The token can't list the repository's secret names. |

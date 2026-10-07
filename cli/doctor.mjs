@@ -49,7 +49,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { URL } from 'node:url';
 import { readResult, resultMasked } from './apps-check.mjs';
-import { checkoutCheck, REGISTER_PATH, remoteRepo } from './apps.mjs';
+import { checkoutCheck, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
 import { appsArgs, inspect, LANE_CHECK, registerRolesOf, registerRows, requiredCheckGap, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
@@ -508,7 +508,15 @@ export const doctor = async (argv, overrides = {}) => {
     deps.out(USAGE);
     return EXIT.healthy;
   }
-  const result = await diagnose(deps, opts);
+  // An error `diagnose` did not expect is the error document too, so `--json` always prints one
+  // (#375). Doctor changes nothing, so there is nothing done to record.
+  /** @type {Awaited<ReturnType<typeof diagnose>>} */
+  let result;
+  try {
+    result = await diagnose(deps, opts);
+  } catch (e) {
+    result = { error: `stopped on an unexpected error: ${/** @type {Error} */ (e).message}` };
+  }
   if (result.error !== undefined || !result.report) {
     const error = result.error ?? 'no report';
     if (opts.json) deps.out(JSON.stringify(errorDocument(deps, EXIT.error, error), null, 2));
@@ -840,11 +848,7 @@ export const diagnose = async (deps, opts) => {
    */
   let installations = null;
   const ownerInstallations = () =>
-    (installations ??= (async () => {
-      const listed = await deps.gh(['api', s.kind === 'Organization' ? `orgs/${s.owner}/installations?per_page=100` : 'user/installations?per_page=100']);
-      const j = ghJsonOf(listed);
-      return { listed, installs: Array.isArray(j?.installations) ? j.installations : null };
-    })());
+    (installations ??= listInstallations(deps.gh, s.owner, s.kind));
 
   /** @type {Map<string, number>} identity → its App's id, read with its permissions */
   const appIdOf = new Map();
