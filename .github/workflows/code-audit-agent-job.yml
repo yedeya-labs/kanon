@@ -156,7 +156,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           KANON: ${{ steps.kanon.outputs.path }}
-        run: node "$KANON/scripts/ensure-labels.mjs" agent:explorer qa:needs-triage bug spec-delta signal:spec-violation signal:security sev:critical sev:high sev:medium sev:low
+        run: node "$KANON/scripts/ensure-labels.mjs" agent:explorer qa:needs-triage bug spec-delta signal:spec-violation signal:security signal:contract sev:critical sev:high sev:medium sev:low
 
       # `continue-on-error` + an EXPLICIT outcome step below (RA-846, RA-1336). The action exits
       # non-zero when the agent exhausts `--max-turns`, even when its report is complete, so a

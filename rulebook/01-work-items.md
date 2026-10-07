@@ -165,6 +165,7 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 | | `capability` | `006b75` | Capability investigation: the cohort the Overseer's interlock counts |
 | Signal that produced a finding | `signal:spec-violation` | `fef2c0` | Contradicts a promoted behavioural invariant |
 | | `signal:security` | `b60205` | A security anti-pattern the code audit cites: credentials, secret compare, isolation, injection |
+| | `signal:contract` | `fef2c0` | A consumer or structural contract the code audit cites the code contradicting |
 | | `signal:<name>` | `fef2c0` | One per objective signal on the project's list (`K-AGENT-9`); `b60205` for a security signal |
 | Review and escalation | `review:please` | `d4c5f9` | Asks the Reviewer to review this PR |
 | | `gate-candidate` | `d93f0b` | Filer says launch-gating (sev:critical or sev:high); the Stakeholder decides if it joins the gate |
@@ -177,7 +178,7 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 
 `qa:needs-info` is also the implement lane's park marker. A human who parks an issue by hand ("built by hand, do not re-dispatch") adds it and may keep `agent:implement`; neither the Lead nor the dispatch sweep dispatches an issue carrying it. The sweep's own stop applies the same label, so there is one marker for "a human has this", not two.
 
-Two families have no members at installation. A `signal:<name>` label is created with the project's signal list, and `project:<n>` is created by the Lead the first time it files for project `<n>`. `signal:spec-violation` is fixed, because the project reconciler reads it, and so is `signal:security`, because the code audit applies it to a security anti-pattern (its second gate) in every repository. The release tool's labels are created by the release tool.
+Two families have no members at installation. A `signal:<name>` label is created with the project's signal list, and `project:<n>` is created by the Lead the first time it files for project `<n>`. `signal:spec-violation` is fixed, because the project reconciler reads it, and so are `signal:security` and `signal:contract`, because the code audit applies them in every repository: the first to a security anti-pattern (its second gate), the second to a consumer or structural-contract contradiction (its first and third). The release tool's labels are created by the release tool.
 
 **How the `agent:` labels map to the roles.** The labels mark lanes, not identities, so they don't map one-to-one onto chapter 03's roles:
 
