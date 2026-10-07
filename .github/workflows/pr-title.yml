@@ -41,5 +41,5 @@ jobs:
       - name: Already checked on the pull request
         if: github.event_name == 'merge_group'
         run: echo "Merge group. Each queued PR's title passed this check before it could be queued."
-      - uses: yedeya-labs/kanon/actions/pr-title@v0.30.0
+      - uses: yedeya-labs/kanon/actions/pr-title@v0.32.0
         if: github.event_name == 'pull_request'
