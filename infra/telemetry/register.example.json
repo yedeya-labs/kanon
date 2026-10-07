@@ -6,7 +6,9 @@
     {
       "key": "k3f9c2a71",
       "repository": "yedeya-labs/kanon",
-      "readers": ["ref:refs/heads/main"]
+      "readers": ["ref:refs/heads/main"],
+      "publish_own_figures_as": "kanon",
+      "aggregate_invoker": true
     }
   ]
 }

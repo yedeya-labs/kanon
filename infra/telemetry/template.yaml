@@ -1,16 +1,17 @@
-# The hosted telemetry store (plan 0002 §3 to §5, §7, §9, §10): one DynamoDB table, written
+# The hosted telemetry store (plan 0002 §3 to §5, §6.1, §7, §9, §10): one DynamoDB table, written
 # only by a validating function behind an IAM-authenticated URL, with a writer and a reader role
-# per registered repository.
+# per registered repository, and an aggregate-only function behind a second such URL.
 #
 # THIS FILE IS NOT DEPLOYED AS IT IS. The register (who is opted in) is private (§5), so
 # `render.mjs` reads it and adds each repository's roles to this template. `docs/telemetry.md`
 # has the Owner's commands. Intrinsics are written in their long form (`Ref:`, `Fn::GetAtt:`)
 # so the file parses as plain YAML, for the render script and for the unit test that checks it.
 #
-# COST (§9): on-demand DynamoDB, one 128 MB function with no schedule, a 30-day log group. No
-# NAT, no VPC, no always-on compute, no customer-managed key, no alarm. A rejected or failed
-# write turns the collector red, and that red run is the page (`K-OBS-4`); a collector that
-# stops running is not paged, as the reference adopter decided.
+# COST (§9): on-demand DynamoDB, one 128 MB ingest function and one 256 MB aggregate function,
+# neither with a schedule, and a 30-day log group each. No NAT, no VPC, no always-on compute,
+# no customer-managed key, no alarm. A rejected or failed write turns the collector red, and that
+# red run is the page (`K-OBS-4`); a collector that stops running is not paged, as the reference
+# adopter decided.
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Kanon's hosted telemetry store (plan 0002).
 
@@ -256,11 +257,104 @@ Resources:
                 Resource:
                   Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry
 
+  # The aggregate-only function (§6.1, decided by the Owner 2026-10-07, #443). It answers only
+  # what may leave: cross-adopter cells with at least three non-declaring adopters, the own
+  # figures of adopters that declared them publishable, and failure signals with a count of
+  # adopters affected. Its
+  # role may Query the table, and only with exactly the aggregate's projection: IAM refuses a
+  # request that asks for any other attribute or leaves `Select` unnamed. About a cent a month.
+  AggregateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: kanon-telemetry-aggregate
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: query-the-projection-and-log
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: dynamodb:Query
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry
+                Condition:
+                  # The aggregate's PROJECTION (function/aggregate.mjs), and sk, the key's other half.
+                  ForAllValues:StringEquals:
+                    dynamodb:Attributes:
+                      - pk
+                      - sk
+                      - row_kind
+                      - tag
+                      - recorded_at
+                      - lane
+                      - model
+                      - total_cost_usd
+                      - expires_at
+                      - outcome
+                      - reason
+                      - failed_stage
+                      - kanon_error
+                      - kanon_version
+                  # Not IfExists: a request without `Select` would read whole items, so it is refused.
+                  StringEquals:
+                    dynamodb:Select: SPECIFIC_ATTRIBUTES
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: { 'Fn::GetAtt': [AggregateLogGroup, Arn] }
+
+  # Counts only (the function never logs a row, a key or a figure), kept 30 days.
+  AggregateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/kanon-telemetry-aggregate
+      RetentionInDays: 30
+
+  AggregateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: kanon-telemetry-aggregate
+      Description: Answers the publishable aggregate only (plan 0002, section 6.1).
+      Runtime: nodejs24.x
+      Architectures: [arm64]
+      Handler: aggregate.handler
+      # The same directory as the ingest function: one package, two handlers.
+      Code: function
+      MemorySize: 256
+      Timeout: 60
+      Role: { 'Fn::GetAtt': [AggregateRole, Arn] }
+      LoggingConfig:
+        LogGroup: { Ref: AggregateLogGroup }
+        LogFormat: Text
+      Environment:
+        Variables:
+          TABLE_NAME: kanon-telemetry
+          ACCOUNT_ID: { Ref: AWS::AccountId }
+          # Set by render.mjs from the register: every key; `key=label` for each adopter that
+          # declared its own figures publishable; the keys whose invoker role may call the URL.
+          AGGREGATE_KEYS: ''
+          OWN_FIGURES: ''
+          INVOKER_KEYS: ''
+
+  # Only the invoker roles render.mjs adds may call it: AWS_IAM auth, and a permission per role.
+  AggregateUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: { 'Fn::GetAtt': [AggregateFunction, Arn] }
+      AuthType: AWS_IAM
+
   # render.mjs adds, per registered repository: WriterRole<id>, ReaderRole<id> and
-  # WriterUrlPermission<id>, from the shapes it holds.
+  # WriterUrlPermission<id>, from the shapes it holds; and, for an entry that sets
+  # `aggregate_invoker`, AggregateInvokerRole<id> and AggregateUrlPermission<id>.
 
 Outputs:
   TableName:
     Value: { Ref: Table }
   IngestUrl:
     Value: { 'Fn::GetAtt': [IngestUrl, FunctionUrl] }
+  AggregateUrl:
+    Value: { 'Fn::GetAtt': [AggregateUrl, FunctionUrl] }
