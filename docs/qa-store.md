@@ -156,7 +156,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.34.1
+    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.35.0
       with:
         operation: ${{ inputs.operation }}
         kind: ${{ inputs.kind }}
@@ -223,7 +223,7 @@ permissions:
   id-token: write
 jobs:
   maintenance:
-    uses: yedeya-labs/kanon/.github/workflows/qa-store-aws-maintenance.yml@v0.34.1
+    uses: yedeya-labs/kanon/.github/workflows/qa-store-aws-maintenance.yml@v0.35.0
     with:
       task: ${{ inputs.task }}
       apply: ${{ inputs.apply }}
