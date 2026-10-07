@@ -8,6 +8,13 @@ on:
   schedule:
     - cron: "0 7 * * 1"
   workflow_dispatch:
+  # Optional: the runtime-version trigger (kanon#423). A merged pull request that changes this
+  # file, which is how the pinned agent runtime moves; the lane audits only when it changed.
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+    paths:
+      - .github/workflows/agent-overseer.yml
 
 permissions:
   contents: read

@@ -72,6 +72,16 @@ name: Overseer
 # THE CALLER'S TRIGGERS — this lane's contract with it:
 #   schedule: "0 7 * * 1"      — weekly, Monday 07:00 UTC (the reference adopter's)
 #   workflow_dispatch          — no inputs
+#   pull_request_target: types: [closed], branches: [<default branch>],
+#     paths: [<the caller's own file>]
+#                              — optional: the runtime-version trigger (kanon#423). A merged
+#                                pull request that moves the caller's Kanon pin; the gate job
+#                                audits only when the agent runtime is newer than the ledger's
+#                                watermark (see below), and the capability review is then due
+#                                whatever the week. The store's role trusts only the default
+#                                branch's ref, and this event's token names the pull request,
+#                                so the export is `degraded` on it: expected, and the prompt
+#                                says it is not a finding.
 on:
   workflow_call:
     inputs:
@@ -102,16 +112,22 @@ permissions:
 
 jobs:
   # THE MEMBERSHIP GATE (K-AGENT-45, kanon#46), in a job of its own, before any token is minted
-  # or the store is read. ONLY THE CALLER'S TWO TRIGGERS: as a called workflow it runs on
-  # whatever its caller is called on (Kanon's smoke calls it on pull requests).
+  # or the store is read. ONLY THE CALLER'S TRIGGERS: as a called workflow it runs on whatever
+  # its caller is called on (Kanon's smoke calls it on pull requests). The runtime-version
+  # trigger is a `pull_request_target` that closed a pull request by merging it: a pull request
+  # closed unmerged is turned away here, and the gate step judges the member who merged it,
+  # `pull_request.merged_by`, who on a merge-queue merge is the member who queued it.
   gate:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request_target' && github.event.action == 'closed' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
     outputs:
       member: ${{ steps.gate.outputs.member }}
+      due: ${{ steps.runtime.outputs.due }}
       upstream: ${{ steps.upstream.outputs.upstream }}
     steps:
       - uses: $/actions/kanon-path
@@ -120,6 +136,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
+      # IS AN AUDIT DUE? (the runtime-version trigger: plan 0004 decision 12, amended 2026-10-06,
+      # and the Owner's decision on kanon#423). On the schedule and a dispatch, always. On a
+      # merged pull request, only when the agent runtime of the Kanon release this lane runs
+      # is newer than the capability ledger's watermark on the default branch (`K-LAYOUT-7`):
+      # an upgrade that didn't move the runtime forward has nothing new for the capability
+      # review, and the run skips the audit, saying so. Anything it can't read makes it due.
+      - name: Is an audit due?
+        id: runtime
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          due="$(node "$KANON/scripts/runtime-bump.mjs")"
+          printf 'due=%s\n' "$due" >> "$GITHUB_OUTPUT"
       # WHERE UPSTREAM FINDINGS GO (`K-LAYOUT-10`, kanon#423): the adoption record's
       # `Upstream findings:` choice, read from the default branch (`K-MERGE-17`) here, before
       # any agent runs, and handed to the `file` job as this job's output. The agent's job can
@@ -127,7 +157,7 @@ jobs:
       # malformed record stops the run here, by name, before anything is spent.
       - name: Where do upstream findings go?
         id: upstream
-        if: steps.gate.outputs.member == 'true'
+        if: steps.runtime.outputs.due == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -139,7 +169,7 @@ jobs:
   # the store is absent.
   export:
     needs: gate
-    if: needs.gate.outputs.member == 'true'
+    if: needs.gate.outputs.member == 'true' && needs.gate.outputs.due == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -154,6 +184,7 @@ jobs:
         id: store
         with:
           operation: export
+          variables: ${{ toJSON(vars) }}
           kind: overseer
 
   # THE LANE'S RUN, AS A CALLED WORKFLOW (kanon#279, `K-AGENT-49`). `overseer-run.yml` mints the

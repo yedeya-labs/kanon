@@ -126,6 +126,7 @@ jobs:
         id: store
         with:
           operation: export
+          variables: ${{ toJSON(vars) }}
           kind: audit
 
   # THE LANE'S RUN, AS A CALLED WORKFLOW (kanon#279, `K-AGENT-49`). `code-audit-run.yml` mints the
@@ -168,6 +169,7 @@ jobs:
       - uses: $/actions/qa-store
         with:
           operation: put
+          variables: ${{ toJSON(vars) }}
           kind: audit
           report: ${{ runner.temp }}/report/qa-audit-summary.json
 

@@ -13,11 +13,11 @@
 # the docs, the guards and the scripts, in that order. It looks for objective contradictions
 # between them, as the explorer playbook's "Code-reading mode" says, and files them on Kanon.
 #
-# NO QA STORE. Kanon has no store hook (.github/actions/qa-store), so the lane's export says the
-# store is absent, the audit runs without memory and picks its areas from `git log`, and the put
-# job is skipped with a notice. At v0.25.0 the store jobs still declare the `kanon-qa-store`
-# environment, which GitHub creates, empty, on the first run; nothing is stored in it (#291
-# drops it from the next release).
+# WITH A QA STORE (kanon#423). Kanon's store hook is .github/actions/qa-store, so the export job
+# reads the code-reading ledger through it before the audit, and the put job records the run
+# after it: the audit has memory, and picks its areas from that ledger as well as `git log`.
+# The hook reads the store's role and bucket from the repository variables QA_STORE_ROLE_ARN
+# and QA_STORE_BUCKET, which the lane passes it from the release that added them on.
 #
 # It runs as the Author App, in its Explorer role (ADR 0011, plan 0005). It files with the
 # labels the lane's prompt names, which must exist on Kanon before a run that finds something.
@@ -33,7 +33,7 @@ on:
   workflow_dispatch:
 
 # The lane's ceiling: the audit job reads the tree, the issues this run filed and its own run;
-# the store jobs need `id-token` (unused here, with no hook), and the export's delete job
+# the store jobs need `id-token` for the store hook's credentials, and the export's delete job
 # `actions: write`.
 permissions:
   contents: read

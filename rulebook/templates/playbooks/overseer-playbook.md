@@ -15,3 +15,5 @@ Measure the follow-up rate and the net open-issue rate, never set a target for t
 ## Capability review
 
 Review the agent runtime's releases since the ledger's watermark, record each disposition in the capability ledger (`K-SELF-16`), and file capability issues sparingly, saying that the watch ran (`K-SELF-17`).
+
+A run the runtime-version trigger started (the prompt names its trigger, `pull_request_target`) exists because the runtime moved past the watermark, so the review is due whatever the week, and its audit is the next run's anchor like any other. On that trigger the QA store isn't read: its role trusts only the default branch's ref, and the event's token names the pull request. A `degraded` store there is expected, not a finding.

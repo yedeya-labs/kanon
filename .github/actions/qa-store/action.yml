@@ -1,0 +1,53 @@
+# Kanon's own QA store hook (docs/qa-store.md, plan 0004 §3.2), for the lanes Kanon runs on
+# itself (ADR 0011, amended 2026-10-06 by kanon#423): the code audit and the Overseer.
+#
+# It is the AWS hook template from docs/qa-store.md, written exactly as an adopter writes it, for
+# the `kanon-qa-store` stack the Owner provisioned on 2026-10-06 with
+# infra/qa-store/aws/provision.mjs (eu-central-1, termination-protected). The stack's role trusts
+# the default branch's ref alone, so a run of any other ref never reaches the store.
+#
+# THE STORE'S ROLE AND BUCKET ARE REPOSITORY VARIABLES, NEVER COMMITTED: both name the AWS account,
+# which stays out of the public tree. The lane's store step passes the repository's Actions
+# variables as `variables`, and this hook reads `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET` from them
+# (the Owner sets them with `gh variable set`). A Kanon release before the one that passes
+# `variables` gives this hook nothing, and the first step below fails by name: a read is then
+# `degraded`, and a write fails its job.
+#
+# Kanon's `qa-store` block reads this file from the checkout of the run's commit and calls it in a
+# store job, the only kind of job that holds `id-token: write` (tests/unit/id-token-guard.test.ts).
+# The `uses:` below names Kanon's last release, like every other Kanon reference under .github/
+# (`lane-check` holds them to one version), and Dependabot's `/.github/actions/*` directory
+# proposes each release here with the others.
+name: QA store
+description: The QA store hook (Kanon plan 0004).
+inputs:
+  operation: { required: true }
+  kind: { required: false, default: "" }
+  dir: { required: true }
+  from: { required: false, default: "" }
+  to: { required: false, default: "" }
+  variables: { required: false, default: "" }
+runs:
+  using: composite
+  steps:
+    - name: Check the store's repository variables
+      shell: bash
+      env:
+        ROLE_ARN: ${{ fromJSON(inputs.variables || '{}').QA_STORE_ROLE_ARN }}
+        BUCKET: ${{ fromJSON(inputs.variables || '{}').QA_STORE_BUCKET }}
+      run: |
+        if [ -z "$ROLE_ARN" ] || [ -z "$BUCKET" ]; then
+          echo "::error title=QA store hook::the repository variables QA_STORE_ROLE_ARN and QA_STORE_BUCKET must both be set, and the Kanon release the lane runs must pass the repository's variables to the store hook (docs/qa-store.md)"
+          exit 1
+        fi
+    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.30.0
+      with:
+        operation: ${{ inputs.operation }}
+        kind: ${{ inputs.kind }}
+        dir: ${{ inputs.dir }}
+        from: ${{ inputs.from }}
+        to: ${{ inputs.to }}
+        role-arn: ${{ fromJSON(inputs.variables || '{}').QA_STORE_ROLE_ARN }}
+        region: eu-central-1
+        table: kanon-qa-store
+        bucket: ${{ fromJSON(inputs.variables || '{}').QA_STORE_BUCKET }}

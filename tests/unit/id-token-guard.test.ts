@@ -51,6 +51,8 @@ describe('every Kanon workflow', () => {
       // Kanon's own caller of the code-audit lane (plan 0004 step 11a): it calls a lane with
       // store jobs, so it grants their id-token, and no job of its own runs anything.
       'code-audit.yml:audit',
+      // And of the Overseer's lane (kanon#423), the same way: its store job is the lane's export.
+      'overseer.yml:oversee',
       'qa-store-aws-maintenance.yml:maintenance',
       'telemetry-collect.yml:collect', 'telemetry.yml:collect',
     ]);

@@ -1,0 +1,72 @@
+# Kanon audits its own pipeline with the Overseer (ADR 0011, amended 2026-10-06 by kanon#423).
+#
+# A trigger-only caller of Kanon's Overseer lane, written exactly as an adopter writes one
+# (docs/lanes.md, "The Overseer"). It is named `overseer.yml` because `agent-overseer.yml` is
+# the lane itself (K-LAYOUT-18's exception for Kanon's own tree, as for review.yml and
+# code-audit.yml), which the adoption record waives by name.
+#
+# IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap). Through `$/` a dispatch from a
+# branch would audit with that branch's lane, and a change to the lane would first be exercised
+# by auditing with itself. Dependabot's `kanon` group proposes each release here
+# (.github/dependabot.yml, ADR 0011), and `lane-check` (in CI) holds every Kanon reference to
+# one version.
+#
+# ITS TRIGGERS. The lane's weekly schedule and a dispatch, and the runtime-version trigger
+# (plan 0004 decision 12, amended 2026-10-06): a merged pull request that changes this file.
+# The agent runtime Kanon's lanes run is the one the release below pins, so it moves only when
+# Dependabot moves that pin here. On that merge the lane compares the runtime version of the
+# release it now runs with the capability ledger's watermark (docs/qa/capability-ledger.md, on
+# the default branch) and audits only when the runtime is newer (the Owner's decisions on
+# kanon#423). On that trigger the store isn't read (its role trusts only `main`'s ref, and the
+# event's token names the pull request), so the export is degraded, as expected; its
+# membership gate admits the member who merged, `pull_request.merged_by`, which on a merge-queue
+# merge is the member who queued it. `pull_request_target` runs the default branch's copy of
+# this file, and nothing checks out the pull request. A release that predates the trigger turns
+# the event away at its gate job, so until the pin reaches one that has it, a merge here is a
+# skipped run.
+#
+# THE QA STORE. Kanon's store hook is .github/actions/qa-store, so the store job exports the
+# Overseer's kind through it, and the agent's job reads the export without credentials. The hook
+# reads the store's role and bucket from the repository variables QA_STORE_ROLE_ARN and
+# QA_STORE_BUCKET, which the lane passes it from the release that added them on.
+#
+# WHERE ITS FINDINGS GO. The adoption record declares `Upstream findings: filed here`, so a
+# finding only Kanon can act on is filed on Kanon, like any other (plan 0004 decision 12, as
+# amended). A release that predates the choice drafts those under the audit issue's
+# `## Upstream` heading instead.
+#
+# It runs as the Author App, in its Overseer role (docs/qa/agent-identities.md), and files with
+# the labels the lane uses, `pipeline-improvement`, `agent:overseer` and `capability`, in the
+# *Development Automation* milestone.
+#
+# The secrets: AUTHOR_APP_ID and AUTHOR_APP_PRIVATE_KEY (the Author App) and
+# CLAUDE_CODE_OAUTH_TOKEN, mapped by name, never inherited.
+name: Overseer
+
+on:
+  # The lane's suggested cadence: weekly, Monday 07:00 UTC.
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+  # The runtime-version trigger: a merged pull request that moves this file's Kanon pin.
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+    paths:
+      - .github/workflows/overseer.yml
+
+# The lane's ceiling: the store job needs `id-token`, the delete jobs `actions: write`, and the
+# agent's job reads the tree, issues and its own run.
+permissions:
+  contents: read
+  issues: read
+  actions: write
+  id-token: write
+
+jobs:
+  oversee:
+    uses: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@v0.30.0
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

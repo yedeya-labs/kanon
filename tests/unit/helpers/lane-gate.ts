@@ -24,7 +24,7 @@ export const LANES = readdirSync(WORKFLOWS)
   .sort();
 
 /** The triggers each lane's caller holds (docs/lanes.md), as the event the gate sees. */
-export type Trigger = 'review' | 'issue-label' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'schedule';
+export type Trigger = 'review' | 'issue-label' | 'pr-label' | 'merged' | 'issue-closed' | 'dispatch' | 'ci-finished' | 'pr-target-label' | 'pr-target-opened' | 'pr-target-merged' | 'schedule';
 export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-implement-revise.yml': ['review', 'pr-label', 'dispatch'],
   'agent-implement.yml': ['issue-label', 'dispatch'],
@@ -43,7 +43,8 @@ export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-explore.yml': ['schedule', 'dispatch'],
   'agent-dispatch-sweep.yml': ['schedule', 'dispatch'],
   'agent-code-audit.yml': ['schedule', 'dispatch'],
-  'agent-overseer.yml': ['schedule', 'dispatch'],
+  // The runtime-version trigger (kanon#423): a merged pull request, judged by who merged it.
+  'agent-overseer.yml': ['schedule', 'dispatch', 'pr-target-merged'],
 };
 
 /** The job holding the gate step, and the step's index in it. */
@@ -241,6 +242,8 @@ export const eventFor = (trigger: Trigger, actor: Actor): { name: string; payloa
       return { name: 'pull_request_target', payload: { action: 'labeled', sender: user }, env: {} };
     case 'pr-target-opened':
       return { name: 'pull_request_target', payload: { action: 'opened', sender: user }, env: {} };
+    case 'pr-target-merged':
+      return { name: 'pull_request_target', payload: { action: 'closed', pull_request: { merged: true, merged_by: user }, sender: { login: 'someone-else' } }, env: {} };
     case 'schedule':
       return { name: 'schedule', payload: { schedule: '50 5 * * *' }, env: { GITHUB_ACTOR: actor.login } };
   }

@@ -38,8 +38,13 @@
 # delete job, given that attempt and the agent job's result, turns the re-run red and says
 # "Re-run all jobs". `tests/unit/helpers/store-jobs.ts` holds a lane to that wiring.
 #
-# NO `vars` OR `secrets` HERE: neither exists inside a composite action. The hook holds its
-# own store's coordinates.
+# NO `vars` OR `secrets` HERE: neither exists inside a composite action. So the lane's store step
+# reads the repository's Actions variables, `toJSON(vars)`, and passes them as `variables`, which
+# this block hands the hook unchanged (kanon#423). The hook reads its store's coordinates from
+# them, so an account id or a bucket name never has to be committed: `docs/qa-store.md`'s template
+# names `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET`. They are variables, not secrets: the hook is the
+# adopter's own code, and nothing in them is a credential. A hook that declares no `variables`
+# input gets a warning for the undeclared input and runs as before.
 name: Kanon QA store
 description: Runs one operation of the QA store contract through the adopter's store hook (.github/actions/qa-store), or says the store is absent and does nothing.
 author: yedeya-labs
@@ -50,6 +55,10 @@ inputs:
     required: true
   kind:
     description: "`put`: `explorer` or `audit`. `export`: `audit` or `overseer`. `cost-rows`: the telemetry agent whose rows it reads."
+    required: false
+    default: ""
+  variables:
+    description: "The repository's Actions variables as JSON, from `toJSON(vars)` in the lane, handed to the hook unchanged (kanon#423). Not used by `delete-export`."
     required: false
     default: ""
   report:
@@ -160,6 +169,7 @@ runs:
         dir: ${{ steps.prepare.outputs.dir }}
         from: ${{ steps.prepare.outputs.from }}
         to: ${{ steps.prepare.outputs.to }}
+        variables: ${{ inputs.variables }}
 
     # A read: its failure is `degraded`, which the finish step turns into the fail-open answer.
     - name: Read through the store hook
@@ -173,6 +183,7 @@ runs:
         dir: ${{ steps.prepare.outputs.dir }}
         from: ${{ steps.prepare.outputs.from }}
         to: ${{ steps.prepare.outputs.to }}
+        variables: ${{ inputs.variables }}
 
     - name: Read what the store hook wrote
       id: finish

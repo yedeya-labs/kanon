@@ -867,9 +867,9 @@
       "agent-overseer": {
         "name": "Overseer (optional)",
         "group": "oversight",
-        "does": "Audits the pipeline weekly from its aggregate, and files what you can act on as `pipeline-improvement` issues.",
+        "does": "Audits the pipeline weekly from its aggregate, and again when a Kanon upgrade moves the agent runtime past its capability ledger's watermark, and files what you can act on as `pipeline-improvement` issues.",
         "needs": [],
-        "cost": "A model run weekly.",
+        "cost": "A model run weekly, plus one when a Kanon upgrade moves the agent runtime forward. Every other merged Kanon upgrade runs only a short gate job.",
         "recommend": [],
         "when": "Once several lanes have run for a few weeks, so it has something to audit."
       },
