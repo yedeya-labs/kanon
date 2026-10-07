@@ -68,9 +68,9 @@ describe('the store jobs and the audit job (plan 0004 P9\'s check, applied at st
   });
 
   it('exports the audit\'s ledger before the agent, and puts the audit\'s report after it', () => {
-    expect(wf.jobs.export!.steps).toEqual([{ uses: '$/actions/qa-store', id: 'store', with: { operation: 'export', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH, kind: 'audit' } }]);
+    expect(wf.jobs.export!.steps).toEqual([{ uses: '$/actions/qa-store', id: 'store', with: { operation: 'export', secrets: STORE_SECRETS_WITH, kind: 'audit' } }]);
     const put = wf.jobs.put!.steps!.find((s) => s.uses === '$/actions/qa-store')!;
-    expect(put.with).toEqual({ operation: 'put', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH, kind: 'audit', report: '${{ runner.temp }}/report/qa-audit-summary.json' });
+    expect(put.with).toEqual({ operation: 'put', secrets: STORE_SECRETS_WITH, kind: 'audit', report: '${{ runner.temp }}/report/qa-audit-summary.json' });
     // The report the put job downloads is the one the audit job uploads.
     const upload = steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'))!;
     const download = wf.jobs.put!.steps!.find((s) => s.uses?.startsWith('actions/download-artifact@'))!;

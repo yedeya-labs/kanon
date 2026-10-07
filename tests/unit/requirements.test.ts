@@ -39,7 +39,9 @@ describe('requirements.json', () => {
   });
 
   it("names the QA store's hook and the secrets the store-coupled lanes take for it, which a caller may leave out (#433)", () => {
-    expect(built.qaStore).toEqual({ hook: '.github/actions/qa-store/action.yml', secrets: ['QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'] });
+    // `secretsOnly` (#479): the block takes no `variables`, so doctor treats a store secret a
+    // variable still holds as missing. Read from the block's own inputs.
+    expect(built.qaStore).toEqual({ hook: '.github/actions/qa-store/action.yml', secrets: ['QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'], secretsOnly: true });
     const lanes = built.lanes as Record<string, { secrets: string[], optionalSecrets?: string[], qaStore: boolean }>;
     // The lanes that call the store (kanon#471's `qaStore`), not every lane holding id-token.
     const coupled = Object.entries(lanes).filter(([, l]) => l.qaStore).map(([n]) => n);

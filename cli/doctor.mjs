@@ -815,6 +815,10 @@ export const diagnose = async (deps, opts) => {
   // asked for only where the hook exists.
   const storeSecrets = req.qaStore?.secrets ?? [];
   const hasStore = Boolean(req.qaStore && read(req.qaStore.hook) !== null);
+  // From kanon#479 the `qa-store` block takes no `variables`, so the hook reads the secrets alone:
+  // a store secret is then needed even where a variable still holds its value. A release whose
+  // requirements file doesn't say so (v0.34.x) still passed the variables, as a fallback.
+  const secretsOnly = req.qaStore?.secretsOnly === true;
 
   for (const c of callers) {
     const spec = req.lanes[c.lane];
@@ -853,7 +857,7 @@ export const diagnose = async (deps, opts) => {
         }]);
       }
       if (hasStore && unmapped.length) {
-        findItems('qa-store.unmapped', c.file, unmapped, (xs) => [`does not map ${xs.join(' or ')}, so the lane ${c.lane} hands ${req.qaStore?.hook} no store secrets: its store jobs read the deprecated variables, which every store job's log prints, or reach no store (docs/qa-store.md, "Move the coordinates to secrets").`, {
+        findItems('qa-store.unmapped', c.file, unmapped, (xs) => [`does not map ${xs.join(' or ')}, so the lane ${c.lane} hands ${req.qaStore?.hook} no store secrets: its store jobs ${secretsOnly ? `reach no store, since Kanon ${checked} passes the hook no variables to fall back to` : "read the deprecated variables, which every store job's log prints, or reach no store"} (docs/qa-store.md, "Move the coordinates to secrets").`, {
           text: `Add under the job's secrets:`,
           commands: xs.map((n) => `      ${n}: \${{ secrets.${n} }}`),
         }]);
@@ -1126,9 +1130,11 @@ export const diagnose = async (deps, opts) => {
     ].join('; ');
   };
   // The QA store's coordinates as repository variables (kanon#433): v0.33.0's way, which prints
-  // them, and the account id they carry, in every store job's log. Not blocking: the hook falls
-  // back to them, so the store still works. Only where the store hook exists, which reads them,
-  // and a store-coupled lane is installed.
+  // them, and the account id they carry, in every store job's log. Never blocking: against a
+  // release that still passes them (v0.34.x) the hook falls back to them, so the store still
+  // works; against one that doesn't (kanon#479, `secretsOnly`) a variable is only a leftover, and
+  // the store secret it doesn't replace is `secret.missing`, below, which blocks. Only where the
+  // store hook exists and a store-coupled lane is installed.
   /** @type {string[]} */
   let storeVariables = [];
   if (hasStore && storeSecrets.length && installed.some((l) => (req.lanes[l]?.optionalSecrets ?? []).length)) {
@@ -1140,8 +1146,12 @@ export const diagnose = async (deps, opts) => {
       storeVariables = [];
     }
     if (storeVariables.length) {
-      findItems('qa-store.variables', repo, storeVariables, (xs) => [`holds ${xs.join(' and ')} as ${xs.length > 1 ? 'repository variables' : 'a repository variable'}, which the runner never masks: every store job's log prints ${xs.length > 1 ? 'them' : 'it'}, and the AWS account id in ${xs.length > 1 ? 'them' : 'it'}. Kanon's lanes take the QA store's coordinates as secrets since kanon#433.`, {
-        text: `Copy each into a secret of the same name, map both secrets in the caller of each store-coupled lane (${installed.filter((l) => (req.lanes[l]?.optionalSecrets ?? []).length).join(', ')}) at ${checked} or later, make the hook read inputs.secrets first, and once a store job has run green on the secrets, delete the variables (docs/qa-store.md, "Move the coordinates to secrets"):`,
+      findItems('qa-store.variables', repo, storeVariables, (xs) => [secretsOnly
+        ? `holds ${xs.join(' and ')} as ${xs.length > 1 ? 'repository variables' : 'a repository variable'}, which Kanon ${checked}'s lanes no longer read or print: they hand the QA store's hook its coordinates as secrets alone (kanon#479). ${xs.length > 1 ? 'They are' : 'It is'} left over from v0.33.0, and any workflow that reads ${xs.length > 1 ? 'them' : 'it'} prints the AWS account id in ${xs.length > 1 ? 'them' : 'it'}.`
+        : `holds ${xs.join(' and ')} as ${xs.length > 1 ? 'repository variables' : 'a repository variable'}, which the runner never masks: every store job's log prints ${xs.length > 1 ? 'them' : 'it'}, and the AWS account id in ${xs.length > 1 ? 'them' : 'it'}. Kanon's lanes take the QA store's coordinates as secrets since kanon#433.`, {
+        text: secretsOnly
+          ? `Copy each into a secret of the same name where none is set yet, then, once a store job has run green on the secrets, delete the variables (docs/qa-store.md, "Move the coordinates to secrets"):`
+          : `Copy each into a secret of the same name, map both secrets in the caller of each store-coupled lane (${installed.filter((l) => (req.lanes[l]?.optionalSecrets ?? []).length).join(', ')}) at ${checked} or later, make the hook read inputs.secrets first, and once a store job has run green on the secrets, delete the variables (docs/qa-store.md, "Move the coordinates to secrets"):`,
         commands: [
           ...xs.filter((n) => !s.secrets?.has(n)).map((n) => `gh variable get ${n} -R ${repo} | gh secret set ${n} -R ${repo}`),
           ...xs.map((n) => `gh variable delete ${n} -R ${repo}`),
@@ -1172,15 +1182,18 @@ export const diagnose = async (deps, opts) => {
         : { text: `Create the ${id} App from this checkout. kanon apps is your step: check the token with the first command (it creates nothing), then create the App with the second, which stores its secrets:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] }];
       });
     }
-    // A store secret a variable still holds is `qa-store.variables`, above: the store still works.
-    for (const n of needSecrets.filter((x) => !/_APP_(ID|PRIVATE_KEY)$/.test(x) && !s.secrets?.has(x) && !storeVariables.includes(x))) {
+    // A store secret a variable still holds is `qa-store.variables`, above, while the checked
+    // release still passes the variables, so the store still works; once it doesn't (kanon#479),
+    // the secret is missing, and the fix copies it from the variable.
+    for (const n of needSecrets.filter((x) => !/_APP_(ID|PRIVATE_KEY)$/.test(x) && !s.secrets?.has(x) && (secretsOnly || !storeVariables.includes(x)))) {
       const by = installed.filter((l) => req.lanes[l]?.secrets.includes(n));
       const who = whoNeeds([n]);
       findItems('secret.missing', repo, [n], () => [`lacks ${n}${by.length ? `, which ${by.join(', ')} ${by.length > 1 ? 'take' : 'takes'}` : ''}${who ? `: ${who}` : ''}.`, {
         text: n === 'CLAUDE_CODE_OAUTH_TOKEN' ? "Store the token of the Claude subscription the agents run on, made with `claude setup-token` (docs/lanes.md), pasting it on standard input:"
+          : storeVariables.includes(n) ? `${req.qaStore?.hook} exists, and Kanon ${checked} hands it the store's coordinates as secrets alone, never the variable ${n} that holds this one (kanon#479): copy the variable into the secret, through a pipe, so the value is never printed (docs/qa-store.md, "Move the coordinates to secrets"):`
           : storeSecrets.includes(n) ? `${req.qaStore?.hook} exists, so the store-coupled lanes need the store's coordinates: store the stack's ${n === 'QA_STORE_ROLE_ARN' ? 'RoleArn' : 'BucketName'} output, pasting it on standard input (docs/qa-store.md, "Provision a store"):`
           : `Store it, pasting the value on standard input:`,
-        commands: [`gh secret set ${n} -R ${repo}`],
+        commands: [storeVariables.includes(n) ? `gh variable get ${n} -R ${repo} | gh secret set ${n} -R ${repo}` : `gh secret set ${n} -R ${repo}`],
       }]);
     }
     // An App secret no App in use reads and no workflow maps: left from the per-role Apps, or from

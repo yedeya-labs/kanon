@@ -10,11 +10,9 @@
 # account, which stays out of the public tree, and the runner masks a secret in every log, where
 # it printed a variable in each store job's log. The lane callers map `QA_STORE_ROLE_ARN` and
 # `QA_STORE_BUCKET` by name, the lane hands them to the `qa-store` block as `secrets`, and the
-# block hands them on to this hook. Until they are secrets, and the callers pin a Kanon release
-# that takes them, this hook falls back to the repository variables of the same names (kanon#423),
-# with a warning: the Owner's step in docs/qa-store.md, "Move the coordinates to secrets", ends it.
-# With neither, the first step below fails by name: a read is then `degraded`, and a write fails
-# its job.
+# block hands them on to this hook, which reads nothing else: since kanon#479 the block passes no
+# repository variables. With either secret unset or unmapped, the first step below fails by name:
+# a read is then `degraded`, and a write fails its job.
 #
 # Kanon's `qa-store` block reads this file from the checkout of the run's commit and calls it in a
 # store job, the only kind of job that holds `id-token: write` (tests/unit/id-token-guard.test.ts).
@@ -29,7 +27,6 @@ inputs:
   dir: { required: true }
   from: { required: false, default: "" }
   to: { required: false, default: "" }
-  variables: { required: false, default: "" }
   secrets: { required: false, default: "" }
 runs:
   using: composite
@@ -37,16 +34,12 @@ runs:
     - name: Check the store's coordinates
       shell: bash
       env:
-        ROLE_ARN: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_ROLE_ARN || fromJSON(inputs.variables || '{}').QA_STORE_ROLE_ARN }}
-        BUCKET: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET || fromJSON(inputs.variables || '{}').QA_STORE_BUCKET }}
-        FROM_SECRETS: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_ROLE_ARN != '' && fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET != '' }}
+        ROLE_ARN: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_ROLE_ARN }}
+        BUCKET: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET }}
       run: |
         if [ -z "$ROLE_ARN" ] || [ -z "$BUCKET" ]; then
           echo "::error title=QA store hook::the repository secrets QA_STORE_ROLE_ARN and QA_STORE_BUCKET must both be set, and mapped by the lane's caller (docs/qa-store.md)"
           exit 1
-        fi
-        if [ "$FROM_SECRETS" != true ]; then
-          echo "::warning title=QA store hook::QA_STORE_ROLE_ARN and QA_STORE_BUCKET are read from repository variables, which this job's log prints; move them to secrets and map them in the lane callers (docs/qa-store.md, kanon#433)"
         fi
     - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.34.1
       with:
@@ -55,7 +48,7 @@ runs:
         dir: ${{ inputs.dir }}
         from: ${{ inputs.from }}
         to: ${{ inputs.to }}
-        role-arn: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_ROLE_ARN || fromJSON(inputs.variables || '{}').QA_STORE_ROLE_ARN }}
+        role-arn: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_ROLE_ARN }}
         region: eu-central-1
         table: kanon-qa-store
-        bucket: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET || fromJSON(inputs.variables || '{}').QA_STORE_BUCKET }}
+        bucket: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET }}

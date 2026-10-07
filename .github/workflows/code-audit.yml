@@ -17,9 +17,8 @@
 # reads the code-reading ledger through it before the audit, and the put job records the run
 # after it: the audit has memory, and picks its areas from that ledger as well as `git log`.
 # The hook reads the store's role and bucket from the repository secrets QA_STORE_ROLE_ARN and
-# QA_STORE_BUCKET (kanon#433), which this caller maps, so the runner masks them in every log. The
-# repository variables of the same names are a deprecated fallback, to be deleted once a store job
-# has run green on the secrets (docs/qa-store.md, "Move the coordinates to secrets").
+# QA_STORE_BUCKET (kanon#433), which this caller maps, so the runner masks them in every log. It
+# reads nothing else: since kanon#479 the lanes pass it no repository variables.
 #
 # It runs as the Author App, in its Explorer role (ADR 0011, plan 0005). It files with the
 # labels the lane's prompt names, which must exist on Kanon before a run that finds something.

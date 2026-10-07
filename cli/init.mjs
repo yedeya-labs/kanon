@@ -1714,7 +1714,8 @@ const run = async (deps, opts, req, rep) => {
     }
     // The QA store's coordinates (kanon#433): secrets, which the runner masks in the store jobs'
     // logs. Asked for only where the store hook exists: without one the lanes run without memory,
-    // and their callers map the two empty. A variable of the same name, v0.33.0's way, is copied.
+    // and their callers map the two empty. A variable of the same name, v0.33.0's way, which the
+    // lanes no longer read (kanon#479), is copied.
     const storeLacks = (req.qaStore?.secrets ?? []).filter((n) => others.includes(n));
     if (storeLacks.length && req.qaStore && read(req.qaStore.hook) !== null) {
       const vars = await ghJson(deps, ['variable', 'list', '-R', repo, '--json', 'name']);
@@ -1724,7 +1725,7 @@ const run = async (deps, opts, req, rep) => {
         id: 'secret.qa-store',
         category: 'secret',
         subject: storeLacks.join(', '),
-        prose: `${req.qaStore.hook} exists, so store the QA store's coordinates as secrets, never as variables, which every store job's log prints (docs/qa-store.md):`,
+        prose: `${req.qaStore.hook} exists, so store the QA store's coordinates as secrets, never as variables: the lanes hand the hook no variables (kanon#479), and a variable is never masked in a log (docs/qa-store.md):`,
         message: `The repository has a QA store hook, and lacks ${storeLacks.join(' and ')}, which the store-coupled lanes map.`,
         text: `Store the stack's ${storeLacks.map(output).join(' and ')} ${storeLacks.length > 1 ? 'outputs' : 'output'} as ${storeLacks.join(' and ')}${storeLacks.some((n) => asVariable.has(n)) ? ', copying each from the variable of the same name, which you then delete once a store job has run green' : ''}.`,
         commands: storeLacks.flatMap((n) => (asVariable.has(n)
