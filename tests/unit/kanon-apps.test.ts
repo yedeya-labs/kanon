@@ -74,7 +74,7 @@ type Scenario = {
   /** gh's exit status for `gh secret delete <name>`. */
   deleteStatus?: Record<string, number>;
   /** `--reuse judge:<slug>=<file>` instead of `--apps`: the slug GitHub's `GET /app` answers for the key. */
-  reuse?: { slug: string; keySlug?: string; keyText?: string };
+  reuse?: { slug: string; keySlug?: string; keyText?: string; permissions?: Record<string, string> };
   /** The repository's rulesets, as `gh api` answers them (#49); unset, every such read fails. */
   rulesets?: { list: Array<{ id: number; target: string }>; full: Record<number, unknown>; putStatus?: number };
 };
@@ -216,7 +216,8 @@ const run = async (s: Scenario = {}): Promise<Run> => {
       }
       if (method === 'GET' && u.pathname === '/app') {
         verifyJwt(auth, '4242');
-        return json(200, { id: 4242, slug: s.reuse?.keySlug ?? s.reuse?.slug });
+        // GitHub's `GET /app` reports the App's permissions, metadata among them; by default the Judge's.
+        return json(200, { id: 4242, slug: s.reuse?.keySlug ?? s.reuse?.slug, permissions: s.reuse?.permissions ?? loadApps().judge!.permissions });
       }
       if (u.pathname === '/app/installations') {
         verifyJwt(auth, '4242');
@@ -553,6 +554,35 @@ describe('one App per owner, reused across its repositories (plan 0005 §3.2)', 
     expect(r.removed).toEqual([]);
     expect(statSync(join(r.dir, 'judge.pem')).isFile()).toBe(true);
     rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('--reuse refuses a slug whose App holds another App\'s permissions, names it, stores nothing and keeps the file (#366)', async () => {
+    const author = loadApps().author!.permissions as Record<string, string>;
+    const r = await run({ reuse: { slug: `${ORG}-author`, permissions: author } });
+    expect(r.status).toBe(1);
+    expect(r.output).toContain(`kanon apps: ${ORG}-author does not hold the Judge's permissions (`);
+    expect(r.output).toContain("workflows: write, the Judge's none");
+    expect(r.output).toContain(`They are the Author's: if ${ORG}-author is your Author, give it as --reuse author:${ORG}-author=<key file>. Nothing was stored; the file is kept.`);
+    expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT')).toEqual([]);
+    expect(r.removed).toEqual([]);
+    expect(statSync(join(r.dir, 'judge.pem')).isFile()).toBe(true);
+    expect(r.writes).toEqual([]);
+    expect(r.api).not.toContain('GET /app/installations');
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('--reuse refuses an App whose permissions differ from the named App\'s, with the page to set them (#366)', async () => {
+    const judge = loadApps().judge!.permissions as Record<string, string>;
+    for (const permissions of [{ ...judge, checks: 'write' }, Object.fromEntries(Object.entries(judge).filter(([k]) => k !== 'metadata')), { ...judge, administration: 'write' }]) {
+      const r = await run({ reuse: { slug: `${ORG}-judge`, permissions } });
+      expect(r.status, JSON.stringify(permissions)).toBe(1);
+      expect(r.output).toContain(`${ORG}-judge does not hold the Judge's permissions (`);
+      expect(r.output).toContain(`set its permissions to the Judge's at https://github.com/organizations/${ORG}/settings/apps/${ORG}-judge/permissions, then run the command again. Nothing was stored; the file is kept.`);
+      expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT')).toEqual([]);
+      expect(r.removed).toEqual([]);
+      expect(r.writes).toEqual([]);
+      rmSync(r.dir, { recursive: true, force: true });
+    }
   });
 
   it('--reuse refuses a file that holds no private key', async () => {

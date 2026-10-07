@@ -45,7 +45,7 @@ GitHub has no API that makes a new private key for an existing App. To add a rep
 kanon apps --owner <owner> --repo <new repo> --reuse author:<author slug>=<key file> --reuse judge:<judge slug>=<key file>
 ```
 
-For each App it checks the key is that App's (GitHub accepts a token it signs only if it is), checks the installation covers the repository, stores the two secrets, **deletes the key file**, and writes the register rows. A key that isn't the App's, or an installation that misses the repository, stops it with the file kept. An organisation may instead hold the secrets once, as organisation secrets, where its plan offers them to its repositories.
+For each App it checks the key is a key of the slug (GitHub accepts a token it signs only if it is), checks the slug's App holds exactly the permissions of the App you named (`rulebook/agent-permissions.json`, as `apps-check` checks them), checks the installation covers the repository, stores the two secrets, **deletes the key file**, and writes the register rows. A key that isn't the slug's, a slug whose App holds other permissions (the Author's slug given as the Judge's, say: it names which App's they are), or an installation that misses the repository, stops it with nothing stored and the file kept. An organisation may instead hold the secrets once, as organisation secrets, where its plan offers them to its repositories.
 
 ## What happens, and what you click
 
