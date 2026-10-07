@@ -189,11 +189,17 @@ A work-item row, which describes one pull request, may also contain:
 - **Kanon's own codes:** the Merger's escalation reasons and guard ids;
 - **linked numbers:** the issues it closes, and the PRs that revert or fix it.
 
-It never contains code, prompts, issue or PR text, file paths, error messages or any other free text.
+An upstream-finding row, which carries one finding only Kanon can act on and is sent only when the adoption record opts in (`K-LAYOUT-10`), may also contain:
+- **its run:** the run id and attempt of the lane that found it, and the finding's position in that run's report;
+- **Kanon's own codes:** the reporting lane, the subject, the evidence level and the scrub version;
+- **the signature's codes:** the lane, stage, Kanon error, reason and Kanon version, from the run row's lists;
+- **Kanon's vocabulary:** rulebook ids, the paths of files Kanon ships, and a suggested-fix category from Kanon's closed list.
 
-**Why.** Telemetry is the one thing that may leave an adopter's project, so it must be safe to leave by construction, not by review. Free text is how content leaks: a bail reason or an error message can quote code, and a file path reveals a project's structure. Without usernames, the rows hold no personal data, which keeps hosted telemetry almost entirely outside data-protection law. The longer allowed list holds only metadata: numbers, times, and values from closed lists that Kanon defines. Cost work needs it to compare like with like, and the work-item row to say what the spend bought ([plan 0002](../docs/plans/0002-hosted-telemetry-store.md), decision 2; [plan 0003](../docs/plans/0003-metrics.md) §5.3).
+No row contains code, prompts, issue or PR text, file paths outside Kanon's own tree, error messages or any other free text, with one exception: an upstream-finding row sent with evidence carries the finding's evidence and suggested fix as text, bounded in length. The lane writes that text for Kanon's maintainer to Kanon's template, in roles rather than names and without quoting the adopter, and then a deterministic scrub removes every URL, email address, credential shape and path outside Kanon's tree, the repository's own name, and the logins and names the lane can see. It may rarely still contain personal data, which the opt-in says. That text is read by Kanon's maintainer and by one third-party decision provider, never published ([ADR 0007](../docs/decisions/0007-data-boundary.md), amended 2026-10-07).
 
-**Enforced by.** The schema module, `actions/agent-telemetry/schema.mjs`. It lists every field each row kind may carry, with its type, enum or pattern, and its `validate` rejects a whole row with any field outside the list, any value outside its enum or pattern, or a reason code that doesn't match the outcome, naming fields and never values. The lane writes its row only when it validates, and the unit tests fail when a fixture's row doesn't, or when a field, a sentence or a code outside the list gets through. The hosted store's ingest function will run the same check.
+**Why.** Telemetry is the one thing that may leave an adopter's project, so it must be safe to leave by construction, not by review. Free text is how content leaks: a bail reason or an error message can quote code, and a file path reveals a project's structure. Without usernames, the rows hold no personal data, which keeps hosted telemetry almost entirely outside data-protection law; an upstream finding sent with evidence is the one row that may rarely hold some, and is opted into knowing it. The longer allowed list holds only metadata: numbers, times, and values from closed lists that Kanon defines. Cost work needs it to compare like with like, and the work-item row to say what the spend bought ([plan 0002](../docs/plans/0002-hosted-telemetry-store.md), decision 2; [plan 0003](../docs/plans/0003-metrics.md) §5.3). The one exception, an upstream finding's evidence, exists because a finding without its evidence often can't be acted on; it is opted into on its own, written to Kanon's template rather than quoted, scrubbed by fixed rules rather than by review, and never published ([plan 0006](../docs/plans/0006-upstream-findings.md)).
+
+**Enforced by.** The schema module, `actions/agent-telemetry/schema.mjs`. It lists every field each row kind may carry, with its type, enum or pattern, and its `validate` rejects a whole row with any field outside the list, any value outside its enum or pattern, or a reason code that doesn't match the outcome, naming fields and never values. The lane writes its row only when it validates, and the unit tests fail when a fixture's row doesn't, or when a field, a sentence or a code outside the list gets through. The hosted store's ingest function will run the same check. The upstream-finding row, and the scrub's check at intake, are planned ([plan 0006](../docs/plans/0006-upstream-findings.md), step F1).
 
 **Class.** framework
 
@@ -213,6 +219,7 @@ The lanes reach the QA store only through Kanon's **store contract**: a hook the
 
 **Rule.**
 - **Opt-in.** Telemetry is written to the adopter's own store by default, by the same collector. Sending it to the Kanon-hosted service is an explicit opt-in.
+- **Upstream findings are a second opt-in.** Sending upstream findings to the Kanon-hosted service, with or without their evidence text, is declared on its own in the adoption record, and needs the first.
 - **Where and how long.** Hosted telemetry is kept in the EU (Frankfurt) for thirteen months, and an adopter's data is deleted on request.
 - **Who sees what.** An adopter sees only their own data. Anything shared across adopters, including published cost figures, is aggregated and anonymised.
 
