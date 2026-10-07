@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { parseEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
+import type { Links } from '../../scripts/metrics/types.mjs';
 import {
-  MAX_FIX_PRS, accuracyFields, codeAreaTest, detectorCounts, explicitLink, explicitLinks, fixesOf, introducedBy,
+  accuracyFields, codeAreaTest, detectorCounts, explicitLink, explicitLinks, fixesOf, introducedBy,
   isFixPr, oldRanges, revertedBy, reverts, revertsOf, sharedCodeFiles, szzLinks,
 } from '../../scripts/metrics/detectors.mjs';
 
@@ -200,22 +201,21 @@ describe('the explicit linked-fix detector (§3.5)', () => {
   });
 });
 
-describe('accuracyFields fills group 3 from the explicit detector and the first revert', () => {
+describe('accuracyFields gives workItemRow its `links` from the explicit detector and the first revert', () => {
   const item = pr(10, 0, { timeline: [xref(30), xref(31)] });
 
   it('sets the revert and the fixes, oldest first, and leaves absent what it can\'t say', () => {
     const r = pr(40, 9, { body: `Reverts ${REPO}#10` });
     const f1 = pr(20, 2, { closingIssues: [bug(30)] });
     const f2 = pr(21, 6, { closingIssues: [bug(31)] });
-    expect(accuracyFields(item, [r, f2, item, f1], opts)).toEqual({ revert_pr: 40, revert_days: 9, fix_prs: '20,21', first_fix_days: 2 });
+    expect(accuracyFields(item, [r, f2, item, f1], opts)).toEqual({ revert_pr: 40, revert_days: 9, fix_prs: [20, 21], first_fix_days: 2 });
     expect(accuracyFields(item, [item], opts)).toEqual({});
   });
 
-  it('stores at most 20 fixes, the pattern\'s bound', () => {
-    const many = Array.from({ length: MAX_FIX_PRS + 1 }, (_, k) => pr(100 + k, 1 + k, { closingIssues: [bug(30)] }));
-    const fields = accuracyFields(item, many, opts);
-    expect(fields.fix_prs?.split(',')).toHaveLength(MAX_FIX_PRS);
-    expect(fields.fix_prs).toMatch(/^\d{1,9}(,\d{1,9}){0,19}$/);
+  it('returns `types.mjs`\'s `Links`, every fix as a number, leaving the cap of 20 and the join to workItemRow', () => {
+    const many = Array.from({ length: 21 }, (_, k) => pr(100 + k, 1 + k, { closingIssues: [bug(30)] }));
+    const links: Links = accuracyFields(item, many, opts);
+    expect(links.fix_prs).toEqual(many.map((p) => p.number));
   });
 });
 

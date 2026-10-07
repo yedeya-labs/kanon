@@ -6,7 +6,7 @@ export { BAND_THRESHOLDS, BAND_VERSION, BANDS, bandOf, diffSize, isExcludedFromS
 export { AREAS, areaCounts, areaOf, escalationFlags } from './areas.mjs';
 export { DEPENDENCY_BOTS, classifyActor, isAgentClass, isDependencyBot } from './actors.mjs';
 export {
-  BUG_LABEL, INTRODUCED_BY, MAX_FIX_PRS, accuracyFields, codeAreaTest, detectorCounts, explicitLink, explicitLinks, fixesOf,
+  BUG_LABEL, INTRODUCED_BY, accuracyFields, codeAreaTest, detectorCounts, explicitLink, explicitLinks, fixesOf,
   introducedBy, isFixPr, oldRanges, revertedBy, reverts, revertsOf, sharedCodeFiles, szzLinks,
 } from './detectors.mjs';
 export { originOf } from './origin.mjs';

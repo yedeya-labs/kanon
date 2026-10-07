@@ -240,21 +240,20 @@ export function fixesOf(item, prs, opts) {
   return after(item, prs).flatMap((fix) => (explicitLink(fix, item, opts) ? [{ pr: fix.number, days: daysBetween(item, fix) }] : []));
 }
 
-/** The most fix PRs one row stores: `fix_prs`'s pattern holds 20 (§3.3). */
-export const MAX_FIX_PRS = 20;
-
 /**
- * The item's group 3 accuracy fields from the detectors (§3.3): the first revert and the explicit
- * linked fixes. SZZ never reaches a row (decision 8). A field with nothing to say is absent.
+ * The item's group 3 accuracy links from the detectors (§3.3): the first revert and the explicit
+ * linked fixes, oldest first, in the shape `workItemRow` takes as `links` (`types.mjs`'s
+ * `Links`). The row's builder caps `fix_prs` at 20 and joins it, so the cap and the format have
+ * one home. SZZ never reaches a row (decision 8). A field with nothing to say is absent.
  * @param {DetectorPr} item @param {DetectorPr[]} prs @param {{ repo: string, isCode: (path: string) => boolean }} opts
- * @returns {{ revert_pr?: number, revert_days?: number, fix_prs?: string, first_fix_days?: number }}
+ * @returns {import('./types.mjs').Links}
  */
 export function accuracyFields(item, prs, opts) {
   const [revert] = revertsOf(item, prs, opts);
   const fixes = fixesOf(item, prs, opts);
   return {
     ...(revert ? { revert_pr: revert.pr, revert_days: revert.days } : {}),
-    ...(fixes.length ? { fix_prs: fixes.slice(0, MAX_FIX_PRS).map((f) => f.pr).join(','), first_fix_days: /** @type {Link} */ (fixes[0]).days } : {}),
+    ...(fixes.length ? { fix_prs: fixes.map((f) => f.pr), first_fix_days: /** @type {Link} */ (fixes[0]).days } : {}),
   };
 }
 
