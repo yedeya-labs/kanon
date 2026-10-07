@@ -706,8 +706,11 @@ jobs:
       # `git push`/`git fetch` are pinned to `origin`, whose transport ignores the
       # `--receive-pack`/`--upload-pack` programs a local remote would run. `--setting-sources
       # user` keeps the project's `.claude/` settings, hooks and MCP servers out (kanon#277).
-      # `tests/unit/lead-shell.test.ts` pins the list. COST CUTOVER: `config_fingerprint`
-      # hashes these flags, so this release starts a new fingerprint for this arm.
+      # `tests/unit/lead-shell.test.ts` pins the list. What the list allows is the CLI's
+      # behaviour, so `tests/unit/reviewer-grant-probe.test.ts` is red until the Lead's probe
+      # battery has been run with these flags, both arms' (kanon#405). COST CUTOVER:
+      # `config_fingerprint` hashes these flags, so this release starts a new fingerprint for
+      # this arm.
       claude_args: |
         --model claude-opus-5-5
         --effort high

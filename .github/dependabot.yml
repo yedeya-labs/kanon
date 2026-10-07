@@ -7,8 +7,9 @@
 # actions under infra/ are listed by path. That includes the exact pin of claude-code-action in
 # actions/agent-run: the pin fixes the CLI per Kanon release, and this is what proposes
 # each bump, as an ordinary Kanon PR that runs the smoke workflow and the tests. Its tests
-# stay red until a maintainer re-probes the Reviewer's grant against the new CLI and pushes
-# the record to the bump's branch (#284, `.github/scripts/reviewer-grant-probe.mjs`).
+# stay red until a maintainer re-probes the Reviewer's and the Lead's grants against the new
+# CLI and pushes the records to the bump's branch (#284, #405,
+# `.github/scripts/reviewer-grant-probe.mjs`).
 #
 # Kanon itself is a dependency here too (#47): the DCO and PR-title checks that judge a PR
 # run Kanon's last release, `yedeya-labs/kanon/actions/…@vX.Y.Z`, and this entry proposes

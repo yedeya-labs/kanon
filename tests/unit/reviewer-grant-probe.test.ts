@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  BATTERY, RECORD, actionPin, batteryDigest, flagsDigest, judge, probeArgs, probeInput, reviewerFlags,
+  BATTERY, LEAD_BATTERY, LEAD_RECORD, RECORD, actionPin, batteryDigest, flagsDigest, judge, leadFlags, probeArgs,
+  probedFlags, probeInput, reviewerFlags,
 } from '../../.github/scripts/reviewer-grant-probe.mjs';
+import { claudeArgWords } from '../../scripts/lib/claude-args.mjs';
 
 /**
  * kanon#284 — a bump of the pinned claude-code-action can't ship until the Reviewer's grant has
@@ -39,6 +41,65 @@ describe("the probe record matches what ships (kanon#284)", () => {
     expect(record.battery_sha256, RERUN).toBe(batteryDigest());
     expect(record.results.map((r) => r.id)).toEqual(BATTERY.map((p) => p.id));
     expect(record.results.filter((r) => !r.pass)).toEqual([]);
+  });
+});
+
+/**
+ * kanon#405 — the Lead's lanes lean on the same CLI behaviour, and add `Edit(/docs/**)` and a git
+ * allow-list (`K-AGENT-50`). Their record is held to the tree the same way, so a change to either
+ * arm's flags, or a bump of the pin, is red until the Lead's battery is re-run too.
+ */
+const lead = JSON.parse(readFileSync(LEAD_RECORD, 'utf8')) as Record;
+const LEAD_RERUN = 'Re-run `node .github/scripts/reviewer-grant-probe.mjs --lane lead` (kanon#405) and commit the record it writes.';
+
+describe("the Lead's probe record matches what ships (kanon#405)", () => {
+  it("was taken on the claude-code-action version agent-run pins, and the CLI the Reviewer's was", () => {
+    expect(lead.action, LEAD_RERUN).toBe(actionPin());
+    expect(lead.cli, 'both records probe the CLI the pin installs').toBe(record.cli);
+  });
+
+  it("was taken with both Lead arms' flags as they are", () => {
+    expect(lead.flags_sha256, LEAD_RERUN).toBe(flagsDigest(leadFlags()));
+  });
+
+  it('was taken with this battery, and every probe in it passed', () => {
+    expect(lead.battery_sha256, LEAD_RERUN).toBe(batteryDigest(LEAD_BATTERY));
+    expect(lead.results.map((r) => r.id)).toEqual(LEAD_BATTERY.map((p) => p.id));
+    expect(lead.results.filter((r) => !r.pass)).toEqual([]);
+  });
+});
+
+describe("the Lead's battery covers its flags (kanon#405)", () => {
+  const tagged = (tag: string, expect: string) => LEAD_BATTERY.filter((p) => p.tags.includes(tag) && p.expect === expect);
+  const arms = leadFlags();
+
+  it('probes one set of flags that stands for both arms', () => {
+    expect(arms).toHaveLength(2);
+    expect(probedFlags(arms)).toBe(arms[0]);
+    expect(() => probedFlags([arms[0]!, `${arms[1]!}\n--allowedTools Write`])).toThrow(/probe each arm/);
+  });
+
+  it('refuses writes outside docs/, directly, by `..`, through a symlink, and git config', () => {
+    expect(tagged('writes-outside', 'refused').length).toBeGreaterThanOrEqual(8);
+    expect(tagged('symlink', 'refused').map((p) => p.tool === 'Write' && p.file.startsWith('{repo}/docs/link-'))).toEqual([true, true, true]);
+    expect(tagged('writes-outside', 'refused').some((p) => p.tool === 'Write' && p.file.includes('/docs/../'))).toBe(true);
+    expect(tagged('git-config', 'refused').filter((p) => p.tool === 'Bash' && /^git config /.test(p.command)).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('allows a write under docs/, and every git command on its allow-list', () => {
+    expect(tagged('docs-write', 'allowed').map((p) => p.tool === 'Write' && p.file.startsWith('{repo}/docs/'))).toEqual([true]);
+    // Each `Bash(git …:*)` rule the arms grant has an allowed probe that it is the longest
+    // match for, so a git rule added to the flags needs a probe as well as a record.
+    const rules = [...new Set(arms.flatMap((a) => claudeArgWords(a)))]
+      .flatMap((w) => /^Bash\((git [^:]+):\*\)$/.exec(w)?.[1] ?? []);
+    expect(rules.length, 'the check is not vacuous').toBeGreaterThanOrEqual(7);
+    const commands = tagged('git', 'allowed').map((p) => (p.tool === 'Bash' ? p.command : ''));
+    const owner = (c: string) => rules.filter((r) => c === r || c.startsWith(`${r} `)).sort((a, b) => b.length - a.length)[0];
+    expect(rules.filter((r) => !commands.some((c) => owner(c) === r))).toEqual([]);
+  });
+
+  it('gives every probe a unique id', () => {
+    expect(new Set(LEAD_BATTERY.map((p) => p.id)).size).toBe(LEAD_BATTERY.length);
   });
 });
 
