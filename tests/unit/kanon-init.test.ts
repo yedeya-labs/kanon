@@ -752,6 +752,15 @@ describe('the Apps (plan 0005 step L4)', () => {
     expect(r.out).not.toMatch(/gh secret set JUDGE_APP/);
   });
 
+  it('says, where it leaves the Apps to create, to reuse an App the owner already has rather than create a second (#363)', async () => {
+    const r = await run(checkout(), fakeGitHub(), ['--json', '--no-apps', '--lanes', 'review,implement']);
+    const f = parse(r).findings.find((x) => x.id === 'app.create')!;
+    expect(f.subject).toBe('author, judge');
+    expect(f.fix.commands).toEqual([expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps author,judge --dir /)]);
+    expect(f.fix.text).toContain("If acme already has these Apps for another repository, don't create them again: add widgets to each installation, generate a private key on its settings page, and run kanon apps --owner acme --repo widgets --reuse <app>:<slug>=<key file> instead");
+    expect(r.err).toContain("If acme already has these Apps for another repository, don't create them again");
+  });
+
   it('creates the Releaser beside the Judge when the repository calls the release workflow and the adopter says yes', async () => {
     const caller = 'name: Release\non:\n  push:\n    branches: [main]\npermissions: {}\njobs:\n  release:\n    uses: yedeya-labs/kanon/.github/workflows/release.yml@v1.2.3\n';
     const yes = await run(checkout({ '.github/workflows/release.yml': caller }), fakeGitHub(), ['--lanes', 'review'], { 'optional Releaser': 'y' });

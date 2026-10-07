@@ -1499,14 +1499,18 @@ const run = async (deps, opts, req, rep) => {
     const argvApps = ['--owner', s.owner, '--repo', repoName, ...flag, '--dir', root];
     const cmd = `kanon apps ${argvApps.join(' ')}`;
     appsRep.command = cmd;
+    // One App per owner (plan 0005 §3.2): init reads only this checkout's register, so an App
+    // the owner already has for another repository looks missing here (#363). Until init can
+    // tell, the step says to reuse such an App rather than create a second one.
+    const reuseInstead = `If ${s.owner} already has ${missing.length > 1 ? 'these Apps' : 'this App'} for another repository, don't create ${missing.length > 1 ? 'them' : 'it'} again: add ${repoName} to ${missing.length > 1 ? 'each' : 'its'} installation, generate a private key on its settings page, and run kanon apps --owner ${s.owner} --repo ${repoName} --reuse <app>:<slug>=<key file> instead (docs/apps.md, "A repository added later").`;
     const createStep = () =>
       step({
         id: 'app.create',
         category: 'app',
         subject: missing.join(', '),
-        prose: `Create the Apps the lanes run as, from this checkout, and commit the register rows it writes:`,
+        prose: `Create the Apps the lanes run as, from this checkout, and commit the register rows it writes. ${reuseInstead}`,
         message: `The App register lacks ${missing.join(' and ')}, which the chosen lanes run as.`,
-        text: 'Run kanon apps from this checkout: it opens your browser for each App. Then commit the register rows it writes.',
+        text: `Run kanon apps from this checkout: it opens your browser for each App. Then commit the register rows it writes. ${reuseInstead}`,
         commands: [cmd],
       });
     if (dry) {
