@@ -8,7 +8,7 @@ This page is the contract, then the AWS implementation and its runbook.
 
 ### The hook
 
-`.github/actions/qa-store/action.yml` is a composite action you write, when you run a store. Kanon's [`qa-store` block](../actions/qa-store/action.yml) calls it with seven string inputs:
+`.github/actions/qa-store/action.yml` is a composite action you write, when you run a store. Kanon's [`qa-store` block](../actions/qa-store/action.yml) calls it with six string inputs:
 
 | Input | What |
 |---|---|
@@ -18,9 +18,8 @@ This page is the contract, then the AWS implementation and its runbook.
 | `from` | `export` and `cost-rows`: the window's start, a store stamp such as `20260904T120245Z`, exclusive. |
 | `to` | `cost-rows`: the window's end, a store stamp, inclusive. Empty means now. |
 | `secrets` | The store's two secrets, `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET`, as JSON. The lane's caller maps them by name, and the lane's store step hands them on. A composite action can't read `secrets` itself, so this is where the hook finds its store's coordinates: read one with `fromJSON(inputs.secrets \|\| '{}').<NAME>`. Keep anything that names your cloud account here, never in the committed hook: the runner masks a secret in every log ([#433](https://github.com/yedeya-labs/kanon/issues/433)). |
-| `variables` | **Deprecated.** Your repository's Actions variables, as JSON (`toJSON(vars)`). The runner masks none of them, so every store job's log prints all of them. It is still passed so that a hook which reads its coordinates here keeps working while you [move them to secrets](#move-the-coordinates-to-secrets). A later release stops passing it. |
 
-The block reads the hook from a checkout of the commit the run is for, made without persisted credentials.
+The block reads the hook from a checkout of the commit the run is for, made without persisted credentials. It passes no repository variables: through v0.34.1 it also passed every one of them, as `variables`, which every store job's log printed ([#479](https://github.com/yedeya-labs/kanon/issues/479)). A hook that still reads its coordinates there reaches no store; [move them to secrets](#move-the-coordinates-to-secrets).
 
 ### The operations
 
@@ -151,7 +150,6 @@ inputs:
   dir: { required: true }
   from: { required: false, default: "" }
   to: { required: false, default: "" }
-  variables: { required: false, default: "" }
   secrets: { required: false, default: "" }
 runs:
   using: composite
@@ -163,28 +161,30 @@ runs:
         dir: ${{ inputs.dir }}
         from: ${{ inputs.from }}
         to: ${{ inputs.to }}
-        role-arn: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_ROLE_ARN || fromJSON(inputs.variables || '{}').QA_STORE_ROLE_ARN }}
+        role-arn: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_ROLE_ARN }}
         region: <region>
         table: <TableName>
-        bucket: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET || fromJSON(inputs.variables || '{}').QA_STORE_BUCKET }}
+        bucket: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET }}
 ```
 
-Each coordinate falls back to the variable of the same name, which an earlier template read, so the hook works before and after you [move them to secrets](#move-the-coordinates-to-secrets). With neither set the AWS action has no role or no bucket, and fails: a read is then `degraded` and a write fails its job.
+The hook reads its coordinates from the secrets alone. With either secret unset, or not mapped by the lane's caller, the AWS action has no role or no bucket, and fails: a read is then `degraded` and a write fails its job.
 
 <!-- x-release-please-end -->
 
 ### Move the coordinates to secrets
 
-Kanon v0.33.0 told you to keep `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET` as repository **variables**. That release prints every variable at the head of each store job's log, so on a public repository anyone can read your AWS account id there ([#433](https://github.com/yedeya-labs/kanon/issues/433)). From the first release after v0.33.0, the lanes take them as secrets, which the runner masks. [`kanon doctor`](doctor.md) reports `qa-store.variables` while a variable still holds either one. The move, in this order:
+Kanon v0.33.0 told you to keep `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET` as repository **variables**, and its lanes passed every repository variable to the hook, so each store job's log printed them, and on a public repository anyone could read your AWS account id there ([#433](https://github.com/yedeya-labs/kanon/issues/433)). v0.34.0 and v0.34.1 took the coordinates as secrets, which the runner masks, and still passed the variables as a fallback. **The release after v0.34.1 passes no variables at all** ([#479](https://github.com/yedeya-labs/kanon/issues/479)): a hook that reads its coordinates from variables reaches no store, so its reads are `degraded` and its writes fail their jobs. The maintenance workflow likewise takes only the secret `QA_STORE_ROLE_ARN`, and GitHub refuses a caller that still passes its old `role-arn` input.
 
-1. **Copy each variable into a secret of the same name.** Nothing changes yet: your callers don't map the secrets, so the hook still reads the variables.
+[`kanon doctor`](doctor.md), checking against that release or a later one, blocks on `secret.missing` while a store secret is unset, and its fix copies the variable where one still holds the value. It lists a variable left over once the secret is set as `qa-store.variables`, without blocking. Do steps 1 to 3 before or with the pin that moves past v0.34.1:
+
+1. **Copy each variable into a secret of the same name.** The value goes through a pipe, never onto a command line or into the log.
 
    ```sh
    gh variable get QA_STORE_ROLE_ARN -R <owner>/<repo> | gh secret set QA_STORE_ROLE_ARN -R <owner>/<repo>
    gh variable get QA_STORE_BUCKET -R <owner>/<repo> | gh secret set QA_STORE_BUCKET -R <owner>/<repo>
    ```
 
-2. **Move the callers' pin past v0.33.0, and map both secrets** in the caller of each store-coupled lane you run: the explore lane, the dispatch sweep, the code audit and the Overseer. GitHub refuses a secret that the pinned lane doesn't declare, so map them in the same change as the pin, or after it.
+2. **Map both secrets** in the caller of each store-coupled lane you run: the explore lane, the dispatch sweep, the code audit and the Overseer. GitHub refuses a secret the pinned lane doesn't declare, which v0.33.0 doesn't, so map them with a pin of v0.34.0 or later. In the maintenance caller, map `QA_STORE_ROLE_ARN` and drop `role-arn:` from its `with:` ([Maintenance](#maintenance)).
 
    ```yaml
        secrets:
@@ -192,7 +192,7 @@ Kanon v0.33.0 told you to keep `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET` as repo
          QA_STORE_BUCKET: ${{ secrets.QA_STORE_BUCKET }}
    ```
 
-3. **Read the secrets in the hook first**, as the template above does, with `secrets` among its inputs. Until this step, the hook still reads the variables.
+3. **Make the hook read the secrets alone,** as the template above does: `secrets` among its inputs, `fromJSON(inputs.secrets || '{}').<NAME>` for each coordinate, and no `variables` input.
 4. **Delete the variables** once a store job has run green on the secrets. Its log shows `***` where the role and the bucket were.
 
    ```sh

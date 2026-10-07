@@ -98,7 +98,7 @@ describe('the cost rows reach the sweep from the store job', () => {
     for (const s of storeSteps) {
       expect(s.uses).toBe('$/actions/qa-store');
       expect(s.id).toBe(s.with?.kind);
-      expect(s.with).toEqual({ operation: 'cost-rows', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH, kind: s.id, days: String(WINDOW_DAYS) });
+      expect(s.with).toEqual({ operation: 'cost-rows', secrets: STORE_SECRETS_WITH, kind: s.id, days: String(WINDOW_DAYS) });
     }
     expect(WINDOW_DAYS).toBe(14);
   });

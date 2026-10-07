@@ -64,7 +64,7 @@ describe('the store job and the overseer job (plan 0004 P9\'s check, applied at 
   });
 
   it('exports the Overseer\'s kind before the agent, and the agent reads that export', () => {
-    expect(wf.jobs.export!.steps).toEqual([{ uses: '$/actions/qa-store', id: 'store', with: { operation: 'export', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH, kind: 'overseer' } }]);
+    expect(wf.jobs.export!.steps).toEqual([{ uses: '$/actions/qa-store', id: 'store', with: { operation: 'export', secrets: STORE_SECRETS_WITH, kind: 'overseer' } }]);
     const exported = steps.find((s) => s.uses?.startsWith('actions/download-artifact@'))!;
     expect(handedIn(LANE_FILE, 'overseer', 'artifact-name')).toBe('${{ needs.export.outputs.artifact-name }}');
     expect(exported.with).toEqual({ name: '${{ inputs.artifact-name }}', path: 'qa-store-export' });

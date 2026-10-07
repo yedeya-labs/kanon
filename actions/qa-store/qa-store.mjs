@@ -4,9 +4,9 @@
 //
 // THE HOOK IS THE ADOPTER'S; THE FILES ARE KANON'S. An adopter that runs a QA store keeps a
 // composite action at `.github/actions/qa-store/action.yml`. Kanon calls it with six inputs
-// (`operation`, `kind`, `dir`, `from`, `to`, and `variables`, the repository's Actions variables as
-// JSON, where the hook finds its store's coordinates, kanon#423) and fixes, per operation, the
-// files in `dir` the hook reads or writes. For an AWS store the hook is one `uses:` of Kanon's AWS action
+// (`operation`, `kind`, `dir`, `from`, `to`, and `secrets`, the store's two secrets as JSON, where
+// the hook finds its store's coordinates, kanon#433) and fixes, per operation, the files in `dir`
+// the hook reads or writes. For an AWS store the hook is one `uses:` of Kanon's AWS action
 // (`infra/qa-store/aws`); any other store implements the same five operations its own way.
 //
 //   operation    the hook reads              the hook writes

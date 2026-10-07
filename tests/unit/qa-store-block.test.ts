@@ -8,6 +8,7 @@ import {
   EXPORT_FILES, FILES, HOOK_PATH, MANIFEST, MAX_ARG_STRLEN, MAX_ROWS_OUTPUT, OPERATIONS, READ_OPERATIONS, WRITE_OPERATIONS,
   absentLine, checkRequest, deleteExport, finish, prepare, readCostRowsFile,
 } from '../../actions/qa-store/qa-store.mjs';
+import { STORE_SECRETS_WITH } from './helpers/store-jobs.js';
 
 /**
  * Plan 0004 step P9: the QA store contract's block, `actions/qa-store`. The hook is the
@@ -254,37 +255,33 @@ describe('the block\'s steps', () => {
     expect(write?.['continue-on-error']).toBeUndefined();
     expect(read?.if).toBe("steps.prepare.outputs.present == 'true' && (inputs.operation == 'last-green' || inputs.operation == 'export' || inputs.operation == 'cost-rows')");
     expect(read?.['continue-on-error']).toBe(true);
-    for (const s of hookSteps) expect(Object.keys(s.with ?? {}).sort()).toEqual(['dir', 'from', 'kind', 'operation', 'secrets', 'to', 'variables']);
-  });
-
-  // kanon#423: a composite action can't read `vars`, so the lane hands the repository's variables
-  // to the block, and the block to the hook, unchanged: the hook reads its store's coordinates
-  // there, and nothing account-specific is committed.
-  it('hands the hook the variables the lane passed, unchanged, in both hook steps', () => {
-    expect(action.inputs.variables).toEqual({ description: expect.stringContaining('toJSON(vars)'), required: false, default: '' });
-    for (const s of hookSteps) expect(s.with?.variables).toBe('${{ inputs.variables }}');
+    for (const s of hookSteps) expect(Object.keys(s.with ?? {}).sort()).toEqual(['dir', 'from', 'kind', 'operation', 'secrets', 'to']);
   });
 
   // kanon#433: the store's coordinates are secrets, which the lane builds into one line of JSON
-  // by name and the block hands on unchanged; `variables` stays, deprecated, for one move.
-  it('hands the hook the store\'s secrets the lane passed, unchanged, in both hook steps', () => {
+  // by name and the block hands on unchanged. kanon#479: the deprecated `variables`, every
+  // repository variable as JSON, is gone, so the block takes none and hands the hook none.
+  it('hands the hook the store\'s secrets the lane passed, unchanged, in both hook steps, and no variables', () => {
     expect(action.inputs.secrets).toEqual({ description: expect.stringContaining('QA_STORE_ROLE_ARN'), required: false, default: '' });
-    expect(action.inputs.variables?.description).toMatch(/^Deprecated \(kanon#433\)/);
+    expect(Object.keys(action.inputs)).not.toContain('variables');
     for (const s of hookSteps) expect(s.with?.secrets).toBe('${{ inputs.secrets }}');
   });
 
-  it('is handed the repository\'s variables by every store step of every lane, and the delete step none', () => {
+  it('is handed the store\'s secrets by every store step of every lane, no variables, and the delete step neither', () => {
     const dir = '.github/workflows';
     const store = readdirSync(dir).filter((f) => f.endsWith('.yml')).flatMap((f) => {
       const wf = parse(readFileSync(join(dir, f), 'utf8')) as { jobs?: Record<string, { steps?: Array<{ uses?: string; with?: Record<string, unknown> }> }> };
       return Object.entries(wf.jobs ?? {}).flatMap(([job, j]) => (j.steps ?? [])
         .filter((st) => st.uses === '$/actions/qa-store')
-        .map((st) => ({ at: `${f}:${job}:${String(st.with?.operation)}`, op: st.with?.operation, variables: st.with?.variables })));
+        .map((st) => ({ at: `${f}:${job}:${String(st.with?.operation)}`, op: st.with?.operation, keys: Object.keys(st.with ?? {}), secrets: st.with?.secrets })));
     });
     const reads = store.filter((x) => x.op !== 'delete-export');
     expect(reads.length).toBeGreaterThanOrEqual(8);
-    for (const x of reads) expect(x.variables, x.at).toBe('${{ toJSON(vars) }}');
-    for (const x of store.filter((y) => y.op === 'delete-export')) expect(x.variables, x.at).toBeUndefined();
+    for (const x of reads) {
+      expect(x.secrets, x.at).toBe(STORE_SECRETS_WITH);
+      expect(x.keys, x.at).not.toContain('variables');
+    }
+    for (const x of store.filter((y) => y.op === 'delete-export')) expect([x.keys.includes('variables'), x.secrets], x.at).toEqual([false, undefined]);
   });
 
   it('reports the read step\'s outcome, which continue-on-error leaves as failure, not its conclusion', () => {

@@ -24,8 +24,9 @@
 # The adopter's caller is in `docs/qa-store.md`: a `workflow_dispatch` with `task` and `apply`,
 # `id-token: write`, and one job that calls this workflow at the pinned release with the store's
 # region and table, and maps the store's role as the secret `QA_STORE_ROLE_ARN` (kanon#433): a
-# secret, so the runner masks the ARN, and the account id in it, in the log. The `role-arn` input
-# is deprecated: it still works, and prints the ARN, until a later release removes it.
+# secret, so the runner masks the ARN, and the account id in it, in the log. The secret is
+# required, and the only way in: the `role-arn` input, which printed the ARN, is gone (kanon#479),
+# so GitHub refuses a caller that still passes it, or that maps no role, before any job starts.
 name: QA store maintenance (AWS)
 
 on:
@@ -41,11 +42,6 @@ on:
         type: boolean
         required: false
         default: false
-      role-arn:
-        description: Deprecated (kanon#433), and printed in the log; map the secret QA_STORE_ROLE_ARN instead. Used only when that secret is empty.
-        type: string
-        required: false
-        default: ""
       region:
         description: The store's region.
         type: string
@@ -56,7 +52,8 @@ on:
         required: true
     secrets:
       QA_STORE_ROLE_ARN:
-        required: false
+        description: The store's role, the stack's `RoleArn` output (kanon#433).
+        required: true
 
 permissions:
   id-token: write # assume the store's OIDC role, in the job below only.
@@ -74,6 +71,6 @@ jobs:
         with:
           task: ${{ inputs.task }}
           apply: ${{ inputs.apply && 'true' || 'false' }}
-          role-arn: ${{ secrets.QA_STORE_ROLE_ARN || inputs.role-arn }}
+          role-arn: ${{ secrets.QA_STORE_ROLE_ARN }}
           region: ${{ inputs.region }}
           table: ${{ inputs.table }}

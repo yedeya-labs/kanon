@@ -2127,9 +2127,18 @@ describe("kanon doctor and the QA store's secrets (#433)", () => {
   const allBut = (...drop: string[]) => new Set(LANES.flatMap((l) => REQ.lanes[l]!.secrets).filter((n) => !drop.includes(n)));
   const CALLER = '.github/workflows/agent-code-audit.yml';
   const unmap = (dir: string) => put(dir, { [CALLER]: readFileSync(join(dir, CALLER), 'utf8').replace(/^ {6}QA_STORE_[A-Z_]+: .*\n/gm, '') });
+  // A v0.34.x requirements file: the store's secrets, without `secretsOnly`, because its block
+  // still passed the variables, which the hook fell back to (#479).
+  const V034 = { ...REQ, qaStore: { hook: HOOK, secrets: STORE } };
+  const runAt = async (req: typeof REQ, dir: string, github: ReturnType<typeof fakeGitHub>): Promise<Result> => {
+    const out: string[] = [];
+    const status = await doctor(['--dir', dir, '--json'], { gh: github.gh, env: {}, out: (l: string) => out.push(l), err: () => {}, requirements: () => req, release: () => PINNED });
+    const text = out.join('\n');
+    return { status, out: text, err: '', json: JSON.parse(text) };
+  };
 
   it('names the store hook and its two secrets, which the store-coupled lanes take as optional', () => {
-    expect(REQ.qaStore).toEqual({ hook: '.github/actions/qa-store/action.yml', secrets: ['QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'] });
+    expect(REQ.qaStore).toEqual({ hook: '.github/actions/qa-store/action.yml', secrets: ['QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'], secretsOnly: true });
     expect(REQ.lanes['agent-code-audit']!.optionalSecrets).toEqual(STORE);
     expect(FINDINGS['qa-store.variables']).toEqual({ category: 'secret', blocking: false });
     expect(FINDINGS['qa-store.unmapped']).toEqual({ category: 'caller', blocking: false });
@@ -2153,8 +2162,33 @@ describe("kanon doctor and the QA store's secrets (#433)", () => {
     expect(r.json.findings[1].fix.text).toContain("store the stack's RoleArn output");
   });
 
-  it('with a hook, reports variables still holding them without blocking, with the move as its fix', async () => {
+  it('against a release that passes no variables (#479), blocks on each store secret a variable alone holds, and copies it from the variable', async () => {
     const r = await run(checkout(withHook()), fakeGitHub({ secrets: allBut(...STORE), variables: new Set([...STORE, 'OTHER']) }), ['--json']);
+    expect(r.status, r.out).toBe(EXIT.findings);
+    expect(ids(r)).toEqual([`qa-store.variables ${REPO}`, `secret.missing ${REPO}`, `secret.missing ${REPO}`]);
+    const [left, bucket, role] = r.json.findings;
+    expect(bucket).toMatchObject({ blocking: true, message: `lacks QA_STORE_BUCKET, which agent-code-audit takes: ${CALLER} maps it.` });
+    expect(bucket.fix.text).toContain('as secrets alone, never the variable QA_STORE_BUCKET');
+    expect(bucket.fix.commands).toEqual([`gh variable get QA_STORE_BUCKET -R ${REPO} | gh secret set QA_STORE_BUCKET -R ${REPO}`]);
+    expect(role.fix.commands).toEqual([`gh variable get QA_STORE_ROLE_ARN -R ${REPO} | gh secret set QA_STORE_ROLE_ARN -R ${REPO}`]);
+    // The leftover variables stay a finding of their own, never blocking.
+    expect(left).toMatchObject({ category: 'secret', blocking: false });
+    expect(left.message).toContain(`holds QA_STORE_BUCKET and QA_STORE_ROLE_ARN as repository variables, which Kanon ${PINNED}'s lanes no longer read or print`);
+    expect(left.fix.commands).toEqual([
+      `gh variable get QA_STORE_BUCKET -R ${REPO} | gh secret set QA_STORE_BUCKET -R ${REPO}`,
+      `gh variable get QA_STORE_ROLE_ARN -R ${REPO} | gh secret set QA_STORE_ROLE_ARN -R ${REPO}`,
+      `gh variable delete QA_STORE_BUCKET -R ${REPO}`,
+      `gh variable delete QA_STORE_ROLE_ARN -R ${REPO}`,
+    ]);
+    // One secret set: only the other blocks.
+    const half = await run(checkout(withHook()), fakeGitHub({ secrets: allBut('QA_STORE_BUCKET'), variables: new Set(STORE) }), ['--json']);
+    expect(half.status, half.out).toBe(EXIT.findings);
+    expect(ids(half)).toEqual([`qa-store.variables ${REPO}`, `secret.missing ${REPO}`]);
+    expect(half.json.findings[1].message).toMatch(/^lacks QA_STORE_BUCKET,/);
+  });
+
+  it('against a v0.34.x release, which still passed the variables, reports them without blocking, with the move as its fix', async () => {
+    const r = await runAt(V034, checkout(withHook()), fakeGitHub({ secrets: allBut(...STORE), variables: new Set([...STORE, 'OTHER']) }));
     expect(r.status, r.out).toBe(EXIT.healthy);
     expect(ids(r)).toEqual([`qa-store.variables ${REPO}`]);
     const f = r.json.findings[0];
@@ -2167,10 +2201,14 @@ describe("kanon doctor and the QA store's secrets (#433)", () => {
       `gh variable delete QA_STORE_BUCKET -R ${REPO}`,
       `gh variable delete QA_STORE_ROLE_ARN -R ${REPO}`,
     ]);
+    // With neither, it still blocks, as before.
+    const none = await runAt(V034, checkout(withHook()), fakeGitHub({ secrets: allBut(...STORE) }));
+    expect(ids(none)).toEqual([`secret.missing ${REPO}`, `secret.missing ${REPO}`]);
   });
 
-  it('once the secrets are set, asks only that the variables be deleted', async () => {
+  it('once the secrets are set, asks only that the variables be deleted, without blocking (#479)', async () => {
     const r = await run(checkout(withHook()), fakeGitHub({ variables: new Set(['QA_STORE_ROLE_ARN']) }), ['--json']);
+    expect(r.status, r.out).toBe(EXIT.healthy);
     expect(ids(r)).toEqual([`qa-store.variables ${REPO}`]);
     expect(r.json.findings[0].fix.commands).toEqual([`gh variable delete QA_STORE_ROLE_ARN -R ${REPO}`]);
   });
@@ -2181,6 +2219,7 @@ describe("kanon doctor and the QA store's secrets (#433)", () => {
     const r = await run(dir, fakeGitHub(), ['--json']);
     expect(r.status, r.out).toBe(EXIT.healthy);
     expect(ids(r)).toEqual([`qa-store.unmapped ${CALLER}`]);
+    expect(r.json.findings[0].message).toContain(`its store jobs reach no store, since Kanon ${PINNED} passes the hook no variables to fall back to`);
     expect(r.json.findings[0].fix.commands).toEqual(['      QA_STORE_BUCKET: ${{ secrets.QA_STORE_BUCKET }}', '      QA_STORE_ROLE_ARN: ${{ secrets.QA_STORE_ROLE_ARN }}']);
     put(dir, { [CALLER]: readFileSync(join(dir, CALLER), 'utf8').replace(/^ {6}CLAUDE_CODE_OAUTH_TOKEN: .*\n/m, '') });
     const missing = await run(dir, fakeGitHub(), ['--json']);

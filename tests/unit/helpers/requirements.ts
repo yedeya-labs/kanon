@@ -124,12 +124,15 @@ export const buildRequirements = (root: string) => {
   // The QA store (kanon#433): the adopter's hook, which the `qa-store` block calls, and the
   // secrets the store-coupled lanes take for it. `kanon init` and `kanon doctor` ask for the
   // secrets only where the hook exists, and name the variables of the same names, which held
-  // them before, as a step to move.
+  // them before, as a step to move. `secretsOnly` (kanon#479): the block takes no `variables`, so
+  // the hook can't fall back to them, and a store secret a variable still holds is missing. Read
+  // from the block itself; a release's file without it (v0.34.x) still passed the variables.
   const block = readFileSync(join(root, 'actions/qa-store/action.yml'), 'utf8');
   const hookPath = /^ +uses: \.\/(\.github\/actions\/[a-z-]+)$/m.exec(block)?.[1];
   const qaStore = {
     hook: `${hookPath}/action.yml`,
     secrets: [...new Set(Object.values(lanes).flatMap((l) => (l as { optionalSecrets?: string[] }).optionalSecrets ?? []))].sort(),
+    ...('variables' in ((parse(block) as Doc).inputs ?? {}) ? {} : { secretsOnly: true }),
   };
   return {
     $comment:

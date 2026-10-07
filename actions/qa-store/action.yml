@@ -47,13 +47,15 @@
 # which GitHub prints before this block runs, and in every step after. This block hands
 # `secrets` to the hook unchanged; the hook reads one with `fromJSON(inputs.secrets || '{}').<NAME>`.
 #
-# `variables`, `toJSON(vars)`, IS DEPRECATED (kanon#423, kanon#433). Nothing masks a variable, so
-# it printed every repository variable into the store step's log. It is still handed to the hook
-# until a later release removes it, so a hook that reads its coordinates from variables keeps
-# working while the adopter moves them to secrets (`kanon doctor` says how: `qa-store.variables`).
-# Once a secret the lane receives holds a value, the runner masks that value in the variables
-# too. A hook that declares no `secrets` or `variables` input gets a warning for the undeclared
-# input and runs as before.
+# NO `variables` (kanon#479). Through v0.34.1 this block also took `toJSON(vars)` and handed it to
+# the hook, so a hook could read its coordinates from repository variables. Nothing masks a
+# variable, so every store step's log printed every repository variable, the store's role ARN and
+# any other ARN among them (kanon#433). The block now takes no variables at all, and no Kanon lane
+# hands one any whole-`vars` expression (`tests/unit/vars-wholesale-guard.test.ts`). A hook that
+# still declares a `variables` input gets an empty one; a hook that reads its coordinates there
+# reaches no store, so a read is `degraded` and a write fails its job (`kanon doctor` says how to
+# move: `secret.missing`, docs/qa-store.md "Move the coordinates to secrets"). A hook that
+# declares no `secrets` input gets a warning for the undeclared input.
 name: Kanon QA store
 description: Runs one operation of the QA store contract through the adopter's store hook (.github/actions/qa-store), or says the store is absent and does nothing.
 author: yedeya-labs
@@ -64,10 +66,6 @@ inputs:
     required: true
   kind:
     description: "`put`: `explorer` or `audit`. `export`: `audit` or `overseer`. `cost-rows`: the telemetry agent whose rows it reads."
-    required: false
-    default: ""
-  variables:
-    description: "Deprecated (kanon#433): the repository's Actions variables as JSON, from `toJSON(vars)` in the lane, handed to the hook unchanged (kanon#423) until a later release removes it. Not used by `delete-export`."
     required: false
     default: ""
   secrets:
@@ -182,7 +180,6 @@ runs:
         dir: ${{ steps.prepare.outputs.dir }}
         from: ${{ steps.prepare.outputs.from }}
         to: ${{ steps.prepare.outputs.to }}
-        variables: ${{ inputs.variables }}
         secrets: ${{ inputs.secrets }}
 
     # A read: its failure is `degraded`, which the finish step turns into the fail-open answer.
@@ -197,7 +194,6 @@ runs:
         dir: ${{ steps.prepare.outputs.dir }}
         from: ${{ steps.prepare.outputs.from }}
         to: ${{ steps.prepare.outputs.to }}
-        variables: ${{ inputs.variables }}
         secrets: ${{ inputs.secrets }}
 
     - name: Read what the store hook wrote

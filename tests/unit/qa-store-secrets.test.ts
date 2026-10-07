@@ -102,29 +102,28 @@ describe('the QA store\'s coordinates reach no log once they are secrets (#433)'
         expect([c.aws['role-arn'], c.aws.bucket]).toEqual([ARN, BUCKET]);
       });
 
-      it('falls back to the variables while the secrets are not mapped, as before the move', () => {
-        const c = chain(storeSteps[0]!.step, hook, { QA_STORE_ROLE_ARN: ARN, QA_STORE_BUCKET: BUCKET }, {});
-        expect([c.aws['role-arn'], c.aws.bucket]).toEqual([ARN, BUCKET]);
-        // A variable is never masked: this is the exposure the move ends.
-        expect(leaks(c.printed).length).toBeGreaterThan(0);
+      // #479: the variables path is gone. With the secrets unmapped and the old variables still
+      // set, the hook gets no coordinates, and no header prints the variables, masked or not.
+      it.each(storeSteps.map((s) => [s.at, s.step] as const))('%s: never reads or prints the variables, even with the secrets unmapped (#479)', (_, step) => {
+        const c = chain(step, hook, { QA_STORE_ROLE_ARN: ARN, QA_STORE_BUCKET: BUCKET, OTHER: 'x' }, {});
+        expect([c.aws['role-arn'], c.aws.bucket]).toEqual(['', '']);
+        expect(leaks(c.unmasked)).toEqual([]);
       });
     });
   }
 
-  it('warns, in Kanon\'s hook, while it reads the variables', () => {
-    const viaSecrets = chain(storeSteps[0]!.step, KANON_HOOK, {}, SECRETS);
-    const viaVariables = chain(storeSteps[0]!.step, KANON_HOOK, { QA_STORE_ROLE_ARN: ARN, QA_STORE_BUCKET: BUCKET }, {});
-    expect(viaSecrets.check.FROM_SECRETS).toBe('true');
-    expect(viaVariables.check.FROM_SECRETS).toBe('false');
+  it('declares no `variables` input in either hook, and Kanon\'s fails by name without the secrets (#479)', () => {
+    for (const hook of [KANON_HOOK, TEMPLATE_HOOK]) expect(Object.keys(hook.inputs ?? {})).toEqual(['operation', 'kind', 'dir', 'from', 'to', 'secrets']);
+    const without = chain(storeSteps[0]!.step, KANON_HOOK, { QA_STORE_ROLE_ARN: ARN, QA_STORE_BUCKET: BUCKET }, {});
+    expect(without.check).toEqual({ ROLE_ARN: '', BUCKET: '' });
     const run = String(KANON_HOOK.runs.steps[0]!.run);
-    expect(run).toContain('if [ "$FROM_SECRETS" != true ]; then');
-    expect(run).toContain('::warning title=QA store hook::');
+    expect(run).toContain('if [ -z "$ROLE_ARN" ] || [ -z "$BUCKET" ]; then');
+    expect(run).toContain('exit 1');
   });
 });
 
 // #480: the maintenance workflow takes the store's role as the secret the documented caller maps,
-// reads it before the deprecated `role-arn` input, and so never prints it. When #479 removes the
-// input, the deprecated case below goes with it.
+// and so never prints it. #479: the secret is required, and the deprecated `role-arn` input is gone.
 describe('the QA store maintenance workflow and its documented caller (#480)', () => {
   type Input = { type?: string; required?: boolean; default?: unknown };
   type Workflow = { on: { workflow_call: { inputs: Record<string, Input>; secrets?: Record<string, unknown> } }; jobs: Record<string, { steps: Step[] }> };
@@ -148,10 +147,10 @@ describe('the QA store maintenance workflow and its documented caller (#480)', (
     return stepHeader(step, { inputs, secrets }, secrets);
   };
 
-  it('declares the secret optional and every input the caller passes, and the caller passes every required one', () => {
+  it('declares the secret required and every input the caller passes, and the caller passes every required one', () => {
     expect(job.uses).toMatch(/^yedeya-labs\/kanon\/\.github\/workflows\/qa-store-aws-maintenance\.yml@v\d+\.\d+\.\d+$/);
-    expect(call.secrets?.QA_STORE_ROLE_ARN).toEqual({ required: false });
-    expect(call.inputs['role-arn']?.required).toBe(false);
+    expect(call.secrets?.QA_STORE_ROLE_ARN).toMatchObject({ required: true });
+    expect(Object.keys(call.secrets ?? {})).toEqual(['QA_STORE_ROLE_ARN']);
     // GitHub refuses a call that maps a secret, or passes an input, the called workflow doesn't declare.
     expect(Object.keys(job.secrets ?? {}).filter((n) => !(n in (call.secrets ?? {})))).toEqual([]);
     expect(Object.keys(job.with ?? {}).filter((k) => !(k in call.inputs))).toEqual([]);
@@ -167,11 +166,9 @@ describe('the QA store maintenance workflow and its documented caller (#480)', (
     expect(h.printed).toContain('role-arn: ***');
   });
 
-  it('reads the secret before the deprecated input, which it takes only while the secret is empty', () => {
-    const both = { ...job, with: { ...job.with, 'role-arn': 'arn:aws:iam::input' } };
-    expect(header(both, { QA_STORE_ROLE_ARN: ARN }).inputs['role-arn']).toBe(ARN);
-    const inputOnly = { ...both, secrets: {} };
-    expect(header(inputOnly, {}).inputs['role-arn']).toBe('arn:aws:iam::input');
+  it('takes the role from the secret alone: no `role-arn` input, which printed it (#479)', () => {
+    expect(Object.keys(call.inputs).sort()).toEqual(['apply', 'region', 'table', 'task']);
+    expect(step.with?.['role-arn']).toBe('${{ secrets.QA_STORE_ROLE_ARN }}');
   });
 });
 

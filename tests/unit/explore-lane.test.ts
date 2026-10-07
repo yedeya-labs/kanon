@@ -44,8 +44,8 @@ describe('the store contract (plan 0004 §3.2, P9\'s check)', () => {
     const store = Object.entries(jobs).filter(([, j]) => j.permissions?.['id-token'] === 'write').map(([n]) => n).sort();
     expect(store).toEqual(['last-green', 'put', 'record-skip']);
     for (const [n, j] of Object.entries(jobs)) expect(j.environment, n).toBeUndefined();
-    expect(storeOp('last-green')).toEqual({ operation: 'last-green', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH });
-    expect(storeOp('record-skip')).toEqual({ operation: 'record-skip', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH, commit: '${{ github.sha }}', trigger: '${{ github.event_name }}', tier: 'all', reason: 'unchanged-commit' });
+    expect(storeOp('last-green')).toEqual({ operation: 'last-green', secrets: STORE_SECRETS_WITH });
+    expect(storeOp('record-skip')).toEqual({ operation: 'record-skip', secrets: STORE_SECRETS_WITH, commit: '${{ github.sha }}', trigger: '${{ github.event_name }}', tier: 'all', reason: 'unchanged-commit' });
     expect(storeOp('put')).toMatchObject({ operation: 'put', kind: 'explorer', report: '${{ runner.temp }}/kanon-explore/qa-explore-summary.json' });
   });
 
