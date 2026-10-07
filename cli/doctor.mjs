@@ -451,35 +451,128 @@ const headingCount = (text, heading) => {
 /** The events on which a workflow's jobs report their checks on a pull request. */
 const PR_EVENTS = ['pull_request', 'pull_request_target'];
 
-/** Whether a workflow runs on a pull request. @param {Record<string, any>} wf */
-const onPullRequest = (wf) => {
-  const on = wf.on;
-  if (typeof on === 'string') return PR_EVENTS.includes(on);
-  if (Array.isArray(on)) return on.some((e) => PR_EVENTS.includes(e));
-  return isMap(on) && PR_EVENTS.some((e) => e in on);
+/** The activity types a pull-request trigger runs on when it names none. A list without any of them skips the pull requests they open or update (#446). */
+const PR_TYPES = ['opened', 'synchronize', 'reopened'];
+
+/** @param {unknown} v @returns {string[]} */
+const listOf = (v) => (Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]).map(String);
+
+/**
+ * A branch filter's pattern as a regular expression, as GitHub matches it: `**` is any run of
+ * characters, `*` any run without `/`, `?` and `+` make the character before them optional or
+ * repeated, `[...]` is a class, and `\` escapes the next character.
+ * @param {string} pattern
+ */
+export const branchPattern = (pattern) => {
+  let re = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = /** @type {string} */ (pattern[i]);
+    if (c === '*') {
+      if (pattern[i + 1] === '*') {
+        re += '.*';
+        i++;
+      } else re += '[^/]*';
+    } else if (c === '?' || c === '+') re += c;
+    else if (c === '[') {
+      const end = pattern.indexOf(']', i + 1);
+      if (end < 0) re += '\\[';
+      else {
+        re += `[${pattern.slice(i + 1, end)}]`;
+        i = end;
+      }
+    } else if (c === '\\' && i + 1 < pattern.length) re += `\\${pattern[++i]}`;
+    else re += c.replace(/[.^$|(){}\\/-]/g, '\\$&');
+  }
+  try {
+    return new RegExp(`^${re}$`);
+  } catch {
+    // A pattern GitHub would refuse, such as a class `[z-a]`, matches nothing.
+    return /(?!)/;
+  }
+};
+
+/** Whether a `branches` list admits `branch`: the last pattern it matches decides, a `!` one excluding it. @param {string[]} patterns @param {string} branch */
+const branchesAdmit = (patterns, branch) => {
+  let admitted = false;
+  for (const p of patterns) {
+    const negated = p.startsWith('!');
+    if (branchPattern(negated ? p.slice(1) : p).test(branch)) admitted = !negated;
+  }
+  return admitted;
 };
 
 /**
- * The jobs that report the status check `check` on a pull request: in a workflow that runs on
- * one, a job whose name, or its key when it has none, is exactly the check's. A job that calls a
- * reusable workflow reports `<its name> / <the called job's>`, and a matrix job its name with the
- * matrix's values, so neither counts: actions/lane-check's README runs the check as a job of its
- * own. A step of another job reports nothing under its own name (L5's G14).
- * @param {Map<string, Record<string, any>>} workflows by path @param {string} check
- * @returns {string[]} `<workflow file>#<job>`
+ * The filters of one pull-request trigger that skip some pull request into `branch`: `paths` and
+ * `paths-ignore` always (they skip a pull request by what it changes), `branches` that don't
+ * admit it, `branches-ignore` that matches it, and `types` that leave out one of the defaults.
+ * Without `branch`, any branch filter counts. GitHub never reports the check of a run it skips,
+ * so a pull request it skips waits on a required check (#446).
+ * @param {string} event @param {unknown} trigger @param {string | undefined} branch
+ * @returns {string[]}
  */
-export const checkReporters = (workflows, check) => {
+const triggerFilters = (event, trigger, branch) => {
+  if (!isMap(trigger)) return [];
+  const has = (/** @type {string} */ k) => trigger[k] !== undefined && trigger[k] !== null;
   /** @type {string[]} */
   const out = [];
+  for (const k of ['paths', 'paths-ignore']) if (has(k)) out.push(`${event}.${k}`);
+  if (has('branches') && (branch === undefined || !branchesAdmit(listOf(trigger.branches), branch))) out.push(`${event}.branches`);
+  if (has('branches-ignore') && (branch === undefined || listOf(trigger['branches-ignore']).some((p) => branchPattern(p).test(branch)))) out.push(`${event}.branches-ignore`);
+  if (has('types') && !PR_TYPES.every((t) => listOf(trigger.types).includes(t))) out.push(`${event}.types`);
+  return out;
+};
+
+/**
+ * Whether a workflow runs on every pull request into `branch`: null when it doesn't run on a
+ * pull request at all, none when one of its pull-request triggers has no filter that skips one,
+ * and otherwise the filters that do.
+ * @param {Record<string, any>} wf @param {string | undefined} branch
+ * @returns {string[] | null}
+ */
+const pullRequestFilters = (wf, branch) => {
+  const on = wf.on;
+  if (typeof on === 'string') return PR_EVENTS.includes(on) ? [] : null;
+  if (Array.isArray(on)) return on.some((e) => PR_EVENTS.includes(e)) ? [] : null;
+  if (!isMap(on)) return null;
+  const events = PR_EVENTS.filter((e) => e in on);
+  if (!events.length) return null;
+  const each = events.map((e) => triggerFilters(e, on[e], branch));
+  return each.some((f) => !f.length) ? [] : each.flat();
+};
+
+/**
+ * The jobs that would report the status check `check` on a pull request into `branch`, each with
+ * the filters of its workflow's trigger that skip some pull request (none when it runs on every
+ * one): in a workflow that runs on one, a job whose name, or its key when it has none, is
+ * exactly the check's. A job that calls a reusable workflow reports `<its name> / <the called
+ * job's>`, and a matrix job its name with the matrix's values, so neither counts:
+ * actions/lane-check's README runs the check as a job of its own. A step of another job reports
+ * nothing under its own name (L5's G14).
+ * @param {Map<string, Record<string, any>>} workflows by path @param {string} check
+ * @param {string} [branch] the branch the pull requests are into; without it, any branch filter skips some
+ * @returns {Array<{ job: string, filters: string[] }>} `job` is `<workflow file>#<job>`
+ */
+export const checkJobs = (workflows, check, branch) => {
+  /** @type {Array<{ job: string, filters: string[] }>} */
+  const out = [];
   for (const [file, wf] of workflows) {
-    if (!onPullRequest(wf)) continue;
+    const filters = pullRequestFilters(wf, branch);
+    if (filters === null) continue;
     for (const [key, job] of Object.entries(isMap(wf.jobs) ? wf.jobs : {})) {
       if (!isMap(job) || job.uses !== undefined || (isMap(job.strategy) && job.strategy.matrix !== undefined)) continue;
-      if ((job.name === undefined || job.name === null ? key : String(job.name)) === check) out.push(`${file}#${key}`);
+      if ((job.name === undefined || job.name === null ? key : String(job.name)) === check) out.push({ job: `${file}#${key}`, filters });
     }
   }
   return out;
 };
+
+/**
+ * The jobs that report the status check `check` on every pull request into `branch`
+ * (`checkJobs`, without a filter that skips one).
+ * @param {Map<string, Record<string, any>>} workflows @param {string} check @param {string} [branch]
+ * @returns {string[]} `<workflow file>#<job>`
+ */
+export const checkReporters = (workflows, check, branch) => checkJobs(workflows, check, branch).filter((j) => !j.filters.length).map((j) => j.job);
 
 /** One read of every workflow file on a branch, with its text. */
 const BRANCH_WORKFLOWS = 'query($owner: String!, $name: String!, $expression: String!) { repository(owner: $owner, name: $name) { object(expression: $expression) { ... on Tree { entries { name type object { ... on Blob { text } } } } } } }';
@@ -1313,7 +1406,8 @@ export const diagnose = async (deps, opts) => {
  * THE REQUIRED CHECK'S JOB (#418, L5's G14). A ruleset that requires a status check no job on the
  * default branch reports blocks every pull request but the one that adds the job, approved and
  * green, until that one merges. So before doctor asks the person to require Kanon's check
- * (`ruleset.rule-missing`), a workflow on the default branch must report it; otherwise it asks
+ * (`ruleset.rule-missing`), a workflow on the default branch must report it on every pull request
+ * into that branch, with no trigger filter that skips one (#446); otherwise it asks
  * for the job first, and for the rule only once the job has merged. It asks the same of a ruleset
  * that requires the check already. A job only the checkout has is not on the default branch: it
  * is a branch's, and the rule waits for its merge. Returns the ruleset's gaps still to ask for.
@@ -1332,15 +1426,22 @@ const checkGaps = async ({ deps, repo, s, checked, gaps, checkout, find, uncheck
     unchecked.push({ check: 'required-check', subject: LANE_CHECK, reason: `could not read the workflows on ${s.defaultBranch} (${onDefault.error}), so doctor can't tell whether a job there reports the status check "${LANE_CHECK}"${required ? '' : ", and doesn't ask you to require it yet"}` });
     return rest;
   }
-  if (checkReporters(onDefault.workflows, LANE_CHECK).length) return gaps;
-  const here = checkReporters(checkout, LANE_CHECK);
+  const jobs = checkJobs(onDefault.workflows, LANE_CHECK, s.defaultBranch);
+  if (jobs.some((j) => !j.filters.length)) return gaps;
+  const here = checkReporters(checkout, LANE_CHECK, s.defaultBranch);
   const then = required ? 'Until it merges, every other pull request waits on the check.' : `Then require the check: doctor asks for it (ruleset.rule-missing) once the job is on ${s.defaultBranch}.`;
+  // A job whose workflow skips some pull requests (#446): GitHub never reports the check on one
+  // it skips, so that pull request waits on the check once it is required.
+  const filters = [...new Set(jobs.flatMap((j) => j.filters))];
+  const skipping = jobs.length ? ` The only job${jobs.length > 1 ? 's' : ''} there that report${jobs.length > 1 ? '' : 's'} it (${jobs.map((j) => j.job).join(', ')}) run${jobs.length > 1 ? '' : 's'} on some pull requests only (${filters.join(', ')}), and a pull request ${jobs.length > 1 ? 'they skip' : 'it skips'} never gets the check.` : '';
   find('ruleset.check-unreported', LANE_CHECK, required
-    ? `The ruleset on ${s.defaultBranch} requires the status check "${LANE_CHECK}", but no job of a workflow on ${s.defaultBranch} reports it, so every pull request that doesn't add such a job waits on it (K-ADOPT-1 step 8).`
-    : `No job of a workflow on ${s.defaultBranch} reports the status check "${LANE_CHECK}", so the ruleset can't require it yet: a required check that nothing reports blocks every pull request (K-ADOPT-1 step 8).`, {
+    ? `The ruleset on ${s.defaultBranch} requires the status check "${LANE_CHECK}", but no job of a workflow on ${s.defaultBranch} reports it on every pull request, so every pull request that doesn't get it waits on it (K-ADOPT-1 step 8).${skipping}`
+    : `No job of a workflow on ${s.defaultBranch} reports the status check "${LANE_CHECK}" on every pull request, so the ruleset can't require it yet: a required check that nothing reports blocks every pull request (K-ADOPT-1 step 8).${skipping}`, {
     text: here.length
       ? `This checkout adds it (${here.join(', ')}): merge the pull request that adds it to ${s.defaultBranch} first. ${then}`
-      : `Add a job of its own named "${LANE_CHECK}", in a workflow that runs on pull_request, as actions/lane-check's README shows (a step in another job reports nothing under that name), and merge it. ${then}`,
+      : jobs.length
+        ? `Run the job on every pull request: take ${filters.join(', ')} off the workflow's trigger, or move the job to a workflow of its own on pull_request with no filter, as actions/lane-check's README shows, and merge it. ${then}`
+        : `Add a job of its own named "${LANE_CHECK}", in a workflow that runs on pull_request, as actions/lane-check's README shows (a step in another job reports nothing under that name), and merge it. ${then}`,
     url: `https://github.com/${KANON_REPO}/blob/${checked}/actions/lane-check/README.md`,
   });
   return rest;

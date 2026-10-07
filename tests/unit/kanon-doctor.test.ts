@@ -7,7 +7,7 @@ import { parse } from 'yaml';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { RESULT_MARK, resultLine } from '../../cli/apps-check.mjs';
 import { appSecrets, appsCheckFile, callerFile, ciFile, dependabotFile, hookFile, loadRequirements, TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
-import { branchWorkflows, CATEGORIES, checkReporters, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
+import { branchPattern, branchWorkflows, CATEGORIES, checkJobs, checkReporters, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { registerRolesOf, rulesetBody } from '../../cli/init.mjs';
 import { isKanonSource, pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { laneFiles, laneTree } from './helpers/requirements.js';
@@ -617,6 +617,45 @@ describe('kanon doctor and the job behind a required check (#418)', () => {
     expect(r.json.unchecked).toEqual([{ check: 'required-check', subject: 'Lane check', reason: expect.stringContaining("doesn't ask you to require it yet") }]);
   });
 
+  // #446: a job whose workflow filters pull_request runs on some pull requests only, and GitHub
+  // never reports its check on the others, which then wait on the required check.
+  const filtered = (filter: string) => ciFile(PINNED, 'main').replace('  pull_request:\n', `  pull_request:\n${filter}`);
+
+  it("doesn't ask for the rule while the only job that reports the check skips some pull requests, and names the filter", async () => {
+    const dir = checkout(healthyFiles());
+    const github = fakeGitHub();
+    withoutCheck(github);
+    github.st.defaultWorkflows = { 'ci.yml': filtered("    paths: ['src/**']\n") };
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.check-unreported Lane check']);
+    const f = r.json.findings[0];
+    expect(f.message).toContain("so the ruleset can't require it yet");
+    expect(f.message).toContain('The only job there that reports it (.github/workflows/ci.yml#lanes) runs on some pull requests only (pull_request.paths), and a pull request it skips never gets the check.');
+    // This checkout's ci.yml has no filter, so its pull request merges first.
+    expect(f.fix.text).toContain('This checkout adds it (.github/workflows/ci.yml#lanes)');
+  });
+
+  it('tells a ruleset that already requires the check to run its job on every pull request when the checkout filters it too', async () => {
+    const files = healthyFiles();
+    files['.github/workflows/ci.yml'] = filtered('    types: [labeled]\n');
+    const dir = checkout(files);
+    const github = fakeGitHub();
+    github.st.defaultWorkflows = { 'ci.yml': filtered('    types: [labeled]\n') };
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.check-unreported Lane check']);
+    expect(r.json.findings[0].message).toContain('requires the status check "Lane check", but no job of a workflow on main reports it on every pull request');
+    expect(r.json.findings[0].fix.text).toMatch(/^Run the job on every pull request: take pull_request\.types off the workflow's trigger/);
+  });
+
+  it('counts a job whose filters skip no pull request into the default branch', async () => {
+    const dir = checkout(healthyFiles());
+    const github = fakeGitHub();
+    withoutCheck(github);
+    github.st.defaultWorkflows = { 'ci.yml': filtered("    branches: [main]\n    types: [opened, synchronize, reopened, labeled]\n") };
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.rule-missing main']);
+  });
+
   it('is waived like any other finding, on the check it names', async () => {
     const files = healthyFiles();
     files['docs/qa/adoption.md'] += `- **${WAIVER_LABEL}:** \`ruleset.check-unreported\` on \`Lane check\` (another CI reports it)\n`;
@@ -679,6 +718,60 @@ describe('checkReporters: which jobs report a status check on a pull request (#4
     expect(one(wf({ pull_request: null }, { lanes: { ...job, strategy: { matrix: { os: ['a', 'b'] } } } }))).toEqual([]);
     // A strategy without a matrix keeps the name.
     expect(one(wf({ pull_request: null }, { lanes: { ...job, strategy: { 'fail-fast': false } } }))).toEqual(['.github/workflows/x.yml#lanes']);
+  });
+});
+
+describe('checkJobs: the filters that skip some pull requests (#446)', () => {
+  const job = { name: 'Lane check', 'runs-on': 'ubuntu-latest', steps: [] };
+  const filtersOf = (on: unknown, branch = 'main') => checkJobs(new Map([['x.yml', { on, jobs: { lanes: job } }]]), 'Lane check', branch).map((j) => j.filters);
+  const reports = (on: unknown, branch = 'main') => checkReporters(new Map([['x.yml', { on, jobs: { lanes: job } }]]), 'Lane check', branch);
+
+  it('names each filter that skips a pull request, by its event', () => {
+    expect(filtersOf({ pull_request: { paths: ['src/**'] } })).toEqual([['pull_request.paths']]);
+    expect(filtersOf({ pull_request: { 'paths-ignore': ['docs/**'] } })).toEqual([['pull_request.paths-ignore']]);
+    expect(filtersOf({ pull_request: { branches: ['release/**'] } })).toEqual([['pull_request.branches']]);
+    expect(filtersOf({ pull_request: { 'branches-ignore': ['ma*'] } })).toEqual([['pull_request.branches-ignore']]);
+    expect(filtersOf({ pull_request_target: { types: ['labeled'] } })).toEqual([['pull_request_target.types']]);
+    expect(filtersOf({ pull_request: { types: 'opened' } })).toEqual([['pull_request.types']]);
+    expect(filtersOf({ pull_request: { paths: ['a'], types: ['opened', 'synchronize'] } })).toEqual([['pull_request.paths', 'pull_request.types']]);
+    expect(reports({ pull_request: { paths: ['src/**'] } })).toEqual([]);
+  });
+
+  it('counts a trigger whose filters skip no pull request into the branch', () => {
+    expect(reports({ pull_request: null })).toEqual(['x.yml#lanes']);
+    expect(reports({ pull_request: { types: ['opened', 'reopened', 'synchronize', 'labeled'] } })).toEqual(['x.yml#lanes']);
+    expect(reports({ pull_request: { types: null } })).toEqual(['x.yml#lanes']);
+    expect(reports({ pull_request: { branches: ['main'] } })).toEqual(['x.yml#lanes']);
+    expect(reports({ pull_request: { branches: 'main' } })).toEqual(['x.yml#lanes']);
+    expect(reports({ pull_request: { branches: ['ma*'] } })).toEqual(['x.yml#lanes']);
+    expect(reports({ pull_request: { 'branches-ignore': ['release/**'] } })).toEqual(['x.yml#lanes']);
+    // One unfiltered trigger is enough: the workflow runs on every pull request through it.
+    expect(reports({ pull_request: { paths: ['a'] }, pull_request_target: null })).toEqual(['x.yml#lanes']);
+    expect(filtersOf({ pull_request: { paths: ['a'] }, pull_request_target: { types: ['closed'] } })).toEqual([['pull_request.paths', 'pull_request_target.types']]);
+  });
+
+  it('reads a branches list as GitHub does: the last pattern it matches decides, and a ! one excludes', () => {
+    expect(reports({ pull_request: { branches: ['**', '!main'] } })).toEqual([]);
+    expect(reports({ pull_request: { branches: ['!main', '**'] } })).toEqual(['x.yml#lanes']);
+    expect(reports({ pull_request: { branches: ['release/*'] } }, 'release/1')).toEqual(['x.yml#lanes']);
+    expect(reports({ pull_request: { branches: ['release/*'] } }, 'release/1/x')).toEqual([]);
+    expect(reports({ pull_request: { branches: ['release/**'] } }, 'release/1/x')).toEqual(['x.yml#lanes']);
+    // Without the branch, any branch filter counts as one that skips.
+    const anyBranch = (on: unknown) => checkReporters(new Map([['x.yml', { on, jobs: { lanes: job } }]]), 'Lane check');
+    expect(anyBranch({ pull_request: { branches: ['main'] } })).toEqual([]);
+    expect(anyBranch({ pull_request: { 'branches-ignore': ['x'] } })).toEqual([]);
+    expect(anyBranch({ pull_request: null })).toEqual(['x.yml#lanes']);
+  });
+});
+
+describe("branchPattern: a branch filter's pattern, as GitHub matches it (#446)", () => {
+  const m = (p: string, b: string) => branchPattern(p).test(b);
+  it('matches *, **, ?, +, a class and an escape', () => {
+    expect([m('main', 'main'), m('main', 'mainx'), m('mai', 'main')]).toEqual([true, false, false]);
+    expect([m('feat/*', 'feat/a'), m('feat/*', 'feat/a/b'), m('feat/**', 'feat/a/b'), m('*', 'a/b')]).toEqual([true, false, true, false]);
+    expect([m('mains?', 'main'), m('mains?', 'mains'), m('ma+in', 'maaain'), m('ma+in', 'min')]).toEqual([true, true, true, false]);
+    expect([m('v[0-9].x', 'v1.x'), m('v[0-9].x', 'va.x'), m('v1.x', 'v1yx')]).toEqual([true, false, false]);
+    expect([m('a\\*b', 'a*b'), m('a\\*b', 'axb'), m('[ab', '[ab'), m('[z-a]', 'z')]).toEqual([true, false, true, false]);
   });
 });
 
