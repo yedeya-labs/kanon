@@ -40,7 +40,7 @@ runs:
           echo "::error title=QA store hook::the repository variables QA_STORE_ROLE_ARN and QA_STORE_BUCKET must both be set, and the Kanon release the lane runs must pass the repository's variables to the store hook (docs/qa-store.md)"
           exit 1
         fi
-    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.30.0
+    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.33.0
       with:
         operation: ${{ inputs.operation }}
         kind: ${{ inputs.kind }}
