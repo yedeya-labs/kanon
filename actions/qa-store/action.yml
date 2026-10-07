@@ -4,7 +4,7 @@
 #     runs-on: ubuntu-latest
 #     permissions:                    # no environment: it would replace the ref in the OIDC subject
 #       contents: read                # the checkout below
-#       id-token: write               # the hook's credentials; only a store job holds this
+#       id-token: write               # the hook's credentials; a store job holds this for the hook
 #     steps:
 #       - uses: $/actions/qa-store
 #         id: store
