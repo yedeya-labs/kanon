@@ -108,7 +108,7 @@ Decided in [ADR 0007](docs/decisions/0007-data-boundary.md) and written as rules
 
 ## Phase 3: Before going public
 
-- **Licence:** see [ADR 0003](docs/decisions/0003-licence-deferred.md).
+- **Done 2026-09-30:** the licence is Apache-2.0, and every contribution is signed off ([ADR 0010](docs/decisions/0010-licence.md), which supersedes ADR 0003).
 - **Installer:** complete, from the extraction requirements above (phase 2), and tested on an adopter that runs it without help.
 - **Roles for teams:** the Owner, Maintainer and Stakeholder roles (ADR 0005, ADR 0006), tested on an adopter where they are different people.
 - **Published per-run cost data**, from the telemetry.
