@@ -410,10 +410,16 @@ describe('delete-export, and a re-run of the agent job alone (kanon#224)', () =>
     expect((await deleteExport(t, api(500))).error).toBe('deleting the telemetry reports (artifact 42) failed: HTTP 500');
     expect((await deleteExport({ ...t, EXPORT_ATTEMPT: '' }, api(204))).error).toBe("delete-export needs export-attempt, the telemetry job's attempt output");
     expect(await deleteExport({ ...t, ARTIFACT_ID: '' }, api(204))).toEqual({ lines: ['No telemetry reports to delete: the telemetry job uploaded none.'], error: null });
+    // A partial re-run skipped the agent because of the store's export, never the telemetry
+    // reports: the export's delete job reports it red, and this one stays green, saying so.
     const r = await deleteExport({ ...t, RUN_ATTEMPT: '2', AGENT_RESULT: 'skipped' }, api(404));
-    expect(r.error).toBe('attempt 2 re-ran the agent job without the telemetry job, whose telemetry reports, from attempt 1, were deleted when that attempt finished. '
-      + 'The agent job was skipped rather than run without them. Use "Re-run all jobs", which reads the telemetry again.');
-    expect(r.error).not.toMatch(/export/);
+    expect(r.error).toBeNull();
+    expect(r.lines).toEqual([
+      'The telemetry reports (artifact 42) were already deleted.',
+      "The agent job was skipped on attempt 2 because the store's export was not re-run (its delete job says so); the telemetry reports from attempt 1 played no part in that.",
+    ]);
+    // The export's own delete still reds the same re-run.
+    expect((await deleteExport({ ...base, RUN_ATTEMPT: '2', AGENT_RESULT: 'skipped' }, api(404))).error).toMatch(/^attempt 2 re-ran the agent job without the export job/);
   });
 
   it('the block hands the kind to the delete step, defaulting to the export', () => {

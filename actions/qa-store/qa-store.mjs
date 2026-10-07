@@ -455,7 +455,6 @@ export async function deleteExport(env, fetchImpl = fetch) {
   const telemetry = env.ARTIFACT_KIND === 'telemetry';
   const What = telemetry ? 'The telemetry reports' : 'The QA store export';
   const what = What.charAt(0).toLowerCase() + What.slice(1);
-  const job = telemetry ? 'the telemetry job' : 'the export job';
   /** @type {string[]} */
   const lines = [];
   if (id !== '' && !/^\d+$/.test(id)) return { lines, error: `artifact-id '${id}' is not a number` };
@@ -473,13 +472,13 @@ export async function deleteExport(env, fetchImpl = fetch) {
     else return { lines, error: `deleting ${what} (artifact ${id}) failed: HTTP ${res.status}` };
   }
   if (exportAttempt !== '' && exportAttempt !== runAttempt && env.AGENT_RESULT === 'skipped') {
+    // THE TELEMETRY REPORTS NEVER SKIP THE AGENT (kanon#499's review): its `if:` reads only the
+    // store export's attempt, and a stale telemetry read only makes the status `failed`. So the
+    // skip is the export's, which its own delete job reports red; this one says so, and stays green.
     if (telemetry) {
-      return {
-        lines,
-        error: `attempt ${runAttempt} re-ran the agent job without ${job}, whose telemetry reports, from attempt ${exportAttempt}, `
-          + 'were deleted when that attempt finished. The agent job was skipped rather than run without them. '
-          + 'Use "Re-run all jobs", which reads the telemetry again.',
-      };
+      lines.push(`The agent job was skipped on attempt ${runAttempt} because the store's export was not re-run (its delete job says so); `
+        + `the telemetry reports from attempt ${exportAttempt} played no part in that.`);
+      return { lines, error: null };
     }
     return {
       lines,

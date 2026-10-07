@@ -132,9 +132,9 @@
     "agent-overseer": {
       "name": "Overseer (optional)",
       "group": "oversight",
-      "does": "Audits the pipeline weekly from its aggregate, and again when a Kanon upgrade moves the agent runtime past its capability ledger's watermark, and files what you can act on as `pipeline-improvement` issues.",
+      "does": "Audits the pipeline weekly from its aggregate, including its cost trend where you map a telemetry reader role, and files what you can act on as `pipeline-improvement` issues. Where your adoption record turns the capability watch on, it also audits when a Kanon upgrade moves the agent runtime past its capability ledger's watermark.",
       "needs": [],
-      "cost": "A model run weekly, plus one when a Kanon upgrade moves the agent runtime forward. Every other merged Kanon upgrade runs only a short gate job.",
+      "cost": "A model run weekly, plus, where the capability watch is on, one when a Kanon upgrade moves the agent runtime forward. Every other merged Kanon upgrade runs only a short gate job.",
       "recommend": ["agent-implement", "agent-lead"],
       "when": "Once you run the Implementer, the Lead or the Merger unattended: it audits what runs without you watching (a lane that stopped, fixes that game their tests, follow-ups that leak, configuration drift, the cost trend). With only the Reviewer, or lanes you trigger by hand, you see every run anyway, and its first audits say little until weeks of history exist."
     },
