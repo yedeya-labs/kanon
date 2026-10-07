@@ -43,6 +43,7 @@ export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-explore.yml': ['schedule', 'dispatch'],
   'agent-dispatch-sweep.yml': ['schedule', 'dispatch'],
   'agent-code-audit.yml': ['schedule', 'dispatch'],
+  'agent-explore-telemetry.yml': ['schedule', 'dispatch'],
   // The runtime-version trigger (kanon#423): a merged pull request, judged by who merged it.
   'agent-overseer.yml': ['schedule', 'dispatch', 'pr-target-merged'],
 };

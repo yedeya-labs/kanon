@@ -1,0 +1,86 @@
+# Explore the telemetry — mint, then the agent's job
+#
+# CALLED ONLY BY `agent-explore-telemetry.yml`, whose `explore` job calls it. Two jobs, for `K-AGENT-49` (kanon#279):
+#   • `mint` holds the App's private key and runs nothing else: no checkout, no project code, no
+#     agent. It mints the lane's narrowed token with `skip-token-revoke` and hands it on
+#     hex-encoded, because GitHub drops a job output that holds a masked value.
+#   • `explore` is `explore-telemetry-agent-job.yml`, the lane's agent job, handed the token and never the key.
+#     A called workflow, because its `secrets:` is the one channel that arrives masked; it
+#     masks the token as it decodes it and revokes it as its last step.
+# Both jobs sit inside the lane's `explore` job, under its `if`, permissions and any group or
+# matrix it carries, so the mint waits with the agent and never mints for a run that is
+# skipped or queued. The spine has the same shape (`agent-lane.yml`), and
+# `tests/unit/app-key-isolation.test.ts` holds this file to it. The lane's header says what the
+# lane does; `agent-lane.yml`'s header says why the token crosses this way.
+name: Explore the telemetry — mint, then the agent's job
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: The aggregate the lane's `aggregate` job uploaded, which the agent reads.
+        required: false
+        type: string
+        default: ""
+    outputs:
+      agent-outcome:
+        value: ${{ jobs.explore.outputs.agent-outcome }}
+      report-artifact-id:
+        value: ${{ jobs.explore.outputs.report-artifact-id }}
+      report-attempt:
+        value: ${{ jobs.explore.outputs.report-attempt }}
+    secrets:
+      app-id:
+        required: true
+      app-private-key:
+        required: true
+      claude-token:
+        required: true
+
+# NO `permissions:` BLOCK: the lane's calling job sets this call's ceiling, and without a block
+# here each job gets exactly what that job was given.
+jobs:
+  # HOLDS THE KEY, AND ONLY THE MINT (`K-AGENT-49`). Nothing else runs here: no checkout, no
+  # project code, no agent, so nothing can rewrite the cached action before its post step,
+  # which skips the revoke (the agent's job revokes the token when it ends). The token
+  # crosses hex-encoded, because GitHub drops a job output holding a masked value.
+  mint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sealed: ${{ steps.seal.outputs.sealed }}
+      app-slug: ${{ steps.app-token.outputs.app-slug }}
+      # The attempt this token was minted for. A partial re-run reuses this job's outputs.
+      attempt: ${{ github.run_attempt }}
+    steps:
+      - name: Mint the Explorer's read-only App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          # The agent's job revokes it when it ends. The default would revoke it as THIS job ends.
+          skip-token-revoke: "true"
+          # Narrowed to what the agent uses (`K-AGENT-46`): it reads the tree and searches
+          # issues, to deduplicate. It files nothing: the lane's `file` job does.
+          permission-contents: read
+          permission-issues: read
+      - name: Seal the token for the agent's job
+        id: seal
+        env:
+          TOKEN: ${{ steps.app-token.outputs.token }}
+        run: printf 'sealed=%s\n' "$(printf %s "$TOKEN" | od -An -v -tx1 | tr -d ' \n')" >> "$GITHUB_OUTPUT"
+
+  # THE AGENT'S JOB, GIVEN THE TOKEN AND NEVER THE KEY (`K-AGENT-49`). `!cancelled()`: a failed
+  # mint still reaches it, and its finish block records `token=failure`.
+  explore:
+    needs: mint
+    if: ${{ !cancelled() }}
+    uses: $/.github/workflows/explore-telemetry-agent-job.yml
+    with:
+      artifact-name: ${{ inputs.artifact-name }}
+      app-slug: ${{ needs.mint.outputs.app-slug }}
+      mint-attempt: ${{ needs.mint.outputs.attempt }}
+    secrets:
+      app-token: ${{ needs.mint.outputs.sealed }}
+      claude-token: ${{ secrets.claude-token }}

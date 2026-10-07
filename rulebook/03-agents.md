@@ -130,7 +130,7 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Why.** Facts need no promotion and opinions are not bugs. A code audit has no deterministic backstop, so the bar is contradiction, not suspicion. A test that did not run is an evidence gap, not a failure. Without an exact signature, a nightly sweep re-files the same bug every night.
 
-**Enforced by.** Prose only; the runtime sweep implements the objective-signal tier in code.
+**Enforced by.** Prose only; the runtime sweep implements the objective-signal tier in code. In telemetry mode, [`scripts/telemetry-file.mjs`](../scripts/telemetry-file.mjs) holds the gate and the deduplication in code: a finding that rests on a failure signal is filed as a bug and one on cost cells alone as a spec delta, and an open issue with the same signature gets a comment instead; [`tests/library/telemetry-file.test.ts`](../tests/library/telemetry-file.test.ts) holds it.
 
 **Class.** split. The gate and the deduplication are framework. **The project supplies:** the list of objective signals for its stack (for a web application: unhandled exceptions, 5xx or unexpected 4xx responses, console errors, hydration mismatches, schema-contract violations).
 

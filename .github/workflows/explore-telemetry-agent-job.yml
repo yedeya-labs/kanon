@@ -1,0 +1,287 @@
+# Explore the telemetry — the agent's job
+#
+# The agent's job of `agent-explore-telemetry.yml`, in the shape of the other lanes' since kanon#279.
+#
+# CALLED ONLY BY `explore-telemetry-run.yml`, beside the job that mints this lane's token. The App's private
+# key never enters this job (`K-AGENT-49`): the token arrives hex-encoded as the `app-token`
+# secret. `Receive the App token` sits where the mint step was, so the token exists in this job
+# from the same point as before, and `Revoke the App token` is the last step; what it reads from the lane's earlier jobs
+# arrives as inputs. The lane's header says what the job
+# does, and `tests/unit/app-key-isolation.test.ts` holds its token steps to the spine's.
+#
+# WHAT THE AGENT CAN STILL REACH HERE: the token it was always given, for at most the hour it
+# lives, and the Claude token. Rewriting a cached action in this job reaches only those.
+name: Explore the telemetry — the agent's job
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: The aggregate the lane's `aggregate` job uploaded, which the agent reads.
+        required: false
+        type: string
+        default: ""
+      app-slug:
+        description: The minted App's slug, from the lane's `mint` job.
+        required: true
+        type: string
+      mint-attempt:
+        description: >-
+          The run attempt the lane's `mint` job minted the token for. A partial re-run
+          ("Re-run failed jobs") reuses that job's outputs, so a token from an earlier
+          attempt, which that attempt revoked, is refused by name.
+        required: true
+        type: string
+    outputs:
+      agent-outcome:
+        value: ${{ jobs.explore.outputs.agent-outcome }}
+      report-artifact-id:
+        value: ${{ jobs.explore.outputs.report-artifact-id }}
+      report-attempt:
+        value: ${{ jobs.explore.outputs.report-attempt }}
+    secrets:
+      app-token:
+        description: >-
+          The lane's App token, hex-encoded by its `mint` job (a job output holding a masked
+          value is dropped). Arrives masked, as every secret does.
+        required: true
+      claude-token:
+        required: true
+
+
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    # Bounds a hang (RA-1336). The agent reads one small file and a few issues; 30 minutes sits
+    # well above what its turn cap below can take.
+    timeout-minutes: 30
+    outputs:
+      agent-outcome: ${{ steps.agent.outcome }}
+      report-artifact-id: ${{ steps.report.outputs.artifact-id }}
+      # The attempt that uploaded the report. A partial re-run reuses this job's outputs, so the
+      # lane's `file` job compares it with its own attempt (kanon#286).
+      report-attempt: ${{ github.run_attempt }}
+    steps:
+      # WHEN THE JOB STARTED, for the telemetry row's `timed_out` (plan 0003 §5.1).
+      - name: Record when the job started
+        id: job
+        run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        id: checkout
+        with:
+          persist-credentials: false
+
+      # THE AGGREGATE, as the lane's read job checked it, into the workspace, because the agent
+      # reads only the workspace. No credential came with it: this job has none.
+      - name: Download the aggregate
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: qa-telemetry
+
+      # THE AGENT-LANE BLOCKS, CALLED DIRECTLY (RA-2661): the report upload runs between
+      # `agent-run` and the end of the job. This arm reads the repository and one file, so it
+      # installs nothing and never calls the project-setup hook. Its App token is received below;
+      # its filing token is the lane's `file` job's.
+      - uses: $/actions/agent-setup
+        id: setup
+        with:
+          arm: telemetry Explorer agent
+          app-slug: ""
+          # The role by name, since there is no slug to look it up by (plan 0005 §3.3).
+          role: Explorer
+
+      # Kanon's scripts, for the steps below, and `KANON` for the agent's environment (kanon#110).
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      # THE AGENT'S TOKEN READS ONLY (`K-AGENT-46`): the tree, and issues, to deduplicate. It
+      # files nothing: the lane's `file` job does, on a token of its own, after checking.
+      # THE TOKEN, RECEIVED WHERE IT WAS MINTED (kanon#279, `K-AGENT-49`): `explore-telemetry-run.yml`'s
+      # `mint` job holds the key and mints it; this step decodes and masks it, and the job never
+      # sees the key.
+      - name: Receive the App token
+        id: app-token
+        env:
+          SEALED: ${{ secrets.app-token }}
+          APP_SLUG: ${{ inputs.app-slug }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$'; then
+            echo "::error title=app-token::no App token arrived from this lane's mint job; see that job's log for why the mint failed."
+            exit 1
+          fi
+          if [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error title=app-token::this is attempt $RUN_ATTEMPT, but the App token was minted for attempt $MINT_ATTEMPT and revoked when that attempt ended. Use \"Re-run all jobs\", not \"Re-run failed jobs\": the token is minted in a job of its own, and only re-running it mints a fresh one."
+            exit 1
+          fi
+          # Decoded with printf and sed alone, so the step needs nothing the runner may lack.
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          {
+            echo "token=$TOKEN"
+            echo "app-slug=$APP_SLUG"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: $/actions/agent-run
+        id: agent
+        continue-on-error: true
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+        with:
+          claude-token: ${{ secrets.claude-token }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          prompt: |
+            You are the Explorer (Agent 1) in TELEMETRY mode. First read the severity rubric
+            in docs/qa/explorer-playbook.md. The repository is ${{ github.repository }}.
+
+            WHAT YOU READ. `qa-telemetry/aggregate.json`, which the workflow read from Kanon's
+            aggregate function before you started. It is the ONLY telemetry you see: do not
+            query any store or function yourself. It holds:
+            - `cross_adopter`: per lane and model, `runs`, `median_cost_usd` and
+              `p90_cost_usd`, each cell combining at least `min_adopters` adopters;
+            - `own`: for each adopter that declared its own figures publishable, under its
+              `label`, the same cells from its own runs alone;
+            - `signals`: the last `signal_days` days' runs that did not end ok, by `lane`,
+              `reason`, `failed_stage`, `kanon_error` and `kanon_version`, with
+              `adopters_affected`, and no cost or run count.
+            No adopter key, repository or run is in it, and nothing you write may name one.
+
+            WHAT YOU LOOK FOR: anomalies that kanon#41's fixed rules would miss. Those rules
+            flag a combination of stage, error and version seen for the first time, and a rise
+            in failures after a release. Look past them, for example:
+            - one Kanon version failing in several lanes, or one stage failing in several lanes;
+            - a failure whose reason points at Kanon rather than the platform (an unreachable
+              model, a rate limit or a usage cap is the platform's) or the adopter (a `hook`
+              stage failing at one adopter is usually the adopter's own hook);
+            - a cell whose 90th percentile is far above its median, or a lane whose cost on one
+              model is far from the same lane's on another;
+            - anything else in the aggregate that a maintainer of Kanon would want to know.
+            When a signal names a stage or an error, read the lane and its blocks under
+            "$KANON/.github/workflows/" and "$KANON/actions/" to say what probably fails.
+            DEDUP first: search open issues (`gh issue list --label agent:explorer`,
+            `gh search issues`) and add no finding already tracked. The filing step also
+            comments on an open issue with the same signature instead of filing it again.
+
+            FILE SPARINGLY. A finding rests on what the aggregate shows. A guess, or a figure
+            that is merely high, is not a finding. No findings is a good run. At most three.
+
+            WHAT YOU WRITE. You file nothing and comment on nothing: your token reads only.
+            You write ONE file, `qa-telemetry-findings.json` at the repository root, and a step
+            after you checks it against the aggregate, then files each finding in this
+            repository or drafts it in the run's summary, by the repository's declared choice,
+            which you neither read nor set:
+            {"examined": "<what you looked at, in a sentence or two>",
+             "held_back": ["<a candidate you did not file, and why>"],
+             "findings": [{"title": "...", "body": "...", "severity": "sev:medium",
+               "signals": [{"lane": "...", "reason": "...", "failed_stage": "...", "kanon_error": null, "kanon_version": "..."}],
+               "cells": [{"source": "own", "label": "...", "lane": "...", "model": "..."},
+                         {"source": "cross_adopter", "lane": "...", "model": "..."}]}]}
+            It must PARSE. Write it even when you find nothing, with `"findings": []`. Write it
+            LAST, once you are done, and write no other file.
+
+            THE RULES THE FILING STEP HOLDS EACH FINDING TO. One that breaks any is refused,
+            and not filed:
+            - It lists the signals and cells it rests on, copying their identifying fields
+              EXACTLY from aggregate.json: a signal's five fields, with `null` where the
+              aggregate has `null`; a cell's lane and model, and an own cell's label. The
+              step renders their figures into the issue itself, under your body.
+            - NO DIGIT IN THE TITLE OR THE BODY, apart from an issue reference (`#41`), a rule
+              id (`K-AGENT-9`), and a model or a Kanon version written exactly as the
+              aggregate writes it. Describe a figure in words ("the 90th percentile is several
+              times the median"); never type a number, a cost, a count or a percentage.
+            - No adopter key, repository, person, run id or HTML comment. Never name the
+              reference adopter.
+            - One that rests on a signal is filed as a `bug`, so give it a `severity`:
+              `sev:critical`, `sev:high`, `sev:medium` or `sev:low`, by the playbook's rubric.
+              One that rests on cells alone is filed as a `spec-delta`, an observation, and
+              needs none.
+            - Its body leads with what the aggregate shows and why it matters, then what
+              probably causes it. Put any concrete change under a
+              `## Possible approach — UNVERIFIED, not acceptance criteria` heading.
+            Every issue is public.
+          claude_args: |
+            --model claude-opus-5-5
+            --effort high
+            --max-turns 40
+            --max-budget-usd 10
+            --allowedTools Read,Bash,Grep,Glob,Write
+            --exclude-dynamic-system-prompt-sections
+
+      # Record what this run cost (RA-1485). `always()` because a run that FAILED is the one you
+      # most want measured. `classify: "false"`: a red here comes from a step before the agent,
+      # and the job's last step explains it; a lost report reds the `file` job instead.
+      - uses: $/actions/agent-finish
+        id: finish
+        if: always()
+        continue-on-error: true
+        with:
+          arm: telemetry Explorer agent
+          agent: telemetry-explorer
+          job-status: ${{ job.status }}
+          classify: "false"
+          execution_file: ${{ steps.agent.outputs.execution_file }}
+          claude_args: |
+            --model claude-opus-5-5
+            --effort high
+            --max-turns 40
+            --max-budget-usd 10
+            --allowedTools Read,Bash,Grep,Glob,Write
+            --exclude-dynamic-system-prompt-sections
+          # The version-2 telemetry row (plan 0002 §2.6): this lane's name and each stage's
+          # step CONCLUSION in the lane's own order, never a step's name or log.
+          lane: explore-telemetry
+          stages: >-
+            checkout=${{ steps.checkout.conclusion }}
+            setup=${{ steps.setup.conclusion }}
+            token=${{ steps.app-token.conclusion }}
+            agent=${{ steps.agent.conclusion }}
+          job-started-at: ${{ steps.job.outputs.started-at }}
+          timeout-minutes: "30"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
+          kanon-error: ${{ steps.setup.outputs.kanon-error }}
+
+      # THE REPORT, FOR THE FILE JOB: data, handed to a job the agent can't reach. One day. No
+      # report uploads nothing, and the file job says the run was lost.
+      - name: Upload the report for the file job
+        id: report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qa-telemetry-findings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: qa-telemetry-findings.json
+          retention-days: 1
+          if-no-files-found: ignore
+
+      # WHY A RED RUN WENT RED (RA-1408): a quota cap and a real failure want opposite responses
+      # (wait or re-run). `if: failure()` so it speaks only when there is something to explain.
+      - name: Say whether the model was unreachable or the run genuinely failed
+        if: failure()
+        uses: $/actions/agent-classify
+        with:
+          arm: telemetry Explorer agent
+
+      # THE TOKEN DIES WITH THE JOB (`K-AGENT-49`). Last, after every step that uses it. It is
+      # decoded from the secret again rather than read from `Receive the App token`, so a run that
+      # ended before that step still revokes the token its mint job minted. Revoking needs only
+      # the token itself, never the key. Never reds the run.
+      - name: Revoke the App token
+        if: always()
+        env:
+          SEALED: ${{ secrets.app-token }}
+          MINT_ATTEMPT: ${{ inputs.mint-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          if [ -z "$SEALED" ] || ! printf %s "$SEALED" | grep -Eq '^([0-9a-f]{2})+$' || [ "$MINT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "No App token of this attempt to revoke"
+            exit 0
+          fi
+          TOKEN="$(printf '%b' "$(printf %s "$SEALED" | sed 's/../\\x&/g')")"
+          echo "::add-mask::$TOKEN"
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            "$API_URL/installation/token" || true)"
+          if [ "$STATUS" = "204" ]; then echo "App token revoked"; else echo "::warning title=app-token::the App token could not be revoked (HTTP ${STATUS:-none}); it expires within the hour"; fi

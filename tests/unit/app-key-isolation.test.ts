@@ -95,9 +95,9 @@ describe('K-AGENT-49: no job that runs an agent or project code holds an App pri
     expect(violations(docs)).toEqual({});
   });
 
-  it('finds the spine and all eight lanes that call the blocks themselves', () => {
+  it('finds the spine and all nine lanes that call the blocks themselves', () => {
     expect(AGENT_JOBS).toEqual([
-      'code-audit-agent-job.yml', 'explore-agent-job.yml', 'lane-agent-job.yml', 'lead-split-agent-job.yml',
+      'code-audit-agent-job.yml', 'explore-agent-job.yml', 'explore-telemetry-agent-job.yml', 'lane-agent-job.yml', 'lead-split-agent-job.yml',
       'merge-reconcile-agent-job.yml', 'overseer-agent-job.yml', 'rebase-agent-job.yml', 'review-agent-job.yml',
       'verify-acs-agent-job.yml',
     ]);

@@ -138,7 +138,7 @@ describe('every job that calls a block calls it from Kanon, and carries nothing 
     expect(jobs.map(([w]) => w).sort()).toEqual([
       'agent-blocks-smoke.yml:smoke', 'explore-agent-job.yml:explore', 'lane-agent-job.yml:run', 'merge-reconcile-agent-job.yml:reconcile',
       'agent-project-digest.yml:digest', 'agent-weekly-digest.yml:digest', 'code-audit-agent-job.yml:audit', 'overseer-agent-job.yml:overseer',
-      'lead-split-agent-job.yml:split', 'rebase-agent-job.yml:resolve', 'review-agent-job.yml:review', 'verify-acs-agent-job.yml:verify', `${FIXTURE}:${JOB}`,
+      'explore-telemetry-agent-job.yml:explore', 'lead-split-agent-job.yml:split', 'rebase-agent-job.yml:resolve', 'review-agent-job.yml:review', 'verify-acs-agent-job.yml:verify', `${FIXTURE}:${JOB}`,
     ].sort());
   });
 

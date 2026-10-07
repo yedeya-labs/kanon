@@ -171,6 +171,9 @@ const runsAgent = (file: string): boolean =>
 /** A lane whose agent names labels and holds no write that applies one. */
 const READ_ONLY_AGENTS: Record<string, string> = {
   'agent-project-digest.yml': 'its agent runs on the default token with issues: read, and names `agent:implement` only to read the queue',
+  // Plan 0004 step 14: the lane's `file` job files, and `telemetry-file.mjs` creates each label
+  // before it applies it, from its gh wrapper (the check below).
+  'explore-telemetry-agent-job.yml': "its agent's token reads only, and the lane's filing step applies the labels its prompt names",
 };
 
 describe('every lane whose agent labels creates the labels first (plan 0005 §5.3)', () => {
@@ -255,7 +258,8 @@ describe('every script that applies a label creates it first, from its gh wrappe
   it('finds the labelling scripts, so the check below is not vacuous', () => {
     expect(scripts.filter(applies).sort()).toEqual([
       'scripts/brief-revise-recovery.mjs', 'scripts/dispatch-sweep.mjs', 'scripts/implement-crash.mjs', 'scripts/lead-reconcile.mjs',
-      'scripts/merge-gate.mjs', 'scripts/overseer-file.mjs', 'scripts/review-recovery.mjs', 'scripts/split-lineage.mjs', 'scripts/workflow-health.mjs',
+      'scripts/merge-gate.mjs', 'scripts/overseer-file.mjs', 'scripts/review-recovery.mjs', 'scripts/split-lineage.mjs', 'scripts/telemetry-file.mjs',
+      'scripts/workflow-health.mjs',
     ]);
   });
 

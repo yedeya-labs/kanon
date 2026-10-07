@@ -40,7 +40,7 @@ describe('requirements.json', () => {
 
   it("lists every lane of docs/lanes.md's table, and no other workflow", () => {
     const table = [...readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8').split('## Which lanes are available')[1]!.split('\n## ')[0]!.matchAll(/^\| [^|]+\| `(agent-[a-z-]+\.yml)` \|/gm)].map((m) => m[1]);
-    expect(table.length).toBe(18);
+    expect(table.length).toBe(19);
     expect(laneFiles(ROOT)).toEqual([...table].sort());
   });
 

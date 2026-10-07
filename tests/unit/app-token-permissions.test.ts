@@ -52,6 +52,9 @@ const DIRECT: Record<string, { step: string; perms: Perms }> = {
   // The Overseer's agent reads the tree, issues, pull requests and the workflow history, and
   // files nothing (plan 0004 step 13): its filing token is `MORE`'s.
   'agent-overseer.yml': { step: 'app-token', perms: { contents: 'read', issues: 'read', 'pull-requests': 'read', actions: 'read' } },
+  // The telemetry Explorer's agent reads the tree and searches issues, to deduplicate, and
+  // files nothing (plan 0004 step 14): its filing token is `MORE`'s.
+  'agent-explore-telemetry.yml': { step: 'app-token', perms: { contents: 'read', issues: 'read' } },
 };
 /** A lane's second minting step, keyed `<lane>#<step id>`. */
 const MORE: Record<string, Perms> = {
@@ -59,6 +62,9 @@ const MORE: Record<string, Perms> = {
   // the agent has finished, so the agent never holds it (plan 0004 step 13, decision 12). The
   // capability interlock's count reads each linked pull request's state.
   'agent-overseer.yml#file-token': { issues: 'write', 'pull-requests': 'read' },
+  // Files each finding that passes the check against the aggregate, and comments on an open
+  // issue with the same signature, after the agent has finished (plan 0004 step 14).
+  'agent-explore-telemetry.yml#file-token': { issues: 'write' },
 };
 /**
  * The implementer status (plan 0005 §3.3, question 6; step L3), keyed `<file>#<step id>`: a
@@ -236,7 +242,7 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
 
   it("maps each lane's called mint to the lane, and the App it mints for to the lane's own secret", () => {
     const runs = yamls.filter((f) => /-run\.yml$/.test(f)).map((f) => f.split('/').pop()!);
-    expect(runs.length).toBe(8);
+    expect(runs.length).toBe(9);
     for (const r of runs) {
       expect(runOwner.get(r), `${r} is called by no lane`).toBeDefined();
       expect(String(runOwner.get(r)!.appId), r).toMatch(/^\$\{\{ secrets\.[A-Z]+_APP_ID \}\}$/);

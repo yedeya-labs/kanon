@@ -21,7 +21,7 @@
 # schedule or a dispatch. The Merger starts only on a review, a CI completion, its schedule
 # or a dispatch, and the reconciler only on its schedule, a closed issue or pull request, or a
 # dispatch. The two digests, the dispatch sweep, the code audit and the Overseer start only on
-# their schedule or a dispatch, and so does the Explorer's sweep. The jobs that would
+# their schedule or a dispatch, and so do the Explorer's sweep and its telemetry mode. The jobs that would
 # mint and run are skipped. The model
 # call is proven by the reference adopter's live run after each upgrade.
 #
@@ -301,9 +301,27 @@ jobs:
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
 
+  explore-telemetry:
+    # The telemetry Explorer (plan 0004 step 14). `id-token: write` is for its `aggregate` job
+    # alone, which calls the aggregate function: GitHub refuses to start a called job that asks
+    # for more than its caller grants.
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+      id-token: write
+    uses: $/.github/workflows/agent-explore-telemetry.yml
+    with:
+      smoke: agent-lanes-smoke
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
+      KANON_AGGREGATE_ROLE: ${{ secrets.KANON_SMOKE_UNSET }}
+
   smoke:
     name: Agent lanes smoke
-    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs, lead, lead-split, rebase, merge, lead-reconcile, project-digest, weekly-digest, explore, dispatch-sweep, code-audit, overseer]
+    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs, lead, lead-split, rebase, merge, lead-reconcile, project-digest, weekly-digest, explore, dispatch-sweep, code-audit, overseer, explore-telemetry]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -313,7 +331,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"'
-          echo "$RESULTS" | jq -e 'to_entries | length == 18 and all(.value.result == "success" or .value.result == "skipped")'
+          echo "$RESULTS" | jq -e 'to_entries | length == 19 and all(.value.result == "success" or .value.result == "skipped")'
 
       # For the fixture adopter only. lane-check itself comes from `$/`.
       - uses: actions/checkout@v7
