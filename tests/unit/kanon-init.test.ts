@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
-import { callerFile, loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
+import { callerFile, ciFile, loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
 import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, laneCatalogue, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, usage, USAGE, workflowName } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
@@ -68,6 +68,9 @@ type State = {
   rulesets: Array<Record<string, unknown> & { id: number }>;
   settings: Record<string, unknown>;
   labelCreateFails?: boolean;
+  /** The workflows on the default branch, as GitHub has them (#444); null when the token can't read them. */
+  defaultWorkflows: Record<string, string> | null;
+  rulesetUpdateFails?: boolean;
 };
 
 /** A fake GitHub for one repository. Every call is recorded; the mutating ones change the state. */
@@ -83,6 +86,9 @@ const fakeGitHub = (over: Partial<State> = {}) => {
     secrets: new Set(),
     rulesets: [],
     settings: { allow_squash_merge: true, allow_merge_commit: true, allow_rebase_merge: true, squash_merge_commit_title: 'COMMIT_OR_PR_TITLE', squash_merge_commit_message: 'COMMIT_MESSAGES' },
+    // A job on the default branch reports "Lane check" unless a case says otherwise, so the
+    // ruleset may require it (#444).
+    defaultWorkflows: { 'ci.yml': ciFile('v1.2.3', 'main') },
     ...over,
   };
   const calls: Array<{ args: string[]; input?: string }> = [];
@@ -90,6 +96,12 @@ const fakeGitHub = (over: Partial<State> = {}) => {
     calls.push({ args, input });
     const [a0, a1] = args;
     if (a0 === 'api' && a1 === 'user') return ok('octo\n');
+    if (a0 === 'api' && a1 === 'graphql') {
+      const { variables } = JSON.parse(input ?? '{}') as { variables: { owner: string; name: string; expression: string } };
+      if (!st.defaultWorkflows || `${variables.owner}/${variables.name}` !== REPO || variables.expression !== 'main:.github/workflows') return no('gh: Resource not accessible by personal access token (HTTP 403)');
+      const entries = Object.entries(st.defaultWorkflows).map(([name, text]) => ({ name, type: 'blob', object: { text } }));
+      return ok({ data: { repository: { object: entries.length ? { entries } : null } } });
+    }
     if (a0 === 'secret' && a1 === 'list') return st.secrets ? ok([...st.secrets].map((name) => ({ name }))) : no('gh: Resource not accessible by integration (HTTP 403)');
     if (a0 === 'label' && a1 === 'create') {
       if (st.labelCreateFails) return no('gh: Resource not accessible by personal access token (HTTP 403)');
@@ -116,6 +128,13 @@ const fakeGitHub = (over: Partial<State> = {}) => {
       st.rulesets.push({ id: st.rulesets.length + 100, ...JSON.parse(input ?? '{}') });
       return ok('{}');
     }
+    const put = /^repos\/acme\/widgets\/rulesets\/(\d+)$/.exec(path);
+    if (method === 'PUT' && put) {
+      const target = st.rulesets.find((r) => r.id === Number(put[1]));
+      if (!st.admin || st.rulesetUpdateFails || !target) return no('gh: Must have admin rights to Repository. (HTTP 403)');
+      Object.assign(target, JSON.parse(input ?? '{}'));
+      return ok('{}');
+    }
     if (method !== 'GET') return no(`unexpected gh ${args.join(' ')}`);
     if (path === `repos/${REPO}`) {
       return ok({ private: st.private, default_branch: 'main', owner: { login: 'acme', type: st.kind }, permissions: { admin: st.admin }, ...st.settings });
@@ -137,7 +156,7 @@ const fakeGitHub = (over: Partial<State> = {}) => {
 
 /** The calls that change something on GitHub. */
 const writes = (calls: Array<{ args: string[] }>) =>
-  calls.map((c) => c.args).filter((a) => (a[0] === 'label' && a[1] !== 'list') || a.includes('PATCH') || a.includes('POST') || a.includes('DELETE'));
+  calls.map((c) => c.args).filter((a) => (a[0] === 'label' && a[1] !== 'list') || a.includes('PATCH') || a.includes('POST') || a.includes('PUT') || a.includes('DELETE'));
 
 type Run = { status: number; out: string; err: string; appsCalls: string[][]; milestoneCalls: string[][] };
 
@@ -339,14 +358,188 @@ describe('kanon init, on what the plan and the token allow', () => {
     expect(r.appsCalls).toEqual([]);
   });
 
-  it("names what an existing default-branch ruleset lacks, and doesn't change it", async () => {
+  it('names what an existing default-branch ruleset lacks, and adds only the required check, which a job on main reports (#444)', async () => {
     const dir = checkout();
     const existing = { id: 7, name: 'protect main', target: 'branch', enforcement: 'active', conditions: { ref_name: { include: ['~DEFAULT_BRANCH'] } }, rules: [{ type: 'pull_request', parameters: { allowed_merge_methods: ['squash', 'merge'] } }] };
-    const github = fakeGitHub({ rulesets: [existing] });
+    const github = fakeGitHub({ rulesets: [structuredClone(existing)] });
     const r = await run(dir, github);
-    expect(github.st.rulesets).toEqual([existing]);
+    expect(writes(github.calls).filter((a) => a.includes('PUT'))).toEqual([['api', '-X', 'PUT', 'repos/acme/widgets/rulesets/7', '--input', '-']]);
+    expect(github.st.rulesets).toEqual([{ ...existing, rules: [...existing.rules, { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: LANE_CHECK }] } }] }]);
+    expect(r.out).toContain(`- Added the required status check "${LANE_CHECK}" to the ruleset "protect main" on main, which a job there reports`);
     expect(r.out).toContain('The ruleset on main (protect main) lacks some of K-ADOPT-1 step 8');
-    for (const g of ['block force pushes', 'restrict deletions', 'allow the squash merge method only', `require the status check "${LANE_CHECK}"`]) expect(r.out).toContain(`- ${g}`);
+    for (const g of ['block force pushes', 'restrict deletions', 'allow the squash merge method only']) expect(r.out).toContain(`- ${g}`);
+    expect(r.out).not.toContain(`- require the status check "${LANE_CHECK}"`);
+  });
+});
+
+// #444, L5's G3 and G14: init created its ruleset requiring "Lane check" in the run that wrote the
+// job reporting it on the adopt branch, so every other open pull request waited on the check
+// until the adopt pull request merged. It now requires the check only once a job on the default
+// branch reports it, as doctor asks (#418), and adds that one rule to a ruleset it didn't create.
+describe('kanon init and the required check (#444)', () => {
+  const CHECK_RULE = { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: LANE_CHECK }] } };
+  const ruleTypes = (github: ReturnType<typeof fakeGitHub>, i = 0) => (github.st.rulesets[i]!.rules as Array<{ type: string }>).map((x) => x.type);
+  const graphql = (github: ReturnType<typeof fakeGitHub>) => github.calls.filter((c) => c.args[1] === 'graphql');
+  const ruleset = (over: Record<string, unknown> = {}) => ({ id: 7, name: 'protect main', target: 'branch', enforcement: 'active', conditions: { ref_name: { include: ['~DEFAULT_BRANCH'] } }, rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }, { type: 'pull_request', parameters: { allowed_merge_methods: ['squash'] } }], ...over });
+
+  it("creates its ruleset without the check while no job on main reports it, and leaves the rule as a step for after the merge", async () => {
+    const dir = checkout();
+    // main has a workflow, whose lane check is a step of another job: it reports nothing as "Lane check".
+    const asStep = 'name: CI\non:\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: yedeya-labs/kanon/actions/lane-check@v1.2.3\n';
+    const github = fakeGitHub({ defaultWorkflows: { 'ci.yml': asStep } });
+    const d = parse(await run(dir, github, ['--json']));
+    expect(ruleTypes(github)).toEqual(['deletion', 'non_fast_forward', 'pull_request']);
+    expect(d.changes.find((c) => c.kind === 'ruleset')!.message).toBe(`Created the ruleset "${RULESET_NAME}" on main`);
+    const f = d.findings.find((x) => x.id === 'ruleset.require-check')!;
+    expect(f).toMatchObject({ category: 'ruleset', blocking: false, subject: LANE_CHECK, fix: { commands: [], url: 'https://github.com/acme/widgets/settings/rules' } });
+    expect(f.message).toBe(`No job of a workflow on main reports the status check "${LANE_CHECK}" on every pull request yet, so the ruleset doesn't require it: a required check that nothing reports blocks every other pull request (K-ADOPT-1 step 8).`);
+    expect(f.fix.text).toMatch(/^After the pull request that adds \.github\/workflows\/ci\.yml#lanes merges to main, run kanon init again with a token that can administer the repository, which adds only that rule/);
+    expect(d.status).toBe('steps-left');
+  });
+
+  it('changes nothing again before the merge, and adds the check to its own ruleset once the job is on main', async () => {
+    const dir = checkout();
+    const github = fakeGitHub({ defaultWorkflows: {} });
+    await run(dir, github);
+    const before = github.calls.length;
+    const again = await run(dir, github);
+    expect(writes(github.calls.slice(before))).toEqual([]);
+    expect(again.out).toContain(`require the status check "${LANE_CHECK}"`);
+    // The adopt pull request merges.
+    github.st.defaultWorkflows = { 'ci.yml': read(dir, '.github/workflows/ci.yml') };
+    const merged = await run(dir, github);
+    expect(ruleTypes(github)).toEqual(['deletion', 'non_fast_forward', 'pull_request', 'required_status_checks']);
+    expect(merged.out).toContain(`- Added the required status check "${LANE_CHECK}" to the ruleset "${RULESET_NAME}" on main, which a job there reports`);
+    expect(merged.out).not.toContain('Not before: until then');
+    expect(merged.out).not.toContain('lacks some of K-ADOPT-1');
+  });
+
+  it("doesn't require the check when it can't read main's workflows, and says why", async () => {
+    const github = fakeGitHub({ defaultWorkflows: null });
+    const d = parse(await run(checkout(), github, ['--json']));
+    expect(ruleTypes(github)).not.toContain('required_status_checks');
+    expect(d.findings.find((x) => x.id === 'ruleset.require-check')!.message).toMatch(/^init could not read the workflows on main \(gh: Resource not accessible by personal access token \(HTTP 403\)\), so it can't tell whether a job there reports the status check "Lane check", so the ruleset doesn't require it/);
+  });
+
+  it('leaves the check out of a dry run and of the command for a token that cannot create the ruleset', async () => {
+    const dry = await run(checkout(), fakeGitHub({ defaultWorkflows: {} }), ['--yes', '--dry-run']);
+    expect(dry.out).toContain(`- Would create the ruleset "${RULESET_NAME}" on main\n`);
+    expect(dry.out).toContain(`require the status check "${LANE_CHECK}" (K-ADOPT-1 step 8)`);
+    const github = fakeGitHub({ defaultWorkflows: {}, admin: false });
+    const d = parse(await run(checkout(), github, ['--json']));
+    const create = d.findings.find((x) => x.id === 'ruleset.create')!;
+    expect(JSON.parse(create.fix.commands[1]!).rules.map((x: { type: string }) => x.type)).toEqual(['deletion', 'non_fast_forward', 'pull_request']);
+    expect(d.findings.map((x) => x.id)).toContain('ruleset.require-check');
+    // With a job on main, the dry run says the ruleset requires the check.
+    const reported = await run(checkout(), fakeGitHub(), ['--yes', '--dry-run']);
+    expect(reported.out).toContain(`- Would create the ruleset "${RULESET_NAME}" on main, requiring "${LANE_CHECK}"`);
+    expect(reported.out).not.toContain('Not before: until then');
+  });
+
+  it("doesn't add the check to an existing ruleset before a job on main reports it: the rule is the step for after the merge", async () => {
+    const github = fakeGitHub({ defaultWorkflows: {}, rulesets: [ruleset()] });
+    const r = await run(checkout(), github, ['--json']);
+    const d = parse(r);
+    expect(writes(github.calls).filter((a) => a.includes('PUT'))).toEqual([]);
+    expect(d.findings.filter((x) => x.id.startsWith('ruleset.')).map((x) => x.id)).toEqual(['ruleset.require-check']);
+    // It lacks the check still, so it hasn't every rule.
+    expect(r.err).not.toContain('has every rule');
+  });
+
+  it('adds only the check to a ruleset that requires other checks, keeping them', async () => {
+    const other = { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: 'build' }] } };
+    // GitHub may add fields to a rule it reads back; the update sends each rule's type and parameters only.
+    const github = fakeGitHub({ rulesets: [ruleset({ rules: [...ruleset().rules.slice(0, 2), { ...ruleset().rules[2], ruleset_id: 7 }, other] })] });
+    const d = parse(await run(checkout(), github, ['--json']));
+    expect(JSON.parse(github.calls.find((c) => c.args.includes('PUT'))!.input!).rules[2]).toEqual(ruleset().rules[2]);
+    expect((github.st.rulesets[0]!.rules as unknown[]).at(-1)).toEqual({ type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: 'build' }, { context: LANE_CHECK }] } });
+    expect(ruleTypes(github)).toEqual(['deletion', 'non_fast_forward', 'pull_request', 'required_status_checks']);
+    expect(d.findings.filter((x) => x.id.startsWith('ruleset.'))).toEqual([]);
+  });
+
+  it('chooses the ruleset that requires checks already, then its own, and never an organisation\'s', async () => {
+    const checks = { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: 'build' }] } };
+    const github = fakeGitHub({ rulesets: [ruleset({ id: 7 }), ruleset({ id: 8, name: RULESET_NAME }), ruleset({ id: 9, name: 'checks', rules: [checks] })] });
+    await run(checkout(), github);
+    expect(writes(github.calls).filter((a) => a.includes('PUT'))).toEqual([['api', '-X', 'PUT', 'repos/acme/widgets/rulesets/9', '--input', '-']]);
+    const own = fakeGitHub({ rulesets: [ruleset({ id: 7 }), ruleset({ id: 8, name: RULESET_NAME })] });
+    await run(checkout(), own);
+    expect(writes(own.calls).filter((a) => a.includes('PUT'))).toEqual([['api', '-X', 'PUT', 'repos/acme/widgets/rulesets/8', '--input', '-']]);
+    const org = fakeGitHub({ rulesets: [ruleset({ source_type: 'Organization' })] });
+    const d = parse(await run(checkout(), org, ['--json']));
+    expect(writes(org.calls).filter((a) => a.includes('PUT'))).toEqual([]);
+    expect(d.findings.find((x) => x.id === 'ruleset.gaps')!.message).toContain(`require the status check "${LANE_CHECK}"`);
+  });
+
+  it('names the check among the gaps when the token cannot administer the repository or GitHub refuses the change', async () => {
+    for (const over of [{ admin: false }, { rulesetUpdateFails: true }]) {
+      const github = fakeGitHub({ ...over, rulesets: [ruleset()] });
+      const d = parse(await run(checkout(), github, ['--json']));
+      expect(github.st.rulesets[0]!.rules, JSON.stringify(over)).toEqual(ruleset().rules);
+      expect(d.findings.find((x) => x.id === 'ruleset.gaps')!.message).toContain(`require the status check "${LANE_CHECK}"`);
+      expect(d.findings.map((x) => x.id)).not.toContain('ruleset.require-check');
+      // A token that can't administer the repository isn't asked to.
+      if ('admin' in over) expect(github.calls.filter((c) => c.args.includes('PUT'))).toEqual([]);
+    }
+    const refused = parse(await run(checkout(), fakeGitHub({ rulesetUpdateFails: true, rulesets: [ruleset()] }), ['--json']));
+    expect(refused.notes).toContain(`Could not add the required status check "${LANE_CHECK}" to the ruleset "protect main" (gh: Must have admin rights to Repository. (HTTP 403)).`);
+  });
+
+  it('says what it would add in a dry run, and adds nothing', async () => {
+    const github = fakeGitHub({ rulesets: [ruleset()] });
+    const r = await run(checkout(), github, ['--yes', '--dry-run']);
+    expect(writes(github.calls)).toEqual([]);
+    expect(r.out).toContain(`- Would add the required status check "${LANE_CHECK}" to the ruleset "protect main" on main, which a job there reports`);
+  });
+
+  it("reads main's workflows only when a ruleset could require the check", async () => {
+    const free = fakeGitHub({ private: true, rulesetsOnPlan: false });
+    await run(checkout(), free);
+    expect(graphql(free)).toEqual([]);
+    const empty = fakeGitHub({ hasCommits: false });
+    await run(checkout(), empty);
+    expect(graphql(empty)).toEqual([]);
+    const done = fakeGitHub({ rulesets: [ruleset({ rules: [...ruleset().rules, CHECK_RULE] })] });
+    await run(checkout(), done);
+    expect(graphql(done)).toEqual([]);
+  });
+
+  describe("lane-check's own workflow (L5's G14)", () => {
+    const job = (on: string) => `name: Build\non:\n${on}jobs:\n  lanes:\n    name: Lane check\n    runs-on: ubuntu-latest\n    steps:\n      - uses: yedeya-labs/kanon/actions/lane-check@v1.2.3\n`;
+    const writesLaneCheck = async (files: Record<string, string>) => {
+      const dir = checkout(files);
+      await run(dir, fakeGitHub(), ['--yes', '--no-apps']);
+      return existsSync(join(dir, '.github/workflows/lane-check.yml'));
+    };
+
+    it('is written when the lane check runs as a step of another job, or in a workflow that skips some pull requests', async () => {
+      const asStep = 'name: CI\non:\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: yedeya-labs/kanon/actions/lane-check@v1.2.3\n';
+      expect(await writesLaneCheck({ '.github/workflows/ci.yml': asStep })).toBe(true);
+      expect(await writesLaneCheck({ '.github/workflows/ci.yml': job("  pull_request:\n    paths: ['src/**']\n") })).toBe(true);
+      expect(await writesLaneCheck({ '.github/workflows/ci.yml': job('  push:\n') })).toBe(true);
+    });
+
+    it('is not written when a workflow, CI or another, has a job that reports the check on every pull request', async () => {
+      expect(await writesLaneCheck({ '.github/workflows/ci.yml': job('  pull_request:\n') })).toBe(false);
+      expect(await writesLaneCheck({ '.github/workflows/ci.yml': 'name: CI\non: push\njobs:\n  t:\n    runs-on: x\n    steps:\n      - run: "true"\n', '.github/workflows/checks.yaml': job('  pull_request:\n') })).toBe(false);
+      // A workflow that doesn't parse reports nothing.
+      expect(await writesLaneCheck({ '.github/workflows/ci.yml': 'name: CI\non: push\njobs:\n  t:\n    runs-on: x\n    steps:\n      - run: "true"\n', '.github/workflows/broken.yml': 'a: &x 1\n' })).toBe(true);
+    });
+
+    it("names the job the checkout's own lane-check.yml has, not the one init would write, in the step for after the merge", async () => {
+      const ci = 'name: CI\non: push\njobs:\n  t:\n    runs-on: x\n    steps:\n      - run: "true"\n';
+      const filtered = job("  pull_request:\n    paths: ['src/**']\n");
+      const d = parse(await run(checkout({ '.github/workflows/ci.yml': ci, '.github/workflows/lane-check.yml': filtered }), fakeGitHub({ defaultWorkflows: {} }), ['--json', '--no-apps']));
+      expect(d.files.find((f) => f.path === '.github/workflows/lane-check.yml')!.status).toBe('differs');
+      expect(d.findings.find((x) => x.id === 'ruleset.require-check')!.fix.text).toMatch(/^After a pull request that adds a job named "Lane check", as actions\/lane-check's README shows, merges to main/);
+    });
+
+    it('is still its own file to compare once init has written it', async () => {
+      const dir = checkout({ '.github/workflows/ci.yml': 'name: CI\non: push\njobs:\n  t:\n    runs-on: x\n    steps:\n      - run: "true"\n' });
+      await run(dir, fakeGitHub(), ['--yes', '--no-apps']);
+      const again = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps']));
+      expect(again.files.find((f) => f.path === '.github/workflows/lane-check.yml')!.status).toBe('same');
+    });
   });
 });
 

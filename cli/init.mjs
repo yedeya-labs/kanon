@@ -13,7 +13,10 @@
 //    Kanon reference pinned to the release it runs from, and prints the diff. It commits nothing.
 // 4. CREATES the taxonomy's labels (rulebook/labels.json), the bucket milestones (`kanon
 //    milestones`), the squash-only merge setting and, where the plan has rulesets and the token
-//    can administer the repository, the default branch's ruleset with its required check.
+//    can administer the repository, the default branch's ruleset. The ruleset requires the
+//    `Lane check` status check only once a job on the default branch reports it (#444): before
+//    that, every other pull request would wait on it, so the rule is a step for after the merge.
+//    To an existing ruleset, init adds that rule alone, and nothing else.
 // 5. DRIVES `kanon apps` for the Apps the chosen lanes run as (the Author and the Judge), and the
 //    optional Releaser when the repository calls Kanon's release workflow.
 // 6. SAYS PLAINLY what the plan can't enforce: on a private repository without rulesets, nothing
@@ -42,7 +45,7 @@
 // Node built-ins only: this runs from a Kanon checkout or through `npx`, with no install.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { URL } from 'node:url';
@@ -62,10 +65,12 @@ import {
   telemetryCallerFile,
   TRIGGERS,
 } from './callers.mjs';
+import { branchWorkflows, checkReporters } from './check-reporters.mjs';
 import { whoami } from './gh-token.mjs';
 import { pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { coveringRulesets } from './ruleset-bypass.mjs';
 import { BUCKETS, milestones as runMilestones } from './milestones.mjs';
+import { parseYaml } from './workflow-yaml.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
 /** @typedef {{ status: number | null, stdout: string, stderr: string }} GhResult */
@@ -87,7 +92,9 @@ callers pinned to this release, creates the labels, the bucket milestones and, w
 has rulesets, the default branch's ruleset, and runs \`kanon apps --apps\` for the Apps the
 lanes run as: the Author and the Judge, and the optional Releaser if the repository calls
 Kanon's release workflow and you ask for it. It commits nothing, and prints as exact steps
-whatever its token can't do. Safe to run again.
+whatever its token can't do. The ruleset requires the "Lane check" status check only once a
+job on the default branch reports it; until then, that rule is a step for after the merge.
+Safe to run again.
 
 Options:
   --repo <owner>/<repo>  the repository (default: the checkout's origin remote)
@@ -212,6 +219,7 @@ export const usage = (req) => {
  *   out: (line: string) => void,
  *   err: (line: string) => void,
  *   readFile: (path: string) => string | null,
+ *   listDir: (path: string) => string[],
  *   writeFile: (path: string, text: string) => void,
  *   ask: (question: string, fallback: string) => Promise<string>,
  *   apps: (argv: string[], io?: { out: (line: string) => void, err: (line: string) => void }) => Promise<number>,
@@ -247,6 +255,7 @@ export const realDeps = {
   out: (line) => process.stdout.write(`${line}\n`),
   err: (line) => process.stderr.write(`${line}\n`),
   readFile: (path) => (existsSync(path) ? readFileSync(path, 'utf8') : null),
+  listDir: (path) => (existsSync(path) && statSync(path).isDirectory() ? readdirSync(path) : []),
   writeFile: (path, text) => {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, text);
@@ -603,13 +612,16 @@ export const inspect = async (deps, repo) => {
 /** The merge settings of `K-SHIP-3`: squash only, the PR's title and body as the commit's. */
 export const MERGE_SETTINGS = { allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false, squash_merge_commit_title: 'PR_TITLE', squash_merge_commit_message: 'PR_BODY' };
 
+/** The rule that requires `lane-check`'s status check. */
+const CHECK_RULE = { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: LANE_CHECK }] } };
+
 /**
  * The default branch's ruleset (K-ADOPT-1 step 8): a pull request with no required approval yet
- * (bootstrap, K-ADOPT-6), squash only, no force-push or deletion, `lane-check` required, and the
- * merge queue where the plan has one.
- * @param {boolean} mergeQueue
+ * (bootstrap, K-ADOPT-6), squash only, no force-push or deletion, `lane-check` required once a
+ * job on the default branch reports it (#444), and the merge queue where the plan has one.
+ * @param {boolean} mergeQueue @param {boolean} [requireCheck]
  */
-export const rulesetBody = (mergeQueue) => ({
+export const rulesetBody = (mergeQueue, requireCheck = true) => ({
   name: RULESET_NAME,
   target: 'branch',
   enforcement: 'active',
@@ -628,7 +640,7 @@ export const rulesetBody = (mergeQueue) => ({
         allowed_merge_methods: ['squash'],
       },
     },
-    { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: LANE_CHECK }] } },
+    ...(requireCheck ? [CHECK_RULE] : []),
     ...(mergeQueue
       ? [
           {
@@ -840,13 +852,41 @@ export const workflowName = (text, path) => {
   return value.trim() || path;
 };
 
+/** Where `init` writes `lane-check`'s own workflow. */
+const LANE_CHECK_PATH = '.github/workflows/lane-check.yml';
+
+/** @param {unknown} v @returns {v is Record<string, any>} */
+const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * The checkout's workflows, parsed, by path. A file that doesn't parse is left out: lane-check
+ * and doctor say so.
+ * @param {Deps} deps @param {string} root
+ * @returns {Map<string, Record<string, any>>}
+ */
+export const checkoutWorkflows = (deps, root) => {
+  /** @type {Map<string, Record<string, any>>} */
+  const out = new Map();
+  for (const name of deps.listDir(join(root, '.github/workflows')).filter((n) => /\.ya?ml$/.test(n)).sort()) {
+    const rel = `.github/workflows/${name}`;
+    try {
+      const doc = parseYaml(deps.readFile(join(root, rel)) ?? '');
+      if (isMap(doc)) out.set(rel, doc);
+    } catch {
+      // Left out, as above.
+    }
+  }
+  return out;
+};
+
 /**
  * Every file `init` would write, by path relative to the checkout. A file it leaves to its
  * default is not here.
- * @param {{ s: Inspection, a: Answers, req: Requirements, release: string, repo: string, today: string, read: (rel: string) => string | null }} c
+ * @param {{ s: Inspection, a: Answers, req: Requirements, release: string, repo: string, today: string, read: (rel: string) => string | null, workflows: Map<string, Record<string, any>> }} c
+ *   `workflows`: the checkout's, parsed, by path (`checkoutWorkflows`)
  * @returns {Map<string, string>}
  */
-export const plannedFiles = ({ s, a, req, release, repo, today, read }) => {
+export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows }) => {
   /** @type {Map<string, string>} */
   const files = new Map();
   files.set('docs/qa/adoption.md', adoptionFile(s, a, repo, today));
@@ -863,7 +903,10 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read }) => {
   const identities = appIdentities(a, req);
   if (identities.length) files.set('.github/workflows/apps-check.yml', appsCheckFile(identities, release));
   if (!ci) files.set('.github/workflows/ci.yml', ciFile(release, s.defaultBranch));
-  else if (!/yedeya-labs\/kanon\/actions\/lane-check@/.test(ci)) files.set('.github/workflows/lane-check.yml', laneCheckFile(release));
+  // `lane-check` gets a workflow of its own unless another workflow has a job that reports its
+  // check on every pull request: a step that uses the action in another job reports nothing
+  // under that name (#444, L5's G14).
+  else if (!checkReporters(new Map([...workflows].filter(([f]) => f !== LANE_CHECK_PATH)), LANE_CHECK, s.defaultBranch).length) files.set(LANE_CHECK_PATH, laneCheckFile(release));
   if (!read('.github/dependabot.yml')) files.set('.github/dependabot.yml', dependabotFile());
   // The plugin's declaration is written only into a project that has no settings file yet; one it
   // has is the project's, and the keys to merge into it are a finding (`plugin.declare`).
@@ -1107,7 +1150,8 @@ const run = async (deps, opts, req, rep) => {
   // 3. Write the files.
   out('');
   out('== Files ==');
-  const files = plannedFiles({ s, a, req, release, repo, today: deps.today(), read });
+  const workflows = checkoutWorkflows(deps, root);
+  const files = plannedFiles({ s, a, req, release, repo, today: deps.today(), read, workflows });
   let wrote = false;
   for (const [rel, text] of files) {
     const have = read(rel);
@@ -1257,7 +1301,77 @@ const run = async (deps, opts, req, rep) => {
     }
   }
 
-  const body = rulesetBody(s.mergeQueue === 'yes');
+  // THE REQUIRED CHECK (#444, L5's G3 and G14). A ruleset requires "Lane check" only once a job on
+  // the default branch reports it on every pull request, read from GitHub as doctor reads it
+  // (cli/check-reporters.mjs): a job only this branch adds reports nothing on any other pull
+  // request, and each would wait on the rule until this one merges. Until then the rule is a step
+  // for after the merge. To a ruleset init didn't create, it adds this rule alone (the Owner's
+  // decision on #444), and only with a token that can administer the repository.
+  const checkGap = requiredCheckGap(LANE_CHECK);
+  const wantsCheck = s.rulesets !== 'no' && s.hasCommits && rulesetGaps(s.covering).includes(checkGap);
+  const onDefault = wantsCheck ? await branchWorkflows(deps, repo, s.defaultBranch) : null;
+  const reported = onDefault !== null && onDefault.error === null && checkReporters(onDefault.workflows, LANE_CHECK, s.defaultBranch).length > 0;
+  const rulesPage = `https://github.com/${repo}/settings/rules`;
+  /** The rule as a step for after the merge. */
+  const checkStep = () => {
+    /** @type {Map<string, Record<string, any>>} */
+    const planned = new Map();
+    for (const [rel, text] of files) {
+      if (!/^\.github\/workflows\/[^/]+\.ya?ml$/.test(rel)) continue;
+      try {
+        const doc = parseYaml(text);
+        if (isMap(doc)) planned.set(rel, doc);
+      } catch {
+        // init's own files parse.
+      }
+    }
+    // The checkout's own file wins over what init would write: init leaves a file that differs.
+    const adds = checkReporters(new Map([...planned, ...workflows]), LANE_CHECK, s.defaultBranch);
+    const by = adds.length ? `the pull request that adds ${adds.join(', ')}` : `a pull request that adds a job named "${LANE_CHECK}", as actions/lane-check's README shows,`;
+    const unread = onDefault?.error ? `init could not read the workflows on ${s.defaultBranch} (${onDefault.error}), so it can't tell whether a job there reports the status check "${LANE_CHECK}"` : `No job of a workflow on ${s.defaultBranch} reports the status check "${LANE_CHECK}" on every pull request yet`;
+    step({
+      id: 'ruleset.require-check',
+      category: 'ruleset',
+      subject: LANE_CHECK,
+      prose: `After ${by} merges to ${s.defaultBranch}, require the status check "${LANE_CHECK}" (K-ADOPT-1 step 8): run kanon init again with a token that can administer the repository, which adds only that rule, or add it in the repository's Settings, Rules, Rulesets. Not before: until then nothing on ${s.defaultBranch} reports it, and every other pull request would wait on it.`,
+      message: `${unread}, so the ruleset doesn't require it: a required check that nothing reports blocks every other pull request (K-ADOPT-1 step 8).`,
+      text: `After ${by} merges to ${s.defaultBranch}, run kanon init again with a token that can administer the repository, which adds only that rule, or add it on the ruleset's page. Never before: every other pull request would wait on the check.`,
+      commands: [],
+      url: rulesPage,
+    });
+  };
+  /**
+   * Adds the required check to one of the existing rulesets, its other rules unchanged: one this
+   * repository owns (an organisation's is the organisation's to change), preferring one that
+   * requires checks already, then init's own. Says whether it did, or in a dry run would.
+   */
+  const addCheck = async () => {
+    const own = s.covering.filter((c) => (c.source_type ?? 'Repository') === 'Repository');
+    const rank = (/** @type {any} */ c) => ((c.rules ?? []).some((/** @type {any} */ r) => r.type === 'required_status_checks') ? 0 : c.name === RULESET_NAME ? 1 : 2);
+    const target = [...own].sort((x, y) => rank(x) - rank(y))[0];
+    if (!target || !s.admin) return false;
+    const message = `the required status check "${LANE_CHECK}" to the ruleset "${target.name}" on ${s.defaultBranch}, which a job there reports`;
+    if (dry) {
+      change('ruleset', s.defaultBranch, `Would add ${message}`);
+      return true;
+    }
+    // Each rule as the API takes it back: its type and parameters, nothing GitHub added on reading.
+    /** @type {Array<{ type: string, parameters?: any }>} */
+    const rules = (target.rules ?? []).map((/** @type {any} */ r) => ({ type: r.type, parameters: r.parameters }));
+    const checks = rules.find((r) => r.type === 'required_status_checks');
+    if (checks) checks.parameters = { ...checks.parameters, required_status_checks: [...(checks.parameters?.required_status_checks ?? []), { context: LANE_CHECK }] };
+    else rules.push(CHECK_RULE);
+    const r = await deps.gh(['api', '-X', 'PUT', `repos/${repo}/rulesets/${target.id}`, '--input', '-'], JSON.stringify({ rules }));
+    if (r.status === 0) {
+      change('ruleset', s.defaultBranch, `Added ${message}`);
+      return true;
+    }
+    note(`Could not add the required status check "${LANE_CHECK}" to the ruleset "${target.name}" (${why(r)}).`);
+    return false;
+  };
+
+  const body = rulesetBody(s.mergeQueue === 'yes', reported);
+  const requiring = reported ? `, requiring "${LANE_CHECK}"` : '';
   const rulesetCmd = [`gh api -X POST repos/${repo}/rulesets --input - <<'JSON'`, JSON.stringify(body), 'JSON'];
   if (s.inactive.length && s.rulesets !== 'no') {
     note(`Not counted: the ruleset(s) ${s.inactive.map((c) => `"${c.name}" (${c.enforcement})`).join(', ')} on ${s.defaultBranch}, which enforce nothing.`);
@@ -1266,9 +1380,14 @@ const run = async (deps, opts, req, rep) => {
     out('');
     note(`THE PLATFORM DOES NOT ENFORCE REVIEW ON ${repo}. A private repository on this plan has no rulesets, so it never leaves bootstrap: every lane runs, and the Merger merges only what the Reviewer approved, but a person can merge past the Reviewer and nothing on GitHub refuses it (K-ADOPT-3, K-ADOPT-6). Making the repository public, or a plan with rulesets, changes that. The adoption record says so.`);
   } else if (s.covering.length) {
-    const gaps = rulesetGaps(s.covering);
-    if (!gaps.length) out(`The default branch's ruleset has every rule of K-ADOPT-1 step 8.`);
-    else {
+    const all = rulesetGaps(s.covering);
+    let gaps = all.filter((g) => g !== checkGap);
+    if (all.includes(checkGap)) {
+      if (!reported) checkStep();
+      else if (!(await addCheck())) gaps = all;
+    }
+    if (!all.length) out(`The default branch's ruleset has every rule of K-ADOPT-1 step 8.`);
+    if (gaps.length) {
       const names = s.covering.map((c) => c.name).join(', ');
       step({
         id: 'ruleset.gaps',
@@ -1277,29 +1396,32 @@ const run = async (deps, opts, req, rep) => {
         prose: `The ruleset on ${s.defaultBranch} (${names}) lacks some of K-ADOPT-1 step 8. In the repository's Settings, Rules, Rulesets:`,
         lines: gaps.map((x) => `  - ${x}`),
         message: `The ruleset on ${s.defaultBranch} (${names}) lacks some of K-ADOPT-1 step 8: ${gaps.join('; ')}.`,
-        text: "Add what it lacks in the repository's Settings, Rules, Rulesets; init doesn't change a ruleset it didn't create.",
+        text: `Add what it lacks in the repository's Settings, Rules, Rulesets. To a ruleset it didn't create, init adds only the required status check, once a job on ${s.defaultBranch} reports it, and with a token that can administer the repository.`,
         commands: [],
-        url: `https://github.com/${repo}/settings/rules`,
+        url: rulesPage,
       });
     }
   } else if (!s.hasCommits) {
     const prose = `Push the first commit straight to ${s.defaultBranch} (K-ADOPT-4), then run kanon init again: it creates the ruleset, which then requires a pull request.`;
     step({ id: 'ruleset.first-commit', category: 'ruleset', subject: s.defaultBranch, prose, message: `${s.defaultBranch} has no commit yet, so init created no ruleset (K-ADOPT-4).`, text: prose, commands: [] });
-  } else if (dry) change('ruleset', s.defaultBranch, `Would create the ruleset "${RULESET_NAME}" on ${s.defaultBranch}, requiring "${LANE_CHECK}"`);
-  else {
-    const r = s.admin ? await deps.gh(['api', '-X', 'POST', `repos/${repo}/rulesets`, '--input', '-'], JSON.stringify(body)) : null;
-    if (r?.status === 0) change('ruleset', s.defaultBranch, `Created the ruleset "${RULESET_NAME}" on ${s.defaultBranch}, requiring "${LANE_CHECK}"${s.mergeQueue === 'yes' ? ', with the merge queue' : ''}`);
+  } else {
+    if (dry) change('ruleset', s.defaultBranch, `Would create the ruleset "${RULESET_NAME}" on ${s.defaultBranch}${requiring}`);
     else {
-      step({
-        id: 'ruleset.create',
-        category: 'ruleset',
-        subject: s.defaultBranch,
-        prose: `Create the default branch's ruleset (K-ADOPT-1 step 8); it needs Administration: write:`,
-        message: `${s.defaultBranch} has no ruleset, and the token could not create one (K-ADOPT-1 step 8).`,
-        text: 'Create it with a token that has Administration: write; the command reads the ruleset from the lines after it.',
-        commands: rulesetCmd,
-      });
+      const r = s.admin ? await deps.gh(['api', '-X', 'POST', `repos/${repo}/rulesets`, '--input', '-'], JSON.stringify(body)) : null;
+      if (r?.status === 0) change('ruleset', s.defaultBranch, `Created the ruleset "${RULESET_NAME}" on ${s.defaultBranch}${requiring}${s.mergeQueue === 'yes' ? ', with the merge queue' : ''}`);
+      else {
+        step({
+          id: 'ruleset.create',
+          category: 'ruleset',
+          subject: s.defaultBranch,
+          prose: `Create the default branch's ruleset (K-ADOPT-1 step 8); it needs Administration: write:`,
+          message: `${s.defaultBranch} has no ruleset, and the token could not create one (K-ADOPT-1 step 8).`,
+          text: 'Create it with a token that has Administration: write; the command reads the ruleset from the lines after it.',
+          commands: rulesetCmd,
+        });
+      }
     }
+    if (!reported) checkStep();
   }
   if (s.rulesets !== 'no' && s.mergeQueue === 'unknown') note('Merge queue not known: the token can\'t read the organisation\'s plan. Without one, "require branches to be up to date" stays off (K-MERGE-7).');
   else if (s.rulesets !== 'no' && s.mergeQueue !== 'yes') note('No merge queue on this plan: "require branches to be up to date" stays off (K-MERGE-7).');
