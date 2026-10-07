@@ -78,7 +78,7 @@ const LISTS = {
 const connection = (field, first, args, node) => `${field}(first: ${first}${args}) { totalCount ${PAGE} nodes { ${node} } }`;
 
 /** @param {number} n the nested page size */
-const issueNode = (n) => `number body author { ${ACTOR} }
+const issueNode = (n) => `number body createdAt author { ${ACTOR} }
   issueDependenciesSummary { totalBlockedBy }
   ${connection('labels', n, '', LISTS.issueLabels.node)}
   ${connection('timelineItems', n, LISTS.issueTimeline.args, LISTS.issueTimeline.node)}`;
@@ -282,6 +282,7 @@ export function toPullRequest(node, renames = new Map()) {
       number: i.number,
       labels: i.labels.nodes.map((/** @type {any} */ l) => l.name),
       body: i.body ?? null,
+      ...(i.createdAt ? { created_at: i.createdAt } : {}),
       author: actor(i.author),
       timeline: i.timelineItems.nodes.map(timelineEvent).filter((/** @type {any} */ e) => e !== null),
       ...(typeof i.issueDependenciesSummary?.totalBlockedBy === 'number' ? { blocked_by: i.issueDependenciesSummary.totalBlockedBy } : {}),
