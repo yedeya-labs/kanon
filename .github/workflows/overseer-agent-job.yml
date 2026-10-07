@@ -225,11 +225,14 @@ jobs:
               whose effect is "file less"; under-filing is what the leakage metric catches.
             - The QA store, exported into `qa-store-export/` before you started. Do not query
               any store yourself. `qa-store-export/manifest.json` says whether the store was
-              `present`, `absent` or `degraded`, and lists the files:
+              `present`, `absent` or `degraded`, lists the files the export holds, and counts
+              its raw reports as `reports`:
               `runs-explorer.json` and `runs-audit.json` (each run in the window, newest
               first: liveness and run history), `coverage.json` (per route, its last status
               and commit), `areas.json` (the code-reading ledger), `reports/<kind>/<ts>.json`
-              (each run's raw report), and this project's own `token-trend.md`, `cache-ttl.md`
+              (each run's raw report; the directory is there only when `reports` is above 0,
+              so a store that holds no report is empty, not missing a file), and this
+              project's own `token-trend.md`, `cache-ttl.md`
               and `qa-clusters.md` when its store writes them. Audit coverage over time,
               liveness and recency, and execution truth (files read, lines cited and turns
               against the machine-stamped duration: an empty or degraded run is

@@ -276,6 +276,31 @@ export function exportProblems(root, kind) {
   return { missing, invalid, unknown };
 }
 
+/**
+ * The raw reports an Overseer export holds, after removing every directory under `reports/` that
+ * holds no file, and `reports/` itself when nothing is left (kanon#467). An artifact upload
+ * drops an empty directory, so a `reports/` the hook created for a window with no report would be
+ * listed in the manifest and missing from the export the agent reads.
+ * @param {string} root the `export/` directory
+ * @returns {number} how many files `reports/` holds
+ */
+export function pruneReports(root) {
+  const at = join(root, EXPORT_REPORTS);
+  if (!existsSync(at) || !statSync(at).isDirectory()) return 0;
+  /** @param {string} dir @returns {number} */
+  const walk = (dir) => {
+    let n = 0;
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) n += walk(p);
+      else n += 1;
+    }
+    if (n === 0) rmSync(dir, { recursive: true, force: true });
+    return n;
+  };
+  return walk(at);
+}
+
 /** Empty a directory, keeping it. @param {string} root */
 const emptyDir = (root) => {
   rmSync(root, { recursive: true, force: true });
@@ -301,7 +326,7 @@ export function finish(env, now = Date.now()) {
   const outputs = { present: String(present), state: present ? 'ok' : 'absent', commit: '' };
 
   if (!present) {
-    if (op === 'export') writeFileSync(join(dir, FILES.export, MANIFEST), `${JSON.stringify({ store: 'absent', kind, generated_at: new Date(now).toISOString(), files: [] })}\n`);
+    if (op === 'export') writeFileSync(join(dir, FILES.export, MANIFEST), `${JSON.stringify({ store: 'absent', kind, generated_at: new Date(now).toISOString(), files: [], ...(kind === 'overseer' ? { reports: 0 } : {}) })}\n`);
     if (op === 'cost-rows') {
       const absent = JSON.stringify({ rows: [], error: 'the QA store is absent' });
       writeFileSync(join(dir, FILES.costRows), `${absent}\n`);
@@ -336,6 +361,7 @@ export function finish(env, now = Date.now()) {
     let state = failed ? 'degraded' : 'ok';
     /** @type {string[]} */
     let files = [];
+    let reports = 0;
     if (failed) {
       warnings.push('the store hook failed to export the store, so this run reads none of it.');
       emptyDir(root);
@@ -352,13 +378,17 @@ export function finish(env, now = Date.now()) {
         warnings.push(`the store hook's export lacks ${[...missing, ...invalid.map((f) => `a valid ${f}`)].join(', ')}, so this run reads none of it.`);
         emptyDir(root);
       } else {
+        // THE MANIFEST LISTS WHAT THE EXPORT HOLDS (kanon#467): an empty `reports/` is removed
+        // here, so it is listed only when it holds a report, and the count says how many.
+        if (kind === 'overseer') reports = pruneReports(root);
         files = readdirSync(root).sort();
       }
     }
     outputs.state = state;
-    writeFileSync(join(root, MANIFEST), `${JSON.stringify({ store: state === 'ok' ? 'present' : 'degraded', kind, generated_at: new Date(now).toISOString(), files })}\n`);
+    const manifest = { store: state === 'ok' ? 'present' : 'degraded', kind, generated_at: new Date(now).toISOString(), files, ...(kind === 'overseer' ? { reports } : {}) };
+    writeFileSync(join(root, MANIFEST), `${JSON.stringify(manifest)}\n`);
     const line = state === 'ok'
-      ? `QA store \`export\` (${kind}): ${files.join(', ')}.`
+      ? `QA store \`export\` (${kind}): ${files.join(', ')}${kind === 'overseer' ? `; ${reports} raw report(s)` : ''}.`
       : `QA store \`export\` (${kind}): degraded, so the agent reads none of the store.`;
     return { outputs, line, warnings };
   }

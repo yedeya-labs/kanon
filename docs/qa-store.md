@@ -42,7 +42,7 @@ An **export** holds JSON arrays of objects, one per row, with each row's attribu
 | `reports/<kind>/<ts>.json` | each run's raw report, for the runs in the window | `overseer` |
 | `token-trend.md`, `cache-ttl.md`, `qa-clusters.md` | your own Overseer inputs, if your hook writes them (plan 0004 §3.2) | `overseer` |
 
-An attribute a row doesn't carry is absent, never `false` or 0. The block leaves out any other file, with a warning, and adds `manifest.json`, which says whether the store was present, absent or degraded, and lists the files.
+An attribute a row doesn't carry is absent, never `false` or 0. The block leaves out any other file, with a warning, and adds `manifest.json`, which says whether the store was present, absent or degraded, lists the files the export holds, and, in an Overseer export, counts its raw reports as `reports`. A `reports/` directory that holds no report is removed, so the manifest never lists a path the export doesn't contain ([#467](https://github.com/yedeya-labs/kanon/issues/467)).
 
 **No cost rows** (plan 0004 step 13). The telemetry store's per-run cost rows are not in any export. The Overseer reads cost as the week's token trend, `token-trend.md`, which your hook writes from those rows, and the prompt-cache facts as `cache-ttl.md`, so its agent gets the arithmetic and never the raw rows, which plan 0002 owns (`K-OBS-13`). After plan 0002's S7 the lane reads both through that plan's `query` instead, and the two files go.
 
