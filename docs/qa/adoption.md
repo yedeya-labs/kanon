@@ -152,6 +152,7 @@ These rules' lines are prose only with a note, and name nothing to install: `K-P
 - **Accepted id-token holder:** `agent-lanes-smoke.yml` job `overseer` (grants it to the overseer lane's store job alone, which the id-token guard test holds)
 - **Accepted id-token holder:** `agent-lanes-smoke.yml` job `explore-telemetry` (grants it to the telemetry lane's aggregate job alone, which the id-token guard test holds)
 - **Accepted id-token holder:** `agent-overseer.yml` job `export` (its QA store job: Kanon's own lane definition; the id-token guard test holds which of its jobs may hold the grant)
+- **Accepted id-token holder:** `agent-overseer.yml` job `telemetry` (reads the repository's own telemetry rows as its reader role, for the token trend and the cache-TTL facts; Kanon's own lane definition, held to its exact shape by the id-token guard test)
 - **Accepted id-token holder:** `qa-store-aws-maintenance.yml` job `maintenance` (runs the QA store's hygiene scripts under the store's role; Kanon's own reusable workflow, held by the id-token guard test)
 - **Accepted id-token holder:** `telemetry-collect.yml` job `collect` (writes to the telemetry store as its writer; Kanon's own reusable workflow, held by the id-token guard test)
 - **Accepted id-token holder:** `telemetry.yml` job `collect` (Kanon's telemetry caller: grants it to telemetry-collect.yml at the pinned release, whose one job holds it)

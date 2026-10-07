@@ -30,6 +30,21 @@
 # `tests/unit/id-token-guard.test.ts`). Without a hook it runs to completion without memory: the
 # export holds only its manifest, which says the store is absent.
 #
+# ── THE COST VIEW, FROM THE TELEMETRY STORE (kanon#470; plan 0002 §6) ─────────────────────
+#
+#   gate → telemetry (store job: the reader role) → overseer, which adds its two files to the export
+#                    ↘ delete-telemetry, after the overseer, always
+#
+# The token trend and the cache-TTL facts come from this repository's own rows in Kanon's hosted
+# telemetry store. The `telemetry` job assumes the repository's reader role,
+# `kanon-telemetry-<key>-reader`, from the `KANON_TELEMETRY_READER_ROLE` secret the caller maps by
+# name, reads its own lanes' partitions, and uploads only `token-trend.md` and `cache-ttl.md`,
+# never a row (plan 0004 step 13; `scripts/overseer-telemetry.mjs`). Its steps are fixed: the
+# id-token guard allows it by its exact shape. The agent's job adds the two files to the export and
+# writes the read's status into the manifest as `telemetry`: `ran`, `not configured` (no reader
+# role mapped, as for a repository that didn't opt in to telemetry) or `failed`. A store hook that
+# writes the two files itself keeps them whenever the read didn't run.
+#
 # ── WHO FILES WHAT (decision 12) ─────────────────────────────────────────────────────────
 #
 #   overseer (agent, read-only token) → uploads qa-overseer-audit.json
@@ -85,8 +100,11 @@ name: Overseer
 #                                says it is not a finding.
 # OPTIONAL SECRET: QA_STORE_BUCKET
 # OPTIONAL SECRET: QA_STORE_ROLE_ARN
+# OPTIONAL SECRET: KANON_TELEMETRY_READER_ROLE
 # The lines above are read by `lane-check` and the requirements file (kanon#433): the QA store's
-# secrets, which a caller maps once its repository has a store hook, and may leave out until then.
+# secrets, which a caller maps once its repository has a store hook, and may leave out until then;
+# and the telemetry reader role (kanon#470), which a caller maps once its repository is registered
+# with Kanon's telemetry store, and may leave out until then.
 on:
   workflow_call:
     inputs:
@@ -109,6 +127,11 @@ on:
       QA_STORE_ROLE_ARN:
         required: false
       QA_STORE_BUCKET:
+        required: false
+      # THE TELEMETRY READER ROLE'S ARN (kanon#470): the hosted telemetry stack's
+      # `ReaderRole<id>` output, `kanon-telemetry-<key>-reader`. A secret, because it carries the
+      # account id. Optional: without it the cost view is `not configured`.
+      KANON_TELEMETRY_READER_ROLE:
         required: false
 
 concurrency:
@@ -142,6 +165,7 @@ jobs:
       member: ${{ steps.gate.outputs.member }}
       due: ${{ steps.runtime.outputs.due }}
       watch: ${{ steps.watch.outputs.watch }}
+      reader: ${{ steps.reader.outputs.reader }}
       upstream: ${{ steps.upstream.outputs.upstream }}
     steps:
       - uses: $/actions/kanon-path
@@ -179,6 +203,15 @@ jobs:
         run: |
           due="$(node "$KANON/scripts/runtime-bump.mjs")"
           printf 'due=%s\n' "$due" >> "$GITHUB_OUTPUT"
+      # IS THERE A TELEMETRY READER ROLE? (kanon#470). A job's `if:` can't read a secret, so this
+      # step says whether it is set, and prints nothing of it.
+      - name: Is the telemetry reader configured?
+        id: reader
+        if: steps.runtime.outputs.due == 'true'
+        env:
+          ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
+        run: |
+          if [ -n "$ROLE" ]; then echo "reader=true" >> "$GITHUB_OUTPUT"; else echo "reader=false" >> "$GITHUB_OUTPUT"; fi
       # WHERE UPSTREAM FINDINGS GO (`K-LAYOUT-10`, kanon#423): the adoption record's
       # `Upstream findings:` choice, read from the default branch (`K-MERGE-17`) here, before
       # any agent runs, and handed to the `file` job as this job's output. The agent's job can
@@ -216,12 +249,62 @@ jobs:
           secrets: ${{ format('{{"QA_STORE_ROLE_ARN":{0},"QA_STORE_BUCKET":{1}}}', toJSON(secrets.QA_STORE_ROLE_ARN), toJSON(secrets.QA_STORE_BUCKET)) }}
           kind: overseer
 
+  # THE TELEMETRY STORE JOB (kanon#470): the reader role's read of this repository's own rows,
+  # summarised into the two files, and nothing else. Its steps are fixed: the id-token guard allows
+  # this job by its exact shape, so a step added here turns the guard red. It declares no
+  # environment, which would replace the ref in its token's subject. A role it can't assume (a run
+  # on another ref, the runtime-version trigger's pull request) is a `failed` read, said, and green.
+  telemetry:
+    needs: gate
+    if: needs.gate.outputs.member == 'true' && needs.gate.outputs.due == 'true' && needs.gate.outputs.reader == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+    outputs:
+      status: ${{ steps.read.outputs.status }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      # The attempt that read it. A partial re-run reuses this job's outputs.
+      attempt: ${{ github.run_attempt }}
+    steps:
+      - uses: $/actions/kanon-path
+      # MASKED FIRST: the account id and the key in the role's name, so no later step prints them.
+      - name: Mask the reader role's account id and key
+        env:
+          ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
+        run: node "$KANON/scripts/overseer-telemetry.mjs" mask
+      # The STS call goes to Frankfurt, where the hosted store lives. A refusal is a `failed` read.
+      - uses: aws-actions/configure-aws-credentials@v6
+        id: creds
+        continue-on-error: true
+        with:
+          role-to-assume: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
+          aws-region: eu-central-1
+          role-session-name: kanon-overseer-telemetry
+      - name: Read this repository's telemetry into the two reports
+        id: read
+        env:
+          ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
+          CREDENTIALS: ${{ steps.creds.outcome }}
+          OUT: ${{ runner.temp }}/overseer-telemetry
+        run: node "$KANON/scripts/overseer-telemetry.mjs" read
+      # One day; a job of its own deletes it after the agent's job.
+      - name: Upload the two reports for the agent's job
+        id: upload
+        if: steps.read.outputs.status == 'ran'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-overseer-telemetry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/overseer-telemetry
+          retention-days: 1
+          if-no-files-found: error
+
   # THE LANE'S RUN, AS A CALLED WORKFLOW (kanon#279, `K-AGENT-49`). `overseer-run.yml` mints the
   # token in a job that holds the key and runs nothing else, then hands it to the agent's job
   # (`overseer-agent-job.yml`). Both sit inside this job's scope, so the mint waits
   # with the agent: a token minted before the wait could expire under it.
   overseer:
-    needs: [gate, export]
+    needs: [gate, export, telemetry]
     if: ${{ !cancelled() && needs.export.result == 'success' && needs.export.outputs.attempt == github.run_attempt }}
     # NO `id-token` AND NO ENVIRONMENT: this job holds no cloud credentials (plan 0004 P9). The
     # reads are the finish block's, with the workflow token: its own run, and issues.
@@ -234,6 +317,10 @@ jobs:
       artifact-name: ${{ needs.export.outputs.artifact-name }}
       # The gate job's reading of the record, never anything the agent wrote.
       capability-watch: ${{ needs.gate.outputs.watch }}
+      # The telemetry read's status (kanon#470): `not configured` without a reader role; `ran`
+      # only when this attempt's read wrote its two files; anything else `failed`.
+      telemetry-status: ${{ needs.gate.outputs.reader != 'true' && 'not configured' || (needs.telemetry.outputs.status == 'ran' && needs.telemetry.outputs.attempt == github.run_attempt) && 'ran' || 'failed' }}
+      telemetry-artifact-name: kanon-overseer-telemetry-${{ github.run_id }}-${{ github.run_attempt }}
     secrets:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
@@ -334,4 +421,22 @@ jobs:
           operation: delete-export
           artifact-id: ${{ needs.export.outputs.artifact-id }}
           export-attempt: ${{ needs.export.outputs.attempt }}
+          agent-result: ${{ needs.overseer.result }}
+
+  # THE TELEMETRY REPORTS' DELETE JOB (kanon#470): the two files describe this repository's cost,
+  # which anyone who can read the repository could download while the artifact exists. After the
+  # overseer job, whatever happened to it.
+  delete-telemetry:
+    needs: [export, telemetry, overseer]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - uses: $/actions/qa-store
+        with:
+          operation: delete-export
+          artifact-id: ${{ needs.telemetry.outputs.artifact-id }}
+          export-attempt: ${{ needs.telemetry.outputs.attempt }}
           agent-result: ${{ needs.overseer.result }}

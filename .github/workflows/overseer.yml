@@ -36,6 +36,11 @@
 # pin every adopter runs, so its Overseer reviews the runtime's changelog once, for everyone. A
 # release that predates the choice runs the watch regardless.
 #
+# ITS COST VIEW (kanon#470). The lane reads Kanon's own telemetry rows with Kanon's reader role,
+# whose ARN is the repository secret KANON_TELEMETRY_READER_ROLE. This caller maps it once it pins
+# a release that declares it: a release before that refuses a secret it doesn't declare. Until
+# then the audit says the export holds no token trend.
+#
 # WHERE ITS FINDINGS GO. The adoption record declares `Upstream findings: filed here`, so a
 # finding only Kanon can act on is filed on Kanon, like any other (plan 0004 decision 12, as
 # amended). A release that predates the choice drafts those under the audit issue's

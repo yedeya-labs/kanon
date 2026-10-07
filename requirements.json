@@ -362,6 +362,7 @@
         "AUTHOR_APP_ID",
         "AUTHOR_APP_PRIVATE_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN",
+        "KANON_TELEMETRY_READER_ROLE",
         "QA_STORE_BUCKET",
         "QA_STORE_ROLE_ARN"
       ],
@@ -380,6 +381,7 @@
       "hooks": [],
       "qaStore": true,
       "optionalSecrets": [
+        "KANON_TELEMETRY_READER_ROLE",
         "QA_STORE_BUCKET",
         "QA_STORE_ROLE_ARN"
       ]

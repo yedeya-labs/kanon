@@ -47,7 +47,9 @@ describe('requirements.json', () => {
     const coupled = Object.entries(lanes).filter(([, l]) => l.qaStore).map(([n]) => n);
     expect(coupled).toEqual(['agent-code-audit', 'agent-dispatch-sweep', 'agent-explore', 'agent-overseer']);
     for (const [name, l] of Object.entries(lanes)) {
-      expect(l.optionalSecrets, name).toEqual(coupled.includes(name) ? ['QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'] : undefined);
+      // The Overseer also takes its telemetry reader role, optionally (kanon#470): not a store secret.
+      const extra = name === 'agent-overseer' ? ['KANON_TELEMETRY_READER_ROLE'] : [];
+      expect(l.optionalSecrets, name).toEqual(coupled.includes(name) ? [...extra, 'QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'] : undefined);
       for (const n of l.optionalSecrets ?? []) expect(l.secrets, name).toContain(n);
     }
   });

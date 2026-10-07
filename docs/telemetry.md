@@ -315,6 +315,20 @@ The Owner's to run; agents run none. It costs about a cent a month (plan 0002 de
    curl -s -o /dev/null -w '%{http_code}\n' "<AggregateUrl>"
    ```
 
+### The Overseer's cost view
+
+The Overseer's weekly token trend and its prompt-cache facts are computed from a repository's own rows (plan 0002 §6; the Owner's decision on [#470](https://github.com/yedeya-labs/kanon/issues/470)). Its lane, `agent-overseer.yml`, has a `telemetry` job, the only one of the lane besides its QA store job that holds `id-token: write`. It assumes the repository's reader role, `kanon-telemetry-<key>-reader`, which the template already creates for every registered repository, trusted for the branch refs its register entry lists and allowed to `Query` only partitions under `<key>#`. It reads each of Kanon's lanes' partitions for the last 14 days, projected to the fields the two reports use, and writes `token-trend.md` and `cache-ttl.md` (`scripts/overseer-telemetry.mjs`, with the reports in `scripts/lib/token-trend.mjs` and `scripts/lib/cache-ttl.mjs`, moved from the reference adopter's two readers of §1.4). Only the two files reach the agent, as an artifact kept one day; no row is printed or handed on. The id-token guard holds the job to its exact steps (`tests/unit/helpers/store-jobs.ts`).
+
+The lane reads the role's ARN from a repository secret its caller maps by name, `KANON_TELEMETRY_READER_ROLE`: the stack's `ReaderRole<key>` output, with the register key's non-alphanumeric characters dropped, as for the writer. It is optional: without it the read is `not configured`, which the audit reports as such and never as a missing store. The Owner reads the output and stores it in the repository without printing it, since it holds the account id:
+
+```sh
+aws cloudformation describe-stacks --stack-name kanon-telemetry --profile kanon --region eu-central-1 \
+  --query "Stacks[0].Outputs[?OutputKey=='ReaderRole<key>'].OutputValue" --output text \
+  | gh secret set KANON_TELEMETRY_READER_ROLE -R <owner>/<repo>
+```
+
+then map it in the Overseer's caller, under the job's `secrets:`, once the caller pins a release that declares it: `KANON_TELEMETRY_READER_ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}`. The job masks the account id and the key in the role's name before any other step names them. A run on a ref the role doesn't trust, such as a dispatch from another branch or the runtime-version trigger's pull request, reads nothing, and the audit says the read `failed`.
+
 ### The Explorer's lane
 
 The function's one caller is the Explorer's telemetry mode, `agent-explore-telemetry.yml` (plan 0004 step 14, [docs/lanes.md](lanes.md#explore-the-telemetry)). Any repository whose entry sets `aggregate_invoker` can install it. Its `aggregate` job, the only job of the lane that holds `id-token: write`, assumes the invoker role with `aws-actions/configure-aws-credentials`, calls the URL with a SigV4-signed `GET` (`scripts/aggregate-read.mjs`), and refuses an answer with any key the function never answers, or a threshold under three. It hands the checked answer to the agent's job, which holds no credentials, as an artifact kept one day. Like the writer, the invoker role trusts every default-branch job of the repository that holds `id-token: write`, so Kanon's id-token guard holds that job to its exact steps (`tests/unit/helpers/store-jobs.ts`).

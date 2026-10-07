@@ -201,11 +201,13 @@ export function agentJobProblems(name: string, j: Job, reads: TelemetryRead[] = 
 /**
  * Everything wrong with a store-coupled lane's jobs. Empty when the lane has the plan's shape.
  *
+ * `file`: the lane's file name, which the Overseer's telemetry read job's exemption needs.
+ *
  * `agentless`: a lane that runs no model, the dispatch sweep (plan 0004 step 9). It must then
  * have no agent job, and its script's job is held to the rule for every other job: its own
  * `permissions:` without `id-token`.
  */
-export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemetryReads(), { agentless = false }: { agentless?: boolean } = {}): string[] {
+export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemetryReads(), { agentless = false, file }: { agentless?: boolean; file?: string } = {}): string[] {
   const out: string[] = [];
   const jobs = Object.entries(wf.jobs ?? {});
   const store = jobs.filter(([, j]) => isStoreJob(j));
@@ -230,7 +232,8 @@ export function storeLaneProblems(wf: Workflow, reads: TelemetryRead[] = telemet
     } else {
       if (j.environment !== undefined) out.push(`${name}: declares environment '${envName(j)}'; no job of a store-coupled lane declares one`);
       if (!p) out.push(`${name}: declares no permissions block of its own, so it inherits the caller's grant, id-token included`);
-      else if ('id-token' in p) out.push(`${name}: grants id-token: ${p['id-token']}; only store jobs do`);
+      // The Overseer's telemetry read job (kanon#470) holds it too, in its exact shape alone.
+      else if ('id-token' in p && !isOverseerTelemetryJob(file, name, j)) out.push(`${name}: grants id-token: ${p['id-token']}; only store jobs do`);
     }
     if (p && rank(p.actions) === 2 && !isDeleteJob(j)) out.push(`${name}: grants actions: write; only the export's delete job does`);
   }
@@ -393,15 +396,56 @@ export function isAggregateJob(file: string | undefined, name: string, j: Job): 
     && typeof w.path === 'string' && TEMP_PATH.test(w.path.trim());
 }
 
+/** The Overseer's telemetry read job (kanon#470), the one holder that assumes a telemetry reader role. */
+export const OVERSEER_TELEMETRY_FILE = 'agent-overseer.yml';
+export const OVERSEER_TELEMETRY_JOB = 'telemetry';
+const OT_MASK_RUN = 'node "$KANON/scripts/overseer-telemetry.mjs" mask';
+const OT_READ_RUN = 'node "$KANON/scripts/overseer-telemetry.mjs" read';
+/** The role the job assumes, and the masking step reads: the lane's secret, mapped by name in its caller. */
+const OT_ROLE = '${{ secrets.KANON_TELEMETRY_READER_ROLE }}';
+/** What the read step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
+export const OT_READ_ENV = { ROLE: OT_ROLE, CREDENTIALS: '${{ steps.creds.outcome }}', OUT: '${{ runner.temp }}/overseer-telemetry' };
+
+/**
+ * The Overseer's `telemetry` job (kanon#470; plan 0002 §6): `telemetry` in `agent-overseer.yml`,
+ * and only in exactly this shape: Kanon's path; the step that masks the role's account id and key;
+ * the AWS credentials for the reader role, from the lane's secret, continuing on error so a
+ * refusal is a `failed` read; the read script, handed only the role, the credentials' outcome and
+ * its output directory; and the upload of the two reports from the runner's temp directory. Its
+ * grant is `id-token: write` and nothing else, and it carries no job `env:`, `container:`,
+ * `services:` or `defaults:` (`STORE_JOB_KEYS`). The reader role trusts every default-branch job
+ * that holds `id-token`, so the shape is what keeps the set to this job.
+ */
+export function isOverseerTelemetryJob(file: string | undefined, name: string, j: Job): boolean {
+  if (file !== OVERSEER_TELEMETRY_FILE || name !== OVERSEER_TELEMETRY_JOB || !only(j, STORE_JOB_KEYS)) return false;
+  if (JSON.stringify(j.permissions) !== JSON.stringify({ 'id-token': 'write' })) return false;
+  const steps = (j.steps ?? []) as Array<Record<string, unknown>>;
+  if (steps.length !== 5) return false;
+  const [path, mask, creds, read, upload] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
+  const w = (upload.with ?? {}) as Record<string, unknown>;
+  return only(path, ['uses']) && path.uses === '$/actions/kanon-path'
+    && only(mask, ['name', 'env', 'run']) && String(mask.run).trim() === OT_MASK_RUN
+    && JSON.stringify(mask.env) === JSON.stringify({ ROLE: OT_ROLE })
+    && only(creds, ['uses', 'id', 'continue-on-error', 'with']) && CREDENTIALS.test(String(creds.uses))
+    && creds.id === 'creds'
+    && only(creds.with as object, ['role-to-assume', 'aws-region', 'role-session-name'])
+    && (creds.with as Record<string, unknown>)['role-to-assume'] === OT_ROLE
+    && only(read, ['name', 'id', 'env', 'run']) && String(read.run).trim() === OT_READ_RUN
+    && JSON.stringify(read.env) === JSON.stringify(OT_READ_ENV)
+    && only(upload, ['name', 'id', 'if', 'uses', 'with']) && UPLOAD.test(String(upload.uses))
+    && only(w, ['name', 'path', 'retention-days', 'if-no-files-found'])
+    && typeof w.path === 'string' && TEMP_PATH.test(w.path.trim());
+}
+
 /**
  * A job that may hold `id-token: write`: one that runs the qa-store block alone (kanon#225's
  * allow-list: the block, plus the download of the report a `put` writes), or the AWS store's
  * maintenance block alone, with nothing that could run other code beside it, or the telemetry
- * collector's job (`isCollectorJob`), or the telemetry Explorer's read job (`isAggregateJob`),
- * which need their workflow's file name.
+ * collector's job (`isCollectorJob`), the telemetry Explorer's read job (`isAggregateJob`), or the
+ * Overseer's telemetry read job (`isOverseerTelemetryJob`), which need their workflow's file name.
  */
 export function mayHoldIdToken(name: string, j: Job, file?: string): boolean {
-  if (isCollectorJob(file, name, j) || isAggregateJob(file, name, j)) return true;
+  if (isCollectorJob(file, name, j) || isAggregateJob(file, name, j) || isOverseerTelemetryJob(file, name, j)) return true;
   if (isStoreJob(j)) return !isAgentJob(j) && !isDeleteJob(j) && extraStepProblems(name, j, 'store').length === 0;
   const steps = j.steps ?? [];
   return steps.length === 1 && usesMaintenance(steps[0]!)
@@ -439,13 +483,13 @@ export function idTokenProblems(workflows: Record<string, Workflow>): string[] {
         else if (target.permissions === undefined) {
           for (const [n, cj] of Object.entries(target.jobs ?? {})) {
             if (cj.permissions === undefined && !mayHoldIdToken(n, cj, callee)) {
-              out.push(`${callee}: job ${n} declares no permissions in a workflow with none, so it inherits id-token: write from ${file}'s job ${name}; only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may`);
+              out.push(`${callee}: job ${n} declares no permissions in a workflow with none, so it inherits id-token: write from ${file}'s job ${name}; only a job that runs the qa-store block alone, the telemetry collector job, the aggregate read job or the Overseer telemetry read job, may`);
             }
           }
         }
         continue;
       }
-      if (!mayHoldIdToken(name, j, file)) out.push(`${file}: job ${name} holds id-token: write (${how}); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may`);
+      if (!mayHoldIdToken(name, j, file)) out.push(`${file}: job ${name} holds id-token: write (${how}); only a job that runs the qa-store block alone, the telemetry collector job, the aggregate read job or the Overseer telemetry read job, may`);
     }
   }
   return out;

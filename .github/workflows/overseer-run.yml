@@ -27,6 +27,16 @@ on:
         required: false
         type: string
         default: "off"
+      telemetry-status:
+        description: The telemetry read's status, `ran`, `not configured` or `failed`, from the lane (kanon#470).
+        required: false
+        type: string
+        default: not configured
+      telemetry-artifact-name:
+        description: The artifact the lane's `telemetry` job uploaded when its read ran.
+        required: false
+        type: string
+        default: ""
     outputs:
       agent-outcome:
         value: ${{ jobs.overseer.outputs.agent-outcome }}
@@ -85,6 +95,8 @@ jobs:
     with:
       artifact-name: ${{ inputs.artifact-name }}
       capability-watch: ${{ inputs.capability-watch }}
+      telemetry-status: ${{ inputs.telemetry-status }}
+      telemetry-artifact-name: ${{ inputs.telemetry-artifact-name }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}
     secrets:

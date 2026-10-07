@@ -131,7 +131,11 @@ export const buildRequirements = (root: string) => {
   const hookPath = /^ +uses: \.\/(\.github\/actions\/[a-z-]+)$/m.exec(block)?.[1];
   const qaStore = {
     hook: `${hookPath}/action.yml`,
-    secrets: [...new Set(Object.values(lanes).flatMap((l) => (l as { optionalSecrets?: string[] }).optionalSecrets ?? []))].sort(),
+    // The secrets the lanes hand the qa-store block (its `secrets:` input), so another optional
+    // secret of a store-coupled lane, such as the Overseer's telemetry reader role (kanon#470),
+    // is not taken for the store's.
+    secrets: [...new Set(laneFiles(root).flatMap((f) => [...readFileSync(join(root, '.github/workflows', f), 'utf8')
+      .matchAll(/^\s+secrets: \$\{\{ format\(.*$/gm)].flatMap((m) => [...m[0].matchAll(/toJSON\(secrets\.([A-Z0-9_]+)\)/g)].map((x) => x[1]!))))].sort(),
     ...('variables' in ((parse(block) as Doc).inputs ?? {}) ? {} : { secretsOnly: true }),
   };
   return {
