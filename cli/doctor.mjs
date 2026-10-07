@@ -51,7 +51,7 @@ import { URL } from 'node:url';
 import { checkoutCheck, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, inspect, registerRolesOf, registerRows, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
+import { appsArgs, inspect, LANE_CHECK, registerRolesOf, registerRows, requiredCheckGap, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -103,7 +103,7 @@ export const UNWAIVABLE = {
  * `unchecked[].check` it is listed under: a waiver of such a finding can't be called stale.
  * @type {Record<string, string>}
  */
-const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset' };
+const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset' };
 
 /**
  * The finding categories, in the order a finding is listed and fixed: the pin decides which
@@ -151,6 +151,7 @@ export const FINDINGS = {
   'label.missing': { category: 'label', blocking: false },
   'ruleset.missing': { category: 'ruleset', blocking: true },
   'ruleset.rule-missing': { category: 'ruleset', blocking: true },
+  'ruleset.check-unreported': { category: 'ruleset', blocking: true },
   'ruleset.releaser-bypass-missing': { category: 'ruleset', blocking: true },
   'ruleset.bypass-extra': { category: 'ruleset', blocking: true },
   'id-token.unaccepted': { category: 'id-token', blocking: true },
@@ -442,6 +443,80 @@ const headingCount = (text, heading) => {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
   const inFence = fenced(lines);
   return lines.filter((l, i) => !inFence.has(i) && l === heading).length;
+};
+
+// ── The jobs that report a status check (#418) ──────────────────────────────────────────────
+
+/** The events on which a workflow's jobs report their checks on a pull request. */
+const PR_EVENTS = ['pull_request', 'pull_request_target'];
+
+/** Whether a workflow runs on a pull request. @param {Record<string, any>} wf */
+const onPullRequest = (wf) => {
+  const on = wf.on;
+  if (typeof on === 'string') return PR_EVENTS.includes(on);
+  if (Array.isArray(on)) return on.some((e) => PR_EVENTS.includes(e));
+  return isMap(on) && PR_EVENTS.some((e) => e in on);
+};
+
+/**
+ * The jobs that report the status check `check` on a pull request: in a workflow that runs on
+ * one, a job whose name, or its key when it has none, is exactly the check's. A job that calls a
+ * reusable workflow reports `<its name> / <the called job's>`, and a matrix job its name with the
+ * matrix's values, so neither counts: actions/lane-check's README runs the check as a job of its
+ * own. A step of another job reports nothing under its own name (L5's G14).
+ * @param {Map<string, Record<string, any>>} workflows by path @param {string} check
+ * @returns {string[]} `<workflow file>#<job>`
+ */
+export const checkReporters = (workflows, check) => {
+  /** @type {string[]} */
+  const out = [];
+  for (const [file, wf] of workflows) {
+    if (!onPullRequest(wf)) continue;
+    for (const [key, job] of Object.entries(isMap(wf.jobs) ? wf.jobs : {})) {
+      if (!isMap(job) || job.uses !== undefined || (isMap(job.strategy) && job.strategy.matrix !== undefined)) continue;
+      if ((job.name === undefined || job.name === null ? key : String(job.name)) === check) out.push(`${file}#${key}`);
+    }
+  }
+  return out;
+};
+
+/** One read of every workflow file on a branch, with its text. */
+const BRANCH_WORKFLOWS = 'query($owner: String!, $name: String!, $expression: String!) { repository(owner: $owner, name: $name) { object(expression: $expression) { ... on Tree { entries { name type object { ... on Blob { text } } } } } } }';
+
+/**
+ * The workflows on the default branch, read from GitHub rather than the checkout: a job that
+ * only a branch adds reports its check on that branch's pull request, and on no other (#418).
+ * One GraphQL query, sent on standard input. A file that doesn't parse is left out: the
+ * checkout's own read says so.
+ * @param {Deps} deps @param {string} repo @param {string} branch
+ * @returns {Promise<{ workflows: Map<string, Record<string, any>>, error: null } | { workflows: null, error: string }>}
+ */
+export const branchWorkflows = async (deps, repo, branch) => {
+  const [owner, name] = repo.split('/');
+  const r = await deps.gh(['api', 'graphql', '--input', '-'], JSON.stringify({ query: BRANCH_WORKFLOWS, variables: { owner, name, expression: `${branch}:.github/workflows` } }));
+  if (r.status !== 0) return { workflows: null, error: r.stderr.trim() || `exit ${r.status}` };
+  /** @type {any[]} */
+  let entries;
+  try {
+    const j = JSON.parse(r.stdout);
+    if (Array.isArray(j?.errors) && j.errors.length) return { workflows: null, error: String(j.errors[0]?.message ?? 'GraphQL error') };
+    if (!isMap(j?.data?.repository)) return { workflows: null, error: 'GitHub returned no repository' };
+    entries = j.data.repository.object?.entries ?? [];
+  } catch {
+    return { workflows: null, error: "GitHub's answer was not JSON" };
+  }
+  /** @type {Map<string, Record<string, any>>} */
+  const workflows = new Map();
+  for (const e of Array.isArray(entries) ? entries : []) {
+    if (e?.type !== 'blob' || !/\.ya?ml$/.test(String(e.name)) || typeof e.object?.text !== 'string') continue;
+    try {
+      const doc = parseYaml(e.object.text);
+      if (isMap(doc)) workflows.set(`.github/workflows/${e.name}`, doc);
+    } catch {
+      // Left out, as above.
+    }
+  }
+  return { workflows, error: null };
 };
 
 // ── The requirements of a release ─────────────────────────────────────────────────────────
@@ -965,7 +1040,7 @@ export const diagnose = async (deps, opts) => {
       commands: ['kanon init'],
     });
   } else {
-    for (const gap of rulesetGaps(s.covering)) {
+    for (const gap of await checkGaps({ deps, repo, s, checked, gaps: rulesetGaps(s.covering), checkout: workflows, find, unchecked })) {
       find('ruleset.rule-missing', s.defaultBranch, `The ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) does not ${gap} (K-ADOPT-1 step 8).`, { text: `In the repository's Settings, Rules, Rulesets: ${gap}.`, url: `https://github.com/${repo}/settings/rules` });
     }
     // THE RELEASER'S BYPASS (K-MERGE-8, plan 0005 §3.1, #49), only where the release caller maps
@@ -1131,6 +1206,43 @@ export const diagnose = async (deps, opts) => {
       notes,
     },
   };
+};
+
+/**
+ * THE REQUIRED CHECK'S JOB (#418, L5's G14). A ruleset that requires a status check no job on the
+ * default branch reports blocks every pull request but the one that adds the job, approved and
+ * green, until that one merges. So before doctor asks the person to require Kanon's check
+ * (`ruleset.rule-missing`), a workflow on the default branch must report it; otherwise it asks
+ * for the job first, and for the rule only once the job has merged. It asks the same of a ruleset
+ * that requires the check already. A job only the checkout has is not on the default branch: it
+ * is a branch's, and the rule waits for its merge. Returns the ruleset's gaps still to ask for.
+ * @param {{ deps: Deps, repo: string, s: Inspection, checked: string, gaps: string[],
+ *   checkout: Map<string, Record<string, any>>,
+ *   find: (id: string, subject: string, message: string, fix: { text: string, commands?: string[], url?: string | null }) => void,
+ *   unchecked: Array<{ check: string, subject: string, reason: string }> }} c
+ * @returns {Promise<string[]>}
+ */
+const checkGaps = async ({ deps, repo, s, checked, gaps, checkout, find, unchecked }) => {
+  const gap = requiredCheckGap(LANE_CHECK);
+  const required = !gaps.includes(gap);
+  const rest = gaps.filter((g) => g !== gap);
+  const onDefault = await branchWorkflows(deps, repo, s.defaultBranch);
+  if (onDefault.error !== null) {
+    unchecked.push({ check: 'required-check', subject: LANE_CHECK, reason: `could not read the workflows on ${s.defaultBranch} (${onDefault.error}), so doctor can't tell whether a job there reports the status check "${LANE_CHECK}"${required ? '' : ", and doesn't ask you to require it yet"}` });
+    return rest;
+  }
+  if (checkReporters(onDefault.workflows, LANE_CHECK).length) return gaps;
+  const here = checkReporters(checkout, LANE_CHECK);
+  const then = required ? 'Until it merges, every other pull request waits on the check.' : `Then require the check: doctor asks for it (ruleset.rule-missing) once the job is on ${s.defaultBranch}.`;
+  find('ruleset.check-unreported', LANE_CHECK, required
+    ? `The ruleset on ${s.defaultBranch} requires the status check "${LANE_CHECK}", but no job of a workflow on ${s.defaultBranch} reports it, so every pull request that doesn't add such a job waits on it (K-ADOPT-1 step 8).`
+    : `No job of a workflow on ${s.defaultBranch} reports the status check "${LANE_CHECK}", so the ruleset can't require it yet: a required check that nothing reports blocks every pull request (K-ADOPT-1 step 8).`, {
+    text: here.length
+      ? `This checkout adds it (${here.join(', ')}): merge the pull request that adds it to ${s.defaultBranch} first. ${then}`
+      : `Add a job of its own named "${LANE_CHECK}", in a workflow that runs on pull_request, as actions/lane-check's README shows (a step in another job reports nothing under that name), and merge it. ${then}`,
+    url: `https://github.com/${KANON_REPO}/blob/${checked}/actions/lane-check/README.md`,
+  });
+  return rest;
 };
 
 /** @typedef {Extract<Awaited<ReturnType<typeof diagnose>>, { report: any }>['report']} Report */

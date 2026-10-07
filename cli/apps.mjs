@@ -65,6 +65,7 @@ export const appRoles = (spec) => {
 
 export const USAGE = `Usage: kanon apps --owner <login> --repo <repo>[,<repo>...] --apps <app>[,<app>...] [options]
        kanon apps --owner <login> --repo <repo>[,<repo>...] --reuse <app>:<slug>=<key file> [options]
+       kanon apps --owner <login> --repo <repo>[,<repo>...] --preflight
 
 Creates Kanon's GitHub Apps for an owner, one manifest flow each, with exactly each App's
 permissions (K-ADOPT-8), stores each App's id and key as Actions secrets on every repository
@@ -89,6 +90,10 @@ Options:
                          stored, and deleted. Repeatable; takes the place of --apps
   --name <app>=<name>    the App's name (default <owner>-<app>); repeatable
   --dir <path>           the checkout (default: here)
+  --preflight            run only the checks that come before any App: the checkout, the
+                         token, the owner, and that the token can write each repository's
+                         Actions secrets (the throwaway secret below). Creates no App, opens
+                         no page and writes no file; exits 0 when the real run would start
   --register <path>      write the App register here instead of the checkout's
                          ${REGISTER_PATH}; no checkout is needed then
   --org <org>            deprecated: the old spelling of --owner, removed in a later release
@@ -172,8 +177,8 @@ export const realDeps = {
  * @param {Record<string, AppSpec>} apps
  */
 export const parseArgs = (argv, apps) => {
-  /** @type {{ owner: string, viaOrg: boolean, repos: string[], apps: string[], reuse: Array<{ app: string, slug: string, file: string }>, names: Record<string, string>, dir: string, register: string, help: boolean }} */
-  const opts = { owner: '', viaOrg: false, repos: [], apps: [], reuse: [], names: {}, dir: process.cwd(), register: '', help: false };
+  /** @type {{ owner: string, viaOrg: boolean, repos: string[], apps: string[], reuse: Array<{ app: string, slug: string, file: string }>, names: Record<string, string>, dir: string, register: string, preflight: boolean, help: boolean }} */
+  const opts = { owner: '', viaOrg: false, repos: [], apps: [], reuse: [], names: {}, dir: process.cwd(), register: '', preflight: false, help: false };
   const list = (/** @type {string} */ v) => [...new Set(v.split(',').map((r) => r.trim()).filter(Boolean))];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
@@ -192,6 +197,7 @@ export const parseArgs = (argv, apps) => {
     } else if (flag === '--register') opts.register = value();
     else if (flag === '--repo') opts.repos = list(value());
     else if (flag === '--dir') opts.dir = value();
+    else if (flag === '--preflight') opts.preflight = true;
     else if (flag === '--apps') opts.apps = list(value().toLowerCase());
     else if (flag === '--roles') {
       throw new Error('--roles is gone since plan 0005\'s L4: the lanes run as two Apps per owner, the Author and the Judge, and the Releaser for releases. Pass --apps author,judge (and ,releaser)');
@@ -212,7 +218,7 @@ export const parseArgs = (argv, apps) => {
   if (!/^[A-Za-z0-9-]+$/.test(opts.owner)) throw new Error(`--owner takes a GitHub login, not "${opts.owner}"`);
   if (!opts.repos.length) throw new Error('--repo is required');
   for (const r of opts.repos) if (r.includes('/')) throw new Error('--repo takes repository names alone; the owner goes in --owner');
-  if (!opts.apps.length && !opts.reuse.length) throw new Error('--apps or --reuse is required');
+  if (!opts.apps.length && !opts.reuse.length && !opts.preflight) throw new Error('--apps or --reuse is required');
   if (opts.apps.length && opts.reuse.length) throw new Error('--apps creates Apps and --reuse adds repositories to existing ones: run them separately');
   for (const a of [...opts.apps, ...opts.reuse.map((r) => r.app), ...Object.keys(opts.names)]) {
     if (!apps[a]) throw new Error(`"${a}" is not one of Kanon's Apps; they are ${Object.keys(apps).join(', ')}`);
@@ -807,6 +813,12 @@ export const apps = async (argv, overrides = {}) => {
       for (const l of refusal) deps.err(`kanon apps: ${l}`);
       return 1;
     }
+  }
+  // `--preflight` (#420, L5's G10): the agent can confirm the token before it hands the person
+  // the command that creates the Apps, so the person doesn't run it twice.
+  if (opts.preflight) {
+    deps.out(`The token can write the Actions secrets of ${repos.map((r) => `${owner}/${r}`).join(', ')}, so kanon apps can run from here. Nothing was created.`);
+    return 0;
   }
 
   let warnings = 0;

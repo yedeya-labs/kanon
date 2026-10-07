@@ -390,6 +390,86 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(skill('upgrade').body).toContain("the doctor skill's table");
   });
 
+  // #418, L5's G14: a status check required before a job on the default branch reports it
+  // blocks every other open pull request. Doctor asks for the job first; the skills ask for the
+  // rule only once the pull request adding the job has merged.
+  it('asks the person to require a status check only after the job that reports it has merged', () => {
+    const table = rows(section(skill('doctor').body, /^## Who fixes each finding of `kanon doctor`$/)!);
+    const row = (id: string) => table.find((c) => c[0] === `\`${id}\``)!;
+    expect(row('ruleset.rule-missing')[2]).toMatch(/never ask for a check it didn't name, or before the pull request that adds the check's job has merged/);
+    expect(row('ruleset.check-unreported')[1]).toBe('agent, person');
+    expect(row('ruleset.check-unreported')[2]).toMatch(/its step comes after that pull request merges/);
+    expect(section(skill('upgrade').body, /^## Steps$/)).toMatch(/\*\*Never ask the person to require a status check before this pull request merges\*\*.*`ruleset\.check-unreported`/);
+  });
+
+  // #419, L5's G4, G11, G12 and G14: the steps that can only happen once the upgrade has merged
+  // are kept in a list the person is handed, each with who does it, when, and what to run.
+  it('keeps a post-merge checklist in the upgrade skill, built from doctor findings that exist', () => {
+    const after = section(skill('upgrade').body, /^## After the merge$/);
+    expect(after).not.toBeNull();
+    const table = rows(after!).filter((c) => c.length === 4 && !/^-+$/.test(c[0]!) && c[0] !== 'Step');
+    const ids = table.map((c) => /^`([a-z-]+\.[a-z-]+)`$/.exec(c[0]!)?.[1]).filter((x): x is string => !!x);
+    // Every finding id it names is one doctor documents: a renamed id fails here.
+    const documented = documentedIds('doctor');
+    expect(ids.filter((id) => !documented.includes(id))).toEqual([]);
+    for (const id of ['ruleset.check-unreported', 'ruleset.bypass-extra', 'app.unused', 'secret.stale']) expect(ids, id).toContain(id);
+    for (const c of table) {
+      expect(c[1], c[0]).toMatch(/^(agent|person|decision)(, (agent|person|decision))*$/);
+      expect(c[2], c[0]).toMatch(/merge|week|chooses/);
+      expect(c[3]!.length, c[0]).toBeGreaterThan(40);
+    }
+    // apps-check is plan 0005 L5's acceptance, and the live checks follow it.
+    expect(after).toContain('`gh workflow run apps-check.yml -R <owner>/<repo>`');
+    expect(after).toMatch(/Judge's App/);
+    // Requiring a check waits for the merge, and app.unused for a week of green runs.
+    expect(table.find((c) => c[0] === '`ruleset.check-unreported`')![2]).toMatch(/^On merge/);
+    expect(table.find((c) => c[0] === '`app.unused`')![2]).toMatch(/week/);
+    // Handed over in the pull request's body, walked through as the person's steps, and found again.
+    const steps = section(skill('upgrade').body, /^## Steps$/)!;
+    expect(steps).toMatch(/under `## After merging`/);
+    expect(steps).toMatch(/\*\*Hand over what waits for the merge\.\*\*/);
+    expect(after).toMatch(/\*\*Do it now\*\* \(Recommended\) or \*\*Skip it for now\*\*/);
+    expect(after).toMatch(/To get the list again/);
+    expect(section(skill('doctor').body, /^## Steps$/)).toMatch(/under `## After merging`/);
+  });
+
+  // #420, L5's G8 and G10: an agent client refused to run kanon apps (it creates Apps and writes
+  // secrets), and the person's first run stopped at the token's pre-check. So the skills say up
+  // front that it is the person's step, check the token first, and give the exact `!` line.
+  it("hands kanon apps to the person: the token checked first, then the exact ! line", () => {
+    for (const dir of ['adopt', 'doctor']) {
+      const s = skill(dir);
+      const run = section(s.body, /^## Running `kanon apps`$/);
+      expect(run, dir).not.toBeNull();
+      expect(run, dir).toMatch(/\*\*it is the person's step,\*\*/);
+      expect(invocations(run!).some((c) => c.command === 'apps' && c.flags.includes('--preflight')), dir).toBe(true);
+      expect(run, dir).toContain('**Secrets: read and write**');
+      const line = code(run!).find((c) => c.startsWith('! cd '));
+      expect(line, dir).toMatch(/^! cd <the checkout's root> && npx --yes --package github:yedeya-labs\/kanon#v\d+\.\d+\.\d+ kanon apps --owner <owner> --repo <repo> --apps <apps>$/);
+      expect(run, dir).toMatch(/\*\*Do it now\*\* \(Recommended\).*\*\*Skip it for now\*\*/);
+      // Every finding whose fix is a kanon apps command sends the agent to that section, and none
+      // tells the agent to run it itself.
+      const table = rows(section(s.body, /^## Who fixes each finding of `kanon [a-z]+`$/)!);
+      for (const c of table.filter((x) => /`kanon apps(?: --[a-z-]+)?` command|`kanon apps --/.test(x[2] ?? ''))) expect(c[2], `${dir} ${c[0]}`).toContain('"Running `kanon apps`"');
+      expect(s.body, dir).not.toMatch(/(?:you )?run (?:the fix's|the finding's) `kanon apps`/i);
+      // Where it says how to read a fix's commands, a `kanon apps` one is the person's, and only
+      // other `kanon` commands are the agent's to run (#445 review).
+      expect(s.body, dir).toMatch(/that starts `kanon apps` is the person's \("Running `kanon apps`"/);
+      expect(s.body, dir).not.toMatch(/(?:a command|one) that starts `kanon ` you run/);
+    }
+    expect(section(skill('upgrade').body, /^## Steps$/)).toMatch(/\*\*Say up front that each `kanon apps` command a fix names is the person's step\*\*.*"Running `kanon apps`"/);
+  });
+
+  it('offers the Releaser to a repository that calls the release workflow without it, as the person\'s choice', () => {
+    const offer = section(skill('doctor').body, /^## Offering the Releaser$/);
+    expect(offer).not.toBeNull();
+    expect(offer).toContain('`.apps[].identity` lists no `releaser`');
+    expect(offer).toMatch(/It is the person's choice/);
+    expect(invocations(offer!).some((c) => c.command === 'apps' && c.text.includes('--apps releaser'))).toBe(true);
+    for (const n of ['RELEASER_APP_ID', 'RELEASER_APP_PRIVATE_KEY']) expect(offer).toContain(`\`${n}\``);
+    expect(section(skill('upgrade').body, /^## Steps$/)).toContain('"Offering the Releaser"');
+  });
+
   it('reads only fields its command documents', () => {
     const problems: string[] = [];
     let seen = 0;
