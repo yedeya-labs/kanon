@@ -48,7 +48,7 @@ runs:
         if [ "$FROM_SECRETS" != true ]; then
           echo "::warning title=QA store hook::QA_STORE_ROLE_ARN and QA_STORE_BUCKET are read from repository variables, which this job's log prints; move them to secrets and map them in the lane callers (docs/qa-store.md, kanon#433)"
         fi
-    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.33.0
+    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.34.1
       with:
         operation: ${{ inputs.operation }}
         kind: ${{ inputs.kind }}
