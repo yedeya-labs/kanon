@@ -20,9 +20,12 @@ import { parse } from 'yaml';
  *   every job of `agent-lane.yml` inherits its caller's grant. The block must still grant every
  *   read the telemetry step makes with the default token, because narrowing that grant once
  *   cost the telemetry step a read (RA-2592): `telemetryReads` derives them from the action.
- * - **Every other job** declares its own `permissions:` without `id-token`, so only a store job
- *   can ever hold the store's credentials. `idTokenProblems` holds every Kanon workflow, not
- *   only the store-coupled lanes, to that last rule.
+ * - **Every other job** declares its own `permissions:` without `id-token`, so in a
+ *   store-coupled lane only a store job, and the Overseer's telemetry read job in its exact shape,
+ *   holds it. That is the lane's rule, not the store's: the store's role trusts the default
+ *   branch's ref, so any job of a default-branch run that holds `id-token: write` can assume it.
+ *   `idTokenProblems` holds every Kanon workflow to which jobs those are: the store jobs, the
+ *   holders `ID_TOKEN_HOLDERS` lists, and the callers that grant one of them the token.
  * - **No job declares an environment.** The store no longer uses one (decision 9 as changed),
  *   and one on a store job would make its subject `:environment:<name>`, which the role refuses.
  * - **The export's delete job** runs `actions/qa-store` with `operation: delete-export`, needs
@@ -316,7 +319,18 @@ export function idTokenSource(wf: Workflow, j: Job): IdTokenSource | null {
 
 const usesMaintenance = (s: Step) => typeof s.uses === 'string' && /^(\$\/|yedeya-labs\/kanon\/)infra\/qa-store\/aws\/maintenance(@|$)/.test(s.uses);
 
-/** The collector's workflow and job (plan 0002 S7), the one holder outside the QA store's. */
+/**
+ * The AWS store's maintenance job: one that runs the maintenance block alone, with nothing that
+ * could run other code beside it.
+ */
+export function isMaintenanceJob(j: Job): boolean {
+  const steps = j.steps ?? [];
+  return steps.length === 1 && usesMaintenance(steps[0]!)
+    && Object.keys(j).every((k) => STORE_JOB_KEYS.includes(k))
+    && Object.keys(steps[0]!).every((k) => STORE_STEP_KEYS.includes(k));
+}
+
+/** The collector's workflow and job (plan 0002 S7), one of the holders outside the QA store's (`ID_TOKEN_HOLDERS`). */
 export const COLLECTOR_FILE = 'telemetry-collect.yml';
 export const COLLECTOR_JOB = 'collect';
 /** What the collector's script step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
@@ -442,21 +456,45 @@ export function isOverseerTelemetryJob(file: string | undefined, name: string, j
     && typeof w.path === 'string' && TEMP_PATH.test(w.path.trim());
 }
 
+/** A holder of `id-token: write` the guard admits by its shape, and how the guard and the docs name it. */
+export type IdTokenHolder = {
+  /** Whether a job is this holder, in the shape the guard holds it to. */
+  is: (file: string | undefined, name: string, j: Job) => boolean;
+  /** How `idTokenProblems`'s message names it. */
+  says: string;
+  /** What each listing of the holders must contain: the template's comment on the store's role, and the docs'. */
+  cited: string;
+};
+
+/**
+ * The holders of `id-token: write` the guard admits besides the store jobs and the callers that
+ * grant one of them the token (kanon#531). `mayHoldIdToken` reads this list, so a holder added to
+ * the guard is added here, and every listing of the holders that doesn't name it yet turns red
+ * (`tests/unit/qa-store-aws.test.ts` for the template, `tests/unit/id-token-guard.test.ts` for
+ * the docs), as does `idTokenProblems`'s message in each test that quotes it.
+ */
+export const ID_TOKEN_HOLDERS: IdTokenHolder[] = [
+  { is: (_file, _name, j) => isMaintenanceJob(j), says: 'the store maintenance job', cited: 'maintenance' },
+  { is: isCollectorJob, says: 'the telemetry collector job', cited: '`collect`' },
+  { is: isAggregateJob, says: 'the aggregate read job', cited: '`aggregate`' },
+  { is: isOverseerTelemetryJob, says: 'the Overseer telemetry read job', cited: '`telemetry`' },
+];
+
 /**
  * A job that may hold `id-token: write`: one that runs the qa-store block alone (kanon#225's
- * allow-list: the block, plus the download of the report a `put` writes), or the AWS store's
- * maintenance block alone, with nothing that could run other code beside it, or the telemetry
- * collector's job (`isCollectorJob`), the telemetry Explorer's read job (`isAggregateJob`), or the
- * Overseer's telemetry read job (`isOverseerTelemetryJob`), which need their workflow's file name.
+ * allow-list: the block, plus the download of the report a `put` writes), or one of
+ * `ID_TOKEN_HOLDERS`, some of which need their workflow's file name.
  */
 export function mayHoldIdToken(name: string, j: Job, file?: string): boolean {
-  if (isCollectorJob(file, name, j) || isAggregateJob(file, name, j) || isOverseerTelemetryJob(file, name, j)) return true;
-  if (isStoreJob(j)) return !isAgentJob(j) && !isDeleteJob(j) && extraStepProblems(name, j, 'store').length === 0;
-  const steps = j.steps ?? [];
-  return steps.length === 1 && usesMaintenance(steps[0]!)
-    && Object.keys(j).every((k) => STORE_JOB_KEYS.includes(k))
-    && Object.keys(steps[0]!).every((k) => STORE_STEP_KEYS.includes(k));
+  if (ID_TOKEN_HOLDERS.some((h) => h.is(file, name, j))) return true;
+  return isStoreJob(j) && !isAgentJob(j) && !isDeleteJob(j) && extraStepProblems(name, j, 'store').length === 0;
 }
+
+/** Who may hold `id-token: write`, as `idTokenProblems` says it. */
+const MAY_HOLD = (() => {
+  const says = ['a job that runs the qa-store block alone', ...ID_TOKEN_HOLDERS.map((h) => h.says)];
+  return `only ${says.slice(0, -1).join(', ')} or ${says.at(-1)}, may`;
+})();
 
 /** The workflow file a job calls, when it is one of Kanon's own. */
 const calledWorkflow = (j: Job) =>
@@ -488,13 +526,13 @@ export function idTokenProblems(workflows: Record<string, Workflow>): string[] {
         else if (target.permissions === undefined) {
           for (const [n, cj] of Object.entries(target.jobs ?? {})) {
             if (cj.permissions === undefined && !mayHoldIdToken(n, cj, callee)) {
-              out.push(`${callee}: job ${n} declares no permissions in a workflow with none, so it inherits id-token: write from ${file}'s job ${name}; only a job that runs the qa-store block alone, the telemetry collector job, the aggregate read job or the Overseer telemetry read job, may`);
+              out.push(`${callee}: job ${n} declares no permissions in a workflow with none, so it inherits id-token: write from ${file}'s job ${name}; ${MAY_HOLD}`);
             }
           }
         }
         continue;
       }
-      if (!mayHoldIdToken(name, j, file)) out.push(`${file}: job ${name} holds id-token: write (${how}); only a job that runs the qa-store block alone, the telemetry collector job, the aggregate read job or the Overseer telemetry read job, may`);
+      if (!mayHoldIdToken(name, j, file)) out.push(`${file}: job ${name} holds id-token: write (${how}); ${MAY_HOLD}`);
     }
   }
   return out;

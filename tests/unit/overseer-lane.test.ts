@@ -702,7 +702,7 @@ describe('the telemetry read job (kanon#470)', () => {
       return idTokenProblems(w);
     };
     const named = [
-      "agent-overseer.yml: job telemetry holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job, the aggregate read job or the Overseer telemetry read job, may",
+      "agent-overseer.yml: job telemetry holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job or the Overseer telemetry read job, may",
     ];
     it('the guard is green as shipped', () => expect(idTokenProblems(all())).toEqual([]));
     it('a step added', () => expect(red((j) => { j.steps!.push({ run: 'echo hi' }); })).toEqual(named));
@@ -720,7 +720,7 @@ describe('the telemetry read job (kanon#470)', () => {
     it('the same job under another name, or in another workflow, is not allowed by this shape', () => {
       const w = all();
       w['agent-code-audit.yml']!.jobs.telemetry = structuredClone(w['agent-overseer.yml']!.jobs.telemetry!);
-      expect(idTokenProblems(w)).toEqual(["agent-code-audit.yml: job telemetry holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job, the aggregate read job or the Overseer telemetry read job, may"]);
+      expect(idTokenProblems(w)).toEqual(["agent-code-audit.yml: job telemetry holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job or the Overseer telemetry read job, may"]);
       expect(isOverseerTelemetryJob('agent-overseer.yml', 'reader', w['agent-overseer.yml']!.jobs.telemetry!)).toBe(false);
     });
   });

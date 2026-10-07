@@ -9,6 +9,7 @@ import { STACK_NAME, TEMPLATE_PATH, deployCommands, lifecycleProblems, readTempl
 import { toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
 import { readCostRowsFile } from '../../actions/qa-store/qa-store.mjs';
 import { SPAWNS } from './helpers/spawns.js';
+import { ID_TOKEN_HOLDERS } from './helpers/store-jobs.js';
 
 /**
  * Plan 0004 step P9: Kanon's AWS implementation of the QA store contract (`infra/qa-store/aws`).
@@ -117,8 +118,9 @@ describe('the role trusts exactly the default branch\'s ref subjects it is given
     while (lines[start - 1]?.trimStart().startsWith('#')) start--;
     const comment = lines.slice(start, role).map((l) => l.replace(/^\s*#\s?/, '')).join(' ');
     expect(comment).not.toMatch(/only a store job holds/);
-    // tests/unit/id-token-guard.test.ts's holders that run no qa-store block and call no lane.
-    for (const holder of ['`collect`', '`aggregate`', '`telemetry`', 'maintenance']) expect(comment).toContain(holder);
+    // The holders the guard admits besides the store jobs and their callers, from the list the
+    // guard itself reads (kanon#531), so a holder added to it turns this red too.
+    for (const holder of ID_TOKEN_HOLDERS) expect(comment, holder.says).toContain(holder.cited);
     expect(comment).toContain('`kanon doctor`');
   });
 });
