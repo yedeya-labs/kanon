@@ -115,8 +115,7 @@ Every lane in [`docs/lanes.md`](docs/lanes.md) ships at this version ([plan 0001
 - **Complete:** the [rulebook](rulebook/), about 200 rules, each with its reason.
 - **Released:** the checks and the release workflow above.
 - **Running on Kanon itself:** the Reviewer reviews Kanon's own pull requests, through the review lane at Kanon's last release, never the PR's own copy ([ADR 0011](docs/decisions/0011-kanon-runs-its-own-lanes.md)). It reviews members' PRs labelled `review:please`, and the Owner merges. The Implementer's lanes and the Explorer's audit of Kanon's own code are called the same way.
-- **Released lanes:** those of the Lead, the Implementer, the Reviewer, and the Explorer's acceptance-criteria check and sweep, listed in [`docs/lanes.md`](docs/lanes.md).
-- **Being extracted:** the Merger's lane and the other non-model lanes, then the store-coupled lanes (explore, overseer, code-audit and the digests), which move with the telemetry store. They are *moved* from the reference adopter unchanged, not rewritten ([ADR 0009](docs/decisions/0009-move-dont-rewrite.md)), so the loop you adopt is the one already running in production.
+- **Released lanes:** every lane in [`docs/lanes.md`](docs/lanes.md): those of the Lead, the Implementer, the Reviewer, the Merger, the Explorer and the Overseer, the rebase lane, the dispatch sweep and the digests. They were *moved* from the reference adopter unchanged, not rewritten ([ADR 0009](docs/decisions/0009-move-dont-rewrite.md)), so the loop you adopt is the one already running in production.
 
 See the [roadmap](ROADMAP.md) for what comes next.
 

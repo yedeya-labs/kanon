@@ -36,8 +36,6 @@ The agent roles, and the Releaser, run under three GitHub Apps per owner, each r
 - **A step's token still fits its role's row,** not only its App's grant (`K-AGENT-46`): the Lead's token holds no Workflows, though the Author does.
 - **The Releaser is optional.** An adopter that makes no releases, or merges its release PRs through the front door, needs only the Author and the Judge.
 
-**Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md),** Kanon's lanes still run each agent role under its own App with exactly its row's permissions, and the Merger's green zone reads the Implementer's App login; the App register shows which Apps a repository runs.
-
 The agent rows' GitHub permissions have a machine-readable twin, [`agent-permissions.json`](agent-permissions.json), which [`kanon apps`](../docs/apps.md) builds each App's manifest from (`K-ADOPT-8`). It also holds the three Apps, each with its roles and its permissions. Change the tables and the file in the same commit: a test fails when they disagree, when an App's permissions differ from the union of its roles' rows plus its recorded broadening, and when a role belongs to no App or to two (`K-PRIN-2`).
 
 ### `K-AGENT-1` Run every agent under its App's identity, and speak as its role
@@ -46,7 +44,7 @@ The agent rows' GitHub permissions have a machine-readable twin, [`agent-permiss
 
 **Why.** Attribution is only half of it. GitHub refuses to let an identity approve its own PR, so when the author and the reviewer share an identity, review silently becomes advisory. The reference adopter began with one shared token, and every actor read as the same person. Two roles of one App are told apart by what they write instead: a person reads the header, and a check reads the marker, but only on an object the expected App authored, so the login says which App and the marker which of its roles.
 
-**Enforced by.** Workflows mint an App token for every agent step, and a run-time assertion fails the job when the minted identity is not the one the code expects (see `K-AGENT-5`). Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md), the lanes mint one App per role and tell roles apart by login; the persona header, the role marker and the persona as commit author arrive with step L3, beside the login, and are prose only until then.
+**Enforced by.** Workflows mint an App token for every agent step, and a run-time assertion fails the job when the minted identity is not the one the code expects (see `K-AGENT-5`). The lanes' fixed steps write the persona header, the role marker and the persona as commit author, and ask the agent to open every post with its header ([`tests/unit/role-marker.test.ts`](../tests/unit/role-marker.test.ts)); an agent's commits are authored that way ([`tests/unit/agent-commits.test.ts`](../tests/unit/agent-commits.test.ts)). Every reader that tells two roles of one App apart requires the role's own marker beside the App's login ([`tests/library/role-marker-readers.test.ts`](../tests/library/role-marker-readers.test.ts)). That an agent's own post opens with its header is prose only: the agent writes it.
 
 **Class.** framework
 
@@ -58,7 +56,7 @@ The agent rows' GitHub permissions have a machine-readable twin, [`agent-permiss
 
 The `agent:` labels mark lanes rather than roles; how they map onto this table is in `K-WORK-12`.
 
-**Enforced by.** The set of lane workflows, each minting its own role's token. Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md), each role also has its own App, and the implementer status is set from step L3 and required from step L4.
+**Enforced by.** The set of lane workflows, each minting its own role's token, and the Merger's green zone, which requires the implementer status ([`tests/library/two-apps.test.ts`](../tests/library/two-apps.test.ts)) that only a fixed step of the Implementer's lanes sets, after the agent's job ([`tests/unit/implementer-status.test.ts`](../tests/unit/implementer-status.test.ts)).
 
 **Class.** split. The role set and the boundaries are framework. **The project supplies:** the display names of its personas.
 
@@ -108,7 +106,7 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Why.** Without it, one logical change that touches a workflow gets split across two PRs, and the reference adopter shipped a guard inert behind a green test that way. The Merger must not hold it because the agent that merges must not be able to edit what gates a merge.
 
-**Enforced by.** The App permission grants, and each lane's minting step narrowed to its role's row (`K-AGENT-46`). Until the release that completes step L4 of [plan 0005](../docs/plans/0005-lean-installation.md), the code-authoring App is the Implementer's own.
+**Enforced by.** The App permission grants, and each lane's minting step narrowed to its role's row (`K-AGENT-46`).
 
 **Class.** framework
 
@@ -392,7 +390,7 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 **Why.** A component with zero blast radius needs no overseer of its own, which dissolves "who watches the watcher".
 
-**Enforced by.** Its App has read-only contents, and in Kanon's Overseer lane its agent's token reads only: a job of its own, on a fresh runner that runs no agent, files what the agent wrote down, on a token of its own (`K-SELF-11`). Until kanon#274 is fixed, an agent that takes its App's private key from its job's action cache could mint a token of its own. The restricting mechanism (revoking the Merger's authority when precision drifts) is prose only; a guard is planned.
+**Enforced by.** Its token is narrowed to read-only contents, though its App, the Author, writes them (`K-AGENT-46`), and in Kanon's Overseer lane its agent's token reads only: a job of its own, on a fresh runner that runs no agent, files what the agent wrote down, on a token of its own (`K-SELF-11`). No job that runs an agent holds an App's private key: the token is minted in a job of its own and handed in (`K-AGENT-49`). The restricting mechanism (revoking the Merger's authority when precision drifts) is prose only; a guard is planned.
 
 **Class.** framework
 
