@@ -44,7 +44,7 @@ name: Rebase lane (Implementer)
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
 #   workflow_run: CI, [completed], branches [main]
-#   schedule: "50 5 * * *"   — the daily floor; clear of every other agent cron
+#   schedule: "17 5 * * *"   — the daily floor; clear of every other agent cron
 #   workflow_dispatch        — input `pr_number` (optional: a single PR; blank = every open PR)
 on:
   workflow_call:

@@ -163,7 +163,7 @@
       "needs": [],
       "cost": "A model run per conflicting agent pull request, checked on each CI run and daily.",
       "recommend": ["agent-implement", "agent-triage"],
-      "when": "With implement or triage, whose pull requests otherwise wait for a person when they conflict."
+      "when": "With implement or triage, whose pull requests otherwise wait for a person when they conflict: a person's rebase takes one out of the Implementer's chain, so the revise lane refuses it."
     },
     "agent-dispatch-sweep": {
       "name": "Dispatch sweep",

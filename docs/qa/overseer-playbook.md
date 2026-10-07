@@ -15,6 +15,7 @@ Tell a run that died from one that skipped by reading full run records, never a 
 | Review | `review.yml` | CI finishing, a review label, a pull request opened, a dispatch |
 | Implement | `implement.yml` | an `agent:implement` label, a dispatch |
 | Implement, revise | `implement-revise.yml` | a changes-request, a label, a dispatch |
+| Rebase (resolve a conflict) | `rebase.yml` | CI finishing on `main` (refused under the merge queue, [#79](https://github.com/yedeya-labs/kanon/issues/79)), daily (sporadic, [#397](https://github.com/yedeya-labs/kanon/issues/397)), a dispatch |
 | Code audit | `code-audit.yml` | every three days, a dispatch |
 | Overseer | `overseer.yml` | weekly, a dispatch, a merged pull request that moves its Kanon pin |
 
@@ -22,7 +23,7 @@ Read them with `gh run list --workflow <caller> --json databaseId,event,status,c
 
 **A run whose gate job concluded `skipped`, or whose agent job never started, is a skip, not a death:** the membership gate turned the event away (a label other than the lane's, a stranger's act, a closed pull request that didn't merge), or the Overseer's runtime-version check found the runtime no newer than the watermark. A death is a run whose agent or filing job failed or was cancelled.
 
-**Scheduled runs don't fire on Kanon yet** ([#397](https://github.com/yedeya-labs/kanon/issues/397)): the repository has never had an `event=schedule` run. A week with no scheduled code audit or Overseer run is that issue, not a lane that died, until #397 closes. Name it once, in the audit, and file nothing new for it.
+**Kanon's schedules fire only now and then** ([#397](https://github.com/yedeya-labs/kanon/issues/397), closed as not planned: GitHub started 3 scheduled runs in about 15 hourly slots). So a missing scheduled run of the code audit, the Overseer or the rebase lane is that, not a lane that died. Name it once, in the audit, and file nothing new for it. The rebase lane is started by a dispatch on Kanon: a conflicting Implementer pull request that no dispatch reached is waiting for one, which is worth naming.
 
 ## Backlog dynamics
 
