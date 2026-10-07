@@ -23,10 +23,12 @@
 //     configured model was unreachable). Neither Kanon nor the adopter is at fault. Checked
 //     first, and only when EVERY run says so: a signal that is half platform is read as the
 //     other half, because a human triages it and a hidden Kanon bug costs more than noise.
-//   - `kanon`: at two adopters or more, or STARTING AT A RELEASE: absent on the previous
-//     version, on which THE SIGNAL'S OWN ADOPTERS ran that lane at least `RISE.minRuns` times (so
-//     its absence means something). Other adopters' runs don't count: a new adopter whose first
-//     runs fail at its hook never ran the previous release, so nothing started at a release.
+//   - `kanon`: at two adopters or more, or STARTING AT A RELEASE: absent on the release EACH
+//     ADOPTER AFFECTED ran that lane on before (its own: adopters pin different releases, #562),
+//     where together they ran it at least `RISE.minRuns` times (so its absence means something).
+//     Other adopters' runs don't count: a new adopter whose first runs fail at its hook never ran
+//     an earlier release, so nothing started at a release. Which release an adopter ran before is
+//     a fact about that adopter, so a signal names none.
 //   - `adopter`: the rest, one adopter only, such as a `failed_stage: hook`.
 // Beside the signals, a RISE: a lane whose failure rate on one release is `RISE.points` or more
 // above its rate on the release before, with at least `RISE.minRuns` runs on each. Platform-coded
@@ -61,9 +63,9 @@ import { isCliEntry } from '../lib/cli-entry.mjs';
 /**
  * "RISING AFTER A RELEASE", and the sample every comparison between two releases needs.
  * - `minRuns`: a lane needs at least this many runs on EACH of the two releases before their
- *   failure rates are compared, and the signal's own adopters need this many runs of the lane on the
- *   previous release before the signal's absence there counts as "starting at a release". Twenty keeps one bad afternoon at
- *   one adopter from reading as a regression.
+ *   failure rates are compared, and the signal's own adopters, together, need this many runs of the lane on
+ *   the release each ran it on before, for the signal's absence there to count as "starting at a release". Twenty
+ *   keeps one bad afternoon at one adopter from reading as a regression.
  * - `points`: the failure rate on the newer release must exceed the older one's by at least
  *   this much, as a fraction (0.10 is ten percentage points).
  * Both decided by the Owner on 2026-10-07 (#554), to be revisited once three adopters send rows.
@@ -96,7 +98,7 @@ const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
  * @typedef {{ kind: 'signal', signature: string, lane: string, failed_stage: string | null,
  *   kanon_error: string | null, reason: string, kanon_version: string, runs: number, adopters: number,
  *   first_seen: string, last_seen: string, api_error_status: Record<string, number>,
- *   previous_version: string | null, starts_at_release: boolean, classification: Classification,
+ *   starts_at_release: boolean, classification: Classification,
  *   visibility: 'public' | 'private', new: boolean, issue: Issue }} Signal
  * @typedef {{ kind: 'rise', signature: string, lane: string, kanon_version: string, previous_version: string,
  *   runs: number, failures: number, rate: number, previous_runs: number, previous_failures: number,
@@ -205,15 +207,27 @@ export function detect(rows, { known = [], tag = 'run' } = {}) {
     const i = releases.indexOf(v);
     return i > 0 ? /** @type {string} */ (releases[i - 1]) : null;
   };
+  /**
+   * The last release before `v` on which adopter `k` ran `lane`, and its runs there, or null.
+   * @param {string} lane @param {string} v @param {string} k
+   */
+  const adopterPrevious = (lane, v, k) => {
+    for (let i = releases.indexOf(v) - 1; i >= 0; i -= 1) {
+      const version = /** @type {string} */ (releases[i]);
+      const runs = totals.get(`${lane}\u0000${version}`)?.byAdopter.get(k);
+      if (runs) return { version, runs };
+    }
+    return null;
+  };
   const visibility = (/** @type {number} */ n) => (n >= MIN_ADOPTERS ? 'public' : 'private');
 
   /** @type {Signal[]} */
   const signals = [...groups.values()].map((g) => {
-    const previous = previousOf(g.kanon_version);
-    const prevTotal = previous ? totals.get(`${g.lane}\u0000${previous}`) : undefined;
-    const onPrevious = previous ? groups.has(JSON.stringify([g.lane, g.failed_stage, g.kanon_error, g.reason, previous])) : false;
-    // Only the runs of this signal's own adopters: another adopter's history says nothing about them.
-    const theirs = prevTotal ? [...g.adopters].reduce((n, k) => n + (prevTotal.byAdopter.get(k) ?? 0), 0) : 0;
+    // Each adopter's own previous release, and only its runs there: another adopter's history, or a
+    // release it skipped, says nothing about it. `dev` is no release, so `indexOf` finds none before it.
+    const previous = [...g.adopters].map((k) => adopterPrevious(g.lane, g.kanon_version, k)).filter((p) => p !== null);
+    const theirs = previous.reduce((n, p) => n + p.runs, 0);
+    const onPrevious = previous.some((p) => groups.has(JSON.stringify([g.lane, g.failed_stage, g.kanon_error, g.reason, p.version])));
     const startsAtRelease = theirs >= RISE.minRuns && !onPrevious;
     /** @type {Classification} */
     const classification = g.platform === g.runs ? 'platform' : g.adopters.size >= 2 || startsAtRelease ? 'kanon' : 'adopter';
@@ -221,7 +235,7 @@ export function detect(rows, { known = [], tag = 'run' } = {}) {
       kind: /** @type {const} */ ('signal'), lane: g.lane, failed_stage: g.failed_stage, kanon_error: g.kanon_error, reason: g.reason,
       kanon_version: g.kanon_version, runs: g.runs, adopters: g.adopters.size, first_seen: g.first, last_seen: g.last,
       api_error_status: Object.fromEntries(Object.entries(g.statuses).sort(([a], [b]) => Number(a) - Number(b))),
-      previous_version: previous, starts_at_release: startsAtRelease, classification,
+      starts_at_release: startsAtRelease, classification,
       visibility: /** @type {'public' | 'private'} */ (visibility(g.adopters.size)),
     };
     const signature = signalSignature(base);
@@ -291,14 +305,14 @@ export function renderIssue(x) {
       `| Failed stage | ${orNone(x.failed_stage)} |`,
       `| Kanon error | ${orNone(x.kanon_error)} |`,
       `| Reason | \`${x.reason}\` |`,
-      `| Kanon version | \`${x.kanon_version}\`${x.previous_version ? ` (previous seen: \`${x.previous_version}\`)` : ''} |`,
+      `| Kanon version | \`${x.kanon_version}\` |`,
       `| Runs | ${x.runs} |`,
       `| Adopters affected | ${x.adopters} |`,
       `| API error status | ${Object.entries(x.api_error_status).map(([s, n]) => `${s} × ${n}`).join(', ') || 'none'} |`,
       `| First seen | ${day(x.first_seen)} |`,
       `| Last seen | ${day(x.last_seen)} |`,
       '',
-      `**Classification: \`${x.classification}\`.** ${CAUSE[x.classification]}${x.starts_at_release ? ` It starts at this release: absent on \`${x.previous_version}\`, on which the adopters affected ran this lane at least ${RISE.minRuns} times.` : ''}`,
+      `**Classification: \`${x.classification}\`.** ${CAUSE[x.classification]}${x.starts_at_release ? ` It starts at this release: absent on the release each adopter affected ran before it, on which together they ran this lane at least ${RISE.minRuns} times.` : ''}`,
     );
     out.push('', 'A human triages this issue; the job that filed it does nothing else (`K-PRIN-6`).', '', `<!-- ${MARKER}=${x.signature} -->`);
     return { signature: x.signature, title, body: out.join('\n') };
