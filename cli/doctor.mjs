@@ -23,7 +23,11 @@
 // (`WAIVER_LABEL`). A waived finding moves from `findings` to `waived`, so it no longer counts
 // toward the exit code but stays in the document. Doctor knows no repository's special case:
 // every finding and every repository is waived alike, except the ids `UNWAIVABLE` lists. A waiver
-// that matches no finding is listed as stale, and one in another shape is malformed.
+// that matches no finding is listed as stale, and one in another shape is malformed. A finding
+// that lists items, which a later release can add to (`ITEMIZED`), is waived item by item: each
+// bullet names the items it waives after `for`, with its own reason, several bullets may share
+// one finding, and an item none names stays a finding. A bullet of such a finding that names no
+// items is malformed, since it would hide what a later release adds (#406, the Owner, 2026-10-07).
 //
 // IT WRITES NOTHING: every GitHub call is a read, and no file is written. `kanon init` fixes
 // what can be fixed from the checkout.
@@ -101,6 +105,34 @@ export const UNWAIVABLE = {
   'ruleset.missing': 'without it nothing enforces review on the default branch (K-ADOPT-1 step 8)',
   'ruleset.rule-missing': 'without it nothing enforces that rule of review on the default branch (K-ADOPT-1 step 8)',
   'ruleset.bypass-extra': 'it lets an actor other than the Releaser merge around review (K-MERGE-8)',
+};
+
+/**
+ * The finding ids whose findings list items, each with what an item is (#406). A later release
+ * can add an item to such a finding, a permission an App needs or a secret a lane takes, so a
+ * waiver of one names the items it waives after `for`, and doctor still reports any other. Several
+ * bullets may waive items of one finding, each with its reason, but no item twice. A waiver of one
+ * that names no items is malformed (the Owner, 2026-10-07), its fix the bullet built from the
+ * items doctor reports today.
+ * @type {Record<string, string>}
+ */
+export const ITEMIZED = {
+  'register.missing-row': 'a role whose row is missing',
+  'register.split-slug': 'an App whose roles name more than one slug',
+  'app.permission-missing': 'a permission',
+  'app.permission-extra': 'a permission',
+  'secret.missing': 'a secret',
+  'secret.stale': 'a secret',
+  'declaration.section-missing': 'a heading',
+  'hook.input-missing': 'an input',
+  'caller.secret-missing': 'a secret',
+  'caller.secret-stale': 'a secret',
+  'caller.input-stale': 'an input',
+  'caller.grant-missing': 'a permission',
+  'apps-check.secret-missing': 'a secret',
+  'apps-check.secret-stale': 'a secret',
+  'label.missing': 'a label',
+  'telemetry.unconfigured': 'a variable',
 };
 
 /**
@@ -364,15 +396,19 @@ export const readHolderAcceptances = (text) => {
 /**
  * The waivers the adoption record declares under `## Choices`, one bullet each:
  * `- **Waived doctor finding:** \`caller.misplaced\` on \`.github/workflows/review.yml\` (why)`.
- * Each names one finding id, one subject exactly as doctor reports it, and the reason. A bullet in
- * another shape, outside `## Choices`, with no reason, naming an id doctor doesn't report or one
- * it doesn't waive (`UNWAIVABLE`), or waiving the same finding twice, is returned as an error
- * naming its line.
+ * Each names one finding id, one subject exactly as doctor reports it, and the reason; for a
+ * finding that lists items (`ITEMIZED`), it may name the items it waives, each a code span after
+ * `for`, separated by commas (`items`, null when it names none). A bullet in another shape,
+ * outside `## Choices`, with no reason, naming an id doctor doesn't report or one it doesn't
+ * waive (`UNWAIVABLE`), naming items of a finding that lists none, waiving a finding that lists
+ * none twice, or naming an item another bullet of the same finding names, is returned as an error
+ * naming its line. A bullet of an `ITEMIZED` finding that names no items is returned as read:
+ * `diagnose` reports it malformed, with the bullet to write from the items it finds.
  * @param {string | null} text
- * @returns {{ waivers: Array<{ id: string, subject: string, reason: string, line: number }>, errors: string[] }}
+ * @returns {{ waivers: Array<{ id: string, subject: string, items: string[] | null, reason: string, line: number }>, errors: string[] }}
  */
 export const readWaivers = (text) => {
-  /** @type {Array<{ id: string, subject: string, reason: string, line: number }>} */
+  /** @type {Array<{ id: string, subject: string, items: string[] | null, reason: string, line: number }>} */
   const waivers = [];
   /** @type {string[]} */
   const errors = [];
@@ -380,7 +416,7 @@ export const readWaivers = (text) => {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
   const inFence = fenced(lines);
   const mention = new RegExp(`^\\s*(?:>\\s*)*(?:(?:[-*+]|\\d+[.)])\\s+)?\\*\\*${WAIVER_LABEL}:\\*\\*`, 'i');
-  const entry = new RegExp(`^[-*] \\*\\*${WAIVER_LABEL}:\\*\\* \`([^\`\\s]+)\` on \`([^\`]*\\S[^\`]*)\` \\((.*\\S.*)\\)\\s*$`);
+  const entry = new RegExp(`^[-*] \\*\\*${WAIVER_LABEL}:\\*\\* \`([^\`\\s]+)\` on \`([^\`]*\\S[^\`]*)\`(?: for (\`[^\`]*\\S[^\`]*\`(?:, \`[^\`]*\\S[^\`]*\`)*))? \\((.*\\S.*)\\)\\s*$`);
   let section = '';
   lines.forEach((line, i) => {
     if (inFence.has(i)) return;
@@ -388,13 +424,20 @@ export const readWaivers = (text) => {
     if (!mention.test(line)) return;
     const m = entry.exec(line);
     const where = `${ADOPTION_RECORD}:${i + 1}`;
-    if (!m) return errors.push(`${where} is not \`- **${WAIVER_LABEL}:** \`<finding id>\` on \`<subject>\` (<why the finding stands>)\``);
+    if (!m) return errors.push(`${where} is not \`- **${WAIVER_LABEL}:** \`<finding id>\` on \`<subject>\` (<why the finding stands>)\`, with \`for \`<item>\`, \`<item>\`\` before the parentheses for a finding that lists items`);
     if (section !== '## Choices') return errors.push(`${where} waives a finding outside \`## Choices\``);
-    const [id, subject, reason] = [/** @type {string} */ (m[1]), /** @type {string} */ (m[2]), /** @type {string} */ (m[3]).trim()];
+    const [id, subject, reason] = [/** @type {string} */ (m[1]), /** @type {string} */ (m[2]), /** @type {string} */ (m[4]).trim()];
+    const items = m[3] === undefined ? null : [...new Set([...m[3].matchAll(/`([^`]+)`/g)].map((x) => /** @type {string} */ (x[1])))];
     if (!FINDINGS[id]) return errors.push(`${where} waives \`${id}\`, which is no finding doctor reports`);
     if (UNWAIVABLE[id]) return errors.push(`${where} waives \`${id}\`, which can't be waived: ${UNWAIVABLE[id]}`);
-    if (waivers.some((w) => w.id === id && w.subject === subject)) return errors.push(`${where} waives \`${id}\` on \`${subject}\` a second time`);
-    waivers.push({ id, subject, reason, line: i + 1 });
+    if (items && !ITEMIZED[id]) return errors.push(`${where} names items after \`for\`, but \`${id}\` lists none: waive it on its subject alone`);
+    const same = waivers.filter((w) => w.id === id && w.subject === subject);
+    if (!ITEMIZED[id] && same.length) return errors.push(`${where} waives \`${id}\` on \`${subject}\` a second time`);
+    for (const w of same) {
+      const twice = items && w.items ? items.filter((x) => w.items?.includes(x)) : [];
+      if (twice.length) return errors.push(`${where} waives ${twice.map((x) => `\`${x}\``).join(', ')} of \`${id}\` on \`${subject}\`, which ${ADOPTION_RECORD}:${w.line} waives already`);
+    }
+    waivers.push({ id, subject, items, reason, line: i + 1 });
   });
   return { waivers, errors };
 };
@@ -443,6 +486,17 @@ export const secretReads = (wf) => {
   return { names, inherits };
 };
 
+/**
+ * The secrets a reusable workflow declares it takes from its caller (`on.workflow_call.secrets`),
+ * upper-cased as `secretReads` reads them.
+ * @param {Record<string, any>} wf
+ * @returns {Set<string>}
+ */
+export const callTakes = (wf) => {
+  const call = isMap(wf.on) && isMap(wf.on.workflow_call) ? wf.on.workflow_call : null;
+  return new Set(Object.keys(call && isMap(call.secrets) ? call.secrets : {}).map((n) => n.toUpperCase()));
+};
+
 /** The headings a document holds exactly once outside a fence, and how often each appears. @param {string} text @param {string} heading */
 const headingCount = (text, heading) => {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
@@ -479,7 +533,8 @@ export const requirementsAt = async (deps, release) => {
 /**
  * @typedef {{ id: string, category: string, blocking: boolean, subject: string, message: string,
  *   fix: { text: string, commands: string[], url: string | null } }} Finding
- * @typedef {Finding & { reason: string }} Waived
+ * @typedef {Finding & { items: string[], line: number, reason: string }} Waived
+ * @typedef {{ text: string, commands?: string[], url?: string | null }} FixIn
  * @typedef {{ workflow: string, job: string, grant: 'job' | 'workflow', how: 'id-token' | 'write-all',
  *   calls: string | null, status: 'kanon-lane' | 'accepted' | 'unaccepted', reason: string | null }} Holder
  */
@@ -612,6 +667,28 @@ export const diagnose = async (deps, opts) => {
     if (!kind) throw new Error(`no finding "${id}" in FINDINGS`);
     findings.push({ id, category: kind.category, blocking: kind.blocking, subject, message, fix: { text: fix.text, commands: fix.commands ?? [], url: fix.url ?? null } });
   };
+  /**
+   * The items each finding of an `ITEMIZED` id lists, and how to write it again for some of them,
+   * so a waiver that names only some leaves the rest a finding (#406).
+   * @type {Map<Finding, { items: string[], build: (items: string[]) => [string, FixIn] }>}
+   */
+  const itemized = new Map();
+  /**
+   * A finding that lists `items`: `build` writes its message and fix for any of them.
+   * @param {string} id @param {string} subject @param {string[]} items
+   * @param {(items: string[]) => [string, FixIn]} build
+   */
+  const findItems = (id, subject, items, build) => {
+    if (!ITEMIZED[id]) throw new Error(`no finding "${id}" in ITEMIZED`);
+    const [message, fix] = build(items);
+    find(id, subject, message, fix);
+    itemized.set(/** @type {Finding} */ (findings[findings.length - 1]), { items, build });
+  };
+  /** The finding `f` written again for some of its items. @param {Finding} f @param {string[]} items @returns {Finding} */
+  const remake = (f, items) => {
+    const [message, fix] = /** @type {{ build: (items: string[]) => [string, FixIn] }} */ (itemized.get(f)).build(items);
+    return { ...f, message, fix: { text: fix.text, commands: fix.commands ?? [], url: fix.url ?? null } };
+  };
   // The workflows are read from the checkout, not from the default branch through the API.
   const branchName = branch.status === 0 ? branch.stdout.trim() : null;
   const onCheckout = branchName && branchName !== 'HEAD' ? branchName : 'this checkout';
@@ -686,32 +763,35 @@ export const diagnose = async (deps, opts) => {
       const missing = want.filter((n) => !got.includes(n));
       const stale = got.filter((n) => !want.includes(n));
       if (missing.length) {
-        find('caller.secret-missing', c.file, `does not map ${missing.join(', ')}, which the lane ${c.lane} takes at ${checked}.`, {
+        findItems('caller.secret-missing', c.file, missing, (xs) => [`does not map ${xs.join(', ')}, which the lane ${c.lane} takes at ${checked}.`, {
           text: `Add under the job's secrets:`,
-          commands: missing.map((n) => `      ${n}: \${{ secrets.${n} }}`),
-        });
+          commands: xs.map((n) => `      ${n}: \${{ secrets.${n} }}`),
+        }]);
       }
       if (stale.length) {
-        find('caller.secret-stale', c.file, `maps ${stale.join(', ')}, which the lane ${c.lane} does not take at ${checked}; GitHub refuses a call that passes a secret the called workflow does not declare.`, {
+        findItems('caller.secret-stale', c.file, stale, (xs) => [`maps ${xs.join(', ')}, which the lane ${c.lane} does not take at ${checked}; GitHub refuses a call that passes a secret the called workflow does not declare.`, {
           text: `Remove these lines from the job's secrets:`,
-          commands: stale.map((n) => `      ${n}: \${{ secrets.${n} }}`),
-        });
+          commands: xs.map((n) => `      ${n}: \${{ secrets.${n} }}`),
+        }]);
       }
     }
     const stale = Object.keys(isMap(c.job.with) ? c.job.with : {}).filter((k) => !spec.inputs[k]);
     if (stale.length) {
-      find('caller.input-stale', c.file, `passes ${stale.join(', ')}, which the lane ${c.lane} does not declare at ${checked}.`, { text: `Remove ${stale.map((k) => `\`${k}\``).join(', ')} from the job's with:, and the dispatch input${stale.length > 1 ? 's' : ''} that feed${stale.length > 1 ? '' : 's'} ${stale.length > 1 ? 'them' : 'it'}.` });
+      findItems('caller.input-stale', c.file, stale, (xs) => [`passes ${xs.join(', ')}, which the lane ${c.lane} does not declare at ${checked}.`, { text: `Remove ${xs.map((k) => `\`${k}\``).join(', ')} from the job's with:, and the dispatch input${xs.length > 1 ? 's' : ''} that feed${xs.length > 1 ? '' : 's'} ${xs.length > 1 ? 'them' : 'it'}.` }]);
     }
     const grant = c.job.permissions !== undefined ? c.job.permissions : c.wf.permissions;
     const short = Object.entries(spec.grant).filter(([k, v]) => !isMap(grant) || level(grant[k]) < level(v));
     if (short.length) {
-      find('caller.grant-missing', c.file, isMap(grant)
-        ? `grants ${short.map(([k]) => `${k}: ${grant[k] ?? 'none'}`).join(', ')}; the lane ${c.lane} needs ${short.map(([k, v]) => `${k}: ${v}`).join(', ')} at ${checked}.`
+      findItems('caller.grant-missing', c.file, short.map(([k]) => k), (xs) => {
+        const some = short.filter(([k]) => xs.includes(k));
+        return [isMap(grant)
+        ? `grants ${some.map(([k]) => `${k}: ${grant[k] ?? 'none'}`).join(', ')}; the lane ${c.lane} needs ${some.map(([k, v]) => `${k}: ${v}`).join(', ')} at ${checked}.`
         : grant === undefined
           ? `grants no explicit permissions; the calling job's permissions: are the lane ${c.lane}'s ceiling (plan 0001 §3).`
           : `grants \`permissions: ${String(grant)}\` rather than a map; the calling job's permissions: are the lane ${c.lane}'s ceiling, so lane-check requires the lane's grant written out (plan 0001 §3).`, {
         text: isMap(grant) ? `Grant under the caller's permissions:` : `Replace the caller's permissions: with the lane's grant:`,
-        commands: isMap(grant) ? short.map(([k, v]) => `  ${k}: ${v}`) : ['permissions:', ...Object.entries(spec.grant).map(([k, v]) => `  ${k}: ${v}`)],
+        commands: isMap(grant) ? some.map(([k, v]) => `  ${k}: ${v}`) : ['permissions:', ...Object.entries(spec.grant).map(([k, v]) => `  ${k}: ${v}`)],
+      }];
       });
     }
     if (spec.callerName && c.wf.name !== spec.callerName) {
@@ -750,18 +830,18 @@ export const diagnose = async (deps, opts) => {
       }
     })();
     if (missingRows.length) {
-      find('register.missing-row', REGISTER_PATH, `lists no ${missingRows.join(', ')} row, which the ${id} App's lanes read their App slug from (K-LAYOUT-6).`, {
+      findItems('register.missing-row', REGISTER_PATH, missingRows, (xs) => [`lists no ${xs.join(', ')} row, which the ${id} App's lanes read their App slug from (K-LAYOUT-6).`, {
         text: slugs.length === 1
-          ? `Add the row${missingRows.length > 1 ? 's' : ''} naming the ${id} App's slug \`${slugs[0]}\`, or let kanon apps write them, and commit the register.`
+          ? `Add the row${xs.length > 1 ? 's' : ''} naming the ${id} App's slug \`${slugs[0]}\`, or let kanon apps write them, and commit the register.`
           : `Create the ${id} App from this checkout, and commit the register rows it writes.`,
         commands: slugs.length === 1 ? [] : [apps],
-      });
+      }]);
     }
     if (slugs.length > 1) {
-      find('register.split-slug', REGISTER_PATH, `names more than one App for the ${id} App's roles (${roles.map((r) => `${r}: ${rows.get(r) ?? 'none'}`).join(', ')}); since plan 0005 each App's roles share one slug (§3.4).`, {
+      findItems('register.split-slug', REGISTER_PATH, [id], () => [`names more than one App for the ${id} App's roles (${roles.map((r) => `${r}: ${rows.get(r) ?? 'none'}`).join(', ')}); since plan 0005 each App's roles share one slug (§3.4).`, {
         text: `Create the ${id} App, or reuse the owner's, and point each of its roles' rows at its slug; then commit the register.`,
         commands: [apps],
-      });
+      }]);
     }
     if (slugs.length === 1) {
       const slug = /** @type {string} */ (slugs[0]);
@@ -874,16 +954,19 @@ export const diagnose = async (deps, opts) => {
     const missing = Object.entries(need).filter(([k, v]) => level(have[k]) < level(v));
     const extra = Object.entries(have).filter(([k, v]) => level(v) > level(need[k]));
     if (missing.length) {
-      find('app.permission-missing', slug, `The ${id} App \`${slug}\` holds ${missing.map(([k]) => `${k}: ${have[k] ?? 'none'}`).join(', ')}; Kanon ${checked} needs ${missing.map(([k, v]) => `${k}: ${v}`).join(', ')}.`, {
-        text: `Widen the App's permissions on its settings page, then accept the new permissions on its installation (GitHub asks the installation's owner), and run your apps-check caller.`,
-        url,
+      findItems('app.permission-missing', slug, missing.map(([k]) => k), (xs) => {
+        const some = missing.filter(([k]) => xs.includes(k));
+        return [`The ${id} App \`${slug}\` holds ${some.map(([k]) => `${k}: ${have[k] ?? 'none'}`).join(', ')}; Kanon ${checked} needs ${some.map(([k, v]) => `${k}: ${v}`).join(', ')}.`, {
+          text: `Widen the App's permissions on its settings page, then accept the new permissions on its installation (GitHub asks the installation's owner), and run your apps-check caller.`,
+          url,
+        }];
       });
     }
     if (extra.length) {
-      find('app.permission-extra', slug, `The ${id} App \`${slug}\` holds ${extra.map(([k, v]) => `${k}: ${v}`).join(', ')}, beyond what Kanon ${checked} grants it (${extra.map(([k]) => `${k}: ${need[k] ?? 'none'}`).join(', ')}). Each lane narrows its token to what it uses (K-AGENT-46), so this blocks nothing, but the App holds more than it needs (K-ADOPT-8).`, {
+      findItems('app.permission-extra', slug, extra.map(([k]) => k), (xs) => [`The ${id} App \`${slug}\` holds ${extra.filter(([k]) => xs.includes(k)).map(([k, v]) => `${k}: ${v}`).join(', ')}, beyond what Kanon ${checked} grants it (${extra.filter(([k]) => xs.includes(k)).map(([k]) => `${k}: ${need[k] ?? 'none'}`).join(', ')}). Each lane narrows its token to what it uses (K-AGENT-46), so this blocks nothing, but the App holds more than it needs (K-ADOPT-8).`, {
         text: `Narrow the App's permissions on its settings page.`,
         url,
-      });
+      }]);
     }
   }
 
@@ -927,29 +1010,68 @@ export const diagnose = async (deps, opts) => {
   }
 
   // ── The secrets ───────────────────────────────────────────────────────────────────────────
-  const needSecrets = [...new Set([...installed.flatMap((l) => req.lanes[l]?.secrets ?? []), ...(identities.includes('releaser') ? releaserSecrets : [])])].sort();
+  // What each workflow maps, read as #414 reads it: any `secrets.<NAME>` outside its on:, whatever
+  // the job calls. A secret of Kanon's that a workflow maps is needed whether or not the job calls
+  // a lane doctor recognises (a local path, `$/`), and the secrets of each of the checked release's
+  // Apps that one maps, both of them, so the Releaser's too when a local release caller maps it
+  // (#415). A reusable workflow's own `secrets.<NAME>` of a secret its on.workflow_call.secrets
+  // declares reads what its caller passes it, not the repository's: the caller is what maps it, so
+  // it doesn't count here, though it still counts as read for secret.stale (#414).
+  const mapping = [...workflows].map(([file, wf]) => ({ file, ...secretReads(wf), takes: callTakes(wf) }));
+  /** @param {string} n */
+  const mappedBy = (n) => mapping.filter((m) => m.names.has(n) && !m.takes.has(n)).map((m) => m.file);
+  const laneSecrets = new Set(Object.values(req.lanes).flatMap((l) => l?.secrets ?? []));
+  const secretApps = [...new Set([...identities, ...Object.keys(req.identities.apps).filter((a) => appSecrets(a).some((n) => mappedBy(n).length))])].sort();
+  const needSecrets = [...new Set([...installed.flatMap((l) => req.lanes[l]?.secrets ?? []), ...secretApps.flatMap(appSecrets), ...[...laneSecrets].filter((n) => mappedBy(n).length)])].sort();
+  /**
+   * The workflows that map these secrets, and the callers of a lane that takes them and doesn't
+   * map them yet (caller.secret-missing names those lines), for the finding's message.
+   * @param {string[]} names
+   */
+  const whoNeeds = (names) => {
+    const maps = [...new Set(names.flatMap(mappedBy))].sort();
+    const must = [...new Set(callers.filter((c) => names.some((n) => req.lanes[c.lane]?.secrets.includes(n))).map((c) => c.file))].filter((f) => !maps.includes(f)).sort();
+    const them = names.length > 1 ? 'them' : 'it';
+    return [
+      ...(maps.length ? [`${maps.join(', ')} map${maps.length > 1 ? '' : 's'} ${them}`] : []),
+      ...(must.length ? [`${must.join(', ')} call${must.length > 1 ? '' : 's'} a lane that takes ${them} at ${checked}`] : []),
+    ].join('; ');
+  };
   if (!s.secrets) unchecked.push({ check: 'secrets', subject: repo, reason: "the token can't list the repository's secret names (it needs admin access)" });
   else {
-    for (const id of identities) {
+    // `kanon apps` is the person's step (#420): its pre-check first, which creates nothing, then
+    // the line that creates the App, or stores a key for the one the register already names.
+    const preflight = `kanon apps --owner ${s.owner} --repo ${repoName} --preflight`;
+    for (const id of secretApps) {
       const lacks = appSecrets(id).filter((n) => needSecrets.includes(n) && !s.secrets?.has(n));
       if (!lacks.length) continue;
-      const slug = slugOf.get(id);
-      find('secret.missing', repo, `lacks ${lacks.join(' and ')}, the ${id} App's ${lacks.length > 1 ? 'secrets' : 'secret'}.`, slug
-        ? { text: `Add ${repoName} to the ${id} App's installation, generate a private key on its settings page, then store it (the command checks it, stores both secrets and deletes the file):`, commands: [`kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}=<downloaded>.pem`] }
-        : { text: `Create the ${id} App from this checkout; kanon apps stores its secrets.`, commands: [`kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] });
+      const slug = slugOf.get(id) ?? (() => {
+        try {
+          const slugs = [...new Set(registerRolesOf(id, req).map((r) => rows.get(r)).filter((x) => x !== undefined))];
+          return slugs.length === 1 ? slugs[0] : undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      findItems('secret.missing', repo, lacks, (xs) => {
+        const who = whoNeeds(xs);
+        return [`lacks ${xs.join(' and ')}, the ${id} App's ${xs.length > 1 ? 'secrets' : 'secret'}${who ? `: ${who}` : ''}.`, slug
+        ? { text: `Add ${repoName} to the ${id} App's installation, and generate a private key on its settings page. kanon apps is your step: check the token with the first command (it creates nothing), then store the key with the second (it checks the key, stores both secrets and deletes the file):`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}=<downloaded>.pem`] }
+        : { text: `Create the ${id} App from this checkout. kanon apps is your step: check the token with the first command (it creates nothing), then create the App with the second, which stores its secrets:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] }];
+      });
     }
     for (const n of needSecrets.filter((x) => !/_APP_(ID|PRIVATE_KEY)$/.test(x) && !s.secrets?.has(x))) {
       const by = installed.filter((l) => req.lanes[l]?.secrets.includes(n));
-      find('secret.missing', repo, `lacks ${n}, which ${by.join(', ')} ${by.length > 1 ? 'take' : 'takes'}.`, {
+      const who = whoNeeds([n]);
+      findItems('secret.missing', repo, [n], () => [`lacks ${n}${by.length ? `, which ${by.join(', ')} ${by.length > 1 ? 'take' : 'takes'}` : ''}${who ? `: ${who}` : ''}.`, {
         text: n === 'CLAUDE_CODE_OAUTH_TOKEN' ? "Store the token of the Claude subscription the agents run on, made with `claude setup-token` (docs/lanes.md), pasting it on standard input:" : `Store it, pasting the value on standard input:`,
         commands: [`gh secret set ${n} -R ${repo}`],
-      });
+      }]);
     }
     // An App secret no App in use reads and no workflow maps: left from the per-role Apps, or from
     // an App dropped. A secret any job maps counts as read, whatever the job calls (#414).
     const known = new Set([...Object.keys(req.identities.roles), ...Object.keys(req.identities.apps)].flatMap(appSecrets));
     const used = new Set(identities.flatMap(appSecrets));
-    const mapping = [...workflows].map(([file, wf]) => ({ file, ...secretReads(wf) }));
     for (const m of mapping) for (const n of m.names) used.add(n);
     const stale = [...s.secrets].filter((n) => known.has(n) && !used.has(n.toUpperCase())).sort();
     const inheriting = mapping.flatMap((m) => m.inherits.map((j) => `${m.file}'s job ${j}`));
@@ -957,10 +1079,10 @@ export const diagnose = async (deps, opts) => {
     if (stale.length && inheriting.length) notes.push(`${inheriting.join(', ')} inherit${inheriting.length > 1 ? '' : 's'} every secret, so doctor lists none of ${stale.join(', ')} as stale: it can't tell which the called workflow reads.`);
     else if (stale.length && unread.length) notes.push(`doctor lists none of ${stale.join(', ')} as stale: it could not read ${unread.join(', ')}, which may map them.`);
     else if (stale.length) {
-      find('secret.stale', repo, `holds ${stale.join(', ')}, which no App the lanes of ${checked} run as here reads, and no job of a workflow under .github/workflows/ on ${onCheckout} names: doctor reads every \`secrets.<NAME>\` in each workflow outside its on:, in a job's secrets:, env:, with: or steps alike, whatever the job calls.`, {
+      findItems('secret.stale', repo, stale, (xs) => [`holds ${xs.join(', ')}, which no App the lanes of ${checked} run as here reads, and no job of a workflow under .github/workflows/ on ${onCheckout} names: doctor reads every \`secrets.<NAME>\` in each workflow outside its on:, in a job's secrets:, env:, with: or steps alike, whatever the job calls.`, {
         text: `Delete them${branchName === s.defaultBranch ? '' : `, once ${s.defaultBranch}'s workflows map none of them either`}, and uninstall the Apps they belong to if no repository uses them:`,
-        commands: stale.map((n) => `gh secret delete ${n} -R ${repo}`),
-      });
+        commands: xs.map((n) => `gh secret delete ${n} -R ${repo}`),
+      }]);
     }
   }
 
@@ -984,7 +1106,7 @@ export const diagnose = async (deps, opts) => {
     }
     for (const h of decl.requiredSections) {
       const n = headingCount(text, h);
-      if (n !== 1) find('declaration.section-missing', path, `has the heading \`${h}\` ${n} times; ${by.join(', ')} read${by.length > 1 ? '' : 's'} that section, which has no default, so it is there exactly once (K-LAYOUT-17).`, { text: `Write \`${h}\` exactly once, outside any fenced block.` });
+      if (n !== 1) findItems('declaration.section-missing', path, [h], () => [`has the heading \`${h}\` ${n} times; ${by.join(', ')} read${by.length > 1 ? '' : 's'} that section, which has no default, so it is there exactly once (K-LAYOUT-17).`, { text: `Write \`${h}\` exactly once, outside any fenced block.` }]);
     }
   }
   if (installed.length) {
@@ -1003,10 +1125,10 @@ export const diagnose = async (deps, opts) => {
         const inputs = isMap(doc.inputs) ? doc.inputs : {};
         const lacks = req.hook.inputs.filter((k) => !(k in inputs));
         if (lacks.length) {
-          find('hook.input-missing', req.hook.path, `does not declare ${lacks.join(', ')}, which Kanon ${checked}'s lanes pass it.`, {
+          findItems('hook.input-missing', req.hook.path, lacks, (xs) => [`does not declare ${xs.join(', ')}, which Kanon ${checked}'s lanes pass it.`, {
             text: `Add under inputs:`,
-            commands: lacks.flatMap((k) => [`  ${k}:`, `    description: Passed by Kanon's lanes (docs/lanes.md).`, '    default: ""']),
-          });
+            commands: xs.flatMap((k) => [`  ${k}:`, `    description: Passed by Kanon's lanes (docs/lanes.md).`, '    default: ""']),
+          }]);
         }
       }
     }
@@ -1028,23 +1150,27 @@ export const diagnose = async (deps, opts) => {
   for (const c of appsCheckCallers) {
     const got = isMap(c.job.secrets) ? Object.keys(c.job.secrets) : [];
     const lacks = identities.flatMap(appSecrets).filter((n) => !got.includes(n));
-    const blind = identities.filter((i) => appSecrets(i).some((n) => lacks.includes(n)));
     const stale = got.filter((n) => !takes.has(n));
-    if (lacks.length) find('apps-check.secret-missing', c.file, `does not map ${lacks.join(', ')}, so apps-check can't check the ${blind.join(' and ')} App${blind.length > 1 ? 's' : ''}.`, { text: `Add under the job's secrets:`, commands: lacks.map((n) => `      ${n}: \${{ secrets.${n} }}`) });
-    if (stale.length) find('apps-check.secret-stale', c.file, `maps ${stale.join(', ')}, which Kanon ${checked}'s apps-check does not take; GitHub refuses the call.`, { text: `Remove these lines from the job's secrets:`, commands: stale.map((n) => `      ${n}: \${{ secrets.${n} }}`) });
+    if (lacks.length) {
+      findItems('apps-check.secret-missing', c.file, lacks, (xs) => {
+        const blind = identities.filter((i) => appSecrets(i).some((n) => xs.includes(n)));
+        return [`does not map ${xs.join(', ')}, so apps-check can't check the ${blind.join(' and ')} App${blind.length > 1 ? 's' : ''}.`, { text: `Add under the job's secrets:`, commands: xs.map((n) => `      ${n}: \${{ secrets.${n} }}`) }];
+      });
+    }
+    if (stale.length) findItems('apps-check.secret-stale', c.file, stale, (xs) => [`maps ${xs.join(', ')}, which Kanon ${checked}'s apps-check does not take; GitHub refuses the call.`, { text: `Remove these lines from the job's secrets:`, commands: xs.map((n) => `      ${n}: \${{ secrets.${n} }}`) }]);
   }
 
   // ── The labels ──────────────────────────────────────────────────────────────────────────────
   const taxonomy = new Map(deps.labels().map((l) => [l.name, l]));
   const missingLabels = (req.labels ?? []).filter((n) => !/<[a-z]+>$/.test(n) && !s.labels.has(n));
   if (missingLabels.length) {
-    find('label.missing', repo, `lacks ${missingLabels.length} of the taxonomy's labels: ${missingLabels.join(', ')}. A lane creates a label it needs on first use (plan 0005 §5.3), so this blocks nothing.`, {
+    findItems('label.missing', repo, missingLabels, (xs) => [`lacks ${xs.length} of the taxonomy's labels: ${xs.join(', ')}. A lane creates a label it needs on first use (plan 0005 §5.3), so this blocks nothing.`, {
       text: `Let kanon init create them, or create them yourself:`,
-      commands: missingLabels.map((n) => {
+      commands: xs.map((n) => {
         const l = taxonomy.get(n);
         return l ? `gh label create ${JSON.stringify(n)} --color ${l.color} --description ${JSON.stringify(l.description)} -R ${repo}` : `gh label create ${JSON.stringify(n)} -R ${repo}`;
       }),
-    });
+    }]);
   }
 
   // ── The ruleset ─────────────────────────────────────────────────────────────────────────────
@@ -1137,9 +1263,11 @@ export const diagnose = async (deps, opts) => {
     else {
       const unset = wanted.filter((v) => !have?.has(v));
       if (unset.length) {
-        const fix = telemetryStep(repo, unset, true);
         for (const file of collectorCallers) {
-          find('telemetry.unconfigured', file, `calls Kanon's telemetry collector, and ${repo} doesn't set ${unset.join(' or ')}, so it sends nothing: the collector skips with a warning and stays green.`, { text: fix.text, commands: fix.commands, url: fix.url });
+          findItems('telemetry.unconfigured', file, unset, (xs) => {
+            const fix = telemetryStep(repo, xs, true);
+            return [`calls Kanon's telemetry collector, and ${repo} doesn't set ${xs.join(' or ')}, so it sends nothing: the collector skips with a warning and stays green.`, { text: fix.text, commands: fix.commands, url: fix.url }];
+          });
         }
       }
     }
@@ -1197,22 +1325,66 @@ export const diagnose = async (deps, opts) => {
   // ── The waivers ─────────────────────────────────────────────────────────────────────────────
   // Last, over every finding: one bullet waives one id on one subject, as doctor reported it.
   const waiverRecord = readWaivers(read(ADOPTION_RECORD));
-  for (const e of waiverRecord.errors) find('declaration.malformed', ADOPTION_RECORD, e, { text: `Write each waiver under ## Choices as \`- **${WAIVER_LABEL}:** \`<finding id>\` on \`<subject>\` (<why the finding stands>)\`, for a finding that can be waived (docs/doctor.md).` });
+  for (const e of waiverRecord.errors) find('declaration.malformed', ADOPTION_RECORD, e, { text: `Write each waiver under ## Choices as \`- **${WAIVER_LABEL}:** \`<finding id>\` on \`<subject>\` (<why the finding stands>)\`, for a finding that can be waived; for one that lists items, name those it waives before the parentheses, \`for \`<item>\`, \`<item>\`\` (docs/doctor.md).` });
   /** @type {Waived[]} */
   const waived = [];
-  for (const w of waiverRecord.waivers) {
-    const hits = findings.filter((f) => f.id === w.id && f.subject === w.subject);
-    if (hits.length) {
+  const spans = (/** @type {string[]} */ xs) => xs.map((x) => `\`${x}\``).join(', ');
+  /** @type {Map<string, typeof waiverRecord.waivers>} the bullets of each finding id on each subject */
+  const groups = new Map();
+  for (const w of waiverRecord.waivers) groups.set(`${w.id} ${w.subject}`, [...(groups.get(`${w.id} ${w.subject}`) ?? []), w]);
+  for (const ws of groups.values()) {
+    const { id, subject } = /** @type {(typeof ws)[number]} */ (ws[0]);
+    const hits = findings.filter((f) => f.id === id && f.subject === subject);
+    const category = /** @type {{ category: string }} */ (FINDINGS[id]).category;
+    const blind = unchecked.find((u) => u.subject === subject || UNCHECKED_CATEGORY[u.check] === category);
+    if (!ITEMIZED[id]) {
+      // A finding that lists no items: its one bullet waives it whole.
+      const w = /** @type {(typeof ws)[number]} */ (ws[0]);
       for (const f of hits) {
         findings.splice(findings.indexOf(f), 1);
-        waived.push({ ...f, reason: w.reason });
+        waived.push({ ...f, items: [], line: w.line, reason: w.reason });
       }
+      if (hits.length) continue;
+      if (blind) notes.push(`${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject}, which doctor did not report; the ${blind.check} check could not run, so it can't tell whether the waiver is still needed.`);
+      else find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject}, but doctor reports no such finding.`, { text: `Remove the bullet, so the record says only what is true.` });
       continue;
     }
-    const category = /** @type {{ category: string }} */ (FINDINGS[w.id]).category;
-    const blind = unchecked.find((u) => u.subject === w.subject || UNCHECKED_CATEGORY[u.check] === category);
-    if (blind) notes.push(`${ADOPTION_RECORD}:${w.line} waives ${w.id} on ${w.subject}, which doctor did not report; the ${blind.check} check could not run, so it can't tell whether the waiver is still needed.`);
-    else find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${w.id} on ${w.subject}, but doctor reports no such finding.`, { text: `Remove the bullet, so the record says only what is true.` });
+    // A finding that lists items: each bullet waives the items it names, and an item none names
+    // stays a finding. A bullet that names none would waive what a later release adds too, so it
+    // is malformed and waives nothing; its fix is the bullet to write, from today's items.
+    const named = ws.filter((w) => w.items);
+    const claimed = new Set(named.flatMap((w) => w.items ?? []));
+    const today = [...new Set(hits.flatMap((f) => itemized.get(f)?.items ?? []))].filter((x) => !claimed.has(x));
+    for (const w of ws.filter((x) => !x.items)) {
+      find('declaration.malformed', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject} without naming its items, so it would waive whatever a later release adds to that finding too; it waives nothing until it names them (#406). ${today.length ? `Doctor reports ${today.join(', ')} there today${named.length ? ', besides what the other bullets name' : ''}.` : `Doctor reports no item there today${named.length ? ' that the other bullets don\'t name' : ''}.`}`, today.length
+        ? { text: `Name the items the repository keeps after \`for\`, as doctor reports them today, and drop any it doesn't keep (docs/doctor.md, "Waiving a finding"):`, commands: [`- **${WAIVER_LABEL}:** \`${id}\` on \`${subject}\` for ${spans(today)} (${w.reason})`] }
+        : { text: `Remove the bullet, or name the items it keeps after \`for\` (docs/doctor.md, "Waiving a finding"):`, commands: [`- **${WAIVER_LABEL}:** \`${id}\` on \`${subject}\` for \`<item>\` (${w.reason})`] });
+    }
+    /** @type {Map<(typeof ws)[number], Set<string>>} */
+    const covered = new Map(named.map((w) => [w, new Set()]));
+    for (const f of hits) {
+      const items = itemized.get(f)?.items ?? [];
+      const takes = /** @type {Array<[(typeof ws)[number], string[]]>} */ (named.map((w) => [w, items.filter((x) => w.items?.includes(x))])).filter(([, t]) => t.length);
+      if (!takes.length) continue;
+      const keep = items.filter((x) => !claimed.has(x));
+      const at = findings.indexOf(f);
+      if (keep.length) {
+        const rest = remake(f, keep);
+        findings.splice(at, 1, { ...rest, message: `${rest.message} ${takes.map(([w, t]) => `${ADOPTION_RECORD}:${w.line} waives ${t.join(', ')}`).join('; ')}, not ${keep.length > 1 ? 'these' : 'this'}.` });
+      } else findings.splice(at, 1);
+      for (const [w, t] of takes) {
+        for (const x of t) covered.get(w)?.add(x);
+        waived.push({ ...remake(f, t), items: t, line: w.line, reason: w.reason });
+      }
+    }
+    for (const w of named) {
+      const got = /** @type {Set<string>} */ (covered.get(w));
+      const gone = (w.items ?? []).filter((x) => !got.has(x));
+      if (!gone.length) continue;
+      if (blind) notes.push(`${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject} for ${gone.join(', ')}, which doctor did not report; the ${blind.check} check could not run, so it can't tell whether the waiver is still needed.`);
+      else if (got.size) find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject} for ${gone.join(', ')}, but doctor reports no such ${gone.length > 1 ? 'items' : 'item'} there.`, { text: `Remove ${spans(gone)} from the bullet, so the record says only what is true.` });
+      else find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject} for ${gone.join(', ')}, but doctor reports ${hits.length ? `none of ${gone.length > 1 ? 'them' : 'it'} there` : 'no such finding'}.`, { text: `Remove the bullet, so the record says only what is true.` });
+    }
   }
 
   if (branchName !== s.defaultBranch) notes.push(`The id-token holders and the secrets the workflows map are counted on ${onCheckout}, not on ${s.defaultBranch}; the roles trust ${s.defaultBranch}'s jobs, and its workflows are the ones that run, so run it there for their count.`);
@@ -1318,7 +1490,7 @@ export const prose = (r) => {
   if (r.waived.length) {
     out.push('');
     out.push(`Waived under ## Choices in ${ADOPTION_RECORD}, so they don't count:`);
-    for (const w of r.waived) out.push(`- [${TITLES[w.category] ?? w.category}] ${w.id}, ${w.subject}: ${w.reason}.`);
+    for (const w of r.waived) out.push(`- [${TITLES[w.category] ?? w.category}] ${w.id}, ${w.subject}${w.items.length ? ` (${w.items.join(', ')})` : ''}, by ${ADOPTION_RECORD}:${w.line}: ${w.reason}.`);
   }
   out.push('');
   if (!r.idTokenHolders.length) out.push('No job of your workflows holds id-token: write.');

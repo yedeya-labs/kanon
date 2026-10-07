@@ -477,6 +477,22 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(section(skill('upgrade').body, /^## Steps$/)).toMatch(/\*\*Say up front that each `kanon apps` command a fix names is the person's step\*\*.*"Running `kanon apps`"/);
   });
 
+  // #406, the Owner's 2026-10-07 decision: a waiver of a finding that lists items names them, or
+  // is malformed. The skills show which bullet waives which items, write waivers that name them,
+  // and the upgrade rewrites an old item-less one before or with the move.
+  it('names the items of a waiver, and has the upgrade rewrite one that names none', () => {
+    const doctor = skill('doctor').body;
+    expect(section(doctor, /^## Steps$/)).toMatch(/`\.waived\[\]\.items`.*`\.waived\[\]\.line`/);
+    const waiving = section(doctor, /^## Waiving a finding$/)!;
+    expect(waiving).toMatch(/after `for`/);
+    expect(waiving).toMatch(/names no items is malformed and waives nothing/);
+    expect(waiving).toMatch(/bullets of their own, each with its reason; no item in two/);
+    expect(code(waiving).some((c) => / for `[^`]+` \(/.test(c)) || /\*\*Waived doctor finding:\*\* `[^`]+` on `[^`]+` for `/.test(waiving)).toBe(true);
+    const malformed = rows(section(doctor, /^## Who fixes each finding of `kanon doctor`$/)!).find((r) => r[0] === '`declaration.malformed`')!;
+    expect(malformed[2]).toMatch(/names no items, the fix's bullet names every item doctor reports there today/);
+    expect(section(skill('upgrade').body, /^## Steps$/)).toMatch(/\*\*Rewrite a waiver that names no items, before or with this upgrade:\*\*.*`declaration\.malformed`/);
+  });
+
   it('offers the Releaser to a repository that calls the release workflow without it, as the person\'s choice', () => {
     const offer = section(skill('doctor').body, /^## Offering the Releaser$/);
     expect(offer).not.toBeNull();
