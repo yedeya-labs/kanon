@@ -49,7 +49,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { URL } from 'node:url';
-import { REGISTER_PATH, apps as runApps, checkoutCheck, remoteRepo } from './apps.mjs';
+import { REGISTER_PATH, apps as runApps, checkoutCheck, ownerInstallations, ownerKanonApps, remoteRepo } from './apps.mjs';
 import {
   appSecrets,
   appsCheckFile,
@@ -132,6 +132,10 @@ The answers, one flag per question (without --yes, the questions no flag answers
   --telemetry            send this repository's agent-run rows to Kanon's hosted telemetry
                          store: writes the collector's caller (docs/telemetry.md)
   --no-telemetry         don't (the default)
+  --reuse-apps           where the owner already has an App the lanes lack (an installation
+                         with exactly its permissions), reuse it with kanon apps --reuse
+                         rather than create a second one (the default)
+  --no-reuse-apps        create it anyway
   --create-apps          run \`kanon apps\` for the Apps the lanes lack (the default)
   --no-apps              don't run \`kanon apps\`; print the command instead
 
@@ -140,7 +144,8 @@ or two flags that contradict each other (--help with --json among them) fail by 
 change nothing. A value that begins with "-" is given as --flag=<value>.
 
 Needs \`gh\`. Reading needs a token that can read the repository; creating labels and
-milestones needs Issues: write; the merge setting and the ruleset need Administration: write.
+milestones needs Issues: write; the merge setting and the ruleset need Administration: write; finding the owner's Apps needs an organisation owner's
+token with Administration: read (on a personal account gh's token can't list them).
 gh takes its token from GH_TOKEN, then GITHUB_TOKEN, then its stored login; the command prints
 which one it uses and whose it is.`;
 
@@ -279,7 +284,7 @@ export const realDeps = {
  * @typedef {{
  *   projectOwner?: string, maintainer?: string, stakeholder?: string, gates?: string, testDatabase?: 'none' | 'hook',
  *   delegation?: boolean, delegateName?: string, delegateEmail?: string, deleteDefaults?: boolean,
- *   releaser?: boolean, plugin?: boolean, telemetry?: boolean, createApps?: boolean,
+ *   releaser?: boolean, reuseApps?: boolean, plugin?: boolean, telemetry?: boolean, createApps?: boolean,
  * }} Given
  */
 
@@ -291,6 +296,7 @@ export const CONFLICTS = [
   ['--delegate-email', '--no-delegation'],
   ['--delete-default-labels', '--keep-default-labels'],
   ['--releaser', '--no-releaser'],
+  ['--reuse-apps', '--no-reuse-apps'],
   ['--plugin', '--no-plugin'],
   ['--telemetry', '--no-telemetry'],
   ['--create-apps', '--no-apps'],
@@ -348,6 +354,8 @@ export const parseArgs = (argv, req) => {
     else if (flag === '--keep-default-labels') g.deleteDefaults = false;
     else if (flag === '--releaser') g.releaser = true;
     else if (flag === '--no-releaser') g.releaser = false;
+    else if (flag === '--reuse-apps') g.reuseApps = true;
+    else if (flag === '--no-reuse-apps') g.reuseApps = false;
     else if (flag === '--plugin') g.plugin = true;
     else if (flag === '--no-plugin') g.plugin = false;
     else if (flag === '--telemetry') g.telemetry = true;
@@ -692,7 +700,7 @@ export const rulesetGaps = (covering) => {
 /**
  * The answers: each from its flag when one was given (#367), else asked with a default, or the
  * default itself with `--yes`.
- * @param {Deps} deps @param {{ yes: boolean, lanes: string[] | null, given?: Given }} opts @param {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements, defaultLanes: string[], releases?: boolean }} ctx
+ * @param {Deps} deps @param {{ yes: boolean, lanes: string[] | null, given?: Given }} opts @param {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements, defaultLanes: string[], releases?: boolean, reusable?: (identities: string[]) => Array<{ app: string, slug: string }> }} ctx
  */
 export const askAll = async (deps, opts, ctx) => {
   const g = opts.given ?? {};
@@ -721,6 +729,12 @@ export const askAll = async (deps, opts, ctx) => {
   const releaser = ctx.releases
     ? await yesNo('Create the optional Releaser App, so the release PR runs CI (docs/release.md, "With the Releaser")?', false, g.releaser)
     : false;
+  // AN APP THE OWNER ALREADY HAS (#363; the Owner, 2026-10-07): one Author and one Judge per
+  // owner, reused across its repositories (plan 0005 §3.2). Asked only when the owner's
+  // installations hold an App the chosen lanes need and this register lacks; yes by default,
+  // since a second set doubles the Apps and keys the owner manages. Null when not asked.
+  const found = ctx.reusable?.(appIdentities({ lanes, releaser }, ctx.req)) ?? [];
+  const reuseApps = found.length ? await yesNo(reuseQuestion(found, ctx.req), true, g.reuseApps) : null;
   // THE KANON PLUGIN (#376), declared at project scope so its release is in the repository, where
   // Dependabot's bump and doctor's check can be read beside it (docs/skills.md). Yes by default:
   // the declaration does nothing until each person trusts the folder in Claude Code.
@@ -728,7 +742,18 @@ export const askAll = async (deps, opts, ctx) => {
   // TELEMETRY (#428), no by default and never without an explicit yes: it sends this
   // repository's run rows out of it, to Kanon's hosted store (plan 0002, docs/telemetry.md).
   const telemetry = await yesNo(TELEMETRY_QUESTION, false, g.telemetry);
-  return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser, plugin, telemetry };
+  return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser, reuseApps, plugin, telemetry };
+};
+
+/**
+ * The question for Apps the owner already has (#363).
+ * @param {Array<{ app: string, slug: string }>} found @param {Requirements} req
+ */
+export const reuseQuestion = (found, req) => {
+  const name = (/** @type {string} */ app) => req.identities.apps[app]?.name ?? app;
+  const apps = [...new Set(found.map((f) => f.app))];
+  const list = apps.map((app) => `the ${name(app)} (${found.filter((f) => f.app === app).map((f) => f.slug).join(' or ')})`).join(' and ');
+  return `The owner already has ${list}, installed with exactly ${apps.length > 1 ? 'their' : 'its'} permissions. Reuse ${apps.length > 1 ? 'them' : 'it'} here with kanon apps --reuse, rather than create a second ${apps.length > 1 ? 'set' : 'one'}?`;
 };
 
 /**
@@ -946,7 +971,7 @@ export const SCHEMA = 'kanon-init/v1';
  *   catalogue: ReturnType<typeof laneCatalogue>,
  *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'differs', content: string | null, diff: string[] }>,
  *   changes: Array<{ kind: string, subject: string, message: string }>,
- *   apps: { identities: string[], missing: string[], command: string | null, outcome: string, exitCode: number | null } | null,
+ *   apps: { identities: string[], missing: string[], reuse: Array<{ app: string, slug: string }>, command: string | null, outcome: string, exitCode: number | null } | null,
  *   findings: Finding[],
  *   notes: string[],
  *   failures: string[],
@@ -1142,8 +1167,38 @@ const run = async (deps, opts, req, rep) => {
   // 2. Ask.
   const gitName = deps.git(['-C', root, 'config', 'user.name']).stdout.trim();
   const gitEmail = deps.git(['-C', root, 'config', 'user.email']).stdout.trim();
+  // THE OWNER'S APPS (#363): Kanon's Apps the owner already has, from its installations (the
+  // reader `kanon doctor` shares), looked for only when this register lacks one of them. An
+  // installation whose App this register already names is this repository's own.
+  const rows = registerRows(read(REGISTER_PATH));
+  const named = new Set(rows.values());
+  const lacking = Object.keys(req.identities.apps).filter((i) => registerRolesOf(i, req).some((r) => !rows.has(r)));
+  /** @type {Array<{ app: string, slug: string, installation: number }> | null} null when they can't be listed */
+  let ownerApps = [];
+  /** @type {string | null} why they can't be listed */
+  let unlisted = null;
+  if (lacking.length) {
+    const { listed, installs } = await ownerInstallations(deps.gh, s.owner, s.kind);
+    if (installs) ownerApps = ownerKanonApps(installs, s.owner, req.identities.apps).filter((f) => !named.has(f.slug));
+    else {
+      ownerApps = null;
+      unlisted = `the token can't list ${s.owner}'s App installations (${listed.stderr.trim() || `exit ${listed.status}`}), so init can't tell whether ${s.owner} already has Kanon's Apps. ${
+        s.kind === 'Organization' ? `Only an owner of ${s.owner} can list them, with the organisation's Administration permission (read).` : "On a personal account gh's token can't list them."
+      }`;
+    }
+  }
+  rep.inspection.ownerApps = ownerApps && ownerApps.map((f) => ({ app: f.app, slug: f.slug }));
   out('');
-  const a = await askAll(deps, opts, { login: who.login ?? ownerName, gates: suggestGates(read), gitName, gitEmail, req, defaultLanes: installed.length ? installed : DEFAULT_LANES, releases });
+  const a = await askAll(deps, opts, {
+    login: who.login ?? ownerName,
+    gates: suggestGates(read),
+    gitName,
+    gitEmail,
+    req,
+    defaultLanes: installed.length ? installed : DEFAULT_LANES,
+    releases,
+    reusable: (ids) => (ownerApps ?? []).filter((f) => ids.includes(f.app) && lacking.includes(f.app)),
+  });
   rep.answers = {
     projectOwner: a.owner,
     maintainer: a.maintainer,
@@ -1154,6 +1209,7 @@ const run = async (deps, opts, req, rep) => {
     delegation: a.delegation,
     deleteDefaultLabels: a.deleteDefaults,
     releaser: a.releaser,
+    reuseApps: a.reuseApps,
     plugin: a.plugin,
     telemetry: a.telemetry,
   };
@@ -1471,7 +1527,6 @@ const run = async (deps, opts, req, rep) => {
   out('');
   out('== Apps ==');
   const identities = appIdentities(a, req);
-  const rows = registerRows(read(REGISTER_PATH));
   /** @type {string[]} */
   let missing = [];
   try {
@@ -1480,17 +1535,42 @@ const run = async (deps, opts, req, rep) => {
     failed(/** @type {Error} */ (e).message);
     failures++;
   }
-  rep.apps = { identities, missing, command: null, outcome: failures ? 'failed' : 'none', exitCode: null };
+  // The Apps the owner already has, which the person chose to reuse (#363): each is the
+  // `kanon apps --reuse` step, with its slug, and the rest are created as before.
+  const owned = ownerApps ?? [];
+  const reusing = a.reuseApps ? missing.filter((i) => owned.some((f) => f.app === i)) : [];
+  const toCreate = missing.filter((i) => !reusing.includes(i));
+  rep.apps = { identities, missing, reuse: reusing.map((i) => ({ app: i, slug: /** @type {{ slug: string }} */ (owned.find((f) => f.app === i)).slug })), command: null, outcome: failures ? 'failed' : 'none', exitCode: null };
   const appsRep = rep.apps;
+  if (missing.length && ownerApps === null && unlisted) note(`Not looked for: ${unlisted}`);
+  for (const i of reusing) {
+    const all = owned.filter((f) => f.app === i);
+    const slug = /** @type {{ slug: string }} */ (all[0]).slug;
+    const name = req.identities.apps[i]?.name ?? i;
+    const also = all.length > 1 ? ` (it also has ${all.slice(1).map((f) => f.slug).join(', ')} with the same permissions: give the one ${repoName} should share)` : '';
+    step({
+      id: 'app.reuse',
+      category: 'app',
+      subject: i,
+      prose: `${s.owner} already has the ${name} App ${slug}${also}. Add ${repoName} to its installation, generate a private key on its settings page, then run this, and commit the register rows it writes:`,
+      message: `${s.owner} already has the ${name} App ${slug}, which the chosen lanes run as, and the register lacks it.`,
+      text: `Add ${repoName} to the App's installation, generate a private key on its settings page, then run kanon apps --reuse with the downloaded key, and commit the register rows it writes.${also}`,
+      commands: [`kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${i}:${slug}=<downloaded>.pem`],
+      url: s.kind === 'User' ? `https://github.com/settings/apps/${slug}` : `https://github.com/organizations/${s.owner}/settings/apps/${slug}`,
+    });
+  }
   if (!identities.length) out('The chosen lanes run as no App.');
   else if (!missing.length) {
     if (!failures) appsRep.outcome = 'registered';
     out(`The App register lists every App the lanes run as: ${identities.join(', ')}.`);
+  } else if (!toCreate.length) {
+    if (!failures) appsRep.outcome = 'reuse';
+    out(`The owner already has every App the register lacks (${reusing.join(', ')}): reuse ${reusing.length > 1 ? 'them' : 'it'} with the kanon apps --reuse step${reusing.length > 1 ? 's' : ''} below.`);
   } else {
     /** @type {string[]} */
     let flag;
     try {
-      flag = appsArgs(missing, req);
+      flag = appsArgs(toCreate, req);
     } catch (e) {
       failed(/** @type {Error} */ (e).message);
       appsRep.outcome = 'failed';
@@ -1499,25 +1579,25 @@ const run = async (deps, opts, req, rep) => {
     const argvApps = ['--owner', s.owner, '--repo', repoName, ...flag, '--dir', root];
     const cmd = `kanon apps ${argvApps.join(' ')}`;
     appsRep.command = cmd;
-    // One App per owner (plan 0005 §3.2): init reads only this checkout's register, so an App
-    // the owner already has for another repository looks missing here (#363). Until init can
-    // tell, the step says to reuse such an App rather than create a second one.
-    const reuseInstead = `If ${s.owner} already has ${missing.length > 1 ? 'these Apps' : 'this App'} for another repository, don't create ${missing.length > 1 ? 'them' : 'it'} again: add ${repoName} to ${missing.length > 1 ? 'each' : 'its'} installation, generate a private key on its settings page, and run kanon apps --owner ${s.owner} --repo ${repoName} --reuse <app>:<slug>=<key file> instead (docs/apps.md, "A repository added later").`;
+    // One App per owner (plan 0005 §3.2): when the owner's installations can't be listed, an App
+    // it already has for another repository looks missing here (#363), so the step says to
+    // reuse such an App rather than create a second one.
+    const reuseInstead = ownerApps !== null ? '' : ` If ${s.owner} already has ${toCreate.length > 1 ? 'these Apps' : 'this App'} for another repository, don't create ${toCreate.length > 1 ? 'them' : 'it'} again: add ${repoName} to ${toCreate.length > 1 ? 'each' : 'its'} installation, generate a private key on its settings page, and run kanon apps --owner ${s.owner} --repo ${repoName} --reuse <app>:<slug>=<key file> instead (docs/apps.md, "A repository added later").`;
     const createStep = () =>
       step({
         id: 'app.create',
         category: 'app',
-        subject: missing.join(', '),
-        prose: `Create the Apps the lanes run as, from this checkout, and commit the register rows it writes. ${reuseInstead}`,
-        message: `The App register lacks ${missing.join(' and ')}, which the chosen lanes run as.`,
-        text: `Run kanon apps from this checkout: it opens your browser for each App. Then commit the register rows it writes. ${reuseInstead}`,
+        subject: toCreate.join(', '),
+        prose: `Create the Apps the lanes run as, from this checkout, and commit the register rows it writes.${reuseInstead}`,
+        message: `The App register lacks ${toCreate.join(' and ')}, which the chosen lanes run as.`,
+        text: `Run kanon apps from this checkout: it opens your browser for each App. Then commit the register rows it writes.${reuseInstead}`,
         commands: [cmd],
       });
     if (dry) {
       out(`Would run: ${cmd}`);
-      change('apps', missing.join(', '), `Would run: ${cmd}`);
+      change('apps', toCreate.join(', '), `Would run: ${cmd}`);
       appsRep.outcome = 'would-run';
-    } else if (!opts.apps || !(opts.given.createApps || /^y/i.test(opts.yes ? 'y' : await deps.ask(`Create the Apps for ${missing.join(', ')} now? It opens your browser for each. (y/n)`, 'y')))) {
+    } else if (!opts.apps || !(opts.given.createApps || /^y/i.test(opts.yes ? 'y' : await deps.ask(`Create the Apps for ${toCreate.join(', ')} now? It opens your browser for each. (y/n)`, 'y')))) {
       createStep();
       appsRep.outcome = 'left-to-you';
     } else {
@@ -1525,7 +1605,7 @@ const run = async (deps, opts, req, rep) => {
       const code = await deps.apps(argvApps, { out, err });
       appsRep.exitCode = code;
       if (code === 0) {
-        change('apps', missing.join(', '), `Created the App(s) for ${missing.join(', ')} with kanon apps`);
+        change('apps', toCreate.join(', '), `Created the App(s) for ${toCreate.join(', ')} with kanon apps`);
         appsRep.outcome = 'ran';
       } else {
         failures++;
@@ -1534,10 +1614,10 @@ const run = async (deps, opts, req, rep) => {
         step({
           id: 'app.failed',
           category: 'app',
-          subject: missing.join(', '),
+          subject: toCreate.join(', '),
           blocking: true,
           prose: `kanon apps did not finish (exit ${code}); fix what it said, then run it again:`,
-          message: `kanon apps did not finish (exit ${code}), so ${missing.join(' and ')} may not exist yet.`,
+          message: `kanon apps did not finish (exit ${code}), so ${toCreate.join(' and ')} may not exist yet.`,
           text: 'Fix what kanon apps said, then run it again.',
           commands: [cmd],
         });

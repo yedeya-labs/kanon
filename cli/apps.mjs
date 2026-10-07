@@ -568,6 +568,42 @@ const writeAppRows = ({ spec, slug, register, deps }) => {
 export const permissionDrift = (got, want) => [...new Set([...Object.keys(got), ...Object.keys(want)])].filter((k) => got[k] !== want[k]);
 
 /**
+ * The owner's App installations, as GitHub lists them: an organisation's to an owner of it, with
+ * its Administration permission (read); a personal account's only to a GitHub App's user token,
+ * never to gh's own (#417). `installs` is null when they can't be listed, and `listed` says why.
+ * `kanon doctor` (`app.unused`, the Releaser's id) and `kanon init` (an App the owner already
+ * has, #363) read them through this.
+ * @param {(args: string[]) => Promise<{ status: number | null, stdout: string, stderr: string }>} gh
+ * @param {string} owner @param {string} kind `Organization` or `User`
+ * @returns {Promise<{ listed: { status: number | null, stdout: string, stderr: string }, installs: any[] | null }>}
+ */
+export const ownerInstallations = async (gh, owner, kind) => {
+  const listed = await gh(['api', kind === 'Organization' ? `orgs/${owner}/installations?per_page=100` : 'user/installations?per_page=100']);
+  /** @type {any} */
+  let j;
+  try {
+    j = listed.status === 0 ? JSON.parse(listed.stdout) : null;
+  } catch {
+    j = null;
+  }
+  return { listed, installs: Array.isArray(j?.installations) ? j.installations : null };
+};
+
+/**
+ * Which of Kanon's Apps the owner already has: each of its installations whose permissions are
+ * exactly one App's in rulebook/agent-permissions.json (#363), as apps-check holds them. In the
+ * order of the Apps, then of the installations.
+ * @param {any[]} installs @param {string} owner @param {Record<string, { permissions: Record<string, string> }>} specs
+ * @returns {Array<{ app: string, slug: string, installation: number }>}
+ */
+export const ownerKanonApps = (installs, owner, specs) =>
+  Object.entries(specs).flatMap(([app, spec]) =>
+    installs
+      .filter((i) => String(i?.account?.login ?? '').toLowerCase() === owner.toLowerCase() && typeof i?.app_slug === 'string' && i?.permissions && typeof i.permissions === 'object' && !permissionDrift(i.permissions, spec.permissions).length)
+      .map((i) => ({ app, slug: String(i.app_slug), installation: Number(i.id) })),
+  );
+
+/**
  * One App, start to finish.
  * @param {{ owner: string, pages: OwnerPages, repos: string[], key: string, name: string, spec: AppSpec, register: string, deps: Deps }} a
  */
