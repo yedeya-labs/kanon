@@ -4,6 +4,7 @@
 - **Tracks:** #32 and #41. **Governed by:** [ADR 0007](../decisions/0007-data-boundary.md) (the data boundary), `K-OBS-14` (claims are measured, size-controlled, with intervals), `K-OBS-16` to `K-OBS-18`, `K-PRIN-14`, and [plan 0002](0002-hosted-telemetry-store.md), whose store this plan extends.
 - **Measured on** the reference adopter's main branch and Kanon's, on 2026-10-02. The commands are in [Measurements](#measurements). The reference adopter's repository is private, and the token this plan ran with can't read its pull requests or reviews. Every number that needs them is marked **not run**, with the command the Owner runs.
 - **Amended** 2026-10-07 (#91), before M4 and M6 are built: the follow-up-close trigger re-derives only PRs that are closed and inside the 13-month window (§3.1), and an issue-only run joins at most one item, the first to close after it (§3.4). Both make the text say what the accepted ambiguity note and the store's window already require. M4's and M6's checks gain one case each (§7).
+- **Amended** 2026-10-07 (#516, #518), as M2's metrics module is built: how an actor is classified once one App plays several roles (§3.2); the `origin` of each author class (§3.3); the stage partition's details and the scope of human corrections (§3.3); where `bandOf` and `areaOf` live (§3.6, §5.2); and the `config` area and Kanon's file lists (§3.7). The Owner accepted the origin mapping the same day.
 
 ## The plan in one paragraph
 
@@ -144,6 +145,13 @@ Several fields count what a **human** did. The collector classifies each GitHub 
 
 The row stores the class, or a count per class. **No login, name or account id ever leaves the adopter.**
 
+**Amended 2026-10-07 (#516, #518): one App, several roles.** Since plan 0005's L4, one App plays several roles: the Author App plays the Implementer, the Lead, the Explorer and the Overseer, and the Judge App plays the Reviewer and the Merger. A login then names the App, not the role. The collector reads the role the way Kanon's own checks do (`scripts/lib/role-marker.mjs`):
+1. the role marker on what the account wrote, when it names a role the App plays;
+2. otherwise, the role the action implies, when the App plays it: a merge is the Merger's, a review the Reviewer's, a pull request the Implementer's;
+3. otherwise the class is **unknown**, and the field is left out rather than guessed.
+
+A register row whose role the row can't carry (the Releaser, Intake) is `other_bot`.
+
 ### 3.3 The fields
 
 **Eighty-four fields, flat.** Types: **count** (non-negative integer below 2³¹), **duration** (whole seconds), **time** (ISO-8601 UTC), **bool**, **enum** (a closed list), **pattern** (a strict regular expression). Every field was checked against ADR 0007 rule 1: none holds code, prompts, issue or PR text, file paths, error messages, free text or a username. The ones rule 1 doesn't already list are added by the `K-OBS-16` amendment (§5).
@@ -183,6 +191,21 @@ The row stores the class, or a count per class. **No login, name or account id e
 
 The collector reads the acceptance criteria, the spec ids and the body from the issue, but stores **only the counts**.
 
+**Amended 2026-10-07 (#516, #518): the `origin` of an author class.** `origin`'s list isn't the class list (§3.2), so when the rule falls through to an author's class, the class maps to an origin as below. The Owner accepted this mapping on 2026-10-07.
+
+| Author's class | `origin` |
+|---|---|
+| `explorer` | `explorer` |
+| `overseer` | `overseer` |
+| `lead` | `brief` |
+| `reviewer` | `reviewer_followup` |
+| `human` | `human` |
+| `other_bot` that is a dependency-update App (Kanon's list: `dependabot`, `renovate`) | `dependency_bot` |
+| any other `other_bot` | `other_bot` |
+| `implementer`, `merger`, or an App of several roles with no role marker | absent: no origin Kanon can name |
+
+The Implementer and the Merger file no issue and open no PR of their own, so an item they appear to originate has no origin. A PR whose closing issues weren't read has an unknown origin, never the PR author's.
+
 **Group 2. Flow and time**
 
 | Field | Type | Derived from |
@@ -207,6 +230,15 @@ The collector reads the acceptance criteria, the spec ids and the body from the 
 
 **Human wait time** is `t_human_s`. Its definition is the one place a policy is encoded in a measure: "waiting for a human" means a human is the only party who can move the item. The order puts it first so that a human wait overlapping, say, a CI run is still counted as human wait.
 
+**Amended 2026-10-07 (#516, #518): the partition's details.**
+- **The next push** (`rework`) is the next commit's committer date or a `head_ref_force_pushed` event, whichever comes first. GitHub records no time for an ordinary push.
+- **`rework` opens only on the Reviewer's** `changes_requested` verdict, not on a human's.
+- **A Reviewer run with no verdict inside it** ends its `review` interval at the run's end.
+- **The Merger may not merge** (the second half of stage 1) is an input the collector sets from the Merger's escalation, `merger_blocked`. The interval opens at the later of the standing Reviewer approval and the last required check's completion on the approved head, when those checks are green.
+- **`dispatched_at` ignores a dispatch label applied after `closed_at`.**
+- **When the first closing issue's timeline wasn't read,** `dispatched_at` is unknown, so the lead time and every stage field are left out, never measured from `opened_at`.
+- Every time is floored to its second before anything is subtracted, so the stages sum to `lead_time_s` exactly. The module checks that sum on every row it builds.
+
 **Group 3. Accuracy**
 
 | Field | Type | Derived from |
@@ -216,7 +248,7 @@ The collector reads the acceptance criteria, the spec ids and the body from the 
 | `ci_failures_before_review` | count | failed required check runs on head commits before the first Reviewer verdict |
 | `red_first` | enum `pass`, `fail`, `absent` | the conclusion of the red-first check (`K-MERGE-13`) on the final head; `absent` on a human-authored PR, which the rule exempts |
 | `verify_acs` | enum `pass`, `fail`, `absent` | the verify-acs lane's check conclusion on the final head |
-| `human_commits` | count | PR commits whose author or committer is `human`, on an agent-authored PR |
+| `human_commits` | count | PR commits whose author or committer is `human`, on an agent-authored PR; **absent** on a human-authored PR, where they are the author's own (amended 2026-10-07, #516, #518) |
 | `human_cr_after_approval` | count | `changes_requested` reviews by a `human` after the Reviewer approved |
 | `human_reviews` | count | reviews by a `human` |
 | `revert_pr` | count (a PR number) | §3.5 |
@@ -315,7 +347,7 @@ SZZ stays possible later as a **diagnostic,** never a headline: the dry run (§7
 
 ### 3.6 The complexity band
 
-**Band version 1.** One function, `bandOf(row, version)`, in the schema module, used by the collector, the store's aggregates and every report. Its inputs are stored counts, so a new version recomputes every stored row without collecting anything again.
+**Band version 1.** One function, `bandOf(row, version)`, in the metrics module (`scripts/metrics/band.mjs`), used by the collector, the store's aggregates and every report. **Amended 2026-10-07 (#516, #518):** it was to live in the schema module, but the schema imports nothing so that it can run in the ingest function, and `areaOf` needs the code-areas and escalation readers. `band.mjs` imports nothing, so the ingest side may copy it, as the schema copies `ESCALATION_CATEGORIES`. Its inputs are stored counts, so a new version recomputes every stored row without collecting anything again.
 
 1. **Lines** are `changed_lines`: additions plus deletions, excluding lockfiles, snapshot files and the changelog. Those are generated. Counting them would put a dependency bump in XL.
 2. **Base band from lines:** S up to 200; M up to 500; L up to 1,200; XL above.
@@ -348,6 +380,11 @@ SZZ stays possible later as a **diagnostic,** never a headline: the dry run (§7
 | `docs` | `*.md`, `docs/**` |
 | `config` | dotfiles and root-level configuration files |
 | `code` | everything else |
+
+**Amended 2026-10-07 (#516, #518): the `config` area and Kanon's lists.**
+- **`config`** is a path with any segment starting with `.` (so `.github/CODEOWNERS`, `.claude/` and `.husky/` are config), or a root-level file named `*.config.*` or with a `json`, `yaml`, `toml`, `ini`, `cfg` or `conf` extension.
+- **A declared `code` tree beats `config`:** a dot-directory the adopter declares as code under `## Code areas` is `code`, as Kanon's own `.github/scripts/` is. Outside a declared code tree, everything else is still `code`.
+- **The `deps` file names and the size exclusions (§3.6) are Kanon's lists,** covering the common stacks' manifests and lockfiles, not one stack's. On a JavaScript repository the exclusions are the files [Measurements](#measurements)' script excludes.
 
 **Escalation categories.** Each entry in the adopter's `docs/qa/escalation-paths.md` (`K-MERGE-4`, `K-LAYOUT-8`) gains a **category** from Kanon's closed list: `pipeline`, `playbooks`, `infra`, `migrations`, `schema`, `payments`, `auth`, `other`. The framework's own entries (workflows, the pipeline's scripts, the playbooks) carry `pipeline` or `playbooks`. The collector sets `esc_<category>` to true when any changed path matches an entry of that category. The adopter's patterns and paths never leave; only the eight booleans do.
 
@@ -408,7 +445,7 @@ Whether the execution file carries every tool and compaction event is checked in
 |---|---|
 | §2.1 | Add §5.1's six fields. Add the work-item row as a second field list (this plan §3.3). |
 | §2.2 | The store keeps a field list per **(`row_kind`, `schema_version`)**. Work-item rows start at version 1. |
-| §2.5 | `validate(row)` reads `row_kind` first and checks the row against that kind's list. The pattern fields (`closing_issues`, `fix_prs`, `escalation_reasons`, `guard_failures`) are validated element by element against their number pattern or Kanon's code list. `bandOf` and `areaOf` live in the same module. |
+| §2.5 | `validate(row)` reads `row_kind` first and checks the row against that kind's list. The pattern fields (`closing_issues`, `fix_prs`, `escalation_reasons`, `guard_failures`) are validated element by element against their number pattern or Kanon's code list. `bandOf` and `areaOf` live in the metrics module, `scripts/metrics/`, not in the import-free schema (amended 2026-10-07, #516, #518; §3.6). |
 | §4 | Work-item key: `pk = <key>#work`, `sk = pr-<n>`, with the PR number zero-padded to ten digits so the keys sort numerically. The key holds no date, so a closed, reopened and re-closed PR overwrites its one row (§3.1). The `recorded_at` window check is unchanged. `closed_at` must be in the past and at most 13 months old. A rewrite has the same key and overwrites. |
 | §5 | The private register also holds, per key, its time from install to first review (§4, group 9). It never enters the public tree. |
 | §6 | The read helper gains `query('work', from, to)`, which reads the adopter's `<key>#work` partition and filters on `closed_at`. The partition is small (about 11 MB at 13 months, §8), so reading it whole is cheap. The first cross-adopter aggregate adds the three indicators per band, under the same three-adopter rule. |
