@@ -80,14 +80,14 @@ Some findings your repository has decided to keep. A caller whose lane's file na
 ```
 
 - **A waived finding doesn't count.** It moves from `findings` to `waived`, with the bullet's reason, so it no longer sets the exit code, and it stays in the document for whoever reads it.
-- **A waiver is narrow.** It waives one finding id on one subject; nothing waives an id everywhere, or every finding on a subject. Where doctor reports more than one finding of an id on one subject, such as each missing secret on the repository, the waiver covers each of them, and `waived` lists each.
+- **A waiver is narrow.** It waives one finding id on one subject; nothing waives an id everywhere, or every finding on a subject. Where doctor reports more than one finding of an id on one subject, such as each missing secret on the repository, a waiver of a finding that lists items covers each of them for the items it names (the next bullet), and any other waiver covers each of them; `waived` lists each.
 - **A waiver of a finding that lists items names them** ([#406](https://github.com/yedeya-labs/kanon/issues/406)). Some findings list several items in one message, and a later release can add one: a permission an App needs, a secret a lane takes. So a waiver of one of these names, after `for`, each item it waives, as one code span each, separated by commas, exactly as the finding's message names them:
 
   ```markdown
   - **Waived doctor finding:** `secret.missing` on `acme/widgets` for `DIGEST_WEBHOOK` (the digests post through the organisation's webhook)
   ```
 
-  Doctor waives only those. Any other item the finding lists, today or after an upgrade, stays a finding, written for those items alone, and says which the waiver covers; `waived` lists the finding for the items it names, in `.waived[].items`. An item the bullet names that doctor no longer reports makes the waiver stale. A waiver that names no items, as every waiver did before, still waives the whole finding, but it also waives whatever a later release adds to it: doctor says so in a note, naming the items it waives today and the bullet to write instead. The ids, and what an item of each is:
+  Doctor waives only those. Any other item the finding lists, today or after an upgrade, stays a finding, written for those items alone, and says which bullet waives which items; `waived` lists the finding for the items each bullet names, in `.waived[].items`, with the bullet's line, `.waived[].line`. **Several bullets may waive items of one finding,** each with its own reason, but no item twice: a bullet naming an item another bullet of that finding names is malformed. An item a bullet names that doctor no longer reports makes the waiver stale. **A bullet of one of these findings that names no items is malformed** (the Owner, 2026-10-07), and waives nothing, because it would also waive whatever a later release adds: its fix is the bullet to write instead, naming the items doctor reports today, with the same reason. Before #406 such a bullet waived the whole finding; rewrite it as its fix says, keeping only the items the repository keeps. The ids, and what an item of each is:
 
   | Id | An item |
   |---|---|
@@ -105,7 +105,7 @@ Some findings your repository has decided to keep. A caller whose lane's file na
   | `telemetry.unconfigured` | a variable |
 
 - **A waiver that matches nothing is listed as stale** (`waiver.stale`), without blocking, so a waiver doesn't outlive its finding. When the check that would report its finding couldn't run, doctor can't tell, and says so in a note instead.
-- **A waiver in another shape is malformed, and blocks** (`declaration.malformed`): outside `## Choices`, with nothing in its parentheses, naming an id doctor doesn't report, naming items of a finding that lists none, waiving one finding twice, or waiving a finding that can't be waived.
+- **A waiver in another shape is malformed, and blocks** (`declaration.malformed`): outside `## Choices`, with nothing in its parentheses, naming an id doctor doesn't report, naming no items of a finding that lists them, naming items of a finding that lists none, waiving one finding twice, or one item of it twice, or waiving a finding that can't be waived.
 - **The person decides.** A waiver is a decision the rulebook gives to the project, in a file on its escalation path (`K-MERGE-4`). An agent may propose one; the person writes it, or accepts it with its reason.
 
 An accepted id-token holder is this waiver's own form for `id-token.unaccepted`: the same `## Choices`, one bullet per job, a reason, malformed and stale alike. It keeps its own shape because doctor lists every holder with its status (`.idTokenHolders[].status`), and the acceptance is what makes one `accepted`.
@@ -129,8 +129,14 @@ Each of these is reported as before, whatever the record says, and a waiver of o
 4. **`--to` checks the target release only.** What the pinned release already needed shows up too, because it fails the target as well.
 5. **The holders are counted on the checkout's workflows,** not on the default branch read through the API; doctor adds a note when the checkout is on another branch.
 6. **A per-role App left installed after the two-App move is listed, without blocking** (`app.unused`), with the steps to uninstall and delete it in its fix.
-7. **Any repository waives a finding it keeps with one bullet under `## Choices`,** one finding id on one subject with its reason, as above ([#390](https://github.com/yedeya-labs/kanon/issues/390)); doctor learns no repository's special case ([#389](https://github.com/yedeya-labs/kanon/issues/389)). A waived finding doesn't count toward the exit code and stays in `waived`; a stale waiver is listed; a malformed one blocks. Which findings can't be waived is listed above.
+7. **Any repository waives a finding it keeps with one bullet under `## Choices`,** one finding id on one subject with its reason, as above ([#390](https://github.com/yedeya-labs/kanon/issues/390)); doctor learns no repository's special case ([#389](https://github.com/yedeya-labs/kanon/issues/389)). A waived finding doesn't count toward the exit code and stays in `waived`; a stale waiver is listed; a malformed one blocks. Which findings can't be waived is listed above. Since 2026-10-07, a finding that lists items takes several bullets, each naming its items (below).
 8. **A project may declare the kanon plugin in `.claude/settings.json`,** and doctor reports, without blocking, a declared release other than the one it checks against (`plugin.version-mismatch`, [#376](https://github.com/yedeya-labs/kanon/issues/376)). Under `--to` that is the release you are moving to, so the upgrade shows the plugin's edit beside the pin's. It can be waived like any other finding.
+
+## Decided by the Owner, 2026-10-07
+
+1. **A waiver of a finding that lists items names them, or is malformed** ([#406](https://github.com/yedeya-labs/kanon/issues/406)), from the release that ships this, not a later schema: a bullet that names none would hide what a later release adds. Its fix is the bullet to write, built from the items doctor reports today. The document's shape stays `kanon-doctor/v1`; what the adoption record accepts is the breaking change.
+2. **Several bullets may waive items of one finding,** each with its own items and reason; two naming the same item are malformed.
+3. **`secret.missing` asks only for Kanon's own secrets** at the checked release: each of its Apps' two, and its lanes' ([#415](https://github.com/yedeya-labs/kanon/issues/415)).
 
 ## Exit codes
 
@@ -206,9 +212,10 @@ When it can't run, or on a usage error with `--json`, the document is `{ "schema
 | `message` | string | What is missing or stale, in a sentence. |
 | `fix` | object | The fix it would have had. |
 | `items` | array | Strings: the items it waives, for a finding that lists items ([above](#waiving-a-finding)); empty for any other. |
+| `line` | number | The line of the adoption record whose bullet waives it. |
 | `reason` | string | Why the finding stands: the waiver's parentheses in the adoption record. |
 
-It is the finding, whole, as it would have been listed, with the waiver's reason; for a waiver that names items, the finding as it would have been listed for those items alone.
+It is the finding, whole, as it would have been listed, with the waiver's reason; for a waiver that names items, the finding as it would have been listed for those items alone, once for each bullet that waives some of them.
 
 ### An id-token holder
 

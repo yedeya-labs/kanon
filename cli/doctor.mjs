@@ -24,8 +24,10 @@
 // toward the exit code but stays in the document. Doctor knows no repository's special case:
 // every finding and every repository is waived alike, except the ids `UNWAIVABLE` lists. A waiver
 // that matches no finding is listed as stale, and one in another shape is malformed. A finding
-// that lists items, which a later release can add to (`ITEMIZED`), is waived item by item: the
-// bullet names the items after `for`, and an item it doesn't name stays a finding (#406).
+// that lists items, which a later release can add to (`ITEMIZED`), is waived item by item: each
+// bullet names the items it waives after `for`, with its own reason, several bullets may share
+// one finding, and an item none names stays a finding. A bullet of such a finding that names no
+// items is malformed, since it would hide what a later release adds (#406, the Owner, 2026-10-07).
 //
 // IT WRITES NOTHING: every GitHub call is a read, and no file is written. `kanon init` fixes
 // what can be fixed from the checkout.
@@ -108,9 +110,10 @@ export const UNWAIVABLE = {
 /**
  * The finding ids whose findings list items, each with what an item is (#406). A later release
  * can add an item to such a finding, a permission an App needs or a secret a lane takes, so a
- * waiver of one names the items it waives after `for`, and doctor still reports any other. A
- * waiver of one that names none waives every item, today's and a later release's, as waivers did
- * before #406, and doctor says so in a note.
+ * waiver of one names the items it waives after `for`, and doctor still reports any other. Several
+ * bullets may waive items of one finding, each with its reason, but no item twice. A waiver of one
+ * that names no items is malformed (the Owner, 2026-10-07), its fix the bullet built from the
+ * items doctor reports today.
  * @type {Record<string, string>}
  */
 export const ITEMIZED = {
@@ -397,8 +400,10 @@ export const readHolderAcceptances = (text) => {
  * finding that lists items (`ITEMIZED`), it may name the items it waives, each a code span after
  * `for`, separated by commas (`items`, null when it names none). A bullet in another shape,
  * outside `## Choices`, with no reason, naming an id doctor doesn't report or one it doesn't
- * waive (`UNWAIVABLE`), naming items of a finding that lists none, or waiving the same finding
- * twice, is returned as an error naming its line.
+ * waive (`UNWAIVABLE`), naming items of a finding that lists none, waiving a finding that lists
+ * none twice, or naming an item another bullet of the same finding names, is returned as an error
+ * naming its line. A bullet of an `ITEMIZED` finding that names no items is returned as read:
+ * `diagnose` reports it malformed, with the bullet to write from the items it finds.
  * @param {string | null} text
  * @returns {{ waivers: Array<{ id: string, subject: string, items: string[] | null, reason: string, line: number }>, errors: string[] }}
  */
@@ -426,7 +431,12 @@ export const readWaivers = (text) => {
     if (!FINDINGS[id]) return errors.push(`${where} waives \`${id}\`, which is no finding doctor reports`);
     if (UNWAIVABLE[id]) return errors.push(`${where} waives \`${id}\`, which can't be waived: ${UNWAIVABLE[id]}`);
     if (items && !ITEMIZED[id]) return errors.push(`${where} names items after \`for\`, but \`${id}\` lists none: waive it on its subject alone`);
-    if (waivers.some((w) => w.id === id && w.subject === subject)) return errors.push(`${where} waives \`${id}\` on \`${subject}\` a second time`);
+    const same = waivers.filter((w) => w.id === id && w.subject === subject);
+    if (!ITEMIZED[id] && same.length) return errors.push(`${where} waives \`${id}\` on \`${subject}\` a second time`);
+    for (const w of same) {
+      const twice = items && w.items ? items.filter((x) => w.items?.includes(x)) : [];
+      if (twice.length) return errors.push(`${where} waives ${twice.map((x) => `\`${x}\``).join(', ')} of \`${id}\` on \`${subject}\`, which ${ADOPTION_RECORD}:${w.line} waives already`);
+    }
     waivers.push({ id, subject, items, reason, line: i + 1 });
   });
   return { waivers, errors };
@@ -512,7 +522,7 @@ export const requirementsAt = async (deps, release) => {
 /**
  * @typedef {{ id: string, category: string, blocking: boolean, subject: string, message: string,
  *   fix: { text: string, commands: string[], url: string | null } }} Finding
- * @typedef {Finding & { items: string[], reason: string }} Waived
+ * @typedef {Finding & { items: string[], line: number, reason: string }} Waived
  * @typedef {{ text: string, commands?: string[], url?: string | null }} FixIn
  * @typedef {{ workflow: string, job: string, grant: 'job' | 'workflow', how: 'id-token' | 'write-all',
  *   calls: string | null, status: 'kanon-lane' | 'accepted' | 'unaccepted', reason: string | null }} Holder
@@ -1306,46 +1316,62 @@ export const diagnose = async (deps, opts) => {
   /** @type {Waived[]} */
   const waived = [];
   const spans = (/** @type {string[]} */ xs) => xs.map((x) => `\`${x}\``).join(', ');
-  for (const w of waiverRecord.waivers) {
-    const hits = findings.filter((f) => f.id === w.id && f.subject === w.subject);
-    const category = /** @type {{ category: string }} */ (FINDINGS[w.id]).category;
-    const blind = unchecked.find((u) => u.subject === w.subject || UNCHECKED_CATEGORY[u.check] === category);
-    if (!w.items) {
-      // The bullet waives the finding whole, every item it lists, as before #406. For a finding
-      // that lists items, that includes any a later release adds, so doctor says which it waives.
-      const items = [...new Set(hits.flatMap((f) => itemized.get(f)?.items ?? []))];
+  /** @type {Map<string, typeof waiverRecord.waivers>} the bullets of each finding id on each subject */
+  const groups = new Map();
+  for (const w of waiverRecord.waivers) groups.set(`${w.id} ${w.subject}`, [...(groups.get(`${w.id} ${w.subject}`) ?? []), w]);
+  for (const ws of groups.values()) {
+    const { id, subject } = /** @type {(typeof ws)[number]} */ (ws[0]);
+    const hits = findings.filter((f) => f.id === id && f.subject === subject);
+    const category = /** @type {{ category: string }} */ (FINDINGS[id]).category;
+    const blind = unchecked.find((u) => u.subject === subject || UNCHECKED_CATEGORY[u.check] === category);
+    if (!ITEMIZED[id]) {
+      // A finding that lists no items: its one bullet waives it whole.
+      const w = /** @type {(typeof ws)[number]} */ (ws[0]);
       for (const f of hits) {
         findings.splice(findings.indexOf(f), 1);
-        waived.push({ ...f, items: itemized.get(f)?.items ?? [], reason: w.reason });
+        waived.push({ ...f, items: [], line: w.line, reason: w.reason });
       }
-      if (items.length) notes.push(`${ADOPTION_RECORD}:${w.line} waives ${w.id} on ${w.subject} without naming its items, so it waives whatever a later release adds to it too; today it waives ${items.join(', ')}. Name them, and doctor reports any other (docs/doctor.md, "Waiving a finding"): \`- **${WAIVER_LABEL}:** \`${w.id}\` on \`${w.subject}\` for ${spans(items)} (${w.reason})\`.`);
       if (hits.length) continue;
-      if (blind) notes.push(`${ADOPTION_RECORD}:${w.line} waives ${w.id} on ${w.subject}, which doctor did not report; the ${blind.check} check could not run, so it can't tell whether the waiver is still needed.`);
-      else find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${w.id} on ${w.subject}, but doctor reports no such finding.`, { text: `Remove the bullet, so the record says only what is true.` });
+      if (blind) notes.push(`${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject}, which doctor did not report; the ${blind.check} check could not run, so it can't tell whether the waiver is still needed.`);
+      else find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject}, but doctor reports no such finding.`, { text: `Remove the bullet, so the record says only what is true.` });
       continue;
     }
-    // The bullet names its items: each finding keeps, as a finding, every item it doesn't name.
-    const waives = w.items;
-    /** @type {Set<string>} */
-    const covered = new Set();
+    // A finding that lists items: each bullet waives the items it names, and an item none names
+    // stays a finding. A bullet that names none would waive what a later release adds too, so it
+    // is malformed and waives nothing; its fix is the bullet to write, from today's items.
+    const named = ws.filter((w) => w.items);
+    const claimed = new Set(named.flatMap((w) => w.items ?? []));
+    const today = [...new Set(hits.flatMap((f) => itemized.get(f)?.items ?? []))].filter((x) => !claimed.has(x));
+    for (const w of ws.filter((x) => !x.items)) {
+      find('declaration.malformed', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject} without naming its items, so it would waive whatever a later release adds to that finding too; it waives nothing until it names them (#406). ${today.length ? `Doctor reports ${today.join(', ')} there today${named.length ? ', besides what the other bullets name' : ''}.` : `Doctor reports no item there today${named.length ? ' that the other bullets don\'t name' : ''}.`}`, today.length
+        ? { text: `Name the items the repository keeps after \`for\`, as doctor reports them today, and drop any it doesn't keep (docs/doctor.md, "Waiving a finding"):`, commands: [`- **${WAIVER_LABEL}:** \`${id}\` on \`${subject}\` for ${spans(today)} (${w.reason})`] }
+        : { text: `Remove the bullet, or name the items it keeps after \`for\` (docs/doctor.md, "Waiving a finding"):`, commands: [`- **${WAIVER_LABEL}:** \`${id}\` on \`${subject}\` for \`<item>\` (${w.reason})`] });
+    }
+    /** @type {Map<(typeof ws)[number], Set<string>>} */
+    const covered = new Map(named.map((w) => [w, new Set()]));
     for (const f of hits) {
       const items = itemized.get(f)?.items ?? [];
-      const take = items.filter((x) => waives.includes(x));
-      if (!take.length) continue;
-      const keep = items.filter((x) => !waives.includes(x));
-      for (const x of take) covered.add(x);
+      const takes = /** @type {Array<[(typeof ws)[number], string[]]>} */ (named.map((w) => [w, items.filter((x) => w.items?.includes(x))])).filter(([, t]) => t.length);
+      if (!takes.length) continue;
+      const keep = items.filter((x) => !claimed.has(x));
       const at = findings.indexOf(f);
       if (keep.length) {
         const rest = remake(f, keep);
-        findings.splice(at, 1, { ...rest, message: `${rest.message} ${ADOPTION_RECORD}:${w.line} waives ${take.join(', ')}, not ${keep.length > 1 ? 'these' : 'this'}.` });
+        findings.splice(at, 1, { ...rest, message: `${rest.message} ${takes.map(([w, t]) => `${ADOPTION_RECORD}:${w.line} waives ${t.join(', ')}`).join('; ')}, not ${keep.length > 1 ? 'these' : 'this'}.` });
       } else findings.splice(at, 1);
-      waived.push({ ...remake(f, take), items: take, reason: w.reason });
+      for (const [w, t] of takes) {
+        for (const x of t) covered.get(w)?.add(x);
+        waived.push({ ...remake(f, t), items: t, line: w.line, reason: w.reason });
+      }
     }
-    const gone = waives.filter((x) => !covered.has(x));
-    if (!gone.length) continue;
-    if (blind) notes.push(`${ADOPTION_RECORD}:${w.line} waives ${w.id} on ${w.subject} for ${gone.join(', ')}, which doctor did not report; the ${blind.check} check could not run, so it can't tell whether the waiver is still needed.`);
-    else if (covered.size) find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${w.id} on ${w.subject} for ${gone.join(', ')}, but doctor reports no such ${gone.length > 1 ? 'items' : 'item'} there.`, { text: `Remove ${spans(gone)} from the bullet, so the record says only what is true.` });
-    else find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${w.id} on ${w.subject}, but doctor reports no such finding.`, { text: `Remove the bullet, so the record says only what is true.` });
+    for (const w of named) {
+      const got = /** @type {Set<string>} */ (covered.get(w));
+      const gone = (w.items ?? []).filter((x) => !got.has(x));
+      if (!gone.length) continue;
+      if (blind) notes.push(`${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject} for ${gone.join(', ')}, which doctor did not report; the ${blind.check} check could not run, so it can't tell whether the waiver is still needed.`);
+      else if (got.size) find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject} for ${gone.join(', ')}, but doctor reports no such ${gone.length > 1 ? 'items' : 'item'} there.`, { text: `Remove ${spans(gone)} from the bullet, so the record says only what is true.` });
+      else find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${id} on ${subject} for ${gone.join(', ')}, but doctor reports ${hits.length ? `none of ${gone.length > 1 ? 'them' : 'it'} there` : 'no such finding'}.`, { text: `Remove the bullet, so the record says only what is true.` });
+    }
   }
 
   if (branchName !== s.defaultBranch) notes.push(`The id-token holders and the secrets the workflows map are counted on ${onCheckout}, not on ${s.defaultBranch}; the roles trust ${s.defaultBranch}'s jobs, and its workflows are the ones that run, so run it there for their count.`);
@@ -1451,7 +1477,7 @@ export const prose = (r) => {
   if (r.waived.length) {
     out.push('');
     out.push(`Waived under ## Choices in ${ADOPTION_RECORD}, so they don't count:`);
-    for (const w of r.waived) out.push(`- [${TITLES[w.category] ?? w.category}] ${w.id}, ${w.subject}${w.items.length ? ` (${w.items.join(', ')})` : ''}: ${w.reason}.`);
+    for (const w of r.waived) out.push(`- [${TITLES[w.category] ?? w.category}] ${w.id}, ${w.subject}${w.items.length ? ` (${w.items.join(', ')})` : ''}, by ${ADOPTION_RECORD}:${w.line}: ${w.reason}.`);
   }
   out.push('');
   if (!r.idTokenHolders.length) out.push('No job of your workflows holds id-token: write.');

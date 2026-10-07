@@ -813,6 +813,7 @@ describe("branchPattern: a branch filter's pattern, as GitHub matches it (#446)"
 describe('kanon doctor and the waivers under ## Choices (#390)', () => {
   const waive = (id: string, subject: string, reason = 'the lane itself holds that name') => `- **${WAIVER_LABEL}:** \`${id}\` on \`${subject}\` (${reason})\n`;
   const record = (bullets: string) => healthyFiles()['docs/qa/adoption.md']! + bullets;
+  const waiveFor = (id: string, subject: string, items: string[], reason: string) => `- **${WAIVER_LABEL}:** \`${id}\` on \`${subject}\` for ${items.map((x) => `\`${x}\``).join(', ')} (${reason})\n`;
   const definition = 'name: Lane\non:\n  workflow_call:\njobs:\n  run:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./lane.sh\n';
   /** Kanon's shape: each lane's definition at the lane's file name, and its caller beside it under another. */
   const laneHost = () => {
@@ -843,12 +844,12 @@ describe('kanon doctor and the waivers under ## Choices (#390)', () => {
     expect(byFile).toEqual({ '.github/workflows/review.yml': 'the lane itself holds that name', '.github/workflows/code-audit.yml': "agent-code-audit.yml is the lane's definition" });
     // The waived finding is the finding, whole: what it was, and the fix it would have had.
     const review = before.json.findings.find((f: { subject: string }) => f.subject === '.github/workflows/review.yml');
-    expect(after.json.waived.find((w: { subject: string }) => w.subject === review.subject)).toEqual({ ...review, items: [], reason: 'the lane itself holds that name' });
+    expect(after.json.waived.find((w: { subject: string }) => w.subject === review.subject)).toEqual({ ...review, items: [], line: 12, reason: 'the lane itself holds that name' });
 
     const prose = await run(dir, github);
     expect(prose.status).toBe(EXIT.healthy);
     expect(prose.out).toContain("Waived under ## Choices in docs/qa/adoption.md, so they don't count:");
-    expect(prose.out).toContain('- [Caller] caller.misplaced, .github/workflows/review.yml: the lane itself holds that name.');
+    expect(prose.out).toContain('- [Caller] caller.misplaced, .github/workflows/review.yml, by docs/qa/adoption.md:12: the lane itself holds that name.');
     expect(prose.out).toContain('Healthy. doctor wrote nothing. 2 finding(s) waived in docs/qa/adoption.md.');
   });
 
@@ -872,19 +873,21 @@ describe('kanon doctor and the waivers under ## Choices (#390)', () => {
   });
 
   it("doesn't call a waiver stale when the check that would report its finding could not run", async () => {
-    const dir = checkout({ ...healthyFiles(), 'docs/qa/adoption.md': record(waive('secret.missing', REPO, 'set in the organisation')) });
+    const dir = checkout({ ...healthyFiles(), 'docs/qa/adoption.md': record(waiveFor('secret.missing', REPO, ['DIGEST_WEBHOOK'], 'set in the organisation')) });
     const blind = await run(dir, fakeGitHub({ secrets: null }), ['--json']);
     expect(blind.status).toBe(EXIT.incomplete);
     expect(ids(blind)).toEqual([]);
-    expect(blind.json.notes.join('\n')).toContain(`waives secret.missing on ${REPO}, which doctor did not report; the secrets check could not run`);
+    expect(blind.json.notes.join('\n')).toContain(`waives secret.missing on ${REPO} for DIGEST_WEBHOOK, which doctor did not report; the secrets check could not run`);
     const seeing = await run(dir, fakeGitHub(), ['--json']);
     expect(ids(seeing)).toEqual(['waiver.stale docs/qa/adoption.md']);
   });
 
-  it('waives a finding that does not block too, and every finding of that id on that subject', async () => {
+  it('waives a finding that does not block too, and every finding of that id on that subject whose items it names', async () => {
     const github = fakeGitHub({ secrets: new Set() });
     github.st.labels = new Set();
-    const dir = checkout({ ...healthyFiles(), 'docs/qa/adoption.md': record(waive('label.missing', REPO, 'we keep our own labels') + waive('secret.missing', REPO, 'set in the organisation')) });
+    const labels = TAXONOMY;
+    const secrets = [...new Set(LANES.flatMap((l) => REQ.lanes[l]!.secrets))];
+    const dir = checkout({ ...healthyFiles(), 'docs/qa/adoption.md': record(waiveFor('label.missing', REPO, labels, 'we keep our own labels') + waiveFor('secret.missing', REPO, secrets, 'set in the organisation')) });
     const r = await run(dir, github, ['--json']);
     expect(r.json.findings).toEqual([]);
     expect(r.status, r.out).toBe(EXIT.healthy);
@@ -973,26 +976,54 @@ describe('kanon doctor and the waiver of a finding that lists items (#406)', () 
     const f = later.json.findings[0];
     expect(f.message).toBe(`The ${judge} App \`${slug}\` holds deployments: none; Kanon ${NEXT} needs deployments: read. docs/qa/adoption.md:12 waives ${kept}, not this.`);
     expect(later.json.waived).toHaveLength(1);
-    expect(later.json.waived[0]).toMatchObject({ items: [kept], reason: 'kept on purpose' });
+    expect(later.json.waived[0]).toMatchObject({ items: [kept], line: 12, reason: 'kept on purpose' });
     expect(later.json.waived[0].message).not.toContain('deployments');
-    expect(later.json.notes.join('\n')).not.toContain('without naming its items');
     const prose = await run(dir, github, ['--to', NEXT]);
-    expect(prose.out).toContain(`- [App] app.permission-missing, ${slug} (${kept}): kept on purpose.`);
+    expect(prose.out).toContain(`- [App] app.permission-missing, ${slug} (${kept}), by docs/qa/adoption.md:12: kept on purpose.`);
   });
 
-  it('still waives the whole finding when the bullet names no items, and says what that hides (mutation: the old form)', async () => {
+  it('refuses a bullet that names no items, waiving nothing, and gives the bullet to write from today\'s items (the Owner, 2026-10-07)', async () => {
     const { dir, github } = setup(waiveFor('app.permission-missing', slug, null));
     const later = await run(dir, github, ['--to', NEXT, '--json']);
-    expect(later.status).toBe(EXIT.healthy);
-    expect(later.json.waived[0].items).toEqual([kept, 'deployments']);
-    const note = later.json.notes.find((n: string) => n.includes('without naming its items'));
-    expect(note).toBe(`docs/qa/adoption.md:12 waives app.permission-missing on ${slug} without naming its items, so it waives whatever a later release adds to it too; today it waives ${kept}, deployments. Name them, and doctor reports any other (docs/doctor.md, "Waiving a finding"): \`- **${WAIVER_LABEL}:** \`app.permission-missing\` on \`${slug}\` for \`${kept}\`, \`deployments\` (kept on purpose)\`.`);
-    // A finding that lists no items gets no such note.
+    expect(later.status).toBe(EXIT.findings);
+    expect(ids(later)).toEqual([`app.permission-missing ${slug}`, 'declaration.malformed docs/qa/adoption.md']);
+    expect(later.json.waived).toEqual([]);
+    const bad = later.json.findings[1];
+    expect(bad.message).toBe(`docs/qa/adoption.md:12 waives app.permission-missing on ${slug} without naming its items, so it would waive whatever a later release adds to that finding too; it waives nothing until it names them (#406). Doctor reports ${kept}, deployments there today.`);
+    expect(bad.fix.commands).toEqual([`- **${WAIVER_LABEL}:** \`app.permission-missing\` on \`${slug}\` for \`${kept}\`, \`deployments\` (kept on purpose)`]);
+    // Written as the fix says, it waives both, and the run is healthy again.
+    put(dir, { 'docs/qa/adoption.md': record(bad.fix.commands[0]) });
+    expect((await run(dir, github, ['--to', NEXT, '--json'])).status).toBe(EXIT.healthy);
+    // Beside a bullet that names some, the rewrite names only the rest; with none reported, a placeholder.
+    put(dir, { 'docs/qa/adoption.md': record(`${waiveFor('app.permission-missing', slug, [kept])}\n${waiveFor('app.permission-missing', slug, null, 'and the rest')}`) });
+    const beside = await run(dir, github, ['--to', NEXT, '--json']);
+    expect(beside.json.findings.find((f: { id: string }) => f.id === 'declaration.malformed').fix.commands).toEqual([`- **${WAIVER_LABEL}:** \`app.permission-missing\` on \`${slug}\` for \`deployments\` (and the rest)`]);
+    const none = await run(dir, github, ['--json']);
+    expect(none.json.findings.find((f: { id: string }) => f.id === 'declaration.malformed')).toMatchObject({ message: expect.stringContaining('Doctor reports no item there today that the other bullets don\'t name.'), fix: { commands: [`- **${WAIVER_LABEL}:** \`app.permission-missing\` on \`${slug}\` for \`<item>\` (and the rest)`] } });
+    // A finding that lists no items is still waived by a bullet that names none.
     const moved = healthyFiles();
     moved['.github/workflows/review.yml'] = moved['.github/workflows/agent-review.yml']!;
     delete moved['.github/workflows/agent-review.yml'];
     const plain = checkout({ ...moved, 'docs/qa/adoption.md': record(waiveFor('caller.misplaced', '.github/workflows/review.yml', null)) });
-    expect((await run(plain, fakeGitHub(), ['--json'])).json.notes.join('\n')).not.toContain('without naming its items');
+    const r = await run(plain, fakeGitHub(), ['--json']);
+    expect(ids(r)).toEqual([]);
+    expect(r.json.waived.map((w: { id: string }) => w.id)).toEqual(['caller.misplaced']);
+  });
+
+  it('takes several bullets for one finding, each with its own items and reason, and shows which covers which', async () => {
+    const { dir, github } = setup(`${waiveFor('app.permission-missing', slug, [kept], 'kept on purpose')}\n${waiveFor('app.permission-missing', slug, ['deployments'], 'until the deploy lane lands')}`);
+    const r = await run(dir, github, ['--to', NEXT, '--json']);
+    expect(r.status, r.out).toBe(EXIT.healthy);
+    expect(r.json.waived.map((w: { items: string[]; line: number; reason: string }) => [w.items, w.line, w.reason])).toEqual([[[kept], 12, 'kept on purpose'], [['deployments'], 13, 'until the deploy lane lands']]);
+    expect(r.json.waived[1].message).toBe(`The ${judge} App \`${slug}\` holds deployments: none; Kanon ${NEXT} needs deployments: read.`);
+    const prose = await run(dir, github, ['--to', NEXT]);
+    expect(prose.out).toContain(`- [App] app.permission-missing, ${slug} (deployments), by docs/qa/adoption.md:13: until the deploy lane lands.`);
+    // An item a third permission brings stays a finding, naming both bullets.
+    const more = next();
+    (more.identities.apps[judge] ?? more.identities.roles[judge]!).permissions.pages = 'read';
+    github.st.releases[NEXT] = more;
+    const later = await run(dir, github, ['--to', NEXT, '--json']);
+    expect(later.json.findings[0].message).toMatch(/needs pages: read\. docs\/qa\/adoption\.md:12 waives \w+; docs\/qa\/adoption\.md:13 waives deployments, not this\.$/);
   });
 
   it('waives item by item across the findings of one id on one subject, each App\'s secrets and a lane\'s', async () => {
@@ -1017,10 +1048,16 @@ describe('kanon doctor and the waiver of a finding that lists items (#406)', () 
     expect(r.json.findings[0].message).toBe(`docs/qa/adoption.md:12 waives app.permission-missing on ${slug} for pages, but doctor reports no such item there.`);
     expect(r.json.findings[0].fix.text).toBe('Remove `pages` from the bullet, so the record says only what is true.');
     expect(r.json.waived.map((w: { items: string[] }) => w.items)).toEqual([[kept]]);
+    // The finding is there, but for none of the items it names (the Reviewer's F2 on 5a0088f).
+    put(dir, { 'docs/qa/adoption.md': record(waiveFor('app.permission-missing', slug, ['pages'])) });
+    const other = await run(dir, github, ['--json']);
+    expect(ids(other)).toEqual([`app.permission-missing ${slug}`, 'waiver.stale docs/qa/adoption.md']);
+    expect(other.json.findings[1].message).toBe(`docs/qa/adoption.md:12 waives app.permission-missing on ${slug} for pages, but doctor reports none of it there.`);
+    expect(other.json.findings[1].fix.text).toBe('Remove the bullet, so the record says only what is true.');
     github.st.apps[slug]!.permissions[kept] = permissionsOf(REQ, judge)[kept]!;
     const none = await run(dir, github, ['--json']);
     expect(ids(none)).toEqual(['waiver.stale docs/qa/adoption.md']);
-    expect(none.json.findings[0].message).toBe(`docs/qa/adoption.md:12 waives app.permission-missing on ${slug}, but doctor reports no such finding.`);
+    expect(none.json.findings[0].message).toBe(`docs/qa/adoption.md:12 waives app.permission-missing on ${slug} for pages, but doctor reports no such finding.`);
   });
 
   it("doesn't call an item stale when the check that would report it could not run", async () => {
@@ -1034,6 +1071,12 @@ describe('kanon doctor and the waiver of a finding that lists items (#406)', () 
     const at = (bullet: string) => readWaivers(`## Choices\n\n${bullet}\n`);
     expect(at(waiveFor('secret.missing', REPO, ['A_B', 'C D', 'A_B'], 'why')).waivers).toEqual([{ id: 'secret.missing', subject: REPO, items: ['A_B', 'C D'], reason: 'why', line: 3 }]);
     expect(at(waiveFor('caller.misplaced', 'a.yml', ['x'])).errors[0]).toContain("names items after `for`, but `caller.misplaced` lists none");
+    // Several bullets of one finding, but never one item twice; an item-less one is read, for diagnose to refuse.
+    const two = at(`${waiveFor('secret.missing', REPO, ['A', 'B'], 'one')}\n${waiveFor('secret.missing', REPO, ['C'], 'two')}\n${waiveFor('secret.missing', REPO, null, 'three')}`);
+    expect(two.errors).toEqual([]);
+    expect(two.waivers.map((w) => [w.items, w.line])).toEqual([[['A', 'B'], 3], [['C'], 4], [null, 5]]);
+    expect(at(`${waiveFor('secret.missing', REPO, ['A', 'B'], 'one')}\n${waiveFor('secret.missing', REPO, ['C', 'B'], 'two')}`).errors).toEqual(['docs/qa/adoption.md:4 waives `B` of `secret.missing` on `acme/widgets`, which docs/qa/adoption.md:3 waives already']);
+    expect(at(`${waiveFor('caller.misplaced', 'a.yml', null)}\n${waiveFor('caller.misplaced', 'a.yml', null, 'again')}`).errors[0]).toContain('a second time');
     for (const bad of [`- **${WAIVER_LABEL}:** \`secret.missing\` on \`${REPO}\` for A_B (why)`, `- **${WAIVER_LABEL}:** \`secret.missing\` on \`${REPO}\` for \`\` (why)`, `- **${WAIVER_LABEL}:** \`secret.missing\` on \`${REPO}\` for \`a\` and \`b\` (why)`]) {
       expect(at(bad).errors, bad).toHaveLength(1);
     }
@@ -1148,7 +1191,7 @@ describe('the JSON contract (ADR 0014, docs/doctor.md)', () => {
     expect(stale.json.findings.map((f: { id: string }) => f.id)).toContain('waiver.stale');
     const github = fakeGitHub();
     github.st.labels = new Set();
-    put(dir, { 'docs/qa/adoption.md': files['docs/qa/adoption.md'] + `- **${WAIVER_LABEL}:** \`label.missing\` on \`${REPO}\` (why)\n` });
+    put(dir, { 'docs/qa/adoption.md': files['docs/qa/adoption.md'] + `- **${WAIVER_LABEL}:** \`label.missing\` on \`${REPO}\` for ${TAXONOMY.map((n) => `\`${n}\``).join(', ')} (why)\n` });
     const waived = await run(dir, github, ['--json']);
     expect(Object.keys(waived.json.waived[0]).sort()).toEqual(documented('A waived finding'));
     expect(doc).toContain(`\`${SCHEMA}\``);
@@ -1793,7 +1836,7 @@ describe("kanon doctor and the telemetry collector's caller (#428)", () => {
     expect(f.fix.commands).toHaveLength(2);
     const none = await run(dir, fakeGitHub(), ['--json']);
     expect(none.json.findings[0].message).toContain("doesn't set KANON_TELEMETRY_URL or KANON_TELEMETRY_WRITER_ROLE");
-    put(dir, { 'docs/qa/adoption.md': healthyFiles()['docs/qa/adoption.md'] + `- **${WAIVER_LABEL}:** \`telemetry.unconfigured\` on \`${TELEMETRY_CALLER_PATH}\` (registration requested)\n` });
+    put(dir, { 'docs/qa/adoption.md': healthyFiles()['docs/qa/adoption.md'] + `- **${WAIVER_LABEL}:** \`telemetry.unconfigured\` on \`${TELEMETRY_CALLER_PATH}\` for \`KANON_TELEMETRY_URL\`, \`KANON_TELEMETRY_WRITER_ROLE\` (registration requested)\n` });
     const waived = await run(dir, fakeGitHub(), ['--json']);
     expect(waived.json.findings).toEqual([]);
     expect(waived.json.waived.map((w: { id: string }) => w.id)).toEqual(['telemetry.unconfigured']);
