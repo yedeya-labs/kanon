@@ -1030,6 +1030,20 @@ describe("the Reviewer's shell is an allow-list that runs no PR code (kanon#248)
     // `gh pr checks` is allowed, and its `--watch` blocks until checks settle (K-AGENT-36).
     expect(prompt).toMatch(/Never `gh pr checks\s+--watch` or `gh run watch`/);
   });
+
+  // kanon#404: across 73 runs after the allow-list shipped, about 1.7 calls a run were reads
+  // the CLI's read-only checker refused because it couldn't parse them. Each shape it measured
+  // has its line here, so a prompt edit that drops one is red.
+  it('steers each read to a shape the read-only checker can verify (kanon#404)', () => {
+    const prompt = String(agent.with!.prompt).replace(/\s+/g, ' ');
+    expect(prompt).toContain('SHAPE EVERY READ SO THE CHECKER CAN VERIFY IT (kanon#404)');
+    expect(prompt).toContain('One simple command per call: no `cd`, no `;`, `&&` or `||` chains, and no `echo` separators.');
+    expect(prompt).toContain('by its relative path (`docs/qa/stack.md`), never an absolute one.');
+    expect(prompt).toContain('Use the Grep tool for any pattern holding `$`, a backtick or `\\|`');
+    expect(prompt).toContain("with the Read tool's offset and limit, never a `sed` address range");
+    expect(prompt).toContain('Filter `gh` output with its own `--jq`, not a pipe.');
+    expect(prompt).toContain('No loops, no `$(…)`, no backticks and no variables');
+  });
 });
 
 /**
