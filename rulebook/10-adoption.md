@@ -138,7 +138,7 @@ Creating GitHub Apps and their keys is done by the Owner in GitHub's interface, 
 
 **Why.** The roles table is the one home for what each role may do (`K-PRIN-2`), and this rule only adds the platform's own requirements. A rollup missing one of the two check sources reads as "fewer checks", not as an error, so the Merger's two read scopes are load-bearing. An App installed on every repository of its owner mints tokens for repositories that never adopted Kanon.
 
-**Enforced by.** [`kanon apps`](../docs/apps.md) builds each App's manifest from [`agent-permissions.json`](agent-permissions.json), the roles table's machine-readable twin, and a test fails when the twin and the table disagree, or when an App's permissions differ from the union of its roles' rows and its recorded broadening. On an App created by hand, or changed after it was created, only `apps-check`, run by hand ([`docs/apps.md`](../docs/apps.md)), and the run-time scope probe in every lane (`K-AGENT-5`) check it.
+**Enforced by.** [`kanon apps`](../docs/apps.md) builds each App's manifest from [`agent-permissions.json`](agent-permissions.json), the roles table's machine-readable twin, and a test fails when the twin and the table disagree, or when an App's permissions differ from the union of its roles' rows and its recorded broadening. On an App created by hand, or changed after it was created, three things check it: `apps-check`, run by hand ([`docs/apps.md`](../docs/apps.md)), which fails an App whose permissions are not exactly its own; [`kanon doctor`](../docs/doctor.md), which blocks on an App that holds less than the release's grant and lists one that holds more; and the run-time scope probe in every lane (`K-AGENT-5`).
 
 **Class.** framework
 
