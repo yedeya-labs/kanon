@@ -135,8 +135,8 @@
       "does": "Audits the pipeline weekly from its aggregate, and again when a Kanon upgrade moves the agent runtime past its capability ledger's watermark, and files what you can act on as `pipeline-improvement` issues.",
       "needs": [],
       "cost": "A model run weekly, plus one when a Kanon upgrade moves the agent runtime forward. Every other merged Kanon upgrade runs only a short gate job.",
-      "recommend": [],
-      "when": "Once several lanes have run for a few weeks, so it has something to audit."
+      "recommend": ["agent-implement", "agent-lead"],
+      "when": "Once you run the Implementer, the Lead or the Merger unattended: it audits what runs without you watching (a lane that stopped, fixes that game their tests, follow-ups that leak, configuration drift, the cost trend). With only the Reviewer, or lanes you trigger by hand, you see every run anyway, and its first audits say little until weeks of history exist."
     },
     "agent-project-digest": {
       "name": "Daily project digest",
