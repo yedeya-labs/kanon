@@ -520,7 +520,7 @@ These rules apply `K-PRIN-19` to the lanes and the workflows around them.
 
 **Why.** `secrets: inherit` hands the called workflow every secret its caller can read, including ones added later, so what a lane can reach can no longer be read from its caller. A fork's pull request is a stranger's code, and any secret its run can read, that code can print or send.
 
-**Enforced by.** [`tests/unit/workflow-security.test.ts`](../tests/unit/workflow-security.test.ts), on Kanon's own workflows: it fails when a job passes `secrets: inherit`. The fork half rests on GitHub withholding secrets from a fork's `pull_request` run; the `pull_request_target` route around it is checked under `K-AGENT-48`, and the `workflow_run` route is prose only. For an adopter, prose only until the guard ships.
+**Enforced by.** [`tests/unit/workflow-security.test.ts`](../tests/unit/workflow-security.test.ts), on Kanon's own workflows: it fails when a job passes `secrets: inherit`. The fork half rests on GitHub withholding secrets from a fork's `pull_request` run; the `pull_request_target` route around it is checked under `K-AGENT-48`, and the `workflow_run` route is prose only. For an adopter, [`lane-check`](../actions/lane-check/README.md), from the release that ships kanon#500, holds every job that calls a Kanon workflow (a lane, the spine `agent-lane.yml`, the release workflow, apps-check) to mapping each secret by name or passing none: `secrets: inherit` fails it. The adopter's fork half is prose only.
 
 **Class.** framework
 
