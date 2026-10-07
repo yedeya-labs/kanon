@@ -35,7 +35,7 @@ Kanon's own source and tests (`K-LAYOUT-17`). `citation-shift` reads comments in
 - `cli/` — code: the `kanon` command
 - `infra/` — code: the QA store's AWS implementation
 - `.github/scripts/` — code: the scripts Kanon's own workflows run
-- `tests/` — tests: the library and unit tests, and their fixtures
+- `tests/` `vitest` — tests: the library and unit tests, and their fixtures
 
 What the code audit reads, in this order (plan 0004 step 11a). Kanon's product is its rules and the machinery that holds a project to them, so the audit looks for objective contradictions between the two, as the [explorer playbook](explorer-playbook.md)'s "Code-reading mode" says.
 
