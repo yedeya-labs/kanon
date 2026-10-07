@@ -141,7 +141,7 @@ describe('the inputs', () => {
     expect(agentSpokeSince([], null), 'no start time keeps the label').toBe(true);
   });
 
-  it("names the Implementer App's unmarked comments, which agentSpokeSince reads as silence (kanon#336)", () => {
+  it("names the Author App's unmarked comments, which agentSpokeSince reads as silence (kanon#336)", () => {
     const since = '2026-09-19T18:06:00Z';
     const at = '2026-09-19T19:00:00Z';
     const unmarked = { login: `${AGENT_LOGIN}[bot]`, createdAt: at, body: 'done, but no header' };
@@ -152,7 +152,7 @@ describe('the inputs', () => {
     expect(unmarkedSince([{ ...unmarked, createdAt: '2026-09-18T00:00:00Z' }], since), 'an older one').toBe(0);
     expect(unmarkedSince([{ ...unmarked, login: 'a-human' }], since), "someone else's").toBe(0);
     expect(unmarkedSince([unmarked], ''), 'no start time').toBe(0);
-    expect(unmarkedWarning('7', 1)).toMatch(/^::warning title=unmarked comment::#7: 1 comment\(s\) by the Implementer's App .* no role marker/);
+    expect(unmarkedWarning('7', 1)).toMatch(/^::warning title=unmarked comment::#7: 1 comment\(s\) by the Author App .* no role marker/);
     expect(unmarkedWarning('7', 0)).toBe('');
   });
 
@@ -227,6 +227,9 @@ describe('which token each edit rides (plan 0001 decision 21)', () => {
     const r = run({ LABEL_TOKEN: '' });
     expect(r.status).toBe(1);
     expect(r.out).toContain('LABEL_TOKEN');
+    // #474: the token is the Author App's, minted for the Implementer; there is no Implementer's App.
+    expect(r.out).toContain("LABEL_TOKEN (the Author App's token, minted for the Implementer) is not set");
+    expect(r.out).not.toContain("Implementer's App");
     expect(r.calls.filter((c) => /^issue (edit|comment)|^workflow/.test(c.args))).toEqual([]);
   });
 
@@ -453,7 +456,7 @@ describe('MODE=detect, run (kanon#181)', () => {
     const comments = [{ author: { login: `${AGENT_LOGIN}[bot]` }, createdAt: '2026-10-02T01:00:00Z', body: 'Stopping: no header on this one.' }];
     const detected = run({ comments });
     expect(detected.status, detected.out).toBe(1);
-    expect(detected.out).toContain("::warning title=unmarked comment::#181: 1 comment(s) by the Implementer's App");
+    expect(detected.out).toContain("::warning title=unmarked comment::#181: 1 comment(s) by the Author App");
     const recovered = run({ comments, mode: '', kind: EMPTY_KIND });
     expect(recovered.out).toContain('::warning title=unmarked comment::#181');
     expect(run({}).out, 'and says nothing when there is none').not.toContain('unmarked comment');

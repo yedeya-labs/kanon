@@ -396,7 +396,7 @@ Its caller:
 - **The figures come from the aggregate, not the agent.** Each finding must name entries of the aggregate exactly, and the step renders their figures into the issue. The agent's title and body may hold no digit other than an issue reference, a rule id, or a model or Kanon version the aggregate names, and nothing shaped like an adopter key or a stored partition. A finding that breaks a rule is refused by name, never filed or drafted, and the job turns red after the rest.
 - **The Explorer's filing gate** (`K-AGENT-9`): a finding that rests on a failure signal is a `bug` (`agent:explorer`, `qa:needs-triage` and its `sev:*`), and one that rests on cost cells alone is a `spec-delta` (`agent:explorer`), each in the bucket your milestone routing gives its labels (`K-WORK-4`; *Product Backlog* for these labels). An open `agent:explorer` issue with the same signature (what it rests on, without the figures) gets a comment with the week's figures instead of a second issue. At most three new issues a run.
 
-It needs the Explorer's App, with `Contents: Read`, and `Issues: Write` to file.
+It needs the Author App, minted for the Explorer, with `Contents: Read`, and `Issues: Write` to file.
 
 ## The digests
 

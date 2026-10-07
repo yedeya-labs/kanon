@@ -38,8 +38,8 @@
 # WITHOUT A STORE HOOK, it runs to completion without memory: the gate says the store is
 # absent and sweeps, and `put` is skipped with a notice.
 #
-# INERT until: the caller is on the default branch + the Explorer's App installed, with a row in
-# the App register + the sweep hook + these secrets (plan 0001 §8):
+# INERT until: the caller is on the default branch + the Author App installed, with the
+# Explorer's row in the App register + the sweep hook + these secrets (plan 0001 §8):
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
 # KANON ROLE: Explorer
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the

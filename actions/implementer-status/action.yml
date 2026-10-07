@@ -1,7 +1,7 @@
 # The implementer commit status, `kanon/role: implementer` (plan 0005 §3.3, question 6; step L3).
 #
 # CALLED BY A FIXED JOB OF EACH IMPLEMENTER LANE, AFTER ITS AGENT'S JOB, NEVER INSIDE IT. The
-# job holds the Implementer App's private key to mint two tokens, so it runs no agent, no
+# job holds the Author App's private key to mint two tokens, so it runs no agent, no
 # `./` action and no checkout of a pull request's code (`K-AGENT-49`,
 # `tests/unit/app-key-isolation.test.ts`), and `tests/unit/implementer-status.test.ts` holds
 # every caller to that shape.
@@ -12,8 +12,8 @@
 # open pull requests, a commit, a comparison) are a second token with Contents and Pull
 # requests read, so the default token needs no grant an adopter's caller doesn't already give.
 #
-# NEVER REDS THE LANE. The Implementer's App may not hold Commit statuses (Kanon's own didn't
-# until 2026-10-05): the mint then fails, the script says so in the summary, and nothing reds.
+# NEVER REDS THE LANE. The Author App may not hold Commit statuses (Kanon's own App didn't until
+# 2026-10-05): the mint then fails, the script says so in the summary, and nothing reds.
 # Both mints are `continue-on-error` for that reason; the caller's `uses:` is too. Since L4 the
 # Merger, the revise lane and the rebase lane require the status, so a missing one holds the
 # pull request for a person rather than failing a run.
@@ -28,10 +28,10 @@ inputs:
     description: "`open` (implement, triage) or `carry` (implement-revise, rebase)."
     required: true
   app-id:
-    description: The Implementer App's id (its `AUTHOR_APP_ID` secret).
+    description: The Author App's id (its `AUTHOR_APP_ID` secret), which mints for the Implementer.
     required: true
   app-private-key:
-    description: The Implementer App's private key (its `AUTHOR_APP_PRIVATE_KEY` secret).
+    description: The Author App's private key (its `AUTHOR_APP_PRIVATE_KEY` secret).
     required: true
   since:
     description: "`open`: when the run started, stamped by the lane's filter job before the agent."

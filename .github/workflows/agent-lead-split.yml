@@ -41,13 +41,13 @@
 # one that arrives anyway.
 #
 # ── HOW IT STARTS ───────────────────────────────────────────────────────────
-# `issues: labeled` with `qa:needs-split` — a human, the dispatch sweep on the Lead App
-# token, or the implement lane's crash job on the Implementer's App token. The crash job
-# used to add its label on the DEFAULT token, which raises no event, and start this
-# workflow by `workflow_dispatch` instead; the membership gate refuses that dispatch, whose
-# actor is `github-actions[bot]` (K-AGENT-45), so it now labels as the App (plan 0001
-# decision 21). A dispatch by hand still works. Both can arrive for
-# one issue; the per-issue concurrency group (on the JOB, so a label event that only
+# `issues: labeled` with `qa:needs-split` — a human, the dispatch sweep on the Author App's
+# token minted for the Lead, or the implement lane's crash job on the same App's token minted
+# for the Implementer. The crash job used to add its label on the DEFAULT token, which
+# raises no event, and start this workflow by `workflow_dispatch` instead; the membership
+# gate refuses that dispatch, whose actor is `github-actions[bot]` (K-AGENT-45), so it now
+# labels as the App (plan 0001 decision 21). A dispatch by hand still works. Both can arrive
+# for one issue; the per-issue concurrency group (on the JOB, so a label event that only
 # reaches a skipped job never joins it and cannot displace a pending run) holds the
 # second until the first finishes, and the gate then finds its open PR and skips.
 #
@@ -57,8 +57,8 @@
 # or a split PR closed unmerged, moves the issue to `qa:needs-info` for a human. The gate
 # below still decides every delivery, so a pre-standard brief is refused, never split.
 #
-# INERT until: the caller is on the default branch + the Lead's App installed + these
-# secrets (plan 0001 §8):
+# INERT until: the caller is on the default branch + the Author App installed, with the
+# Lead's row in the App register + these secrets (plan 0001 §8):
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
 # KANON ROLE: Lead
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the

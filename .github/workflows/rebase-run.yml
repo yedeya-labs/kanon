@@ -1,7 +1,7 @@
 # Rebase — one conflicting PR's resolution (kanon#279).
 #
 # CALLED ONLY BY `agent-rebase.yml`, once per matrix entry. Two jobs, for `K-AGENT-49`:
-#   • `mint` holds the Implementer App's private key and runs nothing else: no checkout, no
+#   • `mint` holds the Author App's private key and runs nothing else: no checkout, no
 #     project code, no agent. It mints this PR's narrowed token with `skip-token-revoke` and
 #     hands it on hex-encoded, because GitHub drops a job output holding a masked value.
 #   • `resolve` is `rebase-agent-job.yml`, which checks out the PR, runs the project's hook

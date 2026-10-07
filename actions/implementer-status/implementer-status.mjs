@@ -145,9 +145,9 @@ function main() {
   const read = String(env.READ_TOKEN ?? '');
   const write = String(env.STATUS_TOKEN ?? '');
   const lead = `**Implementer status** (\`${CONTEXT}\`, plan 0005 §3.3):`;
-  if (!read || !slug) return say(`${lead} not set: the Implementer's App could not mint a read token, so nothing could be checked.`);
+  if (!read || !slug) return say(`${lead} not set: the Author App (the Implementer's) could not mint a read token, so nothing could be checked.`);
   if (!write) {
-    return say(`${lead} not set: the Implementer's App could not mint a token with Commit statuses write. Grant it that permission (a broadened permission, recorded in the App register, \`K-AGENT-3\`). Without the status the Merger skips this pull request as \`not-the-implementer\`, and the revise and rebase lanes refuse it, so a person merges it.`);
+    return say(`${lead} not set: the Author App (the Implementer's) could not mint a token with Commit statuses write. Grant it that permission (a broadened permission, recorded in the App register, \`K-AGENT-3\`). Without the status the Merger skips this pull request as \`not-the-implementer\`, and the revise and rebase lanes refuse it, so a person merges it.`);
   }
   const id = ghJson(['api', `users/${slug}%5Bbot%5D`], read).id;
   const host = String(env.GITHUB_SERVER_URL ?? 'https://github.com').replace(/^[a-z]+:\/\//, '').replace(/\/.*$/, '');

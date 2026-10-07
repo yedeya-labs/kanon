@@ -1197,7 +1197,7 @@ jobs:
           echo "Verdicts by the Reviewer on ${HEAD_SHA:0:7}: $POSTED, $MARKED with its role marker (agent step: $AGENT)"
 
           if [ "$POSTED" -gt 0 ] && [ "$MARKED" -eq 0 ]; then
-            echo "::error title=verdict carries no Reviewer marker::A verdict for ${HEAD_SHA:0:7} was posted by the Reviewer's App, but none carries the Reviewer's role marker (\`<!-- kanon:role=reviewer -->\`), and the stamp step above could not add it (its warning says why). The Merger and the review filter count only a marked verdict, so PR #$PR_NUMBER would wait with no review. Re-run with: gh workflow run agent-review.yml -f pr_number=$PR_NUMBER (kanon#336)."
+            echo "::error title=verdict carries no Reviewer marker::A verdict for ${HEAD_SHA:0:7} was posted by the Judge App, but none carries the Reviewer's role marker (\`<!-- kanon:role=reviewer -->\`), and the stamp step above could not add it (its warning says why). The Merger and the review filter count only a marked verdict, so PR #$PR_NUMBER would wait with no review. Re-run with: gh workflow run agent-review.yml -f pr_number=$PR_NUMBER (kanon#336)."
             echo "**The verdict for \`${HEAD_SHA:0:7}\` carries no Reviewer role marker**, so no reader counts it: this job is red so that is visible now (kanon#336)." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi

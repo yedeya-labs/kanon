@@ -18,11 +18,11 @@
 # depending on the event. It holds NO state: its own past actions are recovered by counting
 # the marker comments it left.
 #
-# IDENTITY: THE LEAD'S APP, deliberately not the Implementer it watches. It cannot be the
-# workflow token, because events that token raises never start another workflow, so a sweep
-# using it could re-label and start nothing. And with the Implementer's own App, the marker
-# comment would be the only thing telling "the agent spoke" from "the sweep spoke"; distinct
-# logins make that structural.
+# IDENTITY: THE AUTHOR APP, MINTED FOR THE LEAD. It cannot be the workflow token, because
+# events that token raises never start another workflow, so a sweep using it could re-label
+# and start nothing. The Implementer it watches mints from the same App, so the same login:
+# its comments are told from the agent's by their Lead role marker and the sweep's marker
+# (plan 0005 §3.3, `isSweepComment`), not by login.
 #
 # ── ITS COST ROWS: THE STORE FIRST, RUN ARTIFACTS WITHOUT ONE (plan 0004 §3.3, decision 3) ──
 # The sweep charges a re-dispatch attempt per marker comment it left, which counts DISPATCHES,
@@ -40,7 +40,7 @@
 #   - A READ THAT FAILS fails CLOSED, as it always has: every dispatch is charged, and the
 #     summary's first line says so (RA-2706).
 #
-# SOFT SKIP WITHOUT THE LEAD'S APP. Until its secrets exist, the lane skips with a
+# SOFT SKIP WITHOUT THE AUTHOR APP. Until its secrets exist, the lane skips with a
 # `::warning::` instead of going red: a daily red run for a known-pending one-time setup is
 # alarm fatigue. The trade is that a secret deleted later also soft-skips; the annotation and
 # the step summary are the signal, and the stalled issues the sweep is not reconciling are the
@@ -52,11 +52,11 @@
 # NO MODEL. Every step runs a library script, `gh` or the store block, so this lane takes no
 # Claude token and writes no telemetry row.
 #
-# INERT until: the caller is on the default branch + the Lead's App installed, with a row in
-# the App register + these secrets (plan 0001 §8):
+# INERT until: the caller is on the default branch + the Author App installed, with the
+# Lead's row in the App register + these secrets (plan 0001 §8):
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY
-# The Lead's App needs `Issues: write`, `Pull requests: read` and `Actions: read` (the run
-# that triggered each telemetry row, and the run artifacts without a store).
+# The Author App (the Lead's) needs `Issues: write`, `Pull requests: read` and `Actions: read`
+# (the run that triggered each telemetry row, and the run artifacts without a store).
 # KANON ROLE: Lead
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
 # role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
@@ -139,15 +139,15 @@ jobs:
 
       # Secrets cannot be read in a job-level `if`, so the soft skip is a step whose output the
       # later jobs read.
-      - name: Is the Lead's App configured?
+      - name: Is the Author App configured?
         id: app
         if: steps.gate.outputs.member == 'true'
         env:
           APP_ID: ${{ secrets.AUTHOR_APP_ID }}
         run: |
           if [ -z "$APP_ID" ]; then
-            echo "::warning title=agent-dispatch-sweep::AUTHOR_APP_ID is unset: the Lead's App is not set up, so the sweep is skipping. See docs/lanes.md (The dispatch sweep)."
-            echo "Dispatch sweep **skipped**: the Lead's App is not configured (\`AUTHOR_APP_ID\` unset)." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=agent-dispatch-sweep::AUTHOR_APP_ID is unset: the Author App (the Lead's) is not set up, so the sweep is skipping. See docs/lanes.md (The dispatch sweep)."
+            echo "Dispatch sweep **skipped**: the Author App (the Lead's) is not configured (\`AUTHOR_APP_ID\` unset)." >> "$GITHUB_STEP_SUMMARY"
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
