@@ -108,6 +108,19 @@ describe('the role trusts exactly the default branch\'s ref subjects it is given
     noParam.Parameters.Subjects.Type = 'String';
     expect(trustProblems(noParam)).toEqual(['the template has no Subjects parameter of type CommaDelimitedList']);
   });
+
+  it('its comment names the id-token holders the guard admits besides the store jobs, and leaves the rest to kanon doctor (kanon#526)', () => {
+    // The comment block right above the role, which an adopter reads for why the trust is safe.
+    const lines = readFileSync(TEMPLATE_PATH, 'utf8').split('\n');
+    const role = lines.indexOf('  Role:');
+    let start = role;
+    while (lines[start - 1]?.trimStart().startsWith('#')) start--;
+    const comment = lines.slice(start, role).map((l) => l.replace(/^\s*#\s?/, '')).join(' ');
+    expect(comment).not.toMatch(/only a store job holds/);
+    // tests/unit/id-token-guard.test.ts's holders that run no qa-store block and call no lane.
+    for (const holder of ['`collect`', '`aggregate`', '`telemetry`', 'maintenance']) expect(comment).toContain(holder);
+    expect(comment).toContain('`kanon doctor`');
+  });
 });
 
 describe('the subjects: the default branch\'s ref, in the repository\'s own subject form', () => {

@@ -110,7 +110,12 @@ Resources:
   # environment. A pull request's token says `:pull_request`, another branch or a tag names its
   # own ref, and a job that declares an environment gets `:environment:<name>` instead of its
   # ref, so all of those are refused. Which jobs of a default-branch run may ask for a token at
-  # all is held in the workflows: only a store job holds `id-token: write` (`K-OBS-17`).
+  # all is held in the workflows, not here: any default-branch job that holds `id-token: write`
+  # can assume this role. In Kanon's workflows those are the store jobs, the store maintenance
+  # job, the callers that grant it to them, and three telemetry jobs held to their exact shape:
+  # the collector's `collect`, the telemetry Explorer's `aggregate` and the Overseer's
+  # `telemetry` (`K-OBS-17`, enforced by `tests/unit/id-token-guard.test.ts`). Any other holder
+  # is one of the adopter's own, theirs to accept or narrow: `kanon doctor` lists them.
   Role:
     Type: AWS::IAM::Role
     Properties:
