@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.33.0](https://github.com/yedeya-labs/kanon/compare/v0.32.0...v0.33.0) (2026-10-07)
+
+
+### Features
+
+* **init:** ask each lane group from one lane catalogue, and every init answer as a question in the adopt skill ([#431](https://github.com/yedeya-labs/kanon/issues/431)) ([4f72b2a](https://github.com/yedeya-labs/kanon/commit/4f72b2aeff45ee207a35a9d6a459d19ea311a01f))
+* **init:** ask whether to send telemetry, write the collector caller on yes, and report an unconfigured collector in doctor ([#432](https://github.com/yedeya-labs/kanon/issues/432)) ([212078a](https://github.com/yedeya-labs/kanon/commit/212078ac629f93a97048faef4449d6e0168e39da))
+* **overseer:** run the Overseer on Kanon, with a QA store and a runtime-version trigger ([#430](https://github.com/yedeya-labs/kanon/issues/430)) ([718f8eb](https://github.com/yedeya-labs/kanon/commit/718f8ebe62adc0c3b14a3fce89368960640a8499))
+
+
+### CI
+
+* balance the unit-test shards by measured file duration ([#429](https://github.com/yedeya-labs/kanon/issues/429)) ([1cae0c3](https://github.com/yedeya-labs/kanon/commit/1cae0c3712093115da1a860583450a5b6271e377))
+
 ## [0.32.0](https://github.com/yedeya-labs/kanon/compare/v0.31.0...v0.32.0) (2026-10-06)
 
 

@@ -24,7 +24,7 @@ On the review lane, the restore of the judging inputs takes the playbook default
 <!-- x-release-please-start-version -->
 
 ```yaml
-- uses: yedeya-labs/kanon/actions/agent-setup@v0.32.0
+- uses: yedeya-labs/kanon/actions/agent-setup@v0.33.0
   with:
     arm: lead agent
     app-slug: ${{ steps.app-token.outputs.app-slug }}
