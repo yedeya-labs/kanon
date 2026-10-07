@@ -25,6 +25,30 @@ laneCheck(() => {
       expect(r.status, r.out).toBe(0);
       expect(r.out).toContain('3 lane caller(s) pass');
     });
+    // Not a lane, but still Kanon's code, so a call to the spine is held to the secrets rule for
+    // any other Kanon workflow: by name, or none, never `secrets: inherit` (K-AGENT-47, kanon#500).
+    const spineCaller = (secrets: unknown) => stringify({
+      on: { workflow_dispatch: null },
+      jobs: { spine: { uses: 'yedeya-labs/kanon/.github/workflows/agent-lane.yml@v1.2.3', with: { agent: 'implementer' }, secrets } },
+    });
+    it('refuses `secrets: inherit` on a call to the spine, by name (kanon#500)', () =>
+      red((t) => t.write('.github/workflows/spine.yml', spineCaller('inherit')), /spine\.yml,title=lane-check::the job `spine` calls Kanon's agent-lane workflow with `secrets: inherit`/));
+    it('passes a call to the spine that maps its secrets by name', () => {
+      const t = adopter();
+      t.write('.github/workflows/spine.yml', spineCaller({
+        'app-id': '${{ secrets.AUTHOR_APP_ID }}',
+        'app-private-key': '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}',
+        'claude-token': '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
+      }));
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('4 lane caller(s) pass');
+    });
+    it('still holds a lane caller\'s `secrets: inherit` to the lane caller rule alone, reported once', () => {
+      const r = red((t) => t.edit(TRIAGE, (d) => { job(d).secrets = 'inherit'; }), 'agent-triage.yml,title=lane-check::maps no secrets explicitly');
+      expect(r.out).not.toContain("calls Kanon's agent-triage workflow");
+      expect(r.out).toContain('1 problem(s) in 4 lane caller(s)');
+    });
     // A caller of one of Kanon's other reusable workflows exactly as its doc gives it,
     // retagged to the fixture's pin, so the doc and this check can't drift apart (kanon#152).
     const docCaller = (doc: string, workflow: string) => {

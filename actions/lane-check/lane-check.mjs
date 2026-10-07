@@ -245,14 +245,16 @@ for (const f of WORKFLOWS) {
   const lane = lanes.find((l) => l.startsWith('agent-') && l !== SPINE) ?? '';
   // Not a lane, but still Kanon's code: a job that calls any other Kanon workflow maps the
   // secrets it passes by name, or passes none, and never `secrets: inherit` (plan 0001
-  // decision 7, K-AGENT-47). A lane caller is held to the same below, with its lane's names.
+  // decision 7, K-AGENT-47). A lane caller is held to the same below, with its lane's names,
+  // so only the job calling the lane picked above is left to that rule: a call to the spine, or
+  // to any lane but that one, is held here (kanon#500).
   for (const [name, value] of Object.entries(jobs)) {
     if (!isObject(value)) continue;
     const v = /** @type {any} */ (value);
     const m = LANE_RE.exec(tostring(alt(v.uses, '')));
     if (!m) continue;
     const wf = /** @type {string} */ (m[1]);
-    if (wf.startsWith('agent-') || !Object.hasOwn(v, 'secrets') || isObject(v.secrets)) continue;
+    if (wf === lane || !Object.hasOwn(v, 'secrets') || isObject(v.secrets)) continue;
     if (!tsv(name)) continue;
     fail(f, `the job \`${tsv(name)}\` calls Kanon's ${tsv(wf)} workflow with \`secrets: ${tsv(tostring(v.secrets))}\`; map each secret it takes by name, or pass none (\`secrets: inherit\` would hand every secret to Kanon's code; plan 0001 decision 7)`);
   }
