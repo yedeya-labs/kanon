@@ -213,6 +213,11 @@ describe('who files what (decision 12)', () => {
       REPORT_PATH: '${{ runner.temp }}/report/qa-overseer-audit.json',
       KANON: '${{ steps.kanon.outputs.path }}',
       UPSTREAM: '${{ needs.gate.outputs.upstream }}',
+      APP_NAME_HASHES: '${{ needs.gate.outputs.names }}',
+      TAG: "${{ inputs.smoke != '' && 'smoke' || 'run' }}",
+      KANON_WORKFLOW_REF: '${{ job.workflow_ref }}',
+      KANON_WORKFLOW_SHA: '${{ job.workflow_sha }}',
+      FINDINGS_PATH: '${{ runner.temp }}/finding/kanon-finding.json',
     });
   });
 
@@ -751,5 +756,41 @@ describe("Kanon's Overseer playbook names every lane caller it waives (kanon#450
 
   it('has a liveness row for each waived caller', () => {
     expect(waived.filter((f) => !table.has(f))).toEqual([]);
+  });
+});
+
+// Plan 0006 §5, steps 1 and 2 (F3, kanon#588): with `sent` or `sent with evidence`, the filing step
+// also writes finding rows, and the file job uploads them for the telemetry collector. The scrub's
+// App names are read in the gate job, from the default branch, before the agent runs.
+describe('finding rows for Kanon\'s telemetry store (plan 0006 F3)', () => {
+  const gsteps = (wf.jobs.gate!.steps ?? []) as Step[];
+  const fsteps = (wf.jobs.file!.steps ?? []) as Step[];
+  const file = fsteps.find((s) => s.id === 'file')!;
+  it('reads the App register\'s names in the gate job, after the choice, only for `sent with evidence`, and hands them to the file job alone', () => {
+    const names = gsteps.find((s) => s.id === 'names')!;
+    expect(gsteps.indexOf(names)).toBeGreaterThan(gsteps.findIndex((s) => s.id === 'upstream'));
+    expect(names.if).toBe("steps.upstream.outputs.upstream == 'sent with evidence'");
+    expect(names.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
+    expect(names.run).toContain('names="$(node "$KANON/scripts/upstream-names.mjs")"');
+    expect(names.run).toContain('printf \'names=%s\\n\' "$names" >> "$GITHUB_OUTPUT"');
+    expect((wf.jobs.gate as { outputs?: Record<string, string> }).outputs?.names).toBe('${{ steps.names.outputs.names }}');
+    for (const [name, j] of Object.entries(wf.jobs)) if (name !== 'gate' && name !== 'file') expect(JSON.stringify(j), name).not.toMatch(/outputs\.names|upstream-names/);
+  });
+
+  it('uploads the rows the filing step wrote, after it, as `kanon-finding-overseer-*`, only when it wrote some', () => {
+    const up = fsteps.at(-1)!;
+    expect(fsteps.indexOf(up)).toBeGreaterThan(fsteps.indexOf(file));
+    expect(up.uses).toBe('actions/upload-artifact@v7');
+    expect(up.if).toBe("${{ !cancelled() && steps.file.outputs.finding-rows != '' }}");
+    expect(up.with).toEqual({
+      name: 'kanon-finding-overseer-${{ github.run_id }}-${{ github.run_attempt }}',
+      path: file.env!.FINDINGS_PATH, 'retention-days': 8, 'if-no-files-found': 'error',
+    });
+  });
+
+  it('tells the agent to give a Kanon finding an `upstream` object in Kanon\'s vocabulary, which the step reads the record to send', () => {
+    expect(flat).toContain('Give each such finding an `upstream` object, in Kanon\'s vocabulary, which the step sends to Kanon\'s telemetry store when the record says so (it reads the record, not you), and drafts either way:');
+    expect(flat).toContain('"upstream": {"lane": "...", "failed_stage": "...", "kanon_error": "...", "reason": "...", "rules": ["K-..."], "kanon_paths": ["scripts/..."], "fix_category": "...", "evidence": "...", "suggested_fix": "..."}');
+    expect(flat).toContain('The step drops a code outside its list, and sends the text only through its scrub.');
   });
 });

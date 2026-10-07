@@ -126,6 +126,7 @@ jobs:
       member: ${{ steps.gate.outputs.member }}
       configured: ${{ steps.configured.outputs.configured }}
       upstream: ${{ steps.upstream.outputs.upstream }}
+      names: ${{ steps.names.outputs.names }}
     steps:
       - uses: $/actions/kanon-path
       - name: Is the actor a member?
@@ -155,6 +156,20 @@ jobs:
         run: |
           upstream="$(node "$KANON/scripts/upstream-findings.mjs")"
           printf 'upstream=%s\n' "$upstream" >> "$GITHUB_OUTPUT"
+      # THE NAMES THE SCRUB REMOVES (plan 0006 §4.2, F3), only when the repository sends its
+      # findings to Kanon with evidence: the App register's, read from the default branch here,
+      # before any agent runs, and handed to the `file` job as hashes. Kanon's own words in a slug
+      # (a role's, a lane's) are left out, so the evidence keeps "the reviewer". It never fails
+      # the gate: a register it can't read prints nothing, and the `file` job then withholds the
+      # text and sends codes only.
+      - name: Which App names does the scrub remove?
+        id: names
+        if: steps.upstream.outputs.upstream == 'sent with evidence'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          names="$(node "$KANON/scripts/upstream-names.mjs")"
+          printf 'names=%s\n' "$names" >> "$GITHUB_OUTPUT"
 
   # NOTHING TO CALL: the repository has no aggregate URL or invoker role, or a dispatch ran from
   # another branch, whose ref the role doesn't trust. Said, and green.
@@ -300,6 +315,7 @@ jobs:
       # one, files nothing and reds the job: the run was lost. A refused finding reds it too,
       # after the others are filed or drafted.
       - name: Check the findings against the aggregate, and file or draft them
+        id: file
         env:
           GH_TOKEN: ${{ steps.file-token.outputs.token }}
           AGENT_OUTCOME: ${{ needs.explore.outputs.agent-outcome }}
@@ -308,4 +324,25 @@ jobs:
           KANON: ${{ steps.kanon.outputs.path }}
           # The gate job's reading of the record, never anything the agent wrote.
           UPSTREAM: ${{ needs.gate.outputs.upstream }}
+          # For the finding rows, with `sent` or `sent with evidence` (plan 0006 §5, F3): the App
+          # register's names the gate job hashed, the run's tag, the Kanon release this job's
+          # workflow is, and where the rows go for the upload below.
+          APP_NAME_HASHES: ${{ needs.gate.outputs.names }}
+          TAG: ${{ inputs.smoke != '' && 'smoke' || 'run' }}
+          KANON_WORKFLOW_REF: ${{ job.workflow_ref }}
+          KANON_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          FINDINGS_PATH: ${{ runner.temp }}/finding/kanon-finding.json
         run: node "$KANON/scripts/telemetry-file.mjs"
+
+      # THE FINDING ROWS (plan 0006 §5, F3): written by the step above only when the repository
+      # sends its upstream findings to Kanon, and sent by the telemetry collector, which holds
+      # the writer role (`K-OBS-13`; it lists `kanon-finding-*` from F4). This job holds no
+      # credential for the store. Kept 8 days: the store refuses a row recorded longer ago.
+      - name: Upload the finding rows for the collector
+        if: ${{ !cancelled() && steps.file.outputs.finding-rows != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-finding-explore-telemetry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/finding/kanon-finding.json
+          retention-days: 8
+          if-no-files-found: error

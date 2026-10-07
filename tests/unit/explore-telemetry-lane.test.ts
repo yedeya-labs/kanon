@@ -180,7 +180,7 @@ describe('the file job: no agent, and the only token that writes', () => {
       { name: 'kanon-telemetry-aggregate-${{ github.run_id }}-${{ github.run_attempt }}', path: '${{ runner.temp }}/aggregate' },
       { name: 'qa-telemetry-findings-${{ github.run_id }}-${{ github.run_attempt }}', path: '${{ runner.temp }}/report' },
     ]);
-    const last = fsteps.at(-1)!;
+    const last = fsteps.find((x) => x.id === 'file')!;
     expect(last.run).toBe('node "$KANON/scripts/telemetry-file.mjs"');
     expect(last.env).toMatchObject({ UPSTREAM: '${{ needs.gate.outputs.upstream }}', GH_TOKEN: '${{ steps.file-token.outputs.token }}', AGGREGATE_PATH: '${{ runner.temp }}/aggregate/aggregate.json', REPORT_PATH: '${{ runner.temp }}/report/qa-telemetry-findings.json' });
   });
@@ -209,5 +209,51 @@ describe('where findings go: the adoption record\'s Upstream findings choice (ka
     for (const f of ['explore-telemetry-run.yml', 'explore-telemetry-agent-job.yml']) {
       expect(readFileSync(`${WF}/${f}`, 'utf8'), f).not.toMatch(/outputs\.upstream|\bUPSTREAM\b|upstream-findings/);
     }
+  });
+});
+
+// Plan 0006 §5, steps 1 and 2 (F3, kanon#588): with `sent` or `sent with evidence`, the filing step
+// also writes finding rows, and the file job uploads them for the telemetry collector. The scrub's
+// App names are read in the gate job, from the default branch, before the agent runs.
+describe('finding rows for Kanon\'s telemetry store (plan 0006 F3)', () => {
+  const gsteps = wf.jobs.gate!.steps as Step[];
+  const fsteps = (wf.jobs.file!.steps ?? []) as Step[];
+  const file = fsteps.find((s) => s.id === 'file')!;
+  it('reads the App register\'s names in the gate job, after the choice, only for `sent with evidence`, and hands them to the file job alone', () => {
+    const names = gsteps.find((s) => s.id === 'names')!;
+    expect(gsteps.indexOf(names)).toBeGreaterThan(gsteps.findIndex((s) => s.id === 'upstream'));
+    expect(names.if).toBe("steps.upstream.outputs.upstream == 'sent with evidence'");
+    expect(names.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
+    expect(names.run).toContain('names="$(node "$KANON/scripts/upstream-names.mjs")"');
+    expect(names.run).toContain('printf \'names=%s\\n\' "$names" >> "$GITHUB_OUTPUT"');
+    expect((wf.jobs.gate as { outputs?: Record<string, string> }).outputs?.names).toBe('${{ steps.names.outputs.names }}');
+    for (const [name, j] of Object.entries(wf.jobs)) if (name !== 'gate' && name !== 'file') expect(JSON.stringify(j), name).not.toMatch(/outputs\.names|upstream-names/);
+  });
+
+  it('gives the filing step the run\'s names, tag, release and where to write the rows', () => {
+    expect(file.env).toMatchObject({
+      APP_NAME_HASHES: '${{ needs.gate.outputs.names }}',
+      TAG: "${{ inputs.smoke != '' && 'smoke' || 'run' }}",
+      KANON_WORKFLOW_REF: '${{ job.workflow_ref }}',
+      KANON_WORKFLOW_SHA: '${{ job.workflow_sha }}',
+      FINDINGS_PATH: '${{ runner.temp }}/finding/kanon-finding.json',
+    });
+  });
+
+  it('uploads the rows the filing step wrote, after it, as `kanon-finding-explore-telemetry-*`, only when it wrote some', () => {
+    const up = fsteps.at(-1)!;
+    expect(fsteps.indexOf(up)).toBeGreaterThan(fsteps.indexOf(file));
+    expect(up.uses).toBe('actions/upload-artifact@v7');
+    expect(up.if).toBe("${{ !cancelled() && steps.file.outputs.finding-rows != '' }}");
+    expect(up.with).toEqual({
+      name: 'kanon-finding-explore-telemetry-${{ github.run_id }}-${{ github.run_attempt }}',
+      path: file.env!.FINDINGS_PATH, 'retention-days': 8, 'if-no-files-found': 'error',
+    });
+  });
+
+  it('tells the agent what `upstream` holds, that its codes are the signal\'s, and that the no-digit rule holds for its text', () => {
+    expect(prompt).toContain('"upstream": {"rules": ["K-..."], "kanon_paths": ["scripts/..."], "fix_category": "..."');
+    expect(prompt).toContain('Its lane and codes are the first signal\'s, or the first cell\'s lane, never yours.');
+    expect(prompt).toMatch(/no-digit rule holds for `evidence` and `suggested_fix` too/);
   });
 });

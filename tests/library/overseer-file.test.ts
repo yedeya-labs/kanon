@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { ROOT } from './helpers/adopter.js';
+import { validate } from '../../actions/agent-telemetry/schema.mjs';
+import { kanonFileIn } from '../../scripts/lib/finding-rows.mjs';
 import {
   BUCKET,
   LABELS,
@@ -322,10 +325,10 @@ describe('a repository that declares `Upstream findings: filed here` (K-LAYOUT-1
   });
 
   // Plan 0006 §3.1 (kanon#585): a sent finding is also drafted, so `sent` and `sent with evidence`
-  // route as drafts, without the warning an unknown value gets.
+  // route as drafts, without the warning an unknown value gets, at the level each sends (F3).
   it('routes `sent` and `sent with evidence` as drafts, knowing both', () => {
-    expect(upstreamChoice('sent')).toEqual({ upstream: 'drafted' });
-    expect(upstreamChoice('sent with evidence')).toEqual({ upstream: 'drafted' });
+    expect(upstreamChoice('sent')).toEqual({ upstream: 'drafted', level: 'codes' });
+    expect(upstreamChoice('sent with evidence')).toEqual({ upstream: 'drafted', level: 'evidence' });
     expect(upstreamChoice('sent  with evidence')).toEqual({ upstream: 'drafted', unknown: 'sent  with evidence' });
   });
 
@@ -336,5 +339,185 @@ describe('a repository that declares `Upstream findings: filed here` (K-LAYOUT-1
     expect(route(fs, 0, 'filed here').file.map((f) => f.subject)).toEqual(['rule', 'declaration']);
     expect(route(fs, 0, 'filed here').upstream).toEqual([]);
     expect(renderAudit({ audit: 'a', filed: [], held: [], upstream: [] })).toBe(renderAudit({ audit: 'a', filed: [], held: [], upstream: [], choice: 'drafted' }));
+  });
+});
+
+// Plan 0006 §5, steps 1 and 2 (F3, kanon#588). With `sent` or `sent with evidence`, the filing
+// step also builds one finding row per upstream finding, from the report's `upstream` object,
+// keeps a code only when it is in the schema's list, runs the scrub on the text for level 2,
+// validates every row and writes them for one `kanon-finding-overseer-*` artifact. Each such
+// finding is still drafted, showing exactly what was sent.
+describe('upstream findings sent to Kanon (plan 0006 §5, F3)', () => {
+  const REPO = 'acme-corp/widget-shop';
+  const guard = finding('guard', 'The citation guard passes a stale line range', {
+    upstream: {
+      fix_category: 'guard', rules: ['K-SELF-11', 'K-NOPE-1'], kanon_paths: ['scripts/overseer-file.mjs', 'src/app.ts'],
+      evidence: '**Expected:** K-SELF-11 holds.\n**Observed:** see https://example.test/run/1, raised by @octo-reviewer in src/app.ts.',
+      suggested_fix: 'Re-read the range in scripts/overseer-file.mjs before judging.',
+    },
+  });
+  const lane = finding('lane', 'The Overseer lane stops before its audit', {
+    upstream: { lane: 'overseer', failed_stage: 'agent', reason: 'did_not_finish', fix_category: 'lane-behaviour', evidence: '**Observed:** the agent stage ended without a report.' },
+  });
+  const fixture = (findings: unknown[] = [finding('playbook', 'The playbook names no liveness query'), guard, lane, finding('vibes', 'Something feels off')]) => report(findings);
+
+  type Opts = { nameHashes?: string[] | null; participants?: 'throws'; write?: 'throws' };
+  /** A `gh` that also answers the participants' reads, as the filing token sees them. */
+  const sendingGh = (o: Opts) => {
+    const calls: Call[] = [];
+    let next = 100;
+    const gh = (args: string[], input?: string) => {
+      calls.push({ args, input });
+      const json = args[args.indexOf('--json') + 1] ?? '';
+      if (args[0] === 'issue' && args[1] === 'create') return `https://github.com/${REPO}/issues/${next++}\n`;
+      if ((args[0] === 'issue' || args[0] === 'pr') && args[1] === 'list' && json.includes('author')) {
+        if (o.participants === 'throws') throw new Error('HTTP 403');
+        return JSON.stringify(args[0] === 'pr'
+          ? [{ author: { login: 'pat-author' }, assignees: [], comments: [], latestReviews: [{ author: { login: 'octo-reviewer' } }], reviewRequests: [{ login: 'req-person' }, { name: 'a-team' }] }]
+          : [{ author: { login: 'issue-opener' }, assignees: [{ login: 'assigned-one' }], comments: [{ author: { login: 'chatty-commenter' } }] }]);
+      }
+      if (args[0] === 'issue' && args[1] === 'list') return '[]';
+      if (args[0] === 'api' && String(args[1]).endsWith('/collaborators')) return 'collab-person\n';
+      return '';
+    };
+    return { gh, calls };
+  };
+  const sending = (upstream: string | undefined, text = fixture(), o: Opts = {}) => {
+    const fake = sendingGh(o);
+    const written: Array<Record<string, unknown>[]> = [];
+    const log: string[] = [];
+    const code = fileAudit({
+      repo: REPO, text, agentOutcome: 'success', gh: fake.gh, interlock: () => ({ count: 0 }), log: (l) => log.push(l), upstream,
+      send: {
+        run: { id: 4242, attempt: 1 }, tag: 'test', recordedAt: '2026-10-07T12:00:00.000Z', kanonVersion: '0.38.0', actor: 'run-actor',
+        nameHashes: o.nameHashes === undefined ? [] : o.nameHashes, isKanonFile: kanonFileIn(ROOT),
+        write: (rows: Record<string, unknown>[]) => { if (o.write === 'throws') throw new Error('disk full'); written.push(rows); },
+      },
+    });
+    const audit = fake.calls.filter((c) => c.args[1] === 'create').map((c) => c.input ?? '').find((b) => b.includes('## Upstream'))!;
+    return { code, written, rows: written.flat(), audit, upstream: audit.slice(audit.indexOf('\n## Upstream\n')), log, calls: fake.calls };
+  };
+  /** The text a draft shows as sent, from its fenced block. */
+  const drafted = (upstream: string, title: string, what: 'evidence' | 'suggested fix') => {
+    const at = upstream.slice(upstream.indexOf(`### ${title}`));
+    const m = new RegExp(`Its ${what}, as sent:\\n\\n(\`{3,})text\\n([\\s\\S]*?)\\n\\1\\n`).exec(at);
+    return m?.[2];
+  };
+
+  it('with `sent`, a fixture audit with two Kanon findings uploads two rows at `codes`, and no text', () => {
+    const r = sending('sent');
+    expect(r.code).toBe(0);
+    expect(r.written).toHaveLength(1);
+    expect(r.rows).toHaveLength(2);
+    for (const row of r.rows) {
+      expect(validate(row)).toEqual({ ok: true });
+      expect(row.evidence_level).toBe('codes');
+      for (const k of ['evidence', 'suggested_fix', 'scrub_version', 'title', 'body']) expect(row).not.toHaveProperty(k);
+    }
+    expect(r.rows.map((x) => [x.finding_index, x.reporter, x.subject, x.fix_category])).toEqual([[0, 'overseer', 'guard', 'guard'], [1, 'overseer', 'lane', 'lane-behaviour']]);
+    expect(r.rows[0]).toMatchObject({ rules: 'K-SELF-11', kanon_paths: 'scripts/overseer-file.mjs', kanon_version: '0.38.0', run_id: 4242, run_attempt: 1, tag: 'test' });
+    expect(r.rows[1]).toMatchObject({ lane: 'overseer', failed_stage: 'agent', reason: 'did_not_finish' });
+    // No text of the agent's, nor the adopter's own finding or the unknown-subject one.
+    const sent = JSON.stringify(r.rows);
+    for (const t of [guard.title, guard.body, 'Observed', 'liveness', 'feels off', 'K-NOPE-1', 'src/app.ts']) expect(sent).not.toContain(t);
+    // Codes only: nothing is read for the scrub.
+    expect(r.calls.some((c) => c.args[0] === 'pr')).toBe(false);
+  });
+
+  it('with `sent`, each Kanon finding is still drafted, marked as sent, and the heading says at which level and who reads it', () => {
+    const r = sending('sent');
+    expect(r.upstream).toContain('`Upstream findings: sent`');
+    expect(r.upstream).toMatch(/codes .*no text/);
+    expect(r.upstream).toMatch(/Kanon's operator's private job reads/);
+    expect(r.upstream.match(/\*\*Sent to Kanon\*\*/g)).toHaveLength(2);
+    expect(r.upstream).toContain(`### ${guard.title}`);
+    expect(r.upstream).toContain('`rules: K-SELF-11`');
+    expect(r.upstream).toContain('Not sent, outside Kanon\'s vocabulary: `rules`, `kanon_paths`.');
+    const vibes = r.upstream.slice(r.upstream.indexOf('### Something feels off'));
+    expect(vibes).toContain('**Not sent to Kanon:**');
+  });
+
+  it('with `sent with evidence`, the text in the artifact equals the draft\'s, placeholders included', () => {
+    const r = sending('sent with evidence');
+    expect(r.code).toBe(0);
+    const [g, l] = r.rows;
+    expect(validate(g)).toEqual({ ok: true });
+    expect(g!.evidence_level).toBe('evidence');
+    expect(g!.scrub_version).toBe(1);
+    expect(g!.evidence).toBe('**Expected:** K-SELF-11 holds.\n**Observed:** see [url] raised by [login] in [path].');
+    expect(drafted(r.upstream, guard.title, 'evidence')).toBe(g!.evidence);
+    expect(g!.suggested_fix).toBe('Re-read the range in scripts/overseer-file.mjs before judging.');
+    expect(drafted(r.upstream, guard.title, 'suggested fix')).toBe(g!.suggested_fix);
+    expect(drafted(r.upstream, lane.title, 'evidence')).toBe(l!.evidence);
+    expect(r.upstream).toContain('`Upstream findings: sent with evidence`');
+    expect(r.upstream).toMatch(/third-party decision provider/);
+  });
+
+  it('with `drafted`, `filed here` or nothing declared, no artifact', () => {
+    for (const upstream of ['drafted', 'filed here', undefined]) {
+      const r = sending(upstream);
+      expect(r.written, String(upstream)).toEqual([]);
+      expect(r.audit).not.toContain('Sent to Kanon');
+    }
+  });
+
+  it('MUTATION: an agent `upstream.lane` outside the lane list is dropped, not sent', () => {
+    const bad = finding('lane', 'A lane we made up', { upstream: { lane: 'acme-deploy', fix_category: 'lane-behaviour' } });
+    const r = sending('sent', fixture([bad]));
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]).not.toHaveProperty('lane');
+    expect(validate(r.rows[0])).toEqual({ ok: true });
+    expect(JSON.stringify(r.rows)).not.toContain('acme-deploy');
+    expect(r.upstream).toContain('Not sent, outside Kanon\'s vocabulary: `lane`.');
+  });
+
+  it('MUTATION: a report whose evidence holds the repository\'s own name sends `[name]`', () => {
+    const named = finding('guard', 'A guard misses a case', { upstream: { fix_category: 'guard', evidence: 'The widget-shop review lane stopped, and acme-corp saw it.' } });
+    const r = sending('sent with evidence', fixture([named]));
+    expect(r.rows[0]!.evidence).toBe('The [name] review lane stopped, and [name] saw it.');
+    expect(drafted(r.upstream, named.title, 'evidence')).toBe(r.rows[0]!.evidence);
+  });
+
+  it('removes a bare login the lane can see, with no `@`: a PR reviewer\'s, a commenter\'s, a collaborator\'s and the run\'s actor\'s', () => {
+    const named = finding('guard', 'A guard misses a case', { upstream: { fix_category: 'guard', evidence: 'octo-reviewer, chatty-commenter, req-person, collab-person and run-actor saw it.' } });
+    const r = sending('sent with evidence', fixture([named]));
+    expect(r.rows[0]!.evidence).toBe('[name], [name], [name], [name] and [name] saw it.');
+  });
+
+  it('FAILS CLOSED: with the App register\'s names unread, or the participants unread, the text is withheld and the draft says why', () => {
+    const noNames = sending('sent with evidence', fixture(), { nameHashes: null });
+    expect(noNames.rows.map((x) => x.evidence_level)).toEqual(['codes', 'codes']);
+    expect(noNames.upstream).toContain('The evidence and suggested fix were withheld, and the finding was sent as codes only: the App register\'s names were not read in the gate job.');
+    const noParticipants = sending('sent with evidence', fixture(), { participants: 'throws' });
+    expect(noParticipants.rows.map((x) => x.evidence_level)).toEqual(['codes', 'codes']);
+    expect(noParticipants.upstream).toContain('the run\'s issue and pull request participants could not be read');
+  });
+
+  it('a collaborator list it can\'t read is not a failure: the plan reads them only where the token may', () => {
+    const fake = sendingGh({});
+    const gh = (args: string[], input?: string) => {
+      if (args[0] === 'api') throw new Error('HTTP 403');
+      return fake.gh(args, input);
+    };
+    const written: Array<Record<string, unknown>[]> = [];
+    const log: string[] = [];
+    fileAudit({ repo: REPO, text: fixture(), agentOutcome: 'success', gh, interlock: () => ({ count: 0 }), log: (l) => log.push(l), upstream: 'sent with evidence',
+      send: { run: { id: 1, attempt: 1 }, tag: 'test', recordedAt: '2026-10-07T12:00:00.000Z', kanonVersion: '0.38.0', actor: 'a', nameHashes: [], isKanonFile: kanonFileIn(ROOT), write: (rows: Record<string, unknown>[]) => written.push(rows) } });
+    expect(written.flat().map((x) => x.evidence_level)).toEqual(['evidence', 'evidence']);
+    expect(log.join('\n')).toMatch(/collaborators could not be listed/);
+  });
+
+  it('a write that fails sends nothing, says so in each draft, and reds the step', () => {
+    const r = sending('sent', fixture(), { write: 'throws' });
+    expect(r.code).toBe(1);
+    expect(r.upstream).not.toContain('**Sent to Kanon**');
+    expect(r.upstream).toContain('**Not sent to Kanon:** the finding rows could not be written');
+    expect(r.log.join('\n')).toMatch(/::error title=overseer finding rows::/);
+  });
+
+  it('without a place to write rows, sends nothing and warns', () => {
+    const log: string[] = [];
+    fileAudit({ repo: REPO, text: fixture(), agentOutcome: 'success', gh: sendingGh({}).gh, interlock: () => ({ count: 0 }), log: (l) => log.push(l), upstream: 'sent' });
+    expect(log.join('\n')).toMatch(/::warning title=overseer finding rows::/);
   });
 });

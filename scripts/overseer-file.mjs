@@ -28,10 +28,27 @@
 // can change what the report says, never how it is routed (the lane's header says so, and names
 // the one dependency, kanon#274).
 //
+// SENT TO KANON, AND STILL DRAFTED (plan 0006 §3.1 and §5, F3). With `sent` or `sent with
+// evidence`, the findings only Kanon can act on are drafted as with `drafted`, and each one whose
+// subject is one of Kanon's is also written as a finding row for Kanon's telemetry store
+// (`scripts/lib/finding-rows.mjs`): its codes from the finding's `upstream` object, each kept only
+// when it is in the schema's list, and at level 2 its evidence and suggested fix through the scrub.
+// The rows go into one file that the lane's next step uploads as `kanon-finding-overseer-<run
+// id>-<attempt>`, for the telemetry collector to send. Each draft shows exactly what was sent, or
+// why it wasn't, or why its text was withheld. The scrub's names are the App register's, which
+// the gate job read and hashed (`upstream-names.mjs`), this repository's, the run's actor, the
+// logins of the issues' and pull requests' participants this step's token can list, which the
+// agent read, and the collaborators, where the token may list them. Without the register's
+// names or the participants, every text is withheld: fail closed.
+//
 // THE REPORT, `qa-overseer-audit.json`, written by the agent at the repository root:
 //
 //   { "audit": "<the audit issue's body, in Markdown>",
-//     "findings": [ { "title": "...", "body": "...", "subject": "playbook", "capability": false } ] }
+//     "findings": [ { "title": "...", "body": "...", "subject": "playbook", "capability": false,
+//       "upstream": { "lane", "failed_stage", "kanon_error", "reason", "rules": [], "kanon_paths": [],
+//         "fix_category", "evidence", "suggested_fix" } } ] }
+//
+// `upstream` is read only for a finding only Kanon can act on, and only when the repository sends.
 //
 // `subject` names what the finding asks to change, from a fixed list (`SUBJECTS`): the subject
 // decides where it goes, not the agent. A subject outside the list goes upstream, never into
@@ -60,15 +77,20 @@
 //   node "$KANON/scripts/overseer-file.mjs"
 //   env: GH_TOKEN (issues write), GITHUB_REPOSITORY, AGENT_OUTCOME (the agent step's outcome),
 //        REPORT_PATH (the downloaded report; default `qa-overseer-audit.json`),
-//        UPSTREAM (`drafted` or `filed here`, the gate job's reading of the record; default `drafted`)
+//        UPSTREAM (`drafted`, `filed here`, `sent` or `sent with evidence`, the gate job's reading
+//        of the record; default `drafted`); and for the rows: KANON, APP_NAME_HASHES (the gate
+//        job's), TAG, KANON_WORKFLOW_REF, KANON_WORKFLOW_SHA, FINDINGS_PATH, GITHUB_OUTPUT
 //
 // `node:` builtins only, like every script under scripts/ (`K-SELF-8`).
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 
+import { FINDING_SUBJECTS } from '../actions/agent-telemetry/schema.mjs';
+import { nameContext } from '../actions/agent-telemetry/scrub.mjs';
 import { THRESHOLD, countInterlock } from './capability-interlock.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { buildRows, notWritten, readUpstream, renderSent, sendFromEnv, sentSentence } from './lib/finding-rows.mjs';
 import { beforeApply } from './lib/labels.mjs';
 import { appPersona } from './app-register.mjs';
 import { signed } from './lib/role-marker.mjs';
@@ -103,13 +125,17 @@ export const auditTitle = (/** @type {number} */ n) => `[pipeline] audit-summary
 /** An audit issue's title, as `auditTitle` writes it; `signal-outcomes.mjs` leaves these out of every signal. */
 export const AUDIT_NUMBER = /audit-summary — Overseer audit #(\d+)\s*$/;
 const MAX_TITLE = 256;
+/** How many of the latest issues, and of the latest pull requests, the scrub reads participants from. */
+export const PARTICIPANT_LIMIT = 100;
 
 export class ReportError extends Error {}
 
 /**
- * @typedef {{ title: string, body: string, subject: string, capability: boolean }} Finding
+ * @typedef {{ title: string, body: string, subject: string, capability: boolean, upstream?: unknown }} Finding
  * @typedef {{ audit: string, findings: Finding[] }} Report
  * @typedef {'drafted' | 'filed here'} Upstream
+ * @typedef {import('./lib/finding-rows.mjs').Level} Level
+ * @typedef {import('./lib/finding-rows.mjs').Send} Send
  */
 
 /**
@@ -138,7 +164,10 @@ export function parseReport(text) {
       if (typeof o.title !== 'string' || o.title.trim() === '') throw new ReportError(`${REPORT}'s finding ${i + 1} has no title`);
       if (o.title.length > MAX_TITLE) throw new ReportError(`${REPORT}'s finding ${i + 1} has a title over ${MAX_TITLE} characters`);
       if (typeof o.body !== 'string') throw new ReportError(`${REPORT}'s finding ${i + 1} ("${o.title}") has no body`);
-      return { title: o.title.trim(), body: o.body, subject: typeof o.subject === 'string' ? o.subject.trim() : '', capability: o.capability === true };
+      return {
+        title: o.title.trim(), body: o.body, subject: typeof o.subject === 'string' ? o.subject.trim() : '', capability: o.capability === true,
+        ...(Object.hasOwn(o, 'upstream') ? { upstream: o.upstream } : {}),
+      };
     }),
   };
 }
@@ -157,16 +186,17 @@ export function classify(f) {
 /**
  * Where upstream findings go, from the gate job's `UPSTREAM`: `filed here` only when it says
  * exactly that, and Kanon's default, `drafted`, otherwise. `sent` and `sent with evidence` are
- * drafted too, since a sent finding is also drafted (plan 0006 §3.1); the rows that send them are
- * plan 0006's F3. `unknown` is set when it said something else, which the step warns about rather
- * than filing on a guess.
+ * drafted too, since a sent finding is also drafted (plan 0006 §3.1), and `level` says what their
+ * rows carry: `codes` or `evidence`. `unknown` is set when it said something else, which the step
+ * warns about rather than filing on a guess.
  * @param {string | undefined} value
- * @returns {{ upstream: Upstream, unknown?: string }}
+ * @returns {{ upstream: Upstream, unknown?: string, level?: Level }}
  */
 export function upstreamChoice(value) {
   const v = String(value ?? '').trim();
   if (v === 'filed here' || v === 'drafted') return { upstream: v };
-  if (v === 'sent' || v === 'sent with evidence') return { upstream: 'drafted' };
+  if (v === 'sent') return { upstream: 'drafted', level: 'codes' };
+  if (v === 'sent with evidence') return { upstream: 'drafted', level: 'evidence' };
   return v === '' ? { upstream: 'drafted' } : { upstream: 'drafted', unknown: v };
 }
 
@@ -218,11 +248,13 @@ export const neutralise = (/** @type {string} */ s) => s.replace(/Watermark(?=[^
 /**
  * The audit issue's body: the agent's audit, what was filed or held, and the Upstream section.
  * `choice` is the repository's declared routing: under `filed here`, a filed finding only Kanon
- * can act on is marked so, and the Upstream section says where those went.
+ * can act on is marked so, and the Upstream section says where those went. `level` is set when
+ * the repository sends its findings to Kanon, and `sent` holds, per draft, what was sent of it.
  * @param {{ audit: string, filed: Array<{ title: string, number?: number, error?: string, kanon?: boolean }>,
- *   held: Array<{ finding: Finding, why: string }>, upstream: Array<{ finding: Finding, why: string }>, choice?: Upstream }} o
+ *   held: Array<{ finding: Finding, why: string }>, upstream: Array<{ finding: Finding, why: string }>, choice?: Upstream,
+ *   level?: Level, sent?: Map<Finding, string> }} o
  */
-export function renderAudit({ audit, filed, held, upstream, choice = 'drafted' }) {
+export function renderAudit({ audit, filed, held, upstream, choice = 'drafted', level, sent = new Map() }) {
   const out = [audit.trimEnd(), '', '## Filed this run', ''];
   if (filed.length === 0 && held.length === 0) out.push('Nothing.');
   for (const f of filed) {
@@ -233,6 +265,8 @@ export function renderAudit({ audit, filed, held, upstream, choice = 'drafted' }
   out.push('', '## Upstream', '');
   if (choice === 'filed here') {
     out.push('This repository\'s adoption record says `Upstream findings: filed here` (K-LAYOUT-10), so a finding only Kanon can act on (a lane\'s behaviour, a guard, a rule or Kanon\'s library) is filed in this repository, under "Filed this run", and in no other. A finding whose subject is not one of the known subjects is drafted here instead, and was not filed: nothing is filed on a guess.');
+  } else if (level) {
+    out.push(`Drafts of findings only Kanon can act on: a lane's behaviour, a guard, a rule or Kanon's library. ${sentSentence(level)}`);
   } else {
     out.push('Drafts of findings only Kanon can act on: a lane\'s behaviour, a guard, a rule or Kanon\'s library. Nothing here was filed. Before filing one on Kanon by hand, check that it names nothing of this project, its issues or its data (ADR 0007).');
   }
@@ -240,6 +274,9 @@ export function renderAudit({ audit, filed, held, upstream, choice = 'drafted' }
   if (upstream.length === 0) out.push('None this run.');
   for (const { finding, why } of upstream) {
     out.push(`### ${neutralise(finding.title)}`, '', `_Routed here by ${why}._`, '', neutralise(finding.body.trim()), '');
+    // What was sent, exactly: its text was neutralised before it was sent, so it is shown as is.
+    const block = sent.get(finding);
+    if (block) out.push(block, '');
   }
   return `${out.join('\n').trimEnd()}\n`;
 }
@@ -265,14 +302,110 @@ const issueNumber = (url) => {
  */
 
 /**
+ * The logins of the latest issues' and pull requests' participants (plan 0006 §4.2): authors,
+ * assignees, commenters, reviewers and requested reviewers, which the agent read. Throws when
+ * either list can't be read: the caller then withholds every text.
+ * @param {string} repo @param {Gh} gh
+ * @returns {string[]}
+ */
+export function readParticipants(repo, gh) {
+  /** @type {Set<string>} */
+  const logins = new Set();
+  /** @param {unknown} u */
+  const add = (u) => {
+    const login = /** @type {{ login?: unknown } | null} */ (u)?.login;
+    if (typeof login === 'string' && login) logins.add(login);
+  };
+  /** @param {unknown} v @returns {any[]} */
+  const list = (v) => (Array.isArray(v) ? v : []);
+  const read = (/** @type {string} */ kind, /** @type {string} */ fields) =>
+    list(JSON.parse(gh([kind, 'list', '--repo', repo, '--state', 'all', '--limit', String(PARTICIPANT_LIMIT), '--json', fields])));
+  for (const x of [...read('issue', 'author,assignees,comments'), ...read('pr', 'author,assignees,comments,latestReviews,reviewRequests')]) {
+    add(x.author);
+    for (const a of list(x.assignees)) add(a);
+    for (const c of list(x.comments)) add(c?.author);
+    for (const r of list(x.latestReviews)) add(r?.author);
+    for (const r of list(x.reviewRequests)) add(r);
+  }
+  return [...logins];
+}
+
+/**
+ * The scrub's context for this run (plan 0006 §4.2), or why it can't be had. The collaborators
+ * are read where the token may list them; their absence is a notice, not a withheld text.
+ * @param {string} repo @param {Gh} gh @param {Send} send @param {(line: string) => void} log
+ * @returns {{ context?: import('../actions/agent-telemetry/scrub.mjs').Context, contextProblem?: string }}
+ */
+function scrubContext(repo, gh, send, log) {
+  if (send.nameHashes === null) return { contextProblem: 'the App register\'s names were not read in the gate job' };
+  /** @type {string[]} */
+  let participants;
+  try {
+    participants = readParticipants(repo, gh);
+  } catch (e) {
+    return { contextProblem: `the run's issue and pull request participants could not be read (${String(/** @type {Error} */ (e).message).split('\n')[0]})` };
+  }
+  /** @type {string[]} */
+  let collaborators = [];
+  try {
+    collaborators = gh(['api', `repos/${repo}/collaborators`, '--paginate', '--jq', '.[].login']).split('\n').map((l) => l.trim()).filter(Boolean);
+  } catch (e) {
+    log(`::notice title=overseer finding rows::the repository's collaborators could not be listed (${String(/** @type {Error} */ (e).message).split('\n')[0]}), so the scrub removes the other names it reads (plan 0006 §4.2)`);
+  }
+  const names = nameContext({ repository: repo, actor: send.actor ?? '', participants, collaborators });
+  return { context: { nameHashes: new Set([...send.nameHashes, ...names]), kanonFiles: send.isKanonFile } };
+}
+
+/**
+ * The finding rows of this run's drafts (plan 0006 §5, step 1): one per draft whose subject is
+ * Kanon's, written in one go, and what each draft shows of it, set into `sent`. Returns 1 when
+ * the rows couldn't be written, which reds the step, and 0 otherwise.
+ * @param {{ repo: string, gh: Gh, log: (line: string) => void, level: Level, send: Send | undefined,
+ *   drafts: Array<{ finding: Finding }>, sent: Map<Finding, string> }} o
+ */
+function sendFindings({ repo, gh, log, level, send, drafts, sent }) {
+  if (!send) {
+    log('::warning title=overseer finding rows::the repository sends its upstream findings to Kanon, but this step was given nowhere to write their rows, so none was sent');
+    return 0;
+  }
+  const kanon = drafts.filter(({ finding }) => FINDING_SUBJECTS.includes(finding.subject));
+  for (const { finding } of drafts) {
+    if (!kanon.some((k) => k.finding === finding)) sent.set(finding, `**Not sent to Kanon:** its subject is not one of Kanon's (${FINDING_SUBJECTS.map((x) => `\`${x}\``).join(', ')}), so it was drafted only.`);
+  }
+  if (kanon.length === 0) return 0;
+  const items = kanon.map(({ finding }) => {
+    const u = readUpstream(finding.upstream, send.isKanonFile);
+    // Neutralised before the scrub, so the text sent is the text the audit shows.
+    return { subject: finding.subject, ...u, evidence: neutralise(u.evidence), suggested_fix: neutralise(u.suggested_fix) };
+  });
+  const needsContext = level === 'evidence' && items.some((i) => i.evidence || i.suggested_fix);
+  const { context, contextProblem } = needsContext ? scrubContext(repo, gh, send, log) : {};
+  const { rows, outcomes } = buildRows({ reporter: 'overseer', level, items, send, context, contextProblem });
+  if (rows.length) {
+    try {
+      send.write(rows);
+    } catch (e) {
+      const why = String(/** @type {Error} */ (e).message).split('\n')[0] ?? '';
+      log(`::error title=overseer finding rows::${why}: the ${rows.length} finding row(s) of this run were not written, so none was sent to Kanon`);
+      for (const { finding } of kanon) sent.set(finding, notWritten(why));
+      return 1;
+    }
+  }
+  kanon.forEach(({ finding }, i) => sent.set(finding, renderSent(/** @type {import('./lib/finding-rows.mjs').Outcome} */ (outcomes[i]))));
+  log(`${rows.length} finding row(s) written for Kanon's telemetry store, at \`${level}\`, of ${kanon.length} upstream finding(s) whose subject is Kanon's`);
+  return 0;
+}
+
+/**
  * The whole step. Returns the exit code; prints its annotations through `log`. `upstream` is the
  * repository's declared routing for findings only Kanon can act on, as the gate job read it
  * (`UPSTREAM`): `filed here`, or anything else for `drafted`, warning on a value it doesn't know.
+ * With `sent` or `sent with evidence`, `send` is where its rows go, and the run they belong to.
  * @param {{ repo: string, text: string | null, agentOutcome: string, gh: Gh, interlock?: (repo: string, gh: Gh) => { count: number },
- *   log?: (line: string) => void, upstream?: string }} o
+ *   log?: (line: string) => void, upstream?: string, send?: Send }} o
  * @returns {number}
  */
-export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInterlock, log = console.log, upstream: declared }) {
+export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInterlock, log = console.log, upstream: declared, send }) {
   if (text === null) {
     log(`::error title=overseer produced nothing::The agent wrote no ${REPORT}, so nothing was filed and the whole audit was lost (the agent step's outcome: ${agentOutcome || 'unknown'}). Why it stopped is on this run's \`overseer\` telemetry row: its \`outcome\` and \`terminal_reason\`.`);
     return 1;
@@ -286,7 +419,7 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
     return 1;
   }
   let failed = 0;
-  const { upstream: choice, unknown } = upstreamChoice(declared);
+  const { upstream: choice, unknown, level } = upstreamChoice(declared);
   if (unknown !== undefined) {
     log(`::warning title=overseer upstream choice::the lane passed \`${unknown}\`, which is neither \`drafted\` nor \`filed here\`, so findings only Kanon can act on are drafted, not filed (K-LAYOUT-10)`);
   }
@@ -301,6 +434,9 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
     }
   }
   const { file, held, upstream } = route(report.findings, count, choice);
+  /** @type {Map<Finding, string>} */
+  const sent = new Map();
+  if (level) failed += sendFindings({ repo, gh, log, level, send, drafts: upstream, sent });
 
   /** @type {Array<{ title: string, number?: number, error?: string, kanon?: boolean }>} */
   const filed = [];
@@ -326,7 +462,7 @@ export function fileAudit({ repo, text, agentOutcome, gh, interlock = countInter
     prior = JSON.parse(gh(['issue', 'list', '--repo', repo, '--label', 'agent:overseer', '--state', 'all', '--limit', '200',
       '--search', 'in:title "audit-summary"', '--json', 'number,title,state']));
     const n = nextAuditNumber(prior.map((p) => p.title));
-    const body = renderAudit({ audit: report.audit, filed, held, upstream, choice });
+    const body = renderAudit({ audit: report.audit, filed, held, upstream, choice, ...(level ? { level, sent } : {}) });
     audit = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', auditTitle(n), '--body-file', '-', ...LABELS.flatMap((l) => ['--label', l]), '--milestone', BUCKET], signed(body, 'Overseer', appPersona('Overseer'))));
   } catch (e) {
     log(`::error title=overseer audit not filed::${String(/** @type {Error} */ (e).message).split('\n')[0]}`);
@@ -368,6 +504,7 @@ if (IS_CLI) {
     text: (() => { const at = process.env.REPORT_PATH || REPORT; return existsSync(at) ? readFileSync(at, 'utf8') : null; })(),
     agentOutcome: String(process.env.AGENT_OUTCOME ?? ''),
     gh,
+    send: sendFromEnv(process.env),
   });
 }
 /* c8 ignore stop */
