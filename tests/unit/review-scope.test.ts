@@ -151,17 +151,42 @@ describe('agent-review.yml — the scope step, run against a shallow CI-shaped c
     expect(r.outputs.context_sha256).toBe(execFileSync('sha256sum', [ctx], { encoding: 'utf8' }).split(' ')[0]);
   });
 
-  it('resolves FULL for a rebased branch, where the reviewed commit is unreachable from the head', () => {
+  it('resolves INCREMENTAL for a clean rebase, fetching the reviewed commit by its SHA (kanon#525)', () => {
     const x = prWithReviewedCommit();
     git('checkout', '-q', 'main');
     commit('other.txt', 'someone else\n', 'unrelated main change');
     git('checkout', '-q', 'pr');
     git('rebase', '-q', 'main');
     const head = commit('fix.txt', 'the fix\n', 'address review');
+    // Out of every ref, as a force-push leaves it: only fetching it by SHA brings it.
+    git('branch', '-q', 'keep', x);
+    git('branch', '-q', '-D', 'keep');
     const r = ciClone([verdict(x)])(head);
     expect(r.status).toBe(0);
+    expect(r.outputs.mode).toBe('incremental');
+    expect(r.outputs.prior_sha).toBe(x);
+    expect(r.summary).toMatch(/rebased or force-pushed.*re-applies cleanly/);
+    const ctx = readFileSync(join(r.temp, 'review-scope/context.md'), 'utf8');
+    const diff = ctx.slice(ctx.indexOf('## Incremental diff'));
+    expect(diff).toContain('+the fix');
+    expect(diff).not.toContain('other.txt');
+  });
+
+  it('resolves FULL for a rebase whose reviewed commit is gone from the remote too', () => {
+    const x = prWithReviewedCommit();
+    git('checkout', '-q', 'main');
+    commit('other.txt', 'someone else\n', 'unrelated main change');
+    git('checkout', '-q', 'pr');
+    git('rebase', '-q', 'main');
+    const head = commit('fix.txt', 'the fix\n', 'address review');
+    const run = ciClone([verdict(x)]);
+    git('reflog', 'expire', '--expire=now', '--all');
+    git('gc', '-q', '--prune=now');
+    expect(() => git('cat-file', '-e', x)).toThrow();
+    const r = run(head);
+    expect(r.status).toBe(0);
     expect(r.outputs.mode).toBe('full');
-    expect(r.summary).toMatch(/not (an ancestor|in the clone)/);
+    expect(r.summary).toMatch(/could not be fetched/);
     expect(r.outputs.context_sha256).toBeUndefined();
   });
 

@@ -314,9 +314,9 @@ The `agent:` labels mark lanes rather than roles; how they map onto this table i
 
 ### `K-AGENT-28` Re-review every push, incrementally, with a filter that shows its inputs
 
-**Rule.** Re-review on every push. Skip a docs-only push only on a PR that also changes code, and never skip one touching agent instructions, project briefs or spec promotions; a human re-applying a review label always gets a review. Scope a re-review to the commits since the last stamped verdict, and review in full when there is no stamp. The skip filter prints every input it read before its verdict, and reads CI completion per commit, distinguishing done, running, not started and unknown.
+**Rule.** Re-review on every push. Skip a docs-only push only on a PR that also changes code, and never skip one touching agent instructions, project briefs or spec promotions; a human re-applying a review label always gets a review. Scope a re-review to what the head changed since the last stamped verdict, and review in full when there is no stamp. After a merge of the base or a rebase, that is the head's difference from the reviewed change re-applied to the new base, and a re-application that conflicts is a full review. The skip filter prints every input it read before its verdict, and reads CI completion per commit, distinguishing done, running, not started and unknown.
 
-**Why.** Each of these skip cases was once wrong in the reference adopter. Re-review rounds were over half of reviewer spend before they were scoped incrementally. A wrong skip that doesn't print its inputs is undiagnosable hours later, and the platform's rollup reports no checks at all just after a push.
+**Why.** Each of these skip cases was once wrong in the reference adopter. Re-review rounds were over half of reviewer spend before they were scoped incrementally. Merges of the base and rebases then still forced full reviews, although the author's own change could be separated; re-applying the reviewed change keeps every line the head adds, drops or resolves in the diff, so the narrower scope never hides a change. A wrong skip that doesn't print its inputs is undiagnosable hours later, and the platform's rollup reports no checks at all just after a push.
 
 **Enforced by.** The review workflow's filter job and incremental-scope step.
 
