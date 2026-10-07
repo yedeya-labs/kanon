@@ -7,6 +7,7 @@ import { agentPrompt, runWorkflowStep, type WorkflowStep } from './helpers/workf
 import { effectiveSteps } from './helpers/spine.js';
 import { readFlattened, workflowText } from './helpers/called-workflow.js';
 import { callerInputs, realGroup } from './helpers/smoke-group.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * Plan 0004 step 12: the Explorer's sweep lane, moved from the reference adopter onto the store
@@ -62,7 +63,8 @@ describe('the store contract (plan 0004 §3.2, P9\'s check)', () => {
   });
 });
 
-describe('the change gate (RA-167): skip a scheduled run on a commit already swept green', () => {
+// Its cases run the gate step in `bash` against a stub `gh`, so the block takes the spawn budget (#436).
+describe('the change gate (RA-167): skip a scheduled run on a commit already swept green', SPAWNS, () => {
   it('reads the baseline only on the schedule, the one trigger it gates', () => {
     expect(jobs['last-green']!.needs).toBe('gate');
     expect(jobs['last-green']!.if).toBe("needs.gate.outputs.member == 'true' && github.event_name == 'schedule'");
@@ -153,7 +155,8 @@ describe('the change gate (RA-167): skip a scheduled run on a commit already swe
   });
 });
 
-describe('the sweep is the project\'s hook, and its summary is Kanon\'s format (decision 5, §4)', () => {
+// Its cases run the sweep step in `bash` against a stub hook, so the block takes the spawn budget (#436).
+describe('the sweep is the project\'s hook, and its summary is Kanon\'s format (decision 5, §4)', SPAWNS, () => {
   it('sets the project up, then sweeps, then checks the summary, then uploads it, all before the token', () => {
     const order = ['checkout', 'hook', 'kanon', 'database', 'project', 'setup', 'sweep', 'summary', 'upload', 'app-token', 'agent'].map(at);
     expect(order.every((i) => i >= 0), JSON.stringify(order)).toBe(true);

@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { LEAD_LOGIN } from './helpers/register.js';
 import { PERMS, runGate, MEMBER, STRANGER, CASES } from './helpers/lane-gate.js';
+import { SPAWNS } from './helpers/spawns.js';
+
+// Each case runs a lane's gate step in `bash` against a stub `gh`, so every case takes the spawn
+// budget (#436).
+vi.setConfig({ testTimeout: SPAWNS.timeout });
 
 // kanon#46 half 2: the gate step of each lane, executed, for each trigger of its caller.
 //

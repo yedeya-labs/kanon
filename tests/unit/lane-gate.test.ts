@@ -7,6 +7,7 @@ import { checkCallerPin, kanonRefsOf, localCallsOf, parseWorkflowRef } from '../
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { IMPLEMENTER_LOGIN } from './helpers/register.js';
 import { type Workflow, read, LANES, TRIGGERS, gateOf, gateProblems, REPO, type Actor, pullsWith, eventsOf, runGate, MEMBER, STRANGER, caller, STACKED, REPOSITORY } from './helpers/lane-gate.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * kanon#46, `K-AGENT-45`: every lane starts real work only on a member's act, and checks it
@@ -185,7 +186,8 @@ describe('every lane carries the membership gate (K-AGENT-45)', () => {
   });
 });
 
-describe('the gate step’s failure paths', () => {
+// Its cases run the gate step in `bash`, so the block takes the spawn budget (#436).
+describe('the gate step’s failure paths', SPAWNS, () => {
   const file = 'agent-implement-revise.yml';
   it('fails the job, by name, when the permission lookup fails, rather than guessing', () => {
     const r = runGate(file, 'pr-label', MEMBER, { STUB_PERMISSION_FAILS: '1' });
@@ -302,7 +304,8 @@ describe('what a member is', () => {
  * the pusher. A member labels a Dependabot PR while its CI runs; the lane defers to CI's
  * completion, whose pusher is `dependabot[bot]`, which is not the repository's App.
  */
-describe('the review lane on CI completion judges the review label’s applier (kanon#81)', () => {
+// Its cases run the gate step in `bash`, so the block takes the spawn budget (#436).
+describe('the review lane on CI completion judges the review label’s applier (kanon#81)', SPAWNS, () => {
   const DEPENDABOT: Actor = { login: 'dependabot[bot]' };
   const gate = (extra: Record<string, string>, pusher: Actor = DEPENDABOT) =>
     runGate('agent-review.yml', 'ci-finished', pusher, extra);
@@ -369,7 +372,8 @@ describe('the review lane on CI completion judges the review label’s applier (
   });
 });
 
-describe('the caller pin check (kanon#69)', () => {
+// Its cases run the pin check in `bash`, so the block takes the spawn budget (#436).
+describe('the caller pin check (kanon#69)', SPAWNS, () => {
   const file = 'agent-review.yml';
   const gate = (extra: Record<string, string>, payload: object = REPOSITORY) => {
     const calls = join(mkdtempSync(join(tmpdir(), 'pin-calls-')), 'calls');

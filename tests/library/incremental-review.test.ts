@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decideScope, fence, gitFacts, latestVerdict, main, renderContext } from '../../scripts/incremental-review.mjs';
 import { trailerFor } from '../../scripts/review-trailer.mjs';
 import { headerLine } from '../../scripts/lib/role-marker.mjs';
+import { SPAWNS } from '../unit/helpers/spawns.js';
 
 /**
  * RA-2455 — a round-2+ review is scoped to `X..HEAD` from the last STAMPED verdict, and
@@ -80,7 +81,8 @@ function prWithReviewedCommit(): string {
 const decide = (reviews: object[], head: string) =>
   decideScope({ reviews, headSha: head, git: gitFacts({ cwd: repo, baseRef: 'main' }) });
 
-describe('decideScope — against real history', () => {
+// Its cases build a git history, so the block takes the spawn budget (#436).
+describe('decideScope — against real history', SPAWNS, () => {
   it('is INCREMENTAL when the head descends from the stamped commit with the same merge-base', () => {
     const x = prWithReviewedCommit();
     const head = commit('feature.txt', 'first\nsecond\n', 'address review');
@@ -222,7 +224,8 @@ describe('renderContext', () => {
   });
 });
 
-describe('hardening against PR-controlled content', () => {
+// Its cases build a git history, so the block takes the spawn budget (#436).
+describe('hardening against PR-controlled content', SPAWNS, () => {
   it('matches the reviewer by EXACT login — a look-alike account cannot supply X', () => {
     const x = prWithReviewedCommit();
     const head = commit('feature.txt', 'second\n', 'more');
@@ -269,7 +272,8 @@ describe('hardening against PR-controlled content', () => {
   });
 });
 
-describe('the CLI', () => {
+// Its cases run the CLI in `node`, with `git`, so the block takes the spawn budget (#436).
+describe('the CLI', SPAWNS, () => {
   it('writes the incremental diff — and only it — on the happy path', () => {
     const x = prWithReviewedCommit();
     const head = commit('fix.txt', 'the fix\n', 'address review');

@@ -1,12 +1,17 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { handedIn, readFlattened, workflowText } from './helpers/called-workflow.js';
 import { headerLine } from '../../scripts/lib/role-marker.mjs';
+import { SPAWNS } from './helpers/spawns.js';
+
+// Its cases run the review filter's step in `bash` against a stub `gh`, so every case takes the
+// spawn budget (#436).
+vi.setConfig({ testTimeout: SPAWNS.timeout });
 
 /** The header and role marker a verdict carries since plan 0005's L4 (kanon#336). */
 const MARK = headerLine('Reviewer');

@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * Kanon is stack-neutral (#15): it is opinionated about process, never about the adopter's
@@ -89,7 +90,8 @@ describe('the fixture adopter is a project with no Node toolchain', () => {
 const hasYq = spawnSync('yq', ['--version'], { encoding: 'utf8' }).status === 0;
 if (!hasYq && process.env.CI) throw new Error('the lane-check case needs yq on PATH in CI');
 
-describe.skipIf(!hasYq)("Kanon's lane check on a project with no package.json", () => {
+// Its cases run lane-check, so the block takes the spawn budget (#436).
+describe.skipIf(!hasYq)("Kanon's lane check on a project with no package.json", SPAWNS, () => {
   const laneCheck = (change?: (dir: string) => void) => {
     const dir = checkout();
     try {
@@ -118,7 +120,8 @@ describe.skipIf(!hasYq)("Kanon's lane check on a project with no package.json", 
   });
 });
 
-describe("Kanon's guards on a project with no package.json, run with only node and git on PATH", () => {
+// Its cases run the guards in `node`, with `git`, so the block takes the spawn budget (#436).
+describe("Kanon's guards on a project with no package.json, run with only node and git on PATH", SPAWNS, () => {
   it.each([
     ['brief-guard', /1 brief\(s\) carry all 8 required sections/],
     ['spec-guard', /1 invariants, 1 unique IDs, registry consistent/],
@@ -293,7 +296,8 @@ describe("Kanon's guards on a project with no package.json, run with only node a
   });
 });
 
-describe('citation-shift on the Python adopter, with only node and git on PATH (kanon#20)', () => {
+// Its cases run citation-shift in `node`, with `git`, so the block takes the spawn budget (#436).
+describe('citation-shift on the Python adopter, with only node and git on PATH (kanon#20)', SPAWNS, () => {
   /** Commit the fixture, move `place` down two lines, and run citation-shift against that diff. */
   const shift = (...args: string[]) => shiftWith(undefined, ...args);
   const shiftWith = (declare: ((dir: string) => void) | undefined, ...args: string[]) => {

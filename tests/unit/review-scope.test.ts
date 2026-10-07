@@ -9,6 +9,7 @@ import { writeStub } from './helpers/stub-bin.js';
 import { agentPrompt, runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { effectiveSteps } from './helpers/spine.js';
 import { readFlattened } from './helpers/called-workflow.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * The review lane's half of RA-2455 (the script's own tests are tests/library/incremental-review.test.ts).
@@ -88,7 +89,8 @@ const byId = (id: string) => {
   return s;
 };
 
-describe('agent-review.yml — the scope step, run against a shallow CI-shaped clone', () => {
+// Its cases build a git history and run the step in `bash`, so the block takes the spawn budget (#436).
+describe('agent-review.yml — the scope step, run against a shallow CI-shaped clone', SPAWNS, () => {
   /** An origin whose `main` carries the App register, a PR branch, and a depth-1 detached
    *  checkout of the PR head — what `actions/checkout` leaves. The script is Kanon's, which
    *  the step reaches as `$KANON` (kanon-path): this tree. The register is read at the

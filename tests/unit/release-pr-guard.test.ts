@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type PrFile, steps, guard, REPO, SHA, BRANCH, stale, clean, manifest, MANIFEST_0_10, type Pr, BASE_SHA, MERGE_BASE, releasePr, responses, runGuard } from './helpers/release-pr-guard.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 // #73: the release workflow refuses a release PR that changes anything beyond version
 // strings. The 0.10.0 release PR (#68) was built from stale copies of its `extra-files`, and
@@ -14,7 +15,8 @@ import { type PrFile, steps, guard, REPO, SHA, BRANCH, stale, clean, manifest, M
 //
 // Split by area across tests/unit/release-pr-guard*.test.ts (kanon#381), with the helpers they
 // share in tests/unit/helpers/release-pr-guard.ts.
-describe('#73 the release workflow refuses a release PR that changes more than version strings', () => {
+// Each case runs the guard in `node`, with `git`, so the block takes the spawn budget (#436).
+describe('#73 the release workflow refuses a release PR that changes more than version strings', SPAWNS, () => {
   it('the fixtures are the real release commits, so the cases below are not vacuous', () => {
     expect(stale.map((f) => f.filename)).toEqual(expect.arrayContaining(['docs/lanes.md', 'actions/lane-check/README.md', 'CHANGELOG.md']));
     expect(clean.length).toBeGreaterThanOrEqual(15);

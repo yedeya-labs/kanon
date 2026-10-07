@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { commentCoordinates, lineMapper, parseDiff, readsCodeComments as readsWith, retarget, rewrittenLines, shiftedCoordinates } from '../../scripts/citation-shift.mjs';
 import { UNDECLARED, parseCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { ROOT } from './helpers/adopter.js';
+import { SPAWNS } from '../unit/helpers/spawns.js';
 
 /**
  * RA-1384 — the coordinates a diff moved, derived from the diff.
@@ -305,7 +306,8 @@ describe('code comments are read too (RA-2293)', () => {
   });
 });
 
-describe('the CLI reads code comments end to end (RA-2293)', () => {
+// Its cases run the CLI in `node`, with `git`, so the block takes the spawn budget (#436).
+describe('the CLI reads code comments end to end (RA-2293)', SPAWNS, () => {
   it('fails on a `.github/scripts/` comment coordinate the working tree moved, and --fix re-points it (kanon#180)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cshift-gh-'));
     const sh = (...a: string[]) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
@@ -355,7 +357,8 @@ describe('the CLI reads code comments end to end (RA-2293)', () => {
  * kanon#175 — a code-comment coordinate the diff itself wrote is skipped by the move check,
  * and `citation-guard` reads Markdown only, so nothing checked it. Read here as ADVICE.
  */
-describe('a code-comment coordinate this diff wrote is read as advice (kanon#175)', () => {
+// Its cases run the CLI in `node`, with `git`, so the block takes the spawn budget (#436).
+describe('a code-comment coordinate this diff wrote is read as advice (kanon#175)', SPAWNS, () => {
   const lines = (n: number) => Array.from({ length: n }, (_, i) => `# line${i + 1}`).join('\n') + '\n';
   // The workflow gained 2 lines after line 1 and 2 more after line 5, so base :12 is head :16.
   const WF = `+++ b/.github/workflows/review.yml
@@ -528,7 +531,8 @@ describe('a fresh code-comment coordinate is read against what its comment names
   });
 });
 
-describe('the docs it maps are the guard\'s `--path` list, `docs/**/*.md` by default (kanon#388)', () => {
+// Its cases run the CLI in `node`, with `git`, so the block takes the spawn budget (#436).
+describe('the docs it maps are the guard\'s `--path` list, `docs/**/*.md` by default (kanon#388)', SPAWNS, () => {
   const setup = () => {
     const dir = mkdtempSync(join(tmpdir(), 'cshift-paths-'));
     const sh = (...a: string[]) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });

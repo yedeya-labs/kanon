@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { accountMasks } from '../../actions/qa-store/qa-store.mjs';
 import { interpolate, mask } from './helpers/expression.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * kanon#488: a store job's log never shows the AWS account id, not even in an AWS error.
@@ -81,7 +82,8 @@ function templateHook(): Action {
   return parse(readFileSync('docs/qa-store.md', 'utf8').split('Then write the hook')[1]!.split('```yaml\n')[1]!.split('```')[0]!) as Action;
 }
 
-describe('the store\'s account id never reaches the log through an AWS error (#488)', () => {
+// Its cases run the store's scripts in `bash` against a stub `aws`, so the block takes the spawn budget (#436).
+describe('the store\'s account id never reaches the log through an AWS error (#488)', SPAWNS, () => {
   it('is not vacuous: masking the secrets whole leaves the account id in every error', () => {
     for (const e of AWS_ERRORS) expect(runnerLog([e], SECRETS)).toMatch(TWELVE);
   });

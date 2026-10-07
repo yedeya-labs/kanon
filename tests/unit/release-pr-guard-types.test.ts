@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type PrFile, REPO, SHA, config, stale, clean, manifest, MANIFEST_0_10, responses, runGuard } from './helpers/release-pr-guard.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 // #73's guard for each release type docs/release.md offers (#17), and the changelog.json
 // they write.
@@ -7,7 +8,8 @@ import { type PrFile, REPO, SHA, config, stale, clean, manifest, MANIFEST_0_10, 
 // One of the release-pr-guard files split by area (kanon#381): vitest runs one file's cases
 // serially. tests/unit/release-pr-guard.test.ts says what the guard is and how it is run; the
 // helpers they share are in tests/unit/helpers/release-pr-guard.ts.
-describe('#73 the release workflow refuses a release PR that changes more than version strings', () => {
+// Each case runs the guard in `node`, with `git`, so the block takes the spawn budget (#436).
+describe('#73 the release workflow refuses a release PR that changes more than version strings', SPAWNS, () => {
   // #17: the adopter's language picks the release type, and `simple` is the neutral default.
   // The guard has to hold for each type docs/release.md offers.
   const withType = (type: string | undefined, files: PrFile[]) => {

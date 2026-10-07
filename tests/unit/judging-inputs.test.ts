@@ -7,6 +7,7 @@ import { JUDGING_INPUTS, NEVER_AN_INPUT, delegatedFrom, diskReader, judgingInput
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { readFlattened, workflowText } from './helpers/called-workflow.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * `K-MERGE-17` (kanon#25, kanon#62): a pull request never chooses the rules it is judged by.
@@ -233,8 +234,9 @@ const runStep = (pred: (s: WorkflowStep) => boolean, cwd: string, extra: Record<
 
 // Each case builds a git repository and runs the review lane's restore and re-check steps in it.
 // Under a loaded full `npm test` these blocks were among the recurring 5s timeouts (kanon#381),
-// so each gets 15s.
-describe('a PR editing each input is still reviewed under the default branch’s copy', { timeout: 15_000 }, () => {
+// and with 15s their cases still reached 10.7s at a load of 100, so each takes the spawn budget
+// (#436).
+describe('a PR editing each input is still reviewed under the default branch’s copy', SPAWNS, () => {
   let work = '';
   let restored: ReturnType<typeof runWorkflowStep>;
   beforeAll(() => {
@@ -277,8 +279,8 @@ describe('a PR editing each input is still reviewed under the default branch’s
   });
 });
 
-// As the block above: a git repository and two workflow steps per case, so 15s (kanon#381).
-describe('the re-check refuses a tree the PR’s code changed after the restore', { timeout: 15_000 }, () => {
+// As the block above: a git repository and two workflow steps per case (kanon#381, #436).
+describe('the re-check refuses a tree the PR’s code changed after the restore', SPAWNS, () => {
   const tampered = (change: (work: string) => void) => {
     const { work } = fixture();
     const restored = runStep(RESTORE, work);
@@ -311,7 +313,8 @@ describe('the re-check refuses a tree the PR’s code changed after the restore'
   });
 });
 
-describe('the restore fails closed', () => {
+// Its cases run the restore in `bash`, with `git`, so the block takes the spawn budget (#436).
+describe('the restore fails closed', SPAWNS, () => {
   it('when the event names no default branch', () => {
     const { work } = fixture();
     const r = runStep(RESTORE, work, { 'github.event.repository.default_branch': '' });
@@ -326,7 +329,8 @@ describe('the restore fails closed', () => {
   });
 });
 
-describe('the review filter asks the same list, over the API', () => {
+// Its cases run the filter step in `bash`, so the block takes the spawn budget (#436).
+describe('the review filter asks the same list, over the API', SPAWNS, () => {
   it('selects the inputs among a push’s files, delegated documents included, at the default branch', () => {
     const dir = mkdtempSync(join(tmpdir(), 'judging-api-'));
     const tree = Object.keys(DEFAULT).map((path) => ({ path, type: 'blob', mode: '100644' }));

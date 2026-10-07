@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type PrFile, REPO, SHA, config, HISTORY, manifest, MANIFEST_0_10, BASE_SHA, MERGE_BASE, responses, runGuard } from './helpers/release-pr-guard.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 // #73's guard on the manifest: a package's first release (#129), Kanon's own release history
 // (#90), and another release type's version file.
@@ -7,7 +8,8 @@ import { type PrFile, REPO, SHA, config, HISTORY, manifest, MANIFEST_0_10, BASE_
 // One of the release-pr-guard files split by area (kanon#381): vitest runs one file's cases
 // serially. tests/unit/release-pr-guard.test.ts says what the guard is and how it is run; the
 // helpers they share are in tests/unit/helpers/release-pr-guard.ts.
-describe('#73 the release workflow refuses a release PR that changes more than version strings', () => {
+// Each case runs the guard in `node`, with `git`, so the block takes the spawn budget (#436).
+describe('#73 the release workflow refuses a release PR that changes more than version strings', SPAWNS, () => {
   // #129: a monorepo's first release of a package with no manifest entry. release-please's
   // ReleasePleaseManifest updater sets `parsed[path] = version` and re-serialises, so the new
   // key lands at the end with no `-` partner and the line before gains a comma.

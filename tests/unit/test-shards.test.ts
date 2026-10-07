@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { assign, listTestFiles, partitionProblems, readWeights } from '../../.github/scripts/test-shards.mjs';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * #407: CI's unit shards each run the files .github/scripts/test-shards.mjs gives them. A file
@@ -81,7 +82,8 @@ describe('stale weights only unbalance the shards, never drop a file', () => {
   });
 });
 
-describe('partitionProblems names each way a plan can lose or repeat a file', () => {
+// Some of its cases run the CLI in `node`, which runs `vitest list`, so the block takes the spawn budget (#436).
+describe('partitionProblems names each way a plan can lose or repeat a file', SPAWNS, () => {
   const files = ['a.test.ts', 'b.test.ts', 'c.test.ts'];
 
   it('a dropped file, a duplicated file, an unknown file and an empty shard', () => {

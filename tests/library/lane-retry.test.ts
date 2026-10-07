@@ -13,6 +13,7 @@ import {
 import { attemptComment, attemptsIn, rebaseDecision, report as rebaseReport } from '../../scripts/rebase-lane.mjs';
 import { briefReviseRecovery, report as briefReport, BRIEF_PATH } from '../../scripts/brief-revise-recovery.mjs';
 import { reviewRecovery as standaloneReviewRecovery, report as reviewReport } from '../../scripts/review-recovery.mjs';
+import { SPAWNS } from '../unit/helpers/spawns.js';
 
 /**
  * RA-2519 — a PR-lane run that died of its CAUSE (the model unreachable, or its API failing
@@ -124,7 +125,8 @@ describe('the retry decision (RA-2519)', () => {
   });
 });
 
-describe('which failures the classifier calls retryable (RA-2519)', () => {
+// Its cases run the classifier in `bash` and `node`, so the block takes the spawn budget (#436).
+describe('which failures the classifier calls retryable (RA-2519)', SPAWNS, () => {
   const init = { type: 'system', subtype: 'init', model: 'claude-opus-5' };
   it('unreachable: the configured model never ran', () => {
     expect(retryClass({ is_error: true, num_turns: 1, total_cost_usd: 0, modelUsage: {} }, 'claude-opus-5')).toBe('unreachable');

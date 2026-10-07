@@ -8,6 +8,7 @@ import { runWorkflowStep } from './helpers/workflow-step.js';
 import {
   classifyResult, parseObjects, readConfiguredModel, readResult, renderNotice,
 } from '../../actions/agent-classify/classify-agent-result.mjs';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * RA-1408 — why a red agent run went red.
@@ -517,7 +518,8 @@ describe('renderNotice', () => {
   });
 });
 
-describe('the CLI, run as the workflow runs it', () => {
+// Its cases run the classifier's CLI in `node`, so the block takes the spawn budget (#436).
+describe('the CLI, run as the workflow runs it', SPAWNS, () => {
   const script = join(process.cwd(), 'actions/agent-classify/classify-agent-result.mjs');
 
   const run = (body: string | null, extra: string[] = []) => {
@@ -607,7 +609,8 @@ describe('the CLI, run as the workflow runs it', () => {
  * CLI's — so a red run prints the same `kind` and `retry` through the block as it did
  * inline.
  */
-describe('the agent-classify block, run as the runner runs it (RA-2691)', () => {
+// Its cases run the block's step in `bash`, which runs `node`, so the block takes the spawn budget (#436).
+describe('the agent-classify block, run as the runner runs it (RA-2691)', SPAWNS, () => {
   const block = readBlock('agent-classify');
   const step = block.runs.steps[0]!;
   const run = (result: unknown, inputs: { arm?: string; recover?: string; nonFatal?: string } = {}) => {

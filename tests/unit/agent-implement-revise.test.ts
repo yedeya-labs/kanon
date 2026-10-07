@@ -1,13 +1,18 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
 import { runWorkflowStep } from './helpers/workflow-step.js';
 import { callsSpine, jobPrompt, spineJobFor } from './helpers/spine.js';
 import { comparePatch, GH_COMPARE_ARM } from './helpers/compare-diff.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { GH_REGISTER_ARM, IMPLEMENTER_LOGIN, REGISTER_FIXTURE, registerEnv } from './helpers/register.js';
+import { SPAWNS } from './helpers/spawns.js';
+
+// Its cases run the lane's steps in `bash` against a stub `gh`, so every case takes the spawn
+// budget (#436).
+vi.setConfig({ testTimeout: SPAWNS.timeout });
 
 /**
  * RA-1077 — the Implementer's revise mode.

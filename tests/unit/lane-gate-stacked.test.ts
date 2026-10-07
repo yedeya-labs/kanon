@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runGate, MEMBER, CASES, caller, STACKED, REPOSITORY } from './helpers/lane-gate.js';
+import { SPAWNS } from './helpers/spawns.js';
+
+// Each case runs a lane's gate step in `bash` against a stub `gh`, so every case takes the spawn
+// budget (#436).
+vi.setConfig({ testTimeout: SPAWNS.timeout });
 
 // kanon#69: the gate step of each lane, executed, run from a stacked base: it runs the Kanon
 // version the default branch's caller pins, or refuses, visibly.

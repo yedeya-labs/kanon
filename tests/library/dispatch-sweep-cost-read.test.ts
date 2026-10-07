@@ -9,6 +9,7 @@ import {
   renderReport, storeRowsEnv,
 } from '../../scripts/dispatch-sweep.mjs';
 import { ROOT } from './helpers/adopter.js';
+import { SPAWNS } from '../unit/helpers/spawns.js';
 
 /**
  * RA-2706 — a store read that did not happen must say so (`K-PRIN-8`).
@@ -211,7 +212,8 @@ describe('readLaneCostRows and costSourceLine — the fallback, and what the sum
   });
 });
 
-describe('the sweep, run end to end through the lane\'s two paths', () => {
+// Its cases run the sweep end to end, against stubs on PATH, so the block takes the spawn budget (#436).
+describe('the sweep, run end to end through the lane\'s two paths', SPAWNS, () => {
   // `main()` itself, with `gh` stubbed: what the lane's sweep step prints for each source.
   let bin: string;
   let summary: string;

@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { BUCKETS, milestones } from '../../cli/milestones.mjs';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * `kanon milestones` (#72): creates the two buckets of K-WORK-4 when missing, never with a
@@ -49,7 +50,8 @@ const writes = (calls: string[][]) => calls.filter((c) => !c.includes('--slurp')
 const roadmap = (title: string, number = 7): Milestone => ({ number, title, state: 'open', due_on: '2026-12-01T08:00:00Z' });
 const bucket = (title: string, number = 3): Milestone => ({ number, title, state: 'open', due_on: null });
 
-describe('kanon milestones creates the bucket milestones (#72, K-ADOPT-1 step 7)', () => {
+// Its cases run `kanon milestones` in `node`, so the block takes the spawn budget (#436).
+describe('kanon milestones creates the bucket milestones (#72, K-ADOPT-1 step 7)', SPAWNS, () => {
   it("names exactly K-WORK-4's two buckets", () => {
     expect(BUCKETS).toEqual(['Product Backlog', 'Development Automation']);
   });
