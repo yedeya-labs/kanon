@@ -15,6 +15,8 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 
 The collector that writes to it is [`telemetry-collect.yml`](../.github/workflows/telemetry-collect.yml) ([Collect the rows](#collect-the-rows)).
 
+**What an adopter gets by opting in** ([#41](https://github.com/yedeya-labs/kanon/issues/41), ADR 0007). Kanon notices failures that Kanon caused in your runs, from the same stage and error at several adopters or a failure that starts at a release, and often fixes them before you would have had to report anything ([Kanon's own bugs](#kanons-own-bugs)). You also get cross-adopter cost and reliability baselines, each combining at least three adopters ([The aggregate function](#the-aggregate-function)). What leaves your project is exactly the schema's fixed fields ([`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), plan 0002 §2.1): never code, prompts, text, file paths or usernames. To opt in, answer yes to `kanon init`'s telemetry question, or write the caller in [Collect the rows](#collect-the-rows); to leave, delete it and ask for erasure, which completes within 35 days ([Erase an adopter](#erase-an-adopter)).
+
 Every AWS command here is the Owner's to run. Agents run none (§5).
 
 ## What the template creates
@@ -353,6 +355,30 @@ gh secret set KANON_AGGREGATE_ROLE --repo <owner>/<repo> --body "<the AggregateI
 The role's ARN holds the account id, which stays out of the public tree and, as a secret, out of the run logs. The lane masks the URL, and the account id on its own, before any other step names them, so only the masking step's own header prints the URL, once per run ([#433](https://github.com/yedeya-labs/kanon/issues/433)).
 
 **Deploy from the release that ships the lane, before any repository's pin reaches it.** The lane's rows carry a new `lane`, `explore-telemetry`, and the ingest function refuses a lane its schema doesn't know: deployed from an earlier release, it answers 422 and the collector turns red. Render, package and deploy from that release's tag, as in [Deploy](#deploy).
+
+## Kanon's own bugs
+
+[#41](https://github.com/yedeya-labs/kanon/issues/41), as the Owner scoped it on 2026-10-07: Kanon notices its own bugs in adopters' runs and files them, before an adopter has to. The detection logic is public, [`scripts/telemetry/kanon-bugs.mjs`](../scripts/telemetry/kanon-bugs.mjs): pure, with no network and no AWS. A private scheduled job in the Owner's operations repository reads the run rows, runs it, and files what it returns. Its configuration, its credentials and everything it files below the threshold stay private.
+
+```sh
+node scripts/telemetry/kanon-bugs.mjs --rows <rows.json> [--known <signatures.json>] [--tag test] --json
+```
+
+**A signal** is every run that did not end `ok`, grouped by lane, `failed_stage`, `kanon_error`, `reason` and `kanon_version` (the aggregate's signal), with its run count, the number of distinct adopters, first and last seen, and the `api_error_status` codes its runs carried. Only `tag = run` rows are read unless a seeded test asks for `test`, and never a row without a `kanon_version` (an imported one, decision 17). Each signal is classified by plan 0002 §2.6's table, in this order:
+
+| Classification | When |
+|---|---|
+| `platform` | **Every** run in it carries a platform code: `api_error_status` 429 (rate limits, usage caps) or 5xx, or the reason `model_never_ran` or `no_model_ran` (an unreachable model). A signal that is only partly platform is read as the rest, because a human triages it and a hidden Kanon bug costs more than noise. |
+| `kanon` | At **two adopters or more**, or **starting at a release**: absent on the previous release seen, which ran that lane at least `RISE.minRuns` times. |
+| `adopter` | Everything else: one adopter only, such as a `failed_stage: hook`. |
+
+A signal is **new** when its signature is not in the `--known` list. The signature is a hash of the five identifying fields, never a count, so as the counts grow the job updates the open issue, found by the `kanon:bug-signature` marker in its body, instead of filing another.
+
+**Rising after a release.** A lane whose failure rate on one release exceeds its rate on the release before by `RISE.points` or more, with at least `RISE.minRuns` runs on each, is a rise. Runs that failed on a platform code don't count as failures there, so an outage just after a release isn't read as a regression. `RISE` is one exported constant, proposed as **ten percentage points over at least twenty runs per release**, for the Owner to set.
+
+**Public or private.** A signal is `public` only when at least three distinct adopters contributed to it: the aggregate's three-adopter rule (#449, plan 0002 decision 7), imported from [`aggregate.mjs`](../infra/telemetry/function/aggregate.mjs), never restated. A rise is `public` only when both of its rates combine three adopters. Everything else is `private`, filed only in the Owner's private repository. Signals at any number of adopters are detected; public filing stays inert until three adopters send rows.
+
+**What an issue holds.** Counts, Kanon's codes, Kanon versions, dates to the day, and the number of adopters. Never an adopter key, a repository, a run id, a login or a path. That is structural: a row's lane, stage, error, reason and outcome are read only when they are in the schema's closed lists, and its version only when it matches the schema's pattern, so a row with anything else is skipped and counted, and every string in a signal is one of Kanon's codes, a version or a time. The output is also checked against every adopter key the input held, and refused whole if one appears. `tests/unit/kanon-bugs.test.ts` proves it with rows that carry keys, a repository, a login, paths and run ids.
 
 ## The importer and the backfill role
 
