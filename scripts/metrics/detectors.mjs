@@ -18,18 +18,17 @@
 //              prints its count beside the explicit one, so the gap between them is visible.
 //
 // THE CODE AREA (§3.7). Condition 3, and SZZ's restriction, need to know which files are code.
-// `codeAreaTest` builds that test from the stack document's `## Code areas` (`parseCodeAreas`,
-// `scripts/lib/code-areas.mjs`, `K-LAYOUT-17`), with Kanon's default when the project declares
-// none: a file inside the declared code trees (or, undeclared, anywhere), that isn't a test and
-// isn't in one of §3.7's other areas. Every detector takes the test as `isCode`, so a caller
-// holding the work-item module's `areaOf` passes `(path) => areaOf(path) === 'code'` instead.
+// `codeAreaTest` is the work-item module's `areaOf` (`areas.mjs`) equal to `code`, read with the
+// adopter's stack document (`parseCodeAreas`, `K-LAYOUT-17`) and escalation file, each taking
+// Kanon's default when absent. Every detector takes the test as `isCode`, so one rule decides
+// what code is for the row's `files_code` and for the detectors.
 //
 // WHAT IS NOT DONE HERE. The 13-month window, the 30- and 90-day maturity, and which items are
 // re-derived are the collector's and the report's (§3.1, §2.4). The detectors return every link
 // with its days, and the caller cuts.
 
-import { UNDECLARED, isCodePath, isTestPath } from '../lib/code-areas.mjs';
 import { revertTargets } from '../lib/reverts.mjs';
+import { areaOf } from './areas.mjs';
 
 /**
  * @typedef {{ sha: string, message: string }} DetectorCommit one of a PR's head commits
@@ -81,34 +80,14 @@ export const BUG_LABEL = 'bug';
 export const INTRODUCED_BY = 'Introduced by';
 
 /**
- * §3.7's areas before `code`, first match wins, so a file in one of them is never code. The
- * `tests` area comes from the stack document, in `codeAreaTest`. The `migrations` area's
- * adopter-declared paths come from the escalation list, which this pure module doesn't read:
- * any `migrations/` directory stands for it here, and a caller with the list passes its own
- * `isCode`.
- */
-const NOT_CODE = [
-  // deps: lockfiles and dependency manifests
-  /(^|\/)(package(-lock)?\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|requirements[^/]*\.txt|Pipfile(\.lock)?|poetry\.lock|pyproject\.toml|go\.(mod|sum)|Cargo\.(toml|lock)|Gemfile(\.lock)?|composer\.(json|lock))$/,
-  // workflows
-  /^\.github\/(workflows|actions)\//,
-  // migrations
-  /(^|\/)migrations\//,
-  // specs (`K-LAYOUT-2`, `docs/qa/specs/`) and docs
-  /\.md$|^docs\//,
-  // config: dotfiles, and configuration files at the root
-  /(^|\/)\.[^/]+$/,
-  /^[^/]+\.(json|ya?ml|toml|ini|cfg|conf)$|^[^/]+\.config\.[cm]?[jt]s$/,
-];
-
-/**
- * The code-area test (§3.7) for a project, from its stack document's `## Code areas`
- * (`parseCodeAreas`), or Kanon's default when it declares none.
- * @param {import('../lib/code-areas.mjs').CodeAreas} [areas]
+ * The code-area test (§3.7): a path whose area, by the work-item module's `areaOf`, is `code`.
+ * `ctx` holds the adopter's parsed declarations, its stack document's `## Code areas`
+ * (`parseCodeAreas`) and its escalation file, and an absent one takes Kanon's default.
+ * @param {import('./areas.mjs').AreaContext} [ctx]
  * @returns {(path: string) => boolean}
  */
-export function codeAreaTest(areas = UNDECLARED) {
-  return (path) => isCodePath(path, areas) && !isTestPath(path, areas) && !NOT_CODE.some((re) => re.test(path));
+export function codeAreaTest(ctx = {}) {
+  return (path) => areaOf(path, ctx) === 'code';
 }
 
 /** @param {DetectorPr} pr */

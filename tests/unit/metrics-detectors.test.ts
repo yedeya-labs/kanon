@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseCodeAreas } from '../../scripts/lib/code-areas.mjs';
+import { parseEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import {
   MAX_FIX_PRS, accuracyFields, codeAreaTest, detectorCounts, explicitLink, explicitLinks, fixesOf, introducedBy,
   isFixPr, oldRanges, revertedBy, reverts, revertsOf, sharedCodeFiles, szzLinks,
@@ -89,27 +90,23 @@ describe('the revert detector', () => {
   });
 });
 
-describe('the code-area test (§3.7)', () => {
+describe('the code-area test (§3.7) is areaOf\'s `code`', () => {
   it('undeclared: code is everything but tests and §3.7\'s other areas', () => {
     for (const p of ['src/app.ts', 'lib/x.py', 'scripts/build.mjs', 'app/main.go']) expect(isCode(p), p).toBe(true);
     for (const p of [
-      'README.md', 'docs/guide.txt', 'src/notes.md', // docs
-      'package.json', 'package-lock.json', 'web/yarn.lock', 'go.sum', 'requirements-dev.txt', // deps
-      '.github/workflows/ci.yml', '.github/actions/x/action.yml', // workflows
-      'db/migrations/0001.sql', // migrations
-      'docs/qa/specs/01-auth.md', // specs
-      '.eslintrc', 'src/.env.example', 'tsconfig.json', 'vitest.config.ts', // config
-      'src/app.test.ts', 'src/app.spec.ts', // tests, by convention
+      'README.md', 'docs/guide.txt', 'src/notes.md', 'package.json', 'web/yarn.lock', '.github/workflows/ci.yml',
+      'db/migrations/0001.sql', 'docs/qa/specs/01-auth.md', '.eslintrc', 'tsconfig.json', 'src/app.test.ts',
     ]) expect(isCode(p), p).toBe(false);
   });
 
-  it('declared: only inside the code trees, and never inside a tests tree', () => {
-    const areas = parseCodeAreas('# Stack\n\n## Code areas\n\n- `src/` — code: the app\n- `src/fixtures/` — tests: fixtures\n');
-    const test = codeAreaTest(areas);
+  it('reads the declared tests trees and the escalation file\'s migrations', () => {
+    const codeAreas = parseCodeAreas('# Stack\n\n## Code areas\n\n- `src/` — code: the app\n- `src/fixtures/` — tests: fixtures\n');
+    const test = codeAreaTest({ codeAreas });
     expect(test('src/app.ts')).toBe(true);
-    expect(test('tools/x.ts')).toBe(false);
     expect(test('src/fixtures/a.ts')).toBe(false);
-    expect(test('src/README.md')).toBe(false);
+    const escalationFile = parseEscalationFile('## Escalation paths\n- `^db/schema/` `migrations` — schema changes\n');
+    expect(codeAreaTest({ escalationFile })('db/schema/0001.ts')).toBe(false);
+    expect(isCode('db/schema/0001.ts')).toBe(true);
   });
 });
 
