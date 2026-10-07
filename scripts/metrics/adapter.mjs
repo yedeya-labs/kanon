@@ -50,7 +50,7 @@ export function toDetectorPr(pr) {
       ...(f.patch === undefined ? {} : { patch: f.patch }),
       ...(f.old_ranges === undefined ? {} : { ranges: f.old_ranges }),
     })),
-    closingIssues: (pr.closing_issues ?? []).map((i) => ({ number: i.number, labels: i.labels, body: i.body ?? null, createdAt: i.created_at ?? null })),
+    closingIssues: (pr.closing_issues ?? []).map((i) => ({ number: i.number, labels: i.labels, body: i.body ?? null })),
     timeline: (pr.timeline ?? []).map((ev) => ({
       type: ev.event,
       ...(ev.source ? { source: { number: ev.source.number, repository: ev.source.repository ?? null } } : {}),

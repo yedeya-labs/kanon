@@ -84,8 +84,8 @@ afterAll(() => rmSync(base, { recursive: true, force: true }));
 type Node = Record<string, any>;
 const at = (day: string, h = 12) => `2026-${day}T${String(h).padStart(2, '0')}:00:00Z`;
 const file = (path: string, additions: number, deletions: number, changeType = 'MODIFIED') => ({ path, additions, deletions, changeType });
-const issue = (number: number, labels: string[], author: object = HUMAN, body = 'the issue', created = '08-25') => ({
-  number, body, createdAt: at(created, 0), author, issueDependenciesSummary: { totalBlockedBy: 0 }, labels: labels.map((name) => ({ name })), timelineItems: [],
+const issue = (number: number, labels: string[], author: object = HUMAN, body = 'the issue') => ({
+  number, body, author, issueDependenciesSummary: { totalBlockedBy: 0 }, labels: labels.map((name) => ({ name })), timelineItems: [],
 });
 const xref = (number: number, repository: string, day: string) => ({
   __typename: 'CrossReferencedEvent', createdAt: at(day), actor: HUMAN, source: { __typename: 'Issue', number, repository: { nameWithOwner: repository } },
@@ -111,16 +111,16 @@ const fixtures = (): Node[] => [
       { __typename: 'LabeledEvent', createdAt: at('09-01', 3), actor: AUTHOR_APP, label: { name: 'review:please' } }],
     closingIssuesReferences: [issue(20, ['project:3'], AUTHOR_APP)],
   } }),
-  // The fixes, and their bug issues, come after #1 and the release PRs of 09-03 merged, so
-  // either could be a fix's cause (kanon#563).
+  // The fixes are opened after #1 and the release PRs of 09-03 merged, so either could be a
+  // fix's cause (kanon#563).
   pr(2, { day: '09-05', created: '09-04', node: {
     title: 'fix: zebra-title-2', mergeCommit: merge('m2', 'm1'), files: [file('app/calc.js', 1, 1)],
-    closingIssuesReferences: [issue(10, ['bug'], HUMAN, 'the issue', '09-04')],
+    closingIssuesReferences: [issue(10, ['bug'])],
   } }),
   pr(3, { day: '09-06', node: { title: 'fix: zebra-title-3', mergeCommit: merge('m3', 'm2'), files: [file('README.md', 1, 1)] } }),
   pr(4, { day: '09-07', created: '09-04', node: {
     title: 'fix: zebra-title-4', mergeCommit: merge('m4', 'm3'), files: [file('app/calc.js', 1, 1)],
-    closingIssuesReferences: [issue(11, ['bug', 'follow-up', 'agent:reviewer'], JUDGE_APP, 'the issue', '09-04')],
+    closingIssuesReferences: [issue(11, ['bug', 'follow-up', 'agent:reviewer'], JUDGE_APP)],
   } }),
   pr(5, { day: '09-08', node: {
     title: 'chore: zebra-title-5', author: DEPENDABOT, mergeCommit: merge('m5', 'm4'),
@@ -306,15 +306,16 @@ describe('kanon metrics dry-run: one adapter feeds the detectors and the rows (k
     expect(fix2.szz).toEqual([{ pr: 1, days: 3 }]);
   });
 
-  it('reads when each closing issue was filed, so a bug reported before the item merged links nothing (kanon#563)', async () => {
+  it('links a fix to a cause merged before it was opened, whenever its closing issue was filed (kanon#571)', async () => {
     const prs = fixtures();
-    // #2's bug issue #10, filed on 09-01, before #1 merged on 09-02: neither detector links #1.
+    // #2's bug issue #10, filed on 09-01, before #1 merged on 09-02: both detectors still link #1.
     (prs[1] as Node).closingIssuesReferences[0].createdAt = at('09-01', 0);
     const d = await run(dryRun('--dir', dir, '--details', join(base, 'd.json')), fakeGitHub({ prs }));
     const fix2 = JSON.parse(Object.values(d.written)[0] as string).fixes.find((f: Node) => f.pr === 2);
-    expect(fix2.explicit).toEqual([]);
-    expect(fix2.szz).toEqual([]);
-    expect(pageQuery('closingIssuesReferences', 25)).toMatch(/nodes \{ number body createdAt /);
+    expect(fix2.explicit).toEqual([{ pr: 1, via: ['cross-reference'], days: 3 }]);
+    expect(fix2.szz).toEqual([{ pr: 1, days: 3 }]);
+    // An issue's filing date is read nowhere, so the reader doesn't ask for it.
+    expect(pageQuery('closingIssuesReferences', 25)).toMatch(/nodes \{ number body author /);
   });
 
   it('puts the detectors\' links into the item\'s row', async () => {

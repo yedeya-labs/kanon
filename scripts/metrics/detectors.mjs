@@ -17,13 +17,14 @@
 //              repository nearly every line was last touched in the month before. The dry run
 //              prints its count beside the explicit one, so the gap between them is visible.
 //
-// A CAUSE PREDATES ITS FIX'S REPORT (kanon#563). An item can be a fix's cause, for either
-// detector, only when it merged before the fix was opened and before the earliest issue the fix
-// closes was filed: a defect reported before the item merged can't be the item's. M2's hand check
-// found both detectors' wrong links here: a "see also" cross-reference from a fix opened before
-// the item merged, and SZZ blaming a batch fix's lines on whichever PR last touched them. A fix
-// whose issue is older than every candidate links nothing, which is right: it repairs something
-// older than the window. A date the reader didn't give bounds nothing.
+// A CAUSE PREDATES ITS FIX (kanon#563, kanon#571). An item can be a fix's cause, for either
+// detector, only when it merged before the fix was opened. M2's hand check found wrong links from
+// a fix opened before the item merged: a later "see also" cross-reference, and SZZ blaming lines
+// on a PR that landed while the fix was open. The dates of the issues the fix closes play no
+// part. A batch fix closes old issues beside the new one, so its earliest issue predates any
+// recent cause; and a Reviewer's follow-up is filed while the cause is still under review, before
+// it merges. Bounding by those dates dropped 11 of the Owner's 15 correct links. A date the reader
+// didn't give bounds nothing.
 //
 // THE CODE AREA (§3.7). Condition 3, and SZZ's restriction, need to know which files are code.
 // `codeAreaTest` is the work-item module's `areaOf` (`areas.mjs`) equal to `code`, read with the
@@ -50,8 +51,8 @@ import { areaOf } from './areas.mjs';
  * }} DetectorFile a changed file. `previousPath` is a rename's old path. SZZ reads the old-side
  *   lines from `ranges` when given, else from the unified-diff hunks in `patch`.
  * @typedef {string | { name: string }} DetectorLabel
- * @typedef {{ number: number, labels: DetectorLabel[], body?: string | null, createdAt?: string | null }} DetectorIssue
- *   an issue the PR closes, and when it was filed
+ * @typedef {{ number: number, labels: DetectorLabel[], body?: string | null }} DetectorIssue an issue
+ *   the PR closes
  * @typedef {{ number: number, repository?: string | null }} DetectorSource what made a
  *   cross-reference: an issue or PR number, and its `owner/name` when known (another
  *   repository's never links)
@@ -121,13 +122,13 @@ function before(pr, prs) {
 }
 
 /**
- * The time before which a fix's cause must have merged (kanon#563): the earliest of the fix's
- * merge, its opening and the filing of each issue it closes. NaN for an unmerged fix.
+ * The time before which a fix's cause must have merged (kanon#563, kanon#571): the earlier of the
+ * fix's merge and its opening. NaN for an unmerged fix.
  * @param {DetectorPr} fix
  */
 function causeBound(fix) {
-  const known = [fix.createdAt, ...fix.closingIssues.map((i) => i.createdAt)].flatMap((t) => (t ? [Date.parse(t)] : []));
-  return Math.min(mergedTime(fix), ...known.filter((t) => !Number.isNaN(t)));
+  const opened = fix.createdAt ? Date.parse(fix.createdAt) : NaN;
+  return Number.isNaN(opened) ? mergedTime(fix) : Math.min(mergedTime(fix), opened);
 }
 
 /** The merged PRs in `prs` that could be `fix`'s cause, by `causeBound`, oldest first. @param {DetectorPr} fix @param {DetectorPr[]} prs */
@@ -218,7 +219,7 @@ export function sharedCodeFiles(fix, item, isCode) {
 
 /**
  * Whether `fix` is an explicit linked fix of `item` (§3.5), and how. `item` merged before `fix`
- * was opened and before the issues it closes were filed (`causeBound`), and all three hold:
+ * was opened (`causeBound`), and all three hold:
  *   1. `fix` closes an issue labelled `bug`;
  *   2. that issue, or `fix`, cross-references `item`: a `cross-referenced` event on the item
  *      whose source is the issue or `fix` in this repository, or the issue's "Introduced by"
@@ -302,7 +303,7 @@ export function oldRanges(file) {
  * The earlier merged items SZZ links `fix` to: the old lines `fix` changed in its code-area files,
  * blamed at its parent, were last touched by one of the item's commits (its merge commit, or a
  * head commit, for a project that merges without squashing), and the item merged before the fix
- * was opened and its issues filed (`causeBound`). A diagnostic only (decision 8).
+ * was opened (`causeBound`). A diagnostic only (decision 8).
  * @param {DetectorPr} fix @param {DetectorPr[]} prs
  * @param {{ isCode: (path: string) => boolean, blame: Blame }} opts
  * @returns {Promise<Link[]>}
