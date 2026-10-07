@@ -241,7 +241,8 @@ describe('kanon metrics dry-run: the counts', () => {
     expect(doc.rows).toEqual({ valid: 6, invalid: 0, invalidFields: {} });
     expect(doc.bands).toEqual({ merged: { S: 4, M: 1, L: 0, XL: 0, none: 0 }, closedUnmerged: { S: 1, M: 0, L: 0, XL: 0, none: 0 } });
     expect(doc.areas).toEqual({ deps: 0, workflows: 0, migrations: 0, specs: 0, tests: 0, docs: 2, config: 0, code: 6 });
-    expect(doc.escalation).toBeNull();
+    // No escalation file is Kanon's default declaration, so the count is known (kanon#521).
+    expect(doc.escalation).toEqual({ mergedTouching: 0 });
     expect(doc.origins).toMatchObject({ brief: 1, human: 3, reviewer_followup: 1, dependency_bot: 1, unknown: 0 });
     expect(doc.authors).toMatchObject({ implementer: 1, human: 4, other_bot: 1, unknown: 0 });
     expect(doc.mergedBy).toMatchObject({ merger: 1, human: 4, unknown: 0 });
@@ -285,6 +286,7 @@ describe('kanon metrics dry-run: the counts', () => {
     expect(r.out).toContain('Bands, merged: S 4, M 1, L 0, XL 0, none 0.');
     expect(r.out).toContain('Linked fixes, over 3 merged fix PRs: explicit 1, SZZ 1; both 1, explicit only 0, SZZ only 0, neither 2.');
     expect(r.out).toContain('of which 1 change no code-area file');
+    expect(r.out).toContain('Merged rows touching an escalation path: 0.');
     expect(r.err).toContain('Using gh\'s stored login, which belongs to octo-secret-login.');
   });
 });
@@ -433,6 +435,15 @@ describe('kanon metrics dry-run: what it can\'t read is said, never dropped', ()
     expect(doc.linkedFixes).toEqual({ fixes: 3, explicit: 1, szz: null, both: null, explicitOnly: null, szzOnly: null, neither: null, undetected: 2, nonCodeGap: 1 });
     expect(doc.declarations).toEqual({ source: 'github', register: 'read', codeAreas: 'declared', escalationFile: 'default' });
     expect(doc.authors).toMatchObject({ implementer: 1 });
+  });
+
+  it("counts every area by Kanon's default when the stack document and the escalation file are missing, never leaving them out as unread (kanon#521)", async () => {
+    const r = await run(dryRun('--repo', REPO, '--json'), fakeGitHub({ contents: { 'docs/qa/agent-identities.md': REGISTER } }));
+    const doc = json(r);
+    expect(r.status).toBe(EXIT.ok);
+    expect(doc.declarations).toEqual({ source: 'github', register: 'read', codeAreas: 'default', escalationFile: 'default' });
+    expect(doc.areas).toEqual({ deps: 0, workflows: 0, migrations: 0, specs: 0, tests: 0, docs: 2, config: 0, code: 6 });
+    expect(doc.escalation).toEqual({ mergedTouching: 0 });
   });
 
   it("reports SZZ as not run when the checkout lacks a fix's merge commit", async () => {

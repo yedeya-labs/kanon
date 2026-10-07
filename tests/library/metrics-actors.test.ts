@@ -58,6 +58,14 @@ describe('classifyActor', () => {
     expect(classifyActor({ login: 'some-ci', type: 'Bot' }, REGISTER)).toBe('other_bot');
   });
 
+  it("reads GitHub's own committer, web-flow, as other_bot: it is no person (kanon#521)", () => {
+    // A User-type account, the committer of every commit GitHub creates through the API or the web UI.
+    expect(classifyActor(user('web-flow'), REGISTER)).toBe('other_bot');
+    expect(classifyActor({ login: 'Web-Flow' }, REGISTER)).toBe('other_bot');
+    // A person whose login merely contains it is still a person.
+    expect(classifyActor(user('web-flow-fan'), REGISTER)).toBe('human');
+  });
+
   it('reads everyone else as human', () => {
     expect(classifyActor(user('octocat'), REGISTER)).toBe('human');
     expect(classifyActor({ login: 'octocat' }, REGISTER)).toBe('human');

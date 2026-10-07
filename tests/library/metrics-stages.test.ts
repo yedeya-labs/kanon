@@ -182,6 +182,17 @@ describe('stageIntervals', () => {
     expect(stageIntervals(input(pr, { merger_blocked: true, check_runs: [{ ...checks[0], conclusion: 'failure' }] })).filter((i) => i.stage === 'human')).toEqual([]);
   });
 
+  it("doesn't end the human wait on a commit GitHub's web-flow committed for a bot (kanon#521)", () => {
+    const WEB_FLOW = { login: 'web-flow', type: 'User' };
+    const pr = basePr({
+      reviews: [review('APPROVED', 400)],
+      commits: [{ sha: 'h2', message: 'merge main', committed_at: t(700), author: { login: 'dependabot[bot]', type: 'Bot' }, committer: WEB_FLOW }],
+    });
+    const checks = [{ name: 'test', head_sha: 'h1', started_at: t(350), completed_at: t(500), conclusion: 'success', required: true }];
+    expect(stageIntervals(input(pr, { check_runs: checks, merger_blocked: true })).filter((i) => i.stage === 'human'))
+      .toEqual([{ stage: 'human', start: t(500), end: t(1000) }]);
+  });
+
   it('opens merge_queue from added to removed, or the close', () => {
     const pr = basePr({ timeline: [
       { event: 'added_to_merge_queue', created_at: t(500) },

@@ -109,6 +109,30 @@ export function areaCounts(files, ctx = {}) {
 }
 
 /**
+ * The first area whose rule reads each declaration besides the path. `config` and `code` read
+ * the code areas too, but come after `tests`, so they are unknown whenever it is.
+ */
+const READS = /** @type {Partial<Record<Area, keyof AreaContext>>} */ ({ migrations: 'escalationFile', tests: 'codeAreas' });
+
+/**
+ * The areas whose counts are known when only some declarations were read: `areaCounts` reads
+ * an unread one (undefined) as Kanon's default, which for a row is a guess (§3.1). An area's
+ * rule is tried only after every earlier area's failed, so a file's area is known only when
+ * the declarations of that area and of every area before it were read: the areas before the
+ * first one whose declaration is missing. A declaration the adopter doesn't make is not
+ * missing: its reader returns the default (`UNDECLARED`, `defaultEscalationFile`), and passes it.
+ * @param {AreaContext} read
+ * @returns {Area[]}
+ */
+export function knownAreas(read) {
+  const first = AREAS.findIndex((a) => {
+    const needs = READS[a];
+    return needs !== undefined && read[needs] === undefined;
+  });
+  return first === -1 ? [...AREAS] : AREAS.slice(0, first);
+}
+
+/**
  * The row's escalation booleans (§3.7): `esc_<category>` for each of Kanon's eight categories,
  * true when a changed path matches an entry of that category, false otherwise. The matching is
  * `escalationCategories`', the one the escalation module owns, so a declared path counts

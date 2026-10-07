@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { WorkItemError, checkWorkItemRow, workItemRow } from '../../scripts/metrics/work-item.mjs';
 import { STAGE_FIELDS } from '../../scripts/metrics/stages.mjs';
 import { roleMarker } from '../../scripts/lib/role-marker.mjs';
-import { parseCodeAreas } from '../../scripts/lib/code-areas.mjs';
+import { UNDECLARED, parseCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { parseEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import { validate } from '../../actions/agent-telemetry/schema.mjs';
 
@@ -208,10 +208,50 @@ describe('workItemRow', () => {
     expect(none).not.toHaveProperty('closing_issues');
   });
 
-  it('leaves the escalation booleans out when the escalation file was not read', () => {
+  it('leaves the escalation booleans out when the escalation file was not read, and the areas it could change (kanon#521)', () => {
     const r = workItemRow({ ...(INPUT() as object), declarations: { register: REGISTER, codeAreas } } as never);
+    expect(validate(r)).toEqual({ ok: true });
     expect(r).not.toHaveProperty('esc_payments');
-    expect(r.files_code).toBe(1);
+    // A declared migration path is checked before every area below it, so only deps and workflows are known.
+    expect(r).toMatchObject({ files_deps: 1, files_workflows: 0 });
+    for (const f of ['files_migrations', 'files_specs', 'files_tests', 'files_docs', 'files_config', 'files_code', 'tests_added', 'tests_changed']) {
+      expect(r, f).not.toHaveProperty(f);
+    }
+  });
+
+  it("leaves the areas the code areas decide out when they were not read, never taking Kanon's default (kanon#521)", () => {
+    const r = workItemRow({ ...(INPUT() as object), declarations: { register: REGISTER, escalationFile } } as never);
+    expect(validate(r)).toEqual({ ok: true });
+    expect(r).toMatchObject({ files_deps: 1, files_workflows: 0, files_migrations: 0, files_specs: 0, esc_payments: true });
+    for (const f of ['files_tests', 'files_docs', 'files_config', 'files_code', 'tests_added', 'tests_changed']) expect(r, f).not.toHaveProperty(f);
+    // Undeclared is not unread: Kanon's default is the adopter's declaration, and every area is counted.
+    const undeclared = workItemRow({ ...(INPUT() as object), declarations: { register: REGISTER, codeAreas: UNDECLARED, escalationFile } } as never);
+    expect(undeclared).toMatchObject({ files_code: 1, files_tests: 1, files_docs: 1, tests_added: 1 });
+  });
+
+  it("counts no commit GitHub's web-flow committed for a bot as a human commit (kanon#521)", () => {
+    const WEB_FLOW = { login: 'web-flow', type: 'User' };
+    const DEPENDABOT = { login: 'dependabot[bot]', type: 'Bot' };
+    const commits = [
+      { sha: 'h1', message: 'feat: charge', committed_at: t(900), author: AUTHOR, committer: WEB_FLOW },
+      { sha: 'h2', message: 'merge main', committed_at: t(2000), author: DEPENDABOT, committer: WEB_FLOW },
+      // A person's web-UI commit is still theirs, by its author.
+      { sha: 'h3', message: 'tweak', committed_at: t(3400), author: HUMAN, committer: WEB_FLOW },
+    ];
+    const r = workItemRow(INPUT({}, { commits }));
+    expect(r.human_commits).toBe(1);
+    expect(r.human_interventions).toBe(6);
+  });
+
+  it('leaves human_interventions out when the author\'s class is unknown, as human_commits is (kanon#521)', () => {
+    for (const pr of [{ author: null }, { author: JUDGE, body: 'no marker' }]) {
+      const r = workItemRow(INPUT({}, pr));
+      expect(r).not.toHaveProperty('author_kind');
+      expect(r).not.toHaveProperty('human_commits');
+      expect(r).not.toHaveProperty('human_interventions');
+      // What doesn't depend on the author's class is still counted.
+      expect(r.human_reviews).toBe(3);
+    }
   });
 
   it('counts no human commits on a human-authored PR, where they are the author\'s own', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AREAS, areaCounts, areaOf, escalationFlags } from '../../scripts/metrics/areas.mjs';
+import { AREAS, areaCounts, areaOf, escalationFlags, knownAreas } from '../../scripts/metrics/areas.mjs';
 import { UNDECLARED, parseCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { ESCALATION_CATEGORIES, defaultEscalationFile, parseEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import { ESCALATION_CATEGORIES as SCHEMA_CATEGORIES } from '../../actions/agent-telemetry/schema.mjs';
@@ -124,6 +124,23 @@ describe('areaCounts', () => {
       files_deps: 1, files_workflows: 0, files_migrations: 0, files_specs: 0, files_tests: 4, files_docs: 1, files_config: 0, files_code: 2,
       tests_added: 1, tests_changed: 2,
     });
+  });
+});
+
+describe('knownAreas (kanon#521)', () => {
+  const esc = defaultEscalationFile();
+
+  it('knows every area when both declarations were read, declared or Kanon\'s default', () => {
+    expect(knownAreas({ codeAreas: UNDECLARED, escalationFile: esc })).toEqual([...AREAS]);
+    expect(knownAreas({ codeAreas: declared, escalationFile: esc })).toEqual([...AREAS]);
+  });
+
+  it('knows only the areas checked before the first one whose declaration was not read', () => {
+    // Without the escalation file, a declared migration path could be any later area.
+    expect(knownAreas({ codeAreas: declared })).toEqual(['deps', 'workflows']);
+    // Without the code areas, a declared tests tree could hold docs, config or code.
+    expect(knownAreas({ escalationFile: esc })).toEqual(['deps', 'workflows', 'migrations', 'specs']);
+    expect(knownAreas({})).toEqual(['deps', 'workflows']);
   });
 });
 
