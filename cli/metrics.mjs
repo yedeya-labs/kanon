@@ -47,6 +47,7 @@ import { AREAS } from '../scripts/metrics/areas.mjs';
 import { BANDS } from '../scripts/metrics/band.mjs';
 import { accuracyFields, codeAreaTest, detectorCounts, isFixPr } from '../scripts/metrics/detectors.mjs';
 import { ORIGINS } from '../scripts/metrics/origin.mjs';
+import { isReleasePr } from '../scripts/metrics/release.mjs';
 import { WorkItemError, workItemRow } from '../scripts/metrics/work-item.mjs';
 import { remoteRepo } from './apps.mjs';
 import { kanonRelease } from './callers.mjs';
@@ -392,13 +393,19 @@ export async function dryRun(deps, opts) {
   const { decl, found } = await declarations(deps, repo, root);
   const read = await readPullRequests({ gh: deps.gh, sleep: deps.sleep, progress: deps.err }, repo, { since, until: opts.until }, deps.sizes);
 
-  // The detectors' view, through the one adapter; a pull request it refuses is left out.
+  // Release PRs are left out of every count and of the detectors' items (§1.2, the Owner on
+  // kanon#538). The detectors' view goes through the one adapter; a PR it refuses is left out.
+  /** @type {{ pr: number, reason: string }[]} */
   const leftOut = [...read.leftOut];
   /** @type {import('../scripts/metrics/types.mjs').PullRequest[]} */
   const prs = [];
   /** @type {import('../scripts/metrics/detectors.mjs').DetectorPr[]} */
   const dprs = [];
   for (const pr of read.prs) {
+    if (isReleasePr(pr, decl.register)) {
+      leftOut.push({ pr: pr.number, reason: 'release' });
+      continue;
+    }
     try {
       dprs.push(toDetectorPr(pr));
       prs.push(pr);
@@ -459,7 +466,7 @@ export async function dryRun(deps, opts) {
     window: { since: since.toISOString().slice(0, 10), until: opts.until ? opts.until.toISOString().slice(0, 10) : null },
     declarations: found,
     prs: { read: prs.length, merged: prs.filter((p) => p.merged_at).length, closedUnmerged: prs.filter((p) => !p.merged_at).length },
-    leftOut: { open: reason('open'), truncated: reason('truncated'), unreadable: reason('unreadable') },
+    leftOut: { open: reason('open'), release: reason('release'), truncated: reason('truncated'), unreadable: reason('unreadable') },
     rows: { valid: rows.length, invalid: invalid.length, invalidFields },
     bands: { merged: bandsOf(merged), closedUnmerged: bandsOf(rows.filter((r) => r.fate !== 'merged')) },
     areas,
@@ -526,7 +533,7 @@ export function prose(r) {
   return [
     `kanon metrics dry-run on ${r.repo}: pull requests closed from ${r.window.since} to ${r.window.until ?? 'now'}.`,
     `Read: ${r.prs.read} (${r.prs.merged} merged, ${r.prs.closedUnmerged} closed unmerged).`,
-    `Left out: ${r.leftOut.open} still open, ${r.leftOut.truncated} truncated, ${r.leftOut.unreadable} unreadable.`,
+    `Left out: ${r.leftOut.open} still open, ${r.leftOut.release} release PRs, ${r.leftOut.truncated} truncated, ${r.leftOut.unreadable} unreadable.`,
     `Rows: ${r.rows.valid} valid, ${r.rows.invalid} failed validation${r.rows.invalid ? ` (fields: ${list(r.rows.invalidFields)})` : ''}.`,
     `Bands, merged: ${list(r.bands.merged)}.`,
     `Bands, closed unmerged: ${list(r.bands.closedUnmerged)}.`,

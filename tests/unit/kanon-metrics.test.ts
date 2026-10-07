@@ -37,6 +37,7 @@ const REGISTER = `# Agent identities
 | Overseer | \`acme-author\` |
 | Reviewer | \`acme-judge\` |
 | Merger | \`acme-judge\` |
+| Releaser | \`acme-releaser\` |
 `;
 const STACK = '# Stack\n\n## Code areas\n\n- `app/` — code: the app\n';
 
@@ -236,7 +237,7 @@ describe('kanon metrics dry-run: the counts', () => {
     expect(doc).toMatchObject({ schema: SCHEMA, kanon: 'v9.9.9', status: 'ok', exitCode: 0, repo: REPO, window: { since: SINCE, until: null } });
     expect(doc.declarations).toEqual({ source: 'checkout', register: 'read', codeAreas: 'declared', escalationFile: 'default' });
     expect(doc.prs).toEqual({ read: 6, merged: 5, closedUnmerged: 1 });
-    expect(doc.leftOut).toEqual({ open: 1, truncated: 0, unreadable: 0 });
+    expect(doc.leftOut).toEqual({ open: 1, release: 0, truncated: 0, unreadable: 0 });
     expect(doc.rows).toEqual({ valid: 6, invalid: 0, invalidFields: {} });
     expect(doc.bands).toEqual({ merged: { S: 4, M: 1, L: 0, XL: 0, none: 0 }, closedUnmerged: { S: 1, M: 0, L: 0, XL: 0, none: 0 } });
     expect(doc.areas).toEqual({ deps: 0, workflows: 0, migrations: 0, specs: 0, tests: 0, docs: 2, config: 0, code: 6 });
@@ -280,6 +281,7 @@ describe('kanon metrics dry-run: the counts', () => {
     const r = await run(dryRun('--dir', dir));
     expect(r.status).toBe(0);
     expect(r.out).toContain('Read: 6 (5 merged, 1 closed unmerged).');
+    expect(r.out).toContain('Left out: 1 still open, 0 release PRs, 0 truncated, 0 unreadable.');
     expect(r.out).toContain('Bands, merged: S 4, M 1, L 0, XL 0, none 0.');
     expect(r.out).toContain('Linked fixes, over 3 merged fix PRs: explicit 1, SZZ 1; both 1, explicit only 0, SZZ only 0, neither 2.');
     expect(r.out).toContain('of which 1 change no code-area file');
@@ -340,6 +342,36 @@ describe('kanon metrics dry-run: privacy', () => {
   });
 });
 
+describe('kanon metrics dry-run: release PRs are left out (§1.2, the Owner on #538)', () => {
+  // #11 carries release-please's label, #12 is the register's Releaser App's, #13 is a person's
+  // PR that only has a release title. #11 also shares app/calc.js with fix #2 and is
+  // cross-referenced by its bug issue, so as an item it would be a second explicit link.
+  const withReleases = () => [
+    ...fixtures(),
+    pr(11, { day: '09-03', node: {
+      title: 'chore(main): release 1.2.0', author: { login: 'github-actions', __typename: 'Bot' }, labels: [{ name: 'autorelease: pending' }],
+      files: [file('app/calc.js', 1, 1), file('CHANGELOG.md', 900, 0)], timelineItems: [xref(10, REPO, '09-04')],
+    } }),
+    pr(12, { day: '09-03', node: { title: 'chore: zebra-title-12', author: { login: 'acme-releaser', __typename: 'Bot' }, files: [file('package.json', 1, 1)] } }),
+    pr(13, { day: '09-03', node: { title: 'chore(main): release 1.3.0', files: [file('app/util.js', 1, 0)] } }),
+  ];
+
+  it('excludes them from every count and from the detectors, and lists them as left out', async () => {
+    const r = await run(dryRun('--dir', dir, '--json', '--details', join(base, 'r.json')), fakeGitHub({ prs: withReleases() }));
+    expect(r.status).toBe(EXIT.ok);
+    const doc = json(r);
+    expect(doc.leftOut).toEqual({ open: 1, release: 2, truncated: 0, unreadable: 0 });
+    expect(doc.prs).toEqual({ read: 7, merged: 6, closedUnmerged: 1 });
+    expect(doc.bands.merged).toEqual({ S: 5, M: 1, L: 0, XL: 0, none: 0 });
+    expect(doc.linkedFixes).toMatchObject({ fixes: 3, explicit: 1, both: 1 });
+    const details = JSON.parse(Object.values(r.written)[0] as string);
+    expect(details.leftOut).toEqual([{ pr: 7, reason: 'open' }, { pr: 11, reason: 'release' }, { pr: 12, reason: 'release' }]);
+    expect(details.rows.map((x: Node) => x.pr_number)).not.toContain(11);
+    expect(details.fixes.find((f: Node) => f.pr === 2).explicit).toEqual([{ pr: 1, via: ['cross-reference'], days: 3 }]);
+    expect((await run(dryRun('--dir', dir), fakeGitHub({ prs: withReleases() }))).out).toContain('Left out: 1 still open, 2 release PRs, 0 truncated, 0 unreadable.');
+  });
+});
+
 describe('kanon metrics dry-run: a row that fails validation', () => {
   it('is counted by its field names only, and exits 1, ahead of an incomplete read', async () => {
     const prs = fixtures();
@@ -364,14 +396,14 @@ describe('kanon metrics dry-run: what it can\'t read is said, never dropped', ()
     expect(r.status).toBe(EXIT.incomplete);
     const doc = json(r);
     expect(doc.status).toBe('incomplete');
-    expect(doc.leftOut).toEqual({ open: 1, truncated: 1, unreadable: 0 });
+    expect(doc.leftOut).toEqual({ open: 1, release: 0, truncated: 1, unreadable: 0 });
     expect(doc.prs.read).toBe(5);
   });
 
   it('leaves out a PR whose nested page fails, as unreadable', async () => {
     const r = await run(dryRun('--dir', dir, '--json'), fakeGitHub({ failPage: 1 }));
     expect(r.status).toBe(EXIT.incomplete);
-    expect(json(r).leftOut).toEqual({ open: 1, truncated: 0, unreadable: 1 });
+    expect(json(r).leftOut).toEqual({ open: 1, release: 0, truncated: 0, unreadable: 1 });
   });
 
   it('stops before the rate limit runs out, as an error document', async () => {
