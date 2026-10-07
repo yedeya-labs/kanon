@@ -106,7 +106,8 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | The digest job | `K-PROJ-13`, `K-SHIP-11` | not yet installed |
 | The observability document's guards: paging parity, signal disposition, hand-created resources | `K-PRIN-2`, `K-OBS-2`, `K-OBS-3`, `K-OBS-8`, `K-LAYOUT-5` | not yet installed |
 | The workflow-health check | `K-OBS-6` | not yet installed |
-| The hosted telemetry store: the collector, quality columns, the cost-trend report, the cache-TTL detector and the row schema (plan 0002) | `K-OBS-13`, `K-OBS-14`, `K-OBS-15`, `K-OBS-16` | not yet installed |
+| The hosted telemetry store: the collector (`telemetry.yml`) and the row schema (plan 0002 S7) | `K-OBS-13`, `K-OBS-16` | installed 2026-10-06 |
+| The hosted telemetry store's quality columns, the cost-trend report and the cache-TTL detector (plan 0002) | `K-OBS-14`, `K-OBS-15` | not yet installed |
 | The fallback-model test and the fallback lists | `K-AGENT-38`, `K-OBS-15` | not yet installed |
 | The lint chain runner, the path guard, the flag guard and the permissions guard | `K-SELF-1`, `K-SELF-3`, `K-SELF-4`, `K-AGENT-37` | not yet installed |
 | The citation guard on Kanon's own `docs/`, the `Citation guard` job of `ci.yml`, which runs the base's copy and is meant to be a required check, and `citation-shift` on every pull request, advisory as for adopters (`citation-shift.yml`, [#377](https://github.com/yedeya-labs/kanon/issues/377), [#343](https://github.com/yedeya-labs/kanon/pull/343)). Both also read `rulebook/` and the READMEs, passed with `--path` ([#388](https://github.com/yedeya-labs/kanon/issues/388)) | `K-SELF-3` | installed 2026-10-06 |
