@@ -91,6 +91,13 @@ const callsSpine = (j: Job) => typeof j.uses === 'string' && /(^\$\/|^yedeya-lab
 const storeSteps = (j: Job) => (j.steps ?? []).filter((s) => usesBlock(s, 'qa-store'));
 
 /** The keys a store job, or the export's delete job, may carry (kanon#225). */
+/**
+ * The QA store's secrets (kanon#433), which every store step of a store-coupled lane hands the
+ * `qa-store` block as `secrets`, by name, and the one expression that builds that JSON.
+ */
+export const STORE_SECRETS = ['QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'];
+export const STORE_SECRETS_WITH = `\${{ format('{{"QA_STORE_ROLE_ARN":{0},"QA_STORE_BUCKET":{1}}}', toJSON(secrets.QA_STORE_ROLE_ARN), toJSON(secrets.QA_STORE_BUCKET)) }}`;
+
 export const STORE_JOB_KEYS = ['name', 'needs', 'if', 'runs-on', 'permissions', 'outputs', 'steps', 'timeout-minutes', 'concurrency'];
 /** The keys a step of one may carry: no `env:`, `run:`, `shell:`, `working-directory:` or `continue-on-error:`. */
 export const STORE_STEP_KEYS = ['uses', 'id', 'name', 'with', 'if', 'timeout-minutes'];

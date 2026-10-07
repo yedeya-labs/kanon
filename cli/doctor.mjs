@@ -133,6 +133,8 @@ export const ITEMIZED = {
   'apps-check.secret-stale': 'a secret',
   'label.missing': 'a label',
   'telemetry.unconfigured': 'a variable',
+  'qa-store.unmapped': 'a secret',
+  'qa-store.variables': 'a variable',
 };
 
 /**
@@ -185,6 +187,8 @@ export const FINDINGS = {
   'apps-check.secret-missing': { category: 'caller', blocking: true },
   'apps-check.secret-stale': { category: 'caller', blocking: true },
   'telemetry.unconfigured': { category: 'caller', blocking: false },
+  'qa-store.unmapped': { category: 'caller', blocking: false },
+  'qa-store.variables': { category: 'secret', blocking: false },
   'label.missing': { category: 'label', blocking: false },
   'ruleset.missing': { category: 'ruleset', blocking: true },
   'ruleset.rule-missing': { category: 'ruleset', blocking: true },
@@ -746,6 +750,11 @@ export const diagnose = async (deps, opts) => {
     }
   }
   const installed = [...new Set(callers.map((c) => c.lane))].filter((l) => req.lanes[l]).sort();
+  // THE QA STORE (kanon#433): its two secrets are the store-coupled lanes' optional ones, which a
+  // caller maps once the repository has a store hook, and may leave out until then. So they are
+  // asked for only where the hook exists.
+  const storeSecrets = req.qaStore?.secrets ?? [];
+  const hasStore = Boolean(req.qaStore && read(req.qaStore.hook) !== null);
 
   for (const c of callers) {
     const spec = req.lanes[c.lane];
@@ -767,8 +776,10 @@ export const diagnose = async (deps, opts) => {
       });
     } else {
       const got = Object.keys(c.job.secrets);
-      const missing = want.filter((n) => !got.includes(n));
+      const optional = spec.optionalSecrets ?? [];
+      const missing = want.filter((n) => !got.includes(n) && !optional.includes(n));
       const stale = got.filter((n) => !want.includes(n));
+      const unmapped = optional.filter((n) => !got.includes(n) && storeSecrets.includes(n));
       if (missing.length) {
         findItems('caller.secret-missing', c.file, missing, (xs) => [`does not map ${xs.join(', ')}, which the lane ${c.lane} takes at ${checked}.`, {
           text: `Add under the job's secrets:`,
@@ -778,6 +789,12 @@ export const diagnose = async (deps, opts) => {
       if (stale.length) {
         findItems('caller.secret-stale', c.file, stale, (xs) => [`maps ${xs.join(', ')}, which the lane ${c.lane} does not take at ${checked}; GitHub refuses a call that passes a secret the called workflow does not declare.`, {
           text: `Remove these lines from the job's secrets:`,
+          commands: xs.map((n) => `      ${n}: \${{ secrets.${n} }}`),
+        }]);
+      }
+      if (hasStore && unmapped.length) {
+        findItems('qa-store.unmapped', c.file, unmapped, (xs) => [`does not map ${xs.join(' or ')}, so the lane ${c.lane} hands ${req.qaStore?.hook} no store secrets: its store jobs read the deprecated variables, which every store job's log prints, or reach no store (docs/qa-store.md, "Move the coordinates to secrets").`, {
+          text: `Add under the job's secrets:`,
           commands: xs.map((n) => `      ${n}: \${{ secrets.${n} }}`),
         }]);
       }
@@ -1029,7 +1046,11 @@ export const diagnose = async (deps, opts) => {
   const mappedBy = (n) => mapping.filter((m) => m.names.has(n) && !m.takes.has(n)).map((m) => m.file);
   const laneSecrets = new Set(Object.values(req.lanes).flatMap((l) => l?.secrets ?? []));
   const secretApps = [...new Set([...identities, ...Object.keys(req.identities.apps).filter((a) => appSecrets(a).some((n) => mappedBy(n).length))])].sort();
-  const needSecrets = [...new Set([...installed.flatMap((l) => req.lanes[l]?.secrets ?? []), ...secretApps.flatMap(appSecrets), ...[...laneSecrets].filter((n) => mappedBy(n).length)])].sort();
+  // The QA store's two secrets are optional (kanon#433): a caller maps them, empty, whether or not
+  // the repository has a store, so they are needed only once its store hook exists.
+  const needSecrets = [...new Set([...installed.flatMap((l) => req.lanes[l]?.secrets ?? []), ...secretApps.flatMap(appSecrets), ...[...laneSecrets].filter((n) => mappedBy(n).length)])]
+    .filter((n) => hasStore || !storeSecrets.includes(n))
+    .sort();
   /**
    * The workflows that map these secrets, and the callers of a lane that takes them and doesn't
    * map them yet (caller.secret-missing names those lines), for the finding's message.
@@ -1044,6 +1065,30 @@ export const diagnose = async (deps, opts) => {
       ...(must.length ? [`${must.join(', ')} call${must.length > 1 ? '' : 's'} a lane that takes ${them} at ${checked}`] : []),
     ].join('; ');
   };
+  // The QA store's coordinates as repository variables (kanon#433): v0.33.0's way, which prints
+  // them, and the account id they carry, in every store job's log. Not blocking: the hook falls
+  // back to them, so the store still works. Only where the store hook exists, which reads them,
+  // and a store-coupled lane is installed.
+  /** @type {string[]} */
+  let storeVariables = [];
+  if (hasStore && storeSecrets.length && installed.some((l) => (req.lanes[l]?.optionalSecrets ?? []).length)) {
+    const listed = await deps.gh(['variable', 'list', '-R', repo, '--json', 'name']);
+    try {
+      if (listed.status === 0) storeVariables = storeSecrets.filter((n) => JSON.parse(listed.stdout).some((/** @type {any} */ v) => String(v.name) === n));
+      else notes.push(`The token can't list ${repo}'s variables, so doctor can't tell whether ${storeSecrets.join(' or ')} is still a variable, which every store job's log prints (docs/qa-store.md, "Move the coordinates to secrets").`);
+    } catch {
+      storeVariables = [];
+    }
+    if (storeVariables.length) {
+      findItems('qa-store.variables', repo, storeVariables, (xs) => [`holds ${xs.join(' and ')} as ${xs.length > 1 ? 'repository variables' : 'a repository variable'}, which the runner never masks: every store job's log prints ${xs.length > 1 ? 'them' : 'it'}, and the AWS account id in ${xs.length > 1 ? 'them' : 'it'}. Kanon's lanes take the QA store's coordinates as secrets since kanon#433.`, {
+        text: `Copy each into a secret of the same name, map both secrets in the caller of each store-coupled lane (${installed.filter((l) => (req.lanes[l]?.optionalSecrets ?? []).length).join(', ')}) at ${checked} or later, make the hook read inputs.secrets first, and once a store job has run green on the secrets, delete the variables (docs/qa-store.md, "Move the coordinates to secrets"):`,
+        commands: [
+          ...xs.filter((n) => !s.secrets?.has(n)).map((n) => `gh variable get ${n} -R ${repo} | gh secret set ${n} -R ${repo}`),
+          ...xs.map((n) => `gh variable delete ${n} -R ${repo}`),
+        ],
+      }]);
+    }
+  }
   if (!s.secrets) unchecked.push({ check: 'secrets', subject: repo, reason: "the token can't list the repository's secret names (it needs admin access)" });
   else {
     // `kanon apps` is the person's step (#420): its pre-check first, which creates nothing, then
@@ -1067,11 +1112,14 @@ export const diagnose = async (deps, opts) => {
         : { text: `Create the ${id} App from this checkout. kanon apps is your step: check the token with the first command (it creates nothing), then create the App with the second, which stores its secrets:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] }];
       });
     }
-    for (const n of needSecrets.filter((x) => !/_APP_(ID|PRIVATE_KEY)$/.test(x) && !s.secrets?.has(x))) {
+    // A store secret a variable still holds is `qa-store.variables`, above: the store still works.
+    for (const n of needSecrets.filter((x) => !/_APP_(ID|PRIVATE_KEY)$/.test(x) && !s.secrets?.has(x) && !storeVariables.includes(x))) {
       const by = installed.filter((l) => req.lanes[l]?.secrets.includes(n));
       const who = whoNeeds([n]);
       findItems('secret.missing', repo, [n], () => [`lacks ${n}${by.length ? `, which ${by.join(', ')} ${by.length > 1 ? 'take' : 'takes'}` : ''}${who ? `: ${who}` : ''}.`, {
-        text: n === 'CLAUDE_CODE_OAUTH_TOKEN' ? "Store the token of the Claude subscription the agents run on, made with `claude setup-token` (docs/lanes.md), pasting it on standard input:" : `Store it, pasting the value on standard input:`,
+        text: n === 'CLAUDE_CODE_OAUTH_TOKEN' ? "Store the token of the Claude subscription the agents run on, made with `claude setup-token` (docs/lanes.md), pasting it on standard input:"
+          : storeSecrets.includes(n) ? `${req.qaStore?.hook} exists, so the store-coupled lanes need the store's coordinates: store the stack's ${n === 'QA_STORE_ROLE_ARN' ? 'RoleArn' : 'BucketName'} output, pasting it on standard input (docs/qa-store.md, "Provision a store"):`
+          : `Store it, pasting the value on standard input:`,
         commands: [`gh secret set ${n} -R ${repo}`],
       }]);
     }

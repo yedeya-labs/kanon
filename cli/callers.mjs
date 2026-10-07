@@ -18,14 +18,15 @@ import { URL } from 'node:url';
 /**
  * @typedef {{ type: string, description: string }} LaneInput
  * @typedef {{ identities: string[], secrets: string[], inputs: Record<string, LaneInput>, grant: Record<string, string>,
- *   reads: string[], readsWorkflows: string[], hooks: string[], qaStore?: boolean, callerName?: string, callerRunNameEndsWith?: string }} Lane
+ *   reads: string[], readsWorkflows: string[], hooks: string[], qaStore?: boolean, callerName?: string, callerRunNameEndsWith?: string,
+ *   optionalSecrets?: string[] }} Lane
  * @typedef {{ name: string, permissions: Record<string, string> }} RoleIdentity
  * @typedef {{ name: string, roles: string[], permissions: Record<string, string> }} AppIdentity
  * @typedef {{ lanes: Record<string, Lane>, hook: { path: string, inputs: string[] },
  *   identities: { roles: Record<string, RoleIdentity>, apps: Record<string, AppIdentity> }, labels: string[],
  *   declarations?: Record<string, { baseline: boolean, requiredSections: string[] }>,
  *   release?: { dcoExemptsReleaser?: boolean }, catalogue?: Catalogue,
- *   telemetry?: { collector: string, variables: string[] } }} Requirements
+ *   telemetry?: { collector: string, variables: string[] }, qaStore?: { hook: string, secrets: string[] } }} Requirements
  * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, recommend: 'always' | string[], when: string, mergeQueue?: string }} CatalogueEntry
  * @typedef {{ groups: Array<{ id: string, title: string, header: string }>, lanes: Record<string, CatalogueEntry> }} Catalogue
  */

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { WINDOW_DAYS } from '../../scripts/lib/telemetry-artifacts.mjs';
-import { storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
+import { STORE_SECRETS, STORE_SECRETS_WITH, storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 import { realGroup } from './helpers/smoke-group.js';
 
 /**
@@ -98,7 +98,7 @@ describe('the cost rows reach the sweep from the store job', () => {
     for (const s of storeSteps) {
       expect(s.uses).toBe('$/actions/qa-store');
       expect(s.id).toBe(s.with?.kind);
-      expect(s.with).toEqual({ operation: 'cost-rows', variables: '${{ toJSON(vars) }}', kind: s.id, days: String(WINDOW_DAYS) });
+      expect(s.with).toEqual({ operation: 'cost-rows', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH, kind: s.id, days: String(WINDOW_DAYS) });
     }
     expect(WINDOW_DAYS).toBe(14);
   });
@@ -141,7 +141,7 @@ describe('the workflow that runs it (moved from the reference adopter)', () => {
     const minter = sweepSteps.find((s) => s.uses?.startsWith('actions/create-github-app-token'))!;
     expect(minter.with?.['client-id']).toBe('${{ secrets.AUTHOR_APP_ID }}');
     expect(minter.with?.['private-key']).toBe('${{ secrets.AUTHOR_APP_PRIVATE_KEY }}');
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY']);
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', ...STORE_SECRETS]);
   });
 
   it('asserts the minted App slug against the script constant (RA-918)', () => {

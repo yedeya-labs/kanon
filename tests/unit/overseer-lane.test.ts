@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { unlinkedQuery } from '../../scripts/capability-interlock.mjs';
-import { storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
+import { STORE_SECRETS, STORE_SECRETS_WITH, storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 import { handedIn, mintFor, readFlattened, workflowText } from './helpers/called-workflow.js';
 import { callerInputs, realGroup } from './helpers/smoke-group.js';
 import { parseCondition } from './helpers/job-condition.js';
@@ -64,7 +64,7 @@ describe('the store job and the overseer job (plan 0004 P9\'s check, applied at 
   });
 
   it('exports the Overseer\'s kind before the agent, and the agent reads that export', () => {
-    expect(wf.jobs.export!.steps).toEqual([{ uses: '$/actions/qa-store', id: 'store', with: { operation: 'export', variables: '${{ toJSON(vars) }}', kind: 'overseer' } }]);
+    expect(wf.jobs.export!.steps).toEqual([{ uses: '$/actions/qa-store', id: 'store', with: { operation: 'export', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH, kind: 'overseer' } }]);
     const exported = steps.find((s) => s.uses?.startsWith('actions/download-artifact@'))!;
     expect(handedIn(LANE_FILE, 'overseer', 'artifact-name')).toBe('${{ needs.export.outputs.artifact-name }}');
     expect(exported.with).toEqual({ name: '${{ inputs.artifact-name }}', path: 'qa-store-export' });
@@ -406,7 +406,7 @@ describe('the capability anchor query, run as composed (RA-899)', () => {
 
 describe('the workflow around it', () => {
   it('maps the Overseer\'s App secrets and the Claude token, by name', () => {
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', ...STORE_SECRETS]);
   });
 
   it('keeps the weekly schedule, and a dispatch with no inputs', () => {

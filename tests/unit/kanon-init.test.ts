@@ -1656,3 +1656,54 @@ describe('kanon init and telemetry (#428)', () => {
     expect(read(dir, TELEMETRY_CALLER_PATH)).toBe(telemetryCallerFile(RELEASE));
   });
 });
+
+// #433: the QA store's coordinates are secrets, which the store-coupled callers map. init writes
+// the mapping in every such caller, and asks for the secrets only where the store hook exists,
+// copying a variable of the same name where one holds it.
+describe("kanon init and the QA store's secrets (#433)", () => {
+  const HOOK = REQ.qaStore!.hook;
+  const withVariables = (names: string[]) => {
+    const github = fakeGitHub({ secrets: new Set(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) });
+    const gh = github.gh;
+    github.gh = async (args: string[], input?: string) => {
+      if (args[0] === 'variable' && args[1] === 'list') {
+        github.calls.push({ args, input });
+        return ok(names.map((name) => ({ name })));
+      }
+      return gh(args, input);
+    };
+    return github;
+  };
+  const store = (d: ReturnType<typeof parse>) => d.findings.find((f) => f.id === 'secret.qa-store');
+
+  it('maps both secrets in a store-coupled caller, and asks for neither without a hook', async () => {
+    const dir = checkout();
+    const github = withVariables([]);
+    const d = parse(await run(dir, github, ['--yes', '--json', '--no-apps', '--lanes', 'code-audit']));
+    const caller = read(dir, '.github/workflows/agent-code-audit.yml');
+    for (const n of REQ.qaStore!.secrets) expect(caller).toContain(`      ${n}: \${{ secrets.${n} }}`);
+    // The --json document carries the caller's full content (#483), mappings included.
+    expect(d.files.find((f) => f.path === '.github/workflows/agent-code-audit.yml')).toMatchObject({ status: 'new', content: caller });
+    expect(store(d)).toBeUndefined();
+    expect(github.calls.some((c) => c.args[0] === 'variable')).toBe(false);
+  });
+
+  it('with a hook, asks for each as a secret, from the stack\'s outputs', async () => {
+    const d = parse(await run(checkout({ [HOOK]: 'name: QA store\n' }), withVariables([]), ['--yes', '--json', '--no-apps', '--lanes', 'code-audit']));
+    expect(store(d)).toMatchObject({ category: 'secret', subject: 'QA_STORE_BUCKET, QA_STORE_ROLE_ARN' });
+    expect(store(d)!.fix.commands).toEqual([
+      `gh secret set QA_STORE_BUCKET -R ${REPO}   # paste the stack's BucketName output on standard input`,
+      `gh secret set QA_STORE_ROLE_ARN -R ${REPO}   # paste the stack's RoleArn output on standard input`,
+    ]);
+  });
+
+  it('with a hook, copies a variable that holds one, and never asks for a variable', async () => {
+    const d = parse(await run(checkout({ [HOOK]: 'name: QA store\n' }), withVariables(['QA_STORE_ROLE_ARN']), ['--yes', '--json', '--no-apps', '--lanes', 'code-audit']));
+    expect(store(d)!.fix.commands).toEqual([
+      `gh secret set QA_STORE_BUCKET -R ${REPO}   # paste the stack's BucketName output on standard input`,
+      `gh variable get QA_STORE_ROLE_ARN -R ${REPO} | gh secret set QA_STORE_ROLE_ARN -R ${REPO}`,
+    ]);
+    expect(store(d)!.fix.text).toContain('which you then delete once a store job has run green');
+    expect(JSON.stringify(d.findings)).not.toMatch(/gh variable set QA_STORE/);
+  });
+});

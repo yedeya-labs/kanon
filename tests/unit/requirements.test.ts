@@ -38,6 +38,18 @@ describe('requirements.json', () => {
     expect(built.telemetry).toEqual({ collector: 'telemetry-collect', variables: ['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE'] });
   });
 
+  it("names the QA store's hook and the secrets the store-coupled lanes take for it, which a caller may leave out (#433)", () => {
+    expect(built.qaStore).toEqual({ hook: '.github/actions/qa-store/action.yml', secrets: ['QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'] });
+    const lanes = built.lanes as Record<string, { secrets: string[], optionalSecrets?: string[], qaStore: boolean }>;
+    // The lanes that call the store (kanon#471's `qaStore`), not every lane holding id-token.
+    const coupled = Object.entries(lanes).filter(([, l]) => l.qaStore).map(([n]) => n);
+    expect(coupled).toEqual(['agent-code-audit', 'agent-dispatch-sweep', 'agent-explore', 'agent-overseer']);
+    for (const [name, l] of Object.entries(lanes)) {
+      expect(l.optionalSecrets, name).toEqual(coupled.includes(name) ? ['QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'] : undefined);
+      for (const n of l.optionalSecrets ?? []) expect(l.secrets, name).toContain(n);
+    }
+  });
+
   it("lists every lane of docs/lanes.md's table, and no other workflow", () => {
     const table = [...readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8').split('## Which lanes are available')[1]!.split('\n## ')[0]!.matchAll(/^\| [^|]+\| `(agent-[a-z-]+\.yml)` \|/gm)].map((m) => m[1]);
     expect(table.length).toBe(19);

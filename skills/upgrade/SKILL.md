@@ -72,6 +72,7 @@ Walk the person through it when they come back after the merge, or whenever they
 | The live checks | agent, person | On the next runs after the merge | Watch, with `gh pr checks <number>`, and tell the person what each showed: the next release pull request, opened by the Releaser where the release caller maps it, runs CI; the next pull request's verdict comes from the Judge's App; a commit of the Author's App passes `dco`. |
 | `/reload-plugins` | person | On merge, where `.claude/settings.json` declares the plugin | Each person pulls the default branch and runs `/reload-plugins` (step 9). |
 | `app.unused` | person | A week after the merge, if every run on the new Apps has been green | Uninstall and delete the App as the fix says, once no other repository's register names it. |
+| `qa-store.variables` | person | On merge, once a store job has run green on the secrets: its log shows `***` where the role and the bucket were | The fix's `gh variable delete` lines. Never before: until the callers on the default branch map the secrets, the hook reads the variables. |
 | `secret.stale` | decision | With `app.unused`, a week of green runs after the merge | Offer the fix's `gh secret delete` commands, and run each only on a yes. |
 | `## Left to do` | person | When the person chooses | Each step skipped during the upgrade, by its finding's id, walked through as above. |
 

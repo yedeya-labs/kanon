@@ -8,7 +8,7 @@ This page is the contract, then the AWS implementation and its runbook.
 
 ### The hook
 
-`.github/actions/qa-store/action.yml` is a composite action you write, when you run a store. Kanon's [`qa-store` block](../actions/qa-store/action.yml) calls it with six string inputs:
+`.github/actions/qa-store/action.yml` is a composite action you write, when you run a store. Kanon's [`qa-store` block](../actions/qa-store/action.yml) calls it with seven string inputs:
 
 | Input | What |
 |---|---|
@@ -17,7 +17,8 @@ This page is the contract, then the AWS implementation and its runbook.
 | `dir` | A directory the block made for this operation. The hook reads and writes only the files below. |
 | `from` | `export` and `cost-rows`: the window's start, a store stamp such as `20260904T120245Z`, exclusive. |
 | `to` | `cost-rows`: the window's end, a store stamp, inclusive. Empty means now. |
-| `variables` | Your repository's Actions variables, as JSON (`toJSON(vars)`, read by the lane's store step). A composite action can't read `vars` itself, so this is where the hook finds its store's coordinates: read one with `fromJSON(inputs.variables \|\| '{}').<NAME>`. Keep anything that names your cloud account here, not in the committed hook. |
+| `secrets` | The store's two secrets, `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET`, as JSON. The lane's caller maps them by name, and the lane's store step hands them on. A composite action can't read `secrets` itself, so this is where the hook finds its store's coordinates: read one with `fromJSON(inputs.secrets \|\| '{}').<NAME>`. Keep anything that names your cloud account here, never in the committed hook: the runner masks a secret in every log ([#433](https://github.com/yedeya-labs/kanon/issues/433)). |
+| `variables` | **Deprecated.** Your repository's Actions variables, as JSON (`toJSON(vars)`). The runner masks none of them, so every store job's log prints all of them. It is still passed so that a hook which reads its coordinates here keeps working while you [move them to secrets](#move-the-coordinates-to-secrets). A later release stops passing it. |
 
 The block reads the hook from a checkout of the commit the run is for, made without persisted credentials.
 
@@ -89,8 +90,9 @@ The one thing the environment did that the ref does not is name the store jobs i
 
 ### Setting it up
 
-1. **Write the hook.** For Kanon's AWS store it is one call of Kanon's AWS action (below), with the role and the bucket read from two repository variables, so the account id they carry is never committed. For any other store, implement the five operations on the files above, reading anything account-specific from `variables` the same way.
-2. **Grant `id-token: write` and `contents: read` in the caller** of each store-coupled lane. Kanon's lane uses `id-token` only in its store jobs, and their checkout needs `contents: read`. A lane that exports the store, such as the code audit, also needs `actions: write`, which only its delete job uses.
+1. **Write the hook.** For Kanon's AWS store it is one call of Kanon's AWS action (below), with the role and the bucket read from two repository secrets, so the account id they carry is never committed and never printed. For any other store, implement the five operations on the files above, and keep its account-specific values in the same two secrets.
+2. **Map the two secrets in the caller** of each store-coupled lane: `QA_STORE_ROLE_ARN: ${{ secrets.QA_STORE_ROLE_ARN }}` and `QA_STORE_BUCKET: ${{ secrets.QA_STORE_BUCKET }}` under its job's `secrets:`. `kanon init` writes them. A caller of a repository with no store may leave them out.
+3. **Grant `id-token: write` and `contents: read` in the caller** of each store-coupled lane. Kanon's lane uses `id-token` only in its store jobs, and their checkout needs `contents: read`. A lane that exports the store, such as the code audit, also needs `actions: write`, which only its delete job uses.
 
 ## Kanon's AWS implementation
 
@@ -129,11 +131,11 @@ node infra/qa-store/aws/provision.mjs --repository <owner>/<repo> --region <regi
 
 It needs `gh`, signed in with read access to the repository: it reads the default branch and the subject prefix from GitHub's API and prints the subject it will trust. A repository with a custom subject template (`use_default: false`) is refused, because its subject is not a branch ref; pass the exact subject with `--subject` instead. `--subject` may be repeated, to trust both prefix forms while a repository moves between them. The script reads the default branch from the API even then, and refuses a subject on any other branch: trusting another branch would let anyone who can push to it reach the store. Re-running it on an existing stack replaces the trust in place: an older stack that trusted the `kanon-qa-store` environment trusts the default branch's ref instead, and the environment can then be deleted.
 
-Pass `--no-oidc-provider` if `aws iam list-open-id-connect-providers` already lists `token.actions.githubusercontent.com`. Put the store in the reference environment's account (`K-OBS-17`). The last command prints the stack's outputs, `RoleArn`, `TableName` and `BucketName`. Store the two that name your account as repository variables, which the hook reads, never in a committed file:
+Pass `--no-oidc-provider` if `aws iam list-open-id-connect-providers` already lists `token.actions.githubusercontent.com`. Put the store in the reference environment's account (`K-OBS-17`). The last command prints the stack's outputs, `RoleArn`, `TableName` and `BucketName`. Store the two that name your account as repository secrets, which the lanes hand the hook, never in a committed file or a variable. A variable would print in every store job's log, and the account id with it:
 
 ```sh
-gh variable set QA_STORE_ROLE_ARN --body '<RoleArn>' -R <owner>/<repo>
-gh variable set QA_STORE_BUCKET --body '<BucketName>' -R <owner>/<repo>
+gh secret set QA_STORE_ROLE_ARN --body '<RoleArn>' -R <owner>/<repo>
+gh secret set QA_STORE_BUCKET --body '<BucketName>' -R <owner>/<repo>
 ```
 
 Then write the hook, with the table and the region in it:
@@ -150,6 +152,7 @@ inputs:
   from: { required: false, default: "" }
   to: { required: false, default: "" }
   variables: { required: false, default: "" }
+  secrets: { required: false, default: "" }
 runs:
   using: composite
   steps:
@@ -160,15 +163,44 @@ runs:
         dir: ${{ inputs.dir }}
         from: ${{ inputs.from }}
         to: ${{ inputs.to }}
-        role-arn: ${{ fromJSON(inputs.variables || '{}').QA_STORE_ROLE_ARN }}
+        role-arn: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_ROLE_ARN || fromJSON(inputs.variables || '{}').QA_STORE_ROLE_ARN }}
         region: <region>
         table: <TableName>
-        bucket: ${{ fromJSON(inputs.variables || '{}').QA_STORE_BUCKET }}
+        bucket: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET || fromJSON(inputs.variables || '{}').QA_STORE_BUCKET }}
 ```
 
-With either variable unset the AWS action has no role or no bucket, and fails: a read is then `degraded` and a write fails its job.
+Each coordinate falls back to the variable of the same name, which an earlier template read, so the hook works before and after you [move them to secrets](#move-the-coordinates-to-secrets). With neither set the AWS action has no role or no bucket, and fails: a read is then `degraded` and a write fails its job.
 
 <!-- x-release-please-end -->
+
+### Move the coordinates to secrets
+
+Kanon v0.33.0 told you to keep `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET` as repository **variables**. That release prints every variable at the head of each store job's log, so on a public repository anyone can read your AWS account id there ([#433](https://github.com/yedeya-labs/kanon/issues/433)). From the first release after v0.33.0, the lanes take them as secrets, which the runner masks. [`kanon doctor`](doctor.md) reports `qa-store.variables` while a variable still holds either one. The move, in this order:
+
+1. **Copy each variable into a secret of the same name.** Nothing changes yet: your callers don't map the secrets, so the hook still reads the variables.
+
+   ```sh
+   gh variable get QA_STORE_ROLE_ARN -R <owner>/<repo> | gh secret set QA_STORE_ROLE_ARN -R <owner>/<repo>
+   gh variable get QA_STORE_BUCKET -R <owner>/<repo> | gh secret set QA_STORE_BUCKET -R <owner>/<repo>
+   ```
+
+2. **Move the callers' pin past v0.33.0, and map both secrets** in the caller of each store-coupled lane you run: the explore lane, the dispatch sweep, the code audit and the Overseer. GitHub refuses a secret that the pinned lane doesn't declare, so map them in the same change as the pin, or after it.
+
+   ```yaml
+       secrets:
+         QA_STORE_ROLE_ARN: ${{ secrets.QA_STORE_ROLE_ARN }}
+         QA_STORE_BUCKET: ${{ secrets.QA_STORE_BUCKET }}
+   ```
+
+3. **Read the secrets in the hook first**, as the template above does, with `secrets` among its inputs. Until this step, the hook still reads the variables.
+4. **Delete the variables** once a store job has run green on the secrets. Its log shows `***` where the role and the bucket were.
+
+   ```sh
+   gh variable delete QA_STORE_ROLE_ARN -R <owner>/<repo>
+   gh variable delete QA_STORE_BUCKET -R <owner>/<repo>
+   ```
+
+The logs of runs before the move still hold the old values until GitHub's log retention removes them. Delete those runs if that matters to you.
 
 **An existing store** of the same item model works the same way: name its table, bucket, region and role. Its role must trust the default branch's ref subject, `<prefix>:ref:refs/heads/<default branch>` with the prefix GitHub's API reports, and hold the template's grants, `s3:ListBucket` on the bucket included: without it, one run whose raw report is missing fails the whole export.
 
@@ -195,9 +227,10 @@ jobs:
     with:
       task: ${{ inputs.task }}
       apply: ${{ inputs.apply }}
-      role-arn: ${{ vars.QA_STORE_ROLE_ARN }}
       region: <region>
       table: <TableName>
+    secrets:
+      QA_STORE_ROLE_ARN: ${{ secrets.QA_STORE_ROLE_ARN }}
 ```
 
 <!-- x-release-please-end -->

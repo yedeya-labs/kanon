@@ -58,6 +58,10 @@ name: Explore (Explorer)
 #         default: ""
 #
 # NEEDS HOOK: .github/actions/explore-sweep/action.yml
+# OPTIONAL SECRET: QA_STORE_BUCKET
+# OPTIONAL SECRET: QA_STORE_ROLE_ARN
+# The lines above are read by `lane-check` and the requirements file (kanon#433): the QA store's
+# secrets, which a caller maps once its repository has a store hook, and may leave out until then.
 on:
   workflow_call:
     inputs:
@@ -78,6 +82,14 @@ on:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
+      # THE QA STORE'S COORDINATES (kanon#433): secrets, so the runner masks them in every log of
+      # the store job, the store step's own `with:` included. Optional: a repository with no store
+      # hook maps nothing, and the store is absent. The store steps below hand them to the
+      # `qa-store` block as `secrets`, by name, never the whole `secrets` context.
+      QA_STORE_ROLE_ARN:
+        required: false
+      QA_STORE_BUCKET:
+        required: false
 
 concurrency:
   # Never two sweeps at once: both would compare with the same baseline and record the same run.
@@ -134,6 +146,7 @@ jobs:
         with:
           operation: last-green
           variables: ${{ toJSON(vars) }}
+          secrets: ${{ format('{{"QA_STORE_ROLE_ARN":{0},"QA_STORE_BUCKET":{1}}}', toJSON(secrets.QA_STORE_ROLE_ARN), toJSON(secrets.QA_STORE_BUCKET)) }}
 
   # THE CHANGE GATE'S DECISION, with no credentials: it reads the store job's outputs. It runs
   # whatever happened to that job (`!cancelled()`), because a store job that failed must sweep,
@@ -175,6 +188,7 @@ jobs:
         with:
           operation: record-skip
           variables: ${{ toJSON(vars) }}
+          secrets: ${{ format('{{"QA_STORE_ROLE_ARN":{0},"QA_STORE_BUCKET":{1}}}', toJSON(secrets.QA_STORE_ROLE_ARN), toJSON(secrets.QA_STORE_BUCKET)) }}
           commit: ${{ github.sha }}
           trigger: ${{ github.event_name }}
           tier: all
@@ -226,5 +240,6 @@ jobs:
         with:
           operation: put
           variables: ${{ toJSON(vars) }}
+          secrets: ${{ format('{{"QA_STORE_ROLE_ARN":{0},"QA_STORE_BUCKET":{1}}}', toJSON(secrets.QA_STORE_ROLE_ARN), toJSON(secrets.QA_STORE_BUCKET)) }}
           kind: explorer
           report: ${{ runner.temp }}/kanon-explore/qa-explore-summary.json
