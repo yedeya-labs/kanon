@@ -38,8 +38,9 @@
 //     conflict, which this cannot tell from a deliberate correction (the rest of RA-1992).
 //     In a doc, `citation-guard` still judges it against the tree. In a CODE COMMENT nothing
 //     else does — `citation-guard` reads Markdown only — so it is read here as ADVICE
-//     (kanon#175, `rewritten`): a re-point the diff's own map disagrees with, or a line past
-//     the end of the file. Advisory, not fatal, for the reason the measurement gave.
+//     (kanon#175, `rewritten`): a re-point the diff's own map disagrees with, a line past
+//     the end of the file, or a fresh coordinate whose comment names an identifier the cited
+//     lines don't hold (kanon#347). Advisory, not fatal, for the reason the measurement gave.
 //   • A coordinate whose cited lines the diff EDITED rather than moved. There is no
 //     mechanical answer — whether a rewritten line still says what the sentence claims
 //     is a reading question — so these are LISTED as advisory, never fatal.
@@ -101,7 +102,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { SOURCE_EXT, coordinatesIn, docPatternsFrom, isOracleSpec, resolvePath, selectDocs, unmatchedMessage } from './citation-guard.mjs';
+import { SOURCE_EXT, anchorFound, anchorsFor, coordinatesIn, docPatternsFrom, isOracleSpec, resolvePath, selectDocs, unmatchedMessage } from './citation-guard.mjs';
 import { qaToolingImport } from './spec-lib.mjs';
 import { ESCALATION_FILE, defaultEscalationFile, parseEscalationFile, printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
 import { STACK_FILE, UNDECLARED, codeAreasDefaults, codeTrees, isCodePath, isTestPath, parseCodeAreas, readCodeAreas } from './lib/code-areas.mjs';
@@ -113,7 +114,8 @@ import { TABLE_EXT, conventionFor } from './lib/test-conventions.mjs';
  *            from: number[], to: number[], replacement: string, kind: 'doc'|'code'}} Moved
  * @typedef {{at: string, doc: string, line: number, citation: string, path: string, kind: 'doc'|'code'}} Edited
  * @typedef {{at: string, doc: string, line: number, citation: string, path: string,
- *            shape: 'off-map'|'past-eof', base?: number[], mapped?: number[], length?: number}} Rewritten
+ *            shape: 'off-map'|'past-eof'|'off-anchor', base?: number[], mapped?: number[], length?: number,
+ *            anchors?: string[]}} Rewritten
  */
 
 // WHERE A CODE COMMENT can carry a coordinate worth mapping (RA-2293): the project's code and
@@ -265,8 +267,8 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
   const edited = [];
   // A CODE-COMMENT coordinate this diff wrote or rewrote (kanon#175) — ADVISORY. The skip
   // below ("not ours to judge") rested on `citation-guard` judging it against the tree, and
-  // that guard reads Markdown only, so nothing checked these. Two shapes, each read from the
-  // diff and the head alone, neither ever fatal:
+  // that guard reads Markdown only, so nothing checked these. Three shapes, each read from the
+  // diff and the head alone, none ever fatal:
   //   • `off-map`: the hunk replaced a coordinate into the same file, and the diff's own line
   //     map sends the old one somewhere other than where the new one points. That is a
   //     re-point made against an intermediate state — a `--fix` in commit 1, then lines added
@@ -274,6 +276,13 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
   //     deliberate correction of an already-wrong coordinate looks like (RA-1992), so it says
   //     where the map puts it and leaves the reading to the author.
   //   • `past-eof`: it names a line the head's file does not have.
+  //   • `off-anchor` (kanon#347): a coordinate written FRESH — its line in the diff replaced no
+  //     coordinate into the same file, so there is no old one to map — whose comment names an
+  //     identifier before it (`anchorsFor`, as `citation-guard` reads a doc sentence) that
+  //     neither the head's cited lines nor their enclosing scope hold (`anchorFound`). Read
+  //     whether or not the target file is in the diff. A comment that names no identifier
+  //     gets no verdict: most code comments name it on an earlier line of the comment, which
+  //     the line-by-line read cannot see, so silence there is not a pass.
   //
   // MEASURED BEFORE CHOOSING ADVISORY (2026-10-06), replayed with `--head` over first-parent
   // history. Kanon, all 107 non-release commits: 1 advisory, a `past-eof` on an illustrative
@@ -282,16 +291,29 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
   // off-by-one range, and three coordinates pointing at a different line from the one they name) and 12 false, each a
   // deliberate correction of a coordinate already wrong on the base or a range widened on
   // purpose. 12 of 16 false is not ~0, so neither shape may fail a run.
+  //
+  // `off-anchor` MEASURED THE SAME WAY (kanon#347, 2026-10-07). Kanon, its 165 most recent
+  // non-release commits: none. The reference adopter, its 151 most recent: 2, both false. One
+  // names `svc.roles` in passing ("`authorize()` admits `superadmin` … before it reads
+  // `svc.roles` (`core.ts:259`)"), and the line it points at is the admission, which is right;
+  // `authorize()` sits on the comment's line above, which a line-by-line read can't see. The
+  // other is a guard's quotation of an old coordinate in its own source, in a tree that did not
+  // yet declare its pipeline code, which `readsCodeComments` now excludes. 0 of 2 true is not
+  // evidence it catches anything, so it stays advisory with the others.
   /** @type {Rewritten[]} */
   const rewritten = [];
-  const lengths = new Map();
-  const lengthOf = (path) => {
-    if (!lengths.has(path)) {
+  const heads = new Map();
+  const headLines = (path) => {
+    if (!heads.has(path)) {
       let text = '';
       try { text = readHead(path); } catch { text = null; }
-      lengths.set(path, text === null ? null : text.split('\n').length - (text.endsWith('\n') ? 1 : 0));
+      heads.set(path, text === null ? null : text.split('\n'));
     }
-    return lengths.get(path);
+    return heads.get(path);
+  };
+  const lengthOf = (path) => {
+    const lines = headLines(path);
+    return lines === null ? null : lines.length - (lines[lines.length - 1] === '' ? 1 : 0);
   };
   let pointing = 0;
   let pointingCode = 0;
@@ -346,6 +368,12 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
       return removedPool.get(key);
     };
 
+    // Did the hunk's removed side carry a coordinate into `path` on this line (paired) or
+    // anywhere in the hunk (uneven)? Then the coordinate here is a re-point or was carried
+    // through, which `off-map` and the move check read; only a fresh one is `off-anchor`'s.
+    const wroteOver = (h, n, path) => (h.removed.length === h.nc ? [h.removed[n - h.ns]] : h.removed)
+      .some((l) => extract(l).some((r) => resolved(r, trackedBase) === path));
+
     lines.forEach((line, i) => {
       const n = i + 1;
       const h = hunkOf(n);
@@ -355,6 +383,11 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
           const len = lengthOf(path);
           if (len !== null && c.b > len) {
             rewritten.push({ at: `${doc}:${n}`, doc, line: n, citation: c.text, path, shape: 'past-eof', length: len });
+          } else if (len !== null && !wroteOver(h, n, path)) {
+            const { anchors, anchorTokens } = anchorsFor(line, c.i);
+            if (anchorTokens.length && !anchorFound(headLines(path), c.a, c.b, anchorTokens)) {
+              rewritten.push({ at: `${doc}:${n}`, doc, line: n, citation: c.text, path, shape: 'off-anchor', anchors });
+            }
           }
         }
         if (!path || !changed.has(path)) continue;
@@ -414,7 +447,11 @@ export const rewrittenLines = (list, ci) =>
     const span = (ab) => (ab[0] === ab[1] ? `${ab[0]}` : `${ab[0]}-${ab[1]}`);
     const why = x.shape === 'past-eof'
       ? `names a line past the end of ${x.path}, which has ${x.length}`
-      : `replaced :${span(x.base)}, which this diff's own line map sends to :${span(x.mapped)}, not here — ` +
+      : x.shape === 'off-anchor'
+        ? `points at lines of ${x.path} that name none of what the comment does before it ` +
+          `(${x.anchors.slice(0, 3).map((t) => `\`${t}\``).join(', ')}), nor does their enclosing scope — ` +
+          're-derive it against the head, unless the comment names those in passing and the line is about something else'
+        : `replaced :${span(x.base)}, which this diff's own line map sends to :${span(x.mapped)}, not here — ` +
         're-derive it against the head (it may have been re-pointed before a later commit moved the lines again), ' +
         'unless the old coordinate was already wrong and this is the correction';
     return `${ci ? '::warning::' : ''}citation-shift (advisory): ${x.at}  ${x.citation} — this diff wrote this code-comment coordinate, and it ${why}.`;

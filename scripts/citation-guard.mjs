@@ -713,6 +713,44 @@ export const anchorsFor = (line, index, inherited) => {
 };
 
 /**
+ * Where the cited lines name what the sentence does: `'range'` when one of `anchorTokens` is in
+ * the range itself, `'enclosing'` when it is only in the enclosing scope, `null` when neither.
+ * Comments are removed first (`codeOnly`). Shared with `citation-shift`'s advice on a
+ * code-comment coordinate a diff writes (kanon#347), so both read an anchor the same way.
+ *
+ * ENCLOSING SCOPE COUNTS, and leaving it out made the check wrong rather than
+ * merely strict. A citation frequently points at a STATEMENT INSIDE the thing
+ * its sentence names — `| enrollStudent | services/enrollment.ts:124-129 |`
+ * targets the `insert(orders)` within `enrollStudent`, which is exactly right
+ * and contains the word "enrollStudent" nowhere. Demanding the identifier
+ * inside the range flags correct citations, and a cleanup driven by that would
+ * have REPLACED good coordinates with worse ones.
+ * Enclosing declarations PLUS a small window above the range. A citation
+ * frequently points at the statement a nearby line names — `managesTransaction:
+ * true` inside a `defineService` whose name is six lines up, or a function
+ * whose doc comment carries the identifier the sentence quotes. Comment
+ * stripping (above) is what makes the window necessary: it correctly refuses to
+ * let prose certify a coordinate, and in doing so removes the anchor from
+ * citations that are perfectly right. Widening ADMITS citations only, so the
+ * cost is precision on a check whose job is to catch coordinates that moved.
+ *
+ * @param {string[]} target the cited file's lines
+ * @param {number} a
+ * @param {number} b
+ * @param {string[]} anchorTokens
+ * @returns {'range'|'enclosing'|null}
+ */
+export const anchorFound = (target, a, b, anchorTokens) => {
+  const range = codeOnly(target.slice(a - 1, b).join('\n'));
+  if (anchorTokens.some((t) => namesIdentifier(range, t))) return 'range';
+  const enclosing = [
+    ...enclosingDeclarations(target, a),
+    ...codeOnly(target.slice(Math.max(0, a - 9), a - 1).join('\n')).split(/[^A-Za-z0-9_]+/).filter(Boolean),
+  ];
+  return anchorTokens.some((t) => enclosing.includes(t)) ? 'enclosing' : null;
+};
+
+/**
  * THE ORACLE, where a line number in prose is refused rather than discarded (RA-1479).
  *
  * `docs/qa/specs/**` is the L2 oracle: the Explorer files bugs against a `[confirmed]`
@@ -978,28 +1016,8 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
           continue;
         }
         anchored += 1;
-        const range = codeOnly(target.slice(a - 1, b).join('\n'));
-        // ENCLOSING SCOPE COUNTS, and leaving it out made the check wrong rather than
-        // merely strict. A citation frequently points at a STATEMENT INSIDE the thing
-        // its sentence names — `| enrollStudent | services/enrollment.ts:124-129 |`
-        // targets the `insert(orders)` within `enrollStudent`, which is exactly right
-        // and contains the word "enrollStudent" nowhere. Demanding the identifier
-        // inside the range flags correct citations, and a cleanup driven by that would
-        // have REPLACED good coordinates with worse ones.
-        // Enclosing declarations PLUS a small window above the range. A citation
-        // frequently points at the statement a nearby line names — `managesTransaction:
-        // true` inside a `defineService` whose name is six lines up, or a function
-        // whose doc comment carries the identifier the sentence quotes. Comment
-        // stripping (above) is what makes the window necessary: it correctly refuses to
-        // let prose certify a coordinate, and in doing so removes the anchor from
-        // citations that are perfectly right. Widening ADMITS citations only, so the
-        // cost is precision on a check whose job is to catch coordinates that moved.
-        const enclosing = [
-          ...enclosingDeclarations(target, a),
-          ...codeOnly(target.slice(Math.max(0, a - 9), a - 1).join('\n')).split(/[^A-Za-z0-9_]+/).filter(Boolean),
-        ];
-        const inRange = anchorTokens.some((t) => namesIdentifier(range, t));
-        if (!inRange && !anchorTokens.some((t) => enclosing.includes(t))) {
+        const found = anchorFound(target, a, b, anchorTokens);
+        if (!found) {
           findings.push({
             at,
             citation: whole,
@@ -1010,7 +1028,7 @@ export const auditCitations = (docs, readFile, tracked, options = {}) => {
           });
           continue;
         }
-        if (!inRange) {
+        if (found === 'enclosing') {
           viaEnclosing += 1;
           viaEnclosingAt.push(`${at}  ${whole}`);
         }

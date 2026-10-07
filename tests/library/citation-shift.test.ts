@@ -467,6 +467,67 @@ describe('a code-comment coordinate this diff wrote is read as advice (kanon#175
   });
 });
 
+/**
+ * kanon#347 — a code-comment coordinate the diff writes FRESH, with no old coordinate on its
+ * line to map, was checked only against the end of its file. Its comment's own identifiers are
+ * now looked for in the cited lines and their enclosing scope, as `citation-guard` reads a doc.
+ */
+describe('a fresh code-comment coordinate is read against what its comment names (kanon#347)', () => {
+  const ORDERS = [
+    'export const loadOrder = (id) => {',
+    '  return db.find(id);',
+    '};',
+    '',
+    'export const saveOrder = (o) => {',
+    '  return db.insert(o);',
+    '};',
+    '',
+  ].join('\n');
+  const added = (line: string) => `+++ b/tests/a.test.ts\n@@ -0,0 +1 @@\n+${line}\n`;
+  const run = (line: string, diff = added(line)) =>
+    shiftedCoordinates({
+      docs: [],
+      code: ['tests/a.test.ts'],
+      readHead: (p: string) => (p === 'tests/a.test.ts' ? `${line}\n` : ORDERS),
+      trackedHead: ['tests/a.test.ts', 'src/orders.ts'],
+      trackedBase: ['tests/a.test.ts', 'src/orders.ts'],
+      diff: parseDiff(diff),
+    }).rewritten;
+
+  it('flags a fresh coordinate whose lines name none of what its comment does, though the target is not in the diff', () => {
+    expect(run('// `saveOrder` writes it (orders.ts:2)')).toEqual([
+      { at: 'tests/a.test.ts:1', doc: 'tests/a.test.ts', line: 1, citation: 'orders.ts:2', path: 'src/orders.ts', shape: 'off-anchor', anchors: ['saveOrder'] },
+    ]);
+  });
+
+  it('says nothing when the range or its enclosing scope names it', () => {
+    expect(run('// `db.insert` writes it (orders.ts:6)')).toEqual([]);
+    expect(run('// `saveOrder` writes it (orders.ts:6)')).toEqual([]);
+  });
+
+  it('gives no verdict on a comment that names no identifier before the coordinate', () => {
+    expect(run('// it is written at orders.ts:2')).toEqual([]);
+    expect(run('// orders.ts:2 is where `saveOrder` writes it')).toEqual([]);
+  });
+
+  it('leaves a re-point, and a coordinate carried through an edit, to the map', () => {
+    const repoint = '+++ b/tests/a.test.ts\n@@ -1 +1 @@\n-// `saveOrder` writes it (orders.ts:5)\n+// `saveOrder` writes it (orders.ts:2)\n';
+    expect(run('// `saveOrder` writes it (orders.ts:2)', repoint)).toEqual([]);
+  });
+
+  it('says nothing about a line the diff did not write, and the move check is unchanged', () => {
+    const elsewhere = '+++ b/tests/a.test.ts\n@@ -1,0 +2 @@\n+// unrelated\n';
+    expect(run('// `saveOrder` writes it (orders.ts:2)', elsewhere)).toEqual([]);
+  });
+
+  it('prints what the comment names, as advice', () => {
+    const x = { at: 't.ts:1', doc: 't.ts', line: 1, citation: 'orders.ts:2', path: 'src/orders.ts', shape: 'off-anchor' as const, anchors: ['saveOrder'] };
+    const [l] = rewrittenLines([x], false);
+    expect(l).toMatch(/^citation-shift \(advisory\): t\.ts:1 {2}orders\.ts:2 — /);
+    expect(l).toContain('points at lines of src/orders.ts that name none of what the comment does before it (`saveOrder`)');
+  });
+});
+
 describe('the docs it maps are the guard\'s `--path` list, `docs/**/*.md` by default (kanon#388)', () => {
   const setup = () => {
     const dir = mkdtempSync(join(tmpdir(), 'cshift-paths-'));
