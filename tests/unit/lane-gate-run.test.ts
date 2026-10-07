@@ -45,3 +45,14 @@ describe.each(CASES)('%s on a %s', (file, trigger) => {
     expect(r.summary).toContain('not in the App register');
   });
 });
+
+// A schedule on a merge-queue repository runs as the queue, named without its `[bot]` suffix
+// (run 37638246558 failed red on it). Every scheduled lane admits it, without a permission lookup.
+describe.each(CASES.filter(([, trigger]) => trigger === 'schedule'))('%s on a schedule run as the merge queue', (file) => {
+  it('admits it', () => {
+    const r = runGate(file, 'schedule', { login: 'github-merge-queue' }, { STUB_PERMISSION_FAILS: '1' });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('true');
+    expect(r.summary).toContain('github-merge-queue[bot]');
+  });
+});
