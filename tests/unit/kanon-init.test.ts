@@ -528,6 +528,47 @@ describe('kanon init and the required check (#444)', () => {
     expect(graphql(done)).toEqual([]);
   });
 
+  // #459: through a merge queue, the queue waits for the check on its merge_group run.
+  describe('through a merge queue (#459)', () => {
+    const noQueueEvent = (text: string) => text.replace('  merge_group:\n', '');
+    const queue = { type: 'merge_queue', parameters: { merge_method: 'SQUASH' } };
+
+    it("creates its queued ruleset without the check while main's job doesn't run on merge_group, and names the workflow to add it to", async () => {
+      const dir = checkout({ '.github/workflows/ci.yml': noQueueEvent(ciFile('v1.2.3', 'main')) });
+      const github = fakeGitHub({ kind: 'Organization', defaultWorkflows: { 'ci.yml': noQueueEvent(ciFile('v1.2.3', 'main')) } });
+      const d = parse(await run(dir, github, ['--json', '--no-apps']));
+      expect(ruleTypes(github)).toEqual(['deletion', 'non_fast_forward', 'pull_request', 'merge_queue']);
+      const f = d.findings.find((x) => x.id === 'ruleset.require-check')!;
+      expect(f.message).toBe(`No job of a workflow on main reports the status check "${LANE_CHECK}" on every pull request and every queued merge yet, so the ruleset doesn't require it: a required check that nothing reports blocks every other pull request (K-ADOPT-1 step 8).`);
+      expect(f.fix.text).toMatch(/^After a pull request that adds merge_group, the event the merge queue runs its checks on, to the triggers of \.github\/workflows\/ci\.yml, merges to main/);
+      // init doesn't write a second job that reports the check beside the project's.
+      expect(existsSync(join(dir, '.github/workflows/lane-check.yml'))).toBe(false);
+    });
+
+    it('requires the check on a queued ruleset once the job runs on merge_group', async () => {
+      const github = fakeGitHub({ kind: 'Organization' });
+      await run(checkout(), github);
+      expect(ruleTypes(github)).toEqual(['deletion', 'non_fast_forward', 'pull_request', 'required_status_checks', 'merge_queue']);
+    });
+
+    it("doesn't add the check to an existing ruleset with a merge queue while main's job doesn't run on merge_group", async () => {
+      const github = fakeGitHub({ defaultWorkflows: { 'ci.yml': noQueueEvent(ciFile('v1.2.3', 'main')) }, rulesets: [ruleset({ rules: [...ruleset().rules, queue] })] });
+      const d = parse(await run(checkout(), github, ['--json', '--no-apps']));
+      expect(writes(github.calls).filter((a) => a.includes('PUT'))).toEqual([]);
+      expect(d.findings.find((x) => x.id === 'ruleset.require-check')!.fix.text).toMatch(/^After the pull request that adds \.github\/workflows\/ci\.yml#lanes merges to main/);
+      // Without the queue, the same job is enough.
+      const plain = fakeGitHub({ defaultWorkflows: { 'ci.yml': noQueueEvent(ciFile('v1.2.3', 'main')) }, rulesets: [ruleset()] });
+      await run(checkout(), plain);
+      expect(writes(plain.calls).filter((a) => a.includes('PUT'))).toEqual([['api', '-X', 'PUT', 'repos/acme/widgets/rulesets/7', '--input', '-']]);
+    });
+
+    it('asks nothing of merge_group on a plan without the queue, where init creates its ruleset without one', async () => {
+      const github = fakeGitHub({ defaultWorkflows: { 'ci.yml': noQueueEvent(ciFile('v1.2.3', 'main')) } });
+      await run(checkout(), github);
+      expect(ruleTypes(github)).toEqual(['deletion', 'non_fast_forward', 'pull_request', 'required_status_checks']);
+    });
+  });
+
   describe("lane-check's own workflow (L5's G14)", () => {
     const job = (on: string) => `name: Build\non:\n${on}jobs:\n  lanes:\n    name: Lane check\n    runs-on: ubuntu-latest\n    steps:\n      - uses: yedeya-labs/kanon/actions/lane-check@v1.2.3\n`;
     const writesLaneCheck = async (files: Record<string, string>) => {
@@ -564,6 +605,90 @@ describe('kanon init and the required check (#444)', () => {
       const again = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps']));
       expect(again.files.find((f) => f.path === '.github/workflows/lane-check.yml')!.status).toBe('same');
     });
+  });
+});
+
+// #451: in a repository that hosts the lanes, `.github/workflows/<lane>.yml` is the lane itself,
+// so its caller lives elsewhere, which the adoption record waives (`caller.misplaced`, #390).
+// init honours that waiver as the caller's path, and its JSON always holds each caller's text.
+describe("kanon init and a caller at the path the adoption record declares (#451)", () => {
+  const LANE = 'name: Rebase lane\non:\n  workflow_call:\njobs:\n  rebase:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n';
+  const record = (bullets: string) => `# Adoption record\n\n## Choices\n\n${bullets}`;
+  const waiver = (path: string) => `- **Waived doctor finding:** \`caller.misplaced\` on \`${path}\` (the lane itself holds its name)\n`;
+  const RELEASE = `v${JSON.parse(read(ROOT, 'package.json')).version}`;
+  const at = (lane: string, path: string, release = RELEASE) => callerFile(lane, REQ.lanes[lane]!, { release, ciName: 'CI', defaultBranch: 'main', path });
+  const fileOf = (d: Doc, path: string) => d.files.find((f) => f.path === path);
+
+  it('compares the caller at the waived path, not the lane at the default one, and counts the lane as installed', async () => {
+    const dir = checkout({
+      '.github/workflows/agent-rebase.yml': LANE,
+      '.github/workflows/rebase.yml': at('agent-rebase', '.github/workflows/rebase.yml', 'v1.0.0'),
+      'docs/qa/adoption.md': record(waiver('.github/workflows/rebase.yml')),
+    });
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase']));
+    expect(fileOf(d, '.github/workflows/agent-rebase.yml')).toBeUndefined();
+    const caller = fileOf(d, '.github/workflows/rebase.yml')!;
+    expect(caller.status).toBe('differs');
+    expect(caller.content).toBe(at('agent-rebase', '.github/workflows/rebase.yml'));
+    expect(caller.diff).toContain(`+     uses: yedeya-labs/kanon/.github/workflows/agent-rebase.yml@${RELEASE}`);
+    expect(d.inspection.installedLanes).toContain('agent-rebase');
+  });
+
+  it("gives every caller's full content, whatever its status, and none of a declaration that is the project's", async () => {
+    const dir = checkout({ '.github/workflows/agent-rebase.yml': LANE, 'docs/qa/stack.md': '# Stack\n' });
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase']));
+    // Without a waiver the default path is offered, and its text is there to write elsewhere.
+    const offered = fileOf(d, '.github/workflows/agent-rebase.yml')!;
+    expect(offered).toMatchObject({ status: 'differs', content: at('agent-rebase', '.github/workflows/agent-rebase.yml') });
+    expect(fileOf(d, 'docs/qa/stack.md')).toMatchObject({ status: 'kept', content: null });
+    // A caller already as init writes it.
+    const same = checkout({ '.github/workflows/agent-review.yml': at('agent-review', '.github/workflows/agent-review.yml') });
+    const s = parse(await run(same, fakeGitHub(), ['--json', '--dry-run', '--no-apps']));
+    expect(fileOf(s, '.github/workflows/agent-review.yml')).toMatchObject({ status: 'same', content: at('agent-review', '.github/workflows/agent-review.yml') });
+  });
+
+  it('writes the caller at the waived path, the runtime-version trigger naming that path', async () => {
+    const dir = checkout({
+      '.github/workflows/agent-overseer.yml': LANE,
+      '.github/workflows/overseer.yml': at('agent-overseer', '.github/workflows/overseer.yml', 'v1.0.0'),
+      'docs/qa/adoption.md': record(waiver('.github/workflows/overseer.yml')),
+    });
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,overseer']));
+    const caller = fileOf(d, '.github/workflows/overseer.yml')!;
+    expect(caller.content).toContain('    paths:\n      - .github/workflows/overseer.yml\n');
+    expect(caller.content).not.toContain('agent-overseer.yml\n');
+  });
+
+  it("keeps the default path when the waived file doesn't call the lane, or the default path already does", async () => {
+    // The waived file calls another lane: the waiver is that lane's.
+    const other = checkout({
+      '.github/workflows/agent-rebase.yml': LANE,
+      '.github/workflows/rebase.yml': at('agent-review', '.github/workflows/rebase.yml'),
+      'docs/qa/adoption.md': record(waiver('.github/workflows/rebase.yml')),
+    });
+    const o = parse(await run(other, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase']));
+    expect(fileOf(o, '.github/workflows/agent-rebase.yml')!.status).toBe('differs');
+    expect(o.inspection.installedLanes).not.toContain('agent-rebase');
+    // A waived file that isn't there.
+    const missing = checkout({ '.github/workflows/agent-rebase.yml': LANE, 'docs/qa/adoption.md': record(waiver('.github/workflows/rebase.yml')) });
+    expect(fileOf(parse(await run(missing, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase'])), '.github/workflows/agent-rebase.yml')).toBeDefined();
+    // The default path is the lane's caller already: a second caller elsewhere doesn't move it.
+    const both = checkout({
+      '.github/workflows/agent-rebase.yml': at('agent-rebase', '.github/workflows/agent-rebase.yml'),
+      '.github/workflows/rebase.yml': at('agent-rebase', '.github/workflows/rebase.yml'),
+      'docs/qa/adoption.md': record(waiver('.github/workflows/rebase.yml')),
+    });
+    const b = parse(await run(both, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase']));
+    expect(fileOf(b, '.github/workflows/agent-rebase.yml')!.status).toBe('same');
+    expect(fileOf(b, '.github/workflows/rebase.yml')).toBeUndefined();
+  });
+
+  it('honours only a waiver of caller.misplaced, under ## Choices', async () => {
+    const files = (record: string) => ({ '.github/workflows/agent-rebase.yml': LANE, '.github/workflows/rebase.yml': at('agent-rebase', '.github/workflows/rebase.yml'), 'docs/qa/adoption.md': record });
+    const paths = async (text: string) => parse(await run(checkout(files(text)), fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase'])).files.map((f) => String(f.path)).filter((p) => /rebase/.test(p));
+    expect(await paths(record(waiver('.github/workflows/rebase.yml')))).toEqual(['.github/workflows/rebase.yml']);
+    expect(await paths(record(waiver('.github/workflows/rebase.yml').replace('caller.misplaced', 'caller.name')))).toEqual(['.github/workflows/agent-rebase.yml']);
+    expect(await paths(`# Adoption record\n\n## People\n\n${waiver('.github/workflows/rebase.yml')}`)).toEqual(['.github/workflows/agent-rebase.yml']);
   });
 });
 
@@ -1383,6 +1508,8 @@ describe('kanon init and the lane catalogue (#428)', () => {
     expect(d.catalogue.flatMap((g) => g.lanes.map((l) => l.lane)).sort()).toEqual(Object.keys(REQ.lanes).sort());
     expect(d.catalogue[0]!.lanes[0]).toMatchObject({ lane: 'agent-review', app: 'judge', recommended: true, installed: false, qaStore: false, schedule: null });
     expect(d.catalogue.flatMap((g) => g.lanes).find((l) => l.lane === 'agent-explore')).toMatchObject({ app: 'author', qaStore: true, schedule: '0 3 * * *', hooks: ['.github/actions/explore-sweep/action.yml'] });
+    // Its id-token grant is for the aggregate function, not a QA store (kanon#471's review).
+    expect(d.catalogue.flatMap((g) => g.lanes).find((l) => l.lane === 'agent-explore-telemetry')).toMatchObject({ app: 'author', qaStore: false, schedule: '30 6 * * 2' });
   });
 
   it('recommends only the review lane on a repository that calls none', () => {
@@ -1420,6 +1547,30 @@ describe('kanon init and the lane catalogue (#428)', () => {
 // #428: telemetry is asked, off by default, and installed only on an explicit yes. On yes, init
 // writes the collector's caller exactly as docs/telemetry.md gives it, and leaves the operator's
 // side (the register entry and the two variables) as a step.
+// #452 (#79): a merge through a merge queue doesn't start a lane that runs on CI finishing on the
+// default branch, so init says when the default branch has one, and the catalogue what it changes.
+describe('kanon init and a merge queue on the default branch (#452)', () => {
+  const queue = { type: 'merge_queue', parameters: { merge_method: 'SQUASH' } };
+  const ruleset = (rules: unknown[]) => ({ id: 7, name: 'protect main', target: 'branch', enforcement: 'active', conditions: { ref_name: { include: ['~DEFAULT_BRANCH'] } }, rules: [{ type: 'pull_request', parameters: { allowed_merge_methods: ['squash'] } }, ...rules] });
+  const inspect = async (over: Parameters<typeof fakeGitHub>[0]) => parse(await run(checkout(), fakeGitHub(over), ['--json', '--dry-run', '--no-apps'])).inspection.defaultBranchMergeQueue;
+
+  it('says whether the default branch merges through a merge queue: its ruleset has one, or the one init creates will', async () => {
+    expect(await inspect({ rulesets: [ruleset([queue])] })).toBe(true);
+    expect(await inspect({ kind: 'Organization', rulesets: [ruleset([])] })).toBe(false);
+    expect(await inspect({ kind: 'Organization' })).toBe(true);
+    expect(await inspect({})).toBe(false);
+    expect(await inspect({ kind: 'Organization', private: true, orgPlan: 'enterprise', rulesetsOnPlan: false })).toBe(false);
+  });
+
+  it("gives each catalogue lane what a merge queue changes for it, from docs/lanes.json", async () => {
+    const d = parse(await run(checkout(), fakeGitHub(), ['--json', '--dry-run', '--no-apps']));
+    const lanes = (d.catalogue as Array<{ lanes: Array<{ lane: string; mergeQueue: string | null }> }>).flatMap((g) => g.lanes);
+    expect(lanes.find((l) => l.lane === 'agent-rebase')!.mergeQueue).toBe(REQ.catalogue!.lanes['agent-rebase']!.mergeQueue);
+    expect(lanes.find((l) => l.lane === 'agent-rebase')!.mergeQueue).toMatch(/^Through a merge queue, a merge doesn't start it/);
+    expect(lanes.find((l) => l.lane === 'agent-review')!.mergeQueue).toBeNull();
+  });
+});
+
 describe('kanon init and telemetry (#428)', () => {
   const RELEASE = `v${JSON.parse(read(ROOT, 'package.json')).version}`;
   const withVariables = (names: string[] | null) => {

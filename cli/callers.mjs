@@ -18,7 +18,7 @@ import { URL } from 'node:url';
 /**
  * @typedef {{ type: string, description: string }} LaneInput
  * @typedef {{ identities: string[], secrets: string[], inputs: Record<string, LaneInput>, grant: Record<string, string>,
- *   reads: string[], readsWorkflows: string[], hooks: string[], callerName?: string, callerRunNameEndsWith?: string }} Lane
+ *   reads: string[], readsWorkflows: string[], hooks: string[], qaStore?: boolean, callerName?: string, callerRunNameEndsWith?: string }} Lane
  * @typedef {{ name: string, permissions: Record<string, string> }} RoleIdentity
  * @typedef {{ name: string, roles: string[], permissions: Record<string, string> }} AppIdentity
  * @typedef {{ lanes: Record<string, Lane>, hook: { path: string, inputs: string[] },
@@ -26,7 +26,7 @@ import { URL } from 'node:url';
  *   declarations?: Record<string, { baseline: boolean, requiredSections: string[] }>,
  *   release?: { dcoExemptsReleaser?: boolean }, catalogue?: Catalogue,
  *   telemetry?: { collector: string, variables: string[] } }} Requirements
- * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, recommend: 'always' | string[], when: string }} CatalogueEntry
+ * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, recommend: 'always' | string[], when: string, mergeQueue?: string }} CatalogueEntry
  * @typedef {{ groups: Array<{ id: string, title: string, header: string }>, lanes: Record<string, CatalogueEntry> }} Catalogue
  */
 
@@ -65,6 +65,7 @@ export const TRIGGERS = {
   'agent-explore': { name: 'Explore (Explorer)', job: 'explore', schedule: '0 3 * * *', dispatch: { tier: false } },
   'agent-dispatch-sweep': { name: 'Dispatch sweep (Lead)', job: 'sweep', schedule: '30 4 * * *', dispatch: { apply: false } },
   'agent-code-audit': { name: 'Code audit (Explorer)', job: 'audit', schedule: '30 7 */3 * *', dispatch: {} },
+  'agent-explore-telemetry': { name: 'Explore the telemetry (Explorer)', job: 'explore', schedule: '30 6 * * 2', dispatch: {} },
   'agent-overseer': { name: 'Overseer (Overseer)', job: 'oversee', schedule: '0 6 * * 1', dispatch: {}, pinMoved: true },
 };
 
@@ -76,9 +77,10 @@ const y = (s) => (/^[A-Za-z0-9_][A-Za-z0-9_ ./()—-]*$/.test(s) && !/[ ]$/.test
  * `permissions` and one job that passes its inputs through, maps exactly the lane's secrets and
  * names the lane at `release`.
  * @param {string} lane the lane's file name without `.yml` @param {Lane} spec
- * @param {{ release: string, ciName: string, defaultBranch: string }} o
+ * @param {{ release: string, ciName: string, defaultBranch: string, path?: string }} o `path`: where
+ *   the caller lives, when not at its lane's file name (#451); a trigger on the file itself names it
  */
-export const callerFile = (lane, spec, { release, ciName, defaultBranch }) => {
+export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = `.github/workflows/${lane}.yml` }) => {
   const t = TRIGGERS[lane];
   if (!t) throw new Error(`no caller template for the lane ${lane}: add its triggers to TRIGGERS in cli/callers.mjs`);
   const out = [`# The caller of Kanon's ${lane} lane, written by \`kanon init\` (docs/lanes.md). The triggers are yours;`, '# the rest is the lane\'s, and `lane-check` holds this file to it.'];
@@ -107,7 +109,7 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch }) => {
   }
   if (t.pinMoved) {
     out.push('  # The runtime-version trigger: a merged pull request that moves this file\'s Kanon pin.',
-      '  pull_request_target:', '    types: [closed]', `    branches: [${y(defaultBranch)}]`, '    paths:', `      - .github/workflows/${lane}.yml`);
+      '  pull_request_target:', '    types: [closed]', `    branches: [${y(defaultBranch)}]`, '    paths:', `      - ${path}`);
   }
   out.push('', 'permissions:');
   for (const [k, v] of Object.entries(spec.grant)) out.push(`  ${k}: ${v}`);

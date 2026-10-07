@@ -55,7 +55,8 @@
  * from the default branch (`K-MERGE-17`) and hands `escalatingPaths` of it to `mergeVerdict`,
  * so a pull request can't add or remove an escalation path for itself. An adopter whose
  * adoption record, on that branch, declares its production promotion human-gated has its
- * high-risk paths merge in the green zone, and nothing else (`K-MERGE-4`, kanon#158).
+ * high-risk paths merge in the green zone, except those it marks `always` and those that are
+ * judging inputs, and nothing else (`K-MERGE-4`, kanon#158, kanon#344).
  *
  * `docs/qa/specs/**` is deliberately never an escalation path: those specs are the project's
  * DELIVERABLE, and escalating them made the Merger decline every PR the project he exists for
@@ -1586,9 +1587,9 @@ export function summaryLines({ considered, dryRun, merged, escalated, waiting = 
  *
  * A HUMAN-GATED PRODUCTION PROMOTION (`K-MERGE-4`, kanon#158) is read from the adoption record
  * on the same default branch, never from a PR, so a PR that declares one is still judged
- * without it. Declared, the project's high-risk paths merge in the green zone, and `inputsAt`
- * gives the judging inputs on that branch, so a high-risk path that is also one still
- * escalates (`escalatingPaths`). It is read only when the opt-in is declared: the default costs
+ * without it. Declared, the project's high-risk paths merge in the green zone, except each one
+ * marked `always`, which still escalates (kanon#344), and `inputsAt` gives the judging inputs on
+ * that branch, so a high-risk path that is also one still escalates (`escalatingPaths`). It is read only when the opt-in is declared: the default costs
  * no extra read. A record that can't be read, is malformed, or a judging-input set that can't
  * be read, throws by name: a sweep with the wrong rules would merge what a human decides.
  * `print` is given one line either way: the default, or what the declaration widened.
@@ -1604,8 +1605,10 @@ export function readEscalations(repo, run = gh, print = (line) => console.log(li
   const promotion = readProductionPromotionAt(branch, (path) => read(path));
   printDefaults('merge-gate', promotion, print);
   if (promotion.gate === null) return escalatingPaths(file);
-  const relaxed = file.paths.length;
-  print(`merge-gate: the production promotion is human-gated (${promotion.gate}), as docs/qa/adoption.md on \`${branch}\` declares, so the project's ${relaxed} high-risk path${relaxed === 1 ? '' : 's'} under \`## Escalation paths\` merge${relaxed === 1 ? 's' : ''} in the green zone. The pipeline's own paths, the project's pipeline code and every judging input still escalate (K-MERGE-4)`);
+  // Only the unmarked entries are relaxed: an entry marked `always` keeps escalating, so the
+  // line that names the widening counts only what it widens (kanon#344).
+  const relaxed = file.paths.filter(({ always }) => !always).length;
+  print(`merge-gate: the production promotion is human-gated (${promotion.gate}), as docs/qa/adoption.md on \`${branch}\` declares, so the project's ${relaxed} high-risk path${relaxed === 1 ? '' : 's'} under \`## Escalation paths\` not marked \`always\` merge${relaxed === 1 ? 's' : ''} in the green zone. The pipeline's own paths, the project's pipeline code, every high-risk path marked \`always\` and every judging input still escalate (K-MERGE-4)`);
   return escalatingPaths(file, { judgingInputs: inputsAt(branch) });
 }
 

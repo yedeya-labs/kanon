@@ -1,9 +1,11 @@
-// Where the Overseer's upstream findings go, as the adoption record declares it (`K-LAYOUT-10`,
-// `K-SELF-11`; plan 0004 decision 12 as amended on 2026-10-06, kanon#423).
+// Where upstream findings go, the Overseer's and the telemetry Explorer's, as the adoption record
+// declares it (`K-LAYOUT-10`, `K-SELF-11`; plan 0004 decision 12 as amended on 2026-10-06, kanon#423;
+// kanon#471 for the telemetry Explorer).
 //
 // WHY A DECLARATION. A finding only Kanon can act on (a lane's behaviour, a guard, a rule,
-// Kanon's library) is, by default, drafted under the audit issue's `## Upstream` heading and never
-// filed: in an adopter's repository it is noise the adopter can't act on, and filing it on Kanon
+// Kanon's library) is, by default, drafted and never filed (each lane says where it drafts:
+// the Overseer under its audit issue's `## Upstream` heading, the telemetry Explorer in its run's
+// summary): in an adopter's repository it is noise the adopter can't act on, and filing it on Kanon
 // would carry the adopter's data across ADR 0007's boundary. A repository that can act on such
 // findings itself (one that maintains Kanon, or a fork of it) would get every one of them as a
 // draft and none as an issue. So the repository says so, and the filing step reads what it says.
@@ -139,6 +141,6 @@ export function readUpstreamFindingsFrom(repo, run, note = () => {}) {
   }
   const declared = text === null ? null : parseUpstreamFindings(text);
   if (declared !== null) return declared;
-  note(`${ADOPTION_RECORD} on \`${branch}\` ${text === null ? "doesn't exist" : "doesn't say where upstream findings go"}, so Kanon's default applies: they are \`${DEFAULT_VALUE}\` under the audit's \`## Upstream\` heading, never filed (K-LAYOUT-10)`);
+  note(`${ADOPTION_RECORD} on \`${branch}\` ${text === null ? "doesn't exist" : "doesn't say where upstream findings go"}, so Kanon's default applies: they are \`${DEFAULT_VALUE}\`, never filed (K-LAYOUT-10)`);
   return DEFAULT_VALUE;
 }

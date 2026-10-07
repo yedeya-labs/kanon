@@ -585,7 +585,7 @@ describe('where the rows go', () => {
 
   it('every Kanon lane names a lane from the schema\'s list', () => {
     const lanes = [...finishCalls, ...spineCalls].filter((c) => c.f !== 'agent-lane.yml' && c.f !== 'lane-agent-job.yml' && c.f !== 'agent-blocks-smoke.yml');
-    expect(lanes.length).toBe(15);
+    expect(lanes.length).toBe(16);
     for (const c of lanes) expect(LANES, c.f).toContain(c.with.lane);
   });
 
@@ -596,7 +596,7 @@ describe('where the rows go', () => {
     .filter((c) => c.f !== 'agent-blocks-smoke.yml');
 
   it('passes each stage as a step conclusion, in the order the job runs those steps', () => {
-    expect(laneJobs.length).toBe(11);
+    expect(laneJobs.length).toBe(12);
     for (const c of laneJobs) {
       expect(Object.keys(c.with).filter((k) => k.endsWith('-outcome')), c.f).toEqual([]);
       const pairs = String(c.with.stages ?? '').trim().split(/\s+(?=[a-z]+=)/);

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DeclarationError } from '../../scripts/lib/declarations.mjs';
-import { ESCALATION_FILE, PIPELINE_ESCALATIONS, escalatingPaths, readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
+import { ESCALATION_FILE, PIPELINE_ESCALATIONS, escalatingPaths, escalationCategories, parseEscalationFile, readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import { parseProductionPromotion, readProductionPromotion, readProductionPromotionAt } from '../../scripts/lib/production-promotion.mjs';
 import { ADOPTION_RECORD } from '../../scripts/lib/reference-deploy.mjs';
 import { IMPLEMENTER_LOGIN, REVIEWER_LOGIN, mergeVerdict, readEscalations } from '../../scripts/merge-gate.mjs';
@@ -173,6 +173,25 @@ describe('the escalating paths under a human-gated promotion (K-MERGE-4)', () =>
     expect(mergeVerdict(spec, { escalations: declared })).toMatchObject({ action: 'escalate', rule: 'spec-promotion' });
   });
 
+  it('declared, still escalates a high-risk path marked `always`, such as the code that keeps the promotion gated (kanon#344)', () => {
+    const marked = parseEscalationFile(
+      '## Escalation paths\n\n- `^infra/environments/` `infra` `always` — the production environment\'s required reviewers\n- `^infra/` `infra` — the rest of the infrastructure\n',
+    );
+    const gated = escalatingPaths(marked, { judgingInputs: [] });
+    expect(verdict(gated, ['infra/environments/production.tf'])).toMatchObject({
+      action: 'escalate',
+      rule: 'escalating-path',
+      why: expect.stringMatching(/the production environment's required reviewers, marked `always`, which a human-gated promotion never relaxes \(K-MERGE-4\)/),
+    });
+    expect(verdict(gated, ['infra/network.tf'])).toMatchObject({ action: 'merge', rule: 'green-zone' });
+    // Undeclared, the marker changes nothing: both escalate, each with its own reason.
+    for (const f of ['infra/environments/production.tf', 'infra/network.tf']) {
+      expect(verdict(escalatingPaths(marked), [f]), f).toMatchObject({ action: 'escalate', rule: 'escalating-path', why: expect.not.stringMatching(/marked `always`/) });
+    }
+    // The category still says what the change touched, marked or not.
+    expect(escalationCategories(marked, ['infra/environments/production.tf'])).toEqual(['infra']);
+  });
+
   it('keeps every pipeline escalation first, whatever is declared', () => {
     expect(declared.slice(0, PIPELINE_ESCALATIONS.length)).toEqual([...PIPELINE_ESCALATIONS]);
   });
@@ -214,8 +233,19 @@ describe("the Merger's reader (K-MERGE-17)", () => {
     expect(inputs).toEqual(['trunk']);
     expect(asked.every((a) => a.endsWith('?ref=trunk')), asked.join(', ')).toBe(true);
     expect(printed).toEqual([
-      "merge-gate: the production promotion is human-gated (the `production` environment's required reviewer), as docs/qa/adoption.md on `trunk` declares, so the project's 1 high-risk path under `## Escalation paths` merges in the green zone. The pipeline's own paths, the project's pipeline code and every judging input still escalate (K-MERGE-4)",
+      "merge-gate: the production promotion is human-gated (the `production` environment's required reviewer), as docs/qa/adoption.md on `trunk` declares, so the project's 1 high-risk path under `## Escalation paths` not marked `always` merges in the green zone. The pipeline's own paths, the project's pipeline code, every high-risk path marked `always` and every judging input still escalate (K-MERGE-4)",
     ]);
+  });
+
+  it('declared, counts only the unmarked high-risk paths as relaxed, and names the marked ones as still escalating (kanon#344)', () => {
+    const marked = '# Escalation paths\n\n## Escalation paths\n\n- `^infra/environments/` `infra` `always` — the required reviewers\n- `^infra/` `infra` — the rest\n- `^migrations/` — database migrations\n\n## Pipeline code\n';
+    const printed: string[] = [];
+    const paths = readEscalations('o/r', gh({ [`${ESCALATION_FILE}@trunk`]: marked, [`${ADOPTION_RECORD}@trunk`]: RECORD(`${BULLET}\n`) }), (l) => printed.push(l), () => []);
+    expect(printed).toEqual([
+      "merge-gate: the production promotion is human-gated (the `production` environment's required reviewer), as docs/qa/adoption.md on `trunk` declares, so the project's 2 high-risk paths under `## Escalation paths` not marked `always` merge in the green zone. The pipeline's own paths, the project's pipeline code, every high-risk path marked `always` and every judging input still escalate (K-MERGE-4)",
+    ]);
+    expect(paths.find(([re]) => re.test('infra/environments/prod.tf'))?.[1]).toMatch(/^the required reviewers, marked `always`/);
+    expect(paths.find(([re]) => re.test('infra/network.tf'))).toBeUndefined();
   });
 
   it("ignores a declaration on a PR's branch: only the default branch's record counts", () => {

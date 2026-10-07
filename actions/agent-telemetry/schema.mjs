@@ -40,6 +40,7 @@ export const LANE_ROLES = Object.freeze({
   'lead-split': 'lead',
   explore: 'explorer',
   'code-audit': 'explorer',
+  'explore-telemetry': 'explorer',
   'verify-acs': 'explorer',
   overseer: 'overseer',
   'weekly-digest': 'overseer',

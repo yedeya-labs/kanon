@@ -74,6 +74,10 @@ export const buildRequirements = (root: string) => {
       reads,
       readsWorkflows: comment(text, 'READS WORKFLOW'),
       hooks: comment(text, 'NEEDS HOOK'),
+      // Whether the lane reaches a QA store, through the qa-store block in any file it runs: an
+      // `id-token: write` grant alone doesn't say, since the telemetry Explorer's is for the
+      // aggregate function (kanon#471).
+      qaStore: laneTree(root, file).some((f) => /^\s*-?\s*uses: \$\/actions\/qa-store\s*$/m.test(readFileSync(join(root, '.github/workflows', f), 'utf8'))),
     };
     const name = comment(text, 'CALLER NAME')[0];
     if (name) lane.callerName = name;

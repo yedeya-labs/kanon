@@ -17,6 +17,8 @@ describe('the table picks a row by the file, never by a setting', () => {
     ['tests/unit/a.test.ts', 'JavaScript and TypeScript', true],
     ['e2e/storefront.spec.ts', 'JavaScript and TypeScript', true],
     ['src/server/a.ts', 'JavaScript and TypeScript', false],
+    ['src/server/a.test.tsx', 'JavaScript and TypeScript', true],
+    ['tests/helpers/db.ts', 'JavaScript and TypeScript', false],
     ['tests/test_core.py', 'Python', true],
     ['src/orders/core_test.py', 'Python', true],
     ['tests/conftest.py', 'Python', false],
@@ -25,14 +27,14 @@ describe('the table picks a row by the file, never by a setting', () => {
     ['internal/orders/core.go', 'Go', false],
   ])('%s is %s, test file: %s', (path, language, test) => {
     expect(conventionFor(path)?.language).toBe(language);
-    expect(isTestFile(path)).toBe(test);
+    expect(isTestFile(path, [])).toBe(test);
   });
 
   it('a language not in the table is never a test file, so nothing it asserts is counted', () => {
     for (const p of ['tests/core_test.rs', 'src/test/java/OrderTest.java', 'tests/README.md']) {
       expect(conventionFor(p)).toBeUndefined();
-      expect(isTestFile(p)).toBe(false);
-      expect(runnerFor(p)).toBe('unknown');
+      expect(isTestFile(p, [])).toBe(false);
+      expect(runnerFor(p, [])).toBe('unknown');
     }
   });
 
@@ -43,6 +45,42 @@ describe('the table picks a row by the file, never by a setting', () => {
       const cmd = make('tests/x', '/out', () => goFile);
       expect(cmd, name).not.toBeNull();
       expect(cmd!.bin, name).not.toMatch(/\bnpx\b/);
+    }
+  });
+});
+
+describe("the JavaScript row reads the adopter's declared test trees (ADR 0012 as amended, kanon#20)", () => {
+  const TREES = [{ path: 'tests/', runner: 'vitest' }, { path: 'e2e/', runner: 'playwright' }, { path: 'tests/contract/' }];
+
+  it('with none declared, a `*.test.*` or `*.spec.*` file is a test wherever it is, and no runner is assumed for it', () => {
+    for (const p of ['src/a.test.ts', 'packages/ui/b.spec.tsx', 'tests/c.test.mjs', 'd.spec.js']) {
+      expect(isTestFile(p, []), p).toBe(true);
+      expect(runnerFor(p, []), p).toBe('unknown');
+    }
+    for (const p of ['tests/helpers/db.ts', 'e2e/fixtures.ts', 'src/test.ts', 'src/spec.ts', 'src/a.tested.ts', 'src/contest.ts']) {
+      expect(isTestFile(p, []), p).toBe(false);
+    }
+  });
+
+  it('declared, every JavaScript file in a tree is a test, fixtures included, and nothing outside one is', () => {
+    for (const p of ['tests/unit/a.test.ts', 'tests/helpers/db.ts', 'e2e/checkout.ts', 'tests/contract/api.ts']) expect(isTestFile(p, TREES), p).toBe(true);
+    for (const p of ['src/a.test.ts', 'e2e2/a.spec.ts', 'scripts/tests/a.ts']) expect(isTestFile(p, TREES), p).toBe(false);
+  });
+
+  it('declared, a file runs with the runner its tree names, the deepest tree when trees nest, and none when that tree names none', () => {
+    expect(runnerFor('tests/unit/a.test.ts', TREES)).toBe('vitest');
+    expect(runnerFor('e2e/checkout.spec.ts', TREES)).toBe('playwright');
+    expect(runnerFor('tests/contract/api.test.ts', TREES)).toBe('unknown');
+    expect(runnerFor('src/a.test.ts', TREES)).toBe('unknown');
+    expect(runnerFor('tests/x.test.ts', [{ path: 'tests/', runner: 'jest' }]), 'a runner the table cannot run').toBe('unknown');
+  });
+
+  it("leaves Python's and Go's rows to their own discovery rules, declared trees or not", () => {
+    for (const trees of [[], TREES]) {
+      expect(isTestFile('src/orders/core_test.py', trees)).toBe(true);
+      expect(isTestFile('tests/conftest.py', trees)).toBe(false);
+      expect(runnerFor('src/orders/core_test.py', trees)).toBe('pytest');
+      expect(runnerFor('internal/orders/core_test.go', trees)).toBe('go');
     }
   });
 });

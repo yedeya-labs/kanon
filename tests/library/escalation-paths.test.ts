@@ -66,6 +66,26 @@ describe('the escalation file parser', () => {
     fails(FILE('', '- `scripts/pipeline/` `pipeline` — ours\n'), /escalation-paths\.md:8, under `## Pipeline code`, names a category: pipeline code is always `pipeline`/);
   });
 
+  it('reads the `always` marker after the category, or alone, and an entry without it as not marked (K-MERGE-4, kanon#344)', () => {
+    const file = parseEscalationFile(FILE('- `^infra/env/` `infra` `always` — the environment\'s reviewers\n- `^deploy/` `always` — the deploy role\n- `^infra/` `infra` — the rest\n', ''));
+    expect(file.paths.map((p) => [p.pattern.source, p.category, p.always, p.reason])).toEqual([
+      ['^infra\\/env\\/', 'infra', true, "the environment's reviewers"],
+      ['^deploy\\/', 'other', true, 'the deploy role'],
+      ['^infra\\/', 'infra', false, 'the rest'],
+    ]);
+  });
+
+  it('fails by name on two spans that are not a category then `always`, rather than guessing which is which', () => {
+    for (const spans of ['`always` `infra`', '`infra` `auth`']) {
+      fails(FILE(`- \`^a/\` ${spans} — a\n`, ''), /escalation-paths\.md:5, under `## Escalation paths`, has `.+` and `.+` after its pattern: write at most one category, then `always`/);
+    }
+    fails(FILE('- `^a/` `infra` `always` `x` — a\n', ''), /escalation-paths\.md:5, under `## Escalation paths`, isn't an entry: .*optionally `always` in backticks/);
+  });
+
+  it('fails by name on `always` on pipeline code, which always escalates', () => {
+    fails(FILE('', '- `scripts/pipeline/` `always` — ours\n'), /escalation-paths\.md:8, under `## Pipeline code`, names `always`: pipeline code is always `pipeline` and always escalates/);
+  });
+
   it('reads `/…/i` as a pattern that ignores case, and anything else as case-sensitive', () => {
     const file = parseEscalationFile(FILE('- `/^src/.*Payments/i` — payments\n- `^Docs/` — docs\n', ''));
     expect(file.paths[0]?.pattern.test('src/lib/payments.ts')).toBe(true);

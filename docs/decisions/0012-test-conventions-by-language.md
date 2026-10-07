@@ -3,6 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-10-03
 - **Decided in:** [#20](https://github.com/yedeya-labs/kanon/issues/20), part of [#15](https://github.com/yedeya-labs/kanon/issues/15)
+- **Amended:** 2026-10-06, the JavaScript row's test trees and runners move to the adopter's stack document ([#20](https://github.com/yedeya-labs/kanon/issues/20), [#54](https://github.com/yedeya-labs/kanon/issues/54))
 
 ## Context
 
@@ -19,7 +20,7 @@ Each of these answers came from the reference adopter: TypeScript files under `t
 
    | Language | Test files | Where the spec id goes | One file is run with |
    |---|---|---|---|
-   | JavaScript and TypeScript | every `.ts`, `.tsx`, `.mjs` or `.js` file under `tests/` or `e2e/` | the title argument: `it('[ORD-1] …')` | `node_modules/.bin/vitest` for `tests/`, `node_modules/.bin/playwright` for `e2e/` |
+   | JavaScript and TypeScript | every `.ts`, `.tsx`, `.mjs` or `.js` file in a `tests` tree the stack document declares, or, with none declared, `*.test.*` and `*.spec.*` (amended, below) | the title argument: `it('[ORD-1] …')` | the runner its tree names: `node_modules/.bin/vitest` or `node_modules/.bin/playwright`; none for a tree that names none, or with no declaration |
    | Python | `test_*.py` or `*_test.py`, anywhere (pytest's discovery) | the first line of the test function's docstring: `"""[ORD-1] …"""` | `python -m pytest <file> --junitxml=…` |
    | Go | `*_test.go`, anywhere | the name of a subtest: `t.Run("[ORD-1] …", …)` | `go test -json -run '^(TestA\|TestB)$' ./<dir>`, the file's own test functions |
 
@@ -35,6 +36,16 @@ Each of these answers came from the reference adopter: TypeScript files under `t
 4. **Tests run through the adopter's own toolchain, never through `npx`.** The lane's project-setup hook installs the toolchain (`install: "true"`). The table names a runner as the hook installs it: the project's own Vitest under `node_modules/.bin`, the `python` that `setup-python` put on the PATH, or `go`. `npx` fetches whatever it can't find, so it could run a tool the adopter never chose. With the table, a missing runner reports `not-run`.
 
 5. **Each runner's report is read for test results, not for its exit code.** The rule `verify-acs` already followed for Vitest also holds for the new rows. A file whose tests ran and passed is `passed`. A file whose tests failed, or that failed to import or compile, is `failed`. A run that produced no test result is `not-run`. Python's report is pytest's JUnit XML, and Go's is the event stream from `go test -json`. Both are built into the runner, so the adopter installs no plug-in.
+
+## Amendment, 2026-10-06: the JavaScript row's trees are the adopter's
+
+**Decided by the Owner, 2026-10-06, on [#20](https://github.com/yedeya-labs/kanon/issues/20)**, from [#54](https://github.com/yedeya-labs/kanon/issues/54)'s inventory of reference-adopter facts left in the library. The JavaScript row was the only one that wasn't its runner's own discovery rule: `tests/` and `e2e/`, run by Vitest and Playwright, were how the reference adopter set up its runners. Python's and Go's rows name a test by its file name wherever it is, as pytest and `go test` do; a JavaScript runner finds tests wherever its configuration says.
+
+1. **The test trees, and a runner per tree, are declared in the stack document's `## Code areas`** (`K-LAYOUT-17`): ``- `e2e/` `playwright` — tests: the browser suite``. Every JavaScript file in a declared `tests` tree is a test, as every file under `tests/` was. The runner is `vitest` or `playwright`, the two this table can run and read; a tree that names none is read and never run.
+2. **With no `tests` tree declared, a JavaScript test is a `*.test.*` or `*.spec.*` file**, wherever it is: the suffix Vitest, Jest and Playwright discover by default. No runner is assumed for it, so its criteria are `not-run` until the project declares the tree and its runner. Kanon choosing Vitest for a project that never said so would be the reference adopter's choice again, and running a Playwright file under Vitest would report `failed` on a test that never ran.
+3. **Decision 2 still holds:** the declaration names trees, not a language. Python and Go files are read by their own rows whatever the trees say.
+
+A project whose tests sit under `tests/` or `e2e/` without the suffix, as the reference adopter's did, declares those trees, or its tests stop being read: spec-coverage reports their clauses Bare, and the locked floor fails on each lock it loses, so the change is visible on the pull request that moves the pin.
 
 ## Adding a language
 
@@ -56,5 +67,5 @@ Add tests for each in `tests/library/test-conventions.test.ts`. Nothing in the t
 
 ## Not decided here
 
-- **The JavaScript row's test runners are still Vitest and Playwright.** A JavaScript project on Jest or `node:test` is outside the row today. Making the JavaScript row choose between runners would be the first row with two runners, and that needs its own case.
-- **Where `citation-shift` looks for code comments** is still `src/`, `scripts/`, `tests/` and `e2e/`, plus `.github/scripts/` since #180. A Go project's `internal/` and `cmd/`, or a Python package at the repository's root, aren't read yet.
+- **The JavaScript row's test runners are still Vitest and Playwright.** A JavaScript project on Jest or `node:test` can declare its trees, so its titles are read, but its tests are not run. A third runner is a new entry in `TREE_RUNNERS` and `RUNNERS`, with its report reader.
+- **Where `citation-shift` looks for code comments** was `src/`, `scripts/`, `tests/` and `e2e/`, plus `.github/scripts/` since #180. Since plan 0004 step 11 it is the declared `code` and `tests` trees, or the whole repository.

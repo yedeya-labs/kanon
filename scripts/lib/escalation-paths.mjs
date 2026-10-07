@@ -12,6 +12,7 @@
 //   ## Escalation paths
 //   - `^migrations/` `migrations` — database migrations
 //   - `/^src/.*payments?/i` `payments` — payments
+//   - `^infra/environments/` `infra` `always` — the production environment's required reviewers
 //
 //   ## Pipeline code
 //   - `scripts/pipeline/` — the project's own pipeline scripts
@@ -19,7 +20,9 @@
 // An escalation path is a regular expression over repository-relative paths, in backticks,
 // optionally written `/…/i` to match without regard to case, then optionally its category from
 // Kanon's closed list (`ESCALATION_CATEGORIES`, below), in backticks too; an entry without one
-// is `other`. A pipeline-code entry is a
+// is `other`. Then, optionally, the marker `always` in backticks: the entry stays an escalation
+// path even when the project declares its production promotion human-gated (`escalatingPaths`,
+// below, kanon#344). A pipeline-code entry is a
 // repository-relative directory ending in `/`. Each bullet is followed by an em dash and the
 // reason. Prose between the bullets is allowed. A list item that isn't an entry is not: an
 // indented, `+` or numbered item, or a bullet that doesn't parse, would otherwise be read as
@@ -37,7 +40,8 @@
 // file under `.claude/` escalates whatever the file says, and so does every pipeline-code
 // directory it declares. An adopter whose production promotion is human-gated may declare so in
 // its adoption record (kanon#158), and then only its high-risk paths stop escalating on their own
-// (`escalatingPaths`, below); none of these do.
+// (`escalatingPaths`, below); none of these do, and neither does a high-risk path marked
+// `always`.
 //
 // FAILS BY NAME. Every reader throws `DeclarationError`, whose message names the file and,
 // for a malformed entry, the line, so a guard that can't read the declaration fails saying
@@ -112,9 +116,10 @@ export { DeclarationError };
 const FILE = { file: ESCALATION_FILE, rule: 'K-LAYOUT-8' };
 
 /**
- * @typedef {{ pattern: RegExp, reason: string, category?: string }} EscalationPath
+ * @typedef {{ pattern: RegExp, reason: string, category?: string, always?: boolean }} EscalationPath
  *   `category`: one of `ESCALATION_CATEGORIES`; the parser sets `other` when the entry names
- *   none, and an entry built without one counts as `other` too
+ *   none, and an entry built without one counts as `other` too. `always`: the entry carries the
+ *   `always` marker, so a human-gated promotion doesn't take it off the escalation paths
  * @typedef {{ dir: string, reason: string }} PipelineDir
  * @typedef {{ paths: EscalationPath[], pipeline: PipelineDir[], defaults: string[] }} EscalationFile
  *   `defaults`: one line per omitted file or section, naming the default it means
@@ -142,24 +147,42 @@ export function printDefaults(reader, file, print = (line) => console.error(line
   for (const d of file.defaults ?? []) print(`${reader}: ${d}`);
 }
 
-const ENTRY = /^`([^`]+)`(?:\s+`([^`]+)`)?\s+—\s+(\S.*)$/;
+const ENTRY = /^`([^`]+)`(?:\s+`([^`]+)`)?(?:\s+`([^`]+)`)?\s+—\s+(\S.*)$/;
+
+/**
+ * The marker that keeps a high-risk path escalating under a human-gated promotion (`K-MERGE-4`,
+ * kanon#344). It is a code span after the category, never a category itself, so a release of
+ * Kanon that predates it reads an entry carrying it as a category it doesn't know, or as no
+ * entry at all, and fails by name: an older Merger stops rather than dropping the marker.
+ */
+export const ALWAYS = 'always';
 
 /**
  * The bullets of a section, each split into its code span, its category's code span if it has
- * one, and its reason.
+ * one, whether it carries the `always` marker, and its reason.
  * @param {import('./declarations.mjs').Line[]} body
  * @param {string} heading
- * @returns {{ line: number, value: string, category: string | undefined, reason: string }[]}
+ * @returns {{ line: number, value: string, category: string | undefined, always: boolean, reason: string }[]}
  */
 function entries(body, heading) {
   return bulletsOf(FILE, body, heading).map(({ line, text }) => {
     const entry = ENTRY.exec(text);
     if (!entry) {
       throw new DeclarationError(
-        `${ESCALATION_FILE}:${line}, under \`${heading}\`, isn't an entry: write a pattern in backticks, optionally its category in backticks, an em dash, then the reason (K-LAYOUT-8)`,
+        `${ESCALATION_FILE}:${line}, under \`${heading}\`, isn't an entry: write a pattern in backticks, optionally its category in backticks, optionally \`${ALWAYS}\` in backticks, an em dash, then the reason (K-LAYOUT-8)`,
       );
     }
-    return { line, value: /** @type {string} */ (entry[1]), category: entry[2], reason: /** @type {string} */ (entry[3]).trim() };
+    const spans = [entry[2], entry[3]].filter((s) => s !== undefined);
+    const always = spans.at(-1) === ALWAYS;
+    if (always) spans.pop();
+    // What is left is at most the category. A second span is either a misplaced marker or a
+    // second category, and reading either would guess.
+    if (spans.length > 1) {
+      throw new DeclarationError(
+        `${ESCALATION_FILE}:${line}, under \`${heading}\`, has \`${spans[0]}\` and \`${spans[1]}\` after its pattern: write at most one category, then \`${ALWAYS}\` if the entry keeps escalating under a human-gated promotion (K-LAYOUT-8)`,
+      );
+    }
+    return { line, value: /** @type {string} */ (entry[1]), category: spans[0], always, reason: /** @type {string} */ (entry[4]).trim() };
   });
 }
 
@@ -244,16 +267,18 @@ export function parseEscalationFile(text) {
     defaults.push(`${ESCALATION_FILE} has no \`${heading}\` heading, so Kanon's default applies: ${means} (K-LAYOUT-8)`);
     return [];
   };
-  const paths = section(PATHS_HEADING, 'the project declares no high-risk paths').map(({ line, value, category: c, reason }) => ({
+  const paths = section(PATHS_HEADING, 'the project declares no high-risk paths').map(({ line, value, category: c, always, reason }) => ({
     pattern: pattern(value, line),
     reason,
     category: category(c, line),
+    always,
   }));
-  const pipeline = section(PIPELINE_HEADING, 'the project declares no pipeline code of its own').map(({ line, value, category: c, reason }) => {
-    // Pipeline code is always `pipeline`, so it names no category.
-    if (c !== undefined) {
+  const pipeline = section(PIPELINE_HEADING, 'the project declares no pipeline code of its own').map(({ line, value, category: c, always, reason }) => {
+    // Pipeline code is always `pipeline`, so it names no category, and it always escalates, so
+    // it carries no marker either.
+    if (c !== undefined || always) {
       throw new DeclarationError(
-        `${ESCALATION_FILE}:${line}, under \`${PIPELINE_HEADING}\`, names a category: pipeline code is always \`${PIPELINE_CODE_CATEGORY}\`, so write the directory, an em dash, then the reason (K-LAYOUT-8)`,
+        `${ESCALATION_FILE}:${line}, under \`${PIPELINE_HEADING}\`, names ${always ? `\`${ALWAYS}\`` : 'a category'}: pipeline code is always \`${PIPELINE_CODE_CATEGORY}\` and always escalates, so write the directory, an em dash, then the reason (K-LAYOUT-8)`,
       );
     }
     return { dir: directory(value, line), reason };
@@ -316,9 +341,11 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
  *     inside `docs/qa/` (the adoption record that makes this declaration, the escalation file,
  *     the identity register, the sign-off delegation and the playbooks), and the agent
  *     instructions and configuration (`AGENTS.md`, `CLAUDE.md`, `.claude/`);
- *   · the project's own pipeline code (`## Pipeline code`), the scripts its lanes run, and
- *     anything else outside `.github/` that keeps the promotion gated, which the project must
- *     list there to keep (kanon#344);
+ *   · the project's own pipeline code (`## Pipeline code`), the scripts its lanes run;
+ *   · a declared high-risk path marked `always`: code outside `.github/` that keeps the
+ *     promotion gated, such as infrastructure code that sets the environment's required
+ *     reviewers, or the role trust that lets only the gated job deploy (kanon#344). Kanon can't
+ *     tell which of a project's paths those are, so the project marks them;
  *   · a declared high-risk path that is also a judging input on the default branch
  *     (`K-MERGE-17`'s delegation row): a document the instructions link to, which a project
  *     declared because it wanted a human to approve changes to it. `judgingInputs` is that
@@ -339,6 +366,9 @@ export function escalatingPaths(file, promotion = null) {
   if (!promotion) return [...own, ...file.paths.map(({ pattern: re, reason }) => /** @type {const} */ ([re, reason]))];
   return [
     ...own,
+    ...file.paths
+      .filter(({ always }) => always)
+      .map(({ pattern: re, reason }) => /** @type {const} */ ([re, `${reason}, marked \`${ALWAYS}\`, which a human-gated promotion never relaxes (K-MERGE-4)`])),
     ...promotion.judgingInputs.flatMap((input) => {
       const hit = file.paths.find(({ pattern: re }) => re.test(input));
       return hit
