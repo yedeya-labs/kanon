@@ -37,12 +37,11 @@ export function queryCostRows({ agent, since, to = '', table, region }) {
     // `sk` too: a row's timestamp is what pairs a run with the sweep comment that
     // dispatched it (RA-1573 review, RA-1579) — and `run_id`, which says WHO triggered it.
     //
-    // A CONSTANT, NOT A LITERAL (RA-1586). Two documents record this bound as a claim a
-    // reader can check — `agent-dispatch-sweep.yml`'s permissions comment and
-    // `docs/qa/agent-identities.md` footnote 7b — and both said "two fields" for as
-    // long as this projected three, because nothing failed when they disagreed. The
-    // test asserts the CONTENTS of this list against both records; a widening here
-    // is now a red test rather than a third round of the same drift.
+    // A CONSTANT, NOT A LITERAL (RA-1586). Two of the reference adopter's documents
+    // recorded this bound as a claim a reader can check, and both said "two fields" for
+    // as long as this projected three, because nothing failed when they disagreed.
+    // `dispatch-sweep.test.ts` asserts the CONTENTS of this list; a widening here is now
+    // a red test rather than a third round of the same drift.
     '--projection-expression', COST_PROJECTION.join(', '),
     '--output', 'json',
   ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });

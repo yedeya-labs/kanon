@@ -1043,8 +1043,8 @@ describe('a human re-applying the review label outranks the already-reviewed ski
    * Measured on PR RA-1327: three attempts over 23 hours (label churn, then a
    * `pull_request` event) all decided `review=false (already reviewed e3797bb)`, and
    * only a manual `workflow_dispatch` broke it. PR RA-1376 hit the same wall. The escape
-   * existed and was documented for a MACHINE — `agent-identities.md:28` grants the Merger
-   * `actions: write` so his recover path can dispatch past this — and nowhere for an
+   * existed and was documented for a MACHINE — the Merger's row in `rulebook/03-agents.md`
+   * grants it `actions: write` so his recover path can dispatch past this — and nowhere for an
    * author.
    */
   // `pushed`/`prFiles` so the flow reaches the dedup rather than short-circuiting on

@@ -783,12 +783,12 @@ jobs:
           # (label churn, then a `pull_request` event) all decided `review=false
           # (already reviewed e3797bb)`, and only a manual `workflow_dispatch` broke it.
           # PR RA-1376 hit the same wall. The remedy existed and was documented for a
-          # MACHINE — `agent-identities.md:28` grants the Merger `actions: write` precisely
+          # MACHINE — the Merger's row in `rulebook/03-agents.md` grants it `actions: write` precisely
           # so his recover path can dispatch past this — and nowhere for an author.
           #
           # KEYED ON THE SENDER, because that is what makes it safe. The Lead churns
           # labels deliberately to avoid needing `actions: write`
-          # (`agent-identities.md:22`), and the Reviewer applies `agent:reviewer` mid-review —
+          # (its row in `rulebook/03-agents.md`), and the Reviewer applies `agent:reviewer` mid-review —
           # both are Apps, and honouring either would re-open the dispatch loop those
           # choices avoid. A person adding the label is an explicit ask for another
           # look, which is exactly what the skip should not override.

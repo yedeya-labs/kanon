@@ -365,8 +365,8 @@ describe('the hourly tick runs it, with the authority it needs and no more', () 
   });
 
   it('churns a label instead of dispatching — the RA-1281 constraint', () => {
-    // `agent-identities.md` footnote 2 gives the Lead no Actions WRITE on purpose: label
-    // churn achieves the same with strictly less authority, and RA-1281 is what reaching
+    // The Lead's row in `rulebook/03-agents.md` gives it no Actions WRITE on purpose: label
+    // churn achieves the same with strictly less authority (`K-AGENT-4`), and RA-1281 is what reaching
     // for `gh workflow run` cost — a 403 and a held pilot.
     // CODE, NOT PROSE. The file's header EXPLAINS why it does not dispatch, so a
     // whole-file match would be satisfied by the sentence saying it never dispatches —

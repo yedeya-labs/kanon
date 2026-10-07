@@ -42,8 +42,8 @@ import { isCliEntry } from './lib/cli-entry.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 
-/** The App this lane runs as — the only one that authors code (`agent-identities.md`
- *  footnote 1, whose `Implementer` row this reads, RA-2701), and the author of every branch it may touch. Asserted against the
+/** The App this lane runs as — the only one that authors code (`K-AGENT-7`; the App register's
+ *  `Implementer` row is what this reads, RA-2701), and the author of every branch it may touch. Asserted against the
  *  minted `app-slug` in the workflow: a renamed App would make the author check below
  *  match nothing, which is what keeps this lane off human branches. */
 export const IMPLEMENTER_LOGIN = appLogin('Implementer');

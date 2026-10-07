@@ -885,8 +885,8 @@ describe('the re-delivery path for an unanswered changes-request (RA-1595)', () 
     // `pull_request_review` fires ONCE. If this workflow did not run for it — a cap,
     // an outage, a dropped queue — nothing re-fired the Lead and the brief PR parked
     // on the developer's own gate. The label is the re-delivery, and it is a label
-    // rather than `gh workflow run` because the Lead holds `Actions: No access`
-    // deliberately (agent-identities.md footnote 2, RA-1281).
+    // rather than `gh workflow run` because the Lead holds no Actions write
+    // deliberately (its row in `rulebook/03-agents.md`, RA-1281).
     //
     // The triggers are the CALLER's since the lane moved to Kanon (plan 0001 §3): the lane
     // is called, and the fixture adopter's caller, which is the shape an adopter copies,

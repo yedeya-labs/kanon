@@ -3295,9 +3295,9 @@ describe('phase 5 reaches the Explorer by label, not by dispatch (RA-1281)', () 
     + workflowText(join(ROOT, '.github/workflows/agent-verify-acs.yml'));
 
   it('does not dispatch the verify workflow', () => {
-    // `gh workflow run` needs `actions: write`, and agent-identities.md footnote 2
-    // gives the Lead `Actions: No access` deliberately — "label churn achieves the same
-    // with strictly less authority". That reasoning had a hole here: the Explorer was
+    // `gh workflow run` needs `actions: write`, and the Lead's row in `rulebook/03-agents.md`
+    // gives it no Actions write deliberately — re-applying a label is the lower-authority
+    // route (`K-AGENT-4`). That reasoning had a hole here: the Explorer was
     // `workflow_dispatch`-only, so there was no label to churn, the dispatch 403'd,
     // and the pilot project held. This pins the lower-authority route so a later edit
     // cannot quietly re-introduce the requirement.

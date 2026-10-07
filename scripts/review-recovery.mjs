@@ -57,7 +57,7 @@
 // impossible.
 //
 // ── NO `actions: write` ─────────────────────────────────────────────────────
-// Recovery is a label churn (`docs/qa/agent-identities.md` footnote 2), which is what
+// Recovery is a label churn (the Lead's row in `rulebook/03-agents.md`, `K-AGENT-4`), which is what
 // RA-1281 cost when phase 5 reached for `gh workflow run` instead. `agent-review.yml`
 // subscribes to `pull_request_target: [labeled]` for exactly this case (it was
 // `pull_request` until RA-2299).

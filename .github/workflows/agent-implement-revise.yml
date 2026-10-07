@@ -49,8 +49,8 @@ name: Implement (Implementer) — revise
 # print a note asking a human to check.
 #
 # A LABEL, NOT A DISPATCH, for the same reason as everywhere else in this pipeline:
-# the Lead holds `Actions: No access` for write deliberately (the App register's
-# footnote), and RA-1281 is what reaching for `gh workflow run` anyway cost. The Explorer's
+# the Lead holds no Actions write deliberately (its row in `rulebook/03-agents.md`,
+# `K-AGENT-4`), and RA-1281 is what reaching for `gh workflow run` anyway cost. The Explorer's
 # remedy was to gain a label trigger; this is the same move for the implementer.
 #
 # `agent:revise` is its OWN marker rather than a churn of `agent:implement`, which

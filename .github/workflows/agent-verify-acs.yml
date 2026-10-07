@@ -69,14 +69,14 @@ name: Verify ACs (Explorer) — targeted
 #         default: ''
 #
 # LABEL TRIGGER (RA-1281). Phase 5 used to reach the Explorer with `gh workflow run`, which
-# needs `actions: write` — and `docs/qa/agent-identities.md`'s footnote 2 gives
-# the Lead `Actions: No access` on purpose, reasoning that "label churn achieves the
-# same with strictly less authority". For this agent that route did not exist: the Explorer
+# needs `actions: write` — and the Lead's row in `rulebook/03-agents.md` gives it no
+# Actions write on purpose, because re-applying a label re-delivers an event with less
+# authority (`K-AGENT-4`). For this agent that route did not exist: the Explorer
 # was `workflow_dispatch`-only, so there was no label to churn, and the dispatch
 # failed 403 and held the project.
 #
-# Re-applying `qa:verify` is now the churn. VERIFIED before building it, the way that
-# footnote's own discipline requires: the QA issue body carries both inputs the
+# Re-applying `qa:verify` is now the churn. VERIFIED before building it, the way
+# `K-AGENT-4` requires: the QA issue body carries both inputs the
 # dispatch passed — "Verify project #961" and "The work is deployed in `v0.48.9`" —
 # so the label route can express everything the higher-authority route did.
 #   issues:
