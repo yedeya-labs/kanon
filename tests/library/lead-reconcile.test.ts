@@ -5459,7 +5459,7 @@ describe('neither churn arm fires at a PR no event can reach (RA-1722)', () => {
     // `reviewBlocked` is what `readWorld` derives for this same PR — a conflicting PR
     // carrying an unanswered changes-request is in BOTH lists, which is the collision
     // the ordering is about.
-    const out = nextActions(atCapWith([blockedPr({ conflicting: true })], { reviewBlocked: true }), { wip: 1 });
+    const out = nextActions(atCapWith([blockedPr({ conflicting: true })], { reviewBlocked: true }), { wip: 1, runsFor: noRuns });
     expect(out.stopped).toMatch(/blocked on a REBASE/);
     expect(out.stopped).toMatch(/#55/);
     expect(out.stopped).toMatch(/RA-1722/);
@@ -5469,11 +5469,12 @@ describe('neither churn arm fires at a PR no event can reach (RA-1722)', () => {
   });
 
   it('says nothing about a rebase when every in-flight PR is clean', () => {
-    expect(nextActions(atCapWith([blockedPr()]), { wip: 1 }).stopped).not.toMatch(/REBASE/);
+    // `runsFor` too: without it the revise arm asks the real `gh` for this PR's runs (#436).
+    expect(nextActions(atCapWith([blockedPr()]), { wip: 1, runsFor: noRuns }).stopped).not.toMatch(/REBASE/);
   });
 
   it('ignores a conflicting PR that is already closed', () => {
-    expect(nextActions(atCapWith([blockedPr({ conflicting: true, state: 'CLOSED' })]), { wip: 1 }).stopped)
+    expect(nextActions(atCapWith([blockedPr({ conflicting: true, state: 'CLOSED' })]), { wip: 1, runsFor: noRuns }).stopped)
       .not.toMatch(/REBASE/);
   });
 });
