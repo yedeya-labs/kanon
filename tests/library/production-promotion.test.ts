@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DeclarationError } from '../../scripts/lib/declarations.mjs';
-import { ESCALATION_FILE, PIPELINE_ESCALATIONS, escalatingPaths, readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
+import { ESCALATION_FILE, PIPELINE_ESCALATIONS, escalatingPaths, escalationCategories, parseEscalationFile, readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import { parseProductionPromotion, readProductionPromotion, readProductionPromotionAt } from '../../scripts/lib/production-promotion.mjs';
 import { ADOPTION_RECORD } from '../../scripts/lib/reference-deploy.mjs';
 import { IMPLEMENTER_LOGIN, REVIEWER_LOGIN, mergeVerdict, readEscalations } from '../../scripts/merge-gate.mjs';
@@ -171,6 +171,25 @@ describe('the escalating paths under a human-gated promotion (K-MERGE-4)', () =>
     expect(verdict(declared, ['docs/projects/12-kiosk.md'])).toMatchObject({ action: 'escalate', rule: 'escalating-path' });
     const spec = { ...pr(['docs/qa/specs/kiosk.md']), specDiff: { promotions: [{ id: 'KIO-1', file: 'docs/qa/specs/kiosk.md', from: 'proposed' }], unreadable: [] } };
     expect(mergeVerdict(spec, { escalations: declared })).toMatchObject({ action: 'escalate', rule: 'spec-promotion' });
+  });
+
+  it('declared, still escalates a high-risk path marked `always`, such as the code that keeps the promotion gated (kanon#344)', () => {
+    const marked = parseEscalationFile(
+      '## Escalation paths\n\n- `^infra/environments/` `infra` `always` — the production environment\'s required reviewers\n- `^infra/` `infra` — the rest of the infrastructure\n',
+    );
+    const gated = escalatingPaths(marked, { judgingInputs: [] });
+    expect(verdict(gated, ['infra/environments/production.tf'])).toMatchObject({
+      action: 'escalate',
+      rule: 'escalating-path',
+      why: expect.stringMatching(/the production environment's required reviewers, marked `always`, which a human-gated promotion never relaxes \(K-MERGE-4\)/),
+    });
+    expect(verdict(gated, ['infra/network.tf'])).toMatchObject({ action: 'merge', rule: 'green-zone' });
+    // Undeclared, the marker changes nothing: both escalate, each with its own reason.
+    for (const f of ['infra/environments/production.tf', 'infra/network.tf']) {
+      expect(verdict(escalatingPaths(marked), [f]), f).toMatchObject({ action: 'escalate', rule: 'escalating-path', why: expect.not.stringMatching(/marked `always`/) });
+    }
+    // The category still says what the change touched, marked or not.
+    expect(escalationCategories(marked, ['infra/environments/production.tf'])).toEqual(['infra']);
   });
 
   it('keeps every pipeline escalation first, whatever is declared', () => {
