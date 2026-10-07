@@ -937,6 +937,21 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(JSON.parse(notCheckout.out)).toMatchObject({ status: 'error', exitCode: 1, error: expect.stringContaining('is not a git checkout') });
   });
 
+  it('prints the error document for --help with --json, not an empty standard output (#372)', async () => {
+    for (const h of ['--help', '-h']) {
+      const github = fakeGitHub();
+      const r = await run(checkout(), github, [h, '--json']);
+      expect(r.status, h).toBe(2);
+      expect(JSON.parse(r.out), h).toMatchObject({ schema: SCHEMA, status: 'error', exitCode: 2, error: '--help and --json contradict each other; give one' });
+      expect(r.err, h).toContain('Usage: kanon init');
+      expect(github.calls).toEqual([]);
+    }
+    // Without --json, --help prints the usage on standard output, as before.
+    const help = await run(checkout(), fakeGitHub(), ['--help']);
+    expect(help.status).toBe(0);
+    expect(help.out).toContain('Usage: kanon init');
+  });
+
   it('sends the prose of kanon apps and kanon milestones to standard error too', async () => {
     const r = await run(checkout(), fakeGitHub(), ['--json'], undefined, REQ, {
       apps: async (_argv: string[], io?: { out: (l: string) => void }) => (io?.out('APPS PROSE'), 0),
@@ -1046,13 +1061,35 @@ describe('kanon init, a flag for each question (#367)', () => {
   });
 
   it('fails by name on each pair of flags that contradict each other', () => {
-    expect(CONFLICTS.length).toBe(8);
+    expect(CONFLICTS.length).toBe(9);
     for (const [x, y] of CONFLICTS) {
       const argv = [x, y].flatMap((f) => (f.startsWith('--delegate-') ? [f, 'v'] : [f]));
       expect(() => parseArgs(argv, REQ), `${x} ${y}`).toThrow(`${x} and ${y} contradict each other; give one`);
     }
     expect(parseArgs(['--delegate-email', 'e@x'], REQ).given.delegation).toBe(true);
     expect(parseArgs(['--json'], REQ).yes).toBe(true);
+    // -h is --help.
+    expect(() => parseArgs(['-h', '--json'], REQ)).toThrow('--help and --json contradict each other; give one');
+  });
+
+  it('never takes the next flag as a value flag\'s value, and takes a value beginning with "-" inline (#372)', () => {
+    const valueFlags = ['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email'];
+    for (const f of valueFlags) {
+      expect(() => parseArgs([f, '--yes', '--json'], REQ), f).toThrow(`${f} needs a value, not the flag "--yes"; to give a value that begins with "-", write ${f}=<value>`);
+      expect(() => parseArgs([f, '-h'], REQ), f).toThrow(`${f} needs a value, not the flag "-h"`);
+    }
+    expect(parseArgs(['--gates=--fast-check', '--yes'], REQ).given.gates).toBe('--fast-check');
+    expect(parseArgs(['--project-owner', 'grace', '--yes'], REQ).given.projectOwner).toBe('grace');
+  });
+
+  it('records no flag as the Owner, and prints the error document, when a value flag is followed by a flag (#372)', async () => {
+    const github = fakeGitHub();
+    const dir = checkout();
+    const r = await run(dir, github, ['--project-owner', '--yes', '--json']);
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.out)).toMatchObject({ schema: SCHEMA, status: 'error', exitCode: 2, error: expect.stringContaining('--project-owner needs a value, not the flag "--yes"') });
+    expect(github.calls).toEqual([]);
+    expect(existsSync(join(dir, 'docs/qa/adoption.md'))).toBe(false);
   });
 
   it('exits 2 on a contradiction and touches nothing', async () => {

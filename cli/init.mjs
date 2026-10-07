@@ -135,8 +135,9 @@ The answers, one flag per question (without --yes, the questions no flag answers
   --create-apps          run \`kanon apps\` for the Apps the lanes lack (the default)
   --no-apps              don't run \`kanon apps\`; print the command instead
 
-A flag init doesn't know, a value flag given twice, or two flags that contradict each other
-fail by name, and change nothing.
+A flag init doesn't know, a value flag given twice or followed by a flag instead of its value,
+or two flags that contradict each other (--help with --json among them) fail by name, and
+change nothing. A value that begins with "-" is given as --flag=<value>.
 
 Needs \`gh\`. Reading needs a token that can read the repository; creating labels and
 milestones needs Issues: write; the merge setting and the ruleset need Administration: write.
@@ -293,6 +294,9 @@ export const CONFLICTS = [
   ['--plugin', '--no-plugin'],
   ['--telemetry', '--no-telemetry'],
   ['--create-apps', '--no-apps'],
+  // `--help` prints the usage, which is no document: with `--json` it would leave standard
+  // output empty, so the pair is refused, and the refusal is the error document (#372).
+  ['--help', '--json'],
 ];
 
 /**
@@ -313,6 +317,10 @@ export const parseArgs = (argv, req) => {
       if (seen.has(flag)) throw new Error(`${flag} is given twice`);
       const v = inline ?? argv[++i];
       if (v === undefined || v === '') throw new Error(`${flag} needs a value`);
+      // The next argument is a flag, not this one's value: an unset, unquoted variable leaves
+      // `--project-owner --yes`, which would record "--yes" as the Owner (#372). A value that
+      // does begin with "-" is given inline, `--gates=-x`.
+      if (inline === undefined && v.startsWith('-')) throw new Error(`${flag} needs a value, not the flag "${v}"; to give a value that begins with "-", write ${flag}=<value>`);
       return v;
     };
     if (flag === '-h' || flag === '--help') opts.help = true;
@@ -351,7 +359,7 @@ export const parseArgs = (argv, req) => {
     if (inline !== undefined && !['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email'].includes(flag)) {
       throw new Error(`${flag} takes no value, not "${inline}"`);
     }
-    seen.add(flag);
+    seen.add(flag === '-h' ? '--help' : flag);
   }
   for (const [x, y] of CONFLICTS) if (seen.has(x) && seen.has(y)) throw new Error(`${x} and ${y} contradict each other; give one`);
   if (g.delegateName !== undefined || g.delegateEmail !== undefined) g.delegation = true;
@@ -954,24 +962,32 @@ export const SCHEMA = 'kanon-init/v1';
  */
 export const init = async (argv, overrides = {}) => {
   const base = { ...realDeps, ...overrides };
+  const req = base.requirements();
+  /** @type {ReturnType<typeof parseArgs> | null} */
+  let opts = null;
+  /** @type {string | null} */
+  let usageError = null;
+  try {
+    opts = parseArgs(argv, req);
+  } catch (e) {
+    usageError = /** @type {Error} */ (e).message;
+  }
   // Under `--json` standard output holds the document alone: the prose moves to standard error.
-  const wantsJson = argv.includes('--json');
+  // Whether the run is under `--json` is what the parse says, so a "--json" taken as a value
+  // can't print a document from a run that asks questions (#372); only arguments that don't
+  // parse fall back to whether "--json" is among them, to print the error document.
+  const wantsJson = opts ? opts.json : argv.includes('--json');
   /** @type {Deps} */
   const deps = wantsJson ? { ...base, out: base.err } : base;
   const { out, err } = deps;
-  const req = deps.requirements();
   /** @type {Report} */
   const rep = { repository: null, token: null, dryRun: false, inspection: null, answers: null, catalogue: [], files: [], changes: [], apps: null, findings: [], notes: [], failures: [], error: null };
   const emit = (/** @type {number} */ code) => {
     if (wantsJson) base.out(JSON.stringify(document(rep, code, deps.release()), null, 2));
     return code;
   };
-  /** @type {ReturnType<typeof parseArgs>} */
-  let opts;
-  try {
-    opts = parseArgs(argv, req);
-  } catch (e) {
-    rep.error = /** @type {Error} */ (e).message;
+  if (!opts) {
+    rep.error = usageError;
     err(`kanon init: ${rep.error}`);
     err(usage(req));
     return emit(2);
