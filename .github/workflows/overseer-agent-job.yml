@@ -234,6 +234,8 @@ jobs:
               step reads the record, not you.) Write each one neutrally, as a draft for a public
               repository: describe the behaviour and the evidence in general terms, and name
               nothing of this project, not its issues, paths, people, product or data.
+              Before writing an upstream finding's `evidence` or `suggested_fix`, read and
+              follow `$KANON/skills/upstream-finding/SKILL.md`.
             A finding that fits no subject goes upstream, unfiled. When in doubt about who
             can act, say so in the body and choose the subject you can defend.
             Each finding's body leads with the evidence and the CONSTRAINT the change must
