@@ -97,6 +97,8 @@ describe('the code-area test (§3.7) is areaOf\'s `code`', () => {
     for (const p of [
       'README.md', 'docs/guide.txt', 'src/notes.md', 'package.json', 'web/yarn.lock', '.github/workflows/ci.yml',
       'db/migrations/0001.sql', 'docs/qa/specs/01-auth.md', '.eslintrc', 'tsconfig.json', 'src/app.test.ts',
+      // Another stack's dependency bump that both pull requests made is not condition 3's code (#520).
+      'pom.xml', 'app/build.gradle.kts', 'src/Api/Api.csproj', 'mix.lock', 'ios/Podfile.lock',
     ]) expect(isCode(p), p).toBe(false);
   });
 

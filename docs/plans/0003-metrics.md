@@ -5,6 +5,7 @@
 - **Measured on** the reference adopter's main branch and Kanon's, on 2026-10-02. The commands are in [Measurements](#measurements). The reference adopter's repository is private, and the token this plan ran with can't read its pull requests or reviews. Every number that needs them is marked **not run**, with the command the Owner runs.
 - **Amended** 2026-10-07 (#91), before M4 and M6 are built: the follow-up-close trigger re-derives only PRs that are closed and inside the 13-month window (§3.1), and an issue-only run joins at most one item, the first to close after it (§3.4). Both make the text say what the accepted ambiguity note and the store's window already require. M4's and M6's checks gain one case each (§7).
 - **Amended** 2026-10-07 (#516, #518), as M2's metrics module is built: how an actor is classified once one App plays several roles (§3.2); the `origin` of each author class (§3.3); the stage partition's details and the scope of human corrections (§3.3); where `bandOf` and `areaOf` live (§3.6, §5.2); and the `config` area and Kanon's file lists (§3.7). The Owner accepted the origin mapping the same day.
+- **Amended** 2026-10-07 (#520): the stacks whose manifests and lockfiles the `deps` area and the size exclusions name, and the one lockfile list both read (§3.7).
 
 ## The plan in one paragraph
 
@@ -385,6 +386,7 @@ SZZ stays possible later as a **diagnostic,** never a headline: the dry run (§7
 - **`config`** is a path with any segment starting with `.` (so `.github/CODEOWNERS`, `.claude/` and `.husky/` are config), or a root-level file named `*.config.*` or with a `json`, `yaml`, `toml`, `ini`, `cfg` or `conf` extension.
 - **A declared `code` tree beats `config`:** a dot-directory the adopter declares as code under `## Code areas` is `code`, as Kanon's own `.github/scripts/` is. Outside a declared code tree, everything else is still `code`.
 - **The `deps` file names and the size exclusions (§3.6) are Kanon's lists,** covering the common stacks' manifests and lockfiles, not one stack's. On a JavaScript repository the exclusions are the files [Measurements](#measurements)' script excludes.
+- **Amended 2026-10-07 (#520): the stacks the lists name.** JavaScript, Python, Go, Rust, Ruby, PHP, the JVM (Maven, Gradle, sbt), .NET (NuGet, Paket), Elixir and Erlang, Swift (SwiftPM, CocoaPods, Carthage) and Dart. The size exclusions' lockfiles are the `deps` area's, one list (`LOCKFILES`, `scripts/metrics/band.mjs`, which still imports nothing: `areas.mjs` imports it from there), so a file is never a lockfile to one and code to the other.
 
 **Escalation categories.** Each entry in the adopter's `docs/qa/escalation-paths.md` (`K-MERGE-4`, `K-LAYOUT-8`) gains a **category** from Kanon's closed list: `pipeline`, `playbooks`, `infra`, `migrations`, `schema`, `payments`, `auth`, `other`. The framework's own entries (workflows, the pipeline's scripts, the playbooks) carry `pipeline` or `playbooks`. The collector sets `esc_<category>` to true when any changed path matches an entry of that category. The adopter's patterns and paths never leave; only the eight booleans do.
 

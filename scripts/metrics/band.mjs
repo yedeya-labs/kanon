@@ -8,6 +8,9 @@
 // RISK IS NOT A BUMP (§3.6, step 5). On the reference adopter 240 of 336 PRs touch an
 // escalation path; bumping them would put 146 in XL and leave 24 in S. Risk is the `esc_*`
 // split instead (`areas.mjs`), and `bandOf` never reads it.
+//
+// THIS MODULE IMPORTS NOTHING (§3.6), so the ingest side may copy it, as the schema copies
+// `ESCALATION_CATEGORIES`. `areas.mjs` imports `LOCKFILES` from here, never the other way.
 
 /** The band version this release writes (§3.6, "Versioning"). */
 export const BAND_VERSION = 1;
@@ -49,13 +52,15 @@ export function bandOf(row, version = BAND_VERSION) {
 }
 
 /**
- * The generated files a diff's size leaves out (§3.6, step 1): lockfiles, test snapshots and
- * the changelog, at any depth. Counting them would put a dependency bump in XL. The lockfile
- * names are every common stack's, so no stack's diff is measured with its lockfile in.
+ * Lockfiles, by file name at any depth: JavaScript's, Python's, Go's, Rust's, Ruby's, PHP's,
+ * the JVM's, .NET's, Elixir's and Erlang's, Swift's and Dart's. The size leaves them out, and
+ * they are the `deps` area's (§3.7, `areas.mjs`), so the two read one list.
  */
-const LOCKFILES = new Set([
-  'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb',
-  'Cargo.lock', 'go.sum', 'poetry.lock', 'Pipfile.lock', 'uv.lock', 'Gemfile.lock', 'composer.lock',
+export const LOCKFILES = new Set([
+  'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'deno.lock',
+  'Pipfile.lock', 'poetry.lock', 'uv.lock', 'go.sum', 'Cargo.lock', 'Gemfile.lock', 'composer.lock',
+  'gradle.lockfile', 'packages.lock.json', 'paket.lock', 'mix.lock', 'rebar.lock',
+  'Package.resolved', 'Podfile.lock', 'Cartfile.resolved', 'pubspec.lock',
 ]);
 
 /** @param {string} path */
@@ -64,8 +69,10 @@ const basename = (path) => path.slice(path.lastIndexOf('/') + 1);
 const dirname = (path) => path.slice(0, Math.max(path.lastIndexOf('/'), 0));
 
 /**
- * Whether a changed file is left out of the diff's size: a lockfile, a snapshot or the
- * changelog (§3.6, step 1).
+ * Whether a changed file is left out of the diff's size (§3.6, step 1): a lockfile, a test
+ * snapshot or the changelog, at any depth. Counting them would put a dependency bump in XL.
+ * The lockfiles are `LOCKFILES`, every stack's that Kanon names, so no stack's diff is
+ * measured with its lockfile in.
  * @param {string} path repository-relative
  */
 export function isExcludedFromSize(path) {

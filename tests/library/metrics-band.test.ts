@@ -1,5 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BAND_THRESHOLDS, BAND_VERSION, bandOf, diffSize, isExcludedFromSize } from '../../scripts/metrics/band.mjs';
+import { BAND_THRESHOLDS, BAND_VERSION, LOCKFILES, bandOf, diffSize, isExcludedFromSize } from '../../scripts/metrics/band.mjs';
+import { areaOf } from '../../scripts/metrics/areas.mjs';
+import { ROOT } from './helpers/adopter.js';
 
 /**
  * Plan 0003 §3.6, band version 1: S up to 200 changed lines, M up to 500, L up to 1,200, XL
@@ -64,6 +68,19 @@ describe('bandOf, version 1', () => {
   });
 });
 
+describe('band.mjs, the module', () => {
+  // §3.6: "`band.mjs` imports nothing, so the ingest side may copy it". An import of
+  // `areas.mjs` would bring the code-areas and escalation readers, and `node:fs`, with it.
+  it('imports nothing, so the ingest side may copy it', () => {
+    // Comments out first: a JSDoc type, `import('./types.mjs')`, loads nothing at run time.
+    const src = readFileSync(join(ROOT, 'scripts/metrics/band.mjs'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(src).not.toMatch(/^\s*import\b/m);
+    expect(src).not.toMatch(/\bfrom\s*['"]/);
+    expect(src).not.toMatch(/\bimport\s*\(/);
+    expect(src).not.toMatch(/\brequire\s*\(/);
+  });
+});
+
 describe('diffSize', () => {
   const f = (path: string, additions: number, deletions = 0) => ({ path, status: 'modified' as const, additions, deletions });
 
@@ -76,6 +93,20 @@ describe('diffSize', () => {
   it('leaves lockfiles, snapshots and the changelog out of the size, and reports their lines', () => {
     const files = [f('package-lock.json', 4000, 3000), f('web/yarn.lock', 10), f('tests/__snapshots__/a.test.ts.snap', 50), f('CHANGELOG.md', 7), f('docs/CHANGELOG.md', 1), f('Cargo.lock', 9), f('src/a.ts', 12)];
     expect(diffSize(files)).toEqual({ changed_lines: 12, changed_files: 1, changed_dirs: 1, excluded_lines: 7077 });
+  });
+
+  it("leaves every stack's lockfile out, not only JavaScript's, Rust's and Go's (#520)", () => {
+    for (const p of ['gradle.lockfile', 'src/Api/packages.lock.json', 'paket.lock', 'mix.lock', 'rebar.lock', 'Package.resolved', 'ios/Podfile.lock', 'Cartfile.resolved', 'pubspec.lock', 'deno.lock']) {
+      expect(isExcludedFromSize(p), p).toBe(true);
+    }
+    for (const p of ['pom.xml', 'build.gradle.kts', 'Api.csproj', 'mix.exs', 'pubspec.yaml']) expect(isExcludedFromSize(p), p).toBe(false);
+  });
+
+  it("leaves out exactly the `deps` area's lockfiles, one list for both (#520)", () => {
+    for (const name of LOCKFILES) {
+      expect(isExcludedFromSize(`svc/${name}`), name).toBe(true);
+      expect(areaOf(`svc/${name}`), name).toBe('deps');
+    }
   });
 
   it('keeps a dependency manifest in the size: only generated files are left out', () => {
