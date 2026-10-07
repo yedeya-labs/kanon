@@ -22,6 +22,14 @@ on:
         required: false
         type: string
         default: ""
+      capability-watch:
+        description: >-
+          The adoption record's capability watch, `on` or `off`, as the lane's gate job read it
+          from the default branch before any agent ran (kanon#477). Off, the prompt skips the
+          capability review.
+        required: false
+        type: string
+        default: "off"
       app-slug:
         description: The minted App's slug, from the lane's `mint` job.
         required: true
@@ -266,7 +274,16 @@ jobs:
               row is a change-gate skip, not a corpse, and a renamed workflow's earlier runs
               are reached by its numeric workflow id.
 
-            - Capability review, WEEKLY (K-SELF-16, K-SELF-17). Read the playbook's
+            - Capability review, WEEKLY (K-SELF-16, K-SELF-17), ONLY WHEN THIS REPOSITORY RUNS
+              THE CAPABILITY WATCH. Its adoption record's choice, read from the default branch
+              before you started, is `${{ inputs.capability-watch }}`. IF IT IS NOT `on`, the
+              watch is OFF BY CHOICE: print exactly
+              `Capability watch: off by choice — this repository's adoption record does not declare it`
+              as the `### Capability watch` section, and skip the rest of this bullet. Read no
+              ledger and no changelog, write no `Ledger delta` block and no `Watermark:` line,
+              raise no capability candidate, and raise no finding for the absent review or a
+              missing ledger. Otherwise read on.
+              Read the playbook's
               "Capability review" first; it is authoritative and this is the summary. The
               ledger is docs/qa/capability-ledger.md.
               THE LAST CAPABILITY AUDIT, one anchor for all three rules below (due test,
@@ -342,8 +359,9 @@ jobs:
               finding with subject `lane`, and goes upstream.
               OUTPUT: a `### Capability watch` section in the audit, opening with exactly one
               of `Capability watch: ran, through 2.1.NNN` (which may carry the suffixes
-              above), `Capability watch: not due this audit` or
-              `Capability watch: degraded — <what failed>`.
+              above), `Capability watch: not due this audit`,
+              `Capability watch: degraded — <what failed>`, or, with the watch off, the
+              `off by choice` line above.
               This section is the LOWEST-priority part of the audit: sacrifice it, never the
               audit. If the turn budget starts to bind, stop, print
               `Capability watch: degraded — cut short for turn budget`, and go write the

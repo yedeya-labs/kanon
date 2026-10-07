@@ -62,6 +62,7 @@ import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { parseUpstreamFindings } from '../scripts/lib/upstream-findings.mjs';
+import { LEDGER as CAPABILITY_LEDGER, parseCapabilityWatch } from '../scripts/lib/capability-watch.mjs';
 
 // The reporter check lives in its own module, which `kanon init` shares (#444).
 export { branchPattern, branchWorkflows, checkJobs, checkReporters } from './check-reporters.mjs';
@@ -1240,9 +1241,19 @@ export const diagnose = async (deps, opts) => {
   const reads = new Map();
   for (const l of installed) for (const d of req.lanes[l]?.reads ?? []) reads.set(d, [...(reads.get(d) ?? []), l]);
   const declared = /** @type {Record<string, { baseline: boolean, requiredSections: string[] }> | undefined} */ (/** @type {any} */ (req).declarations);
+  // The capability ledger is needed only where the adoption record turns the capability watch on
+  // (kanon#477); off by default. A malformed choice is named below, and holds the ledger as needed.
+  const capabilityWatchOn = (() => {
+    const record = read(ADOPTION_RECORD);
+    try { return record !== null && parseCapabilityWatch(record) === 'on'; } catch { return true; }
+  })();
   for (const [path, by] of [...reads].sort(([a], [b]) => a.localeCompare(b))) {
     const decl = declared?.[path] ?? { baseline: /-playbook\.md$/.test(path), requiredSections: path === 'docs/qa/stack.md' ? ['## Gates'] : [] };
     const text = read(path);
+    if (text === null && path === CAPABILITY_LEDGER && !capabilityWatchOn) {
+      notes.push(`${path} doesn't exist, which is fine: ${ADOPTION_RECORD} doesn't turn the capability watch on, so ${by.join(', ')} skip${by.length > 1 ? '' : 's'} the capability review and don't read it (K-LAYOUT-10).`);
+      continue;
+    }
     if (text === null) {
       if (decl.baseline) notes.push(`${path} doesn't exist, so ${by.join(', ')} read${by.length > 1 ? '' : 's'} Kanon's baseline for it (plan 0005 §5.2).`);
       else {
@@ -1488,6 +1499,12 @@ export const diagnose = async (deps, opts) => {
       parseUpstreamFindings(recordText);
     } catch (e) {
       find('declaration.malformed', ADOPTION_RECORD, /** @type {Error} */ (e).message, { text: 'Write it under ## Choices as `- **Upstream findings:** `filed here`` or `drafted`, or remove it for Kanon\'s default, `drafted` (K-LAYOUT-10).' });
+    }
+    // ── Whether the Overseer runs the capability watch (`K-LAYOUT-10`, kanon#477) ─────────────────
+    try {
+      parseCapabilityWatch(recordText);
+    } catch (e) {
+      find('declaration.malformed', ADOPTION_RECORD, /** @type {Error} */ (e).message, { text: 'Write it under ## Choices as `- **Capability watch:** `on`` or `off`, or remove it for Kanon\'s default, `off` (K-LAYOUT-10).' });
     }
   }
   // ── The waivers ─────────────────────────────────────────────────────────────────────────────

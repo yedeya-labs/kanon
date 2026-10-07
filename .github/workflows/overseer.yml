@@ -31,6 +31,11 @@
 # QA_STORE_BUCKET (kanon#433), which this caller maps, so the runner masks them in every log. It
 # reads nothing else: since kanon#479 the lanes pass it no repository variables.
 #
+# ITS CAPABILITY WATCH. The adoption record declares `Capability watch: on` (kanon#477), a
+# choice any repository may make and which is off by default: Kanon maintains the agent-runtime
+# pin every adopter runs, so its Overseer reviews the runtime's changelog once, for everyone. A
+# release that predates the choice runs the watch regardless.
+#
 # WHERE ITS FINDINGS GO. The adoption record declares `Upstream findings: filed here`, so a
 # finding only Kanon can act on is filed on Kanon, like any other (plan 0004 decision 12, as
 # amended). A release that predates the choice drafts those under the audit issue's

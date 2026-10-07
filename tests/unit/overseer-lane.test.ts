@@ -475,10 +475,11 @@ describe('the runtime-version trigger', () => {
     for (const event of ['pull_request', 'merge_group', 'push', 'workflow_run']) expect(admits(event, 'closed', true), event).toBe(false);
   });
 
-  it('decides in the gate job, right after the membership gate and only when it admitted', () => {
-    expect(gateSteps.findIndex((s) => s.id === 'runtime')).toBe(gateSteps.findIndex((s) => s.id === 'gate') + 1);
+  it('decides in the gate job, right after the membership gate and the capability watch, and only when it admitted', () => {
+    expect(gateSteps.findIndex((s) => s.id === 'watch')).toBe(gateSteps.findIndex((s) => s.id === 'gate') + 1);
+    expect(gateSteps.findIndex((s) => s.id === 'runtime')).toBe(gateSteps.findIndex((s) => s.id === 'watch') + 1);
     expect(runtime.if).toBe("steps.gate.outputs.member == 'true'");
-    expect(runtime.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
+    expect(runtime.env).toEqual({ GH_TOKEN: '${{ github.token }}', CAPABILITY_WATCH: '${{ steps.watch.outputs.watch }}' });
     expect(runtime.run).toContain('due="$(node "$KANON/scripts/runtime-bump.mjs")"');
     expect(runtime.run).toContain('printf \'due=%s\\n\' "$due" >> "$GITHUB_OUTPUT"');
     expect((gate as { outputs?: Record<string, string> }).outputs?.due).toBe('${{ steps.runtime.outputs.due }}');
@@ -486,8 +487,9 @@ describe('the runtime-version trigger', () => {
 
   it('holds the store job, and so the agent and the filing, behind the answer', () => {
     expect(wf.jobs.export!.if).toBe("needs.gate.outputs.member == 'true' && needs.gate.outputs.due == 'true'");
-    // Everything that spends goes through the export: the agent's job needs it to succeed.
-    expect(overseer.needs).toBe('export');
+    // Everything that spends goes through the export: the agent's job needs it to succeed. It
+    // also needs the gate, for the capability watch the gate read (kanon#477).
+    expect(overseer.needs).toEqual(['gate', 'export']);
   });
 
   // The review on #430: the agent must learn the trigger from the workflow, and on it the weekly
@@ -514,6 +516,49 @@ describe('the runtime-version trigger', () => {
     const bash = (reader: string) => spawnSync('bash', ['-e', '-c', script(reader)], { env: { ...process.env, GITHUB_OUTPUT: '/dev/null' }, encoding: 'utf8' });
     expect(bash('exit 2').stdout).not.toContain('reached');
     expect(bash('echo false').stdout).toBe('reached\n');
+  });
+});
+
+// kanon#477 (the Owner's decision of 2026-10-07): the capability watch is the adoption record's
+// `Capability watch:` choice, off by default. The gate job reads it from the default branch
+// before any agent runs; off, the runtime-version trigger doesn't audit
+// (tests/library/runtime-bump.test.ts) and the prompt skips the capability section.
+describe('the capability watch is a declared choice, off by default', () => {
+  const gate = wf.jobs.gate!;
+  const gateSteps = (gate.steps ?? []) as Step[];
+  const read = gateSteps.find((s) => s.id === 'watch')!;
+
+  it('is read in the gate job, from the default branch, before the runtime check and any agent', () => {
+    expect(read.if).toBe("steps.gate.outputs.member == 'true'");
+    expect(read.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
+    expect(read.run).toContain('watch="$(node "$KANON/scripts/capability-watch.mjs")"');
+    expect(read.run).toContain('printf \'watch=%s\\n\' "$watch" >> "$GITHUB_OUTPUT"');
+    expect((gate as { outputs?: Record<string, string> }).outputs?.watch).toBe('${{ steps.watch.outputs.watch }}');
+  });
+
+  it('fails the gate job on a malformed record, before the agent: the assignment carries the reader\'s exit', () => {
+    const script = (reader: string) => `${read.run!.replace('node "$KANON/scripts/capability-watch.mjs"', reader)}\necho reached`;
+    const bash = (reader: string) => spawnSync('bash', ['-e', '-c', script(reader)], { env: { ...process.env, GITHUB_OUTPUT: '/dev/null' }, encoding: 'utf8' });
+    expect(bash('exit 1').stdout).not.toContain('reached');
+    expect(bash('echo on').stdout).toBe('reached\n');
+  });
+
+  it('reaches the agent\'s job only as the gate job\'s output, through both called workflows', () => {
+    expect(handedIn(LANE_FILE, 'overseer', 'capability-watch')).toBe('${{ needs.gate.outputs.watch }}');
+    const run = parse(readFileSync('.github/workflows/overseer-run.yml', 'utf8')) as { on: { workflow_call: { inputs: Record<string, { default?: string }> } }; jobs: Record<string, { with?: Record<string, string> }> };
+    expect(run.on.workflow_call.inputs['capability-watch']?.default).toBe('off');
+    expect(run.jobs.overseer!.with?.['capability-watch']).toBe('${{ inputs.capability-watch }}');
+    const job = parse(readFileSync('.github/workflows/overseer-agent-job.yml', 'utf8')) as { on: { workflow_call: { inputs: Record<string, { default?: string }> } } };
+    expect(job.on.workflow_call.inputs['capability-watch']?.default).toBe('off');
+    expect(prompt).toContain('is `${{ inputs.capability-watch }}`');
+  });
+
+  it('tells the agent, with the watch off, to print the off-by-choice status line and skip the review', () => {
+    expect(flat).toContain('IF IT IS NOT `on`, the watch is OFF BY CHOICE: print exactly `Capability watch: off by choice — this repository\'s adoption record does not declare it` as the `### Capability watch` section, and skip the rest of this bullet.');
+    expect(flat).toContain('Read no ledger and no changelog, write no `Ledger delta` block and no `Watermark:` line');
+    expect(flat).toMatch(/raise no finding for the absent review or a missing ledger/);
+    // The status-line rule (K-SELF-17) names it as one of the lines a section opens with.
+    expect(flat).toMatch(/`Capability watch: degraded — <what failed>`, or, with the watch off, the `off by choice` line above/);
   });
 });
 

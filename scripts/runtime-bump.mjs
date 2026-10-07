@@ -5,7 +5,9 @@
 //
 //   due="$(node "$KANON/scripts/runtime-bump.mjs")"
 //
-// Reads `GITHUB_EVENT_NAME`, `GITHUB_REPOSITORY` and `gh`'s token from the environment, the
+// Reads `GITHUB_EVENT_NAME`, `GITHUB_REPOSITORY`, `CAPABILITY_WATCH` (the gate job's reading of
+// the adoption record's capability watch, `on` or `off`; kanon#477) and `gh`'s token from the
+// environment, the
 // capability ledger from the default branch (`K-MERGE-17`), and the runtime from the Kanon tree
 // this file is in, which is the release the lane runs. Exits 0 with the answer, writing why as a
 // notice and to the step summary when it is the runtime-version trigger; exits 2 without
@@ -22,13 +24,14 @@ import { LEDGER, reviewDue, runtimeOf } from './lib/runtime-bump.mjs';
 const KANON_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /**
- * @param {{ event?: string, repo?: string, root?: string, run?: (args: string[], opts?: object) => string }} [io]
+ * @param {{ event?: string, repo?: string, root?: string, run?: (args: string[], opts?: object) => string, watch?: string }} [io]
  * @returns {{ code: number, out: string, note?: string }}
  */
-export function runtimeBumpCli({ event = process.env.GITHUB_EVENT_NAME ?? '', repo = process.env.GITHUB_REPOSITORY, root = KANON_ROOT, run } = {}) {
+export function runtimeBumpCli({ event = process.env.GITHUB_EVENT_NAME ?? '', repo = process.env.GITHUB_REPOSITORY, root = KANON_ROOT, run, watch = process.env.CAPABILITY_WATCH ?? '' } = {}) {
   if (event === 'pull_request_target' && !repo) return { code: 2, out: 'runtime-bump: GITHUB_REPOSITORY must be set' };
   const { due, note } = reviewDue({
     event,
+    watch,
     runtime: () => runtimeOf(root),
     ledger: () => {
       const { branch, read } = defaultBranchFile(/** @type {string} */ (repo), run);

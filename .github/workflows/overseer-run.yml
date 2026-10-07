@@ -22,6 +22,11 @@ on:
         required: false
         type: string
         default: ""
+      capability-watch:
+        description: The adoption record's capability watch, `on` or `off`, as the lane's gate job read it from the default branch (kanon#477).
+        required: false
+        type: string
+        default: "off"
     outputs:
       agent-outcome:
         value: ${{ jobs.overseer.outputs.agent-outcome }}
@@ -79,6 +84,7 @@ jobs:
     uses: $/.github/workflows/overseer-agent-job.yml
     with:
       artifact-name: ${{ inputs.artifact-name }}
+      capability-watch: ${{ inputs.capability-watch }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}
     secrets:

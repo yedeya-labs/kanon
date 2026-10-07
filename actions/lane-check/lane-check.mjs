@@ -22,6 +22,7 @@ import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { declarationFindings } from './declarations.mjs';
+import { LEDGER, readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const KANON_ROOT = process.env.KANON_ROOT || join(HERE, '../..');
@@ -479,7 +480,17 @@ const BASELINES = join(KANON_ROOT, 'rulebook/templates/playbooks');
 const FENCE = /^[ \t]*(```|~~~)/;
 /** awk's `tolower`, on ASCII. @param {string} s */
 const lower = (s) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+// The capability ledger is needed only where the capability watch is on (kanon#477): the
+// adoption record's `Capability watch:` choice, off by default. A malformed choice is named below,
+// with the record's other declarations, and the ledger is held as needed meanwhile.
+const watchOn = (() => {
+  try { return readCapabilityWatch(process.cwd()) === 'on'; } catch { return true; }
+})();
 for (const [d, by] of byName(DOCS)) {
+  if (!isFile(d) && d === LEDGER && !watchOn) {
+    note(d, `doesn't exist, which is fine: the adoption record doesn't turn the capability watch on under \`## Choices\`, so the Kanon lane(s) ${by} skip the capability review and don't read it (K-LAYOUT-10, kanon#477)`);
+    continue;
+  }
   if (!isFile(d)) {
     if (isFile(join(BASELINES, basename(d)))) note(d, `doesn't exist, so the Kanon lane(s) ${by} read Kanon's baseline for it (plan 0005 §5.2, K-LAYOUT-17)`);
     else fail(d, `is missing; the Kanon lane(s) ${by} read it (K-LAYOUT-17)`);
