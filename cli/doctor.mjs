@@ -415,6 +415,28 @@ export const kanonCall = (uses) => {
   return m ? { workflow: /** @type {string} */ (m[1]), ref: /** @type {string} */ (m[2]) } : null;
 };
 
+/**
+ * The secrets a workflow maps into its jobs: each name an expression reads as `secrets.<NAME>` or
+ * `secrets['<NAME>']` anywhere outside its `on:` (where a reusable workflow declares the secrets
+ * it takes, which reads none), upper-cased as GitHub stores them; and the jobs that pass on every
+ * secret with `secrets: inherit`. Whatever a job calls, a lane, the release workflow by any path,
+ * or nothing, its secrets count (#414).
+ * @param {Record<string, any>} wf
+ */
+export const secretReads = (wf) => {
+  /** @type {Set<string>} */
+  const names = new Set();
+  /** @param {unknown} v */
+  const walk = (v) => {
+    if (typeof v === 'string') for (const m of v.matchAll(/(?<![\w.])secrets\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*)|\[\s*'([A-Za-z_][A-Za-z0-9_]*)'\s*\])/g)) names.add(/** @type {string} */ (m[1] ?? m[2]).toUpperCase());
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (isMap(v)) Object.values(v).forEach(walk);
+  };
+  for (const [k, v] of Object.entries(wf)) if (k !== 'on') walk(v);
+  const inherits = Object.entries(isMap(wf.jobs) ? wf.jobs : {}).filter(([, j]) => isMap(j) && j.secrets === 'inherit').map(([n]) => n);
+  return { names, inherits };
+};
+
 /** The headings a document holds exactly once outside a fence, and how often each appears. @param {string} text @param {string} heading */
 const headingCount = (text, heading) => {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
@@ -576,6 +598,9 @@ export const diagnose = async (deps, opts) => {
     if (!kind) throw new Error(`no finding "${id}" in FINDINGS`);
     findings.push({ id, category: kind.category, blocking: kind.blocking, subject, message, fix: { text: fix.text, commands: fix.commands ?? [], url: fix.url ?? null } });
   };
+  // The workflows are read from the checkout, not from the default branch through the API.
+  const branchName = branch.status === 0 ? branch.stdout.trim() : null;
+  const onCheckout = branchName && branchName !== 'HEAD' ? branchName : 'this checkout';
   const checking = opts.to ? `${checked} (the release you are moving to)` : `${checked} (the release the callers pin)`;
 
   if (exact.length > 1 || pins.size > exact.length) {
@@ -829,13 +854,20 @@ export const diagnose = async (deps, opts) => {
         commands: [`gh secret set ${n} -R ${repo}`],
       });
     }
-    // An App secret no App in use reads: left from the per-role Apps, or from an App dropped.
+    // An App secret no App in use reads and no workflow maps: left from the per-role Apps, or from
+    // an App dropped. A secret any job maps counts as read, whatever the job calls (#414).
     const known = new Set([...Object.keys(req.identities.roles), ...Object.keys(req.identities.apps)].flatMap(appSecrets));
     const used = new Set(identities.flatMap(appSecrets));
-    const stale = [...s.secrets].filter((n) => known.has(n) && !used.has(n)).sort();
-    if (stale.length) {
-      find('secret.stale', repo, `holds ${stale.join(', ')}, which no lane, apps-check or release caller of ${checked} reads here.`, {
-        text: `Delete them once nothing maps them, and uninstall the Apps they belong to if no repository uses them:`,
+    const mapping = [...workflows].map(([file, wf]) => ({ file, ...secretReads(wf) }));
+    for (const m of mapping) for (const n of m.names) used.add(n);
+    const stale = [...s.secrets].filter((n) => known.has(n) && !used.has(n.toUpperCase())).sort();
+    const inheriting = mapping.flatMap((m) => m.inherits.map((j) => `${m.file}'s job ${j}`));
+    const unread = unchecked.filter((u) => u.check === 'workflow').map((u) => u.subject);
+    if (stale.length && inheriting.length) notes.push(`${inheriting.join(', ')} inherit${inheriting.length > 1 ? '' : 's'} every secret, so doctor lists none of ${stale.join(', ')} as stale: it can't tell which the called workflow reads.`);
+    else if (stale.length && unread.length) notes.push(`doctor lists none of ${stale.join(', ')} as stale: it could not read ${unread.join(', ')}, which may map them.`);
+    else if (stale.length) {
+      find('secret.stale', repo, `holds ${stale.join(', ')}, which no App the lanes of ${checked} run as here reads, and no job of a workflow under .github/workflows/ on ${onCheckout} names: doctor reads every \`secrets.<NAME>\` in each workflow outside its on:, in a job's secrets:, env:, with: or steps alike, whatever the job calls.`, {
+        text: `Delete them${branchName === s.defaultBranch ? '' : `, once ${s.defaultBranch}'s workflows map none of them either`}, and uninstall the Apps they belong to if no repository uses them:`,
         commands: stale.map((n) => `gh secret delete ${n} -R ${repo}`),
       });
     }
@@ -1073,8 +1105,7 @@ export const diagnose = async (deps, opts) => {
     else find('waiver.stale', ADOPTION_RECORD, `${ADOPTION_RECORD}:${w.line} waives ${w.id} on ${w.subject}, but doctor reports no such finding.`, { text: `Remove the bullet, so the record says only what is true.` });
   }
 
-  const branchName = branch.status === 0 ? branch.stdout.trim() : null;
-  if (branchName !== s.defaultBranch) notes.push(`The id-token holders are counted on ${branchName && branchName !== 'HEAD' ? branchName : 'this checkout'}, not on ${s.defaultBranch}; the roles trust ${s.defaultBranch}'s jobs, so run it there for their count.`);
+  if (branchName !== s.defaultBranch) notes.push(`The id-token holders and the secrets the workflows map are counted on ${onCheckout}, not on ${s.defaultBranch}; the roles trust ${s.defaultBranch}'s jobs, and its workflows are the ones that run, so run it there for their count.`);
 
   findings.sort((a, b) => CATEGORIES.indexOf(a.category) - CATEGORIES.indexOf(b.category));
   waived.sort((a, b) => CATEGORIES.indexOf(a.category) - CATEGORIES.indexOf(b.category));

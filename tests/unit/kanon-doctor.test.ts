@@ -861,6 +861,94 @@ describe('kanon doctor and Apps no lane uses any more', () => {
     expect(plain.status).toBe(EXIT.healthy);
     expect(github.calls.some((c) => String(c[1]).includes('installations'))).toBe(false);
   });
+
+  it('lists the per-role Apps as app.unused and their secrets as secret.stale, beside a release caller by `$/` (G4)', async () => {
+    const dir = migrated();
+    put(dir, { '.github/workflows/release-please.yml': releaseBy('$/.github/workflows/release.yml') });
+    execFileSync('git', ['-C', dir, 'add', '-A']);
+    execFileSync('git', ['-C', dir, 'commit', '-q', '-m', 'release caller']);
+    const github = fakeGitHub({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...appSecrets('releaser'), ...appSecrets('reviewer')]) });
+    github.st.installations = [{ id: 31, app_slug: 'widgets-reviewer', account: { login: 'acme' } }];
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['app.unused widgets-reviewer', 'secret.stale acme/widgets']);
+    expect(r.json.findings[1].fix.commands).toEqual(appSecrets('reviewer').sort().map((n) => `gh secret delete ${n} -R ${REPO}`));
+  });
+});
+
+/** A release caller reaching Kanon's release workflow by `uses`, mapping the Releaser's secrets. */
+const releaseBy = (uses: string) => [
+  'name: Release', 'on:', '  push:', '    branches: [main]', 'permissions: {}', 'jobs:', '  release:',
+  '    permissions:', '      contents: write', '      pull-requests: write',
+  `    uses: ${uses}`,
+  '    secrets:', ...appSecrets('releaser').map((n) => `      ${n}: \${{ secrets.${n} }}`), '',
+].join('\n');
+
+// #414 (plan 0005 G16): doctor counts a secret as read when any workflow maps it into a job, not
+// only when a caller it recognises as Kanon's does, so it never tells anyone to delete a secret a
+// workflow still uses.
+describe('kanon doctor and the secrets a workflow maps (#414)', () => {
+  const RELEASER = appSecrets('releaser');
+  const withSecrets = (files: Record<string, string>) => {
+    const dir = checkout({ ...healthyFiles(), ...files });
+    const github = fakeGitHub({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...RELEASER]) });
+    return run(dir, github, ['--json']);
+  };
+
+  it('lists the Releaser\'s secrets as stale when no workflow maps them, and says how it looked (the mutation\'s baseline)', async () => {
+    const r = await withSecrets({});
+    expect(ids(r)).toEqual(['secret.stale acme/widgets']);
+    const stale = r.json.findings[0];
+    expect(stale.fix.commands).toEqual(RELEASER.map((n) => `gh secret delete ${n} -R ${REPO}`));
+    expect(stale.message).toContain('no job of a workflow under .github/workflows/ on main names');
+    expect(stale.message).toContain('`secrets.<NAME>`');
+  });
+
+  for (const uses of ['$/.github/workflows/release.yml', './.github/workflows/release.yml']) {
+    it(`doesn't list the secrets a release caller reaching release.yml by \`${uses.split('/')[0]}/\` maps`, async () => {
+      const r = await withSecrets({ '.github/workflows/release-please.yml': releaseBy(uses) });
+      expect(ids(r)).toEqual([]);
+      expect(r.status).toBe(EXIT.healthy);
+    });
+  }
+
+  it("doesn't list a secret any other job names, in its env:, a step's with: or its secrets:", async () => {
+    const [id, key] = RELEASER as [string, string];
+    const other = ['name: Other', 'on: push', 'permissions: {}', 'jobs:', '  mint:', '    runs-on: ubuntu-latest',
+      '    env:', `      ID: \${{ secrets.${id} }}`,
+      '    steps:', '      - uses: actions/create-github-app-token@v2', '        with:', `          private-key: \${{ secrets.${key} }}`, ''].join('\n');
+    expect(ids(await withSecrets({ '.github/workflows/other.yml': other }))).toEqual([]);
+    // Mutation: the job names only one of them, and the other is listed.
+    const half = other.split('\n').filter((l) => !l.includes(key)).join('\n');
+    const r = await withSecrets({ '.github/workflows/other.yml': half });
+    expect(ids(r)).toEqual(['secret.stale acme/widgets']);
+    expect(r.json.findings[0].fix.commands).toEqual([`gh secret delete ${key} -R ${REPO}`]);
+  });
+
+  it("doesn't count a secret a comment, or a reusable workflow's declaration of what it takes, names", async () => {
+    const declares = ['name: Takes', 'on:', '  workflow_call:', '    secrets:', ...RELEASER.map((n) => `      ${n}:\n        required: false\n        description: "the caller maps secrets.${n}"`),
+      'jobs:', '  noop:', '    runs-on: ubuntu-latest', `    # \${{ secrets.${RELEASER[0]} }}`, '    steps:', '      - run: "true"', ''].join('\n');
+    expect(ids(await withSecrets({ '.github/workflows/takes.yml': declares }))).toEqual(['secret.stale acme/widgets']);
+  });
+
+  it('lists nothing as stale while a job inherits every secret, and says why', async () => {
+    const inherits = ['name: Inherits', 'on: push', 'permissions: {}', 'jobs:', '  call:', '    uses: ./.github/workflows/mine.yml', '    secrets: inherit', ''].join('\n');
+    const r = await withSecrets({ '.github/workflows/inherits.yml': inherits });
+    expect(ids(r)).toEqual([]);
+    expect(r.json.notes.join('\n')).toContain(`.github/workflows/inherits.yml's job call inherits every secret, so doctor lists none of ${RELEASER.join(', ')} as stale`);
+  });
+
+  it('lists nothing as stale while a workflow can\'t be read, which might map them', async () => {
+    const r = await withSecrets({ '.github/workflows/broken.yml': 'jobs: [\n' });
+    expect(ids(r)).toEqual([]);
+    expect(r.json.unchecked).toEqual(expect.arrayContaining([expect.objectContaining({ check: 'workflow', subject: '.github/workflows/broken.yml' })]));
+  });
+
+  it('notes that the reads are counted on the checkout, off the default branch', async () => {
+    const dir = checkout(healthyFiles());
+    execFileSync('git', ['-C', dir, 'checkout', '-q', '-b', 'topic']);
+    const r = await run(dir, fakeGitHub(), ['--json']);
+    expect(r.json.notes.join('\n')).toContain('The id-token holders and the secrets the workflows map are counted on topic, not on main');
+  });
 });
 
 // #376: a project declares the kanon plugin in its .claude/settings.json (docs/skills.md), and
