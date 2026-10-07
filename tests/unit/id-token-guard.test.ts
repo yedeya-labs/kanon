@@ -45,8 +45,11 @@ describe('every Kanon workflow', () => {
     expect(holders).toEqual([
       'agent-code-audit.yml:export', 'agent-code-audit.yml:put',
       'agent-dispatch-sweep.yml:store',
+      // The telemetry Explorer's read job (plan 0004 step 14), which calls the aggregate function.
+      'agent-explore-telemetry.yml:aggregate',
       'agent-explore.yml:last-green', 'agent-explore.yml:put', 'agent-explore.yml:record-skip',
-      'agent-lanes-smoke.yml:code-audit', 'agent-lanes-smoke.yml:dispatch-sweep', 'agent-lanes-smoke.yml:explore', 'agent-lanes-smoke.yml:overseer',
+      'agent-lanes-smoke.yml:code-audit', 'agent-lanes-smoke.yml:dispatch-sweep', 'agent-lanes-smoke.yml:explore',
+      'agent-lanes-smoke.yml:explore-telemetry', 'agent-lanes-smoke.yml:overseer',
       'agent-overseer.yml:export',
       // Kanon's own caller of the code-audit lane (plan 0004 step 11a): it calls a lane with
       // store jobs, so it grants their id-token, and no job of its own runs anything.
@@ -70,9 +73,9 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
   it('an agent job given id-token: write', () => {
     // The agent's job itself, in the called workflow it runs in since kanon#279.
     expect(mutate((w) => grant(job(w, 'explore-agent-job.yml', 'explore'))))
-      .toEqual(['explore-agent-job.yml: job explore holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, or the telemetry collector job, may']);
+      .toEqual(['explore-agent-job.yml: job explore holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may']);
     expect(mutate((w) => grant(job(w, 'code-audit-agent-job.yml', 'audit'))))
-      .toEqual(['code-audit-agent-job.yml: job audit holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, or the telemetry collector job, may']);
+      .toEqual(['code-audit-agent-job.yml: job audit holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may']);
     // And the lane's call to it, whose grant is the ceiling of every job it runs.
     expect(mutate((w) => grant(job(w, 'agent-explore.yml', 'explore'))))
       .toEqual(['agent-explore.yml: job explore holds id-token: write (its own permissions grant) and calls explore-run.yml, which has no store job to pass it to']);
@@ -82,12 +85,12 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
 
   it('a gate job given id-token: write', () => {
     expect(mutate((w) => grant(job(w, 'agent-explore.yml', 'gate'))))
-      .toEqual(['agent-explore.yml: job gate holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, or the telemetry collector job, may']);
+      .toEqual(['agent-explore.yml: job gate holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may']);
   });
 
   it('a job of a lane that never touches the store', () => {
     expect(mutate((w) => grant(job(w, 'agent-review.yml', Object.keys(w['agent-review.yml']!.jobs).find((n) => w['agent-review.yml']!.jobs[n]!.permissions)!))))
-      .toEqual([expect.stringMatching(/^agent-review\.yml: job \S+ holds id-token: write \(its own permissions grant\); only a job that runs the qa-store block alone, or the telemetry collector job, may$/)]);
+      .toEqual([expect.stringMatching(/^agent-review\.yml: job \S+ holds id-token: write \(its own permissions grant\); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may$/)]);
   });
 
   it('a job that inherits id-token from the workflow-level permissions', () => {
@@ -96,20 +99,20 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
     // holds the agent job: each is named in its own form.
     const inherits = "(it declares no permissions, so it inherits the workflow's)";
     expect(mutate((w) => { w['agent-lane.yml']!.permissions = { contents: 'read', 'id-token': 'write' }; })).toEqual([
-      `agent-lane.yml: job mint holds id-token: write ${inherits}; only a job that runs the qa-store block alone, or the telemetry collector job, may`,
+      `agent-lane.yml: job mint holds id-token: write ${inherits}; only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may`,
       `agent-lane.yml: job run holds id-token: write ${inherits} and calls lane-agent-job.yml, which has no store job to pass it to`,
     ]);
     // The spine's agent job, in the workflow it calls.
     expect(mutate((w) => { w['lane-agent-job.yml']!.permissions = { contents: 'read', 'id-token': 'write' }; }))
-      .toEqual([`lane-agent-job.yml: job run holds id-token: write ${inherits}; only a job that runs the qa-store block alone, or the telemetry collector job, may`]);
+      .toEqual([`lane-agent-job.yml: job run holds id-token: write ${inherits}; only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may`]);
     // A job that drops its own block in a lane whose workflow grants it.
     expect(mutate((w) => {
       w['agent-explore.yml']!.permissions = { contents: 'read', 'id-token': 'write' };
       delete job(w, 'agent-explore.yml', 'change').permissions;
-    })).toEqual(["agent-explore.yml: job change holds id-token: write (it declares no permissions, so it inherits the workflow's); only a job that runs the qa-store block alone, or the telemetry collector job, may"]);
+    })).toEqual(["agent-explore.yml: job change holds id-token: write (it declares no permissions, so it inherits the workflow's); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may"]);
     // `write-all` grants id-token too.
     expect(mutate((w) => { job(w, 'agent-explore.yml', 'gate').permissions = 'write-all'; }))
-      .toEqual(['agent-explore.yml: job gate holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, or the telemetry collector job, may']);
+      .toEqual(['agent-explore.yml: job gate holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may']);
   });
 
   it('a caller that passes id-token to a lane with no store job', () => {
@@ -123,36 +126,36 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
     expect(mutate((w) => {
       delete w['agent-explore.yml']!.permissions;
       delete job(w, 'agent-explore.yml', 'change').permissions;
-    })).toEqual(["agent-explore.yml: job change declares no permissions in a workflow with none, so it inherits id-token: write from agent-lanes-smoke.yml's job explore; only a job that runs the qa-store block alone, or the telemetry collector job, may"]);
+    })).toEqual(["agent-explore.yml: job change declares no permissions in a workflow with none, so it inherits id-token: write from agent-lanes-smoke.yml's job explore; only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may"]);
     // With the workflow-level block in place the job inherits that, which grants no id-token.
     expect(mutate((w) => { delete job(w, 'agent-explore.yml', 'change').permissions; })).toEqual([]);
   });
 
   it('a store job that runs anything beside the block loses its exemption', () => {
     expect(mutate((w) => { job(w, 'agent-explore.yml', 'put').steps!.push({ run: 'echo hi' }); }))
-      .toEqual(['agent-explore.yml: job put holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, or the telemetry collector job, may']);
+      .toEqual(['agent-explore.yml: job put holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may']);
     expect(mutate((w) => { (job(w, 'qa-store-aws-maintenance.yml', 'maintenance') as Record<string, unknown>).env = { NODE_OPTIONS: '-r x' }; }))
-      .toEqual(["qa-store-aws-maintenance.yml: job maintenance holds id-token: write (it declares no permissions, so it inherits the workflow's); only a job that runs the qa-store block alone, or the telemetry collector job, may"]);
+      .toEqual(["qa-store-aws-maintenance.yml: job maintenance holds id-token: write (it declares no permissions, so it inherits the workflow's); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may"]);
   });
 
   // Plan 0002 S7: the telemetry collector's job is the one holder outside the QA store's, and
   // only in its exact shape.
   it('any other job of telemetry-collect.yml given id-token: write', () => {
     expect(mutate((w) => grant(job(w, 'telemetry-collect.yml', 'unset'))))
-      .toEqual(['telemetry-collect.yml: job unset holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, or the telemetry collector job, may']);
+      .toEqual(['telemetry-collect.yml: job unset holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may']);
     expect(mutate((w) => {
       const wf = w['telemetry-collect.yml']!;
       wf.jobs.extra = { ...structuredClone(job(w, 'telemetry-collect.yml', 'collect')) };
-    })).toEqual(['telemetry-collect.yml: job extra holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, or the telemetry collector job, may']);
+    })).toEqual(['telemetry-collect.yml: job extra holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may']);
     // A workflow-level grant reaches the job that declares none.
     expect(mutate((w) => {
       w['telemetry-collect.yml']!.permissions = { 'id-token': 'write' };
       delete job(w, 'telemetry-collect.yml', 'unset').permissions;
-    })).toEqual(["telemetry-collect.yml: job unset holds id-token: write (it declares no permissions, so it inherits the workflow's); only a job that runs the qa-store block alone, or the telemetry collector job, may"]);
+    })).toEqual(["telemetry-collect.yml: job unset holds id-token: write (it declares no permissions, so it inherits the workflow's); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may"]);
   });
 
   it('the collector job loses its exemption for anything beside its three steps', () => {
-    const red = ["telemetry-collect.yml: job collect holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, or the telemetry collector job, may",
+    const red = ["telemetry-collect.yml: job collect holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may",
       "telemetry.yml: job collect holds id-token: write (it declares no permissions, so it inherits the workflow's) and calls telemetry-collect.yml, which has no store job to pass it to"];
     const steps = (w: Record<string, Workflow>) => job(w, 'telemetry-collect.yml', 'collect').steps as Array<{ run?: string; uses?: string; env: Record<string, string> }>;
     expect(mutate((w) => { steps(w).push({ run: 'echo hi', env: {} }); })).toEqual(red);
@@ -168,11 +171,11 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
       wf.jobs.sweep = job(w, 'telemetry-collect.yml', 'collect');
       delete wf.jobs.collect;
     })).toEqual([
-      "telemetry-collect.yml: job sweep holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, or the telemetry collector job, may",
+      "telemetry-collect.yml: job sweep holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may",
       "telemetry.yml: job collect holds id-token: write (it declares no permissions, so it inherits the workflow's) and calls telemetry-collect.yml, which has no store job to pass it to",
     ]);
     expect(mutate((w) => { w['agent-review.yml']!.jobs.collect = structuredClone(job(w, 'telemetry-collect.yml', 'collect')); }))
-      .toEqual(["agent-review.yml: job collect holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, or the telemetry collector job, may"]);
+      .toEqual(["agent-review.yml: job collect holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may"]);
   });
 
   it('the collector job declares no environment', () => {
@@ -180,7 +183,7 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
     const w = load();
     expect(job(w, 'telemetry-collect.yml', 'collect').environment).toBeUndefined();
     expect(mutate((x) => { job(x, 'telemetry-collect.yml', 'collect').environment = 'kanon-telemetry'; })).toEqual([
-      "telemetry-collect.yml: job collect holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, or the telemetry collector job, may",
+      "telemetry-collect.yml: job collect holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may",
       "telemetry.yml: job collect holds id-token: write (it declares no permissions, so it inherits the workflow's) and calls telemetry-collect.yml, which has no store job to pass it to",
     ]);
   });

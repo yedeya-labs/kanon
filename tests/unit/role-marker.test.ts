@@ -193,6 +193,7 @@ const SIGNED: Record<string, string> = {
   'scripts/dispatch-sweep.mjs': 'Lead',
   'scripts/lead-reconcile.mjs': 'Lead',
   'scripts/overseer-file.mjs': 'Overseer',
+  'scripts/telemetry-file.mjs': 'Explorer',
 };
 const UNSIGNED: Record<string, string> = {
   'scripts/implement-crash.mjs': 'posts as github-actions, deliberately not as the Implementer (its header says why)',

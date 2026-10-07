@@ -46,6 +46,28 @@
       "readsWorkflows": [],
       "hooks": []
     },
+    "agent-explore-telemetry": {
+      "identities": [
+        "author"
+      ],
+      "secrets": [
+        "AUTHOR_APP_ID",
+        "AUTHOR_APP_PRIVATE_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
+      ],
+      "inputs": {},
+      "grant": {
+        "actions": "read",
+        "contents": "read",
+        "id-token": "write",
+        "issues": "read"
+      },
+      "reads": [
+        "docs/qa/explorer-playbook.md"
+      ],
+      "readsWorkflows": [],
+      "hooks": []
+    },
     "agent-explore": {
       "identities": [
         "author"
@@ -789,6 +811,17 @@
         "cost": "A model run every three days.",
         "recommend": [],
         "when": "When you want a periodic second reading of the code, guided by `## Code areas` in your stack document."
+      },
+      "agent-explore-telemetry": {
+        "name": "Explore the telemetry",
+        "group": "explore",
+        "does": "Reads Kanon's hosted telemetry aggregate weekly, never a row, and files the anomalies it finds in Kanon's lanes: failures by lane, stage, error and Kanon version, and costs per lane and model.",
+        "needs": [
+          "an aggregate invoker role from Kanon's telemetry register (`aggregate_invoker`), and the repository variables `KANON_AGGREGATE_URL` and `KANON_AGGREGATE_ROLE` (docs/telemetry.md)"
+        ],
+        "cost": "A model run weekly, skipped when the aggregate holds no cell and no signal.",
+        "recommend": [],
+        "when": "When your telemetry register entry has an aggregate invoker role, so you can read the aggregate."
       },
       "agent-triage": {
         "name": "Triage and fix",

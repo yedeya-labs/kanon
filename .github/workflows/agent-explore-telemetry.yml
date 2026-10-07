@@ -1,0 +1,269 @@
+# QA pipeline — Agent 1 (the Explorer), TELEMETRY mode: a weekly read of the hosted telemetry's
+# aggregate. A Kanon lane (plan 0004, step 14; decision 13).
+#
+# The Explorer's third modality, beside the runtime sweep (`agent-explore.yml`) and the code audit
+# (`agent-code-audit.yml`): it reads what Kanon's aggregate function answers, and nothing else, and
+# looks for anomalies the fixed rules of kanon#41 would miss: a failure the same Kanon version
+# causes at several adopters, a stage that has started failing, a cost that moved. It files what
+# it finds under the Explorer's filing gate (`K-AGENT-9`), and "nothing to file" is a good run.
+#
+# WHAT IT READS IS THE AGGREGATE, NEVER A ROW (plan 0002 §6.1). The function answers three things:
+# `cross_adopter` cells, each combining at least three adopters that did not declare their own
+# figures; `own` cells, the figures of each adopter that declared them publishable, under the
+# label it chose; and `signals`, the last week's failures by lane, reason, stage, Kanon error and
+# Kanon version, with how many adopters each affected and no cost or run count. No key, no
+# repository, no run. Anything else in its answer refuses the whole read.
+#
+# ANY REPOSITORY WHOSE TELEMETRY REGISTER ENTRY SETS `aggregate_invoker` CAN INSTALL IT
+# (docs/telemetry.md). That creates the role `kanon-telemetry-<key>-aggregates`, trusted for the
+# repository's default-branch ref, which may call the function's URL and nothing else. The lane
+# reads the URL and the role from two repository variables, `KANON_AGGREGATE_URL` and
+# `KANON_AGGREGATE_ROLE`, the stack's `AggregateUrl` and `AggregateInvokerRole<id>` outputs.
+# Without both, it says so and stops after the gate, green: an adopter who hasn't asked for a
+# role has nothing to call.
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:` this
+# file at an exact Kanon tag and maps the three secrets by name (never `secrets: inherit`).
+#
+# ── WHO HOLDS WHAT ───────────────────────────────────────────────────────────────────────
+#
+#   gate → aggregate (id-token, the invoker role) → explore (the agent, reads only) → file
+#
+# - `aggregate` IS THE ONLY JOB WITH `id-token: write`. It assumes the invoker role through
+#   GitHub's OIDC token, calls the function's URL with a SigV4-signed `GET`
+#   (`scripts/aggregate-read.mjs`), checks the answer, and uploads it as an artifact kept one
+#   day. Its steps are exactly Kanon's path, the masking step, the credentials, the read and
+#   the upload: the id-token guard (`tests/unit/helpers/store-jobs.ts`) allows it by that shape,
+#   as it allows the QA store's jobs and the telemetry collector, and nothing else of this file.
+#   It declares no environment, which would replace the ref in its token's subject.
+# - `explore` RUNS THE AGENT, WITH NO CLOUD CREDENTIALS. Its agent job declares no `id-token`
+#   (plan 0004 P9's check) and downloads the aggregate into the workspace. Its token is the
+#   Explorer's, narrowed to read the tree and issues: it files nothing. It writes its findings to
+#   `qa-telemetry-findings.json`, which the job uploads.
+# - `file` FILES, WITH NO AGENT. On a fresh runner that checks out nothing, it downloads the
+#   aggregate and the findings, mints the Explorer's filing token, and runs
+#   `scripts/telemetry-file.mjs`: each finding must rest on entries of the aggregate, by their
+#   identifying fields; its prose may quote no figure, and nothing shaped like an adopter key;
+#   the step renders the figures itself, from the aggregate. A finding that fails is refused by
+#   name. So a steered agent can change what it says, never which figures an issue quotes.
+#
+# THE VARIABLES IN THE LOG (kanon#433). Neither is a credential, but the role's ARN holds the AWS
+# account id, and a public repository's run logs are public. Only these two variables are read,
+# never `toJSON(vars)`. The `aggregate` job's masking step reads them, and registers both, and the
+# account id, as masks before any other step names them, so the credentials step's
+# `role-to-assume:` and the read's `env:` print `***`. What still prints is the masking step's own
+# `env:`, the two values, once per run, because a step's environment is printed before the step
+# can mask anything. Holding the role's ARN as a secret instead would hide that too, at the cost
+# of a fourth secret in every caller.
+#
+# The schedule is a suggestion; the aggregate's signals cover the last 7 days (`signal_days`), so
+# a weekly run sees each failure once.
+#
+# INERT until: the caller is on the default branch, the Explorer's App installed with a row in
+# the App register, the two variables set, and these secrets (plan 0001 §8):
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+# KANON ROLE: Explorer
+# The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
+# role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
+# in the App register must exist, and this lane's tokens fit inside that role's row.
+name: Explore the telemetry (Explorer)
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#   schedule: "30 6 * * 2"     — weekly, Tuesday 06:30 UTC
+#   workflow_dispatch          — no inputs; from the default branch, as the invoker role trusts
+on:
+  workflow_call:
+    inputs:
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      AUTHOR_APP_ID:
+        required: true
+      AUTHOR_APP_PRIVATE_KEY:
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+concurrency:
+  # Never two at once: both would file from the same aggregate.
+  # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  group: agent-explore-telemetry${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). Each job below declares its
+# own, so only the `aggregate` job ever holds `id-token: write`, which the caller grants for it.
+permissions:
+  contents: read
+
+jobs:
+  # THE MEMBERSHIP GATE (K-AGENT-45, kanon#46), in a job of its own, before any token is minted
+  # or the function is called. ONLY THE CALLER'S TWO TRIGGERS: as a called workflow it runs on
+  # whatever its caller is called on (Kanon's smoke calls it on pull requests).
+  gate:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      member: ${{ steps.gate.outputs.member }}
+    steps:
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+  # NOTHING TO CALL: the repository has no invoker role's variables, or a dispatch ran from
+  # another branch, whose ref the role doesn't trust. Said, and green.
+  unconfigured:
+    needs: gate
+    if: >-
+      needs.gate.outputs.member == 'true'
+      && (vars.KANON_AGGREGATE_URL == '' || vars.KANON_AGGREGATE_ROLE == ''
+        || (github.event_name == 'workflow_dispatch' && github.ref_name != github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Say why the aggregate isn't read
+        run: |
+          echo "::notice title=explore-telemetry::The aggregate is not read: KANON_AGGREGATE_URL or KANON_AGGREGATE_ROLE is not set, or this dispatch ran from a branch other than the default, which the invoker role does not trust. See docs/telemetry.md (The aggregate function)."
+          echo "Telemetry Explorer **skipped**: the aggregate function's URL or invoker role is not set, or the run is not on the default branch." >> "$GITHUB_STEP_SUMMARY"
+
+  # THE ONE JOB THAT HOLDS `id-token: write` (see the header). Its steps are fixed: the id-token
+  # guard allows this job by its exact shape, so a step added here turns the guard red.
+  aggregate:
+    needs: gate
+    if: >-
+      needs.gate.outputs.member == 'true'
+      && vars.KANON_AGGREGATE_URL != '' && vars.KANON_AGGREGATE_ROLE != ''
+      && (github.event_name == 'schedule' || github.ref_name == github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+    outputs:
+      empty: ${{ steps.read.outputs.empty }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      # The attempt that uploaded the aggregate. A partial re-run reuses this job's outputs.
+      attempt: ${{ github.run_attempt }}
+    steps:
+      - uses: $/actions/kanon-path
+      # MASKED FIRST (kanon#433): every later step's header then prints `***` for them. This
+      # step's own `env:` is printed before it runs, so the two values appear here, once.
+      - name: Mask the aggregate function's URL and the invoker role
+        env:
+          URL: ${{ vars.KANON_AGGREGATE_URL }}
+          ROLE: ${{ vars.KANON_AGGREGATE_ROLE }}
+        run: node "$KANON/scripts/aggregate-mask.mjs"
+      # The STS call goes to Frankfurt, where the hosted store lives: the account's region policy
+      # denies every other region.
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.KANON_AGGREGATE_ROLE }}
+          aws-region: eu-central-1
+          role-session-name: kanon-explore-telemetry
+      - name: Read the aggregate
+        id: read
+        env:
+          KANON_AGGREGATE_URL: ${{ vars.KANON_AGGREGATE_URL }}
+          OUT: ${{ runner.temp }}/aggregate
+        run: node "$KANON/scripts/aggregate-read.mjs"
+      # One day: the agent's job and the filing job read it within the run.
+      - name: Upload the aggregate for the agent and the filing step
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-telemetry-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aggregate/aggregate.json
+          retention-days: 1
+          if-no-files-found: error
+
+  # THE LANE'S RUN, AS A CALLED WORKFLOW (kanon#279, `K-AGENT-49`). `explore-telemetry-run.yml`
+  # mints the token in a job that holds the key and runs nothing else, then hands it to the
+  # agent's job (`explore-telemetry-agent-job.yml`). Only when there is something to look at:
+  # an aggregate with no cell and no signal spends no model run.
+  explore:
+    needs: aggregate
+    if: needs.aggregate.outputs.empty == 'false' && needs.aggregate.outputs.attempt == github.run_attempt
+    # NO `id-token` AND NO ENVIRONMENT: this job holds no cloud credentials (plan 0004 P9). The
+    # reads are the finish block's, with the workflow token: its own run, and issues.
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+    uses: $/.github/workflows/explore-telemetry-run.yml
+    with:
+      artifact-name: kanon-telemetry-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+    secrets:
+      app-id: ${{ secrets.AUTHOR_APP_ID }}
+      app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+      claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  file:
+    needs: [aggregate, explore]
+    # AN EXPLICIT STATUS FUNCTION AND THE PARENT'S RESULT (kanon#261): the explore job is green
+    # whatever the agent concluded, because the agent step continues on error.
+    if: ${{ !cancelled() && needs.explore.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Nothing on the workflow token: the downloads read this run's artifacts with the runner's
+    # own token, and every write is the filing App token's.
+    permissions: {}
+    steps:
+      # A PARTIAL RE-RUN (kanon#286): "Re-run failed jobs" after a failed `file` re-runs this job
+      # but not the explore job, whose report is an earlier attempt's.
+      - name: Refuse a report from an earlier attempt
+        env:
+          REPORT_ATTEMPT: ${{ needs.explore.outputs.report-attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$REPORT_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error title=explore-telemetry::this is attempt $RUN_ATTEMPT, but the agent's report is from attempt ${REPORT_ATTEMPT:-unknown}. Nothing was filed on this attempt. Use \"Re-run all jobs\", not \"Re-run failed jobs\": only a new run reads a new aggregate."
+            exit 1
+          fi
+
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      # THE SAME AGGREGATE THE AGENT READ, from the read job's artifact: the agent's job can't
+      # write it, so the check below judges the findings against what the function answered.
+      - name: Download the aggregate
+        uses: actions/download-artifact@v8
+        with:
+          name: kanon-telemetry-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aggregate
+
+      - name: Download the agent's findings
+        if: needs.explore.outputs.report-artifact-id != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: qa-telemetry-findings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/report
+
+      # THE FILING TOKEN, minted in this job, which runs no agent.
+      - name: Mint the Explorer's filing token
+        id: file-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+          permission-issues: write
+
+      # THE CHECK AND THE FILING (see the header). No report, or an unparseable one, files
+      # nothing and reds the job: the run was lost. A refused finding reds it too, after the
+      # others are filed.
+      - name: Check the findings against the aggregate, and file them
+        env:
+          GH_TOKEN: ${{ steps.file-token.outputs.token }}
+          AGENT_OUTCOME: ${{ needs.explore.outputs.agent-outcome }}
+          REPORT_PATH: ${{ runner.temp }}/report/qa-telemetry-findings.json
+          AGGREGATE_PATH: ${{ runner.temp }}/aggregate/aggregate.json
+          KANON: ${{ steps.kanon.outputs.path }}
+        run: node "$KANON/scripts/telemetry-file.mjs"

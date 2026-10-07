@@ -335,14 +335,56 @@ export function isCollectorJob(file: string | undefined, name: string, j: Job): 
     && only(run.env as object, COLLECTOR_ENV);
 }
 
+/** The telemetry Explorer's read job (plan 0004 step 14), the one holder that calls the aggregate function. */
+export const AGGREGATE_FILE = 'agent-explore-telemetry.yml';
+export const AGGREGATE_JOB = 'aggregate';
+const AGGREGATE_MASK_RUN = 'node "$KANON/scripts/aggregate-mask.mjs"';
+const AGGREGATE_READ_RUN = 'node "$KANON/scripts/aggregate-read.mjs"';
+/** What the masking step reads: the two variables, by name (kanon#433: never `toJSON(vars)`). */
+const AGGREGATE_MASK_ENV = { URL: '${{ vars.KANON_AGGREGATE_URL }}', ROLE: '${{ vars.KANON_AGGREGATE_ROLE }}' };
+/** What the read step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
+export const AGGREGATE_READ_ENV = ['KANON_AGGREGATE_URL', 'OUT'];
+const UPLOAD = /^actions\/upload-artifact@v\d+$/;
+const TEMP_PATH = /^\$\{\{\s*runner\.temp\s*\}\}(?:\/(?!\.\.?(?:\/|$))[\w.-]+)+$/;
+
+/**
+ * The telemetry Explorer's `aggregate` job (plan 0004 step 14, plan 0002 §6.1): `aggregate` in
+ * `agent-explore-telemetry.yml`, and only in exactly this shape: Kanon's path; the step that
+ * masks the two variables, reading them by name; the AWS credentials for the invoker role; the
+ * read script, handed only the URL and its output directory; and the upload of the answer from
+ * the runner's temp directory. Its grant is `id-token: write` and nothing else, and it carries
+ * no job `env:`, `container:`, `services:` or `defaults:` (`STORE_JOB_KEYS`). The invoker role
+ * trusts every default-branch job that holds `id-token`, like the writer, so the shape is what
+ * keeps the set to this job.
+ */
+export function isAggregateJob(file: string | undefined, name: string, j: Job): boolean {
+  if (file !== AGGREGATE_FILE || name !== AGGREGATE_JOB || !only(j, STORE_JOB_KEYS)) return false;
+  if (JSON.stringify(j.permissions) !== JSON.stringify({ 'id-token': 'write' })) return false;
+  const steps = (j.steps ?? []) as Array<Record<string, unknown>>;
+  if (steps.length !== 5) return false;
+  const [path, mask, creds, read, upload] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
+  const w = (upload.with ?? {}) as Record<string, unknown>;
+  return only(path, ['uses']) && path.uses === '$/actions/kanon-path'
+    && only(mask, ['name', 'env', 'run']) && String(mask.run).trim() === AGGREGATE_MASK_RUN
+    && JSON.stringify(mask.env) === JSON.stringify(AGGREGATE_MASK_ENV)
+    && only(creds, ['uses', 'with']) && CREDENTIALS.test(String(creds.uses))
+    && only(creds.with as object, ['role-to-assume', 'aws-region', 'role-session-name'])
+    && only(read, ['name', 'id', 'env', 'run']) && String(read.run).trim() === AGGREGATE_READ_RUN
+    && only(read.env as object, AGGREGATE_READ_ENV)
+    && only(upload, ['name', 'id', 'uses', 'with']) && UPLOAD.test(String(upload.uses))
+    && only(w, ['name', 'path', 'retention-days', 'if-no-files-found'])
+    && typeof w.path === 'string' && TEMP_PATH.test(w.path.trim());
+}
+
 /**
  * A job that may hold `id-token: write`: one that runs the qa-store block alone (kanon#225's
  * allow-list: the block, plus the download of the report a `put` writes), or the AWS store's
  * maintenance block alone, with nothing that could run other code beside it, or the telemetry
- * collector's job (`isCollectorJob`), which needs its workflow's file name.
+ * collector's job (`isCollectorJob`), or the telemetry Explorer's read job (`isAggregateJob`),
+ * which need their workflow's file name.
  */
 export function mayHoldIdToken(name: string, j: Job, file?: string): boolean {
-  if (isCollectorJob(file, name, j)) return true;
+  if (isCollectorJob(file, name, j) || isAggregateJob(file, name, j)) return true;
   if (isStoreJob(j)) return !isAgentJob(j) && !isDeleteJob(j) && extraStepProblems(name, j, 'store').length === 0;
   const steps = j.steps ?? [];
   return steps.length === 1 && usesMaintenance(steps[0]!)
@@ -380,13 +422,13 @@ export function idTokenProblems(workflows: Record<string, Workflow>): string[] {
         else if (target.permissions === undefined) {
           for (const [n, cj] of Object.entries(target.jobs ?? {})) {
             if (cj.permissions === undefined && !mayHoldIdToken(n, cj, callee)) {
-              out.push(`${callee}: job ${n} declares no permissions in a workflow with none, so it inherits id-token: write from ${file}'s job ${name}; only a job that runs the qa-store block alone, or the telemetry collector job, may`);
+              out.push(`${callee}: job ${n} declares no permissions in a workflow with none, so it inherits id-token: write from ${file}'s job ${name}; only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may`);
             }
           }
         }
         continue;
       }
-      if (!mayHoldIdToken(name, j, file)) out.push(`${file}: job ${name} holds id-token: write (${how}); only a job that runs the qa-store block alone, or the telemetry collector job, may`);
+      if (!mayHoldIdToken(name, j, file)) out.push(`${file}: job ${name} holds id-token: write (${how}); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may`);
     }
   }
   return out;

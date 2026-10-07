@@ -234,9 +234,10 @@ The writer trusts the default branch's ref. What a token's subject is decides wh
 
 The last row is what the environment used to narrow, and nothing narrows it now: **every default-branch job that holds `id-token: write` can assume the writer.** That includes:
 - **Kanon's own QA-store jobs**, in every adopter that runs those lanes and in Kanon: the store jobs of explore, the code audit, the Overseer and the dispatch sweep, and the AWS maintenance job. Several run on a schedule, so on the default branch. While they declare `environment: kanon-qa-store`, their subject names that environment and the writer refuses them; once the QA store drops its environment ([#291](https://github.com/yedeya-labs/kanon/pull/291)), each carries the default branch's ref and is admitted.
+- **The Explorer's telemetry mode's `aggregate` job**, in a repository that runs that lane ([The Explorer's lane](#the-explorers-lane)). It holds the grant to assume the aggregate invoker role, on a schedule, so on the default branch.
 - **The adopter's own jobs** that hold it for another cloud, such as a deploy on push to the default branch.
 
-Each can write rows under its own adopter's key that pass the function's validation. None can read, name a partition, or reach another adopter's key. A job without `id-token: write` gets no token to ask with, so the set is exactly the jobs that hold it. What is guarded is that set's size in Kanon's own workflows, not that the collector is its only member: the id-token guard #291 added fails any Kanon job holding `id-token: write` that doesn't run a store block alone or isn't the collector's `collect` job in its exact shape (Kanon's path, the credentials and the collector script, and nothing beside them). The adopter's own holders are the adopter's to check.
+Each can write rows under its own adopter's key that pass the function's validation. None can read, name a partition, or reach another adopter's key. A job without `id-token: write` gets no token to ask with, so the set is exactly the jobs that hold it. What is guarded is that set's size in Kanon's own workflows, not that the collector is its only member: the id-token guard #291 added fails any Kanon job holding `id-token: write` that doesn't run a store block alone, or isn't the collector's `collect` job or the telemetry Explorer's `aggregate` job in its exact shape (Kanon's path, the credentials and the one script, the masking step and the upload for the second, and nothing beside them). The adopter's own holders are the adopter's to check.
 
 ## Erase an adopter
 
@@ -292,7 +293,7 @@ The Owner's to run; agents run none. It costs about a cent a month (plan 0002 de
    ```
 
 3. **Package and deploy,** exactly as in [Deploy](#deploy). One package holds both functions.
-4. **Read the outputs.** `AggregateUrl` is the function's URL, and `AggregateInvokerRole<id>` the invoker role's ARN; the Explorer's lane takes both, when it is added:
+4. **Read the outputs.** `AggregateUrl` is the function's URL, and `AggregateInvokerRole<id>` the invoker role's ARN; the Explorer's lane takes both ([The Explorer's lane](#the-explorers-lane)):
 
    ```sh
    aws cloudformation describe-stacks --profile kanon --region eu-central-1 \
@@ -313,6 +314,21 @@ The Owner's to run; agents run none. It costs about a cent a month (plan 0002 de
    ```sh
    curl -s -o /dev/null -w '%{http_code}\n' "<AggregateUrl>"
    ```
+
+### The Explorer's lane
+
+The function's one caller is the Explorer's telemetry mode, `agent-explore-telemetry.yml` (plan 0004 step 14, [docs/lanes.md](lanes.md#explore-the-telemetry)). Any repository whose entry sets `aggregate_invoker` can install it. Its `aggregate` job, the only job of the lane that holds `id-token: write`, assumes the invoker role with `aws-actions/configure-aws-credentials`, calls the URL with a SigV4-signed `GET` (`scripts/aggregate-read.mjs`), and refuses an answer with any key the function never answers, or a threshold under three. It hands the checked answer to the agent's job, which holds no credentials, as an artifact kept one day. Like the writer, the invoker role trusts every default-branch job of the repository that holds `id-token: write`, so Kanon's id-token guard holds that job to its exact steps (`tests/unit/helpers/store-jobs.ts`).
+
+The lane reads two repository variables, which carry no credential; set them from the outputs above, in the repository that runs the lane:
+
+```sh
+gh variable set KANON_AGGREGATE_URL --repo <owner>/<repo> --body "<AggregateUrl>"
+gh variable set KANON_AGGREGATE_ROLE --repo <owner>/<repo> --body "<AggregateInvokerRole<id>>"
+```
+
+The role's ARN holds the account id, which stays out of the public tree. The lane masks both values before any other step names them, so only the masking step's own header prints them, once per run ([#433](https://github.com/yedeya-labs/kanon/issues/433)).
+
+**Deploy from the release that ships the lane, before any repository's pin reaches it.** The lane's rows carry a new `lane`, `explore-telemetry`, and the ingest function refuses a lane its schema doesn't know: deployed from an earlier release, it answers 422 and the collector turns red. Render, package and deploy from that release's tag, as in [Deploy](#deploy).
 
 ## The importer and the backfill role
 
