@@ -334,8 +334,9 @@ describe('kanon metrics dry-run: privacy', () => {
     expect(r.err).toContain('keep it private');
   });
 
-  it('refuses a details file inside the checkout being measured, and writes nothing', async () => {
-    const r = await run(dryRun('--dir', dir, '--json', '--details', join(dir, 'details.json')));
+  // `..details.json` and `..ops/` begin with `..` but are inside the checkout (#541).
+  it.each(['details.json', '..details.json', join('..ops', 'd.json')])('refuses a details file inside the checkout being measured (%s), and writes nothing', async (name) => {
+    const r = await run(dryRun('--dir', dir, '--json', '--details', join(dir, name)));
     expect(r.status).toBe(EXIT.error);
     expect(json(r).error).toMatch(/inside the checkout/);
     expect(r.written).toEqual({});

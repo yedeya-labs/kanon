@@ -53,6 +53,8 @@ export const RESERVED_PARTITION = 'work';
 export const ROLES = Object.freeze(['explorer', 'implementer', 'reviewer', 'merger', 'lead', 'overseer']);
 /** An actor's class on a work-item row (plan 0003 §3.2): a role, or `human`, or `other_bot`. */
 export const ACTOR_CLASSES = Object.freeze([...ROLES, 'human', 'other_bot']);
+/** Where a work item came from (plan 0003 §3.3); `scripts/metrics/origin.mjs` derives it. */
+export const ORIGINS = Object.freeze(/** @type {const} */ (['brief', 'explorer', 'reviewer_followup', 'overseer', 'human', 'dependency_bot', 'other_bot']));
 
 export const TAGS = Object.freeze(['run', 'smoke', 'test']);
 export const OUTCOMES = Object.freeze(['ok', 'unavailable', 'exhausted', 'failed', 'not-reached']);
@@ -288,7 +290,7 @@ const WORK_ITEM_V1 = Object.freeze({
   issue_body_chars: count,
   issue_paths_named: count,
   blocked_by_count: count,
-  origin: oneOf(['brief', 'explorer', 'reviewer_followup', 'overseer', 'human', 'dependency_bot', 'other_bot']),
+  origin: oneOf(ORIGINS),
   author_kind: ACTOR,
   commits: count,
   force_pushes: count,

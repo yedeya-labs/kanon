@@ -3,7 +3,7 @@ import { AdapterError, toDetectorPr } from '../../scripts/metrics/adapter.mjs';
 import { codeAreaTest, explicitLink, reverts, szzLinks } from '../../scripts/metrics/detectors.mjs';
 import { ORIGINS } from '../../scripts/metrics/origin.mjs';
 import { workItemRow } from '../../scripts/metrics/work-item.mjs';
-import { validate } from '../../actions/agent-telemetry/schema.mjs';
+import { ORIGINS as SCHEMA_ORIGINS, validate } from '../../actions/agent-telemetry/schema.mjs';
 
 /**
  * Plan 0003 M2 (kanon#516, kanon#527): one reader fills `types.mjs`'s `PullRequest`, and
@@ -98,6 +98,8 @@ describe('toDetectorPr', () => {
 
 describe('ORIGINS', () => {
   it("is exactly the telemetry schema's origin list", () => {
+    // One home (#541): the schema's own list, so an origin added there alone can't be tallied as unknown.
+    expect(ORIGINS).toBe(SCHEMA_ORIGINS);
     const row = workItemRow({ pr: PR(3), declarations: { register: new Map() }, tag: 'test', recorded_at: '2026-10-07T00:00:00Z' });
     for (const origin of ORIGINS) expect(validate({ ...row, origin }).ok, origin).toBe(true);
     expect(validate({ ...row, origin: 'implementer' }).ok).toBe(false);

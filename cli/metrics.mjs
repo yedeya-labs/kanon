@@ -36,7 +36,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { ACTOR_CLASSES } from '../actions/agent-telemetry/schema.mjs';
 import { APP_REGISTER, parseAppRegister } from '../scripts/app-register.mjs';
@@ -382,8 +382,10 @@ export async function dryRun(deps, opts) {
   let root = null;
   if (opts.dir) ({ root, repo } = checkoutOf(deps, opts.dir, repo));
   if (opts.details && root) {
+    // Outside means a first segment of exactly `..`: `..details.json` is a file inside the checkout.
     const rel = relative(realPath(root), realPath(resolve(opts.details)));
-    if (!rel.startsWith('..') && !isAbsolute(rel)) return { error: `--details names a file inside the checkout of ${repo}, where a commit would publish it; write it outside, in the private ops repository` };
+    const outside = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+    if (!outside) return { error: `--details names a file inside the checkout of ${repo}, where a commit would publish it; write it outside, in the private ops repository` };
   }
 
   const who = await whoami(deps.gh, deps.env);
