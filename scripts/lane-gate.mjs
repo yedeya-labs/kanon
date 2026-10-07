@@ -62,8 +62,9 @@
 //                            without the `[bot]` an App's login carries (measured on Kanon's
 //                            own `main`, 2026-10-07: the run's API record names
 //                            `github-merge-queue[bot]`). On a schedule alone, it is admitted:
-//                            only a member can queue a merge, so the default branch the queue
-//                            last changed got there through a member. Refusing it would leave
+//                            only someone with write access (a member, or an App the
+//                            repository installed) can queue a merge, and a schedule runs the
+//                            default branch's code, not a stranger's text. Refusing it would leave
 //                            every scheduled lane skipped forever on a merge-queue repository,
 //                            and the schedules are the floor the queue's refused push and
 //                            CI-completion triggers fall back to (kanon#263). On every other
@@ -173,7 +174,7 @@ export function triggeringActor(eventName, event, env) {
           actor: {
             login: MERGE_QUEUE_LOGIN,
             source: 'merge queue that last changed the default branch',
-            admitted: 'on a schedule the merge queue is admitted, since only a member can queue the merges it makes',
+            admitted: 'on a schedule the merge queue is admitted, since only someone with write access (a member, or an App the repository installed) can queue the merges it makes',
           },
         };
       }

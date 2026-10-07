@@ -77,7 +77,7 @@ describe('a pull request merged through the queue (kanon#484)', () => {
  * 37638246558): every merge changes the default branch as the queue, so GitHub runs every
  * schedule as it, and `GITHUB_ACTOR` is `github-merge-queue`, without the `[bot]` suffix. The
  * gate looked that up as a person and failed red. On a schedule alone the queue is admitted:
- * only a member can queue a merge.
+ * only someone with write access (a member, or an App the repository installed) can queue a merge.
  */
 describe('a schedule run as the merge queue', () => {
   const lookups = {
@@ -92,7 +92,7 @@ describe('a schedule run as the merge queue', () => {
       const r = triggeringActor('schedule', { schedule: '30 7 */3 * *' }, { GITHUB_ACTOR });
       if (!('actor' in r)) throw new Error(r.refuse);
       expect(r.actor.login).toBe('github-merge-queue[bot]');
-      expect(decide(r.actor, lookups)).toEqual({ member: true, reason: expect.stringContaining('only a member can queue') });
+      expect(decide(r.actor, lookups)).toEqual({ member: true, reason: expect.stringContaining('only someone with write access') });
     }
   });
 
