@@ -528,6 +528,47 @@ describe('kanon init and the required check (#444)', () => {
     expect(graphql(done)).toEqual([]);
   });
 
+  // #459: through a merge queue, the queue waits for the check on its merge_group run.
+  describe('through a merge queue (#459)', () => {
+    const noQueueEvent = (text: string) => text.replace('  merge_group:\n', '');
+    const queue = { type: 'merge_queue', parameters: { merge_method: 'SQUASH' } };
+
+    it("creates its queued ruleset without the check while main's job doesn't run on merge_group, and names the workflow to add it to", async () => {
+      const dir = checkout({ '.github/workflows/ci.yml': noQueueEvent(ciFile('v1.2.3', 'main')) });
+      const github = fakeGitHub({ kind: 'Organization', defaultWorkflows: { 'ci.yml': noQueueEvent(ciFile('v1.2.3', 'main')) } });
+      const d = parse(await run(dir, github, ['--json', '--no-apps']));
+      expect(ruleTypes(github)).toEqual(['deletion', 'non_fast_forward', 'pull_request', 'merge_queue']);
+      const f = d.findings.find((x) => x.id === 'ruleset.require-check')!;
+      expect(f.message).toBe(`No job of a workflow on main reports the status check "${LANE_CHECK}" on every pull request and every queued merge yet, so the ruleset doesn't require it: a required check that nothing reports blocks every other pull request (K-ADOPT-1 step 8).`);
+      expect(f.fix.text).toMatch(/^After a pull request that adds merge_group, the event the merge queue runs its checks on, to the triggers of \.github\/workflows\/ci\.yml, merges to main/);
+      // init doesn't write a second job that reports the check beside the project's.
+      expect(existsSync(join(dir, '.github/workflows/lane-check.yml'))).toBe(false);
+    });
+
+    it('requires the check on a queued ruleset once the job runs on merge_group', async () => {
+      const github = fakeGitHub({ kind: 'Organization' });
+      await run(checkout(), github);
+      expect(ruleTypes(github)).toEqual(['deletion', 'non_fast_forward', 'pull_request', 'required_status_checks', 'merge_queue']);
+    });
+
+    it("doesn't add the check to an existing ruleset with a merge queue while main's job doesn't run on merge_group", async () => {
+      const github = fakeGitHub({ defaultWorkflows: { 'ci.yml': noQueueEvent(ciFile('v1.2.3', 'main')) }, rulesets: [ruleset({ rules: [...ruleset().rules, queue] })] });
+      const d = parse(await run(checkout(), github, ['--json', '--no-apps']));
+      expect(writes(github.calls).filter((a) => a.includes('PUT'))).toEqual([]);
+      expect(d.findings.find((x) => x.id === 'ruleset.require-check')!.fix.text).toMatch(/^After the pull request that adds \.github\/workflows\/ci\.yml#lanes merges to main/);
+      // Without the queue, the same job is enough.
+      const plain = fakeGitHub({ defaultWorkflows: { 'ci.yml': noQueueEvent(ciFile('v1.2.3', 'main')) }, rulesets: [ruleset()] });
+      await run(checkout(), plain);
+      expect(writes(plain.calls).filter((a) => a.includes('PUT'))).toEqual([['api', '-X', 'PUT', 'repos/acme/widgets/rulesets/7', '--input', '-']]);
+    });
+
+    it('asks nothing of merge_group on a plan without the queue, where init creates its ruleset without one', async () => {
+      const github = fakeGitHub({ defaultWorkflows: { 'ci.yml': noQueueEvent(ciFile('v1.2.3', 'main')) } });
+      await run(checkout(), github);
+      expect(ruleTypes(github)).toEqual(['deletion', 'non_fast_forward', 'pull_request', 'required_status_checks']);
+    });
+  });
+
   describe("lane-check's own workflow (L5's G14)", () => {
     const job = (on: string) => `name: Build\non:\n${on}jobs:\n  lanes:\n    name: Lane check\n    runs-on: ubuntu-latest\n    steps:\n      - uses: yedeya-labs/kanon/actions/lane-check@v1.2.3\n`;
     const writesLaneCheck = async (files: Record<string, string>) => {

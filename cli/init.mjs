@@ -65,7 +65,7 @@ import {
   telemetryCallerFile,
   TRIGGERS,
 } from './callers.mjs';
-import { branchWorkflows, checkReporters } from './check-reporters.mjs';
+import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { whoami } from './gh-token.mjs';
 import { pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { coveringRulesets } from './ruleset-bypass.mjs';
@@ -675,6 +675,14 @@ export const rulesetBody = (mergeQueue, requireCheck = true) => ({
       : []),
   ],
 });
+
+/**
+ * Whether the default branch merges through a merge queue (#459): one of the rulesets that cover
+ * it has one, or, where none covers it yet, the ruleset `init` creates or asks for has one, on a
+ * plan that has the queue (`rulesetBody`).
+ * @param {{ rulesets: string, mergeQueue: string, covering: any[] }} s
+ */
+export const mergesThroughQueue = (s) => (s.covering.length ? mergeQueueOn(s.covering) : s.rulesets !== 'no' && s.mergeQueue === 'yes');
 
 /** The gap `rulesetGaps` names for a status check the ruleset doesn't require. @param {string} check */
 export const requiredCheckGap = (check) => `require the status check "${check}"`;
@@ -1407,7 +1415,10 @@ const run = async (deps, opts, req, rep) => {
   const checkGap = requiredCheckGap(LANE_CHECK);
   const wantsCheck = s.rulesets !== 'no' && s.hasCommits && rulesetGaps(s.covering).includes(checkGap);
   const onDefault = wantsCheck ? await branchWorkflows(deps, repo, s.defaultBranch) : null;
-  const reported = onDefault !== null && onDefault.error === null && checkReporters(onDefault.workflows, LANE_CHECK, s.defaultBranch).length > 0;
+  // Through a merge queue, the job must report the check on the queue's merge_group run too (#459).
+  const queued = mergesThroughQueue(s);
+  const every = queued ? 'every pull request and every queued merge' : 'every pull request';
+  const reported = onDefault !== null && onDefault.error === null && checkReporters(onDefault.workflows, LANE_CHECK, s.defaultBranch, queued).length > 0;
   const rulesPage = `https://github.com/${repo}/settings/rules`;
   /** The rule as a step for after the merge. */
   const checkStep = () => {
@@ -1423,9 +1434,17 @@ const run = async (deps, opts, req, rep) => {
       }
     }
     // The checkout's own file wins over what init would write: init leaves a file that differs.
-    const adds = checkReporters(new Map([...planned, ...workflows]), LANE_CHECK, s.defaultBranch);
-    const by = adds.length ? `the pull request that adds ${adds.join(', ')}` : `a pull request that adds a job named "${LANE_CHECK}", as actions/lane-check's README shows,`;
-    const unread = onDefault?.error ? `init could not read the workflows on ${s.defaultBranch} (${onDefault.error}), so it can't tell whether a job there reports the status check "${LANE_CHECK}"` : `No job of a workflow on ${s.defaultBranch} reports the status check "${LANE_CHECK}" on every pull request yet`;
+    const merged = new Map([...planned, ...workflows]);
+    const adds = checkReporters(merged, LANE_CHECK, s.defaultBranch, queued);
+    // Otherwise a job with no filter lacks only the queue's event (#459): init never edits a
+    // workflow of the project's, so adding the trigger is the pull request's.
+    const unqueued = [...new Set(checkJobs(merged, LANE_CHECK, s.defaultBranch, queued).filter((j) => !j.filters.length).map((j) => j.job.split('#')[0]))];
+    const by = adds.length
+      ? `the pull request that adds ${adds.join(', ')}`
+      : unqueued.length
+        ? `a pull request that adds merge_group, the event the merge queue runs its checks on, to the triggers of ${unqueued.join(', ')},`
+        : `a pull request that adds a job named "${LANE_CHECK}", as actions/lane-check's README shows,`;
+    const unread = onDefault?.error ? `init could not read the workflows on ${s.defaultBranch} (${onDefault.error}), so it can't tell whether a job there reports the status check "${LANE_CHECK}"` : `No job of a workflow on ${s.defaultBranch} reports the status check "${LANE_CHECK}" on ${every} yet`;
     step({
       id: 'ruleset.require-check',
       category: 'ruleset',

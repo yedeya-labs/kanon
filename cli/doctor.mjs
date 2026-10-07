@@ -60,7 +60,7 @@ import { appsArgs, inspect, LANE_CHECK, registerRolesOf, registerRows, requiredC
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
-import { branchWorkflows, checkJobs, checkReporters } from './check-reporters.mjs';
+import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { parseUpstreamFindings } from '../scripts/lib/upstream-findings.mjs';
 
 // The reporter check lives in its own module, which `kanon init` shares (#444).
@@ -1439,22 +1439,32 @@ const checkGaps = async ({ deps, repo, s, checked, gaps, checkout, find, uncheck
     unchecked.push({ check: 'required-check', subject: LANE_CHECK, reason: `could not read the workflows on ${s.defaultBranch} (${onDefault.error}), so doctor can't tell whether a job there reports the status check "${LANE_CHECK}"${required ? '' : ", and doesn't ask you to require it yet"}` });
     return rest;
   }
-  const jobs = checkJobs(onDefault.workflows, LANE_CHECK, s.defaultBranch);
-  if (jobs.some((j) => !j.filters.length)) return gaps;
-  const here = checkReporters(checkout, LANE_CHECK, s.defaultBranch);
+  // With a merge queue, the queue waits for the check on its own `merge_group` run, so the job must
+  // run on that event as well (#459).
+  const queue = mergeQueueOn(s.covering);
+  const jobs = checkJobs(onDefault.workflows, LANE_CHECK, s.defaultBranch, queue);
+  if (jobs.some((j) => !j.filters.length && !j.missing.length)) return gaps;
+  const here = checkReporters(checkout, LANE_CHECK, s.defaultBranch, queue);
+  const every = queue ? 'every pull request and every queued merge' : 'every pull request';
   const then = required ? 'Until it merges, every other pull request waits on the check.' : `Then require the check: doctor asks for it (ruleset.rule-missing) once the job is on ${s.defaultBranch}.`;
   // A job whose workflow skips some pull requests (#446): GitHub never reports the check on one
   // it skips, so that pull request waits on the check once it is required.
   const filters = [...new Set(jobs.flatMap((j) => j.filters))];
-  const skipping = jobs.length ? ` The only job${jobs.length > 1 ? 's' : ''} there that report${jobs.length > 1 ? '' : 's'} it (${jobs.map((j) => j.job).join(', ')}) run${jobs.length > 1 ? '' : 's'} on some pull requests only (${filters.join(', ')}), and a pull request ${jobs.length > 1 ? 'they skip' : 'it skips'} never gets the check.` : '';
+  const filtered = jobs.filter((j) => j.filters.length);
+  const skipping = filtered.length ? ` The ${queue ? '' : 'only '}job${filtered.length > 1 ? 's' : ''} there that report${filtered.length > 1 ? '' : 's'} it (${filtered.map((j) => j.job).join(', ')}) run${filtered.length > 1 ? '' : 's'} on some ${queue ? 'runs' : 'pull requests'} only (${filters.join(', ')}), and a ${queue ? 'run' : 'pull request'} ${filtered.length > 1 ? 'they skip' : 'it skips'} never gets the check.` : '';
+  // A job whose workflow doesn't run on the merge queue's event (#459).
+  const unqueued = jobs.filter((j) => j.missing.length).map((j) => j.job);
+  const lacking = unqueued.length ? ` ${unqueued.join(', ')} ${unqueued.length > 1 ? "don't" : "doesn't"} run on merge_group, the event the merge queue on ${s.defaultBranch} runs its checks on, so a queued merge never gets the check and waits on it.` : '';
+  const workflowsOf = (/** @type {string[]} */ list) => [...new Set(list.map((j) => j.split('#')[0]))].join(', ');
+  const fixes = [...(filters.length ? [`take ${filters.join(', ')} off the workflow's trigger`] : []), ...(unqueued.length ? [`add merge_group to the triggers of ${workflowsOf(unqueued)}`] : [])];
   find('ruleset.check-unreported', LANE_CHECK, required
-    ? `The ruleset on ${s.defaultBranch} requires the status check "${LANE_CHECK}", but no job of a workflow on ${s.defaultBranch} reports it on every pull request, so every pull request that doesn't get it waits on it (K-ADOPT-1 step 8).${skipping}`
-    : `No job of a workflow on ${s.defaultBranch} reports the status check "${LANE_CHECK}" on every pull request, so the ruleset can't require it yet: a required check that nothing reports blocks every pull request (K-ADOPT-1 step 8).${skipping}`, {
+    ? `The ruleset on ${s.defaultBranch} requires the status check "${LANE_CHECK}", but no job of a workflow on ${s.defaultBranch} reports it on ${every}, so every ${queue ? 'one' : 'pull request'} that doesn't get it waits on it (K-ADOPT-1 step 8).${skipping}${lacking}`
+    : `No job of a workflow on ${s.defaultBranch} reports the status check "${LANE_CHECK}" on ${every}, so the ruleset can't require it yet: a required check that nothing reports blocks every pull request (K-ADOPT-1 step 8).${skipping}${lacking}`, {
     text: here.length
       ? `This checkout adds it (${here.join(', ')}): merge the pull request that adds it to ${s.defaultBranch} first. ${then}`
       : jobs.length
-        ? `Run the job on every pull request: take ${filters.join(', ')} off the workflow's trigger, or move the job to a workflow of its own on pull_request with no filter, as actions/lane-check's README shows, and merge it. ${then}`
-        : `Add a job of its own named "${LANE_CHECK}", in a workflow that runs on pull_request, as actions/lane-check's README shows (a step in another job reports nothing under that name), and merge it. ${then}`,
+        ? `Run the job on ${every}: ${fixes.join(', and ')}, or move the job to a workflow of its own on pull_request${queue ? ' and merge_group' : ''} with no filter, as actions/lane-check's README shows, and merge it. ${then}`
+        : `Add a job of its own named "${LANE_CHECK}", in a workflow that runs on pull_request${queue ? ' and merge_group' : ''}, as actions/lane-check's README shows (a step in another job reports nothing under that name), and merge it. ${then}`,
     url: `https://github.com/${KANON_REPO}/blob/${checked}/actions/lane-check/README.md`,
   });
   return rest;
