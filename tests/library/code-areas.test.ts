@@ -267,9 +267,8 @@ describe("Kanon's own stack document declares its code areas", () => {
   it('parses, and names the trees Kanon keeps code and tests in', () => {
     const a = parseCodeAreas(readFileSync(join(ROOT, 'docs/qa/stack.md'), 'utf8'));
     expect(a.code.map((c) => c.path)).toEqual(['scripts/', 'actions/', 'cli/', 'infra/', '.github/scripts/']);
-    // No runner yet: the lane check runs Kanon's pinned release, whose parser predates the runner
-    // form (kanon#20), so the runner is named once the pin moves past the release that reads it.
-    expect(a.tests).toEqual([{ path: 'tests/', what: 'the library and unit tests, and their fixtures' }]);
+    // The runner is named now that Kanon pins a release whose parser reads it (kanon#20, #482).
+    expect(a.tests).toEqual([{ path: 'tests/', runner: 'vitest', what: 'the library and unit tests, and their fixtures' }]);
   });
 });
 
