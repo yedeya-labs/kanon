@@ -46,20 +46,29 @@ const put = (row, fields) => {
   for (const [k, v] of Object.entries(fields)) if (v !== undefined && v !== null) row[k] = v;
 };
 
-/** Thrown when the input can't make a valid row; the message names fields, never values. */
-export class WorkItemError extends Error {}
+/**
+ * Thrown when the input can't make a valid row; the message names fields, never values, and
+ * `fields` lists them, for a reader that counts which fields fail (the dry run).
+ */
+export class WorkItemError extends Error {
+  /** @param {string} message @param {string[]} [fields] */
+  constructor(message, fields = []) {
+    super(message);
+    this.fields = fields;
+  }
+}
 
 /**
  * Validates a work-item row against the schema, and checks that its stages partition its lead
  * time (§3.3, group 2). The answer names fields only.
  * @param {Record<string, unknown>} row
- * @returns {{ ok: true } | { ok: false, why: string }}
+ * @returns {{ ok: true } | { ok: false, why: string, fields: string[] }}
  */
 export function checkWorkItemRow(row) {
   const v = validate(row);
-  if (!v.ok) return { ok: false, why: describeErrors(v.errors) };
+  if (!v.ok) return { ok: false, why: describeErrors(v.errors), fields: [...new Set(v.errors.map((e) => e.field))] };
   const p = partitionProblem(row);
-  return p ? { ok: false, why: `stage partition: ${p}` } : { ok: true };
+  return p ? { ok: false, why: `stage partition: ${p}`, fields: ['lead_time_s'] } : { ok: true };
 }
 
 /**
@@ -143,7 +152,7 @@ function followupFields(followups) {
 export function workItemRow(input) {
   const { pr, declarations } = input;
   const { register, codeAreas, escalationFile } = declarations;
-  if (pr.state !== 'closed' || !pr.closed_at) throw new WorkItemError(`PR #${pr.number} is not closed, so it has no work-item row yet`);
+  if (pr.state !== 'closed' || !pr.closed_at) throw new WorkItemError(`PR #${pr.number} is not closed, so it has no work-item row yet`, ['closed_at']);
 
   /** @type {Record<string, unknown>} */
   const row = {
@@ -210,6 +219,6 @@ export function workItemRow(input) {
   }
 
   const check = checkWorkItemRow(row);
-  if (!check.ok) throw new WorkItemError(`PR #${pr.number}'s work-item row is invalid: ${check.why}`);
+  if (!check.ok) throw new WorkItemError(`PR #${pr.number}'s work-item row is invalid: ${check.why}`, check.fields);
   return row;
 }

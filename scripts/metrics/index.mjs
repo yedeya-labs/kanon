@@ -9,7 +9,9 @@ export {
   BUG_LABEL, INTRODUCED_BY, accuracyFields, codeAreaTest, detectorCounts, explicitLink, explicitLinks, fixesOf,
   introducedBy, isFixPr, oldRanges, revertedBy, reverts, revertsOf, sharedCodeFiles, szzLinks,
 } from './detectors.mjs';
-export { originOf } from './origin.mjs';
+export { AdapterError, toDetectorPr } from './adapter.mjs';
+export { ORIGINS, originOf } from './origin.mjs';
+export { RELEASE_LABELS, RELEASE_TITLE, isReleasePr } from './release.mjs';
 export {
   DISPATCH_LABELS, STAGE_FIELDS, STAGE_ORDER, dispatchedAt, partitionProblem, partitionStages, reviewerVerdicts, seconds, stageIntervals,
 } from './stages.mjs';

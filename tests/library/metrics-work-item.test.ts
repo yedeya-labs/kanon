@@ -246,10 +246,10 @@ describe('checkWorkItemRow', () => {
   it("fails a row whose stages don't sum to its lead time (§7 mutation)", () => {
     const bad = { ...row, t_other_s: (row.t_other_s as number) + 1 };
     expect(validate(bad)).toEqual({ ok: true });
-    expect(checkWorkItemRow(bad)).toEqual({ ok: false, why: expect.stringMatching(/^stage partition: the stages sum to 5001 seconds/) });
+    expect(checkWorkItemRow(bad)).toEqual({ ok: false, why: expect.stringMatching(/^stage partition: the stages sum to 5001 seconds/), fields: ['lead_time_s'] });
   });
 
   it('fails a row the schema rejects', () => {
-    expect(checkWorkItemRow({ ...row, login: 'octocat' })).toEqual({ ok: false, why: 'login (unknown)' });
+    expect(checkWorkItemRow({ ...row, login: 'octocat' })).toEqual({ ok: false, why: 'login (unknown)', fields: ['login'] });
   });
 });
