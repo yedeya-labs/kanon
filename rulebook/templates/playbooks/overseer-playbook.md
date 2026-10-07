@@ -16,4 +16,6 @@ Measure the follow-up rate and the net open-issue rate, never set a target for t
 
 Review the agent runtime's releases since the ledger's watermark, record each disposition in the capability ledger (`K-SELF-16`), and file capability issues sparingly, saying that the watch ran (`K-SELF-17`).
 
+Only where the adoption record turns the capability watch on (``- **Capability watch:** `on` `` under `## Choices`, `K-LAYOUT-10`). It is off by default: the runtime is the one the project's Kanon release pins, so the review would find only what Kanon can act on. Off, the section's status line says the watch is off by choice, and the review reads no ledger and no changelog.
+
 A run the runtime-version trigger started (the prompt names its trigger, `pull_request_target`) exists because the runtime moved past the watermark, so the review is due whatever the week, and its audit is the next run's anchor like any other. On that trigger the QA store isn't read: its role trusts only the default branch's ref, and the event's token names the pull request. A `degraded` store there is expected, not a finding.

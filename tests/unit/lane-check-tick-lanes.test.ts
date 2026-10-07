@@ -114,9 +114,19 @@ laneCheck(() => {
       red((t) => t.write(REC, record('yes')), /adoption\.md:6: `Overseer` is `yes`; write `installed` or `not installed`/));
     it('refuses a caller that does not grant the store job its OIDC token', () =>
       red((t) => { install(t); t.edit(OVERSEER, (d) => { delete (d as Caller).permissions!['id-token']; }); }, 'needs id-token: write'));
-    it("reads a missing Overseer playbook as Kanon's baseline, and refuses a missing capability ledger, which has no default", () => {
+    const watchOn = (t: Tree) => t.write(REC, `${record('installed')}- **Capability watch:** \`on\`\n`);
+    it("reads a missing Overseer playbook as Kanon's baseline, and refuses a missing capability ledger where the capability watch is on, which has no default", () => {
       defaulted((t) => { install(t); t.rm('docs/qa/overseer-playbook.md'); }, "docs/qa/overseer-playbook.md,title=lane-check::doesn't exist, so the Kanon lane(s) agent-overseer read Kanon's baseline for it");
-      red((t) => { install(t); t.rm('docs/qa/capability-ledger.md'); }, 'is missing; the Kanon lane(s) agent-overseer');
+      red((t) => { install(t); watchOn(t); t.rm('docs/qa/capability-ledger.md'); }, 'is missing; the Kanon lane(s) agent-overseer');
+    });
+    // kanon#477: the capability watch is off by default, and off needs no ledger.
+    it('needs no capability ledger where the record leaves the capability watch off, and says so', () => {
+      defaulted((t) => { install(t); t.rm('docs/qa/capability-ledger.md'); }, /::notice file=docs\/qa\/capability-ledger\.md,title=lane-check::doesn't exist, which is fine: the adoption record doesn't turn the capability watch on/);
+      defaulted((t) => { install(t); t.write(REC, `${record('installed')}- **Capability watch:** \`off\`\n`); t.rm('docs/qa/capability-ledger.md'); }, /doesn't turn the capability watch on/);
+    });
+    it('refuses a malformed capability watch, by line, and then holds the ledger as needed', () => {
+      red((t) => { install(t); t.write(REC, `${record('installed')}- **Capability watch:** \`yes\`\n`); }, /`Capability watch` is `yes`; write `on` or `off`/);
+      red((t) => { install(t); t.write(REC, `${record('installed')}- **Capability watch:** \`yes\`\n`); t.rm('docs/qa/capability-ledger.md'); }, 'is missing; the Kanon lane(s) agent-overseer');
     });
   });
 });

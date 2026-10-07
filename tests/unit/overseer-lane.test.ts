@@ -1,9 +1,10 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { unlinkedQuery } from '../../scripts/capability-interlock.mjs';
-import { STORE_SECRETS, STORE_SECRETS_WITH, storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
+import { STORE_SECRETS, STORE_SECRETS_WITH, idTokenProblems, isOverseerTelemetryJob, storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 import { handedIn, mintFor, readFlattened, workflowText } from './helpers/called-workflow.js';
 import { callerInputs, realGroup } from './helpers/smoke-group.js';
 import { parseCondition } from './helpers/job-condition.js';
@@ -48,14 +49,15 @@ const caller = parse(readFileSync('tests/fixtures/lane-check/extra/agent-oversee
 
 describe('the store job and the overseer job (plan 0004 P9\'s check, applied at step 13)', () => {
   it('the lane has the store-coupled shape', () => {
-    expect(storeLaneProblems(wf, telemetryReads())).toEqual([]);
+    expect(storeLaneProblems(wf, telemetryReads(), { file: 'agent-overseer.yml' })).toEqual([]);
   });
 
-  it('no job declares an environment, and only the store job holds id-token', () => {
+  it('no job declares an environment, and only the store job and the telemetry read job hold id-token', () => {
     const withEnv = Object.entries(wf.jobs).filter(([, j]) => j.environment !== undefined).map(([n]) => n);
     expect(withEnv).toEqual([]);
     const withToken = Object.entries(wf.jobs).filter(([, j]) => typeof j.permissions === 'object' && 'id-token' in j.permissions).map(([n]) => n);
-    expect(withToken).toEqual(['export']);
+    // The store job, and the telemetry read job (kanon#470), held to its shape below.
+    expect(withToken).toEqual(['export', 'telemetry']);
   });
 
   it('the overseer job declares its own permissions without id-token, and no environment', () => {
@@ -82,7 +84,7 @@ describe('the store job and the overseer job (plan 0004 P9\'s check, applied at 
     const mutate = (change: (l: Lane) => void) => {
       const l = lane();
       change(l);
-      return storeLaneProblems(l, telemetryReads());
+      return storeLaneProblems(l, telemetryReads(), { file: 'agent-overseer.yml' });
     };
     it('id-token on the overseer job', () =>
       expect(mutate((l) => { (l.jobs.overseer!.permissions as Record<string, string>)['id-token'] = 'write'; })).toEqual(['overseer: the agent job grants id-token: write']));
@@ -267,7 +269,13 @@ describe('who files what (decision 12)', () => {
 
 describe('what the agent is told', () => {
   it('names no cloud, no credentials and no store query: the store comes as files', () => {
-    expect(LANE_TEXT).not.toMatch(/configure-aws-credentials|role-to-assume|QA_DYNAMO_TABLE|QA_S3_BUCKET|QA_AWS|vars\.QA_|aws dynamodb|aws s3|environment: qa\b/);
+    // Only the telemetry read job (kanon#470) assumes a role; the agent's jobs and every other job
+    // of the lane name none.
+    const rest = Object.fromEntries(Object.entries(wf.jobs).filter(([n]) => n !== 'telemetry'));
+    const agentText = ['.github/workflows/overseer-run.yml', '.github/workflows/overseer-agent-job.yml'].map((f) => readFileSync(f, 'utf8')).join('\n');
+    for (const text of [JSON.stringify(rest), agentText]) {
+      expect(text).not.toMatch(/configure-aws-credentials|role-to-assume|QA_DYNAMO_TABLE|QA_S3_BUCKET|QA_AWS|vars\.QA_|aws dynamodb|aws s3|environment: qa\b/);
+    }
     expect(flat).toContain('Do not query any store yourself.');
     for (const f of ['manifest.json', 'runs-explorer.json', 'runs-audit.json', 'coverage.json', 'areas.json', 'reports/<kind>/<ts>.json', 'token-trend.md', 'cache-ttl.md', 'qa-clusters.md']) {
       expect(prompt, f).toContain(f);
@@ -406,7 +414,10 @@ describe('the capability anchor query, run as composed (RA-899)', () => {
 
 describe('the workflow around it', () => {
   it('maps the Overseer\'s App secrets and the Claude token, by name', () => {
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', ...STORE_SECRETS]);
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'KANON_TELEMETRY_READER_ROLE', ...STORE_SECRETS]);
+    // Optional, and marked so for lane-check: a caller maps it once its repository has a reader role.
+    expect(wf.on.workflow_call.secrets.KANON_TELEMETRY_READER_ROLE).toEqual({ required: false });
+    expect(LANE_TEXT).toMatch(/^# OPTIONAL SECRET: KANON_TELEMETRY_READER_ROLE$/m);
   });
 
   it('keeps the weekly schedule, and a dispatch with no inputs', () => {
@@ -475,10 +486,11 @@ describe('the runtime-version trigger', () => {
     for (const event of ['pull_request', 'merge_group', 'push', 'workflow_run']) expect(admits(event, 'closed', true), event).toBe(false);
   });
 
-  it('decides in the gate job, right after the membership gate and only when it admitted', () => {
-    expect(gateSteps.findIndex((s) => s.id === 'runtime')).toBe(gateSteps.findIndex((s) => s.id === 'gate') + 1);
+  it('decides in the gate job, right after the membership gate and the capability watch, and only when it admitted', () => {
+    expect(gateSteps.findIndex((s) => s.id === 'watch')).toBe(gateSteps.findIndex((s) => s.id === 'gate') + 1);
+    expect(gateSteps.findIndex((s) => s.id === 'runtime')).toBe(gateSteps.findIndex((s) => s.id === 'watch') + 1);
     expect(runtime.if).toBe("steps.gate.outputs.member == 'true'");
-    expect(runtime.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
+    expect(runtime.env).toEqual({ GH_TOKEN: '${{ github.token }}', CAPABILITY_WATCH: '${{ steps.watch.outputs.watch }}' });
     expect(runtime.run).toContain('due="$(node "$KANON/scripts/runtime-bump.mjs")"');
     expect(runtime.run).toContain('printf \'due=%s\\n\' "$due" >> "$GITHUB_OUTPUT"');
     expect((gate as { outputs?: Record<string, string> }).outputs?.due).toBe('${{ steps.runtime.outputs.due }}');
@@ -486,8 +498,10 @@ describe('the runtime-version trigger', () => {
 
   it('holds the store job, and so the agent and the filing, behind the answer', () => {
     expect(wf.jobs.export!.if).toBe("needs.gate.outputs.member == 'true' && needs.gate.outputs.due == 'true'");
-    // Everything that spends goes through the export: the agent's job needs it to succeed.
-    expect(overseer.needs).toBe('export');
+    // Everything that spends goes through the export: the agent's job needs it to succeed. It
+    // also needs the gate, for the capability watch the gate read (kanon#477).
+    expect(overseer.needs).toEqual(['gate', 'export', 'telemetry']);
+    expect(wf.jobs.telemetry!.if).toBe("needs.gate.outputs.member == 'true' && needs.gate.outputs.due == 'true' && needs.gate.outputs.reader == 'true' && github.event_name != 'pull_request_target'");
   });
 
   // The review on #430: the agent must learn the trigger from the workflow, and on it the weekly
@@ -514,6 +528,201 @@ describe('the runtime-version trigger', () => {
     const bash = (reader: string) => spawnSync('bash', ['-e', '-c', script(reader)], { env: { ...process.env, GITHUB_OUTPUT: '/dev/null' }, encoding: 'utf8' });
     expect(bash('exit 2').stdout).not.toContain('reached');
     expect(bash('echo false').stdout).toBe('reached\n');
+  });
+});
+
+// kanon#477 (the Owner's decision of 2026-10-07): the capability watch is the adoption record's
+// `Capability watch:` choice, off by default. The gate job reads it from the default branch
+// before any agent runs; off, the runtime-version trigger doesn't audit
+// (tests/library/runtime-bump.test.ts) and the prompt skips the capability section.
+describe('the capability watch is a declared choice, off by default', () => {
+  const gate = wf.jobs.gate!;
+  const gateSteps = (gate.steps ?? []) as Step[];
+  const read = gateSteps.find((s) => s.id === 'watch')!;
+
+  it('is read in the gate job, from the default branch, before the runtime check and any agent', () => {
+    expect(read.if).toBe("steps.gate.outputs.member == 'true'");
+    expect(read.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
+    expect(read.run).toContain('watch="$(node "$KANON/scripts/capability-watch.mjs")"');
+    expect(read.run).toContain('printf \'watch=%s\\n\' "$watch" >> "$GITHUB_OUTPUT"');
+    expect((gate as { outputs?: Record<string, string> }).outputs?.watch).toBe('${{ steps.watch.outputs.watch }}');
+  });
+
+  it('fails the gate job on a malformed record, before the agent: the assignment carries the reader\'s exit', () => {
+    const script = (reader: string) => `${read.run!.replace('node "$KANON/scripts/capability-watch.mjs"', reader)}\necho reached`;
+    const bash = (reader: string) => spawnSync('bash', ['-e', '-c', script(reader)], { env: { ...process.env, GITHUB_OUTPUT: '/dev/null' }, encoding: 'utf8' });
+    expect(bash('exit 1').stdout).not.toContain('reached');
+    expect(bash('echo on').stdout).toBe('reached\n');
+  });
+
+  it('reaches the agent\'s job only as the gate job\'s output, through both called workflows', () => {
+    expect(handedIn(LANE_FILE, 'overseer', 'capability-watch')).toBe('${{ needs.gate.outputs.watch }}');
+    const run = parse(readFileSync('.github/workflows/overseer-run.yml', 'utf8')) as { on: { workflow_call: { inputs: Record<string, { default?: string }> } }; jobs: Record<string, { with?: Record<string, string> }> };
+    expect(run.on.workflow_call.inputs['capability-watch']?.default).toBe('off');
+    expect(run.jobs.overseer!.with?.['capability-watch']).toBe('${{ inputs.capability-watch }}');
+    const job = parse(readFileSync('.github/workflows/overseer-agent-job.yml', 'utf8')) as { on: { workflow_call: { inputs: Record<string, { default?: string }> } } };
+    expect(job.on.workflow_call.inputs['capability-watch']?.default).toBe('off');
+    expect(prompt).toContain('is `${{ inputs.capability-watch }}`');
+  });
+
+  it('tells the agent, with the watch off, to print the off-by-choice status line and skip the review', () => {
+    expect(flat).toContain('IF IT IS NOT `on`, the watch is OFF BY CHOICE: print exactly `Capability watch: off by choice — this repository\'s adoption record does not declare it` as the `### Capability watch` section, and skip the rest of this bullet.');
+    expect(flat).toContain('Read no ledger and no changelog, write no `Ledger delta` block and no `Watermark:` line');
+    expect(flat).toMatch(/raise no finding for the absent review or a missing ledger/);
+    // The status-line rule (K-SELF-17) names it as one of the lines a section opens with.
+    expect(flat).toMatch(/`Capability watch: degraded — <what failed>`, or, with the watch off, the `off by choice` line above/);
+  });
+});
+
+// kanon#470 (the Owner's decision, option A): the Overseer's own cost view, read from the hosted
+// telemetry store with the repository's reader role, in a store job of its own, handed to the
+// agent as two files and a status, never as rows.
+describe('the telemetry read job (kanon#470)', () => {
+  const job = wf.jobs.telemetry!;
+  const s = (job.steps ?? []) as Step[];
+  const all = () => Object.fromEntries(readdirSync('.github/workflows').filter((f) => /\.ya?ml$/.test(f))
+    .map((f) => [f, parse(readFileSync(join('.github/workflows', f), 'utf8')) as Workflow]));
+
+  it('is allowed to hold id-token by its exact shape, and holds nothing else', () => {
+    expect(isOverseerTelemetryJob('agent-overseer.yml', 'telemetry', job)).toBe(true);
+    expect(job.permissions).toEqual({ 'id-token': 'write' });
+    expect(job.environment).toBeUndefined();
+    expect(s.map((x) => x.uses ?? x.name)).toEqual(['$/actions/kanon-path', "Mask the reader role's account id and key, and resolve the store",
+      'aws-actions/configure-aws-credentials@v6', "Read this repository's telemetry into the two reports", 'actions/upload-artifact@v7']);
+    expect(s[2]!.with).toEqual({ 'role-to-assume': '${{ secrets.KANON_TELEMETRY_READER_ROLE }}', 'aws-region': '${{ steps.resolve.outputs.region }}', 'role-session-name': 'kanon-overseer-telemetry' });
+    expect(s[2]!['continue-on-error']).toBe(true);
+    expect(s[4]!.if).toBe("steps.read.outputs.status == 'ran'");
+    expect(s[4]!.with).toMatchObject({ path: '${{ runner.temp }}/overseer-telemetry', 'retention-days': 1 });
+  });
+
+  it('runs only with a reader role, which the gate job says without printing it', () => {
+    const reader = (wf.jobs.gate!.steps as Step[]).find((x) => x.id === 'reader')!;
+    expect(reader.env).toEqual({ ROLE: '${{ secrets.KANON_TELEMETRY_READER_ROLE }}' });
+    expect(reader.run).not.toMatch(/echo "\$ROLE"|printf[^\n]*\$ROLE/);
+    expect((wf.jobs.gate as { outputs?: Record<string, string> }).outputs?.reader).toBe('${{ steps.reader.outputs.reader }}');
+  });
+
+  it('hands the agent\'s job a status and the artifact, never the role, and deletes the artifact after it', () => {
+    expect(handedIn(LANE_FILE, 'overseer', 'telemetry-status')).toBe("${{ needs.gate.outputs.reader != 'true' && 'not configured' || github.event_name == 'pull_request_target' && 'not run on this trigger' || (needs.telemetry.outputs.status == 'ran' && needs.telemetry.outputs.attempt == github.run_attempt) && 'ran' || 'failed' }}");
+    expect(handedIn(LANE_FILE, 'overseer', 'telemetry-artifact-name')).toBe('kanon-overseer-telemetry-${{ github.run_id }}-${{ github.run_attempt }}');
+    expect(JSON.stringify(overseer)).not.toContain('KANON_TELEMETRY_READER_ROLE');
+    const del = wf.jobs['delete-telemetry']!;
+    expect(del.if).toBe('always()');
+    expect(del.permissions).toEqual({ 'actions': 'write' });
+    expect(del.steps).toEqual([{ uses: '$/actions/qa-store', with: { operation: 'delete-export', 'artifact-id': '${{ needs.telemetry.outputs.artifact-id }}', 'export-attempt': '${{ needs.telemetry.outputs.attempt }}', 'agent-result': '${{ needs.overseer.result }}', 'artifact-kind': 'telemetry' } }]);
+  });
+
+  it('adds the two files and the status to the export before the token trend and the agent', () => {
+    const download = at((x) => x.name === 'Download the telemetry read');
+    const add = at((x) => x.name === 'Add the telemetry read to the export');
+    expect(download).toBeGreaterThan(at((x) => x.id === 'kanon'));
+    expect(add).toBe(download + 1);
+    expect(add).toBeLessThan(at((x) => x.id === 'trend'));
+    expect(steps[download]!.if).toBe("inputs.telemetry-status == 'ran'");
+    expect(steps[download]!['continue-on-error']).toBe(true);
+    expect(steps[add]!.run).toBe('node "$KANON/scripts/overseer-telemetry.mjs" merge');
+    expect(steps[add]!.env).toEqual({ TELEMETRY_STATUS: '${{ inputs.telemetry-status }}', TELEMETRY_DIR: '${{ runner.temp }}/overseer-telemetry', EXPORT_DIR: 'qa-store-export' });
+    expect(byId('trend').run).toContain('.telemetry');
+    expect(byId('trend').run).not.toContain('.store)');
+  });
+
+  it('tells the agent to report the read\'s status, and never to infer an absent store', () => {
+    expect(flat).toContain('`ran` (both files are computed from this repository\'s own telemetry rows), `not configured` (no telemetry reader role is mapped, so it wasn\'t read), `not run on this trigger`');
+    expect(flat).toContain('or `failed` (the read was tried and didn\'t work)');
+    expect(flat).toContain('a missing file NEVER means that the telemetry store, the QA store or telemetry itself is absent or not installed, so never say so.');
+    expect(flat).toContain('`cache-ttl: UNAVAILABLE — no cache-ttl.md (telemetry read: <status>)`');
+    expect(flat).toContain('ON THE RUNTIME-VERSION TRIGGER (`pull_request_target`) the status is `not run on this trigger`: report it as it is, in one line, and raise no finding for it.');
+    expect(flat).toContain('`not run on this trigger` (the runtime-version trigger, whose token the reader role refuses, so the read wasn\'t tried)');
+  });
+
+  // kanon#499: on the runtime-version trigger the role refuses the token, so the job isn't run
+  // and the status says so, as a fourth value.
+  describe('the runtime-version trigger: the read is not run, and says so', () => {
+    type Ctx = Record<string, string | boolean | undefined>;
+    type Cond = ReturnType<typeof parseCondition>;
+    const value = (n: Cond, ctx: Ctx): unknown => {
+      switch (n.kind) {
+        case 'lit': return n.value;
+        case 'ref': return ctx[n.path];
+        case 'not': return !value(n.arg, ctx);
+        case 'and': { const l = value(n.left, ctx); return l ? value(n.right, ctx) : l; }
+        case 'or': { const l = value(n.left, ctx); return l ? l : value(n.right, ctx); }
+        case 'cmp': {
+          const [l, r] = [value(n.left, ctx), value(n.right, ctx)];
+          if (n.op === '==') return l === r;
+          if (n.op === '!=') return l !== r;
+          throw new Error(`unmodelled ${n.op}`);
+        }
+        default: throw new Error(`unmodelled ${n.kind}`);
+      }
+    };
+    const expr = (e: string) => e.replace(/^\$\{\{\s*|\s*\}\}$/g, '');
+    const runs = (event: string) => Boolean(value(parseCondition(String(wf.jobs.telemetry!.if)), {
+      'needs.gate.outputs.member': 'true', 'needs.gate.outputs.due': 'true', 'needs.gate.outputs.reader': 'true', 'github.event_name': event,
+    }));
+    const status = (ctx: Ctx) => value(parseCondition(expr(String(handedIn(LANE_FILE, 'overseer', 'telemetry-status')))), {
+      'needs.gate.outputs.reader': 'true', 'github.event_name': 'schedule', 'github.run_attempt': '1', 'needs.telemetry.outputs.attempt': '1', 'needs.telemetry.outputs.status': 'ran', ...ctx,
+    });
+
+    it('runs the read job on the schedule and a dispatch, and not on the trigger', () => {
+      expect(runs('schedule')).toBe(true);
+      expect(runs('workflow_dispatch')).toBe(true);
+      expect(runs('pull_request_target')).toBe(false);
+    });
+
+    it('hands the agent each of the four statuses', () => {
+      expect(status({})).toBe('ran');
+      expect(status({ 'needs.gate.outputs.reader': 'false' })).toBe('not configured');
+      expect(status({ 'github.event_name': 'pull_request_target', 'needs.telemetry.outputs.status': undefined, 'needs.telemetry.outputs.attempt': undefined })).toBe('not run on this trigger');
+      expect(status({ 'needs.gate.outputs.reader': 'false', 'github.event_name': 'pull_request_target' })).toBe('not configured');
+      expect(status({ 'needs.telemetry.outputs.status': 'failed' })).toBe('failed');
+      expect(status({ 'needs.telemetry.outputs.attempt': '2' })).toBe('failed');
+    });
+  });
+
+  // kanon#499 (Owner, 2026-10-07: repository variables, not a caller-setting marker): the table and
+  // region come from the repository variables, resolved ONCE by the mask step, whose outputs every
+  // later step takes, so an unset or empty variable is the hosted store's value everywhere.
+  it('reads the table and region from the repository variables once, and hands every later step the resolved value', () => {
+    expect(s[1]!.id).toBe('resolve');
+    expect(s[1]!.env).toEqual({ ROLE: '${{ secrets.KANON_TELEMETRY_READER_ROLE }}', TABLE: '${{ vars.KANON_TELEMETRY_TABLE }}', REGION: '${{ vars.KANON_TELEMETRY_REGION }}' });
+    expect(s[2]!.with?.['aws-region']).toBe('${{ steps.resolve.outputs.region }}');
+    expect(s[3]!.env).toMatchObject({ TABLE: '${{ steps.resolve.outputs.table }}', REGION: '${{ steps.resolve.outputs.region }}' });
+    // No other step, and no job of the lane, reads the variables raw.
+    const raw = JSON.stringify(wf.jobs).match(/vars\.KANON_TELEMETRY_(TABLE|REGION)/g) ?? [];
+    expect(raw).toEqual(['vars.KANON_TELEMETRY_TABLE', 'vars.KANON_TELEMETRY_REGION']);
+    expect(wf.on.workflow_call.inputs).not.toHaveProperty('telemetry-table');
+    expect(LANE_TEXT).not.toMatch(/CALLER SETTING/);
+  });
+
+  describe('mutations: each turns the id-token guard red, by name', () => {
+    const red = (change: (j: LaneJob) => void) => {
+      const w = all();
+      change(w['agent-overseer.yml']!.jobs.telemetry as LaneJob);
+      return idTokenProblems(w);
+    };
+    const named = [
+      "agent-overseer.yml: job telemetry holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job, the aggregate read job or the Overseer telemetry read job, may",
+    ];
+    it('the guard is green as shipped', () => expect(idTokenProblems(all())).toEqual([]));
+    it('a step added', () => expect(red((j) => { j.steps!.push({ run: 'echo hi' }); })).toEqual(named));
+    it('the read step handed NODE_OPTIONS', () => expect(red((j) => { j.steps![3]!.env = { ...j.steps![3]!.env, NODE_OPTIONS: '-r x' }; })).toEqual(named));
+    it('another mode of the script in the read step', () => expect(red((j) => { j.steps![3]!.run = 'node "$KANON/scripts/overseer-telemetry.mjs" merge'; })).toEqual(named));
+    it('the masking step handed every variable', () => expect(red((j) => { j.steps![1]!.env = { VARS: '${{ toJSON(vars) }}' }; })).toEqual(named));
+    it('the role from anywhere but the lane\'s secret', () => expect(red((j) => { (j.steps![2]!.with as Record<string, unknown>)['role-to-assume'] = '${{ vars.KANON_TELEMETRY_READER_ROLE }}'; })).toEqual(named));
+    it('a wider grant', () => expect(red((j) => { j.permissions = { 'id-token': 'write', contents: 'read' }; })).toEqual(named));
+    it('the upload from the workspace', () => expect(red((j) => { (j.steps![4]!.with as Record<string, unknown>).path = 'overseer-telemetry'; })).toEqual(named));
+    it('a job env', () => expect(red((j) => { (j as Record<string, unknown>).env = { NODE_OPTIONS: '-r x' }; })).toEqual(named));
+    it('a region read raw, not the one the mask step resolved', () => expect(red((j) => { (j.steps![2]!.with as Record<string, unknown>)['aws-region'] = '${{ vars.KANON_TELEMETRY_REGION }}'; })).toEqual(named));
+    it('a table read raw by the read step', () => expect(red((j) => { j.steps![3]!.env = { ...j.steps![3]!.env, TABLE: '${{ vars.KANON_TELEMETRY_TABLE }}' }; })).toEqual(named));
+    it('the variables left out of the mask step, which resolves them first', () => expect(red((j) => { j.steps![1]!.env = { ROLE: '${{ secrets.KANON_TELEMETRY_READER_ROLE }}' }; })).toEqual(named));
+    it('the mask step without its id, so nothing reads what it resolved', () => expect(red((j) => { delete (j.steps![1] as Record<string, unknown>).id; })).toEqual(named));
+    it('the same job under another name, or in another workflow, is not allowed by this shape', () => {
+      const w = all();
+      w['agent-code-audit.yml']!.jobs.telemetry = structuredClone(w['agent-overseer.yml']!.jobs.telemetry!);
+      expect(idTokenProblems(w)).toEqual(["agent-code-audit.yml: job telemetry holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job, the aggregate read job or the Overseer telemetry read job, may"]);
+      expect(isOverseerTelemetryJob('agent-overseer.yml', 'reader', w['agent-overseer.yml']!.jobs.telemetry!)).toBe(false);
+    });
   });
 });
 

@@ -60,7 +60,7 @@ Doctor reads GitHub through `gh`, with `GH_TOKEN`, `GITHUB_TOKEN` or `gh`'s own 
 
 The QA store's role and the telemetry writer trust the default branch's ref, not an environment ([`docs/qa-store.md`](qa-store.md#who-can-reach-the-store), [`docs/telemetry.md`](telemetry.md#who-can-write)), so **every job on your default branch that holds `id-token: write` can assume them**, including your own jobs that hold it for another cloud. Kanon's guard holds Kanon's own workflows; yours are yours to check, and doctor lists them, counted as the guard counts them: a job's own grant, the workflow's when the job declares none, `permissions: write-all` at either level, and a job that calls a reusable workflow with such a grant.
 
-- **A caller of one of Kanon's store-coupled lanes at the pinned release** is listed as Kanon's, and accepted: the grant reaches only the lane's store jobs, which Kanon's guard holds. So is **a caller of Kanon's telemetry collector at the pinned release** (`kanon init --telemetry` writes one), whose one job that holds the grant the same guard holds; both are `kanon-lane` in `.idTokenHolders[].status`.
+- **A caller of one of Kanon's store-coupled lanes at the pinned release** is listed as Kanon's, and accepted: the grant reaches only the lane's store jobs and, in the Overseer, its `telemetry` job, each of which Kanon's guard holds. So is **a caller of Kanon's telemetry collector at the pinned release** (`kanon init --telemetry` writes one), whose one job that holds the grant the same guard holds; both are `kanon-lane` in `.idTokenHolders[].status`.
 - **Any other holder** blocks until you either narrow its grant, or accept it under `## Choices` in the adoption record (`K-LAYOUT-10`), one bullet per job, naming the workflow file and the job's key, with the reason it holds the grant:
 
   ```markdown
@@ -247,7 +247,7 @@ It is the finding, whole, as it would have been listed, with the waiver's reason
 | `secret.stale` | `secret` | no | An App secret no App in use reads and no workflow of the checkout names, while none inherits every secret or reads secrets by a computed name. |
 | `declaration.missing` | `declaration` | yes | A project document a lane reads, with no default, is missing. |
 | `declaration.section-missing` | `declaration` | yes | A section with no default is missing, or written more than once. |
-| `declaration.malformed` | `declaration` | yes | An id-token holder's acceptance, a waiver or the `Upstream findings:` choice in the adoption record is malformed, or a waiver waives a finding that can't be waived. |
+| `declaration.malformed` | `declaration` | yes | An id-token holder's acceptance, a waiver, or the `Upstream findings:` or `Capability watch:` choice in the adoption record is malformed, or a waiver waives a finding that can't be waived. |
 | `waiver.stale` | `declaration` | no | The adoption record waives a finding doctor doesn't report, or names an item of one that doctor doesn't report. |
 | `hook.missing` | `declaration` | yes | The project-setup hook, or a hook a lane calls, is missing. |
 | `hook.input-missing` | `declaration` | yes | The project-setup hook does not declare an input the lanes pass it. |

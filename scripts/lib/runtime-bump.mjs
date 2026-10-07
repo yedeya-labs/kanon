@@ -22,6 +22,11 @@
 // THE WATERMARK is the ledger's bare `Watermark: <version>` line, alone in a fenced block
 // (`K-LAYOUT-7`), read by exact match: a decorated line is no watermark.
 //
+// ONLY WHEN THE WATCH IS ON (kanon#477). The capability watch is the adoption record's choice,
+// `Capability watch:`, off by default (`scripts/lib/capability-watch.mjs`). Off, the trigger has
+// nothing to review, so it never audits, and says so; the weekly run still audits, without the
+// capability section.
+//
 // FAILING OPEN. Anything that can't be read, or compared, makes the review due, with a note
 // naming why: the trigger exists so that a runtime change is never left unreviewed, and a spare
 // audit costs less than a missed one. Only a runtime read and compared as not newer skips.
@@ -125,14 +130,20 @@ export function runtimeOf(root) {
  *   event: string,
  *   runtime: () => { action: string, cli: string },
  *   ledger: () => string | null,
- * }} io the event's name, the runtime of the release the lane runs, and the ledger's text on the
- *   default branch (`null` when it doesn't exist there); each throws on a failed read
+ *   watch?: string,
+ * }} io the event's name, the runtime of the release the lane runs, the ledger's text on the
+ *   default branch (`null` when it doesn't exist there), each of which throws on a failed read,
+ *   and the adoption record's capability watch as the gate job read it, `on` or `off`
  * @returns {{ due: boolean, note: string }}
  */
-export function reviewDue({ event, runtime, ledger }) {
+export function reviewDue({ event, runtime, ledger, watch = 'on' }) {
   if (event !== TRIGGER_EVENT) return { due: true, note: '' };
   /** @param {string} why */
   const anyway = (why) => ({ due: true, note: `${why}, so the audit runs: a runtime change is never left unreviewed on a guess` });
+  if (watch === 'off') {
+    return { due: false, note: 'the capability watch is off by choice (the adoption record declares no `Capability watch:` bullet with `on`, kanon#477), so a runtime change has nothing to review and this run skips the audit. The weekly run still audits.' };
+  }
+  if (watch !== 'on') return anyway(`the capability watch's value \`${watch}\` is neither \`on\` nor \`off\``);
   let rt;
   try {
     rt = runtime();

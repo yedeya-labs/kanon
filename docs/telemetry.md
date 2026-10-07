@@ -235,9 +235,10 @@ The writer trusts the default branch's ref. What a token's subject is decides wh
 The last row is what the environment used to narrow, and nothing narrows it now: **every default-branch job that holds `id-token: write` can assume the writer.** That includes:
 - **Kanon's own QA-store jobs**, in every adopter that runs those lanes and in Kanon: the store jobs of explore, the code audit, the Overseer and the dispatch sweep, and the AWS maintenance job. Several run on a schedule, so on the default branch. While they declare `environment: kanon-qa-store`, their subject names that environment and the writer refuses them; once the QA store drops its environment ([#291](https://github.com/yedeya-labs/kanon/pull/291)), each carries the default branch's ref and is admitted.
 - **The Explorer's telemetry mode's `aggregate` job**, in a repository that runs that lane ([The Explorer's lane](#the-explorers-lane)). It holds the grant to assume the aggregate invoker role, on a schedule, so on the default branch.
+- **The Overseer's `telemetry` job**, in a repository that maps a telemetry reader role to that lane ([The Overseer's cost view](#the-overseers-cost-view)). It holds the grant to assume the reader role, on the weekly schedule or a dispatch, so on the default branch.
 - **The adopter's own jobs** that hold it for another cloud, such as a deploy on push to the default branch.
 
-Each can write rows under its own adopter's key that pass the function's validation. None can read, name a partition, or reach another adopter's key. A job without `id-token: write` gets no token to ask with, so the set is exactly the jobs that hold it. What is guarded is that set's size in Kanon's own workflows, not that the collector is its only member: the id-token guard #291 added fails any Kanon job holding `id-token: write` that doesn't run a store block alone, or isn't the collector's `collect` job or the telemetry Explorer's `aggregate` job in its exact shape (Kanon's path, the masking step, the credentials and the one script, with the upload too for the second, and nothing beside them). The adopter's own holders are the adopter's to check.
+Each can write rows under its own adopter's key that pass the function's validation. None can read, name a partition, or reach another adopter's key. A job without `id-token: write` gets no token to ask with, so the set is exactly the jobs that hold it. What is guarded is that set's size in Kanon's own workflows, not that the collector is its only member: the id-token guard #291 added fails any Kanon job holding `id-token: write` that doesn't run a store block alone, or isn't the collector's `collect` job, the telemetry Explorer's `aggregate` job or the Overseer's `telemetry` job in its exact shape (Kanon's path, the masking step, the credentials and the one script, with the upload too for the last two, and nothing beside them). The adopter's own holders are the adopter's to check.
 
 ## Erase an adopter
 
@@ -314,6 +315,29 @@ The Owner's to run; agents run none. It costs about a cent a month (plan 0002 de
    ```sh
    curl -s -o /dev/null -w '%{http_code}\n' "<AggregateUrl>"
    ```
+
+### The Overseer's cost view
+
+The Overseer's weekly token trend and its prompt-cache facts are computed from a repository's own rows (plan 0002 §6; the Owner's decision on [#470](https://github.com/yedeya-labs/kanon/issues/470)). Its lane, `agent-overseer.yml`, has a `telemetry` job, the only one of the lane besides its QA store job that holds `id-token: write`. It assumes the repository's reader role, `kanon-telemetry-<key>-reader`, which the template already creates for every registered repository, trusted for the branch refs its register entry lists and allowed to `Query` only partitions under `<key>#`. It reads each of Kanon's lanes' partitions for the last 14 days, projected to the fields the two reports use, and writes `token-trend.md` and `cache-ttl.md` (`scripts/overseer-telemetry.mjs`, with the reports in `scripts/lib/token-trend.mjs` and `scripts/lib/cache-ttl.mjs`, moved from the reference adopter's two readers of §1.4). Only the two files reach the agent, as an artifact kept one day; no row is printed or handed on. The id-token guard holds the job to its exact steps (`tests/unit/helpers/store-jobs.ts`).
+
+The lane reads the role's ARN from a repository secret its caller maps by name, `KANON_TELEMETRY_READER_ROLE`: the stack's `ReaderRole<key>` output, with the register key's non-alphanumeric characters dropped, as for the writer. It is optional: without it the read is `not configured`, which the audit reports as such and never as a missing store. The Owner reads the output and stores it in the repository without printing it, since it holds the account id:
+
+```sh
+aws cloudformation describe-stacks --stack-name kanon-telemetry --profile kanon --region eu-central-1 \
+  --query "Stacks[0].Outputs[?OutputKey=='ReaderRole<key>'].OutputValue" --output text \
+  | gh secret set KANON_TELEMETRY_READER_ROLE -R <owner>/<repo>
+```
+
+then map it in the Overseer's caller, under the job's `secrets:`, once the caller pins a release that declares it: `KANON_TELEMETRY_READER_ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}`. The job masks the account id and the key in the role's name before any other step names them. A run on a ref the role doesn't trust, such as a dispatch from another branch, reads nothing, and the audit says the read `failed`. On the runtime-version trigger, whose `pull_request_target` token the role refuses, the job doesn't try: the audit says the read was `not run on this trigger` (the Owner's decision on [#499](https://github.com/yedeya-labs/kanon/pull/499)).
+
+**A self-hosted telemetry store** is read the same way. The table and region default to the hosted store's, `kanon-telemetry` in `eu-central-1`. A repository reading its own stack sets two optional repository variables, which are coordinates, not credentials (the Owner's decision on [#499](https://github.com/yedeya-labs/kanon/pull/499)):
+
+```sh
+gh variable set KANON_TELEMETRY_TABLE -R <owner>/<repo> --body '<its table>'
+gh variable set KANON_TELEMETRY_REGION -R <owner>/<repo> --body '<its region>'
+```
+
+The job's first script step resolves them once: a variable that is unset or empty is the hosted store's value. It checks the table against DynamoDB's table-name shape and the region against an AWS region code, and stops the read by name on one that isn't. The credentials step and the read then use that step's resolved values, never the variables themselves.
 
 ### The Explorer's lane
 

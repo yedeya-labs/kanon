@@ -225,13 +225,15 @@ const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: str
 
 const ids = (r: Result) => r.json.findings.map((f: { id: string; subject: string }) => `${f.id} ${f.subject}`);
 
-/** The release after PINNED: one App permission more, and one declaration more for the review lane. */
+/** The release after PINNED: one App permission more, and one declaration more for the review lane:
+ *  a document with no baseline, which the lane would need whatever the adoption record chose. */
+const NEW_DOC = 'docs/qa/release-checklist.md';
 const nextRelease = () => {
   const next = clone(REQ);
   const judgeLike = REQ.lanes['agent-review']!.identities[0]!;
   const target = next.identities.apps[judgeLike] ?? next.identities.roles[judgeLike]!;
   target.permissions.deployments = 'read';
-  next.lanes['agent-review']!.reads = [...next.lanes['agent-review']!.reads, 'docs/qa/capability-ledger.md'].sort();
+  next.lanes['agent-review']!.reads = [...next.lanes['agent-review']!.reads, NEW_DOC].sort();
   return { next, slug: `widgets-${judgeLike}` };
 };
 
@@ -285,13 +287,13 @@ describe('kanon doctor --to, before the pin moves (plan 0005 L10)', () => {
     const github = fakeGitHub({ releases: { [NEXT]: next } });
     const before = await run(dir, github, ['--to', NEXT, '--json']);
     expect(before.status, before.out).toBe(EXIT.findings);
-    expect(ids(before)).toEqual([`app.permission-missing ${slug}`, 'declaration.missing docs/qa/capability-ledger.md']);
+    expect(ids(before)).toEqual([`app.permission-missing ${slug}`, `declaration.missing ${NEW_DOC}`]);
     expect(before.json.findings[0].message).toContain('deployments: read');
     expect(before.json.findings[0].fix.url).toBe(`https://github.com/settings/apps/${slug}/permissions`);
     expect(before.json.releases).toMatchObject({ pinned: PINNED, to: NEXT, checked: NEXT });
 
     github.st.apps[slug]!.permissions.deployments = 'read';
-    put(dir, { 'docs/qa/capability-ledger.md': '# Capability ledger\n' });
+    put(dir, { [NEW_DOC]: '# Release checklist\n' });
     const after = await run(dir, github, ['--to', NEXT, '--json']);
     expect(after.json.findings).toEqual([]);
     expect(after.status, after.out).toBe(EXIT.healthy);
@@ -304,7 +306,7 @@ describe('kanon doctor --to, before the pin moves (plan 0005 L10)', () => {
     const id = REQ.lanes['agent-review']!.identities[0]!;
     delete (dropped.identities.apps[id] ?? dropped.identities.roles[id]!).permissions.deployments;
     const r = await run(dir, fakeGitHub({ releases: { [NEXT]: dropped } }), ['--to', NEXT, '--json']);
-    expect(ids(r)).toEqual(['declaration.missing docs/qa/capability-ledger.md']);
+    expect(ids(r)).toEqual([`declaration.missing ${NEW_DOC}`]);
   });
 
   it('names what a caller must change for the next release: a secret, a grant and an input', async () => {
@@ -600,6 +602,33 @@ ${jobPerms}    steps:
     expect(ids(r)).toEqual(['declaration.malformed docs/qa/adoption.md']);
     expect(r.json.findings[0].message).toMatch(/`Upstream findings` is `filed on another repository`; write `drafted` or `filed here`/);
     expect(r.status).toBe(EXIT.findings);
+  });
+
+  it("blocks on a malformed `Capability watch:` choice, and passes a well-formed one (K-LAYOUT-10, kanon#477)", async () => {
+    for (const value of ['on', 'off']) {
+      const good = healthyFiles();
+      good['docs/qa/adoption.md'] += `- **Capability watch:** \`${value}\`\n`;
+      expect(ids(await run(checkout(good), fakeGitHub(), ['--json'])), value).toEqual([]);
+    }
+    const bad = healthyFiles();
+    bad['docs/qa/adoption.md'] += '- **Capability watch:** `yes`\n';
+    const r = await run(checkout(bad), fakeGitHub(), ['--json']);
+    expect(ids(r)).toEqual(['declaration.malformed docs/qa/adoption.md']);
+    expect(r.json.findings[0].message).toMatch(/`Capability watch` is `yes`; write `on` or `off`/);
+    expect(r.status).toBe(EXIT.findings);
+  });
+
+  // kanon#477: the capability ledger is needed only where the record turns the watch on.
+  it('needs the capability ledger only where the record turns the capability watch on', async () => {
+    const { next } = nextRelease();
+    next.lanes['agent-review']!.reads = [...REQ.lanes['agent-review']!.reads, 'docs/qa/capability-ledger.md'].sort();
+    const off = await run(checkout(healthyFiles()), fakeGitHub({ releases: { [NEXT]: next } }), ['--to', NEXT, '--json']);
+    expect(ids(off).filter((i: string) => i.startsWith('declaration'))).toEqual([]);
+    expect(off.json.notes.join('\n')).toMatch(/docs\/qa\/capability-ledger\.md doesn't exist, which is fine: docs\/qa\/adoption\.md doesn't turn the capability watch on/);
+    const on = healthyFiles();
+    on['docs/qa/adoption.md'] += '- **Capability watch:** `on`\n';
+    const r = await run(checkout(on), fakeGitHub({ releases: { [NEXT]: next } }), ['--to', NEXT, '--json']);
+    expect(ids(r)).toContain('declaration.missing docs/qa/capability-ledger.md');
   });
 
   it('accepts a caller of a store-coupled Kanon lane only at the pinned release', async () => {
@@ -1891,7 +1920,7 @@ describe('kanon doctor and private Apps, read through apps-check (#417)', () => 
     github.st.releases[NEXT] = next;
     appsCheckRun(github, asReleased());
     const r = await run(checkout(healthyFiles()), github, ['--json', '--to', NEXT]);
-    expect(ids(r)).toEqual([`app.permission-missing ${slug}`, 'declaration.missing docs/qa/capability-ledger.md']);
+    expect(ids(r)).toEqual([`app.permission-missing ${slug}`, `declaration.missing ${NEW_DOC}`]);
     expect(r.json.findings[0].message).toContain('deployments: read');
   });
 

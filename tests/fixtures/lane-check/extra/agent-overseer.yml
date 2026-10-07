@@ -1,7 +1,7 @@
 # A trigger-only caller of Kanon's Overseer lane, as an adopter writes it (plan 0004 step 13).
-# `id-token: write` is for the lane's store job alone, which exports the store through the
-# store hook, and `actions: write` for the export's delete job alone. GitHub refuses to start a
-# called job that asks for more than its caller grants. The adoption record says it is installed.
+# `id-token: write` is for the lane's store job, which exports the store through the store hook,
+# and its telemetry read job alone, and `actions: write` for its delete jobs alone. GitHub
+# refuses to start a called job that asks for more than its caller grants. The adoption record says it is installed.
 name: Overseer
 
 on:

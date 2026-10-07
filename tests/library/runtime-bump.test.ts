@@ -80,8 +80,9 @@ describe('the runtime a Kanon tree runs', () => {
 });
 
 describe('whether the audit is due', () => {
-  const due = (o: { event?: string; runtime?: () => typeof RUNTIME; ledger?: () => string | null }) => reviewDue({
+  const due = (o: { event?: string; runtime?: () => typeof RUNTIME; ledger?: () => string | null; watch?: string }) => reviewDue({
     event: o.event ?? TRIGGER,
+    watch: o.watch ?? 'on',
     runtime: o.runtime ?? (() => RUNTIME),
     ledger: o.ledger ?? (() => fenced('Watermark: 2.1.289')),
   });
@@ -165,13 +166,28 @@ describe('the CLI the gate job runs', () => {
 
   it('prints false on an unchanged runtime, true on a changed one, reading the ledger from the default branch', () => {
     const calls: string[][] = [];
-    const unchanged = runtimeBumpCli({ event: TRIGGER, repo: 'o/r', root: kanonTree('2.1.289'), run: gh(fenced('Watermark: 2.1.289'), calls) });
+    const unchanged = runtimeBumpCli({ event: TRIGGER, watch: 'on', repo: 'o/r', root: kanonTree('2.1.289'), run: gh(fenced('Watermark: 2.1.289'), calls) });
     expect(unchanged).toMatchObject({ code: 0, out: 'false' });
     expect(unchanged.note).toMatch(/skips the audit/);
     expect(calls[1]![1]).toBe(`repos/o/r/contents/${LEDGER}?ref=trunk`);
-    expect(runtimeBumpCli({ event: TRIGGER, repo: 'o/r', root: kanonTree('2.1.300'), run: gh(fenced('Watermark: 2.1.289')) })).toMatchObject({ code: 0, out: 'true' });
-    expect(runtimeBumpCli({ event: TRIGGER, repo: 'o/r', root: kanonTree('2.1.200'), run: gh(fenced('Watermark: 2.1.289')) })).toMatchObject({ code: 0, out: 'false' });
-    expect(runtimeBumpCli({ event: TRIGGER, repo: 'o/r', root: kanonTree('2.1.289'), run: gh(null) })).toMatchObject({ code: 0, out: 'true' });
+    expect(runtimeBumpCli({ event: TRIGGER, watch: 'on', repo: 'o/r', root: kanonTree('2.1.300'), run: gh(fenced('Watermark: 2.1.289')) })).toMatchObject({ code: 0, out: 'true' });
+    expect(runtimeBumpCli({ event: TRIGGER, watch: 'on', repo: 'o/r', root: kanonTree('2.1.200'), run: gh(fenced('Watermark: 2.1.289')) })).toMatchObject({ code: 0, out: 'false' });
+    expect(runtimeBumpCli({ event: TRIGGER, watch: 'on', repo: 'o/r', root: kanonTree('2.1.289'), run: gh(null) })).toMatchObject({ code: 0, out: 'true' });
+  });
+
+  // kanon#477: the watch is the adoption record's choice, off by default; off, the trigger never audits.
+  it('prints false on the trigger when the capability watch is off, reading neither the runtime nor the ledger', () => {
+    const calls: string[][] = [];
+    const off = runtimeBumpCli({ event: TRIGGER, watch: 'off', repo: 'o/r', root: kanonTree('2.1.300'), run: gh(fenced('Watermark: 2.1.289'), calls) });
+    expect(off).toMatchObject({ code: 0, out: 'false' });
+    expect(off.note).toMatch(/^the capability watch is off by choice .* this run skips the audit\. The weekly run still audits\.$/);
+    expect(calls).toEqual([]);
+    // Off the trigger the choice changes nothing here: the weekly audit runs, without the capability section.
+    expect(runtimeBumpCli({ event: 'schedule', watch: 'off', repo: 'o/r' })).toEqual({ code: 0, out: 'true' });
+    // A value the gate job couldn't have written fails open, as any unread input does.
+    const odd = runtimeBumpCli({ event: TRIGGER, watch: '', repo: 'o/r', root: kanonTree('2.1.289'), run: gh(fenced('Watermark: 2.1.289')) });
+    expect(odd).toMatchObject({ code: 0, out: 'true' });
+    expect(odd.note).toMatch(/neither `on` nor `off`, so the audit runs/);
   });
 
   it('prints true with no note off the trigger, and exits 2 on the trigger without a repository', () => {

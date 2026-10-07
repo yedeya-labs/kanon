@@ -30,6 +30,25 @@
 # `tests/unit/id-token-guard.test.ts`). Without a hook it runs to completion without memory: the
 # export holds only its manifest, which says the store is absent.
 #
+# ── THE COST VIEW, FROM THE TELEMETRY STORE (kanon#470; plan 0002 §6) ─────────────────────
+#
+#   gate → telemetry (store job: the reader role) → overseer, which adds its two files to the export
+#                    ↘ delete-telemetry, after the overseer, always
+#
+# The token trend and the cache-TTL facts come from this repository's own rows in Kanon's hosted
+# telemetry store. The `telemetry` job assumes the repository's reader role,
+# `kanon-telemetry-<key>-reader`, from the `KANON_TELEMETRY_READER_ROLE` secret the caller maps by
+# name, reads its own lanes' partitions, and uploads only `token-trend.md` and `cache-ttl.md`,
+# never a row (plan 0004 step 13; `scripts/overseer-telemetry.mjs`). Its steps are fixed: the
+# id-token guard allows it by its exact shape. The agent's job adds the two files to the export and
+# writes the read's status into the manifest as `telemetry`: `ran`, `not configured` (no reader
+# role mapped, as for a repository that didn't opt in to telemetry), `not run on this trigger` (the
+# runtime-version trigger, whose token the role refuses, so the job doesn't try) or `failed`. A
+# store hook that writes the two files itself keeps them whenever the read didn't run. The table
+# and region default to Kanon's hosted store; a repository reading a self-hosted one sets the
+# repository variables KANON_TELEMETRY_TABLE and KANON_TELEMETRY_REGION (the Owner's decision on
+# kanon#499), which the job resolves once, in its first script step, and uses everywhere after.
+#
 # ── WHO FILES WHAT (decision 12) ─────────────────────────────────────────────────────────
 #
 #   overseer (agent, read-only token) → uploads qa-overseer-audit.json
@@ -76,16 +95,20 @@ name: Overseer
 #     paths: [<the caller's own file>]
 #                              — optional: the runtime-version trigger (kanon#423). A merged
 #                                pull request that moves the caller's Kanon pin; the gate job
-#                                audits only when the agent runtime is newer than the ledger's
-#                                watermark (see below), and the capability review is then due
-#                                whatever the week. The store's role trusts only the default
+#                                audits only when the adoption record turns the capability
+#                                watch on (kanon#477) and the agent runtime is newer than the
+#                                ledger's watermark (see below), and the capability review is
+#                                then due whatever the week. The store's role trusts only the default
 #                                branch's ref, and this event's token names the pull request,
 #                                so the export is `degraded` on it: expected, and the prompt
 #                                says it is not a finding.
 # OPTIONAL SECRET: QA_STORE_BUCKET
 # OPTIONAL SECRET: QA_STORE_ROLE_ARN
+# OPTIONAL SECRET: KANON_TELEMETRY_READER_ROLE
 # The lines above are read by `lane-check` and the requirements file (kanon#433): the QA store's
-# secrets, which a caller maps once its repository has a store hook, and may leave out until then.
+# secrets, which a caller maps once its repository has a store hook, and may leave out until then;
+# and the telemetry reader role (kanon#470), which a caller maps once its repository is registered
+# with Kanon's telemetry store, and may leave out until then.
 on:
   workflow_call:
     inputs:
@@ -109,6 +132,11 @@ on:
         required: false
       QA_STORE_BUCKET:
         required: false
+      # THE TELEMETRY READER ROLE'S ARN (kanon#470): the hosted telemetry stack's
+      # `ReaderRole<id>` output, `kanon-telemetry-<key>-reader`. A secret, because it carries the
+      # account id. Optional: without it the cost view is `not configured`.
+      KANON_TELEMETRY_READER_ROLE:
+        required: false
 
 concurrency:
   # Never two audits at once: both would file an audit issue and close each other's.
@@ -117,8 +145,9 @@ concurrency:
   cancel-in-progress: false
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). Each job below declares its
-# own, so only the store job ever holds `id-token: write`, which the caller grants for it, and
-# only the delete job holds `actions: write`.
+# own, so only the store job and the telemetry read job ever hold `id-token: write`, which the
+# caller grants for them, and only the delete jobs (the export's, the report's and the telemetry
+# reports') hold `actions: write`.
 permissions:
   contents: read
 
@@ -140,6 +169,8 @@ jobs:
     outputs:
       member: ${{ steps.gate.outputs.member }}
       due: ${{ steps.runtime.outputs.due }}
+      watch: ${{ steps.watch.outputs.watch }}
+      reader: ${{ steps.reader.outputs.reader }}
       upstream: ${{ steps.upstream.outputs.upstream }}
     steps:
       - uses: $/actions/kanon-path
@@ -148,20 +179,44 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
+      # IS THE CAPABILITY WATCH ON? (`K-LAYOUT-10`, kanon#477): the adoption record's
+      # `Capability watch:` choice, off by default, read from the default branch (`K-MERGE-17`)
+      # here, before any agent runs. Off, the runtime-version trigger below doesn't audit and the
+      # agent skips the capability review; the agent's job can't change it. A malformed record
+      # stops the run here, by name, before anything is spent.
+      - name: Is the capability watch on?
+        id: watch
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          watch="$(node "$KANON/scripts/capability-watch.mjs")"
+          printf 'watch=%s\n' "$watch" >> "$GITHUB_OUTPUT"
       # IS AN AUDIT DUE? (the runtime-version trigger: plan 0004 decision 12, amended 2026-10-06,
       # and the Owner's decision on kanon#423). On the schedule and a dispatch, always. On a
       # merged pull request, only when the agent runtime of the Kanon release this lane runs
       # is newer than the capability ledger's watermark on the default branch (`K-LAYOUT-7`):
       # an upgrade that didn't move the runtime forward has nothing new for the capability
       # review, and the run skips the audit, saying so. Anything it can't read makes it due.
+      # With the capability watch off, the trigger never audits (kanon#477).
       - name: Is an audit due?
         id: runtime
         if: steps.gate.outputs.member == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          CAPABILITY_WATCH: ${{ steps.watch.outputs.watch }}
         run: |
           due="$(node "$KANON/scripts/runtime-bump.mjs")"
           printf 'due=%s\n' "$due" >> "$GITHUB_OUTPUT"
+      # IS THERE A TELEMETRY READER ROLE? (kanon#470). A job's `if:` can't read a secret, so this
+      # step says whether it is set, and prints nothing of it.
+      - name: Is the telemetry reader configured?
+        id: reader
+        if: steps.runtime.outputs.due == 'true'
+        env:
+          ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
+        run: |
+          if [ -n "$ROLE" ]; then echo "reader=true" >> "$GITHUB_OUTPUT"; else echo "reader=false" >> "$GITHUB_OUTPUT"; fi
       # WHERE UPSTREAM FINDINGS GO (`K-LAYOUT-10`, kanon#423): the adoption record's
       # `Upstream findings:` choice, read from the default branch (`K-MERGE-17`) here, before
       # any agent runs, and handed to the `file` job as this job's output. The agent's job can
@@ -199,12 +254,73 @@ jobs:
           secrets: ${{ format('{{"QA_STORE_ROLE_ARN":{0},"QA_STORE_BUCKET":{1}}}', toJSON(secrets.QA_STORE_ROLE_ARN), toJSON(secrets.QA_STORE_BUCKET)) }}
           kind: overseer
 
+  # THE TELEMETRY STORE JOB (kanon#470): the reader role's read of this repository's own rows,
+  # summarised into the two files, and nothing else. Its steps are fixed: the id-token guard allows
+  # this job by its exact shape, so a step added here turns the guard red. It declares no
+  # environment, which would replace the ref in its token's subject. A role it can't assume (a run
+  # on another ref) is a `failed` read, said, and green. On the runtime-version trigger it doesn't
+  # run at all: the role refuses a `pull_request_target` token, so the read is `not run on this
+  # trigger` (the Owner's decision on kanon#499).
+  telemetry:
+    needs: gate
+    if: needs.gate.outputs.member == 'true' && needs.gate.outputs.due == 'true' && needs.gate.outputs.reader == 'true' && github.event_name != 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+    outputs:
+      status: ${{ steps.read.outputs.status }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      # The attempt that read it. A partial re-run reuses this job's outputs.
+      attempt: ${{ github.run_attempt }}
+    steps:
+      - uses: $/actions/kanon-path
+      # MASKED FIRST: the account id and the key in the role's name, so no later step prints them.
+      # THE TABLE AND REGION ARE RESOLVED HERE, ONCE: the repository variables, or the hosted
+      # store's when unset or empty, checked and handed on as this step's outputs, which the
+      # credentials step and the read use. A value of the wrong shape stops the job here, by name.
+      - name: Mask the reader role's account id and key, and resolve the store
+        id: resolve
+        env:
+          ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
+          TABLE: ${{ vars.KANON_TELEMETRY_TABLE }}
+          REGION: ${{ vars.KANON_TELEMETRY_REGION }}
+        run: node "$KANON/scripts/overseer-telemetry.mjs" mask
+      # The STS call goes to the store's region: Frankfurt for the hosted store. A refusal is a
+      # `failed` read.
+      - uses: aws-actions/configure-aws-credentials@v6
+        id: creds
+        continue-on-error: true
+        with:
+          role-to-assume: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
+          aws-region: ${{ steps.resolve.outputs.region }}
+          role-session-name: kanon-overseer-telemetry
+      - name: Read this repository's telemetry into the two reports
+        id: read
+        env:
+          ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
+          CREDENTIALS: ${{ steps.creds.outcome }}
+          OUT: ${{ runner.temp }}/overseer-telemetry
+          TABLE: ${{ steps.resolve.outputs.table }}
+          REGION: ${{ steps.resolve.outputs.region }}
+        run: node "$KANON/scripts/overseer-telemetry.mjs" read
+      # One day; a job of its own deletes it after the agent's job.
+      - name: Upload the two reports for the agent's job
+        id: upload
+        if: steps.read.outputs.status == 'ran'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-overseer-telemetry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/overseer-telemetry
+          retention-days: 1
+          if-no-files-found: error
+
   # THE LANE'S RUN, AS A CALLED WORKFLOW (kanon#279, `K-AGENT-49`). `overseer-run.yml` mints the
   # token in a job that holds the key and runs nothing else, then hands it to the agent's job
   # (`overseer-agent-job.yml`). Both sit inside this job's scope, so the mint waits
   # with the agent: a token minted before the wait could expire under it.
   overseer:
-    needs: export
+    needs: [gate, export, telemetry]
     if: ${{ !cancelled() && needs.export.result == 'success' && needs.export.outputs.attempt == github.run_attempt }}
     # NO `id-token` AND NO ENVIRONMENT: this job holds no cloud credentials (plan 0004 P9). The
     # reads are the finish block's, with the workflow token: its own run, and issues.
@@ -215,6 +331,13 @@ jobs:
     uses: $/.github/workflows/overseer-run.yml
     with:
       artifact-name: ${{ needs.export.outputs.artifact-name }}
+      # The gate job's reading of the record, never anything the agent wrote.
+      capability-watch: ${{ needs.gate.outputs.watch }}
+      # The telemetry read's status (kanon#470, kanon#499): `not configured` without a reader role;
+      # `not run on this trigger` on the runtime-version trigger; `ran` only when this attempt's
+      # read wrote its two files; anything else `failed`.
+      telemetry-status: ${{ needs.gate.outputs.reader != 'true' && 'not configured' || github.event_name == 'pull_request_target' && 'not run on this trigger' || (needs.telemetry.outputs.status == 'ran' && needs.telemetry.outputs.attempt == github.run_attempt) && 'ran' || 'failed' }}
+      telemetry-artifact-name: kanon-overseer-telemetry-${{ github.run_id }}-${{ github.run_attempt }}
     secrets:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
@@ -316,3 +439,23 @@ jobs:
           artifact-id: ${{ needs.export.outputs.artifact-id }}
           export-attempt: ${{ needs.export.outputs.attempt }}
           agent-result: ${{ needs.overseer.result }}
+
+  # THE TELEMETRY REPORTS' DELETE JOB (kanon#470): the two files describe this repository's cost,
+  # which anyone who can read the repository could download while the artifact exists. After the
+  # overseer job, whatever happened to it.
+  delete-telemetry:
+    needs: [export, telemetry, overseer]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - uses: $/actions/qa-store
+        with:
+          operation: delete-export
+          artifact-id: ${{ needs.telemetry.outputs.artifact-id }}
+          export-attempt: ${{ needs.telemetry.outputs.attempt }}
+          agent-result: ${{ needs.overseer.result }}
+          # Names the telemetry reports, not the store's export, in what the delete says.
+          artifact-kind: telemetry

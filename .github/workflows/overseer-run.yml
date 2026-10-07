@@ -22,6 +22,21 @@ on:
         required: false
         type: string
         default: ""
+      capability-watch:
+        description: The adoption record's capability watch, `on` or `off`, as the lane's gate job read it from the default branch (kanon#477).
+        required: false
+        type: string
+        default: "off"
+      telemetry-status:
+        description: The telemetry read's status, `ran`, `not configured`, `not run on this trigger` or `failed`, from the lane (kanon#470, kanon#499).
+        required: false
+        type: string
+        default: not configured
+      telemetry-artifact-name:
+        description: The artifact the lane's `telemetry` job uploaded when its read ran.
+        required: false
+        type: string
+        default: ""
     outputs:
       agent-outcome:
         value: ${{ jobs.overseer.outputs.agent-outcome }}
@@ -79,6 +94,9 @@ jobs:
     uses: $/.github/workflows/overseer-agent-job.yml
     with:
       artifact-name: ${{ inputs.artifact-name }}
+      capability-watch: ${{ inputs.capability-watch }}
+      telemetry-status: ${{ inputs.telemetry-status }}
+      telemetry-artifact-name: ${{ inputs.telemetry-artifact-name }}
       app-slug: ${{ needs.mint.outputs.app-slug }}
       mint-attempt: ${{ needs.mint.outputs.attempt }}
     secrets:

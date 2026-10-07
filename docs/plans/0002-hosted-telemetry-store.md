@@ -69,6 +69,8 @@ Everything else is a number, a boolean, or a value from a closed list (`outcome`
 | The Overseer agent | weekly | any partition, ad hoc, through `aws dynamodb query` in its prompt |
 | The weekly and project digests | — | **nothing.** They mention cost rows in comments only. |
 
+**Moved 2026-10-07 ([#470](https://github.com/yedeya-labs/kanon/issues/470)):** the first two readers are Kanon's, run by the Overseer's lane with the adopter's reader role, with §6's changes (`scripts/lib/token-trend.mjs`, `scripts/lib/cache-ttl.mjs`, `scripts/overseer-telemetry.mjs`; [The Overseer's cost view](../telemetry.md#the-overseers-cost-view)). Two things stayed behind: the reference adopter's cutover ledger, which dated configuration changes the fingerprint can't see, and the pinned arms' health check that read it. Kanon has no such ledger for an adopter, so both reports name what they can't see instead. They read the last 14 days and `tag: run` rows only.
+
 The partition list comes from `qa-store.mjs`, which scans the workflows for `agent:` names. One reader read nothing: the dispatch sweep's store read did not run, because its job assumed the QA role without declaring `environment: qa`, which the role's trust requires (RA-2706). The read is non-fatal by design, so nothing failed. RA-2714 added the declaration, and Kanon [#60](https://github.com/yedeya-labs/kanon/pull/60) ported its reporting of a skipped read. The new reader trust must name that job's subject (§6).
 
 ## 2. The schema (decision 1)

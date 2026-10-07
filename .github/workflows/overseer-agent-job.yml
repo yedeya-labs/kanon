@@ -22,6 +22,28 @@ on:
         required: false
         type: string
         default: ""
+      capability-watch:
+        description: >-
+          The adoption record's capability watch, `on` or `off`, as the lane's gate job read it
+          from the default branch before any agent ran (kanon#477). Off, the prompt skips the
+          capability review.
+        required: false
+        type: string
+        default: "off"
+      telemetry-status:
+        description: >-
+          The telemetry read's status (kanon#470): `ran` when the lane's `telemetry` job read this
+          repository's own rows into `token-trend.md` and `cache-ttl.md`, `not configured` without
+          a reader role, `not run on this trigger` on the runtime-version trigger, `failed`
+          otherwise. Written into the export's manifest as `telemetry`.
+        required: false
+        type: string
+        default: not configured
+      telemetry-artifact-name:
+        description: The artifact holding the two files, when the read ran.
+        required: false
+        type: string
+        default: ""
       app-slug:
         description: The minted App's slug, from the lane's `mint` job.
         required: true
@@ -94,10 +116,29 @@ jobs:
       - uses: $/actions/kanon-path
         id: kanon
 
+      # THE TELEMETRY READ (kanon#470): the two files the lane's `telemetry` job wrote from this
+      # repository's own rows, never a row, into the export beside the QA store's files, and its
+      # status into the manifest as `telemetry`. A store hook's own files stay when the read
+      # didn't run. A failed download is a `failed` read, said, never a red job.
+      - name: Download the telemetry read
+        if: inputs.telemetry-status == 'ran'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.telemetry-artifact-name }}
+          path: ${{ runner.temp }}/overseer-telemetry
+      - name: Add the telemetry read to the export
+        env:
+          TELEMETRY_STATUS: ${{ inputs.telemetry-status }}
+          TELEMETRY_DIR: ${{ runner.temp }}/overseer-telemetry
+          EXPORT_DIR: qa-store-export
+        run: node "$KANON/scripts/overseer-telemetry.mjs" merge
+
       # THE WEEK'S TOKEN-EFFICIENCY REPORT (RA-2081), to the step summary BEFORE the agent, so the
-      # figures survive an agent that dies. No model runs here: the report is the adopter's
-      # export's `token-trend.md`, arithmetic over its telemetry rows (plan 0004 §3.2). A missing
-      # one is described here rather than left to read as a quiet week.
+      # figures survive an agent that dies. No model runs here: the report is the export's
+      # `token-trend.md`, arithmetic over this repository's telemetry rows (kanon#470). A missing
+      # one is described here, by the telemetry read's status, rather than left to read as a quiet
+      # week, and never as a missing store.
       - name: Token efficiency for the week
         id: trend
         run: |
@@ -106,8 +147,8 @@ jobs:
           if [ -s "$f" ]; then
             cat "$f" >> "$GITHUB_STEP_SUMMARY"
           else
-            store="$(node -e 'try { console.log(JSON.parse(require("fs").readFileSync("qa-store-export/manifest.json", "utf8")).store) } catch { console.log("unreadable") }')"
-            printf '## Token efficiency\n\n**UNAVAILABLE**: the QA store export holds no `token-trend.md` (the store is %s). This is not a quiet week.\n' "$store" >> "$GITHUB_STEP_SUMMARY"
+            status="$(node -e 'try { console.log(JSON.parse(require("fs").readFileSync("qa-store-export/manifest.json", "utf8")).telemetry ?? "unknown") } catch { console.log("unknown") }')"
+            printf '## Token efficiency\n\n**UNAVAILABLE**: the export holds no `token-trend.md` (the telemetry read: %s). This is not a quiet week.\n' "$status" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # THE AGENT'S TOKEN READS ONLY (`K-AGENT-35`, `K-AGENT-46`): the tree, issues and pull
@@ -225,12 +266,15 @@ jobs:
               whose effect is "file less"; under-filing is what the leakage metric catches.
             - The QA store, exported into `qa-store-export/` before you started. Do not query
               any store yourself. `qa-store-export/manifest.json` says whether the store was
-              `present`, `absent` or `degraded`, and lists the files:
+              `present`, `absent` or `degraded`, lists the files the export holds, and counts
+              its raw reports as `reports`:
               `runs-explorer.json` and `runs-audit.json` (each run in the window, newest
               first: liveness and run history), `coverage.json` (per route, its last status
               and commit), `areas.json` (the code-reading ledger), `reports/<kind>/<ts>.json`
-              (each run's raw report), and this project's own `token-trend.md`, `cache-ttl.md`
-              and `qa-clusters.md` when its store writes them. Audit coverage over time,
+              (each run's raw report; the directory is there only when `reports` is above 0,
+              so a store that holds no report is empty, not missing a file), `token-trend.md`
+              and `cache-ttl.md` (below), and `qa-clusters.md` when this project's store hook
+              writes it. Audit coverage over time,
               liveness and recency, and execution truth (files read, lines cited and turns
               against the machine-stamped duration: an empty or degraded run is
               self-evident). Coverage gaps: the routes the Explorer's summaries list against
@@ -246,24 +290,47 @@ jobs:
               confirm each against the real issues before proposing a systemic fix. If the
               file is absent or says recall is unavailable, do NOT read that as "no recurring
               classes".
+            - THE TELEMETRY READ, which wrote the two cost files below. `manifest.json`'s
+              `telemetry` says how it went: `ran` (both files are computed from this
+              repository's own telemetry rows), `not configured` (no telemetry reader role is
+              mapped, so it wasn't read), `not run on this trigger` (the runtime-version trigger,
+              whose token the reader role refuses, so the read wasn't tried) or `failed` (the
+              read was tried and didn't work). A file can also come from this project's own
+              store hook. When a file is missing,
+              REPORT THAT STATUS, in those words, and nothing more: a missing file NEVER means
+              that the telemetry store, the QA store or telemetry itself is absent or not
+              installed, so never say so. ON THE RUNTIME-VERSION TRIGGER (`pull_request_target`)
+              the status is `not run on this trigger`: report it as it is, in one line, and raise
+              no finding for it.
             - The prompt-cache TTL, as facts you do not derive: paste ALL of
               `qa-store-export/cache-ttl.md` into the audit VERBATIM, every line in the order
               written. Its `cache-ttl:` lines and the unprefixed lines under them are the
               findings; keep the prefixes, which are what a reader greps for. If the file is
-              missing, say `cache-ttl: UNAVAILABLE — the store export holds no cache-ttl.md`:
-              an unreadable input is a finding, not a pass.
+              missing, say `cache-ttl: UNAVAILABLE — no cache-ttl.md (telemetry read: <status>)`
+              with the manifest's `telemetry` status: an unreadable input is reported, never
+              read as a pass.
             - The week's token efficiency, already computed: paste
               `qa-store-export/token-trend.md` into the audit VERBATIM, under a
               `## Token efficiency` heading. DO NOT recompute, re-rank, round or summarise it:
               its deltas carry confidence intervals, and a delta inside its own interval is
-              not a finding. If the file is missing, say the token trend is UNAVAILABLE.
+              not a finding. If the file is missing, say the token trend is UNAVAILABLE, with
+              the manifest's `telemetry` status.
             - Workflow history (`gh run list` and `gh run view` on the lane callers in
               .github/workflows/, the Explorer's first): the ONLY place a run that died is
               visible, since a store row is written from a completed report. Read the playbook's "Liveness queries" first: a count-less run
               row is a change-gate skip, not a corpse, and a renamed workflow's earlier runs
               are reached by its numeric workflow id.
 
-            - Capability review, WEEKLY (K-SELF-16, K-SELF-17). Read the playbook's
+            - Capability review, WEEKLY (K-SELF-16, K-SELF-17), ONLY WHEN THIS REPOSITORY RUNS
+              THE CAPABILITY WATCH. Its adoption record's choice, read from the default branch
+              before you started, is `${{ inputs.capability-watch }}`. IF IT IS NOT `on`, the
+              watch is OFF BY CHOICE: print exactly
+              `Capability watch: off by choice — this repository's adoption record does not declare it`
+              as the `### Capability watch` section, and skip the rest of this bullet. Read no
+              ledger and no changelog, write no `Ledger delta` block and no `Watermark:` line,
+              raise no capability candidate, and raise no finding for the absent review or a
+              missing ledger. Otherwise read on.
+              Read the playbook's
               "Capability review" first; it is authoritative and this is the summary. The
               ledger is docs/qa/capability-ledger.md.
               THE LAST CAPABILITY AUDIT, one anchor for all three rules below (due test,
@@ -339,8 +406,9 @@ jobs:
               finding with subject `lane`, and goes upstream.
               OUTPUT: a `### Capability watch` section in the audit, opening with exactly one
               of `Capability watch: ran, through 2.1.NNN` (which may carry the suffixes
-              above), `Capability watch: not due this audit` or
-              `Capability watch: degraded — <what failed>`.
+              above), `Capability watch: not due this audit`,
+              `Capability watch: degraded — <what failed>`, or, with the watch off, the
+              `off by choice` line above.
               This section is the LOWEST-priority part of the audit: sacrifice it, never the
               audit. If the turn budget starts to bind, stop, print
               `Capability watch: degraded — cut short for turn budget`, and go write the

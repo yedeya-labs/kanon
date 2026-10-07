@@ -1573,11 +1573,23 @@ describe('kanon init and the lane catalogue (#428)', () => {
 
   it('recommends what the repository calls already, and what is recommended with it', () => {
     const lanes = laneCatalogue(REQ, ['agent-implement']).flatMap((g) => g.lanes);
-    expect(lanes.filter((l) => l.recommended).map((l) => l.lane).sort()).toEqual(['agent-dispatch-sweep', 'agent-implement', 'agent-implement-revise', 'agent-rebase', 'agent-review']);
+    expect(lanes.filter((l) => l.recommended).map((l) => l.lane).sort()).toEqual(['agent-dispatch-sweep', 'agent-implement', 'agent-implement-revise', 'agent-overseer', 'agent-rebase', 'agent-review']);
     expect(lanes.filter((l) => l.installed).map((l) => l.lane)).toEqual(['agent-implement']);
     // Transitively: the Lead recommends the reconciler, which recommends verify-acs and the daily digest.
     const lead = laneCatalogue(REQ, ['agent-lead']).flatMap((g) => g.lanes).filter((l) => l.recommended).map((l) => l.lane);
     expect(lead).toEqual(expect.arrayContaining(['agent-lead-reconcile', 'agent-verify-acs', 'agent-project-digest']));
+  });
+
+  // #478: the Overseer audits lanes that run unattended; with only the Reviewer it isn't recommended.
+  it('recommends the Overseer only beside the Implementer or the Lead, never to a Reviewer-only repository', () => {
+    const rec = (installed: string[]) => laneCatalogue(REQ, installed).flatMap((g) => g.lanes).filter((l) => l.recommended).map((l) => l.lane);
+    expect(rec([])).not.toContain('agent-overseer');
+    expect(rec(['agent-review'])).not.toContain('agent-overseer');
+    expect(rec(['agent-implement'])).toContain('agent-overseer');
+    expect(rec(['agent-lead'])).toContain('agent-overseer');
+    const overseer = laneCatalogue(REQ, []).flatMap((g) => g.lanes).find((l) => l.lane === 'agent-overseer')!;
+    expect(overseer.recommendedWith).toEqual(['agent-implement', 'agent-lead']);
+    expect(overseer.when).toMatch(/^Once you run the Implementer, the Lead or the Merger unattended/);
   });
 
   it('recommends the same lanes whatever order the catalogue lists them in', () => {

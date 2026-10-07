@@ -162,7 +162,7 @@ This chapter governs how a Kanon pipeline keeps itself honest: the guards that c
 
 ### `K-SELF-16` A human keeps the capability ledger, and its dispositions bind
 
-**Rule.** Keep a capability ledger, `docs/qa/capability-ledger.md` in the format of `K-LAYOUT-7`, of runtime and platform features the pipeline could adopt, maintained by a human. A rejected or deferred capability is re-raised only when its recorded reason has changed; "pending, first sighting" is the only non-binding value. The weekly review proposes changes as a delta block, carried forward verbatim until a human folds it in; the reviewer never writes the ledger. A candidate is raised only when it maps to a named operation with evidence already measured, in the full form: operation, pain and evidence, what changes, what it deletes, what would make it not worth it, disposition. "No proposals" is a valid outcome.
+**Rule.** Where the project turns the capability watch on (`K-LAYOUT-10`), keep a capability ledger, `docs/qa/capability-ledger.md` in the format of `K-LAYOUT-7`, of runtime and platform features the pipeline could adopt, maintained by a human. A rejected or deferred capability is re-raised only when its recorded reason has changed; "pending, first sighting" is the only non-binding value. The weekly review proposes changes as a delta block, carried forward verbatim until a human folds it in; the reviewer never writes the ledger. A candidate is raised only when it maps to a named operation with evidence already measured, in the full form: operation, pain and evidence, what changes, what it deletes, what would make it not worth it, disposition. "No proposals" is a valid outcome.
 
 **Why.** Without binding dispositions, the same capability is re-proposed every week. Without the evidence form, the review chases novelty. The reviewer not writing the ledger keeps it at zero blast radius.
 
@@ -172,7 +172,7 @@ This chapter governs how a Kanon pipeline keeps itself honest: the guards that c
 
 ### `K-SELF-17` File capability issues sparingly, and make the watch say it ran
 
-**Rule.** File a capability issue only after two consecutive sightings, when no issue for it exists, and when the open capability backlog is under its interlock limit, counted by a script and not by the agent; at most one per scan, labelled as a capability. Open every capability-watch section with exactly one status line: ran through, not due, or degraded. Write the watermark as a bare line, never write one in an audit that emits no delta, and never carry a value that failed validation. When turns run short, sacrifice this section, never the audit.
+**Rule.** File a capability issue only after two consecutive sightings, when no issue for it exists, and when the open capability backlog is under its interlock limit, counted by a script and not by the agent; at most one per scan, labelled as a capability. Open every capability-watch section with exactly one status line: ran through, not due, degraded, or off by choice where the project leaves the watch off. Write the watermark as a bare line, never write one in an audit that emits no delta, and never carry a value that failed validation. When turns run short, sacrifice this section, never the audit.
 
 **Why.** An unlabelled issue escapes the interlock, and a search that returns zero on error would unlock it silently. The status line is what shows the watch has gone quiet. A decorated or invented watermark becomes the anchor for the next run and orphans months of state.
 

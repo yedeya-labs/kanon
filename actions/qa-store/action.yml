@@ -4,7 +4,7 @@
 #     runs-on: ubuntu-latest
 #     permissions:                    # no environment: it would replace the ref in the OIDC subject
 #       contents: read                # the checkout below
-#       id-token: write               # the hook's credentials; only a store job holds this
+#       id-token: write               # the hook's credentials; a store job holds this for the hook
 #     steps:
 #       - uses: $/actions/qa-store
 #         id: store
@@ -125,6 +125,10 @@ inputs:
     description: "`delete-export`: the agent job's result, `needs.<agent>.result`."
     required: false
     default: ""
+  artifact-kind:
+    description: "`delete-export`: what the artifact holds, for what the delete says: `export` (the QA store's export, the default) or `telemetry` (the Overseer's telemetry reports, kanon#499)."
+    required: false
+    default: export
 
 outputs:
   present:
@@ -249,4 +253,5 @@ runs:
         EXPORT_ATTEMPT: ${{ inputs.export-attempt }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
         AGENT_RESULT: ${{ inputs.agent-result }}
+        ARTIFACT_KIND: ${{ inputs.artifact-kind }}
       run: node "$GITHUB_ACTION_PATH/qa-store.mjs" delete-export

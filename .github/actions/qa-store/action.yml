@@ -15,7 +15,7 @@
 # a read is then `degraded`, and a write fails its job.
 #
 # Kanon's `qa-store` block reads this file from the checkout of the run's commit and calls it in a
-# store job, the only kind of job that holds `id-token: write` (tests/unit/id-token-guard.test.ts).
+# store job, which holds `id-token: write` in its exact shape (tests/unit/id-token-guard.test.ts).
 # The `uses:` below names Kanon's last release, like every other Kanon reference under .github/
 # (`lane-check` holds them to one version), and Dependabot's `/.github/actions/*` directory
 # proposes each release here with the others.

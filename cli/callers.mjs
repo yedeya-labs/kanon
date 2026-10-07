@@ -45,7 +45,8 @@ export const kanonRelease = () => `v${JSON.parse(readFileSync(new URL('../packag
  * `pinMoved` adds the Overseer's runtime-version trigger (kanon#423): a `pull_request_target`
  * that closed a pull request on the default branch which changed this caller file, the one place
  * the adopter's agent runtime moves (it is pinned per Kanon release). The lane audits on it only
- * when the runtime changed, so it costs a short gate job on any other Kanon upgrade. `merged` adds
+ * when the runtime changed and the adoption record turns the capability watch on (kanon#477), so
+ * it costs a short gate job on any other Kanon upgrade. `merged` adds
  * a `pull_request_target` that closed a pull request on the default branch, any file (kanon#484):
  * through a merge queue the CI run on a merge is the queue's, which the gate turns away, and this
  * fires after the queue merges, judged by the member who queued it. The lane acts on it only as a
@@ -119,7 +120,9 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
     }
   }
   if (t.pinMoved) {
-    out.push('  # The runtime-version trigger: a merged pull request that moves this file\'s Kanon pin.',
+    out.push('  # The runtime-version trigger: a merged pull request that moves this file\'s Kanon pin. It audits',
+      '  # only where docs/qa/adoption.md turns the capability watch on, under ## Choices:',
+      '  # `- **Capability watch:** `on``. Off, Kanon\'s default, it runs a short gate job and skips (kanon#477).',
       '  pull_request_target:', '    types: [closed]', `    branches: [${y(defaultBranch)}]`, '    paths:', `      - ${path}`);
   }
   out.push('', 'permissions:');

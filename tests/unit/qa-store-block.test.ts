@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import {
   EXPORT_FILES, FILES, HOOK_PATH, MANIFEST, MAX_ARG_STRLEN, MAX_ROWS_OUTPUT, OPERATIONS, READ_OPERATIONS, WRITE_OPERATIONS,
-  absentLine, checkRequest, deleteExport, finish, prepare, readCostRowsFile,
+  absentLine, checkRequest, deleteExport, finish, prepare, pruneReports, readCostRowsFile,
 } from '../../actions/qa-store/qa-store.mjs';
 import { STORE_SECRETS_WITH } from './helpers/store-jobs.js';
 
@@ -163,7 +163,40 @@ describe('with a hook', () => {
     it('keeps the files Kanon fixes, and the adopter\'s own Overseer inputs, and lists them', () => {
       const r = run({ ...full, 'token-trend.md': '# trend', 'reports/explorer/20261001T000000Z.json': '{}' });
       expect(r.outputs.state).toBe('ok');
-      expect(r.manifest).toMatchObject({ store: 'present', kind: 'overseer', files: ['areas.json', 'coverage.json', 'reports', 'runs-audit.json', 'runs-explorer.json', 'token-trend.md'] });
+      expect(r.manifest).toMatchObject({ store: 'present', kind: 'overseer', files: ['areas.json', 'coverage.json', 'reports', 'runs-audit.json', 'runs-explorer.json', 'token-trend.md'], reports: 1 });
+    });
+
+    // kanon#467: an artifact upload drops an empty directory, so a `reports/` the hook made for a
+    // window with no report was listed in the manifest and missing from the export.
+    it('lists `reports` only when it holds a report, and says how many it holds', () => {
+      withHook();
+      const { outputs } = prepare(env({ OPERATION: 'export', KIND: 'overseer' }), NOW);
+      const root = join(outputs.dir!, FILES.export);
+      for (const [f, text] of Object.entries(full)) writeFileSync(join(root, f), text);
+      // What Kanon's AWS hook writes for a store with no report: a directory per kind, empty.
+      mkdirSync(join(root, 'reports', 'explorer'), { recursive: true });
+      mkdirSync(join(root, 'reports', 'audit'), { recursive: true });
+      const done = finish({ OPERATION: 'export', KIND: 'overseer', DIR: outputs.dir!, PRESENT: 'true', HOOK_OUTCOME: 'success' }, NOW);
+      const manifest = JSON.parse(readFileSync(join(root, MANIFEST), 'utf8'));
+      expect(done.outputs.state).toBe('ok');
+      expect(manifest).toMatchObject({ store: 'present', files: ['areas.json', 'coverage.json', 'runs-audit.json', 'runs-explorer.json'], reports: 0 });
+      expect(existsSync(join(root, 'reports'))).toBe(false);
+      // Every name the manifest lists is in the export.
+      for (const f of manifest.files) expect(existsSync(join(root, f)), f).toBe(true);
+    });
+
+    it('keeps the kinds that hold a report and drops the empty ones', () => {
+      const r = run({ ...full, 'reports/explorer/20261001T000000Z.json': '{}', 'reports/explorer/20261002T000000Z.json': '{}' });
+      mkdirSync(join(r.root, 'reports', 'audit'), { recursive: true });
+      expect(r.manifest.reports).toBe(2);
+      expect(r.manifest.files).toContain('reports');
+      expect(pruneReports(r.root)).toBe(2);
+      expect(readdirSync(join(r.root, 'reports'))).toEqual(['explorer']);
+    });
+
+    it('counts no report on an audit export, and on a degraded or absent one says none', () => {
+      expect(run({ 'areas.json': '[]' }, 'audit').manifest.reports).toBeUndefined();
+      expect(run(full, 'overseer', 'failure').manifest).toMatchObject({ store: 'degraded', files: [], reports: 0 });
     });
 
     it('leaves out a file the contract doesn\'t name, with a warning', () => {
@@ -366,6 +399,33 @@ describe('delete-export, and a re-run of the agent job alone (kanon#224)', () =>
     expect(r.lines).toEqual(['The QA store export (artifact 42) was already deleted.']);
     expect(r.error).toBe('attempt 2 re-ran the agent job without the export job, whose export, from attempt 1, was deleted when that attempt finished. '
       + 'The agent job was skipped rather than run without the store. Use "Re-run all jobs", which exports again.');
+  });
+
+  // kanon#499: the Overseer's `delete-telemetry` job deletes its telemetry reports with the same
+  // operation, and what it says names them, not the store's export.
+  it('names the telemetry reports, not the export, when the artifact is the telemetry read\'s', async () => {
+    const t = { ...base, ARTIFACT_KIND: 'telemetry' };
+    expect(await deleteExport(t, api(204))).toEqual({ lines: ['Deleted the telemetry reports (artifact 42).'], error: null });
+    expect(await deleteExport(t, api(404))).toEqual({ lines: ['The telemetry reports (artifact 42) were already deleted.'], error: null });
+    expect((await deleteExport(t, api(500))).error).toBe('deleting the telemetry reports (artifact 42) failed: HTTP 500');
+    expect((await deleteExport({ ...t, EXPORT_ATTEMPT: '' }, api(204))).error).toBe("delete-export needs export-attempt, the telemetry job's attempt output");
+    expect(await deleteExport({ ...t, ARTIFACT_ID: '' }, api(204))).toEqual({ lines: ['No telemetry reports to delete: the telemetry job uploaded none.'], error: null });
+    // A partial re-run skipped the agent because of the store's export, never the telemetry
+    // reports: the export's delete job reports it red, and this one stays green, saying so.
+    const r = await deleteExport({ ...t, RUN_ATTEMPT: '2', AGENT_RESULT: 'skipped' }, api(404));
+    expect(r.error).toBeNull();
+    expect(r.lines).toEqual([
+      'The telemetry reports (artifact 42) were already deleted.',
+      "The agent job was skipped on attempt 2 because the store's export was not re-run (its delete job says so); the telemetry reports from attempt 1 played no part in that.",
+    ]);
+    // The export's own delete still reds the same re-run.
+    expect((await deleteExport({ ...base, RUN_ATTEMPT: '2', AGENT_RESULT: 'skipped' }, api(404))).error).toMatch(/^attempt 2 re-ran the agent job without the export job/);
+  });
+
+  it('the block hands the kind to the delete step, defaulting to the export', () => {
+    const block = parse(readFileSync('actions/qa-store/action.yml', 'utf8')) as { inputs: Record<string, { default?: string }>; runs: { steps: Array<{ name?: string; env?: Record<string, string> }> } };
+    expect(block.inputs['artifact-kind']?.default).toBe('export');
+    expect(block.runs.steps.find((x) => x.name === 'Delete the export')?.env?.ARTIFACT_KIND).toBe('${{ inputs.artifact-kind }}');
   });
 
   it('leaves green a re-run of the delete job alone, and an agent skipped on the export\'s own attempt', async () => {

@@ -4,7 +4,7 @@
 // `docs/qa/adoption.md` (`K-LAYOUT-10`, plan 0004 P6), with the weekly digest's audience beside
 // it (kanon#218) and whether the production promotion is human-gated (`K-MERGE-4`, kanon#158),
 // whether the Overseer is installed, held to the callers (plan 0004 step 13), and where its
-// upstream findings go (kanon#423),
+// upstream findings go (kanon#423), and whether the Overseer runs the capability watch (kanon#477),
 // and the code areas in the stack document, `docs/qa/stack.md`'s `## Code areas`
 // (`K-LAYOUT-17`, kanon#54), which the guards and the code-audit lane read.
 //
@@ -35,6 +35,7 @@ import { readReferenceDeploy } from '../../scripts/lib/reference-deploy.mjs';
 import { codeAreasDefaults, readCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { checkOverseerInstall } from '../../scripts/lib/overseer-install.mjs';
 import { readUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
+import { readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
 import { APP_REGISTER, appShape, parseAppRegister, parsePersonas } from '../../scripts/app-register.mjs';
 import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -57,6 +58,7 @@ export const declarationFindings = (overseer, register, root) => {
       readDigestAudience(root);
       readProductionPromotion(root);
       readUpstreamFindings(root);
+      readCapabilityWatch(root);
       return [];
     }],
     // Only `## Code areas`: the other sections are checked by lane-check itself, and only when a

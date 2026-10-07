@@ -1,6 +1,6 @@
 # `qa-store`: one QA store operation, through the adopter's hook
 
-Kanon's store-coupled lanes call this block from their store jobs, the only jobs that hold `id-token: write` ([plan 0004 §3.2](../../docs/plans/0004-move-the-remaining-lanes.md), [`K-OBS-17`](../../rulebook/08-observability-and-cost.md)). It checks out the commit the run is for, runs one operation of the store contract through your hook, `.github/actions/qa-store/action.yml`, and turns what the hook wrote into its outputs and one line of the job's summary. You don't call this block yourself. You write the hook, or leave it out.
+Kanon's store-coupled lanes call this block from their store jobs, which, besides the Overseer's telemetry read job, are the only jobs in those lanes that hold `id-token: write` ([plan 0004 §3.2](../../docs/plans/0004-move-the-remaining-lanes.md), [`K-OBS-17`](../../rulebook/08-observability-and-cost.md)). It checks out the commit the run is for, runs one operation of the store contract through your hook, `.github/actions/qa-store/action.yml`, and turns what the hook wrote into its outputs and one line of the job's summary. You don't call this block yourself. You write the hook, or leave it out.
 
 | Operation | What the lane gets |
 |---|---|
