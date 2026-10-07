@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { writeStub } from './helpers/stub-bin.js';
 
@@ -51,8 +51,45 @@ describe('the real gh and aws are unreachable from the test suite (#524)', () =>
   });
 
   it('no AWS credential reaches a test', () => {
-    for (const name of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE']) {
+    for (const name of [
+      'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'AWS_DEFAULT_PROFILE',
+      'AWS_WEB_IDENTITY_TOKEN_FILE', 'AWS_ROLE_ARN', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+      'AWS_CONTAINER_CREDENTIALS_FULL_URI', 'AWS_CONTAINER_AUTHORIZATION_TOKEN', 'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
+      'AWS_BEARER_TOKEN_BEDROCK',
+    ]) {
       expect(process.env[name], name).toBeUndefined();
     }
+  });
+
+  // #534: as gh reads a config directory with no login, aws reads config and credentials
+  // files that don't exist rather than ~/.aws, and asks no instance metadata service.
+  it('aws reads no shared config or credentials file, and asks no instance metadata', () => {
+    for (const name of ['AWS_CONFIG_FILE', 'AWS_SHARED_CREDENTIALS_FILE']) {
+      const path = process.env[name];
+      expect(path, name).toBeTruthy();
+      expect(existsSync(path!), `${name}=${path}`).toBe(false);
+    }
+    expect(process.env.AWS_EC2_METADATA_DISABLED).toBe('true');
+  });
+
+  // The real aws, reached through a PATH without the trap, with a [default] profile in
+  // ~/.aws as a developer's machine has: it must find no credentials. Skipped where no
+  // real aws is installed; CI's runners have one.
+  const outside = (process.env.PATH ?? '').split(delimiter).filter((d) => !d.includes('kanon-test-offline-'));
+  const realAws = outside.map((d) => join(d, 'aws')).find((p) => existsSync(p));
+  it.skipIf(!realAws)('a real aws, outside the trap, finds no credentials in a ~/.aws default profile', () => {
+    const home = join(bin, 'home');
+    mkdirSync(join(home, '.aws'), { recursive: true });
+    writeFileSync(join(home, '.aws', 'credentials'),
+      '[default]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n');
+    writeFileSync(join(home, '.aws', 'config'), '[default]\nregion = us-east-1\n');
+    // export-credentials resolves the credential chain locally and sends no request.
+    const r = spawnSync(realAws!, ['configure', 'export-credentials', '--format', 'env'], {
+      encoding: 'utf8', timeout: 20_000, env: { ...process.env, HOME: home, PATH: outside.join(delimiter) },
+    });
+    expect(r.error).toBeUndefined();
+    expect(r.stdout).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/no credentials found|Unable to locate credentials/i);
   });
 });

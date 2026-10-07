@@ -19,12 +19,18 @@ import { writeStub } from './stub-bin.js';
  *     stub still wins, because it puts its directory before this one.
  *   · for a case that builds a PATH of its own without the trap: no GitHub or AWS token
  *     in the environment, and a `GH_CONFIG_DIR` with no stored login, so a real `gh` stops
- *     at "gh auth login" before any request.
+ *     at "gh auth login" before any request. Likewise a real `aws` (#534): it reads config
+ *     and credentials files that don't exist rather than `~/.aws`, whose default profile
+ *     (static keys, SSO, `credential_process`) would otherwise sign it in, and it asks no
+ *     instance metadata service, so it stops at "Unable to locate credentials".
  */
 const TOOLS = ['gh', 'aws'];
 const SECRETS = [
   'GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN',
-  'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE',
+  'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'AWS_DEFAULT_PROFILE',
+  'AWS_WEB_IDENTITY_TOKEN_FILE', 'AWS_ROLE_ARN', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+  'AWS_CONTAINER_CREDENTIALS_FULL_URI', 'AWS_CONTAINER_AUTHORIZATION_TOKEN', 'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
+  'AWS_BEARER_TOKEN_BEDROCK',
 ];
 
 const trap = (tool: string): string => [
@@ -45,6 +51,9 @@ export const setup = (): (() => void) => {
   for (const tool of TOOLS) writeStub(join(bin, tool), trap(tool));
   for (const name of SECRETS) delete process.env[name];
   process.env.GH_CONFIG_DIR = config;
+  process.env.AWS_CONFIG_FILE = join(dir, 'aws', 'config');
+  process.env.AWS_SHARED_CREDENTIALS_FILE = join(dir, 'aws', 'credentials');
+  process.env.AWS_EC2_METADATA_DISABLED = 'true';
   process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
   return () => rmSync(dir, { recursive: true, force: true });
 };
