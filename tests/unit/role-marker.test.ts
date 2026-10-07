@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { SPAWNS } from './helpers/spawns.js';
+import { writeStub } from './helpers/stub-bin.js';
 
 const { asRole, headerLine, markedRole, personaHeader, roleMarker, setMarkerPhase, signed, signedAs, withPersona } = await import('../../scripts/lib/role-marker.mjs');
 const { personaEnv, resolvePersona, resolveRole, speaksAsNoRole } = await import('../../actions/agent-setup/persona.mjs');
@@ -313,8 +314,7 @@ describe('personas live in the App register\'s optional Persona column', SPAWNS,
     const dir = mkdtempSync(join(tmpdir(), 'persona-step-'));
     try {
       writeFileSync(join(dir, 'register'), reg(ROWS));
-      writeFileSync(join(dir, 'gh'), `#!/usr/bin/env bash\ncat "${dir}/register"\n`);
-      chmodSync(join(dir, 'gh'), 0o755);
+      writeStub(join(dir, 'gh'), `#!/usr/bin/env bash\ncat "${dir}/register"\n`);
       const envFile = join(dir, 'env');
       writeFileSync(envFile, '');
       const r = spawnSync(process.execPath, ['actions/agent-setup/persona.mjs'], { encoding: 'utf8',
@@ -331,8 +331,7 @@ describe('personas live in the App register\'s optional Persona column', SPAWNS,
     const dir = mkdtempSync(join(tmpdir(), 'persona-fail-'));
     try {
       writeFileSync(join(dir, 'register'), reg(ROWS));
-      writeFileSync(join(dir, 'gh'), `#!/usr/bin/env bash\ncat "${dir}/register"\n`);
-      chmodSync(join(dir, 'gh'), 0o755);
+      writeStub(join(dir, 'gh'), `#!/usr/bin/env bash\ncat "${dir}/register"\n`);
       const envFile = join(dir, 'env');
       const step = (ROLE: string, APP_SLUG: string) => {
         writeFileSync(envFile, '');

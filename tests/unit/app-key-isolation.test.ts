@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { writeStub } from './helpers/stub-bin.js';
 
 /**
  * `K-AGENT-49` (kanon#274, kanon#279): no job that runs an agent, the project's code, or a pull
@@ -265,7 +266,8 @@ describe('the receive and revoke steps work as written', () => {
     const out = join(dir, 'out');
     writeFileSync(out, '');
     // A `curl` that records its arguments and answers 204, so the revoke never reaches a network.
-    writeFileSync(join(dir, 'curl'), `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${dir}/curl.args"\nprintf 204\n`, { mode: 0o755 });
+    // A link to the shared shim, never a new executable that macOS scans on its first run (#436).
+    writeStub(join(dir, 'curl'), `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${dir}/curl.args"\nprintf 204\n`);
     const stdout = execFileSync('bash', ['-e', '-c', script], { encoding: 'utf8', env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_OUTPUT: out, ...env } });
     let curl = '';
     try { curl = readFileSync(join(dir, 'curl.args'), 'utf8'); } catch { /* not called */ }

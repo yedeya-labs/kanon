@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { writeStub } from './stub-bin.js';
 
 
 /**
@@ -49,7 +50,7 @@ export const manifest = (...moves: Array<[string, string, string]>): PrFile => (
 });
 export const MANIFEST_0_10 = manifest(['.', '0.9.1', '0.10.0']);
 
-export const FAKE_GH = `#!/bin/sh
+export const FAKE_GH = `#!/usr/bin/env bash
 echo "$*" >> "$FAKE_GH_DIR/calls.log"
 path=""; slurp=""
 for a in "$@"; do
@@ -107,8 +108,9 @@ export const responses = (opts: { prs?: Pr[]; files?: PrFile[]; comments?: Array
 
 export const runGuard = (answers: Record<string, unknown>) => {
   const dir = mkdtempSync(join(tmpdir(), 'kanon-release-pr-guard-'));
-  writeFileSync(join(dir, 'gh'), FAKE_GH);
-  chmodSync(join(dir, 'gh'), 0o755);
+  // A link to the shared shim, never a new executable: macOS scans each new one on its first run,
+  // which cost every case here up to 2 s under load (#436, helpers/stub-bin.ts).
+  writeStub(join(dir, 'gh'), FAKE_GH);
   for (const [path, body] of Object.entries(answers)) {
     writeFileSync(join(dir, `${path.replace(/[^A-Za-z0-9._-]/g, '_')}.json`), JSON.stringify(body));
   }
