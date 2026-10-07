@@ -73,7 +73,7 @@ describe('CI runs lint, type-check and unit tests on every pull request', () => 
 
   it('runs all three, none of them allowed to fail', () => {
     for (const command of ['npm run lint', 'npm run typecheck']) expect(runs).toContain(command);
-    expect(runs.filter((r) => r.startsWith('npm test'))).toEqual(['npm test -- --shard=${{ matrix.shard }}/4']);
+    expect(runs.filter((r) => /^npm test\b/m.test(r))).toHaveLength(1);
     const steps = stepsOf(wf);
     expect(steps.filter((s) => s['continue-on-error'])).toEqual([]);
   });
@@ -88,7 +88,7 @@ describe('CI runs lint, type-check and unit tests on every pull request', () => 
 
     it('needs every job that runs a check command, and nothing else', () => {
       const runsAny = (id: string, cmds: RegExp) => (jobs[id]!.steps ?? []).some((s) => cmds.test(s.run ?? ''));
-      const workers = Object.keys(jobs).filter((id) => runsAny(id, /^(npm (run lint|run typecheck|test)\b|bash \.github\/scripts\/actionlint\.sh)/));
+      const workers = Object.keys(jobs).filter((id) => runsAny(id, /^(npm (run lint|run typecheck|test)\b|bash \.github\/scripts\/actionlint\.sh)/m));
       expect(workers.sort()).toEqual(['lint', 'unit']);
       expect([...needs].sort()).toEqual(workers);
     });
@@ -107,7 +107,12 @@ describe('CI runs lint, type-check and unit tests on every pull request', () => 
       const shards = strategy?.matrix?.shard ?? [];
       expect(shards).toEqual(Array.from({ length: shards.length }, (_, i) => i + 1));
       expect(shards.length).toBeGreaterThan(1);
-      expect(jobs.unit!.steps?.map((s) => s.run).filter(Boolean)).toContain(`npm test -- --shard=\${{ matrix.shard }}/${shards.length}`);
+      // The shard's files from the duration plan, as a plain assignment so the step fails when
+      // the script does: an inline `npm test -- $(…)` would run every file and pass (#407).
+      expect(jobs.unit!.steps?.map((s) => s.run).filter(Boolean)).toContain(
+        `files=$(node .github/scripts/test-shards.mjs \${{ matrix.shard }}/${shards.length})\necho "$files"\nnpm test -- $files\n`,
+      );
+      expect(jobs.unit!.name).toBe(`Unit tests (shard \${{ matrix.shard }}/${shards.length})`);
       expect(strategy?.['fail-fast']).toBe(false);
     });
   });

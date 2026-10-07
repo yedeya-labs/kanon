@@ -2,7 +2,8 @@
 #
 # The unit suite runs in four shards, in parallel with a job for lint, type-check and
 # actionlint (#407): one runner is CPU-bound on the suite, so splitting it is what brings the
-# check's wall-clock down. The required check, `Lint, type-check and unit tests`, is the `checks`
+# check's wall-clock down. The shards are balanced by each test file's measured duration
+# (.github/scripts/test-shards.mjs), not by vitest's file-count `--shard`. The required check, `Lint, type-check and unit tests`, is the `checks`
 # job that `needs` them all and passes only when every one of them succeeded, so the `main`
 # ruleset names one check however the work under it is split.
 #
@@ -116,7 +117,14 @@ jobs:
           key: actionlint-1.7.12-${{ runner.os }}-${{ runner.arch }}
       - name: Provision the pinned actionlint for its tests
         run: bash .github/scripts/actionlint.sh
-      - run: npm test -- --shard=${{ matrix.shard }}/4
+      # The shard's files come from .github/scripts/test-shards.mjs, which splits every test file
+      # vitest lists by its measured duration (tests/shard-weights.json). The assignment fails
+      # the step if the script does; an inline `npm test -- $(…)` would run every file instead.
+      - name: Run this shard's test files
+        run: |
+          files=$(node .github/scripts/test-shards.mjs ${{ matrix.shard }}/4)
+          echo "$files"
+          npm test -- $files
 
   checks:
     name: Lint, type-check and unit tests
