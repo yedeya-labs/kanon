@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BAND_THRESHOLDS, BAND_VERSION, bandOf, diffSize, isExcludedFromSize } from '../../scripts/metrics/band.mjs';
-import { LOCKFILES, areaOf } from '../../scripts/metrics/areas.mjs';
+import { BAND_THRESHOLDS, BAND_VERSION, LOCKFILES, bandOf, diffSize, isExcludedFromSize } from '../../scripts/metrics/band.mjs';
+import { areaOf } from '../../scripts/metrics/areas.mjs';
+import { ROOT } from './helpers/adopter.js';
 
 /**
  * Plan 0003 §3.6, band version 1: S up to 200 changed lines, M up to 500, L up to 1,200, XL
@@ -62,6 +65,19 @@ describe('bandOf, version 1', () => {
 
   it('refuses a version it does not know, rather than banding by another', () => {
     expect(() => bandOf({ changed_lines: 1 }, 2)).toThrow(/band version 2/);
+  });
+});
+
+describe('band.mjs, the module', () => {
+  // §3.6: "`band.mjs` imports nothing, so the ingest side may copy it". An import of
+  // `areas.mjs` would bring the code-areas and escalation readers, and `node:fs`, with it.
+  it('imports nothing, so the ingest side may copy it', () => {
+    // Comments out first: a JSDoc type, `import('./types.mjs')`, loads nothing at run time.
+    const src = readFileSync(join(ROOT, 'scripts/metrics/band.mjs'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(src).not.toMatch(/^\s*import\b/m);
+    expect(src).not.toMatch(/\bfrom\s*['"]/);
+    expect(src).not.toMatch(/\bimport\s*\(/);
+    expect(src).not.toMatch(/\brequire\s*\(/);
   });
 });
 

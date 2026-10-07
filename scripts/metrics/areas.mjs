@@ -11,24 +11,15 @@
 
 import { isTestPath } from '../lib/code-areas.mjs';
 import { ESCALATION_CATEGORIES, escalationCategories } from '../lib/escalation-paths.mjs';
+// The band's lockfiles are the `deps` area's: one list, kept where nothing is imported (§3.6).
+import { LOCKFILES } from './band.mjs';
 
 /** The areas, in the order a file is checked against them: the first that matches wins. */
 export const AREAS = /** @type {const} */ (['deps', 'workflows', 'migrations', 'specs', 'tests', 'docs', 'config', 'code']);
 
 /** @typedef {typeof AREAS[number]} Area */
 
-/**
- * Lockfiles, by file name at any depth: JavaScript's, Python's, Go's, Rust's, Ruby's, PHP's,
- * the JVM's, .NET's, Elixir's and Erlang's, Swift's and Dart's. They are `deps` here, and the
- * band leaves them out of a diff's size (§3.6, `band.mjs`), so the two read one list.
- */
-export const LOCKFILES = new Set([
-  'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'deno.lock',
-  'Pipfile.lock', 'poetry.lock', 'uv.lock', 'go.sum', 'Cargo.lock', 'Gemfile.lock', 'composer.lock',
-  'gradle.lockfile', 'packages.lock.json', 'paket.lock', 'mix.lock', 'rebar.lock',
-  'Package.resolved', 'Podfile.lock', 'Cartfile.resolved', 'pubspec.lock',
-]);
-/** Dependency manifests, by file name at any depth, for the same stacks as `LOCKFILES`. */
+/** Dependency manifests, by file name at any depth, for the same stacks as `LOCKFILES` (`band.mjs`). */
 const MANIFESTS = new Set([
   'package.json', 'Pipfile', 'pyproject.toml', 'setup.py', 'setup.cfg', 'go.mod', 'Cargo.toml', 'Gemfile', 'composer.json',
   'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts', 'libs.versions.toml', 'build.sbt',
