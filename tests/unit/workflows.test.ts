@@ -463,9 +463,14 @@ const BASE_SCRIPT_JUDGES: Record<string, string> = { 'Citation guard': 'citation
 // The Markdown Kanon's citation guard and shift helper read (#388): `docs/`, the rulebook and the
 // READMEs, passed with `--path` as an adopter passes its own. Both workflows pass exactly this.
 const CITED_DOCS = ['docs/**/*.md', 'rulebook/**/*.md', 'README.md', 'actions/*/README.md'];
+// One `--path` argument: a single-quoted glob, or an unquoted run of the characters a glob
+// needs. `\S+` took shell operators too, so `--path docs/**/*.md&&node${IFS}scripts/x.mjs`
+// stripped to the bare base command and a chained run of the PR's own script passed (#422).
+// Whatever follows the glob is left in place, so the run no longer equals the base command.
+const PATH_ARG = / --path (?:'([^']+)'|([\w./*?-]+))/g;
 // A run with its `--path` globs taken out: what a base-script judge must otherwise equal.
-const withoutPaths = (run: string | undefined) => run?.replace(/ --path (?:'[^']+'|\S+)/g, '');
-const pathArgs = (run: string | undefined) => [...(run ?? '').matchAll(/--path (?:'([^']+)'|(\S+))/g)].map((m) => m[1] ?? m[2]);
+const withoutPaths = (run: string | undefined) => run?.replace(PATH_ARG, '');
+const pathArgs = (run: string | undefined) => [...(run ?? '').matchAll(PATH_ARG)].map((m) => m[1] ?? m[2]);
 
 describe('#47 no required check judges a PR with the PR\'s own copy of its action', () => {
   const names = readdirSync(new URL('../../.github/workflows/', import.meta.url)).filter((n) => n.endsWith('.yml'));
