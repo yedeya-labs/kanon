@@ -120,7 +120,7 @@ const fieldTable = (page: string, heading: string): Map<string, string> => {
   const body = section(read(page), new RegExp(`^### ${heading}$`));
   if (!body) throw new Error(`${page} has no "### ${heading}"`);
   // The first table only: a section may follow its fields with a status table.
-  const first = body.split(/\n\n(?=[^|])/).find((p) => p.trimStart().startsWith('|')) ?? '';
+  const first = body.split(/\n\s*\n/).find((p) => p.trimStart().startsWith('|')) ?? '';
   return new Map(rows(first).flatMap((c) => {
     const name = /^`([a-zA-Z]+)`$/.exec(c[0]!)?.[1];
     return name ? [[name, c.at(-1)!] as [string, string]] : [];
@@ -158,6 +158,8 @@ const SHAPES: Record<Command, { top: Map<string, string>; nested: Record<string,
     nested: {
       inspection: fieldTable('docs/init.md', 'The inspection'),
       answers: fieldTable('docs/init.md', 'The answers'),
+      catalogue: fieldTable('docs/init.md', 'The lane catalogue'),
+      lanes: fieldTable('docs/init.md', 'A catalogue lane'),
       files: fieldTable('docs/init.md', 'A file'),
       changes: fieldTable('docs/init.md', 'A change'),
       apps: fieldTable('docs/init.md', 'The Apps'),
@@ -280,17 +282,65 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(seen).toBeGreaterThan(10);
   });
 
-  it("asks every question kanon init has an answer for, with its flags", () => {
-    const table = rows(section(skill('adopt').body, /^## Steps$/)!).filter((c) => /^`\.answers\.[a-zA-Z]+`$/.test(c[0]!));
-    const asked = table.map((c) => c[0]!.slice('`.answers.'.length, -1)).sort();
-    expect(asked).toEqual([...SHAPES.init.nested.answers!.keys()].sort());
-    // Every flag that answers a question (docs/init.md) is offered, except --create-apps:
-    // adopt passes --no-apps, and runs the Apps' step itself.
-    const offered = new Set(table.flatMap((c) => [...c[1]!.matchAll(/`(--[a-z-]+)/g)].map((m) => m[1]!)));
+  // kanon#428, the Owner's rule: anything that needs the person's input is asked during the
+  // installation, as a question with its recommended option and what each option does, never
+  // filled in with a default the person didn't see. So every answer in init's contract has a
+  // question of its own in the adopt skill, and a new answer without one fails the build here.
+  it('asks a question for every answer in kanon init\'s contract, with its recommended option, its options and their flags', () => {
+    const questions = section(skill('adopt').body, /^## The questions$/);
+    expect(questions).not.toBeNull();
+    const blocks = questions!.split(/^(?=### )/m).filter((b) => b.startsWith('### '));
+    const asked = new Map(blocks.map((b) => [/^### `\.answers\.([a-zA-Z]+)`: /.exec(b)?.[1] ?? b.split('\n')[0]!, b]));
+    expect([...asked.keys()].sort()).toEqual([...SHAPES.init.nested.answers!.keys()].sort());
+    for (const [answer, b] of asked) {
+      expect(b, answer).toMatch(/^- \*\*Recommended:\*\* \S/m);
+      // Each option says what it does: at least two, each with the flag it becomes.
+      expect(b, answer).toMatch(/^- \*\*Options:\*\* .*`--[a-z-]+[^`]*`.*\S/m);
+    }
+    // Every flag that answers a question (docs/init.md) is offered, except --create-apps and
+    // --no-apps: adopt passes --no-apps, and walks the person through the Apps itself.
+    // Only from the options themselves: a flag named elsewhere in a question is not an option.
+    const offered = new Set(blocks.flatMap((b) => [...b.matchAll(/^- \*\*Options\b.*$/gm)].flatMap((l) => [...l[0].matchAll(/`(--[a-z-]+)/g)].map((m) => m[1]!))));
     const answering = rows(section(read('docs/init.md'), /^## Answering without a terminal$/)!)
       .flatMap((c) => [...(c[1] ?? '').matchAll(/`(--[a-z-]+)/g)].map((m) => m[1]!));
     expect(answering.length).toBeGreaterThan(10);
     expect(answering.filter((f) => !offered.has(f))).toEqual(['--create-apps', '--no-apps']);
+    // No answer is taken unasked: the steps say so, and the lanes are asked a group at a time,
+    // from the catalogue init prints, recommended option first.
+    const steps = section(skill('adopt').body, /^## Steps$/)!;
+    expect(steps).toMatch(/none is taken from its default unasked/);
+    const lanes = asked.get('lanes')!;
+    for (const p of ['.catalogue', '.catalogue[].lanes[].does', '.catalogue[].lanes[].cost', '.catalogue[].lanes[].when', '.catalogue[].lanes[].recommended', '.catalogue[].lanes[].recommendedWith']) {
+      expect(lanes, p).toContain(`\`${p}\``);
+    }
+    expect(lanes).toMatch(/multi-select/);
+  });
+
+  it('asks in Claude Code with its question tool, recommended option first and marked, and never for a list', () => {
+    const how = section(skill('adopt').body, /^## How to ask$/)!;
+    expect(how).toMatch(/In Claude Code, ask with its question tool\*\* \(`AskUserQuestion`\)/);
+    expect(how).toMatch(/recommended option comes first/);
+    expect(how).toContain('`(Recommended)`');
+    expect(how).toMatch(/In another agent client/);
+    expect(how).toMatch(/Never ask for a comma-separated list/);
+  });
+
+  it("walks the person through a step only they can do when it comes up, as do it now or skip, and records a skip", () => {
+    const person = section(skill('adopt').body, /^## Steps only a person can do$/)!;
+    // Both options in the one question the person is asked.
+    expect(person).toMatch(/^2\. Ask, as a question: \*\*Do it now\*\* \(Recommended\).*; or \*\*Skip it for now\*\*/m);
+    expect(person).toMatch(/skipped list/);
+    // The pull request carries what was skipped.
+    expect(section(skill('adopt').body, /^## Steps$/)).toMatch(/`## Left to do`/);
+  });
+
+  // The upgrade skill asks, rather than defaults, any answer a newer release adds.
+  it('has the upgrade skill ask any answer the target release adds, as the adopt skill asks it', () => {
+    const steps = section(skill('upgrade').body, /^## Steps$/)!;
+    expect(steps).toMatch(/\*\*New questions\.\*\*/);
+    expect(steps).toMatch(/"The answers"/);
+    expect(steps).toMatch(/"The questions"/);
+    expect(steps).toMatch(/never tak(e|ing) its default/);
   });
 
   // An agent's shell has no terminal on standard input, where `kanon init` refuses to start

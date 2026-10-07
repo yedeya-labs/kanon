@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
-import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, USAGE, workflowName } from '../../cli/init.mjs';
+import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, laneCatalogue, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, usage, USAGE, workflowName } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 
 /**
@@ -922,5 +922,60 @@ describe('kanon init and the kanon plugin (#376)', () => {
     expect(r.status, r.err).toBe(0);
     expect(asked.filter((q) => q.startsWith('Declare the kanon plugin'))).toHaveLength(1);
     expect(existsSync(join(dir, SETTINGS))).toBe(false);
+  });
+});
+
+// kanon#428: the lane catalogue (docs/lanes.json) is what a person chooses lanes from, in
+// --help and in the JSON's `catalogue`, which the adopt skill asks a question per group from.
+describe('kanon init and the lane catalogue (#428)', () => {
+  const CATALOGUE = JSON.parse(readFileSync(join(ROOT, 'docs/lanes.json'), 'utf8')) as { groups: Array<{ id: string; title: string; header: string }>; lanes: Record<string, { group: string; does: string; when: string; cost: string }> };
+
+  it('prints every group and every lane of the catalogue in its JSON, with the fields docs/init.md lists', async () => {
+    const r = await run(checkout(), fakeGitHub(), ['--yes', '--json', '--dry-run']);
+    const d = parse(r) as Doc & { catalogue: Array<Record<string, unknown> & { group: string; lanes: Array<Record<string, unknown> & { lane: string }> }> };
+    expect(d.catalogue.map((g) => g.group)).toEqual(CATALOGUE.groups.map((g) => g.id));
+    for (const g of d.catalogue) {
+      expect(keys(g)).toEqual(fields('### The lane catalogue').sort());
+      for (const l of g.lanes) {
+        expect(keys(l)).toEqual(fields('### A catalogue lane').sort());
+        const e = CATALOGUE.lanes[l.lane]!;
+        expect(l, l.lane).toMatchObject({ does: e.does, when: e.when, cost: e.cost });
+        expect(e.group).toBe(g.group);
+      }
+    }
+    expect(d.catalogue.flatMap((g) => g.lanes.map((l) => l.lane)).sort()).toEqual(Object.keys(REQ.lanes).sort());
+    expect(d.catalogue[0]!.lanes[0]).toMatchObject({ lane: 'agent-review', app: 'judge', recommended: true, installed: false, qaStore: false, schedule: null });
+    expect(d.catalogue.flatMap((g) => g.lanes).find((l) => l.lane === 'agent-explore')).toMatchObject({ app: 'author', qaStore: true, schedule: '0 3 * * *', hooks: ['.github/actions/explore-sweep/action.yml'] });
+  });
+
+  it('recommends only the review lane on a repository that calls none', () => {
+    const rec = laneCatalogue(REQ, []).flatMap((g) => g.lanes).filter((l) => l.recommended).map((l) => l.lane);
+    expect(rec).toEqual(['agent-review']);
+  });
+
+  it('recommends what the repository calls already, and what is recommended with it', () => {
+    const lanes = laneCatalogue(REQ, ['agent-implement']).flatMap((g) => g.lanes);
+    expect(lanes.filter((l) => l.recommended).map((l) => l.lane).sort()).toEqual(['agent-dispatch-sweep', 'agent-implement', 'agent-implement-revise', 'agent-rebase', 'agent-review']);
+    expect(lanes.filter((l) => l.installed).map((l) => l.lane)).toEqual(['agent-implement']);
+    // Transitively: the Lead recommends the reconciler, which recommends verify-acs and the daily digest.
+    const lead = laneCatalogue(REQ, ['agent-lead']).flatMap((g) => g.lanes).filter((l) => l.recommended).map((l) => l.lane);
+    expect(lead).toEqual(expect.arrayContaining(['agent-lead-reconcile', 'agent-verify-acs', 'agent-project-digest']));
+  });
+
+  it('recommends the same lanes whatever order the catalogue lists them in', () => {
+    const cat = REQ.catalogue!;
+    const reversed = { ...REQ, catalogue: { ...cat, lanes: Object.fromEntries(Object.entries(cat.lanes).reverse()) } };
+    const rec = (req: typeof REQ, installed: string[]) => laneCatalogue(req, installed).flatMap((g) => g.lanes).filter((l) => l.recommended).map((l) => l.lane).sort();
+    for (const installed of [[], ['agent-lead'], ['agent-implement'], ['agent-explore']]) expect(rec(reversed, installed), installed.join()).toEqual(rec(REQ, installed));
+    expect(rec(reversed, ['agent-lead'])).toEqual(expect.arrayContaining(['agent-project-digest']));
+  });
+
+  it('lists every lane of the catalogue in --help, with what it does, by group', async () => {
+    const r = await run(checkout(), fakeGitHub(), ['--help']);
+    expect(r.status).toBe(0);
+    expect(r.out).toBe(usage(REQ));
+    for (const g of CATALOGUE.groups) expect(r.out).toContain(`\n  ${g.title}\n`);
+    for (const [lane, e] of Object.entries(CATALOGUE.lanes)) expect(r.out).toMatch(new RegExp(`^ {4}${lane.slice('agent-'.length)} +${e.does.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm'));
+    expect(r.out).toMatch(/^ {4}review +.* \(recommended\)$/m);
   });
 });

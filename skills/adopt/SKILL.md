@@ -1,6 +1,6 @@
 ---
 name: adopt
-description: Install Kanon in the repository of the current checkout, new or already in use, by driving `kanon init --json`. Inspects first with a dry run, explains each choice in plain words, asks the person, writes the files, walks them through the steps only a person can take (creating the Apps, the secrets, the ruleset), opens the pull request, then hands over to the doctor skill until the installation is healthy. Use when the person asks to install, adopt or set up Kanon.
+description: Install Kanon in the repository of the current checkout, new or already in use, by driving `kanon init --json`. Inspects first with a dry run, asks every choice as a multiple-choice question with its recommended option and what it means, writes the files, walks the person through each step only a person can take (creating the Apps, the secrets, the ruleset) when it comes up, recording any they skip, opens the pull request, then hands over to the doctor skill until the installation is healthy. Use when the person asks to install, adopt or set up Kanon.
 disable-model-invocation: true
 ---
 
@@ -31,6 +31,101 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 - **The person signs off.** Commit with `git commit -s` under the person's own git identity. Never sign off as yourself: Kanon's DCO check rejects an AI sign-off.
 - **The contract is `kanon-init/v1`.** If the document's `.schema` is anything else, stop and tell the person this skill and the command disagree. Ignore a field you don't know. A finding whose `.findings[].id` is not in the table below is newer than this skill: show the person its `.findings[].message` and `.findings[].fix`, and do nothing else with it.
 
+## How to ask
+
+The person decides every choice, as a question in their agent client ([#428](https://github.com/yedeya-labs/kanon/issues/428)):
+
+- **In Claude Code, ask with its question tool** (`AskUserQuestion`): multiple choice, up to four questions at a time, two to four options each. **The recommended option comes first,** its label ending in `(Recommended)`, and **each option's description says what choosing it does.** A question about several things that can all be chosen, such as a group of lanes, is a multi-select question. A value only the person can type (a login, a name, an email, a command) is the tool's own free-text answer, with the inferred value as the recommended option.
+- **In another agent client,** ask with its own multiple-choice question in the same shape. If it has none, write the options as a numbered list in one message, the recommended one first and marked, each with its consequence, and wait for the answer.
+- **Never ask for a comma-separated list,** and never fill in an answer the person didn't give or confirm: no silent defaults. You build each flag from their answers; they never type a flag.
+- **Infer the recommended option** from `.inspection`, the answers already given and the checkout, as each question below says, and say in one line why it is recommended.
+- **Keep a list of the answers and of what the person skipped,** for the pull request (step 9) and for the doctor skill.
+
+## Steps only a person can do
+
+Some steps are the person's alone (**Only a person can**, above): creating and installing the Apps, giving their token a permission it lacks, a ruleset step the token can't take, typing a secret's value. Walk each through **when it comes up,** never as a list for later:
+
+1. Say what the step is, why it is needed, and what is left undone without it.
+2. Ask, as a question: **Do it now** (Recommended), and tell me when it's done; or **Skip it for now**, and the step is recorded as left to do.
+3. On **Do it now**, give the exact step (the finding's `.findings[].fix.text`, its `.findings[].fix.commands` and `.findings[].fix.url`), and wait for the person to say it's done. Check it where you can: a dry run again, `gh secret list`, or the doctor skill.
+4. On **Skip it for now**, add it to the skipped list with the finding's id, and go on. Never pretend it was done.
+
+## The questions
+
+Ask them in this order, each as **How to ask** says. One answer of `kanon init` is one question, except the lanes, which are one question per group. Each says where its recommended option comes from, and the flag each answer becomes.
+
+### `.answers.projectOwner`: who is the Owner?
+
+The Owner decides product questions, accepts what the rulebook gives a person to accept, and merges what the agents can't. The adoption record names them.
+
+- **Recommended:** the login whose token runs `kanon init` (`.token.login`), which is the dry run's `.answers.projectOwner`.
+- **Options:** that login (`--project-owner <login>`); or someone else, typed (`--project-owner <who>`): a GitHub login, or a name.
+
+### `.answers.maintainer`: who is the Maintainer?
+
+The Maintainer keeps the pipeline running: the lanes, the Apps, the secrets, the upgrades.
+
+- **Recommended:** the Owner just named, as it often is.
+- **Options:** the Owner (`--maintainer <owner>`); or someone else, typed (`--maintainer <who>`).
+
+### `.answers.stakeholder`: who is the Stakeholder?
+
+The Stakeholder places work on the roadmap and decides what is a gate candidate.
+
+- **Recommended:** the Owner.
+- **Options:** the Owner (`--stakeholder <owner>`); or someone else, typed (`--stakeholder <who>`).
+
+### `.answers.lanes`: which lanes, a group at a time
+
+The lanes are the agents' workflows. Ask one question per group of `.catalogue`, in its order, as a multi-select question headed with the group's `.catalogue[].header`; for a group of one lane, ask **Install it** or **Not now** instead.
+
+- **Options:** each lane of `.catalogue[].lanes`, chosen into `--lanes <list>`: its `.catalogue[].lanes[].name` as the label, and as the description what it does (`.catalogue[].lanes[].does`), what it needs (its App, `.catalogue[].lanes[].app`; its secrets beyond the App's, `.catalogue[].lanes[].secrets`; the QA store, `.catalogue[].lanes[].qaStore`; its hooks, `.catalogue[].lanes[].hooks`; its schedule, `.catalogue[].lanes[].schedule`; and `.catalogue[].lanes[].needs`) and what it costs (`.catalogue[].lanes[].cost`), shortened to fit, with `.catalogue[].lanes[].when` in one line.
+- **Recommended:** each lane whose `.catalogue[].lanes[].recommended` is true (the review lane, and every lane the repository already calls, `.catalogue[].lanes[].installed`), and each lane whose `.catalogue[].lanes[].recommendedWith` names a lane the person chose in an earlier group. A lane recommended with one beside it in the same group says so in its description. Where `.catalogue[].lanes[].when` names a condition you can read from an answer already given, such as a Stakeholder who isn't the Owner for the weekly digest, apply it. The recommended lanes are listed first.
+- **The review lane stays first and recommended:** its App's approval is what ends bootstrap. If the person leaves it out, say what that means and ask once more.
+- **A lane the repository already calls** (`.inspection.installedLanes`) that the person leaves out is not uninstalled by `kanon init`: say so.
+- **The flag:** every lane chosen, in every group, as one `--lanes <list>`, by the names in `.catalogue[].lanes[].lane`. At least one lane must be chosen.
+
+### `.answers.gates`: the stack's gates
+
+The commands a change must pass before it is done, in order. They go under `## Gates` in `docs/qa/stack.md`, which every lane that changes code reads.
+
+- **Recommended:** the commands `kanon init` suggested from the repository, the dry run's `.answers.gates`, each kept.
+- **Options:** a multi-select of the suggested commands, each one kept when chosen, and the free-text answer for one to edit or add. With none suggested: **None yet** (`--gates none`), recommended, which leaves the section saying so; or the commands, typed one at a time.
+- **The flag:** `--gates <list>` from the commands kept, in order, or `--gates none`.
+
+### `.answers.testDatabase`: does a lane need a test database?
+
+- **Recommended:** **No** (`--test-database none`), unless the checkout shows its tests need a database: a database service in a compose file, `DATABASE_URL` in an example environment file, a migrations directory. Then **Yes**.
+- **Options:** **No** (`--test-database none`): no lane starts one. **Yes** (`--test-database hook`): `init` writes `docs/qa/test-database.md`, and your project-setup hook must start the database and write `DATABASE_URL`.
+
+### `.answers.delegation`: who signs off the agents' commits?
+
+An agent can't sign off its own commits, so a required DCO check fails them unless one named person takes responsibility for them (`K-AGENT-44`).
+
+- **Recommended:** **Yes** when a chosen lane runs as the Author App (`.catalogue[].lanes[].app` is `author`) and the repository runs Kanon's DCO check (a workflow that uses `yedeya-labs/kanon/actions/dco`); otherwise **No**.
+- **Options:** **Yes** (`--delegation`): `init` writes `docs/qa/sign-off-delegation.md`, and the agents' commits carry that person's sign-off. **No** (`--no-delegation`): an agent's commit fails a required DCO check.
+- **Options on Yes,** two more questions: the delegate's name, recommended from `git config user.name` (`--delegate-name <name>`), and their email, recommended from `git config user.email` (`--delegate-email <email>`), each confirmed or typed. Say that the delegate signs off every agent commit, so it is a person who accepts that.
+
+### `.answers.deleteDefaultLabels`: GitHub's default labels
+
+Kanon's label taxonomy replaces GitHub's default labels it doesn't use, such as `good first issue` and `wontfix`.
+
+- **Recommended:** **Delete** when the repository has no commit yet (`.inspection.hasCommits` is false), so nothing uses them; otherwise **Keep**, because issues may carry them.
+- **Options:** **Delete** (`--delete-default-labels`): `init` deletes those in `.inspection.labels` that the taxonomy doesn't hold, and the issues that carry one lose it. **Keep** (`--keep-default-labels`): they stay beside the taxonomy.
+- **When `.inspection.labels` holds none of them,** there is nothing to choose: say so, and pass `--keep-default-labels`.
+
+### `.answers.releaser`: the optional Releaser App
+
+Asked only when `.inspection.callsRelease` is true. Otherwise there is nothing to choose: say so, and pass neither flag.
+
+- **Recommended:** **Yes** when `.inspection.rulesets` is `yes`, because a release pull request opened without an App runs no CI, so a ruleset that requires checks blocks it unless an admin bypasses it; otherwise **No**.
+- **Options:** **Yes** (`--releaser`): `kanon apps` creates a third App, the Releaser, which opens the release pull requests so their CI runs, and becomes the ruleset's only bypass actor (`K-MERGE-8`). **No** (`--no-releaser`): release pull requests keep being opened with the workflow's token.
+
+### `.answers.plugin`: declare this plugin in the repository
+
+- **Recommended:** **Yes**, unless the person says nobody here uses Claude Code.
+- **Options:** **Yes** (`--plugin`): `init` writes `.claude/settings.json` declaring the kanon plugin at this release (or, when the file exists, the finding `plugin.declare` gives the keys to merge), so everyone who uses Claude Code here gets these skills once they trust the folder, and doctor checks the release against the pins. **No** (`--no-plugin`): each person installs the plugin themselves, and nothing checks its release.
+
 ## Steps
 
 1. **Check where you are.** A git checkout of the repository to install in (`git rev-parse --show-toplevel`), `gh` signed in, and Node 24 or later. If the working tree has changes, ask the person to commit or stash them first; never do either yourself.
@@ -38,38 +133,25 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 2. **Inspect, changing nothing.** `kanon init --dry-run --json`. Read `.status` and `.exitCode` (the table below). Then tell the person, in plain words:
    - the repository (`.repository`), whose token is used, and whether it can administer the repository (`.inspection.admin`);
    - the account (`.inspection.owner`, `.inspection.ownerKind`), and what its plan allows: `.inspection.rulesets` of `no` means nothing on the platform enforces review, so the Owner's discipline does (say this one clearly); `.inspection.mergeQueue`; and every line of `.notes`;
-   - what is already there: the lanes it already calls (`.inspection.installedLanes`), its rulesets (`.inspection.defaultBranchRulesets`, `.inspection.inactiveRulesets`), whether it has a commit yet (`.inspection.hasCommits`);
-   - every file it would write (`.files[].path` with `.files[].status`). For a file that `differs`, show `.files[].diff` and say `init` leaves it alone, so it is the person's to reconcile;
-   - every change it would make on GitHub (`.changes[].message`).
+   - what is already there: the lanes it already calls (`.inspection.installedLanes`), its rulesets (`.inspection.defaultBranchRulesets`, `.inspection.inactiveRulesets`), whether it has a commit yet (`.inspection.hasCommits`).
 
-3. **Explain each choice, and ask.** Show each default from `.answers`, say what it means, and ask the person to accept it or give another, all in one message:
+   If `.inspection.admin` is false, the token can't create the ruleset or set the merge settings: say so now, and ask, as a step only a person can do, whether they want to run with a token that can (then they set `GH_TOKEN` in their own terminal and start again) or go on and take those steps later.
 
-   | Answer | Flag | Say |
-   |---|---|---|
-   | `.answers.projectOwner` | `--project-owner <who>` | The Owner decides product questions and merges what the agents can't. |
-   | `.answers.maintainer` | `--maintainer <who>` | The Maintainer keeps the pipeline running. Often the Owner. |
-   | `.answers.stakeholder` | `--stakeholder <who>` | The Stakeholder places work on the roadmap. Often the Owner. |
-   | `.answers.lanes` | `--lanes <list>` | Which agent lanes to install. The review lane first: its App's approval is what ends bootstrap. |
-   | `.answers.gates` | `--gates <list>`, or `--gates none` | The commands that must pass before a change is done, in order, suggested from the repository. |
-   | `.answers.testDatabase` | `--test-database none` or `--test-database hook` | Whether a lane needs a test database, started by the project-setup hook. |
-   | `.answers.delegation` | `--delegation` with `--delegate-name <name>` and `--delegate-email <email>`, or `--no-delegation` | Whether a named person signs off the agents' commits (`K-AGENT-44`). |
-   | `.answers.deleteDefaultLabels` | `--delete-default-labels` or `--keep-default-labels` | Whether to delete GitHub's default labels that Kanon's taxonomy doesn't use. |
-   | `.answers.releaser` | `--releaser` or `--no-releaser` | Only when `.inspection.callsRelease` is true: whether to create the optional Releaser App for release pull requests. |
-   | `.answers.plugin` | `--plugin` or `--no-plugin` | Whether to declare this plugin in `.claude/settings.json`, pinned to this release: everyone who uses Claude Code in the repository then gets these skills once they trust the folder, at the release the callers pin, and doctor checks the two agree. |
+3. **Ask the questions** ("The questions", above), in their order, as **How to ask** says. Every answer of `.answers` gets a question; none is taken from its default unasked.
 
-   Then run the dry run again with their flags, show what changed in `.files` and `.changes`, and get a yes.
+4. **Show what the answers do.** Run the dry run again with every flag the answers gave, and show the person every file it would write (`.files[].path` with `.files[].status`; for a file that `differs`, show `.files[].diff` and say `init` leaves it alone, so it is the person's to reconcile) and every change it would make on GitHub (`.changes[].message`). Then ask: **Go ahead** (Recommended), or **Change an answer**, which asks that question again.
 
-4. **Make a branch.** If `.inspection.hasCommits` is false, the repository is in bootstrap and its first commit goes straight to the default branch (`K-ADOPT-4`): say so. Otherwise create `kanon/adopt` from the default branch.
+5. **Make a branch.** If `.inspection.hasCommits` is false, the repository is in bootstrap and its first commit goes straight to the default branch (`K-ADOPT-4`): say so. Otherwise create `kanon/adopt` from the default branch.
 
-5. **Write.** `kanon init --json --no-apps` with the person's flags. `--no-apps` leaves the Apps to step 6, so you can explain them first. Read `.status`: on `failed`, show `.failures` and what it did (`.changes`), and stop; on `error`, show `.error` and stop. Show the person `git status` and the diff.
+6. **Write.** `kanon init --json --no-apps` with the person's flags. `--no-apps` leaves the Apps to step 7, so you can explain them first. Read `.status`: on `failed`, show `.failures` and what it did (`.changes`), and stop; on `error`, show `.error` and stop. Show the person `git status` and the diff.
 
-6. **The Apps.** When `.apps.outcome` is `left-to-you`, the finding `app.create` holds the command. Explain first: the Apps the lanes run as (`.apps.identities`), that each opens a page in their browser where they check the permissions and click **Create**, then a second page where they click **Install** and choose this repository, and that the command stores each App's id and key as Actions secrets itself, never printing the key. Then run the finding's `kanon apps` command (in the background, because it waits for their clicks), and wait for them. When it exits 0, the register rows it wrote in `docs/qa/agent-identities.md` go in the commit. When it doesn't, show its exit code and what it said, and run it again once they've fixed it.
+7. **The Apps,** a step only a person can do. When `.apps.outcome` is `left-to-you`, the finding `app.create` holds the command. Explain first: the Apps the lanes run as (`.apps.identities`), that each opens a page in their browser where they check the permissions and click **Create**, then a second page where they click **Install** and choose this repository, and that the command stores each App's id and key as Actions secrets itself, never printing the key. Ask **Do it now** or **Skip it for now**. On **Do it now**, run the finding's `kanon apps` command (in the background, because it waits for their clicks), and wait for them. When it exits 0, the register rows it wrote in `docs/qa/agent-identities.md` go in the commit. When it doesn't, show its exit code and what it said, and run it again once they've fixed it.
 
-7. **The rest of the findings,** in their order, as the table below says. Each `.findings[].fix` has the text, the commands and the page: a command that starts `kanon ` you run as above, one that starts `gh secret set` the person runs in their own terminal, pasting the value on standard input, and any other line is a line to add to the file the finding's `.findings[].subject` names.
+8. **The rest of the findings,** in their order, as the table below says. A finding an agent fixes, you fix, after showing the diff. A finding only a person can fix is asked as a step only a person can do, when you reach it. Each `.findings[].fix` has the text, the commands and the page: a command that starts `kanon ` you run as above, one that starts `gh secret set` the person runs in their own terminal, pasting the value on standard input, and any other line is a line to add to the file the finding's `.findings[].subject` names.
 
-8. **Open the pull request.** Commit everything `init` and `kanon apps` wrote (signed off by the person), push the branch, and `gh pr create` with a title that passes the PR-title check, such as `ci: install Kanon`. Say that until the Judge's App exists and the ruleset requires its approval, the repository is in bootstrap and a person merges (`K-ADOPT-6`). Never merge it.
+9. **Open the pull request.** Commit everything `init` and `kanon apps` wrote (signed off by the person), push the branch, and `gh pr create` with a title that passes the PR-title check, such as `ci: install Kanon`. Its body lists the answers, and, under `## Left to do`, each step the person skipped with its finding's id, so nobody has to remember it. Say that until the Judge's App exists and the ruleset requires its approval, the repository is in bootstrap and a person merges (`K-ADOPT-6`). Never merge it.
 
-9. **Check it.** Hand over to the doctor skill on the branch, and run it until it is healthy or only a person's steps are left.
+10. **Check it.** Hand over to the doctor skill on the branch, with the skipped list, and run it until it is healthy or only the person's skipped steps are left.
 
 | Code | Status | What you do |
 |---|---|---|
