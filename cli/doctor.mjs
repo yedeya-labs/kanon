@@ -289,6 +289,10 @@ export const parseArgs = (argv) => {
     const value = () => {
       const v = inline ?? argv[++i];
       if (v === undefined || v === '') throw new Error(`${flag} needs a value`);
+      // The next argument is a flag, not this one's value: an unset, unquoted variable leaves
+      // `--dir --json`, which would read "--json" as the checkout and print prose (#457). A
+      // value that does begin with "-" is given inline, `--dir=-x`.
+      if (inline === undefined && v.startsWith('-')) throw new Error(`${flag} needs a value, not the flag "${v}"; to give a value that begins with "-", write ${flag}=<value>`);
       return v;
     };
     if (flag === '-h' || flag === '--help') opts.help = true;
@@ -298,6 +302,9 @@ export const parseArgs = (argv) => {
     else if (flag === '--json') opts.json = true;
     else throw new Error(`unknown argument "${arg}"`);
   }
+  // `--help` prints the usage, which is no document: with `--json` it would leave prose on
+  // standard output, so the pair is refused, and the refusal is the error document (#457).
+  if (opts.help && opts.json) throw new Error('--help and --json contradict each other; give one');
   if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
   if (opts.to && !/^v\d+\.\d+\.\d+$/.test(opts.to)) throw new Error(`--to takes an exact release, vX.Y.Z, not "${opts.to}"`);
   return opts;
