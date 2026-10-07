@@ -16,7 +16,7 @@
 # L2 spec) is the specification, and he builds to it test-first.
 #
 # Trigger: an issue is labeled `agent:implement`.
-# Identity: the Implementer's GitHub App (the same identity as the triage lane).
+# Identity: the Author App, as the Implementer (the same identity as the triage lane).
 # Output: a PR labeled `review:please` so the Reviewer reviews it; a human merges.
 # See docs/qa/triage-fix-playbook.md ("Implementer mode") and docs/qa/agent-identities.md.
 #
@@ -27,8 +27,8 @@
 #
 # INERT until: (1) the caller + the docs/qa playbooks are on the default branch,
 # (2) the GitHub Apps exist + are installed, and (3) these secrets are set (plan 0001 §8):
-#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY   (the Implementer's App)
-#   CLAUDE_CODE_OAUTH_TOKEN                            (Claude subscription; `claude setup-token`)
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY   (the Author App, which holds the Implementer)
+#   CLAUDE_CODE_OAUTH_TOKEN                 (Claude subscription; `claude setup-token`)
 # KANON ROLE: Implementer
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
 # role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row

@@ -47,7 +47,7 @@
 #     sits BELOW the CI-pending defer, which it must not pre-empt.
 # Keep this list and the `decide` step in step: the header going stale after a
 # carve-out was added is RA-1043, and it is the third time on this file (RA-959, RA-821).
-# Identity: the Reviewer's GitHub App — a DIFFERENT identity than the Implementer's, so
+# Identity: the Judge App, as the Reviewer — a DIFFERENT App than the Implementer's Author, so
 # it can submit a formal Approve (GitHub blocks approving your own PR). Its login is the
 # App register's `Reviewer` row (`K-LAYOUT-6`), read from the default branch.
 # Instructions: pinned to the DEFAULT branch by the restore step below (`K-MERGE-17`,
@@ -56,8 +56,8 @@
 #
 # INERT until: (1) the caller + the docs/qa playbooks are on the default branch,
 # (2) the GitHub Apps exist + are installed, and (3) these secrets are set (plan 0001 §8):
-#   JUDGE_APP_ID, JUDGE_APP_PRIVATE_KEY   (the Reviewer's App)
-#   CLAUDE_CODE_OAUTH_TOKEN                      (Claude subscription; `claude setup-token`)
+#   JUDGE_APP_ID, JUDGE_APP_PRIVATE_KEY   (the Judge App, which holds the Reviewer)
+#   CLAUDE_CODE_OAUTH_TOKEN               (Claude subscription; `claude setup-token`)
 # Auth starts on the Claude subscription; graduate to API-key billing later — see the
 # note at the claude-code-action step.
 # KANON ROLE: Reviewer

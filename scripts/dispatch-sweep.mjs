@@ -87,9 +87,11 @@ export const SWEEP_LOGIN = appLogin('Lead');
 // (bounded by MAX_REDISPATCH) rather than toward stalling forever — the failure
 // this script exists to end.
 //
-// The project's own Apps come from the register (RA-2701), by ROLE — exactly the six
-// this set has always named. The Merger and the Intake App are deliberately not added
-// by this move: it changes where the logins are written, not which ones count.
+// The project's own Apps come from the register (RA-2701), by ROLE. The six roles named
+// cover every Kanon App: since plan 0005's L4 the Merger is a role of the Judge App, so its
+// login is the Reviewer's and is in the set too. That is right: a Merger comment is an
+// App's, never a human's reply. The Intake App belongs to the running application, not
+// to Kanon (docs/apps.md), and is not added.
 // `github-actions` and `dependabot` are GitHub's own, the same in every repository.
 const BOT_LOGINS = new Set([
   ...['Implementer', 'Lead', 'Reviewer', 'Explorer', 'Overseer', 'Releaser'].map((role) => appLogin(role)),
