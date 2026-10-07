@@ -418,6 +418,36 @@ describe('step 11a: Kanon audits its own code, through the lane at its last rele
   });
 });
 
+// ADR 0011, the Explorer's telemetry mode (plan 0004 step 14, kanon#443): Kanon reads its hosted
+// telemetry's aggregate with the telemetry lane, at its last release, like the code audit above.
+describe("step 14: Kanon reads its telemetry's aggregate, through the lane at its last release", () => {
+  const { wf } = load('explore-telemetry.yml');
+  const jobs = Object.values(wf.jobs) as (Job & { with?: unknown; secrets?: unknown })[];
+
+  it('calls the telemetry lane at an exact release, never through `$/`, from its one job', () => {
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.uses).toMatch(/^yedeya-labs\/kanon\/\.github\/workflows\/agent-explore-telemetry\.yml@v\d+\.\d+\.\d+$/);
+  });
+
+  it("runs on the lane's two triggers only: its weekly schedule and a dispatch with no inputs", () => {
+    expect(wf.on).toEqual({ schedule: [{ cron: '30 6 * * 2' }], workflow_dispatch: null });
+  });
+
+  it("grants the lane's documented ceiling, and no more", () => {
+    expect(wf.permissions).toEqual({ contents: 'read', issues: 'read', actions: 'read', 'id-token': 'write' });
+  });
+
+  it('passes no inputs, and maps the four secrets by name, never inheriting', () => {
+    expect(jobs[0]?.with).toBeUndefined();
+    expect(jobs[0]?.secrets).toEqual({
+      AUTHOR_APP_ID: '${{ secrets.AUTHOR_APP_ID }}',
+      AUTHOR_APP_PRIVATE_KEY: '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}',
+      CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
+      KANON_AGGREGATE_ROLE: '${{ secrets.KANON_AGGREGATE_ROLE }}',
+    });
+  });
+});
+
 // The ruleset on main (id 24259403) requires these checks by name. A merge queue waits
 // for each one on the queue's branch, so each must report there under the same name it
 // reports under on the pull request (K-MERGE-7). The agent blocks smoke run joins them

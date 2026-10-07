@@ -95,11 +95,12 @@ describe('the aggregate job: the only one with id-token (K-OBS-17\'s shape)', ()
       change(w[AGGREGATE_FILE]!.jobs[AGGREGATE_JOB] as LaneJob);
       return idTokenProblems(w);
     };
-    // The job itself, and the smoke caller that grants id-token to a lane left with no job that
-    // may hold it.
+    // The job itself, and the two callers that grant id-token to a lane left with no job that
+    // may hold it: the smoke caller, and Kanon's own caller (kanon#443), whose workflow grants it.
     const named = [
       `${AGGREGATE_FILE}: job ${AGGREGATE_JOB} holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the telemetry collector job or the aggregate read job, may`,
       `agent-lanes-smoke.yml: job explore-telemetry holds id-token: write (its own permissions grant) and calls ${AGGREGATE_FILE}, which has no store job to pass it to`,
+      `explore-telemetry.yml: job explore holds id-token: write (it declares no permissions, so it inherits the workflow's) and calls ${AGGREGATE_FILE}, which has no store job to pass it to`,
     ];
     it('the guard is green as shipped', () => expect(idTokenProblems(all())).toEqual([]));
     it('a step added', () => expect(red((j) => { j.steps!.push({ run: 'echo hi' }); })).toEqual(named));

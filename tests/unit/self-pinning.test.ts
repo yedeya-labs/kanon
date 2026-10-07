@@ -45,6 +45,10 @@ const files = [
 // and for the same reason: through `$/`, a dispatch from a branch would audit the pipeline with
 // that branch's lane, and its filing job would file with that branch's script.
 //
+// explore-telemetry.yml calls the Explorer's telemetry lane (plan 0004 step 14, kanon#443), at the
+// same release and for the same reason: through `$/`, a dispatch from a branch would read the
+// aggregate with that branch's lane, and its filing job would file with that branch's script.
+//
 // The smoke run's python fixture hook is the first exception again, on a fixture (kanon#110):
 // the project-setup hook of the fixture adopter in Kanon's own checkout, run to show that a
 // hook with no `KANON` and no Node leaves a guard running on Kanon's Node.
@@ -75,6 +79,7 @@ const EXEMPT = new Set([
   '.github/workflows/rebase.yml: yedeya-labs/kanon/.github/workflows/agent-rebase.yml@vX.Y.Z',
   '.github/workflows/code-audit.yml: yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@vX.Y.Z',
   '.github/workflows/overseer.yml: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@vX.Y.Z',
+  '.github/workflows/explore-telemetry.yml: yedeya-labs/kanon/.github/workflows/agent-explore-telemetry.yml@vX.Y.Z',
   '.github/workflows/ci.yml: yedeya-labs/kanon/actions/lane-check@vX.Y.Z',
   // telemetry.yml calls the telemetry collector (plan 0002 S7), at the same release: its job
   // holds the store's writer credentials, so the code that runs with them is a released one.
