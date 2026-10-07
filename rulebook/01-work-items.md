@@ -169,7 +169,7 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 | Review and escalation | `review:please` | `d4c5f9` | Asks the Reviewer to review this PR |
 | | `gate-candidate` | `d93f0b` | Filer says launch-gating (sev:critical or sev:high); the Stakeholder decides if it joins the gate |
 | | `gate:declined` | `cfd3d7` | The Stakeholder declined this gate-candidate for the gate; applied by a person only |
-| | `needs:human` | `d93f0b` | A human decides: the Merger declined this PR, or the Lead held this project |
+| | `needs:human` | `d93f0b` | A human decides: the Merger declined this PR, the Lead held this project, or a review deferred it |
 | | `blocked` | `b60205` | Waiting on something outside the pipeline; parks the issue's whole project |
 | Project membership | `project:<n>` | `bfd4f2` | Project #n: mirrors the marker while the project is open; written by the Lead only |
 | Untrusted intake | `from-app` | `ffd200` | Filed from the running application; never dispatched |

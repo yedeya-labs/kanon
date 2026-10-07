@@ -47,6 +47,7 @@ File a follow-up only for work someone should eventually do. Fold what is small 
 - **One call:** pass `--label` and `--milestone` in the same `gh issue create` (`K-WORK-2`).
 - **Body:** what must be true and its evidence, then any remedy under `## Possible approach — UNVERIFIED, not acceptance criteria` (`K-WORK-14`). Keep the line `Surfaced by PR #N review` exactly, and add no project marker (`K-WORK-19`).
 - **Link each filed issue** from your review.
+- **An item you leave with the Owner gets an issue.** When you name deferred work in a review and judge it the Owner's call rather than yours to file or fold, file it as a follow-up that also carries `needs:human`, with the question the Owner decides at the top of its body, or name the open issue that already asks it. Never write "left with the Owner" with neither: the Owner's decision comment answers the pull request, not every aside in its reviews, so an item with no issue is lost. This changes what you file only for items you would otherwise have deferred to the Owner; one you judge not worth doing, say so in the review and file nothing (`K-WORK-17`).
 
 ## Beware your own suggested fix
 
