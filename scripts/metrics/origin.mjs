@@ -17,10 +17,11 @@
 // open no PR of their own (an Implementer PR closes the issue it was dispatched on), so an item
 // they appear to originate has no origin Kanon can name, and the field is left out.
 
+import { ORIGINS } from '../../actions/agent-telemetry/schema.mjs';
 import { classifyActor, isDependencyBot } from './actors.mjs';
 
-/** The origins, as the telemetry schema's `origin` lists them. */
-export const ORIGINS = /** @type {const} */ (['brief', 'explorer', 'reviewer_followup', 'overseer', 'human', 'dependency_bot', 'other_bot']);
+/** The origins: the telemetry schema's `origin` list, its one home. */
+export { ORIGINS };
 
 /** @typedef {typeof ORIGINS[number]} Origin */
 

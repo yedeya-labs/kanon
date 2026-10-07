@@ -118,6 +118,13 @@ describe('what the agent is told', () => {
     expect(prompt).toContain('Do not query any store');
   });
 
+  it('checks out the history its `git log` ranking needs, without file contents, and says which forms work (#544)', () => {
+    expect(prompt).toMatch(/unless `git log` shows they changed since/);
+    expect(byId('checkout').with).toEqual({ 'persist-credentials': false, 'fetch-depth': 0, filter: 'blob:none' });
+    expect(prompt).toMatch(/full commit history without older file contents/);
+    expect(prompt).toMatch(/never `-p` or\n`--stat`/);
+  });
+
   it('reads its areas from the stack document, through a step that fails by name before the token is minted', () => {
     const areas = byId('areas');
     expect(areas.run).toContain('node "$KANON/scripts/code-areas.mjs"');

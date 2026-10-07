@@ -164,11 +164,12 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 | | `pipeline-improvement` | `5319e7` | Improvement to the pipeline itself; also a platform project's tracking issue |
 | | `capability` | `006b75` | Capability investigation: the cohort the Overseer's interlock counts |
 | Signal that produced a finding | `signal:spec-violation` | `fef2c0` | Contradicts a promoted behavioural invariant |
+| | `signal:security` | `b60205` | A security anti-pattern the code audit cites: credentials, secret compare, isolation, injection |
 | | `signal:<name>` | `fef2c0` | One per objective signal on the project's list (`K-AGENT-9`); `b60205` for a security signal |
 | Review and escalation | `review:please` | `d4c5f9` | Asks the Reviewer to review this PR |
 | | `gate-candidate` | `d93f0b` | Filer says launch-gating (sev:critical or sev:high); the Stakeholder decides if it joins the gate |
 | | `gate:declined` | `cfd3d7` | The Stakeholder declined this gate-candidate for the gate; applied by a person only |
-| | `needs:human` | `d93f0b` | A human decides: the Merger declined this PR, or the Lead held this project |
+| | `needs:human` | `d93f0b` | A human decides: the Merger declined this PR, the Lead held this project, or a review deferred it |
 | | `blocked` | `b60205` | Waiting on something outside the pipeline; parks the issue's whole project |
 | Project membership | `project:<n>` | `bfd4f2` | Project #n: mirrors the marker while the project is open; written by the Lead only |
 | Untrusted intake | `from-app` | `ffd200` | Filed from the running application; never dispatched |
@@ -176,7 +177,7 @@ So the queue, `is:issue is:open label:gate-candidate`, holds only candidates awa
 
 `qa:needs-info` is also the implement lane's park marker. A human who parks an issue by hand ("built by hand, do not re-dispatch") adds it and may keep `agent:implement`; neither the Lead nor the dispatch sweep dispatches an issue carrying it. The sweep's own stop applies the same label, so there is one marker for "a human has this", not two.
 
-Two families have no members at installation. A `signal:<name>` label is created with the project's signal list, and `project:<n>` is created by the Lead the first time it files for project `<n>`. `signal:spec-violation` is fixed, because the project reconciler reads it. The release tool's labels are created by the release tool.
+Two families have no members at installation. A `signal:<name>` label is created with the project's signal list, and `project:<n>` is created by the Lead the first time it files for project `<n>`. `signal:spec-violation` is fixed, because the project reconciler reads it, and so is `signal:security`, because the code audit applies it to a security anti-pattern (its second gate) in every repository. The release tool's labels are created by the release tool.
 
 **How the `agent:` labels map to the roles.** The labels mark lanes, not identities, so they don't map one-to-one onto chapter 03's roles:
 

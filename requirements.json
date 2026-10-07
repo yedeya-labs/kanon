@@ -706,6 +706,7 @@
     "pipeline-improvement",
     "capability",
     "signal:spec-violation",
+    "signal:security",
     "signal:<name>",
     "review:please",
     "gate-candidate",

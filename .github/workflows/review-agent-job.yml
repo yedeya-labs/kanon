@@ -736,6 +736,11 @@ jobs:
             a `follow-up` issue so it isn't lost — search OPEN issues first to dedup,
             label it `follow-up` + `agent:reviewer` (NEVER `agent:implement` — a human
             triages dispatch).
+            An item you leave for a human to decide, rather than filing or folding it,
+            still needs a home: file it the same way, with the question to decide at
+            the top of its body and any label the playbook names for it, or name the
+            open issue that already asks it. Never write that you left it with a human
+            and do neither.
 
             ALWAYS APPLY A `sev:*` (RA-729). You are the only one who can: severity is a
             claim about REACHABILITY AND IMPACT, which lives in the diff and its

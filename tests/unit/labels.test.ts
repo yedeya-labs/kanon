@@ -140,8 +140,9 @@ const ENSURE = /^node "\$KANON\/scripts\/ensure-labels\.mjs"((?: [a-z:-]+)+)$/;
 /**
  * The taxonomy labels a lane's file names: what its agent's prompt may tell it to apply. A family
  * wildcard (`sev:*`, "a sev:* you can justify") names every member of that family a lane creates,
- * because the agent picks one at run time; for `signal:*` that is only `signal:spec-violation`,
- * since a project's own signals are created with its signal list, never by a lane.
+ * because the agent picks one at run time; for `signal:*` that is only the fixed ones,
+ * `signal:spec-violation` and `signal:security`, since a project's own signals are created with
+ * its signal list, never by a lane.
  */
 const promptLabels = (file: string): string[] => {
   const text = stripComments(file, read(file));
@@ -185,8 +186,8 @@ describe('every lane whose agent labels creates the labels first (plan 0005 §5.
 
   it('reads a family wildcard as every lane-created member of the family', () => {
     expect(promptLabels('.github/workflows/explore-agent-job.yml')).toEqual(expect.arrayContaining(['sev:critical', 'sev:high', 'sev:medium', 'sev:low']));
-    // `signal:*` reaches only the one signal label the taxonomy fixes; a project's own are never a lane's to create.
-    expect(promptLabels('.github/workflows/explore-agent-job.yml').filter((n) => n.startsWith('signal:'))).toEqual(['signal:spec-violation']);
+    // `signal:*` reaches only the signal labels the taxonomy fixes; a project's own are never a lane's to create.
+    expect(promptLabels('.github/workflows/explore-agent-job.yml').filter((n) => n.startsWith('signal:'))).toEqual(['signal:spec-violation', 'signal:security']);
   });
 
   it('finds the agent lanes, so the checks below are not vacuous', () => {
