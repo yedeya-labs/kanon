@@ -14,7 +14,7 @@ Run every `kanon` command in this skill, and every one a finding's fix names, fr
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.34.0 kanon doctor --json
+npx --yes --package github:yedeya-labs/kanon#v0.34.1 kanon doctor --json
 ```
 
 <!-- x-release-please-end -->
@@ -66,7 +66,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 <!-- x-release-please-start-version -->
 
 ```sh
-! cd <the checkout's root> && npx --yes --package github:yedeya-labs/kanon#v0.34.0 kanon apps --owner <owner> --repo <repo> --apps <apps>
+! cd <the checkout's root> && npx --yes --package github:yedeya-labs/kanon#v0.34.1 kanon apps --owner <owner> --repo <repo> --apps <apps>
 ```
 
 <!-- x-release-please-end -->

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.34.1](https://github.com/yedeya-labs/kanon/compare/v0.34.0...v0.34.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **qa-store:** take the store's role and bucket as secrets, so no log prints them ([#475](https://github.com/yedeya-labs/kanon/issues/475)) ([f4104a0](https://github.com/yedeya-labs/kanon/commit/f4104a02f977aba9c43c33fd251ee5107626a7fd))
+
 ## [0.34.0](https://github.com/yedeya-labs/kanon/compare/v0.33.0...v0.34.0) (2026-10-07)
 
 
