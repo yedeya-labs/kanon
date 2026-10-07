@@ -56,6 +56,19 @@
 //                            the one GitHub holds to the schedule. Checked the same way, so a
 //                            schedule set by someone who has since lost access is refused,
 //                            not run on their behalf. The rebase lane's daily floor runs on it.
+//                            EXCEPT the merge queue: where merges go through one, every merge
+//                            changes the default branch as the queue, so GitHub runs every
+//                            schedule as it, and `GITHUB_ACTOR` is then `github-merge-queue`,
+//                            without the `[bot]` an App's login carries (measured on Kanon's
+//                            own `main`, 2026-10-07: the run's API record names
+//                            `github-merge-queue[bot]`). On a schedule alone, it is admitted:
+//                            only someone with write access (a member, or an App the
+//                            repository installed) can queue a merge, and a schedule runs the
+//                            default branch's code, not a stranger's text. Refusing it would leave
+//                            every scheduled lane skipped forever on a merge-queue repository,
+//                            and the schedules are the floor the queue's refused push and
+//                            CI-completion triggers fall back to (kanon#263). On every other
+//                            event the queue is still an App outside the register, and refused.
 //   anything else            refused: no lane acts on another event, and a lane that starts
 //                            to must decide who its actor is here first.
 //
@@ -95,11 +108,15 @@ import { isCliEntry } from './lib/cli-entry.mjs';
 /** The `author_association` values that make a member (`K-AGENT-45`). */
 export const MEMBER_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
 
+/** GitHub's merge queue, as `GITHUB_ACTOR` names it on a schedule, and as its login. */
+export const MERGE_QUEUE_ACTOR = 'github-merge-queue';
+export const MERGE_QUEUE_LOGIN = 'github-merge-queue[bot]';
+
 /** The repository permissions, from the lookup's `user.permissions`, that make a member. */
 const MEMBER_PERMISSIONS = ['admin', 'maintain', 'push', 'triage'];
 
 /**
- * @typedef {{ login: string, association?: string, source: string }} Actor
+ * @typedef {{ login: string, association?: string, source: string, admitted?: string }} Actor
  * @typedef {{ actor: Actor } | { refuse: string }} ActorResult
  * @typedef {{ member: boolean, reason: string }} Verdict
  * @typedef {{ login?: string } | null | undefined} User
@@ -151,6 +168,16 @@ export function triggeringActor(eventName, event, env) {
     case 'workflow_run':
       return found(event.workflow_run?.triggering_actor?.login || event.workflow_run?.actor?.login, 'user whose push the finished workflow ran on');
     case 'schedule':
+      // The merge queue, on a schedule alone: admitted, and named by its login (see the header).
+      if (env.GITHUB_ACTOR === MERGE_QUEUE_ACTOR || env.GITHUB_ACTOR === MERGE_QUEUE_LOGIN) {
+        return {
+          actor: {
+            login: MERGE_QUEUE_LOGIN,
+            source: 'merge queue that last changed the default branch',
+            admitted: 'on a schedule the merge queue is admitted, since only someone with write access (a member, or an App the repository installed) can queue the merges it makes',
+          },
+        };
+      }
       return found(env.GITHUB_ACTOR, 'user who last changed the schedule');
     default:
       return { refuse: `no lane acts on a ${eventName || 'nameless'} event` };
@@ -198,6 +225,7 @@ export function reviewLabeller(sha, pullsFor, eventsOf) {
  * @returns {Verdict}
  */
 export function decide(actor, { registeredApps, permissionOf }) {
+  if (actor.admitted) return { member: true, reason: actor.admitted };
   const bot = /^(.+)\[bot\]$/.exec(actor.login);
   if (bot) {
     const slug = bot[1];

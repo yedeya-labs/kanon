@@ -71,3 +71,44 @@ describe('a pull request merged through the queue (kanon#484)', () => {
       .toEqual({ actor: { login: 'closer', source: 'user who closed it' } });
   });
 });
+
+/**
+ * A schedule on a merge-queue repository. Measured on Kanon's own `main` (2026-10-07, run
+ * 37638246558): every merge changes the default branch as the queue, so GitHub runs every
+ * schedule as it, and `GITHUB_ACTOR` is `github-merge-queue`, without the `[bot]` suffix. The
+ * gate looked that up as a person and failed red. On a schedule alone the queue is admitted:
+ * only someone with write access (a member, or an App the repository installed) can queue a merge.
+ */
+describe('a schedule run as the merge queue', () => {
+  const lookups = {
+    registeredApps: () => new Map([['Lead', 'example-lead']]),
+    permissionOf: () => {
+      throw new Error('looked up a permission for the merge queue');
+    },
+  };
+
+  it('names the queue by its login, with or without the suffix, and admits it without a lookup', () => {
+    for (const GITHUB_ACTOR of ['github-merge-queue', 'github-merge-queue[bot]']) {
+      const r = triggeringActor('schedule', { schedule: '30 7 */3 * *' }, { GITHUB_ACTOR });
+      if (!('actor' in r)) throw new Error(r.refuse);
+      expect(r.actor.login).toBe('github-merge-queue[bot]');
+      expect(decide(r.actor, lookups)).toEqual({ member: true, reason: expect.stringContaining('only someone with write access') });
+    }
+  });
+
+  it('is still refused on any other event', () => {
+    for (const [name, event, env] of [
+      ['workflow_dispatch', {}, { GITHUB_ACTOR: 'github-merge-queue[bot]' }],
+      ['workflow_run', { workflow_run: { actor: { login: 'github-merge-queue[bot]' } } }, {}],
+      ['pull_request_target', { action: 'labeled', sender: { login: 'github-merge-queue[bot]' } }, {}],
+    ] as const) {
+      const r = triggeringActor(name, event, env);
+      if (!('actor' in r)) throw new Error(r.refuse);
+      expect(decide(r.actor, lookups).member, name).toBe(false);
+    }
+  });
+
+  it('leaves any other schedule actor to the usual checks', () => {
+    expect(triggeringActor('schedule', {}, { GITHUB_ACTOR: 'a-member' })).toEqual({ actor: { login: 'a-member', source: 'user who last changed the schedule' } });
+  });
+});
