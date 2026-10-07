@@ -678,6 +678,22 @@ jobs:
               (`$RUNNER_TEMP` included) is refused, and so are loops, `find`, `awk`,
               `xargs`, `git fetch` and any interpreter or package manager.
 
+            SHAPE EVERY READ SO THE CHECKER CAN VERIFY IT (kanon#404). Outside the `gh`
+            list, a command runs only when Claude Code can tell that it only reads, and
+            it refuses a read it can't parse just as it refuses a write:
+            - One simple command per call: no `cd`, no `;`, `&&` or `||` chains, and no
+              `echo` separators. You already start in the checkout, and two reads are
+              two calls.
+            - Name a file in the checkout by its relative path (`docs/qa/stack.md`),
+              never an absolute one. The only absolute path you need is the
+              `${{ runner.temp }}` file you write.
+            - Prefer the Read, Grep and Glob tools to a shell pipeline. Use the Grep
+              tool for any pattern holding `$`, a backtick or `\|`, and read part of a
+              file with the Read tool's offset and limit, never a `sed` address range
+              such as `sed -n '/a/,/b/p'`. Read the playbook with the Read tool.
+            - Filter `gh` output with its own `--jq`, not a pipe.
+            - No loops, no `$(…)`, no backticks and no variables: write each value out.
+
             When the PR changes a behavior / message / error string, grep the OLD string
             repo-wide INCLUDING `tests/` before trusting nothing else asserts on it.
 

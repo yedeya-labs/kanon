@@ -114,12 +114,12 @@ runs:
     # Kanon release, and Dependabot proposes each bump as a Kanon PR. This is the release
     # `@v1` resolved to when the block moved.
     #
-    # A BUMP IS RED UNTIL THE REVIEWER'S GRANT IS RE-PROBED (kanon#284). What the Reviewer's
-    # flags allow, and which settings they load, is the CLI's behaviour, and this pin picks
-    # the CLI. `tests/unit/reviewer-grant-probe.test.ts` fails while
-    # `.github/scripts/reviewer-grant-record.json` names another version: a maintainer runs
-    # `.github/scripts/reviewer-grant-probe.mjs` against the CLI the new version installs and
-    # commits the record it writes.
+    # A BUMP IS RED UNTIL THE REVIEWER'S AND THE LEAD'S GRANTS ARE RE-PROBED (kanon#284,
+    # kanon#405). What their flags allow, and which settings they load, is the CLI's
+    # behaviour, and this pin picks the CLI. `tests/unit/reviewer-grant-probe.test.ts` fails
+    # while `.github/scripts/reviewer-grant-record.json` or `lead-grant-record.json` names
+    # another version: a maintainer runs `.github/scripts/reviewer-grant-probe.mjs` against
+    # the CLI the new version installs and commits the records it writes.
     - uses: anthropics/claude-code-action@v1.0.241
       id: agent
       env:
