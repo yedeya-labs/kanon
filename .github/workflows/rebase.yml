@@ -14,13 +14,14 @@
 # and is a person's to finish (#438). This lane resolves the conflict as the Author App, by a
 # merge commit, and a fixed job after its agent's carries the status to the head it pushed.
 #
-# WHEN IT RUNS ON KANON: DISPATCH IT. Kanon merges through a merge queue, so a merge to `main`
-# doesn't start it: the CI run on the queue's push names `github-merge-queue[bot]`, which the
-# lane's gate turns away (docs/lanes.md, #79). And GitHub fires Kanon's schedules only now and
-# then (#397), so the cron below is a sporadic floor, not a daily run. So a conflict on an
-# Implementer pull request is resolved by dispatching this lane for it (`gh workflow run
-# rebase.yml -R yedeya-labs/kanon -f pr_number=N`), never by rebasing it by hand, which takes the
-# pull request out of the Implementer's chain.
+# WHEN IT RUNS ON KANON: AFTER EVERY MERGE. Kanon merges through a merge queue, and the CI run on
+# the queue's push names `github-merge-queue[bot]`, which the lane's gate turns away (#79). So the
+# lane also starts on a merged pull request (`pull_request_target` closed on `main`, kanon#484,
+# #512), judged by the member who queued it (`merged_by`); it reads nothing of that pull request.
+# The cron is a sporadic floor (#397). A conflict on an Implementer pull request can still be
+# resolved at once by dispatching the lane for it (`gh workflow run rebase.yml -R
+# yedeya-labs/kanon -f pr_number=N`), never by rebasing it by hand, which takes the pull request
+# out of the Implementer's chain.
 #
 # The secrets: as implement.yml, mapped by name, never inherited.
 name: Rebase (Implementer)
@@ -29,6 +30,11 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+    branches: [main]
+  # A merged pull request: through a merge queue, the CI run on a merge is the queue's, which
+  # the lane's gate turns away. The lane reads nothing of the pull request (docs/lanes.md).
+  pull_request_target:
+    types: [closed]
     branches: [main]
   schedule:
     - cron: "17 5 * * *"
