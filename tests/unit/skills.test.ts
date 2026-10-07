@@ -452,6 +452,10 @@ describe('each skill is held to the kanon command it drives', () => {
       const table = rows(section(s.body, /^## Who fixes each finding of `kanon [a-z]+`$/)!);
       for (const c of table.filter((x) => /`kanon apps(?: --[a-z-]+)?` command|`kanon apps --/.test(x[2] ?? ''))) expect(c[2], `${dir} ${c[0]}`).toContain('"Running `kanon apps`"');
       expect(s.body, dir).not.toMatch(/(?:you )?run (?:the fix's|the finding's) `kanon apps`/i);
+      // Where it says how to read a fix's commands, a `kanon apps` one is the person's, and only
+      // other `kanon` commands are the agent's to run (#445 review).
+      expect(s.body, dir).toMatch(/that starts `kanon apps` is the person's \("Running `kanon apps`"/);
+      expect(s.body, dir).not.toMatch(/(?:a command|one) that starts `kanon ` you run/);
     }
     expect(section(skill('upgrade').body, /^## Steps$/)).toMatch(/\*\*Say up front that each `kanon apps` command a fix names is the person's step\*\*.*"Running `kanon apps`"/);
   });
