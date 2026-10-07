@@ -98,37 +98,6 @@ describe('decideScope — against real history', SPAWNS, () => {
     expect(s.mode === 'incremental' && s.priorSha).toBe(x);
   });
 
-  it('is FULL after a REBASE onto a moved base — X is no longer in the head’s history', () => {
-    const x = prWithReviewedCommit();
-    commit('feature.txt', 'first\nsecond\n', 'address review');
-    git('checkout', '-q', 'main');
-    commit('other.txt', 'someone else\n', 'unrelated main change');
-    git('checkout', '-q', 'pr');
-    git('rebase', '-q', 'main');
-    const head = git('rev-parse', 'HEAD');
-    // The old commit still EXISTS in the object store — only ancestry can tell.
-    expect(git('cat-file', '-t', x)).toBe('commit');
-    const s = decide([verdict(x)], head);
-    expect(s.mode).toBe('full');
-    expect(s.reason).toMatch(/not an ancestor.*rebased or force-pushed/);
-  });
-
-  it('is FULL when the base was MERGED in — X is an ancestor, but X..HEAD would carry base changes', () => {
-    const x = prWithReviewedCommit();
-    git('checkout', '-q', 'main');
-    commit('other.txt', 'someone else\n', 'unrelated main change');
-    git('checkout', '-q', 'pr');
-    git('merge', '-q', '--no-edit', 'main');
-    const head = commit('feature.txt', 'first\nsecond\n', 'address review');
-    // The trap this guards: ancestry alone says "incremental" …
-    expect(gitFacts({ cwd: repo, baseRef: 'main' }).isAncestor(x, head)).toBe(true);
-    // … and the diff would include main's commit as if the author wrote it.
-    expect(git('diff', '--name-only', x, head)).toContain('other.txt');
-    const s = decide([verdict(x)], head);
-    expect(s.mode).toBe('full');
-    expect(s.reason).toMatch(/merge-base with the base branch moved/);
-  });
-
   it('stays INCREMENTAL when main moved but was NOT brought into the branch', () => {
     const x = prWithReviewedCommit();
     git('checkout', '-q', 'main');
@@ -138,21 +107,12 @@ describe('decideScope — against real history', SPAWNS, () => {
     expect(decide([verdict(x)], head).mode).toBe('incremental');
   });
 
-  it('is FULL after a FORCE-PUSH that dropped X', () => {
-    const x = prWithReviewedCommit();
-    git('reset', '-q', '--hard', 'main');
-    const head = commit('feature.txt', 'rewritten\n', 'start over');
-    const s = decide([verdict(x)], head);
-    expect(s.mode).toBe('full');
-    expect(s.reason).toMatch(/not an ancestor/);
-  });
-
   it('is FULL when X is not in the clone at all', () => {
     prWithReviewedCommit();
     const head = commit('feature.txt', 'second\n', 'more');
     const s = decide([verdict('abcdef1234567890abcdef1234567890abcdef12')], head);
     expect(s.mode).toBe('full');
-    expect(s.reason).toMatch(/not in the clone/);
+    expect(s.reason).toMatch(/not in the clone and could not be fetched/);
   });
 
   it('is FULL when X is the head — a same-commit re-review is an explicit request (RA-1351)', () => {
@@ -174,6 +134,253 @@ describe('decideScope — against real history', SPAWNS, () => {
   it('is FULL on a first review', () => {
     const head = prWithReviewedCommit();
     expect(decide([], head).mode).toBe('full');
+  });
+});
+
+/** Runs the CLI on `head` against the latest verdict stamped `x`, in the test repo. */
+function context(x: string, head: string) {
+  writeFileSync(join(dir, 'reviews.json'), JSON.stringify([verdict(x)]));
+  const out = join(dir, 'ctx.md');
+  rmSync(out, { force: true });
+  const r = main(['--reviews', join(dir, 'reviews.json'), '--head', head, '--base-ref', 'main', '--register', REGISTER(), '--out', out], repo);
+  return { r, text: r.mode === 'incremental' ? readFileSync(out, 'utf8') : '' };
+}
+/** The context's incremental diff, alone. */
+const diffSection = (text: string) => text.slice(text.indexOf('## Incremental diff'));
+
+/** main: base -> M (other.txt). pr: base -> X (feature.txt), not yet built on M. Returns X. */
+function baseMovesAfterReview(): string {
+  const x = prWithReviewedCommit();
+  git('checkout', '-q', 'main');
+  commit('other.txt', 'someone else\n', 'unrelated main change');
+  git('checkout', '-q', 'pr');
+  return x;
+}
+
+// kanon#525. Its cases build a git history, so the block takes the spawn budget (#436).
+describe('a merge of the base or a rebase — incremental against the reviewed change re-applied', SPAWNS, () => {
+  it('a CLEAN REBASE plus a new commit: incremental, and the diff is the new commit alone', () => {
+    const x = baseMovesAfterReview();
+    git('rebase', '-q', 'main');
+    const head = commit('feature.txt', 'first\nsecond\n', 'address review');
+    const s = decide([verdict(x)], head);
+    expect(s.mode).toBe('incremental');
+    expect(s.mode === 'incremental' && s.kind).toBe('rewritten');
+    expect(s.reason).toMatch(/rebased or force-pushed.*re-applies cleanly/);
+    const { text } = context(x, head);
+    const diff = diffSection(text);
+    expect(diff).toContain('+second');
+    expect(diff).not.toContain('other.txt'); // the base's change is not the author's
+    expect(diff).not.toContain('+first'); // nor is the change already reviewed
+    // Both rebased commits, newest first, and none of the base's.
+    expect(text).toMatch(/## Commits since[^\n]*\n\n`+\n[0-9a-f]+ address review\n[0-9a-f]+ feature: first cut\n`+\n/);
+  });
+
+  it('a CLEAN REBASE and nothing else: incremental, with an empty diff', () => {
+    const x = baseMovesAfterReview();
+    git('rebase', '-q', 'main');
+    const head = git('rev-parse', 'HEAD');
+    const { r, text } = context(x, head);
+    expect(r.mode).toBe('incremental');
+    expect(diffSection(text)).toContain('(empty: the head is the reviewed change on the newer base)');
+  });
+
+  it('a CLEAN MERGE of the base plus a new commit: incremental, without the base’s commits', () => {
+    const x = baseMovesAfterReview();
+    git('merge', '-q', '--no-edit', 'main');
+    const head = commit('feature.txt', 'first\nsecond\n', 'address review');
+    const s = decide([verdict(x)], head);
+    expect(s.mode === 'incremental' && s.kind).toBe('base-merged');
+    expect(s.reason).toMatch(/base was merged in.*re-applies cleanly/);
+    const { text } = context(x, head);
+    const diff = diffSection(text);
+    expect(diff).toContain('+second');
+    expect(diff).not.toContain('other.txt');
+    expect(text).not.toMatch(/unrelated main change/); // the log lists the head's own commits
+    expect(text).toMatch(/Merge branch 'main'/);
+  });
+
+  it('a force-push that rewrote X on the same base: incremental against X, showing every rewritten line', () => {
+    const x = prWithReviewedCommit();
+    git('reset', '-q', '--hard', 'main');
+    const head = commit('feature.txt', 'rewritten\n', 'start over');
+    // Not "descends": the context must not tell the Reviewer the head extends X.
+    const s = decide([verdict(x)], head);
+    expect(s.mode === 'incremental' && s.kind).toBe('rewritten');
+    const { r, text } = context(x, head);
+    expect(r.mode).toBe('incremental');
+    expect(text).not.toMatch(/descends from it/);
+    expect(diffSection(text)).toMatch(/-first\n\+rewritten/);
+  });
+
+  it('lists a file both the base and the PR changed, when the re-application is clean', () => {
+    commit('shared.txt', 'a\nb\nc\nd\ne\nf\ng\n', 'shared on main');
+    const x = prWithReviewedCommit();
+    commit('shared.txt', 'PR\nb\nc\nd\ne\nf\ng\n', 'pr edits the top');
+    const y = git('rev-parse', 'HEAD');
+    git('checkout', '-q', 'main');
+    commit('shared.txt', 'a\nb\nc\nd\ne\nf\nBASE\n', 'base edits the bottom');
+    commit('other.txt', 'x\n', 'base touches a file the PR does not');
+    git('checkout', '-q', 'pr');
+    git('rebase', '-q', 'main');
+    expect(x).not.toBe(y);
+    const { r, text } = context(y, git('rev-parse', 'HEAD'));
+    expect(r.mode).toBe('incremental');
+    const section = text.slice(text.indexOf('## Where the base moved'), text.indexOf('## Incremental diff'));
+    expect(section).toContain('shared.txt');
+    expect(section).not.toContain('other.txt');
+  });
+});
+
+// kanon#525's safety property. Its cases build a git history, so the block takes the spawn budget (#436).
+describe('never carries a verdict across a change to the PR’s own diff', SPAWNS, () => {
+  it('a rebase that also EDITS the reviewed change: the edit is in the diff', () => {
+    const x = baseMovesAfterReview();
+    git('rebase', '-q', 'main');
+    writeFileSync(join(repo, 'feature.txt'), 'first\nconst bypass = true;\n');
+    git('commit', '-qa', '--amend', '--no-edit'); // still one commit, still "feature: first cut"
+    const { r, text } = context(x, git('rev-parse', 'HEAD'));
+    expect(r.mode).toBe('incremental');
+    expect(diffSection(text)).toContain('+const bypass = true;');
+  });
+
+  it('a rebase that DROPS a reviewed commit: the removal is in the diff', () => {
+    git('checkout', '-qb', 'pr');
+    commit('check.txt', 'assert(authorised)\n', 'add the check');
+    const x = commit('feature.txt', 'first\n', 'feature');
+    git('checkout', '-q', 'main');
+    commit('other.txt', 'someone else\n', 'unrelated main change');
+    git('checkout', '-q', 'pr');
+    git('rebase', '-q', '--onto', 'main', `${x}~1`); // replays only "feature": the check is gone
+    const { r, text } = context(x, git('rev-parse', 'HEAD'));
+    expect(r.mode).toBe('incremental');
+    expect(diffSection(text)).toContain('-assert(authorised)');
+  });
+
+  it('an "evil" merge of the base, with a change of its own: the change is in the diff', () => {
+    const x = baseMovesAfterReview();
+    git('merge', '-q', '--no-commit', 'main');
+    writeFileSync(join(repo, 'feature.txt'), 'first\nhidden in the merge\n');
+    git('add', '-A');
+    git('commit', '-q', '--no-edit');
+    const { r, text } = context(x, git('rev-parse', 'HEAD'));
+    expect(r.mode).toBe('incremental');
+    expect(diffSection(text)).toContain('+hidden in the merge');
+  });
+
+  it('a merge that rewrites what the BASE brought in: that rewrite is the PR’s, and is in the diff', () => {
+    const x = baseMovesAfterReview();
+    git('merge', '-q', '--no-commit', 'main');
+    writeFileSync(join(repo, 'other.txt'), 'someone else, edited by the PR\n');
+    git('add', '-A');
+    git('commit', '-q', '--no-edit');
+    const { r, text } = context(x, git('rev-parse', 'HEAD'));
+    expect(r.mode).toBe('incremental');
+    expect(diffSection(text)).toContain('+someone else, edited by the PR');
+  });
+
+  it('a merge of the base that needed a CONFLICT RESOLUTION: full', () => {
+    git('checkout', '-qb', 'pr');
+    const x = commit('base.txt', 'pr\n', 'pr edits base.txt');
+    git('checkout', '-q', 'main');
+    commit('base.txt', 'main\n', 'main edits base.txt');
+    git('checkout', '-q', 'pr');
+    try { git('merge', '-q', '--no-edit', 'main'); } catch { /* the conflict */ }
+    writeFileSync(join(repo, 'base.txt'), 'resolved\n');
+    git('add', '-A');
+    git('commit', '-q', '--no-edit');
+    const s = decide([verdict(x)], git('rev-parse', 'HEAD'));
+    expect(s.mode).toBe('full');
+    expect(s.reason).toMatch(/does not re-apply cleanly/);
+  });
+
+  it('a rebase that needed a conflict resolution: full', () => {
+    git('checkout', '-qb', 'pr');
+    const x = commit('base.txt', 'pr\n', 'pr edits base.txt');
+    git('checkout', '-q', 'main');
+    const m = commit('base.txt', 'main\n', 'main edits base.txt');
+    git('checkout', '-q', '--detach', m);
+    const head = commit('base.txt', 'resolved\n', 'pr edits base.txt');
+    const s = decide([verdict(x)], head);
+    expect(s.mode).toBe('full');
+    expect(s.reason).toMatch(/rebased or force-pushed.*does not re-apply cleanly/);
+  });
+
+  // The PR's own attributes must not decide how the reviewed change re-applies: `merge=union`
+  // turns the conflict above into a "clean" merge of both sides that nobody reviewed.
+  for (const where of ['the head’s working tree', 'the reviewed commit']) {
+    it(`ignores a \`merge=union\` in ${where}: the conflict is still a conflict, so full`, () => {
+      git('checkout', '-qb', 'pr');
+      if (where === 'the reviewed commit') commit('.gitattributes', 'base.txt merge=union\n', 'attributes');
+      const x = commit('base.txt', 'pr\n', 'pr edits base.txt');
+      git('checkout', '-q', 'main');
+      commit('base.txt', 'main\n', 'main edits base.txt');
+      git('checkout', '-q', 'pr');
+      git('merge', '-q', '--no-edit', '-X', 'ours', 'main');
+      writeFileSync(join(repo, '.gitattributes'), 'base.txt merge=union\n');
+      writeFileSync(join(repo, 'base.txt'), 'pr\nmain\n');
+      git('add', '-A');
+      git('commit', '-q', '--allow-empty', '-m', 'union, as the attribute would merge it');
+      // The trap, as plain git shows it from the PR's checkout.
+      expect(() => git('merge-tree', '--write-tree', x, 'main')).not.toThrow();
+      const s = decide([verdict(x)], git('rev-parse', 'HEAD'));
+      expect(s.mode).toBe('full');
+      expect(s.reason).toMatch(/does not re-apply cleanly/);
+    });
+  }
+
+  it('a head built on an OLDER base than X: full', () => {
+    const m = commit('other.txt', 'someone else\n', 'main change');
+    git('checkout', '-qb', 'pr');
+    const x = commit('feature.txt', 'first\n', 'feature');
+    git('rebase', '-q', '--onto', `${m}~1`, m);
+    const s = decide([verdict(x)], git('rev-parse', 'HEAD'));
+    expect(s.mode).toBe('full');
+    expect(s.reason).toMatch(/does not descend from/);
+  });
+
+  it('a criss-cross history, where a merge-base is not unique: full', () => {
+    const x = prWithReviewedCommit();
+    git('checkout', '-q', 'main');
+    const m1 = commit('other.txt', 'someone else\n', 'main change');
+    git('merge', '-q', '--no-ff', '--no-edit', x); // main takes X …
+    git('checkout', '-q', 'pr');
+    git('merge', '-q', '--no-ff', '--no-edit', m1); // … and the PR takes main's older commit
+    const head = git('rev-parse', 'HEAD');
+    expect(git('merge-base', '--all', head, 'main').split('\n')).toHaveLength(2);
+    const s = decide([verdict(x)], head);
+    expect(s.mode).toBe('full');
+    expect(s.reason).toMatch(/not unique/);
+  });
+});
+
+describe('decideScope — fetching the reviewed commit', () => {
+  const fake = (present: Set<string>, fetchable: Set<string>, calls: string[]) => ({
+    resolve: (sha: string) => (present.has(sha) ? sha : null),
+    isAncestor: () => true,
+    mergeBases: () => ['b'.repeat(40)],
+    replay: () => null,
+    fetch: (sha: string) => {
+      calls.push(sha);
+      if (fetchable.has(sha)) present.add(sha);
+    },
+  });
+  const x = 'a'.repeat(40);
+  const head = 'c'.repeat(40);
+
+  it('fetches X by its SHA when the clone lacks it, and goes on with it', () => {
+    const calls: string[] = [];
+    const s = decideScope({ reviews: [verdict(x)], headSha: head, git: fake(new Set([head]), new Set([x]), calls) });
+    expect(calls).toEqual([x]);
+    expect(s.mode).toBe('incremental');
+  });
+
+  it('is FULL when the fetch cannot find it either', () => {
+    const calls: string[] = [];
+    const s = decideScope({ reviews: [verdict(x)], headSha: head, git: fake(new Set([head]), new Set(), calls) });
+    expect(calls).toEqual([x]);
+    expect(s.mode).toBe('full');
+    expect(s.reason).toMatch(/could not be fetched/);
   });
 });
 
@@ -205,7 +412,7 @@ describe('renderContext', () => {
     const head = 'b'.repeat(40);
     const review = verdict(x, { id: 55 });
     const text = renderContext({
-      scope: { mode: 'incremental', reason: 'r', priorSha: x, review },
+      scope: { mode: 'incremental', kind: 'descends', reason: 'r', priorSha: x, review, from: x },
       headSha: head,
       comments: [
         { pull_request_review_id: 55, path: 'src/a.ts', line: 3, body: 'null check' },

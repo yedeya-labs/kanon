@@ -325,11 +325,14 @@ jobs:
       # When the Reviewer's latest verdict is STAMPED (RA-1680) with a commit X that the head
       # still descends from, with an unchanged merge-base against the base branch, this
       # writes X..HEAD plus that verdict's findings to a file and the prompt narrows the
-      # review to "were the findings addressed, and what did the new commits add". Every
-      # other case — no prior verdict, an unstamped one (RA-2281), X == HEAD (RA-1351's
-      # same-commit request), a rebase or force-push that dropped X, the base merged in —
-      # is a FULL review. Kanon's `scripts/incremental-review.mjs` holds the decision and says
-      # why the stamp, never `commit_id`, is the only acceptable X.
+      # review to "were the findings addressed, and what did the new commits add". After a
+      # merge of the base or a rebase (kanon#525), the diff starts instead at the change X's
+      # verdict read re-applied cleanly to the head's new base, so it still holds every line
+      # the head differs from what was reviewed. Every other case — no prior verdict, an
+      # unstamped one (RA-2281), X == HEAD (RA-1351's same-commit request), a merge or rebase
+      # whose re-application conflicts — is a FULL review. Kanon's
+      # `scripts/incremental-review.mjs` holds the decision, says why the stamp, never
+      # `commit_id`, is the only acceptable X, and why the diff can't hide a change.
       #
       # BEFORE ANY PR CODE RUNS, AND NEVER FROM THE PR. The script and its imports are
       # Kanon's, run from the action cache at the tag this workflow pins (RA-2715; Kanon plan
@@ -369,8 +372,8 @@ jobs:
           [ -n "$BASE_REF" ] || full "could not resolve PR #$PR_NUMBER's base branch"
           # The checkout is depth 1. Ancestry and merge-bases need history: ~50MB for
           # this repo, seconds to fetch. If X is an ancestor of the head it arrives with
-          # the head's history, so X is never fetched by name — absent after this fetch
-          # IS the "force-pushed or rebased away" answer.
+          # the head's history. After a rebase it doesn't, and the script fetches X by its
+          # SHA from `--remote` (kanon#525); absent after that IS the "force-pushed away" answer.
           UNSHALLOW=""
           if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then UNSHALLOW="--unshallow"; fi
           git fetch --no-tags --quiet $UNSHALLOW origin "$HEAD_SHA" "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF" \
@@ -390,7 +393,7 @@ jobs:
           RESULT="$(node "$KANON/scripts/incremental-review.mjs" \
             --reviews "$OUT/reviews.json" --comments "$OUT/comments.json" \
             --head "$HEAD_SHA" --base-ref "refs/remotes/origin/$BASE_REF" \
-            --register "$OUT/agent-identities.md" \
+            --register "$OUT/agent-identities.md" --remote origin \
             --out "$OUT/context.md" 2>/dev/null)" || RESULT=""
           MODE="$(printf '%s' "$RESULT" | jq -r '.mode // empty' 2>/dev/null)" || MODE=""
           REASON="$(printf '%s' "$RESULT" | jq -r '.reason // empty' 2>/dev/null)" || REASON=""
@@ -598,16 +601,23 @@ jobs:
 
             REVIEW SCOPE FOR THIS RUN: ${{ steps.scope_place.outputs.mode == 'incremental' && 'INCREMENTAL' || 'FULL' }} (RA-2455).
             FULL: review the whole PR as usual, and ignore any `.qa-review/` path.
-            INCREMENTAL: your latest verdict on this PR was formed at a commit the head
-            still descends from, with an unchanged merge-base. The workflow — from the
-            base branch, not the PR — wrote `.qa-review/incremental.md`: that verdict's
-            body and inline comments, the commits since, and the diff `<prior>..HEAD`.
-            Read it FIRST. Your review then answers two questions:
+            INCREMENTAL: your latest verdict on this PR was formed at a commit whose
+            change the workflow can still separate from the head's. Either the head
+            descends from it with an unchanged merge-base, or the base was merged in or
+            the branch rebased since, and the change your verdict read re-applies to the
+            new base with no conflicts (kanon#525). The workflow — from the base branch,
+            not the PR — wrote `.qa-review/incremental.md`: that verdict's body and inline
+            comments, the head's commits since, and the INCREMENTAL diff: everything the
+            head differs from what you reviewed (on the newer base, after a merge or
+            rebase, where it also names the files the base changed under the PR). An empty
+            diff means the head is exactly what you reviewed. Read it FIRST. Your review
+            then answers two questions:
               (a) Was each prior finding addressed? Check every one against the head and
                   say, per finding, addressed / not addressed / no longer applies.
-              (b) Did the new commits introduce anything new? Apply your full lens —
+              (b) Did the head introduce anything new? Apply your full lens —
                   the playbook's gates, the PR-type lens below, blast radius by grep —
-                  to the INCREMENTAL diff.
+                  to the INCREMENTAL diff, and after a merge or rebase check that the
+                  PR's change still fits the files the base moved under it.
             Use the full diff (`gh pr diff`) and unchanged code only as CONTEXT, to check
             how the new commits interact with what was already there; do not re-review
             code your prior verdict already judged, and re-read the linked issue only
