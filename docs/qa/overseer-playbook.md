@@ -15,6 +15,7 @@ Tell a run that died from one that skipped by reading full run records, never a 
 | Review | `review.yml` | CI finishing, a review label, a pull request opened, a dispatch |
 | Implement | `implement.yml` | an `agent:implement` label, a dispatch |
 | Implement, revise | `implement-revise.yml` | a changes-request, a label, a dispatch |
+| Rebase (resolve a conflict) | `rebase.yml` | CI finishing on `main` (refused under the merge queue, [#79](https://github.com/yedeya-labs/kanon/issues/79)), daily (sporadic, [#397](https://github.com/yedeya-labs/kanon/issues/397)), a dispatch |
 | Code audit | `code-audit.yml` | every three days, a dispatch |
 | Overseer | `overseer.yml` | weekly, a dispatch, a merged pull request that moves its Kanon pin |
 

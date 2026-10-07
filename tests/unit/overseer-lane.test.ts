@@ -516,3 +516,23 @@ describe('the runtime-version trigger', () => {
     expect(bash('echo false').stdout).toBe('reached\n');
   });
 });
+
+describe("Kanon's Overseer playbook names every lane caller it waives (kanon#450)", () => {
+  // The playbook's liveness table is where the Overseer finds a lane's runs on Kanon, whose
+  // callers aren't at their lanes' names. Each such caller is waived by name in the adoption
+  // record, so a caller waived there and missing from the table is a lane whose liveness the
+  // Overseer would read from a lookup that comes back empty.
+  const waived = [...readFileSync('docs/qa/adoption.md', 'utf8')
+    .matchAll(/^- \*\*Waived doctor finding:\*\* `caller\.misplaced` on `\.github\/workflows\/([^`]+)`/gm)].map((m) => m[1]);
+  const liveness = readFileSync('docs/qa/overseer-playbook.md', 'utf8').split(/^## /m).find((s) => s.startsWith('Liveness queries')) ?? '';
+  const table = new Set([...liveness.matchAll(/^\| [^|]+ \| `([^`]+)` \|/gm)].map((m) => m[1]));
+
+  it('reads both, so the check is not vacuous', () => {
+    expect(waived.length).toBeGreaterThanOrEqual(6);
+    expect(table.size).toBeGreaterThanOrEqual(6);
+  });
+
+  it('has a liveness row for each waived caller', () => {
+    expect(waived.filter((f) => !table.has(f))).toEqual([]);
+  });
+});
