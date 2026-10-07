@@ -13,16 +13,16 @@ import { ROOT, SCRIPT, TRIAGE, IMPL, adopter, check, red, job, type Caller, lane
  * says how every case runs and holds the helpers they share.
  */
 laneCheck(() => {
-  it('passes Kanon itself, its six lane callers on the Author and the Judge (ADR 0011)', () => {
+  it('passes Kanon itself, its seven lane callers on the Author and the Judge (ADR 0011)', () => {
     // In this tree, not a copy: Kanon is its own adopter. CI runs the RELEASED action on it, at
     // the version its callers pin; this run reads the lanes as this PR leaves them, so a lane
     // change that would break Kanon's caller is red here before it is released. Since plan
     // 0005's L5 the callers map the Author's and the Judge's secrets, and the register names
-    // one slug per App. The fifth is the Overseer's, since kanon#423, and the sixth the rebase
-    // lane's, since kanon#448.
+    // one slug per App. The fifth is the Overseer's, since kanon#423, the sixth the rebase
+    // lane's, since kanon#448, and the seventh the telemetry Explorer's, since kanon#443.
     const r = spawnSync('bash', [SCRIPT], { cwd: ROOT, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '' } });
     expect(r.status, r.stdout).toBe(0);
-    expect(r.stdout).toContain('6 lane caller(s) pass');
+    expect(r.stdout).toContain('7 lane caller(s) pass');
     // One lane-check run over Kanon's whole tree: under a loaded full run it outlasted the 5s
     // default once, as the three-run test below did.
   }, 30_000);

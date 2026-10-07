@@ -1,0 +1,56 @@
+# Kanon reads its hosted telemetry's aggregate with the Explorer (ADR 0011, plan 0004 step 14,
+# decision 13).
+#
+# A trigger-only caller of Kanon's telemetry lane, written exactly as an adopter writes one
+# (docs/lanes.md, "Explore the telemetry"). It is named `explore-telemetry.yml` because
+# `agent-explore-telemetry.yml` is the lane itself (K-LAYOUT-18's exception for Kanon's own tree,
+# as for review.yml, code-audit.yml and overseer.yml), which the adoption record waives by name.
+#
+# IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap). Through `$/` a dispatch from a
+# branch would read the aggregate with that branch's lane, and its filing job would file with that
+# branch's script. Dependabot's `kanon` group proposes each release here (.github/dependabot.yml,
+# ADR 0011), and `lane-check` (in CI) holds every Kanon reference to one version.
+#
+# WHAT IT READS is the aggregate function's answer, never a row (plan 0002 §6.1): Kanon's own
+# figures, which its telemetry register entry declares publishable, cross-adopter cells of at
+# least three adopters, and the last week's failure signals. The lane's `aggregate` job assumes
+# Kanon's aggregate invoker role, which trusts only `main`'s ref, so a dispatch from another
+# branch is skipped. The agent's job holds no cloud credentials, and its token only reads.
+#
+# WHAT THE LOG SHOWS (kanon#433). The function's URL is the repository variable
+# KANON_AGGREGATE_URL, which the lane reads by name; it prints once per run, in the masking step's
+# own header, and is no credential. The invoker role's ARN, which holds the account id, is the
+# repository secret KANON_AGGREGATE_ROLE, mapped below, so it is masked in every log.
+#
+# WHERE ITS FINDINGS GO. The adoption record declares `Upstream findings: filed here`, so each
+# finding that passes the lane's check (`scripts/telemetry-file.mjs`) is filed on Kanon, under the
+# Explorer's filing gate (K-AGENT-9), at most three new issues a run.
+#
+# It runs as the Author App, in its Explorer role (docs/qa/agent-identities.md).
+#
+# The secrets: AUTHOR_APP_ID and AUTHOR_APP_PRIVATE_KEY (the Author App),
+# CLAUDE_CODE_OAUTH_TOKEN and KANON_AGGREGATE_ROLE, mapped by name, never inherited.
+name: Explore the telemetry
+
+on:
+  # The lane's suggested cadence: weekly, Tuesday 06:30 UTC.
+  schedule:
+    - cron: "30 6 * * 2"
+  workflow_dispatch:
+
+# The lane's ceiling: the aggregate job needs `id-token` to assume the invoker role, and the
+# agent's job reads the tree, the issues and its own run.
+permissions:
+  contents: read
+  issues: read
+  actions: read
+  id-token: write
+
+jobs:
+  explore:
+    uses: yedeya-labs/kanon/.github/workflows/agent-explore-telemetry.yml@v0.34.1
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      KANON_AGGREGATE_ROLE: ${{ secrets.KANON_AGGREGATE_ROLE }}

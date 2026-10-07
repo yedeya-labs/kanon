@@ -1,6 +1,6 @@
 # Explorer playbook: Kanon
 
-Kanon runs the Explorer in one mode: the code audit, on Kanon's own code ([ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md), plan 0004 step 11a), through `code-audit.yml`. It runs no runtime sweep, because Kanon has no app to sweep. The Reviewer also rates each follow-up it files with the rubric below, and the review lane's prompt looks for it here.
+Kanon runs the Explorer in two modes ([ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md)): the code audit, on Kanon's own code (plan 0004 step 11a), through `code-audit.yml`, and since 2026-10-07 the telemetry mode, a weekly read of the hosted telemetry's aggregate (plan 0004 step 14, [#443](https://github.com/yedeya-labs/kanon/issues/443)), through `explore-telemetry.yml`. It runs no runtime sweep, because Kanon has no app to sweep. The Reviewer also rates each follow-up it files with the rubric below, and the review lane's prompt looks for it here.
 
 ## Severity rubric
 
@@ -40,3 +40,7 @@ What the code audit looks for on Kanon. The lane's prompt sets the bar (an objec
 - **Wording, style, or a doc that is unclear but not wrong.**
 
 **Filing on a public repository.** Every issue you file is public. Never name the reference adopter, its people or its product: write "the reference adopter", and cite its issues only as `RA-N`, as Kanon's files do. Quote no secret, token or key, even a revoked one. Rate severity with the rubric above, and milestone a bug to Product Backlog.
+
+## Telemetry mode
+
+The lane's prompt sets everything this mode does on Kanon: what the aggregate holds, what counts as an anomaly, and the report it writes ([Explore the telemetry](../lanes.md#explore-the-telemetry)). From this playbook it reads only the severity rubric above, for a finding that rests on a failure signal. Kanon declares `Upstream findings: filed here` in its [adoption record](adoption.md), so each finding that passes the lane's check is filed on Kanon, never drafted. Its figures are Kanon's own, which Kanon's telemetry register entry declares publishable, and cross-adopter cells only once at least three adopters contribute to one.
