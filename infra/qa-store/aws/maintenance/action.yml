@@ -30,11 +30,23 @@ inputs:
 runs:
   using: composite
   steps:
+    # No `qa-store` block runs before this action, so it masks the account id itself, before any
+    # AWS call: an AWS error names it in ARNs that are not the role secret (kanon#488).
+    - name: Mask the store's account id
+      shell: bash
+      env:
+        ROLE_ARN: ${{ inputs.role-arn }}
+      run: |
+        printf '%s' "$ROLE_ARN" | grep -oE '[0-9]+' | grep -xE '[0-9]{12}' | sort -u | sed 's/^/::add-mask::/' || true
+
     - name: Assume the QA store's role
       uses: aws-actions/configure-aws-credentials@v6
       with:
         role-to-assume: ${{ inputs.role-arn }}
         aws-region: ${{ inputs.region }}
+        # The account id, and the assumed role's ARN, as secrets for the rest of the job: an AWS
+        # error names them in strings the runner never masks whole (kanon#488).
+        mask-aws-account-id: true
 
     # Fail-the-job, never best-effort: this WRITES the store, and a red run is the only page
     # this path has (the reference adopter's observability doc, §8).
