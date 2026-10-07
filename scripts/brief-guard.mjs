@@ -663,7 +663,7 @@ export const danglingCriterionRefs = (markdown, proposed) => {
  *   - its own clause ends and the next one is about a follow-up ("once X lands, a
  *     follow-up may extend …"), so what waits is that follow-up, not this issue. The
  *     follow-up must be the next clause's subject, a verb after it; "the follow-up check
- *     runs here" is about this issue (kanon#272).
+ *     runs here" is about this issue (kanon#272, `FOLLOW_UP_CLAUSE`).
  *
  * The window is deliberately two words and stops at a clause boundary, so a negation
  * elsewhere in the sentence ("Issue B is not optional; this is blocked on Issue B") does
@@ -734,11 +734,33 @@ export const deniedEdge = (text, start, length) => {
     : /\b(?:not|never|no longer)\b|n['’]t\b/i;
   if (negated.test(words)) return true;
   const after = text.slice(start + length);
-  // The follow-up is the subject of the next clause, so a verb comes next ("a follow-up may
-  // extend …"); `follow-up` before a noun ("the follow-up check runs here") is an adjective,
-  // and that clause is about this issue (kanon#272).
-  return /^[^.!?;,]*,\s*(?:a|any|the) (?:later |separate )?follow-?ups? (?:may|might|can|could|will|would|should|must|is|are|does|do)\b/i.test(after);
+  return FOLLOW_UP_CLAUSE.test(after);
 };
+
+/**
+ * The next clause has a follow-up as its SUBJECT, so what waits is the follow-up (kanon#272,
+ * kanon#351). `follow-up` before a noun ("the follow-up check runs here") is an adjective, and
+ * that clause is about this issue, so it still asserts the edge. Told apart by the word after:
+ *
+ *   - `follow-ups`, plural, is always the noun: English puts a noun used as an adjective in the
+ *     singular ("follow-up checks", never "follow-ups checks"), so any word may follow;
+ *   - a singular `follow-up` is the subject when a singular verb comes next: a modal, `is`, or
+ *     a common irregular past from the list below, or a word inflected as a verb, a
+ *     third-person `-s` ("extends", "has", "was") or a past `-ed` ("added"). The list alone, as
+ *     kanon#272 had it, read "a follow-up has to …" and "a follow-up extends …" as edges
+ *     (kanon#351).
+ *
+ * What it gives up: a word ending in `-s` after a singular `follow-up` reads as a verb, so a
+ * plural noun there ("the follow-up checks run here") reads as a follow-up and the edge is
+ * missed. A word ending in `-ss`, `-is` or `-us` ("pass", "analysis", "status") is taken for a
+ * noun, so it does not count as an `-s`; an irregular past not in the list ("a follow-up wrote …") still reads as an edge.
+ */
+const FOLLOW_UP_CLAUSE = new RegExp(
+  String.raw`^[^.!?;,]*,\s*(?:a|any|the) (?:later |separate )?(?:follow-?ups\b|follow-?up ` +
+    String.raw`(?:may|might|can|could|will|would|shall|should|must|ought|is|did|had|got|went|took|came|made|kept|` +
+    String.raw`[a-z]*[a-hj-rtv-z]s|[a-z]+ed)\b)`,
+  'i',
+);
 
 /**
  * A decisions section that parses to ZERO decisions while a human would read numbered
