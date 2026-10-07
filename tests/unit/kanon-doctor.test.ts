@@ -335,6 +335,35 @@ describe('kanon doctor --to, before the pin moves (plan 0005 L10)', () => {
   });
 });
 
+describe('kanon doctor on an error it did not expect (#375)', () => {
+  it('prints the error document, exit 3, and the sentence without a stack trace in prose', async () => {
+    const dir = checkout(healthyFiles());
+    const go = async (argv: string[]) => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const status = await doctor(['--dir', dir, ...argv], {
+        gh: fakeGitHub().gh,
+        git: () => {
+          throw new Error('spawnSync git EMFILE');
+        },
+        env: {},
+        out: (l: string) => out.push(l),
+        err: (l: string) => err.push(l),
+        requirements: () => REQ,
+        release: () => PINNED,
+      });
+      return { status, out: out.join('\n'), err: err.join('\n') };
+    };
+    const json = await go(['--json']);
+    expect(json.status).toBe(EXIT.error);
+    expect(JSON.parse(json.out)).toEqual({ schema: SCHEMA, kanon: PINNED, status: 'error', exitCode: 3, error: 'stopped on an unexpected error: spawnSync git EMFILE' });
+    const prose = await go([]);
+    expect(prose.status).toBe(EXIT.error);
+    expect(prose.out).toBe('');
+    expect(prose.err).toBe('kanon doctor: stopped on an unexpected error: spawnSync git EMFILE');
+  });
+});
+
 describe('kanon doctor on what an installation lacks', () => {
   it('names a missing register row, App secret and stack section, and a stale role secret', async () => {
     const files = healthyFiles();

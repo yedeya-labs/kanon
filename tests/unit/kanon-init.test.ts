@@ -937,6 +937,57 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(JSON.parse(notCheckout.out)).toMatchObject({ status: 'error', exitCode: 1, error: expect.stringContaining('is not a git checkout') });
   });
 
+  it('prints a failed document listing the files already written when a write throws (#375)', async () => {
+    const dir = checkout();
+    const github = fakeGitHub();
+    let n = 0;
+    const r = await run(dir, github, ['--json'], undefined, REQ, {
+      writeFile: (path: string, text: string) => {
+        if (++n === 3) throw new Error(`EROFS: read-only file system, open '${path}'`);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, text);
+      },
+    });
+    expect(r.status).toBe(1);
+    const d = parse(r);
+    expect(d).toMatchObject({ schema: SCHEMA, status: 'failed', exitCode: 1, repository: REPO });
+    expect(d.failures).toEqual([expect.stringMatching(/^stopped on an unexpected error: EROFS: read-only file system/)]);
+    const written = d.files.filter((f) => f.status === 'new').map((f) => String(f.path));
+    expect(written).toHaveLength(2);
+    for (const f of written) expect(existsSync(join(dir, f)), f).toBe(true);
+    expect(d.changes.map((c) => c.subject)).toEqual(written);
+    expect(r.err).toContain('kanon init: stopped on an unexpected error: EROFS');
+    // Nothing after the throw ran: no label, ruleset or App.
+    expect(writes(github.calls)).toEqual([]);
+    expect(r.appsCalls).toEqual([]);
+  });
+
+  it('prints the error document when it throws before inspecting, or cannot read its requirements (#375)', async () => {
+    const early = await run(checkout(), fakeGitHub(), ['--json'], undefined, REQ, {
+      git: () => {
+        throw new Error('spawnSync git ENOENT');
+      },
+    });
+    expect(early.status).toBe(1);
+    expect(JSON.parse(early.out)).toEqual({ schema: SCHEMA, kanon: expect.any(String), status: 'error', exitCode: 1, error: 'stopped on an unexpected error: spawnSync git ENOENT. Nothing was changed.' });
+    const noReq = await run(checkout(), fakeGitHub(), ['--json'], undefined, REQ, {
+      requirements: () => {
+        throw new Error('ENOENT: requirements.json');
+      },
+    });
+    expect(noReq.status).toBe(1);
+    expect(JSON.parse(noReq.out)).toMatchObject({ status: 'error', exitCode: 1, error: expect.stringContaining("could not read this release's requirements file (ENOENT: requirements.json)") });
+    // Without --json, the same sentence on standard error, and no stack trace.
+    const prose = await run(checkout(), fakeGitHub(), ['--yes'], undefined, REQ, {
+      git: () => {
+        throw new Error('spawnSync git ENOENT');
+      },
+    });
+    expect(prose.status).toBe(1);
+    expect(prose.out).toBe('');
+    expect(prose.err).toBe('kanon init: stopped on an unexpected error: spawnSync git ENOENT');
+  });
+
   it('prints the error document for --help with --json, not an empty standard output (#372)', async () => {
     for (const h of ['--help', '-h']) {
       const github = fakeGitHub();

@@ -80,8 +80,8 @@ The store's side is the operator's: the register entry, and the values of the re
 |---|---|---|
 | `complete` | 0 | It ran, and nothing is left to a person. |
 | `steps-left` | 0 | It ran, and `findings` lists what is left to a person. |
-| `failed` | 1 | Something failed after it started changing things; `failures` says what. What it did is still listed. |
-| `error` | 1 or 2 | It stopped before inspecting the repository, so nothing changed: the error document of [`docs/cli-json.md`](cli-json.md), `{ "schema", "kanon", "status", "exitCode", "error" }`. 2 is a usage error. |
+| `failed` | 1 | Something failed after it started changing things, or it stopped on an error it didn't expect (a file it couldn't write) once it had inspected the repository; `failures` says what. What it did before is still listed. |
+| `error` | 1 or 2 | It stopped before inspecting the repository, on a usage error, an unreadable requirements file or an error it didn't expect, so nothing changed: the error document of [`docs/cli-json.md`](cli-json.md), `{ "schema", "kanon", "status", "exitCode", "error" }`. 2 is a usage error. |
 
 ### The inspection
 

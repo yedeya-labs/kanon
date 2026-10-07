@@ -508,7 +508,15 @@ export const doctor = async (argv, overrides = {}) => {
     deps.out(USAGE);
     return EXIT.healthy;
   }
-  const result = await diagnose(deps, opts);
+  // An error `diagnose` did not expect is the error document too, so `--json` always prints one
+  // (#375). Doctor changes nothing, so there is nothing done to record.
+  /** @type {Awaited<ReturnType<typeof diagnose>>} */
+  let result;
+  try {
+    result = await diagnose(deps, opts);
+  } catch (e) {
+    result = { error: `stopped on an unexpected error: ${/** @type {Error} */ (e).message}` };
+  }
   if (result.error !== undefined || !result.report) {
     const error = result.error ?? 'no report';
     if (opts.json) deps.out(JSON.stringify(errorDocument(deps, EXIT.error, error), null, 2));

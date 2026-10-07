@@ -962,15 +962,25 @@ export const SCHEMA = 'kanon-init/v1';
  */
 export const init = async (argv, overrides = {}) => {
   const base = { ...realDeps, ...overrides };
-  const req = base.requirements();
+  /** @type {Requirements | null} */
+  let req = null;
+  /** @type {string | null} the release's requirements file could not be read */
+  let reqError = null;
+  try {
+    req = base.requirements();
+  } catch (e) {
+    reqError = `could not read this release's requirements file (${/** @type {Error} */ (e).message}). Nothing was changed.`;
+  }
   /** @type {ReturnType<typeof parseArgs> | null} */
   let opts = null;
   /** @type {string | null} */
   let usageError = null;
-  try {
-    opts = parseArgs(argv, req);
-  } catch (e) {
-    usageError = /** @type {Error} */ (e).message;
+  if (req) {
+    try {
+      opts = parseArgs(argv, req);
+    } catch (e) {
+      usageError = /** @type {Error} */ (e).message;
+    }
   }
   // Under `--json` standard output holds the document alone: the prose moves to standard error.
   // Whether the run is under `--json` is what the parse says, so a "--json" taken as a value
@@ -986,6 +996,11 @@ export const init = async (argv, overrides = {}) => {
     if (wantsJson) base.out(JSON.stringify(document(rep, code, deps.release()), null, 2));
     return code;
   };
+  if (!req) {
+    rep.error = reqError;
+    err(`kanon init: ${rep.error}`);
+    return emit(1);
+  }
   if (!opts) {
     rep.error = usageError;
     err(`kanon init: ${rep.error}`);
@@ -1004,6 +1019,16 @@ export const init = async (argv, overrides = {}) => {
   }
   try {
     return emit(await run(deps, opts, req, rep));
+  } catch (e) {
+    // An error `run` did not expect, such as a file it could not write (#375). The document
+    // still prints: before the inspection nothing had changed, so it is the error document;
+    // after it, it is `failed`, with what was already done (`files`, `changes`) and the error
+    // among `failures`.
+    const message = `stopped on an unexpected error: ${/** @type {Error} */ (e).message}`;
+    err(`kanon init: ${message}`);
+    if (rep.inspection === null) rep.error = `${message}. Nothing was changed.`;
+    else rep.failures.push(message);
+    return emit(1);
   } finally {
     rl?.close();
     rl = null;
