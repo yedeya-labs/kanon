@@ -1,6 +1,6 @@
 # The `kanon` command's JSON output
 
-`kanon doctor` and `kanon init` are scriptable ([ADR 0014](decisions/0014-adopter-audiences.md), decision 2): beside the prose a person reads, each prints one JSON document with `--json`, for the agent skills that wrap them and for integrators. This page is the convention every command's document follows, so a consumer that reads one reads the others. Each command's own page lists its fields: [`kanon doctor`](doctor.md#the-json-output) and [`kanon init`](init.md#the-json-output).
+`kanon doctor` and `kanon init` are scriptable ([ADR 0014](decisions/0014-adopter-audiences.md), decision 2): beside the prose a person reads, each prints one JSON document with `--json`, for the agent skills that wrap them and for integrators. This page is the convention every command's document follows, so a consumer that reads one reads the others. Each command's own page lists its fields: [`kanon doctor`](doctor.md#the-json-output), [`kanon init`](init.md#the-json-output) and [`kanon metrics dry-run`](metrics.md#the-json-output).
 
 ## The convention
 
