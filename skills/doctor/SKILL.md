@@ -40,7 +40,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
    | 1 | `findings` | Go on to step 2. |
    | 2 | `usage` | This skill passed something the command refused: show `.error`, and stop. It is a bug in the skill, not the repository. |
    | 3 | `error` | Show `.error` in plain words. Usually: not a checkout, a release's requirements file that can't be read, or nothing pins Kanon yet, which is the adopt skill's job. |
-   | 4 | `incomplete` | Nothing blocking was found, but a check couldn't run. List each of `.unchecked`, with `.unchecked[].check`, `.unchecked[].subject` and `.unchecked[].reason`, and say what would let it run (often a token that can list the repository's secrets). Then go on to step 2 for any finding that doesn't block. |
+   | 4 | `incomplete` | Nothing blocking was found, but a check couldn't run. List each of `.unchecked`, with `.unchecked[].check`, `.unchecked[].subject` and `.unchecked[].reason`, and say what would let it run, as "When a check couldn't run" below says. Then go on to step 2 for any finding that doesn't block. |
 
 2. **Say what it checked.** The release (`.checking`), the lanes (`.lanes`), the Apps (`.apps[].identity` and `.apps[].slug`), and whose token it used. If `.checkout.branch` is not `.checkout.defaultBranch`, say that the id-token holders, and the secrets the workflows map, are counted on this branch, not the default one. List what the adoption record waives (`.waived`): each `.waived[].id` on `.waived[].subject`, and the record's reason, `.waived[].reason`. A waived finding doesn't block, and you leave it alone unless the person asks.
 
@@ -76,6 +76,18 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 ## Offering the Releaser
 
 When the repository calls Kanon's release workflow (a job whose `uses:` is Kanon's `.github/workflows/release.yml` at a release) and `.apps[].identity` lists no `releaser`, its release pull requests are opened with the workflow's token, so they run no CI, and a ruleset that requires checks blocks them unless an admin bypasses it. Plan 0005 gives such a repository the optional Releaser ([#420](https://github.com/yedeya-labs/kanon/issues/420)). Offer it, as a question, once: **Create the Releaser** (Recommended when an active ruleset covers the default branch), which opens the release pull requests so their CI runs and becomes the ruleset's only bypass actor (`K-MERGE-8`); or **Not now**, which keeps the workflow's token. It is the person's choice. On **Create the Releaser**, the person runs `kanon apps --owner <owner> --repo <repo> --apps releaser` ("Running `kanon apps`"); then you map `RELEASER_APP_ID` and `RELEASER_APP_PRIVATE_KEY` under that job's `secrets:` (`docs/release.md` in Kanon's repository, "With the Releaser"), show the diff, and run doctor again: it now checks the Releaser, its register row and its bypass.
+
+## When a check couldn't run
+
+Each check's token is in `docs/doctor.md`, "The token it needs". Never ask for a token's value, and never put one in a command line: the person runs doctor with another token in their own terminal, once, and tells you what it said.
+
+| `.unchecked[].check` | What lets it run |
+|---|---|
+| `app-permissions` | A private App shows its permissions only to itself, so doctor reads them from the latest `apps-check` run on the default branch. Offer to run the `apps-check` caller there, `gh workflow run apps-check.yml -R <owner>/<repo>`, on a yes; wait for it with `gh run watch <id>`, the id from `gh run list --workflow apps-check.yml -L 1 -R <owner>/<repo>`, then run doctor again. If the caller pins a release from before doctor could read it, the run prints nothing doctor reads: the upgrade moves that pin. |
+| `ruleset-bypass` | When the reason says the Releaser could not be read, as `app-permissions` above. Otherwise someone who can edit the ruleset runs doctor once. |
+| `unused-apps` | In an organisation, an owner runs doctor once in their own terminal, with a token that holds the organisation's Administration permission (read): a fine-grained token, or `gh auth refresh -s admin:org` for `gh`'s own login. On a personal account, the person looks on https://github.com/settings/installations for the Apps the reason names. |
+| `secrets` | Someone with admin access runs doctor once, or a fine-grained token with Secrets: read. |
+| any other | Read them the reason. |
 
 ## Waiving a finding
 

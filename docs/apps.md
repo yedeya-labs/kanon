@@ -99,6 +99,7 @@ gh workflow run apps-check.yml -R <owner>/<repo>
 
 - **Map secrets by name, never `secrets: inherit`.** The workflow takes each App's two secrets by their fixed names (`AUTHOR_`, `JUDGE_`, `RELEASER_`), all optional, and each App's job reads only its own two. An App the register lists whose secrets you didn't map fails at the mint, by name.
 - **`contents: read` is the ceiling.** Only the job that reads your register uses it; the check jobs run on the App tokens alone.
+- **`kanon doctor` reads what it found.** GitHub shows a private App only to the App itself, so each App's job also prints one line, `kanon-apps-check/v1` and the App's slug, id and installation permissions, which doctor reads from the latest run on your default branch ([`docs/doctor.md`](doctor.md#the-token-it-needs), [#417](https://github.com/yedeya-labs/kanon/issues/417)). Run it again after you change an App.
 - **The check is the pinned version's.** It runs Kanon's script and compares against Kanon's App permissions at the tag you pinned, and reads only your register from your checkout. `lane-check` reads this caller as no lane caller, and holds it to the one pin and to mapping its secrets by name.
 
 ## Limits

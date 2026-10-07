@@ -21,6 +21,11 @@
 // The register is read with actions/lane-check/app-register.awk, the one reader the lanes
 // use, so this check and the lanes can't disagree about what the register says.
 //
+// `check` also prints one line for `kanon doctor` (#417): `kanon-apps-check/v1 ` and a JSON
+// object of the App's key, the minted slug, the App's id and the installation's permissions,
+// whether the check passes or fails. A person's token and the workflow's can't read a private
+// App, but they can read this run's log; `readResult` is the reader doctor uses.
+//
 // Node built-ins only. The private key is read from the environment to sign the App JWT
 // that reads the installation's permissions; it is never printed or written.
 
@@ -115,6 +120,38 @@ export const compare = ({ app, spec, registerSlug, appSlug, repository, selectio
   return { failures, warnings };
 };
 
+/** The mark that opens the line `check` prints for doctor; a new shape is a new version. */
+export const RESULT_MARK = 'kanon-apps-check/v1';
+
+/** @typedef {{ app: string, slug: string, appId: number | null, permissions: Record<string, string> }} Result */
+
+/** The line `check` prints for doctor. @param {Result} r */
+export const resultLine = (r) => `${RESULT_MARK} ${JSON.stringify({ app: r.app, slug: r.slug, appId: r.appId, permissions: r.permissions })}`;
+
+/**
+ * The App's result in a job's log, whose lines the runner opens with a timestamp; null when the
+ * log has none, as from an apps-check before #417, or one that isn't this shape.
+ * @param {string} log @param {string} app the App's key, `author`, `judge` or `releaser`
+ * @returns {Result | null}
+ */
+export const readResult = (log, app) => {
+  for (const line of log.split(/\r?\n/)) {
+    const at = line.indexOf(`${RESULT_MARK} `);
+    if (at < 0 || !/^(\S+ )?$/.test(line.slice(0, at))) continue;
+    /** @type {any} */
+    let r;
+    try {
+      r = JSON.parse(line.slice(at + RESULT_MARK.length + 1));
+    } catch {
+      continue;
+    }
+    if (r?.app !== app || typeof r.slug !== 'string' || !r.permissions || typeof r.permissions !== 'object' || Array.isArray(r.permissions)) continue;
+    if (!Object.values(r.permissions).every((v) => typeof v === 'string')) continue;
+    return { app, slug: r.slug, appId: Number.isInteger(r.appId) ? r.appId : null, permissions: r.permissions };
+  }
+  return null;
+};
+
 /** @param {string} s */
 const cell = (s) => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
@@ -199,6 +236,7 @@ const check = async (deps) => {
     }
   }
 
+  deps.out(resultLine({ app: key, slug: appSlug, appId: Number.isInteger(inst.app_id) ? inst.app_id : null, permissions }));
   const { failures, warnings } = compare({ app: spec.app, spec, registerSlug, appSlug, repository, selection, repositories, permissions });
   for (const w of warnings) deps.out(`::warning title=apps-check::${w}`);
   for (const f of failures) deps.out(`::error title=apps-check::${f}`);
