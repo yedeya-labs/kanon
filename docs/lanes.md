@@ -265,7 +265,7 @@ A lane gets a database only when your project declares one, in `docs/qa/test-dat
 
 ## The QA store
 
-The code audit, the Explorer, the Overseer and the dispatch sweep remember earlier runs in a QA store in your own account (`K-OBS-17`). They reach it only through a hook you write, `.github/actions/qa-store/action.yml`, with five operations, each run in a store job of its own, the only kind of job that holds `id-token: write`, so no agent job holds the store's credentials. The store trusts your default branch's ref, and no GitHub Environment. Kanon's AWS implementation provisions a store and is the hook's one `uses:` line. Without a hook, each lane runs without memory and says the store is absent. [The QA store](qa-store.md) has the contract, the setup and the AWS runbook.
+The code audit, the Explorer, the Overseer and the dispatch sweep remember earlier runs in a QA store in your own account (`K-OBS-17`). They reach it only through a hook you write, `.github/actions/qa-store/action.yml`, with five operations, each run in a store job of its own, which, besides the Overseer's `telemetry` job (held to its exact shape, and reading your telemetry rows, not the store), is the only kind of job in those lanes that holds `id-token: write`, so no agent job holds the store's credentials. The store trusts your default branch's ref, and no GitHub Environment. Kanon's AWS implementation provisions a store and is the hook's one `uses:` line. Without a hook, each lane runs without memory and says the store is absent. [The QA store](qa-store.md) has the contract, the setup and the AWS runbook.
 
 ## The stack document and the playbooks
 
