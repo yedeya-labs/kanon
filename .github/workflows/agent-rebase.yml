@@ -92,8 +92,24 @@ concurrency:
   # One global lane, never cancelled: cancelling mid-resolution leaves a branch with a
   # half-finished merge and an attempt marker already posted.
   # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  #
+  # AND NO PENDING RUN IS REPLACED (kanon#537). With the default `queue: single`, a group
+  # keeps one pending run and a newer arrival cancels it. Every event this lane is called on
+  # joins the group BEFORE `filter` decides to skip it: an unmerged close, a cancelled CI
+  # run, and the merge queue's CI run, which the gate refuses. So while a resolution session
+  # held the lane, the next skip-only arrival cancelled a merge's pending run, and the
+  # conflict that merge caused waited for the next merge or the cron. A job-level `if:` does
+  # not keep a run out of a workflow-level group (Kanon's own "Implement — revise" lane:
+  # 37617337974 and 37617338207 were cancelled pending by label events that only skip).
+  # `queue: max` keeps up to 100 pending, in arrival order: a skip-only run drains in
+  # seconds, and a second real run rescans and finds the work done. GitHub refuses it with
+  # `cancel-in-progress: true`, which this lane never sets. MEASURED in a called workflow:
+  # the lane concurrency probe with `queue: max`, three runs pushed within 5 s (37632145643,
+  # 37632152297, 37632158162, 2026-10-07), ran one after another and none was cancelled,
+  # though the second was pending when the third arrived.
   group: qa-rebase-lane${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
+  queue: max
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
 # ceiling and must grant at least this and the jobs' own blocks below, or the run fails to

@@ -40,7 +40,7 @@ type Job = {
 type Lane = {
   name?: string;
   on: Record<string, { inputs?: Record<string, { type: string; required?: boolean }>; secrets?: Record<string, { required?: boolean }> }>;
-  concurrency?: { group: string; 'cancel-in-progress': boolean };
+  concurrency?: { group: string; 'cancel-in-progress': boolean; queue?: string };
   permissions?: Record<string, string>;
   env?: unknown;
   jobs: Record<string, Job>;
@@ -133,6 +133,13 @@ describe('plan 0001 decision 11: each lane keeps its concurrency group at the to
     const c = (lane(file).jobs[job] as { concurrency?: { group: string; 'cancel-in-progress': boolean } }).concurrency;
     expect(c?.group).toBeTruthy();
     expect(c?.['cancel-in-progress']).toBe(false);
+  });
+
+  // kanon#537. Every event the rebase lane is called on joins its group before `filter` can
+  // skip it, so with the default `queue: single` a skip-only arrival cancelled a merge's
+  // pending run. `queue: max` keeps every pending run.
+  it('agent-rebase.yml keeps every pending run, so a skip-only one cannot replace a merge’s', () => {
+    expect(lane('agent-rebase.yml').concurrency).toMatchObject({ 'cancel-in-progress': false, queue: 'max' });
   });
 
   it('the probe is the shape the lanes rely on', () => {

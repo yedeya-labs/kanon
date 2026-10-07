@@ -9,6 +9,11 @@
 # passing an undeclared or misspelled block input. Upstream:
 #   https://github.com/rhysd/actionlint/issues/711
 #   https://github.com/rhysd/actionlint/issues/732
+# A SECOND REWRITE, for `concurrency.queue` (kanon#537): GitHub added the key in May 2026, and
+# actionlint 1.7.12 still rejects it ("unexpected key "queue" for "concurrency" section",
+# rhysd/actionlint#746). In the copy, a `queue: single|max` line becomes a comment of the
+# same line count, so the rest of the block is still checked. Drop it with the `$/` one, once
+# a released actionlint knows the key.
 # DROP THE REWRITE (the `perl -pi` below and the snippet restore) once a released actionlint
 # supports `$/`: bump ACTIONLINT_VERSION and its checksums, delete the rewrite, and
 # `tests/unit/actionlint.test.ts`'s red-on-undeclared-input case keeps proving the input
@@ -129,6 +134,11 @@ mkdir "$WORK/.git"
 # The shim. Only `uses:` keys (optionally a list item, optionally quoted), never comments.
 find "$WORK/.github" -type f \( -name '*.yml' -o -name '*.yaml' \) -exec \
   perl -pi -e 's{^(\s*(?:-\s+)?uses:\s*["\x27]?)\$/}{$1./}' {} +
+# `concurrency.queue`, which actionlint does not know yet (see the header). Only directly
+# inside a `concurrency:` block and only its two documented values, so an input that happens
+# to be named `queue`, or a misspelled value, is still linted.
+find "$WORK/.github" -type f \( -name '*.yml' -o -name '*.yaml' \) -exec \
+  perl -pi -e 'if (/^(\s*)concurrency:\s*$/) { $c = length $1 } elsif (defined $c && /^(\s*)\S/ && length $1 <= $c) { undef $c } elsif (defined $c) { s{^(\s+)queue:\s*(?:single|max)\s*$}{$1# queue (kanon#537)\n} } $c = undef if eof' {} +
 
 trap - ERR
 set +e
