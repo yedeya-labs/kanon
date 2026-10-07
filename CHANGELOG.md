@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.35.0](https://github.com/yedeya-labs/kanon/compare/v0.34.1...v0.35.0) (2026-10-07)
+
+
+### Features
+
+* **overseer:** count precision per signal from outcome labels and merged fixes, and list the unrecorded for a person to label ([#490](https://github.com/yedeya-labs/kanon/issues/490)) ([c4e1344](https://github.com/yedeya-labs/kanon/commit/c4e1344d8a519eab316aafcb46617c88e12bc261))
+
+
+### Bug Fixes
+
+* count a computed secrets read, recognise a release caller by what it calls, offer only the owner's own Apps, and guard the QA store's maintenance secret ([#493](https://github.com/yedeya-labs/kanon/issues/493)) ([1f92dc4](https://github.com/yedeya-labs/kanon/commit/1f92dc433b1bfd5fc056cfed5621fc9ec1c32768))
+* **lane-check:** hold a call to the spine to the secrets rule for non-lane Kanon calls ([#502](https://github.com/yedeya-labs/kanon/issues/502)) ([6b3e923](https://github.com/yedeya-labs/kanon/commit/6b3e923b6d39e3eba90cf895397dc63653be99ca))
+* **lanes:** deny a $ and a glob in the Lead's git push and fetch, and probe each shell spelling of a far-end program ([#496](https://github.com/yedeya-labs/kanon/issues/496)) ([f7c148a](https://github.com/yedeya-labs/kanon/commit/f7c148ab92c85f13ae3e0e67b99a93d5529aedec))
+* **lanes:** name the Author or Judge App in lane headers and runtime messages, not an App per role ([#487](https://github.com/yedeya-labs/kanon/issues/487)) ([cc8fcb8](https://github.com/yedeya-labs/kanon/commit/cc8fcb86ec961784a0181a1165955eb4ad3cdd55))
+
+
+### Documentation
+
+* name what kanon init and kanon doctor enforce of K-MERGE-7 for an adopter ([#503](https://github.com/yedeya-labs/kanon/issues/503)) ([dd5f130](https://github.com/yedeya-labs/kanon/commit/dd5f130feb00985592b56423ec9668b2ec670adc))
+* point agent-lead.yml's SETUP header at records that exist ([#501](https://github.com/yedeya-labs/kanon/issues/501)) ([a6ee104](https://github.com/yedeya-labs/kanon/commit/a6ee104fd0ee9670a1860897469a671e8b522e23))
+
+
+### CI
+
+* **dependabot:** say how to ask for a run now, by changing this file ([#492](https://github.com/yedeya-labs/kanon/issues/492)) ([422b16f](https://github.com/yedeya-labs/kanon/commit/422b16fd4ec55a238e72d5aa8cd1054c3bc1277f))
+* **deps:** Bump the kanon group across 2 directories with 8 updates ([#495](https://github.com/yedeya-labs/kanon/issues/495)) ([dcf7f8a](https://github.com/yedeya-labs/kanon/commit/dcf7f8ab1cd8acaca4b131d7d5da78a9b0603793))
+* map the QA store's secrets in Kanon's store callers, and declare Vitest as the runner of tests/ ([#497](https://github.com/yedeya-labs/kanon/issues/497)) ([d052ea9](https://github.com/yedeya-labs/kanon/commit/d052ea9abc1e309014bfec61f627287c990ef275))
+
 ## [0.34.1](https://github.com/yedeya-labs/kanon/compare/v0.34.0...v0.34.1) (2026-10-07)
 
 
