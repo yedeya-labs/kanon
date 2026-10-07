@@ -18,7 +18,7 @@
 # ITS CREDENTIALS ARE THE WRITER ROLE ALONE (§3). The role trusts the default branch's ref
 # subject, so the collect job runs only on a schedule or on a dispatch of the default branch,
 # and DECLARES NO ENVIRONMENT, which would replace the ref in its token's subject. It is the
-# only job here holding `id-token: write`, and its steps are exactly Kanon's path, the
+# only job here holding `id-token: write`, and its steps are exactly Kanon's path, the mask, the
 # credentials and the collector script: the id-token guard (tests/unit/helpers/store-jobs.ts)
 # allows it by that shape, and nothing else of this file.
 #
@@ -102,6 +102,14 @@ jobs:
       id-token: write
     steps:
       - uses: $/actions/kanon-path
+      # MASKED FIRST, BEFORE ANY AWS CALL (kanon#514): the role's ARN is a variable, which the
+      # runner never masks, and an AWS error names its account in other ARNs besides. Every later
+      # line of the job then prints `***` for the ARN and the account id; this step's own `env:`
+      # is printed before it runs, so the ARN appears here, once.
+      - name: Mask the writer role's account id
+        env:
+          ROLE: ${{ inputs.writer-role }}
+        run: node "$KANON/scripts/telemetry-collect.mjs" mask
       # The STS call goes to Frankfurt, where the hosted store lives: the account's region policy
       # denies every other region.
       - uses: aws-actions/configure-aws-credentials@v6
@@ -109,6 +117,9 @@ jobs:
           role-to-assume: ${{ inputs.writer-role }}
           aws-region: eu-central-1
           role-session-name: kanon-telemetry-collect
+          # The account id, and the assumed role's ARN, as secrets for the rest of the job
+          # (kanon#514, as the QA store's AWS actions since kanon#488).
+          mask-aws-account-id: true
       - name: Sweep the span and send every row in it
         env:
           GH_TOKEN: ${{ github.token }}

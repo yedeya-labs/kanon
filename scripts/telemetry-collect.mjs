@@ -30,11 +30,17 @@
 // retention is gone. A watermark older than the cap means rows were lost, and the run says so.
 //
 // LOGS HOLD COUNTS, IDS, LANES AND FIELD NAMES, NEVER A ROW'S VALUE (ADR 0007).
+//
+// `mask` FIRST (kanon#514). The writer role's ARN is a repository variable, which the runner
+// never masks, and an AWS error names its account in other ARNs besides. So the job's step before
+// the credentials runs this script as `mask`, with the ARN as ROLE, to register the ARN and its
+// account id with `::add-mask::`, as the telemetry Explorer's read job does (`aggregate-mask.mjs`).
 
 import { appendFileSync } from 'node:fs';
 
 import { describeErrors, validate } from '../actions/agent-telemetry/schema.mjs';
 import { sign } from '../infra/telemetry/function/sigv4.mjs';
+import { masksOf } from './aggregate-mask.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { ARTIFACT_FILE, ghApi, ghDownload, listTelemetryArtifacts, readZipEntry } from './lib/telemetry-artifacts.mjs';
 
@@ -292,4 +298,8 @@ async function main() {
   }
 }
 
-if (isCliEntry(import.meta.url)) await main();
+if (isCliEntry(import.meta.url)) {
+  if (process.argv[2] === 'mask') {
+    for (const m of masksOf({ ROLE: process.env.ROLE })) process.stdout.write(`::add-mask::${m}\n`);
+  } else await main();
+}
