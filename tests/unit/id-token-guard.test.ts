@@ -86,6 +86,18 @@ describe('every Kanon workflow', () => {
     expect(bullet[0]).toContain('is admitted');
   });
 
+  it("and K-OBS-13's Enforced by doesn't say the store jobs declare none only from some later day (kanon#556)", () => {
+    // The rule once said the store jobs could assume the writer "once they declare no
+    // environment", written before the QA store dropped its own and left stale by the case above.
+    const rule = readFileSync('rulebook/08-observability-and-cost.md', 'utf8').split(/^### /m)
+      .filter((s) => s.startsWith('`K-OBS-13`'));
+    expect(rule).toHaveLength(1);
+    const enforced = rule.flatMap((s) => s.split('\n')).filter((l) => l.startsWith('**Enforced by.**'));
+    expect(enforced).toHaveLength(1);
+    expect(enforced[0]).not.toMatch(/once they declare/);
+    expect(enforced[0]).toContain("Kanon's QA-store jobs, which declare no environment");
+  });
+
   it('every holder it admits besides the store jobs and their callers is one ID_TOKEN_HOLDERS lists, and each it lists holds it (kanon#531)', () => {
     // The listings below read ID_TOKEN_HOLDERS, so a holder the guard admits some other way would
     // leave them stale: it fails here instead, by name.
