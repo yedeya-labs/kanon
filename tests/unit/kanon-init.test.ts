@@ -1,8 +1,8 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { callerFile, ciFile, DEPENDABOT_ENTRY, loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
@@ -10,6 +10,11 @@ import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, lan
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
 import { TELEMETRY_QUESTION, TELEMETRY_REGISTRATION_URL } from '../../cli/init.mjs';
+import { SPAWNS } from './helpers/spawns.js';
+
+// Its cases run `kanon init` against a real git checkout, and several run lane-check, so every
+// case takes the spawn budget (#436).
+vi.setConfig({ testTimeout: SPAWNS.timeout });
 
 /**
  * `kanon init` (plan 0005 §5.4, step L9). Every case runs the command against a real git
@@ -37,14 +42,31 @@ afterAll(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
 });
 
+/**
+ * An empty repository with `remote` as its origin, made once per remote: each checkout is a copy
+ * of it, made with the file system alone. Four `git` processes per case were a third of this
+ * file's processes (#436).
+ */
+const skeletons = new Map<string, string>();
+const skeleton = (remote: string) => {
+  let dir = skeletons.get(remote);
+  if (!dir) {
+    dir = mkdtempSync(join(tmpdir(), 'kanon-init-skeleton-'));
+    dirs.push(dir);
+    execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+    execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', remote]);
+    execFileSync('git', ['-C', dir, 'config', 'user.name', 'Ada Lovelace']);
+    execFileSync('git', ['-C', dir, 'config', 'user.email', 'ada@example.com']);
+    skeletons.set(remote, dir);
+  }
+  return dir;
+};
+
 /** A checkout of acme/widgets with no files, or with the given ones, committed or not. */
 const checkout = (files: Record<string, string> = {}, remote = `https://github.com/${REPO}.git`) => {
   const dir = mkdtempSync(join(tmpdir(), 'kanon-init-'));
   dirs.push(dir);
-  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
-  execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', remote]);
-  execFileSync('git', ['-C', dir, 'config', 'user.name', 'Ada Lovelace']);
-  execFileSync('git', ['-C', dir, 'config', 'user.email', 'ada@example.com']);
+  cpSync(skeleton(remote), dir, { recursive: true });
   for (const [rel, text] of Object.entries(files)) {
     mkdirSync(dirname(join(dir, rel)), { recursive: true });
     writeFileSync(join(dir, rel), text);

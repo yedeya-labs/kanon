@@ -81,12 +81,16 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
    * in the SAME file as the call — an id is scoped to its job, so a name-wide search would let
    * one file's reader of `steps.classify.outputs.x` cover another file's dead output.
    */
+  // Each caller is read and parsed once: the reader runs once per action, and parsing every
+  // workflow again for each made one case take 7 s under a loaded run (#436).
+  const CALLER_STEPS = CALLERS.map((file) => {
+    const text = readFileSync(file, 'utf8');
+    const doc = parse(text) as { jobs?: Record<string, { steps?: WorkflowStep[] }>; runs?: { steps?: WorkflowStep[] } };
+    return { text, steps: doc.jobs ? Object.values(doc.jobs).flatMap((j) => j.steps ?? []) : (doc.runs?.steps ?? []) };
+  });
   const readOutputsOf = (action: string): Set<string> => {
     const read = new Set<string>();
-    for (const file of CALLERS) {
-      const text = readFileSync(file, 'utf8');
-      const doc = parse(text) as { jobs?: Record<string, { steps?: WorkflowStep[] }>; runs?: { steps?: WorkflowStep[] } };
-      const steps = doc.jobs ? Object.values(doc.jobs).flatMap((j) => j.steps ?? []) : (doc.runs?.steps ?? []);
+    for (const { text, steps } of CALLER_STEPS) {
       for (const st of steps) {
         if (kanonActionOf(st.uses) !== action || !st.id) continue;
         for (const [, name] of text.matchAll(new RegExp(String.raw`steps\.${st.id}\.outputs\.([\w-]+)`, 'g'))) read.add(String(name));

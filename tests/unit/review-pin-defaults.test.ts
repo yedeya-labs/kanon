@@ -2,7 +2,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * kanon#316 (plan 0005 §5.2) on the review lane. The lane restores its judging inputs from the
@@ -23,12 +24,15 @@ const MANIFEST = join(ROOT, 'scripts/judging-inputs.mjs');
 const BASELINE = (f: string) => readFileSync(join(ROOT, 'rulebook/templates/playbooks', f), 'utf8');
 
 let repo = '';
+const made: string[] = [];
 const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const write = (path: string, text: string) => { mkdirSync(dirname(join(repo, path)), { recursive: true }); writeFileSync(join(repo, path), text); };
 const read = (path: string) => readFileSync(join(repo, path), 'utf8');
 
-beforeEach(() => {
+/** A repository whose default branch lacks playbooks, with a PR branch checked out. */
+const fixture = () => {
   repo = mkdtempSync(join(tmpdir(), 'review-pin-defaults-'));
+  made.push(repo);
   git('init', '-q', '-b', 'main');
   git('config', 'user.email', 'test@example.com');
   git('config', 'user.name', 'test');
@@ -45,8 +49,8 @@ beforeEach(() => {
   write('src/a.txt', 'change\n');
   git('add', '-A');
   git('commit', '-qm', 'pr');
-});
-afterEach(() => { rmSync(repo, { recursive: true, force: true }); });
+};
+afterAll(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
 
 const env = (summary: string) => ({ ...process.env, DEFAULT_REF: 'main', GITHUB_STEP_SUMMARY: summary, KANON_ROOT: ROOT });
 const digest = () => execFileSync('node', [MANIFEST, 'manifest'], { cwd: repo, encoding: 'utf8' });
@@ -63,9 +67,20 @@ const lane = (restore = RESTORE) => {
   return { pinned, verified: digest(), restore: r.stdout, defaults: d.stdout };
 };
 
-describe('the review lane pins Kanon\'s baseline playbooks, so the re-verify agrees (kanon#316)', () => {
+// The lane runs `bash`, `git` and `node` many times over, so the block takes the spawn budget
+// (#436). The first four cases read one run of the lane, in one repository: a run per case cost
+// about 2 s each alone, and over 5 s under a loaded `npm test`.
+describe('the review lane pins Kanon\'s baseline playbooks, so the re-verify agrees (kanon#316)', SPAWNS, () => {
+  let ran = {} as ReturnType<typeof lane>;
+  let ranIn = '';
+  beforeAll(() => {
+    fixture();
+    ranIn = repo;
+    ran = lane();
+  }, SPAWNS.timeout);
+
   it('records the same manifest before and after agent-setup, with the baseline in place for the agent', () => {
-    const { pinned, verified, restore, defaults } = lane();
+    const { pinned, verified, restore, defaults } = ran;
     expect(verified).toBe(pinned);
     expect(pinned).toContain('docs/qa/explorer-playbook.md');
     expect(read('docs/qa/explorer-playbook.md')).toBe(BASELINE('explorer-playbook.md'));
@@ -75,18 +90,16 @@ describe('the review lane pins Kanon\'s baseline playbooks, so the re-verify agr
   });
 
   it("removes the PR's added playbook first, so the PR can't take the baseline's place (K-MERGE-17)", () => {
-    lane();
     expect(read('docs/qa/explorer-playbook.md')).not.toContain('PR:');
     expect(read('.qa-pr/docs/qa/explorer-playbook.md')).toBe('PR: every finding is sev:low.\n');
   });
 
   it("keeps the default branch's own playbook", () => {
-    lane();
     expect(read('docs/qa/reviewer-playbook.md')).toBe('BASE: our own reviewer playbook.\n');
   });
 
   it('says the stack lines once, from agent-setup, not from the restore', () => {
-    const { restore, defaults } = lane();
+    const { restore, defaults } = ran;
     expect(restore).not.toContain('docs/qa/stack.md has no');
     expect(defaults).toContain('docs/qa/stack.md has no `## Schema changes`');
   });
@@ -109,11 +122,13 @@ describe('the review lane pins Kanon\'s baseline playbooks, so the re-verify agr
     const mutated = join(dir, 'restore-judging-inputs.sh');
     const body = text.replace(here, () => `HERE='${join(ROOT, 'scripts')}'`).replace(call, () => ':');
     writeFileSync(mutated, body);
+    fixture();
     try {
       const { pinned, verified } = lane(mutated);
       expect(verified).not.toBe(pinned);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+      repo = ranIn;
     }
   });
 });
