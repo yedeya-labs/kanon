@@ -24,7 +24,9 @@
 //     first, and only when EVERY run says so: a signal that is half platform is read as the
 //     other half, because a human triages it and a hidden Kanon bug costs more than noise.
 //   - `kanon`: at two adopters or more, or STARTING AT A RELEASE: absent on the previous
-//     version, which ran that lane at least `RISE.minRuns` times (so its absence means something).
+//     version, on which THE SIGNAL'S OWN ADOPTERS ran that lane at least `RISE.minRuns` times (so
+//     its absence means something). Other adopters' runs don't count: a new adopter whose first
+//     runs fail at its hook never ran the previous release, so nothing started at a release.
 //   - `adopter`: the rest, one adopter only, such as a `failed_stage: hook`.
 // Beside the signals, a RISE: a lane whose failure rate on one release is `RISE.points` or more
 // above its rate on the release before, with at least `RISE.minRuns` runs on each. Platform-coded
@@ -52,15 +54,15 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { KANON_ERRORS, LANES, OUTCOMES, REASONS, STAGES } from '../../actions/agent-telemetry/schema.mjs';
+import { KANON_ERRORS, LANES, OUTCOMES, REASONS, SCHEMAS, STAGES } from '../../actions/agent-telemetry/schema.mjs';
 import { MIN_ADOPTERS, assertNoKey, keyOf } from '../../infra/telemetry/function/aggregate.mjs';
 import { isCliEntry } from '../lib/cli-entry.mjs';
 
 /**
  * "RISING AFTER A RELEASE", and the sample every comparison between two releases needs.
  * - `minRuns`: a lane needs at least this many runs on EACH of the two releases before their
- *   failure rates are compared, and the previous release needs this many runs of a lane before a
- *   signal's absence there counts as "starting at a release". Twenty keeps one bad afternoon at
+ *   failure rates are compared, and the signal's own adopters need this many runs of the lane on the
+ *   previous release before the signal's absence there counts as "starting at a release". Twenty keeps one bad afternoon at
  *   one adopter from reading as a regression.
  * - `points`: the failure rate on the newer release must exceed the older one's by at least
  *   this much, as a fraction (0.10 is ten percentage points).
@@ -76,7 +78,12 @@ export const PLATFORM_REASONS = Object.freeze(['model_never_ran', 'no_model_ran'
 /** The marker an issue body carries its signature in, so the job finds the open issue to update. */
 export const MARKER = 'kanon:bug-signature';
 
-const VERSION = /^(\d+\.\d+\.\d+|dev)$/;
+/** The schema's own `kanon_version` pattern, read from its field list rather than copied. */
+const VERSION = (() => {
+  const f = /** @type {{ re?: RegExp } | undefined} */ (SCHEMAS.run?.[2]?.kanon_version);
+  if (!f?.re) throw new Error("the schema's run row has no kanon_version pattern");
+  return f.re;
+})();
 /** A field the module reads from a row as an ISO time. */
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 
@@ -145,7 +152,7 @@ export function detect(rows, { known = [], tag = 'run' } = {}) {
   /** @type {Set<string>} */
   const keys = new Set();
   /** Every run, failed or not, by lane and version: the denominators. */
-  /** @type {Map<string, { runs: number, failures: number, adopters: Set<string> }>} */
+  /** @type {Map<string, { runs: number, failures: number, adopters: Set<string>, byAdopter: Map<string, number> }>} */
   const totals = new Map();
   /** @type {Map<string, { lane: string, failed_stage: string | null, kanon_error: string | null, reason: string,
    *   kanon_version: string, runs: number, platform: number, adopters: Set<string>, first: string, last: string,
@@ -173,10 +180,11 @@ export function detect(rows, { known = [], tag = 'run' } = {}) {
     const platform = PLATFORM_REASONS.includes(reason) || isPlatformStatus(status);
 
     const tk = `${lane}\u0000${version}`;
-    const t = totals.get(tk) ?? { runs: 0, failures: 0, adopters: new Set() };
+    const t = totals.get(tk) ?? { runs: 0, failures: 0, adopters: new Set(), byAdopter: new Map() };
     totals.set(tk, t);
     t.runs += 1;
     t.adopters.add(key);
+    t.byAdopter.set(key, (t.byAdopter.get(key) ?? 0) + 1);
     if (okOutcome) continue;
     if (!platform) t.failures += 1;
 
@@ -204,7 +212,9 @@ export function detect(rows, { known = [], tag = 'run' } = {}) {
     const previous = previousOf(g.kanon_version);
     const prevTotal = previous ? totals.get(`${g.lane}\u0000${previous}`) : undefined;
     const onPrevious = previous ? groups.has(JSON.stringify([g.lane, g.failed_stage, g.kanon_error, g.reason, previous])) : false;
-    const startsAtRelease = Boolean(prevTotal && prevTotal.runs >= RISE.minRuns && !onPrevious);
+    // Only the runs of this signal's own adopters: another adopter's history says nothing about them.
+    const theirs = prevTotal ? [...g.adopters].reduce((n, k) => n + (prevTotal.byAdopter.get(k) ?? 0), 0) : 0;
+    const startsAtRelease = theirs >= RISE.minRuns && !onPrevious;
     /** @type {Classification} */
     const classification = g.platform === g.runs ? 'platform' : g.adopters.size >= 2 || startsAtRelease ? 'kanon' : 'adopter';
     const base = {
@@ -288,7 +298,7 @@ export function renderIssue(x) {
       `| First seen | ${day(x.first_seen)} |`,
       `| Last seen | ${day(x.last_seen)} |`,
       '',
-      `**Classification: \`${x.classification}\`.** ${CAUSE[x.classification]}${x.starts_at_release ? ` It starts at this release: absent on \`${x.previous_version}\`, which ran this lane at least ${RISE.minRuns} times.` : ''}`,
+      `**Classification: \`${x.classification}\`.** ${CAUSE[x.classification]}${x.starts_at_release ? ` It starts at this release: absent on \`${x.previous_version}\`, on which the adopters affected ran this lane at least ${RISE.minRuns} times.` : ''}`,
     );
     out.push('', 'A human triages this issue; the job that filed it does nothing else (`K-PRIN-6`).', '', `<!-- ${MARKER}=${x.signature} -->`);
     return { signature: x.signature, title, body: out.join('\n') };
@@ -364,7 +374,13 @@ export function main(argv) {
     // The error's name only: a message could quote a row, and a row holds what must not be printed.
     return { code: 2, out: `could not read the input (${e instanceof Error ? e.name : 'error'})` };
   }
-  const r = detect(rows, { known, tag: opts.tag ?? 'run' });
+  let r;
+  try {
+    r = detect(rows, { known, tag: opts.tag ?? 'run' });
+  } catch {
+    // `assertNoKey`'s refusal: the output would hold an adopter key as a value, so none is printed.
+    return { code: 2, out: 'refused: the signals would hold an adopter key, so nothing is printed' };
+  }
   return { code: 0, out: json ? JSON.stringify(r, null, 2) : summary(r) };
 }
 

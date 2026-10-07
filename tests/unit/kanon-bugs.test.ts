@@ -99,6 +99,22 @@ describe('the classification (plan 0002 §2.6)', () => {
     expect(s).toMatchObject({ classification: 'adopter', starts_at_release: false });
   });
 
+  it("counts only the signal's own adopters' runs of the previous release: a new adopter's hook failure is `adopter`", () => {
+    const s = detect([...prior(RISE.minRuns), failed('k9', { failed_stage: 'hook' })]).signals[0];
+    expect(s).toMatchObject({ classification: 'adopter', starts_at_release: false, previous_version: '0.35.0' });
+    // Its own runs of the previous release, together with a second affected adopter's, do count.
+    const both = detect([
+      ...many(RISE.minRuns - 5, () => row('k1', { kanon_version: '0.35.0' })), ...many(5, () => row('k2', { kanon_version: '0.35.0' })),
+      ...many(30, () => row('k3', { kanon_version: '0.35.0' })), failed('k1'), failed('k2'),
+    ]).signals[0];
+    expect(both).toMatchObject({ starts_at_release: true });
+    const short = detect([
+      ...many(RISE.minRuns - 6, () => row('k1', { kanon_version: '0.35.0' })), ...many(5, () => row('k2', { kanon_version: '0.35.0' })),
+      ...many(30, () => row('k3', { kanon_version: '0.35.0' })), failed('k1'), failed('k2'),
+    ]).signals[0];
+    expect(short).toMatchObject({ starts_at_release: false });
+  });
+
   it('is not "starting at a release" when the previous release failed the same way', () => {
     const s = detect([...prior(RISE.minRuns), failed('k1', { kanon_version: '0.35.0' }), failed('k1')]).signals
       .find((x) => x.kanon_version === '0.36.0');
@@ -303,5 +319,8 @@ describe('the CLI', () => {
     const bad = main(['--rows', file('bad.json', '{"repository":"acme-corp/secret-repo"')]);
     expect(bad).toEqual({ code: 2, out: 'could not read the input (SyntaxError)' });
     expect(main(['--rows', file('obj.json', '[1]'), '--known', file('k.json', '{"a":1}')]).code).toBe(2);
+    // A key that is also a lane's name would reach the output: refused, not thrown, and not printed.
+    expect(main(['--rows', file('key.json', JSON.stringify([failed('review')])), '--json']))
+      .toEqual({ code: 2, out: 'refused: the signals would hold an adopter key, so nothing is printed' });
   });
 });

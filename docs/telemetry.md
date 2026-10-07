@@ -369,7 +369,7 @@ node scripts/telemetry/kanon-bugs.mjs --rows <rows.json> [--known <signatures.js
 | Classification | When |
 |---|---|
 | `platform` | **Every** run in it carries a platform code: `api_error_status` 429 (rate limits, usage caps) or 5xx, or the reason `model_never_ran` or `no_model_ran` (an unreachable model). A signal that is only partly platform is read as the rest, because a human triages it and a hidden Kanon bug costs more than noise. |
-| `kanon` | At **two adopters or more**, or **starting at a release**: absent on the previous release seen, which ran that lane at least `RISE.minRuns` times. |
+| `kanon` | At **two adopters or more**, or **starting at a release**: absent on the previous release seen, on which **the signal's own adopters** ran that lane at least `RISE.minRuns` times. Other adopters' runs don't count, so a new adopter whose first runs fail at its hook is `adopter`, not `kanon`. |
 | `adopter` | Everything else: one adopter only, such as a `failed_stage: hook`. |
 
 A signal is **new** when its signature is not in the `--known` list. The signature is a hash of the five identifying fields, never a count, so as the counts grow the job updates the open issue, found by the `kanon:bug-signature` marker in its body, instead of filing another.
