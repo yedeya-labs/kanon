@@ -90,7 +90,7 @@ import { FINDING_SUBJECTS } from '../actions/agent-telemetry/schema.mjs';
 import { nameContext } from '../actions/agent-telemetry/scrub.mjs';
 import { THRESHOLD, countInterlock } from './capability-interlock.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
-import { buildRows, notWritten, readUpstream, renderSent, sendFromEnv, sentSentence } from './lib/finding-rows.mjs';
+import { buildRows, levelOf, notWritten, readUpstream, renderSent, sendFromEnv, sentSentence } from './lib/finding-rows.mjs';
 import { beforeApply } from './lib/labels.mjs';
 import { appPersona } from './app-register.mjs';
 import { signed } from './lib/role-marker.mjs';
@@ -195,8 +195,8 @@ export function classify(f) {
 export function upstreamChoice(value) {
   const v = String(value ?? '').trim();
   if (v === 'filed here' || v === 'drafted') return { upstream: v };
-  if (v === 'sent') return { upstream: 'drafted', level: 'codes' };
-  if (v === 'sent with evidence') return { upstream: 'drafted', level: 'evidence' };
+  const level = levelOf(v);
+  if (level) return { upstream: 'drafted', level };
   return v === '' ? { upstream: 'drafted' } : { upstream: 'drafted', unknown: v };
 }
 

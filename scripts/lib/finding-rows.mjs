@@ -291,7 +291,7 @@ export function sentSentence(level) {
   const readers = level === 'codes'
     ? 'Kanon\'s operator\'s private job reads it'
     : 'Kanon\'s operator\'s private job reads it, and the text is read by Kanon\'s maintainer and by a third-party decision provider, which decides whether a finding becomes a public Kanon issue holding the codes alone';
-  return `This repository's adoption record says \`Upstream findings: ${value}\` (K-LAYOUT-10). Each finding marked "Sent to Kanon" was also written as a finding row for Kanon's telemetry store, ${what}; this repository's telemetry collector sends it, and ${readers}. Nothing here was filed.`;
+  return `This repository's adoption record says \`Upstream findings: ${value}\` (K-LAYOUT-10). Each finding marked "Sent to Kanon" was also written as a finding row for Kanon's telemetry store, ${what}. This repository's telemetry collector sends it once the collector sends finding rows (plan 0006 F4); until then it stays in this run's artifact, and nothing leaves the repository. Once sent, ${readers}. Nothing here was filed.`;
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   levelOf,
   readUpstream,
   sendFromEnv,
+  sentSentence,
 } from '../../scripts/lib/finding-rows.mjs';
 
 /**
@@ -35,6 +36,19 @@ describe('levelOf: the declared value, as the row\'s level', () => {
     expect(levelOf('sent')).toBe('codes');
     expect(levelOf(' sent with evidence ')).toBe('evidence');
     for (const v of ['drafted', 'filed here', '', undefined, 'sent  with evidence', 'Sent']) expect(levelOf(v)).toBeNull();
+  });
+});
+
+describe('sentSentence: says what the draft\'s rows are, true for the release it ships in', () => {
+  // Until F4's collector lists `kanon-finding-*`, a row is written and uploaded, and nothing
+  // leaves the repository; the sentence must not say a row was sent (PR #605's review).
+  it('says the collector sends the rows only from F4, and that until then nothing leaves', () => {
+    for (const level of ['codes', 'evidence'] as const) {
+      const s = sentSentence(level);
+      expect(s).toMatch(/once the collector sends finding rows \(plan 0006 F4\)/);
+      expect(s).toContain('nothing leaves the repository');
+      expect(s).not.toMatch(/telemetry collector sends it, and/);
+    }
   });
 });
 

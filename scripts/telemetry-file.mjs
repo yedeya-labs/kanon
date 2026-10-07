@@ -54,7 +54,10 @@
 // through the scrub and then through `proseProblem`, as the prose does, since the draft shows
 // them in the run's summary. A text either refuses is withheld, and the finding is sent as codes.
 // The scrub's names are the App register's, which the gate job hashed, this repository's and the
-// run's actor: the agent reads the aggregate alone, which names no one.
+// run's actor. That is narrower than §4.2's: the agent also reads this repository's issues on its
+// read token, to deduplicate, so a bare login it read there is not redacted (an `@login` is, by
+// the `mention` rule). Reading those participants here needs a token this job doesn't mint
+// unless the record says `filed here` (`K-AGENT-46`), which is the Owner's decision: kanon#606.
 //
 // THE REPORT, `qa-telemetry-findings.json`, written by the agent at the repository root:
 //
