@@ -486,6 +486,17 @@ export const secretReads = (wf) => {
   return { names, inherits };
 };
 
+/**
+ * The secrets a reusable workflow declares it takes from its caller (`on.workflow_call.secrets`),
+ * upper-cased as `secretReads` reads them.
+ * @param {Record<string, any>} wf
+ * @returns {Set<string>}
+ */
+export const callTakes = (wf) => {
+  const call = isMap(wf.on) && isMap(wf.on.workflow_call) ? wf.on.workflow_call : null;
+  return new Set(Object.keys(call && isMap(call.secrets) ? call.secrets : {}).map((n) => n.toUpperCase()));
+};
+
 /** The headings a document holds exactly once outside a fence, and how often each appears. @param {string} text @param {string} heading */
 const headingCount = (text, heading) => {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
@@ -1003,10 +1014,12 @@ export const diagnose = async (deps, opts) => {
   // the job calls. A secret of Kanon's that a workflow maps is needed whether or not the job calls
   // a lane doctor recognises (a local path, `$/`), and the secrets of each of the checked release's
   // Apps that one maps, both of them, so the Releaser's too when a local release caller maps it
-  // (#415).
-  const mapping = [...workflows].map(([file, wf]) => ({ file, ...secretReads(wf) }));
+  // (#415). A reusable workflow's own `secrets.<NAME>` of a secret its on.workflow_call.secrets
+  // declares reads what its caller passes it, not the repository's: the caller is what maps it, so
+  // it doesn't count here, though it still counts as read for secret.stale (#414).
+  const mapping = [...workflows].map(([file, wf]) => ({ file, ...secretReads(wf), takes: callTakes(wf) }));
   /** @param {string} n */
-  const mappedBy = (n) => mapping.filter((m) => m.names.has(n)).map((m) => m.file);
+  const mappedBy = (n) => mapping.filter((m) => m.names.has(n) && !m.takes.has(n)).map((m) => m.file);
   const laneSecrets = new Set(Object.values(req.lanes).flatMap((l) => l?.secrets ?? []));
   const secretApps = [...new Set([...identities, ...Object.keys(req.identities.apps).filter((a) => appSecrets(a).some((n) => mappedBy(n).length))])].sort();
   const needSecrets = [...new Set([...installed.flatMap((l) => req.lanes[l]?.secrets ?? []), ...secretApps.flatMap(appSecrets), ...[...laneSecrets].filter((n) => mappedBy(n).length)])].sort();

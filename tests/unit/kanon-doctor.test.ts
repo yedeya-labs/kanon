@@ -1550,6 +1550,18 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
     expect(digest.fix.commands).toEqual([`gh secret set DIGEST_WEBHOOK -R ${REPO}`]);
   });
 
+  it("doesn't ask for a secret a reusable workflow only takes from its caller, as a lane's own definition does (Kanon's DIGEST_WEBHOOK)", async () => {
+    const definition = (declares: boolean) => ['name: Digest', 'on:', '  workflow_call:', ...(declares ? ['    secrets:', '      digest_webhook: # GitHub reads a secret name in any case', '        required: true'] : []), '  schedule:', '    - cron: "0 9 * * 1"',
+      'jobs:', '  post:', '    runs-on: ubuntu-latest', '    env:', '      HOOK: ${{ secrets.DIGEST_WEBHOOK }}', '    steps:', '      - run: "true"', ''].join('\n');
+    expect(ids(await l5(all(), { '.github/workflows/digest.yml': definition(true) }))).toEqual([]);
+    const secrets = new Set([...all()].filter((n) => n !== 'DIGEST_WEBHOOK'));
+    expect(ids(await l5(secrets, { '.github/workflows/digest.yml': definition(true) }))).toEqual([]);
+    // Mutation: the same job, in a workflow that doesn't declare it takes the secret, reads the repository's.
+    const r = await l5(secrets, { '.github/workflows/digest.yml': definition(false) });
+    expect(ids(r)).toEqual([`secret.missing ${REPO}`]);
+    expect(r.json.findings[0].message).toBe('lacks DIGEST_WEBHOOK: .github/workflows/digest.yml maps it.');
+  });
+
   it("reports no secret that is not Kanon's, nor one of a per-role App the checked release has no more", async () => {
     const role = Object.keys(REQ.identities.roles).find((x) => !REQ.identities.apps[x])!;
     const other = ['name: Publish', 'on: push', 'permissions: {}', 'jobs:', '  publish:', '    runs-on: ubuntu-latest', '    env:',
