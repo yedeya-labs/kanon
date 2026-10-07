@@ -594,8 +594,9 @@ export const ownerInstallations = async (gh, owner, kind) => {
 
 /**
  * Which of Kanon's Apps the owner already has: each of its installations whose permissions are
- * exactly one App's in rulebook/agent-permissions.json (#363), as apps-check holds them. In the
- * order of the Apps, then of the installations.
+ * exactly one App's in rulebook/agent-permissions.json (#363), as apps-check holds them, and that
+ * subscribes to no events, as `buildManifest` creates each of Kanon's Apps (#462). In the order of
+ * the Apps, then of the installations. `ownersOwn` then drops an App of someone else's.
  * @param {any[]} installs @param {string} owner @param {Record<string, { permissions: Record<string, string> }>} specs
  * @returns {Array<{ app: string, slug: string, installation: number }>}
  */
@@ -603,8 +604,38 @@ export const ownerKanonApps = (installs, owner, specs) =>
   Object.entries(specs).flatMap(([app, spec]) =>
     installs
       .filter((i) => String(i?.account?.login ?? '').toLowerCase() === owner.toLowerCase() && typeof i?.app_slug === 'string' && i?.permissions && typeof i.permissions === 'object' && !permissionDrift(i.permissions, spec.permissions).length)
+      .filter((i) => Array.isArray(i.events) && !i.events.length)
       .map((i) => ({ app, slug: String(i.app_slug), installation: Number(i.id) })),
   );
+
+/**
+ * The owner's own Apps among `found`, each read with `GET /apps/<slug>` (#462). Kanon creates its
+ * Apps private (`buildManifest`), and GitHub installs a private App only on the account that owns
+ * it, so a slug it answers 404 for, as it does a private App to a person's token, is the owner's.
+ * One it answers names its owner: a public App of another account's, such as a bot installed on
+ * an organisation, is never one of Kanon's. Any other answer can't tell, so the App is dropped.
+ * The Releaser's three permissions are ones an ordinary bot can hold, so it needs this most.
+ * @template {{ slug: string }} T
+ * @param {(args: string[]) => Promise<{ status: number | null, stdout: string, stderr: string }>} gh
+ * @param {string} owner @param {T[]} found
+ * @returns {Promise<T[]>}
+ */
+export const ownersOwn = async (gh, owner, found) => {
+  /** @type {Map<string, boolean>} */
+  const own = new Map();
+  for (const slug of new Set(found.map((f) => f.slug))) {
+    const r = await gh(['api', `apps/${slug}`]);
+    /** @type {any} */
+    let app;
+    try {
+      app = r.status === 0 ? JSON.parse(r.stdout) : null;
+    } catch {
+      app = null;
+    }
+    own.set(slug, r.status === 0 ? String(app?.owner?.login ?? '').toLowerCase() === owner.toLowerCase() : /\(HTTP 404\)/.test(r.stderr));
+  }
+  return found.filter((f) => own.get(f.slug));
+};
 
 /**
  * One App, start to finish.

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -1518,10 +1518,10 @@ describe('kanon doctor and Apps no lane uses any more', () => {
 
   it('lists the per-role Apps as app.unused and their secrets as secret.stale, beside a release caller by `$/` (G4)', async () => {
     const dir = migrated();
-    put(dir, { '.github/workflows/release-please.yml': releaseBy('$/.github/workflows/release.yml') });
+    put(dir, releaserFiles({ '.github/workflows/release-please.yml': releaseBy('$/.github/workflows/release.yml') }));
     execFileSync('git', ['-C', dir, 'add', '-A']);
     execFileSync('git', ['-C', dir, 'commit', '-q', '-m', 'release caller']);
-    const github = fakeGitHub({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...appSecrets('releaser'), ...appSecrets('reviewer')]) });
+    const github = releaserOn(fakeGitHub({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...appSecrets('releaser'), ...appSecrets('reviewer')]) }));
     github.st.installations = [{ id: 31, app_slug: 'widgets-reviewer', account: { login: 'acme' } }];
     const r = await run(dir, github, ['--json']);
     expect(ids(r)).toEqual(['app.unused widgets-reviewer', 'secret.stale acme/widgets']);
@@ -1536,6 +1536,87 @@ const releaseBy = (uses: string) => [
   `    uses: ${uses}`,
   '    secrets:', ...appSecrets('releaser').map((n) => `      ${n}: \${{ secrets.${n} }}`), '',
 ].join('\n');
+
+/** The Releaser as an App in use (#441): its register row, and the apps-check caller mapping it. */
+const releaserFiles = (files: Record<string, string>) => ({
+  ...files,
+  'docs/qa/agent-identities.md': registerText([...identitiesOf(LANES), 'releaser']),
+  '.github/workflows/apps-check.yml': appsCheckFile([...identitiesOf(LANES), 'releaser'], PINNED),
+});
+const RELEASER_APP_ID = 4242;
+const RELEASER_BYPASS = { actor_id: RELEASER_APP_ID, actor_type: 'Integration', bypass_mode: 'pull_request' };
+/** The Releaser's App on GitHub, and each ruleset's bypass listing it alone (#441). */
+const releaserOn = (github: ReturnType<typeof fakeGitHub>, bypass: unknown[] = [RELEASER_BYPASS]) => {
+  github.st.apps['widgets-releaser'] = { id: RELEASER_APP_ID, owner: { login: 'acme', type: 'User' }, permissions: permissionsOf(REQ, 'releaser') };
+  github.st.rulesets = github.st.rulesets.map((r) => ({ ...r, bypass_actors: bypass }));
+  return github;
+};
+
+// The Owner, 2026-10-07 (#440, #437): apps-check names each App's secrets literally, so on Kanon's
+// own tree doctor lists the per-role Apps' secrets as stale, and never the three Apps'.
+describe("kanon doctor on Kanon's own workflows (#440, #437)", () => {
+  const kanonTree = () => {
+    const files: Record<string, string> = { 'docs/qa/agent-identities.md': readFileSync(join(ROOT, 'docs/qa/agent-identities.md'), 'utf8') };
+    for (const f of readdirSync(join(ROOT, '.github/workflows')).filter((x) => /\.ya?ml$/.test(x))) files[`.github/workflows/${f}`] = readFileSync(join(ROOT, '.github/workflows', f), 'utf8');
+    return files;
+  };
+  const PER_ROLE = ['implementer', 'explorer', 'reviewer'].flatMap(appSecrets);
+  const APP_SECRETS = ['author', 'judge', 'releaser'].flatMap(appSecrets);
+  const stale = async (files: Record<string, string>) => {
+    // Kanon's tree pins its judging actions to its last release; check against this tree's own.
+    const r = await run(checkout(files), fakeGitHub({ secrets: new Set(['CLAUDE_CODE_OAUTH_TOKEN', ...PER_ROLE, ...APP_SECRETS]) }), ['--json', '--to', PINNED]);
+    return { r, deletes: r.json.findings.filter((f: { id: string }) => f.id === 'secret.stale').flatMap((f: { fix: { commands: string[] } }) => f.fix.commands) };
+  };
+
+  it('lists exactly the per-role pairs as stale, and none of the Author\'s, Judge\'s or Releaser\'s', async () => {
+    const { deletes } = await stale(kanonTree());
+    expect(deletes).toEqual([...PER_ROLE].sort().map((n) => `gh secret delete ${n} -R ${REPO}`));
+  });
+
+  it('lists none while apps-check reads them by a computed name, and says why (mutation)', async () => {
+    const files = kanonTree();
+    const computed = (suffix: string) => `\${{ secrets[format('{0}_${suffix}', matrix.app.secret)] }}`;
+    files['.github/workflows/apps-check.yml'] = files['.github/workflows/apps-check.yml']!
+      .replace(/\$\{\{ matrix\.app\.key == 'author' && secrets\.AUTHOR_APP_ID [^}]*\}\}/g, computed('APP_ID'))
+      .replace(/\$\{\{ matrix\.app\.key == 'author' && secrets\.AUTHOR_APP_PRIVATE_KEY [^}]*\}\}/g, computed('APP_PRIVATE_KEY'));
+    const { r, deletes } = await stale(files);
+    expect(deletes).toEqual([]);
+    expect(r.json.notes.join('\n')).toContain('.github/workflows/apps-check.yml reads secrets by a computed name');
+  });
+});
+
+// #441: a release caller is recognised by what it calls, Kanon's pin, `$/` or a local path, never by
+// the repository's name, so the Releaser it maps is an App in use on Kanon's own repository too.
+describe('kanon doctor and a release caller by any path (#441)', () => {
+  const ADMIN = { actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'pull_request' };
+  const using = (uses: string, bypass?: unknown[]) => {
+    const dir = checkout(releaserFiles({ ...healthyFiles(), '.github/workflows/release-please.yml': releaseBy(uses) }));
+    return run(dir, releaserOn(fakeGitHub({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...appSecrets('releaser')]) }), bypass), ['--json']);
+  };
+  const apps = (r: Result) => r.json.apps.map((a: { identity: string }) => a.identity);
+
+  for (const uses of [`yedeya-labs/kanon/.github/workflows/release.yml@${PINNED}`, '$/.github/workflows/release.yml', '$/.github/workflows/release.yaml', './.github/workflows/release.yml']) {
+    it(`checks the Releaser a caller reaching \`${uses}\` maps as an App in use, its ruleset bypass included`, async () => {
+      const r = await using(uses);
+      expect(apps(r)).toContain('releaser');
+      expect(ids(r)).toEqual([]);
+      expect(r.status).toBe(EXIT.healthy);
+      expect(ids(await using(uses, [ADMIN]))).toEqual(['ruleset.releaser-bypass-missing main', 'ruleset.bypass-extra main']);
+    });
+  }
+
+  it('leaves the Releaser out for a caller of another workflow, or one that maps none of its secrets (mutations)', async () => {
+    for (const uses of ['$/.github/workflows/release-notes.yml', './.github/workflows/releases/release.yml', '$/actions/release.yml', 'octo/kanon/.github/workflows/release.yml@v1.0.0', 'acme/tools/$/.github/workflows/release.yml', './.github/workflows/release.yml.bak']) {
+      const r = await using(uses, [ADMIN]);
+      expect(apps(r)).not.toContain('releaser');
+      expect(ids(r)).not.toContain('ruleset.releaser-bypass-missing main');
+    }
+    const bare = releaseBy('$/.github/workflows/release.yml').replace(/ {4}secrets:\n( {6}.*\n)+/, '');
+    const dir = checkout(releaserFiles({ ...healthyFiles(), '.github/workflows/release-please.yml': bare }));
+    const r = await run(dir, releaserOn(fakeGitHub({ secrets: new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...appSecrets('releaser')]) }), [ADMIN]), ['--json']);
+    expect(apps(r)).not.toContain('releaser');
+  });
+});
 
 // #414 (plan 0005 G16): doctor counts a secret as read when any workflow maps it into a job, not
 // only when a caller it recognises as Kanon's does, so it never tells anyone to delete a secret a
@@ -1560,8 +1641,8 @@ describe('kanon doctor and the secrets a workflow maps (#414)', () => {
   for (const uses of ['$/.github/workflows/release.yml', './.github/workflows/release.yml']) {
     it(`doesn't list the secrets a release caller reaching release.yml by \`${uses.split('/')[0]}/\` maps`, async () => {
       const r = await withSecrets({ '.github/workflows/release-please.yml': releaseBy(uses) });
-      expect(ids(r)).toEqual([]);
-      expect(r.status).toBe(EXIT.healthy);
+      // The Releaser is an App in use here (#441), checked in its own block below.
+      expect(ids(r).filter((x: string) => x.startsWith('secret.'))).toEqual([]);
     });
   }
 
@@ -1591,6 +1672,33 @@ describe('kanon doctor and the secrets a workflow maps (#414)', () => {
     expect(r.json.notes.join('\n')).toContain(`.github/workflows/inherits.yml's job call inherits every secret, so doctor lists none of ${RELEASER.join(', ')} as stale`);
   });
 
+  // #440: a read by a computed name, or of the whole context, can reach any secret the workflow
+  // sees, so it counts as reading every one, as an inheriting job does.
+  const reads = (expr: string, on = 'workflow_dispatch') => ['name: Reads', `on: ${on}`, 'permissions: {}', 'jobs:', '  mint:', '    runs-on: ubuntu-latest',
+    '    steps:', '      - env:', `          ALL: ${expr}`, '        run: "true"', ''].join('\n');
+  for (const expr of ["${{ secrets[format('{0}_APP_ID', matrix.app.secret)] }}", '${{ toJSON(secrets) }}', '${{ secrets.* }}', "${{ format('{{\"A\":{0}}}', toJSON(secrets)) }}"]) {
+    it(`lists nothing as stale while a workflow reads secrets as \`${expr}\`, and says why (#440)`, async () => {
+      const r = await withSecrets({ '.github/workflows/reads.yml': reads(expr) });
+      expect(ids(r)).toEqual([]);
+      expect(r.json.notes.join('\n')).toContain(`.github/workflows/reads.yml reads secrets by a computed name or as a whole (\`secrets[<expression>]\`, \`toJSON(secrets)\`), which can reach any of them, so doctor lists none of ${RELEASER.join(', ')} as stale`);
+    });
+  }
+
+  it('still lists them beside a read by a literal name, a script\'s own text, or a computed read in a workflow only its callers run (#440, mutations)', async () => {
+    for (const files of [
+      { '.github/workflows/reads.yml': reads("${{ secrets['OTHER'] }} ${{ toJSON(secrets.OTHER) }} ${{ 'secrets' }}") },
+      { '.github/workflows/reads.yml': reads('echo secrets[x] $(toJSON secrets)') },
+      { '.github/workflows/reads.yml': reads('${{ toJSON(secrets) }}', '[workflow_call]') },
+    ]) {
+      const r = await withSecrets(files);
+      expect(ids(r)).toEqual(['secret.stale acme/widgets']);
+      expect(r.json.notes.join('\n')).not.toContain('computed name');
+    }
+    // The same read in an if:, which holds an expression without ${{ }}, counts.
+    const inIf = reads('x').replace('      - env:', "      - if: toJSON(secrets) != '{}'\n        env:");
+    expect(ids(await withSecrets({ '.github/workflows/reads.yml': inIf }))).toEqual([]);
+  });
+
   it('lists nothing as stale while a workflow can\'t be read, which might map them', async () => {
     const r = await withSecrets({ '.github/workflows/broken.yml': 'jobs: [\n' });
     expect(ids(r)).toEqual([]);
@@ -1615,8 +1723,8 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
   const preflight = `kanon apps --owner acme --repo widgets --preflight`;
   /** The L5 shape: the lanes Kanon pins, and a release caller that reaches release.yml by `$/`. */
   const l5 = (secrets: Set<string>, extra: Record<string, string> = {}) => {
-    const dir = checkout({ ...healthyFiles(), '.github/workflows/release-please.yml': releaseBy('$/.github/workflows/release.yml'), ...extra });
-    return run(dir, fakeGitHub({ secrets, releases: { [NEXT]: clone(REQ) } }), ['--to', NEXT, '--json']);
+    const dir = checkout({ ...releaserFiles(healthyFiles()), '.github/workflows/release-please.yml': releaseBy('$/.github/workflows/release.yml'), ...extra });
+    return run(dir, releaserOn(fakeGitHub({ secrets, releases: { [NEXT]: clone(REQ) } })), ['--to', NEXT, '--json']);
   };
   const missing = (r: Result) => r.json.findings.filter((f: { id: string }) => f.id === 'secret.missing');
 
@@ -1631,8 +1739,8 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
     expect(ids(r)).toEqual(APPS.map(() => `secret.missing ${REPO}`));
     expect(missing(r).map((f: { message: string }) => f.message.split(',')[0])).toEqual(APPS.map((a) => `lacks ${appSecrets(a).join(' and ')}`));
     const releaser = missing(r)[2];
-    expect(releaser.message).toContain('the releaser App\'s secrets: .github/workflows/release-please.yml maps them.');
-    expect(releaser.fix.commands).toEqual([preflight, 'kanon apps --owner acme --repo widgets --apps releaser']);
+    expect(releaser.message).toContain('the releaser App\'s secrets: .github/workflows/apps-check.yml, .github/workflows/release-please.yml map them.');
+    expect(releaser.fix.commands).toEqual([preflight, 'kanon apps --owner acme --repo widgets --reuse releaser:widgets-releaser=<downloaded>.pem']);
   });
 
   for (const app of APPS) {
@@ -1641,10 +1749,16 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
       expect(ids(r)).toEqual([`secret.missing ${REPO}`]);
       expect(r.json.findings[0].message).toMatch(new RegExp(`^lacks ${appSecrets(app).join(' and ')}, the ${app} App's secrets: \\S`));
       expect(r.json.findings[0].fix.commands[0]).toBe(preflight);
-      // The App the register names gets the line that stores a new key for it; another, the line that creates it.
-      expect(r.json.findings[0].fix.commands[1]).toBe(app === 'releaser' ? `kanon apps --owner acme --repo widgets --apps releaser` : `kanon apps --owner acme --repo widgets --reuse ${app}:widgets-${app}=<downloaded>.pem`);
+      // The App the register names gets the line that stores a new key for it.
+      expect(r.json.findings[0].fix.commands[1]).toBe(`kanon apps --owner acme --repo widgets --reuse ${app}:widgets-${app}=<downloaded>.pem`);
     });
   }
+
+  it('gives an App in use that the register doesn\'t name the line that creates it, not the one that reuses a slug', async () => {
+    const r = await l5(new Set([...all()].filter((n) => !appSecrets('releaser').includes(n))), { 'docs/qa/agent-identities.md': registerText(identitiesOf(LANES)) });
+    expect(r.json.apps.map((a: { identity: string }) => a.identity)).toContain('releaser');
+    expect(missing(r).map((f: { fix: { commands: string[] } }) => f.fix.commands)).toEqual([[preflight, 'kanon apps --owner acme --repo widgets --apps releaser']]);
+  });
 
   it('names every workflow that maps the secrets, and the caller of a lane that takes them without mapping them', async () => {
     const files = healthyFiles();
