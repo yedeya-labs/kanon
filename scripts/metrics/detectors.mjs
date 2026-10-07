@@ -17,6 +17,14 @@
 //              repository nearly every line was last touched in the month before. The dry run
 //              prints its count beside the explicit one, so the gap between them is visible.
 //
+// A CAUSE PREDATES ITS FIX'S REPORT (kanon#563). An item can be a fix's cause, for either
+// detector, only when it merged before the fix was opened and before the earliest issue the fix
+// closes was filed: a defect reported before the item merged can't be the item's. M2's hand check
+// found both detectors' wrong links here: a "see also" cross-reference from a fix opened before
+// the item merged, and SZZ blaming a batch fix's lines on whichever PR last touched them. A fix
+// whose issue is older than every candidate links nothing, which is right: it repairs something
+// older than the window. A date the reader didn't give bounds nothing.
+//
 // THE CODE AREA (§3.7). Condition 3, and SZZ's restriction, need to know which files are code.
 // `codeAreaTest` is the work-item module's `areaOf` (`areas.mjs`) equal to `code`, read with the
 // adopter's stack document (`parseCodeAreas`, `K-LAYOUT-17`) and escalation file, each taking
@@ -42,8 +50,8 @@ import { areaOf } from './areas.mjs';
  * }} DetectorFile a changed file. `previousPath` is a rename's old path. SZZ reads the old-side
  *   lines from `ranges` when given, else from the unified-diff hunks in `patch`.
  * @typedef {string | { name: string }} DetectorLabel
- * @typedef {{ number: number, labels: DetectorLabel[], body?: string | null }} DetectorIssue an
- *   issue the PR closes
+ * @typedef {{ number: number, labels: DetectorLabel[], body?: string | null, createdAt?: string | null }} DetectorIssue
+ *   an issue the PR closes, and when it was filed
  * @typedef {{ number: number, repository?: string | null }} DetectorSource what made a
  *   cross-reference: an issue or PR number, and its `owner/name` when known (another
  *   repository's never links)
@@ -56,13 +64,14 @@ import { areaOf } from './areas.mjs';
  *   mergeCommitSha: string | null,
  *   parentSha?: string | null,
  *   mergedAt: string | null,
+ *   createdAt?: string | null,
  *   commits: DetectorCommit[],
  *   files: DetectorFile[],
  *   closingIssues: DetectorIssue[],
  *   timeline: DetectorEvent[],
  * }} DetectorPr one pull request. `mergedAt` null means not merged, and such a PR is neither an
- *   item nor a revert or fix. `parentSha` is the commit SZZ blames at, default
- *   `<mergeCommitSha>^`.
+ *   item nor a revert or fix. `createdAt` is when it was opened. `parentSha` is the commit SZZ
+ *   blames at, default `<mergeCommitSha>^`.
  * @typedef {(path: string, ranges: LineRange[], atSha: string) => string[] | Promise<string[]>} Blame
  *   the commits that last touched `ranges` of `path` at `atSha`, one SHA per line or deduplicated
  * @typedef {{ pr: number, days: number }} Link a later PR and the whole days from the item's merge
@@ -108,6 +117,22 @@ function after(item, prs) {
 /** The merged PRs in `prs` that merged before `pr` did, oldest first. @param {DetectorPr} pr @param {DetectorPr[]} prs */
 function before(pr, prs) {
   const t = mergedTime(pr); // NaN, unmerged, compares false with everything
+  return prs.filter((p) => mergedTime(p) < t).sort(byMerge);
+}
+
+/**
+ * The time before which a fix's cause must have merged (kanon#563): the earliest of the fix's
+ * merge, its opening and the filing of each issue it closes. NaN for an unmerged fix.
+ * @param {DetectorPr} fix
+ */
+function causeBound(fix) {
+  const known = [fix.createdAt, ...fix.closingIssues.map((i) => i.createdAt)].flatMap((t) => (t ? [Date.parse(t)] : []));
+  return Math.min(mergedTime(fix), ...known.filter((t) => !Number.isNaN(t)));
+}
+
+/** The merged PRs in `prs` that could be `fix`'s cause, by `causeBound`, oldest first. @param {DetectorPr} fix @param {DetectorPr[]} prs */
+function causes(fix, prs) {
+  const t = causeBound(fix); // NaN, unmerged, compares false with everything
   return prs.filter((p) => mergedTime(p) < t).sort(byMerge);
 }
 
@@ -192,7 +217,8 @@ export function sharedCodeFiles(fix, item, isCode) {
 }
 
 /**
- * Whether `fix` is an explicit linked fix of `item` (§3.5), and how. All three must hold:
+ * Whether `fix` is an explicit linked fix of `item` (§3.5), and how. `item` merged before `fix`
+ * was opened and before the issues it closes were filed (`causeBound`), and all three hold:
  *   1. `fix` closes an issue labelled `bug`;
  *   2. that issue, or `fix`, cross-references `item`: a `cross-referenced` event on the item
  *      whose source is the issue or `fix` in this repository, or the issue's "Introduced by"
@@ -204,7 +230,7 @@ export function sharedCodeFiles(fix, item, isCode) {
  * @returns {ExplicitLink | null}
  */
 export function explicitLink(fix, item, { repo, isCode }) {
-  if (!(mergedTime(fix) > mergedTime(item))) return null;
+  if (!(mergedTime(item) < causeBound(fix))) return null;
   const bugs = bugIssues(fix);
   if (bugs.length === 0) return null;
   const sources = new Set([fix.number, ...bugs.map((i) => i.number)]);
@@ -227,7 +253,7 @@ export function explicitLink(fix, item, { repo, isCode }) {
  * @returns {ExplicitLink[]}
  */
 export function explicitLinks(fix, prs, opts) {
-  return before(fix, prs).flatMap((item) => explicitLink(fix, item, opts) ?? []);
+  return causes(fix, prs).flatMap((item) => explicitLink(fix, item, opts) ?? []);
 }
 
 /**
@@ -275,7 +301,8 @@ export function oldRanges(file) {
 /**
  * The earlier merged items SZZ links `fix` to: the old lines `fix` changed in its code-area files,
  * blamed at its parent, were last touched by one of the item's commits (its merge commit, or a
- * head commit, for a project that merges without squashing). A diagnostic only (decision 8).
+ * head commit, for a project that merges without squashing), and the item merged before the fix
+ * was opened and its issues filed (`causeBound`). A diagnostic only (decision 8).
  * @param {DetectorPr} fix @param {DetectorPr[]} prs
  * @param {{ isCode: (path: string) => boolean, blame: Blame }} opts
  * @returns {Promise<Link[]>}
@@ -293,7 +320,7 @@ export async function szzLinks(fix, prs, { isCode, blame }) {
     blamed.push(...(await blame(path, ranges, at)));
   }
   const own = (/** @type {DetectorPr} */ item) => [item.mergeCommitSha, ...item.commits.map((c) => c.sha)].filter((s) => typeof s === 'string');
-  return before(fix, prs)
+  return causes(fix, prs)
     .filter((item) => own(item).some((s) => blamed.some((b) => sameSha(s, b))))
     .map((item) => ({ pr: item.number, days: daysBetween(item, fix) }));
 }

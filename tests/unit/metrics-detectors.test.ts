@@ -21,25 +21,25 @@ const opts = { repo: REPO, isCode };
 type File = { path: string; previousPath?: string | null; status?: string; patch?: string | null; ranges?: { start: number; count: number }[] };
 type Pr = {
   number: number; title?: string; body?: string | null; mergeCommitSha: string | null; parentSha?: string | null; mergedAt: string | null;
-  commits: { sha: string; message: string }[]; files: File[];
-  closingIssues: { number: number; labels: (string | { name: string })[]; body?: string | null }[];
+  createdAt?: string | null; commits: { sha: string; message: string }[]; files: File[];
+  closingIssues: { number: number; labels: (string | { name: string })[]; body?: string | null; createdAt?: string | null }[];
   timeline: { type: string; source?: { number: number; repository?: string | null } | null }[];
 };
 
 const sha = (n: number) => n.toString(16).padStart(8, '0').repeat(5);
 const day = (d: number) => new Date(Date.UTC(2026, 8, 1, 12) + d * 86_400_000).toISOString();
 
-/** A merged PR on day `d`, its merge commit `sha(n)`, changing `src/app.ts`. */
+/** A merged PR on day `d`, opened half a day before, its merge commit `sha(n)`, changing `src/app.ts`. */
 function pr(n: number, d: number, over: Partial<Pr> = {}): Pr {
   return {
-    number: n, title: `feat: item ${n}`, body: '', mergeCommitSha: sha(n), mergedAt: day(d),
+    number: n, title: `feat: item ${n}`, body: '', mergeCommitSha: sha(n), mergedAt: day(d), createdAt: day(d - 0.5),
     commits: [{ sha: sha(n + 1000), message: `feat: item ${n}` }],
     files: [{ path: 'src/app.ts', status: 'modified', patch: '@@ -1,2 +1,3 @@\n a\n-b\n+c\n+d' }],
     closingIssues: [], timeline: [], ...over,
   };
 }
 
-const bug = (n: number, body = '') => ({ number: n, labels: [{ name: 'bug' }], body });
+const bug = (n: number, body = '', createdAt?: string) => ({ number: n, labels: [{ name: 'bug' }], body, ...(createdAt ? { createdAt } : {}) });
 const xref = (n: number, repository: string | null = REPO) => ({ type: 'cross-referenced', source: { number: n, repository } });
 
 describe('the revert detector', () => {
@@ -200,6 +200,62 @@ describe('the explicit linked-fix detector (§3.5)', () => {
     expect(explicitLink({ ...fix, mergedAt: day(-1) }, item, opts)).toBeNull();
     expect(explicitLink({ ...fix, mergedAt: null }, item, opts)).toBeNull();
     expect(fixesOf(item, [{ ...fix, mergedAt: day(-1) }], opts)).toEqual([]);
+  });
+});
+
+describe('a linked fix\'s cause merged before the fix was opened and before its issues were filed (kanon#563)', () => {
+  // Item 10 merges on day 2. Each fix merges on day 6, closes bug issue 30, which cross-references
+  // the item, and changes the item's code file, so only the order of the dates decides.
+  const item = pr(10, 2, { timeline: [xref(30)] });
+  const fixWith = (createdAt: string, issueCreated?: string) => pr(20, 6, { title: 'fix: the crash', createdAt, closingIssues: [bug(30, '', issueCreated)] });
+  const blame = () => [sha(10)];
+
+  it('an item merged after the fix was opened is not an explicit link, despite the cross-reference and the shared code file', () => {
+    // The fix was opened on day 1 and merged on day 6; the item merged in between, on day 2.
+    const fix = fixWith(day(1));
+    expect(explicitLink(fix, item, opts)).toBeNull();
+    expect(explicitLinks(fix, [item, fix], opts)).toEqual([]);
+    expect(fixesOf(item, [item, fix], opts)).toEqual([]);
+    expect(accuracyFields(item, [item, fix], opts)).toEqual({});
+  });
+
+  it('an item merged after the fix\'s closing bug issue was filed is neither an explicit nor an SZZ link', async () => {
+    // The fix was opened on day 5, after the item merged, but its bug was filed on day 1.
+    const fix = fixWith(day(5), day(1));
+    expect(explicitLink(fix, item, opts)).toBeNull();
+    expect(fixesOf(item, [item, fix], opts)).toEqual([]);
+    expect(await szzLinks(fix, [item, fix], { isCode, blame })).toEqual([]);
+  });
+
+  it('the earliest issue the fix closes is the bound, whatever its label', async () => {
+    const fix = { ...fixWith(day(5), day(4)), closingIssues: [bug(30, '', day(4)), { number: 31, labels: [], createdAt: day(1) }] };
+    expect(explicitLink(fix, item, opts)).toBeNull();
+    expect(await szzLinks(fix, [item, fix], { isCode, blame })).toEqual([]);
+  });
+
+  it('an item merged before both is still linked by each detector, its days still merge to merge', async () => {
+    const fix = fixWith(day(5), day(3));
+    expect(explicitLink(fix, item, opts)).toEqual({ pr: 10, days: 4, via: ['cross-reference'], files: ['src/app.ts'] });
+    expect(fixesOf(item, [item, fix], opts)).toEqual([{ pr: 20, days: 4 }]);
+    expect(await szzLinks(fix, [item, fix], { isCode, blame })).toEqual([{ pr: 10, days: 4 }]);
+  });
+
+  it('a fix whose issue predates every candidate links nothing, and the same items, older, are linked', async () => {
+    const fix = fixWith(day(5), day(0));
+    const older = pr(9, -1, { timeline: [xref(30)] });
+    expect(explicitLinks(fix, [item, older, fix], opts).map((l) => l.pr)).toEqual([9]);
+    expect(await szzLinks(fix, [item, older, fix], { isCode, blame: () => [sha(9), sha(10)] })).toEqual([{ pr: 9, days: 7 }]);
+  });
+
+  it('an unknown date bounds nothing: without the fix\'s or the issue\'s, only the merge order applies', async () => {
+    const fix = { ...fixWith(day(5)), createdAt: null };
+    expect(explicitLink(fix, item, opts)).not.toBeNull();
+    expect(await szzLinks({ ...fix, createdAt: undefined }, [item, fix], { isCode, blame })).toEqual([{ pr: 10, days: 4 }]);
+  });
+
+  it('detectorCounts counts neither link for such a fix', async () => {
+    const { counts } = await detectorCounts([item, fixWith(day(5), day(1))], { ...opts, blame });
+    expect(counts).toMatchObject({ fixes: 1, explicit: 0, szz: 0, neither: 1, undetected: 1 });
   });
 });
 
