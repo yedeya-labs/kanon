@@ -86,6 +86,14 @@ describe("the Lead's battery covers its flags (kanon#405)", () => {
     expect(tagged('git-config', 'refused').filter((p) => p.tool === 'Bash' && /^git config /.test(p.command)).length).toBeGreaterThanOrEqual(2);
   });
 
+  it('refuses a program for the far end of a push or fetch, in each spelling the deny rules name', () => {
+    const commands = tagged('git-transport', 'refused').map((p) => (p.tool === 'Bash' ? p.command : ''));
+    for (const shape of [/^git push .*--receive-pack=/, /^git push .*--receive-pack \S/, /^git push -u .*--exec=/, /^git push .*--rec''eive/,
+      /^git push .*--rec""eive/, /^git push .*\\/, /^git push .*--\{/, /^git fetch .*--upload-pack=/, /^git fetch .*--upl \S/, /^git fetch .*--up""load/]) {
+      expect(commands.some((c) => shape.test(c)), String(shape)).toBe(true);
+    }
+  });
+
   it('allows a write under docs/, and every git command on its allow-list', () => {
     expect(tagged('docs-write', 'allowed').map((p) => p.tool === 'Write' && p.file.startsWith('{repo}/docs/'))).toEqual([true]);
     // Each `Bash(git …:*)` rule the arms grant has an allowed probe that it is the longest

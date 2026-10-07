@@ -385,10 +385,14 @@ jobs:
       # it writes only under `docs/`, runs Kanon's scripts by name (the spine puts them on the
       # PATH when `project-setup` is off), commits and pushes to `origin` only, and calls
       # named `gh` subcommands; every other command falls to Claude Code's read-only set.
-      # `git push`/`git fetch` are pinned to `origin`, whose transport ignores the
-      # `--receive-pack`/`--upload-pack` programs a local remote would run. `--setting-sources
+      # `git push`/`git fetch` are pinned to `origin`, and the deny rules refuse the program
+      # either could be handed for the far end (`--receive-pack`, `--exec`, `--upload-pack`, in
+      # each prefix git accepts, and any quote, backslash or brace the shell would join back
+      # into one), so a local `origin` runs none either (kanon#405, the Owner's decision of
+      # 2026-10-07). A rule spells a backslash as four, which the CLI reads as one; no rule may
+      # hold a comma, on which the action splits the list. `--setting-sources
       # user` keeps the project's `.claude/` settings, hooks and MCP servers out (kanon#277).
-      # `tests/unit/lead-shell.test.ts` pins the list. What the list allows is the CLI's
+      # `tests/unit/lead-shell.test.ts` pins both lists. What the lists allow is the CLI's
       # behaviour, so `tests/unit/reviewer-grant-probe.test.ts` is red until the Lead's probe
       # battery has been run with these flags, both arms' (kanon#405). COST CUTOVER:
       # `config_fingerprint` hashes these flags, so this release starts a new fingerprint for
@@ -403,6 +407,9 @@ jobs:
         --allowedTools "Edit(/docs/**)"
         --allowedTools "Bash(kanon-brief-guard:*)" "Bash(kanon-spec-ids:*)" "Bash(kanon-spec-coverage:*)"
         --allowedTools "Bash(git checkout:*)" "Bash(git switch:*)" "Bash(git add:*)" "Bash(git commit:*)" "Bash(git push origin:*)" "Bash(git push -u origin:*)" "Bash(git fetch origin:*)"
+        --disallowedTools "Bash(git push *--rece*)" "Bash(git push *--e*)" "Bash(git fetch *--upl*)" "Bash(git fetch *--e*)"
+        --disallowedTools "Bash(git push *'*)" 'Bash(git push *"*)' 'Bash(git push *\\\\*)' "Bash(git push *{*)"
+        --disallowedTools "Bash(git fetch *'*)" 'Bash(git fetch *"*)' 'Bash(git fetch *\\\\*)' "Bash(git fetch *{*)"
         --allowedTools "Bash(gh pr view:*)" "Bash(gh pr diff:*)" "Bash(gh pr checks:*)" "Bash(gh pr list:*)" "Bash(gh pr create:*)" "Bash(gh pr comment:*)" "Bash(gh pr edit:*)"
         --allowedTools "Bash(gh issue view:*)" "Bash(gh issue list:*)" "Bash(gh issue comment:*)" "Bash(gh label list:*)"
         --allowedTools "Bash(gh run view:*)" "Bash(gh run list:*)" "Bash(gh search:*)" "Bash(gh api:*)"

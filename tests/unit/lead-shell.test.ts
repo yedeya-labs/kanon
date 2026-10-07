@@ -27,17 +27,19 @@ const LANES = [['agent-lead.yml', 'brief'], ['agent-lead-revise.yml', 'revise']]
 
 const words = (args: string) => [...args.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
   .matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]!);
-const allowedTools = (args: string) => {
+const toolsOf = (kind: 'allowed' | 'disallowed') => (args: string) => {
   const w = words(args);
   const out: string[] = [];
   for (let i = 0; i < w.length; i++) {
-    const eq = /^--allowed-?[Tt]ools=(.*)$/.exec(w[i]!);
+    const eq = new RegExp(`^--${kind}-?[Tt]ools=(.*)$`).exec(w[i]!);
     if (eq) { out.push(eq[1]!); continue; }
-    if (!/^--allowed-?[Tt]ools$/.test(w[i]!)) continue;
+    if (!new RegExp(`^--${kind}-?[Tt]ools$`).test(w[i]!)) continue;
     while (i + 1 < w.length && !w[i + 1]!.startsWith('--')) out.push(w[++i]!);
   }
   return out.flatMap((v) => v.split(',')).map((t) => t.trim()).filter(Boolean);
 };
+const allowedTools = toolsOf('allowed');
+const disallowedTools = toolsOf('disallowed');
 
 // THE LIST, pinned. A change to it is a security change the Owner reviews, made here and in
 // both lanes together.
@@ -51,6 +53,22 @@ const EXPECTED = [
   'Bash(gh pr create:*)', 'Bash(gh pr comment:*)', 'Bash(gh pr edit:*)',
   'Bash(gh issue view:*)', 'Bash(gh issue list:*)', 'Bash(gh issue comment:*)', 'Bash(gh label list:*)',
   'Bash(gh run view:*)', 'Bash(gh run list:*)', 'Bash(gh search:*)', 'Bash(gh api:*)',
+];
+
+// THE DENY LIST, pinned (kanon#405, the Owner's decision of 2026-10-07). `git push origin:*` and
+// `git fetch origin:*` match any option after the remote, and `--receive-pack`, `--exec` and
+// `--upload-pack` name a program git runs for the far end: an https `origin` ignores it, a local
+// one runs it. So both arms deny them, in each spelling git accepts (an unambiguous prefix:
+// `--rece`, `--e`, `--upl`; `=` or a space) and each the shell joins back into one (a quote, a
+// backslash, a brace). A rule spells a backslash as four: the CLI halves them when it reads the
+// rule, and its matcher reads the two left as one literal backslash (measured on CLI 2.1.289: with
+// one or two, a push holding a backslash got through). The CLI refuses a brace on its own; the
+// rule is a second layer. `reviewer-grant-probe.mjs` refuses each push spelling and each fetch
+// option for real, and these pin the list on both arms.
+const DENIED = [
+  'Bash(git push *--rece*)', 'Bash(git push *--e*)', 'Bash(git fetch *--upl*)', 'Bash(git fetch *--e*)',
+  "Bash(git push *'*)", 'Bash(git push *"*)', String.raw`Bash(git push *\\\\*)`, 'Bash(git push *{*)',
+  "Bash(git fetch *'*)", 'Bash(git fetch *"*)', String.raw`Bash(git fetch *\\\\*)`, 'Bash(git fetch *{*)',
 ];
 
 // Independent of the pinned list: each word runs a program it is handed, or the project's.
@@ -92,6 +110,11 @@ describe("the Lead's shell is an allow-list that runs no tree code (kanon#243)",
       });
       it('grants exactly the pinned list', () => {
         expect([...allowedTools(ARGS)].sort()).toEqual([...EXPECTED].sort());
+      });
+      it('denies a program for the far end of a push or fetch, in every spelling (kanon#405)', () => {
+        expect([...disallowedTools(ARGS)].sort()).toEqual([...DENIED].sort());
+        // claude-code-action splits each rule list on commas, so a rule may hold none.
+        expect(words(ARGS).filter((x) => /^Bash\(git (push|fetch) /.test(x) && x.includes(','))).toEqual([]);
       });
       it('grants Bash only for named commands that run no program of the tree', () => {
         expect(allowedTools(ARGS).filter((t) => /^Bash\b/.test(t)).length, 'not vacuous').toBeGreaterThan(10);
