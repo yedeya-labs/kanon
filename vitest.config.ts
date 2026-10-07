@@ -4,7 +4,9 @@ export default defineConfig({
   test: {
     // Creates and pre-execs the shared stub shim once, before workers start, so suites that
     // put a stub on PATH don't each pay the OS's first-exec scan (tests/unit/helpers/stub-bin.ts).
-    globalSetup: ['tests/unit/helpers/stub-bin.ts'],
+    // Then puts a trap `gh` and `aws` first on PATH and drops their tokens, so a case that
+    // forgets a stub fails at once and offline (#524, tests/unit/helpers/offline.ts).
+    globalSetup: ['tests/unit/helpers/stub-bin.ts', 'tests/unit/helpers/offline.ts'],
     // No `maxWorkers` or `pool` here, on purpose (#436): the suite is bound by the processes its
     // cases start, so fewer workers on a loaded machine don't shrink the work, they only stretch
     // it. Capped at 8 of 16 cores, a run alone took 54 s instead of 39 s, and two runs at once
