@@ -164,6 +164,13 @@ jobs:
             docs/qa/overseer-playbook.md. Audit the pipeline from the AGGREGATE, read-only
             and out of the hot path. The repository is ${{ github.repository }}.
 
+            THIS RUN'S TRIGGER is `${{ github.event_name }}`. `schedule` is the weekly audit and
+            `workflow_dispatch` a member's request. `pull_request_target` is the RUNTIME-VERSION
+            TRIGGER: a merged pull request moved this repository's Kanon pin, and the lane ran
+            you only because the agent runtime is now newer than the capability ledger's
+            watermark. Two rules below change on it: the capability review is due whatever the
+            week, and a `degraded` store is expected.
+
             WHAT YOU WRITE. You file nothing, comment on nothing and close nothing: your
             token reads only. You write ONE file, `qa-overseer-audit.json` at the repository
             root, and a step after you files from it:
@@ -221,7 +228,12 @@ jobs:
               against the machine-stamped duration: an empty or degraded run is
               self-evident). Coverage gaps: the routes the Explorer's summaries list against
               `coverage.json`. When the store is absent or degraded, say so in the audit, and
-              audit from GitHub alone: an unreadable store is a finding, not a pass.
+              audit from GitHub alone: an unreadable store is a finding, not a pass. EXCEPT ON
+              THE RUNTIME-VERSION TRIGGER (`pull_request_target`): the store's role trusts only
+              the default branch's ref, and this event's token names the pull request instead,
+              so a `degraded` store is EXPECTED there. Say in one line that the store is not
+              read on this trigger, and raise no finding for it. An `absent` store is judged as
+              on any run.
             - Semantic-recall clusters, if `qa-store-export/qa-clusters.md` exists: candidate
               "same class of bug recurring" groups. They are HINTS TO VERIFY, never findings:
               confirm each against the real issues before proposing a systemic fix. If the
@@ -264,11 +276,16 @@ jobs:
               THE AUDIT, in any form, with any value, under any decoration: any of them would
               make a block-less audit the anchor and orphan the real one. Write "capability
               state not carried this run" and name no field.
-              DUE TEST: if the last capability audit's line reads `ran, through …` AND that
-              audit is dated in the CURRENT ISO week (Monday to Sunday, UTC), print exactly
-              `Capability watch: not due this audit` as the `### Capability watch` section,
-              then skip the rest of this bullet. Otherwise run it. Match on `ran, through`
-              specifically, never on any `Capability watch:` line.
+              DUE TEST: ON THE RUNTIME-VERSION TRIGGER (`pull_request_target`) THE REVIEW IS
+              ALWAYS DUE, whatever the week: skip this test and run it, because the runtime
+              moved since the last review. Otherwise: if the last capability audit's line reads
+              `ran, through …` AND that audit is dated in the CURRENT ISO week (Monday to
+              Sunday, UTC), print exactly `Capability watch: not due this audit` as the
+              `### Capability watch` section, then skip the rest of this bullet. Otherwise run
+              it. Match on `ran, through` specifically, never on any `Capability watch:` line.
+              A runtime-triggered audit is a capability audit like any other: it carries its
+              `Ledger delta` and becomes the anchor, so a weekly run later that week finds its
+              `ran, through` and is not due.
               TWO directions, both required:
               (A) feature to operation. The watermark lives in the AUDIT ISSUE, not in the
               ledger, which you cannot write. Read it from the last capability audit's

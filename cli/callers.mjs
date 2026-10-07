@@ -40,7 +40,11 @@ export const kanonRelease = () => `v${JSON.parse(readFileSync(new URL('../packag
  * `workflow_dispatch` inputs, each the lane's own input passed through by name, `true` when a
  * dispatch must give it. `ci` adds a `workflow_run` of the adopter's CI (`'default'` limits it to
  * the default branch); `schedule` is the cron the caller suggests, which the adopter may change.
- * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', schedule?: string }>}
+ * `pinMoved` adds the Overseer's runtime-version trigger (kanon#423): a `pull_request_target`
+ * that closed a pull request on the default branch which changed this caller file, the one place
+ * the adopter's agent runtime moves (it is pinned per Kanon release). The lane audits on it only
+ * when the runtime changed, so it costs a short gate job on any other Kanon upgrade.
+ * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', schedule?: string, pinMoved?: boolean }>}
  */
 export const TRIGGERS = {
   'agent-triage': { name: 'Triage (Implementer)', job: 'triage', issues: ['labeled'], dispatch: { issue_number: true } },
@@ -60,7 +64,7 @@ export const TRIGGERS = {
   'agent-explore': { name: 'Explore (Explorer)', job: 'explore', schedule: '0 3 * * *', dispatch: { tier: false } },
   'agent-dispatch-sweep': { name: 'Dispatch sweep (Lead)', job: 'sweep', schedule: '30 4 * * *', dispatch: { apply: false } },
   'agent-code-audit': { name: 'Code audit (Explorer)', job: 'audit', schedule: '30 7 */3 * *', dispatch: {} },
-  'agent-overseer': { name: 'Overseer (Overseer)', job: 'oversee', schedule: '0 6 * * 1', dispatch: {} },
+  'agent-overseer': { name: 'Overseer (Overseer)', job: 'oversee', schedule: '0 6 * * 1', dispatch: {}, pinMoved: true },
 };
 
 /** A YAML scalar, double-quoted when plain would be read as something else. @param {string} s */
@@ -99,6 +103,10 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch }) => {
       out.push(`      ${k}:`, `        description: ${JSON.stringify(input.description)}`, `        required: ${required}`);
       if (input.type === 'boolean') out.push('        type: boolean', '        default: false');
     }
+  }
+  if (t.pinMoved) {
+    out.push('  # The runtime-version trigger: a merged pull request that moves this file\'s Kanon pin.',
+      '  pull_request_target:', '    types: [closed]', `    branches: [${y(defaultBranch)}]`, '    paths:', `      - .github/workflows/${lane}.yml`);
   }
   out.push('', 'permissions:');
   for (const [k, v] of Object.entries(spec.grant)) out.push(`  ${k}: ${v}`);

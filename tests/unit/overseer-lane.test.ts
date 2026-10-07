@@ -6,6 +6,7 @@ import { unlinkedQuery } from '../../scripts/capability-interlock.mjs';
 import { storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 import { handedIn, mintFor, readFlattened, workflowText } from './helpers/called-workflow.js';
 import { callerInputs, realGroup } from './helpers/smoke-group.js';
+import { parseCondition } from './helpers/job-condition.js';
 
 /**
  * Plan 0004 step 13: the Overseer, moved from the reference adopter as a Kanon lane
@@ -63,7 +64,7 @@ describe('the store job and the overseer job (plan 0004 P9\'s check, applied at 
   });
 
   it('exports the Overseer\'s kind before the agent, and the agent reads that export', () => {
-    expect(wf.jobs.export!.steps).toEqual([{ uses: '$/actions/qa-store', id: 'store', with: { operation: 'export', kind: 'overseer' } }]);
+    expect(wf.jobs.export!.steps).toEqual([{ uses: '$/actions/qa-store', id: 'store', with: { operation: 'export', variables: '${{ toJSON(vars) }}', kind: 'overseer' } }]);
     const exported = steps.find((s) => s.uses?.startsWith('actions/download-artifact@'))!;
     expect(handedIn(LANE_FILE, 'overseer', 'artifact-name')).toBe('${{ needs.export.outputs.artifact-name }}');
     expect(exported.with).toEqual({ name: '${{ inputs.artifact-name }}', path: 'qa-store-export' });
@@ -220,9 +221,10 @@ describe('who files what (decision 12)', () => {
     const gateSteps = (gate.steps ?? []) as Step[];
     const read = gateSteps.find((s) => s.id === 'upstream')!;
 
-    it('is read in the gate job, after the membership gate and only when it admitted, from the default branch', () => {
-      expect(gateSteps.findIndex((s) => s.id === 'upstream')).toBeGreaterThan(gateSteps.findIndex((s) => s.id === 'gate'));
-      expect(read.if).toBe("steps.gate.outputs.member == 'true'");
+    it('is read in the gate job, after the membership gate and only when an audit is due, from the default branch', () => {
+      expect(gateSteps.findIndex((s) => s.id === 'upstream')).toBeGreaterThan(gateSteps.findIndex((s) => s.id === 'runtime'));
+      expect(gateSteps.findIndex((s) => s.id === 'runtime')).toBeGreaterThan(gateSteps.findIndex((s) => s.id === 'gate'));
+      expect(read.if).toBe("steps.runtime.outputs.due == 'true'");
       expect(read.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
       expect(read.run).toContain('upstream="$(node "$KANON/scripts/upstream-findings.mjs")"');
       expect(read.run).toContain('printf \'upstream=%s\\n\' "$upstream" >> "$GITHUB_OUTPUT"');
@@ -417,13 +419,100 @@ describe('the workflow around it', () => {
     expect(caller.permissions).toEqual({ contents: 'read', issues: 'read', actions: 'write', 'id-token': 'write' });
   });
 
-  it('serialises runs, admits only its caller\'s two triggers, and bounds every job', () => {
+  it('serialises runs, admits only its caller\'s triggers, and bounds every job', () => {
     expect({ ...wf.concurrency, group: realGroup(wf.concurrency.group) }).toEqual({ group: 'agent-overseer', 'cancel-in-progress': false });
-    expect(wf.jobs.gate!.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'");
+    expect(wf.jobs.gate!.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request_target' && github.event.action == 'closed' && github.event.pull_request.merged == true)");
     for (const [name, job] of Object.entries(wf.jobs)) expect(job['timeout-minutes'], name).toBeGreaterThan(0);
   });
 
   it('with no hook, nothing in the lane waits on the store being present: the audit runs without memory', () => {
     for (const [name, job] of Object.entries(wf.jobs)) expect(String(job.if ?? ''), name).not.toMatch(/outputs\.(present|state)/);
+  });
+});
+
+// kanon#423 (plan 0004 decision 12, amended 2026-10-06): the runtime-version trigger. A caller
+// may also run the lane on a merged pull request that moves its Kanon pin, and the lane audits
+// only when the agent runtime changed (the Owner's decision), which `scripts/runtime-bump.mjs`
+// decides in the gate job (tests/library/runtime-bump.test.ts holds the decision).
+describe('the runtime-version trigger', () => {
+  const gate = wf.jobs.gate!;
+  const gateSteps = (gate.steps ?? []) as Step[];
+  const runtime = gateSteps.find((s) => s.id === 'runtime')!;
+
+  /** The gate job's `if:`, evaluated against one event (`==` is case-insensitive on strings, as GitHub's). */
+  type Ctx = Record<string, string | boolean | undefined>;
+  type Cond = ReturnType<typeof parseCondition>;
+  const value = (n: Cond, ctx: Ctx): unknown => {
+    switch (n.kind) {
+      case 'lit': return n.value;
+      case 'ref': return ctx[n.path];
+      case 'not': return !value(n.arg, ctx);
+      case 'and': return Boolean(value(n.left, ctx)) && Boolean(value(n.right, ctx));
+      case 'or': return Boolean(value(n.left, ctx)) || Boolean(value(n.right, ctx));
+      case 'cmp': {
+        const [l, r] = [value(n.left, ctx), value(n.right, ctx)];
+        if (n.op === '==') return l === r;
+        if (n.op === '!=') return l !== r;
+        throw new Error(`unmodelled ${n.op}`);
+      }
+      default: throw new Error(`unmodelled ${n.kind}`);
+    }
+  };
+  const admits = (event: string, action?: string, merged?: boolean) => value(parseCondition(String(gate.if)), {
+    'github.event_name': event, 'github.event.action': action, 'github.event.pull_request.merged': merged,
+  });
+
+  it('starts the gate job on a merged pull_request_target, beside the schedule and a dispatch', () => {
+    expect(admits('schedule')).toBe(true);
+    expect(admits('workflow_dispatch')).toBe(true);
+    expect(admits('pull_request_target', 'closed', true)).toBe(true);
+  });
+
+  it('turns away a pull request closed unmerged, any other action, and the smoke run\'s events', () => {
+    expect(admits('pull_request_target', 'closed', false)).toBe(false);
+    expect(admits('pull_request_target', 'opened', false)).toBe(false);
+    expect(admits('pull_request_target', 'labeled', true)).toBe(false);
+    for (const event of ['pull_request', 'merge_group', 'push', 'workflow_run']) expect(admits(event, 'closed', true), event).toBe(false);
+  });
+
+  it('decides in the gate job, right after the membership gate and only when it admitted', () => {
+    expect(gateSteps.findIndex((s) => s.id === 'runtime')).toBe(gateSteps.findIndex((s) => s.id === 'gate') + 1);
+    expect(runtime.if).toBe("steps.gate.outputs.member == 'true'");
+    expect(runtime.env).toEqual({ GH_TOKEN: '${{ github.token }}' });
+    expect(runtime.run).toContain('due="$(node "$KANON/scripts/runtime-bump.mjs")"');
+    expect(runtime.run).toContain('printf \'due=%s\\n\' "$due" >> "$GITHUB_OUTPUT"');
+    expect((gate as { outputs?: Record<string, string> }).outputs?.due).toBe('${{ steps.runtime.outputs.due }}');
+  });
+
+  it('holds the store job, and so the agent and the filing, behind the answer', () => {
+    expect(wf.jobs.export!.if).toBe("needs.gate.outputs.member == 'true' && needs.gate.outputs.due == 'true'");
+    // Everything that spends goes through the export: the agent's job needs it to succeed.
+    expect(overseer.needs).toBe('export');
+  });
+
+  // The review on #430: the agent must learn the trigger from the workflow, and on it the weekly
+  // due test and the store's expected refusal must not cancel or taint the review it was run for.
+  it('tells the agent its trigger, from the event, not by inference', () => {
+    expect(prompt).toContain("THIS RUN'S TRIGGER is `${{ github.event_name }}`.");
+    expect(flat).toContain('`pull_request_target` is the RUNTIME-VERSION TRIGGER');
+  });
+
+  it('makes the capability review due whatever the week on that trigger, and keeps the weekly due test otherwise', () => {
+    expect(flat).toContain('DUE TEST: ON THE RUNTIME-VERSION TRIGGER (`pull_request_target`) THE REVIEW IS ALWAYS DUE, whatever the week: skip this test and run it');
+    expect(flat).toContain("Otherwise: if the last capability audit's line reads `ran, through …` AND that audit is dated in the CURRENT ISO week (Monday to Sunday, UTC), print exactly `Capability watch: not due this audit`");
+    // The anchor rules hold: the triggered audit carries its delta and anchors the next run.
+    expect(flat).toContain('A runtime-triggered audit is a capability audit like any other: it carries its `Ledger delta` and becomes the anchor');
+  });
+
+  it('treats a degraded store as expected on that trigger, and as a finding otherwise', () => {
+    expect(flat).toContain('an unreadable store is a finding, not a pass. EXCEPT ON THE RUNTIME-VERSION TRIGGER (`pull_request_target`)');
+    expect(flat).toContain('so a `degraded` store is EXPECTED there. Say in one line that the store is not read on this trigger, and raise no finding for it. An `absent` store is judged as on any run.');
+  });
+
+  it('fails the gate job if the decision itself fails, rather than reading an empty answer', () => {
+    const script = (reader: string) => `${runtime.run!.replace('node "$KANON/scripts/runtime-bump.mjs"', reader)}\necho reached`;
+    const bash = (reader: string) => spawnSync('bash', ['-e', '-c', script(reader)], { env: { ...process.env, GITHUB_OUTPUT: '/dev/null' }, encoding: 'utf8' });
+    expect(bash('exit 2').stdout).not.toContain('reached');
+    expect(bash('echo false').stdout).toBe('reached\n');
   });
 });

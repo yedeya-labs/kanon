@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
-import { loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
+import { callerFile, loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
 import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, laneCatalogue, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, usage, USAGE, workflowName } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 
@@ -478,10 +478,20 @@ describe('the callers kanon init writes', () => {
     ...(t.review ? ['pull_request_review:submitted'] : []),
     ...(t.pr ? [`pull_request:${[...t.pr].sort().join(',')}`] : []),
     ...(t.prTarget ? [`pull_request_target:${[...t.prTarget].sort().join(',')}`] : []),
+    ...(t.pinMoved ? ['pull_request_target:closed'] : []),
     ...(t.issues ? [`issues:${[...t.issues].sort().join(',')}`] : []),
     ...(t.schedule ? ['schedule'] : []),
     `workflow_dispatch:${Object.keys(t.dispatch).sort().join(',')}`,
   ];
+
+  it("writes the Overseer's runtime-version trigger on its own file, on the default branch (kanon#423)", () => {
+    const text = callerFile('agent-overseer', REQ.lanes['agent-overseer']!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'trunk' });
+    expect(text).toContain('  pull_request_target:\n    types: [closed]\n    branches: [trunk]\n    paths:\n      - .github/workflows/agent-overseer.yml\n');
+    // No other lane's caller gets it.
+    for (const lane of Object.keys(REQ.lanes).filter((l) => l !== 'agent-overseer')) {
+      expect(callerFile(lane, REQ.lanes[lane]!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'trunk' }), lane).not.toContain('types: [closed]\n    branches:');
+    }
+  });
 
   it("holds each lane's triggers to docs/lanes.md's table, event by event", () => {
     const section = readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8').split('## Which lanes are available')[1]!.split('\n## ')[0]!;

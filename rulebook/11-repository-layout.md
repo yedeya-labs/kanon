@@ -152,7 +152,7 @@ Watermark: <version>
 
 **Why.** The weekly review reads the dispositions (`K-SELF-16`) and the watermark (`K-SELF-17`) by exact match. A decorated watermark matches nothing and orphans every later run.
 
-**Enforced by.** The watermark reader's exact-line match; the rest is prose only.
+**Enforced by.** The watermark reader's exact-line match (`parseWatermark` in [`scripts/lib/runtime-bump.mjs`](../scripts/lib/runtime-bump.mjs), which the Overseer's runtime-version trigger runs, and the lane's anchor query); the rest is prose only.
 
 **Class.** framework
 

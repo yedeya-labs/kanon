@@ -133,6 +133,7 @@ jobs:
         id: store
         with:
           operation: last-green
+          variables: ${{ toJSON(vars) }}
 
   # THE CHANGE GATE'S DECISION, with no credentials: it reads the store job's outputs. It runs
   # whatever happened to that job (`!cancelled()`), because a store job that failed must sweep,
@@ -173,6 +174,7 @@ jobs:
       - uses: $/actions/qa-store
         with:
           operation: record-skip
+          variables: ${{ toJSON(vars) }}
           commit: ${{ github.sha }}
           trigger: ${{ github.event_name }}
           tier: all
@@ -223,5 +225,6 @@ jobs:
       - uses: $/actions/qa-store
         with:
           operation: put
+          variables: ${{ toJSON(vars) }}
           kind: explorer
           report: ${{ runner.temp }}/kanon-explore/qa-explore-summary.json

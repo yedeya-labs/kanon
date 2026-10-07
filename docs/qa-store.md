@@ -8,7 +8,7 @@ This page is the contract, then the AWS implementation and its runbook.
 
 ### The hook
 
-`.github/actions/qa-store/action.yml` is a composite action you write, when you run a store. Kanon's [`qa-store` block](../actions/qa-store/action.yml) calls it with five string inputs:
+`.github/actions/qa-store/action.yml` is a composite action you write, when you run a store. Kanon's [`qa-store` block](../actions/qa-store/action.yml) calls it with six string inputs:
 
 | Input | What |
 |---|---|
@@ -17,6 +17,7 @@ This page is the contract, then the AWS implementation and its runbook.
 | `dir` | A directory the block made for this operation. The hook reads and writes only the files below. |
 | `from` | `export` and `cost-rows`: the window's start, a store stamp such as `20260904T120245Z`, exclusive. |
 | `to` | `cost-rows`: the window's end, a store stamp, inclusive. Empty means now. |
+| `variables` | Your repository's Actions variables, as JSON (`toJSON(vars)`, read by the lane's store step). A composite action can't read `vars` itself, so this is where the hook finds its store's coordinates: read one with `fromJSON(inputs.variables \|\| '{}').<NAME>`. Keep anything that names your cloud account here, not in the committed hook. |
 
 The block reads the hook from a checkout of the commit the run is for, made without persisted credentials.
 
@@ -88,7 +89,7 @@ The one thing the environment did that the ref does not is name the store jobs i
 
 ### Setting it up
 
-1. **Write the hook.** For Kanon's AWS store it is one call of Kanon's AWS action (below). For any other store, implement the five operations on the files above.
+1. **Write the hook.** For Kanon's AWS store it is one call of Kanon's AWS action (below), with the role and the bucket read from two repository variables, so the account id they carry is never committed. For any other store, implement the five operations on the files above, reading anything account-specific from `variables` the same way.
 2. **Grant `id-token: write` and `contents: read` in the caller** of each store-coupled lane. Kanon's lane uses `id-token` only in its store jobs, and their checkout needs `contents: read`. A lane that exports the store, such as the code audit, also needs `actions: write`, which only its delete job uses.
 
 ## Kanon's AWS implementation
@@ -128,7 +129,14 @@ node infra/qa-store/aws/provision.mjs --repository <owner>/<repo> --region <regi
 
 It needs `gh`, signed in with read access to the repository: it reads the default branch and the subject prefix from GitHub's API and prints the subject it will trust. A repository with a custom subject template (`use_default: false`) is refused, because its subject is not a branch ref; pass the exact subject with `--subject` instead. `--subject` may be repeated, to trust both prefix forms while a repository moves between them. The script reads the default branch from the API even then, and refuses a subject on any other branch: trusting another branch would let anyone who can push to it reach the store. Re-running it on an existing stack replaces the trust in place: an older stack that trusted the `kanon-qa-store` environment trusts the default branch's ref instead, and the environment can then be deleted.
 
-Pass `--no-oidc-provider` if `aws iam list-open-id-connect-providers` already lists `token.actions.githubusercontent.com`. Put the store in the reference environment's account (`K-OBS-17`). The last command prints the stack's outputs, `RoleArn`, `TableName` and `BucketName`, which the hook names:
+Pass `--no-oidc-provider` if `aws iam list-open-id-connect-providers` already lists `token.actions.githubusercontent.com`. Put the store in the reference environment's account (`K-OBS-17`). The last command prints the stack's outputs, `RoleArn`, `TableName` and `BucketName`. Store the two that name your account as repository variables, which the hook reads, never in a committed file:
+
+```sh
+gh variable set QA_STORE_ROLE_ARN --body '<RoleArn>' -R <owner>/<repo>
+gh variable set QA_STORE_BUCKET --body '<BucketName>' -R <owner>/<repo>
+```
+
+Then write the hook, with the table and the region in it:
 
 <!-- x-release-please-start-version -->
 
@@ -141,6 +149,7 @@ inputs:
   dir: { required: true }
   from: { required: false, default: "" }
   to: { required: false, default: "" }
+  variables: { required: false, default: "" }
 runs:
   using: composite
   steps:
@@ -151,11 +160,13 @@ runs:
         dir: ${{ inputs.dir }}
         from: ${{ inputs.from }}
         to: ${{ inputs.to }}
-        role-arn: <RoleArn>
+        role-arn: ${{ fromJSON(inputs.variables || '{}').QA_STORE_ROLE_ARN }}
         region: <region>
         table: <TableName>
-        bucket: <BucketName>
+        bucket: ${{ fromJSON(inputs.variables || '{}').QA_STORE_BUCKET }}
 ```
+
+With either variable unset the AWS action has no role or no bucket, and fails: a read is then `degraded` and a write fails its job.
 
 <!-- x-release-please-end -->
 
@@ -184,7 +195,7 @@ jobs:
     with:
       task: ${{ inputs.task }}
       apply: ${{ inputs.apply }}
-      role-arn: <RoleArn>
+      role-arn: ${{ vars.QA_STORE_ROLE_ARN }}
       region: <region>
       table: <TableName>
 ```
