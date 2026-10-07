@@ -1591,6 +1591,33 @@ describe('kanon doctor and the secrets a workflow maps (#414)', () => {
     expect(r.json.notes.join('\n')).toContain(`.github/workflows/inherits.yml's job call inherits every secret, so doctor lists none of ${RELEASER.join(', ')} as stale`);
   });
 
+  // #440: a read by a computed name, or of the whole context, can reach any secret the workflow
+  // sees, so it counts as reading every one, as an inheriting job does.
+  const reads = (expr: string, on = 'workflow_dispatch') => ['name: Reads', `on: ${on}`, 'permissions: {}', 'jobs:', '  mint:', '    runs-on: ubuntu-latest',
+    '    steps:', '      - env:', `          ALL: ${expr}`, '        run: "true"', ''].join('\n');
+  for (const expr of ["${{ secrets[format('{0}_APP_ID', matrix.app.secret)] }}", '${{ toJSON(secrets) }}', '${{ secrets.* }}', "${{ format('{{\"A\":{0}}}', toJSON(secrets)) }}"]) {
+    it(`lists nothing as stale while a workflow reads secrets as \`${expr}\`, and says why (#440)`, async () => {
+      const r = await withSecrets({ '.github/workflows/reads.yml': reads(expr) });
+      expect(ids(r)).toEqual([]);
+      expect(r.json.notes.join('\n')).toContain(`.github/workflows/reads.yml reads secrets by a computed name or as a whole (\`secrets[<expression>]\`, \`toJSON(secrets)\`), which can reach any of them, so doctor lists none of ${RELEASER.join(', ')} as stale`);
+    });
+  }
+
+  it('still lists them beside a read by a literal name, a script\'s own text, or a computed read in a workflow only its callers run (#440, mutations)', async () => {
+    for (const files of [
+      { '.github/workflows/reads.yml': reads("${{ secrets['OTHER'] }} ${{ toJSON(secrets.OTHER) }} ${{ 'secrets' }}") },
+      { '.github/workflows/reads.yml': reads('echo secrets[x] $(toJSON secrets)') },
+      { '.github/workflows/reads.yml': reads('${{ toJSON(secrets) }}', '[workflow_call]') },
+    ]) {
+      const r = await withSecrets(files);
+      expect(ids(r)).toEqual(['secret.stale acme/widgets']);
+      expect(r.json.notes.join('\n')).not.toContain('computed name');
+    }
+    // The same read in an if:, which holds an expression without ${{ }}, counts.
+    const inIf = reads('x').replace('      - env:', "      - if: toJSON(secrets) != '{}'\n        env:");
+    expect(ids(await withSecrets({ '.github/workflows/reads.yml': inIf }))).toEqual([]);
+  });
+
   it('lists nothing as stale while a workflow can\'t be read, which might map them', async () => {
     const r = await withSecrets({ '.github/workflows/broken.yml': 'jobs: [\n' });
     expect(ids(r)).toEqual([]);

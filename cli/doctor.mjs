@@ -476,25 +476,74 @@ export const kanonCall = (uses) => {
 };
 
 /**
+ * The triggers a workflow runs on, read from its `on:` as a name, a list or a map. Null when `on:`
+ * is none of those, which doctor can't read.
+ * @param {Record<string, any>} wf
+ * @returns {string[] | null}
+ */
+const triggers = (wf) => typeof wf.on === 'string' ? [wf.on] : Array.isArray(wf.on) ? wf.on.map(String) : isMap(wf.on) ? Object.keys(wf.on) : null;
+
+/**
+ * Whether an expression reads the `secrets` context other than by a literal name: an index by an
+ * expression (`secrets[format('{0}_APP_ID', x)]`), or the whole context (`toJSON(secrets)`,
+ * `secrets.*`, `${{ secrets }}`). Such a read can reach any secret the workflow sees (#440).
+ * @param {string} expr the text inside `${{ }}`, or an `if:`
+ */
+const computedRead = (expr) => /(?<![\w.])secrets(?![\w-])/.test(expr
+  .replace(/(?<![\w.])secrets\s*(?:\.\s*[A-Za-z_][A-Za-z0-9_-]*|\[\s*'[A-Za-z_][A-Za-z0-9_-]*'\s*\])/g, '')
+  .replace(/'(?:[^']|'')*'/g, "''"));
+
+/**
+ * The expressions a string holds, each `${{ }}`'s text, read past a `}}` inside a quoted literal
+ * (`format('{{"A":{0}}}', x)`).
+ * @param {string} v
+ */
+const expressions = (v) => {
+  /** @type {string[]} */
+  const out = [];
+  for (let at = v.indexOf('${{'); at !== -1; at = v.indexOf('${{', at)) {
+    let i = at + 3;
+    let quoted = false;
+    for (; i < v.length; i++) {
+      if (v[i] === "'") quoted = !quoted;
+      else if (!quoted && v.startsWith('}}', i)) break;
+    }
+    out.push(v.slice(at + 3, i));
+    at = i + 2;
+  }
+  return out;
+};
+
+/**
  * The secrets a workflow maps into its jobs: each name an expression reads as `secrets.<NAME>` or
  * `secrets['<NAME>']` anywhere outside its `on:` (where a reusable workflow declares the secrets
- * it takes, which reads none), upper-cased as GitHub stores them; and the jobs that pass on every
- * secret with `secrets: inherit`. Whatever a job calls, a lane, the release workflow by any path,
- * or nothing, its secrets count (#414).
+ * it takes, which reads none), upper-cased as GitHub stores them; the jobs that pass on every
+ * secret with `secrets: inherit`; and whether it reads the repository's secrets by a computed name
+ * or as a whole (`secrets[expr]`, `toJSON(secrets)`), which can reach any of them (#440). Only an
+ * expression counts for that, `${{ }}` or an `if:`, never a script's own text, and only in a
+ * workflow that runs on a trigger of its own: one that runs only on `workflow_call` sees just what
+ * its caller passes, which the caller names or inherits. Whatever a job calls, a lane, the release
+ * workflow by any path, or nothing, its secrets count (#414).
  * @param {Record<string, any>} wf
  */
 export const secretReads = (wf) => {
   /** @type {Set<string>} */
   const names = new Set();
-  /** @param {unknown} v */
-  const walk = (v) => {
-    if (typeof v === 'string') for (const m of v.matchAll(/(?<![\w.])secrets\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*)|\[\s*'([A-Za-z_][A-Za-z0-9_]*)'\s*\])/g)) names.add(/** @type {string} */ (m[1] ?? m[2]).toUpperCase());
-    else if (Array.isArray(v)) v.forEach(walk);
-    else if (isMap(v)) Object.values(v).forEach(walk);
+  let computed = false;
+  /** @param {unknown} v @param {string} [key] */
+  const walk = (v, key) => {
+    if (typeof v === 'string') {
+      for (const m of v.matchAll(/(?<![\w.])secrets\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*)|\[\s*'([A-Za-z_][A-Za-z0-9_]*)'\s*\])/g)) names.add(/** @type {string} */ (m[1] ?? m[2]).toUpperCase());
+      const exprs = expressions(v);
+      if (key === 'if' && !exprs.length) exprs.push(v);
+      if (exprs.some(computedRead)) computed = true;
+    } else if (Array.isArray(v)) v.forEach((x) => walk(x));
+    else if (isMap(v)) Object.entries(v).forEach(([k, x]) => walk(x, k));
   };
-  for (const [k, v] of Object.entries(wf)) if (k !== 'on') walk(v);
+  for (const [k, v] of Object.entries(wf)) if (k !== 'on') walk(v, k);
   const inherits = Object.entries(isMap(wf.jobs) ? wf.jobs : {}).filter(([, j]) => isMap(j) && j.secrets === 'inherit').map(([n]) => n);
-  return { names, inherits };
+  const on = triggers(wf);
+  return { names, inherits, computed: computed && (on === null || on.some((t) => t !== 'workflow_call')) };
 };
 
 /**
@@ -1131,7 +1180,9 @@ export const diagnose = async (deps, opts) => {
     const stale = [...s.secrets].filter((n) => known.has(n) && !used.has(n.toUpperCase())).sort();
     const inheriting = mapping.flatMap((m) => m.inherits.map((j) => `${m.file}'s job ${j}`));
     const unread = unchecked.filter((u) => u.check === 'workflow').map((u) => u.subject);
+    const computing = mapping.filter((m) => m.computed).map((m) => m.file);
     if (stale.length && inheriting.length) notes.push(`${inheriting.join(', ')} inherit${inheriting.length > 1 ? '' : 's'} every secret, so doctor lists none of ${stale.join(', ')} as stale: it can't tell which the called workflow reads.`);
+    else if (stale.length && computing.length) notes.push(`${computing.join(', ')} read${computing.length > 1 ? '' : 's'} secrets by a computed name or as a whole (\`secrets[<expression>]\`, \`toJSON(secrets)\`), which can reach any of them, so doctor lists none of ${stale.join(', ')} as stale: it can't tell which ${computing.length > 1 ? 'they read' : 'it reads'} (#440).`);
     else if (stale.length && unread.length) notes.push(`doctor lists none of ${stale.join(', ')} as stale: it could not read ${unread.join(', ')}, which may map them.`);
     else if (stale.length) {
       findItems('secret.stale', repo, stale, (xs) => [`holds ${xs.join(', ')}, which no App the lanes of ${checked} run as here reads, and no job of a workflow under .github/workflows/ on ${onCheckout} names: doctor reads every \`secrets.<NAME>\` in each workflow outside its on:, in a job's secrets:, env:, with: or steps alike, whatever the job calls.`, {
