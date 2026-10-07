@@ -11,13 +11,26 @@
 // window, stamped with `received_at`, `expires_at` and `source`, and written with `PutItem`.
 // The answer is per row; any rejection makes the response 422, and the collector turns red.
 //
+// A FINDING ROW (plan 0006 §5, step 4) is stored from a writer only, never the importer or the
+// backfill role, and only after intake's own checks, beyond `validate` (which already runs the
+// scrub's `verify` with no context):
+//   - `verify` again on its text, with THE SENDER'S CONTEXT: the SHA-256 of each word of the
+//     registered repository's owner and name, which `render.mjs` writes into `NAME_HASHES` per key,
+//     never the words. A key with no hashes there gets no finding stored: the check can't run;
+//   - `assertNoKey` (the aggregate's) over every field with every registered key, and each text
+//     searched for a registered key as a word, since a key need not have the shape the scrub's
+//     `key` rule refuses.
+// Each failure is a rejected field, named with the rule or `key`, never the value.
+//
 // LOGS HOLD KEYS AND FIELD NAMES ONLY (§9, §10). A rejected row may carry content, so nothing
 // here logs or echoes a value.
 //
 // `node:` built-ins only: DynamoDB is called over HTTPS with the signer beside this file.
 
 import { Buffer } from 'node:buffer';
-import { FINDING_PARTITION, LANES, RESERVED_PARTITION, validate } from './schema.mjs';
+import { assertNoKey } from './aggregate.mjs';
+import { FINDING_PARTITION, LANES, RESERVED_PARTITION, SCHEMAS, validate } from './schema.mjs';
+import { verify } from './scrub.mjs';
 import { sign } from './sigv4.mjs';
 
 export const MAX_BODY_BYTES = 256 * 1024;
@@ -53,7 +66,7 @@ export function addMonths(ms, months) {
 
 /**
  * @typedef {{ kind: 'writer' | 'importer' | 'backfill', key: string | null }} Caller
- * @typedef {{ TABLE_NAME: string, ACCOUNT_ID: string, WRITER_KEYS: string, IMPORTER_ROLE?: string, BACKFILL_ROLE?: string, AWS_REGION?: string }} Env
+ * @typedef {{ TABLE_NAME: string, ACCOUNT_ID: string, WRITER_KEYS: string, NAME_HASHES?: string, IMPORTER_ROLE?: string, BACKFILL_ROLE?: string, AWS_REGION?: string }} Env
  */
 
 /**
@@ -77,6 +90,70 @@ export function callerOf(event, env) {
 }
 
 const registeredKeys = (/** @type {Env} */ env) => env.WRITER_KEYS.split(',').filter(Boolean);
+
+/** A SHA-256, as `render.mjs` writes each word's. */
+const HASH = /^[0-9a-f]{64}$/;
+
+/**
+ * The sender's name hashes (plan 0006 §4.2): `NAME_HASHES` is `<key>=<hash>:<hash>…`, one entry per
+ * registered key, comma-separated, as `render.mjs` writes it. Null when the key has no entry, or
+ * the entry holds anything but hashes: then no finding of that key is stored.
+ * @param {Env} env
+ * @param {string} key
+ * @returns {Set<string> | null}
+ */
+export function nameHashesOf(env, key) {
+  for (const entry of (env.NAME_HASHES ?? '').split(',')) {
+    const at = entry.indexOf('=');
+    if (at < 0 || entry.slice(0, at) !== key) continue;
+    const hashes = entry.slice(at + 1).split(':');
+    return hashes.length && hashes.every((h) => HASH.test(h)) ? new Set(hashes) : null;
+  }
+  return null;
+}
+
+/** A finding row's free-text fields (plan 0006 §2.2), read from the schema: the `text` type. */
+export const TEXT_FIELDS = Object.freeze(Object.entries(/** @type {Record<string, { type: string }>} */ (SCHEMAS.finding?.[1] ?? {}))
+  .filter(([, f]) => f.type === 'text').map(([name]) => name));
+
+/**
+ * Whether a text holds a key as a word: not inside a longer run of key characters.
+ * @param {string} text
+ * @param {string} key
+ */
+const holdsKey = (text, key) =>
+  new RegExp(`(?<![a-z0-9-])${key.replace(/-/g, '\\-')}(?![a-z0-9-])`).test(text.toLowerCase());
+
+/**
+ * Intake's own checks of a VALID finding row (plan 0006 §5, step 4), past `validate`: who sent it,
+ * its text against the sender's context, and every registered key. Problems by field name and rule
+ * name only.
+ * @param {Record<string, any>} row
+ * @param {{ caller: Caller, key: string, env: Env }} ctx
+ * @returns {{ field: string, problem: string }[]}
+ */
+export function findingProblems(row, { caller, key, env }) {
+  if (caller.kind !== 'writer') return [{ field: 'row_kind', problem: 'not-allowed' }];
+  const nameHashes = nameHashesOf(env, key);
+  if (!nameHashes) return [{ field: 'row_kind', problem: 'no-sender-context' }];
+  /** @type {{ field: string, problem: string }[]} */
+  const out = [];
+  for (const field of TEXT_FIELDS) {
+    if (typeof row[field] === 'string') for (const rule of verify(row[field], { nameHashes })) out.push({ field, problem: rule });
+  }
+  const keys = new Set(registeredKeys(env));
+  for (const [field, value] of Object.entries(row)) {
+    let held = false;
+    try {
+      assertNoKey(value, keys);
+    } catch {
+      held = true;
+    }
+    if (!held && TEXT_FIELDS.includes(field) && typeof value === 'string') held = [...keys].some((k) => holdsKey(value, k));
+    if (held && !out.some((e) => e.field === field && e.problem === 'key')) out.push({ field, problem: 'key' });
+  }
+  return out;
+}
 
 /** `2026-10-02T09:15:00Z` -> `20261002T091500Z`. */
 const compact = (/** @type {string} */ iso) => `${iso.slice(0, 19).replace(/[-:]/g, '')}Z`;
@@ -115,20 +192,18 @@ export function expiresOf(row) {
 /**
  * Check and stamp one row. Returns the item to store, or the problems by FIELD NAME only.
  * @param {unknown} row
- * @param {{ caller: Caller, key: string, now: number }} ctx
+ * @param {{ caller: Caller, key: string, now: number, env?: Env }} ctx `env` for a finding row's checks
  * @returns {{ ok: true, item: Record<string, any> } | { ok: false, errors: { field: string, problem: string }[] }}
  */
-export function stamp(row, { caller, key, now }) {
+export function stamp(row, { caller, key, now, env }) {
   // The importer's rows predate Kanon, so they carry no `kanon_version` (decision 17).
   const v = validate(row, { imported: caller.kind === 'importer' });
   if (!v.ok) return v;
   const r = /** @type {Record<string, any>} */ (row);
   /** @type {{ field: string, problem: string }[]} */
   const errors = [];
-  // A finding row validates from plan 0006's F1, but intake's own checks of it (the sender's name
-  // hashes, `assertNoKey` with every registered key, writers only) are F4's. Until then no caller
-  // may store one.
-  if (r.row_kind === 'finding') errors.push({ field: 'row_kind', problem: 'not-allowed' });
+  // A finding row: writers only, its text against the sender's context, and no registered key.
+  if (r.row_kind === 'finding') errors.push(...findingProblems(r, { caller, key, env: env ?? { TABLE_NAME: '', ACCOUNT_ID: '', WRITER_KEYS: '' } }));
   else if (caller.kind === 'backfill' && r.row_kind !== 'work_item') errors.push({ field: 'row_kind', problem: 'not-allowed' });
   // Only the importer backdates, and only as far as retention reaches (§7).
   const earliest = caller.kind === 'importer' ? addMonths(now, -RETENTION_MONTHS) : now - RECORDED_BACK_MS;
@@ -234,7 +309,7 @@ export async function handle(event, deps = {}) {
   /** @type {object[]} */
   const logged = [];
   for (const [index, row] of rows.entries()) {
-    const s = stamp(row, { caller, key, now });
+    const s = stamp(row, { caller, key, now, env });
     if (!s.ok) {
       results.push({ status: 'rejected', errors: s.errors });
       logged.push({ index, rejected: s.errors.map((e) => e.field) });

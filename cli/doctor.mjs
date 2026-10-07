@@ -1430,6 +1430,28 @@ export const diagnose = async (deps, opts) => {
   const collectorCallers = collector
     ? [...workflows].filter(([, wf]) => Object.values(isMap(wf.jobs) ? wf.jobs : {}).some((j) => isMap(j) && kanonCall(j.uses)?.workflow === collector)).map(([f]) => f)
     : [];
+  // A called workflow's job can only narrow its caller's grant, and GitHub refuses to start a run
+  // whose called job asks for more (plan 0001 §3). So a caller whose permissions: lack what the
+  // collector's job asks for at the checked release (`contents: read` since plan 0006 F4, to read
+  // the record's upstream-findings level) would stop every sweep once the pin moves: named here,
+  // as a lane caller's grant is.
+  const telemetryGrant = req.telemetry?.grant ?? {};
+  for (const file of collectorCallers) {
+    const wf = /** @type {Record<string, any>} */ (workflows.get(file));
+    for (const j of Object.values(isMap(wf.jobs) ? wf.jobs : {})) {
+      if (!isMap(j) || kanonCall(j.uses)?.workflow !== collector) continue;
+      const grant = j.permissions !== undefined ? j.permissions : wf.permissions;
+      const short = Object.entries(telemetryGrant).filter(([k, v]) => !isMap(grant) || level(grant[k]) < level(v));
+      if (!short.length) continue;
+      findItems('caller.grant-missing', file, short.map(([k]) => k), (xs) => {
+        const some = short.filter(([k]) => xs.includes(k));
+        return [`grants ${some.map(([k]) => `${k}: ${isMap(grant) ? grant[k] ?? 'none' : 'none'}`).join(', ')}; Kanon's telemetry collector needs ${some.map(([k, v]) => `${k}: ${v}`).join(', ')} at ${checked}, and GitHub refuses to start a run whose called job asks for more than its caller grants.`, {
+          text: `Grant under the caller's permissions:`,
+          commands: some.map(([k, v]) => `  ${k}: ${v}`),
+        }];
+      });
+    }
+  }
   if (collectorCallers.length) {
     const wanted = req.telemetry?.variables ?? [];
     const listed = await deps.gh(['variable', 'list', '-R', repo, '--json', 'name']);

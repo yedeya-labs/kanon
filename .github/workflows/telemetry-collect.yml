@@ -4,8 +4,8 @@
 #
 # A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER (docs/telemetry.md, "Collect
 # the rows"). The caller holds the triggers listed above `on:` below, a `permissions:` ceiling of
-# `actions: read` and `id-token: write`, and one job that `uses:` this file at an exact Kanon
-# tag, passing the store's function URL and the repository's writer role, which are repository
+# `actions: read`, `contents: read` and `id-token: write`, and one job that `uses:` this file at
+# an exact Kanon tag, passing the store's function URL and the repository's writer role, which are repository
 # variables and not secrets: neither is a credential.
 #
 # WHY A COLLECTOR, AND WHY HOURLY. The lanes hold no store credentials (`K-OBS-13`): each run
@@ -97,8 +97,11 @@ jobs:
     runs-on: ubuntu-latest
     # The reference adopter's: a week's recovery is a few hundred downloads.
     timeout-minutes: 15
+    # `contents: read` reads the adoption record on the default branch, whose `Upstream findings`
+    # level decides which finding rows leave (plan 0006 §3.1, F4); nothing is checked out.
     permissions:
       actions: read
+      contents: read
       id-token: write
     steps:
       - uses: $/actions/kanon-path

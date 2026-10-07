@@ -1021,7 +1021,12 @@
     "variables": [
       "KANON_TELEMETRY_URL",
       "KANON_TELEMETRY_WRITER_ROLE"
-    ]
+    ],
+    "grant": {
+      "actions": "read",
+      "contents": "read",
+      "id-token": "write"
+    }
   },
   "qaStore": {
     "hook": ".github/actions/qa-store/action.yml",

@@ -5,12 +5,15 @@ import {
   handle,
   keysOf,
   MAX_ROWS,
+  nameHashesOf,
   PARTITIONS,
   putItem,
   stamp,
+  TEXT_FIELDS,
 } from '../../infra/telemetry/function/index.mjs';
 import { sign } from '../../infra/telemetry/function/sigv4.mjs';
 import { LANES } from '../../actions/agent-telemetry/schema.mjs';
+import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
 
 /**
  * Plan 0002 step S3: the ingest function (§4), its stamps (§10) and its signer, against fake
@@ -23,7 +26,7 @@ type Item = Record<string, unknown>;
 const ACCOUNT = '1'.repeat(6) + '2'.repeat(6);
 const NOW = Date.parse('2026-10-02T12:00:00Z');
 const DAY = 86_400_000;
-const env = { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, WRITER_KEYS: 'k1,k2', IMPORTER_ROLE: '', BACKFILL_ROLE: '' };
+const env = { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, WRITER_KEYS: 'k1,k2', NAME_HASHES: '', IMPORTER_ROLE: '', BACKFILL_ROLE: '' };
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 const runRow = (over: Row = {}): Row => ({
@@ -198,28 +201,97 @@ describe('the recorded_at window (§4): 8 days back, 10 minutes ahead', () => {
   });
 });
 
-describe('a finding row (plan 0006 F1): keyed, but stored by no caller until intake checks it (F4)', () => {
+describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
+  // Invented repositories: k1's words are `acme`, `corp`, `widget` and `shop`; k2's are not.
+  const hashes = (repository: string) => [...nameContext({ repository })].sort().join(':');
+  const findingEnv = { NAME_HASHES: `k1=${hashes('acme-corp/widget-shop')},k2=${hashes('zorblax/quintet')}` };
   const findingRow = (over: Row = {}): Row => ({
     schema_version: 1, row_kind: 'finding', tag: 'test', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 2,
     finding_index: 3, reporter: 'overseer', subject: 'guard', kanon_version: '0.37.0', fix_category: 'guard', evidence_level: 'codes', ...over,
   });
+  const withText = (evidence: string): Row => findingRow({
+    subject: 'lane', lane: 'review', reason: 'did_not_finish', evidence_level: 'evidence', evidence,
+    suggested_fix: 'Cap the re-reads in the review prompt.', scrub_version: 1,
+  });
+  const CLEAN = 'Expected: the review lane finishes within its turn cap (K-AGENT-12).\nObserved: it stopped at stage `agent`.';
+  const errorsOf = (r: { body: { results: Array<{ errors?: unknown }> } }) => r.body.results[0]!.errors;
 
   it('is keyed <key>#finding, by time, run, attempt and its place in the report (§2.3)', () => {
     expect(keysOf('k1', findingRow())).toEqual({ pk: 'k1#finding', sk: '20261002T115900Z#33679229731-2-3' });
   });
 
-  it('is refused from a writer, the importer and the backfill role alike, naming row_kind', async () => {
+  it("a writer's valid finding, codes or evidence, gets 200 and is stored under the writer's key", async () => {
+    const r = await call(event([findingRow(), withText(CLEAN)]), findingEnv);
+    expect(r.status).toBe(200);
+    expect(r.puts).toHaveLength(2);
+    expect(r.puts[0]).toMatchObject({ pk: 'k1#finding', sk: '20261002T115900Z#33679229731-2-3', source: 'collector', expires_at: Math.floor((NOW - 60_000 + 30 * DAY) / 1000) });
+    expect(r.puts[1]).toMatchObject({ pk: 'k1#finding', evidence: CLEAN, scrub_version: 1 });
+  });
+
+  it('a run-tagged finding is kept 13 months, as a run row (decision 11)', async () => {
+    const r = await call(event([findingRow({ tag: 'run' })]), findingEnv);
+    expect(r.puts[0]!.expires_at).toBe(Math.floor(Date.parse('2027-11-02T11:59:00Z') / 1000));
+  });
+
+  it('is refused from the importer and the backfill role, naming row_kind: writers only', async () => {
     const roles = [
-      [{}, {}],
       [{ role: 'kanon-telemetry-importer', key: 'k2' }, { IMPORTER_ROLE: 'kanon-telemetry-importer' }],
       [{ role: 'kanon-telemetry-backfill', key: 'k2' }, { BACKFILL_ROLE: 'kanon-telemetry-backfill' }],
     ] as const;
     for (const [opts, envOver] of roles) {
-      const r = await call(event([findingRow()], opts), envOver);
+      const r = await call(event([findingRow()], opts), { ...findingEnv, ...envOver });
       expect(r.status).toBe(422);
-      expect(r.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
+      expect(errorsOf(r)).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
       expect(r.puts).toEqual([]);
     }
+  });
+
+  it('a URL in the evidence gets 422 naming evidence (url), and the URL is never echoed or logged', async () => {
+    const r = await call(event([withText('Observed: the lane read https://example.com/SECRET-CONTENT first.')]), findingEnv);
+    expect(r.status).toBe(422);
+    expect(errorsOf(r)).toContainEqual({ field: 'evidence', problem: 'url' });
+    expect(JSON.stringify(r.body) + r.logs.join('\n')).not.toContain('SECRET-CONTENT');
+  });
+
+  it("checks the text against the SENDER's name hashes: a word of its own repository's name is refused, another's is not", async () => {
+    const text = 'Observed: the widget lane stopped at stage `agent`.';
+    const own = await call(event([withText(text)]), findingEnv);
+    expect(own.status).toBe(422);
+    expect(errorsOf(own)).toEqual([{ field: 'evidence', problem: 'name' }]);
+    const other = await call(event([withText(text)], { role: 'kanon-telemetry-k2-writer' }), findingEnv);
+    expect(other.status).toBe(200);
+    // The same in the suggested fix.
+    const fix = await call(event([{ ...withText(CLEAN), suggested_fix: 'Rename the Shop step.' }]), findingEnv);
+    expect(errorsOf(fix)).toEqual([{ field: 'suggested_fix', problem: 'name' }]);
+  });
+
+  it("stores no finding for a key without name hashes, or with malformed ones: the sender's check can't run", async () => {
+    for (const NAME_HASHES of ['', `k2=${hashes('zorblax/quintet')}`, 'k1=not-a-hash', 'k1=']) {
+      const r = await call(event([findingRow()]), { NAME_HASHES });
+      expect(r.status).toBe(422);
+      expect(errorsOf(r)).toEqual([{ field: 'row_kind', problem: 'no-sender-context' }]);
+    }
+    expect(nameHashesOf({ ...env, ...findingEnv }, 'k1')?.size).toBe(4);
+    expect(nameHashesOf({ ...env, ...findingEnv }, 'k3')).toBeNull();
+  });
+
+  it("refuses a registered key held in the text as a word, whoever's it is, naming the field and never the key", async () => {
+    // `k2` has neither a key's hex shape nor a partition's, so only intake's key check finds it.
+    const r = await call(event([withText('Observed: the row named k2 as its partition.')]), findingEnv);
+    expect(r.status).toBe(422);
+    expect(errorsOf(r)).toEqual([{ field: 'evidence', problem: 'key' }]);
+    // Inside a longer run of key characters it is not the key.
+    expect((await call(event([withText('Observed: the k2x step.')]), findingEnv)).status).toBe(200);
+  });
+
+  it('runs assertNoKey over every field: a vocabulary value that is a registered key is refused', async () => {
+    const r = await call(event([findingRow({ kanon_version: 'dev' })]), { ...findingEnv, WRITER_KEYS: 'k1,k2,dev' });
+    expect(r.status).toBe(422);
+    expect(errorsOf(r)).toEqual([{ field: 'kanon_version', problem: 'key' }]);
+  });
+
+  it('reads the text fields from the schema', () => {
+    expect(TEXT_FIELDS).toEqual(['evidence', 'suggested_fix']);
   });
 });
 

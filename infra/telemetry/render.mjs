@@ -23,7 +23,15 @@
 // ref of that repository, no environment or pull request, and for the writer the default branch.
 // "Only the collector reaches the store" (`K-OBS-13`) is then held by which jobs hold
 // `id-token: write`, not by an environment.
+//
+// THE SENDER'S NAME HASHES (plan 0006 §4.2, F4). The ingest function checks a finding row's text
+// with the scrub's `verify`, in the context of the repository that sent it: the words of its owner
+// and name. It is told them as `NAME_HASHES`, `<key>=<hash>:<hash>…` per key, the SHA-256 of each
+// lowercase `[a-z0-9]` run, as the scrub's `nameContext` hashes them, NEVER THE WORDS, so the
+// function's configuration names no repository. Lambda holds a function's whole environment to
+// 4 KB, so a register too large for it is refused here, before a deploy.
 
+import { Buffer } from 'node:buffer';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,6 +41,7 @@ import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 import { readRepositorySubject, subjectProblems } from '../../scripts/lib/oidc-subject.mjs';
 import { addMonths, RETENTION_MONTHS } from './function/index.mjs';
 import { ISO_UTC } from '../../actions/agent-telemetry/schema.mjs';
+import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const TEMPLATE_PATH = join(HERE, 'template.yaml');
@@ -132,6 +141,27 @@ export function registerProblems(register, now = Date.now()) {
 }
 
 const logicalId = (/** @type {string} */ key) => key.replace(/[^A-Za-z0-9]/g, '');
+
+/** Lambda's limit on a function's environment variables, names and values together. */
+export const LAMBDA_ENV_BYTES = 4096;
+/** What a value CloudFormation resolves at deploy time (an account id, a role name) is allowed. */
+const RESOLVED_VALUE_BYTES = 64;
+
+/**
+ * `NAME_HASHES` for the ingest function: per key, the SHA-256 of each word of its repository's
+ * owner and name, sorted, never the words (plan 0006 §4.2).
+ * @param {Entry[]} entries
+ */
+export const nameHashesVariable = (entries) =>
+  entries.map((e) => `${e.key}=${[...nameContext({ repository: e.repository })].sort().join(':')}`).join(',');
+
+/**
+ * The size Lambda counts for an environment: each name and value, a value CloudFormation resolves
+ * counted at `RESOLVED_VALUE_BYTES`.
+ * @param {Record<string, unknown>} variables
+ */
+export const environmentBytes = (variables) =>
+  Object.entries(variables).reduce((n, [k, v]) => n + Buffer.byteLength(k) + (typeof v === 'string' ? Buffer.byteLength(v) : RESOLVED_VALUE_BYTES), 0);
 const providerArn = {
   'Fn::If': [
     'CreateOidc',
@@ -311,6 +341,11 @@ export function render(register, opts = {}) {
   const fn = template.Resources.IngestFunction.Properties;
   fn.Code = opts.functionDir ?? FUNCTION_DIR;
   fn.Environment.Variables.WRITER_KEYS = register.repositories.map((r) => r.key).join(',');
+  fn.Environment.Variables.NAME_HASHES = nameHashesVariable(register.repositories);
+  const bytes = environmentBytes(fn.Environment.Variables);
+  if (bytes > LAMBDA_ENV_BYTES) {
+    throw new Error(`register: the ingest function's environment would be ${bytes} bytes for ${register.repositories.length} repositories, past Lambda's ${LAMBDA_ENV_BYTES}`);
+  }
   const invokePolicy = template.Resources.ImporterRole.Properties.Policies[0].PolicyDocument;
   for (const entry of register.repositories) Object.assign(template.Resources, repositoryResources(entry, invokePolicy, /** @type {Subjects} */ (subjects[entry.key])));
   const agg = template.Resources.AggregateFunction.Properties;
