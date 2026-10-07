@@ -103,6 +103,9 @@ describe('every Kanon workflow', () => {
       "docs/qa-store.md's store job": paragraph('docs/qa-store.md', '- **A store job** declares'),
       "docs/qa-store.md's guard": paragraph('docs/qa-store.md', '`tests/unit/helpers/store-jobs.ts` checks this shape'),
       "docs/telemetry.md's writers": paragraph('docs/telemetry.md', 'Each can write rows under its own adopter'),
+      // K-OBS-17's Enforced by (kanon#548). Its Rule isn't held: it speaks of the store-coupled
+      // lanes alone, where only the Overseer's `telemetry` job holds the token besides store jobs.
+      "K-OBS-17's Enforced by": paragraph('rulebook/08-observability-and-cost.md', '**Enforced by.** `tests/unit/qa-store-aws.test.ts`'),
     };
     for (const [where, text] of Object.entries(listings)) {
       for (const h of ID_TOKEN_HOLDERS) expect(text, `${where} names ${h.says}`).toContain(h.cited);
