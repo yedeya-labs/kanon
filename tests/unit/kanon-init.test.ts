@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
-import { callerFile, ciFile, loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
+import { callerFile, ciFile, DEPENDABOT_ENTRY, loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
 import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, laneCatalogue, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, usage, USAGE, workflowName } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
@@ -239,6 +240,24 @@ describe('kanon init, on an empty repository with every default (plan 0005 L9)',
     const refs = ['.github/workflows/agent-review.yml', '.github/workflows/apps-check.yml', '.github/workflows/ci.yml'].flatMap((f) => [...read(dir, f).matchAll(/yedeya-labs\/kanon\/[^@\s]+@(\S+)/g)].map((m) => m[1]));
     expect(refs.length).toBe(3);
     expect(new Set(refs)).toEqual(new Set([release]));
+  });
+
+  it("writes the Dependabot entry adopters are given: daily, and allowing only Kanon's dependencies (K-ADOPT-11, #360)", async () => {
+    const readme = read(ROOT, 'actions/pr-title/README.md');
+    const block = /## Upgrades: Dependabot[\s\S]*?```yaml\n([\s\S]*?)```/.exec(readme)?.[1];
+    expect(block).toBeDefined();
+    const documented = parseYaml(block!);
+    expect(documented.updates[0].schedule.interval).toBe('daily');
+    expect(documented.updates[0].allow).toEqual([{ 'dependency-name': 'yedeya-labs/kanon*' }]);
+    const dir = checkout();
+    await run(dir, fakeGitHub());
+    expect(parseYaml(read(dir, '.github/dependabot.yml'))).toEqual(documented);
+    // The step init prints for a dependabot.yml that lacks the entry is the same entry.
+    const github = fakeGitHub();
+    const other = checkout({ '.github/dependabot.yml': 'version: 2\nupdates: []\n' });
+    const r = await run(other, github);
+    expect(r.out).toContain(DEPENDABOT_ENTRY.join('\n   '));
+    expect(parseYaml(['updates:', ...DEPENDABOT_ENTRY].join('\n'))).toEqual({ updates: documented.updates });
   });
 
   it('creates the taxonomy, the buckets, the merge setting and the ruleset, and runs kanon apps for the Judge, the Reviewer\'s App', async () => {
