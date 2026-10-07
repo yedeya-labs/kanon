@@ -1,6 +1,6 @@
 {
   "name": "kanon",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "description": "Install Kanon in a repository, keep it healthy, and move it to a new release, by driving the kanon command's JSON output: adopt, doctor and upgrade.",
   "author": {
     "name": "Yedeya Labs"
