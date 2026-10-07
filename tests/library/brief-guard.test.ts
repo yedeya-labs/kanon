@@ -917,6 +917,14 @@ Acceptance criteria:
     ['It does not matter if Issue C1B has not landed.'],
     ["It doesn't block if Issue C1B has not landed."],
     ['Once Issue C1B lands, the follow-ups can widen it.'],
+    // kanon#351: any verb after the follow-up makes it the subject, not only an auxiliary.
+    ['Once Issue C1B lands, a follow-up has to extend this.'],
+    ['Once Issue C1B lands, a follow-up extends this.'],
+    ['Once Issue C1B lands, the follow-up added later widens it.'],
+    ['Once Issue C1B lands, a follow-up was filed to widen it.'],
+    ['Once Issue C1B lands, a follow-up is due.'],
+    ['Once Issue C1B lands, the follow-ups were split off.'],
+    ['Once Issue C1B lands, the follow-ups split it further.'],
   ])('lints clean on a denied edge: %s', (prose) => {
     expect(problems(withIssueAProse(prose))).toEqual([]);
   });
@@ -940,6 +948,10 @@ Acceptance criteria:
     ['Never merge unless Issue C1B has not landed.'],
     // …and `follow-up` as an adjective names this issue's own work.
     ['Once Issue C1B lands, the follow-up check runs here and this issue wires it in.'],
+    // kanon#351: a noun ending in -ss, -is or -us is not a verb's -s.
+    ['Once Issue C1B lands, the follow-up pass runs here.'],
+    ['Once Issue C1B lands, the follow-up analysis runs here.'],
+    ['Once Issue C1B lands, the follow-up status is set here.'],
   ])('still refuses a real edge beside a negation: %s', (prose) => {
     const found = problems(withIssueAProse(prose)).filter((p) => /does not name Issue C1B/.test(p));
     expect(found, prose).toHaveLength(1);
