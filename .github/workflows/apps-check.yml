@@ -21,8 +21,10 @@
 #
 # Permissions: nothing at the top. Reading the register needs `contents: read` on that one
 # job. The check jobs grant nothing: the App token carries its own permissions. Each job
-# names the two secrets of its own App, so no job reads another App's key and none inherits
-# secrets. Called, it takes each App's two secrets by their fixed names (plan 0005 §3.5),
+# evaluates only the two secrets of its own App, picked by the App's key, so no job reads
+# another App's key, and none inherits secrets. Each secret is named literally, never by a
+# computed name, so `kanon doctor` sees exactly which secrets this workflow reads and
+# can list any other App secret as stale (#440): a new App adds its line to each of the four. Called, it takes each App's two secrets by their fixed names (plan 0005 §3.5),
 # all optional: a caller maps the Apps its register lists, and an App the register lists
 # whose secrets are not mapped fails at the mint.
 name: apps-check
@@ -80,8 +82,8 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets[format('{0}_APP_ID', matrix.app.secret)] }}
-          private-key: ${{ secrets[format('{0}_APP_PRIVATE_KEY', matrix.app.secret)] }}
+          client-id: ${{ matrix.app.key == 'author' && secrets.AUTHOR_APP_ID || matrix.app.key == 'judge' && secrets.JUDGE_APP_ID || matrix.app.key == 'releaser' && secrets.RELEASER_APP_ID || '' }}
+          private-key: ${{ matrix.app.key == 'author' && secrets.AUTHOR_APP_PRIVATE_KEY || matrix.app.key == 'judge' && secrets.JUDGE_APP_PRIVATE_KEY || matrix.app.key == 'releaser' && secrets.RELEASER_APP_PRIVATE_KEY || '' }}
           owner: ${{ github.repository_owner }}
       - uses: $/actions/kanon-path
       - name: Check the installation
@@ -93,6 +95,6 @@ jobs:
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
           TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_ID: ${{ secrets[format('{0}_APP_ID', matrix.app.secret)] }}
-          APP_PRIVATE_KEY: ${{ secrets[format('{0}_APP_PRIVATE_KEY', matrix.app.secret)] }}
+          APP_ID: ${{ matrix.app.key == 'author' && secrets.AUTHOR_APP_ID || matrix.app.key == 'judge' && secrets.JUDGE_APP_ID || matrix.app.key == 'releaser' && secrets.RELEASER_APP_ID || '' }}
+          APP_PRIVATE_KEY: ${{ matrix.app.key == 'author' && secrets.AUTHOR_APP_PRIVATE_KEY || matrix.app.key == 'judge' && secrets.JUDGE_APP_PRIVATE_KEY || matrix.app.key == 'releaser' && secrets.RELEASER_APP_PRIVATE_KEY || '' }}
         run: node "$KANON/cli/apps-check.mjs" check

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -1551,6 +1551,39 @@ const releaserOn = (github: ReturnType<typeof fakeGitHub>, bypass: unknown[] = [
   github.st.rulesets = github.st.rulesets.map((r) => ({ ...r, bypass_actors: bypass }));
   return github;
 };
+
+// The Owner, 2026-10-07 (#440, #437): apps-check names each App's secrets literally, so on Kanon's
+// own tree doctor lists the per-role Apps' secrets as stale, and never the three Apps'.
+describe("kanon doctor on Kanon's own workflows (#440, #437)", () => {
+  const kanonTree = () => {
+    const files: Record<string, string> = { 'docs/qa/agent-identities.md': readFileSync(join(ROOT, 'docs/qa/agent-identities.md'), 'utf8') };
+    for (const f of readdirSync(join(ROOT, '.github/workflows')).filter((x) => /\.ya?ml$/.test(x))) files[`.github/workflows/${f}`] = readFileSync(join(ROOT, '.github/workflows', f), 'utf8');
+    return files;
+  };
+  const PER_ROLE = ['implementer', 'explorer', 'reviewer'].flatMap(appSecrets);
+  const APP_SECRETS = ['author', 'judge', 'releaser'].flatMap(appSecrets);
+  const stale = async (files: Record<string, string>) => {
+    // Kanon's tree pins its judging actions to its last release; check against this tree's own.
+    const r = await run(checkout(files), fakeGitHub({ secrets: new Set(['CLAUDE_CODE_OAUTH_TOKEN', ...PER_ROLE, ...APP_SECRETS]) }), ['--json', '--to', PINNED]);
+    return { r, deletes: r.json.findings.filter((f: { id: string }) => f.id === 'secret.stale').flatMap((f: { fix: { commands: string[] } }) => f.fix.commands) };
+  };
+
+  it('lists exactly the per-role pairs as stale, and none of the Author\'s, Judge\'s or Releaser\'s', async () => {
+    const { deletes } = await stale(kanonTree());
+    expect(deletes).toEqual([...PER_ROLE].sort().map((n) => `gh secret delete ${n} -R ${REPO}`));
+  });
+
+  it('lists none while apps-check reads them by a computed name, and says why (mutation)', async () => {
+    const files = kanonTree();
+    const computed = (suffix: string) => `\${{ secrets[format('{0}_${suffix}', matrix.app.secret)] }}`;
+    files['.github/workflows/apps-check.yml'] = files['.github/workflows/apps-check.yml']!
+      .replace(/\$\{\{ matrix\.app\.key == 'author' && secrets\.AUTHOR_APP_ID [^}]*\}\}/g, computed('APP_ID'))
+      .replace(/\$\{\{ matrix\.app\.key == 'author' && secrets\.AUTHOR_APP_PRIVATE_KEY [^}]*\}\}/g, computed('APP_PRIVATE_KEY'));
+    const { r, deletes } = await stale(files);
+    expect(deletes).toEqual([]);
+    expect(r.json.notes.join('\n')).toContain('.github/workflows/apps-check.yml reads secrets by a computed name');
+  });
+});
 
 // #441: a release caller is recognised by what it calls, Kanon's pin, `$/` or a local path, never by
 // the repository's name, so the Releaser it maps is an App in use on Kanon's own repository too.

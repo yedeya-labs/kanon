@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { compare, loadApps, main, readResult, RESULT_MARK, registeredApps, resultMasked, summary } from '../../cli/apps-check.mjs';
 import { loadRoles, realDeps } from '../../cli/apps.mjs';
+import { secretReads } from '../../cli/doctor.mjs';
+import { asString, evaluate } from './helpers/expression.js';
 
 /**
  * apps-check (#39): the script that checks each registered App's installation, and the
@@ -381,18 +383,49 @@ describe('the apps-check workflow', () => {
     const pinned = /uses: (actions\/create-github-app-token@\S+)/.exec(lane)?.[1];
     const mint = check.steps[0]!;
     expect(mint.uses).toBe(pinned);
-    expect(mint.with).toEqual({
-      'client-id': "${{ secrets[format('{0}_APP_ID', matrix.app.secret)] }}",
-      'private-key': "${{ secrets[format('{0}_APP_PRIVATE_KEY', matrix.app.secret)] }}",
-      owner: '${{ github.repository_owner }}',
-    });
+    expect(Object.keys(mint.with!).sort()).toEqual(['client-id', 'owner', 'private-key']);
+    expect(mint.with!.owner).toBe('${{ github.repository_owner }}');
+    // The same two values the check step reads.
+    const env = check.steps.at(-1)!.env!;
+    expect(mint.with!['client-id']).toBe(env.APP_ID);
+    expect(mint.with!['private-key']).toBe(env.APP_PRIVATE_KEY);
+  });
+
+  // The Owner, 2026-10-07 (kanon#440, kanon#437): each App's secrets are read by their literal
+  // names, so doctor can tell which App secrets the workflow reads, and lists any other as stale.
+  const picks = () => {
+    const env = check.steps.at(-1)!.env!;
+    const mint = check.steps[0]!.with!;
+    return { 'client-id': mint['client-id']!, 'private-key': mint['private-key']!, APP_ID: env.APP_ID!, APP_PRIVATE_KEY: env.APP_PRIVATE_KEY! };
+  };
+  const value = (expr: string, key: string, secrets: Record<string, string>) =>
+    asString(evaluate(/^\$\{\{([\s\S]*)\}\}$/.exec(expr.trim())![1]!, { matrix: { app: { key } }, secrets }));
+
+  it("hands each App's job its own two secrets, and never another App's, even when its own are empty", () => {
+    const all = Object.fromEntries(Object.keys(APPS).flatMap((k) => [[`${k.toUpperCase()}_APP_ID`, `${k}-id`], [`${k.toUpperCase()}_APP_PRIVATE_KEY`, `${k}-key`]]));
+    for (const key of Object.keys(APPS)) {
+      for (const [at, expr] of Object.entries(picks())) {
+        const own = /PRIVATE|private/.test(at) ? `${key}-key` : `${key}-id`;
+        expect(value(expr, key, all), `${key} ${at}`).toBe(own);
+        const without = Object.fromEntries(Object.entries(all).filter(([, v]) => v !== own));
+        expect(value(expr, key, without), `${key} ${at}, its own secret empty`).toBe('');
+      }
+    }
+    for (const expr of Object.values(picks())) expect(value(expr, 'reviewer', all)).toBe('');
+  });
+
+  it('names each App secret it reads literally, so doctor reads none of them as a computed read (kanon#440)', () => {
+    expect(text).not.toMatch(/secrets\s*\[/);
+    const reads = secretReads(wf as unknown as Record<string, unknown>);
+    expect(reads.computed).toBe(false);
+    expect([...reads.names].sort()).toEqual(Object.keys(APPS).flatMap((k) => [`${k.toUpperCase()}_APP_ID`, `${k.toUpperCase()}_APP_PRIVATE_KEY`]).sort());
   });
 
   it('names every secret it reads, and inherits none', () => {
     expect(text).not.toMatch(/secrets:\s*inherit/);
     for (const job of Object.values(wf.jobs)) expect(job.secrets).toBeUndefined();
-    const named = [...text.matchAll(/secrets(\.\w+|\[[^\]]+\])/g)].map((m) => m[1]);
-    expect(new Set(named)).toEqual(new Set(["[format('{0}_APP_ID', matrix.app.secret)]", "[format('{0}_APP_PRIVATE_KEY', matrix.app.secret)]"]));
+    const named = [...text.replace(/^\s*#.*$/gm, '').matchAll(/secrets(\.\w+|\[[^\]]+\])/g)].map((m) => m[1]);
+    expect(new Set(named)).toEqual(new Set(Object.keys(APPS).flatMap((k) => [`.${k.toUpperCase()}_APP_ID`, `.${k.toUpperCase()}_APP_PRIVATE_KEY`])));
   });
 
   it('keeps the logic in the script: one run line per job', () => {
