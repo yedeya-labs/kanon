@@ -4,7 +4,7 @@
 // with its telemetry reader role, and handed to the agent as two Markdown files, never as rows.
 //
 //   node "$KANON/scripts/overseer-telemetry.mjs" mask    the lane's `telemetry` job, first; it also
-//                                                        checks the table and region inputs
+//                                                        resolves and checks the table and region
 //   node "$KANON/scripts/overseer-telemetry.mjs" read    the lane's `telemetry` job, after the
 //                                                        credentials step
 //   node "$KANON/scripts/overseer-telemetry.mjs" merge   the agent's job, before the agent
@@ -42,9 +42,9 @@ import { isCliEntry } from './lib/cli-entry.mjs';
 import { DAY_MS, TREND_ATTRIBUTES, render as renderTrend, summarize as summarizeTrend } from './lib/token-trend.mjs';
 import { TTL_ATTRIBUTES, pinnedLanes, render as renderTtl, summarize as summarizeTtl } from './lib/cache-ttl.mjs';
 
-/** The hosted store's table and region (docs/telemetry.md), the lane's defaults. A caller reading a
- *  self-hosted telemetry store sets the lane's `telemetry-table` and `telemetry-region` inputs
- *  (the Owner's decision on kanon#499); `checkStore` holds both to these shapes before any use. */
+/** The hosted store's table and region (docs/telemetry.md), the defaults. A repository reading a
+ *  self-hosted telemetry store sets the variables KANON_TELEMETRY_TABLE and KANON_TELEMETRY_REGION
+ *  (the Owner's decision on kanon#499); `checkStore` resolves and checks both before any use. */
 export const TABLE = 'kanon-telemetry';
 export const REGION = 'eu-central-1';
 /** A DynamoDB table name, as AWS allows it. */
@@ -62,8 +62,8 @@ export function checkStore(env) {
   const region = String(env.REGION ?? '').trim() || REGION;
   /** @type {string[]} */
   const problems = [];
-  if (!TABLE_PATTERN.test(table)) problems.push(`the telemetry-table input \`${table.slice(0, 80)}\` is not a DynamoDB table name (3 to 255 of A-Z, a-z, 0-9, \`_\`, \`-\` and \`.\`)`);
-  if (!REGION_PATTERN.test(region)) problems.push(`the telemetry-region input \`${region.slice(0, 80)}\` is not an AWS region code such as \`eu-central-1\``);
+  if (!TABLE_PATTERN.test(table)) problems.push(`the KANON_TELEMETRY_TABLE variable \`${table.slice(0, 80)}\` is not a DynamoDB table name (3 to 255 of A-Z, a-z, 0-9, \`_\`, \`-\` and \`.\`)`);
+  if (!REGION_PATTERN.test(region)) problems.push(`the KANON_TELEMETRY_REGION variable \`${region.slice(0, 80)}\` is not an AWS region code such as \`eu-central-1\``);
   return { table, region, problems };
 }
 /** Two weeks: the token trend compares this week with the one before. */
@@ -229,13 +229,18 @@ if (isCliEntry(import.meta.url)) {
   if (mode === 'mask') {
     for (const m of masksOf(process.env)) process.stdout.write(`::add-mask::${m}\n`);
     console.log('Masked the reader role, its account id and its key.');
-    // THE TABLE AND REGION ARE CHECKED HERE, before the credentials step uses the region: a value
-    // that isn't one stops the job by name, and the agent's job reports the read `failed`.
+    // THE TABLE AND REGION ARE RESOLVED HERE, ONCE (the Owner's decision on kanon#499): the
+    // repository variables, or the hosted store's when unset or empty, checked, and written as this
+    // step's outputs, which the credentials step and the read use. A value of the wrong shape stops
+    // the job by name, and the agent's job reports the read `failed`.
     const { table, region, problems } = checkStore(process.env);
     if (problems.length) {
       for (const p of problems) console.log(`::error title=overseer telemetry::${p}`);
       process.exitCode = 1;
-    } else console.log(`Reading the telemetry table ${table} in ${region}.`);
+    } else {
+      writeOutputs({ table, region });
+      console.log(`Reading the telemetry table ${table} in ${region}.`);
+    }
   } else if (mode === 'read') {
     const { status, files, lines } = read(process.env);
     const out = process.env.OUT ?? '';

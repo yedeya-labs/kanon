@@ -329,15 +329,14 @@ aws cloudformation describe-stacks --stack-name kanon-telemetry --profile kanon 
 
 then map it in the Overseer's caller, under the job's `secrets:`, once the caller pins a release that declares it: `KANON_TELEMETRY_READER_ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}`. The job masks the account id and the key in the role's name before any other step names them. A run on a ref the role doesn't trust, such as a dispatch from another branch, reads nothing, and the audit says the read `failed`. On the runtime-version trigger, whose `pull_request_target` token the role refuses, the job doesn't try: the audit says the read was `not run on this trigger` (the Owner's decision on [#499](https://github.com/yedeya-labs/kanon/pull/499)).
 
-**A self-hosted telemetry store** is read the same way. The table and region default to the hosted store's, `kanon-telemetry` in `eu-central-1`. A caller reading its own stack sets them in its job's `with:`, beside its `uses:` of the lane:
+**A self-hosted telemetry store** is read the same way. The table and region default to the hosted store's, `kanon-telemetry` in `eu-central-1`. A repository reading its own stack sets two optional repository variables, which are coordinates, not credentials (the Owner's decision on [#499](https://github.com/yedeya-labs/kanon/pull/499)):
 
-```yaml
-    with:
-      telemetry-table: <its table>
-      telemetry-region: <its region>
+```sh
+gh variable set KANON_TELEMETRY_TABLE -R <owner>/<repo> --body '<its table>'
+gh variable set KANON_TELEMETRY_REGION -R <owner>/<repo> --body '<its region>'
 ```
 
-`lane-check` admits a plain value there, since the lane marks both inputs as caller settings. The lane checks the table against DynamoDB's table-name shape and the region against an AWS region code before the credentials step uses either, and stops the read by name on one that isn't.
+The job's first script step resolves them once: a variable that is unset or empty is the hosted store's value. It checks the table against DynamoDB's table-name shape and the region against an AWS region code, and stops the read by name on one that isn't. The credentials step and the read then use that step's resolved values, never the variables themselves.
 
 ### The Explorer's lane
 

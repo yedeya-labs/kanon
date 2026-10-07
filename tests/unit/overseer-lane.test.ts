@@ -52,7 +52,7 @@ describe('the store job and the overseer job (plan 0004 P9\'s check, applied at 
     expect(storeLaneProblems(wf, telemetryReads(), { file: 'agent-overseer.yml' })).toEqual([]);
   });
 
-  it('no job declares an environment, and only the store job holds id-token', () => {
+  it('no job declares an environment, and only the store job and the telemetry read job hold id-token', () => {
     const withEnv = Object.entries(wf.jobs).filter(([, j]) => j.environment !== undefined).map(([n]) => n);
     expect(withEnv).toEqual([]);
     const withToken = Object.entries(wf.jobs).filter(([, j]) => typeof j.permissions === 'object' && 'id-token' in j.permissions).map(([n]) => n);
@@ -423,8 +423,7 @@ describe('the workflow around it', () => {
   it('keeps the weekly schedule, and a dispatch with no inputs', () => {
     expect(caller.on.schedule).toEqual([{ cron: '0 7 * * 1' }]);
     expect(LANE_TEXT).toContain('schedule: "0 7 * * 1"');
-    // No dispatch input: the only inputs a caller may set are the telemetry store's settings (kanon#499).
-    expect(Object.keys(callerInputs(wf.on.workflow_call.inputs) ?? {})).toEqual(['telemetry-table', 'telemetry-region']);
+    expect(callerInputs(wf.on.workflow_call.inputs)).toBeUndefined();
   });
 
   it('the caller grants what the store job, the agent job and the delete job need', () => {
@@ -588,11 +587,9 @@ describe('the telemetry read job (kanon#470)', () => {
     expect(isOverseerTelemetryJob('agent-overseer.yml', 'telemetry', job)).toBe(true);
     expect(job.permissions).toEqual({ 'id-token': 'write' });
     expect(job.environment).toBeUndefined();
-    expect(s.map((x) => x.uses ?? x.name)).toEqual(['$/actions/kanon-path', "Mask the reader role's account id and key",
+    expect(s.map((x) => x.uses ?? x.name)).toEqual(['$/actions/kanon-path', "Mask the reader role's account id and key, and resolve the store",
       'aws-actions/configure-aws-credentials@v6', "Read this repository's telemetry into the two reports", 'actions/upload-artifact@v7']);
-    expect(s[1]!.env).toEqual({ ROLE: '${{ secrets.KANON_TELEMETRY_READER_ROLE }}', TABLE: '${{ inputs.telemetry-table }}', REGION: '${{ inputs.telemetry-region }}' });
-    expect(s[2]!.with).toEqual({ 'role-to-assume': '${{ secrets.KANON_TELEMETRY_READER_ROLE }}', 'aws-region': '${{ inputs.telemetry-region }}', 'role-session-name': 'kanon-overseer-telemetry' });
-    expect(s[3]!.env).toMatchObject({ TABLE: '${{ inputs.telemetry-table }}', REGION: '${{ inputs.telemetry-region }}' });
+    expect(s[2]!.with).toEqual({ 'role-to-assume': '${{ secrets.KANON_TELEMETRY_READER_ROLE }}', 'aws-region': '${{ steps.resolve.outputs.region }}', 'role-session-name': 'kanon-overseer-telemetry' });
     expect(s[2]!['continue-on-error']).toBe(true);
     expect(s[4]!.if).toBe("steps.read.outputs.status == 'ran'");
     expect(s[4]!.with).toMatchObject({ path: '${{ runner.temp }}/overseer-telemetry', 'retention-days': 1 });
@@ -683,13 +680,19 @@ describe('the telemetry read job (kanon#470)', () => {
     });
   });
 
-  // kanon#499: the table and region are the lane's caller settings, for a self-hosted store.
-  it('takes the table and region as inputs defaulting to the hosted store, marked as caller settings', () => {
-    const inputs = wf.on.workflow_call.inputs as Record<string, { default?: string; type?: string }>;
-    expect(inputs['telemetry-table']).toMatchObject({ type: 'string', default: 'kanon-telemetry' });
-    expect(inputs['telemetry-region']).toMatchObject({ type: 'string', default: 'eu-central-1' });
-    expect(LANE_TEXT).toMatch(/^# CALLER SETTING: telemetry-table$/m);
-    expect(LANE_TEXT).toMatch(/^# CALLER SETTING: telemetry-region$/m);
+  // kanon#499 (Owner, 2026-10-07: repository variables, not a caller-setting marker): the table and
+  // region come from the repository variables, resolved ONCE by the mask step, whose outputs every
+  // later step takes, so an unset or empty variable is the hosted store's value everywhere.
+  it('reads the table and region from the repository variables once, and hands every later step the resolved value', () => {
+    expect(s[1]!.id).toBe('resolve');
+    expect(s[1]!.env).toEqual({ ROLE: '${{ secrets.KANON_TELEMETRY_READER_ROLE }}', TABLE: '${{ vars.KANON_TELEMETRY_TABLE }}', REGION: '${{ vars.KANON_TELEMETRY_REGION }}' });
+    expect(s[2]!.with?.['aws-region']).toBe('${{ steps.resolve.outputs.region }}');
+    expect(s[3]!.env).toMatchObject({ TABLE: '${{ steps.resolve.outputs.table }}', REGION: '${{ steps.resolve.outputs.region }}' });
+    // No other step, and no job of the lane, reads the variables raw.
+    const raw = JSON.stringify(wf.jobs).match(/vars\.KANON_TELEMETRY_(TABLE|REGION)/g) ?? [];
+    expect(raw).toEqual(['vars.KANON_TELEMETRY_TABLE', 'vars.KANON_TELEMETRY_REGION']);
+    expect(wf.on.workflow_call.inputs).not.toHaveProperty('telemetry-table');
+    expect(LANE_TEXT).not.toMatch(/CALLER SETTING/);
   });
 
   describe('mutations: each turns the id-token guard red, by name', () => {
@@ -710,8 +713,10 @@ describe('the telemetry read job (kanon#470)', () => {
     it('a wider grant', () => expect(red((j) => { j.permissions = { 'id-token': 'write', contents: 'read' }; })).toEqual(named));
     it('the upload from the workspace', () => expect(red((j) => { (j.steps![4]!.with as Record<string, unknown>).path = 'overseer-telemetry'; })).toEqual(named));
     it('a job env', () => expect(red((j) => { (j as Record<string, unknown>).env = { NODE_OPTIONS: '-r x' }; })).toEqual(named));
-    it('a region from anywhere but the input', () => expect(red((j) => { (j.steps![2]!.with as Record<string, unknown>)['aws-region'] = '${{ vars.REGION }}'; })).toEqual(named));
-    it('the inputs left out of the mask step, which checks them first', () => expect(red((j) => { j.steps![1]!.env = { ROLE: '${{ secrets.KANON_TELEMETRY_READER_ROLE }}' }; })).toEqual(named));
+    it('a region read raw, not the one the mask step resolved', () => expect(red((j) => { (j.steps![2]!.with as Record<string, unknown>)['aws-region'] = '${{ vars.KANON_TELEMETRY_REGION }}'; })).toEqual(named));
+    it('a table read raw by the read step', () => expect(red((j) => { j.steps![3]!.env = { ...j.steps![3]!.env, TABLE: '${{ vars.KANON_TELEMETRY_TABLE }}' }; })).toEqual(named));
+    it('the variables left out of the mask step, which resolves them first', () => expect(red((j) => { j.steps![1]!.env = { ROLE: '${{ secrets.KANON_TELEMETRY_READER_ROLE }}' }; })).toEqual(named));
+    it('the mask step without its id, so nothing reads what it resolved', () => expect(red((j) => { delete (j.steps![1] as Record<string, unknown>).id; })).toEqual(named));
     it('the same job under another name, or in another workflow, is not allowed by this shape', () => {
       const w = all();
       w['agent-code-audit.yml']!.jobs.telemetry = structuredClone(w['agent-overseer.yml']!.jobs.telemetry!);

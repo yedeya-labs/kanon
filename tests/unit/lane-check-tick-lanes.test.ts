@@ -112,22 +112,6 @@ laneCheck(() => {
       red((t) => { install(t); t.rm(REC); }, "doesn't exist, so it reads as Kanon's default, `not installed`, but a workflow calls the Overseer's lane"));
     it('refuses a value it does not know, by line', () =>
       red((t) => t.write(REC, record('yes')), /adoption\.md:6: `Overseer` is `yes`; write `installed` or `not installed`/));
-    // kanon#499: the telemetry store's table and region are the lane's caller settings, which a
-    // caller reading a self-hosted store sets to a plain value.
-    const setting = (t: Tree, w: Record<string, string>) => t.edit(OVERSEER, (d) => { (job(d) as Record<string, unknown>).with = w; });
-    it('accepts the telemetry table and region set to plain values, the lane\'s caller settings', () => {
-      const t = adopter();
-      install(t);
-      setting(t, { 'telemetry-table': 'acme-telemetry', 'telemetry-region': 'us-east-2' });
-      const r = check(t);
-      expect(r.status, r.out).toBe(0);
-    });
-    it('refuses a setting that is an expression or holds other characters', () => {
-      red((t) => { install(t); setting(t, { 'telemetry-table': '${{ vars.TABLE }}' }); }, /sets `telemetry-table: \$\{\{ vars\.TABLE \}\}`; a setting is a plain value/);
-      red((t) => { install(t); setting(t, { 'telemetry-region': 'eu central 1' }); }, /sets `telemetry-region: eu central 1`; a setting is a plain value/);
-    });
-    it('refuses a plain value for an input the lane does not mark as a setting', () =>
-      red((t) => { install(t); setting(t, { smoke: 'x' }); }, 'passes `smoke`'));
     it('refuses a caller that does not grant the store job its OIDC token', () =>
       red((t) => { install(t); t.edit(OVERSEER, (d) => { delete (d as Caller).permissions!['id-token']; }); }, 'needs id-token: write'));
     const watchOn = (t: Tree) => t.write(REC, `${record('installed')}- **Capability watch:** \`on\`\n`);

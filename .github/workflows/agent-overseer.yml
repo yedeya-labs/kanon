@@ -45,8 +45,9 @@
 # role mapped, as for a repository that didn't opt in to telemetry), `not run on this trigger` (the
 # runtime-version trigger, whose token the role refuses, so the job doesn't try) or `failed`. A
 # store hook that writes the two files itself keeps them whenever the read didn't run. The table
-# and region default to Kanon's hosted store; a caller reading a self-hosted one sets the
-# `telemetry-table` and `telemetry-region` inputs.
+# and region default to Kanon's hosted store; a repository reading a self-hosted one sets the
+# repository variables KANON_TELEMETRY_TABLE and KANON_TELEMETRY_REGION (the Owner's decision on
+# kanon#499), which the job resolves once, in its first script step, and uses everywhere after.
 #
 # ── WHO FILES WHAT (decision 12) ─────────────────────────────────────────────────────────
 #
@@ -104,15 +105,10 @@ name: Overseer
 # OPTIONAL SECRET: QA_STORE_BUCKET
 # OPTIONAL SECRET: QA_STORE_ROLE_ARN
 # OPTIONAL SECRET: KANON_TELEMETRY_READER_ROLE
-# CALLER SETTING: telemetry-table
-# CALLER SETTING: telemetry-region
 # The lines above are read by `lane-check` and the requirements file (kanon#433): the QA store's
 # secrets, which a caller maps once its repository has a store hook, and may leave out until then;
 # and the telemetry reader role (kanon#470), which a caller maps once its repository is registered
-# with Kanon's telemetry store, and may leave out until then. The `CALLER SETTING` lines name the
-# inputs a caller may set to a literal value (the Owner's decision on kanon#499): the telemetry
-# store's table and region, for a repository that reads a self-hosted store. `lane-check` admits a
-# literal there, and the lane checks each value's shape before it uses it.
+# with Kanon's telemetry store, and may leave out until then.
 on:
   workflow_call:
     inputs:
@@ -121,16 +117,6 @@ on:
         required: false
         type: string
         default: ""
-      telemetry-table:
-        description: The telemetry store's DynamoDB table, for a self-hosted store. Kanon's hosted store by default.
-        required: false
-        type: string
-        default: kanon-telemetry
-      telemetry-region:
-        description: The telemetry store's AWS region, for a self-hosted store. Kanon's hosted store by default.
-        required: false
-        type: string
-        default: eu-central-1
     secrets:
       AUTHOR_APP_ID:
         required: true
@@ -159,8 +145,9 @@ concurrency:
   cancel-in-progress: false
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). Each job below declares its
-# own, so only the store job ever holds `id-token: write`, which the caller grants for it, and
-# only the delete job holds `actions: write`.
+# own, so only the store job and the telemetry read job ever hold `id-token: write`, which the
+# caller grants for them, and only the delete jobs (the export's, the report's and the telemetry
+# reports') hold `actions: write`.
 permissions:
   contents: read
 
@@ -289,12 +276,15 @@ jobs:
     steps:
       - uses: $/actions/kanon-path
       # MASKED FIRST: the account id and the key in the role's name, so no later step prints them.
-      # It also checks the table and region inputs, before the credentials step uses the region.
-      - name: Mask the reader role's account id and key
+      # THE TABLE AND REGION ARE RESOLVED HERE, ONCE: the repository variables, or the hosted
+      # store's when unset or empty, checked and handed on as this step's outputs, which the
+      # credentials step and the read use. A value of the wrong shape stops the job here, by name.
+      - name: Mask the reader role's account id and key, and resolve the store
+        id: resolve
         env:
           ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
-          TABLE: ${{ inputs.telemetry-table }}
-          REGION: ${{ inputs.telemetry-region }}
+          TABLE: ${{ vars.KANON_TELEMETRY_TABLE }}
+          REGION: ${{ vars.KANON_TELEMETRY_REGION }}
         run: node "$KANON/scripts/overseer-telemetry.mjs" mask
       # The STS call goes to the store's region: Frankfurt for the hosted store. A refusal is a
       # `failed` read.
@@ -303,7 +293,7 @@ jobs:
         continue-on-error: true
         with:
           role-to-assume: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
-          aws-region: ${{ inputs.telemetry-region }}
+          aws-region: ${{ steps.resolve.outputs.region }}
           role-session-name: kanon-overseer-telemetry
       - name: Read this repository's telemetry into the two reports
         id: read
@@ -311,8 +301,8 @@ jobs:
           ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
           CREDENTIALS: ${{ steps.creds.outcome }}
           OUT: ${{ runner.temp }}/overseer-telemetry
-          TABLE: ${{ inputs.telemetry-table }}
-          REGION: ${{ inputs.telemetry-region }}
+          TABLE: ${{ steps.resolve.outputs.table }}
+          REGION: ${{ steps.resolve.outputs.region }}
         run: node "$KANON/scripts/overseer-telemetry.mjs" read
       # One day; a job of its own deletes it after the agent's job.
       - name: Upload the two reports for the agent's job

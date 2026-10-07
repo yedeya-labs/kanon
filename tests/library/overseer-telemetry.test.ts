@@ -59,8 +59,8 @@ describe('the reader role', () => {
   it('takes a self-hosted table and region, and refuses one of the wrong shape by name', () => {
     expect(checkStore({ TABLE: 'acme_telemetry.v2', REGION: 'us-gov-west-1' })).toEqual({ table: 'acme_telemetry.v2', region: 'us-gov-west-1', problems: [] });
     expect(checkStore({ REGION: 'ap-southeast-2' }).problems).toEqual([]);
-    for (const table of ['ab', 'a b', 'kanon/telemetry', '${{ x }}', 't'.repeat(256)]) expect(checkStore({ TABLE: table }).problems, table).toEqual([expect.stringMatching(/the telemetry-table input .* is not a DynamoDB table name/)]);
-    for (const region of ['eu-central', 'EU-CENTRAL-1', 'eu-central-1; rm', 'europe', '1-a-1']) expect(checkStore({ REGION: region }).problems, region).toEqual([expect.stringMatching(/the telemetry-region input .* is not an AWS region code/)]);
+    for (const table of ['ab', 'a b', 'kanon/telemetry', '${{ x }}', 't'.repeat(256)]) expect(checkStore({ TABLE: table }).problems, table).toEqual([expect.stringMatching(/the KANON_TELEMETRY_TABLE variable .* is not a DynamoDB table name/)]);
+    for (const region of ['eu-central', 'EU-CENTRAL-1', 'eu-central-1; rm', 'europe', '1-a-1']) expect(checkStore({ REGION: region }).problems, region).toEqual([expect.stringMatching(/the KANON_TELEMETRY_REGION variable .* is not an AWS region code/)]);
   });
 });
 
@@ -122,7 +122,7 @@ describe('the read', () => {
     const never = () => { throw new Error('must not query'); };
     const bad = read({ ROLE, CREDENTIALS: 'success', REGION: 'nowhere' }, { query: never, now: NOW, workflows: WORKFLOWS });
     expect(bad).toMatchObject({ status: 'failed', files: {} });
-    expect(bad.lines[0]).toMatch(/^The telemetry read failed: the telemetry-region input `nowhere` is not an AWS region code/);
+    expect(bad.lines[0]).toMatch(/^The telemetry read failed: the KANON_TELEMETRY_REGION variable `nowhere` is not an AWS region code/);
   });
 
   it('fails, reading nothing, when the role could not be assumed or isn\'t a reader role', () => {
@@ -243,15 +243,31 @@ describe('the script, as the lane runs it', () => {
     expect(r.stdout).toMatch(/::warning title=overseer telemetry::The telemetry read failed/);
   });
 
+  // kanon#499: the variables are resolved once, here; an unset or an empty one is the hosted store's.
+  it('mask: resolves an unset or empty variable to the hosted store\'s table and region, as its outputs', () => {
+    for (const env of [{}, { TABLE: '', REGION: '' }, { TABLE: '  ', REGION: '\n' }] as Array<Record<string, string>>) {
+      const outputs = join(temp(), 'outputs');
+      const r = run('mask', { ROLE, GITHUB_OUTPUT: outputs, ...env });
+      expect(r.status, JSON.stringify(env)).toBe(0);
+      expect(readFileSync(outputs, 'utf8'), JSON.stringify(env)).toBe('table=kanon-telemetry\nregion=eu-central-1\n');
+    }
+    const outputs = join(temp(), 'outputs');
+    expect(run('mask', { ROLE, GITHUB_OUTPUT: outputs, TABLE: 'acme-telemetry', REGION: 'us-east-2' }).status).toBe(0);
+    expect(readFileSync(outputs, 'utf8')).toBe('table=acme-telemetry\nregion=us-east-2\n');
+  });
+
   it('mask: registers the three masks first, then checks the table and region', () => {
-    const ok = run('mask', { ROLE });
+    const ok = run('mask', { ROLE, GITHUB_OUTPUT: join(temp(), 'o') });
     expect(ok.status).toBe(0);
     expect(ok.stdout.split('\n').slice(0, 3)).toEqual([`::add-mask::${ROLE}`, `::add-mask::${ACCOUNT}`, `::add-mask::${KEY}`]);
     expect(ok.stdout).toContain('Reading the telemetry table kanon-telemetry in eu-central-1.');
-    const bad = run('mask', { ROLE, TABLE: 'a b', REGION: 'eu-central-1' });
+    const badOut = join(temp(), 'o');
+    const bad = run('mask', { ROLE, TABLE: 'a b', REGION: 'eu-central-1', GITHUB_OUTPUT: badOut });
     expect(bad.status).toBe(1);
+    // A refused value hands nothing on: the credentials step gets no region at all.
+    expect(existsSync(badOut)).toBe(false);
     expect(bad.stdout.split('\n').slice(0, 3)).toEqual([`::add-mask::${ROLE}`, `::add-mask::${ACCOUNT}`, `::add-mask::${KEY}`]);
-    expect(bad.stdout).toMatch(/::error title=overseer telemetry::the telemetry-table input `a b` is not a DynamoDB table name/);
+    expect(bad.stdout).toMatch(/::error title=overseer telemetry::the KANON_TELEMETRY_TABLE variable `a b` is not a DynamoDB table name/);
   });
 
   it('read: queries the table and region it is handed', () => {

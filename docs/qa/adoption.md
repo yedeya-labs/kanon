@@ -149,7 +149,7 @@ These rules' lines are prose only with a note, and name nothing to install: `K-P
 - **Accepted id-token holder:** `agent-lanes-smoke.yml` job `explore` (grants it to the explore lane's store jobs alone, which the id-token guard test holds)
 - **Accepted id-token holder:** `agent-lanes-smoke.yml` job `dispatch-sweep` (grants it to the dispatch-sweep lane's store job alone, which the id-token guard test holds)
 - **Accepted id-token holder:** `agent-lanes-smoke.yml` job `code-audit` (grants it to the code-audit lane's store jobs alone, which the id-token guard test holds)
-- **Accepted id-token holder:** `agent-lanes-smoke.yml` job `overseer` (grants it to the overseer lane's store job alone, which the id-token guard test holds)
+- **Accepted id-token holder:** `agent-lanes-smoke.yml` job `overseer` (grants it to the overseer lane's store job and telemetry read job alone, which the id-token guard test holds)
 - **Accepted id-token holder:** `agent-lanes-smoke.yml` job `explore-telemetry` (grants it to the telemetry lane's aggregate job alone, which the id-token guard test holds)
 - **Accepted id-token holder:** `agent-overseer.yml` job `export` (its QA store job: Kanon's own lane definition; the id-token guard test holds which of its jobs may hold the grant)
 - **Accepted id-token holder:** `agent-overseer.yml` job `telemetry` (reads the repository's own telemetry rows as its reader role, for the token trend and the cache-TTL facts; Kanon's own lane definition, held to its exact shape by the id-token guard test)

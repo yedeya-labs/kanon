@@ -346,12 +346,6 @@ for (const f of WORKFLOWS) {
   const onCall = isObject(laneDoc) && isObject(laneDoc.on) ? laneDoc.on.workflow_call : null;
   const declared = keys(alt(isObject(onCall) ? onCall.inputs : null, {}));
   const withs = isObject(job) ? alt(job.with, {}) : {};
-  // THE LANE'S SETTINGS (the Owner's decision on kanon#499): an input the lane marks
-  // `# CALLER SETTING:` may also be set to a literal value, such as the Overseer's telemetry table
-  // and region for a self-hosted store. Plain characters only, never an expression; the lane checks
-  // each value's own shape before it uses it.
-  const settings = words(marked(laneFile, '# CALLER SETTING: '));
-  const LITERAL = /^[A-Za-z0-9_.-]{1,255}$/;
   for (const [rk, rv] of Object.entries(isObject(withs) ? withs : {})) {
     const k = tsv(rk);
     const v = tsv(tostring(rv));
@@ -369,12 +363,7 @@ for (const f of WORKFLOWS) {
     const through = (() => {
       try { return new RegExp(`^\\$\\{\\{${SP}*inputs\\.${k}${SP}*\\}\\}$`).test(v); } catch { return false; }
     })();
-    if (through) continue;
-    if (settings.includes(k)) {
-      if (!LITERAL.test(v)) fail(f, `sets \`${k}: ${v}\`; a setting is a plain value of letters, digits, \`_\`, \`-\` and \`.\`, or its own input passed through, as \`\${{ inputs.${k} }}\``);
-      continue;
-    }
-    fail(f, `passes \`${k}: ${v}\`; a caller only passes its own input through, as \`\${{ inputs.${k} }}\` (ADR 0002)`);
+    if (!through) fail(f, `passes \`${k}: ${v}\`; a caller only passes its own input through, as \`\${{ inputs.${k} }}\` (ADR 0002)`);
   }
 
   // Secrets: exactly the lane's, by their fixed names, each mapped explicitly, except that a
