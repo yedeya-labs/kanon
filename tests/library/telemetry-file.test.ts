@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { checkAggregate } from '../../scripts/aggregate-read.mjs';
 import {
-  BUCKET,
   LABELS,
   MAX_FILED,
+  milestoneFor,
   checkFinding,
   fileFindings,
   parseReport,
@@ -53,10 +53,10 @@ const fakeGh = (open: Array<{ number: number; body: string }> = []) => {
   };
   return { gh, calls, creates: () => calls.filter((c) => c.args[1] === 'create'), comments: () => calls.filter((c) => c.args[1] === 'comment') };
 };
-const run = (text: string | null, gh = fakeGh(), aggregateText: string | null = JSON.stringify(AGG)) => {
+const run = (text: string | null, gh = fakeGh(), aggregateText: string | null = JSON.stringify(AGG), upstream: string | null = 'filed here') => {
   const log: string[] = [];
   const summary: string[] = [];
-  const code = fileFindings({ repo: 'o/r', text, aggregateText, agentOutcome: 'success', gh: gh.gh, log: (l) => log.push(l), summary: (l) => summary.push(l) });
+  const code = fileFindings({ repo: 'o/r', text, aggregateText, agentOutcome: 'success', gh: gh.gh, log: (l) => log.push(l), summary: (l) => summary.push(l), upstream: upstream ?? undefined });
   return { code, log, summary, gh };
 };
 
@@ -143,13 +143,12 @@ describe('renderEvidence: the figures come from the aggregate, not the agent', (
 });
 
 describe('fileFindings', () => {
-  it('files a bug in the platform bucket, with the Explorer\'s labels, signed, prose first and the figures after', () => {
+  it('files a bug in the bucket the project\'s routing gives its labels (K-WORK-4, kanon#476), with the Explorer\'s labels, signed, prose first and the figures after', () => {
     const { code, gh } = run(report([finding()]));
     expect(code).toBe(0);
     const [create] = gh.creates();
     expect(create!.args).toEqual(['issue', 'create', '--repo', 'o/r', '--title', finding().title, '--body-file', '-',
-      ...[...LABELS.bug, 'sev:medium'].flatMap((l) => ['--label', l]), '--milestone', BUCKET]);
-    expect(BUCKET).toBe('Development Automation');
+      ...[...LABELS.bug, 'sev:medium'].flatMap((l) => ['--label', l]), '--milestone', 'Product Backlog']);
     expect(create!.input).toMatch(/^\*\*Explorer\*\* <!-- kanon:role=explorer -->\n\nRuns of the review lane/);
     expect(create!.input).toContain('## What the aggregate shows');
   });
@@ -158,6 +157,7 @@ describe('fileFindings', () => {
     const { gh } = run(report([finding({ title: 'A tail cost', body: 'The tail is far above the median.', severity: 'sev:high', signals: [], cells: [ownRef] })]));
     const labels = gh.creates()[0]!.args.filter((_, i, a) => a[i - 1] === '--label');
     expect(labels).toEqual(LABELS['spec-delta']);
+    expect(gh.creates()[0]!.args.at(-1)).toBe('Product Backlog');
   });
 
   it('files nothing and stays green when there are no findings', () => {
@@ -234,5 +234,44 @@ describe('parseReport', () => {
   it('refuses held_back that is not a list of strings, and findings that are not an array', () => {
     expect(() => parseReport(JSON.stringify({ examined: 'x', held_back: [1] }))).toThrow(/held_back/);
     expect(() => parseReport(JSON.stringify({ examined: 'x', findings: {} }))).toThrow(/findings/);
+  });
+});
+
+describe('drafted, unless the repository declares `filed here` (kanon#471, as the Overseer, kanon#426)', () => {
+  it.each([null, '', 'drafted', 'filed elsewhere'])('with UPSTREAM %j, files, comments and lists nothing, and drafts each checked finding in the summary', (upstream) => {
+    const { code, gh, summary, log } = run(report([finding(), finding({ title: 'A tail cost', body: 'The tail is far above the median.', severity: '', signals: [], cells: [ownRef] })]), fakeGh(), JSON.stringify(AGG), upstream);
+    expect(code).toBe(0);
+    expect(gh.calls).toEqual([]);
+    const text = summary.join('\n');
+    expect(text).toContain(`### Draft (bug): ${finding().title}`);
+    expect(text).toContain('### Draft (spec-delta): A tail cost');
+    expect(text).toContain('| own: kanon | `review` | `claude-opus-5-5` | 47 | $0.4213 | $3.0987 |');
+    expect(log.join('\n')).toContain('none filed');
+    if (upstream === 'filed elsewhere') expect(log.join('\n')).toMatch(/neither `drafted` nor `filed here`/);
+  });
+
+  it('still refuses a finding that breaks the rules, never drafting it, and turns red', () => {
+    const { code, summary } = run(report([finding({ body: 'Adopter 3fa9c0d1 fails.' })]), fakeGh(), JSON.stringify(AGG), 'drafted');
+    expect(code).toBe(1);
+    expect(summary.join('\n')).not.toContain('### Draft');
+    expect(summary.join('\n')).not.toContain('3fa9c0d1');
+  });
+
+  it('drafts one finding per signature', () => {
+    const { summary } = run(report([finding(), finding({ title: 'The same, again' })]), fakeGh(), JSON.stringify(AGG), 'drafted');
+    expect(summary.filter((l) => l.includes('### Draft'))).toHaveLength(1);
+    expect(summary.join('\n')).toMatch(/"The same, again": another finding this run has the same signature/);
+  });
+
+  it('files only with `filed here`, exactly', () => {
+    expect(run(report([finding()]), fakeGh(), JSON.stringify(AGG), 'filed here').gh.creates()).toHaveLength(1);
+  });
+});
+
+describe('milestoneFor: the backstop\'s routing, never a fixed bucket (K-WORK-4, kanon#476)', () => {
+  it('routes by the labels, as the backstop does for every filer', () => {
+    expect(milestoneFor([...LABELS.bug, 'sev:high'])).toBe('Product Backlog');
+    expect(milestoneFor(LABELS['spec-delta'])).toBe('Product Backlog');
+    expect(milestoneFor([...LABELS['spec-delta'], 'pipeline-improvement'])).toBe('Development Automation');
   });
 });

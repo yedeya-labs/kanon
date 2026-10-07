@@ -171,7 +171,9 @@ jobs:
 
             WHAT YOU WRITE. You file nothing and comment on nothing: your token reads only.
             You write ONE file, `qa-telemetry-findings.json` at the repository root, and a step
-            after you checks it against the aggregate and files from it:
+            after you checks it against the aggregate, then files each finding in this
+            repository or drafts it in the run's summary, by the repository's declared choice,
+            which you neither read nor set:
             {"examined": "<what you looked at, in a sentence or two>",
              "held_back": ["<a candidate you did not file, and why>"],
              "findings": [{"title": "...", "body": "...", "severity": "sev:medium",

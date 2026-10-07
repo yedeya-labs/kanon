@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-// Masks the aggregate function's URL and the invoker role before any other step of the
-// telemetry Explorer's `aggregate` job names them (kanon#433).
+// Masks the aggregate function's URL, and the account id inside the invoker role's ARN, before
+// any other step of the telemetry Explorer's `aggregate` job names them (kanon#433).
 //
-// Repository variables are not masked, and a run log of a public repository is public. The
-// role's ARN holds the AWS account id, which Kanon keeps out of the public tree. So the job's
-// second step registers the URL, the ARN and the account id inside it as masks: from then on
-// the credentials step's `role-to-assume:`, the read step's `env:` and anything a later step
-// prints show `***`. This step's own `env:` is printed before it runs, so the two values appear
-// in its header, once; nothing here can change that.
+// A repository variable is not masked, and a run log of a public repository is public. The
+// role's ARN is a secret (the Owner's decision on kanon#471), which GitHub masks whole, but not
+// the account id inside it on its own. So the job's second step registers the URL and the
+// account id as masks (and the ARN again, which costs nothing): from then on the read step's
+// `env:` and anything a later step prints show `***`. This step's own `env:` is printed before
+// it runs, so the URL appears in its header, once; the ARN, a secret, shows `***` there too.
 //
 //   node "$KANON/scripts/aggregate-mask.mjs"
-//   env: URL, ROLE (the repository variables KANON_AGGREGATE_URL and KANON_AGGREGATE_ROLE)
+//   env: URL (the variable KANON_AGGREGATE_URL), ROLE (the secret KANON_AGGREGATE_ROLE)
 //
 // `node:` built-ins only, like every script under scripts/ (`K-SELF-8`).
 

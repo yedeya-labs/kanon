@@ -319,14 +319,14 @@ The Owner's to run; agents run none. It costs about a cent a month (plan 0002 de
 
 The function's one caller is the Explorer's telemetry mode, `agent-explore-telemetry.yml` (plan 0004 step 14, [docs/lanes.md](lanes.md#explore-the-telemetry)). Any repository whose entry sets `aggregate_invoker` can install it. Its `aggregate` job, the only job of the lane that holds `id-token: write`, assumes the invoker role with `aws-actions/configure-aws-credentials`, calls the URL with a SigV4-signed `GET` (`scripts/aggregate-read.mjs`), and refuses an answer with any key the function never answers, or a threshold under three. It hands the checked answer to the agent's job, which holds no credentials, as an artifact kept one day. Like the writer, the invoker role trusts every default-branch job of the repository that holds `id-token: write`, so Kanon's id-token guard holds that job to its exact steps (`tests/unit/helpers/store-jobs.ts`).
 
-The lane reads two repository variables, which carry no credential; set them from the outputs above, in the repository that runs the lane:
+The lane reads the URL from a repository variable and the role's ARN from a repository secret, which its caller maps by name (the Owner's decision on [#471](https://github.com/yedeya-labs/kanon/pull/471)). Set them from the outputs above, in the repository that runs the lane:
 
 ```sh
 gh variable set KANON_AGGREGATE_URL --repo <owner>/<repo> --body "<AggregateUrl>"
-gh variable set KANON_AGGREGATE_ROLE --repo <owner>/<repo> --body "<AggregateInvokerRole<id>>"
+gh secret set KANON_AGGREGATE_ROLE --repo <owner>/<repo> --body "<the AggregateInvokerRole<id> output>"
 ```
 
-The role's ARN holds the account id, which stays out of the public tree. The lane masks both values before any other step names them, so only the masking step's own header prints them, once per run ([#433](https://github.com/yedeya-labs/kanon/issues/433)).
+The role's ARN holds the account id, which stays out of the public tree and, as a secret, out of the run logs. The lane masks the URL, and the account id on its own, before any other step names them, so only the masking step's own header prints the URL, once per run ([#433](https://github.com/yedeya-labs/kanon/issues/433)).
 
 **Deploy from the release that ships the lane, before any repository's pin reaches it.** The lane's rows carry a new `lane`, `explore-telemetry`, and the ingest function refuses a lane its schema doesn't know: deployed from an earlier release, it answers 422 and the collector turns red. Render, package and deploy from that release's tag, as in [Deploy](#deploy).
 

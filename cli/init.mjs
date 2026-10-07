@@ -187,7 +187,8 @@ export const laneCatalogue = (req, installed) => {
           does: e.does,
           app: spec.identities[0] ?? null,
           secrets: spec.secrets,
-          qaStore: spec.grant['id-token'] === 'write',
+          // From the lane (kanon#471); a requirements file from before it says so by the grant alone.
+          qaStore: spec.qaStore ?? spec.grant['id-token'] === 'write',
           hooks: spec.hooks,
           reads: spec.reads,
           schedule: TRIGGERS[lane]?.schedule ?? null,

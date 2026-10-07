@@ -1383,6 +1383,8 @@ describe('kanon init and the lane catalogue (#428)', () => {
     expect(d.catalogue.flatMap((g) => g.lanes.map((l) => l.lane)).sort()).toEqual(Object.keys(REQ.lanes).sort());
     expect(d.catalogue[0]!.lanes[0]).toMatchObject({ lane: 'agent-review', app: 'judge', recommended: true, installed: false, qaStore: false, schedule: null });
     expect(d.catalogue.flatMap((g) => g.lanes).find((l) => l.lane === 'agent-explore')).toMatchObject({ app: 'author', qaStore: true, schedule: '0 3 * * *', hooks: ['.github/actions/explore-sweep/action.yml'] });
+    // Its id-token grant is for the aggregate function, not a QA store (kanon#471's review).
+    expect(d.catalogue.flatMap((g) => g.lanes).find((l) => l.lane === 'agent-explore-telemetry')).toMatchObject({ app: 'author', qaStore: false, schedule: '30 6 * * 2' });
   });
 
   it('recommends only the review lane on a repository that calls none', () => {

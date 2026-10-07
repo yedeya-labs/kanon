@@ -17,18 +17,19 @@
 # ANY REPOSITORY WHOSE TELEMETRY REGISTER ENTRY SETS `aggregate_invoker` CAN INSTALL IT
 # (docs/telemetry.md). That creates the role `kanon-telemetry-<key>-aggregates`, trusted for the
 # repository's default-branch ref, which may call the function's URL and nothing else. The lane
-# reads the URL and the role from two repository variables, `KANON_AGGREGATE_URL` and
-# `KANON_AGGREGATE_ROLE`, the stack's `AggregateUrl` and `AggregateInvokerRole<id>` outputs.
-# Without both, it says so and stops after the gate, green: an adopter who hasn't asked for a
-# role has nothing to call.
+# reads the URL from the repository variable `KANON_AGGREGATE_URL` (the stack's `AggregateUrl`
+# output) and the role's ARN from the secret `KANON_AGGREGATE_ROLE` (its `AggregateInvokerRole<id>`
+# output), which the caller maps by name (the Owner's decision on kanon#471). Without both, it
+# says so and stops after the gate, green: an adopter who hasn't asked for a role has nothing to
+# call.
 #
 # A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
 # triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:` this
-# file at an exact Kanon tag and maps the three secrets by name (never `secrets: inherit`).
+# file at an exact Kanon tag and maps the four secrets by name (never `secrets: inherit`).
 #
 # ── WHO HOLDS WHAT ───────────────────────────────────────────────────────────────────────
 #
-#   gate → aggregate (id-token, the invoker role) → explore (the agent, reads only) → file
+#   gate → aggregate (id-token, the invoker role) → explore (the agent, reads only) → file or draft
 #
 # - `aggregate` IS THE ONLY JOB WITH `id-token: write`. It assumes the invoker role through
 #   GitHub's OIDC token, calls the function's URL with a SigV4-signed `GET`
@@ -48,21 +49,28 @@
 #   the step renders the figures itself, from the aggregate. A finding that fails is refused by
 #   name. So a steered agent can change what it says, never which figures an issue quotes.
 #
-# THE VARIABLES IN THE LOG (kanon#433). Neither is a credential, but the role's ARN holds the AWS
-# account id, and a public repository's run logs are public. Only these two variables are read,
-# never `toJSON(vars)`. The `aggregate` job's masking step reads them, and registers both, and the
-# account id, as masks before any other step names them, so the credentials step's
-# `role-to-assume:` and the read's `env:` print `***`. What still prints is the masking step's own
-# `env:`, the two values, once per run, because a step's environment is printed before the step
-# can mask anything. Holding the role's ARN as a secret instead would hide that too, at the cost
-# of a fourth secret in every caller.
+# WHERE ITS FINDINGS GO (the Owner's decision on kanon#471, as the Overseer's do: plan 0004
+# decision 12, kanon#426). Every finding is about Kanon's lanes, so it goes by the adoption
+# record's `Upstream findings:` choice under `## Choices` (`K-LAYOUT-10`), which the `gate` job
+# reads from the default branch before any agent runs and hands to the `file` job. `filed here`
+# files each finding in this repository; anything else, the default, is `drafted`: the checked
+# finding, rendered exactly as it would be filed, goes into the run's summary, and nothing is
+# filed or minted. Nothing is ever filed in another repository.
+#
+# WHAT THE LOG SHOWS (kanon#433). The role's ARN holds the AWS account id, and a public
+# repository's run logs are public, so it is a secret, which GitHub masks wherever it appears.
+# The URL is no credential and stays a variable, the only one the lane reads, never
+# `toJSON(vars)`. The `aggregate` job's masking step registers the URL, and the account id inside
+# the ARN, as masks before any other step names them, so the read's `env:` prints `***`. What
+# still prints is the URL, once per run, in the masking step's own `env:`, which is printed before
+# the step can mask anything.
 #
 # The schedule is a suggestion; the aggregate's signals cover the last 7 days (`signal_days`), so
 # a weekly run sees each failure once.
 #
 # INERT until: the caller is on the default branch, the Explorer's App installed with a row in
-# the App register, the two variables set, and these secrets (plan 0001 §8):
-#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+# the App register, `KANON_AGGREGATE_URL` set, and these secrets (plan 0001 §8):
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN, KANON_AGGREGATE_ROLE
 # KANON ROLE: Explorer
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
 # role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
@@ -87,6 +95,11 @@ on:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
+      # The aggregate invoker role's ARN (the stack's `AggregateInvokerRole<id>` output). Not
+      # required: a repository without a role maps it to a secret it doesn't have, and the lane
+      # says so and stops after its gate.
+      KANON_AGGREGATE_ROLE:
+        required: false
 
 concurrency:
   # Never two at once: both would file from the same aggregate.
@@ -111,6 +124,8 @@ jobs:
       contents: read
     outputs:
       member: ${{ steps.gate.outputs.member }}
+      configured: ${{ steps.configured.outputs.configured }}
+      upstream: ${{ steps.upstream.outputs.upstream }}
     steps:
       - uses: $/actions/kanon-path
       - name: Is the actor a member?
@@ -118,14 +133,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
+      # IS THERE A FUNCTION TO CALL? A job's `if:` can't read a secret, so this step says whether
+      # both the URL and the role are set, and prints neither.
+      - name: Is the aggregate function configured?
+        id: configured
+        if: steps.gate.outputs.member == 'true'
+        env:
+          URL: ${{ vars.KANON_AGGREGATE_URL }}
+          ROLE: ${{ secrets.KANON_AGGREGATE_ROLE }}
+        run: |
+          if [ -n "$URL" ] && [ -n "$ROLE" ]; then echo "configured=true" >> "$GITHUB_OUTPUT"; else echo "configured=false" >> "$GITHUB_OUTPUT"; fi
+      # WHERE FINDINGS GO (`K-LAYOUT-10`, kanon#426): the adoption record's `Upstream findings:`
+      # choice, read from the default branch (`K-MERGE-17`) here, before any agent runs, and
+      # handed to the `file` job as this job's output, which the agent's job can't write. A
+      # malformed record stops the run here, by name, before anything is spent.
+      - name: Where do findings go?
+        id: upstream
+        if: steps.configured.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          upstream="$(node "$KANON/scripts/upstream-findings.mjs")"
+          printf 'upstream=%s\n' "$upstream" >> "$GITHUB_OUTPUT"
 
-  # NOTHING TO CALL: the repository has no invoker role's variables, or a dispatch ran from
+  # NOTHING TO CALL: the repository has no aggregate URL or invoker role, or a dispatch ran from
   # another branch, whose ref the role doesn't trust. Said, and green.
   unconfigured:
     needs: gate
     if: >-
       needs.gate.outputs.member == 'true'
-      && (vars.KANON_AGGREGATE_URL == '' || vars.KANON_AGGREGATE_ROLE == ''
+      && (needs.gate.outputs.configured != 'true'
         || (github.event_name == 'workflow_dispatch' && github.ref_name != github.event.repository.default_branch))
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -133,7 +170,7 @@ jobs:
     steps:
       - name: Say why the aggregate isn't read
         run: |
-          echo "::notice title=explore-telemetry::The aggregate is not read: KANON_AGGREGATE_URL or KANON_AGGREGATE_ROLE is not set, or this dispatch ran from a branch other than the default, which the invoker role does not trust. See docs/telemetry.md (The aggregate function)."
+          echo "::notice title=explore-telemetry::The aggregate is not read: the KANON_AGGREGATE_URL variable or the KANON_AGGREGATE_ROLE secret is not set, or this dispatch ran from a branch other than the default, which the invoker role does not trust. See docs/telemetry.md (The aggregate function)."
           echo "Telemetry Explorer **skipped**: the aggregate function's URL or invoker role is not set, or the run is not on the default branch." >> "$GITHUB_STEP_SUMMARY"
 
   # THE ONE JOB THAT HOLDS `id-token: write` (see the header). Its steps are fixed: the id-token
@@ -142,7 +179,7 @@ jobs:
     needs: gate
     if: >-
       needs.gate.outputs.member == 'true'
-      && vars.KANON_AGGREGATE_URL != '' && vars.KANON_AGGREGATE_ROLE != ''
+      && needs.gate.outputs.configured == 'true'
       && (github.event_name == 'schedule' || github.ref_name == github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -155,18 +192,19 @@ jobs:
       attempt: ${{ github.run_attempt }}
     steps:
       - uses: $/actions/kanon-path
-      # MASKED FIRST (kanon#433): every later step's header then prints `***` for them. This
-      # step's own `env:` is printed before it runs, so the two values appear here, once.
-      - name: Mask the aggregate function's URL and the invoker role
+      # MASKED FIRST (kanon#433): every later step's header then prints `***` for the URL and the
+      # account id. The role's ARN is a secret, masked already. This step's own `env:` is printed
+      # before it runs, so the URL appears here, once.
+      - name: Mask the aggregate function's URL and the account id
         env:
           URL: ${{ vars.KANON_AGGREGATE_URL }}
-          ROLE: ${{ vars.KANON_AGGREGATE_ROLE }}
+          ROLE: ${{ secrets.KANON_AGGREGATE_ROLE }}
         run: node "$KANON/scripts/aggregate-mask.mjs"
       # The STS call goes to Frankfurt, where the hosted store lives: the account's region policy
       # denies every other region.
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.KANON_AGGREGATE_ROLE }}
+          role-to-assume: ${{ secrets.KANON_AGGREGATE_ROLE }}
           aws-region: eu-central-1
           role-session-name: kanon-explore-telemetry
       - name: Read the aggregate
@@ -207,7 +245,7 @@ jobs:
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   file:
-    needs: [aggregate, explore]
+    needs: [gate, aggregate, explore]
     # AN EXPLICIT STATUS FUNCTION AND THE PARENT'S RESULT (kanon#261): the explore job is green
     # whatever the agent concluded, because the agent step continues on error.
     if: ${{ !cancelled() && needs.explore.result == 'success' }}
@@ -247,23 +285,27 @@ jobs:
           name: qa-telemetry-findings-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/report
 
-      # THE FILING TOKEN, minted in this job, which runs no agent.
+      # THE FILING TOKEN, minted in this job, which runs no agent, and only when the repository
+      # files its findings itself: a draft needs none.
       - name: Mint the Explorer's filing token
         id: file-token
+        if: needs.gate.outputs.upstream == 'filed here'
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ secrets.AUTHOR_APP_ID }}
           private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           permission-issues: write
 
-      # THE CHECK AND THE FILING (see the header). No report, or an unparseable one, files
-      # nothing and reds the job: the run was lost. A refused finding reds it too, after the
-      # others are filed.
-      - name: Check the findings against the aggregate, and file them
+      # THE CHECK, AND THE FILING OR THE DRAFTS (see the header). No report, or an unparseable
+      # one, files nothing and reds the job: the run was lost. A refused finding reds it too,
+      # after the others are filed or drafted.
+      - name: Check the findings against the aggregate, and file or draft them
         env:
           GH_TOKEN: ${{ steps.file-token.outputs.token }}
           AGENT_OUTCOME: ${{ needs.explore.outputs.agent-outcome }}
           REPORT_PATH: ${{ runner.temp }}/report/qa-telemetry-findings.json
           AGGREGATE_PATH: ${{ runner.temp }}/aggregate/aggregate.json
           KANON: ${{ steps.kanon.outputs.path }}
+          # The gate job's reading of the record, never anything the agent wrote.
+          UPSTREAM: ${{ needs.gate.outputs.upstream }}
         run: node "$KANON/scripts/telemetry-file.mjs"

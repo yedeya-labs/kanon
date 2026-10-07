@@ -317,6 +317,7 @@ jobs:
       AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.KANON_SMOKE_UNSET }}
+      KANON_AGGREGATE_ROLE: ${{ secrets.KANON_SMOKE_UNSET }}
 
   smoke:
     name: Agent lanes smoke

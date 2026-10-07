@@ -32,8 +32,17 @@
 // - SPARINGLY. At most `MAX_FILED` new issues a run; the rest are held, and the summary says so.
 //   A run that finds nothing files nothing, which is a valid outcome.
 //
-// Issues go to the platform bucket, *Development Automation* (`K-WORK-4`): a lane's reliability
-// and cost are pipeline work.
+// THE MILESTONE IS THE PROJECT'S ROUTING (`K-WORK-4`; the Owner's decision on kanon#476), from
+// the issue's own labels through the backstop's `decide()` (`issue-triage-defaults.mjs`), as for
+// every filer: a bucket, never a roadmap milestone (`K-WORK-5`). Nothing here fixes one.
+//
+// FILED HERE, OR DRAFTED (the Owner's decision on kanon#471). Every finding is about Kanon's lanes,
+// so it goes by the repository's `Upstream findings:` choice (`K-LAYOUT-10`), as the Overseer's
+// do: `UPSTREAM` is the lane's gate job's reading of the adoption record, never anything the
+// agent wrote. `filed here` files in this repository, as above. Anything else is `drafted`, the
+// default: each finding that passes the check is written into the run's summary, rendered
+// exactly as it would be filed, and nothing is filed, commented on or listed. Nothing is ever
+// filed in another repository.
 //
 // THE REPORT, `qa-telemetry-findings.json`, written by the agent at the repository root:
 //
@@ -47,8 +56,8 @@
 // filing the rest. An agent that exited non-zero after a valid report is a warning.
 //
 //   node "$KANON/scripts/telemetry-file.mjs"
-//   env: GH_TOKEN (issues write), GITHUB_REPOSITORY, AGENT_OUTCOME, REPORT_PATH, AGGREGATE_PATH,
-//        GITHUB_STEP_SUMMARY
+//   env: GH_TOKEN (issues write; only for `filed here`), GITHUB_REPOSITORY, AGENT_OUTCOME,
+//        REPORT_PATH, AGGREGATE_PATH, UPSTREAM (`filed here` or `drafted`), GITHUB_STEP_SUMMARY
 //
 // `node:` builtins only, like every script under scripts/ (`K-SELF-8`).
 
@@ -60,12 +69,18 @@ import { AggregateError, checkAggregate } from './aggregate-read.mjs';
 import { appPersona } from './app-register.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
+import { decide } from './issue-triage-defaults.mjs';
+import { upstreamChoice } from './overseer-file.mjs';
 import { signed } from './lib/role-marker.mjs';
 
 /** The report the agent writes, at the repository root. */
 export const REPORT = 'qa-telemetry-findings.json';
-/** The platform bucket (`K-WORK-4`). */
-export const BUCKET = 'Development Automation';
+/**
+ * The bucket an issue with these labels goes to, by the backstop's routing (`K-WORK-4`).
+ * @param {string[]} labels
+ * @returns {string}
+ */
+export const milestoneFor = (labels) => /** @type {string} */ (decide({ labels }).milestone);
 /** At most this many new issues a run. */
 export const MAX_FILED = 3;
 export const SEVERITIES = ['sev:critical', 'sev:high', 'sev:medium', 'sev:low'];
@@ -278,10 +293,14 @@ const issueNumber = (url) => {
  * The whole step. Returns the exit code; prints its annotations through `log` and its summary
  * through `summary`.
  * @param {{ repo: string, text: string | null, aggregateText: string | null, agentOutcome: string, gh: Gh,
- *   log?: (line: string) => void, summary?: (line: string) => void }} o
+ *   log?: (line: string) => void, summary?: (line: string) => void, upstream?: string }} o
  * @returns {number}
  */
-export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log = console.log, summary = () => {} }) {
+export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log = console.log, summary = () => {}, upstream: declared }) {
+  const { upstream: choice, unknown } = upstreamChoice(declared);
+  if (unknown !== undefined) {
+    log(`::warning title=telemetry explorer upstream choice::the lane passed \`${unknown}\`, which is neither \`drafted\` nor \`filed here\`, so the findings are drafted, not filed (K-LAYOUT-10)`);
+  }
   /** @type {Aggregate} */
   let a;
   try {
@@ -317,6 +336,19 @@ export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log 
     }
   }
 
+  if (choice !== 'filed here') {
+    const seenDraft = new Set();
+    for (const { f, c } of ok) {
+      if (seenDraft.has(c.signature)) { summary(`- **Held:** "${f.title}": another finding this run has the same signature.`); continue; }
+      seenDraft.add(c.signature);
+      summary(`\n### Draft (${c.kind}): ${f.title}\n\n${f.body.trim()}\n\n${renderEvidence(c, a)}\n`);
+    }
+    log(`${seenDraft.size} finding(s) drafted in the run's summary, none filed: this repository's adoption record doesn't say \`Upstream findings: filed here\` (K-LAYOUT-10).`);
+    summary(`- ${report.findings.length} finding(s) in the report, ${seenDraft.size} drafted above and not filed (this repository doesn't declare \`Upstream findings: filed here\`), ${report.held_back.length} candidate(s) the agent held back.`);
+    if (agentOutcome === 'failure') log(`::warning title=telemetry explorer exited non-zero after writing its report::The agent exited non-zero, but its ${REPORT} was valid, so it was drafted from.`);
+    return failed > 0 ? 1 : 0;
+  }
+
   /** @type {Map<string, number>} */
   let open = new Map();
   if (ok.length) {
@@ -344,10 +376,11 @@ export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log 
         continue;
       }
       if (filed >= MAX_FILED) { summary(`- **Held:** "${f.title}": ${MAX_FILED} issues were filed this run already.`); continue; }
-      const labels = [...LABELS[c.kind], ...(c.kind === 'bug' ? [f.severity] : [])].flatMap((l) => ['--label', l]);
+      const names = [...LABELS[c.kind], ...(c.kind === 'bug' ? [f.severity] : [])];
+      const labels = names.flatMap((l) => ['--label', l]);
       // The agent's prose holds no HTML comment (`proseProblem`), so no marker of its own can
       // stand in for the Explorer's header.
-      const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...labels, '--milestone', BUCKET],
+      const number = issueNumber(gh(['issue', 'create', '--repo', repo, '--title', f.title, '--body-file', '-', ...labels, '--milestone', milestoneFor(names)],
         signed(`${f.body.trim()}\n\n${evidence}`, 'Explorer', appPersona('Explorer'))));
       filed += 1;
       log(`filed #${number} (${c.kind}): ${f.title}`);
@@ -384,6 +417,7 @@ if (isCliEntry(import.meta.url)) {
     text: read(process.env.REPORT_PATH || REPORT),
     aggregateText: read(process.env.AGGREGATE_PATH),
     agentOutcome: String(process.env.AGENT_OUTCOME ?? ''),
+    upstream: process.env.UPSTREAM,
     gh,
     summary: (line) => { if (out) appendFileSync(out, `${line}\n`); },
   });

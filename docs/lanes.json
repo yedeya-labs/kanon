@@ -69,8 +69,8 @@
     "agent-explore-telemetry": {
       "name": "Explore the telemetry",
       "group": "explore",
-      "does": "Reads Kanon's hosted telemetry aggregate weekly, never a row, and files the anomalies it finds in Kanon's lanes: failures by lane, stage, error and Kanon version, and costs per lane and model.",
-      "needs": ["an aggregate invoker role from Kanon's telemetry register (`aggregate_invoker`), and the repository variables `KANON_AGGREGATE_URL` and `KANON_AGGREGATE_ROLE` (docs/telemetry.md)"],
+      "does": "Reads Kanon's hosted telemetry aggregate weekly, never a row, and files or drafts the anomalies it finds in Kanon's lanes: failures by lane, stage, error and Kanon version, and costs per lane and model.",
+      "needs": ["an aggregate invoker role from Kanon's telemetry register (`aggregate_invoker`), whose ARN is the secret `KANON_AGGREGATE_ROLE`, and the repository variable `KANON_AGGREGATE_URL` (docs/telemetry.md)"],
       "cost": "A model run weekly, skipped when the aggregate holds no cell and no signal.",
       "recommend": [],
       "when": "When your telemetry register entry has an aggregate invoker role, so you can read the aggregate."

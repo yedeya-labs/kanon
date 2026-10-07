@@ -340,8 +340,10 @@ export const AGGREGATE_FILE = 'agent-explore-telemetry.yml';
 export const AGGREGATE_JOB = 'aggregate';
 const AGGREGATE_MASK_RUN = 'node "$KANON/scripts/aggregate-mask.mjs"';
 const AGGREGATE_READ_RUN = 'node "$KANON/scripts/aggregate-read.mjs"';
-/** What the masking step reads: the two variables, by name (kanon#433: never `toJSON(vars)`). */
-const AGGREGATE_MASK_ENV = { URL: '${{ vars.KANON_AGGREGATE_URL }}', ROLE: '${{ vars.KANON_AGGREGATE_ROLE }}' };
+/** What the masking step reads: the URL variable and the role secret, by name (kanon#433: never `toJSON(vars)`). */
+const AGGREGATE_MASK_ENV = { URL: '${{ vars.KANON_AGGREGATE_URL }}', ROLE: '${{ secrets.KANON_AGGREGATE_ROLE }}' };
+/** The role the credentials step assumes: the lane's secret, mapped by name in its caller (kanon#471). */
+const AGGREGATE_ROLE = '${{ secrets.KANON_AGGREGATE_ROLE }}';
 /** What the read step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
 export const AGGREGATE_READ_ENV = ['KANON_AGGREGATE_URL', 'OUT'];
 const UPLOAD = /^actions\/upload-artifact@v\d+$/;
@@ -350,7 +352,8 @@ const TEMP_PATH = /^\$\{\{\s*runner\.temp\s*\}\}(?:\/(?!\.\.?(?:\/|$))[\w.-]+)+$
 /**
  * The telemetry Explorer's `aggregate` job (plan 0004 step 14, plan 0002 §6.1): `aggregate` in
  * `agent-explore-telemetry.yml`, and only in exactly this shape: Kanon's path; the step that
- * masks the two variables, reading them by name; the AWS credentials for the invoker role; the
+ * masks the URL variable and the account id, reading them by name; the AWS credentials for the
+ * invoker role, from the lane's secret; the
  * read script, handed only the URL and its output directory; and the upload of the answer from
  * the runner's temp directory. Its grant is `id-token: write` and nothing else, and it carries
  * no job `env:`, `container:`, `services:` or `defaults:` (`STORE_JOB_KEYS`). The invoker role
@@ -369,6 +372,7 @@ export function isAggregateJob(file: string | undefined, name: string, j: Job): 
     && JSON.stringify(mask.env) === JSON.stringify(AGGREGATE_MASK_ENV)
     && only(creds, ['uses', 'with']) && CREDENTIALS.test(String(creds.uses))
     && only(creds.with as object, ['role-to-assume', 'aws-region', 'role-session-name'])
+    && (creds.with as Record<string, unknown>)['role-to-assume'] === AGGREGATE_ROLE
     && only(read, ['name', 'id', 'env', 'run']) && String(read.run).trim() === AGGREGATE_READ_RUN
     && only(read.env as object, AGGREGATE_READ_ENV)
     && only(upload, ['name', 'id', 'uses', 'with']) && UPLOAD.test(String(upload.uses))

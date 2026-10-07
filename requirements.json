@@ -22,7 +22,8 @@
         "docs/qa/stack.md"
       ],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": true
     },
     "agent-dispatch-sweep": {
       "identities": [
@@ -44,7 +45,8 @@
       },
       "reads": [],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": true
     },
     "agent-explore-telemetry": {
       "identities": [
@@ -53,7 +55,8 @@
       "secrets": [
         "AUTHOR_APP_ID",
         "AUTHOR_APP_PRIVATE_KEY",
-        "CLAUDE_CODE_OAUTH_TOKEN"
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "KANON_AGGREGATE_ROLE"
       ],
       "inputs": {},
       "grant": {
@@ -66,7 +69,8 @@
         "docs/qa/explorer-playbook.md"
       ],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-explore": {
       "identities": [
@@ -95,7 +99,8 @@
       "readsWorkflows": [],
       "hooks": [
         ".github/actions/explore-sweep/action.yml"
-      ]
+      ],
+      "qaStore": true
     },
     "agent-implement-revise": {
       "identities": [
@@ -127,7 +132,8 @@
         "docs/qa/triage-fix-playbook.md"
       ],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-implement": {
       "identities": [
@@ -155,7 +161,8 @@
         "docs/qa/triage-fix-playbook.md"
       ],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-lead-reconcile": {
       "identities": [
@@ -187,7 +194,8 @@
       "readsWorkflows": [
         "ci.yml"
       ],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-lead-revise": {
       "identities": [
@@ -215,7 +223,8 @@
       },
       "reads": [],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-lead-split": {
       "identities": [
@@ -241,7 +250,8 @@
         "docs/qa/lead-playbook.md"
       ],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-lead": {
       "identities": [
@@ -269,7 +279,8 @@
         "docs/qa/lead-playbook.md"
       ],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-merge-reconcile": {
       "identities": [
@@ -295,7 +306,8 @@
         "docs/qa/reviewer-playbook.md"
       ],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-merge": {
       "identities": [
@@ -321,6 +333,7 @@
       "reads": [],
       "readsWorkflows": [],
       "hooks": [],
+      "qaStore": false,
       "callerName": "Merge (Merger)"
     },
     "agent-overseer": {
@@ -344,7 +357,8 @@
         "docs/qa/overseer-playbook.md"
       ],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": true
     },
     "agent-project-digest": {
       "identities": [],
@@ -366,7 +380,8 @@
       },
       "reads": [],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-rebase": {
       "identities": [
@@ -394,7 +409,8 @@
         "docs/qa/triage-fix-playbook.md"
       ],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-review": {
       "identities": [
@@ -426,6 +442,7 @@
         "ci.yml"
       ],
       "hooks": [],
+      "qaStore": false,
       "callerRunNameEndsWith": "${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}"
     },
     "agent-triage": {
@@ -451,7 +468,8 @@
         "docs/qa/triage-fix-playbook.md"
       ],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-verify-acs": {
       "identities": [
@@ -480,7 +498,8 @@
         "docs/qa/explorer-playbook.md"
       ],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     },
     "agent-weekly-digest": {
       "identities": [],
@@ -505,7 +524,8 @@
       },
       "reads": [],
       "readsWorkflows": [],
-      "hooks": []
+      "hooks": [],
+      "qaStore": false
     }
   },
   "hook": {
@@ -815,9 +835,9 @@
       "agent-explore-telemetry": {
         "name": "Explore the telemetry",
         "group": "explore",
-        "does": "Reads Kanon's hosted telemetry aggregate weekly, never a row, and files the anomalies it finds in Kanon's lanes: failures by lane, stage, error and Kanon version, and costs per lane and model.",
+        "does": "Reads Kanon's hosted telemetry aggregate weekly, never a row, and files or drafts the anomalies it finds in Kanon's lanes: failures by lane, stage, error and Kanon version, and costs per lane and model.",
         "needs": [
-          "an aggregate invoker role from Kanon's telemetry register (`aggregate_invoker`), and the repository variables `KANON_AGGREGATE_URL` and `KANON_AGGREGATE_ROLE` (docs/telemetry.md)"
+          "an aggregate invoker role from Kanon's telemetry register (`aggregate_invoker`), whose ARN is the secret `KANON_AGGREGATE_ROLE`, and the repository variable `KANON_AGGREGATE_URL` (docs/telemetry.md)"
         ],
         "cost": "A model run weekly, skipped when the aggregate holds no cell and no signal.",
         "recommend": [],
