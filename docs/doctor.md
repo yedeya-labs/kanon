@@ -81,8 +81,31 @@ Some findings your repository has decided to keep. A caller whose lane's file na
 
 - **A waived finding doesn't count.** It moves from `findings` to `waived`, with the bullet's reason, so it no longer sets the exit code, and it stays in the document for whoever reads it.
 - **A waiver is narrow.** It waives one finding id on one subject; nothing waives an id everywhere, or every finding on a subject. Where doctor reports more than one finding of an id on one subject, such as each missing secret on the repository, the waiver covers each of them, and `waived` lists each.
+- **A waiver of a finding that lists items names them** ([#406](https://github.com/yedeya-labs/kanon/issues/406)). Some findings list several items in one message, and a later release can add one: a permission an App needs, a secret a lane takes. So a waiver of one of these names, after `for`, each item it waives, as one code span each, separated by commas, exactly as the finding's message names them:
+
+  ```markdown
+  - **Waived doctor finding:** `secret.missing` on `acme/widgets` for `DIGEST_WEBHOOK` (the digests post through the organisation's webhook)
+  ```
+
+  Doctor waives only those. Any other item the finding lists, today or after an upgrade, stays a finding, written for those items alone, and says which the waiver covers; `waived` lists the finding for the items it names, in `.waived[].items`. An item the bullet names that doctor no longer reports makes the waiver stale. A waiver that names no items, as every waiver did before, still waives the whole finding, but it also waives whatever a later release adds to it: doctor says so in a note, naming the items it waives today and the bullet to write instead. The ids, and what an item of each is:
+
+  | Id | An item |
+  |---|---|
+  | `register.missing-row` | a role whose row is missing |
+  | `register.split-slug` | an App whose roles name more than one slug |
+  | `app.permission-missing`, `app.permission-extra` | a permission, such as `contents` |
+  | `secret.missing`, `secret.stale` | a secret's name |
+  | `declaration.section-missing` | a heading, such as `## Gates` |
+  | `hook.input-missing` | an input |
+  | `caller.secret-missing`, `caller.secret-stale` | a secret's name |
+  | `caller.input-stale` | an input |
+  | `caller.grant-missing` | a permission |
+  | `apps-check.secret-missing`, `apps-check.secret-stale` | a secret's name |
+  | `label.missing` | a label |
+  | `telemetry.unconfigured` | a variable |
+
 - **A waiver that matches nothing is listed as stale** (`waiver.stale`), without blocking, so a waiver doesn't outlive its finding. When the check that would report its finding couldn't run, doctor can't tell, and says so in a note instead.
-- **A waiver in another shape is malformed, and blocks** (`declaration.malformed`): outside `## Choices`, with nothing in its parentheses, naming an id doctor doesn't report, waiving one finding twice, or waiving a finding that can't be waived.
+- **A waiver in another shape is malformed, and blocks** (`declaration.malformed`): outside `## Choices`, with nothing in its parentheses, naming an id doctor doesn't report, naming items of a finding that lists none, waiving one finding twice, or waiving a finding that can't be waived.
 - **The person decides.** A waiver is a decision the rulebook gives to the project, in a file on its escalation path (`K-MERGE-4`). An agent may propose one; the person writes it, or accepts it with its reason.
 
 An accepted id-token holder is this waiver's own form for `id-token.unaccepted`: the same `## Choices`, one bullet per job, a reason, malformed and stale alike. It keeps its own shape because doctor lists every holder with its status (`.idTokenHolders[].status`), and the acceptance is what makes one `accepted`.
@@ -182,9 +205,10 @@ When it can't run, or on a usage error with `--json`, the document is `{ "schema
 | `subject` | string | What it is about, as the waiver names it. |
 | `message` | string | What is missing or stale, in a sentence. |
 | `fix` | object | The fix it would have had. |
+| `items` | array | Strings: the items it waives, for a finding that lists items ([above](#waiving-a-finding)); empty for any other. |
 | `reason` | string | Why the finding stands: the waiver's parentheses in the adoption record. |
 
-It is the finding, whole, as it would have been listed, with the waiver's reason.
+It is the finding, whole, as it would have been listed, with the waiver's reason; for a waiver that names items, the finding as it would have been listed for those items alone.
 
 ### An id-token holder
 
@@ -215,7 +239,7 @@ It is the finding, whole, as it would have been listed, with the waiver's reason
 | `declaration.missing` | `declaration` | yes | A project document a lane reads, with no default, is missing. |
 | `declaration.section-missing` | `declaration` | yes | A section with no default is missing, or written more than once. |
 | `declaration.malformed` | `declaration` | yes | An id-token holder's acceptance, a waiver or the `Upstream findings:` choice in the adoption record is malformed, or a waiver waives a finding that can't be waived. |
-| `waiver.stale` | `declaration` | no | The adoption record waives a finding doctor doesn't report. |
+| `waiver.stale` | `declaration` | no | The adoption record waives a finding doctor doesn't report, or names an item of one that doctor doesn't report. |
 | `hook.missing` | `declaration` | yes | The project-setup hook, or a hook a lane calls, is missing. |
 | `hook.input-missing` | `declaration` | yes | The project-setup hook does not declare an input the lanes pass it. |
 | `workflow.missing` | `declaration` | yes | A workflow a lane reads by file name is missing. |
