@@ -325,6 +325,8 @@ describe('kanon doctor --to, before the pin moves (plan 0005 L10)', () => {
     const grant = r.json.findings.find((f: { id: string }) => f.id === 'caller.grant-missing');
     expect(grant.fix.commands).toEqual(['  checks: read']);
     expect(r.json.findings[0].fix.commands).toEqual([`gh secret set DIGEST_WEBHOOK -R ${REPO}`]);
+    // The lane that takes it, and its caller, which doesn't map it yet (#415).
+    expect(r.json.findings[0].message).toBe(`lacks DIGEST_WEBHOOK, which agent-review takes: .github/workflows/agent-review.yml calls a lane that takes it at ${NEXT}.`);
   });
 
   it('refuses, exit 3, a release that ships no requirements file', async () => {
@@ -1320,6 +1322,83 @@ describe('kanon doctor and the secrets a workflow maps (#414)', () => {
     execFileSync('git', ['-C', dir, 'checkout', '-q', '-b', 'topic']);
     const r = await run(dir, fakeGitHub(), ['--json']);
     expect(r.json.notes.join('\n')).toContain('The id-token holders and the secrets the workflows map are counted on topic, not on main');
+  });
+});
+
+// #415 (Kanon's own L5, G2 and G9e): for each secret of the checked release's Apps, or of its
+// lanes, that a workflow maps and the repository doesn't hold, doctor reports secret.missing,
+// naming the secret, the workflows that map it, and the kanon apps line that creates it, after
+// its pre-check (#420). A caller that reaches its workflow by a local path or `$/` counts.
+describe('kanon doctor and the secrets a caller maps at the checked release (#415)', () => {
+  const APPS = ['author', 'judge', 'releaser'];
+  const all = () => new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...APPS.flatMap(appSecrets)]);
+  const preflight = `kanon apps --owner acme --repo widgets --preflight`;
+  /** The L5 shape: the lanes Kanon pins, and a release caller that reaches release.yml by `$/`. */
+  const l5 = (secrets: Set<string>, extra: Record<string, string> = {}) => {
+    const dir = checkout({ ...healthyFiles(), '.github/workflows/release-please.yml': releaseBy('$/.github/workflows/release.yml'), ...extra });
+    return run(dir, fakeGitHub({ secrets, releases: { [NEXT]: clone(REQ) } }), ['--to', NEXT, '--json']);
+  };
+  const missing = (r: Result) => r.json.findings.filter((f: { id: string }) => f.id === 'secret.missing');
+
+  it('finds nothing missing while every App secret is there (the mutations\' baseline)', async () => {
+    const r = await l5(all());
+    expect(ids(r)).toEqual([]);
+  });
+
+  it('reports each App whose secrets are gone, the Releaser of a `$/` release caller included, and nothing else', async () => {
+    const r = await l5(new Set([...all()].filter((n) => !/_APP_(ID|PRIVATE_KEY)$/.test(n))));
+    expect(r.status).toBe(EXIT.findings);
+    expect(ids(r)).toEqual(APPS.map(() => `secret.missing ${REPO}`));
+    expect(missing(r).map((f: { message: string }) => f.message.split(',')[0])).toEqual(APPS.map((a) => `lacks ${appSecrets(a).join(' and ')}`));
+    const releaser = missing(r)[2];
+    expect(releaser.message).toContain('the releaser App\'s secrets: .github/workflows/release-please.yml maps them.');
+    expect(releaser.fix.commands).toEqual([preflight, 'kanon apps --owner acme --repo widgets --apps releaser']);
+  });
+
+  for (const app of APPS) {
+    it(`reports exactly the ${app} App's finding when only its secrets are gone (mutation)`, async () => {
+      const r = await l5(new Set([...all()].filter((n) => !appSecrets(app).includes(n))));
+      expect(ids(r)).toEqual([`secret.missing ${REPO}`]);
+      expect(r.json.findings[0].message).toMatch(new RegExp(`^lacks ${appSecrets(app).join(' and ')}, the ${app} App's secrets: \\S`));
+      expect(r.json.findings[0].fix.commands[0]).toBe(preflight);
+      // The App the register names gets the line that stores a new key for it; another, the line that creates it.
+      expect(r.json.findings[0].fix.commands[1]).toBe(app === 'releaser' ? `kanon apps --owner acme --repo widgets --apps releaser` : `kanon apps --owner acme --repo widgets --reuse ${app}:widgets-${app}=<downloaded>.pem`);
+    });
+  }
+
+  it('names every workflow that maps the secrets, and the caller of a lane that takes them without mapping them', async () => {
+    const files = healthyFiles();
+    const judge = appSecrets('judge');
+    const review = files['.github/workflows/agent-review.yml']!.split('\n').filter((l) => !judge.some((n) => l.includes(`${n}:`))).join('\n');
+    const r = await l5(new Set([...all()].filter((n) => !judge.includes(n))), { '.github/workflows/agent-review.yml': review });
+    const f = missing(r)[0];
+    expect(f.message).toBe(`lacks ${judge.join(' and ')}, the judge App's secrets: .github/workflows/apps-check.yml maps them; .github/workflows/agent-review.yml calls a lane that takes them at ${NEXT}.`);
+  });
+
+  it('counts a lane reached by `$/`, which doctor does not read as a caller, and its lane secret too', async () => {
+    const files = healthyFiles();
+    delete files['.github/workflows/agent-review.yml'];
+    const local = callerFile('agent-review', REQ.lanes['agent-review']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }).replace(`yedeya-labs/kanon/.github/workflows/agent-review.yml@${PINNED}`, '$/.github/workflows/agent-review.yml').replace(/^( {4}secrets:\n)/m, '$1      DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}\n');
+    const dir = checkout({ ...files, '.github/workflows/local-review.yml': local });
+    const secrets = new Set([...all()].filter((n) => ![...appSecrets('judge'), ...appSecrets('releaser'), 'DIGEST_WEBHOOK'].includes(n)));
+    const r = await run(dir, fakeGitHub({ secrets }), ['--json']);
+    expect(r.json.lanes).toEqual(['agent-code-audit']);
+    expect(ids(r).filter((x: string) => x.startsWith('secret.'))).toEqual([`secret.missing ${REPO}`, `secret.missing ${REPO}`]);
+    const [judgeFinding, digest] = missing(r);
+    expect(judgeFinding.message).toBe(`lacks ${appSecrets('judge').join(' and ')}, the judge App's secrets: .github/workflows/apps-check.yml, .github/workflows/local-review.yml map them.`);
+    // No lane doctor reads runs as the Judge, so its slug is the register's own row.
+    expect(r.json.apps.map((a: { identity: string }) => a.identity)).toEqual(['author']);
+    expect(judgeFinding.fix.commands).toEqual([preflight, 'kanon apps --owner acme --repo widgets --reuse judge:widgets-judge=<downloaded>.pem']);
+    expect(digest.message).toBe('lacks DIGEST_WEBHOOK: .github/workflows/local-review.yml maps it.');
+    expect(digest.fix.commands).toEqual([`gh secret set DIGEST_WEBHOOK -R ${REPO}`]);
+  });
+
+  it("reports no secret that is not Kanon's, nor one of a per-role App the checked release has no more", async () => {
+    const role = Object.keys(REQ.identities.roles).find((x) => !REQ.identities.apps[x])!;
+    const other = ['name: Publish', 'on: push', 'permissions: {}', 'jobs:', '  publish:', '    runs-on: ubuntu-latest', '    env:',
+      '      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}', ...appSecrets(role).map((n) => `      ${n}: \${{ secrets.${n} }}`), '    steps:', '      - run: "true"', ''].join('\n');
+    const r = await l5(all(), { '.github/workflows/publish.yml': other });
+    expect(ids(r)).toEqual([]);
   });
 });
 

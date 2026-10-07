@@ -927,20 +927,56 @@ export const diagnose = async (deps, opts) => {
   }
 
   // ── The secrets ───────────────────────────────────────────────────────────────────────────
-  const needSecrets = [...new Set([...installed.flatMap((l) => req.lanes[l]?.secrets ?? []), ...(identities.includes('releaser') ? releaserSecrets : [])])].sort();
+  // What each workflow maps, read as #414 reads it: any `secrets.<NAME>` outside its on:, whatever
+  // the job calls. A secret of Kanon's that a workflow maps is needed whether or not the job calls
+  // a lane doctor recognises (a local path, `$/`), and the secrets of each of the checked release's
+  // Apps that one maps, both of them, so the Releaser's too when a local release caller maps it
+  // (#415).
+  const mapping = [...workflows].map(([file, wf]) => ({ file, ...secretReads(wf) }));
+  /** @param {string} n */
+  const mappedBy = (n) => mapping.filter((m) => m.names.has(n)).map((m) => m.file);
+  const laneSecrets = new Set(Object.values(req.lanes).flatMap((l) => l?.secrets ?? []));
+  const secretApps = [...new Set([...identities, ...Object.keys(req.identities.apps).filter((a) => appSecrets(a).some((n) => mappedBy(n).length))])].sort();
+  const needSecrets = [...new Set([...installed.flatMap((l) => req.lanes[l]?.secrets ?? []), ...secretApps.flatMap(appSecrets), ...[...laneSecrets].filter((n) => mappedBy(n).length)])].sort();
+  /**
+   * The workflows that map these secrets, and the callers of a lane that takes them and doesn't
+   * map them yet (caller.secret-missing names those lines), for the finding's message.
+   * @param {string[]} names
+   */
+  const whoNeeds = (names) => {
+    const maps = [...new Set(names.flatMap(mappedBy))].sort();
+    const must = [...new Set(callers.filter((c) => names.some((n) => req.lanes[c.lane]?.secrets.includes(n))).map((c) => c.file))].filter((f) => !maps.includes(f)).sort();
+    const them = names.length > 1 ? 'them' : 'it';
+    return [
+      ...(maps.length ? [`${maps.join(', ')} map${maps.length > 1 ? '' : 's'} ${them}`] : []),
+      ...(must.length ? [`${must.join(', ')} call${must.length > 1 ? '' : 's'} a lane that takes ${them} at ${checked}`] : []),
+    ].join('; ');
+  };
   if (!s.secrets) unchecked.push({ check: 'secrets', subject: repo, reason: "the token can't list the repository's secret names (it needs admin access)" });
   else {
-    for (const id of identities) {
+    // `kanon apps` is the person's step (#420): its pre-check first, which creates nothing, then
+    // the line that creates the App, or stores a key for the one the register already names.
+    const preflight = `kanon apps --owner ${s.owner} --repo ${repoName} --preflight`;
+    for (const id of secretApps) {
       const lacks = appSecrets(id).filter((n) => needSecrets.includes(n) && !s.secrets?.has(n));
       if (!lacks.length) continue;
-      const slug = slugOf.get(id);
-      find('secret.missing', repo, `lacks ${lacks.join(' and ')}, the ${id} App's ${lacks.length > 1 ? 'secrets' : 'secret'}.`, slug
-        ? { text: `Add ${repoName} to the ${id} App's installation, generate a private key on its settings page, then store it (the command checks it, stores both secrets and deletes the file):`, commands: [`kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}=<downloaded>.pem`] }
-        : { text: `Create the ${id} App from this checkout; kanon apps stores its secrets.`, commands: [`kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] });
+      const slug = slugOf.get(id) ?? (() => {
+        try {
+          const slugs = [...new Set(registerRolesOf(id, req).map((r) => rows.get(r)).filter((x) => x !== undefined))];
+          return slugs.length === 1 ? slugs[0] : undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      const who = whoNeeds(lacks);
+      find('secret.missing', repo, `lacks ${lacks.join(' and ')}, the ${id} App's ${lacks.length > 1 ? 'secrets' : 'secret'}${who ? `: ${who}` : ''}.`, slug
+        ? { text: `Add ${repoName} to the ${id} App's installation, and generate a private key on its settings page. kanon apps is your step: check the token with the first command (it creates nothing), then store the key with the second (it checks the key, stores both secrets and deletes the file):`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}=<downloaded>.pem`] }
+        : { text: `Create the ${id} App from this checkout. kanon apps is your step: check the token with the first command (it creates nothing), then create the App with the second, which stores its secrets:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] });
     }
     for (const n of needSecrets.filter((x) => !/_APP_(ID|PRIVATE_KEY)$/.test(x) && !s.secrets?.has(x))) {
       const by = installed.filter((l) => req.lanes[l]?.secrets.includes(n));
-      find('secret.missing', repo, `lacks ${n}, which ${by.join(', ')} ${by.length > 1 ? 'take' : 'takes'}.`, {
+      const who = whoNeeds([n]);
+      find('secret.missing', repo, `lacks ${n}${by.length ? `, which ${by.join(', ')} ${by.length > 1 ? 'take' : 'takes'}` : ''}${who ? `: ${who}` : ''}.`, {
         text: n === 'CLAUDE_CODE_OAUTH_TOKEN' ? "Store the token of the Claude subscription the agents run on, made with `claude setup-token` (docs/lanes.md), pasting it on standard input:" : `Store it, pasting the value on standard input:`,
         commands: [`gh secret set ${n} -R ${repo}`],
       });
@@ -949,7 +985,6 @@ export const diagnose = async (deps, opts) => {
     // an App dropped. A secret any job maps counts as read, whatever the job calls (#414).
     const known = new Set([...Object.keys(req.identities.roles), ...Object.keys(req.identities.apps)].flatMap(appSecrets));
     const used = new Set(identities.flatMap(appSecrets));
-    const mapping = [...workflows].map(([file, wf]) => ({ file, ...secretReads(wf) }));
     for (const m of mapping) for (const n of m.names) used.add(n);
     const stale = [...s.secrets].filter((n) => known.has(n) && !used.has(n.toUpperCase())).sort();
     const inheriting = mapping.flatMap((m) => m.inherits.map((j) => `${m.file}'s job ${j}`));
