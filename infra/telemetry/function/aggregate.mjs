@@ -2,8 +2,11 @@
 // function over stored rows, and the aggregate-only function that serves it.
 //
 // WHAT MAY LEAVE, AND NOTHING ELSE (§6.1, items 1 to 3):
-// 1. `cross_adopter`: a lane-and-model cell, from `tag = run` run rows, only when AT LEAST THREE
-//    DISTINCT ADOPTERS contribute to it (decision 7, unchanged). A cell under that is withheld.
+// 1. `cross_adopter`: a lane-and-model cell, from `tag = run` run rows OF ADOPTERS THAT DID NOT
+//    DECLARE their own figures, only when AT LEAST THREE such DISTINCT ADOPTERS contribute to it
+//    (decision 7, unchanged). A cell under that is withheld. A declaring adopter's rows are in
+//    `own` only, so the two never overlap: were they in both, subtracting `own` from a cell
+//    would recover a figure of fewer than three adopters (#449's review).
 // 2. `own`: an adopter's own lane-and-model cells, only for an adopter whose register entry
 //    declares its own figures publishable (`publish_own_figures_as`, off by default), labelled
 //    with the label it declared, never its key. They are that adopter's figures, not
@@ -88,7 +91,7 @@ const orNull = (/** @type {unknown} */ v) => (typeof v === 'string' && v !== '' 
  * @returns {Aggregate}
  */
 export function aggregate(rows, { now, own = {} }) {
-  /** @type {Map<string, { lane: string, model: string, costs: number[], byAdopter: Map<string, number[]> }>} */
+  /** @type {Map<string, { lane: string, model: string, byAdopter: Map<string, number[]> }>} */
   const cells = new Map();
   /** @type {Map<string, { signal: Omit<Signal, 'adopters_affected'>, adopters: Set<string> }>} */
   const signals = new Map();
@@ -113,9 +116,8 @@ export function aggregate(rows, { now, own = {} }) {
     if (typeof row.model !== 'string' || row.model === '') { excluded.no_model += 1; continue; }
     if (typeof row.total_cost_usd !== 'number' || !Number.isFinite(row.total_cost_usd)) { excluded.no_cost += 1; continue; }
     const id = `${row.lane}\u0000${row.model}`;
-    const cell = cells.get(id) ?? { lane: row.lane, model: row.model, costs: /** @type {number[]} */ ([]), byAdopter: new Map() };
+    const cell = cells.get(id) ?? { lane: row.lane, model: row.model, byAdopter: /** @type {Map<string, number[]>} */ (new Map()) };
     cells.set(id, cell);
-    cell.costs.push(row.total_cost_usd);
     const mine = cell.byAdopter.get(key) ?? [];
     cell.byAdopter.set(key, mine);
     mine.push(row.total_cost_usd);
@@ -126,9 +128,10 @@ export function aggregate(rows, { now, own = {} }) {
   const ownCells = new Map();
   let withheld = 0;
   for (const cell of cells.values()) {
-    // One entry per distinct adopter key: that is what the rule counts.
-    if (cell.byAdopter.size >= MIN_ADOPTERS) cross.push(figures(cell.lane, cell.model, cell.costs));
-    else withheld += 1;
+    // One entry per distinct adopter key, declaring adopters left out: that is what the rule counts.
+    const others = [...cell.byAdopter].filter(([key]) => !Object.hasOwn(own, key));
+    if (others.length >= MIN_ADOPTERS) cross.push(figures(cell.lane, cell.model, others.flatMap(([, costs]) => costs)));
+    else if (others.length > 0) withheld += 1;
     for (const [key, costs] of cell.byAdopter) {
       if (!Object.hasOwn(own, key)) continue;
       const label = /** @type {string} */ (own[key]);

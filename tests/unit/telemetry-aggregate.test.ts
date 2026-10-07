@@ -88,6 +88,30 @@ describe("an adopter's own figures (§6.1, item 2)", () => {
     expect(out.own).toEqual([{ label: 'kanon', cells: [{ lane: 'review', model: MODEL, runs: 1, median_cost_usd: 1, p90_cost_usd: 1 }] }]);
   });
 
+  it("never let a cross-adopter cell and own figures overlap: subtracting own can't recover two adopters' figure (#449)", () => {
+    // The reviewer's example: alpha declares; alpha, beta and gamma share the cell.
+    const rows = [row('alpha', 1), row('alpha', 1), row('beta', 10), row('gamma', 3), row('gamma', 3), row('gamma', 3), row('gamma', 3)];
+    const out = run(rows, { alpha: 'kanon' });
+    expect(out.cross_adopter).toEqual([]);
+    expect(out.notes.withheld_cells).toBe(1);
+    expect(out.own).toEqual([{ label: 'kanon', cells: [{ lane: 'review', model: MODEL, runs: 2, median_cost_usd: 1, p90_cost_usd: 1 }] }]);
+  });
+
+  it('count only adopters that did not declare toward a cross-adopter cell, and their rows only', () => {
+    // alpha and beta declare; gamma, delta and epsilon don't.
+    const own = { alpha: 'one', beta: 'two' };
+    const four = [row('alpha', 100), row('beta', 100), row('gamma', 1), row('delta', 2)];
+    expect(run(four, own).cross_adopter).toEqual([]);
+    expect(run(four, own).notes.withheld_cells).toBe(1);
+    const five = [...four, row('epsilon', 3)];
+    expect(run(five, own).cross_adopter).toEqual([{ lane: 'review', model: MODEL, runs: 3, median_cost_usd: 2, p90_cost_usd: 3 }]);
+    expect(run(five, own).own.map((o) => [o.label, o.cells[0]!.runs])).toEqual([['one', 1], ['two', 1]]);
+  });
+
+  it('withhold nothing when only declaring adopters contribute: their figures are all in own', () => {
+    expect(run([row('alpha', 1)], { alpha: 'kanon' }).notes.withheld_cells).toBe(0);
+  });
+
   it('keep two declaring adopters apart, each under its own label', () => {
     const out = run([row('alpha', 1), row('beta', 5)], { alpha: 'one', beta: 'two' });
     expect(out.own.map((o) => [o.label, o.cells[0]!.median_cost_usd])).toEqual([['one', 1], ['two', 5]]);
@@ -293,12 +317,12 @@ describe('the reader', () => {
 
 describe('the aggregate-only function (§6.1)', () => {
   const ACCOUNT = '5'.repeat(12);
-  const env = { TABLE_NAME: TABLE, ACCOUNT_ID: ACCOUNT, AGGREGATE_KEYS: 'alpha,beta,gamma', OWN_FIGURES: 'alpha=kanon', INVOKER_KEYS: 'alpha' };
+  const env = { TABLE_NAME: TABLE, ACCOUNT_ID: ACCOUNT, AGGREGATE_KEYS: 'alpha,beta,gamma,delta', OWN_FIGURES: 'alpha=kanon', INVOKER_KEYS: 'alpha' };
   const urlEvent = (role = 'kanon-telemetry-alpha-aggregates', method = 'GET', account = ACCOUNT) => ({
     requestContext: { http: { method }, authorizer: { iam: { userArn: `arn:aws:sts::${account}:assumed-role/${role}/GitHubActions` } } },
   });
   const failed = { outcome: 'failed', reason: 'did_not_finish', failed_stage: 'agent' };
-  const items = [...three(), row('alpha', 5, { lane: 'implement' }), row('beta', 7, { lane: 'implement', ...failed })];
+  const items = [...three(), row('delta', 4), row('alpha', 5, { lane: 'implement' }), row('beta', 7, { lane: 'implement', ...failed })];
   const call = async (event: unknown, over: Partial<typeof env> = {}, q = fakeQuery(items).query) => {
     const logs: string[] = [];
     const res = await handle(event, { env: { ...env, ...over }, now: () => NOW, query: q, log: (l) => logs.push(l) });
@@ -310,14 +334,15 @@ describe('the aggregate-only function (§6.1)', () => {
     expect(status).toBe(200);
     expect(Object.keys(body).sort()).toEqual(['computed_at', 'cross_adopter', 'min_adopters', 'own', 'signal_days', 'signals']);
     expect(body.min_adopters).toBe(3);
-    expect(body.cross_adopter).toEqual([{ lane: 'review', model: MODEL, runs: 3, median_cost_usd: 2, p90_cost_usd: 3 }]);
+    // alpha declared, so the cross-adopter cell is beta, gamma and delta's alone.
+    expect(body.cross_adopter).toEqual([{ lane: 'review', model: MODEL, runs: 3, median_cost_usd: 3, p90_cost_usd: 4 }]);
     expect(body.own).toEqual([{ label: 'kanon', cells: [
       { lane: 'implement', model: MODEL, runs: 1, median_cost_usd: 5, p90_cost_usd: 5 },
       { lane: 'review', model: MODEL, runs: 1, median_cost_usd: 1, p90_cost_usd: 1 },
     ] }]);
     expect(body.signals).toEqual([{ lane: 'implement', reason: 'did_not_finish', failed_stage: 'agent', kanon_error: null, kanon_version: '0.32.0', adopters_affected: 1 }]);
     const text = JSON.stringify(body) + logs.join('\n');
-    for (const k of ['alpha', 'beta', 'gamma', 'withheld', 'excluded']) expect(text).not.toContain(k);
+    for (const k of ['alpha', 'beta', 'gamma', 'delta', 'withheld', 'excluded']) expect(text).not.toContain(k);
     // beta's lone implement run, which cost 7, is in no figure.
     expect(text).not.toMatch(/_usd":7\b/);
   });
@@ -346,9 +371,9 @@ describe('the aggregate-only function (§6.1)', () => {
 
   it('refuses a malformed configuration rather than guess', async () => {
     expect((await call(urlEvent(), { OWN_FIGURES: 'alpha' })).status).toBe(500);
-    expect((await call(urlEvent(), { OWN_FIGURES: 'delta=kanon' })).status).toBe(500);
+    expect((await call(urlEvent(), { OWN_FIGURES: 'zeta=kanon' })).status).toBe(500);
     expect((await call(urlEvent(), { AGGREGATE_KEYS: 'Al#pha' })).status).toBe(500);
-    expect(configOf(env)).toEqual({ keys: ['alpha', 'beta', 'gamma'], own: { alpha: 'kanon' }, invokers: ['alpha'] });
+    expect(configOf(env)).toEqual({ keys: ['alpha', 'beta', 'gamma', 'delta'], own: { alpha: 'kanon' }, invokers: ['alpha'] });
   });
 
   it('checks the caller by role name, account and invoker list', () => {

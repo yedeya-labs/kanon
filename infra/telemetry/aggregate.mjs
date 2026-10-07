@@ -6,7 +6,8 @@
 // The figures are `function/aggregate.mjs`'s, the same module the aggregate-only function
 // serves, so the Owner sees exactly what the function would answer, plus `notes`:
 // - `cross_adopter`: lane-and-model cells from `tag = run` run rows (run count, median and
-//   90th-percentile cost per run), each only when AT LEAST THREE DISTINCT ADOPTERS contribute;
+//   90th-percentile cost per run) of adopters that did not declare their own figures, each only
+//   when AT LEAST THREE such DISTINCT ADOPTERS contribute;
 // - `own`: an adopter's own cells, only for an adopter whose register entry sets
 //   `publish_own_figures_as`, under that label, never its key;
 // - `signals`: the week's failures by lane, reason, stage, Kanon error and version, with how many

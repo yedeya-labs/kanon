@@ -140,7 +140,7 @@ An adopter opts in when it installs Kanon: `kanon init --telemetry`, or a yes to
    `readers` lists the branch refs the adopter's reading jobs run on, usually just the default branch (§3, §6). An environment is refused, and so are a pattern and a repository already in the register. The writer's subject is not listed: `render.mjs` derives it.
 
    Two optional fields, both off by default, are the adopter's to ask for (§6.1):
-   - `"publish_own_figures_as": "<label>"`: the adopter declares its **own** figures publishable, under that label. The aggregate then answers its own lane-and-model figures, labelled as its own and never with its key. The label must match the key's pattern, must not be any key, and must be unique. Without it, the adopter's rows reach the public only in cells with at least three adopters, and in failure signals as one of the adopters affected.
+   - `"publish_own_figures_as": "<label>"`: the adopter declares its **own** figures publishable, under that label. The aggregate then answers its own lane-and-model figures, labelled as its own and never with its key, and leaves its rows out of every cross-adopter cell, so subtracting one from the other can't recover a figure of fewer than three adopters. The label must match the key's pattern, must not be any key, and must be unique. Without it, the adopter's rows reach the public only in cells with at least three such adopters, and in failure signals as one of the adopters affected.
    - `"aggregate_invoker": true`: creates `kanon-telemetry-<key>-aggregates`, the role a default-branch job of that repository assumes to call the aggregate function. Kanon's own entry sets it for the Explorer's lane.
 
    **A repository with a custom OIDC subject template** (`use_default: false`) is refused, because its subject is not `<prefix>:ref:refs/heads/<branch>`. Name its subjects exactly instead, as GitHub issues them:
@@ -266,7 +266,7 @@ Plan 0002 §6 and §6.1, as the Owner decided on 2026-10-07 (#443). From `tag = 
 }
 ```
 
-- **`cross_adopter`:** one cell per lane and model: the run count, and the median and 90th-percentile cost per run (nearest rank, so always a cost some run had). **A cell is answered only when at least three distinct adopters contribute to it** (decision 7). A run with no model or no cost is in no cell.
+- **`cross_adopter`:** one cell per lane and model: the run count, and the median and 90th-percentile cost per run (nearest rank, so always a cost some run had). **A cell comes from the rows of adopters that did not declare their own figures, and is answered only when at least three distinct such adopters contribute to it** (decision 7). A declaring adopter's rows are in `own` only, so the two never overlap. A run with no model or no cost is in no cell.
 - **`own`:** for each adopter whose entry sets `publish_own_figures_as`, the same cells from its rows alone, under its label. They are that adopter's figures, not cross-adopter ones.
 - **`signals`:** the last 7 days' runs that did not end `ok`, by lane, reason, failed stage, Kanon error and Kanon version, with how many adopters each affected. No cost and no run count.
 

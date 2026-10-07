@@ -258,8 +258,9 @@ Resources:
                   Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry
 
   # The aggregate-only function (§6.1, decided by the Owner 2026-10-07, #443). It answers only
-  # what may leave: cross-adopter cells with at least three adopters, the own figures of adopters
-  # that declared them publishable, and failure signals with a count of adopters affected. Its
+  # what may leave: cross-adopter cells with at least three non-declaring adopters, the own
+  # figures of adopters that declared them publishable, and failure signals with a count of
+  # adopters affected. Its
   # role may Query the table, and only with exactly the aggregate's projection: IAM refuses a
   # request that asks for any other attribute or leaves `Select` unnamed. About a cent a month.
   AggregateRole:
