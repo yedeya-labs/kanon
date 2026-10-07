@@ -140,3 +140,4 @@ Contributions are welcome, and every commit must be signed off by its human auth
 ## License
 
 Kanon is licensed under the [Apache License 2.0](LICENSE). The name "Kanon" is not covered by the licence; see [TRADEMARK.md](TRADEMARK.md).
+
