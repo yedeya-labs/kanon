@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.34.0](https://github.com/yedeya-labs/kanon/compare/v0.33.0...v0.34.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **specs:** read JavaScript test trees from the stack document, and keep gate code escalating under a human-gated promotion ([#482](https://github.com/yedeya-labs/kanon/issues/482))
+* **doctor:** report secret.missing for each App or lane secret a workflow maps, and waive a listing finding only for the items named ([#464](https://github.com/yedeya-labs/kanon/issues/464))
+
+### Features
+
+* check merge_group behind a required check, say what a merge queue changes for a lane, and honour a caller's declared path ([#483](https://github.com/yedeya-labs/kanon/issues/483)) ([8f5df7a](https://github.com/yedeya-labs/kanon/commit/8f5df7a739d91512a2a70801d40c366c6ba92956))
+* **init:** ask whether to send telemetry, wri… ([13d8325](https://github.com/yedeya-labs/kanon/commit/13d83254d9541c5cf950deed1af454c071a28a69))
+* **init:** require the lane check only once a job on the default branch reports it on every pull request ([#456](https://github.com/yedeya-labs/kanon/issues/456)) ([87cd998](https://github.com/yedeya-labs/kanon/commit/87cd99863a0ac4ac2b21e48918fc9c9bfa9cf431))
+* **lanes:** add the Explorer's telemetry mode, which reads only the aggregate function and files what it finds ([#471](https://github.com/yedeya-labs/kanon/issues/471)) ([c29c153](https://github.com/yedeya-labs/kanon/commit/c29c1531c775c607b8102c85baa3180ece81a3d7))
+* **lanes:** steer the Reviewer's reads to what the read-only checker accepts, and probe the Lead's grant ([#453](https://github.com/yedeya-labs/kanon/issues/453)) ([2c7783c](https://github.com/yedeya-labs/kanon/commit/2c7783c296b3d74e2c71186af90e1d5b7693ec3b))
+* **rebase:** install the rebase lane on Kanon, and say a person's rebase takes an Implementer PR out of the chain ([#450](https://github.com/yedeya-labs/kanon/issues/450)) ([720c689](https://github.com/yedeya-labs/kanon/commit/720c6899a9bbfa927c613b1126994790f71d84e5))
+* **skills:** require a check only after its job merges, hand over a post-merge checklist, and make kanon apps the person's step ([#445](https://github.com/yedeya-labs/kanon/issues/445)) ([7a23d78](https://github.com/yedeya-labs/kanon/commit/7a23d78b2147daacf5ca5b06be28e335e655a310))
+* **specs:** read JavaScript test trees from the stack document, and keep gate code escalating under a human-gated promotion ([#482](https://github.com/yedeya-labs/kanon/issues/482)) ([6bc0d0c](https://github.com/yedeya-labs/kanon/commit/6bc0d0c594504fc8cbaa823f6f9dbbe1c0ce1065))
+* **telemetry:** compute the aggregate, and serve it to the Explorer through an aggregate-only function ([#449](https://github.com/yedeya-labs/kanon/issues/449)) ([fa76263](https://github.com/yedeya-labs/kanon/commit/fa762630d4ff772e1f58addb60495ccb0757bcb6))
+
+
+### Bug Fixes
+
+* **doctor:** count a secret any workflow maps as read, so secret.stale never lists one in use ([#435](https://github.com/yedeya-labs/kanon/issues/435)) ([0d701b6](https://github.com/yedeya-labs/kanon/commit/0d701b607fd8d62524fbc6cffbf937ea4a67e6a4))
+* **doctor:** read a private App's permissions from apps-check, and name the token for unused-apps ([#438](https://github.com/yedeya-labs/kanon/issues/438)) ([f26d1af](https://github.com/yedeya-labs/kanon/commit/f26d1afea3d581b52e1c1014ebec4ff5cef43ea9))
+* **doctor:** refuse --help with --json, and a value flag followed by a flag ([#486](https://github.com/yedeya-labs/kanon/issues/486)) ([050397d](https://github.com/yedeya-labs/kanon/commit/050397d33995ab543ebed18d9a3b513b57737223))
+* **doctor:** report secret.missing for each App or lane secret a workflow maps, and waive a listing finding only for the items named ([#464](https://github.com/yedeya-labs/kanon/issues/464)) ([3759bb9](https://github.com/yedeya-labs/kanon/commit/3759bb9e83c03680bafd976240eec2982c0077bf))
+* **init:** the Reviewer's kanon init and kanon apps follow-ups ([#455](https://github.com/yedeya-labs/kanon/issues/455)) ([497c8fe](https://github.com/yedeya-labs/kanon/commit/497c8feab7096ac50dff6c661997a2c2b1df5139))
+* **lanes:** credit a re-land only when it says so, hold every register-parser copy, and pin the never-ran re-dispatch ([#465](https://github.com/yedeya-labs/kanon/issues/465)) ([a573732](https://github.com/yedeya-labs/kanon/commit/a573732679b3f152db54d71ddfbcc542ce9fc341))
+* name the Author and Judge Apps where prose named an App per role, print the reused App's install page, and say kanon apps edits the Releaser's bypass ([#473](https://github.com/yedeya-labs/kanon/issues/473)) ([dbaf087](https://github.com/yedeya-labs/kanon/commit/dbaf087dd0cabff92e2ec8d97baf6f256384a27a))
+* record the release a $/ lane pins, and hold every action to the unread-output guard ([#463](https://github.com/yedeya-labs/kanon/issues/463)) ([8f722a4](https://github.com/yedeya-labs/kanon/commit/8f722a4f558fdcfa2983112ac857fcd8b15e791a))
+* the Reviewer's guard follow-ups for brief-guard, rulebook-why, the [#47](https://github.com/yedeya-labs/kanon/issues/47) workflows test and citation-shift ([#447](https://github.com/yedeya-labs/kanon/issues/447)) ([574291d](https://github.com/yedeya-labs/kanon/commit/574291dbab15c6b2b428dea205968b3b7551da5d))
+
+
+### Documentation
+
+* **qa:** fold the first Overseer audit's ledger delta into the capability ledger ([#469](https://github.com/yedeya-labs/kanon/issues/469)) ([2b070ac](https://github.com/yedeya-labs/kanon/commit/2b070ac4bbd23582eeff1b4a1b8c5d0ea2ab9de3))
+
+
+### CI
+
+* **deps:** Bump the kanon group across 2 directories with 8 updates ([#461](https://github.com/yedeya-labs/kanon/issues/461)) ([13d8325](https://github.com/yedeya-labs/kanon/commit/13d83254d9541c5cf950deed1af454c071a28a69))
+
 ## [0.33.0](https://github.com/yedeya-labs/kanon/compare/v0.32.0...v0.33.0) (2026-10-07)
 
 
