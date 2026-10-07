@@ -21,7 +21,7 @@ Never inflate a severity to reach a gate (`K-WORK-10`).
 
 What the code audit looks for on Kanon. The lane's prompt sets the bar (an objective contradiction, cited `file:line`, deduped against open issues) and the report protocol; this section says what those mean here. Kanon's product is its rules and the machinery that holds a project to them, so most of its contradictions are between two of the areas its stack document lists under `## Code areas`: a rule, a doc, a guard, or a script.
 
-**Kanon has no QA store.** The export says the store is absent, so say so in your final message, and choose areas from `git log`: prefer what changed since the last audit issue you can find, then what no audit issue has cited.
+**Kanon has a QA store, since 2026-10-06** (the [adoption record](adoption.md)'s `## Choices`). Choose areas from the export's code-reading ledger, as the lane's prompt says. Until the store holds a few audits, its ledger covers little, so fill the rest from `git log`: prefer what changed since the last audit issue you can find, then what no audit issue has cited. When the export says the store is absent or degraded, say so in your final message, and choose from `git log` alone.
 
 **What counts, by the prompt's four kinds:**
 
