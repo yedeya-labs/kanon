@@ -22,8 +22,8 @@ const STACK = (areas: string) => `# Stack\n\n## Gates\n\n1. \`make test\`\n\n## 
 const REFERENCE = STACK([
   '- `src/` — code: the application',
   '- `scripts/` — code: build scripts',
-  '- `tests/` — tests: unit and integration tests',
-  '- `e2e/` — tests: the browser suite',
+  '- `tests/` `vitest` — tests: unit and integration tests',
+  '- `e2e/` `playwright` — tests: the browser suite',
   '- `src/server/services/` — audit: the service layer, where tenant scope lives',
   '- `src/middleware.ts` — audit: the session guard',
 ].join('\n'));
@@ -33,7 +33,10 @@ describe('parseCodeAreas reads the declaration', () => {
     const a = parseCodeAreas(REFERENCE);
     expect(a.declared).toBe(true);
     expect(a.code).toEqual([{ path: 'src/', what: 'the application' }, { path: 'scripts/', what: 'build scripts' }]);
-    expect(a.tests.map((t) => t.path)).toEqual(['tests/', 'e2e/']);
+    expect(a.tests).toEqual([
+      { path: 'tests/', what: 'unit and integration tests', runner: 'vitest' },
+      { path: 'e2e/', what: 'the browser suite', runner: 'playwright' },
+    ]);
     expect(a.audit).toEqual([
       { path: 'src/server/services/', what: 'the service layer, where tenant scope lives' },
       { path: 'src/middleware.ts', what: 'the session guard' },
@@ -45,6 +48,10 @@ describe('parseCodeAreas reads the declaration', () => {
     expect(a.code).toEqual([{ path: 'lib/', what: 'the package' }]);
   });
 
+  it('reads a tests tree with no runner as one that names none (kanon#20)', () => {
+    expect(parseCodeAreas(STACK('- `spec/` — tests: the suite')).tests).toEqual([{ path: 'spec/', what: 'the suite' }]);
+  });
+
   it('reads no section as undeclared, and a section with no entries as declared but empty', () => {
     expect(parseCodeAreas('# Stack\n\n## Gates\n\n1. `make`\n')).toBe(UNDECLARED);
     expect(parseCodeAreas(STACK('Nothing yet.'))).toEqual({ declared: true, code: [], tests: [], audit: [] });
@@ -54,7 +61,11 @@ describe('parseCodeAreas reads the declaration', () => {
 
   it.each([
     ['an entry in another shape', '- src/ — code: the application', /:9, under `## Code areas`, isn't an area/],
-    ['an entry with no kind', '- `src/` — the application', /isn't an area: write a path in backticks, an em dash, its kind/],
+    ['an entry with no kind', '- `src/` — the application', /isn't an area: write a path in backticks, for a tests tree optionally its runner in backticks, an em dash, its kind/],
+    ['a runner on a code area', '- `src/` `vitest` — code: the application', /:9 names the runner `vitest` on a `code` area: only a `tests` tree names a runner/],
+    ['a runner on an audit area', '- `src/` `vitest` — audit: the application', /:9 names the runner `vitest` on a `audit` area/],
+    ['a runner Kanon does not run a tree with', '- `tests/` `jest` — tests: the suite', /:9: `jest` isn't a runner Kanon runs a tests tree with: write `vitest` or `playwright`, or none/],
+    ['a language runner, which its own row already names', '- `tests/` `pytest` — tests: the suite', /`pytest` isn't a runner Kanon runs a tests tree with/],
     ['an unknown kind', '- `src/` — source: the application', /`source` isn't a kind of code area; write one of code, tests, audit/],
     ['a code area that is not a directory', '- `src` — code: the application', /a `code` area is a directory, so write `src\/`/],
     ['a tests area that is not a directory', '- `tests` — tests: the suite', /a `tests` area is a directory, so write `tests\/`/],
@@ -256,14 +267,16 @@ describe("Kanon's own stack document declares its code areas", () => {
   it('parses, and names the trees Kanon keeps code and tests in', () => {
     const a = parseCodeAreas(readFileSync(join(ROOT, 'docs/qa/stack.md'), 'utf8'));
     expect(a.code.map((c) => c.path)).toEqual(['scripts/', 'actions/', 'cli/', 'infra/', '.github/scripts/']);
-    expect(a.tests.map((c) => c.path)).toEqual(['tests/']);
+    // No runner yet: the lane check runs Kanon's pinned release, whose parser predates the runner
+    // form (kanon#20), so the runner is named once the pin moves past the release that reads it.
+    expect(a.tests).toEqual([{ path: 'tests/', what: 'the library and unit tests, and their fixtures' }]);
   });
 });
 
 describe("an omitted `## Code areas` is Kanon's default, and the readers name it (plan 0005 §5.2)", () => {
   it('names the default for an undeclared document, and nothing for a declared one', () => {
     expect(codeAreasDefaults(UNDECLARED)).toEqual([
-      "docs/qa/stack.md declares no `## Code areas`, so Kanon's default applies: the code is the whole repository, and a test is what its language's convention calls one (K-LAYOUT-17)",
+      "docs/qa/stack.md declares no `## Code areas`, so Kanon's default applies: the code is the whole repository, and a test is what its language's convention calls one, in JavaScript and TypeScript a `*.test.*` or `*.spec.*` file that no runner runs (K-LAYOUT-17)",
     ]);
     expect(codeAreasDefaults(parseCodeAreas('## Gates\n'))).toHaveLength(1);
     expect(codeAreasDefaults(parseCodeAreas('## Code areas\n\n- `src/` — code: the app\n'))).toEqual([]);

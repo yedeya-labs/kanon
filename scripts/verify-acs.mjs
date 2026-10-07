@@ -42,6 +42,7 @@ import { parseProposed } from './project-closure.mjs';
 import { citations } from './spec-coverage.mjs';
 import { parseSpec, specFiles } from './spec-lib.mjs';
 import { RUNNERS, interpretGoJson, interpretJunit, runnerFor } from './lib/test-conventions.mjs';
+import { codeAreasDefaults, readCodeAreas } from './lib/code-areas.mjs';
 
 /**
  * The acceptance-criteria IDs a brief's issues COMMIT TO.
@@ -172,7 +173,8 @@ export function verdicts(acs, cited, known) {
 
 /**
  * Which runner owns a test file, by the per-language table (`scripts/lib/test-conventions.mjs`,
- * kanon#20): `tests/**` JavaScript is Vitest, `e2e/**` is Playwright, a pytest file is pytest,
+ * kanon#20): JavaScript is the runner its declared `tests` tree names (`## Code areas`,
+ * `K-LAYOUT-17`), and no runner when its tree names none or none is declared, a pytest file is pytest,
  * a `_test.go` file is `go test`, and anything else is NEITHER — reported as such rather than
  * guessed at, because a file this tool cannot run is evidence it cannot read, and saying
  * "passed" about it would be the same rubber stamp `unverifiable` exists to prevent.
@@ -305,21 +307,23 @@ export function interpretRun(runner, report, file) {
  * not read as success, and it must not read as failure either.
  *
  * @param {string[]} files
- * @param {{cwd?: string, exec?: typeof execFileSync, outDir?: string, read?: (file: string) => string}} [opts]
+ * @param {{cwd?: string, exec?: typeof execFileSync, outDir?: string, read?: (file: string) => string, trees?: import('./lib/test-conventions.mjs').TestTree[]}} [opts]
  *   `exec` is injectable so the tests do not shell out. It receives the same
  *   (cmd, args, options) `execFileSync` would; the runner's report is read back from the
  *   path named in the arguments (Vitest, pytest) or the env (Playwright), or taken from
  *   what `exec` returns, its standard output (`go test -json`). `read` gives a test file's
- *   text, which `go test` needs to name the file's test functions.
+ *   text, which `go test` needs to name the file's test functions. `trees` is the stack
+ *   document's `tests` trees, which name the JavaScript runners; by default it is read from
+ *   `cwd`, and a malformed declaration throws by name.
  */
 // The default wraps `execFileSync` rather than aliasing it so the call site still reads
 // as a subprocess with a COMPUTED binary — which is what permissions-guard.mjs flags as
 // unreadable for its `gh` scan (RA-1379), and what this is.
-export function runTests(files, { cwd = process.cwd(), exec = (bin, args, opts) => execFileSync(bin, args, opts), outDir, read = (f) => readFileSync(join(cwd, f), 'utf8') } = {}) {
+export function runTests(files, { cwd = process.cwd(), exec = (bin, args, opts) => execFileSync(bin, args, opts), outDir, read = (f) => readFileSync(join(cwd, f), 'utf8'), trees = readCodeAreas(cwd).tests } = {}) {
   const results = new Map();
   const byRunner = new Map();
   for (const f of files) {
-    const r = runnerFor(f);
+    const r = runnerFor(f, trees);
     if (r === 'unknown') continue;
     if (!byRunner.has(r)) byRunner.set(r, []);
     byRunner.get(r).push(f);
@@ -397,6 +401,15 @@ const main = () => {
     process.exit(2);
   }
 
+  // The test trees decide which files are tests (kanon#20): a malformed declaration ends the
+  // run with one line naming it, before anything reads it.
+  let areas;
+  try {
+    areas = readCodeAreas();
+  } catch (e) {
+    console.error(`verify-acs: ${/** @type {Error} */ (e).message}`);
+    process.exit(1);
+  }
   const brief = readFileSync(`docs/projects/${project}.md`, 'utf8');
   const known = new Set(specFiles().flatMap((f) => parseSpec(f)).map((i) => i.id).filter(Boolean));
   let rows = verdicts(acsFromBrief(brief), citations(), known);
@@ -404,7 +417,8 @@ const main = () => {
   const ref = currentRef();
   if (doRun) {
     const files = [...new Set(rows.flatMap((r) => r.tests))];
-    rows = applyRuns(rows, runTests(files));
+    for (const d of codeAreasDefaults(areas)) console.error(`verify-acs: ${d}`);
+    rows = applyRuns(rows, runTests(files, { trees: areas.tests }));
   }
   const s = summarise(rows);
 

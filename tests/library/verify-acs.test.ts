@@ -273,7 +273,7 @@ describe('runnerFor — a file this tool cannot run is not evidence it can read'
     ['e2e/storefront.spec.ts', 'playwright'],
     ['scripts/qa/x.mjs', 'unknown'],
   ])('%s -> %s', (file, expected) => {
-    expect(runnerFor(file)).toBe(expected);
+    expect(runnerFor(file, [{ path: 'tests/', runner: 'vitest' }, { path: 'e2e/', runner: 'playwright' }])).toBe(expected);
   });
 });
 

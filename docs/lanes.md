@@ -272,17 +272,18 @@ The lanes' prompts state the process and never your stack. What your stack decid
 
 **What you leave out is a documented default** ([plan 0005](plans/0005-lean-installation.md) §5.2). A stack-document section you omit, other than `## Gates`, means none: no schema, nothing to isolate, no generated files. A playbook you don't write is Kanon's baseline for the role, [`rulebook/templates/playbooks/`](../rulebook/templates/playbooks/) at the release you pin: the lane's `agent-setup` block puts it in place before the agent starts, keeps it out of the agent's commits, and says so in the job summary and in the agent's prompt, so an agent asked to write that playbook stages it with `git add -f`. Write your own, starting from a copy, when you want the Reviewer to check your project's own risks. `lane-check` fails when the stack document or a capability ledger a lane you call reads is missing, or the stack document has no `## Gates`, and names each default it takes.
 
-**Your code areas.** The stack document may also say where your code and tests are, under `## Code areas`, one bullet per area: a path in backticks, an em dash, its kind, a colon, and what it holds.
+**Your code areas.** The stack document may also say where your code and tests are, under `## Code areas`, one bullet per area: a path in backticks, for a `tests` tree optionally its runner in backticks, an em dash, its kind, a colon, and what it holds.
 
 ```markdown
 ## Code areas
 
 - `src/` — code: the application
-- `tests/` — tests: unit and integration tests
+- `tests/` `vitest` — tests: unit and integration tests
+- `e2e/` `playwright` — tests: the browser suite
 - `src/server/services/` — audit: the service layer, where tenant scope and authorisation live
 ```
 
-A `code` tree is your own source: `citation-shift` reads its comments, and the spec-id sweeps read its references. A `tests` tree holds tests and their fixtures: `doc-path-guard` doesn't read its files as claims. An `audit` area is what the code audit reads first. Without the section, the guards read the whole repository, a test is what its language's convention calls one, and the audit reads your `code` trees, or the whole repository. So an undeclared tree is read, never skipped: declare the trees once a guard reads something it shouldn't. `lane-check` fails a malformed section by name, and so does each guard that reads it.
+A `code` tree is your own source: `citation-shift` reads its comments, and the spec-id sweeps read its references. A `tests` tree holds tests and their fixtures: `doc-path-guard` doesn't read its files as claims, and every JavaScript or TypeScript file in it is a test whose title can cite a spec id (`K-SPEC-6`). The acceptance-criteria check runs those with the runner the tree names, `vitest` or `playwright`; a tree that names none is read and never run, so its criteria are not-run. A Kanon release older than the runner form fails by name on a tree that names one, so add the runner with, or after, the upgrade that brings it. An `audit` area is what the code audit reads first. Without the section, the guards read the whole repository, a test is what its language's convention calls one, in JavaScript and TypeScript a `*.test.*` or `*.spec.*` file, which nothing runs until you declare its tree's runner, and the audit reads your `code` trees, or the whole repository. So an undeclared tree is read, never skipped: declare the trees once a guard reads something it shouldn't. `lane-check` fails a malformed section by name, and so does each guard that reads it.
 
 ## The App register
 
@@ -318,7 +319,18 @@ The merge lane merges a pull request with no person in the loop only inside the 
 - **Production promotion:** human-gated (the `production` environment's required reviewer)
 ```
 
-The Merger reads it from your default branch, so the pull request that adds it is judged without it, and escalates anyway, because it changes `docs/qa/`. Once merged, a pull request that touches only your `## Escalation paths` merges in the green zone. Everything else still escalates: `.github/`, the `docs/qa/` documents, `AGENTS.md`, `CLAUDE.md`, `.claude/`, your `## Pipeline code`, and a high-risk path that is also a judging input (a document your instructions link to). Without the bullet, which is the default, every escalation path escalates, and every sweep says so. If code outside `.github/` keeps the promotion gated, such as infrastructure that manages the environment's required reviewers, list it under `## Pipeline code`, or a pull request that removes the gate can merge in the green zone ([#344](https://github.com/yedeya-labs/kanon/issues/344)). Kanon doesn't check that the environment really has a required reviewer, or that no deploy can skip it: make the declaration only if both hold. The human gate moves to the promotion, where one approval covers every change in the deploy.
+The Merger reads it from your default branch, so the pull request that adds it is judged without it, and escalates anyway, because it changes `docs/qa/`. Once merged, a pull request that touches only your `## Escalation paths` merges in the green zone. Everything else still escalates: `.github/`, the `docs/qa/` documents, `AGENTS.md`, `CLAUDE.md`, `.claude/`, your `## Pipeline code`, a high-risk path you mark `always`, and a high-risk path that is also a judging input (a document your instructions link to). Without the bullet, which is the default, every escalation path escalates, and every sweep says so.
+
+**Mark the code that keeps the promotion gated `always`.** The opt-in relaxes every high-risk path outside `.github/`, including code that decides whether the promotion is gated at all: infrastructure that manages the environment's required reviewers, the cloud role trust that lets only the gated job deploy, or a deploy script an ungated job runs. Unmarked, a pull request that removes the gate merges in the green zone. Put `always` in backticks after the entry's category, and the entry keeps escalating ([#344](https://github.com/yedeya-labs/kanon/issues/344)):
+
+```markdown
+## Escalation paths
+
+- `^infra/environments/` `infra` `always` — the production environment's required reviewers
+- `^infra/` `infra` — the rest of the infrastructure
+```
+
+A Kanon release older than the marker fails by name on an entry that carries it, rather than reading it without it, so add the marker with, or after, the upgrade that brings it. Kanon doesn't check that the environment really has a required reviewer, or that no deploy can skip it: make the declaration only if both hold. The human gate moves to the promotion, where one approval covers every change in the deploy.
 
 On a review, the lane first reads the Merger's and the Implementer's logins from the App register on your default branch, in a job of their own. That job starts no runner for a review on a pull request that is closed, a draft or carries neither lane label. The sweep needs no login, so CI's completion, the schedule and a dispatch start the Merger's own job alone, and bill one runner each.
 

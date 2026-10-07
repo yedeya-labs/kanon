@@ -65,8 +65,6 @@ const ALLOWED: ReadonlyArray<readonly [string, string, string]> = [
     'the generic environment words the digest must not use ("staging", "production"): vocabulary, not a declaration'],
   ['infra/qa-store/aws/provision.mjs', 'its environment name',
     "the generic stage words a store resource's lifecycle must not name: vocabulary, not a declaration"],
-  ['scripts/lib/test-conventions.mjs', 'its test trees',
-    "ADR 0012's JavaScript row: tests under `tests/` and `e2e/`, run by Vitest and Playwright. Changing it revises the ADR, an Owner decision (kanon#54)"],
 ];
 
 const SCANNED = /\.(?:mjs|cjs|js|yml|yaml|sh|awk)$/;

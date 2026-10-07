@@ -64,13 +64,13 @@ Where the title is depends on the test's language, and Kanon fixes it per langua
 
 | Language | Test files | The title that carries the id |
 |---|---|---|
-| JavaScript and TypeScript | under `tests/` or `e2e/` | the title argument: `it('[ORD-1] …')` |
+| JavaScript and TypeScript | every file in a `tests` tree the project declares under `## Code areas` (`K-LAYOUT-17`), or, with none declared, `*.test.*` and `*.spec.*` | the title argument: `it('[ORD-1] …')` |
 | Python | `test_*.py` or `*_test.py` | the first line of the docstring of a test function pytest collects (a module-level `test…` function, or a `test…` method of a `Test…` class): `"""[ORD-1] …"""` |
 | Go | `*_test.go` | the name of a subtest in a `Test…` function: `t.Run("[ORD-1] …", …)` |
 
-Kanon reads no test in a language outside the table.
+Kanon reads no test in a language outside the table. A JavaScript test runs with the runner its declared tree names, and a test in a tree that names none, or found by the suffix alone, is read and never run, so its criteria are not-run.
 
-**Why.** The title is the only thing the coverage and verification tools read, so a false citation turns "unverifiable" into a false pass. Evidence gaps must not become verdicts in either direction. A fixed convention per language keeps the tools from depending on a setting. The language of each file picks its row, so a project with two languages needs nothing extra. A language outside the table reads as "nothing checked", never as a pass.
+**Why.** The title is the only thing the coverage and verification tools read, so a false citation turns "unverifiable" into a false pass. Evidence gaps must not become verdicts in either direction. A fixed convention per language keeps the tools from depending on a setting. The language of each file picks its row, so a project with two languages needs nothing extra. JavaScript is the exception that proves it: its runners find tests wherever the project configures them, so a fixed tree would be one project's layout imposed on every other, and its trees are declared in the stack document instead, with the suffix most of its runners discover by default when none are. A language outside the table reads as "nothing checked", never as a pass.
 
 **Enforced by.** The coverage and acceptance-criteria tools read test titles and report the three states separately. Citation honesty is prose only.
 
