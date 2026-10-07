@@ -630,10 +630,29 @@ function collect(args, env) {
 //
 // ABSENT MEANS UNKNOWN, as on the version-1 row: a null there is a missing key here, never 0.
 
-/** The Kanon release the lane ran at: `github.action_ref` as `X.Y.Z`, or `dev` (§2.6). */
-export function kanonVersion(ref) {
-  const m = /^v?(\d+\.\d+\.\d+)$/.exec(String(ref ?? "").trim());
-  return m ? m[1] : "dev";
+/**
+ * The Kanon release the lane ran at, as `X.Y.Z`, or `dev` (§2.6, kanon#454).
+ *
+ * FIRST `github.action_ref`, when the action was called at a release (`…/agent-telemetry@v0.33.0`).
+ *
+ * THEN THE JOB'S WORKFLOW, FOR A `$/` CALL. A lane reaches this action through `$/`, and the
+ * runner hands a `$/` step the commit it resolved to, a SHA, as `github.action_ref`. The release
+ * is in `job.workflow_ref`, the ref of the reusable workflow that defines the job
+ * (`yedeya-labs/kanon/.github/workflows/review-agent-job.yml@refs/tags/v0.33.0`). It counts only
+ * when `job.workflow_sha` is that same commit: the action then came from the workflow that defines
+ * the job, so the workflow's tag is the action's release. An adopter's own workflow, run at the
+ * adopter's own tag, has the adopter's commit there, never the one the action came from.
+ *
+ * Anything else is `dev`: a branch, a pull request, a SHA pin, an empty ref.
+ */
+export function kanonVersion(ref, workflowRef = "", workflowSha = "") {
+  const release = (text) => /^v?(\d+\.\d+\.\d+)$/.exec(String(text ?? "").trim())?.[1];
+  const direct = release(ref);
+  if (direct) return direct;
+  const sha = String(ref ?? "").trim();
+  if (!/^[0-9a-f]{40}$/.test(sha) || String(workflowSha ?? "").trim() !== sha) return "dev";
+  const tag = /@refs\/tags\/([^@/]+)$/.exec(String(workflowRef ?? "").trim());
+  return (tag && release(tag[1])) || "dev";
 }
 
 /**
@@ -808,7 +827,7 @@ export function buildRowV2(row, classification, extra) {
     is_error: row.is_error ?? undefined,
     api_error_status: row.api_error_status ?? undefined,
     verdict: verdictOf(row.outcome_label),
-    kanon_version: kanonVersion(extra.kanon_ref),
+    kanon_version: kanonVersion(extra.kanon_ref, extra.kanon_workflow_ref, extra.kanon_workflow_sha),
     failed_stage: failedStage(extra.stages ?? [], row.outcome),
     kanon_error: extra.kanon_error || undefined,
     model: row.model ?? undefined,
@@ -857,6 +876,8 @@ function readExtra(args, env, path) {
     tag: args.tag ?? env.TELEMETRY_TAG ?? "run",
     lane: args.lane ?? env.TELEMETRY_LANE ?? "",
     kanon_ref: args.kanon_ref ?? env.TELEMETRY_KANON_REF ?? "",
+    kanon_workflow_ref: args.kanon_workflow_ref ?? env.TELEMETRY_KANON_WORKFLOW_REF ?? "",
+    kanon_workflow_sha: args.kanon_workflow_sha ?? env.TELEMETRY_KANON_WORKFLOW_SHA ?? "",
     stages: parseStages(args.stages ?? env.TELEMETRY_STAGES),
     kanon_error: args.kanon_error ?? env.TELEMETRY_KANON_ERROR ?? "",
     job_status: args.job_status ?? env.TELEMETRY_JOB_STATUS ?? "",

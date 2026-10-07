@@ -242,11 +242,15 @@ runs:
         TELEMETRY_OUTCOME_LABEL: ${{ inputs.outcome_label }}
         TELEMETRY_ARTIFACTS_FILED: ${{ inputs.artifacts_filed }}
         TELEMETRY_SEVERITIES: ${{ inputs.severities }}
-        # The version-2 row's inputs (plan 0002 §2). `github.action_ref` is the Kanon release
-        # the caller pinned; an untagged ref records `dev`.
+        # The version-2 row's inputs (plan 0002 §2). The Kanon release the caller pinned is
+        # `github.action_ref` for a call at a release, and the job's workflow ref for a lane's
+        # `$/` call, whose `action_ref` is the commit it resolved to (kanon#454, `kanonVersion`);
+        # an untagged ref records `dev`.
         TELEMETRY_LANE: ${{ inputs.lane }}
         TELEMETRY_TAG: ${{ inputs.tag }}
         TELEMETRY_KANON_REF: ${{ github.action_ref }}
+        TELEMETRY_KANON_WORKFLOW_REF: ${{ job.workflow_ref }}
+        TELEMETRY_KANON_WORKFLOW_SHA: ${{ job.workflow_sha }}
         TELEMETRY_STAGES: ${{ inputs.stages }}
         TELEMETRY_KANON_ERROR: ${{ inputs.kanon_error }}
         TELEMETRY_JOB_STATUS: ${{ inputs.job_status }}

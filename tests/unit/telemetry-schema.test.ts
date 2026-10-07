@@ -341,6 +341,45 @@ describe('fault attribution (plan 0002 §2.6)', () => {
     expect(kanonVersion('')).toBe('dev');
   });
 
+  // kanon#454: a lane reaches the action through `$/`, whose `action_ref` is the commit it
+  // resolved to. The runner's real values, from a Kanon review run at v0.30.0.
+  const SHA = '3a8bbd91d480849fa610dccf5593461673a7b133';
+  const LANE_JOB = 'yedeya-labs/kanon/.github/workflows/review-agent-job.yml@refs/tags/v0.30.0';
+  it('reads a $/ call\'s release from the job\'s workflow, when the action came from that commit', () => {
+    expect(kanonVersion(SHA, LANE_JOB, SHA)).toBe('0.30.0');
+    expect(kanonVersion(SHA, 'yedeya-labs/kanon/.github/workflows/review-agent-job.yml@refs/tags/0.30.0', SHA)).toBe('0.30.0');
+    // A release in `action_ref` wins over the workflow's.
+    expect(kanonVersion('v0.31.0', LANE_JOB, SHA)).toBe('0.31.0');
+  });
+  it('says dev for a $/ call from a dev checkout, or a workflow at another commit or ref', () => {
+    expect(kanonVersion(SHA, 'yedeya-labs/kanon/.github/workflows/agent-blocks-smoke.yml@refs/heads/main', SHA)).toBe('dev');
+    expect(kanonVersion(SHA, 'yedeya-labs/kanon/.github/workflows/ci.yml@refs/pull/12/merge', SHA)).toBe('dev');
+    expect(kanonVersion(SHA, `yedeya-labs/kanon/.github/workflows/review-agent-job.yml@${SHA}`, SHA)).toBe('dev');
+    expect(kanonVersion(SHA, 'yedeya-labs/kanon/.github/workflows/review-agent-job.yml@refs/tags/v0.30.0-rc.1', SHA)).toBe('dev');
+    // An adopter's own workflow at its own tag, calling the action at a SHA: not Kanon's release.
+    expect(kanonVersion(SHA, 'o/r/.github/workflows/release.yml@refs/tags/v1.2.3', 'ef04d1a95c3d1b9f0e1c5f6a7b8c9d0e1f2a3b4c')).toBe('dev');
+    expect(kanonVersion('main', LANE_JOB, SHA)).toBe('dev');
+    expect(kanonVersion('', LANE_JOB, '')).toBe('dev');
+    expect(kanonVersion(SHA, LANE_JOB, '')).toBe('dev');
+  });
+  it('writes the release a $/ lane pins into the row, and dev from a dev checkout', () => {
+    const row = (ref: string) => both('tests/fixtures/agent-blocks/finished.json', {
+      TELEMETRY_KANON_REF: SHA, TELEMETRY_KANON_WORKFLOW_REF: ref, TELEMETRY_KANON_WORKFLOW_SHA: SHA,
+    }).v2 as Row;
+    expect(row(LANE_JOB).kanon_version).toBe('0.30.0');
+    expect(validate(row(LANE_JOB)).ok).toBe(true);
+    expect(row('yedeya-labs/kanon/.github/workflows/agent-blocks-smoke.yml@refs/heads/main').kanon_version).toBe('dev');
+  });
+  it('hands the normaliser the job\'s workflow ref and commit', () => {
+    const action = parse(readFileSync('actions/agent-telemetry/action.yml', 'utf8')) as { runs: { steps: { id?: string, env?: Record<string, string> }[] } };
+    const env = action.runs.steps.find((s) => s.id === 'row')?.env;
+    expect(env).toMatchObject({
+      TELEMETRY_KANON_REF: '${{ github.action_ref }}',
+      TELEMETRY_KANON_WORKFLOW_REF: '${{ job.workflow_ref }}',
+      TELEMETRY_KANON_WORKFLOW_SHA: '${{ job.workflow_sha }}',
+    });
+  });
+
   it('takes the first stage that ended the run, in the order the lane gave', () => {
     const o = parseStages('token=success checkout=success hook=failure setup=skipped agent=skipped finish=success');
     expect(failedStage(o, 'not-reached')).toBe('hook');
