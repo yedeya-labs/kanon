@@ -66,7 +66,7 @@ import { isCliEntry } from '../lib/cli-entry.mjs';
  *   one adopter from reading as a regression.
  * - `points`: the failure rate on the newer release must exceed the older one's by at least
  *   this much, as a fraction (0.10 is ten percentage points).
- * The Owner sets both (#41); these are the proposal.
+ * Both decided by the Owner on 2026-10-07 (#554), to be revisited once three adopters send rows.
  */
 export const RISE = Object.freeze({ minRuns: 20, points: 0.10 });
 

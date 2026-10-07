@@ -197,7 +197,7 @@ describe('rising after a release (RISE)', () => {
   const runs = (version: string, n: number, fail: number, over: Row = {}) =>
     many(n, (i) => (i < fail ? failed(`k${i % 3}`, { kanon_version: version, ...over }) : row(`k${i % 3}`, { kanon_version: version })));
 
-  it('is ten points over at least twenty runs on each release, as proposed to the Owner', () => {
+  it('is ten points over at least twenty runs on each release, as the Owner decided on 2026-10-07', () => {
     expect(RISE).toEqual({ minRuns: 20, points: 0.1 });
   });
 
