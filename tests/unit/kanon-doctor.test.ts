@@ -7,7 +7,7 @@ import { parse } from 'yaml';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { RESULT_MARK, resultLine } from '../../cli/apps-check.mjs';
 import { appSecrets, appsCheckFile, callerFile, ciFile, dependabotFile, hookFile, loadRequirements, TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
-import { branchPattern, branchWorkflows, CATEGORIES, checkJobs, checkReporters, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, ITEMIZED, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
+import { branchPattern, branchWorkflows, CATEGORIES, checkJobs, checkReporters, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, ITEMIZED, kanonPins, parseArgs, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { registerRolesOf, rulesetBody } from '../../cli/init.mjs';
 import { isKanonSource, pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { laneFiles, laneTree } from './helpers/requirements.js';
@@ -480,6 +480,39 @@ describe('kanon doctor on what an installation lacks', () => {
     const r = await run(dir, fakeGitHub(), ['--to', 'latest', '--json']);
     expect(r.status).toBe(EXIT.usage);
     expect(r.json).toMatchObject({ schema: SCHEMA, status: 'error', exitCode: 2, error: expect.stringContaining('vX.Y.Z') });
+  });
+
+  it('prints the error document for --help with --json, not the usage text (#457)', async () => {
+    const dir = checkout(healthyFiles());
+    for (const h of ['--help', '-h']) {
+      const r = await run(dir, fakeGitHub(), [h, '--json']);
+      expect(r.status, h).toBe(EXIT.usage);
+      expect(r.json, h).toMatchObject({ schema: SCHEMA, status: 'error', exitCode: 2, error: '--help and --json contradict each other; give one' });
+    }
+    // Without --json, --help prints the usage on standard output, as before.
+    const help = await run(dir, fakeGitHub(), ['--help']);
+    expect(help.status).toBe(EXIT.healthy);
+    expect(help.out).toContain('Usage: kanon doctor');
+  });
+
+  it('never takes the next flag as a value flag\'s value, and prints the error document under --json (#457)', async () => {
+    // `kanon doctor --dir --json`, as an unset, unquoted variable leaves it.
+    for (const f of ['--dir', '--repo', '--to']) {
+      const out: string[] = [];
+      const err: string[] = [];
+      const status = await doctor([f, '--json'], { gh: fakeGitHub().gh, env: {}, out: (l: string) => out.push(l), err: (l: string) => err.push(l), requirements: () => REQ, release: () => PINNED });
+      expect(status, f).toBe(EXIT.usage);
+      expect(JSON.parse(out.join('\n')), f).toMatchObject({
+        schema: SCHEMA,
+        status: 'error',
+        exitCode: 2,
+        error: `${f} needs a value, not the flag "--json"; to give a value that begins with "-", write ${f}=<value>`,
+      });
+      expect(err, f).toEqual([]);
+    }
+    expect(() => parseArgs(['--dir', '-h'])).toThrow('--dir needs a value, not the flag "-h"');
+    // A value that begins with "-" is given inline.
+    expect(parseArgs(['--dir=-x', '--json'])).toMatchObject({ dir: '-x', json: true });
   });
 });
 
