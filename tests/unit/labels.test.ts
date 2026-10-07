@@ -141,8 +141,8 @@ const ENSURE = /^node "\$KANON\/scripts\/ensure-labels\.mjs"((?: [a-z:-]+)+)$/;
  * The taxonomy labels a lane's file names: what its agent's prompt may tell it to apply. A family
  * wildcard (`sev:*`, "a sev:* you can justify") names every member of that family a lane creates,
  * because the agent picks one at run time; for `signal:*` that is only the fixed ones,
- * `signal:spec-violation` and `signal:security`, since a project's own signals are created with
- * its signal list, never by a lane.
+ * `signal:spec-violation`, `signal:security` and `signal:contract`, since a project's own signals
+ * are created with its signal list, never by a lane.
  */
 const promptLabels = (file: string): string[] => {
   const text = stripComments(file, read(file));
@@ -187,7 +187,18 @@ describe('every lane whose agent labels creates the labels first (plan 0005 §5.
   it('reads a family wildcard as every lane-created member of the family', () => {
     expect(promptLabels('.github/workflows/explore-agent-job.yml')).toEqual(expect.arrayContaining(['sev:critical', 'sev:high', 'sev:medium', 'sev:low']));
     // `signal:*` reaches only the signal labels the taxonomy fixes; a project's own are never a lane's to create.
-    expect(promptLabels('.github/workflows/explore-agent-job.yml').filter((n) => n.startsWith('signal:'))).toEqual(['signal:spec-violation', 'signal:security']);
+    expect(promptLabels('.github/workflows/explore-agent-job.yml').filter((n) => n.startsWith('signal:'))).toEqual(['signal:spec-violation', 'signal:security', 'signal:contract']);
+  });
+
+  it("creates every signal the code audit's prompt applies, each a fixed member of the taxonomy (kanon#561)", () => {
+    const file = '.github/workflows/code-audit-agent-job.yml';
+    const applied = [...stripComments(file, read(file)).matchAll(/`(signal:[a-z0-9-]+)`/g)].map((m) => m[1] ?? '');
+    expect([...new Set(applied)].sort()).toEqual(['signal:contract', 'signal:security', 'signal:spec-violation']);
+    for (const name of applied) {
+      expect(TAXONOMY.find((l) => l.name === name), name).toMatchObject({ name, family: 'Signal that produced a finding' });
+      expect(TAXONOMY.find((l) => l.name === name)?.createdBy, name).toBeUndefined();
+    }
+    expect(declared(file)).toEqual(expect.arrayContaining(applied));
   });
 
   it('finds the agent lanes, so the checks below are not vacuous', () => {
@@ -329,7 +340,7 @@ describe('ensureLabels', () => {
 
   it('refuses, by name, a missing label no lane creates', () => {
     const repo = fakeRepo([]);
-    expect(() => ensureLabels(['signal:contract'], { repo: 'acme/widgets', run: repo.run })).toThrow(/`signal:contract` is created by the project's signal list/);
+    expect(() => ensureLabels(['signal:latency'], { repo: 'acme/widgets', run: repo.run })).toThrow(/`signal:latency` is created by the project's signal list/);
     expect(() => ensureLabels(['autorelease: pending'], { repo: 'acme/widgets', run: repo.run })).toThrow(/created by the release tool/);
     expect(repo.creates()).toEqual([]);
   });

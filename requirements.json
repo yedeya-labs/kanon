@@ -707,6 +707,7 @@
     "capability",
     "signal:spec-violation",
     "signal:security",
+    "signal:contract",
     "signal:<name>",
     "review:please",
     "gate-candidate",
