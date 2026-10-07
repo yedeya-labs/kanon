@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.37.0](https://github.com/yedeya-labs/kanon/compare/v0.36.0...v0.37.0) (2026-10-07)
+
+
+### Features
+
+* **labels:** make signal:contract a fixed label, so an adopter's code audit can apply it ([#568](https://github.com/yedeya-labs/kanon/issues/568)) ([53ec84b](https://github.com/yedeya-labs/kanon/commit/53ec84bc4f6b3a9609337893e43e7236168528cc))
+* **metrics:** detect reverts and linked fixes, by explicit link and by SZZ, side by side ([#519](https://github.com/yedeya-labs/kanon/issues/519)) ([d9c05fa](https://github.com/yedeya-labs/kanon/commit/d9c05fa18f9697154c6df5485b7bc008eb3d0457))
+* **metrics:** kanon metrics dry-run, read-only and counts only, with one adapter for the detectors ([#538](https://github.com/yedeya-labs/kanon/issues/538)) ([2a2f978](https://github.com/yedeya-labs/kanon/commit/2a2f978f1af4ec7a917142a108fb42d496795077))
+* **metrics:** read the JVM's, .NET's and other stacks' manifests and lockfiles as deps ([#540](https://github.com/yedeya-labs/kanon/issues/540)) ([b84d742](https://github.com/yedeya-labs/kanon/commit/b84d742ae8d028316d2ae1077728ced631d72913))
+* **review:** keep incremental review across a merge of the base or a clean rebase ([#550](https://github.com/yedeya-labs/kanon/issues/550)) ([1535baf](https://github.com/yedeya-labs/kanon/commit/1535bafe6d18f134bb61c5b62178cf34387de5b8))
+* **telemetry:** detect Kanon's own bugs in adopters' run rows, with a public/private split ([#554](https://github.com/yedeya-labs/kanon/issues/554)) ([8eb4d2f](https://github.com/yedeya-labs/kanon/commit/8eb4d2f299d003c82389c4fc8ba3f0a77f4d0f13))
+
+
+### Bug Fixes
+
+* **lanes:** admit the merge queue as a schedule's actor, so scheduled lanes run on a merge-queue repository ([#566](https://github.com/yedeya-labs/kanon/issues/566)) ([39aa92b](https://github.com/yedeya-labs/kanon/commit/39aa92b5ce803beb442185a13bf4201b032e4d1c))
+* metrics dry-run fold-ins, signal:security, the code audit's history, and Owner-deferred review items ([#557](https://github.com/yedeya-labs/kanon/issues/557)) ([671f958](https://github.com/yedeya-labs/kanon/commit/671f95857e7562e9f224a060cbfd08ba651e50ef))
+* **metrics:** a linked fix's cause must predate the fix and its bug report ([#567](https://github.com/yedeya-labs/kanon/issues/567)) ([e3ffbe3](https://github.com/yedeya-labs/kanon/commit/e3ffbe36473112d6918385f52815deb7e4423703))
+* **metrics:** bound a linked fix's cause by the fix's opening only ([#572](https://github.com/yedeya-labs/kanon/issues/572)) ([b401b66](https://github.com/yedeya-labs/kanon/commit/b401b6653ab8ba41fe20a9c593b1bd6f76f2bb65))
+* **metrics:** count only people as human, and leave out what an unread declaration or unknown author decides ([#558](https://github.com/yedeya-labs/kanon/issues/558)) ([70f59a4](https://github.com/yedeya-labs/kanon/commit/70f59a4a332c8c99a2523b9e16df984fe65002d9))
+* **rebase:** keep every pending run, so a skip-only one can't replace a merge's ([#551](https://github.com/yedeya-labs/kanon/issues/551)) ([e100bd1](https://github.com/yedeya-labs/kanon/commit/e100bd17ca8c7a5ebb548163fd57afc14249f0dc))
+* **telemetry:** compare a signal with the release each affected adopter ran before ([#565](https://github.com/yedeya-labs/kanon/issues/565)) ([f265cc6](https://github.com/yedeya-labs/kanon/commit/f265cc680a212ec9361b11b9e38a78b7f2785a1c))
+
+
+### Documentation
+
+* **adoption:** describe Kanon's QA store hook as reading th… ([df148c8](https://github.com/yedeya-labs/kanon/commit/df148c836d5b213801816eb6d77268f51cb1a98a))
+* **qa-store:** name every id-token holder the store's role admits, in the template's trust comment ([#530](https://github.com/yedeya-labs/kanon/issues/530)) ([dd1e705](https://github.com/yedeya-labs/kanon/commit/dd1e705d24eb47e98ea8838050774de18bc06fe4))
+* **rulebook:** name every id-token holder in K-OBS-17's Enforced by ([#555](https://github.com/yedeya-labs/kanon/issues/555)) ([cb71d55](https://github.com/yedeya-labs/kanon/commit/cb71d55bcfbe41dcdbd4f9dc2d6a9d81edef4aba))
+* **rulebook:** say K-OBS-13's QA-store jobs declare no environment, in the present ([#564](https://github.com/yedeya-labs/kanon/issues/564)) ([0d63680](https://github.com/yedeya-labs/kanon/commit/0d63680f8b3b7860e098c885f03e44425e373044))
+* **telemetry:** say the QA store jobs are admitted as writers now ([#553](https://github.com/yedeya-labs/kanon/issues/553)) ([48af20f](https://github.com/yedeya-labs/kanon/commit/48af20f24745f750fc9d50ff6a5325491b1bc67b))
+* **tests:** hold every listing of the id-token holders to the guard's own list ([#542](https://github.com/yedeya-labs/kanon/issues/542)) ([0c40da5](https://github.com/yedeya-labs/kanon/commit/0c40da58cdb356bdcaa4424481b0c78cec65a632))
+
+
+### Tests
+
+* make the offline backstop cover a real aws's file-based credentials, as it does gh's ([#539](https://github.com/yedeya-labs/kanon/issues/539)) ([39899cd](https://github.com/yedeya-labs/kanon/commit/39899cd87c5a4dffb9d4b5be1665c4b5ca38ab8b))
+* make the real gh and aws unreachable from the test suite, so an unstubbed call fails offline ([#533](https://github.com/yedeya-labs/kanon/issues/533)) ([9408a9c](https://github.com/yedeya-labs/kanon/commit/9408a9c39451cb18c8ce5030f06aa3981ced197e))
+* make the spawn-heavy suites cheaper, and give them a time budget that holds under load ([#523](https://github.com/yedeya-labs/kanon/issues/523)) ([4851869](https://github.com/yedeya-labs/kanon/commit/4851869a0b690b65e071f5e3eeed7bac0446a2a5))
+
+
+### CI
+
+* **dependabot:** say a comment-only change is enough to ask for a run ([#528](https://github.com/yedeya-labs/kanon/issues/528)) ([db0c3ca](https://github.com/yedeya-labs/kanon/commit/db0c3caec8e4595c23fe4235957a005b13eb3d94))
+* **deps:** Bump the kanon group across 2 directories with 9 updates ([#532](https://github.com/yedeya-labs/kanon/issues/532)) ([df148c8](https://github.com/yedeya-labs/kanon/commit/df148c836d5b213801816eb6d77268f51cb1a98a))
+* **overseer:** map the telemetry reader role, so Kanon's Overseer gets its cost view ([#535](https://github.com/yedeya-labs/kanon/issues/535)) ([fcd25e9](https://github.com/yedeya-labs/kanon/commit/fcd25e92def6b27af3551494900a9b7d0ed48d4d))
+* **rebase:** start Kanon's rebase lane on a merged pull request ([#536](https://github.com/yedeya-labs/kanon/issues/536)) ([9433f5e](https://github.com/yedeya-labs/kanon/commit/9433f5e3cb9f15cfb48a3157386096a8aef984ff))
+
 ## [0.36.0](https://github.com/yedeya-labs/kanon/compare/v0.35.0...v0.36.0) (2026-10-07)
 
 

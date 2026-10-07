@@ -195,7 +195,7 @@ permissions:
   id-token: write
 jobs:
   collect:
-    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.36.0
+    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.37.0
     with:
       url: ${{ vars.KANON_TELEMETRY_URL }}
       writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}
