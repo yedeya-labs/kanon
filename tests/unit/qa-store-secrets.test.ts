@@ -120,6 +120,16 @@ describe('the QA store\'s coordinates reach no log once they are secrets (#433)'
     expect(run).toContain('if [ -z "$ROLE_ARN" ] || [ -z "$BUCKET" ]; then');
     expect(run).toContain('exit 1');
   });
+
+  // #506: Kanon's adoption record describes its hook as the test above holds it.
+  it('the adoption record\'s QA store choice names the secrets alone, and no variables fallback (#506)', () => {
+    const bullet = readFileSync('docs/qa/adoption.md', 'utf8').split('\n').find((l) => l.startsWith('- **A QA store, since'));
+    expect(bullet).toBeDefined();
+    expect(bullet).toContain('`QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET`');
+    expect(bullet).toContain('[#479]');
+    expect(bullet).toContain('fails by name');
+    expect(bullet).not.toMatch(/falls back|repository variables/);
+  });
 });
 
 // #480: the maintenance workflow takes the store's role as the secret the documented caller maps,
