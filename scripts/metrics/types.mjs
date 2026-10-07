@@ -3,9 +3,11 @@
 //
 // ONE PLAIN SHAPE, FILLED BY WHOEVER READS GITHUB. The functions here make no network call and
 // read no file. The dry run (`kanon metrics dry-run`, M2 part C) and, later, the collector's
-// work-item step (M4) read GitHub with the adopter's token and build these objects; the revert
-// and linked-fix detectors (`detectors.mjs`, M2 part B) read the same shape. Field names follow
-// the GitHub REST API where one exists, so a reader can copy a response field for field.
+// work-item step (M4) read GitHub with the adopter's token and build these objects. The revert
+// and linked-fix detectors (`detectors.mjs`, M2 part B) read the same pull requests through one
+// adapter, `toDetectorPr` (`adapter.mjs`), which is the only place the two spellings meet, so a
+// reader fills this shape once and both get what they read. Field names follow the GitHub REST
+// API where one exists, so a reader can copy a response field for field.
 //
 // WHAT THE SHAPE HOLDS IS ADOPTER CONTENT: logins, paths, label names, issue bodies, commit
 // messages. It never leaves the adopter. Only the row `workItemRow` returns does, and that row
@@ -34,21 +36,29 @@
  *   additions: number,
  *   deletions: number,
  *   previous_path?: string,
+ *   patch?: string | null,
+ *   old_ranges?: { start: number, count: number }[],
  * }} ChangedFile
+ *
+ * `patch` (REST's unified diff) or `old_ranges` (the old side's hunks, `-start,count`) give the
+ * lines SZZ blames (`detectors.mjs`); a reader that runs no SZZ leaves both out.
  */
 
 /**
  * One timeline event (REST `issues/{n}/timeline`), flattened. `label` is the label's name for
  * `labeled` and `unlabeled`; `commit_id` is set for `merged`, `closed` and
  * `head_ref_force_pushed`; `source` for `cross-referenced` (the issue or PR that mentioned this
- * one). Other events may be passed and are ignored.
+ * one, and its repository as `owner/name`, REST's `source.issue.repository.full_name`). A reader
+ * always fills `repository`: the linked-fix detector reads a source without one as this
+ * repository, so another repository's issue #7 would pass for this one's (kanon#527). Other
+ * events may be passed and are ignored.
  * @typedef {{
  *   event: string,
  *   created_at: string,
  *   actor?: Actor | null,
  *   label?: string,
  *   commit_id?: string,
- *   source?: { type: 'issue' | 'pull_request', number: number },
+ *   source?: { type: 'issue' | 'pull_request', number: number, repository?: string },
  * }} TimelineEvent
  */
 
@@ -96,14 +106,17 @@
 /**
  * The pull request. `state` is GitHub's (`open` or `closed`); a merged PR is `closed` with
  * `merged_at` set. `merged_by` is the account that merged it, when known; the `merged` timeline
- * event's actor is read when it isn't.
+ * event's actor is read when it isn't. `title` is read only for whether the PR is a `fix`
+ * (`isFixPr`), and `parent_sha`, the merge commit's first parent, only as SZZ's blame point.
  * @typedef {{
  *   number: number,
+ *   title?: string,
  *   state: 'open' | 'closed',
  *   created_at: string,
  *   closed_at: string | null,
  *   merged_at: string | null,
  *   merge_commit_sha?: string | null,
+ *   parent_sha?: string | null,
  *   author: Actor | null,
  *   merged_by?: Actor | null,
  *   body?: string | null,

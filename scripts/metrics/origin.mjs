@@ -19,7 +19,10 @@
 
 import { classifyActor, isDependencyBot } from './actors.mjs';
 
-/** @typedef {'brief' | 'explorer' | 'reviewer_followup' | 'overseer' | 'human' | 'dependency_bot' | 'other_bot'} Origin */
+/** The origins, as the telemetry schema's `origin` lists them. */
+export const ORIGINS = /** @type {const} */ (['brief', 'explorer', 'reviewer_followup', 'overseer', 'human', 'dependency_bot', 'other_bot']);
+
+/** @typedef {typeof ORIGINS[number]} Origin */
 
 /** @type {Readonly<Record<string, Origin>>} */
 const ROLE_ORIGIN = Object.freeze({
