@@ -26,7 +26,7 @@
       "permissions": { "contents": "read", "issues": "write", "pull_requests": "read", "actions": "read", "metadata": "read" }
     }
   },
-  "$apps": "The three GitHub Apps of ADR 0013, as chapter 03's Apps table groups the roles. Each App holds the union of its roles' rows of the roles table plus Metadata: read, and any permission in `broadened`, which K-AGENT-3 records with its reason. A role named here may be any row of the roles table, so the Releaser, which is not an agent, belongs to its own App. Until the release that completes step L4 of plan 0005, `kanon apps` and apps-check read `roles` only.",
+  "$apps": "The three GitHub Apps of ADR 0013, as chapter 03's Apps table groups the roles. Each App holds the union of its roles' rows of the roles table plus Metadata: read, and any permission in `broadened`, which K-AGENT-3 records with its reason. A role named here may be any row of the roles table, so the Releaser, which is not an agent, belongs to its own App.",
   "apps": {
     "author": {
       "app": "Author",

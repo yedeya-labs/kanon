@@ -203,6 +203,8 @@ jobs:
               probably causes it. Put any concrete change under a
               `## Possible approach — UNVERIFIED, not acceptance criteria` heading.
             Every issue is public.
+            Before writing an upstream finding's `evidence` or `suggested_fix`, read and follow
+            `$KANON/skills/upstream-finding/SKILL.md`.
           claude_args: |
             --model claude-opus-5-5
             --effort high

@@ -82,3 +82,7 @@ Each skill states these rules in its own instructions:
 - each skill names the contract (`kanon-init/v1`, `kanon-doctor/v1`) its command prints, and runs `kanon` from the release it ships in.
 
 A skill step that a person still had to do by hand, when the skills ran Kanon's own migration (plan 0005 L5) or an adopter's (L6), is a gap in the skills, filed against L11 and fixed there.
+
+## The lanes' skill
+
+One more skill ships in `skills/`, for Kanon's lanes rather than for you: [upstream-finding](../skills/upstream-finding/SKILL.md) ([plan 0006](plans/0006-upstream-findings.md) §4.1). The Overseer and the telemetry Explorer read it by its path in Kanon's tree, at the release the lane pins, before they write an upstream finding's `evidence` or `suggested_fix`: a fixed template, the hard rules that keep people, repositories and the adopter's own text out of it, and a self-check that sends the finding as codes only when the lane can't comply. It is no command in your menu, and the agent never starts it on its own. `tests/unit/skills.test.ts` holds it to the template's five parts, the hard rules and the self-check, and each lane's test holds the line in its prompt that sends the agent there.

@@ -49,16 +49,25 @@ const rows = (text: string): string[][] =>
 
 type Skill = { dir: string; front: Record<string, unknown>; body: string };
 
-const SKILLS: Skill[] = readdirSync(join(ROOT, 'skills'), { withFileTypes: true })
+/** A skill's frontmatter and body, from its text. */
+const parseSkill = (dir: string, text: string): Skill => {
+  const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text);
+  if (!m) throw new Error(`skills/${dir}/SKILL.md has no frontmatter`);
+  return { dir, front: parse(m[1]!) as Record<string, unknown>, body: m[2]! };
+};
+
+/**
+ * The skills a lane's agent reads from `$KANON` (plan 0006 §4.1), not a person's skills: they
+ * drive no `kanon` command, so the person's skills' checks below don't apply to them.
+ */
+const LANE_SKILLS = ['upstream-finding'];
+
+const ALL_SKILLS: Skill[] = readdirSync(join(ROOT, 'skills'), { withFileTypes: true })
   .filter((d) => d.isDirectory())
-  .map((d) => {
-    const text = read(`skills/${d.name}/SKILL.md`);
-    const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text);
-    if (!m) throw new Error(`skills/${d.name}/SKILL.md has no frontmatter`);
-    return { dir: d.name, front: parse(m[1]!) as Record<string, unknown>, body: m[2]! };
-  });
+  .map((d) => parseSkill(d.name, read(`skills/${d.name}/SKILL.md`)));
+const SKILLS: Skill[] = ALL_SKILLS.filter((s) => !LANE_SKILLS.includes(s.dir));
 const skill = (dir: string): Skill => {
-  const s = SKILLS.find((x) => x.dir === dir);
+  const s = ALL_SKILLS.find((x) => x.dir === dir);
   if (!s) throw new Error(`no skill ${dir}`);
   return s;
 };
@@ -227,10 +236,17 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
     for (const m of listed) expect(new Set([m[1], m[2], m[3]]).size, m[0]).toBe(1);
     expect(listed.map((m) => m[1]).sort()).toEqual(SKILLS.map((s) => s.dir).sort());
     expect(SKILLS.map((s) => s.dir).sort()).toEqual(['adopt', 'doctor', 'upgrade']);
+    // The lanes' skills are listed apart, as files a lane reads, never as a `/kanon:` command.
+    const lanes = section(read('docs/skills.md'), /^## The lanes' skill$/);
+    expect(lanes).not.toBeNull();
+    const named = [...lanes!.matchAll(/\[([a-z-]+)\]\(\.\.\/skills\/([a-z-]+)\/SKILL\.md\)/g)];
+    for (const m of named) expect(m[1], m[0]).toBe(m[2]);
+    expect(named.map((m) => m[1]).sort()).toEqual([...LANE_SKILLS].sort());
+    expect(lanes).not.toMatch(/\/kanon:/);
   });
 
   it("names each skill by its directory, describes it, and lets only doctor start without being asked", () => {
-    for (const s of SKILLS) {
+    for (const s of ALL_SKILLS) {
       expect(s.front.name, s.dir).toBe(s.dir);
       expect(String(s.front.name)).toMatch(/^[a-z]+(?:-[a-z]+)*$/);
       expect(typeof s.front.description, s.dir).toBe('string');
@@ -239,7 +255,61 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
       expect(String(s.front.description).length, s.dir).toBeLessThanOrEqual(1536);
       // adopt and upgrade change the repository, so a person starts them (docs/skills.md).
       expect(s.front['disable-model-invocation'] === true, s.dir).toBe(s.dir !== 'doctor');
+      // A lane's skill is read by its path, so it is no command in the person's menu either.
+      expect(s.front['user-invocable'] === false, s.dir).toBe(LANE_SKILLS.includes(s.dir));
     }
+  });
+});
+
+/**
+ * Plan 0006 step F2a (§4.1): the one file both lanes that write to Kanon, the Overseer and the
+ * telemetry Explorer, read before they write an upstream finding's `evidence` or
+ * `suggested_fix`. Its prompt line is held by each lane's own test; here, that the file has what
+ * the plan says it has: the template's five parts, the hard rules, and the self-check.
+ */
+describe('the upstream-finding skill (plan 0006 §4.1)', () => {
+  const s = skill('upstream-finding');
+
+  it('is the one lane skill', () => {
+    expect(LANE_SKILLS).toEqual(['upstream-finding']);
+    expect(ALL_SKILLS.map((x) => x.dir)).toContain('upstream-finding');
+  });
+
+  it('has the template\'s five parts, in order, the fifth written into `suggested_fix`', () => {
+    const template = section(s.body, /^## The template$/);
+    expect(template).not.toBeNull();
+    expect([...template!.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(['Expected', 'Observed', 'Where', 'Reproduce', 'Suggested fix']);
+    const part = (name: string): string => section(template!, new RegExp(`^### ${name}$`))!.trim();
+    expect(part('Expected')).toMatch(/`K-…`/);
+    expect(part('Observed')).toMatch(/stage/);
+    expect(part('Where')).toMatch(/`kanon_version`/);
+    expect(part('Reproduce')).toMatch(/trigger/);
+    expect(part('Suggested fix')).toMatch(/into `suggested_fix`, never `evidence`/);
+    expect(part('Suggested fix')).toMatch(/`K-SELF-10`/);
+  });
+
+  it('states the hard rules, with roles instead of names', () => {
+    const rules = section(s.body, /^## The hard rules$/);
+    expect(rules).not.toBeNull();
+    const leads = rules!.split('\n').filter((l) => l.startsWith('- **')).map((l) => /^- (\*\*[^*]+\*\*)/.exec(l)![1]);
+    expect(leads).toEqual([
+      '**No people, logins or personal names.**',
+      '**No repository names.**',
+      '**No URLs.**',
+      "**No paths outside Kanon's tree.**",
+      "**No quotes of the adopter's text,**",
+      '**Roles instead.**',
+    ]);
+    for (const role of ['"the PR"', '"the reviewer"', '"an adopter workflow"', '"the adopter\'s hook"']) expect(rules, role).toContain(role);
+  });
+
+  it('ends with the self-check: codes only when it can\'t comply, and the draft says why', () => {
+    const check = section(s.body, /^## The self-check$/);
+    expect(check).not.toBeNull();
+    expect(check).toMatch(/re-read each extract against the hard rules/);
+    expect(check).toMatch(/leave `evidence` and `suggested_fix` empty/);
+    expect(check).toMatch(/sent as codes only/);
+    expect(check).toMatch(/say why/);
   });
 });
 

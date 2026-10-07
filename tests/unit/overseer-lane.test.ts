@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -293,6 +293,14 @@ describe('what the agent is told', () => {
     expect(at((s) => s.id === 'trend')).toBeLessThan(at((s) => s.id === 'agent'));
     expect(byId('trend').run).toContain('qa-store-export/token-trend.md');
     expect(byId('trend').run).toContain('This is not a quiet week.');
+  });
+
+  // Plan 0006 F2a (§4.1): one skill for every lane that writes to Kanon, read from Kanon's tree
+  // at the lane's release, so the two lanes' evidence can't drift apart.
+  it('sends the agent to the upstream-finding skill before it writes an upstream finding\'s evidence', () => {
+    expect(flat).toContain("Before writing an upstream finding's `evidence` or `suggested_fix`, read and follow `$KANON/skills/upstream-finding/SKILL.md`.");
+    expect(existsSync('skills/upstream-finding/SKILL.md')).toBe(true);
+    expect(byId('agent').env?.KANON).toBe('${{ steps.kanon.outputs.path }}');
   });
 
   it('reaches Kanon\'s scripts through `$KANON`, never the adopter\'s pipeline directory', () => {

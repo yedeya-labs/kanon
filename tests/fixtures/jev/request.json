@@ -1,0 +1,61 @@
+{
+  "model": "jev-latest",
+  "state": {
+    "lane": "review",
+    "failed_stage": "hook",
+    "kanon_error": "hook_missing",
+    "reason": "did_not_finish",
+    "kanon_version": "0.37.0",
+    "reporters": [
+      "overseer"
+    ],
+    "subjects": [
+      "lane"
+    ],
+    "rules": [
+      "K-LAYOUT-10",
+      "K-SELF-8"
+    ],
+    "kanon_paths": [
+      "actions/agent-run/action.yml",
+      "docs/init.md"
+    ],
+    "fix_categories": [
+      "documentation",
+      "lane-behaviour"
+    ],
+    "findings": 2,
+    "adopters": 2,
+    "signal": {
+      "classification": "kanon",
+      "runs": 14,
+      "adopters": 2
+    },
+    "evidence": [
+      {
+        "evidence": "Expected: the review lane finds the setup hook the install wrote.\nObserved: the lane stops at the hook stage with hook_missing.\nWhere: actions/agent-run/action.yml.\nReproduce: install with the default answers, then open a pull request.",
+        "suggested_fix": "Look for the hook where kanon init writes it, or have init write it where the lane looks."
+      }
+    ]
+  },
+  "questions": {
+    "kind": {
+      "type": "choice",
+      "instructions": "This is a problem report about Kanon, a framework that runs AI agents in GitHub Actions for the repositories that adopt it. The report was found in one or more adopting repositories, in Kanon's own vocabulary: the lane, the stage, the error and reason codes, the Kanon release, the Kanon rules and files involved, and, when present, a description written for a Kanon maintainer. What is the cause of the problem?",
+      "criteria": {
+        "kanon_bug": "A defect in Kanon itself, in its code, workflows, rules, defaults or documentation, that a change to Kanon would fix.",
+        "adopter_configuration": "The adopting repository's own setup, choices, secrets, permissions or content cause it, and the adopter would fix it.",
+        "platform": "GitHub, the model provider or another service outside Kanon failed or limited the run: an outage, a rate limit, a quota.",
+        "unclear": "The report does not say enough to tell which of the others it is."
+      }
+    },
+    "actionable": {
+      "type": "noul",
+      "instructions": "A Kanon maintainer can act on this report as it stands, without asking the adopting repository for anything more.",
+      "criteria": {
+        "true": "The report names what went wrong and where in Kanon well enough to reproduce or fix it.",
+        "false": "Acting on it would need more from the adopter: their configuration, their logs, their content or an answer to a question."
+      }
+    }
+  }
+}
