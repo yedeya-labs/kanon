@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -73,6 +75,16 @@ describe("runTests runs a JavaScript file with its declared tree's runner (kanon
   it('runs nothing for a tree that names no runner, or with no declaration: not-run, never a guessed runner', () => {
     expect(ran(stackIn('# Stack\n\n## Code areas\n\n- `tests/` — tests: the suite\n'), 'tests/a.test.ts')).toEqual({ result: undefined, bins: [] });
     expect(ran(stackIn(null), 'tests/a.test.ts')).toEqual({ result: undefined, bins: [] });
+  });
+
+  it('the CLI stops with one line naming a malformed declaration, before reading anything else', () => {
+    const cwd = stackIn('# Stack\n\n## Code areas\n\n- `tests/` `jest` — tests: the suite\n');
+    // The locked floor, which the spec library reads when it loads.
+    mkdirSync(join(cwd, 'docs/qa/specs'), { recursive: true });
+    writeFileSync(join(cwd, 'docs/qa/specs/_locked-floor.json'), '{ "locked": [] }\n');
+    const r = spawnSync(process.execPath, [fileURLToPath(new URL('../../scripts/verify-acs.mjs', import.meta.url)), '1'], { cwd, encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr.trim()).toMatch(/^verify-acs: docs\/qa\/stack\.md:5: `jest` isn't a runner Kanon runs a tests tree with.*\(K-LAYOUT-17\)$/);
   });
 
   it('fails by name on a malformed declaration, rather than running with none', () => {

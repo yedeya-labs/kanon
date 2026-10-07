@@ -233,8 +233,19 @@ describe("the Merger's reader (K-MERGE-17)", () => {
     expect(inputs).toEqual(['trunk']);
     expect(asked.every((a) => a.endsWith('?ref=trunk')), asked.join(', ')).toBe(true);
     expect(printed).toEqual([
-      "merge-gate: the production promotion is human-gated (the `production` environment's required reviewer), as docs/qa/adoption.md on `trunk` declares, so the project's 1 high-risk path under `## Escalation paths` merges in the green zone. The pipeline's own paths, the project's pipeline code and every judging input still escalate (K-MERGE-4)",
+      "merge-gate: the production promotion is human-gated (the `production` environment's required reviewer), as docs/qa/adoption.md on `trunk` declares, so the project's 1 high-risk path under `## Escalation paths` not marked `always` merges in the green zone. The pipeline's own paths, the project's pipeline code, every high-risk path marked `always` and every judging input still escalate (K-MERGE-4)",
     ]);
+  });
+
+  it('declared, counts only the unmarked high-risk paths as relaxed, and names the marked ones as still escalating (kanon#344)', () => {
+    const marked = '# Escalation paths\n\n## Escalation paths\n\n- `^infra/environments/` `infra` `always` — the required reviewers\n- `^infra/` `infra` — the rest\n- `^migrations/` — database migrations\n\n## Pipeline code\n';
+    const printed: string[] = [];
+    const paths = readEscalations('o/r', gh({ [`${ESCALATION_FILE}@trunk`]: marked, [`${ADOPTION_RECORD}@trunk`]: RECORD(`${BULLET}\n`) }), (l) => printed.push(l), () => []);
+    expect(printed).toEqual([
+      "merge-gate: the production promotion is human-gated (the `production` environment's required reviewer), as docs/qa/adoption.md on `trunk` declares, so the project's 2 high-risk paths under `## Escalation paths` not marked `always` merge in the green zone. The pipeline's own paths, the project's pipeline code, every high-risk path marked `always` and every judging input still escalate (K-MERGE-4)",
+    ]);
+    expect(paths.find(([re]) => re.test('infra/environments/prod.tf'))?.[1]).toMatch(/^the required reviewers, marked `always`/);
+    expect(paths.find(([re]) => re.test('infra/network.tf'))).toBeUndefined();
   });
 
   it("ignores a declaration on a PR's branch: only the default branch's record counts", () => {

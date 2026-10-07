@@ -401,6 +401,15 @@ const main = () => {
     process.exit(2);
   }
 
+  // The test trees decide which files are tests (kanon#20): a malformed declaration ends the
+  // run with one line naming it, before anything reads it.
+  let areas;
+  try {
+    areas = readCodeAreas();
+  } catch (e) {
+    console.error(`verify-acs: ${/** @type {Error} */ (e).message}`);
+    process.exit(1);
+  }
   const brief = readFileSync(`docs/projects/${project}.md`, 'utf8');
   const known = new Set(specFiles().flatMap((f) => parseSpec(f)).map((i) => i.id).filter(Boolean));
   let rows = verdicts(acsFromBrief(brief), citations(), known);
@@ -408,7 +417,6 @@ const main = () => {
   const ref = currentRef();
   if (doRun) {
     const files = [...new Set(rows.flatMap((r) => r.tests))];
-    const areas = readCodeAreas();
     for (const d of codeAreasDefaults(areas)) console.error(`verify-acs: ${d}`);
     rows = applyRuns(rows, runTests(files, { trees: areas.tests }));
   }
