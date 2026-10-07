@@ -86,10 +86,14 @@ describe("the Lead's battery covers its flags (kanon#405)", () => {
     expect(tagged('git-config', 'refused').filter((p) => p.tool === 'Bash' && /^git config /.test(p.command)).length).toBeGreaterThanOrEqual(2);
   });
 
-  it('refuses a program for the far end of a push or fetch, in each spelling the deny rules name', () => {
+  it('refuses a program for the far end of a push or fetch, in each spelling the deny rules, or the CLI, refuse', () => {
     const commands = tagged('git-transport', 'refused').map((p) => (p.tool === 'Bash' ? p.command : ''));
     for (const shape of [/^git push .*--receive-pack=/, /^git push .*--receive-pack \S/, /^git push -u .*--exec=/, /^git push .*--rec''eive/,
-      /^git push .*--rec""eive/, /^git push .*\\/, /^git push .*--\{/, /^git fetch .*--upload-pack=/, /^git fetch .*--upl \S/, /^git fetch .*--up""load/]) {
+      /^git push .*--rec""eive/, /^git push .*\\/, /^git push .*--\{/, /^git fetch .*--upload-pack=/, /^git fetch .*--upl \S/, /^git fetch .*--up""load/,
+      // kanon#460: a `$` expansion or substitution, and a glob, each spelling the option.
+      /^git push .*--rec\$1eive/, /^git push .*--rec\$@eive/, /^git push .*--\$'r'eceive/, /^git push .*--rec\$\{X\}eive/, /^git push .*--rec\$\(true\)eive/,
+      /^git push .*--rec`true`eive/, /^git fetch .*--up\$1load/, /^git push .*--rec\?ive/, /^git push .*--rec\[e\]ive/, /^git push .*--\*-pack/,
+      /^git fetch .*--up\?oad/, /^git fetch .*--up\[l\]oad/, /^git fetch .*--up\*-pack/]) {
       expect(commands.some((c) => shape.test(c)), String(shape)).toBe(true);
     }
   });
