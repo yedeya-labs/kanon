@@ -253,6 +253,24 @@ describe("kanon doctor and the telemetry collector's caller (#428)", () => {
     expect(github.calls.some((c) => c[0] === 'variable')).toBe(false);
   });
 
+  it("blocks a caller whose permissions: lack what the collector's job asks for: GitHub would refuse every sweep (plan 0006 F4)", async () => {
+    // The caller as releases before F4 wrote it, with no `contents: read`.
+    const before = telemetryCallerFile(PINNED).replace('  contents: read\n', '');
+    const r = await run(checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: before }), fakeGitHub({ variables: new Set(VARS) }), ['--json']);
+    expect(r.status, r.out).toBe(EXIT.findings);
+    expect(ids(r)).toEqual([`caller.grant-missing ${TELEMETRY_CALLER_PATH}`]);
+    const f = r.json.findings[0];
+    expect(f).toMatchObject({ category: 'caller', blocking: true });
+    expect(f.message).toContain("grants contents: none; Kanon's telemetry collector needs contents: read at");
+    expect(f.fix.commands).toEqual(['  contents: read']);
+    // Against a release whose requirements give the collector no grant, nothing is asked.
+    const old = clone(REQ);
+    delete (old as { telemetry?: { grant?: unknown } }).telemetry!.grant;
+    const out: string[] = [];
+    await doctor(['--dir', checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: before }), '--json'], { gh: fakeGitHub({ variables: new Set(VARS) }).gh, env: {}, out: (l: string) => out.push(l), err: () => {}, requirements: () => old, release: () => PINNED });
+    expect(JSON.parse(out.join('\n')).findings).toEqual([]);
+  });
+
   it('accepts the collector only from a release whose requirements name it', async () => {
     const old = clone(REQ);
     delete (old as { telemetry?: unknown }).telemetry;

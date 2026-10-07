@@ -45,12 +45,30 @@
 import { execFileSync } from 'node:child_process';
 import { inflateRawSync } from 'node:zlib';
 
-import { describeErrors, validate } from '../../actions/agent-telemetry/schema.mjs';
+import { describeErrors, REPORTERS, validate } from '../../actions/agent-telemetry/schema.mjs';
 
 /** Every version-2 artifact's name starts with this (`actions/agent-telemetry/action.yml`). */
 export const ARTIFACT_PREFIX = 'kanon-telemetry-';
 /** The file inside the artifact. */
 export const ARTIFACT_FILE = 'kanon-telemetry.json';
+/**
+ * A lane's finding rows (plan 0006 §5, step 1): one artifact per run of a reporting lane,
+ * `kanon-finding-<reporter>-<run id>-<attempt>`, written by its filing job and sent by the
+ * collector (step 3). The lane's filing step and the collector both take the name and the file
+ * from here, so they can't disagree.
+ */
+export const FINDING_ARTIFACT_PREFIX = 'kanon-finding-';
+/** The file inside a finding artifact: a JSON array of the run's finding rows, at most `MAX_FINDINGS`. */
+export const FINDING_ARTIFACT_FILE = 'kanon-finding.json';
+/** A finding artifact's name: a reporter from the schema's list, then the run id and the attempt. */
+export const FINDING_ARTIFACT = new RegExp(`^${FINDING_ARTIFACT_PREFIX}(${REPORTERS.join('|')})-(\\d+)-(\\d+)$`);
+/**
+ * The name a reporter's run uploads its finding rows under.
+ * @param {string} reporter one of the schema's `REPORTERS`
+ * @param {number | string} runId
+ * @param {number | string} attempt
+ */
+export const findingArtifactName = (reporter, runId, attempt) => `${FINDING_ARTIFACT_PREFIX}${reporter}-${runId}-${attempt}`;
 /** The sweep's window, in days, as `dispatch-sweep.mjs`'s `UNREACHED_WINDOW_DAYS` defaults it. */
 export const WINDOW_DAYS = 14;
 /** Pages of 100 the listing may read before it gives up and fails the read. */
@@ -173,7 +191,7 @@ export const ghDownload = (repo) => (id) =>
 export function listLaneArtifacts(lane, opts) {
   const pattern = laneArtifactPattern(lane);
   const { artifacts, foreign, retentionDays } = listArtifacts((name) => pattern.exec(name), opts);
-  return { artifacts: artifacts.map(({ lane: _lane, ...a }) => a), foreign, retentionDays };
+  return { artifacts: artifacts.map(({ lane: _lane, kind: _kind, ...a }) => a), foreign, retentionDays };
 }
 
 /** Any lane's version-2 artifact name: the lane, then the run id and the attempt. */
@@ -182,26 +200,35 @@ export const ANY_LANE_ARTIFACT = new RegExp(`^${ARTIFACT_PREFIX}([a-z][a-z0-9-]*
 /**
  * Every lane's unexpired version-2 artifacts created since `from`, for the collector (plan 0002
  * S7), with the same rules as `listLaneArtifacts`: this repository's own runs only, a fork's
- * counted in `foreign`, and the retention measured.
- * @param {{ repo: string, from: number, api: Api, maxPages?: number }} opts
- * @returns {{ artifacts: (LaneArtifact & { lane: string })[], foreign: number, retentionDays: number | null }}
+ * counted in `foreign`, and the retention measured. Each is `kind: 'run'`, with its lane.
+ *
+ * With `findings`, the same listing also takes every reporter's finding artifacts (plan 0006 §5,
+ * step 3), `kind: 'finding'`, with the reporter in `lane`. A fork's is foreign, as a run row's
+ * is. The retention is still measured from the run artifacts alone: a finding artifact may ask for
+ * its own, and the sweep's cap is about the run rows.
+ * @param {{ repo: string, from: number, api: Api, maxPages?: number, findings?: boolean }} opts
+ * @returns {{ artifacts: (LaneArtifact & { lane: string, kind: 'run' | 'finding' })[], foreign: number, retentionDays: number | null }}
  */
-export function listTelemetryArtifacts(opts) {
+export function listTelemetryArtifacts({ findings = false, ...opts }) {
   return listArtifacts((name) => {
     const m = ANY_LANE_ARTIFACT.exec(name);
-    return m ? [m[0], m[2], m[3], m[1]] : null;
-  }, opts);
+    if (m) return [m[0], m[2], m[3], m[1], 'run'];
+    const f = findings ? FINDING_ARTIFACT.exec(name) : null;
+    return f ? [f[0], f[2], f[3], f[1], 'finding'] : null;
+  }, opts, findings ? [ARTIFACT_PREFIX, FINDING_ARTIFACT_PREFIX] : [ARTIFACT_PREFIX]);
 }
 
 /**
  * The listing both readers share. `match` returns, for a name it takes, `[name, run id, attempt]`
- * and, for the any-lane listing, the lane fourth.
+ * and, for the any-lane listing, the lane (or the reporter) fourth and the kind fifth. Only names
+ * under `prefixes` are looked at; the retention is measured from the run artifacts alone.
  * @param {(name: string) => (string | undefined)[] | null} match
  * @param {{ repo: string, from: number, api: Api, maxPages?: number }} opts
- * @returns {{ artifacts: (LaneArtifact & { lane: string })[], foreign: number, retentionDays: number | null }}
+ * @param {string[]} [prefixes]
+ * @returns {{ artifacts: (LaneArtifact & { lane: string, kind: 'run' | 'finding' })[], foreign: number, retentionDays: number | null }}
  */
-function listArtifacts(match, { repo, from, api, maxPages = MAX_PAGES }) {
-  /** @type {(LaneArtifact & { lane: string })[]} */
+function listArtifacts(match, { repo, from, api, maxPages = MAX_PAGES }, prefixes = [ARTIFACT_PREFIX]) {
+  /** @type {(LaneArtifact & { lane: string, kind: 'run' | 'finding' })[]} */
   const artifacts = [];
   const seen = new Set();
   let foreign = 0;
@@ -216,16 +243,16 @@ function listArtifacts(match, { repo, from, api, maxPages = MAX_PAGES }) {
       const expiresAt = Date.parse(a?.expires_at);
       if (Number.isFinite(createdAt)) newest = Math.max(newest, createdAt);
       const name = String(a?.name ?? '');
-      if (!name.startsWith(ARTIFACT_PREFIX) || !Number.isFinite(createdAt)) continue;
+      if (!prefixes.some((p) => name.startsWith(p)) || !Number.isFinite(createdAt)) continue;
       const run = a?.workflow_run;
       const own = Number.isInteger(run?.repository_id) && run.head_repository_id === run.repository_id;
       const m = match(name);
       if (m && createdAt >= from && !a.expired && !(own && run.id === Number(m[1]))) { foreign += 1; continue; }
       if (!own) continue;
-      if (Number.isFinite(expiresAt)) retention = Math.min(retention, expiresAt - createdAt);
+      if (Number.isFinite(expiresAt) && name.startsWith(ARTIFACT_PREFIX)) retention = Math.min(retention, expiresAt - createdAt);
       if (!m || a.expired || createdAt < from || seen.has(a.id)) continue;
       seen.add(a.id);
-      artifacts.push({ id: a.id, name, runId: Number(m[1]), attempt: Number(m[2]), createdAt, expiresAt, lane: String(m[3] ?? '') });
+      artifacts.push({ id: a.id, name, runId: Number(m[1]), attempt: Number(m[2]), createdAt, expiresAt, lane: String(m[3] ?? ''), kind: m[4] === 'finding' ? 'finding' : 'run' });
     }
     if (list.length < 100 || newest < from - LISTING_SLACK) break;
   }

@@ -15,7 +15,7 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 
 The collector that writes to it is [`telemetry-collect.yml`](../.github/workflows/telemetry-collect.yml) ([Collect the rows](#collect-the-rows)).
 
-**What an adopter gets by opting in** ([#41](https://github.com/yedeya-labs/kanon/issues/41), ADR 0007). Kanon notices failures that Kanon caused in your runs, from the same stage and error at several adopters or a failure that starts at a release, and often fixes them before you would have had to report anything ([Kanon's own bugs](#kanons-own-bugs)). You also get cross-adopter cost and reliability baselines, each combining at least three adopters ([The aggregate function](#the-aggregate-function)). What leaves your project is exactly the schema's fixed fields ([`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), plan 0002 §2.1): never code, prompts, text, file paths or usernames. To opt in, answer yes to `kanon init`'s telemetry question, or write the caller in [Collect the rows](#collect-the-rows); to leave, delete it and ask for erasure, which completes within 35 days ([Erase an adopter](#erase-an-adopter)). With telemetry on, you may also opt in to sending the Overseer's and the telemetry Explorer's upstream findings, the ones only Kanon can act on, by your adoption record's `Upstream findings:` choice, `sent` or `sent with evidence`, which `kanon init` asks after telemetry ([plan 0006](plans/0006-upstream-findings.md) §3, [`docs/init.md`](init.md#upstream-findings)): Kanon then hears of its own bugs from your findings without your filing anything. Its rows are plan 0006's F1 to F4, still being built.
+**What an adopter gets by opting in** ([#41](https://github.com/yedeya-labs/kanon/issues/41), ADR 0007). Kanon notices failures that Kanon caused in your runs, from the same stage and error at several adopters or a failure that starts at a release, and often fixes them before you would have had to report anything ([Kanon's own bugs](#kanons-own-bugs)). You also get cross-adopter cost and reliability baselines, each combining at least three adopters ([The aggregate function](#the-aggregate-function)). What leaves your project is exactly the schema's fixed fields ([`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), plan 0002 §2.1): never code, prompts, text, file paths or usernames. To opt in, answer yes to `kanon init`'s telemetry question, or write the caller in [Collect the rows](#collect-the-rows); to leave, delete it and ask for erasure, which completes within 35 days ([Erase an adopter](#erase-an-adopter)). With telemetry on, you may also opt in to sending the Overseer's and the telemetry Explorer's upstream findings, the ones only Kanon can act on, by your adoption record's `Upstream findings:` choice, `sent` or `sent with evidence`, which `kanon init` asks after telemetry ([plan 0006](plans/0006-upstream-findings.md) §3, [`docs/init.md`](init.md#upstream-findings)): Kanon then hears of its own bugs from your findings without your filing anything. The collector sends them and the ingest function stores them ([Collect the rows](#collect-the-rows), plan 0006 F4); the lanes' writing of them is plan 0006's F3.
 
 Every AWS command here is the Owner's to run. Agents run none (§5).
 
@@ -26,10 +26,12 @@ Every AWS command here is the Owner's to run. Agents run none (§5).
   - validates the row with the schema module, and rejects it with the offending field names if it fails;
   - takes the key from the caller's role, never from the row (a row that sends `pk`, `sk`, `source`, `received_at` or `expires_at` fails validation);
   - checks that `recorded_at` is between 8 days ago and 10 minutes ahead;
-  - stamps `received_at`, `expires_at` and `source`, and writes the row with `PutItem`.
+  - for an upstream-finding row ([plan 0006](plans/0006-upstream-findings.md) §5, step 4), stores it only from a writer, never the importer or the backfill role, and only when, beyond `validate`, its text passes the scrub's `verify` against the sender's own name hashes (`NAME_HASHES`, below), and no field holds a registered key, checked with the aggregate's `assertNoKey` and, in the text, as a word. A refusal names the field and the rule, such as `evidence (url)`, `evidence (name)` or `evidence (key)`, never the text. A key with no name hashes stores no finding;
+  - stamps `received_at`, `expires_at` and `source`, and writes the row with `PutItem`, a finding under `<key>#finding`.
 
   It takes up to 25 rows a request and 256 KB, and answers per row: 200 when every row is stored, 422 when any is rejected, and 502 when a write fails.
 - **Its log group:** 30-day retention. It holds keys and field names, never a value.
+- **Its environment** (from `render.mjs`): `WRITER_KEYS`, every registered key, and `NAME_HASHES`, for each key the SHA-256 of each word of its repository's owner and name, never the words, which a finding's text is checked against (plan 0006 §4.2). Lambda holds a function's environment to 4 KB, so `render.mjs` refuses a register too large for it before any deploy.
 - **The aggregate function, `kanon-telemetry-aggregate`** (plan 0002 §6.1, decided by the Owner on 2026-10-07): Node 24, 256 MB, no VPC, the same package as the ingest function. Its URL has `AuthType: AWS_IAM`. A `GET` answers only what may be published ([The aggregate function](#the-aggregate-function)). Its role may `Query` the table and nothing else, and only with exactly the aggregate's projection: `dynamodb:Attributes` lists those attributes, and `dynamodb:Select` must be `SPECIFIC_ATTRIBUTES`, so a request for whole items is refused. Its log group keeps counts only, 30 days.
 - **Per registered repository** (from `render.mjs`):
   - `kanon-telemetry-<key>-writer`, trusted only for the repository's default-branch ref, `<prefix>:ref:refs/heads/<default branch>`, which may invoke the URL and nothing else;
@@ -106,10 +108,10 @@ The outputs name the ingest URL and each repository's two roles, and the aggrega
 
 ## Verify
 
-Step S3's falsifiers. Deploy with `--verify`, which lets your role assume the writer and reader roles and creates the write probe. This path doesn't touch the OIDC subjects: your role assumes the writer and reader through their second trust statement, which names your role's ARN and exists only while `EnableVerify` is on. So a PASS shows the store and its policies, not that a workflow's token is accepted; that is S4's first collector run (and, for Kanon, S7's). Run the script, then deploy without it, which deletes the probe:
+Step S3's falsifiers, and plan 0006 F4's. Deploy with `--verify`, which lets your role assume the writer and reader roles and creates the write probe, and with `--importer`, which lets it assume the importer, so the script can show the importer is refused a finding. This path doesn't touch the OIDC subjects: your role assumes the writer and reader through their second trust statement, which names your role's ARN and exists only while `EnableVerify` is on. So a PASS shows the store and its policies, not that a workflow's token is accepted; that is S4's first collector run (and, for Kanon, S7's). Run the script, then deploy without it, which deletes the probe:
 
 ```sh
-node infra/telemetry/render.mjs --register "$REG" --out "$OUT" --verify
+node infra/telemetry/render.mjs --register "$REG" --out "$OUT" --verify --importer
 # package and deploy, as above
 node infra/telemetry/verify.mjs --key <Kanon's key> --profile kanon
 node infra/telemetry/render.mjs --register "$REG" --out "$OUT"
@@ -123,7 +125,13 @@ It sends `tag: test` rows, which expire in 30 days, and prints PASS or FAIL for 
 - the reader querying another key gets `AccessDeniedException`;
 - a direct `PutItem` with the writer role is denied;
 - the stored row's `expires_at` is 30 days out;
-- the probe's `PutItem`, `UpdateItem`, `DeleteItem` and `BatchWriteItem` are each denied, and IAM says the denial came from a resource-based policy ([#101](https://github.com/yedeya-labs/kanon/issues/101)).
+- the probe's `PutItem`, `UpdateItem`, `DeleteItem` and `BatchWriteItem` are each denied, and IAM says the denial came from a resource-based policy ([#101](https://github.com/yedeya-labs/kanon/issues/101));
+- a valid `test` finding gets 200 and lands in `<key>#finding` (plan 0006 F4);
+- a finding with a URL in its evidence gets 422 naming `evidence (url)`;
+- a finding holding the key in its evidence gets 422 naming `evidence (key)`;
+- the importer sending a finding gets 422 naming `row_kind (not-allowed)`;
+- the aggregate you compute for the key, as `aggregate.mjs` does, is the same before and after the finding is stored;
+- a dry run of `erase.mjs` for the key counts the stored finding in `<key>#finding`. It erases nothing; the erasure itself is held by the erase test.
 
 The writer holds no DynamoDB action, so IAM denies its `PutItem` before the table's policy is read. On its own, that check would pass against a table with no resource policy. The probe is allowed every write by its own policy, so only the table's deny can stop it. Its writes aim at `verify-probe#none`, a partition no register holds, and carry an expiry an hour out, so a write that lands (a FAIL) is removed by TTL.
 
@@ -169,11 +177,12 @@ Plan 0002 S7. The lanes hold no store credentials. Each run uploads its version-
 - **stops at 7 days, or at the repository's artifact retention when that is shorter** (S1a, [#212](https://github.com/yedeya-labs/kanon/issues/212)). The function refuses a row older than 8 days, and an expired artifact is gone. When the last successful run is older than that, the run warns that the rows before it are lost.
 - **sends only this repository's own runs' rows.** A fork's run can upload any row under any name, so its artifacts are counted and ignored.
 - **checks each row with `validate`, and against its artifact's lane, run and attempt,** then sends the rows 25 to a signed `POST`.
+- **sends upstream findings at the level your adoption record declares** ([plan 0006](plans/0006-upstream-findings.md) §3.1 and §5, step 3). The Overseer's and the telemetry Explorer's filing jobs upload them as `kanon-finding-<reporter>-<run id>-<attempt>`, holding `kanon-finding.json`, a list of at most 20 finding rows. Before it sends any, the run reads `docs/qa/adoption.md` from the default branch: `drafted` or `filed here` sends none, `sent` sends each row as codes only, without its evidence or suggested fix, and `sent with evidence` sends each row as the lane built it. So turning the level down stops the text at the next sweep, even for artifacts written before. A record it can't read, or a malformed one, sends no finding and turns the run red. Each row must name its artifact's reporter, run and attempt. A text the scrub still finds something in, with this repository's name as its context, is sent as codes only, with a warning naming the field and the rule.
 - **turns red on anything it couldn't send:** an unreadable artifact, a row that fails the schema, a row the store rejects, or a listing that fails. The errors name the artifact and the field, never a value. That red run is the page (§9). The next run re-covers the same span, so nothing is lost by failing.
 
 **Cadence and cost.** The caller schedules it hourly, at minute 40 (§1.2), so 24 runs a day. It touches no database, and nothing it calls scales to zero. On a public repository its Actions minutes are free. On a private one it is about a minute a run. Each run calls the function only when it has rows, once per 25 rows. For Kanon that is at most 720 calls a month, inside Lambda's free tier, plus 2 DynamoDB write units per row. That is inside §9's estimate of about $0.05 a month.
 
-**The caller.** `kanon init --telemetry` writes it as `.github/workflows/telemetry.yml`, byte for byte as below; `tests/unit/kanon-init.test.ts` holds the two to each other. Written by hand, it is a trigger-only workflow. Pin it to the Kanon version every other Kanon reference uses, and pass the two values as repository variables. Neither is a credential: the role can be assumed only by the repository's own default-branch token. The role's ARN still names the account, so the collect job masks the ARN, and the account id on its own, before its first AWS call, and has `configure-aws-credentials` mask the account it assumed: only the masking step's own header prints the ARN, once per run ([#514](https://github.com/yedeya-labs/kanon/issues/514)). Name the caller as you like; the collector finds its own runs from `GITHUB_WORKFLOW_REF`.
+**The caller.** It grants `actions: read` for the runs and artifacts, `contents: read` for the adoption record's upstream-findings level (plan 0006 F4), and `id-token: write` for the writer role. A caller written before F4 lacks `contents: read`, and GitHub refuses to start a called workflow that asks for more than its caller grants, so add it before moving the pin to a release with F4: `kanon doctor` reports it as `caller.grant-missing`. `kanon init --telemetry` writes it as `.github/workflows/telemetry.yml`, byte for byte as below; `tests/unit/kanon-init.test.ts` holds the two to each other. Written by hand, it is a trigger-only workflow. Pin it to the Kanon version every other Kanon reference uses, and pass the two values as repository variables. Neither is a credential: the role can be assumed only by the repository's own default-branch token. The role's ARN still names the account, so the collect job masks the ARN, and the account id on its own, before its first AWS call, and has `configure-aws-credentials` mask the account it assumed: only the masking step's own header prints the ARN, once per run ([#514](https://github.com/yedeya-labs/kanon/issues/514)). Name the caller as you like; the collector finds its own runs from `GITHUB_WORKFLOW_REF`.
 
 <!-- x-release-please-start-version -->
 
@@ -192,6 +201,7 @@ on:
         default: ""
 permissions:
   actions: read
+  contents: read
   id-token: write
 jobs:
   collect:

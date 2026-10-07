@@ -33,10 +33,12 @@ on:
         required: false
         default: ""
 
-# The ceiling for the collector: it reads the artifacts and runs, and its collect job mints
-# the OIDC token for the writer role. Nothing else is granted.
+# The ceiling for the collector: it reads the artifacts and runs, and the adoption record's
+# upstream-findings level (plan 0006 F4), and its collect job mints the OIDC token for the writer
+# role. Nothing else is granted.
 permissions:
   actions: read
+  contents: read
   id-token: write
 
 jobs:

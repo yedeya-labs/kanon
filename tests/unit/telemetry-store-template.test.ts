@@ -5,6 +5,9 @@ import { parse } from 'yaml';
 
 import { FUNCTION_DIR, registerProblems, render, TEMPLATE_PATH } from '../../infra/telemetry/render.mjs';
 import { PROJECTION } from '../../infra/telemetry/function/aggregate.mjs';
+import { nameHashesOf } from '../../infra/telemetry/function/index.mjs';
+import { sha256 } from '../../actions/agent-telemetry/public-words.mjs';
+import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
 
 /**
  * Plan 0002 step S3: the store's CloudFormation template, as rendered from the example
@@ -99,6 +102,23 @@ describe('the ingest function and its URL (§4)', () => {
     expect(fn.Environment.Variables.WRITER_KEYS).toBe(key);
     expect(fn.Environment.Variables.IMPORTER_ROLE).toEqual({ 'Fn::If': ['ImporterOn', 'kanon-telemetry-importer', ''] });
     expect(fn.Environment.Variables.BACKFILL_ROLE).toEqual({ 'Fn::If': ['BackfillOn', 'kanon-telemetry-backfill', ''] });
+  });
+  it("is told each key's repository as the hashes of its words, never the words (plan 0006 §4.2, F4)", () => {
+    const words = repo.toLowerCase().match(/[a-z0-9]+/g)!;
+    expect(fn.Environment.Variables.NAME_HASHES).toBe(`${key}=${[...new Set(words.map(sha256))].sort().join(':')}`);
+    for (const w of words) expect(fn.Environment.Variables.NAME_HASHES).not.toContain(w);
+    // The function reads back exactly the scrub's context for that repository.
+    expect(nameHashesOf({ TABLE_NAME: '', ACCOUNT_ID: '', WRITER_KEYS: key, NAME_HASHES: fn.Environment.Variables.NAME_HASHES }, key))
+      .toEqual(nameContext({ repository: repo }));
+    const two = render({ ...register, repositories: [{ key: 'k1', repository: 'o/r', readers: ['ref:refs/heads/main'] }, { key: 'k2', repository: 'o/s', readers: ['ref:refs/heads/main'] }] }, { gh });
+    expect(two.template.Resources.IngestFunction.Properties.Environment.Variables.NAME_HASHES)
+      .toBe(`k1=${[sha256('o'), sha256('r')].sort().join(':')},k2=${[sha256('o'), sha256('s')].sort().join(':')}`);
+  });
+  it("refuses a register whose environment would pass Lambda's 4 KB", () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ key: `k${i}`, repository: `owner${i}/name${i}-and-more-words`, readers: ['ref:refs/heads/main'] }));
+    const lots = fakeGh(Object.fromEntries(many.map((e) => [e.repository, {}])));
+    expect(() => render({ ...register, repositories: many }, { gh: lots })).toThrow(/environment would be \d+ bytes for 20 repositories, past Lambda's 4096/);
+    expect(() => render({ ...register, repositories: many.slice(0, 5) }, { gh: lots })).not.toThrow();
   });
 });
 
