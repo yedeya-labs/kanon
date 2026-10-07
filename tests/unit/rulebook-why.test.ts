@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 //
 // What this can decide by reading, and so what it fails on:
 // - a link to an issue, a pull request, a commit or a file on GitHub (`github.com/o/r/issues/n`);
-// - a bare issue reference (`#233`);
+// - a bare issue reference (`#233`), or the reference adopter's (`RA-936`, #345);
 // - a path into the repository's own tests, workflows, scripts, CLI or infrastructure
 //   (`tests/…`, `.github/…`, `scripts/…`, `cli/…`, `infra/…`), or into `docs/` other than the
 //   three places a Why may cite. `actions/` is left out on purpose: an action's README is a
@@ -19,9 +19,15 @@ import { describe, expect, it } from 'vitest';
 // layout every adopter has; and the word "Kanon", since a Why about the framework has to
 // name it. Whether Kanon is named as the framework or as the place an incident happened
 // can't be told by reading, so that is left to the Reviewer.
+//
+// A Why is every paragraph a rule opens with a bold label starting "Why": `**Why.**`, and a
+// further labelled one such as `**Why the default branch, not the base.**` (#345). Each runs to
+// the next bold-labelled paragraph or heading, so a rule's `**Not covered.**` or `**Enforced
+// by.**` is not read as part of it.
 
 const ISSUE_OR_FILE_LINK = /github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull|commit|blob|tree)\//;
 const BARE_ISSUE = /(?<![\w&/])#\d+\b/;
+const ADOPTER_ISSUE = /\bRA-\d+\b/;
 const OWN_PATH = /(?<![\w-])(?:\.github|tests|scripts|cli|infra)\/[\w./-]+|(?<![\w-])docs\/(?!decisions\/|plans\/|qa\/)[\w./-]+/;
 
 /** The reasons a Why's text names the project's issues or files, one per kind found. */
@@ -29,19 +35,20 @@ const projectReferences = (why: string): string[] =>
   ([
     ['links an issue, pull request, commit or file', ISSUE_OR_FILE_LINK],
     ['cites a bare issue number', BARE_ISSUE],
+    ["cites the reference adopter's issue", ADOPTER_ISSUE],
     ["names one of the repository's own files", OWN_PATH],
   ] as const).flatMap(([what, re]) => {
     const m = re.exec(why);
     return m ? [`${what}: ${m[0]}`] : [];
   });
 
-/** Each **Why.** in a chapter, from its line to the next **Enforced by.**, **Class.** or heading. */
+/** Each Why in a chapter, `**Why.**` or a labelled `**Why …**`, from its line to the next bold label or heading. */
 const whysOf = (text: string): { line: number; why: string }[] => {
   const lines = text.split('\n');
   return lines.flatMap((l, i) => {
-    if (!l.startsWith('**Why.**')) return [];
+    if (!/^\*\*Why\b/.test(l)) return [];
     let end = i + 1;
-    while (end < lines.length && !/^\*\*(?:Enforced by|Class)\.\*\*|^#/.test(lines[end] ?? '')) end++;
+    while (end < lines.length && !/^\*\*[^*]+\*\*|^#/.test(lines[end] ?? '')) end++;
     return [{ line: i + 1, why: lines.slice(i, end).join('\n') }];
   });
 };
@@ -58,6 +65,7 @@ describe('#249 the guard fails a Why that names the project\'s issues or files',
     '**Why.** As [the runbook](../docs/runbook.md) records.',
     '**Why.** The CLI `cli/apps.mjs` read it wrong.',
     '**Why.** See `infra/telemetry/collector.mjs`.',
+    '**Why.** The reference adopter decided this in RA-936.',
   ];
   it.each(MUST_FAIL)('%s', (why) => {
     expect(projectReferences(why)).not.toEqual([]);
@@ -73,6 +81,24 @@ describe('#249 the guard fails a Why that names the project\'s issues or files',
   ];
   it.each(MUST_PASS)('allows %s', (why) => {
     expect(projectReferences(why)).toEqual([]);
+  });
+
+  it('reads a labelled Why, and stops each Why at the next bold label', () => {
+    const text = [
+      '### `K-X-1` T', '', '**Rule.** r', '',
+      '**Why the default.** decided in RA-936', '',
+      '**Not covered.** see (#47)', '',
+      '**Why.** one', '', '**Why it widens.** two (#7)', '', '**Enforced by.** e',
+    ].join('\n');
+    expect(whysOf(text)).toEqual([
+      { line: 5, why: '**Why the default.** decided in RA-936\n' },
+      { line: 9, why: '**Why.** one\n' },
+      { line: 11, why: '**Why it widens.** two (#7)\n' },
+    ]);
+    expect(whysOf(text).flatMap(({ why }) => projectReferences(why))).toEqual([
+      "cites the reference adopter's issue: RA-936",
+      'cites a bare issue number: #7',
+    ]);
   });
 
   it('reads a Why up to the next Enforced by, Class or heading, across paragraphs', () => {
