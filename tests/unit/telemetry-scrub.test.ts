@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { KANON_PATH, RULE_NAMES, SCRUB_VERSION, nameContext, redact, verify } from '../../actions/agent-telemetry/scrub.mjs';
-import { sha256 } from '../../.github/scripts/public-words.mjs';
+import { sha256 } from '../../actions/agent-telemetry/public-words.mjs';
 
 /**
  * Plan 0006 step F1: the scrub (§4.2), its two halves and its eight rules. Every name below is

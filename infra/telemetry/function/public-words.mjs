@@ -1,1 +1,1 @@
-../../../.github/scripts/public-words.mjs
+../../../actions/agent-telemetry/public-words.mjs

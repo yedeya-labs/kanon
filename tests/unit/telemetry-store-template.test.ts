@@ -109,7 +109,7 @@ describe('the code that is packaged (§5)', () => {
     expect(realpathSync(join(FUNCTION_DIR, 'schema.mjs'))).toBe(realpathSync('actions/agent-telemetry/schema.mjs'));
   });
   it('its scrub and the scrub\'s word check ARE the lanes\' files, linked like the schema (plan 0006 §4.2)', () => {
-    for (const [f, real] of [['scrub.mjs', 'actions/agent-telemetry/scrub.mjs'], ['public-words.mjs', '.github/scripts/public-words.mjs']] as const) {
+    for (const [f, real] of [['scrub.mjs', 'actions/agent-telemetry/scrub.mjs'], ['public-words.mjs', 'actions/agent-telemetry/public-words.mjs']] as const) {
       expect(lstatSync(join(FUNCTION_DIR, f)).isSymbolicLink(), f).toBe(true);
       expect(realpathSync(join(FUNCTION_DIR, f)), f).toBe(realpathSync(real));
     }

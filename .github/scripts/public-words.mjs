@@ -1,72 +1,21 @@
-// The reference adopter's names, kept out of Kanon's public history without spelling them
-// out: a guard that listed them would publish them. Kanon was extracted from a private
-// reference adopter, and the list of names is kept in the private extraction repository.
-// Each entry is the SHA-256 of one forbidden word, in lowercase.
+// The PR-text check's entry point (#239): .github/workflows/public-text.yml runs this file to hash
+// every word of a pull request's title and body against the reference adopter's names. The list
+// and the check live in `actions/agent-telemetry/public-words.mjs`, which the telemetry scrub
+// also reads (plan 0006 §4.2); this file re-exports them, so every earlier reader of this path
+// keeps working. The workflow sparse-checks out both directories.
 //
-// Two guards read this list. tests/unit/public-tree.test.ts hashes every word of every
-// tracked file. This script, run by .github/workflows/public-text.yml, hashes every word
-// of a pull request's title and body (#239). The repository squash-merges with the PR's
-// title and body as the commit message, so a name in either would reach main's history
-// through the commit even when no tracked file holds it, and only a force-push could take
-// it out.
-//
-// The script never prints the word it found, only where it found it: a public run's log
-// would publish it just as the file would.
-import { createHash } from 'node:crypto';
+// It never prints the word it found, only where it found it: a public run's log would publish
+// it just as the file would.
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export const FORBIDDEN_WORD_HASHES = new Set([
-  'eb6d4cb1d4d4fd087a92bd52a7c778fbcc46dc621ba6344f6fd93e047acdcc33',
-  '158385f3d76e7655f02bd15674a48626946ece7464201dbc4400e73209880c7e',
-  '898bf036643470de81f5b53327142a6aa333296219b9af8c09b652bc12011c88',
-]);
+import { check } from '../../actions/agent-telemetry/public-words.mjs';
 
-/** @param {string} word */
-export const sha256 = (word) => createHash('sha256').update(word).digest('hex');
-
-/**
- * Whether the text holds a forbidden word: each lowercased run of `[a-z0-9]` is hashed and
- * looked up, so a name inside punctuation, a URL or a path is still one word.
- * @param {string} text
- * @param {Set<string>} [hashes]
- */
-export const namesForbiddenWord = (text, hashes = FORBIDDEN_WORD_HASHES) =>
-  (text.toLowerCase().match(/[a-z0-9]+/g) ?? []).some((w) => hashes.has(sha256(w)));
-
-/**
- * The parts of a pull request's text that hold a forbidden word, by name.
- * @param {{ title?: string, body?: string }} pr
- * @param {Set<string>} [hashes]
- * @returns {string[]}
- */
-export const forbiddenParts = ({ title = '', body = '' }, hashes = FORBIDDEN_WORD_HASHES) =>
-  [['the title', title], ['the body', body]].filter(([, text]) => namesForbiddenWord(text ?? '', hashes)).map(([part]) => part ?? '');
-
-/** @param {string[]} parts */
-export const advice = (parts) => [
-  `The pull request's ${parts.join(' and ')} name${parts.length === 1 ? 's' : ''} the reference adopter.`,
-  'This repository squash-merges with the title and body as the commit message, so the name would enter main\'s history.',
-  'Edit it out, which re-runs this check. GitHub keeps every earlier revision of a description in its edit history,',
-  'readable by anyone: open the "edited" menu on the description and delete each revision that holds the name.',
-].join('\n');
-
-/**
- * The check itself: the exit code and what to print, for a PR's title and body as the
- * workflow passes them in the environment.
- * @param {Record<string, string | undefined>} env
- * @param {Set<string>} [hashes]
- * @returns {{ code: number, message: string }}
- */
-export const check = (env, hashes = FORBIDDEN_WORD_HASHES) => {
-  const parts = forbiddenParts({ title: env.PR_TITLE ?? '', body: env.PR_BODY ?? '' }, hashes);
-  return parts.length
-    ? { code: 1, message: `::error title=The reference adopter is named::${advice(parts).replaceAll('\n', '%0A')}` }
-    : { code: 0, message: 'Neither the title nor the body names the reference adopter.' };
-};
+export * from '../../actions/agent-telemetry/public-words.mjs';
 
 // Inline rather than `scripts/lib/cli-entry.mjs`'s `isCliEntry`: `public-text.yml` sparse-checks
-// out only `.github/scripts`, so that import would not exist at run time (kanon#191).
+// out only `.github/scripts` and `actions/agent-telemetry`, so that import would not exist at run
+// time (kanon#191).
 const IS_CLI = (() => {
   try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? '')).href; } catch { return false; }
 })();

@@ -26,6 +26,8 @@
 // FILES. ONE MODULE, beside the schema and linked into the ingest function's directory with it
 // (`infra/telemetry/function/scrub.mjs`), like `public-words.mjs`, whose `namesForbiddenWord` the
 // `name` rule is: so it imports only `node:` built-ins and its own directory's files (`K-SELF-8`).
+// Both are real files here, never links: the `kanon` CLI loads them at startup through the
+// schema, and npm drops links when it installs the CLI from GitHub (`tests/unit/cli-install.test.ts`).
 // The adopter key is not this module's: intake and the #41 job check a row with `assertNoKey`
 // (`infra/telemetry/function/aggregate.mjs`) against the keys they hold; the lane holds none, which
 // is why the `key` rule refuses a key's SHAPE.

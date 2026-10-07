@@ -11,8 +11,8 @@ import { describe, expect, it, vi } from 'vitest';
 const STAND_IN = 'zorblaxquint';
 const hashOf = (w: string) => createHash('sha256').update(w).digest('hex');
 
-vi.mock('../../.github/scripts/public-words.mjs', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../../.github/scripts/public-words.mjs')>();
+vi.mock('../../actions/agent-telemetry/public-words.mjs', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../actions/agent-telemetry/public-words.mjs')>();
   const stand = new Set([hashOf(STAND_IN)]);
   return { ...original, FORBIDDEN_WORD_HASHES: stand, namesForbiddenWord: (text: string, hashes: Set<string> = stand) => original.namesForbiddenWord(text, hashes) };
 });
