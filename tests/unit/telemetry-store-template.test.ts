@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 import { FUNCTION_DIR, registerProblems, render, TEMPLATE_PATH } from '../../infra/telemetry/render.mjs';
+import { PROJECTION } from '../../infra/telemetry/function/aggregate.mjs';
 
 /**
  * Plan 0002 step S3: the store's CloudFormation template, as rendered from the example
@@ -67,8 +68,8 @@ describe('the table (§5, §10, K-OBS-17)', () => {
 
 describe('the ingest function and its URL (§4)', () => {
   const fn = R.IngestFunction!.Properties;
-  it('the URL is IAM-authenticated, and is the only one', () => {
-    expect(byType('AWS::Lambda::Url').map(([, r]) => r.Properties.AuthType)).toEqual(['AWS_IAM']);
+  it('the URLs are IAM-authenticated, and there are two: the ingest URL and the aggregate URL', () => {
+    expect(byType('AWS::Lambda::Url').map(([name, r]) => [name, r.Properties.AuthType])).toEqual([['IngestUrl', 'AWS_IAM'], ['AggregateUrl', 'AWS_IAM']]);
   });
   it('no permission is public, and each is held to IAM auth', () => {
     for (const [, p] of byType('AWS::Lambda::Permission')) {
@@ -204,6 +205,55 @@ describe('the roles (§3, §6, §7)', () => {
   });
 });
 
+describe('the aggregate-only function (§6.1, decided by the Owner 2026-10-07)', () => {
+  const fn = R.AggregateFunction!.Properties;
+  const role = R.AggregateRole!.Properties;
+  const invoker = R[`AggregateInvokerRole${id}`]!.Properties;
+  it('runs the aggregate module from the same package as the ingest function', () => {
+    expect(fn.Handler).toBe('aggregate.handler');
+    expect(fn.Code).toBe(FUNCTION_DIR);
+    expect(fn.VpcConfig).toBeUndefined();
+    expect(fn.Role).toEqual({ 'Fn::GetAtt': ['AggregateRole', 'Arn'] });
+    expect(R.AggregateLogGroup!.Properties.RetentionInDays).toBe(30);
+  });
+  it('its role may Query only with exactly the aggregate projection and Select named, and log; nothing else', () => {
+    const [q, logs, ...rest] = statements(role.Policies[0].PolicyDocument);
+    expect(rest).toEqual([]);
+    expect(q.Action).toBe('dynamodb:Query');
+    expect([...q.Condition['ForAllValues:StringEquals']['dynamodb:Attributes']].sort()).toEqual([...PROJECTION, 'sk'].sort());
+    expect(q.Condition.StringEquals).toEqual({ 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' });
+    expect(Object.keys(q.Condition).sort()).toEqual(['ForAllValues:StringEquals', 'StringEquals']);
+    expect([...logs.Action].sort()).toEqual(['logs:CreateLogStream', 'logs:PutLogEvents']);
+    expect(statements(role.AssumeRolePolicyDocument)).toEqual([{ Effect: 'Allow', Principal: { Service: 'lambda.amazonaws.com' }, Action: 'sts:AssumeRole' }]);
+  });
+  it('is told every key, the declared own-figure labels and the invoker keys, from the register', () => {
+    expect(fn.Environment.Variables).toMatchObject({ AGGREGATE_KEYS: key, OWN_FIGURES: `${key}=kanon`, INVOKER_KEYS: key });
+    const quiet = render({ ...register, repositories: [{ key: 'k1', repository: 'o/r', readers: ['ref:refs/heads/main'] }] }, { gh }).template;
+    expect(quiet.Resources.AggregateFunction.Properties.Environment.Variables).toMatchObject({ AGGREGATE_KEYS: 'k1', OWN_FIGURES: '', INVOKER_KEYS: '' });
+    expect(Object.keys(quiet.Resources).filter((n) => n.startsWith('AggregateInvoker') || n.startsWith('AggregateUrlPermission'))).toEqual([]);
+  });
+  it('an invoker role trusts only its repository\'s default-branch ref, and may only call the aggregate URL', () => {
+    expect(invoker.RoleName).toBe(`kanon-telemetry-${key}-aggregates`);
+    const trust = statements(invoker.AssumeRolePolicyDocument);
+    expect(trust).toHaveLength(1);
+    expect(trust[0].Condition.StringEquals['token.actions.githubusercontent.com:sub']).toBe(`repo:${repo}:ref:refs/heads/main`);
+    const s = statements(invoker.Policies[0].PolicyDocument);
+    expect(s.map((x) => x.Action)).toEqual(['lambda:InvokeFunctionUrl', 'lambda:InvokeFunction']);
+    expect(s[1].Condition).toEqual({ Bool: { 'lambda:InvokedViaFunctionUrl': 'true' } });
+    expect(s.every((x) => x.Resource['Fn::GetAtt'][0] === 'AggregateFunction')).toBe(true);
+    expect(R[`AggregateUrlPermission${id}`]!.Properties).toEqual({
+      FunctionName: { Ref: 'AggregateFunction' }, Action: 'lambda:InvokeFunctionUrl',
+      Principal: { 'Fn::GetAtt': [`AggregateInvokerRole${id}`, 'Arn'] }, FunctionUrlAuthType: 'AWS_IAM',
+    });
+  });
+  it('no writer or reader may call the aggregate URL, and no invoker the ingest URL', () => {
+    for (const [, p] of byType('AWS::Lambda::Permission')) {
+      const principal = p.Properties.Principal['Fn::GetAtt'][0] as string;
+      expect(p.Properties.FunctionName.Ref).toBe(principal.startsWith('AggregateInvokerRole') ? 'AggregateFunction' : 'IngestFunction');
+    }
+  });
+});
+
 describe('the region and the cost (§5, §9)', () => {
   it('the template refuses any region but eu-central-1', () => {
     expect(template.Rules.Frankfurt.Assertions[0].Assert).toEqual({ 'Fn::Equals': [{ Ref: 'AWS::Region' }, 'eu-central-1'] });
@@ -252,6 +302,18 @@ describe('the register (§5)', () => {
     expect(registerProblems({ ...register, repositories: [dup, { ...dup, key: 'k2' }] })).not.toEqual([]);
     expect(registerProblems({ ...register, repositories: [{ ...dup, key: 'k-1' }, { ...dup, key: 'k1', repository: 'o/s' }] })).not.toEqual([]);
     expect(registerProblems({ ...register, owner_principal_arn: 'arn:aws:iam::*:role/x' })).not.toEqual([]);
+    // §6.1: a label for an adopter's own figures is a label, never a key, and unique; the
+    // invoker flag is a boolean.
+    expect(one({ publish_own_figures_as: 'kanon' })).toEqual([]);
+    expect(one({ publish_own_figures_as: 'k1' })).toEqual(['repositories[0].publish_own_figures_as is a key']);
+    expect(one({ publish_own_figures_as: 'Kanon!' })).toEqual(['repositories[0].publish_own_figures_as is not a label']);
+    expect(one({ publish_own_figures_as: true })).toEqual(['repositories[0].publish_own_figures_as is not a label']);
+    expect(registerProblems({ ...register, repositories: [{ ...dup, publish_own_figures_as: 'x' }, { ...dup, key: 'k2', repository: 'o/s', publish_own_figures_as: 'x' }] }))
+      .toEqual(['repositories[1].publish_own_figures_as duplicates another label']);
+    expect(registerProblems({ ...register, repositories: [{ ...dup, publish_own_figures_as: 'k2' }, { ...dup, key: 'k2', repository: 'o/s' }] }))
+      .toEqual(['repositories[0].publish_own_figures_as is a key']);
+    expect(one({ aggregate_invoker: true })).toEqual([]);
+    expect(one({ aggregate_invoker: 'yes' })).toEqual(['repositories[0].aggregate_invoker is not true or false']);
     expect(() => render({ ...register, repositories: [] }, { gh })).toThrow(/register/);
   });
 

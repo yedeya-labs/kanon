@@ -47,7 +47,8 @@ const READER = /^ref:refs\/heads\/[A-Za-z0-9._/-]+$/;
 
 /**
  * @typedef {{ minutes: number, review_recorded_at: string }} FirstReview
- * @typedef {{ key: string, repository: string, readers?: string[], writer_subjects?: string[], reader_subjects?: string[], first_review?: FirstReview }} Entry
+ * @typedef {{ key: string, repository: string, readers?: string[], writer_subjects?: string[], reader_subjects?: string[], first_review?: FirstReview,
+ *   publish_own_figures_as?: string, aggregate_invoker?: boolean }} Entry
  * @typedef {{ writer: string[], readers: string[] }} Subjects
  * @typedef {{ owner_principal_arn: string, create_oidc_provider?: boolean, reserved_concurrency?: number, repositories: Entry[] }} Register
  */
@@ -80,6 +81,8 @@ export function registerProblems(register, now = Date.now()) {
   if (!Array.isArray(repos) || repos.length === 0) return [...out, 'repositories is empty'];
   const ids = new Set();
   const names = new Set();
+  const keys = new Set(repos.map((r) => r?.key));
+  const labels = new Set();
   repos.forEach((r, i) => {
     const at = `repositories[${i}]`;
     if (typeof r?.key !== 'string' || !KEY.test(r.key)) out.push(`${at}.key is not a key`);
@@ -108,6 +111,16 @@ export function registerProblems(register, now = Date.now()) {
         out.push(`${at}.first_review is past its ${RETENTION_MONTHS} months (decision 18): remove it`);
       }
     }
+    // §6.1: an adopter's own figures are published only if it declares so, under a label it
+    // chooses. Off by default; never a key, so the label can't name one.
+    const label = r?.publish_own_figures_as;
+    if (label !== undefined) {
+      if (typeof label !== 'string' || !KEY.test(label)) out.push(`${at}.publish_own_figures_as is not a label`);
+      else if (keys.has(label)) out.push(`${at}.publish_own_figures_as is a key`);
+      else if (labels.has(label)) out.push(`${at}.publish_own_figures_as duplicates another label`);
+      else labels.add(label);
+    }
+    if (r?.aggregate_invoker !== undefined && typeof r.aggregate_invoker !== 'boolean') out.push(`${at}.aggregate_invoker is not true or false`);
     for (const field of ['writer_subjects', 'reader_subjects']) {
       const v = r?.[field];
       if (v !== undefined && (!Array.isArray(v) || v.length === 0 || !v.every((/** @type {unknown} */ s) => typeof s === 'string'))) {
@@ -241,6 +254,39 @@ export function repositoryResources(entry, invokePolicy, subjects) {
 }
 
 /**
+ * For an entry that sets `aggregate_invoker` (§6.1): a role its default-branch jobs assume to call
+ * the aggregate-only function's URL, and nothing else, and the URL's permission for that role.
+ * It trusts the writer's subjects, the default branch's ref, never a reader's other branches.
+ * @param {Entry} entry
+ * @param {object} invokePolicy the importer's policy document, aimed here at the aggregate function
+ * @param {Subjects} subjects from `entrySubjects`
+ */
+export function invokerResources(entry, invokePolicy, subjects) {
+  if (entry.aggregate_invoker !== true) return {};
+  const id = logicalId(entry.key);
+  const policy = JSON.parse(JSON.stringify(invokePolicy).replaceAll('"IngestFunction"', '"AggregateFunction"'));
+  return {
+    [`AggregateInvokerRole${id}`]: {
+      Type: 'AWS::IAM::Role',
+      Properties: {
+        RoleName: `kanon-telemetry-${entry.key}-aggregates`,
+        AssumeRolePolicyDocument: { Version: '2012-10-17', Statement: [oidcTrust(subjects.writer)] },
+        Policies: [{ PolicyName: 'invoke-aggregate-url', PolicyDocument: policy }],
+      },
+    },
+    [`AggregateUrlPermission${id}`]: {
+      Type: 'AWS::Lambda::Permission',
+      Properties: {
+        FunctionName: { Ref: 'AggregateFunction' },
+        Action: 'lambda:InvokeFunctionUrl',
+        Principal: { 'Fn::GetAtt': [`AggregateInvokerRole${id}`, 'Arn'] },
+        FunctionUrlAuthType: 'AWS_IAM',
+      },
+    },
+  };
+}
+
+/**
  * The deployable template and its parameter overrides.
  * @param {Register} register
  * @param {{ verify?: boolean, importer?: boolean, backfill?: boolean, templateText?: string, functionDir?: string, gh?: (args: string[]) => string, now?: number }} [opts]
@@ -267,10 +313,18 @@ export function render(register, opts = {}) {
   fn.Environment.Variables.WRITER_KEYS = register.repositories.map((r) => r.key).join(',');
   const invokePolicy = template.Resources.ImporterRole.Properties.Policies[0].PolicyDocument;
   for (const entry of register.repositories) Object.assign(template.Resources, repositoryResources(entry, invokePolicy, /** @type {Subjects} */ (subjects[entry.key])));
+  const agg = template.Resources.AggregateFunction.Properties;
+  agg.Code = fn.Code;
+  agg.Environment.Variables.AGGREGATE_KEYS = fn.Environment.Variables.WRITER_KEYS;
+  agg.Environment.Variables.OWN_FIGURES = register.repositories.filter((r) => r.publish_own_figures_as !== undefined)
+    .map((r) => `${r.key}=${r.publish_own_figures_as}`).join(',');
+  agg.Environment.Variables.INVOKER_KEYS = register.repositories.filter((r) => r.aggregate_invoker === true).map((r) => r.key).join(',');
+  for (const entry of register.repositories) Object.assign(template.Resources, invokerResources(entry, invokePolicy, /** @type {Subjects} */ (subjects[entry.key])));
   for (const entry of register.repositories) {
     const id = logicalId(entry.key);
     template.Outputs[`WriterRole${id}`] = { Value: { 'Fn::GetAtt': [`WriterRole${id}`, 'Arn'] } };
     template.Outputs[`ReaderRole${id}`] = { Value: { 'Fn::GetAtt': [`ReaderRole${id}`, 'Arn'] } };
+    if (entry.aggregate_invoker === true) template.Outputs[`AggregateInvokerRole${id}`] = { Value: { 'Fn::GetAtt': [`AggregateInvokerRole${id}`, 'Arn'] } };
   }
   const parameters = [
     `OwnerPrincipalArn=${register.owner_principal_arn}`,
@@ -298,9 +352,15 @@ if (isCliEntry(import.meta.url)) {
     process.exit(2);
   }
   try {
-    const { template, parameters, subjects } = render(JSON.parse(readFileSync(values.register, 'utf8')), values);
+    /** @type {Register} */
+    const register = JSON.parse(readFileSync(values.register, 'utf8'));
+    const { template, parameters, subjects } = render(register, values);
     // The Owner checks these before deploying: each is what that repository's tokens carry.
     for (const [key, s] of Object.entries(subjects)) console.log(`${key}: writer trusts ${s.writer.join(', ')}; reader trusts ${s.readers.join(', ')}`);
+    for (const e of register.repositories) {
+      if (e.aggregate_invoker === true) console.log(`${e.key}: aggregate invoker trusts ${subjects[e.key]?.writer.join(', ')}`);
+      if (e.publish_own_figures_as !== undefined) console.log(`${e.key}: own figures publishable as ${e.publish_own_figures_as}`);
+    }
     mkdirSync(values.out, { recursive: true });
     writeFileSync(join(values.out, 'template.json'), `${JSON.stringify(template, null, 2)}\n`);
     writeFileSync(join(values.out, 'parameters.json'), `${JSON.stringify(parameters, null, 2)}\n`);

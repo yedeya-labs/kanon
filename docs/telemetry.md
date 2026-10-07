@@ -4,11 +4,12 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 
 | File | What it is |
 |---|---|
-| `template.yaml` | The CloudFormation template: the table, the ingest function and its URL, its log group, the GitHub OIDC provider, and the importer and backfill roles. |
+| `template.yaml` | The CloudFormation template: the table, the ingest function and its URL, the aggregate function and its URL, their log groups, the GitHub OIDC provider, and the importer and backfill roles. |
 | `render.mjs` | Adds each registered repository's writer and reader roles to the template, from the private register and GitHub's API. |
-| `function/` | The ingest function. `schema.mjs` there is a link to [`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), so the function validates with the same file the lanes use. |
+| `function/` | The ingest function (`index.mjs`) and the aggregate function (`aggregate.mjs`), one package with two handlers. `schema.mjs` there is a link to [`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), so the function validates with the same file the lanes use. |
 | `verify.mjs` | Step S3's checks, run against the deployed store. |
 | `erase.mjs` | Deletes one adopter's rows (§10). |
+| `aggregate.mjs` | The aggregate (§6, §6.1), run by you: what the aggregate function answers, plus the totals only you see. |
 | `import.mjs` | The reference adopter's history import (§7, S5): its transform, dry run and send. |
 | `register.example.json` | The register's shape, naming only Kanon. |
 
@@ -27,9 +28,12 @@ Every AWS command here is the Owner's to run. Agents run none (§5).
 
   It takes up to 25 rows a request and 256 KB, and answers per row: 200 when every row is stored, 422 when any is rejected, and 502 when a write fails.
 - **Its log group:** 30-day retention. It holds keys and field names, never a value.
+- **The aggregate function, `kanon-telemetry-aggregate`** (plan 0002 §6.1, decided by the Owner on 2026-10-07): Node 24, 256 MB, no VPC, the same package as the ingest function. Its URL has `AuthType: AWS_IAM`. A `GET` answers only what may be published ([The aggregate function](#the-aggregate-function)). Its role may `Query` the table and nothing else, and only with exactly the aggregate's projection: `dynamodb:Attributes` lists those attributes, and `dynamodb:Select` must be `SPECIFIC_ATTRIBUTES`, so a request for whole items is refused. Its log group keeps counts only, 30 days.
 - **Per registered repository** (from `render.mjs`):
   - `kanon-telemetry-<key>-writer`, trusted only for the repository's default-branch ref, `<prefix>:ref:refs/heads/<default branch>`, which may invoke the URL and nothing else;
   - `kanon-telemetry-<key>-reader`, trusted for the branch refs the register lists, under the same prefix, which may `Query` and `GetItem` only where `dynamodb:LeadingKeys` matches `<key>#*`.
+
+  - for an entry that sets `"aggregate_invoker": true`, `kanon-telemetry-<key>-aggregates`, trusted only for the default-branch ref, like the writer, which may call the aggregate function's URL and nothing else.
 
   No role trusts a GitHub Environment (the Owner's decision of 2026-10-05). `<prefix>` is what the repository's tokens carry, and `render.mjs` reads it from GitHub's API, with the default branch, every time it runs ([Who can write](#who-can-write)).
 - **Behind parameters, all off by default:**
@@ -94,7 +98,7 @@ aws cloudformation describe-stacks --profile kanon --region eu-central-1 \
 
 Before packaging, read the subjects `render.mjs` printed: each writer's must be `<prefix>:ref:refs/heads/<default branch>`, where the prefix is `repo:<owner>/<repo>` for a repository created before 2026-07-15 and `repo:<owner>@<id>/<repo>@<id>` for one created after. It refuses to render when GitHub doesn't answer for a repository, when a repository customizes its subject template and its entry names no exact subjects, and when an exact subject fails the checks below.
 
-The outputs name the URL and each repository's two roles.
+The outputs name the ingest URL and each repository's two roles, and the aggregate function's URL and each invoker role ([The aggregate function](#the-aggregate-function)).
 
 **If the first deploy fails,** the stack rolls back, but the table stays, because it is retained. The next deploy then fails because `kanon-telemetry` already exists. While the table holds no rows, delete the stack, then turn off the table's deletion protection, delete the table, and deploy again.
 
@@ -134,6 +138,10 @@ An adopter opts in when it installs Kanon: `kanon init --telemetry`, or a yes to
    ```
 
    `readers` lists the branch refs the adopter's reading jobs run on, usually just the default branch (§3, §6). An environment is refused, and so are a pattern and a repository already in the register. The writer's subject is not listed: `render.mjs` derives it.
+
+   Two optional fields, both off by default, are the adopter's to ask for (§6.1):
+   - `"publish_own_figures_as": "<label>"`: the adopter declares its **own** figures publishable, under that label. The aggregate then answers its own lane-and-model figures, labelled as its own and never with its key. The label must match the key's pattern, must not be any key, and must be unique. Without it, the adopter's rows reach the public only in cells with at least three adopters, and in failure signals as one of the adopters affected.
+   - `"aggregate_invoker": true`: creates `kanon-telemetry-<key>-aggregates`, the role a default-branch job of that repository assumes to call the aggregate function. Kanon's own entry sets it for the Explorer's lane.
 
    **A repository with a custom OIDC subject template** (`use_default: false`) is refused, because its subject is not `<prefix>:ref:refs/heads/<branch>`. Name its subjects exactly instead, as GitHub issues them:
 
@@ -243,6 +251,69 @@ Plan 0002 §10. Deletion is immediate in the table, and complete in backups with
    ```
 
 
+## The aggregate function
+
+Plan 0002 §6 and §6.1, as the Owner decided on 2026-10-07 (#443). From `tag = run` run rows only, never a row past its `expires_at`, it answers:
+
+```json
+{
+  "computed_at": "2026-10-07T12:00:00.000Z",
+  "min_adopters": 3,
+  "signal_days": 7,
+  "cross_adopter": [{ "lane": "review", "model": "…", "runs": 0, "median_cost_usd": 0, "p90_cost_usd": 0 }],
+  "own": [{ "label": "kanon", "cells": [{ "lane": "review", "model": "…", "runs": 0, "median_cost_usd": 0, "p90_cost_usd": 0 }] }],
+  "signals": [{ "lane": "review", "reason": "did_not_finish", "failed_stage": "agent", "kanon_error": null, "kanon_version": "0.32.0", "adopters_affected": 1 }]
+}
+```
+
+- **`cross_adopter`:** one cell per lane and model: the run count, and the median and 90th-percentile cost per run (nearest rank, so always a cost some run had). **A cell is answered only when at least three distinct adopters contribute to it** (decision 7). A run with no model or no cost is in no cell.
+- **`own`:** for each adopter whose entry sets `publish_own_figures_as`, the same cells from its rows alone, under its label. They are that adopter's figures, not cross-adopter ones.
+- **`signals`:** the last 7 days' runs that did not end `ok`, by lane, reason, failed stage, Kanon error and Kanon version, with how many adopters each affected. No cost and no run count.
+
+Nothing names an adopter or carries a key; the function refuses to answer output that holds one. It takes no input, so a caller can't narrow a figure to one adopter, and it answers only a registered invoker role in this account (403 otherwise). A failed read answers 502 and logs only DynamoDB's status.
+
+**You can compute the same thing yourself,** with your role, plus the totals only you see (`notes`: the cells withheld under the threshold, and the runs left out for no model or no cost). The totals cover every adopter, so they never leave you:
+
+```sh
+node infra/telemetry/aggregate.mjs --register "$REG" --profile kanon
+```
+
+It walks `<key>#<lane>` for every key in the register and every lane in the enum, so it needs no scan. Plan 0003's indicators per complexity band, and the time from install to first review, are not in it yet.
+
+### Deploy the aggregate function
+
+The Owner's to run; agents run none. It costs about a cent a month (plan 0002 decision 10's terms, below).
+
+1. **In the register,** on Kanon's entry, add `"publish_own_figures_as": "kanon"` and `"aggregate_invoker": true`. Any other adopter may ask for either, the same way.
+2. **Render, and read what it prints.** Besides each writer and reader, it prints `<key>: aggregate invoker trusts <subject>`, which must be the default-branch ref, like the writer's, and `<key>: own figures publishable as <label>` for each declaring adopter. Check that only the adopters that asked are listed:
+
+   ```sh
+   node infra/telemetry/render.mjs --register "$REG" --out "$OUT"
+   ```
+
+3. **Package and deploy,** exactly as in [Deploy](#deploy). One package holds both functions.
+4. **Read the outputs.** `AggregateUrl` is the function's URL, and `AggregateInvokerRole<id>` the invoker role's ARN; the Explorer's lane takes both, when it is added:
+
+   ```sh
+   aws cloudformation describe-stacks --profile kanon --region eu-central-1 \
+     --stack-name kanon-telemetry --query 'Stacks[0].Outputs'
+   ```
+
+5. **Call it once yourself.** A direct invoke needs `lambda:InvokeFunction` outside the URL, which only your role holds, and the function answers it. Expect `statusCode` 200, and a body with exactly the keys above:
+
+   ```sh
+   aws lambda invoke --profile kanon --region eu-central-1 \
+     --function-name kanon-telemetry-aggregate "$OUT/aggregate-check.json"
+   node -e 'const r=require(process.argv[1]);console.log(r.statusCode, Object.keys(JSON.parse(r.body)))' "$OUT/aggregate-check.json"
+   ```
+
+   A 502 means the read failed: the function's log says `aggregate: failed (Query <status>)`. A 400 there most likely means the role's projection condition refused the request, so compare `dynamodb:Attributes` in the template with `PROJECTION` in `function/aggregate.mjs`.
+6. **Check that no one else can call it.** An unsigned request to the URL gets 403 from Lambda:
+
+   ```sh
+   curl -s -o /dev/null -w '%{http_code}\n' "<AggregateUrl>"
+   ```
+
 ## The importer and the backfill role
 
 These roles are created only for their step and deleted after it (§7). Add `--importer` (S5) or `--backfill` (S7a) to `render.mjs`, package and deploy, and the function accepts that role. Such a caller names the adopter's key as `?key=<key>` on the URL, and the key must be in the register:
@@ -266,9 +337,11 @@ The export holds the adopter's rows, so it stays beside the register, outside th
 
 Plan 0002 §9 estimates about $0.05 a month, under a $1 ceiling watched by the account's budget alert. The template creates nothing outside that estimate:
 - on-demand DynamoDB, with the AWS-owned key;
-- one function with no schedule, no VPC and no NAT;
-- one log group kept 30 days;
+- two functions, ingest and aggregate, with no schedule, no VPC and no NAT;
+- two log groups kept 30 days;
 - IAM roles and the OIDC provider, which are free.
+
+The aggregate function adds about a cent a month (§6.1): a weekly call reads every run row in full, because DynamoDB bills a projected query by the size of the items it reads, which at §9's 52,000 held rows is about 9,000 read units a call. Its compute stays inside the free tier.
 
 The test that parses the template fails if any other resource type appears. The one addition is the artifacts bucket, a few kilobytes, which costs nothing measurable.
 
