@@ -705,10 +705,12 @@ jobs:
       # named `gh` subcommands; every other command falls to Claude Code's read-only set.
       # `git push`/`git fetch` are pinned to `origin`, and the deny rules refuse the program
       # either could be handed for the far end (`--receive-pack`, `--exec`, `--upload-pack`, in
-      # each prefix git accepts, and any quote, backslash or brace the shell would join back
-      # into one), so a local `origin` runs none either (kanon#405, the Owner's decision of
-      # 2026-10-07). A rule spells a backslash as four, which the CLI reads as one; no rule may
-      # hold a comma, on which the action splits the list. `--setting-sources
+      # each prefix git accepts, and any quote, backslash, brace, `$` or glob the shell would
+      # join or expand back into one), so a local `origin` runs none either (kanon#405, the
+      # Owner's decision of 2026-10-07; kanon#460). A rule spells a backslash as four, which the
+      # CLI reads as one, and a literal `*` as `\\*`; a rule holding `$` is single-quoted, or
+      # the action's parse expands it away; no rule may hold a comma, on which the action splits
+      # the list. `--setting-sources
       # user` keeps the project's `.claude/` settings, hooks and MCP servers out (kanon#277).
       # `tests/unit/lead-shell.test.ts` pins both lists. What the lists allow is the CLI's
       # behaviour, so `tests/unit/reviewer-grant-probe.test.ts` is red until the Lead's probe
@@ -728,6 +730,8 @@ jobs:
         --disallowedTools "Bash(git push *--rece*)" "Bash(git push *--e*)" "Bash(git fetch *--upl*)" "Bash(git fetch *--e*)"
         --disallowedTools "Bash(git push *'*)" 'Bash(git push *"*)' 'Bash(git push *\\\\*)' "Bash(git push *{*)"
         --disallowedTools "Bash(git fetch *'*)" 'Bash(git fetch *"*)' 'Bash(git fetch *\\\\*)' "Bash(git fetch *{*)"
+        --disallowedTools 'Bash(git push *$*)' "Bash(git push *?*)" "Bash(git push *[*)" 'Bash(git push *\\**)'
+        --disallowedTools 'Bash(git fetch *$*)' "Bash(git fetch *?*)" "Bash(git fetch *[*)" 'Bash(git fetch *\\**)'
         --allowedTools "Bash(gh pr view:*)" "Bash(gh pr diff:*)" "Bash(gh pr checks:*)" "Bash(gh pr list:*)" "Bash(gh pr create:*)" "Bash(gh pr comment:*)" "Bash(gh pr edit:*)"
         --allowedTools "Bash(gh issue view:*)" "Bash(gh issue list:*)" "Bash(gh issue comment:*)" "Bash(gh label list:*)"
         --allowedTools "Bash(gh run view:*)" "Bash(gh run list:*)" "Bash(gh search:*)" "Bash(gh api:*)"
