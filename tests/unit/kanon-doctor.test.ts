@@ -766,6 +766,28 @@ describe('kanon doctor and the job behind a required check, through a merge queu
   });
 });
 
+// #452 (#79): a merge through a merge queue doesn't start the rebase lane, so doctor notes it,
+// in the catalogue's words, for a lane the repository calls. It blocks nothing.
+describe('kanon doctor and a lane a merge queue changes (#452)', () => {
+  const withRebase = () => ({ ...healthyFiles(), '.github/workflows/agent-rebase.yml': callerFile('agent-rebase', REQ.lanes['agent-rebase']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }) });
+  const noteOf = (r: Result) => (r.json.notes as string[]).filter((n) => n.includes('merges through a merge queue'));
+
+  it('notes a called lane that a merge through the queue does not start, and nothing else changes', async () => {
+    const github = fakeGitHub();
+    github.st.rulesets = [{ id: 7, ...rulesetBody(true) }];
+    const r = await run(checkout(withRebase()), github, ['--json']);
+    expect(noteOf(r)).toEqual([`main merges through a merge queue, and you call agent-rebase. ${REQ.catalogue!.lanes['agent-rebase']!.mergeQueue}`]);
+    expect(r.json.findings.filter((f: { blocking: boolean }) => f.blocking).map((f: { id: string }) => f.id)).not.toContain('ruleset.check-unreported');
+  });
+
+  it('notes nothing without a merge queue, or for a lane the repository does not call', async () => {
+    expect(noteOf(await run(checkout(withRebase()), fakeGitHub(), ['--json']))).toEqual([]);
+    const github = fakeGitHub();
+    github.st.rulesets = [{ id: 7, ...rulesetBody(true) }];
+    expect(noteOf(await run(checkout(healthyFiles()), github, ['--json']))).toEqual([]);
+  });
+});
+
 describe("branchWorkflows: the default branch's workflows, read from GitHub (#418)", () => {
   const read = (reply: Gh) => branchWorkflows({ gh: async () => reply } as unknown as Parameters<typeof branchWorkflows>[0], REPO, 'main');
   const lane = 'on: pull_request\njobs:\n  lanes:\n    name: Lane check\n    runs-on: x\n';

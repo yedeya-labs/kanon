@@ -900,7 +900,8 @@
         "needs": [],
         "cost": "No model; a short job per review, per CI run on the default branch, and hourly.",
         "recommend": [],
-        "when": "Once you have merged the Implementer's approved pull requests by hand for a while, and trust the green zone."
+        "when": "Once you have merged the Implementer's approved pull requests by hand for a while, and trust the green zone.",
+        "mergeQueue": "Through a merge queue, a merge doesn't start its sweep: the queue's push runs CI as `github-merge-queue[bot]`, which the lane's gate turns away, so it sweeps on a review and hourly (#79)."
       },
       "agent-rebase": {
         "name": "Rebase (resolve a conflict)",
@@ -912,7 +913,8 @@
           "agent-implement",
           "agent-triage"
         ],
-        "when": "With implement or triage, whose pull requests otherwise wait for a person when they conflict: a person's rebase takes one out of the Implementer's chain, so the revise lane refuses it."
+        "when": "With implement or triage, whose pull requests otherwise wait for a person when they conflict: a person's rebase takes one out of the Implementer's chain, so the revise lane refuses it.",
+        "mergeQueue": "Through a merge queue, a merge doesn't start it: the queue's push runs CI as `github-merge-queue[bot]`, which the lane's gate turns away, so it runs at its daily slot or when dispatched for a pull request (#79)."
       },
       "agent-dispatch-sweep": {
         "name": "Dispatch sweep",

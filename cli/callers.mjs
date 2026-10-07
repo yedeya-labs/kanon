@@ -26,7 +26,7 @@ import { URL } from 'node:url';
  *   declarations?: Record<string, { baseline: boolean, requiredSections: string[] }>,
  *   release?: { dcoExemptsReleaser?: boolean }, catalogue?: Catalogue,
  *   telemetry?: { collector: string, variables: string[] } }} Requirements
- * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, recommend: 'always' | string[], when: string }} CatalogueEntry
+ * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, recommend: 'always' | string[], when: string, mergeQueue?: string }} CatalogueEntry
  * @typedef {{ groups: Array<{ id: string, title: string, header: string }>, lanes: Record<string, CatalogueEntry> }} Catalogue
  */
 

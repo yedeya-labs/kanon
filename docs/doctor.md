@@ -178,7 +178,7 @@ The same in both outputs.
 | `waived` | array | Each finding the adoption record waives, in the same order: it doesn't count toward the exit code. |
 | `idTokenHolders` | array | Every job of the checkout's workflows that holds `id-token: write`. |
 | `unchecked` | array | Each check that could not run: `check`, `subject` and `reason`. |
-| `notes` | array | Strings: defaults taken and facts that block nothing. |
+| `notes` | array | Strings: defaults taken and facts that block nothing, such as a lane you call that a merge through the default branch's merge queue doesn't start, in its catalogue entry's words ([#452](https://github.com/yedeya-labs/kanon/issues/452)). |
 
 When it can't run, or on a usage error with `--json`, the document is `{ "schema", "kanon", "status": "error", "exitCode", "error" }`, with the exit code 2 or 3 and `error` saying why.
 

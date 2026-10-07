@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { TRIGGERS } from '../../cli/callers.mjs';
 import { buildRequirements, laneFiles } from './helpers/requirements.js';
 
 /**
@@ -76,7 +77,7 @@ describe('requirements.json', () => {
   // built from it, so a lane without an entry would be installed without anyone being told what
   // it does.
   describe('the lane catalogue (docs/lanes.json)', () => {
-    type Entry = { name: string; group: string; does: string; needs: string[]; cost: string; recommend: 'always' | string[]; when: string };
+    type Entry = { name: string; group: string; does: string; needs: string[]; cost: string; recommend: 'always' | string[]; when: string; mergeQueue?: string };
     const cat = built.catalogue as { groups: Array<{ id: string; title: string; header: string }>; lanes: Record<string, Entry> };
     const lanes = built.lanes as Record<string, { secrets: string[] }>;
     const groupOf = (lane: string) => cat.groups.findIndex((g) => g.id === cat.lanes[lane]!.group);
@@ -87,10 +88,12 @@ describe('requirements.json', () => {
 
     it('fills in every field of every entry', () => {
       for (const [lane, e] of Object.entries(cat.lanes)) {
-        expect(Object.keys(e).sort(), lane).toEqual(['cost', 'does', 'group', 'name', 'needs', 'recommend', 'when']);
+        // `mergeQueue` only on a lane a merge queue changes (#452).
+        expect(Object.keys(e).filter((k) => k !== 'mergeQueue').sort(), lane).toEqual(['cost', 'does', 'group', 'name', 'needs', 'recommend', 'when']);
         for (const k of ['name', 'does', 'cost', 'when'] as const) expect(e[k].trim().length, `${lane} ${k}`).toBeGreaterThan(3);
         // One line each: --help prints it on one, and a question's option shows it as one.
         for (const k of ['does', 'cost', 'when'] as const) expect(e[k], `${lane} ${k}`).toMatch(/^[A-Z][^\n]*\.$/);
+        if ('mergeQueue' in e) expect(e.mergeQueue, `${lane} mergeQueue`).toMatch(/^[A-Z][^\n]*\.$/);
         expect(Array.isArray(e.needs), lane).toBe(true);
       }
     });
@@ -130,6 +133,14 @@ describe('requirements.json', () => {
           expect(groupOf(w), `${lane} recommends with ${w}, asked after it`).toBeLessThanOrEqual(groupOf(lane));
         }
       }
+    });
+
+    // #452 (#79): a merge through a merge queue doesn't start a lane that runs on CI finishing on
+    // the default branch, since the queue's push is the run's actor and the gate turns it away.
+    it('says what a merge queue changes for exactly the lanes that run on CI finishing on the default branch', () => {
+      const ciOnDefault = Object.entries(TRIGGERS).filter(([, t]) => t.ci === 'default').map(([l]) => l).sort();
+      expect(ciOnDefault.length).toBeGreaterThan(0);
+      expect(Object.entries(cat.lanes).filter(([, e]) => e.mergeQueue !== undefined).map(([l]) => l).sort()).toEqual(ciOnDefault);
     });
 
     it('says a lane runs no model exactly when it maps no Claude token', () => {

@@ -1461,6 +1461,30 @@ describe('kanon init and the lane catalogue (#428)', () => {
 // #428: telemetry is asked, off by default, and installed only on an explicit yes. On yes, init
 // writes the collector's caller exactly as docs/telemetry.md gives it, and leaves the operator's
 // side (the register entry and the two variables) as a step.
+// #452 (#79): a merge through a merge queue doesn't start a lane that runs on CI finishing on the
+// default branch, so init says when the default branch has one, and the catalogue what it changes.
+describe('kanon init and a merge queue on the default branch (#452)', () => {
+  const queue = { type: 'merge_queue', parameters: { merge_method: 'SQUASH' } };
+  const ruleset = (rules: unknown[]) => ({ id: 7, name: 'protect main', target: 'branch', enforcement: 'active', conditions: { ref_name: { include: ['~DEFAULT_BRANCH'] } }, rules: [{ type: 'pull_request', parameters: { allowed_merge_methods: ['squash'] } }, ...rules] });
+  const inspect = async (over: Parameters<typeof fakeGitHub>[0]) => parse(await run(checkout(), fakeGitHub(over), ['--json', '--dry-run', '--no-apps'])).inspection.defaultBranchMergeQueue;
+
+  it('says whether the default branch merges through a merge queue: its ruleset has one, or the one init creates will', async () => {
+    expect(await inspect({ rulesets: [ruleset([queue])] })).toBe(true);
+    expect(await inspect({ kind: 'Organization', rulesets: [ruleset([])] })).toBe(false);
+    expect(await inspect({ kind: 'Organization' })).toBe(true);
+    expect(await inspect({})).toBe(false);
+    expect(await inspect({ kind: 'Organization', private: true, orgPlan: 'enterprise', rulesetsOnPlan: false })).toBe(false);
+  });
+
+  it("gives each catalogue lane what a merge queue changes for it, from docs/lanes.json", async () => {
+    const d = parse(await run(checkout(), fakeGitHub(), ['--json', '--dry-run', '--no-apps']));
+    const lanes = (d.catalogue as Array<{ lanes: Array<{ lane: string; mergeQueue: string | null }> }>).flatMap((g) => g.lanes);
+    expect(lanes.find((l) => l.lane === 'agent-rebase')!.mergeQueue).toBe(REQ.catalogue!.lanes['agent-rebase']!.mergeQueue);
+    expect(lanes.find((l) => l.lane === 'agent-rebase')!.mergeQueue).toMatch(/^Through a merge queue, a merge doesn't start it/);
+    expect(lanes.find((l) => l.lane === 'agent-review')!.mergeQueue).toBeNull();
+  });
+});
+
 describe('kanon init and telemetry (#428)', () => {
   const RELEASE = `v${JSON.parse(read(ROOT, 'package.json')).version}`;
   const withVariables = (names: string[] | null) => {

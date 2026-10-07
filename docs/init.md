@@ -95,7 +95,8 @@ The store's side is the operator's: the register entry, and the values of the re
 | `hasCommits` | boolean | Whether the default branch has a commit. |
 | `admin` | boolean | Whether the token can administer the repository. |
 | `rulesets` | string | `yes`, `no` or `unknown`: whether the plan has rulesets. `no` means the platform can't enforce review (`K-ADOPT-3`). |
-| `mergeQueue` | string | `yes`, `no` or `unknown`. |
+| `mergeQueue` | string | `yes`, `no` or `unknown`: whether the plan has the merge queue. |
+| `defaultBranchMergeQueue` | boolean | Whether the default branch merges through a merge queue ([#452](https://github.com/yedeya-labs/kanon/issues/452)): an active ruleset on it has one, or, where none covers it yet, the ruleset `init` creates has one, because the plan has the queue. A lane's `mergeQueue`, in the catalogue, says what that changes for it. |
 | `defaultBranchRulesets` | array | The names of the active rulesets on the default branch. |
 | `inactiveRulesets` | array | Each `disabled` or `evaluate` ruleset on the default branch: `name` and `enforcement`. |
 | `labels` | array | The repository's label names, sorted. |
@@ -149,6 +150,7 @@ What `--lanes` chooses from, so a person, or the adopt skill asking them, can ch
 | `needs` | array | Strings: what else it needs, such as project briefs. |
 | `cost` | string | What it costs to run, in one sentence: whether it runs a model, and how often. |
 | `when` | string | When it is recommended, in one sentence. |
+| `mergeQueue` | string or null | What a merge queue on the default branch changes for it, in one sentence, or null when nothing ([#452](https://github.com/yedeya-labs/kanon/issues/452)): a merge through the queue doesn't start a lane that runs on CI finishing on the default branch. |
 | `recommendedWith` | array | The lanes whose choice makes it recommended; empty for none. |
 | `recommended` | boolean | Whether it is recommended for this repository: the repository calls it already, it is the review lane, or it is recommended with a lane that is. |
 | `installed` | boolean | Whether the repository calls it already (`inspection.installedLanes`). |

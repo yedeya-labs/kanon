@@ -1240,6 +1240,17 @@ export const diagnose = async (deps, opts) => {
     }
   }
 
+  // ── A merge queue (#452) ────────────────────────────────────────────────────────────────────
+  // A merge through the queue is pushed by the queue's bot, which a lane's gate turns away, so a
+  // lane that starts on CI finishing on the default branch waits for its schedule. The release's
+  // lane catalogue says so of each such lane; it blocks nothing.
+  if (mergeQueueOn(s.covering)) {
+    for (const l of installed) {
+      const said = req.catalogue?.lanes[l]?.mergeQueue;
+      if (said) notes.push(`${s.defaultBranch} merges through a merge queue, and you call ${l}. ${said}`);
+    }
+  }
+
   // ── The telemetry collector (#428) ──────────────────────────────────────────────────────────
   // A caller of Kanon's collector sends nothing until the repository has the two variables the
   // Kanon operator gives it (docs/telemetry.md): the collector skips with a warning and stays
