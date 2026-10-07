@@ -18,16 +18,27 @@ export const AREAS = /** @type {const} */ (['deps', 'workflows', 'migrations', '
 /** @typedef {typeof AREAS[number]} Area */
 
 /**
- * Dependency manifests and lockfiles, by file name at any depth (§3.7's `deps`). Every common
- * stack's, so none is read as code.
+ * Lockfiles, by file name at any depth: JavaScript's, Python's, Go's, Rust's, Ruby's, PHP's,
+ * the JVM's, .NET's, Elixir's and Erlang's, Swift's and Dart's. They are `deps` here, and the
+ * band leaves them out of a diff's size (§3.6, `band.mjs`), so the two read one list.
  */
-const DEPENDENCY_FILES = new Set([
-  'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb',
-  'Pipfile', 'Pipfile.lock', 'pyproject.toml', 'poetry.lock', 'uv.lock', 'setup.py', 'setup.cfg',
-  'go.mod', 'go.sum', 'Cargo.toml', 'Cargo.lock', 'Gemfile', 'Gemfile.lock', 'composer.json', 'composer.lock',
+export const LOCKFILES = new Set([
+  'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'deno.lock',
+  'Pipfile.lock', 'poetry.lock', 'uv.lock', 'go.sum', 'Cargo.lock', 'Gemfile.lock', 'composer.lock',
+  'gradle.lockfile', 'packages.lock.json', 'paket.lock', 'mix.lock', 'rebar.lock',
+  'Package.resolved', 'Podfile.lock', 'Cartfile.resolved', 'pubspec.lock',
+]);
+/** Dependency manifests, by file name at any depth, for the same stacks as `LOCKFILES`. */
+const MANIFESTS = new Set([
+  'package.json', 'Pipfile', 'pyproject.toml', 'setup.py', 'setup.cfg', 'go.mod', 'Cargo.toml', 'Gemfile', 'composer.json',
+  'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts', 'libs.versions.toml', 'build.sbt',
+  'packages.config', 'Directory.Packages.props', 'paket.dependencies', 'mix.exs', 'rebar.config',
+  'Package.swift', 'Podfile', 'Cartfile', 'pubspec.yaml',
 ]);
 /** `requirements.txt`, `requirements-dev.txt`, `requirements/base.txt`'s siblings named so. */
 const REQUIREMENTS = /^requirements.*\.txt$/;
+/** A .NET project file, which holds its package references: `*.csproj`, `*.fsproj`, `*.vbproj`. */
+const DOTNET_PROJECT = /\.(?:cs|fs|vb)proj$/;
 const WORKFLOWS = /^\.github\/(?:workflows|actions)\//;
 const MIGRATIONS = /(?:^|\/)migrations\//;
 const SPECS = /^docs\/qa\/specs\//;
@@ -72,7 +83,7 @@ const NO_AREAS = { declared: false, code: [], tests: [], audit: [] };
  */
 export function areaOf(path, { codeAreas = NO_AREAS, escalationFile } = {}) {
   const name = basename(path);
-  if (DEPENDENCY_FILES.has(name) || REQUIREMENTS.test(name)) return 'deps';
+  if (LOCKFILES.has(name) || MANIFESTS.has(name) || REQUIREMENTS.test(name) || DOTNET_PROJECT.test(name)) return 'deps';
   if (WORKFLOWS.test(path)) return 'workflows';
   if (MIGRATIONS.test(path) || (escalationFile?.paths ?? []).some((e) => e.category === 'migrations' && e.pattern.test(path))) return 'migrations';
   if (SPECS.test(path)) return 'specs';

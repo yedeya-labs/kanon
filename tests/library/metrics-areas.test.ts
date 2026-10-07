@@ -36,6 +36,18 @@ describe('areaOf', () => {
     }
   });
 
+  it("reads the JVM's, .NET's, Elixir's and Erlang's, Swift's and Dart's manifests and lockfiles as deps too, at any depth (#520)", () => {
+    for (const p of [
+      'pom.xml', 'svc/build.gradle', 'build.gradle.kts', 'settings.gradle.kts', 'gradle.lockfile', 'gradle/libs.versions.toml', 'build.sbt',
+      'src/Api/Api.csproj', 'Lib.fsproj', 'Old.vbproj', 'packages.config', 'src/Api/packages.lock.json', 'Directory.Packages.props', 'paket.dependencies', 'paket.lock',
+      'mix.exs', 'apps/web/mix.lock', 'rebar.config', 'rebar.lock',
+      'Package.swift', 'Package.resolved', 'ios/Podfile', 'ios/Podfile.lock', 'Cartfile', 'Cartfile.resolved',
+      'pubspec.yaml', 'app/pubspec.lock', 'deno.lock',
+    ]) expect(areaOf(p), p).toBe('deps');
+    // A project file's extension, not a name that only contains it.
+    for (const p of ['src/csproj.ts', 'src/Api/Api.csproj.user.cs', 'src/pom.xml.ts']) expect(areaOf(p), p).toBe('code');
+  });
+
   it('reads workflows and the repository\'s own actions as workflows, before anything else in .github', () => {
     expect(areaOf('.github/workflows/ci.yml')).toBe('workflows');
     expect(areaOf('.github/actions/setup/action.yml')).toBe('workflows');

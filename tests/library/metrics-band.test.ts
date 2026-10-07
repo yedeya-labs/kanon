@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BAND_THRESHOLDS, BAND_VERSION, bandOf, diffSize, isExcludedFromSize } from '../../scripts/metrics/band.mjs';
+import { LOCKFILES, areaOf } from '../../scripts/metrics/areas.mjs';
 
 /**
  * Plan 0003 §3.6, band version 1: S up to 200 changed lines, M up to 500, L up to 1,200, XL
@@ -76,6 +77,20 @@ describe('diffSize', () => {
   it('leaves lockfiles, snapshots and the changelog out of the size, and reports their lines', () => {
     const files = [f('package-lock.json', 4000, 3000), f('web/yarn.lock', 10), f('tests/__snapshots__/a.test.ts.snap', 50), f('CHANGELOG.md', 7), f('docs/CHANGELOG.md', 1), f('Cargo.lock', 9), f('src/a.ts', 12)];
     expect(diffSize(files)).toEqual({ changed_lines: 12, changed_files: 1, changed_dirs: 1, excluded_lines: 7077 });
+  });
+
+  it("leaves every stack's lockfile out, not only JavaScript's, Rust's and Go's (#520)", () => {
+    for (const p of ['gradle.lockfile', 'src/Api/packages.lock.json', 'paket.lock', 'mix.lock', 'rebar.lock', 'Package.resolved', 'ios/Podfile.lock', 'Cartfile.resolved', 'pubspec.lock', 'deno.lock']) {
+      expect(isExcludedFromSize(p), p).toBe(true);
+    }
+    for (const p of ['pom.xml', 'build.gradle.kts', 'Api.csproj', 'mix.exs', 'pubspec.yaml']) expect(isExcludedFromSize(p), p).toBe(false);
+  });
+
+  it("leaves out exactly the `deps` area's lockfiles, one list for both (#520)", () => {
+    for (const name of LOCKFILES) {
+      expect(isExcludedFromSize(`svc/${name}`), name).toBe(true);
+      expect(areaOf(`svc/${name}`), name).toBe('deps');
+    }
   });
 
   it('keeps a dependency manifest in the size: only generated files are left out', () => {

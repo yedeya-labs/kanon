@@ -9,6 +9,8 @@
 // escalation path; bumping them would put 146 in XL and leave 24 in S. Risk is the `esc_*`
 // split instead (`areas.mjs`), and `bandOf` never reads it.
 
+import { LOCKFILES } from './areas.mjs';
+
 /** The band version this release writes (§3.6, "Versioning"). */
 export const BAND_VERSION = 1;
 
@@ -48,24 +50,16 @@ export function bandOf(row, version = BAND_VERSION) {
   return BANDS[Math.min(band, BANDS.length - 1)];
 }
 
-/**
- * The generated files a diff's size leaves out (§3.6, step 1): lockfiles, test snapshots and
- * the changelog, at any depth. Counting them would put a dependency bump in XL. The lockfile
- * names are every common stack's, so no stack's diff is measured with its lockfile in.
- */
-const LOCKFILES = new Set([
-  'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb',
-  'Cargo.lock', 'go.sum', 'poetry.lock', 'Pipfile.lock', 'uv.lock', 'Gemfile.lock', 'composer.lock',
-]);
-
 /** @param {string} path */
 const basename = (path) => path.slice(path.lastIndexOf('/') + 1);
 /** @param {string} path the directory part, `''` for the repository root */
 const dirname = (path) => path.slice(0, Math.max(path.lastIndexOf('/'), 0));
 
 /**
- * Whether a changed file is left out of the diff's size: a lockfile, a snapshot or the
- * changelog (§3.6, step 1).
+ * Whether a changed file is left out of the diff's size (§3.6, step 1): a lockfile, a test
+ * snapshot or the changelog, at any depth. Counting them would put a dependency bump in XL.
+ * The lockfiles are the `deps` area's (`areas.mjs`), every stack's that Kanon names, so no
+ * stack's diff is measured with its lockfile in.
  * @param {string} path repository-relative
  */
 export function isExcludedFromSize(path) {
