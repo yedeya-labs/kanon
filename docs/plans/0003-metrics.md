@@ -153,6 +153,8 @@ The row stores the class, or a count per class. **No login, name or account id e
 
 A register row whose role the row can't carry (the Releaser, Intake) is `other_bot`.
 
+**Amended 2026-10-07 (#521): `human` is a person.** GitHub's own committer, `web-flow`, is `other_bot`, not `human`, though it is a `User`-type account with no `[bot]` suffix: GitHub records it as the committer of every commit it creates through the API or the web UI, so read as `human` it would make an App's API commit, or Dependabot's, a human commit. A person's web-UI commit still counts, by its author.
+
 ### 3.3 The fields
 
 **Eighty-four fields, flat.** Types: **count** (non-negative integer below 2³¹), **duration** (whole seconds), **time** (ISO-8601 UTC), **bool**, **enum** (a closed list), **pattern** (a strict regular expression). Every field was checked against ADR 0007 rule 1: none holds code, prompts, issue or PR text, file paths, error messages, free text or a username. The ones rule 1 doesn't already list are added by the `K-OBS-16` amendment (§5).
