@@ -22,8 +22,8 @@
 # Identity: the `reviewer` GitHub App — this IS the reviewer's promised fallback.
 # Proposes only — never fixes/merges/reopens/closes.
 #
-# INERT until: the caller is on the default branch + the Reviewer's App installed + secrets
-# (plan 0001 §8):
+# INERT until: the caller is on the default branch + the Judge App installed, with the
+# Reviewer's row in the App register + these secrets (plan 0001 §8):
 #   JUDGE_APP_ID, JUDGE_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
 # KANON ROLE: Reviewer
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the

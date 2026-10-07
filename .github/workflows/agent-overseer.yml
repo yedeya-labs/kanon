@@ -60,8 +60,8 @@
 # steered agent too. What it can still reach is the read-only token it is given, for the hour
 # that token lives.
 #
-# INERT until: the caller is on the default branch + the Overseer's App installed, with a row in
-# the App register + these secrets (plan 0001 §8):
+# INERT until: the caller is on the default branch + the Author App installed, with the
+# Overseer's row in the App register + these secrets (plan 0001 §8):
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
 # KANON ROLE: Overseer
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the

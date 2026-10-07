@@ -27,9 +27,10 @@
 #
 # HE MERGES THROUGH THE FRONT DOOR. The Merger is deliberately NOT a ruleset bypass actor:
 # the default branch's ruleset still enforces its required checks and one approving review,
-# and the Reviewer's App holds `Contents: write` so its approval satisfies it. A bypass actor
-# bypasses the ENTIRE ruleset, checks included — under that design `merge-gate.mjs` would be
-# the only thing between a red build and the default branch. Here it is the second line.
+# and the Judge App holds `Contents: write` so the Reviewer's approval satisfies it. A bypass
+# actor bypasses the ENTIRE ruleset, checks included — under that design `merge-gate.mjs`
+# would be the only thing between a red build and the default branch. Here it is the second
+# line.
 #
 # NOT THE DEFAULT GITHUB_TOKEN, and the run FAILS rather than falling back to it: a merge
 # pushed by GITHUB_TOKEN triggers no workflows, so the release workflow would never see the

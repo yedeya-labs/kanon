@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -805,5 +805,41 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
     // the pins itself. An ignore rule on Kanon would stop the release that judges the next PR.
     const ignored = (actions?.ignore ?? []).map((r) => r['dependency-name'] ?? '');
     expect(ignored.filter((n) => n.startsWith('yedeya-labs/kanon'))).toEqual([]);
+  });
+});
+
+// Since plan 0005's L4 an adopter installs two Apps, the Author and the Judge, and each role
+// mints its token from one of them. Text that reads "the Lead's App" sends an adopter looking
+// for, or creating, an App per role. Narrative comments deeper in a lane are not held here.
+const PER_ROLE_APP = /\b(?:Lead|Implementer|Explorer|Overseer|Reviewer|Merger|Triager)'s (?:GitHub )?App\b/;
+const ROOT_URL = new URL('../../', import.meta.url);
+const laneFiles = (): string[] => [
+  ...readdirSync(new URL('.github/workflows/', ROOT_URL)).filter((f) => f.endsWith('.yml')).map((f) => `.github/workflows/${f}`),
+  ...readdirSync(new URL('actions/', ROOT_URL)).map((d) => `actions/${d}/action.yml`)
+    .filter((f) => existsSync(new URL(f, ROOT_URL))),
+];
+
+describe('#474 adopter-facing lane text names the Author or Judge App, never an App per role', () => {
+  const offenders = (pick: (text: string) => string[]) => laneFiles().flatMap((f) =>
+    pick(readFileSync(new URL(f, ROOT_URL), 'utf8')).filter((l) => PER_ROLE_APP.test(l)).map((l) => `${f}: ${l.trim()}`));
+
+  it('in the header of every lane and action, which says what to install', () => {
+    // The header is the leading comment block, up to the first line of YAML.
+    const header = (text: string) => { const end = text.search(/^[^#\s]/m); return (end < 0 ? text : text.slice(0, end)).split('\n'); };
+    expect(offenders(header)).toEqual([]);
+  });
+
+  it("in every step's name and every line a step prints to the log or the summary", () => {
+    const printed = (text: string) => text.split('\n').filter((l) =>
+      /^\s*-?\s*name:|\b(?:echo|printf)\b|::(?:error|warning|notice)\b|GITHUB_STEP_SUMMARY/.test(l));
+    expect(offenders(printed)).toEqual([]);
+  });
+
+  it('the guard matches the per-role wording it holds, and not the two Apps or the Releaser', () => {
+    expect(PER_ROLE_APP.test("the Lead's App is not set up")).toBe(true);
+    expect(PER_ROLE_APP.test("the Implementer's GitHub App")).toBe(true);
+    expect(PER_ROLE_APP.test("the Author App (the Lead's) is not set up")).toBe(false);
+    expect(PER_ROLE_APP.test("the Judge App's token, minted for the Merger")).toBe(false);
+    expect(PER_ROLE_APP.test("the Releaser's App id")).toBe(false);
   });
 });

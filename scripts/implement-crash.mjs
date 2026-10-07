@@ -30,7 +30,8 @@
 // with `KIND=empty` — the same retry, the same marker, the same cap.
 //
 // Env: GH_TOKEN (the workflow's default token — see the workflow for why not the App's),
-//      LABEL_TOKEN (the Implementer's App token, for the `qa:needs-split` label alone),
+//      LABEL_TOKEN (the Author App's token, minted for the Implementer, for the
+//      `qa:needs-split` label alone),
 //      GITHUB_REPOSITORY, ISSUE, RUN_ID, KIND (the classifier's verdict), APPLY.
 
 import { execFileSync } from 'node:child_process';
@@ -116,8 +117,8 @@ export function agentSpokeSince(comments, since) {
 }
 
 /**
- * How many comments the Implementer's App posted on the issue since the run started that carry
- * NO role marker (kanon#336). Since L4 `agentSpokeSince` reads such a comment as silence, so a
+ * How many comments the Author App posted on the issue since the run started that carry NO
+ * role marker (kanon#336). Since L4 `agentSpokeSince` reads such a comment as silence, so a
  * run whose agent left its header off reads as one that said nothing; this count lets the job
  * say so by name rather than leave "the implementer did not comment" as the only account.
  * A comment carrying another role's marker (the Lead's, on the same App) is that role's, and
@@ -135,7 +136,7 @@ export function unmarkedSince(comments, since) {
 /** The warning `unmarkedSince` asks for, or '' when there is nothing to say. */
 export function unmarkedWarning(issue, n) {
   return n > 0
-    ? `::warning title=unmarked comment::#${issue}: ${n} comment(s) by the Implementer's App since the run started carry no role marker, so none is read as the Implementer speaking (plan 0005 §3.3; the agent left off its header, kanon#336).`
+    ? `::warning title=unmarked comment::#${issue}: ${n} comment(s) by the Author App since the run started carry no role marker, so none is read as the Implementer speaking (plan 0005 §3.3; the agent left off its header, kanon#336).`
     : '';
 }
 
@@ -362,7 +363,7 @@ function main() {
   // on the default token, where it would start nothing and look done.
   const appToken = process.env.LABEL_TOKEN ?? '';
   if (calls.some((c) => c.token === 'app') && !appToken) {
-    console.log(`::error title=implement-crash::#${issue} must be split, and the split lane starts only on a \`${SPLIT_LABEL}\` label added by an App; LABEL_TOKEN (the Implementer's App token) is not set, so nothing was changed`);
+    console.log(`::error title=implement-crash::#${issue} must be split, and the split lane starts only on a \`${SPLIT_LABEL}\` label added by an App; LABEL_TOKEN (the Author App's token, minted for the Implementer) is not set, so nothing was changed`);
     process.exit(1);
   }
   for (const c of calls) gh(c.args, c.token === 'app' ? appToken : undefined);

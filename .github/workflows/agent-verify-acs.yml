@@ -11,8 +11,8 @@
 # NOT A JUDGING LANE (`K-MERGE-17`, "Not covered"). It runs the code under test, the
 # project's hook and its tests by design, so it reads them from the ref it verifies.
 #
-# INERT until: the caller is on the default branch + the Explorer's App installed + secrets
-# (plan 0001 §8):
+# INERT until: the caller is on the default branch + the Author App installed, with the
+# Explorer's row in the App register + these secrets (plan 0001 §8):
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
 #
 # Verifies ONE PROJECT'S acceptance criteria, per invariant ID, rather than

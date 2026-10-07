@@ -47,8 +47,8 @@
 # NO MODEL. Every step runs a library script or `gh`, so this lane takes no Claude token and
 # writes no telemetry row.
 #
-# INERT until: the caller is on the default branch + the Lead's App installed, with a row in
-# the App register + these secrets (plan 0001 §8):
+# INERT until: the caller is on the default branch + the Author App installed, with the
+# Lead's row in the App register + these secrets (plan 0001 §8):
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY
 # A project closes only once its merges are deployed to the reference environment, which the
 # adoption record declares (`K-LAYOUT-10`, `K-PROJ-11`; `docs/lanes.md`).

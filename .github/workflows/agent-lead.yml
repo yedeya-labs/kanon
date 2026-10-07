@@ -31,7 +31,7 @@
 # the invariants this brief proposes stay `[seed]` until separately promoted, and
 # a `[seed]` → `[confirmed]` transition is outside the green zone by design (§3).
 #
-# SETUP: the Lead's App needs `Contents: Read & write` and
+# SETUP: the Author App (the Lead's) needs `Contents: Read & write` and
 # `Pull requests: Read & write` — a deliberate widening of the minimal set it
 # holds for agent-dispatch-sweep.yml, recorded with its reason in
 # docs/qa/agent-identities.md footnote ³. The push probe (the spine's `push-probe`,
@@ -42,8 +42,8 @@
 # — it cannot be, without creating a PR — and the run verifies it by doing it; the probe
 # step says so, and RA-959 is this comment having claimed the guard covered both.
 #
-# INERT until: the caller is on the default branch + the Lead's App installed + these
-# secrets (plan 0001 §8):
+# INERT until: the caller is on the default branch + the Author App installed, with the
+# Lead's row in the App register + these secrets (plan 0001 §8):
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
 # KANON ROLE: Lead
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the

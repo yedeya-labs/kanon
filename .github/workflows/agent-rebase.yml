@@ -33,8 +33,8 @@
 # population: 2 PRs have ever reached the un-startable state. `MAX_PER_RUN` caps a bad
 # day at three sessions.
 #
-# INERT until: the caller is on the default branch + the Implementer's App installed + these
-# secrets (plan 0001 §8):
+# INERT until: the caller is on the default branch + the Author App installed, with the
+# Implementer's row in the App register + these secrets (plan 0001 §8):
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
 # KANON ROLE: Implementer
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the

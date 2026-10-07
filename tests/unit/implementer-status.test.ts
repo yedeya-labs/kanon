@@ -35,6 +35,19 @@ describe('the summary an adopter reads when the App lacks Commit statuses write 
     expect(src).not.toMatch(/until L4/);
     expect(src).toMatch(/the Merger skips this pull request as \\`not-the-implementer\\`, and the revise and rebase lanes refuse it/);
   });
+
+  // #474: an adopter installs the Author App, which holds the Implementer; there is no
+  // Implementer's App to grant the permission to.
+  it('names the Author App, the one the adopter installs, as the App to grant the permission', () => {
+    const say = (env: Record<string, string>) => execFileSync('node', ['actions/implementer-status/implementer-status.mjs'], {
+      encoding: 'utf8', env: { PATH: process.env.PATH ?? '', GITHUB_REPOSITORY: REPO, ...env },
+    });
+    const noRead = say({});
+    expect(noRead).toContain('the Author App (the Implementer\'s) could not mint a read token');
+    const noWrite = say({ APP_SLUG: SLUG, READ_TOKEN: 'read' });
+    expect(noWrite).toContain('the Author App (the Implementer\'s) could not mint a token with Commit statuses write. Grant it that permission');
+    for (const out of [noRead, noWrite]) expect(out).not.toMatch(/Implementer's App/);
+  });
 });
 
 describe('open: the first status goes only on the pull request this run opened', () => {
