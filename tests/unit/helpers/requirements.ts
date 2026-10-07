@@ -79,6 +79,10 @@ export const buildRequirements = (root: string) => {
       // aggregate function (kanon#471).
       qaStore: laneTree(root, file).some((f) => /^\s*-?\s*uses: \$\/actions\/qa-store\s*$/m.test(readFileSync(join(root, '.github/workflows', f), 'utf8'))),
     };
+    // The secrets a caller may leave out (kanon#433): the QA store's, which the lane marks and
+    // declares `required: false`, as `lane-check` reads them.
+    const optional = comment(text, 'OPTIONAL SECRET').filter((n) => secrets.includes(n) && call.secrets[n]?.required === false).sort();
+    if (optional.length) lane.optionalSecrets = optional;
     const name = comment(text, 'CALLER NAME')[0];
     if (name) lane.callerName = name;
     const runName = comment(text, 'CALLER RUN-NAME ENDS WITH')[0];
@@ -117,6 +121,16 @@ export const buildRequirements = (root: string) => {
   const telemetry = collectorDoc.on && typeof collectorDoc.on === 'object' && 'workflow_call' in collectorDoc.on
     ? { collector, variables: [...new Set([...callerBlock.matchAll(/\$\{\{ vars\.([A-Z0-9_]+) \}\}/g)].map((m) => m[1]!))].sort() }
     : undefined;
+  // The QA store (kanon#433): the adopter's hook, which the `qa-store` block calls, and the
+  // secrets the store-coupled lanes take for it. `kanon init` and `kanon doctor` ask for the
+  // secrets only where the hook exists, and name the variables of the same names, which held
+  // them before, as a step to move.
+  const block = readFileSync(join(root, 'actions/qa-store/action.yml'), 'utf8');
+  const hookPath = /^ +uses: \.\/(\.github\/actions\/[a-z-]+)$/m.exec(block)?.[1];
+  const qaStore = {
+    hook: `${hookPath}/action.yml`,
+    secrets: [...new Set(Object.values(lanes).flatMap((l) => (l as { optionalSecrets?: string[] }).optionalSecrets ?? []))].sort(),
+  };
   return {
     $comment:
       "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. `catalogue` is the lane catalogue, copied from docs/lanes.json.",
@@ -139,5 +153,6 @@ export const buildRequirements = (root: string) => {
     // itself, so the file can't claim an exemption the action doesn't make.
     release: { dcoExemptsReleaser: /^export const RELEASER_ROLE = 'Releaser';$/m.test(readFileSync(join(root, 'actions/dco/dco.mjs'), 'utf8')) },
     telemetry,
+    qaStore,
   };
 };

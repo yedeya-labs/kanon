@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { storeLaneProblems, type Workflow } from './helpers/store-jobs.js';
+import { STORE_SECRETS, STORE_SECRETS_WITH, storeLaneProblems, type Workflow } from './helpers/store-jobs.js';
 import { agentPrompt, runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
 import { effectiveSteps } from './helpers/spine.js';
 import { readFlattened, workflowText } from './helpers/called-workflow.js';
@@ -44,8 +44,8 @@ describe('the store contract (plan 0004 §3.2, P9\'s check)', () => {
     const store = Object.entries(jobs).filter(([, j]) => j.permissions?.['id-token'] === 'write').map(([n]) => n).sort();
     expect(store).toEqual(['last-green', 'put', 'record-skip']);
     for (const [n, j] of Object.entries(jobs)) expect(j.environment, n).toBeUndefined();
-    expect(storeOp('last-green')).toEqual({ operation: 'last-green', variables: '${{ toJSON(vars) }}' });
-    expect(storeOp('record-skip')).toEqual({ operation: 'record-skip', variables: '${{ toJSON(vars) }}', commit: '${{ github.sha }}', trigger: '${{ github.event_name }}', tier: 'all', reason: 'unchanged-commit' });
+    expect(storeOp('last-green')).toEqual({ operation: 'last-green', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH });
+    expect(storeOp('record-skip')).toEqual({ operation: 'record-skip', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH, commit: '${{ github.sha }}', trigger: '${{ github.event_name }}', tier: 'all', reason: 'unchanged-commit' });
     expect(storeOp('put')).toMatchObject({ operation: 'put', kind: 'explorer', report: '${{ runner.temp }}/kanon-explore/qa-explore-summary.json' });
   });
 
@@ -58,7 +58,7 @@ describe('the store contract (plan 0004 §3.2, P9\'s check)', () => {
     expect(realGroup(wf.concurrency.group)).toBe('agent-explore');
     expect(Object.keys(callerInputs(wf.on.workflow_call.inputs)!)).toEqual(['tier']);
     expect(wf.on.workflow_call.inputs.tier).toMatchObject({ type: 'string', default: '', required: false });
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', ...STORE_SECRETS]);
   });
 });
 

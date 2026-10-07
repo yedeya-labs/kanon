@@ -23,7 +23,9 @@
 #
 # The adopter's caller is in `docs/qa-store.md`: a `workflow_dispatch` with `task` and `apply`,
 # `id-token: write`, and one job that calls this workflow at the pinned release with the store's
-# role, region and table.
+# region and table, and maps the store's role as the secret `QA_STORE_ROLE_ARN` (kanon#433): a
+# secret, so the runner masks the ARN, and the account id in it, in the log. The `role-arn` input
+# is deprecated: it still works, and prints the ARN, until a later release removes it.
 name: QA store maintenance (AWS)
 
 on:
@@ -40,9 +42,10 @@ on:
         required: false
         default: false
       role-arn:
-        description: The store role's ARN.
+        description: Deprecated (kanon#433), and printed in the log; map the secret QA_STORE_ROLE_ARN instead. Used only when that secret is empty.
         type: string
-        required: true
+        required: false
+        default: ""
       region:
         description: The store's region.
         type: string
@@ -51,6 +54,9 @@ on:
         description: The store's DynamoDB table.
         type: string
         required: true
+    secrets:
+      QA_STORE_ROLE_ARN:
+        required: false
 
 permissions:
   id-token: write # assume the store's OIDC role, in the job below only.
@@ -68,6 +74,6 @@ jobs:
         with:
           task: ${{ inputs.task }}
           apply: ${{ inputs.apply && 'true' || 'false' }}
-          role-arn: ${{ inputs.role-arn }}
+          role-arn: ${{ secrets.QA_STORE_ROLE_ARN || inputs.role-arn }}
           region: ${{ inputs.region }}
           table: ${{ inputs.table }}

@@ -363,14 +363,24 @@ for (const f of WORKFLOWS) {
     if (!through) fail(f, `passes \`${k}: ${v}\`; a caller only passes its own input through, as \`\${{ inputs.${k} }}\` (ADR 0002)`);
   }
 
-  // Secrets: exactly the lane's, by their fixed names, each mapped explicitly.
+  // Secrets: exactly the lane's, by their fixed names, each mapped explicitly, except that a
+  // caller may leave out one the lane marks `# OPTIONAL SECRET:` and declares `required: false`
+  // (kanon#433): the QA store's, which only a repository with a store hook has. GitHub passes an
+  // unmapped one empty. Any other optional secret is still mapped, as before.
   const secrets = isObject(job) ? job.secrets : null;
   if (!isObject(secrets)) {
     fail(f, "maps no secrets explicitly (`secrets: inherit` would hand every secret to Kanon's code; plan 0001 decision 7)");
   } else {
-    const want = keys(alt(isObject(onCall) ? onCall.secrets : null, {})).join(',');
-    const got = keys(secrets).join(',');
-    if (want !== got) fail(f, `maps secrets [${got}]; the Kanon lane ${lane} takes exactly [${want}]`);
+    const declared = alt(isObject(onCall) ? onCall.secrets : null, {});
+    const declaredKeys = isObject(declared) ? keys(declared) : [];
+    const markedOptional = words(marked(laneFile, '# OPTIONAL SECRET: '));
+    const optional = declaredKeys.filter((k) => markedOptional.includes(k) && isObject(declared[k]) && declared[k].required === false);
+    const got = keys(secrets);
+    const want = declaredKeys.filter((k) => !optional.includes(k) || got.includes(k)).join(',');
+    if (want !== got.join(',')) {
+      const may = optional.length ? `, and may leave out [${optional.join(',')}]` : '';
+      fail(f, `maps secrets [${got.join(',')}]; the Kanon lane ${lane} takes exactly [${declaredKeys.join(',')}]${may}`);
+    }
     // THE ROLE-NAMED SECRETS ARE GONE (plan 0005 §3.5, step L4): the lanes mint as the Author or
     // the Judge, by fixed names. Named on its own, so an adopter moving the pin reads the rename
     // it has to make rather than only a set difference.

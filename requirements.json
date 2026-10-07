@@ -8,7 +8,9 @@
       "secrets": [
         "AUTHOR_APP_ID",
         "AUTHOR_APP_PRIVATE_KEY",
-        "CLAUDE_CODE_OAUTH_TOKEN"
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "QA_STORE_BUCKET",
+        "QA_STORE_ROLE_ARN"
       ],
       "inputs": {},
       "grant": {
@@ -23,7 +25,11 @@
       ],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": true
+      "qaStore": true,
+      "optionalSecrets": [
+        "QA_STORE_BUCKET",
+        "QA_STORE_ROLE_ARN"
+      ]
     },
     "agent-dispatch-sweep": {
       "identities": [
@@ -31,7 +37,9 @@
       ],
       "secrets": [
         "AUTHOR_APP_ID",
-        "AUTHOR_APP_PRIVATE_KEY"
+        "AUTHOR_APP_PRIVATE_KEY",
+        "QA_STORE_BUCKET",
+        "QA_STORE_ROLE_ARN"
       ],
       "inputs": {
         "apply": {
@@ -46,7 +54,11 @@
       "reads": [],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": true
+      "qaStore": true,
+      "optionalSecrets": [
+        "QA_STORE_BUCKET",
+        "QA_STORE_ROLE_ARN"
+      ]
     },
     "agent-explore-telemetry": {
       "identities": [
@@ -79,7 +91,9 @@
       "secrets": [
         "AUTHOR_APP_ID",
         "AUTHOR_APP_PRIVATE_KEY",
-        "CLAUDE_CODE_OAUTH_TOKEN"
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "QA_STORE_BUCKET",
+        "QA_STORE_ROLE_ARN"
       ],
       "inputs": {
         "tier": {
@@ -100,7 +114,11 @@
       "hooks": [
         ".github/actions/explore-sweep/action.yml"
       ],
-      "qaStore": true
+      "qaStore": true,
+      "optionalSecrets": [
+        "QA_STORE_BUCKET",
+        "QA_STORE_ROLE_ARN"
+      ]
     },
     "agent-implement-revise": {
       "identities": [
@@ -343,7 +361,9 @@
       "secrets": [
         "AUTHOR_APP_ID",
         "AUTHOR_APP_PRIVATE_KEY",
-        "CLAUDE_CODE_OAUTH_TOKEN"
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "QA_STORE_BUCKET",
+        "QA_STORE_ROLE_ARN"
       ],
       "inputs": {},
       "grant": {
@@ -358,7 +378,11 @@
       ],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": true
+      "qaStore": true,
+      "optionalSecrets": [
+        "QA_STORE_BUCKET",
+        "QA_STORE_ROLE_ARN"
+      ]
     },
     "agent-project-digest": {
       "identities": [],
@@ -991,6 +1015,13 @@
     "variables": [
       "KANON_TELEMETRY_URL",
       "KANON_TELEMETRY_WRITER_ROLE"
+    ]
+  },
+  "qaStore": {
+    "hook": ".github/actions/qa-store/action.yml",
+    "secrets": [
+      "QA_STORE_BUCKET",
+      "QA_STORE_ROLE_ARN"
     ]
   }
 }

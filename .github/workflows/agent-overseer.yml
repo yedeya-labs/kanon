@@ -82,6 +82,10 @@ name: Overseer
 #                                branch's ref, and this event's token names the pull request,
 #                                so the export is `degraded` on it: expected, and the prompt
 #                                says it is not a finding.
+# OPTIONAL SECRET: QA_STORE_BUCKET
+# OPTIONAL SECRET: QA_STORE_ROLE_ARN
+# The lines above are read by `lane-check` and the requirements file (kanon#433): the QA store's
+# secrets, which a caller maps once its repository has a store hook, and may leave out until then.
 on:
   workflow_call:
     inputs:
@@ -97,6 +101,14 @@ on:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
+      # THE QA STORE'S COORDINATES (kanon#433): secrets, so the runner masks them in every log of
+      # the store job, the store step's own `with:` included. Optional: a repository with no store
+      # hook maps nothing, and the store is absent. The store steps below hand them to the
+      # `qa-store` block as `secrets`, by name, never the whole `secrets` context.
+      QA_STORE_ROLE_ARN:
+        required: false
+      QA_STORE_BUCKET:
+        required: false
 
 concurrency:
   # Never two audits at once: both would file an audit issue and close each other's.
@@ -185,6 +197,7 @@ jobs:
         with:
           operation: export
           variables: ${{ toJSON(vars) }}
+          secrets: ${{ format('{{"QA_STORE_ROLE_ARN":{0},"QA_STORE_BUCKET":{1}}}', toJSON(secrets.QA_STORE_ROLE_ARN), toJSON(secrets.QA_STORE_BUCKET)) }}
           kind: overseer
 
   # THE LANE'S RUN, AS A CALLED WORKFLOW (kanon#279, `K-AGENT-49`). `overseer-run.yml` mints the

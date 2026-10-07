@@ -207,6 +207,7 @@ Every finding is non-blocking, except `app.failed`: `blocking` means it makes th
 | `app.reuse` | `app` | The register lists an App, but the repository lacks its secrets; or the owner already has an App the register lacks, and the person chose to reuse it. |
 | `secret.claude-code-oauth-token` | `secret` | The repository lacks `CLAUDE_CODE_OAUTH_TOKEN`. |
 | `secret.digest-webhook` | `secret` | The repository lacks `DIGEST_WEBHOOK`. |
+| `secret.qa-store` | `secret` | The repository has a QA store hook (`.github/actions/qa-store/action.yml`), and lacks `QA_STORE_ROLE_ARN` or `QA_STORE_BUCKET`, the store's coordinates, which the store-coupled lanes take as secrets ([#433](https://github.com/yedeya-labs/kanon/issues/433)). The fix stores each, copying it from a repository variable of the same name where one holds it. A repository without a hook is asked for neither. |
 | `secret.unreadable` | `secret` | The token can't list the repository's secret names. |
 | `telemetry.register` | `telemetry` | The repository calls Kanon's telemetry collector, and `KANON_TELEMETRY_URL` and `KANON_TELEMETRY_WRITER_ROLE` aren't both set, or the token can't list its variables: the register entry and the two values are the Kanon operator's to give, and the fix says how to ask. |
 | `plugin.declare` | `plugin` | `.claude/settings.json` exists, and doesn't declare the kanon plugin at this release: the file is the project's, so `init` leaves it alone, and the fix lists the keys to merge into it. |

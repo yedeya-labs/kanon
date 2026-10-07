@@ -186,7 +186,8 @@ export const laneCatalogue = (req, installed) => {
           name: e.name,
           does: e.does,
           app: spec.identities[0] ?? null,
-          secrets: spec.secrets,
+          // The QA store's secrets are the lane's optional ones (kanon#433), under `qaStore`.
+          secrets: spec.secrets.filter((n) => !(spec.optionalSecrets ?? []).includes(n)),
           // From the lane (kanon#471); a requirements file from before it says so by the grant alone.
           qaStore: spec.qaStore ?? spec.grant['id-token'] === 'write',
           hooks: spec.hooks,
@@ -1708,6 +1709,27 @@ const run = async (deps, opts, req, rep) => {
     }
     if (others.includes('DIGEST_WEBHOOK')) {
       step({ id: 'secret.digest-webhook', category: 'secret', subject: 'DIGEST_WEBHOOK', prose: 'Store the chat webhook the digests post to:', message: 'The repository lacks DIGEST_WEBHOOK, which the chosen lanes map.', text: 'Store the chat webhook the digests post to.', commands: [`gh secret set DIGEST_WEBHOOK -R ${repo}   # paste it on standard input`], url: secretsUrl });
+    }
+    // The QA store's coordinates (kanon#433): secrets, which the runner masks in the store jobs'
+    // logs. Asked for only where the store hook exists: without one the lanes run without memory,
+    // and their callers map the two empty. A variable of the same name, v0.33.0's way, is copied.
+    const storeLacks = (req.qaStore?.secrets ?? []).filter((n) => others.includes(n));
+    if (storeLacks.length && req.qaStore && read(req.qaStore.hook) !== null) {
+      const vars = await ghJson(deps, ['variable', 'list', '-R', repo, '--json', 'name']);
+      const asVariable = new Set(vars.ok ? vars.json.map((/** @type {any} */ v) => String(v.name)) : []);
+      const output = (/** @type {string} */ n) => (n === 'QA_STORE_ROLE_ARN' ? 'RoleArn' : 'BucketName');
+      step({
+        id: 'secret.qa-store',
+        category: 'secret',
+        subject: storeLacks.join(', '),
+        prose: `${req.qaStore.hook} exists, so store the QA store's coordinates as secrets, never as variables, which every store job's log prints (docs/qa-store.md):`,
+        message: `The repository has a QA store hook, and lacks ${storeLacks.join(' and ')}, which the store-coupled lanes map.`,
+        text: `Store the stack's ${storeLacks.map(output).join(' and ')} ${storeLacks.length > 1 ? 'outputs' : 'output'} as ${storeLacks.join(' and ')}${storeLacks.some((n) => asVariable.has(n)) ? ', copying each from the variable of the same name, which you then delete once a store job has run green' : ''}.`,
+        commands: storeLacks.flatMap((n) => (asVariable.has(n)
+          ? [`gh variable get ${n} -R ${repo} | gh secret set ${n} -R ${repo}`]
+          : [`gh secret set ${n} -R ${repo}   # paste the stack's ${output(n)} output on standard input`])),
+        url: secretsUrl,
+      });
     }
   } else {
     const all = [...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))];

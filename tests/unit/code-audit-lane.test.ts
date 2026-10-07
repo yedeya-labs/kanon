@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
+import { STORE_SECRETS, STORE_SECRETS_WITH, storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 import { handedIn, mintFor, readFlattened, workflowText } from './helpers/called-workflow.js';
 import { callerInputs, realGroup } from './helpers/smoke-group.js';
 
@@ -68,9 +68,9 @@ describe('the store jobs and the audit job (plan 0004 P9\'s check, applied at st
   });
 
   it('exports the audit\'s ledger before the agent, and puts the audit\'s report after it', () => {
-    expect(wf.jobs.export!.steps).toEqual([{ uses: '$/actions/qa-store', id: 'store', with: { operation: 'export', variables: '${{ toJSON(vars) }}', kind: 'audit' } }]);
+    expect(wf.jobs.export!.steps).toEqual([{ uses: '$/actions/qa-store', id: 'store', with: { operation: 'export', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH, kind: 'audit' } }]);
     const put = wf.jobs.put!.steps!.find((s) => s.uses === '$/actions/qa-store')!;
-    expect(put.with).toEqual({ operation: 'put', variables: '${{ toJSON(vars) }}', kind: 'audit', report: '${{ runner.temp }}/report/qa-audit-summary.json' });
+    expect(put.with).toEqual({ operation: 'put', variables: '${{ toJSON(vars) }}', secrets: STORE_SECRETS_WITH, kind: 'audit', report: '${{ runner.temp }}/report/qa-audit-summary.json' });
     // The report the put job downloads is the one the audit job uploads.
     const upload = steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'))!;
     const download = wf.jobs.put!.steps!.find((s) => s.uses?.startsWith('actions/download-artifact@'))!;
@@ -194,7 +194,7 @@ describe('the workflow around it (moved from the reference adopter)', () => {
       'permission-contents': 'read',
       'permission-issues': 'write',
     });
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', ...STORE_SECRETS]);
   });
 
   it('keeps the schedule every three days at 07:30, and a dispatch with no inputs', () => {

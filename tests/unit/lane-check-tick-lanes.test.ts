@@ -47,7 +47,26 @@ laneCheck(() => {
       red((t) => {
         extra(t);
         t.edit(SWEEP, (d) => { (job(d).secrets as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN = '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}'; });
-      }, 'the Kanon lane agent-dispatch-sweep takes exactly [AUTHOR_APP_ID,AUTHOR_APP_PRIVATE_KEY]'));
+      }, 'the Kanon lane agent-dispatch-sweep takes exactly [AUTHOR_APP_ID,AUTHOR_APP_PRIVATE_KEY,QA_STORE_BUCKET,QA_STORE_ROLE_ARN], and may leave out [QA_STORE_BUCKET,QA_STORE_ROLE_ARN]'));
+    // kanon#433: the QA store's secrets are the lane's `# OPTIONAL SECRET:`s. A caller maps both
+    // once its repository has a store hook, or leaves them out; its App's optional secrets it
+    // still maps, so the soft skip stays a skip and never a caller that forgot them.
+    it('accepts a caller that maps the QA store\'s secrets, or leaves them out', () => {
+      const without = adopter();
+      extra(without);
+      expect(check(without).status).toBe(0);
+      const t = adopter();
+      extra(t);
+      t.edit(SWEEP, (d) => {
+        const s = job(d).secrets as Record<string, string>;
+        s.QA_STORE_ROLE_ARN = '${{ secrets.QA_STORE_ROLE_ARN }}';
+        s.QA_STORE_BUCKET = '${{ secrets.QA_STORE_BUCKET }}';
+      });
+      expect(check(t).status).toBe(0);
+    });
+    it('still refuses a caller that leaves out an optional secret the lane does not mark', () =>
+      red((t) => { extra(t); t.edit(SWEEP, (d) => { delete (job(d).secrets as Record<string, string>).AUTHOR_APP_ID; }); },
+        'the Kanon lane agent-dispatch-sweep takes exactly [AUTHOR_APP_ID,AUTHOR_APP_PRIVATE_KEY,QA_STORE_BUCKET,QA_STORE_ROLE_ARN]'));
     it('refuses a caller that passes apply as a setting', () =>
       red((t) => { extra(t); t.edit(SWEEP, (d) => { (job(d).with as Record<string, string>).apply = 'true'; }); }, 'passes `apply: true`'));
   });

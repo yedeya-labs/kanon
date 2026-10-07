@@ -39,12 +39,21 @@
 # "Re-run all jobs". `tests/unit/helpers/store-jobs.ts` holds a lane to that wiring.
 #
 # NO `vars` OR `secrets` HERE: neither exists inside a composite action. So the lane's store step
-# reads the repository's Actions variables, `toJSON(vars)`, and passes them as `variables`, which
-# this block hands the hook unchanged (kanon#423). The hook reads its store's coordinates from
-# them, so an account id or a bucket name never has to be committed: `docs/qa-store.md`'s template
-# names `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET`. They are variables, not secrets: the hook is the
-# adopter's own code, and nothing in them is a credential. A hook that declares no `variables`
-# input gets a warning for the undeclared input and runs as before.
+# hands this block the store's coordinates as `secrets` (kanon#433): one line of JSON it builds
+# from the two secrets its caller maps by name, `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET`
+# (`K-AGENT-47`), never the whole `secrets` context, which would hand the hook the lane's App key.
+# They are secrets because both name the adopter's cloud account (the bucket's name carries it),
+# and the runner masks a secret's value wherever a log prints it: in the store step's `with:`,
+# which GitHub prints before this block runs, and in every step after. This block hands
+# `secrets` to the hook unchanged; the hook reads one with `fromJSON(inputs.secrets || '{}').<NAME>`.
+#
+# `variables`, `toJSON(vars)`, IS DEPRECATED (kanon#423, kanon#433). Nothing masks a variable, so
+# it printed every repository variable into the store step's log. It is still handed to the hook
+# until a later release removes it, so a hook that reads its coordinates from variables keeps
+# working while the adopter moves them to secrets (`kanon doctor` says how: `qa-store.variables`).
+# Once a secret the lane receives holds a value, the runner masks that value in the variables
+# too. A hook that declares no `secrets` or `variables` input gets a warning for the undeclared
+# input and runs as before.
 name: Kanon QA store
 description: Runs one operation of the QA store contract through the adopter's store hook (.github/actions/qa-store), or says the store is absent and does nothing.
 author: yedeya-labs
@@ -58,7 +67,11 @@ inputs:
     required: false
     default: ""
   variables:
-    description: "The repository's Actions variables as JSON, from `toJSON(vars)` in the lane, handed to the hook unchanged (kanon#423). Not used by `delete-export`."
+    description: "Deprecated (kanon#433): the repository's Actions variables as JSON, from `toJSON(vars)` in the lane, handed to the hook unchanged (kanon#423) until a later release removes it. Not used by `delete-export`."
+    required: false
+    default: ""
+  secrets:
+    description: "The store's secrets as JSON, `QA_STORE_ROLE_ARN` and `QA_STORE_BUCKET`, built by the lane from the secrets its caller maps, handed to the hook unchanged (kanon#433). Not used by `delete-export`."
     required: false
     default: ""
   report:
@@ -170,6 +183,7 @@ runs:
         from: ${{ steps.prepare.outputs.from }}
         to: ${{ steps.prepare.outputs.to }}
         variables: ${{ inputs.variables }}
+        secrets: ${{ inputs.secrets }}
 
     # A read: its failure is `degraded`, which the finish step turns into the fail-open answer.
     - name: Read through the store hook
@@ -184,6 +198,7 @@ runs:
         from: ${{ steps.prepare.outputs.from }}
         to: ${{ steps.prepare.outputs.to }}
         variables: ${{ inputs.variables }}
+        secrets: ${{ inputs.secrets }}
 
     - name: Read what the store hook wrote
       id: finish

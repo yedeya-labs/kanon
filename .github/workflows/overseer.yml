@@ -27,8 +27,10 @@
 #
 # THE QA STORE. Kanon's store hook is .github/actions/qa-store, so the store job exports the
 # Overseer's kind through it, and the agent's job reads the export without credentials. The hook
-# reads the store's role and bucket from the repository variables QA_STORE_ROLE_ARN and
-# QA_STORE_BUCKET, which the lane passes it from the release that added them on.
+# reads the store's role and bucket from the repository secrets QA_STORE_ROLE_ARN and
+# QA_STORE_BUCKET (kanon#433), which this caller maps once it pins a release after v0.33.0, the
+# first that takes them. Until then it reads the repository variables of the same names, which
+# v0.33.0's lane passes it, and which the store jobs' logs print.
 #
 # WHERE ITS FINDINGS GO. The adoption record declares `Upstream findings: filed here`, so a
 # finding only Kanon can act on is filed on Kanon, like any other (plan 0004 decision 12, as

@@ -17,7 +17,7 @@ import {
 
 type Step = { name?: string; id?: string; if?: string; uses?: string; run?: string; with?: Record<string, string>; env?: Record<string, string>; 'continue-on-error'?: boolean };
 const action = parse(readFileSync('actions/qa-store/action.yml', 'utf8')) as {
-  inputs: Record<string, { default?: string; required?: boolean }>;
+  inputs: Record<string, { default?: string; required?: boolean; description?: string }>;
   outputs: Record<string, { value: string }>;
   runs: { using: string; steps: Step[] };
 };
@@ -254,7 +254,7 @@ describe('the block\'s steps', () => {
     expect(write?.['continue-on-error']).toBeUndefined();
     expect(read?.if).toBe("steps.prepare.outputs.present == 'true' && (inputs.operation == 'last-green' || inputs.operation == 'export' || inputs.operation == 'cost-rows')");
     expect(read?.['continue-on-error']).toBe(true);
-    for (const s of hookSteps) expect(Object.keys(s.with ?? {}).sort()).toEqual(['dir', 'from', 'kind', 'operation', 'to', 'variables']);
+    for (const s of hookSteps) expect(Object.keys(s.with ?? {}).sort()).toEqual(['dir', 'from', 'kind', 'operation', 'secrets', 'to', 'variables']);
   });
 
   // kanon#423: a composite action can't read `vars`, so the lane hands the repository's variables
@@ -263,6 +263,14 @@ describe('the block\'s steps', () => {
   it('hands the hook the variables the lane passed, unchanged, in both hook steps', () => {
     expect(action.inputs.variables).toEqual({ description: expect.stringContaining('toJSON(vars)'), required: false, default: '' });
     for (const s of hookSteps) expect(s.with?.variables).toBe('${{ inputs.variables }}');
+  });
+
+  // kanon#433: the store's coordinates are secrets, which the lane builds into one line of JSON
+  // by name and the block hands on unchanged; `variables` stays, deprecated, for one move.
+  it('hands the hook the store\'s secrets the lane passed, unchanged, in both hook steps', () => {
+    expect(action.inputs.secrets).toEqual({ description: expect.stringContaining('QA_STORE_ROLE_ARN'), required: false, default: '' });
+    expect(action.inputs.variables?.description).toMatch(/^Deprecated \(kanon#433\)/);
+    for (const s of hookSteps) expect(s.with?.secrets).toBe('${{ inputs.secrets }}');
   });
 
   it('is handed the repository\'s variables by every store step of every lane, and the delete step none', () => {
