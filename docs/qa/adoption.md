@@ -123,7 +123,7 @@ These rules' lines are prose only with a note, and name nothing to install: `K-P
 - **The Implementer** is not yet on. Its App, callers, register row and sign-off delegation are in place, and its pins include [#234](https://github.com/yedeya-labs/kanon/issues/234) since 2026-10-05 (ADR 0011, stage 2); what remains is the first `agent:implement` label.
 - **The Explorer** runs its code audit of Kanon's own code (`code-audit.yml`, plan 0004 step 11a) and, since 2026-10-07, its telemetry mode (`explore-telemetry.yml`, plan 0004 step 14). Kanon has no app for its sweep.
 - **The Lead** waits for the Owner's decision (ADR 0011).
-- **No hosted telemetry yet:** the store is plan 0002, in progress.
+- **The hosted telemetry store has been live since 2026-10-06,** and Kanon's collector (`telemetry.yml`, plan 0002 S7) writes its lanes' rows to it.
 - **The admin bypass on the `main` ruleset** stays until Kanon's `dco` caller pins a release that exempts the Releaser's release commits (#337), by the Owner's decision (#49). The Releaser, `yedeya-labs-releaser`, has been a bypass actor, for pull requests only, since plan 0005's L5 (2026-10-06); once the pin lands on `main`, the admin's bypass is removed, which installs `K-MERGE-8`'s bypass list.
 - **No agent ever merges on Kanon** (ADR 0011), so the merge gate and the Merger are not planned here.
 

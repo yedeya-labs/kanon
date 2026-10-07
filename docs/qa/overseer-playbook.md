@@ -18,6 +18,7 @@ Tell a run that died from one that skipped by reading full run records, never a 
 | Rebase (resolve a conflict) | `rebase.yml` | CI finishing on `main` (refused under the merge queue, [#79](https://github.com/yedeya-labs/kanon/issues/79)), daily (sporadic, [#397](https://github.com/yedeya-labs/kanon/issues/397)), a dispatch |
 | Code audit | `code-audit.yml` | every three days, a dispatch |
 | Overseer | `overseer.yml` | weekly, a dispatch, a merged pull request that moves its Kanon pin |
+| Explore the telemetry | `explore-telemetry.yml` | weekly (Tuesday 06:30 UTC), a dispatch |
 
 Read them with `gh run list --workflow <caller> --json databaseId,event,status,conclusion,createdAt,headBranch` and `gh run view <id> --json jobs`. The runs filed under `agent-lanes-smoke.yml`, `agent-blocks-smoke.yml` and the other smoke workflows are tests of the lane code on a pull request, not the pipeline running: never count them as a lane's runs.
 
