@@ -383,8 +383,8 @@ jobs:
             # one role, given as `-v role=<Role>`. Fails, with the reason on stderr, unless there is
             # exactly one table headed `Role | App slug` outside a fenced block, exactly one row for the
             # role, and the slug is in backticks (optionally bold) and spelled as GitHub derives slugs.
-            # The revise lanes carry this program verbatim in their filter steps, and
-            # tests/unit/lane-check.test.ts holds every copy to this file.
+            # The review lane and the two revise lanes carry this program verbatim, as a
+            # `REGISTER_AWK` env. tests/unit/lane-check.test.ts holds every such copy to this file.
             function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
             function unbold(s) {
               s = trim(s)

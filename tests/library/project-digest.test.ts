@@ -262,6 +262,9 @@ describe('classifyDispatch — the classification the digest must not get wrong'
     const shapes = [
       [], [c(BAIL)], [c(BAIL, '2026-08-20T00:00:00Z')], [c(BAIL), h('go')], [h('hello')],
       [c('Stopped.'), h('ok'), c('Stopped again.')],
+      // Stops the Implementer's App left unmarked, which the sweep still re-dispatches (kanon#393).
+      [{ login: IMPL, body: 'Stopping: this needs design.', createdAt: '2026-08-20T00:00:00Z' }],
+      [c(BAIL, '2026-08-20T00:00:00Z'), { login: IMPL, body: 'Stopping: this needs design.', createdAt: '2026-08-25T00:00:00Z' }],
     ];
     for (const comments of shapes) {
       for (const labels of [['agent:implement'], ['agent:implement', 'qa:needs-info']]) {
