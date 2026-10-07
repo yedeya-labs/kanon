@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
+import { RESULT_MARK, resultLine } from '../../cli/apps-check.mjs';
 import { appSecrets, appsCheckFile, callerFile, ciFile, dependabotFile, hookFile, loadRequirements, TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
 import { branchWorkflows, CATEGORIES, checkReporters, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { registerRolesOf, rulesetBody } from '../../cli/init.mjs';
@@ -109,10 +110,16 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
     apps: Object.fromEntries(ids.map((id) => [`widgets-${id}`, { owner: { login: 'acme', type: 'User' }, permissions: permissionsOf(REQ, id) }])) as Record<string, { id?: number; owner: object; permissions: Record<string, string> }>,
     rulesets: [{ id: 7, ...rulesetBody(false) }] as Array<ReturnType<typeof rulesetBody> & { id: number; bypass_actors?: unknown[]; source_type?: string }>,
     releases: over.releases ?? {},
-    installations: null as Array<{ id: number; app_slug: string; account: { login: string } }> | null,
+    installations: null as Array<{ id: number; app_slug: string; app_id?: number; account: { login: string } }> | null,
     variables: over.variables === undefined ? new Set<string>() : over.variables,
     // The workflows on the default branch, as GitHub has them (#418): CI with the lane check's job.
     defaultWorkflows: { 'ci.yml': ciFile(PINNED, 'main') } as Record<string, string> | null,
+    ownerType: 'User' as 'User' | 'Organization',
+    /** Slugs of private Apps: GET /apps/<slug> answers 404 to a person's token and the workflow's (#417). */
+    private: new Set<string>(),
+    appsCheck: { runs: [] as AppsCheckRun[], jobs: {} as Record<number, Array<{ id: number; name: string; conclusion: string }>>, logs: {} as Record<number, string>, ignoresEvent: false /* a server that ignores the event filter, so doctor's own check is what refuses */,
+      /** The values of the run's secrets, each App's <APP>_APP_ID among them, which the runner masks in every log as `***`. */
+      secrets: new Set<string>() },
   };
   const calls: string[][] = [];
   const inputs: string[] = [];
@@ -127,12 +134,22 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
       return ok({ data: { repository: { object: entries.length ? { entries } : null } } });
     }
     if (a0 === 'api' && a1 === 'user') return ok('octo\n');
-    if (a0 === 'api' && a1 === 'user/installations?per_page=100') return st.installations ? ok({ total_count: st.installations.length, installations: st.installations }) : no('gh: Resource not accessible by personal access token (HTTP 403)');
+    if (a0 === 'api' && (a1 === 'user/installations?per_page=100' || a1 === 'orgs/acme/installations?per_page=100')) return st.installations ? ok({ total_count: st.installations.length, installations: st.installations }) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 === 'secret' && a1 === 'list') return st.secrets ? ok([...st.secrets].map((name) => ({ name }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 === 'variable' && a1 === 'list') return st.variables ? ok([...st.variables].map((name) => ({ name }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 !== 'api' || args.includes('-X')) return no(`unexpected gh ${args.join(' ')}`);
     const path = args.find((x, i) => i > 0 && /^(repos|orgs|apps)\//.test(x)) ?? '';
-    if (path === `repos/${REPO}`) return ok({ private: false, default_branch: 'main', owner: { login: 'acme', type: 'User' }, permissions: { admin: true } });
+    if (path === `repos/${REPO}`) return ok({ private: false, default_branch: 'main', owner: { login: 'acme', type: st.ownerType }, permissions: { admin: true } });
+    const runs = /^repos\/acme\/widgets\/actions\/workflows\/apps-check\.yml\/runs\?(.*)$/.exec(path);
+    if (runs) {
+      const q = new URLSearchParams(runs[1]);
+      const list = st.appsCheck.runs.filter((x) => (!q.get('branch') || x.head_branch === q.get('branch')) && (!q.get('event') || st.appsCheck.ignoresEvent || x.event === q.get('event')) && (!q.get('status') || q.get('status') === 'completed'));
+      return ok({ total_count: list.length, workflow_runs: list.slice(0, Number(q.get('per_page') ?? 30)) });
+    }
+    const jobs = /^repos\/acme\/widgets\/actions\/runs\/(\d+)\/jobs(\?.*)?$/.exec(path);
+    if (jobs) return ok({ jobs: st.appsCheck.jobs[Number(jobs[1])] ?? [] });
+    const log = /^repos\/acme\/widgets\/actions\/jobs\/(\d+)\/logs$/.exec(path);
+    if (log) return st.appsCheck.logs[Number(log[1])] !== undefined ? ok(masked(st.appsCheck.logs[Number(log[1])]!, st.appsCheck.secrets)) : no('gh: Not Found (HTTP 404)');
     if (path === `repos/${REPO}/branches/main`) return ok('main');
     if (path.startsWith(`repos/${REPO}/rulesets?`)) return ok(st.rulesets.map((r) => ({ id: r.id, name: r.name, target: r.target })));
     const one = /^repos\/acme\/widgets\/rulesets\/(\d+)$/.exec(path);
@@ -140,7 +157,7 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
     if (path.startsWith(`repos/${REPO}/labels?`)) return ok([[...st.labels].map((name) => ({ name }))]);
     if (path.startsWith(`repos/${REPO}/milestones?`)) return ok([[]]);
     const app = /^apps\/([a-z0-9-]+)$/.exec(path);
-    if (app) return st.apps[app[1]!] ? ok({ slug: app[1], ...st.apps[app[1]!] }) : no('gh: Not Found (HTTP 404)');
+    if (app) return st.apps[app[1]!] && !st.private.has(app[1]!) ? ok({ slug: app[1], ...st.apps[app[1]!] }) : no('gh: Not Found (HTTP 404)');
     const rel = /^repos\/yedeya-labs\/kanon\/contents\/requirements\.json\?ref=(.+)$/.exec(path);
     if (rel) {
       const r = st.releases[decodeURIComponent(rel[1]!)];
@@ -149,6 +166,43 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
     return no(`unexpected gh ${args.join(' ')}`);
   };
   return { st, gh, calls, inputs };
+};
+
+/** A log as the runner writes it: each secret's value, wherever it appears, is `***`. */
+const masked = (log: string, secrets: Set<string>) => [...secrets].reduce((text, value) => text.split(value).join('***'), log);
+
+type AppsCheckRun = { id: number; head_branch: string; event: string; head_repository: { full_name: string }; html_url: string; created_at: string; conclusion: string };
+
+/**
+ * A completed run of the apps-check caller, newest first: each App's job printed the line
+ * apps-check writes for doctor, with what its installation holds (#417).
+ */
+const appsCheckRun = (
+  github: ReturnType<typeof fakeGitHub>,
+  holds: Record<string, Record<string, string>>,
+  o: { branch?: string; event?: string; from?: string; conclusion?: string; slugs?: Record<string, string>; appIds?: Record<string, number>; line?: boolean | 'with-id' } = {},
+) => {
+  const id = 900 + github.st.appsCheck.runs.length;
+  const conclusion = o.conclusion ?? 'success';
+  github.st.appsCheck.runs.unshift({ id, head_branch: o.branch ?? 'main', event: o.event ?? 'workflow_dispatch', head_repository: { full_name: o.from ?? REPO }, html_url: `https://github.com/${REPO}/actions/runs/${id}`, created_at: '2026-10-06T17:32:19Z', conclusion });
+  const apps = Object.keys(holds);
+  github.st.appsCheck.jobs[id] = [{ id: id * 10, name: 'apps / Read the App register', conclusion: 'success' }, ...apps.map((app, i) => ({ id: id * 10 + i + 1, name: `apps / ${REQ.identities.apps[app]!.name}`, conclusion }))];
+  apps.forEach((app, i) => {
+    const result = { app, slug: o.slugs?.[app] ?? `widgets-${app}`, permissions: holds[app]! };
+    // The App's id is its <APP>_APP_ID secret, which the job maps and the runner masks.
+    const appId = String(o.appIds?.[app] ?? 3100001 + i);
+    github.st.appsCheck.secrets.add(appId);
+    github.st.appsCheck.logs[id * 10 + i + 1] = [
+      '2026-10-06T17:32:40.1163336Z ##[group]Run actions/create-github-app-token',
+      `2026-10-06T17:32:40.1163336Z   client-id: ${appId}`,
+      '2026-10-06T17:32:43.2932067Z ##[group]Run node "$KANON/cli/apps-check.mjs" check',
+      `2026-10-06T17:32:43.2932067Z   APP_ID: ${appId}`,
+      // 'with-id': the line as d7a7108 printed it, with the App's id in it.
+      ...(o.line === false ? [] : [`2026-10-06T17:32:44.1163336Z ${o.line === 'with-id' ? `${RESULT_MARK} ${JSON.stringify({ app, slug: result.slug, appId: Number(appId), permissions: result.permissions })}` : resultLine(result)}`]),
+      `2026-10-06T17:32:44.1163336Z ${REQ.identities.apps[app]!.name}: the installation matches the register and the App's permissions.`,
+    ].join('\n');
+  });
+  return `https://github.com/${REPO}/actions/runs/${id}`;
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the JSON document, read field by field
@@ -957,6 +1011,41 @@ describe('kanon doctor and the Releaser\'s ruleset bypass (#49)', () => {
     expect(r.status).toBe(EXIT.incomplete);
   });
 
+  // #417: apps-check reads a private Releaser's permissions, but its id is the RELEASER_APP_ID
+  // secret's value, which the run's log masks; the owner's installations name it.
+  const privateReleaser = (bypass: unknown[]) => {
+    const { dir, github } = withReleaser(bypass);
+    github.st.private = new Set(Object.keys(github.st.apps));
+    appsCheckRun(github, Object.fromEntries([...identitiesOf(LANES), 'releaser'].map((id) => [id, permissionsOf(REQ, id)])), { appIds: { releaser: RELEASER_ID } });
+    return { dir, github };
+  };
+
+  it('reads a private Releaser\'s id from the owner\'s installations, never from the masked log, to find it in the bypass list (#417)', async () => {
+    const { dir, github } = privateReleaser([RELEASER]);
+    github.st.installations = [{ id: 34, app_slug: 'widgets-releaser', app_id: RELEASER_ID, account: { login: 'acme' } }];
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual([]);
+    expect(r.json.unchecked).toEqual([]);
+    expect(r.status).toBe(EXIT.healthy);
+    const missing = privateReleaser([ADMIN]);
+    missing.github.st.installations = github.st.installations;
+    expect(ids(await run(missing.dir, missing.github, ['--json']))).toContain('ruleset.releaser-bypass-missing main');
+  });
+
+  it('leaves a private Releaser\'s bypass unchecked, and says why, when the token can\'t list the installations or they list no Releaser (#417)', async () => {
+    const { dir, github } = privateReleaser([RELEASER]);
+    const r = await run(dir, github, ['--json']);
+    expect(r.json.unchecked).toEqual([expect.objectContaining({ check: 'ruleset-bypass', subject: 'main', reason: expect.stringContaining('a secret the run\'s log masks') })]);
+    expect(r.json.unchecked[0].reason).toContain('only a GitHub App\'s user token can list them');
+    expect(r.status).toBe(EXIT.incomplete);
+    github.st.ownerType = 'Organization';
+    const org = await run(dir, github, ['--json']);
+    expect(org.json.unchecked[0].reason).toContain('Administration permission (read)');
+    github.st.installations = [{ id: 31, app_slug: 'widgets-reviewer', app_id: 77, account: { login: 'acme' } }];
+    const none = await run(dir, github, ['--json']);
+    expect(none.json.unchecked).toEqual([expect.objectContaining({ check: 'ruleset-bypass', reason: expect.stringContaining('list no installation of it') })]);
+  });
+
   it('asks nothing of the bypass where the release caller doesn\'t map the Releaser', async () => {
     const dir = checkout(healthyFiles());
     const github = fakeGitHub();
@@ -995,6 +1084,22 @@ describe('kanon doctor and Apps no lane uses any more', () => {
     github.st.installations = [{ id: 33, app_slug: `widgets-${identitiesOf(LANES)[0]}`, account: { login: 'acme' } }];
     const r = await run(migrated(), github, ['--json']);
     expect(ids(r)).toEqual([]);
+  });
+
+  it('in an organisation, lists its installations, and names the token that can when this one can\'t (#417)', async () => {
+    const github = fakeGitHub();
+    github.st.ownerType = 'Organization';
+    const blind = await run(migrated(), github, ['--json']);
+    expect(blind.json.unchecked).toEqual([expect.objectContaining({ check: 'unused-apps', subject: 'acme' })]);
+    expect(blind.json.unchecked[0].reason).toMatch(/an owner of acme.*Administration permission \(read\)/);
+    expect(blind.json.unchecked[0].reason).toContain('docs/doctor.md');
+    expect(blind.status).toBe(EXIT.incomplete);
+    github.st.installations = [{ id: 31, app_slug: 'widgets-reviewer', account: { login: 'acme' } }];
+    const r = await run(migrated(), github, ['--json']);
+    expect(github.calls.some((c) => c[1] === 'orgs/acme/installations?per_page=100')).toBe(true);
+    expect(ids(r)).toEqual(['app.unused widgets-reviewer']);
+    expect(r.json.findings[0].fix.url).toBe('https://github.com/organizations/acme/settings/installations/31');
+    expect(r.status).toBe(EXIT.healthy);
   });
 
   it('is incomplete when the installations can\'t be listed, and asks nothing without a former App', async () => {
@@ -1093,6 +1198,129 @@ describe('kanon doctor and the secrets a workflow maps (#414)', () => {
     execFileSync('git', ['-C', dir, 'checkout', '-q', '-b', 'topic']);
     const r = await run(dir, fakeGitHub(), ['--json']);
     expect(r.json.notes.join('\n')).toContain('The id-token holders and the secrets the workflows map are counted on topic, not on main');
+  });
+});
+
+// #417: GET /apps/<slug> answers 404 for a private App to a person's token and the workflow's
+// alike; only the App itself reads it. apps-check reads each installation with the App's own
+// key, and prints what it found; doctor reads that from the latest run on the default branch.
+describe('kanon doctor and private Apps, read through apps-check (#417)', () => {
+  const apps = identitiesOf(LANES);
+  const asReleased = () => Object.fromEntries(apps.map((id) => [id, permissionsOf(REQ, id)]));
+  const privately = () => {
+    const github = fakeGitHub();
+    github.st.private = new Set(apps.map((id) => `widgets-${id}`));
+    return github;
+  };
+
+  it('is healthy, exit 0, when the Apps are private and the latest apps-check run found what the release grants', async () => {
+    const github = privately();
+    const url = appsCheckRun(github, asReleased());
+    const r = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(r.json.unchecked).toEqual([]);
+    expect(ids(r)).toEqual([]);
+    expect(r.status, r.out).toBe(EXIT.healthy);
+    expect(r.json.notes.filter((n: string) => n.includes(url))).toHaveLength(apps.length);
+    expect(github.calls.map((c) => c.join(' '))).toContain(`api repos/${REPO}/actions/workflows/apps-check.yml/runs?branch=main&event=workflow_dispatch&status=completed&per_page=1`);
+  });
+
+  it('finds a missing and an extra permission in what apps-check found, though apps-check failed the run', async () => {
+    const github = privately();
+    const [author, judge] = apps as [string, string];
+    const holds = asReleased();
+    delete holds[judge]!.issues;
+    holds[author]!.deployments = 'read';
+    appsCheckRun(github, holds, { conclusion: 'failure' });
+    const r = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(ids(r)).toEqual([`app.permission-extra widgets-${author}`, `app.permission-missing widgets-${judge}`]);
+    expect(r.json.findings[1].message).toContain('issues: none');
+    expect(r.json.findings[1].fix.url).toBe(`https://github.com/settings/apps/widgets-${judge}/permissions`);
+    expect(r.status).toBe(EXIT.findings);
+  });
+
+  it('checks --to against what apps-check found', async () => {
+    const github = privately();
+    const { next, slug } = nextRelease();
+    github.st.releases[NEXT] = next;
+    appsCheckRun(github, asReleased());
+    const r = await run(checkout(healthyFiles()), github, ['--json', '--to', NEXT]);
+    expect(ids(r)).toEqual([`app.permission-missing ${slug}`, 'declaration.missing docs/qa/capability-ledger.md']);
+    expect(r.json.findings[0].message).toContain('deployments: read');
+  });
+
+  it('is incomplete, and says to run apps-check, when there is no run on the default branch', async () => {
+    const github = privately();
+    appsCheckRun(github, asReleased(), { branch: 'feature' });
+    const r = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(r.json.unchecked.map((u: { check: string; subject: string }) => `${u.check} ${u.subject}`)).toEqual(apps.map((id) => `app-permissions widgets-${id}`));
+    for (const u of r.json.unchecked) {
+      expect(u.reason).toContain('could not read the App');
+      expect(u.reason).toContain(`gh workflow run apps-check.yml -R ${REPO}`);
+    }
+    expect(r.status).toBe(EXIT.incomplete);
+  });
+
+  it('never reads a newer run a fork\'s pull request from its own main started, whose workflow is the fork\'s', async () => {
+    const github = privately();
+    const [author] = apps as [string];
+    const url = appsCheckRun(github, asReleased());
+    const forged = asReleased();
+    delete forged[author]!.contents;
+    appsCheckRun(github, forged, { event: 'pull_request', from: 'mallory/widgets' });
+    const r = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(r.json.unchecked).toEqual([]);
+    expect(ids(r)).toEqual([]);
+    expect(r.json.notes.filter((n: string) => n.includes(url))).toHaveLength(apps.length);
+  });
+
+  it('is incomplete, and reads nothing from it, when the run it is given came from another repository or another event', async () => {
+    for (const o of [{ from: 'mallory/widgets' }, { event: 'pull_request', from: 'mallory/widgets' }, { event: 'push' }]) {
+      const github = privately();
+      github.st.appsCheck.ignoresEvent = true;
+      appsCheckRun(github, asReleased(), o);
+      const r = await run(checkout(healthyFiles()), github, ['--json']);
+      expect(r.json.unchecked.map((u: { check: string }) => u.check), JSON.stringify(o)).toEqual(apps.map(() => 'app-permissions'));
+      expect(r.json.unchecked[0].reason).toContain(`not dispatched in ${REPO}`);
+      expect(r.json.unchecked[0].reason).toContain(`gh workflow run apps-check.yml -R ${REPO}`);
+      expect(r.status).toBe(EXIT.incomplete);
+    }
+  });
+
+  it('is incomplete when the run printed no result, as apps-check before #417 did, or checked another App', async () => {
+    const github = privately();
+    const url = appsCheckRun(github, asReleased(), { line: false });
+    const old = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(old.json.unchecked).toHaveLength(apps.length);
+    expect(old.json.unchecked[0].reason).toContain(url);
+    expect(old.json.unchecked[0].reason).toContain('gh workflow run apps-check.yml');
+    expect(old.status).toBe(EXIT.incomplete);
+    const [author] = apps as [string];
+    appsCheckRun(github, asReleased(), { slugs: { [author]: 'acme-old-author' } });
+    const other = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(other.json.unchecked).toEqual([expect.objectContaining({ check: 'app-permissions', subject: `widgets-${author}`, reason: expect.stringContaining('`acme-old-author`') })]);
+    expect(other.status).toBe(EXIT.incomplete);
+  });
+
+  it('reads the permissions from a log the runner masked the App id in, and says when a line it can\'t read was masked', async () => {
+    const github = privately();
+    appsCheckRun(github, asReleased());
+    expect([...github.st.appsCheck.secrets]).toHaveLength(apps.length);
+    const r = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(r.json.unchecked).toEqual([]);
+    expect(r.status).toBe(EXIT.healthy);
+    for (const n of r.json.notes) for (const v of github.st.appsCheck.secrets) expect(n).not.toContain(v);
+    appsCheckRun(github, asReleased(), { line: 'with-id' });
+    const old = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(old.json.unchecked).toHaveLength(apps.length);
+    expect(old.json.unchecked[0].reason).toContain('the runner masked part of');
+    expect(old.json.unchecked[0].reason).not.toContain('from before #417');
+  });
+
+  it('reads an App it can read from GitHub, and no run', async () => {
+    const github = fakeGitHub();
+    const r = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(r.status).toBe(EXIT.healthy);
+    expect(github.calls.some((c) => c.some((x) => x.includes('/actions/')))).toBe(false);
   });
 });
 

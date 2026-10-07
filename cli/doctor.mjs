@@ -46,8 +46,9 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { URL } from 'node:url';
+import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
@@ -837,22 +838,100 @@ export const diagnose = async (deps, opts) => {
       });
     }
   }
+  // GitHub shows a private App only to the App itself: GET /apps/<slug> answers 404 to a person's
+  // token and the workflow's alike (#417). apps-check reads each installation with the App's own
+  // key and prints what it found (cli/apps-check.mjs), and a run's log is readable with
+  // Actions: read. Only the latest completed run dispatched on the default branch counts: its
+  // workflow is the reviewed one, and an older run may predate a change. The branch filter alone
+  // doesn't hold that: it matches a run's head_branch, and a pull request from a fork's own `main`
+  // has that too, and runs the fork's workflow. So the query asks the server for workflow_dispatch
+  // runs only, the one trigger the caller declares and one a fork can't start, and a run from
+  // another repository or another trigger is refused, never read.
+  const appsCheckPath = appsCheckCallers[0]?.file ?? (workflows.has('.github/workflows/apps-check.yml') ? '.github/workflows/apps-check.yml' : null);
+  const appsCheckName = appsCheckPath ? basename(appsCheckPath) : 'apps-check.yml';
+  const runAppsCheck = appsCheckPath
+    ? `run ${appsCheckName} on ${s.defaultBranch} (gh workflow run ${appsCheckName} -R ${repo}), then doctor again`
+    : `add the apps-check caller (docs/apps.md), run it on ${s.defaultBranch}, then doctor again`;
+  const ghJsonOf = (/** @type {GhResult} */ r) => {
+    try {
+      return r.status === 0 ? JSON.parse(r.stdout) : null;
+    } catch {
+      return null;
+    }
+  };
+  /** @type {Promise<{ run: any, jobs: any[] } | { reason: string }> | null} */
+  let latestAppsCheck = null;
+  const appsCheckRun = () =>
+    (latestAppsCheck ??= (async () => {
+      if (!appsCheckPath) return { reason: `no apps-check workflow is there to read it from: ${runAppsCheck}` };
+      const runs = await deps.gh(['api', `repos/${repo}/actions/workflows/${appsCheckName}/runs?branch=${encodeURIComponent(s.defaultBranch)}&event=workflow_dispatch&status=completed&per_page=1`]);
+      const list = ghJsonOf(runs)?.workflow_runs;
+      if (!Array.isArray(list)) return { reason: `the token can't list ${appsCheckName}'s runs, which needs Actions: read (${runs.stderr.trim() || `exit ${runs.status}`})` };
+      const run = list[0];
+      if (!isMap(run)) return { reason: `${appsCheckName} has no completed run on ${s.defaultBranch}: ${runAppsCheck}` };
+      const from = isMap(run.head_repository) ? String(run.head_repository.full_name ?? '') : '';
+      if (run.event !== 'workflow_dispatch' || from.toLowerCase() !== repo.toLowerCase()) {
+        return { reason: `the latest ${appsCheckName} run on ${s.defaultBranch} (${run.html_url}) was started by ${run.event || 'an unknown event'} from ${from || 'an unknown repository'}, not dispatched in ${repo}, so its workflow may not be the reviewed one: ${runAppsCheck}` };
+      }
+      const jobs = await deps.gh(['api', `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`]);
+      const all = ghJsonOf(jobs)?.jobs;
+      if (!Array.isArray(all)) return { reason: `the token can't list the jobs of ${run.html_url}, which needs Actions: read (${jobs.stderr.trim() || `exit ${jobs.status}`})` };
+      return { run, jobs: all };
+    })());
+  /**
+   * What the latest apps-check run found on the App's installation, or why it can't be used.
+   * @param {string} id @param {string} slug
+   * @returns {Promise<{ result: import('./apps-check.mjs').Result, when: string } | { reason: string }>}
+   */
+  const fromAppsCheck = async (id, slug) => {
+    const found = await appsCheckRun();
+    if ('reason' in found) return found;
+    const when = `the ${appsCheckName} run of ${String(found.run.created_at ?? '').slice(0, 10)} (${found.run.html_url})`;
+    const name = req.identities.apps[id]?.name;
+    const job = name ? found.jobs.find((j) => isMap(j) && (j.name === name || String(j.name).endsWith(` / ${name}`))) : undefined;
+    if (!job) return { reason: `${when} has no job for the ${id} App: ${runAppsCheck}` };
+    const path = `repos/${repo}/actions/jobs/${job.id}/logs`;
+    // The log holds terminal escapes, which gh prints only when asked; a gh too old to know the
+    // flag prints them anyway.
+    let log = await deps.gh(['api', '--allow-escape-sequences', path]);
+    if (log.status !== 0 && /unknown flag/.test(log.stderr)) log = await deps.gh(['api', path]);
+    if (log.status !== 0) return { reason: `the token can't read the log of ${when}, which needs Actions: read (${log.stderr.trim() || `exit ${log.status}`})` };
+    const result = readResult(log.stdout, id);
+    if (!result && resultMasked(log.stdout)) return { reason: `${when} printed a result for the ${id} App that the runner masked part of, where a secret's value appeared in it, so it can't be read; this is apps-check's to fix, not yours` };
+    if (!result) return { reason: `${when} printed no result for the ${id} App, as an apps-check from before #417 doesn't, nor one that couldn't mint the App's token: ${runAppsCheck}` };
+    if (result.slug !== slug) return { reason: `${when} checked the App \`${result.slug}\` as the ${id} App, but the register names \`${slug}\`: ${runAppsCheck}` };
+    return { result, when };
+  };
+
+  /**
+   * The owner's App installations, read once: only an owner of an organisation can list them,
+   * with its Administration permission (read); a repository's token never can (#417).
+   * @type {Promise<{ listed: GhResult, installs: any[] | null }> | null}
+   */
+  let installations = null;
+  const ownerInstallations = () =>
+    (installations ??= (async () => {
+      const listed = await deps.gh(['api', s.kind === 'Organization' ? `orgs/${s.owner}/installations?per_page=100` : 'user/installations?per_page=100']);
+      const j = ghJsonOf(listed);
+      return { listed, installs: Array.isArray(j?.installations) ? j.installations : null };
+    })());
+
   /** @type {Map<string, number>} identity → its App's id, read with its permissions */
   const appIdOf = new Map();
   for (const [id, slug] of slugOf) {
     const need = req.identities.apps[id]?.permissions ?? req.identities.roles[id]?.permissions ?? {};
     const r = await deps.gh(['api', `apps/${slug}`]);
     /** @type {any} */
-    const app = (() => {
-      try {
-        return r.status === 0 ? JSON.parse(r.stdout) : null;
-      } catch {
-        return null;
-      }
-    })();
+    let app = ghJsonOf(r);
     if (!isMap(app) || !isMap(app.permissions)) {
-      unchecked.push({ check: 'app-permissions', subject: slug, reason: `could not read the App ${slug} (${r.stderr.trim() || `exit ${r.status}`})` });
-      continue;
+      const found = await fromAppsCheck(id, slug);
+      if ('reason' in found) {
+        unchecked.push({ check: 'app-permissions', subject: slug, reason: `could not read the App ${slug} (${r.stderr.trim() || `exit ${r.status}`}), and ${found.reason}` });
+        continue;
+      }
+      // No id: the App's id is a secret's value, which the run's log masks (#417).
+      app = { permissions: found.result.permissions };
+      notes.push(`GitHub shows the ${id} App \`${slug}\` only to itself, so its permissions are its installation's, as ${found.when} found them; run apps-check again after you change them.`);
     }
     if (Number.isInteger(app.id)) appIdOf.set(id, Number(app.id));
     const have = /** @type {Record<string, string>} */ (app.permissions);
@@ -886,20 +965,23 @@ export const diagnose = async (deps, opts) => {
     ? [...new Set([...history.stdout.matchAll(/^[+-][ \t]*\|[^|\n]*\|[ \t]*\*{0,2}`([a-z0-9]+(?:-[a-z0-9]+)*)`/gm)].map((m) => /** @type {string} */ (m[1])))].filter((x) => !nowSlugs.has(x)).sort()
     : [];
   if (formerSlugs.length) {
-    const listed = await deps.gh(['api', s.kind === 'Organization' ? `orgs/${s.owner}/installations?per_page=100` : 'user/installations?per_page=100']);
-    /** @type {any[] | null} */
-    const installs = (() => {
-      try {
-        const j = listed.status === 0 ? JSON.parse(listed.stdout) : null;
-        return Array.isArray(j?.installations) ? j.installations : null;
-      } catch {
-        return null;
-      }
-    })();
-    if (!installs) unchecked.push({ check: 'unused-apps', subject: s.owner, reason: `the token can't list ${s.owner}'s App installations (${listed.stderr.trim() || `exit ${listed.status}`}), so ${formerSlugs.join(', ')}, which the register once named, can't be looked for` });
+    const { listed, installs } = await ownerInstallations();
+    // Only an owner of the organisation can list its installations, with the organisation's
+    // Administration permission (read); a repository's token never can (#417).
+    if (!installs) {
+      unchecked.push({
+        check: 'unused-apps',
+        subject: s.owner,
+        reason: `the token can't list ${s.owner}'s App installations (${listed.stderr.trim() || `exit ${listed.status}`}), so ${formerSlugs.join(', ')}, which the register once named, can't be looked for. ${
+          s.kind === 'Organization'
+            ? `Only an owner of ${s.owner} can list them, with a token that holds the organisation's Administration permission (read): run doctor once with one (docs/doctor.md, "The token it needs")`
+            : 'Look for them on https://github.com/settings/installations'
+        }`,
+      });
+    }
     else {
       for (const slug of formerSlugs) {
-        const inst = installs.find((i) => i?.app_slug === slug && String(i?.account?.login ?? '').toLowerCase() === s.owner.toLowerCase());
+        const inst = installs.find((/** @type {any} */ i) => i?.app_slug === slug && String(i?.account?.login ?? '').toLowerCase() === s.owner.toLowerCase());
         if (!inst) continue;
         const base = s.kind === 'Organization' ? `https://github.com/organizations/${s.owner}/settings` : 'https://github.com/settings';
         find('app.unused', slug, `The App \`${slug}\` is still installed for ${s.owner}, but ${REGISTER_PATH} no longer names it, so no lane of ${checked} runs as it; it holds a key nothing reads (plan 0005 §3.1).`, {
@@ -1050,9 +1132,28 @@ export const diagnose = async (deps, opts) => {
     // passes the Releaser's release PR (#337); before that, it is what merges that PR.
     if (identities.includes('releaser')) {
       const slug = slugOf.get('releaser');
-      const appId = appIdOf.get('releaser');
+      let appId = appIdOf.get('releaser');
+      /** @type {string | null} */
+      let noId = null;
+      // A private Releaser's permissions come from apps-check, but not its id: that is the
+      // <RELEASER>_APP_ID secret's value, which the run's log masks, and doctor never works
+      // around a mask (K-AGENT-47). Its installation, which an organisation's owner can list,
+      // names it.
+      if (slug !== undefined && appId === undefined && !unchecked.some((u) => u.check === 'app-permissions' && u.subject === slug)) {
+        const { listed, installs } = await ownerInstallations();
+        const inst = installs?.find((/** @type {any} */ i) => i?.app_slug === slug && String(i?.account?.login ?? '').toLowerCase() === s.owner.toLowerCase());
+        if (Number.isInteger(inst?.app_id)) appId = Number(inst.app_id);
+        else if (installs) noId = `the Releaser App \`${slug}\` is private and ${s.owner}'s installations list no installation of it, so its id, and with it its bypass, can't be looked for`;
+        else {
+          noId = `the Releaser App \`${slug}\` is private, so GitHub shows its id only in ${s.owner}'s App installations, which the token can't list (${listed.stderr.trim() || `exit ${listed.status}`}); apps-check can't print it, because it is the value of a secret the run's log masks. ${
+            s.kind === 'Organization'
+              ? `An owner of ${s.owner} runs doctor once with a token that holds the organisation's Administration permission (read) (docs/doctor.md, "The token it needs")`
+              : 'On a personal account only a GitHub App\'s user token can list them, so check the bypass list yourself on the ruleset\'s page'
+          }`;
+        }
+      }
       if (slug === undefined || appId === undefined) {
-        unchecked.push({ check: 'ruleset-bypass', subject: s.defaultBranch, reason: `the Releaser App ${slug ? `\`${slug}\` could not be read` : 'has no register row'}, so its bypass can't be looked for` });
+        unchecked.push({ check: 'ruleset-bypass', subject: s.defaultBranch, reason: noId ?? `the Releaser App ${slug ? `\`${slug}\` could not be read` : 'has no register row'}, so its bypass can't be looked for` });
       } else {
         const where = releaserBypass(s.covering, appId);
         for (const r of where.hidden) unchecked.push({ check: 'ruleset-bypass', subject: s.defaultBranch, reason: `the token can't see the bypass list of the ruleset "${r.name}" (only someone who can edit it can)` });
