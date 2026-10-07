@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -88,5 +88,50 @@ describe('the lane-check action', () => {
     const steps = smoke.jobs.smoke?.steps ?? [];
     expect(steps.map((s) => s.uses).filter(Boolean)).toEqual(['actions/checkout@v7', '$/actions/kanon-path', '$/actions/lane-check']);
     expect(steps.some((s) => s.run?.includes('cp -R tests/fixtures/lane-check/adopter/. .'))).toBe(true);
+  });
+});
+
+describe('every copy of the App-register parser is the parser (kanon#401)', () => {
+  // The review lane and the two revise lanes carry `actions/lane-check/app-register.awk` verbatim
+  // as a `REGISTER_AWK` env, and the file and each copy say this test holds them to it. A copy
+  // that drifts reads a role's login with a parser `lane-check` and the CLI don't use. The
+  // copies are found by reading the tree, not by naming the lanes, so one added later is held too.
+  const AWK = readFileSync(join(ROOT, 'actions/lane-check/app-register.awk'), 'utf8');
+  type Env = Record<string, unknown> | undefined;
+  type Step = { name?: string; id?: string; env?: Env };
+  type Doc = { env?: Env; jobs?: Record<string, { env?: Env; steps?: Step[] }>; runs?: { steps?: Step[] } };
+  const files = [
+    ...readdirSync(join(ROOT, '.github/workflows')).filter((f) => /\.ya?ml$/.test(f)).map((f) => `.github/workflows/${f}`),
+    ...readdirSync(join(ROOT, 'actions')).flatMap((d) => [`actions/${d}/action.yml`, `actions/${d}/action.yaml`])
+      .filter((f) => existsSync(join(ROOT, f))),
+  ];
+  const read = files.map((file) => {
+    const raw = readFileSync(join(ROOT, file), 'utf8');
+    const doc = parse(raw) as Doc;
+    const envs: Array<[string, Env]> = [
+      ['(top level)', doc.env],
+      ...Object.entries(doc.jobs ?? {}).flatMap(([jn, j]): Array<[string, Env]> =>
+        [[jn, j.env], ...(j.steps ?? []).map((s): [string, Env] => [`${jn}: ${s.name ?? s.id ?? '?'}`, s.env])]),
+      ...(doc.runs?.steps ?? []).map((s): [string, Env] => [s.name ?? s.id ?? '?', s.env]),
+    ];
+    const copies = envs.filter(([, env]) => env && 'REGISTER_AWK' in env).map(([where, env]) => ({ where, text: env!.REGISTER_AWK }));
+    // The parser's own first function, wherever it appears in the file's text.
+    return { file, copies, mentions: raw.split('function unbold(s)').length - 1 };
+  });
+
+  it('finds the copies the lanes carry', () => {
+    expect(read.filter((r) => r.copies.length).map((r) => r.file)).toEqual([
+      '.github/workflows/agent-implement-revise.yml',
+      '.github/workflows/agent-lead-revise.yml',
+      '.github/workflows/agent-review.yml',
+    ]);
+  });
+
+  it('holds each to `actions/lane-check/app-register.awk`, word for word', () => {
+    for (const { file, copies } of read) for (const c of copies) expect(c.text, `${file} (${c.where})`).toBe(AWK);
+  });
+
+  it('leaves no copy outside a `REGISTER_AWK` env, where the case above would not see it', () => {
+    for (const { file, copies, mentions } of read) expect(mentions, file).toBe(copies.length);
   });
 });
