@@ -79,6 +79,12 @@ export const checkout = (files: Record<string, string>) => {
       execFileSync('git', ['-C', skeleton, 'remote', 'add', 'origin', `https://github.com/${REPO}.git`]);
       execFileSync('git', ['-C', skeleton, 'config', 'user.name', 'Ada Lovelace']);
       execFileSync('git', ['-C', skeleton, 'config', 'user.email', 'ada@example.com']);
+      // From git 2.47, a commit starts `git maintenance run --auto --detach`, which can still be
+      // writing under .git/objects after the commit returns. A copy taken then can find a file
+      // gone mid-copy: ENOENT on CI's git 2.55 (#523). Every fixture and every copy inherits this
+      // config, so no commit to them, here or in a case, leaves a git process behind.
+      execFileSync('git', ['-C', skeleton, 'config', 'maintenance.auto', 'false']);
+      execFileSync('git', ['-C', skeleton, 'config', 'gc.auto', '0']);
     }
     built = mkdtempSync(join(tmpdir(), 'kanon-doctor-built-'));
     scratch.push(built);

@@ -45,7 +45,8 @@ afterAll(() => {
 /**
  * An empty repository with `remote` as its origin, made once per remote: each checkout is a copy
  * of it, made with the file system alone. Four `git` processes per case were a third of this
- * file's processes (#436).
+ * file's processes (#436). Nothing ever commits to the skeleton, so no git process can still be
+ * writing to it while it is copied (helpers/doctor.ts says why that matters).
  */
 const skeletons = new Map<string, string>();
 const skeleton = (remote: string) => {
