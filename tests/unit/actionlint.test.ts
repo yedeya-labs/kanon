@@ -323,6 +323,22 @@ describe('the actionlint wrapper rewrites `$/` in a copy only, and maps the outp
     expect(r.ran!.slice(1, 5)).toEqual(['-no-color', '-shellcheck=', '-pyflakes=', '-oneline']);
   }, TIMEOUT);
 
+  // kanon#537: actionlint 1.7.12 rejects GitHub's `concurrency.queue`. The copy hides only that key.
+  it('comments out `queue: single|max` inside a `concurrency:` block only, keeping the line count', () => {
+    const root = fixture(['arm: x', 'queue: max']);
+    const w = join(root, '.github/workflows/w.yml');
+    const src = readFileSync(w, 'utf8').replace('jobs:\n', 'concurrency:\n  group: g\n  # a comment\n  queue: max\njobs:\n');
+    writeFileSync(w, `${src}  k:\n    runs-on: ubuntu-latest\n    concurrency:\n      group: h\n      queue: maximum\n    steps:\n      - run: echo\n`);
+    const r = fetchRun({ root, serves: GOOD.tarball, args: ['-oneline'] });
+    expect(r.code, r.out).toBe(0);
+    const copy = r.copy!.split('\n');
+    const real = readFileSync(w, 'utf8').split('\n');
+    expect(copy).toHaveLength(real.length);
+    expect(copy[5]).toBe('  # queue (kanon#537)');
+    expect(copy).toContain('          queue: max'); // a `with:` input of that name is linted
+    expect(copy).toContain('      queue: maximum'); // and so is a value GitHub doesn't know
+  }, TIMEOUT);
+
   it("maps the copy's path to the real one, quotes the real `$/` line, and passes the exit code through", () => {
     const root = fixture(['arm: x']);
     const r = fetchRun({ root, serves: GOOD.tarball, rc: 1 });
