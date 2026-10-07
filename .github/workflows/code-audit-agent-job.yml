@@ -54,10 +54,21 @@ jobs:
         id: job
         run: echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+      # THE WHOLE COMMIT HISTORY, WITHOUT ITS FILE CONTENTS (#544). The prompt ranks areas by
+      # `git log` (what changed since the ledger last read an area, or since no audit read it),
+      # which a one-commit checkout can't answer. A blobless clone (`filter: blob:none`) brings
+      # every commit and tree, so `git log` with a path, `--name-only` or `--format` works over the
+      # full history at a fraction of a full clone's cost, and at the same depth on every trigger,
+      # so the ledger's "changed since" means one thing across runs. Only the checked-out
+      # commit's file contents are fetched; with no persisted credential a command that needs an
+      # older file's contents (`-p`, `--stat`) fails rather than fetching it, so the prompt says
+      # which forms to use.
       - uses: actions/checkout@v7
         id: checkout
         with:
           persist-credentials: false
+          fetch-depth: 0
+          filter: blob:none
 
       # THE STORE'S LEDGER, as the export job read it: `areas.json` and `manifest.json`, which
       # says whether the store was present, absent or degraded. Into the workspace, because the
@@ -186,6 +197,9 @@ jobs:
             PREFER areas the ledger shows read least recently, or never, over re-reading
             the ones read last, unless `git log` shows they changed since. Coverage must
             widen monotonically across runs, not oscillate over the same surface.
+            The checkout holds the full commit history without older file contents: use
+            `git log` with a path, `--since`, `--name-only` or `--format`, never `-p` or
+            `--stat`, which need those contents and fail here.
 
             GATE A: file a bug ONLY on an OBJECTIVE contradiction (never a subjective
             "this looks off" or a style nit; those are a `spec-delta` or nothing):
