@@ -6,6 +6,7 @@ import { upstreamFindingsCli } from '../../scripts/upstream-findings.mjs';
 import {
   DEFAULT_VALUE,
   LABEL,
+  SENT_VALUES,
   VALUES,
   parseUpstreamFindings,
   readUpstreamFindings,
@@ -17,16 +18,23 @@ import { declarationFindings } from '../../actions/lane-check/declarations.mjs';
  * `K-LAYOUT-10`, `K-SELF-11`, kanon#423 (plan 0004 decision 12, amended 2026-10-06): where the
  * Overseer's upstream findings go is a choice any repository declares in its adoption record,
  * never something Kanon detects. Without it they are drafts, as before. The lane reads it from
- * the default branch; `lane-check` and `kanon doctor` read the checkout.
+ * the default branch; `lane-check` and `kanon doctor` read the checkout. Plan 0006 F2 (kanon#585)
+ * adds `sent` and `sent with evidence`, which need the telemetry opt-in (§3.1).
  */
 const RECORD = (choices: string[], tail = '') =>
   ['# Adoption record', '', '## People', '', '- Owner: someone', '', '## Choices', '', ...choices, '', tail].join('\n');
 const BULLET = `- **${LABEL}:** \`filed here\``;
 
 describe('the declaration', () => {
-  it('takes two values, and defaults to drafts', () => {
-    expect(VALUES).toEqual(['drafted', 'filed here']);
+  it('takes four values, two of them sent, and defaults to drafts', () => {
+    expect(VALUES).toEqual(['drafted', 'filed here', 'sent', 'sent with evidence']);
+    expect(SENT_VALUES).toEqual(['sent', 'sent with evidence']);
     expect(DEFAULT_VALUE).toBe('drafted');
+  });
+
+  it('reads `sent` and `sent with evidence` under `## Choices` (plan 0006 §3.1)', () => {
+    expect(parseUpstreamFindings(RECORD([`- **${LABEL}:** \`sent\``]))).toBe('sent');
+    expect(parseUpstreamFindings(RECORD(['- **Overseer:** `installed`', `- **${LABEL}:** \`sent with evidence\``]))).toBe('sent with evidence');
   });
 
   it('reads `filed here` and `drafted` under `## Choices`, beside the other choices', () => {
@@ -49,7 +57,9 @@ describe('the declaration', () => {
     ['in another shape', RECORD([`- **${LABEL}:** filed here`]), /adoption\.md:9, under `## Choices`, isn't a declaration/],
     ['as a numbered item', RECORD([`1. **${LABEL}:** \`filed here\``]), /isn't a declaration/],
     ['with something after the value', RECORD([`${BULLET} on Kanon`]), /isn't a declaration/],
-    ['naming another repository', RECORD([`- **${LABEL}:** \`filed on yedeya-labs/kanon\``]), /adoption\.md:9: `Upstream findings` is `filed on yedeya-labs\/kanon`; write `drafted` or `filed here`/],
+    ['naming another repository', RECORD([`- **${LABEL}:** \`filed on yedeya-labs/kanon\``]), /adoption\.md:9: `Upstream findings` is `filed on yedeya-labs\/kanon`; write `drafted`, `filed here`, `sent` or `sent with evidence`/],
+    ['with two spaces inside a sent value', RECORD([`- **${LABEL}:** \`sent  with evidence\``]), /adoption\.md:9: `Upstream findings` is `sent {2}with evidence`; write `drafted`, `filed here`, `sent` or `sent with evidence` \(K-LAYOUT-10\)/],
+    ['with a sent value in another case', RECORD([`- **${LABEL}:** \`Sent\``]), /adoption\.md:9: `Upstream findings` is `Sent`; write/],
     ['with an empty value', RECORD([`- **${LABEL}:** \`\``]), /`Upstream findings` is ``; write/],
     ['in a fence that never closes', RECORD(['```', BULLET]), /opens a code fence that never closes/],
   ])('refuses one %s, by line', (_name, text, message) => {
@@ -79,8 +89,26 @@ describe('lane-check reads it from the checkout', () => {
     const errors = (root: string) => declarationFindings(false, false, root).filter((l) => l.startsWith('error\tdocs/qa/adoption.md\t'));
     expect(errors(tree(RECORD(['- **Overseer:** `not installed`', BULLET])))).toEqual([]);
     expect(errors(tree(RECORD(['- **Overseer:** `not installed`', `- **${LABEL}:** \`always\``])))).toEqual([
-      'error\tdocs/qa/adoption.md\tdocs/qa/adoption.md:10: `Upstream findings` is `always`; write `drafted` or `filed here` (K-LAYOUT-10)',
+      'error\tdocs/qa/adoption.md\tdocs/qa/adoption.md:10: `Upstream findings` is `always`; write `drafted`, `filed here`, `sent` or `sent with evidence` (K-LAYOUT-10)',
     ]);
+  });
+
+  // Plan 0006 §3.1: `sent` and `sent with evidence` travel over the telemetry channel, so without a
+  // caller of Kanon's telemetry collector nothing is sent, and lane-check says so, naming both fixes.
+  it('fails `sent` and `sent with evidence` without a caller of the telemetry collector, naming both fixes (upstream.unsent)', () => {
+    const errors = (root: string, telemetry: boolean) => declarationFindings(false, false, root, telemetry).filter((l) => l.startsWith('error\tdocs/qa/adoption.md\t'));
+    for (const value of ['sent', 'sent with evidence']) {
+      const root = tree(RECORD([`- **${LABEL}:** \`${value}\``]));
+      const [line, ...rest] = errors(root, false);
+      expect(rest).toEqual([]);
+      expect(line).toContain(`docs/qa/adoption.md:9 says \`${LABEL}: ${value}\`, and no workflow calls Kanon's telemetry collector`);
+      expect(line).toMatch(/opt in to telemetry \(`kanon init --telemetry`, docs\/telemetry\.md\), or choose `drafted`/);
+      expect(line).toMatch(/\(K-LAYOUT-10, upstream\.unsent\)$/);
+      expect(errors(root, true)).toEqual([]);
+      rmSync(root, { recursive: true, force: true });
+    }
+    // `drafted`, `filed here` and no bullet need no collector.
+    for (const choices of [[`- **${LABEL}:** \`drafted\``], [BULLET], []]) expect(errors(tree(RECORD(choices)), false)).toEqual([]);
   });
 
   it('reads the fixture adopter, which declares none', () => {

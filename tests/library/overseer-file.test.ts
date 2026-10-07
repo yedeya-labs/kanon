@@ -321,6 +321,14 @@ describe('a repository that declares `Upstream findings: filed here` (K-LAYOUT-1
     expect(upstreamChoice('Filed Here')).toEqual({ upstream: 'drafted', unknown: 'Filed Here' });
   });
 
+  // Plan 0006 §3.1 (kanon#585): a sent finding is also drafted, so `sent` and `sent with evidence`
+  // route as drafts, without the warning an unknown value gets.
+  it('routes `sent` and `sent with evidence` as drafts, knowing both', () => {
+    expect(upstreamChoice('sent')).toEqual({ upstream: 'drafted' });
+    expect(upstreamChoice('sent with evidence')).toEqual({ upstream: 'drafted' });
+    expect(upstreamChoice('sent  with evidence')).toEqual({ upstream: 'drafted', unknown: 'sent  with evidence' });
+  });
+
   it('routes by the choice in the pure router too', () => {
     const fs = [finding('rule'), finding('declaration')];
     expect(route(fs, 0).file.map((f) => f.subject)).toEqual(['declaration']);

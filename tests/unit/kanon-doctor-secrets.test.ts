@@ -267,3 +267,43 @@ describe("kanon doctor and the telemetry collector's caller (#428)", () => {
     expect(doc.findings.map((f: { id: string }) => f.id)).not.toContain('telemetry.unconfigured');
   });
 });
+
+// Plan 0006 §3.1 (kanon#585): `Upstream findings: sent` or `sent with evidence` travels over the
+// telemetry channel, so a record that says it with no caller of Kanon's collector sends nothing,
+// and doctor says so, naming both fixes, as lane-check does on the pull request.
+describe('kanon doctor and upstream findings sent without the telemetry collector (plan 0006 F2)', () => {
+  const VARS = ['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE'];
+  const record = (value: string, extra = '') => ({ 'docs/qa/adoption.md': `${healthyFiles()['docs/qa/adoption.md']}- **Upstream findings:** \`${value}\`\n${extra}` });
+
+  for (const value of ['sent', 'sent with evidence']) {
+    it(`reports \`${value}\` with no caller of the collector as upstream.unsent, blocking, naming both fixes`, async () => {
+      const r = await run(checkout({ ...healthyFiles(), ...record(value) }), fakeGitHub({ variables: new Set(VARS) }), ['--json']);
+      expect(r.status, r.out).toBe(EXIT.findings);
+      expect(ids(r)).toEqual(['upstream.unsent docs/qa/adoption.md']);
+      const f = r.json.findings[0];
+      expect(f).toMatchObject({ category: 'declaration', blocking: true });
+      expect(f.message).toContain(`docs/qa/adoption.md:12 says \`Upstream findings: ${value}\`, and no workflow calls Kanon's telemetry collector`);
+      expect(f.fix.text).toMatch(/kanon init --telemetry/);
+      expect(f.fix.text).toMatch(/`drafted`/);
+      expect(f.fix.commands).toEqual(['- **Upstream findings:** `drafted`']);
+    });
+  }
+
+  it('reports nothing once a workflow calls the collector, nor for `drafted` or `filed here` without one', async () => {
+    const github = fakeGitHub({ variables: new Set(VARS) });
+    const sent = await run(checkout({ ...healthyFiles(), ...record('sent with evidence'), [TELEMETRY_CALLER_PATH]: telemetryCallerFile(PINNED) }), github, ['--json']);
+    expect(sent.status, sent.out).toBe(EXIT.healthy);
+    expect(sent.json.findings).toEqual([]);
+    for (const value of ['drafted', 'filed here']) {
+      const r = await run(checkout({ ...healthyFiles(), ...record(value) }), github, ['--json']);
+      expect(r.json.findings, value).toEqual([]);
+    }
+  });
+
+  it("can't be waived: lane-check fails the record whatever a waiver says", async () => {
+    const waiver = `- **${WAIVER_LABEL}:** \`upstream.unsent\` on \`docs/qa/adoption.md\` (later)\n`;
+    const r = await run(checkout({ ...healthyFiles(), ...record('sent', waiver) }), fakeGitHub(), ['--json']);
+    expect(ids(r).sort()).toEqual(['declaration.malformed docs/qa/adoption.md', 'upstream.unsent docs/qa/adoption.md']);
+    expect(r.json.findings.find((f: { id: string }) => f.id === 'declaration.malformed').message).toContain("waives `upstream.unsent`, which can't be waived");
+  });
+});

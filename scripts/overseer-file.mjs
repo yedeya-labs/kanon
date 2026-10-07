@@ -156,14 +156,17 @@ export function classify(f) {
 
 /**
  * Where upstream findings go, from the gate job's `UPSTREAM`: `filed here` only when it says
- * exactly that, and Kanon's default, `drafted`, otherwise. `unknown` is set when it said
- * something else, which the step warns about rather than filing on a guess.
+ * exactly that, and Kanon's default, `drafted`, otherwise. `sent` and `sent with evidence` are
+ * drafted too, since a sent finding is also drafted (plan 0006 §3.1); the rows that send them are
+ * plan 0006's F3. `unknown` is set when it said something else, which the step warns about rather
+ * than filing on a guess.
  * @param {string | undefined} value
  * @returns {{ upstream: Upstream, unknown?: string }}
  */
 export function upstreamChoice(value) {
   const v = String(value ?? '').trim();
   if (v === 'filed here' || v === 'drafted') return { upstream: v };
+  if (v === 'sent' || v === 'sent with evidence') return { upstream: 'drafted' };
   return v === '' ? { upstream: 'drafted' } : { upstream: 'drafted', unknown: v };
 }
 

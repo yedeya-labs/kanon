@@ -71,6 +71,7 @@ import { pluginSettings, pluginSettingsFile, readPluginDeclaration, SETTINGS_PAT
 import { coveringRulesets } from './ruleset-bypass.mjs';
 import { BUCKETS, milestones as runMilestones } from './milestones.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
+import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL, sends } from '../scripts/lib/upstream-findings.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
 /** @typedef {{ status: number | null, stdout: string, stderr: string }} GhResult */
@@ -132,6 +133,9 @@ The answers, one flag per question (without --yes, the questions no flag answers
   --telemetry            send this repository's agent-run rows to Kanon's hosted telemetry
                          store: writes the collector's caller (docs/telemetry.md)
   --no-telemetry         don't (the default)
+  --upstream-findings <where>  where findings only Kanon can act on go: drafted (the
+                         default), filed-here, or, with --telemetry, sent or
+                         sent-with-evidence (docs/init.md)
   --reuse-apps           where the owner already has an App the lanes lack (an installation
                          with exactly its permissions), reuse it with kanon apps --reuse
                          rather than create a second one (the default)
@@ -288,6 +292,7 @@ export const realDeps = {
  *   projectOwner?: string, maintainer?: string, stakeholder?: string, gates?: string, testDatabase?: 'none' | 'hook',
  *   delegation?: boolean, delegateName?: string, delegateEmail?: string, deleteDefaults?: boolean,
  *   releaser?: boolean, reuseApps?: boolean, plugin?: boolean, telemetry?: boolean, createApps?: boolean,
+ *   upstreamFindings?: import('../scripts/lib/upstream-findings.mjs').Value,
  * }} Given
  */
 
@@ -363,17 +368,29 @@ export const parseArgs = (argv, req) => {
     else if (flag === '--no-plugin') g.plugin = false;
     else if (flag === '--telemetry') g.telemetry = true;
     else if (flag === '--no-telemetry') g.telemetry = false;
+    else if (flag === '--upstream-findings') {
+      const v = value();
+      const where = UPSTREAM_FLAG_VALUES[v];
+      if (!where) throw new Error(`--upstream-findings takes ${Object.keys(UPSTREAM_FLAG_VALUES).join(', ').replace(/, (?=[^,]*$)/, ' or ')}, not "${v}"`);
+      g.upstreamFindings = where;
+    }
     // `--owner` names the GitHub account everywhere else (`kanon apps --owner`), so init's Owner
     // question is `--project-owner`, and a bare `--owner` is refused with that name (Owner, 2026-10-06).
     else if (flag === '--owner') throw new Error('unknown argument "--owner": the project\'s Owner is --project-owner; --owner names the GitHub account, in kanon apps');
     else throw new Error(`unknown argument "${arg}"`);
-    if (inline !== undefined && !['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email'].includes(flag)) {
+    if (inline !== undefined && !['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email', '--upstream-findings'].includes(flag)) {
       throw new Error(`${flag} takes no value, not "${inline}"`);
     }
     seen.add(flag === '-h' ? '--help' : flag);
   }
   for (const [x, y] of CONFLICTS) if (seen.has(x) && seen.has(y)) throw new Error(`${x} and ${y} contradict each other; give one`);
   if (g.delegateName !== undefined || g.delegateEmail !== undefined) g.delegation = true;
+  // Sent findings travel over the telemetry channel (plan 0006 §3.1), so `sent` is offered only on
+  // a telemetry yes, and a flag that sends them needs `--telemetry` beside it.
+  if (sends(g.upstreamFindings) && g.telemetry !== true) {
+    const flag = Object.entries(UPSTREAM_FLAG_VALUES).find(([, v]) => v === g.upstreamFindings)?.[0];
+    throw new Error(`--upstream-findings ${flag} needs --telemetry: sent findings travel over the telemetry channel (plan 0006 §3.1). Give --telemetry too, or choose drafted or filed-here`);
+  }
   if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
   // `--json` asks nothing (docs/cli-json.md): each question takes its flag or its default.
   if (opts.json) opts.yes = true;
@@ -753,8 +770,55 @@ export const askAll = async (deps, opts, ctx) => {
   // TELEMETRY (#428), no by default and never without an explicit yes: it sends this
   // repository's run rows out of it, to Kanon's hosted store (plan 0002, docs/telemetry.md).
   const telemetry = await yesNo(TELEMETRY_QUESTION, false, g.telemetry);
-  return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser, reuseApps, plugin, telemetry };
+  // UPSTREAM FINDINGS (plan 0006 §3.2), `drafted` by default: sending is the person's to offer, as
+  // telemetry is, and `sent` is offered only on a telemetry yes, since it travels over that
+  // channel. The evidence text is asked about only after `sent`, codes only by default. A flag
+  // answers both questions; an answer it didn't offer is the default, so nothing is sent on a guess.
+  /** @type {import('../scripts/lib/upstream-findings.mjs').Value} */
+  let upstreamFindings = g.upstreamFindings ?? UPSTREAM_DEFAULT;
+  /** @type {boolean | null} */
+  let upstreamEvidence = sends(g.upstreamFindings) ? g.upstreamFindings === 'sent with evidence' : null;
+  if (g.upstreamFindings === undefined) {
+    const answer = (await ask(upstreamFindingsQuestion(telemetry), UPSTREAM_DEFAULT, undefined)).trim().toLowerCase().replace(/\s+/g, '-');
+    const where = UPSTREAM_FLAG_VALUES[answer];
+    upstreamFindings = where === 'drafted' || where === 'filed here' || (where === 'sent' && telemetry) ? where : UPSTREAM_DEFAULT;
+    if (upstreamFindings === 'sent') {
+      upstreamEvidence = await yesNo(UPSTREAM_EVIDENCE_QUESTION, false, undefined);
+      if (upstreamEvidence) upstreamFindings = 'sent with evidence';
+    }
+  }
+  return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser, reuseApps, plugin, telemetry, upstreamFindings, upstreamEvidence };
 };
+
+/**
+ * `--upstream-findings`' values (plan 0006 decision 14), each the declaration's value it writes.
+ * @type {Record<string, import('../scripts/lib/upstream-findings.mjs').Value>}
+ */
+export const UPSTREAM_FLAG_VALUES = { drafted: 'drafted', 'filed-here': 'filed here', sent: 'sent', 'sent-with-evidence': 'sent with evidence' };
+
+/**
+ * The question where upstream findings go (plan 0006 §3.2), offering `sent` only when the
+ * telemetry answer is yes, and otherwise saying that it needs telemetry.
+ * @param {boolean} telemetry
+ */
+export const upstreamFindingsQuestion = (telemetry) =>
+  [
+    "Where do upstream findings go? An upstream finding is one about Kanon itself (a lane's behaviour, a guard, a rule or Kanon's library), found by the Overseer or the telemetry Explorer; whichever you choose, nothing is ever filed in another repository.",
+    "drafted: written into the audit issue or the run's summary, for you to read; nothing is filed or sent.",
+    telemetry
+      ? "sent: also sent to Kanon's telemetry store as codes only (the lane, stage, error and reason codes, the Kanon release, rulebook ids, Kanon's own file paths and a fix category); no text."
+      : "Sending them to Kanon as codes needs telemetry, which this repository doesn't send, so it isn't offered.",
+    'filed-here: filed as issues in this repository, for a repository that maintains Kanon itself or a fork of it.',
+    telemetry ? '(drafted/sent/filed-here)' : '(drafted/filed-here)',
+  ].join(' ');
+
+/**
+ * The evidence question (plan 0006 §3.2, decision 14), asked only after `sent`, in the plan's own
+ * words: who reads the text, a third-party decision provider among them, and that it may rarely
+ * still hold personal data. The adopt skill quotes it word for word.
+ */
+export const UPSTREAM_EVIDENCE_QUESTION =
+  "Also send each finding's evidence and suggested fix, as text? The agent writes it for Kanon's maintainer, to Kanon's template, without names, logins, URLs, repository names or quotes of this repository's text, and before it leaves, an automatic scrub removes URLs, this repository's name, the logins and names the lane can see, and every path outside Kanon's own files. It may rarely still contain personal data, such as a name the scrub didn't know. The text is read by Kanon's maintainer, and by a third-party decision provider, TypeSafe, whose model, Jev, decides whether a finding becomes a public Kanon issue. The text itself is never published: a public issue holds only the codes. It is kept 13 months in Frankfurt and erased on request, like telemetry.";
 
 /**
  * The question for Apps the owner already has (#363).
@@ -842,7 +906,10 @@ export const adoptionFile = (s, a, repo, today) => {
         : '- **Merge queue:** not on this plan, so "require branches to be up to date" stays off and the release commit\'s full CI run catches a stale base (`K-MERGE-7`).',
   );
   lines.push('- **Environments:** no Kanon lane needs one.', '', '## Bootstrap', '', `\`in bootstrap since ${today}\``, '');
-  if (a.lanes.includes('agent-overseer')) lines.push('## Choices', '', '- **Overseer:** `installed`', '');
+  const choices = [];
+  if (a.lanes.includes('agent-overseer')) choices.push('- **Overseer:** `installed`');
+  if (a.upstreamFindings && a.upstreamFindings !== UPSTREAM_DEFAULT) choices.push(`- **${UPSTREAM_LABEL}:** \`${a.upstreamFindings}\``);
+  if (choices.length) lines.push('## Choices', '', ...choices, '');
   return lines.join('\n');
 };
 
@@ -1258,6 +1325,8 @@ const run = async (deps, opts, req, rep) => {
     reuseApps: a.reuseApps,
     plugin: a.plugin,
     telemetry: a.telemetry,
+    upstreamFindings: a.upstreamFindings,
+    upstreamEvidence: a.upstreamEvidence,
   };
 
   /** @type {string[]} what changed (or, in a dry run, would) */
