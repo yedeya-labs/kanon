@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { FORBIDDEN_WORD_HASHES, check, forbiddenParts, sha256 } from '../../.github/scripts/public-words.mjs';
@@ -90,6 +92,22 @@ describe('#239 public-text.yml runs the check on every change to the title or bo
     expect(onQueue).toHaveLength(1);
     expect(onQueue[0]?.uses).toBeUndefined();
     expect(steps.filter((s) => s !== onQueue[0]).every((s) => s.if === "github.event_name == 'pull_request'")).toBe(true);
+  });
+
+  it('runs from the sparse checkout alone: the directories it checks out hold everything the script imports', () => {
+    const checkout = steps.find((s) => s.uses?.startsWith('actions/checkout@'));
+    const dirs = String(checkout?.with?.['sparse-checkout'] ?? '').split('\n').map((d) => d.trim()).filter(Boolean);
+    expect(dirs).toContain('.github/scripts');
+    const sparse = mkdtempSync(join(tmpdir(), 'public-text-sparse-'));
+    try {
+      for (const d of dirs) cpSync(d, join(sparse, d), { recursive: true, dereference: true });
+      const out = execFileSync('node', ['.github/scripts/public-words.mjs'], {
+        cwd: sparse, encoding: 'utf8', env: { ...process.env, PR_TITLE: 'fix: a clean title', PR_BODY: 'A clean body.' },
+      });
+      expect(out.trim()).toBe('Neither the title nor the body names the reference adopter.');
+    } finally {
+      rmSync(sparse, { recursive: true, force: true });
+    }
   });
 
   it("judges with the base commit's script, never the PR's own copy (#47)", () => {

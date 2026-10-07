@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addMonths,
   handle,
+  keysOf,
   MAX_ROWS,
   PARTITIONS,
   putItem,
@@ -197,6 +198,31 @@ describe('the recorded_at window (§4): 8 days back, 10 minutes ahead', () => {
   });
 });
 
+describe('a finding row (plan 0006 F1): keyed, but stored by no caller until intake checks it (F4)', () => {
+  const findingRow = (over: Row = {}): Row => ({
+    schema_version: 1, row_kind: 'finding', tag: 'test', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 2,
+    finding_index: 3, reporter: 'overseer', subject: 'guard', kanon_version: '0.37.0', fix_category: 'guard', evidence_level: 'codes', ...over,
+  });
+
+  it('is keyed <key>#finding, by time, run, attempt and its place in the report (§2.3)', () => {
+    expect(keysOf('k1', findingRow())).toEqual({ pk: 'k1#finding', sk: '20261002T115900Z#33679229731-2-3' });
+  });
+
+  it('is refused from a writer, the importer and the backfill role alike, naming row_kind', async () => {
+    const roles = [
+      [{}, {}],
+      [{ role: 'kanon-telemetry-importer', key: 'k2' }, { IMPORTER_ROLE: 'kanon-telemetry-importer' }],
+      [{ role: 'kanon-telemetry-backfill', key: 'k2' }, { BACKFILL_ROLE: 'kanon-telemetry-backfill' }],
+    ] as const;
+    for (const [opts, envOver] of roles) {
+      const r = await call(event([findingRow()], opts), envOver);
+      expect(r.status).toBe(422);
+      expect(r.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
+      expect(r.puts).toEqual([]);
+    }
+  });
+});
+
 describe('the partition comes from the caller\'s role, never the request', () => {
   it('a writer for another registered key writes that key', async () => {
     expect((await call(event([runRow()], { role: 'kanon-telemetry-k2-writer' }))).puts[0]!.pk).toBe('k2#review');
@@ -308,7 +334,7 @@ describe('the write and its signature', () => {
     await expect(putItem({ pk: 'k1#review' }, env, fakeFetch)).rejects.toThrow('PutItem 400');
   });
 
-  it('the partitions the function can write are every lane and work', () => {
-    expect(PARTITIONS).toEqual([...LANES, 'work']);
+  it('the partitions erasure walks are every lane, work and finding (plan 0006 §2.3)', () => {
+    expect(PARTITIONS).toEqual([...LANES, 'work', 'finding']);
   });
 });

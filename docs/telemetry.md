@@ -6,7 +6,7 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 |---|---|
 | `template.yaml` | The CloudFormation template: the table, the ingest function and its URL, the aggregate function and its URL, their log groups, the GitHub OIDC provider, and the importer and backfill roles. |
 | `render.mjs` | Adds each registered repository's writer and reader roles to the template, from the private register and GitHub's API. |
-| `function/` | The ingest function (`index.mjs`) and the aggregate function (`aggregate.mjs`), one package with two handlers. `schema.mjs` there is a link to [`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), so the function validates with the same file the lanes use. |
+| `function/` | The ingest function (`index.mjs`) and the aggregate function (`aggregate.mjs`), one package with two handlers. `schema.mjs` there is a link to [`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), so the function validates with the same file the lanes use; `scrub.mjs` and `public-words.mjs` are links too, the scrub that schema runs on a finding's text (plan 0006 §4.2). |
 | `verify.mjs` | Step S3's checks, run against the deployed store. |
 | `erase.mjs` | Deletes one adopter's rows (§10). |
 | `aggregate.mjs` | The aggregate (§6, §6.1), run by you: what the aggregate function answers, plus the totals only you see. |
@@ -247,7 +247,7 @@ Each can write rows under its own adopter's key that pass the function's validat
 Plan 0002 §10. Deletion is immediate in the table, and complete in backups within 35 days, which is how long point-in-time recovery keeps them.
 
 1. Remove the adopter's entry from the register, and in the same edit its time from install to first review, which sits beside the key (plan 0003). Record the date and the key there, not the repository. Then render, package and deploy. That deletes both roles, so its writes and reads stop at once.
-2. Count the rows, then delete them. The script walks `<key>#<lane>` for every lane in the schema's enum and `<key>#work`, so it needs no scan. It runs as your role, which is the one role besides the function's that the table lets delete.
+2. Count the rows, then delete them. The script walks `<key>#<lane>` for every lane in the schema's enum, `<key>#work` and `<key>#finding`, so it needs no scan. It runs as your role, which is the one role besides the function's that the table lets delete.
 
    ```sh
    node infra/telemetry/erase.mjs --key <key> --profile kanon

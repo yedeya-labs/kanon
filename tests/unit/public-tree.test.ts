@@ -8,7 +8,7 @@ import { namesForbiddenWord } from '../../.github/scripts/public-words.mjs';
 // out of the public tree without spelling them out: a guard that listed them would
 // publish them. Every word in every tracked file is hashed and compared against the
 // SHA-256 of each forbidden name, in lowercase. The hashes live in
-// .github/scripts/public-words.mjs, which the PR-text check (public-text.yml) shares, and
+// actions/agent-telemetry/public-words.mjs, which the PR-text check (public-text.yml) shares, and
 // the list of names is kept in the private extraction repository.
 
 // Patterns that reveal nothing themselves. An account id is twelve digits that aren't part of a

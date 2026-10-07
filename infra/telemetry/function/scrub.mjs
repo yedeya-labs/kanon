@@ -1,0 +1,1 @@
+../../../actions/agent-telemetry/scrub.mjs

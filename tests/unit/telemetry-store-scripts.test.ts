@@ -245,14 +245,16 @@ describe('erase.mjs deletes every partition of a key (§10)', () => {
     return { aws, calls };
   };
 
-  it('walks every lane\'s partition and the work partition', () => {
-    expect(partitionsOf('kk')).toEqual([...LANES.map((l) => `kk#${l}`), 'kk#work']);
+  it('walks every lane\'s partition, the work partition and the finding partition (plan 0006 §2.3)', () => {
+    expect(partitionsOf('kk')).toEqual([...LANES.map((l) => `kk#${l}`), 'kk#work', 'kk#finding']);
   });
 
   it('only counts without --apply', () => {
-    const f = fake({ 'kk#review': 3, 'kk#work': 2 });
+    const f = fake({ 'kk#review': 3, 'kk#work': 2, 'kk#finding': 4 });
     const counts = erase('kk', { aws: f.aws, profile: 'kanon', apply: false });
-    expect(counts.filter((c) => c.rows)).toEqual([{ partition: 'kk#review', rows: 3 }, { partition: 'kk#work', rows: 2 }]);
+    expect(counts.filter((c) => c.rows)).toEqual([
+      { partition: 'kk#review', rows: 3 }, { partition: 'kk#work', rows: 2 }, { partition: 'kk#finding', rows: 4 },
+    ]);
     expect(f.calls.filter((c) => c[1] === 'batch-write-item')).toEqual([]);
   });
 

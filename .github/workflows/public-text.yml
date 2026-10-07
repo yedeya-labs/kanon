@@ -3,8 +3,8 @@
 # The repository squash-merges with the PR's title and body as the commit message, so a name
 # in either reaches main's history even when no tracked file holds one, and the tree guard
 # (tests/unit/public-tree.test.ts) reads only tracked files. This check hashes every word of
-# the title and body against the same list, in .github/scripts/public-words.mjs, and never
-# prints the word it finds.
+# the title and body against the same list (actions/agent-telemetry/public-words.mjs, run
+# through .github/scripts/public-words.mjs), and never prints the word it finds.
 #
 # `edited` re-runs it when the title or the body changes, which is also how a red run is
 # fixed. Fixing it is not enough on its own: GitHub keeps every earlier revision of a
@@ -48,7 +48,10 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           ref: ${{ github.event.pull_request.base.sha }}
-          sparse-checkout: .github/scripts
+          # The entry point, and the list it re-exports from the telemetry scrub's directory.
+          sparse-checkout: |
+            .github/scripts
+            actions/agent-telemetry
           persist-credentials: false
       - name: Hash the title and body against the base's list
         if: github.event_name == 'pull_request'

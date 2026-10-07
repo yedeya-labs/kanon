@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -108,10 +108,20 @@ describe('the code that is packaged (§5)', () => {
     expect(lstatSync(join(FUNCTION_DIR, 'schema.mjs')).isSymbolicLink()).toBe(true);
     expect(realpathSync(join(FUNCTION_DIR, 'schema.mjs'))).toBe(realpathSync('actions/agent-telemetry/schema.mjs'));
   });
-  it('imports nothing but node: built-ins and its own files', () => {
+  it('its scrub and the scrub\'s word check ARE the lanes\' files, linked like the schema (plan 0006 §4.2)', () => {
+    for (const [f, real] of [['scrub.mjs', 'actions/agent-telemetry/scrub.mjs'], ['public-words.mjs', 'actions/agent-telemetry/public-words.mjs']] as const) {
+      expect(lstatSync(join(FUNCTION_DIR, f)).isSymbolicLink(), f).toBe(true);
+      expect(realpathSync(join(FUNCTION_DIR, f)), f).toBe(realpathSync(real));
+    }
+  });
+  it('imports nothing but node: built-ins and its own files, each of which is in the package', () => {
     for (const f of readdirSync(FUNCTION_DIR)) {
       const specs = [...readFileSync(join(FUNCTION_DIR, f), 'utf8').matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]!);
-      for (const s of specs) expect(s, `${f} imports ${s}`).toMatch(/^(node:|\.\/[a-z0-9]+\.mjs$)/);
+      for (const s of specs) {
+        expect(s, `${f} imports ${s}`).toMatch(/^(node:|\.\/[a-z0-9-]+\.mjs$)/);
+        // `aws cloudformation package` zips this directory alone, so a sibling import must be here.
+        if (s.startsWith('./')) expect(existsSync(join(FUNCTION_DIR, s)), `${f} imports ${s}, which the package lacks`).toBe(true);
+      }
     }
   });
 });
