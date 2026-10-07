@@ -1,8 +1,9 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { LANE_BLOCKS, PIPELINE, readBlock, selfRefOf } from './helpers/blocks.js';
+import { ACTIONS, LANE_BLOCKS, PIPELINE, kanonActionOf, readBlock, selfRefOf } from './helpers/blocks.js';
 import { type WorkflowStep } from './helpers/workflow-step.js';
 
 /**
@@ -50,52 +51,99 @@ describe('the blocks are composite actions that reach each other only through `$
 // nothing reads is a claim the next reader has to disprove by tracing every caller, and its
 // description is free to drift: `agent-classify` declared `code` and said "the telemetry row
 // stores this", while the row's reason code was derived inside `agent-telemetry` instead.
-describe('every output a block declares is read by a caller (#314)', () => {
-  // Where a block is called from in here: the lanes, and the blocks themselves (`agent-finish`
-  // calls two). An adopter calls one at a release tag; every call in this repository is `$/`.
+// kanon#342 widened it from the five lane blocks to every action under `actions/`.
+describe('every output an action declares is read by a caller (#314, #342)', () => {
+  // Where an action is called from in here: every workflow, and every action in the tree
+  // (`agent-finish` calls two, `qa-store` calls the adopter's hook). An adopter calls one at a
+  // release tag; a call in this repository is `$/`, or a release pin for a judging check.
   const CALLERS = [
     ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => join('.github/workflows', f)),
-    ...PIPELINE.map((b) => join('actions', b, 'action.yml')),
+    ...execFileSync('git', ['ls-files', '*action.yml'], { encoding: 'utf8' }).split('\n')
+      .filter((f) => f !== '' && !f.startsWith('tests/')),
   ];
 
   /**
-   * Which of `block`'s outputs a caller reads. A block's output is reached through the id of
-   * the step that calls it, so the readers are the `steps.<id>.outputs.<name>` expressions in
-   * the SAME file as the call — an id is scoped to its job, so a name-wide search would let
+   * The outputs kept for a caller outside this repository, which nothing in it reads, each with
+   * its reason. Its description has to say "No Kanon lane reads it" (the rule below), so the
+   * next reader of the `action.yml` doesn't go looking for a caller. Removing one instead
+   * changes a released action's contract, which is the Owner's call.
+   */
+  const FOR_ADOPTERS: Record<string, Record<string, string>> = {
+    // A store job's scratch directory: `cost-rows` writes `cost-rows.json` there, for a later
+    // step in the same job to read whole, where `rows` is one line for another job. Kanon's
+    // lanes read `rows`.
+    'qa-store': { dir: 'cost-rows.json for a step after the block, in the same job' },
+  };
+
+  /**
+   * Which of `action`'s outputs a caller reads. An action's output is reached through the id
+   * of the step that calls it, so the readers are the `steps.<id>.outputs.<name>` expressions
+   * in the SAME file as the call — an id is scoped to its job, so a name-wide search would let
    * one file's reader of `steps.classify.outputs.x` cover another file's dead output.
    */
-  const readOutputsOf = (block: string): Set<string> => {
+  const readOutputsOf = (action: string): Set<string> => {
     const read = new Set<string>();
     for (const file of CALLERS) {
       const text = readFileSync(file, 'utf8');
       const doc = parse(text) as { jobs?: Record<string, { steps?: WorkflowStep[] }>; runs?: { steps?: WorkflowStep[] } };
       const steps = doc.jobs ? Object.values(doc.jobs).flatMap((j) => j.steps ?? []) : (doc.runs?.steps ?? []);
       for (const st of steps) {
-        if (selfRefOf(st.uses) !== block || !st.id) continue;
+        if (kanonActionOf(st.uses) !== action || !st.id) continue;
         for (const [, name] of text.matchAll(new RegExp(String.raw`steps\.${st.id}\.outputs\.([\w-]+)`, 'g'))) read.add(String(name));
       }
     }
     return read;
   };
 
-  it.each([...PIPELINE])('%s declares no output that nothing reads', (name) => {
-    const read = readOutputsOf(name);
-    const declared = Object.keys(readBlock(name).outputs ?? {});
-    expect(declared.filter((o) => !read.has(o)), `${name} declares these and nothing reads them`).toEqual([]);
+  it('checks every action under actions/, the five lane blocks among them', () => {
+    expect(ACTIONS).toEqual(expect.arrayContaining([...PIPELINE, 'qa-store', 'kanon-path', 'test-database']));
+    expect(ACTIONS.length).toBe(readdirSync('actions').filter((d) => existsSync(join('actions', d, 'action.yml'))).length);
   });
+
+  it.each([...ACTIONS])('%s declares no output that nothing reads, but those it keeps for other callers', (name) => {
+    const read = readOutputsOf(name);
+    const kept = FOR_ADOPTERS[name] ?? {};
+    const declared = Object.keys(readBlock(name).outputs ?? {});
+    expect(declared.filter((o) => !read.has(o) && !Object.hasOwn(kept, o)), `${name} declares these and nothing reads them`).toEqual([]);
+  });
+
+  it.each(Object.entries(FOR_ADOPTERS).flatMap(([a, outs]) => Object.keys(outs).map((o) => [a, o])))(
+    '%s keeps `%s` for other callers: declared, read by nothing here, and its description says so',
+    (action, output) => {
+      const out = (readBlock(action).outputs as Record<string, { description?: string }> | undefined)?.[output];
+      expect(out, `${action} no longer declares ${output}: drop it from FOR_ADOPTERS`).toBeDefined();
+      expect(readOutputsOf(action).has(output), `something reads ${action}'s ${output} now: drop it from FOR_ADOPTERS`).toBe(false);
+      expect(out?.description ?? '').toMatch(/No Kanon lane reads it/);
+    },
+  );
 
   it('finds the readers it checks against, and says which they are', () => {
     // A `uses:` form or a parse that stopped matching would find no readers at all. The rule
-    // above reds for a block that declares something, but says only "nothing reads them" — it
-    // cannot tell a dead output from a blind matcher, and it passes `agent-telemetry`, which
-    // declares none, either way. So the reader sets are pinned here, named per block.
-    expect(PIPELINE.map((b) => `${b}: ${[...readOutputsOf(b)].sort().join(' ') || 'nothing'}`)).toEqual([
-      'agent-setup: kanon-error',
-      'agent-run: execution_file started-at',
-      'agent-finish: kind retry',
+    // above reds for an action that declares something, but says only "nothing reads them" —
+    // it cannot tell a dead output from a blind matcher, and it passes an action that declares
+    // none either way. So the reader sets are pinned here, named per action.
+    expect(ACTIONS.map((b) => `${b}: ${[...readOutputsOf(b)].sort().join(' ') || 'nothing'}`)).toEqual([
       'agent-classify: kind retry',
+      'agent-finish: kind retry',
+      'agent-run: execution_file started-at',
+      'agent-setup: kanon-error',
       'agent-telemetry: nothing',
+      'dco: nothing',
+      'implementer-status: nothing',
+      'kanon-path: path',
+      'lane-check: nothing',
+      'pr-title: nothing',
+      'qa-store: artifact-id artifact-name attempt commit present rows state',
+      'test-database: database kind',
     ]);
+  });
+
+  it('matches both forms this tree calls an action by, and nothing else', () => {
+    expect(kanonActionOf('$/actions/qa-store')).toBe('qa-store');
+    expect(kanonActionOf('yedeya-labs/kanon/actions/dco@v0.33.0')).toBe('dco');
+    expect(kanonActionOf('./.github/actions/qa-store')).toBeUndefined();
+    expect(kanonActionOf('other/kanon/actions/dco@v0.33.0')).toBeUndefined();
+    expect(kanonActionOf('yedeya-labs/kanon/infra/qa-store/aws@v0.33.0')).toBeUndefined();
   });
 });
 

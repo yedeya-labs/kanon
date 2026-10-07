@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { type WorkflowStep } from './workflow-step.js';
@@ -32,3 +32,19 @@ export const readBlock = (name: string): Block =>
  */
 export const selfRefOf = (uses: unknown): string | undefined =>
   typeof uses === 'string' ? /^\$\/actions\/([a-z0-9-]+)$/.exec(uses)?.[1] : undefined;
+
+/**
+ * Every action under `actions/`, by directory name: each directory holding an `action.yml`
+ * (kanon#342). `PIPELINE` is the five a lane is built from; this is all of them.
+ */
+export const ACTIONS: readonly string[] = Object.freeze(readdirSync(join(process.cwd(), 'actions'))
+  .filter((d) => existsSync(join(process.cwd(), 'actions', d, 'action.yml')))
+  .sort());
+
+/**
+ * The Kanon action a `uses:` names in either form this tree calls one by: the self-reference,
+ * `$/actions/<name>`, or the release pin, `yedeya-labs/kanon/actions/<name>@<ref>`, which the
+ * checks that judge a pull request use (ADR 0011). Undefined for anything else.
+ */
+export const kanonActionOf = (uses: unknown): string | undefined =>
+  selfRefOf(uses) ?? (typeof uses === 'string' ? /^yedeya-labs\/kanon\/actions\/([a-z0-9-]+)@[\w.-]+$/.exec(uses)?.[1] : undefined);
