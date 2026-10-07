@@ -547,6 +547,15 @@ export const secretReads = (wf) => {
 };
 
 /**
+ * Whether a job's `uses` calls Kanon's release workflow, recognised by what it calls: Kanon's
+ * pinned path, `$/` (Kanon's self-pinning form, plan 0001 §4) or a local path, never by the
+ * repository doctor runs on (#441).
+ * @param {unknown} uses
+ */
+export const releaseCall = (uses) => kanonCall(uses)?.workflow === 'release'
+  || (typeof uses === 'string' && /^(?:\$|\.)\/\.github\/workflows\/release\.ya?ml$/.test(uses.trim()));
+
+/**
  * The secrets a reusable workflow declares it takes from its caller (`on.workflow_call.secrets`),
  * upper-cased as `secretReads` reads them.
  * @param {Record<string, any>} wf
@@ -786,15 +795,17 @@ export const diagnose = async (deps, opts) => {
   const callers = [];
   /** @type {Array<{ file: string, job: Record<string, any> }>} */
   const appsCheckCallers = [];
+  // Each job that calls the release workflow, by Kanon's pin, `$/` or a local path (#441): read
+  // only to tell whether the Releaser is in use, so a `$/` caller meets no rule of a pinned one.
   /** @type {Array<{ file: string, job: Record<string, any> }>} */
   const releaseCallers = [];
   for (const [file, wf] of workflows) {
     for (const [jobName, job] of Object.entries(isMap(wf.jobs) ? wf.jobs : {})) {
       if (!isMap(job)) continue;
+      if (releaseCall(job.uses)) releaseCallers.push({ file, job });
       const call = kanonCall(job.uses);
       if (!call) continue;
       if (call.workflow === 'apps-check') appsCheckCallers.push({ file, job });
-      else if (call.workflow === 'release') releaseCallers.push({ file, job });
       else if (call.workflow.startsWith('agent-') && call.workflow !== 'agent-lane') callers.push({ file, wf, jobName, job, lane: call.workflow });
     }
   }
