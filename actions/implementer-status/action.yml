@@ -1,7 +1,7 @@
 # The implementer commit status, `kanon/role: implementer` (plan 0005 §3.3, question 6; step L3).
 #
 # CALLED BY A FIXED JOB OF EACH IMPLEMENTER LANE, AFTER ITS AGENT'S JOB, NEVER INSIDE IT. The
-# job holds the Implementer App's private key to mint two tokens, so it runs no agent, no
+# job holds the Author App's private key to mint two tokens, so it runs no agent, no
 # `./` action and no checkout of a pull request's code (`K-AGENT-49`,
 # `tests/unit/app-key-isolation.test.ts`), and `tests/unit/implementer-status.test.ts` holds
 # every caller to that shape.
@@ -28,10 +28,10 @@ inputs:
     description: "`open` (implement, triage) or `carry` (implement-revise, rebase)."
     required: true
   app-id:
-    description: The Implementer App's id (its `AUTHOR_APP_ID` secret).
+    description: The Author App's id (its `AUTHOR_APP_ID` secret), which mints for the Implementer.
     required: true
   app-private-key:
-    description: The Implementer App's private key (its `AUTHOR_APP_PRIVATE_KEY` secret).
+    description: The Author App's private key (its `AUTHOR_APP_PRIVATE_KEY` secret).
     required: true
   since:
     description: "`open`: when the run started, stamped by the lane's filter job before the agent."

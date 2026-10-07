@@ -1734,10 +1734,13 @@ describe('phase 5 — staging verification (RA-1063)', () => {
       expect(r.stopped).toMatch(/UNKNOWN/);
       // NAMES A REACHABLE CAUSE (RA-1103). This asserted `issues: read`, which sent the
       // operator to the workflow's `permissions:` block — that block governs the
-      // pre-filter on `github.token`, while the Reconcile step runs on the the Lead
-      // App token. The message was pointing at a file that was already correct.
-      expect(r.stopped, 'must name the token it actually runs on').toMatch(/App token/i);
+      // pre-filter on `github.token`, while the Reconcile step runs on the Author App's
+      // token. The message was pointing at a file that was already correct.
+      expect(r.stopped, 'must name the token it actually runs on').toMatch(/App's token/i);
       expect(r.stopped, 'and where its permissions live').toMatch(/App installation/i);
+      // #474: the App to check is the Author App, which mints for the Lead. There is no Lead App.
+      expect(r.stopped).toContain('Author App installation');
+      expect(r.stopped).not.toMatch(/Lead App/);
       expect(
         r.stopped,
         'and must not send the reader to the permissions block, which governs a different call',

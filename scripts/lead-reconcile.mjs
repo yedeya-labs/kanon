@@ -885,8 +885,8 @@ function nextActionsCore(world, {
       phase, actions: [],
       // THE CAUSE MUST BE REACHABLE (RA-1103). This said "this job needs `issues:
       // read`" and sent the operator to the workflow's `permissions:` block — which
-      // governs a different call. The `Reconcile` step runs on the Lead App token
-      // (`agent-lead-reconcile.yml` mints it via `actions/create-github-app-token`);
+      // governs a different call. The `Reconcile` step runs on the Author App's token,
+      // minted for the Lead (`agent-lead-reconcile.yml`, via `actions/create-github-app-token`);
       // the `permissions:` block only covers the cheap pre-filter that uses
       // `github.token`. So the operator finds that block already correct and the real
       // causes go unnamed.
@@ -894,7 +894,7 @@ function nextActionsCore(world, {
       // Naming the likely cause IS this phase's justification: `qa-unreadable` exists
       // to refuse both dispatching and waiting, and hand a human a lead instead. A
       // lead pointing at the wrong file is worse than none.
-      stopped: `could not read QA issue #${world.qaIssue.number}'s comments, so how many times the Explorer has verified this project is UNKNOWN. Refusing to dispatch (which would loop) or to wait (which would look healthy). This step runs on the Lead App token, NOT the workflow token — so check the App installation's repository permissions (Issues: Read), not this workflow's \`permissions:\` block, which governs only the pre-filter. A transient \`gh\` failure is the other candidate; it clears on the next tick.`,
+      stopped: `could not read QA issue #${world.qaIssue.number}'s comments, so how many times the Explorer has verified this project is UNKNOWN. Refusing to dispatch (which would loop) or to wait (which would look healthy). This step runs on the Author App's token, minted for the Lead, NOT the workflow token — so check the Author App installation's repository permissions (Issues: Read), not this workflow's \`permissions:\` block, which governs only the pre-filter. A transient \`gh\` failure is the other candidate; it clears on the next tick.`,
     };
   }
 

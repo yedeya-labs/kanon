@@ -18,11 +18,11 @@
 # depending on the event. It holds NO state: its own past actions are recovered by counting
 # the marker comments it left.
 #
-# IDENTITY: THE LEAD'S APP, deliberately not the Implementer it watches. It cannot be the
-# workflow token, because events that token raises never start another workflow, so a sweep
-# using it could re-label and start nothing. And with the Implementer's own App, the marker
-# comment would be the only thing telling "the agent spoke" from "the sweep spoke"; distinct
-# logins make that structural.
+# IDENTITY: THE AUTHOR APP, MINTED FOR THE LEAD. It cannot be the workflow token, because
+# events that token raises never start another workflow, so a sweep using it could re-label
+# and start nothing. The Implementer it watches mints from the same App, so the same login:
+# its comments are told from the agent's by their Lead role marker and the sweep's marker
+# (plan 0005 §3.3, `isSweepComment`), not by login.
 #
 # ── ITS COST ROWS: THE STORE FIRST, RUN ARTIFACTS WITHOUT ONE (plan 0004 §3.3, decision 3) ──
 # The sweep charges a re-dispatch attempt per marker comment it left, which counts DISPATCHES,
@@ -40,7 +40,7 @@
 #   - A READ THAT FAILS fails CLOSED, as it always has: every dispatch is charged, and the
 #     summary's first line says so (RA-2706).
 #
-# SOFT SKIP WITHOUT THE LEAD'S APP. Until its secrets exist, the lane skips with a
+# SOFT SKIP WITHOUT THE AUTHOR APP. Until its secrets exist, the lane skips with a
 # `::warning::` instead of going red: a daily red run for a known-pending one-time setup is
 # alarm fatigue. The trade is that a secret deleted later also soft-skips; the annotation and
 # the step summary are the signal, and the stalled issues the sweep is not reconciling are the

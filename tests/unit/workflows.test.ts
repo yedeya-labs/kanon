@@ -811,7 +811,12 @@ describe('plan 0001 decision 14: claude-code-action is pinned exactly, and Depen
 // Since plan 0005's L4 an adopter installs two Apps, the Author and the Judge, and each role
 // mints its token from one of them. Text that reads "the Lead's App" sends an adopter looking
 // for, or creating, an App per role. Narrative comments deeper in a lane are not held here.
-const PER_ROLE_APP = /\b(?:Lead|Implementer|Explorer|Overseer|Reviewer|Merger|Triager)'s (?:GitHub )?App\b/;
+// What an adopter reads to install and wire a lane, its header and its inputs, is held to every
+// spelling: possessive or not, any case, the role backticked. A printed line is held to the
+// possessive only, so a step named "Mint lead App token", the App token for the lead, passes.
+const ROLES = 'lead|implementer|explorer|overseer|reviewer|merger|triager';
+const PER_ROLE_APP = new RegExp(`\\b(?:${ROLES})'s (?:GitHub )?App\\b`, 'i');
+const ANY_PER_ROLE_APP = new RegExp(`\\b(?:${ROLES})\\b\`?(?:'s)? (?:GitHub )?App\\b`, 'i');
 const ROOT_URL = new URL('../../', import.meta.url);
 const laneFiles = (): string[] => [
   ...readdirSync(new URL('.github/workflows/', ROOT_URL)).filter((f) => f.endsWith('.yml')).map((f) => `.github/workflows/${f}`),
@@ -820,26 +825,48 @@ const laneFiles = (): string[] => [
 ];
 
 describe('#474 adopter-facing lane text names the Author or Judge App, never an App per role', () => {
-  const offenders = (pick: (text: string) => string[]) => laneFiles().flatMap((f) =>
-    pick(readFileSync(new URL(f, ROOT_URL), 'utf8')).filter((l) => PER_ROLE_APP.test(l)).map((l) => `${f}: ${l.trim()}`));
+  const offenders = (pick: (text: string) => string[], guard: RegExp) => laneFiles().flatMap((f) =>
+    pick(readFileSync(new URL(f, ROOT_URL), 'utf8')).filter((l) => guard.test(l)).map((l) => `${f}: ${l.trim()}`));
 
-  it('in the header of every lane and action, which says what to install', () => {
-    // The header is the leading comment block, up to the first line of YAML.
+  it('in the header and every input description of every lane and action, which say what to install and map', () => {
+    // The header is the leading comment block, up to the first line of YAML. A description runs
+    // on over the lines indented deeper than its key, so a folded one is read whole.
     const header = (text: string) => { const end = text.search(/^[^#\s]/m); return (end < 0 ? text : text.slice(0, end)).split('\n'); };
-    expect(offenders(header)).toEqual([]);
+    const descriptions = (text: string) => {
+      const lines = text.split('\n');
+      return lines.flatMap((l, i) => {
+        const key = /^(\s*)description:/.exec(l);
+        if (!key) return [];
+        const rest = lines.slice(i + 1);
+        const end = rest.findIndex((r) => r.trim() !== '' && r.search(/\S/) <= (key[1] ?? '').length);
+        return [l, ...(end < 0 ? rest : rest.slice(0, end))];
+      });
+    };
+    expect(offenders((text) => [...header(text), ...descriptions(text)], ANY_PER_ROLE_APP)).toEqual([]);
   });
 
   it("in every step's name and every line a step prints to the log or the summary", () => {
     const printed = (text: string) => text.split('\n').filter((l) =>
       /^\s*-?\s*name:|\b(?:echo|printf)\b|::(?:error|warning|notice)\b|GITHUB_STEP_SUMMARY/.test(l));
-    expect(offenders(printed)).toEqual([]);
+    expect(offenders(printed, PER_ROLE_APP)).toEqual([]);
   });
 
-  it('the guard matches the per-role wording it holds, and not the two Apps or the Releaser', () => {
-    expect(PER_ROLE_APP.test("the Lead's App is not set up")).toBe(true);
-    expect(PER_ROLE_APP.test("the Implementer's GitHub App")).toBe(true);
-    expect(PER_ROLE_APP.test("the Author App (the Lead's) is not set up")).toBe(false);
-    expect(PER_ROLE_APP.test("the Judge App's token, minted for the Merger")).toBe(false);
-    expect(PER_ROLE_APP.test("the Releaser's App id")).toBe(false);
+  it('the guards match the per-role wording they hold, and not the two Apps or the Releaser', () => {
+    for (const guard of [PER_ROLE_APP, ANY_PER_ROLE_APP]) {
+      expect(guard.test("the Lead's App is not set up")).toBe(true);
+      expect(guard.test("the Implementer's GitHub App")).toBe(true);
+      expect(guard.test("IDENTITY: THE LEAD'S APP")).toBe(true);
+      expect(guard.test("the Author App (the Lead's) is not set up")).toBe(false);
+      expect(guard.test("the Judge App's token, minted for the Merger")).toBe(false);
+      expect(guard.test("the Releaser's App id")).toBe(false);
+      expect(guard.test("the Judge App installed, with the Reviewer's row in the App register")).toBe(false);
+    }
+    // The header and input guard also holds the non-possessive and backticked spellings.
+    expect(ANY_PER_ROLE_APP.test("holds the Implementer App's private key")).toBe(true);
+    expect(ANY_PER_ROLE_APP.test('Identity: the `reviewer` GitHub App')).toBe(true);
+    expect(ANY_PER_ROLE_APP.test('the lead App token')).toBe(true);
+    // A printed line is not: a step's name says whose App token it mints.
+    expect(PER_ROLE_APP.test('- name: Mint lead App token')).toBe(false);
+    expect(PER_ROLE_APP.test('Identity: the `reviewer` GitHub App')).toBe(false);
   });
 });

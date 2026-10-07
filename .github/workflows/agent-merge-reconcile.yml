@@ -19,7 +19,7 @@
 # tracker, and files the fallback follow-up for anything actionable that is both
 # un-applied and un-tracked.
 #
-# Identity: the `reviewer` GitHub App — this IS the reviewer's promised fallback.
+# Identity: the Judge App, minted for the Reviewer — this IS the reviewer's promised fallback.
 # Proposes only — never fixes/merges/reopens/closes.
 #
 # INERT until: the caller is on the default branch + the Judge App installed, with the
