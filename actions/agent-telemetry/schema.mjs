@@ -3,9 +3,11 @@
 //
 // ONE FILE, USED THREE TIMES (plan 0002 §2.5): by the normaliser's tests, so every fixture's
 // row must validate; by the collector, before it sends a row; and by the store's ingest
-// function, which is the enforcement. So it imports nothing but `node:` built-ins (it imports
-// none today), and it lives beside the normaliser so the lane, the collector and the function
-// read it at the same Kanon tag.
+// function, which is the enforcement. So it imports nothing but `node:` built-ins and its own
+// directory's files, and it lives beside the normaliser so the lane, the collector and the
+// function read it at the same Kanon tag. Its one import is the scrub (`scrub.mjs`, plan 0006
+// §4.2), a sibling linked into the function's directory beside it, whose `verify` checks every
+// text field.
 //
 // A ROW IS VALID OR IT IS NOT STORED. `validate` never strips or repairs. A row with a field
 // outside its kind's list, a value of the wrong type, a string outside its enum or pattern,
@@ -13,19 +15,28 @@
 // offending FIELDS only. It never echoes a value: a rejected row may hold the content this
 // schema exists to keep out, and the rejection is what reaches a log.
 //
-// TWO ROW KINDS, each with its own version (plan 0002 §2.2). A `run` row (version 2) describes
+// THREE ROW KINDS, each with its own version (plan 0002 §2.2). A `run` row (version 2) describes
 // one agent run. A `work_item` row (version 1, plan 0003 §3.3) describes one pull request; S1
-// ships its field list only, and nothing writes one until plan 0003's M4.
+// ships its field list only, and nothing writes one until plan 0003's M4. A `finding` row
+// (version 1, plan 0006 §2) carries one upstream finding, a finding only Kanon can act on; F1
+// ships its field list and checks, and nothing writes one until plan 0006's F3.
+
+import { KANON_PATH, SCRUB_VERSION, verify } from './scrub.mjs';
 
 /** Integers are non-negative and below 2³¹ (plan 0002 §2.1)... */
 const INT_MAX = 2 ** 31 - 1;
 /** ...except a workflow run id, which GitHub already issues above 2³¹ (run 33679229731). */
 const RUN_ID_MAX = Number.MAX_SAFE_INTEGER;
+/** `K-<prefix>-1` to `K-<prefix>-<n>`: a chapter's rule ids, which run without a gap. */
+function range(/** @type {string} */ prefix, /** @type {number} */ n) {
+  return Array.from({ length: n }, (_, i) => `K-${prefix}-${i + 1}`);
+}
 
 /**
  * Kanon's lanes, and the role each runs as (plan 0002 §7's table). The lane is the run row's
- * partition (`<key>#<lane>`), so `work`, the work-item partition, is reserved: no lane may be
- * named `work`, and the schema test fails if this list ever holds it.
+ * partition (`<key>#<lane>`), so `work`, the work-item partition, and `finding`, the finding
+ * partition, are reserved: no lane may be named either, and the schema test fails if this list
+ * ever holds one.
  * @type {Readonly<Record<string, string>>}
  */
 export const LANE_ROLES = Object.freeze({
@@ -49,6 +60,8 @@ export const LANE_ROLES = Object.freeze({
 export const LANES = Object.freeze(Object.keys(LANE_ROLES));
 /** The work-item partition's name, which no lane may take (plan 0002 §4). */
 export const RESERVED_PARTITION = 'work';
+/** The finding partition's name, which no lane may take either (plan 0006 §2.3). */
+export const FINDING_PARTITION = 'finding';
 
 export const ROLES = Object.freeze(['explorer', 'implementer', 'reviewer', 'merger', 'lead', 'overseer']);
 /** An actor's class on a work-item row (plan 0003 §3.2): a role, or `human`, or `other_bot`. */
@@ -154,6 +167,30 @@ export const GUARDS = Object.freeze([
   'dco', 'pr-title', 'lane-check',
 ]);
 
+/**
+ * The rulebook's ids (plan 0006 §2.1): a finding's `rules` are built from these only. Closed, like
+ * `GUARDS`: the schema test fails when this list differs from the rulebook's headings, so a rule
+ * added without its id here, or an id here that the rulebook doesn't have, fails.
+ */
+export const RULE_IDS = Object.freeze([
+  ...range('PRIN', 20), ...range('WORK', 23), ...range('SPEC', 11), ...range('AGENT', 50),
+  ...range('MERGE', 17), ...range('WS', 8), ...range('SHIP', 11), ...range('PROJ', 18),
+  ...range('OBS', 18), ...range('SELF', 18), ...range('ADOPT', 12), ...range('LAYOUT', 18),
+]);
+
+/** The lanes that report upstream findings (plan 0006 §2.1), a subset of the lane list. */
+export const REPORTERS = Object.freeze(['overseer', 'explore-telemetry']);
+/** The Overseer's Kanon subjects (`SUBJECTS` in `scripts/overseer-file.mjs`, `K-SELF-11`). */
+export const FINDING_SUBJECTS = Object.freeze(['lane', 'guard', 'rule', 'library']);
+/** The suggested-fix categories (plan 0006 decision 9), a closed list. */
+export const FIX_CATEGORIES = Object.freeze([
+  'lane-behaviour', 'guard', 'rule-text', 'documentation', 'codes-or-schema', 'default-value', 'permissions', 'other',
+]);
+/** What a finding carries (plan 0006 §2.1): `codes` for `sent`, `evidence` for `sent with evidence`. */
+export const EVIDENCE_LEVELS = Object.freeze(['codes', 'evidence']);
+/** The most findings one run sends (decision 10): `finding_index` 0 to 19. */
+export const MAX_FINDINGS = 20;
+
 // ------------------------------------------------------------------ field types
 
 /** @typedef {{ type: 'int', max?: number, min?: number }
@@ -163,6 +200,7 @@ export const GUARDS = Object.freeze([
  *   | { type: 'pattern', re: RegExp }
  *   | { type: 'time' }
  *   | { type: 'list', re: RegExp, values?: readonly string[], max: number, pair?: boolean }
+ *   | { type: 'text', max: number }
  * } FieldType */
 /** @typedef {FieldType & { required?: boolean }} Field */
 
@@ -173,6 +211,15 @@ const time = /** @type {Field} */ ({ type: 'time' });
 const oneOf = (/** @type {readonly (string|number)[]} */ values) => /** @type {Field} */ ({ type: 'enum', values });
 const pattern = (/** @type {RegExp} */ re) => /** @type {Field} */ ({ type: 'pattern', re });
 const req = (/** @type {Field} */ f) => /** @type {Field} */ ({ ...f, required: true });
+/** A field as another kind has it, but optional. */
+const optional = (/** @type {Field | undefined} */ f) => {
+  if (!f) throw new Error('optional() of a field that does not exist');
+  const rest = { ...f };
+  delete rest.required;
+  return /** @type {Field} */ (rest);
+};
+/** Free text (plan 0006 §2.2): the one type outside a closed list, on the finding row only. */
+const text = (/** @type {number} */ max) => /** @type {Field} */ ({ type: 'text', max });
 
 const KANON_VERSION = pattern(/^(\d+\.\d+\.\d+|dev)$/);
 /** A comma-separated list of up to 20 PR or issue numbers (plan 0003 §3.3). */
@@ -345,6 +392,42 @@ const WORK_ITEM_V1 = Object.freeze({
 });
 
 /**
+ * The finding row, version 1: twenty-one fields (plan 0006 §2.1). No title and no body: an
+ * issue's title is rendered from the codes. The signature's fields are the run row's own, imported,
+ * not copied, and only `kanon_version` is required of them.
+ */
+const FINDING_V1 = Object.freeze({
+  // Row
+  schema_version: req(oneOf([1])),
+  row_kind: req(oneOf(['finding'])),
+  tag: req(oneOf(TAGS)),
+  recorded_at: req(time),
+  // Run: the lane's run that found it, and the finding's place in its report
+  run_id: req(int(RUN_ID_MAX)),
+  run_attempt: req(count),
+  finding_index: req(int(MAX_FINDINGS - 1)),
+  // Reporter and subject
+  reporter: req(oneOf(REPORTERS)),
+  subject: req(oneOf(FINDING_SUBJECTS)),
+  // Signature (§2.4)
+  lane: optional(RUN_V2.lane),
+  failed_stage: optional(RUN_V2.failed_stage),
+  kanon_error: optional(RUN_V2.kanon_error),
+  reason: optional(RUN_V2.reason),
+  kanon_version: RUN_V2.kanon_version,
+  // Kanon's vocabulary
+  rules: /** @type {Field} */ ({ type: 'list', re: /^K-[A-Z]+-\d{1,3}$/, values: RULE_IDS, max: 10 }),
+  kanon_paths: /** @type {Field} */ ({ type: 'list', re: KANON_PATH, max: 10 }),
+  fix_category: req(oneOf(FIX_CATEGORIES)),
+  // Level
+  evidence_level: req(oneOf(EVIDENCE_LEVELS)),
+  // Evidence (§2.2), level 2 only
+  evidence: text(2000),
+  suggested_fix: text(1000),
+  scrub_version: /** @type {Field} */ ({ type: 'int', min: 1, max: SCRUB_VERSION }),
+});
+
+/**
  * Every field list, by row kind and then version (plan 0002 §2.2). A new version is a Kanon
  * release that adds a list; the old one stays until no supported release writes it.
  * @type {Readonly<Record<string, Readonly<Record<number, Readonly<Record<string, Field>>>>>>}
@@ -352,6 +435,7 @@ const WORK_ITEM_V1 = Object.freeze({
 export const SCHEMAS = Object.freeze({
   run: Object.freeze({ 2: RUN_V2 }),
   work_item: Object.freeze({ 1: WORK_ITEM_V1 }),
+  finding: Object.freeze({ 1: FINDING_V1 }),
 });
 
 /** Set by the store, never by a row: a row that sends one is rejected (plan 0002 §2.1). */
@@ -405,9 +489,51 @@ function problemOf(f, v) {
       }
       return null;
     }
+    case 'text': {
+      // At most `max` characters, counted as code points, and no control character but the
+      // newline. The scrub's rules are checked in `textProblems`, by name; its `marker` rule is
+      // the type's "no `<!--`", so a text can't forge an issue marker.
+      if (typeof v !== 'string') return 'type';
+      const n = [...v].length;
+      if (n === 0 || n > f.max) return 'range';
+      // eslint-disable-next-line no-control-regex
+      return /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u2028\u2029]/.test(v) ? 'control' : null;
+    }
     default:
       return 'type';
   }
+}
+
+/**
+ * Why a text field fails: its type's problem, or else each scrub rule that would still fire on it
+ * (plan 0006 §2.2), by the rule's name. Never the text.
+ * @param {Field} f
+ * @param {unknown} v
+ * @returns {string[]}
+ */
+function textProblems(f, v) {
+  const p = problemOf(f, v);
+  return p ? [p] : verify(/** @type {string} */ (v));
+}
+
+/**
+ * The cross-field rules of a finding row (plan 0006 §2.1): the evidence fields only at
+ * `evidence_level: evidence`, with `scrub_version`; and a telemetry-Explorer finding is about a
+ * lane, which it names. A finding has no outcome, so its reason is checked against the list alone.
+ * @param {Record<string, unknown>} row
+ * @returns {{ field: string, problem: string }[]}
+ */
+function findingPairings(row) {
+  /** @type {{ field: string, problem: string }[]} */
+  const out = [];
+  const texts = ['evidence', 'suggested_fix'].filter((k) => Object.hasOwn(row, k));
+  if (row.evidence_level !== 'evidence') for (const k of texts) out.push({ field: k, problem: 'level-mismatch' });
+  if (texts.length && !Object.hasOwn(row, 'scrub_version')) out.push({ field: 'scrub_version', problem: 'required' });
+  if (row.reporter === 'explore-telemetry') {
+    if (row.subject !== 'lane') out.push({ field: 'subject', problem: 'reporter-mismatch' });
+    if (!Object.hasOwn(row, 'lane')) out.push({ field: 'lane', problem: 'required' });
+  }
+  return out;
 }
 
 /**
@@ -478,6 +604,7 @@ export function validate(row, { imported = false } = {}) {
     // A key that isn't shaped like a field name could itself be content, so it is reported
     // as `(unnamed)` rather than echoed.
     if (!f) { errors.push({ field: FIELD_NAME.test(name) ? name : '(unnamed)', problem: 'unknown' }); continue; }
+    if (f.type === 'text') { for (const p of textProblems(f, r[name])) errors.push({ field: name, problem: p }); continue; }
     const p = problemOf(f, r[name]);
     if (p) errors.push({ field: name, problem: p });
   }
@@ -488,6 +615,7 @@ export function validate(row, { imported = false } = {}) {
   }
   if (importedRun && Object.hasOwn(r, IMPORT_ABSENT)) errors.push({ field: IMPORT_ABSENT, problem: 'not-allowed' });
   if (kind === 'run') errors.push(...runPairings(r, importedRun));
+  if (kind === 'finding') errors.push(...findingPairings(r));
   return errors.length ? { ok: false, errors } : { ok: true };
 }
 

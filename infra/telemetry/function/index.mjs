@@ -17,7 +17,7 @@
 // `node:` built-ins only: DynamoDB is called over HTTPS with the signer beside this file.
 
 import { Buffer } from 'node:buffer';
-import { LANES, RESERVED_PARTITION, validate } from './schema.mjs';
+import { FINDING_PARTITION, LANES, RESERVED_PARTITION, validate } from './schema.mjs';
 import { sign } from './sigv4.mjs';
 
 export const MAX_BODY_BYTES = 256 * 1024;
@@ -83,13 +83,18 @@ const compact = (/** @type {string} */ iso) => `${iso.slice(0, 19).replace(/[-:]
 
 /**
  * The row's key (§4, plan 0003 §4). A run row: `<key>#<lane>`, sorted by time, then run,
- * attempt and PR or issue number. A work item: `<key>#work`, one row per PR.
+ * attempt and PR or issue number. A work item: `<key>#work`, one row per PR. A finding:
+ * `<key>#finding`, sorted by time, then run, attempt and its place in the run's report
+ * (plan 0006 §2.3).
  * @param {string} key
  * @param {Record<string, any>} row a VALID row
  */
 export function keysOf(key, row) {
   if (row.row_kind === 'work_item') {
     return { pk: `${key}#${RESERVED_PARTITION}`, sk: `pr-${String(row.pr_number).padStart(10, '0')}` };
+  }
+  if (row.row_kind === 'finding') {
+    return { pk: `${key}#${FINDING_PARTITION}`, sk: `${compact(row.recorded_at)}#${row.run_id}-${row.run_attempt}-${row.finding_index}` };
   }
   const n = row.pr_number ?? row.issue_number ?? 0;
   return { pk: `${key}#${row.lane}`, sk: `${compact(row.recorded_at)}#${row.run_id}-${row.run_attempt}-${n}` };
@@ -120,7 +125,11 @@ export function stamp(row, { caller, key, now }) {
   const r = /** @type {Record<string, any>} */ (row);
   /** @type {{ field: string, problem: string }[]} */
   const errors = [];
-  if (caller.kind === 'backfill' && r.row_kind !== 'work_item') errors.push({ field: 'row_kind', problem: 'not-allowed' });
+  // A finding row validates from plan 0006's F1, but intake's own checks of it (the sender's name
+  // hashes, `assertNoKey` with every registered key, writers only) are F4's. Until then no caller
+  // may store one.
+  if (r.row_kind === 'finding') errors.push({ field: 'row_kind', problem: 'not-allowed' });
+  else if (caller.kind === 'backfill' && r.row_kind !== 'work_item') errors.push({ field: 'row_kind', problem: 'not-allowed' });
   // Only the importer backdates, and only as far as retention reaches (§7).
   const earliest = caller.kind === 'importer' ? addMonths(now, -RETENTION_MONTHS) : now - RECORDED_BACK_MS;
   const recorded = Date.parse(r.recorded_at);
@@ -248,5 +257,6 @@ export async function handle(event, deps = {}) {
 /** The Lambda entry point. */
 export const handler = (/** @type {any} */ event) => handle(event);
 
-// Kept so the lane list the erase script walks is the one this function writes (§10).
-export const PARTITIONS = Object.freeze([...LANES, RESERVED_PARTITION]);
+// Kept so the lane list the erase script walks is the one this function writes (§10), and the
+// finding partition, which erasure must reach too (plan 0006 §2.3).
+export const PARTITIONS = Object.freeze([...LANES, RESERVED_PARTITION, FINDING_PARTITION]);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import { MIN_ADOPTERS } from '../../infra/telemetry/function/aggregate.mjs';
 import {
-  MARKER, RISE, compareVersions, detect, main, parseRows, renderIssue, riseSignature, signalSignature,
+  MARKER, RISE, compareVersions, detect, main, parseRows, renderIssue, riseSignature, signalSignature, signature,
 } from '../../scripts/telemetry/kanon-bugs.mjs';
 
 /**
@@ -227,6 +228,52 @@ describe('new, and the signature', () => {
     expect(new Set(sigs).size).toBe(sigs.length);
     expect(sigs[0]).toMatch(/^[0-9a-f]{24}$/);
     expect(riseSignature({ lane: 'review', kanon_version: '0.36.0' })).not.toBe(sigs[0]);
+  });
+
+  it('is the signature a finding shares (plan 0006 §2.4), and every signal\'s is unchanged by it', () => {
+    expect(signalSignature).toBe(signature);
+    // Measured on main before `signature` existed: a change to any signal's signature would orphan
+    // every open issue the job filed under the old one.
+    const golden: [Parameters<typeof signature>[0], string][] = [
+      [{ lane: 'review', failed_stage: 'agent', kanon_error: null, reason: 'did_not_finish', kanon_version: '0.36.0' }, 'a047bfc3341895d98e2d5d55'],
+      [{ lane: 'implement', failed_stage: 'hook', kanon_error: 'hook_missing', reason: 'no_result_file', kanon_version: '0.37.0' }, 'd048f7cbcebf84e1b61c7af6'],
+      [{ lane: 'overseer', failed_stage: null, kanon_error: null, reason: 'turn_cap', kanon_version: 'dev' }, 'd96659995c0f41c5ba747f84'],
+      [{ lane: 'triage', failed_stage: 'token', kanon_error: 'unhandled', reason: 'no_result_file', kanon_version: '0.30.0' }, '9788cc85aaeb49282d3fd821'],
+    ];
+    for (const [s, sig] of golden) expect(signature(s)).toBe(sig);
+    // And every signal `detect` makes has the signature the old formula gave it.
+    const old = (s: { lane: string, failed_stage: string | null, kanon_error: string | null, reason: string, kanon_version: string }) =>
+      createHash('sha256').update(['signal', s.lane, s.failed_stage ?? '-', s.kanon_error ?? '-', s.reason, s.kanon_version].join('\n')).digest('hex').slice(0, 24);
+    const rows = [failed('k1'), failed('k2', { failed_stage: 'hook', kanon_error: 'hook_missing', reason: 'no_result_file', outcome: 'not-reached' }),
+      failed('k3', { lane: 'triage', role: 'implementer', kanon_version: 'dev' })];
+    const signals = detect(rows).signals;
+    expect(signals.length).toBe(3);
+    for (const s of signals) expect(s.signature).toBe(old(s));
+  });
+
+  it('gives a finding with a signal\'s five codes that signal\'s signature, whatever else it names', () => {
+    const s = detect([failed('k1')]).signals[0]!;
+    const finding = { lane: s.lane, failed_stage: s.failed_stage, kanon_error: s.kanon_error ?? undefined, reason: s.reason,
+      kanon_version: s.kanon_version, rules: 'K-AGENT-12', kanon_paths: 'scripts/merge-gate.mjs' };
+    expect(signature(finding)).toBe(s.signature);
+    // A finding that names only a lane is still on the signal's terms: absent is `-`, as for a signal.
+    expect(signature({ lane: 'review', kanon_version: '0.36.0', rules: 'K-AGENT-12' }))
+      .toBe(signature({ lane: 'review', failed_stage: null, kanon_error: null, reason: null, kanon_version: '0.36.0' }));
+  });
+
+  it('appends the sorted rules and paths of a finding that names no lane, stage, error or reason (decision 12)', () => {
+    const base = { kanon_version: '0.37.0' };
+    const a = signature({ ...base, rules: 'K-MERGE-10,K-SELF-7', kanon_paths: 'scripts/merge-gate.mjs' });
+    expect(signature({ ...base, rules: ['K-SELF-7', 'K-MERGE-10'], kanon_paths: ['scripts/merge-gate.mjs'] })).toBe(a);
+    const others = [
+      signature(base),
+      signature({ ...base, rules: 'K-MERGE-10' }),
+      signature({ ...base, rules: 'K-MERGE-10,K-SELF-7', kanon_paths: 'scripts/lane-gate.mjs' }),
+      signature({ ...base, kanon_paths: 'K-MERGE-10,K-SELF-7' }),
+      signature({ kanon_version: '0.36.0', rules: 'K-MERGE-10,K-SELF-7', kanon_paths: 'scripts/merge-gate.mjs' }),
+    ];
+    expect(new Set([a, ...others]).size).toBe(others.length + 1);
+    expect(a).toMatch(/^[0-9a-f]{24}$/);
   });
 
   it("is in the issue body's marker, so the job finds the open issue to update", () => {

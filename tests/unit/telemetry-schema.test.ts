@@ -8,6 +8,7 @@ import { parse } from 'yaml';
 import {
   ESCALATION_CATEGORIES,
   ESCALATION_REASONS,
+  FINDING_PARTITION,
   GUARDS,
   KANON_ERRORS,
   LANES,
@@ -130,9 +131,11 @@ describe('the field lists (plan 0002 §2.1, plan 0003 §3.3)', () => {
     }
   });
 
-  it('reserves `work`: no lane may take the work-item partition\'s name (plan 0002 §4)', () => {
+  it('reserves `work` and `finding`: no lane may take the work-item or the finding partition\'s name (plan 0002 §4, plan 0006 §2.3)', () => {
     expect(RESERVED_PARTITION).toBe('work');
+    expect(FINDING_PARTITION).toBe('finding');
     expect(LANES).not.toContain(RESERVED_PARTITION);
+    expect(LANES).not.toContain(FINDING_PARTITION);
     expect(LANES.length).toBeGreaterThan(0);
   });
 

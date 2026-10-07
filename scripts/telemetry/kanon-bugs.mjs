@@ -127,8 +127,29 @@ export function compareVersions(a, b) {
  * @param {string[]} parts
  */
 const hash = (parts) => createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 24);
-/** @param {{ lane: string, failed_stage: string | null, kanon_error: string | null, reason: string, kanon_version: string }} s */
-export const signalSignature = (s) => hash(['signal', s.lane, s.failed_stage ?? '-', s.kanon_error ?? '-', s.reason, s.kanon_version]);
+/** A row's list field as its items: a comma-separated string, as the schema stores it, or an array. */
+const items = (/** @type {unknown} */ v) => (Array.isArray(v) ? v.map(String) : typeof v === 'string' && v !== '' ? v.split(',') : []);
+/**
+ * THE SIGNATURE OF A SIGNAL AND OF AN UPSTREAM FINDING, one function for both, so the two can't
+ * drift (plan 0006 §2.4). A finding with the same lane, stage, error, reason and version as a
+ * signal gets the signal's signature, and the job files the two on one issue. Every signal has a
+ * lane and a reason, so its signature is what it was before findings existed.
+ *
+ * A finding that names none of lane, stage, error or reason (a rule, guard or library finding)
+ * would otherwise share one signature with every other such finding on its release, so its sorted
+ * `rules` and `kanon_paths` are appended (plan 0006 decision 12). Such a finding can't match a
+ * signal anyway.
+ * @param {{ lane?: string | null, failed_stage?: string | null, kanon_error?: string | null, reason?: string | null,
+ *   kanon_version: string, rules?: string | readonly string[], kanon_paths?: string | readonly string[] }} s
+ */
+export const signature = (s) => {
+  const parts = ['signal', s.lane ?? '-', s.failed_stage ?? '-', s.kanon_error ?? '-', s.reason ?? '-', s.kanon_version];
+  const coded = [s.lane, s.failed_stage, s.kanon_error, s.reason].some((v) => v !== undefined && v !== null);
+  if (!coded) parts.push(`rules:${items(s.rules).sort().join(',')}`, `paths:${items(s.kanon_paths).sort().join(',')}`);
+  return hash(parts);
+};
+/** A signal's signature: `signature`, under the name the job has always called it by. */
+export const signalSignature = signature;
 /** @param {{ lane: string, kanon_version: string }} r */
 export const riseSignature = (r) => hash(['rise', r.lane, r.kanon_version]);
 
