@@ -15,7 +15,7 @@ Tell a run that died from one that skipped by reading full run records, never a 
 | Review | `review.yml` | CI finishing, a review label, a pull request opened, a dispatch |
 | Implement | `implement.yml` | an `agent:implement` label, a dispatch |
 | Implement, revise | `implement-revise.yml` | a changes-request, a label, a dispatch |
-| Rebase (resolve a conflict) | `rebase.yml` | CI finishing on `main` (refused under the merge queue, [#79](https://github.com/yedeya-labs/kanon/issues/79)), daily (sporadic, [#397](https://github.com/yedeya-labs/kanon/issues/397)), a dispatch |
+| Rebase (resolve a conflict) | `rebase.yml` | CI finishing on `main` (refused under the merge queue, [#79](https://github.com/yedeya-labs/kanon/issues/79)), a merged pull request (`pull_request_target` closed on `main`, [#484](https://github.com/yedeya-labs/kanon/issues/484)/[#512](https://github.com/yedeya-labs/kanon/issues/512)), daily (sporadic, [#397](https://github.com/yedeya-labs/kanon/issues/397)), a dispatch |
 | Code audit | `code-audit.yml` | every three days, a dispatch |
 | Overseer | `overseer.yml` | weekly, a dispatch, a merged pull request that moves its Kanon pin |
 | Explore the telemetry | `explore-telemetry.yml` | weekly (Tuesday 06:30 UTC), a dispatch |
@@ -24,7 +24,7 @@ Read them with `gh run list --workflow <caller> --json databaseId,event,status,c
 
 **A run whose gate job concluded `skipped`, or whose agent job never started, is a skip, not a death:** the membership gate turned the event away (a label other than the lane's, a stranger's act, a closed pull request that didn't merge), or the Overseer's runtime-version check found the runtime no newer than the watermark. A death is a run whose agent or filing job failed or was cancelled. **`explore-telemetry.yml` is the exception to "agent job never started":** its agent job (`explore`) needs the `aggregate` job, so a run whose `aggregate` job failed or was cancelled is a death (the role's trust, the function or the answer check broke), while a run that ended at `unconfigured`, or whose `aggregate` succeeded with nothing in it and so skipped `explore`, is a skip.
 
-**Kanon's schedules fire only now and then** ([#397](https://github.com/yedeya-labs/kanon/issues/397), closed as not planned: GitHub started 3 scheduled runs in about 15 hourly slots). So a missing scheduled run of any scheduled caller in the table above (the code audit, the Overseer, the rebase lane or the telemetry Explorer) is that, not a lane that died. Name it once, in the audit, and file nothing new for it. The rebase lane is started by a dispatch on Kanon: a conflicting Implementer pull request that no dispatch reached is waiting for one, which is worth naming.
+**Kanon's schedules fire only now and then** ([#397](https://github.com/yedeya-labs/kanon/issues/397), closed as not planned: GitHub started 3 scheduled runs in about 15 hourly slots). So a missing scheduled run of any scheduled caller in the table above (the code audit, the Overseer, the rebase lane or the telemetry Explorer) is that, not a lane that died. Name it once, in the audit, and file nothing new for it. The rebase lane starts after every merge through the queue, on the merged pull request, and a dispatch is the immediate retry: a conflicting Implementer pull request that stays conflicting after a later merge's rebase run is a skip or a death to judge, and worth naming.
 
 ## Backlog dynamics
 
