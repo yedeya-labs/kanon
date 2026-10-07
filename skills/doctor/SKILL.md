@@ -14,7 +14,7 @@ Run every `kanon` command in this skill, and every one a finding's fix names, fr
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.32.0 kanon doctor --json
+npx --yes --package github:yedeya-labs/kanon#v0.33.0 kanon doctor --json
 ```
 
 <!-- x-release-please-end -->

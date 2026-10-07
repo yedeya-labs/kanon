@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: yedeya-labs/kanon/actions/pr-title@v0.32.0
+      - uses: yedeya-labs/kanon/actions/pr-title@v0.33.0
 ```
 
 <!-- x-release-please-end -->
