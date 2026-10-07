@@ -148,7 +148,7 @@ runs:
       run: |
         set -uo pipefail
         if ! git push --dry-run origin "HEAD:refs/heads/${MINTED_SLUG}-permission-probe" 2>/tmp/push.err; then
-          echo "::error title=agent-lane::$MINTED_SLUG cannot push. The $ARM needs Contents: Read & write and Pull requests: Read & write on the App, AND the installation re-authorized to accept them — a permission change does not take effect until it is accepted. See docs/qa/agent-identities.md footnote 3."
+          echo "::error title=agent-lane::$MINTED_SLUG cannot push. The $ARM needs Contents: Read & write and Pull requests: Read & write on the App, AND the installation re-authorized to accept them — a permission change does not take effect until it is accepted. Kanon's apps-check workflow compares the installation's permissions with the App's (Kanon's docs/apps.md, \"Checking the installations later\")."
           sed -n '1,5p' /tmp/push.err
           echo "kanon-error=push_probe_denied" >> "$GITHUB_OUTPUT"
           exit 1

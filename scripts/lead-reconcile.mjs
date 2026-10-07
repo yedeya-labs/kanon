@@ -1940,8 +1940,8 @@ export function awaitingReview(prs, now = Date.now(), hours = AWAITING_REVIEW_HO
  * whether anything is churned. Failing to read Actions must never manufacture a
  * "no run ever fired" and re-fire a review on top of one that is already running.
  *
- * `Actions: Read` is granted (agent-identities.md footnote 7, for phase 4's probe of
- * the declared deploy workflow) and `agent-lead-reconcile.yml` already probes it at the top
+ * `Actions: Read` is granted (the Lead's row in `rulebook/03-agents.md`, for phase 4's probe
+ * of the declared deploy workflow) and `agent-lead-reconcile.yml` already probes it at the top
  * of the tick, so a missing grant reds the run in seconds rather than silently
  * degrading here.
  *
@@ -2154,9 +2154,9 @@ export function reviseRecovery(world, { runsFor = reviseRunsFor, now = Date.now(
  * PR RA-1503 sat unreviewed while its own fix was in it. This turns the note into an
  * action.
  *
- * IT CHURNS A LABEL, IT DOES NOT DISPATCH. `agent-identities.md` footnote 2 gives
- * the Lead `Actions: No access` for write on purpose — "label churn achieves the same
- * with strictly less authority" — and RA-1281 is what happened when phase 5 reached for
+ * IT CHURNS A LABEL, IT DOES NOT DISPATCH. The Lead's row in `rulebook/03-agents.md`
+ * gives it no Actions write on purpose — re-applying a label is the lower-authority
+ * route (`K-AGENT-4`) — and RA-1281 is what happened when phase 5 reached for
  * `gh workflow run` anyway: a 403 and a held pilot. `agent-review.yml` subscribes to
  * `pull_request: [labeled]` for precisely this case, in its own words: "a review label
  * added to a PR whose checks already settled fires no CI run, so no `workflow_run` ever
@@ -2245,8 +2245,8 @@ export function reviewRecovery(world, { runsFor = reviewRunsFor, now = Date.now(
 // nothing re-fired it: the tick only told a human to. The same "nothing re-fires"
 // shape RA-1595 closed for the brief-revise lane and RA-1592 for the implementer.
 //
-// IT CHURNS THE LABEL, IT DOES NOT DISPATCH — footnote 2 again: the Lead has `Actions:
-// No access` for write, and a label re-added on the App token is an `issues: labeled`
+// IT CHURNS THE LABEL, IT DOES NOT DISPATCH — the Lead's row again: it has no Actions
+// write, and a label re-added on the App token is an `issues: labeled`
 // event the lane already subscribes to.
 //
 // THE BOUND IS THE ISSUE'S OWN EVENT HISTORY, not a counter or a marker comment. Every
@@ -3688,9 +3688,9 @@ export function execute(world, actions, { run = gh } = {}) {
         console.log(`filed QA issue: ${url}`);
       } else if (a.kind === 'verify') {
         // LABEL CHURN, NOT `workflow run` (RA-1281). The dispatch needed `actions:
-        // write`, and `docs/qa/agent-identities.md` footnote 2 gives the Lead
-        // `Actions: No access` deliberately — "label churn achieves the same with
-        // strictly less authority". That reasoning had a hole for this one agent:
+        // write`, and the Lead's row in `rulebook/03-agents.md` gives it no Actions
+        // write deliberately — re-applying a label is the lower-authority route
+        // (`K-AGENT-4`). That reasoning had a hole for this one agent:
         // the Explorer was `workflow_dispatch`-only, so there was no label to churn, and the
         // dispatch 403'd and held the pilot project.
         //

@@ -206,7 +206,7 @@ describe('what it acts on', () => {
     // an outage, a dropped queue — nothing re-fires the implementer and the PR parks
     // on an unanswered changes-request. The reconciler churns `agent:revise` to
     // re-deliver it, which is a label rather than a dispatch because the Lead holds
-    // `Actions: No access` for write (agent-identities.md footnote 2).
+    // no Actions write (its row in `rulebook/03-agents.md`).
     it('acts on a label event when a changes-request stands on the head', () => {
       expect(runFilter({ isLabel: true }).act).toBe(true);
     });

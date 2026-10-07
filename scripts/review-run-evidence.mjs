@@ -34,7 +34,7 @@
 //
 // ── WHAT COUNTS AS AN ATTEMPT, AND WHY EACH RULE IS SAFE ────────────────────
 // The classification below is entirely readable from the Actions listing, which is
-// the only surface the Lead's `Actions: Read` grant reaches (agent-identities.md ⁷):
+// the only surface the Lead's `Actions: Read` grant reaches (its row in `rulebook/03-agents.md`):
 //
 //   · a run the RECOVERY ITSELF started counts, whatever it concluded. This is the
 //     only thing bounding the loop, and it must not depend on what the churn's run
