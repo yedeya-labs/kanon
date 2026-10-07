@@ -194,6 +194,8 @@ const KANON_TREE = isFile('actions/lane-check/lane-check.sh') && isFile(`.github
 let CALLERS = 0;
 /** @type {string[]} */
 const CALLED = [];
+/** Whether a workflow calls Kanon's telemetry collector, which sends `Upstream findings: sent` (plan 0006 §3.1). */
+let COLLECTOR = false;
 /** @type {string[]} */
 const ROLES = [];
 /** @type {Array<[string, string]>} */
@@ -255,6 +257,7 @@ for (const f of WORKFLOWS) {
     const m = LANE_RE.exec(tostring(alt(v.uses, '')));
     if (!m) continue;
     const wf = /** @type {string} */ (m[1]);
+    if (wf === 'telemetry-collect') COLLECTOR = true;
     if (wf === lane || !Object.hasOwn(v, 'secrets') || isObject(v.secrets)) continue;
     if (!tsv(name)) continue;
     fail(f, `the job \`${tsv(name)}\` calls Kanon's ${tsv(wf)} workflow with \`secrets: ${tsv(tostring(v.secrets))}\`; map each secret it takes by name, or pass none (\`secrets: inherit\` would hand every secret to Kanon's code; plan 0001 decision 7)`);
@@ -555,7 +558,7 @@ if (isFile(DATABASE)) {
   const personas = ROLES.length > 0 && isFile(REGISTER);
   /** @type {string[]} */
   let found = [];
-  try { found = declarationFindings(overseer, personas, process.cwd()); } catch { die(`could not run Kanon's declaration readers (${HERE}/declarations.mjs)`); }
+  try { found = declarationFindings(overseer, personas, process.cwd(), COLLECTOR); } catch { die(`could not run Kanon's declaration readers (${HERE}/declarations.mjs)`); }
   for (const line of found) {
     const [kind = '', file = '', ...msg] = line.split('\t');
     const m = msg.join('\t').replace(/^\t+|\t+$/g, '');

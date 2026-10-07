@@ -9,7 +9,8 @@ import { callerFile, ciFile, DEPENDABOT_ENTRY, loadRequirements, TRIGGERS } from
 import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, laneCatalogue, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, usage, USAGE, workflowName } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
-import { TELEMETRY_QUESTION, TELEMETRY_REGISTRATION_URL } from '../../cli/init.mjs';
+import { TELEMETRY_QUESTION, TELEMETRY_REGISTRATION_URL, UPSTREAM_EVIDENCE_QUESTION, upstreamFindingsQuestion } from '../../cli/init.mjs';
+import { parseUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 
 // Its cases run `kanon init` against a real git checkout, and several run lane-check, so every
@@ -1191,7 +1192,7 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
       expect(keys(f.fix)).toEqual(['commands', 'text', 'url']);
     }
     expect(d.inspection).toMatchObject({ owner: 'acme', ownerKind: 'user', private: false, defaultBranch: 'main', rulesets: 'yes', installedLanes: [], callsRelease: false });
-    expect(d.answers).toEqual({ projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false, reuseApps: null, plugin: true, telemetry: false });
+    expect(d.answers).toEqual({ projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false, reuseApps: null, plugin: true, telemetry: false, upstreamFindings: 'drafted', upstreamEvidence: null });
     expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], reuse: [], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
     expect(d.files.find((f) => f.path === '.github/workflows/agent-review.yml')).toMatchObject({ status: 'new', content: read(dir, '.github/workflows/agent-review.yml'), diff: [] });
     expect(d.findings.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token']);
@@ -1752,6 +1753,102 @@ describe('kanon init and telemetry (#428)', () => {
     });
     expect(r.status, r.err).toBe(0);
     expect(read(dir, TELEMETRY_CALLER_PATH)).toBe(telemetryCallerFile(RELEASE));
+  });
+});
+
+// Plan 0006 §3.2 (kanon#585): where upstream findings go is asked after telemetry, `drafted`
+// recommended. `sent` is offered only when the telemetry answer is yes, since it travels over the
+// telemetry channel, and only after it is the evidence text asked about, codes only recommended.
+describe('kanon init and upstream findings (plan 0006 F2)', () => {
+  const WHERE = 'Where do upstream findings go';
+  const EVIDENCE = 'Also send each finding';
+  const record = (dir: string) => parseUpstreamFindings(read(dir, 'docs/qa/adoption.md'));
+
+  it('drafts them by default, writing no bullet, and leaves the evidence unasked', async () => {
+    const dir = checkout();
+    const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    expect(d.answers).toMatchObject({ upstreamFindings: 'drafted', upstreamEvidence: null });
+    expect(read(dir, 'docs/qa/adoption.md')).not.toContain('Upstream findings');
+    expect(record(dir)).toBeNull();
+  });
+
+  for (const value of ['sent', 'sent-with-evidence']) {
+    it(`offers no sent option without telemetry: --json --upstream-findings ${value} is refused by name, before any call to GitHub`, async () => {
+      for (const argv of [['--json', '--no-apps', '--upstream-findings', value], ['--json', '--no-apps', '--no-telemetry', '--upstream-findings', value]]) {
+        const github = fakeGitHub();
+        const r = await run(checkout(), github, argv);
+        expect(r.status, argv.join(' ')).toBe(2);
+        const d = parse(r);
+        expect(d.status).toBe('error');
+        expect(d.error).toContain(`--upstream-findings ${value} needs --telemetry`);
+        expect(github.calls).toEqual([]);
+      }
+    });
+  }
+
+  it.each([
+    ['sent', ['--telemetry'], 'sent', false],
+    ['sent-with-evidence', ['--telemetry'], 'sent with evidence', true],
+    ['filed-here', [], 'filed here', null],
+    ['drafted', [], 'drafted', null],
+  ] as const)('writes --upstream-findings %s as the bullet the lanes read', async (flag, extra, value, evidence) => {
+    const dir = checkout();
+    const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps', ...extra, '--upstream-findings', flag]));
+    expect(d.status).not.toBe('error');
+    expect(d.answers).toMatchObject({ upstreamFindings: value, upstreamEvidence: evidence });
+    expect(record(dir)).toBe(value === 'drafted' ? null : value);
+  });
+
+  it('refuses a value it does not take, and the flag twice', () => {
+    expect(() => parseArgs(['--upstream-findings', 'filed'], REQ)).toThrow('--upstream-findings takes drafted, filed-here, sent or sent-with-evidence, not "filed"');
+    expect(() => parseArgs(['--upstream-findings', 'sent with evidence'], REQ)).toThrow(/takes drafted, filed-here, sent or sent-with-evidence/);
+    expect(() => parseArgs(['--upstream-findings', 'drafted', '--upstream-findings', 'drafted'], REQ)).toThrow('--upstream-findings is given twice');
+    expect(parseArgs(['--upstream-findings=filed-here'], REQ).given.upstreamFindings).toBe('filed here');
+  });
+
+  it('asks without telemetry, offering no sent option, and never asks about the evidence', async () => {
+    const asked: string[] = [];
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, {
+      ask: async (q: string, d: string) => (asked.push(q), q.startsWith(WHERE) ? 'sent' : d),
+    });
+    expect(r.status, r.err).toBe(0);
+    const where = asked.filter((q) => q.startsWith(WHERE));
+    expect(where).toEqual([upstreamFindingsQuestion(false)]);
+    expect(where[0]).toMatch(/\(drafted\/filed-here\)$/);
+    expect(where[0]).toContain('needs telemetry');
+    expect(asked.indexOf(where[0]!)).toBeGreaterThan(asked.findIndex((q) => q.startsWith(TELEMETRY_QUESTION)));
+    expect(asked.some((q) => q.startsWith(EVIDENCE))).toBe(false);
+    // An answer it didn't offer is its default: nothing is sent on a guess.
+    expect(record(dir)).toBeNull();
+  });
+
+  it('with telemetry, offers sent, then asks about the evidence, codes only by default', async () => {
+    for (const [evidence, value] of [['n', 'sent'], ['y', 'sent with evidence']] as const) {
+      const asked: string[] = [];
+      const dir = checkout();
+      const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, {
+        ask: async (q: string, d: string) => {
+          asked.push(q);
+          if (q.startsWith(TELEMETRY_QUESTION)) return 'y';
+          if (q.startsWith(WHERE)) return 'sent';
+          if (q.startsWith(EVIDENCE)) return evidence;
+          return d;
+        },
+      });
+      expect(r.status, r.err).toBe(0);
+      expect(asked.filter((q) => q.startsWith(WHERE))).toEqual([upstreamFindingsQuestion(true)]);
+      expect(upstreamFindingsQuestion(true)).toMatch(/\(drafted\/sent\/filed-here\)$/);
+      expect(asked.filter((q) => q.startsWith(EVIDENCE))).toEqual([`${UPSTREAM_EVIDENCE_QUESTION} (y/n)`]);
+      expect(record(dir)).toBe(value);
+    }
+  });
+
+  it('says, in the evidence question, who reads the text and that it may hold personal data (decision 14)', () => {
+    expect(UPSTREAM_EVIDENCE_QUESTION.startsWith(EVIDENCE)).toBe(true);
+    for (const s of ['third-party decision provider', 'TypeSafe', 'Jev', 'It may rarely still contain personal data', "Kanon's maintainer", 'never published', '13 months in Frankfurt', 'erased on request']) {
+      expect(UPSTREAM_EVIDENCE_QUESTION).toContain(s);
+    }
   });
 });
 

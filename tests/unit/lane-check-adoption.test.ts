@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
 import { adopter, check, red, laneCheck } from './helpers/lane-check.js';
 
 /**
  * `actions/lane-check` (plan 0001 §6): the adoption record's reference deploy, weekly digest
- * audience and production promotion.
+ * audience and production promotion, and whether its upstream findings can be sent (plan 0006 F2).
  *
  * One of the lane-check files split by area (kanon#381); `tests/unit/helpers/lane-check.ts`
  * says how every case runs and holds the helpers they share.
@@ -65,5 +66,22 @@ laneCheck(() => {
     it('refuses one outside `## Choices`, by name', () =>
       red((t) => t.write(REC, `# Adoption record\n\n${GATED}\n## Choices\n`),
         /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:3 declares the production promotion outside `## Choices`/));
+  });
+
+  // Plan 0006 §3.1 (kanon#585): `sent` and `sent with evidence` need the telemetry opt-in, a
+  // workflow that calls Kanon's telemetry collector, or nothing is sent.
+  describe("the adoption record's sent upstream findings and the telemetry collector (K-LAYOUT-10, plan 0006 F2)", () => {
+    const REC = 'docs/qa/adoption.md';
+    const SENT = (value: string) => `# Adoption record\n\n## Choices\n\n- **Overseer:** \`not installed\`\n- **Upstream findings:** \`${value}\`\n`;
+    it('refuses `sent` with no caller of the collector, by line, naming both fixes', () =>
+      red((t) => t.write(REC, SENT('sent')),
+        /adoption\.md,title=lane-check::docs\/qa\/adoption\.md:6 says `Upstream findings: sent`, and no workflow calls Kanon's telemetry collector.*opt in to telemetry.*or choose `drafted` \(K-LAYOUT-10, upstream\.unsent\)/));
+    it('passes `sent with evidence` beside a caller of the collector', () => {
+      const t = adopter();
+      t.write(REC, SENT('sent with evidence'));
+      t.write(TELEMETRY_CALLER_PATH, telemetryCallerFile('v1.2.3'));
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
   });
 });

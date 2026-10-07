@@ -16,10 +16,17 @@
 //   ## Choices
 //   - **Upstream findings:** `filed here`
 //
-// or `drafted`. `filed here` files them IN THIS REPOSITORY, as the adopter's own findings are
-// filed; it never files anything in another repository, so ADR 0007's boundary is unchanged. A
-// record with it twice, outside `## Choices`, in another shape or with another value throws
-// `DeclarationError` naming the file and the line.
+// or `drafted`, `sent` or `sent with evidence`. `filed here` files them IN THIS REPOSITORY, as the
+// adopter's own findings are filed; it never files anything in another repository, so ADR 0007's
+// boundary is unchanged. A record with it twice, outside `## Choices`, in another shape or with
+// another value throws `DeclarationError` naming the file and the line.
+//
+// SENT (plan 0006 §3.1, kanon#585). `sent` and `sent with evidence` also draft each finding, and
+// send it to Kanon's telemetry store over the telemetry channel: the collector sends the rows, so
+// both need a workflow that calls Kanon's telemetry collector. Without one nothing is sent, and
+// `lane-check` and `kanon doctor` say so (`upstream.unsent`, `unsentMessage`), naming both fixes.
+// The lanes build the rows in plan 0006's F3, and the collector sends them in F4: until then a
+// sent finding is drafted, and nothing is sent.
 //
 // OMITTED, IT IS KANON'S DEFAULT, `drafted` (plan 0005 §5.2): a record without the bullet, or no
 // record, routes upstream findings exactly as before the choice existed.
@@ -40,8 +47,13 @@ import { ADOPTION_RECORD, CHOICES_HEADING } from './reference-deploy.mjs';
 /** The bullet's bold label. */
 export const LABEL = 'Upstream findings';
 
-/** The two values it takes. */
-export const VALUES = /** @type {const} */ (['drafted', 'filed here']);
+/** The four values it takes. */
+export const VALUES = /** @type {const} */ (['drafted', 'filed here', 'sent', 'sent with evidence']);
+
+/** The values that send findings to Kanon's telemetry store, and so need its collector (plan 0006 §3.1). */
+export const SENT_VALUES = /** @type {const} */ (['sent', 'sent with evidence']);
+
+/** @typedef {typeof VALUES[number]} Value */
 
 /** Kanon's default when the record doesn't say: upstream findings are drafts, never issues. */
 export const DEFAULT_VALUE = 'drafted';
@@ -57,13 +69,26 @@ const ENTRY = new RegExp(`^[-*] \\*\\*${LABEL}:\\*\\* \`([^\`]*)\`\\s*$`);
 
 const EXAMPLE = `- **${LABEL}:** \`filed here\``;
 
+/** The values, as the error that names them writes them. */
+const WRITE = `${VALUES.slice(0, -1).map((v) => `\`${v}\``).join(', ')} or \`${VALUES[VALUES.length - 1]}\``;
+
 /**
  * Parses the declaration out of an adoption record. Returns `null` when the record doesn't
  * declare it, and throws `DeclarationError` naming the line of a malformed one.
  * @param {string} text the adoption record's markdown
- * @returns {'drafted' | 'filed here' | null}
+ * @returns {Value | null}
  */
 export function parseUpstreamFindings(text) {
+  return declaredAt(text)?.value ?? null;
+}
+
+/**
+ * The declaration and its line (1-based), or `null` when the record doesn't declare it. Throws as
+ * `parseUpstreamFindings` does.
+ * @param {string} text
+ * @returns {{ value: Value, line: number } | null}
+ */
+export function declaredAt(text) {
   const lines = linesOf(text);
   const fenced = fencedLines(lines);
   if (fenced.unclosed !== -1) throw fail(`${ADOPTION_RECORD}:${fenced.unclosed + 1} opens a code fence that never closes`);
@@ -96,17 +121,51 @@ export function parseUpstreamFindings(text) {
     throw fail(`${ADOPTION_RECORD}:${line}, under \`${CHOICES_HEADING}\`, isn't a declaration: write a \`- \` bullet at the start of the line, the bold label, then the value as one code span and nothing after it, as in: ${EXAMPLE}`);
   }
   const value = /** @type {string} */ (entry[1]);
-  if (value !== 'drafted' && value !== 'filed here') {
-    throw fail(`${ADOPTION_RECORD}:${line}: \`${LABEL}\` is \`${value}\`; write \`drafted\` or \`filed here\``);
+  if (!(/** @type {readonly string[]} */ (VALUES)).includes(value)) {
+    throw fail(`${ADOPTION_RECORD}:${line}: \`${LABEL}\` is \`${value}\`; write ${WRITE}`);
   }
-  return value;
+  return { value: /** @type {Value} */ (value), line };
+}
+
+/** @param {string | null | undefined} value @returns {boolean} whether it sends findings to Kanon */
+export const sends = (value) => (/** @type {readonly (string | null | undefined)[]} */ (SENT_VALUES)).includes(value);
+
+/**
+ * What `lane-check` and `kanon doctor` say of a record that sends findings with no caller of
+ * Kanon's telemetry collector (plan 0006 §3.1, `upstream.unsent`): nothing is sent, and the two
+ * fixes. `null` when the record doesn't send, or a workflow calls the collector.
+ * @param {string} text the adoption record's markdown
+ * @param {boolean} collector whether a workflow calls Kanon's telemetry collector
+ * @returns {string | null}
+ */
+export function unsentMessage(text, collector) {
+  const at = declaredAt(text);
+  if (!at || !sends(at.value) || collector) return null;
+  return `${ADOPTION_RECORD}:${at.line} says \`${LABEL}: ${at.value}\`, and no workflow calls Kanon's telemetry collector, so nothing is sent and the lanes only draft them: opt in to telemetry (\`kanon init --telemetry\`, docs/telemetry.md), or choose \`drafted\` (K-LAYOUT-10, upstream.unsent)`;
+}
+
+/**
+ * The same, from a checked-out tree, for `lane-check`: throws `DeclarationError` with the message.
+ * A missing record sends nothing.
+ * @param {string} root the repository root @param {boolean} collector
+ */
+export function checkUpstreamSent(root, collector) {
+  let text;
+  try {
+    text = readFileSync(join(root, ADOPTION_RECORD), 'utf8');
+  } catch (e) {
+    if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT') return;
+    throw fail(`${ADOPTION_RECORD} couldn't be read: ${/** @type {Error} */ (e).message}`);
+  }
+  const message = unsentMessage(text, collector);
+  if (message) throw new DeclarationError(message);
 }
 
 /**
  * Reads the declaration from a checked-out tree, for `lane-check` and `kanon doctor`. A missing
  * record declares nothing; a malformed one throws.
  * @param {string} [root] the repository root
- * @returns {'drafted' | 'filed here' | null}
+ * @returns {Value | null}
  */
 export function readUpstreamFindings(root = process.cwd()) {
   let text;
@@ -128,7 +187,7 @@ export function readUpstreamFindings(root = process.cwd()) {
  * @param {string} repo `owner/name`
  * @param {(args: string[], opts?: object) => string} [run] `gh`, injected for tests
  * @param {(line: string) => void} [note]
- * @returns {'drafted' | 'filed here'}
+ * @returns {Value}
  */
 export function readUpstreamFindingsFrom(repo, run, note = () => {}) {
   const { branch, read } = defaultBranchFile(repo, run);

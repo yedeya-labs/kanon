@@ -122,6 +122,7 @@ Propose the bullet and ask for the reason; never invent one. Write it only once 
 | `declaration.missing` | agent | Run `kanon init --dry-run --json`, show the file it would write, then write it with `kanon init --json --no-apps` (with the adopt skill's answer flags), or by hand. |
 | `declaration.section-missing` | agent | Add the section, or remove the duplicate, as the fix says. Ask the person for content only they know, such as the stack's gates. |
 | `declaration.malformed` | agent, decision | Rewrite the acceptance or waiver in the shape the fix shows, keeping the person's reason. For a waiver that names no items, the fix's bullet names every item doctor reports there today: show it to the person, and drop any item they don't keep, which is then a finding to fix. If it waives a finding that can't be waived, tell the person, remove the bullet once they agree, and fix the finding instead. |
+| `upstream.unsent` | decision | The record says findings are sent, and nothing sends them. Ask the person which fix they want: opt in to telemetry (`kanon init --json --no-apps --telemetry`, which writes the collector's caller and leaves the operator's registration as a step), or choose drafted, the fix's bullet, which you write in place of theirs on a yes. It can't be waived. |
 | `waiver.stale` | agent | Doesn't block. Offer to remove the bullet, or, when the message names items, only those items from it. |
 | `hook.missing` | agent | As `declaration.missing`. |
 | `hook.input-missing` | agent | Add the inputs the fix lists to the hook. |

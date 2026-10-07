@@ -61,7 +61,7 @@ import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } f
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
-import { parseUpstreamFindings } from '../scripts/lib/upstream-findings.mjs';
+import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '../scripts/lib/upstream-findings.mjs';
 import { LEDGER as CAPABILITY_LEDGER, parseCapabilityWatch } from '../scripts/lib/capability-watch.mjs';
 
 // The reporter check lives in its own module, which `kanon init` shares (#444).
@@ -106,6 +106,7 @@ export const UNWAIVABLE = {
   'ruleset.missing': 'without it nothing enforces review on the default branch (K-ADOPT-1 step 8)',
   'ruleset.rule-missing': 'without it nothing enforces that rule of review on the default branch (K-ADOPT-1 step 8)',
   'ruleset.bypass-extra': 'it lets an actor other than the Releaser merge around review (K-MERGE-8)',
+  'upstream.unsent': 'it is about the adoption record itself, which says findings are sent when nothing sends them, and lane-check fails it whatever a waiver says',
 };
 
 /**
@@ -172,6 +173,7 @@ export const FINDINGS = {
   'declaration.missing': { category: 'declaration', blocking: true },
   'declaration.section-missing': { category: 'declaration', blocking: true },
   'declaration.malformed': { category: 'declaration', blocking: true },
+  'upstream.unsent': { category: 'declaration', blocking: true },
   'hook.missing': { category: 'declaration', blocking: true },
   'hook.input-missing': { category: 'declaration', blocking: true },
   'workflow.missing': { category: 'declaration', blocking: true },
@@ -1497,8 +1499,17 @@ export const diagnose = async (deps, opts) => {
   if (recordText !== null) {
     try {
       parseUpstreamFindings(recordText);
+      // `sent` and `sent with evidence` travel over the telemetry channel (plan 0006 §3.1): with
+      // no caller of Kanon's collector, nothing is sent, so the record says what isn't true.
+      const unsent = unsentMessage(recordText, collectorCallers.length > 0);
+      if (unsent) {
+        find('upstream.unsent', ADOPTION_RECORD, unsent, {
+          text: `Opt in to telemetry, which writes the collector's caller: run \`kanon init --telemetry\` (docs/telemetry.md). Or choose \`drafted\`, which drafts each upstream finding and sends nothing: write this bullet in its place, or remove it for Kanon's default (K-LAYOUT-10).`,
+          commands: [`- **${UPSTREAM_LABEL}:** \`drafted\``],
+        });
+      }
     } catch (e) {
-      find('declaration.malformed', ADOPTION_RECORD, /** @type {Error} */ (e).message, { text: 'Write it under ## Choices as `- **Upstream findings:** `filed here`` or `drafted`, or remove it for Kanon\'s default, `drafted` (K-LAYOUT-10).' });
+      find('declaration.malformed', ADOPTION_RECORD, /** @type {Error} */ (e).message, { text: 'Write it under ## Choices as `- **Upstream findings:** `filed here`` or `drafted`, `sent` or `sent with evidence`, or remove it for Kanon\'s default, `drafted` (K-LAYOUT-10).' });
     }
     // ── Whether the Overseer runs the capability watch (`K-LAYOUT-10`, kanon#477) ─────────────────
     try {

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { SCHEMA as DOCTOR_SCHEMA } from '../../cli/doctor.mjs';
-import { SCHEMA as INIT_SCHEMA } from '../../cli/init.mjs';
+import { SCHEMA as INIT_SCHEMA, UPSTREAM_EVIDENCE_QUESTION } from '../../cli/init.mjs';
 
 /**
  * The agent skills (plan 0005 step L11, ADR 0014 audience 1; docs/skills.md) are held to the
@@ -332,6 +332,28 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(person).toMatch(/skipped list/);
     // The pull request carries what was skipped.
     expect(section(skill('adopt').body, /^## Steps$/)).toMatch(/`## Left to do`/);
+  });
+
+  // Plan 0006 §3.2 (kanon#585): where upstream findings go is asked after telemetry, Drafted
+  // recommended, Sent to Kanon offered only on a telemetry yes; the evidence question is asked only
+  // after Sent to Kanon, says in its own words that the text reaches a third-party decision
+  // provider (Owner decision 7), and is init's own question, word for word.
+  it('asks where upstream findings go after telemetry, and the evidence question in init\'s words, naming the third-party decision provider', () => {
+    const questions = section(skill('adopt').body, /^## The questions$/)!;
+    const blocks = questions.split(/^(?=### )/m);
+    const at = (answer: string) => blocks.findIndex((b) => b.startsWith(`### \`.answers.${answer}\`: `));
+    expect(at('upstreamFindings')).toBe(at('telemetry') + 1);
+    expect(at('upstreamEvidence')).toBe(at('upstreamFindings') + 1);
+    const where = blocks[at('upstreamFindings')]!;
+    expect(where).toMatch(/^- \*\*Recommended:\*\* \*\*Drafted\*\*/m);
+    expect(where).toMatch(/\*\*Sent to Kanon\*\* \(`--upstream-findings sent`\).*Offered only when the telemetry answer is yes/);
+    expect(where).toMatch(/nothing is ever filed in another repository/);
+    const evidence = blocks[at('upstreamEvidence')]!;
+    expect(evidence).toMatch(/Asked only after \*\*Sent to Kanon\*\*/);
+    expect(evidence).toMatch(/^- \*\*Recommended:\*\* \*\*Codes only\*\*/m);
+    expect(evidence).toContain('`--upstream-findings sent-with-evidence`');
+    expect(evidence).toContain(`"${UPSTREAM_EVIDENCE_QUESTION}"`);
+    expect(evidence).toContain('third-party decision provider');
   });
 
   // The upgrade skill asks, rather than defaults, any answer a newer release adds.

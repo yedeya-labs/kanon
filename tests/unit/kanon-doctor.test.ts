@@ -245,7 +245,7 @@ ${jobPerms}    steps:
     bad['docs/qa/adoption.md'] += '- **Upstream findings:** `filed on another repository`\n';
     const r = await run(checkout(bad), fakeGitHub(), ['--json']);
     expect(ids(r)).toEqual(['declaration.malformed docs/qa/adoption.md']);
-    expect(r.json.findings[0].message).toMatch(/`Upstream findings` is `filed on another repository`; write `drafted` or `filed here`/);
+    expect(r.json.findings[0].message).toMatch(/`Upstream findings` is `filed on another repository`; write `drafted`, `filed here`, `sent` or `sent with evidence`/);
     expect(r.status).toBe(EXIT.findings);
   });
 

@@ -166,6 +166,22 @@ Off unless the person says yes. Say, in the question itself, everything the pers
 - **Recommended:** **No**. Telemetry is never recommended for the person: it is theirs to offer.
 - **Options:** **No** (`--no-telemetry`): nothing is written and nothing is sent. **Yes** (`--telemetry`): `init` writes the collector's caller, and the finding `telemetry.register` is the operator's step, walked through as a step only a person can do: the person files the registration issue the fix's page opens (it is public and names the repository; for a name that must stay private, the issue's form says what to do instead), then sets the two variables the operator gives them.
 
+### `.answers.upstreamFindings`: where findings only Kanon can act on go
+
+Asked of every installation, after telemetry (`docs/plans/0006-upstream-findings.md` in Kanon's repository, §3.2). Say, in the question: an upstream finding is one about Kanon itself, a lane's behaviour, a guard, a rule or Kanon's library, found by the Overseer or the telemetry Explorer; whichever is chosen, nothing is ever filed in another repository.
+
+- **Recommended:** **Drafted**, because sending is the person's to offer, as telemetry is.
+- **Options:** **Drafted** (`--upstream-findings drafted`): written into the audit issue or the run's summary, for the person to read; nothing is filed or sent. **Sent to Kanon** (`--upstream-findings sent`): also sent to Kanon's telemetry store as codes only, the lane, stage, error and reason codes, the Kanon release, rulebook ids, Kanon's own file paths and a fix category; no text. Offered only when the telemetry answer is yes; otherwise its description says it needs telemetry, and choosing it isn't possible. **Filed here** (`--upstream-findings filed-here`): filed as issues in this repository, for a repository that maintains Kanon itself or a fork of it.
+
+### `.answers.upstreamEvidence`: also send the evidence text
+
+Asked only after **Sent to Kanon**. Otherwise there is nothing to choose: say so, and pass nothing more. Ask it in these words, the question `kanon init` asks:
+
+"Also send each finding's evidence and suggested fix, as text? The agent writes it for Kanon's maintainer, to Kanon's template, without names, logins, URLs, repository names or quotes of this repository's text, and before it leaves, an automatic scrub removes URLs, this repository's name, the logins and names the lane can see, and every path outside Kanon's own files. It may rarely still contain personal data, such as a name the scrub didn't know. The text is read by Kanon's maintainer, and by a third-party decision provider, TypeSafe, whose model, Jev, decides whether a finding becomes a public Kanon issue. The text itself is never published: a public issue holds only the codes. It is kept 13 months in Frankfurt and erased on request, like telemetry."
+
+- **Recommended:** **Codes only**.
+- **Options:** **Codes only** (keeps `--upstream-findings sent`): each finding is sent as codes, with no text. **With evidence** (`--upstream-findings sent-with-evidence`): each finding's evidence and suggested fix are sent too, as text, read by Kanon's maintainer and by a third-party decision provider, TypeSafe, whose model, Jev, decides whether a finding becomes a public Kanon issue; the text itself is never published.
+
 ## Steps
 
 1. **Check where you are.** A git checkout of the repository to install in (`git rev-parse --show-toplevel`), `gh` signed in, and Node 24 or later. If the working tree has changes, ask the person to commit or stash them first; never do either yourself.
