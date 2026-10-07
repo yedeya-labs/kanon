@@ -91,7 +91,7 @@ describe('the classification (plan 0002 §2.6)', () => {
 
   it('is `kanon` for one adopter when the failure starts at a release the previous one ran enough of', () => {
     const s = detect([...prior(RISE.minRuns), failed('k1', { kanon_version: '0.36.0' })]).signals[0];
-    expect(s).toMatchObject({ classification: 'kanon', starts_at_release: true, previous_version: '0.35.0' });
+    expect(s).toMatchObject({ classification: 'kanon', starts_at_release: true });
   });
 
   it('is not "starting at a release" when the previous release ran the lane too few times', () => {
@@ -101,7 +101,7 @@ describe('the classification (plan 0002 §2.6)', () => {
 
   it("counts only the signal's own adopters' runs of the previous release: a new adopter's hook failure is `adopter`", () => {
     const s = detect([...prior(RISE.minRuns), failed('k9', { failed_stage: 'hook' })]).signals[0];
-    expect(s).toMatchObject({ classification: 'adopter', starts_at_release: false, previous_version: '0.35.0' });
+    expect(s).toMatchObject({ classification: 'adopter', starts_at_release: false });
     // Its own runs of the previous release, together with a second affected adopter's, do count.
     const both = detect([
       ...many(RISE.minRuns - 5, () => row('k1', { kanon_version: '0.35.0' })), ...many(5, () => row('k2', { kanon_version: '0.35.0' })),
@@ -123,10 +123,54 @@ describe('the classification (plan 0002 §2.6)', () => {
 
   it('compares with the release just before, by number, not by text', () => {
     const s = detect([...prior(RISE.minRuns, { kanon_version: '0.9.0' }), failed('k1', { kanon_version: '0.10.0' })]).signals[0];
-    expect(s).toMatchObject({ previous_version: '0.9.0', starts_at_release: true });
+    expect(s).toMatchObject({ starts_at_release: true });
+    // 0.9.0 is the release just before 0.10.0: had 0.1.0 been taken for it, the absence would not count.
+    expect(detect([...prior(RISE.minRuns, { kanon_version: '0.9.0' }), row('k1', { kanon_version: '0.1.0' }), failed('k1', { kanon_version: '0.10.0' })])
+      .signals[0]).toMatchObject({ starts_at_release: true });
     expect(compareVersions('0.10.0', '0.9.0')).toBeGreaterThan(0);
     expect(compareVersions('dev', '9.9.9')).toBeGreaterThan(0);
-    expect(detect([failed('k1', { kanon_version: 'dev' }), ...prior(RISE.minRuns)]).signals[0]?.previous_version).toBeNull();
+    // `dev` is no release, so nothing starts at it.
+    expect(detect([failed('k1', { kanon_version: 'dev' }), ...prior(RISE.minRuns)]).signals[0]?.starts_at_release).toBe(false);
+  });
+
+  it("compares each adopter affected with the release IT ran before, not the one just before among every adopter's (#562)", () => {
+    // k1 pins 0.35.0 and k2 0.35.1. k1 moves to 0.36.0, and a failure starts there for k1 alone.
+    const pinned = [...prior(RISE.minRuns), ...many(RISE.minRuns, () => row('k2', { kanon_version: '0.35.1' }))];
+    const s = detect([...pinned, failed('k1')]).signals[0];
+    expect(s).toMatchObject({ classification: 'kanon', starts_at_release: true, adopters: 1 });
+    // The same failure on 0.35.0, k1's own previous release, means it did not start at 0.36.0.
+    expect(detect([...pinned, failed('k1', { kanon_version: '0.35.0' }), failed('k1')]).signals
+      .find((x) => x.kanon_version === '0.36.0')).toMatchObject({ classification: 'adopter', starts_at_release: false });
+  });
+
+  it('takes, for each adopter, the last release on which it ran THIS lane', () => {
+    // k1 ran the review lane on 0.35.0, and only the triage lane on 0.35.1.
+    const s = detect([
+      ...prior(RISE.minRuns), ...many(RISE.minRuns, () => row('k1', { kanon_version: '0.35.1', lane: 'triage', role: 'implementer' })),
+      failed('k1'),
+    ]).signals[0];
+    expect(s).toMatchObject({ classification: 'kanon', starts_at_release: true });
+  });
+
+  it("sums the adopters' runs on their own previous releases, and needs the signal absent on every one of them", () => {
+    const split = [
+      ...many(RISE.minRuns / 2, () => row('k1', { kanon_version: '0.35.0' })),
+      ...many(RISE.minRuns / 2, () => row('k2', { kanon_version: '0.35.1' })),
+    ];
+    expect(detect([...split, failed('k1'), failed('k2')]).signals[0]).toMatchObject({ starts_at_release: true });
+    // One run fewer, and the sample is too small.
+    expect(detect([...split.slice(1), failed('k1'), failed('k2')]).signals[0]).toMatchObject({ starts_at_release: false });
+    // Present on k2's previous release, though not on k1's: it did not start at 0.36.0.
+    expect(detect([...split, failed('k2', { kanon_version: '0.35.1' }), failed('k1'), failed('k2')]).signals
+      .find((x) => x.kanon_version === '0.36.0')).toMatchObject({ starts_at_release: false });
+  });
+
+  it("names no adopter's previous release, in the JSON or in the issue", () => {
+    // Which release each adopter ran before is a fact about that adopter: not in a signal.
+    const s = detect([...prior(RISE.minRuns), ...many(RISE.minRuns, () => row('k2', { kanon_version: '0.35.1' })), failed('k1')]).signals[0]!;
+    expect(s).not.toHaveProperty('previous_version');
+    expect(JSON.stringify(s)).not.toMatch(/0\.35\.[01]/);
+    expect(s.issue.body).toContain('It starts at this release: absent on the release each adopter affected ran before it');
   });
 
   it('is `platform` when every run carries a rate limit, a server error or an unreachable model, at any number of adopters', () => {
