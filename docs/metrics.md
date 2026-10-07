@@ -12,7 +12,7 @@ kanon metrics dry-run --since 2026-09-04 --dir . --details ../ops/metrics-detail
 
 - **The pull requests closed in the window**, `--since` (00:00 UTC) up to `--until` (00:00 UTC, not included; default now), each with its files, commits, reviews, timeline and closing issues, and each closing issue's labels and label events. It reads them through GitHub's GraphQL API, a page of pull requests at a time with every list nested, and pages a nested list past its first page for that pull request alone. GraphQL gives no renamed file's old path, so a pull request with a rename has its files read once more from REST. Open pull requests are counted and left out: they have no row yet (§3.1).
 - **Release pull requests are left out** of every count, and of the detectors' items, since a release is never a fix's cause; their number is reported as left out, `release` (§1.2 leaves release commits out; the Owner, on [#538](https://github.com/yedeya-labs/kanon/pull/538)). A release PR is recognised by what the release workflow produces, never by a repository's name: release-please's label `autorelease: pending` or `autorelease: tagged`; an author that is the App register's Releaser App; or, for history from before the Releaser App, `github-actions[bot]` with a conventional release title, `chore(<branch>): release <version>`. The title alone never makes a person's pull request a release.
-- **The declarations**: the App register (`docs/qa/agent-identities.md`), the code areas in `docs/qa/stack.md` and the escalation file (`docs/qa/escalation-paths.md`). With `--dir`, from that checkout; without it, from the default branch on GitHub. A missing one takes Kanon's default, and the output says which were read.
+- **The declarations**: the App register (`docs/qa/agent-identities.md`), the code areas in `docs/qa/stack.md` and the escalation file (`docs/qa/escalation-paths.md`). With `--dir`, from that checkout; without it, from the default branch on GitHub. A missing one takes Kanon's default, and the output says which were read: no code areas declared, the escalation file's default (the pipeline's own paths), and, for a missing register, no App registered, so every bot is `other_bot`. A file that is there but can't be read or parsed stops the run (exit 3), so no row is derived from a guess.
 - **`git blame`, for SZZ**, in the checkout `--dir` names: each fix's old-side lines, from `git diff -U0` between its merge commit and that commit's parent, blamed at the parent (`git blame --porcelain -L`). Without `--dir`, or when the checkout lacks a fix's merge commit or its parent, SZZ is reported as **not run**, with the reason, and its counts are `null`, never 0. Fetch the default branch first.
 
 It needs `gh` and a token that can read the repository's pull requests and issues; nothing more. It says on standard error which token `gh` used and whose it is, as the other commands do.
@@ -27,8 +27,8 @@ Counts, the window, the repository you named and field names. **No title, login 
 
 - **Pull requests:** read, merged, closed unmerged, and left out: still open, release, truncated, unreadable.
 - **Rows:** how many validate against the telemetry schema's work-item list and the stage partition, and, for each one that doesn't, only the fields that failed.
-- **Bands** (§3.6), for the merged and the closed unmerged apart; **files by area** (§3.7); merged rows touching an escalation path, when the escalation file is declared.
-- **Origins** and **actor classes**: the author's class and who merged, each with `unknown` (§3.2, §3.3).
+- **Bands** (§3.6), for the merged and the closed unmerged apart; **files by area** (§3.7); merged rows touching an escalation path, by the escalation file, or by Kanon's default (the pipeline's own paths) without one.
+- **Origins** and **actor classes**: the author's class and who merged, each with `unknown` (§3.2, §3.3). `human` is a person: a bot, and GitHub's own committer `web-flow` (the committer of every commit GitHub creates through the API or the web UI), are `other_bot`.
 - **Linked fixes**, over the merged fix pull requests (a conventional `fix` title, or a closing issue labelled `bug`), the explicit links and SZZ side by side (§3.5, decision 8): `explicit`, `szz`, `both`, `explicitOnly`, `szzOnly`, `neither`; `undetected`, the fixes the explicit detector links to nothing; and `nonCodeGap`, the fixes that change no code-area file, which condition 3 can never detect.
 - **Reverts:** the pull requests that revert an earlier one, and the items reverted.
 
@@ -59,7 +59,7 @@ Both detectors look only inside the window: a fix whose cause merged before `--s
 | `rows` | object | `valid`, `invalid`, and `invalidFields`, each failing field's name with how many rows it failed. |
 | `bands` | object | `merged` and `closedUnmerged`, each `S`, `M`, `L`, `XL` and `none`. |
 | `areas` | object | Files per area, over every row. |
-| `escalation` | object or null | `mergedTouching`; null without an escalation file. |
+| `escalation` | object | `mergedTouching`, by the escalation file or, without one, Kanon's default. |
 | `origins`, `authors`, `mergedBy` | object | A count per origin or actor class, and `unknown`. |
 | `linkedFixes` | object | `fixes`, `explicit`, `szz`, `both`, `explicitOnly`, `szzOnly`, `neither`, `undetected`, `nonCodeGap`. The SZZ counts are null when SZZ didn't run. |
 | `reverts` | object | `reverting`, `revertedItems`. |

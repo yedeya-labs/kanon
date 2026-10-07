@@ -174,7 +174,9 @@
  * The adopter's declarations the functions read, already parsed: the App register
  * (`parseAppRegister`, role name → App slug), the code areas (`parseCodeAreas`) and the
  * escalation file (`parseEscalationFile`). A declaration the reader couldn't read is left out,
- * and the fields that need it are left out of the row.
+ * and the fields that need it are left out of the row (`knownAreas`, the escalation booleans).
+ * One the adopter doesn't make is not left out: the reader passes Kanon's default for it
+ * (`UNDECLARED`, `defaultEscalationFile`), as `readCodeAreas` and `readEscalationFile` do.
  * @typedef {{
  *   register: Map<string, string>,
  *   codeAreas?: import('../lib/code-areas.mjs').CodeAreas,

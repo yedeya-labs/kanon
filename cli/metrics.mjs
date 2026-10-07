@@ -40,8 +40,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { setTimeout as wait } from 'node:timers/promises';
 import { ACTOR_CLASSES } from '../actions/agent-telemetry/schema.mjs';
 import { APP_REGISTER, parseAppRegister } from '../scripts/app-register.mjs';
-import { parseCodeAreas, STACK_FILE } from '../scripts/lib/code-areas.mjs';
-import { ESCALATION_FILE, parseEscalationFile } from '../scripts/lib/escalation-paths.mjs';
+import { parseCodeAreas, STACK_FILE, UNDECLARED } from '../scripts/lib/code-areas.mjs';
+import { defaultEscalationFile, ESCALATION_FILE, parseEscalationFile } from '../scripts/lib/escalation-paths.mjs';
 import { toDetectorPr } from '../scripts/metrics/adapter.mjs';
 import { AREAS } from '../scripts/metrics/areas.mjs';
 import { BANDS } from '../scripts/metrics/band.mjs';
@@ -292,8 +292,10 @@ async function declarations(deps, repo, root) {
   return {
     decl: {
       register: register ?? new Map(),
-      ...(codeAreas ? { codeAreas } : {}),
-      ...(escalationFile ? { escalationFile } : {}),
+      // A missing file is the adopter declaring nothing, which is Kanon's default, as the
+      // checkout readers have it; a file that can't be read has already stopped the run.
+      codeAreas: codeAreas ?? UNDECLARED,
+      escalationFile: escalationFile ?? defaultEscalationFile(),
     },
     found: {
       source: root ? 'checkout' : 'github',
@@ -470,7 +472,7 @@ export async function dryRun(deps, opts) {
     rows: { valid: rows.length, invalid: invalid.length, invalidFields },
     bands: { merged: bandsOf(merged), closedUnmerged: bandsOf(rows.filter((r) => r.fate !== 'merged')) },
     areas,
-    escalation: decl.escalationFile ? { mergedTouching: merged.filter((r) => Object.entries(r).some(([k, v]) => k.startsWith('esc_') && v === true)).length } : null,
+    escalation: { mergedTouching: merged.filter((r) => Object.entries(r).some(([k, v]) => k.startsWith('esc_') && v === true)).length },
     origins: tally(ORIGINS, rows, 'origin'),
     authors: tally(ACTOR_CLASSES, rows, 'author_kind'),
     mergedBy: tally(ACTOR_CLASSES, merged, 'merged_by'),
@@ -538,7 +540,7 @@ export function prose(r) {
     `Bands, merged: ${list(r.bands.merged)}.`,
     `Bands, closed unmerged: ${list(r.bands.closedUnmerged)}.`,
     `Files by area: ${list(r.areas)}.`,
-    ...(r.escalation ? [`Merged rows touching an escalation path: ${r.escalation.mergedTouching}.`] : []),
+    `Merged rows touching an escalation path: ${r.escalation.mergedTouching}.`,
     `Origins: ${list(r.origins)}.`,
     `Authors: ${list(r.authors)}.`,
     `Merged by: ${list(r.mergedBy)}.`,

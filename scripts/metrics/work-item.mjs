@@ -7,11 +7,12 @@
 //
 // ABSENT MEANS UNKNOWN, NEVER ZERO (§3.1). A field whose source the reader didn't fetch is
 // left out: no `files`, no group-1 counts or band; no `reviews`, no review fields; no `runs`,
-// no `agent` or `queue` stage. A field that needs a source no reader has yet (`ac_count` and
-// `spec_clauses_cited` need the adopter's criteria format and spec prefixes, `escalation_reasons`
-// the Merger's comments, `review_comments` the inline comments, `recoveries` the retry
-// script's dispatches, `guard_failures` the guards' check names) is left for the step that
-// reads it.
+// no `agent` or `queue` stage. So is a field whose declaration the reader couldn't read (an
+// area count, `knownAreas`), or whose author's class is unknown (`human_interventions`). A
+// field that needs a source no reader has yet (`ac_count` and `spec_clauses_cited` need the
+// adopter's criteria format and spec prefixes, `escalation_reasons` the Merger's comments,
+// `review_comments` the inline comments, `recoveries` the retry script's dispatches,
+// `guard_failures` the guards' check names) is left for the step that reads it.
 //
 // THE ROW CARRIES NO LOGIN, PATH OR TEXT. Every value below is a count, a time, an enum, a
 // class or a number. `validate` is the enforcement: it rejects any field outside the schema's
@@ -21,7 +22,7 @@
 import { describeErrors, validate } from '../../actions/agent-telemetry/schema.mjs';
 import { issueSize } from '../../actions/agent-telemetry/agent-telemetry.mjs';
 import { classifyActor, isAgentClass } from './actors.mjs';
-import { areaCounts, escalationFlags } from './areas.mjs';
+import { areaCounts, escalationFlags, knownAreas } from './areas.mjs';
 import { BAND_VERSION, bandOf, diffSize } from './band.mjs';
 import { originOf } from './origin.mjs';
 import { dispatchedAt, partitionProblem, partitionStages, reviewerVerdicts, seconds, stageIntervals } from './stages.mjs';
@@ -120,7 +121,8 @@ function accuracyFields(input, authorKind) {
   if (pr.timeline) {
     out.escalations = pr.timeline.filter((ev) => ev.event === 'labeled' && ev.label === 'needs:human').length;
     out.force_pushes = pr.timeline.filter((ev) => ev.event === 'head_ref_force_pushed').length;
-    if (out.human_reviews !== undefined && (pr.commits || !isAgentClass(authorKind))) {
+    // An unknown author class can't say whether `human_commits` belongs in the sum.
+    if (out.human_reviews !== undefined && authorKind !== undefined && (pr.commits || !isAgentClass(authorKind))) {
       const labels = pr.timeline.filter((ev) =>
         (ev.event === 'labeled' || ev.event === 'unlabeled') && INTERVENTION_LABELS.test(ev.label ?? '') && human(ev.actor)).length;
       out.human_interventions = /** @type {number} */ (out.human_commits ?? 0) + /** @type {number} */ (out.human_reviews) + labels;
@@ -176,7 +178,10 @@ export function workItemRow(input) {
   if (pr.files) {
     const size = diffSize(pr.files);
     put(row, size);
-    put(row, areaCounts(pr.files, { codeAreas, escalationFile }));
+    // An unread declaration leaves out the areas that depend on it, not Kanon's default.
+    const known = new Set(knownAreas({ codeAreas, escalationFile }));
+    const counts = Object.entries(areaCounts(pr.files, { codeAreas, escalationFile }));
+    put(row, Object.fromEntries(counts.filter(([k]) => known.has(/** @type {import('./areas.mjs').Area} */ (k.startsWith('files_') ? k.slice(6) : 'tests')))));
     if (escalationFile) put(row, escalationFlags(escalationFile, pr.files));
     put(row, { band: bandOf(size, BAND_VERSION), band_version: BAND_VERSION });
   }

@@ -2,8 +2,8 @@
 //
 // THE CLASS IS DERIVED ADOPTER-SIDE, AND THE LOGIN IS DISCARDED. A GitHub account is one of:
 //   a role       its login is an App the App register (`K-LAYOUT-6`) lists;
-//   `other_bot`  any other bot account;
-//   `human`      everything else.
+//   `other_bot`  any other bot account, and GitHub's own committer (`web-flow`);
+//   `human`      everything else: a person.
 // Only the class reaches the row (`author_kind`, `merged_by`) or a count per class
 // (`human_reviews`, `human_commits`). No function here returns a login.
 //
@@ -15,6 +15,13 @@
 // has no body (a merge, a commit), the caller says which role the action implies (a merge by
 // the Judge is the Merger's), and that hint is taken only when the App plays that role. With
 // neither, the class is unknown, and left out, rather than guessed.
+//
+// GITHUB'S OWN COMMITTER IS NOT A PERSON. GitHub records `web-flow`, a `User`-type account, as
+// the committer of every commit it creates through the API or the web UI: an App's API commit,
+// an update-branch merge, Dependabot's commit. Read as `human`, it would make each of those a
+// human commit (`human_commits`, the end of a blocked item's human wait). The person behind a
+// web-UI commit is its author, which is still read, so nothing a person did is lost. The login
+// is the one `actions/dco/dco.mjs` treats as GitHub's.
 //
 // ROLES OUTSIDE THE ROW'S LIST. The register may also list the Releaser and Intake, which the
 // telemetry schema's `ACTOR_CLASSES` doesn't: their accounts are bots of no delivery role, so
@@ -28,6 +35,9 @@ import { markedRole, slugOf } from '../lib/role-marker.mjs';
 /** Whether an account is a bot: GitHub's `type`, or the `[bot]` and `app/` spellings of an App's login. */
 const isBot = (/** @type {import('./types.mjs').Actor} */ actor) =>
   actor.type === 'Bot' || /\[bot\]$/i.test(actor.login) || /^app\//i.test(actor.login);
+
+/** The committer GitHub records for commits it creates itself (`actions/dco/dco.mjs`). */
+const GITHUB_COMMITTER = 'web-flow';
 
 /**
  * The dependency-update bots `origin` names `dependency_bot` (§3.3). Kanon's list, by App
@@ -79,7 +89,7 @@ export function classifyActor(actor, register, { body, expect } = {}) {
     if (expect && roles.includes(expect)) return /** @type {ActorClass} */ (expect);
     return undefined;
   }
-  if (registered(register, slug) || isBot(actor)) return 'other_bot';
+  if (registered(register, slug) || isBot(actor) || actor.login.toLowerCase() === GITHUB_COMMITTER) return 'other_bot';
   return 'human';
 }
 
