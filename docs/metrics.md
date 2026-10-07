@@ -34,7 +34,7 @@ Counts, the window, the repository you named and field names. **No title, login 
 
 Both detectors look only inside the window: a fix whose cause merged before `--since` links to nothing. Start the window earlier than the fixes you want judged.
 
-Both detectors also take as a fix's cause only an item that merged before the fix was opened and before the earliest issue the fix closes was filed: a defect reported before the item merged can't be the item's (kanon#563). A fix whose issue is older than every item in the window links to nothing.
+Both detectors also take as a fix's cause only an item that merged before the fix was opened (kanon#563). The dates of the issues the fix closes play no part (kanon#571): a batch fix closes old issues beside the new one, and a Reviewer's follow-up is filed while its cause is still under review, so either would drop a correct link.
 
 ## Exit codes
 

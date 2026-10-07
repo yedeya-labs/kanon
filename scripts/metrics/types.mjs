@@ -92,11 +92,9 @@
  * One issue the PR closes (GraphQL `closingIssuesReferences`), in the order GitHub lists them:
  * the first is "the first closing issue" of plan 0003 §3.3. `timeline` gives `dispatched_at`
  * (the dispatch label's first `labeled` event); `blocked_by` is the number of its GitHub
- * blocked-by relationships. `created_at` bounds which items the linked-fix detectors may call
- * the PR's cause (`detectors.mjs`, kanon#563).
+ * blocked-by relationships.
  * @typedef {{
  *   number: number,
- *   created_at?: string,
  *   labels: string[],
  *   body?: string | null,
  *   author?: Actor | null,

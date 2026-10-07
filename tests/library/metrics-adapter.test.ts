@@ -41,7 +41,7 @@ describe('toDetectorPr', () => {
       title: 'fix: it',
       body: 'Reverts acme/widgets#3',
       files: [{ path: 'src/new.js', previous_path: 'src/old.js', status: 'renamed', additions: 1, deletions: 1, old_ranges: [{ start: 2, count: 1 }], patch: '@@ -2 +2 @@' }],
-      closing_issues: [{ number: 9, labels: ['bug'], body: '### Introduced by\n\n#3', created_at: '2026-08-30T00:00:00Z' }],
+      closing_issues: [{ number: 9, labels: ['bug'], body: '### Introduced by\n\n#3' }],
       timeline: [
         { event: 'cross-referenced', created_at: '2026-09-01T00:00:00Z', source: { type: 'issue', number: 9, repository: 'other/place' } },
         { event: 'labeled', created_at: '2026-09-01T00:00:00Z', label: 'bug' },
@@ -57,7 +57,7 @@ describe('toDetectorPr', () => {
       parentSha: 'p'.repeat(40),
       commits: [{ sha: pr.commits[0]!.sha, message: 'work' }],
       files: [{ path: 'src/new.js', previousPath: 'src/old.js', status: 'renamed', patch: '@@ -2 +2 @@', ranges: [{ start: 2, count: 1 }] }],
-      closingIssues: [{ number: 9, labels: ['bug'], body: '### Introduced by\n\n#3', createdAt: '2026-08-30T00:00:00Z' }],
+      closingIssues: [{ number: 9, labels: ['bug'], body: '### Introduced by\n\n#3' }],
       timeline: [{ type: 'cross-referenced', source: { number: 9, repository: 'other/place' } }, { type: 'labeled' }],
     });
   });
@@ -81,14 +81,14 @@ describe('toDetectorPr', () => {
     expect(links).toEqual([{ pr: 3, days: 3 }]);
   });
 
-  it('carries when the fix was opened and its issues filed, so a cause must predate both (kanon#563)', () => {
+  it('carries when the fix was opened, so a cause must predate it, and no closing issue\'s date bounds it (kanon#563, kanon#571)', () => {
     const item = toDetectorPr(PR(3, { timeline: [{ event: 'cross-referenced', created_at: '2026-09-03T00:00:00Z', source: { type: 'issue', number: 9, repository: REPO } }] }));
     const fix = (o: Record<string, unknown>) => toDetectorPr(PR(5, { created_at: '2026-09-03T00:00:00Z', merged_at: '2026-09-05T00:00:00Z', closing_issues: [{ number: 9, labels: ['bug'] }], ...o }));
     expect(explicitLink(fix({}), item, { repo: REPO, isCode })).not.toBeNull();
     // Opened on 09-01, before the item merged on 09-02.
     expect(explicitLink(fix({ created_at: '2026-09-01T00:00:00Z' }), item, { repo: REPO, isCode })).toBeNull();
-    // Its bug filed on 09-01.
-    expect(explicitLink(fix({ closing_issues: [{ number: 9, labels: ['bug'], created_at: '2026-09-01T00:00:00Z' }] }), item, { repo: REPO, isCode })).toBeNull();
+    // Its bug filed on 09-01, while the item was under review: still the item's fix.
+    expect(explicitLink(fix({ closing_issues: [{ number: 9, labels: ['bug'], created_at: '2026-09-01T00:00:00Z' }] }), item, { repo: REPO, isCode })).not.toBeNull();
   });
 
   it('refuses a merged PR missing a list the detectors read, naming it, rather than read it as empty', () => {
