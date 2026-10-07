@@ -31,12 +31,13 @@
 # the invariants this brief proposes stay `[seed]` until separately promoted, and
 # a `[seed]` → `[confirmed]` transition is outside the green zone by design (§3).
 #
-# SETUP: the Author App (the Lead's) needs `Contents: Read & write` and
-# `Pull requests: Read & write` — a deliberate widening of the minimal set it
-# holds for agent-dispatch-sweep.yml, recorded with its reason in
-# docs/qa/agent-identities.md footnote ³. The push probe (the spine's `push-probe`,
-# switched on below) fails LOUDLY if `contents: write` is missing, because a 403 on
-# push is the likeliest first-run failure
+# SETUP: this lane narrows its Author App token to `contents: write`, `issues: write` and
+# `pull-requests: write` (`K-AGENT-46`; the `permission-*` inputs below), which the Lead's
+# row of the roles table (rulebook/03-agents.md) and of the App register allows. It is
+# wider than the dispatch sweep's token because this lane pushes a branch and opens a pull
+# request; tests/unit/app-token-permissions.test.ts records each lane's list and why.
+# The push probe (the spine's `push-probe`, switched on below) fails LOUDLY if
+# `contents: write` is missing, because a 403 on push is the likeliest first-run failure
 # and a silent one would be indistinguishable from "the agent had nothing to say" —
 # `silent-absence` (RA-946), in the newest component. `pull_requests: write` is NOT probed
 # — it cannot be, without creating a PR — and the run verifies it by doing it; the probe
