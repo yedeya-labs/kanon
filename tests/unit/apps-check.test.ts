@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { compare, loadApps, main, readResult, RESULT_MARK, registeredApps, summary } from '../../cli/apps-check.mjs';
+import { compare, loadApps, main, readResult, RESULT_MARK, registeredApps, resultMasked, summary } from '../../cli/apps-check.mjs';
 import { loadRoles, realDeps } from '../../cli/apps.mjs';
 
 /**
@@ -151,7 +151,7 @@ describe('compare', () => {
 
 describe('readResult, the reader doctor uses', () => {
   const line = (o: object) => `${RESULT_MARK} ${JSON.stringify(o)}`;
-  const judge = { app: 'judge', slug: 'acme-judge', appId: 7, permissions: { contents: 'write', metadata: 'read' } };
+  const judge = { app: 'judge', slug: 'acme-judge', permissions: { contents: 'write', metadata: 'read' } };
 
   it('reads the App\'s line from a job log, behind the runner\'s timestamps', () => {
     const log = ['2026-10-06T17:32:43.29Z ##[group]Run node "$KANON/cli/apps-check.mjs" check', `2026-10-06T17:32:44.11Z ${line(judge)}`, '2026-10-06T17:32:44.12Z Judge: the installation matches the register and the App\'s permissions.'].join('\n');
@@ -164,7 +164,16 @@ describe('readResult, the reader doctor uses', () => {
     expect(readResult(`${RESULT_MARK} {not json`, 'judge')).toBeNull();
     expect(readResult(line({ ...judge, permissions: 'all' }), 'judge')).toBeNull();
     expect(readResult(line({ ...judge, slug: 7 }), 'judge')).toBeNull();
-    expect(readResult(line({ ...judge, appId: 'x' }), 'judge')).toEqual({ ...judge, appId: null });
+    expect(readResult(line({ ...judge, extra: 'x' }), 'judge')).toEqual(judge);
+  });
+
+  // The runner masks a secret's value in the log; a line with one in it is no JSON (#417).
+  it('reads nothing from a line the runner masked part of, and says it was masked', () => {
+    const masked = `2026-10-06T17:32:44.11Z ${RESULT_MARK} {"app":"judge","slug":"acme-judge","appId":***,"permissions":{"contents":"write"}}`;
+    expect(readResult(masked, 'judge')).toBeNull();
+    expect(resultMasked(masked)).toBe(true);
+    expect(resultMasked(`2026-10-06T17:32:44.11Z ${line(judge)}`)).toBe(false);
+    expect(resultMasked('2026-10-06T17:32:44.11Z APP_ID: ***')).toBe(false);
   });
 });
 
@@ -291,21 +300,23 @@ describe('main check, with GitHub mocked', () => {
   });
 
   // #417: a person's token can't read a private App, so doctor reads what apps-check found.
-  it('prints one result line for doctor: the minted slug, the App id and the installation\'s permissions, pass or fail', async () => {
+  it('prints one result line for doctor: the minted slug and the installation\'s permissions, pass or fail', async () => {
     const pass = await run();
     const lines = pass.output.split('\n').filter((l) => l.startsWith(RESULT_MARK));
-    expect(lines).toEqual([`${RESULT_MARK} ${JSON.stringify({ app: 'judge', slug: 'kanon-reviewer', appId: 4242, permissions: REVIEWER.permissions })}`]);
+    expect(lines).toEqual([`${RESULT_MARK} ${JSON.stringify({ app: 'judge', slug: 'kanon-reviewer', permissions: REVIEWER.permissions })}`]);
     const drift = { ...REVIEWER.permissions, workflows: 'write' };
     const fail = await run({ permissions: drift }, { APP_SLUG: 'other-judge' });
     expect(fail.status).toBe(1);
-    expect(readResult(fail.output, 'judge')).toEqual({ app: 'judge', slug: 'other-judge', appId: 4242, permissions: drift });
+    expect(readResult(fail.output, 'judge')).toEqual({ app: 'judge', slug: 'other-judge', permissions: drift });
   });
 
-  it('never prints the key or the token', async () => {
+  it('never prints the key, the token or the App id', async () => {
     for (const r of [await run(), await run({ status: 500 }), await run({ permissions: {} })]) {
       const all = [r.output, ...r.summaries].join('\n');
       expect(all).not.toContain('PRIVATE KEY');
       expect(all).not.toContain('ghs_secret_token');
+      // The App id is the <APP>_APP_ID secret's value, which the runner masks (#417).
+      expect(all).not.toContain('4242');
     }
   });
 

@@ -123,10 +123,15 @@ export const compare = ({ app, spec, registerSlug, appSlug, repository, selectio
 /** The mark that opens the line `check` prints for doctor; a new shape is a new version. */
 export const RESULT_MARK = 'kanon-apps-check/v1';
 
-/** @typedef {{ app: string, slug: string, appId: number | null, permissions: Record<string, string> }} Result */
+/** @typedef {{ app: string, slug: string, permissions: Record<string, string> }} Result */
 
-/** The line `check` prints for doctor. @param {Result} r */
-export const resultLine = (r) => `${RESULT_MARK} ${JSON.stringify({ app: r.app, slug: r.slug, appId: r.appId, permissions: r.permissions })}`;
+/**
+ * The line `check` prints for doctor. It holds no secret's value: the runner masks each one in
+ * the log as `***`, so a line with one in it, such as the App's id, which `kanon apps` stores as
+ * the `<APP>_APP_ID` secret, would reach doctor as no JSON at all (#417).
+ * @param {Result} r
+ */
+export const resultLine = (r) => `${RESULT_MARK} ${JSON.stringify({ app: r.app, slug: r.slug, permissions: r.permissions })}`;
 
 /**
  * The App's result in a job's log, whose lines the runner opens with a timestamp; null when the
@@ -147,10 +152,17 @@ export const readResult = (log, app) => {
     }
     if (r?.app !== app || typeof r.slug !== 'string' || !r.permissions || typeof r.permissions !== 'object' || Array.isArray(r.permissions)) continue;
     if (!Object.values(r.permissions).every((v) => typeof v === 'string')) continue;
-    return { app, slug: r.slug, appId: Number.isInteger(r.appId) ? r.appId : null, permissions: r.permissions };
+    return { app, slug: r.slug, permissions: r.permissions };
   }
   return null;
 };
+
+/**
+ * Whether the log holds a result line the runner masked part of, where a secret's value
+ * appeared in it: that line can't be read, and doctor says so instead of "no result".
+ * @param {string} log
+ */
+export const resultMasked = (log) => log.split(/\r?\n/).some((line) => line.includes(`${RESULT_MARK} `) && line.includes('***'));
 
 /** @param {string} s */
 const cell = (s) => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
@@ -236,7 +248,7 @@ const check = async (deps) => {
     }
   }
 
-  deps.out(resultLine({ app: key, slug: appSlug, appId: Number.isInteger(inst.app_id) ? inst.app_id : null, permissions }));
+  deps.out(resultLine({ app: key, slug: appSlug, permissions }));
   const { failures, warnings } = compare({ app: spec.app, spec, registerSlug, appSlug, repository, selection, repositories, permissions });
   for (const w of warnings) deps.out(`::warning title=apps-check::${w}`);
   for (const f of failures) deps.out(`::error title=apps-check::${f}`);
