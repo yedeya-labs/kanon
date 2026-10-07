@@ -223,13 +223,13 @@ Whether the Overseer is installed is declared under `## Choices` in one bullet, 
 
 The Overseer is an optional lane (plan 0004 decision 12). `installed` means a workflow calls the Overseer's lane, and `not installed` means none does. **A record without the bullet, or no record, means Kanon's default, `not installed`** ([plan 0005](../docs/plans/0005-lean-installation.md) §5.2). A record with the bullet twice, outside `## Choices`, in another shape or with another value is malformed, and so is one whose value, declared or the default, the callers contradict.
 
-Where the Overseer's upstream findings go may be declared under `## Choices` in one bullet, its value `drafted` or `filed here` as one code span with nothing after it:
+Where upstream findings go, the Overseer's and the telemetry Explorer's, may be declared under `## Choices` in one bullet, its value `drafted` or `filed here` as one code span with nothing after it:
 
 ```markdown
 - **Upstream findings:** `filed here`
 ```
 
-An upstream finding is one only Kanon can act on: a lane's behaviour, a guard, a rule or Kanon's library (`K-SELF-11`). `drafted` puts each one under the audit issue's `## Upstream` heading as a draft, and files none. `filed here` files each one in this repository, as the Overseer files the findings the repository can act on; a finding whose subject the filing step doesn't know stays a draft. Neither files anything in another repository. **A record without the bullet, or no record, means Kanon's default, `drafted`.** A bullet outside `## Choices`, in another shape, with another value or written twice is malformed.
+An upstream finding is one only Kanon can act on: a lane's behaviour, a guard, a rule or Kanon's library (`K-SELF-11`). Every finding of the telemetry Explorer (`agent-explore-telemetry.yml`) is one, since it is about Kanon's lanes. `drafted` files none: the Overseer puts each one under its audit issue's `## Upstream` heading as a draft, and the telemetry Explorer writes each one into its run's step summary, rendered with the title, labels and body it would be filed with (the Owner's decision of 2026-10-07, on kanon#471). `filed here` files each one in this repository, for both lanes, as the Overseer files the findings the repository can act on; an Overseer finding whose subject the filing step doesn't know stays a draft. Neither files anything in another repository. **A record without the bullet, or no record, means Kanon's default, `drafted`.** A bullet outside `## Choices`, in another shape, with another value or written twice is malformed.
 
 The weekly digest's audience may be declared under `## Choices` in one bullet, the bold label and then the audience as plain text, on one line:
 

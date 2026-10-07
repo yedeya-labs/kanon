@@ -113,8 +113,8 @@ describe('the lane reads it from the default branch (K-MERGE-17)', () => {
     readUpstreamFindingsFrom('o/r', run(fail('gh: Not Found (HTTP 404)')), (l) => notes.push(l));
     readUpstreamFindingsFrom('o/r', run(() => RECORD([BULLET])), (l) => notes.push(l));
     expect(notes).toEqual([
-      "docs/qa/adoption.md on `trunk` doesn't say where upstream findings go, so Kanon's default applies: they are `drafted` under the audit's `## Upstream` heading, never filed (K-LAYOUT-10)",
-      "docs/qa/adoption.md on `trunk` doesn't exist, so Kanon's default applies: they are `drafted` under the audit's `## Upstream` heading, never filed (K-LAYOUT-10)",
+      "docs/qa/adoption.md on `trunk` doesn't say where upstream findings go, so Kanon's default applies: they are `drafted`, never filed (K-LAYOUT-10)",
+      "docs/qa/adoption.md on `trunk` doesn't exist, so Kanon's default applies: they are `drafted`, never filed (K-LAYOUT-10)",
     ]);
     expect(upstreamFindingsCli({ repo: 'o/r', run: run(() => RECORD([])) })).toEqual({ code: 0, out: 'drafted', notes: [`upstream-findings: ${notes[0]}`] });
   });

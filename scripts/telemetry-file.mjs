@@ -76,6 +76,11 @@ import { signed } from './lib/role-marker.mjs';
 /** The report the agent writes, at the repository root. */
 export const REPORT = 'qa-telemetry-findings.json';
 /**
+ * The labels a finding is filed with: its kind's, and a bug's severity (`K-AGENT-9`).
+ * @param {'bug' | 'spec-delta'} kind @param {string} severity
+ */
+export const labelsFor = (kind, severity) => [...LABELS[kind], ...(kind === 'bug' ? [severity] : [])];
+/**
  * The bucket an issue with these labels goes to, by the backstop's routing (`K-WORK-4`).
  * @param {string[]} labels
  * @returns {string}
@@ -341,7 +346,8 @@ export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log 
     for (const { f, c } of ok) {
       if (seenDraft.has(c.signature)) { summary(`- **Held:** "${f.title}": another finding this run has the same signature.`); continue; }
       seenDraft.add(c.signature);
-      summary(`\n### Draft (${c.kind}): ${f.title}\n\n${f.body.trim()}\n\n${renderEvidence(c, a)}\n`);
+      const names = labelsFor(c.kind, f.severity);
+      summary(`\n### Draft: ${f.title}\n\nLabels: ${names.map((l) => `\`${l}\``).join(', ')}. Milestone: ${milestoneFor(names)}.\n\n${f.body.trim()}\n\n${renderEvidence(c, a)}\n`);
     }
     log(`${seenDraft.size} finding(s) drafted in the run's summary, none filed: this repository's adoption record doesn't say \`Upstream findings: filed here\` (K-LAYOUT-10).`);
     summary(`- ${report.findings.length} finding(s) in the report, ${seenDraft.size} drafted above and not filed (this repository doesn't declare \`Upstream findings: filed here\`), ${report.held_back.length} candidate(s) the agent held back.`);
@@ -376,7 +382,7 @@ export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log 
         continue;
       }
       if (filed >= MAX_FILED) { summary(`- **Held:** "${f.title}": ${MAX_FILED} issues were filed this run already.`); continue; }
-      const names = [...LABELS[c.kind], ...(c.kind === 'bug' ? [f.severity] : [])];
+      const names = labelsFor(c.kind, f.severity);
       const labels = names.flatMap((l) => ['--label', l]);
       // The agent's prose holds no HTML comment (`proseProblem`), so no marker of its own can
       // stand in for the Explorer's header.

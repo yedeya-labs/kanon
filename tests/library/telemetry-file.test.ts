@@ -243,8 +243,8 @@ describe('drafted, unless the repository declares `filed here` (kanon#471, as th
     expect(code).toBe(0);
     expect(gh.calls).toEqual([]);
     const text = summary.join('\n');
-    expect(text).toContain(`### Draft (bug): ${finding().title}`);
-    expect(text).toContain('### Draft (spec-delta): A tail cost');
+    expect(text).toContain(`### Draft: ${finding().title}\n\nLabels: \`bug\`, \`agent:explorer\`, \`qa:needs-triage\`, \`sev:medium\`. Milestone: Product Backlog.`);
+    expect(text).toContain('### Draft: A tail cost\n\nLabels: `spec-delta`, `agent:explorer`. Milestone: Product Backlog.');
     expect(text).toContain('| own: kanon | `review` | `claude-opus-5-5` | 47 | $0.4213 | $3.0987 |');
     expect(log.join('\n')).toContain('none filed');
     if (upstream === 'filed elsewhere') expect(log.join('\n')).toMatch(/neither `drafted` nor `filed here`/);
