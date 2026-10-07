@@ -117,7 +117,7 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
     ownerType: 'User' as 'User' | 'Organization',
     /** Slugs of private Apps: GET /apps/<slug> answers 404 to a person's token and the workflow's (#417). */
     private: new Set<string>(),
-    appsCheck: { runs: [] as AppsCheckRun[], jobs: {} as Record<number, Array<{ id: number; name: string; conclusion: string }>>, logs: {} as Record<number, string> },
+    appsCheck: { runs: [] as AppsCheckRun[], jobs: {} as Record<number, Array<{ id: number; name: string; conclusion: string }>>, logs: {} as Record<number, string>, ignoresEvent: false /* a server that ignores the event filter, so doctor's own check is what refuses */ },
   };
   const calls: string[][] = [];
   const inputs: string[] = [];
@@ -141,7 +141,7 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
     const runs = /^repos\/acme\/widgets\/actions\/workflows\/apps-check\.yml\/runs\?(.*)$/.exec(path);
     if (runs) {
       const q = new URLSearchParams(runs[1]);
-      const list = st.appsCheck.runs.filter((x) => (!q.get('branch') || x.head_branch === q.get('branch')) && (!q.get('status') || q.get('status') === 'completed'));
+      const list = st.appsCheck.runs.filter((x) => (!q.get('branch') || x.head_branch === q.get('branch')) && (!q.get('event') || st.appsCheck.ignoresEvent || x.event === q.get('event')) && (!q.get('status') || q.get('status') === 'completed'));
       return ok({ total_count: list.length, workflow_runs: list.slice(0, Number(q.get('per_page') ?? 30)) });
     }
     const jobs = /^repos\/acme\/widgets\/actions\/runs\/(\d+)\/jobs(\?.*)?$/.exec(path);
@@ -166,7 +166,7 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
   return { st, gh, calls, inputs };
 };
 
-type AppsCheckRun = { id: number; head_branch: string; html_url: string; created_at: string; conclusion: string };
+type AppsCheckRun = { id: number; head_branch: string; event: string; head_repository: { full_name: string }; html_url: string; created_at: string; conclusion: string };
 
 /**
  * A completed run of the apps-check caller, newest first: each App's job printed the line
@@ -175,11 +175,11 @@ type AppsCheckRun = { id: number; head_branch: string; html_url: string; created
 const appsCheckRun = (
   github: ReturnType<typeof fakeGitHub>,
   holds: Record<string, Record<string, string>>,
-  o: { branch?: string; conclusion?: string; slugs?: Record<string, string>; appIds?: Record<string, number>; line?: boolean } = {},
+  o: { branch?: string; event?: string; from?: string; conclusion?: string; slugs?: Record<string, string>; appIds?: Record<string, number>; line?: boolean } = {},
 ) => {
   const id = 900 + github.st.appsCheck.runs.length;
   const conclusion = o.conclusion ?? 'success';
-  github.st.appsCheck.runs.unshift({ id, head_branch: o.branch ?? 'main', html_url: `https://github.com/${REPO}/actions/runs/${id}`, created_at: '2026-10-06T17:32:19Z', conclusion });
+  github.st.appsCheck.runs.unshift({ id, head_branch: o.branch ?? 'main', event: o.event ?? 'workflow_dispatch', head_repository: { full_name: o.from ?? REPO }, html_url: `https://github.com/${REPO}/actions/runs/${id}`, created_at: '2026-10-06T17:32:19Z', conclusion });
   const apps = Object.keys(holds);
   github.st.appsCheck.jobs[id] = [{ id: id * 10, name: 'apps / Read the App register', conclusion: 'success' }, ...apps.map((app, i) => ({ id: id * 10 + i + 1, name: `apps / ${REQ.identities.apps[app]!.name}`, conclusion }))];
   apps.forEach((app, i) => {
@@ -1184,7 +1184,7 @@ describe('kanon doctor and private Apps, read through apps-check (#417)', () => 
     expect(ids(r)).toEqual([]);
     expect(r.status, r.out).toBe(EXIT.healthy);
     expect(r.json.notes.filter((n: string) => n.includes(url))).toHaveLength(apps.length);
-    expect(github.calls.map((c) => c.join(' '))).toContain(`api repos/${REPO}/actions/workflows/apps-check.yml/runs?branch=main&status=completed&per_page=1`);
+    expect(github.calls.map((c) => c.join(' '))).toContain(`api repos/${REPO}/actions/workflows/apps-check.yml/runs?branch=main&event=workflow_dispatch&status=completed&per_page=1`);
   });
 
   it('finds a missing and an extra permission in what apps-check found, though apps-check failed the run', async () => {
@@ -1221,6 +1221,32 @@ describe('kanon doctor and private Apps, read through apps-check (#417)', () => 
       expect(u.reason).toContain(`gh workflow run apps-check.yml -R ${REPO}`);
     }
     expect(r.status).toBe(EXIT.incomplete);
+  });
+
+  it('never reads a newer run a fork\'s pull request from its own main started, whose workflow is the fork\'s', async () => {
+    const github = privately();
+    const [author] = apps as [string];
+    const url = appsCheckRun(github, asReleased());
+    const forged = asReleased();
+    delete forged[author]!.contents;
+    appsCheckRun(github, forged, { event: 'pull_request', from: 'mallory/widgets' });
+    const r = await run(checkout(healthyFiles()), github, ['--json']);
+    expect(r.json.unchecked).toEqual([]);
+    expect(ids(r)).toEqual([]);
+    expect(r.json.notes.filter((n: string) => n.includes(url))).toHaveLength(apps.length);
+  });
+
+  it('is incomplete, and reads nothing from it, when the run it is given came from another repository or another event', async () => {
+    for (const o of [{ from: 'mallory/widgets' }, { event: 'pull_request', from: 'mallory/widgets' }, { event: 'push' }]) {
+      const github = privately();
+      github.st.appsCheck.ignoresEvent = true;
+      appsCheckRun(github, asReleased(), o);
+      const r = await run(checkout(healthyFiles()), github, ['--json']);
+      expect(r.json.unchecked.map((u: { check: string }) => u.check), JSON.stringify(o)).toEqual(apps.map(() => 'app-permissions'));
+      expect(r.json.unchecked[0].reason).toContain(`not dispatched in ${REPO}`);
+      expect(r.json.unchecked[0].reason).toContain(`gh workflow run apps-check.yml -R ${REPO}`);
+      expect(r.status).toBe(EXIT.incomplete);
+    }
   });
 
   it('is incomplete when the run printed no result, as apps-check before #417 did, or checked another App', async () => {

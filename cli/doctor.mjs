@@ -841,8 +841,12 @@ export const diagnose = async (deps, opts) => {
   // GitHub shows a private App only to the App itself: GET /apps/<slug> answers 404 to a person's
   // token and the workflow's alike (#417). apps-check reads each installation with the App's own
   // key and prints what it found (cli/apps-check.mjs), and a run's log is readable with
-  // Actions: read. Only the latest completed run on the default branch counts: its workflow is
-  // the reviewed one, and an older run may predate a change.
+  // Actions: read. Only the latest completed run dispatched on the default branch counts: its
+  // workflow is the reviewed one, and an older run may predate a change. The branch filter alone
+  // doesn't hold that: it matches a run's head_branch, and a pull request from a fork's own `main`
+  // has that too, and runs the fork's workflow. So the query asks the server for workflow_dispatch
+  // runs only, the one trigger the caller declares and one a fork can't start, and a run from
+  // another repository or another trigger is refused, never read.
   const appsCheckPath = appsCheckCallers[0]?.file ?? (workflows.has('.github/workflows/apps-check.yml') ? '.github/workflows/apps-check.yml' : null);
   const appsCheckName = appsCheckPath ? basename(appsCheckPath) : 'apps-check.yml';
   const runAppsCheck = appsCheckPath
@@ -860,11 +864,15 @@ export const diagnose = async (deps, opts) => {
   const appsCheckRun = () =>
     (latestAppsCheck ??= (async () => {
       if (!appsCheckPath) return { reason: `no apps-check workflow is there to read it from: ${runAppsCheck}` };
-      const runs = await deps.gh(['api', `repos/${repo}/actions/workflows/${appsCheckName}/runs?branch=${encodeURIComponent(s.defaultBranch)}&status=completed&per_page=1`]);
+      const runs = await deps.gh(['api', `repos/${repo}/actions/workflows/${appsCheckName}/runs?branch=${encodeURIComponent(s.defaultBranch)}&event=workflow_dispatch&status=completed&per_page=1`]);
       const list = ghJsonOf(runs)?.workflow_runs;
       if (!Array.isArray(list)) return { reason: `the token can't list ${appsCheckName}'s runs, which needs Actions: read (${runs.stderr.trim() || `exit ${runs.status}`})` };
       const run = list[0];
       if (!isMap(run)) return { reason: `${appsCheckName} has no completed run on ${s.defaultBranch}: ${runAppsCheck}` };
+      const from = isMap(run.head_repository) ? String(run.head_repository.full_name ?? '') : '';
+      if (run.event !== 'workflow_dispatch' || from.toLowerCase() !== repo.toLowerCase()) {
+        return { reason: `the latest ${appsCheckName} run on ${s.defaultBranch} (${run.html_url}) was started by ${run.event || 'an unknown event'} from ${from || 'an unknown repository'}, not dispatched in ${repo}, so its workflow may not be the reviewed one: ${runAppsCheck}` };
+      }
       const jobs = await deps.gh(['api', `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`]);
       const all = ghJsonOf(jobs)?.jobs;
       if (!Array.isArray(all)) return { reason: `the token can't list the jobs of ${run.html_url}, which needs Actions: read (${jobs.stderr.trim() || `exit ${jobs.status}`})` };
