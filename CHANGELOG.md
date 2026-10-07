@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.36.0](https://github.com/yedeya-labs/kanon/compare/v0.35.0...v0.36.0) (2026-10-07)
+
+
+### Features
+
+* **overseer:** cost view from the adopter's telemetry rows, capability watch as a choice, and three fixes ([#499](https://github.com/yedeya-labs/kanon/issues/499)) ([ac1ad59](https://github.com/yedeya-labs/kanon/commit/ac1ad59b9fbd7ec2963d829467b6019c3ee68a10))
+* **rebase:** start the rebase lane on a merged pull request, so a merge through a merge queue starts it ([#513](https://github.com/yedeya-labs/kanon/issues/513)) ([b036811](https://github.com/yedeya-labs/kanon/commit/b0368113dec4b92bbf525985c8cec8081c7c4f82))
+
+
+### Bug Fixes
+
+* **agent-setup:** point the push probe's error and the code's comments at records that exist ([#515](https://github.com/yedeya-labs/kanon/issues/515)) ([f3e2e14](https://github.com/yedeya-labs/kanon/commit/f3e2e14dc6626878fc15f64dbf6d6108f89fd3ac))
+* **qa-store:** mask the AWS account id before any store step can print an AWS error ([#511](https://github.com/yedeya-labs/kanon/issues/511)) ([0139ec4](https://github.com/yedeya-labs/kanon/commit/0139ec4c5bd510265fb37a2828f546407d554c18))
+* **telemetry:** mask the writer role's account id before the collector's first AWS call ([#517](https://github.com/yedeya-labs/kanon/issues/517)) ([df1ceeb](https://github.com/yedeya-labs/kanon/commit/df1ceeba789eae50f15e3bcef9cad535a8064f9c))
+
+
+### Documentation
+
+* **adoption:** describe Kanon's QA store hook as reading the secrets alone ([#509](https://github.com/yedeya-labs/kanon/issues/509)) ([03038ff](https://github.com/yedeya-labs/kanon/commit/03038ffb225071104e85d2a52c5d3d183dab82eb))
+* **plans:** bound plan 0003's follow-up-close trigger, and join an issue-only run to one item ([#507](https://github.com/yedeya-labs/kanon/issues/507)) ([3d288e4](https://github.com/yedeya-labs/kanon/commit/3d288e46319647e6b72779f931f460d53ab76e0e))
+
+
+### CI
+
+* **explore:** install Kanon's caller for the Explorer's telemetry lane ([#498](https://github.com/yedeya-labs/kanon/issues/498)) ([6734ce6](https://github.com/yedeya-labs/kanon/commit/6734ce623013fc5b5762a315c4082b58a7030046))
+
 ## [0.35.0](https://github.com/yedeya-labs/kanon/compare/v0.34.1...v0.35.0) (2026-10-07)
 
 
