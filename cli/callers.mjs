@@ -45,8 +45,12 @@ export const kanonRelease = () => `v${JSON.parse(readFileSync(new URL('../packag
  * `pinMoved` adds the Overseer's runtime-version trigger (kanon#423): a `pull_request_target`
  * that closed a pull request on the default branch which changed this caller file, the one place
  * the adopter's agent runtime moves (it is pinned per Kanon release). The lane audits on it only
- * when the runtime changed, so it costs a short gate job on any other Kanon upgrade.
- * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', schedule?: string, pinMoved?: boolean }>}
+ * when the runtime changed, so it costs a short gate job on any other Kanon upgrade. `merged` adds
+ * a `pull_request_target` that closed a pull request on the default branch, any file (kanon#484):
+ * through a merge queue the CI run on a merge is the queue's, which the gate turns away, and this
+ * fires after the queue merges, judged by the member who queued it. The lane acts on it only as a
+ * merge, and reads nothing of the pull request.
+ * @type {Record<string, { name: string, job: string, dispatch: Record<string, boolean>, issues?: string[], pr?: string[], prTarget?: string[], review?: boolean, ci?: 'any' | 'default', merged?: boolean, schedule?: string, pinMoved?: boolean }>}
  */
 export const TRIGGERS = {
   'agent-triage': { name: 'Triage (Implementer)', job: 'triage', issues: ['labeled'], dispatch: { issue_number: true } },
@@ -58,7 +62,7 @@ export const TRIGGERS = {
   'agent-verify-acs': { name: 'Verify acceptance criteria (Explorer)', job: 'verify', issues: ['labeled'], dispatch: { project: false, ref: false } },
   'agent-lead': { name: 'Lead (Lead) — brief', job: 'brief', dispatch: { mandate: true, context: false } },
   'agent-lead-split': { name: 'Lead (Lead) — split', job: 'split', issues: ['labeled'], dispatch: { issue: true } },
-  'agent-rebase': { name: 'Rebase (Implementer)', job: 'rebase', ci: 'default', schedule: '17 5 * * *', dispatch: { pr_number: false } },
+  'agent-rebase': { name: 'Rebase (Implementer)', job: 'rebase', ci: 'default', merged: true, schedule: '17 5 * * *', dispatch: { pr_number: false } },
   'agent-lead-reconcile': { name: 'Lead (Lead) — reconcile', job: 'reconcile', pr: ['closed'], issues: ['closed'], schedule: '7 * * * *', dispatch: { project: false, apply: false } },
   'agent-merge': { name: 'Merge (Merger)', job: 'merge', review: true, ci: 'default', schedule: '37 * * * *', dispatch: { pr_number: false, apply: false } },
   'agent-project-digest': { name: 'Daily project digest', job: 'digest', schedule: '0 7 * * *', dispatch: { dry_run: false } },
@@ -84,6 +88,7 @@ const y = (s) => (/^[A-Za-z0-9_][A-Za-z0-9_ ./()—-]*$/.test(s) && !/[ ]$/.test
 export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = `.github/workflows/${lane}.yml` }) => {
   const t = TRIGGERS[lane];
   if (!t) throw new Error(`no caller template for the lane ${lane}: add its triggers to TRIGGERS in cli/callers.mjs`);
+  if ((t.prTarget || t.pinMoved) && t.merged) throw new Error(`the caller template of ${lane} writes \`pull_request_target\` twice`);
   const out = [`# The caller of Kanon's ${lane} lane, written by \`kanon init\` (docs/lanes.md). The triggers are yours;`, '# the rest is the lane\'s, and `lane-check` holds this file to it.'];
   out.push(`name: ${y(spec.callerName ?? t.name)}`, '');
   if (spec.callerRunNameEndsWith) out.push(`run-name: ${t.name.split(' ')[0]} ${spec.callerRunNameEndsWith}`, '');
@@ -91,6 +96,11 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   if (t.ci) {
     out.push('  workflow_run:', `    workflows: [${y(ciName)}]`, '    types: [completed]');
     if (t.ci === 'default') out.push(`    branches: [${y(defaultBranch)}]`);
+  }
+  if (t.merged) {
+    out.push('  # A merged pull request: through a merge queue, the CI run on a merge is the queue\'s, which',
+      '  # the lane\'s gate turns away. The lane reads nothing of the pull request (docs/lanes.md).',
+      '  pull_request_target:', '    types: [closed]', `    branches: [${y(defaultBranch)}]`);
   }
   if (t.review) out.push('  pull_request_review:', '    types: [submitted]');
   if (t.pr) out.push('  pull_request:', `    types: [${t.pr.join(', ')}]`);

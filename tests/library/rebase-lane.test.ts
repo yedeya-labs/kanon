@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 const {
-  HELD_LABEL, IMPLEMENTER_LOGIN, MAX_PER_RUN, PIPELINE_LABELS, PR_FIELDS,
-  attemptComment, ineligible, isResolveJob, marker, rebaseDecision, report,
+  HELD_LABEL, IMPLEMENTER_LOGIN, MAX_PER_RUN, PIPELINE_LABELS, PR_FIELDS, SETTLE_PAUSE_MS, SETTLE_READS,
+  attemptComment, ineligible, isResolveJob, marker, rebaseDecision, report, settledPrs,
 } = await import('../../scripts/rebase-lane.mjs');
+import { parseCondition } from '../unit/helpers/job-condition.js';
 const { ConflictFieldsUnread } = await import('../../scripts/conflict-state.mjs');
 const { IMPLEMENTER_STATUS, headerLine } = await import('../../scripts/lib/role-marker.mjs');
 import { blockOf, effectiveSteps, laneBlockOf } from '../unit/helpers/spine.js';
@@ -180,15 +181,80 @@ describe('the workflow wiring', () => {
   const text = workflowText(join(ROOT, '.github/workflows/agent-rebase.yml'));
   const contract = text.slice(text.indexOf("# THE CALLER'S TRIGGERS"), text.indexOf('\non:\n'));
 
+  /** The filter job's `if:`, evaluated against one event's context (`==` as GitHub's, on these values). */
+  type Ctx = Record<string, string | boolean | undefined>;
+  type Cond = ReturnType<typeof parseCondition>;
+  const value = (n: Cond, ctx: Ctx): unknown => {
+    switch (n.kind) {
+      case 'lit': return n.value;
+      case 'ref': return ctx[n.path];
+      case 'not': return !value(n.arg, ctx);
+      case 'and': return Boolean(value(n.left, ctx)) && Boolean(value(n.right, ctx));
+      case 'or': return Boolean(value(n.left, ctx)) || Boolean(value(n.right, ctx));
+      case 'cmp': {
+        const [l, r] = [value(n.left, ctx), value(n.right, ctx)];
+        if (n.op === '==') return l === r;
+        if (n.op === '!=') return l !== r;
+        throw new Error(`unmodelled ${n.op}`);
+      }
+      default: throw new Error(`unmodelled ${n.kind}`);
+    }
+  };
+  const filterAdmits = (ctx: Ctx) => Boolean(value(parseCondition(String(wf.jobs.filter.if)), ctx));
+
   it('is NOT triggered by a label, which could never fire on a conflicting PR', () => {
     // The whole finding of RA-1722, and the reason this lane departs from the route every
     // other re-delivery here takes.
     expect(Object.keys(wf.on)).toEqual(['workflow_call']);
     const events = [...contract.matchAll(/^#\s{3}(\w+)/gm)].map((m) => m[1]).sort();
-    expect(events).toEqual(['schedule', 'workflow_dispatch', 'workflow_run']);
+    expect(events).toEqual(['pull_request_target', 'schedule', 'workflow_dispatch', 'workflow_run']);
     const admits = String(wf.jobs.filter.if);
     expect([...admits.matchAll(/github\.event_name == '(\w+)'/g)].map((m) => m[1]).sort()).toEqual(events);
-    expect(admits).not.toContain('pull_request');
+    // The smoke calls it on pull requests, which must not reach the PR-listing script.
+    expect(admits).not.toContain("'pull_request'");
+    expect(filterAdmits({ 'github.event_name': 'pull_request', 'github.event.action': 'labeled' })).toBe(false);
+    expect(filterAdmits({ 'github.event_name': 'pull_request_target', 'github.event.action': 'labeled' })).toBe(false);
+  });
+
+  // kanon#484: through a merge queue the CI run on a merge is the queue's, which the gate turns
+  // away; the merged pull request starts the lane instead. `pull_request_target` runs with the
+  // base's secrets on a fork's pull request too, so only a merge into the default branch passes.
+  const MERGED = {
+    'github.event_name': 'pull_request_target', 'github.event.action': 'closed', 'github.event.pull_request.merged': true,
+    'github.event.pull_request.base.ref': 'main', 'github.event.repository.default_branch': 'main',
+  };
+  it('starts on a pull request merged into the default branch (kanon#484)', () => {
+    expect(contract).toMatch(/^#\s+pull_request_target: \[closed\], branches \[main\]/m);
+    expect(filterAdmits(MERGED)).toBe(true);
+  });
+
+  it('skips a close that is not a merge, a merge into another branch, and any other pull_request_target action', () => {
+    expect(filterAdmits({ ...MERGED, 'github.event.pull_request.merged': false })).toBe(false);
+    expect(filterAdmits({ ...MERGED, 'github.event.pull_request.merged': undefined })).toBe(false);
+    // A stacked pull request's base is another pull request's branch, which its author can write.
+    expect(filterAdmits({ ...MERGED, 'github.event.pull_request.base.ref': 'feature-a' })).toBe(false);
+    for (const action of ['opened', 'labeled', 'synchronize', 'reopened']) expect(filterAdmits({ ...MERGED, 'github.event.action': action }), action).toBe(false);
+    // A merged pull_request (not _target) is not one of the caller's triggers.
+    expect(filterAdmits({ ...MERGED, 'github.event_name': 'pull_request' })).toBe(false);
+  });
+
+  it('still starts on its other triggers, and not on a cancelled CI run', () => {
+    expect(filterAdmits({ 'github.event_name': 'workflow_run', 'github.event.workflow_run.conclusion': 'success' })).toBe(true);
+    expect(filterAdmits({ 'github.event_name': 'workflow_run', 'github.event.workflow_run.conclusion': 'cancelled' })).toBe(false);
+    expect(filterAdmits({ 'github.event_name': 'schedule' })).toBe(true);
+    expect(filterAdmits({ 'github.event_name': 'workflow_dispatch' })).toBe(true);
+    expect(filterAdmits({ 'github.event_name': 'merge_group' })).toBe(false);
+  });
+
+  it('checks out nothing of the pull request on any trigger (K-AGENT-48)', () => {
+    // No `ref`, `repository` or head expression on any checkout: on `pull_request_target` the
+    // default ref is the base, which the filter holds to the default branch.
+    const resolveJob = readFlattened(join(ROOT, '.github/workflows/rebase-agent-job.yml'));
+    const checkouts = [...wf.jobs.filter.steps, ...Object.values(resolveJob.jobs as Record<string, { steps?: unknown[] }>).flatMap((j) => j.steps ?? [])]
+      .filter((st) => /^actions\/checkout@/.test(String((st as { uses?: string }).uses ?? '')));
+    expect(checkouts.length).toBeGreaterThanOrEqual(2);
+    for (const c of checkouts) expect(Object.keys((c as { with?: object }).with ?? {}).filter((k) => !['token', 'fetch-depth'].includes(k))).toEqual([]);
+    expect(workflowText(join(ROOT, '.github/workflows/agent-rebase.yml')) + workflowText(join(ROOT, '.github/workflows/rebase-agent-job.yml'))).not.toMatch(/github\.event\.pull_request\.(head|title|body|number)|github\.head_ref/);
   });
 
   it('fires on the event that CREATES the condition', () => {
@@ -375,6 +441,56 @@ describe('which job of a run is this PR’s (RA-2519, plan 0001 step 5)', () => 
     const wf = readFlattened(join(ROOT, '.github/workflows/agent-rebase.yml'));
     expect(wf.jobs.resolve.strategy.matrix.pr).toBeDefined();
     expect(wf.jobs.resolve.name).toBeUndefined();
+  });
+});
+
+// kanon#484: a merged pull request starts the lane before GitHub has recomputed the other PRs'
+// mergeability, so the read is repeated, a bounded number of times, while any is still computing.
+describe('reading the open PRs until their mergeability settles (kanon#484)', () => {
+  const computing = (n = 55) => pr({ number: n, mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' });
+  const reader = (...answers: unknown[][]) => {
+    let i = 0;
+    return { read: () => answers[Math.min(i++, answers.length - 1)]!, reads: () => i };
+  };
+  const noPause = () => {};
+
+  it('reads once when nothing is computing', () => {
+    const r = reader([pr(), pr({ number: 56, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' })]);
+    expect(settledPrs(r.read, { pause: noPause })).toMatchObject({ reads: 1 });
+    expect(r.reads()).toBe(1);
+  });
+
+  it('reads again while a PR is computing, and hands over the conflict it settles into', () => {
+    const r = reader([computing()], [computing()], [pr()]);
+    let paused = 0;
+    const { prs, reads } = settledPrs(r.read, { pause: () => { paused += 1; } });
+    expect(reads).toBe(3);
+    expect(paused).toBe(2);
+    expect(decide(prs).resolve.map((x: { number: number }) => x.number)).toEqual([55]);
+  });
+
+  it('stops after its bound and uses the last read as it is', () => {
+    const r = reader([computing()]);
+    const { prs, reads } = settledPrs(r.read, { pause: noPause });
+    expect(reads).toBe(SETTLE_READS);
+    expect(decide(prs).resolve).toEqual([]);
+  });
+
+  it('waits only on the PR it was asked about', () => {
+    const r = reader([pr({ number: 7 }), computing(8)]);
+    const { prs, reads } = settledPrs(r.read, { only: '7', pause: noPause });
+    expect(reads).toBe(1);
+    expect(prs.map((p: { number: number }) => p.number)).toEqual([7]);
+    // And keeps to it on a re-read.
+    const again = reader([computing(7)], [pr({ number: 7 }), computing(8)]);
+    const settled = settledPrs(again.read, { only: '7', pause: noPause });
+    expect(settled.reads).toBe(2);
+    expect(settled.prs.map((p: { number: number }) => p.number)).toEqual([7]);
+  });
+
+  it('waits at most about a minute in all', () => {
+    expect((SETTLE_READS - 1) * SETTLE_PAUSE_MS).toBeLessThanOrEqual(60_000);
+    expect(SETTLE_READS).toBeGreaterThan(1);
   });
 });
 

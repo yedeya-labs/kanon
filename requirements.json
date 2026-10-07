@@ -990,8 +990,7 @@
           "agent-implement",
           "agent-triage"
         ],
-        "when": "With implement or triage, whose pull requests otherwise wait for a person when they conflict: a person's rebase takes one out of the Implementer's chain, so the revise lane refuses it.",
-        "mergeQueue": "Through a merge queue, a merge doesn't start it: the queue's push runs CI as `github-merge-queue[bot]`, which the lane's gate turns away, so it runs at its daily slot or when dispatched for a pull request (#79)."
+        "when": "With implement or triage, whose pull requests otherwise wait for a person when they conflict: a person's rebase takes one out of the Implementer's chain, so the revise lane refuses it."
       },
       "agent-dispatch-sweep": {
         "name": "Dispatch sweep",

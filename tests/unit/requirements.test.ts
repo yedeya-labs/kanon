@@ -148,10 +148,13 @@ describe('requirements.json', () => {
     });
 
     // #452 (#79): a merge through a merge queue doesn't start a lane that runs on CI finishing on
-    // the default branch, since the queue's push is the run's actor and the gate turns it away.
-    it('says what a merge queue changes for exactly the lanes that run on CI finishing on the default branch', () => {
-      const ciOnDefault = Object.entries(TRIGGERS).filter(([, t]) => t.ci === 'default').map(([l]) => l).sort();
+    // the default branch, since the queue's push is the run's actor and the gate turns it away;
+    // unless its caller also starts it on the merged pull request (#484), which the queue doesn't
+    // change.
+    it('says what a merge queue changes for exactly the lanes that run on CI finishing on the default branch and not on a merge', () => {
+      const ciOnDefault = Object.entries(TRIGGERS).filter(([, t]) => t.ci === 'default' && !t.merged).map(([l]) => l).sort();
       expect(ciOnDefault.length).toBeGreaterThan(0);
+      expect(Object.entries(TRIGGERS).filter(([, t]) => t.ci === 'default' && t.merged).map(([l]) => l)).toEqual(['agent-rebase']);
       expect(Object.entries(cat.lanes).filter(([, e]) => e.mergeQueue !== undefined).map(([l]) => l).sort()).toEqual(ciOnDefault);
     });
 

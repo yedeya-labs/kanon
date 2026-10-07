@@ -23,8 +23,26 @@
 # ── THE TRIGGER IS THE EVENT THAT CREATES THE CONDITION ─────────────────────
 # A merge to `main` is the only thing that makes an already-open PR conflict, and CI
 # completing on `main` is how this repo observes one (`agent-merge.yml` measured that
-# trigger at 12-37x/day). The cron is a FLOOR: the only states it adds are ones no
-# `main` merge caused, such as a human clearing `needs:human`.
+# trigger at 12-37x/day). Through a MERGE QUEUE that run is the queue's push, whose actor is
+# `github-merge-queue[bot]`, which the gate turns away (kanon#79); `merge_group` fires before
+# `main` moves. So the caller also starts the lane on the merged pull request itself
+# (`pull_request_target` `closed` on `main`, kanon#484), judged by `merged_by`, the member
+# who merged or queued it. Without a queue a merge starts both; the second run finds the
+# first one's attempt markers and hands the agent nothing new. The cron is a FLOOR: the only
+# states it adds are ones no `main` merge caused, such as a human clearing `needs:human`.
+#
+# ── WHY `pull_request_target` IS SAFE HERE (kanon#484) ──────────────────────
+# It runs with the base's secrets on any pull request, a fork's included, so the lane takes
+# nothing from the closed pull request but the fact of its merge and who merged it:
+#   · the filter admits a `closed` event only when `merged` is true and the base is the
+#     default branch, and the gate judges `merged_by` alone and refuses an unmerged close,
+#     so a fork's author closing their own pull request starts nothing;
+#   · no step reads the pull request's head, title, body or branch. Every checkout here and
+#     in `rebase-agent-job.yml` takes no `ref`, which on this event is the default branch;
+#     the PRs it resolves come from its own `gh pr list` of open PRs, each the Implementer
+#     App's and carrying its status (`rebase-lane.mjs`, `ineligible`), never the closed one;
+#   · the workflow that runs is the caller on the default branch and this lane at the
+#     caller's pinned tag; the pull request can change neither.
 #
 # ── COST ────────────────────────────────────────────────────────────────────
 # The FILTER job is a `gh pr list` and exits in seconds; it opens no database
@@ -44,6 +62,7 @@ name: Rebase lane (Implementer)
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
 #   workflow_run: CI, [completed], branches [main]
+#   pull_request_target: [closed], branches [main]   — a merged pull request (kanon#484)
 #   schedule: "17 5 * * *"   — the daily floor; clear of every other agent cron
 #   workflow_dispatch        — input `pr_number` (optional: a single PR; blank = every open PR)
 on:
@@ -91,13 +110,19 @@ jobs:
     # fires its own. A skipped job bills ~no Actions minutes, which matters because a
     # third of `main`'s CI runs are cancelled.
     #
-    # AND ONLY THE CALLER'S THREE TRIGGERS. When this file held its triggers, no other event
+    # AND ONLY THE CALLER'S FOUR TRIGGERS. When this file held its triggers, no other event
     # could reach it; as a called workflow it runs on whatever its caller is called on, so
     # the job names them (Kanon's smoke calls it on pull requests, which must not reach the
-    # PR-listing script with a token).
+    # PR-listing script with a token). A `pull_request_target` only as a merge into the
+    # default branch: an unmerged close, and a merge into another branch (a stacked pull
+    # request's base, which its author can write), skip here, whatever the caller's filter.
     if: >-
       (github.event_name == 'workflow_run'
         && github.event.workflow_run.conclusion != 'cancelled')
+      || (github.event_name == 'pull_request_target'
+        && github.event.action == 'closed'
+        && github.event.pull_request.merged == true
+        && github.event.pull_request.base.ref == github.event.repository.default_branch)
       || github.event_name == 'schedule'
       || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -129,7 +154,8 @@ jobs:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted:
       # this lane acts only when the event's actor is a member or a registered agent App.
       # `scripts/lane-gate.mjs` says who the actor is for each event — on a finished CI run,
-      # whoever pushed the commit it ran on; on the schedule, whoever last changed it — and
+      # whoever pushed the commit it ran on; on a merged pull request, whoever merged or
+      # queued it; on the schedule, whoever last changed it — and
       # a refusal leaves `member=false`, a notice and a step-summary line, and every later
       # step and job skips.
       - uses: $/actions/kanon-path

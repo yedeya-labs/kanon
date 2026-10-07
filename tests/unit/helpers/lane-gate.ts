@@ -34,7 +34,8 @@ export const TRIGGERS: Record<string, Trigger[]> = {
   'agent-lead.yml': ['dispatch'],
   'agent-merge-reconcile.yml': ['merged', 'review', 'dispatch'],
   'agent-merge.yml': ['review', 'ci-finished', 'schedule', 'dispatch'],
-  'agent-rebase.yml': ['ci-finished', 'schedule', 'dispatch'],
+  // kanon#484: a merged pull request too, which a merge through a merge queue still starts.
+  'agent-rebase.yml': ['ci-finished', 'pr-target-merged', 'schedule', 'dispatch'],
   'agent-review.yml': ['ci-finished', 'pr-target-label', 'pr-target-opened', 'dispatch'],
   'agent-triage.yml': ['issue-label', 'dispatch'],
   'agent-verify-acs.yml': ['issue-label', 'dispatch'],
