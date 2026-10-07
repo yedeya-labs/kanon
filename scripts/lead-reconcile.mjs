@@ -805,7 +805,7 @@ function nextActionsCore(world, {
     'deploy-gate-declined': () => `\`${world.deploy?.tag}\` was released but its deploy job was SKIPPED: ${deployWorkflow(world)}'s gate found nothing to deploy in the range, so ${deployEnvironment(world)} was never touched${walked(world)}. The project is not closed on a deploy that did not happen`,
     // A REVERT IS NOT A DEPLOY (kanon#161). Ancestry credited a release whose tree no
     // longer held the work, because a reverted merge stays an ancestor of every later tag.
-    'deploy-reverted': () => `every containing release that deployed also contains a revert of this project's work: ${(world.deploy?.reverted ?? []).map((r) => `\`${String(r.sha).slice(0, 7)}\` reverted by \`${String(r.by).slice(0, 7)}\``).join(', ') || 'a closing merge'}, so ${deployEnvironment(world)} does not hold it — the newest examined is \`${world.deploy?.tag}\`${walked(world)}. A later release that re-lands the work clears this, by a revert of the revert or by a later merged pull request that closes the same issue and names the reverted pull request, its merge or the revert; if it was re-landed another way, a human decides whether the project is done`,
+    'deploy-reverted': () => `every containing release that deployed also contains a revert of this project's work: ${(world.deploy?.reverted ?? []).map((r) => `\`${String(r.sha).slice(0, 7)}\` reverted by \`${String(r.by).slice(0, 7)}\``).join(', ') || 'a closing merge'}, so ${deployEnvironment(world)} does not hold it — the newest examined is \`${world.deploy?.tag}\`${walked(world)}. A later release that re-lands the work clears this, by a revert of the revert or by a later merged pull request that closes the same issue and names the revert or says it re-lands the reverted pull request or its merge (a mention alone, such as "follows #N", is not a re-land); if it was re-landed another way, a human decides whether the project is done`,
     'deploy-history-unreadable': () => `\`${world.deploy?.tag}\` deployed (${world.deploy?.url ?? 'no url'}), but the commits after this project's merges could not be read, so whether one of them reverts the work is UNKNOWN — refusing to treat unknown as deployed. A read failure is transient: the next tick re-issues it`,
     'deploy-unknown': () => `readDeploy returned a state this tick does not know how to act on — refusing to guess`,
   };
@@ -1462,15 +1462,16 @@ export function revertedMerges(shas, commits) {
  * tag (it was in the reverted merge's range), so it is missing from the other merge's
  * range exactly when that merge's history holds it.
  *
- * AND IT MUST NAME WHAT IT RE-LANDS (kanon#280). History alone cannot tell a re-land from
- * a later, DIFFERENT part of the same issue: a second pull request that was in flight when
- * the first one was reverted, and merged after the revert, has the same shape. Crediting it
- * closed the project on a release that lacked the reverted part. So the later pull
- * request's title or body must name the reverted pull request (`#N`, `<owner>/<repo>#N` or
- * its URL) or a 7+ character prefix of the reverted merge or of the revert
- * (`namesReverted`). A re-land that names nothing keeps the project at `reverted`, which
- * waits for a human: the wrong answer in that direction is a page, not a silent close.
- * The text is read on the call `closingMergesByIssue` already makes, so this adds none.
+ * AND IT MUST SAY IT RE-LANDS IT (kanon#280, kanon#357). History alone cannot tell a re-land
+ * from a later, DIFFERENT part of the same issue: a second pull request that was in flight
+ * when the first one was reverted, and merged after the revert, has the same shape. Crediting
+ * it closed the project on a release that lacked the reverted part. A mention is not enough
+ * either: a sibling that delivers the other part commonly cites the first ("Part 2, follows
+ * #9"). So the later pull request's title or body must name the revert, or say it re-lands
+ * the reverted pull request or merge (`namesReverted`). A re-land that says neither keeps
+ * the project at `reverted`, which waits for a human: the wrong answer in that direction is
+ * a page, not a silent close. The text is read on the call `closingMergesByIssue` already
+ * makes, so this adds none.
  *
  * A merge that landed BEFORE the revert re-lands nothing: two pull requests that each
  * closed part of an issue, one of them reverted, is a partial revert and still holds. So
@@ -1494,19 +1495,46 @@ export function relandedReverts(reverted, byIssue, after) {
 }
 
 /**
- * Whether a pull request's title and body name a reverted merge (kanon#280): its pull
- * request as `#N`, `<repo>#N` or `<repo>/pull/N`, or a 7+ character prefix of the merge
- * commit or of the revert. A `#N` of ANOTHER repository (`other/repo#N`) names nothing.
+ * The words that say a pull request re-lands something: re-land (reland, re-landed…),
+ * re-apply, restore, un-revert, bring back, and a revert of the revert (GitHub's revert
+ * button titles that one `Revert "Revert "…""`).
+ */
+const RELAND_WORD = /\b(?:re-?land\w*|re-?appl(?:y|ies|ied|ying)|restor(?:e|es|ed|ing)|un-?revert\w*|(?:bring(?:s|ing)?|brought)\s+back|revert(?:s|ed|ing)?\s+(?:of\s+)?(?:the\s+)?"?revert)\b/i;
+
+/**
+ * Whether a pull request's title and body say it re-lands a reverted merge (kanon#280,
+ * kanon#357). Either of two ties counts:
+ *
+ * - it names the REVERT, by a 7+ character prefix of the revert's commit. A sibling that
+ *   delivers another part of the issue has no reason to cite the commit that undid the first;
+ * - it names the reverted pull request (`#N`, `<repo>#N`, `<repo>/pull/N`) or a 7+ character
+ *   prefix of its merge AFTER a re-land word (`RELAND_WORD`) in the same clause: on one line,
+ *   with no `.`, `;`, `!` or `?` and a space between them. "Re-lands #9" ties; "Part 2,
+ *   follows #9", "builds on #9" and "#9 will be re-landed later" do not.
+ *
+ * A `#N` of ANOTHER repository (`other/repo#N`) names nothing.
+ *
+ * THE LIMIT: this reads words, not code. A re-land that says neither (a bare "#9") is refused,
+ * and the project waits at `reverted` for a human, which is the safe side. A sibling whose
+ * text says "re-land" next to the reverted pull request, or that cites the revert's commit,
+ * is still credited, and a human undoes that by reopening the project.
  *
  * @param {string} text @param {{pr: number|null, sha: string, by: string}} target @param {string} repo
  */
 export function namesReverted(text, { pr, sha, by }, repo) {
   const t = String(text);
   const esc = String(repo).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (pr != null && (new RegExp(`(?:^|[^\\w/.-])#${pr}\\b`).test(t)
-    || new RegExp(`\\b${esc}(?:#|/pull/)${pr}\\b`, 'i').test(t))) return true;
-  return [...t.matchAll(/\b[0-9a-f]{7,40}\b/gi)].some(([h]) =>
-    [sha, by].some((s) => String(s).toLowerCase().startsWith(h.toLowerCase())));
+  const hashes = (s, of) => [...s.matchAll(/\b[0-9a-f]{7,40}\b/gi)].some(([h]) =>
+    of.some((x) => String(x).toLowerCase().startsWith(h.toLowerCase())));
+  if (hashes(t, [by])) return true;
+  const namesPr = (s) => pr != null && (new RegExp(`(?:^|[^\\w/.-])#${pr}\\b`).test(s)
+    || new RegExp(`\\b${esc}(?:#|/pull/)${pr}\\b`, 'i').test(s));
+  return t.split(/\n|[.;!?](?=\s|$)/).some((clause) => {
+    const w = RELAND_WORD.exec(clause);
+    if (!w) return false;
+    const rest = clause.slice(w.index + w[0].length);
+    return namesPr(rest) || hashes(rest, [sha]);
+  });
 }
 
 /**

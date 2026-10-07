@@ -187,6 +187,18 @@ describe('work re-landed through a NEW pull request that closes the same issue (
     expect(d.reverted).toEqual([{ sha: SHA1, by: REV1 }]);
   });
 
+  it('a later merge that only cites the reverted pull request is a sibling too, and the revert holds (kanon#357)', () => {
+    // #11 delivered the other part of issue 1 and merged after #9's revert. It mentions #9
+    // for context, which is no re-land: the release still lacks #9's work.
+    const { io } = world([
+      { tag: 'v1.0.0', deploy: 'success', after: [revertOf(SHA1, REV1)] },
+      { tag: 'v1.0.1', deploy: 'success', after: [merge(RELAND)] },
+    ], { closing: [[9, SHA1], [11, RELAND]], bodies: { 11: 'Part 2 of the issue, follows #9.' } });
+    const d = readDeploy(CLOSED, io);
+    expect(d.state).toBe('reverted');
+    expect(d.reverted).toEqual([{ sha: SHA1, by: REV1 }]);
+  });
+
   it('a second merge that landed BEFORE the revert re-lands nothing: a partial revert still holds', () => {
     const { io } = world([
       { tag: 'v1.0.0', deploy: 'success', after: [merge(SHA2), revertOf(SHA1, REV1)] },
@@ -243,6 +255,9 @@ describe('which reverts a re-land answers', () => {
   it('a later, unreverted merge of the same issue that names the reverted work answers the revert', () => {
     expect(relandedReverts([r1], [{ issue: 1, shas: [SHA1, RELAND], prs: prs('re-land #9') }], ranges([[SHA1, [REV1]], [RELAND, []]]))).toEqual([]);
   });
+  it('the same merge citing the reverted pull request without re-landing it answers nothing (kanon#357)', () => {
+    expect(relandedReverts([r1], [{ issue: 1, shas: [SHA1, RELAND], prs: prs('Part 2 of the issue, follows #9') }], ranges([[SHA1, [REV1]], [RELAND, []]]))).toEqual([r1]);
+  });
   it('the same merge naming nothing answers nothing: it may be a different part of the issue (kanon#280)', () => {
     expect(relandedReverts([r1], [{ issue: 1, shas: [SHA1, RELAND], prs: prs('the other part') }], ranges([[SHA1, [REV1]], [RELAND, []]]))).toEqual([r1]);
     expect(relandedReverts([r1], [{ issue: 1, shas: [SHA1, RELAND] }], ranges([[SHA1, [REV1]], [RELAND, []]]))).toEqual([r1]);
@@ -262,20 +277,30 @@ describe('which reverts a re-land answers', () => {
   });
 });
 
-describe('what a re-land must name (kanon#280)', () => {
+describe('what a re-land must name (kanon#280, kanon#357)', () => {
   const target = { pr: 9, sha: SHA1, by: REV1 };
-  it('names the reverted pull request, its merge or the revert', () => {
-    for (const t of ['Re-lands #9', '#9', `Re-lands ${REPO}#9`, `see https://github.com/${REPO}/pull/9`,
-      `re-land of ${SHA1.slice(0, 7)}`, `after ${REV1.slice(0, 12).toUpperCase()}`]) {
+  it('says it re-lands the reverted pull request or its merge, or names the revert', () => {
+    for (const t of ['Re-lands #9', `Re-lands ${REPO}#9`, `restores https://github.com/${REPO}/pull/9`,
+      `re-land of ${SHA1.slice(0, 7)}`, 'Reland #9, which was reverted.', 'feat: the work, re-applied from #9',
+      'Brings back #9', `Revert "Revert "feat: the work (#9)""`, 'This is the revert of the revert of #9',
+      'Part 2.\nAlso re-lands #9', `after ${REV1.slice(0, 12).toUpperCase()}`, `Follows the revert ${REV1.slice(0, 7)}.`]) {
       expect(namesReverted(t, target, REPO), t).toBe(true);
     }
   });
-  it('a different number, another repository\'s #9, a short or foreign hash names nothing', () => {
-    for (const t of ['', '#90', '#19', 'other-org/other-repo#9', `https://github.com/other/repo/pull/9`,
-      SHA1.slice(0, 6), 'f6'.repeat(4), 'issue9']) {
+  it('a mention of the reverted pull request or its merge with no re-land word is not a re-land (kanon#357)', () => {
+    // A sibling that delivers another part of the issue commonly cites the first.
+    for (const t of ['#9', 'Part 2 of the issue, follows #9', 'builds on #9', `see https://github.com/${REPO}/pull/9`,
+      `Follows ${SHA1.slice(0, 7)}`, '#9 will be re-landed later', 'Re-land is tracked elsewhere. Follows #9',
+      'Restore the cache; part 2 of #9', 'Re-lands nothing\nbuilds on #9']) {
       expect(namesReverted(t, target, REPO), t).toBe(false);
     }
-    expect(namesReverted('#9', { ...target, pr: null }, REPO)).toBe(false);
+  });
+  it('a different number, another repository\'s #9, a short or foreign hash names nothing', () => {
+    for (const t of ['', 'Re-lands #90', 'Re-lands #19', 'Re-lands other-org/other-repo#9', 'Re-lands https://github.com/other/repo/pull/9',
+      `Re-lands ${SHA1.slice(0, 6)}`, `Re-lands ${'f6'.repeat(4)}`, 'Re-lands issue9', REV1.slice(0, 6)]) {
+      expect(namesReverted(t, target, REPO), t).toBe(false);
+    }
+    expect(namesReverted('Re-lands #9', { ...target, pr: null }, REPO)).toBe(false);
   });
 });
 
