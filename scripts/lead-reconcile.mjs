@@ -65,6 +65,11 @@ import { asRole, signed } from './lib/role-marker.mjs';
 import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/reference-deploy.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply, taxonomyLabel } from './lib/labels.mjs';
+// What a commit message says it reverts lives in `lib/reverts.mjs`, shared with the metrics
+// detectors (plan 0003 §3.5), so the Lead and the escape rate read a revert the same way.
+// Re-exported, so every caller that imported them from here still does.
+import { REVERT_PREFILTER, revertTargets } from './lib/reverts.mjs';
+export { REVERT_PREFILTER, revertTargets };
 export {
   VERIFY, briefIssues, carriedOut, declaresMembership, dependsField, gatesClosure, inDecomposition, isPhase5Finding,
   isProjectWork, itemSatisfied, openGatingWork, parseProposed, satisfiedTitles,
@@ -1395,30 +1400,6 @@ export function closingMergesByIssue(issues, { json = ghJson } = {}) {
  */
 export const reachesPhase6 = (deployState) =>
   deployState !== undefined && DEPLOY_PHASE[deployState] === null;
-
-/**
- * What one commit message says it reverts (kanon#161): the commits git names
- * (`This reverts commit <sha>.`, which `git revert` and GitHub's Revert button both write)
- * and the pull requests GitHub names (`Reverts <owner>/<repo>#N`, the Revert button's PR
- * body, which a squash merge can carry instead). Only `repo`'s own pull requests count.
- *
- * @param {string} message @param {string} repo
- * @returns {{shas: string[], prs: number[]}}
- */
-export function revertTargets(message, repo) {
-  const shas = [...String(message).matchAll(/reverts commit ([0-9a-f]{7,40})\b/gi)].map((m) => m[1].toLowerCase());
-  const prs = [...String(message).matchAll(/^Reverts ([\w.-]+\/[\w.-]+)#(\d+)\b/gim)]
-    .filter((m) => m[1].toLowerCase() === String(repo).toLowerCase())
-    .map((m) => Number(m[2]));
-  return { shas, prs };
-}
-
-/**
- * The `--jq` prefilter for reverts, a regex that must hold every message `revertTargets`
- * accepts. Exported so a test evaluates the SAME pattern. It may use no anchor and no flag
- * but `i`, so that JavaScript and gojq read it the same way.
- */
-export const REVERT_PREFILTER = 'reverts commit [0-9a-f]{7}|reverts [^ ]+#[0-9]';
 
 /**
  * Which of `shas` a commit in `commits` undoes (kanon#161), each with the revert that
