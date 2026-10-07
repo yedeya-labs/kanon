@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { appSecrets, appsCheckFile, callerFile, ciFile, dependabotFile, hookFile, loadRequirements, TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
-import { CATEGORIES, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
+import { branchWorkflows, CATEGORIES, checkReporters, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, kanonPins, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { registerRolesOf, rulesetBody } from '../../cli/init.mjs';
 import { isKanonSource, pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { laneFiles, laneTree } from './helpers/requirements.js';
@@ -111,11 +111,21 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
     releases: over.releases ?? {},
     installations: null as Array<{ id: number; app_slug: string; account: { login: string } }> | null,
     variables: over.variables === undefined ? new Set<string>() : over.variables,
+    // The workflows on the default branch, as GitHub has them (#418): CI with the lane check's job.
+    defaultWorkflows: { 'ci.yml': ciFile(PINNED, 'main') } as Record<string, string> | null,
   };
   const calls: string[][] = [];
-  const gh = async (args: string[]): Promise<Gh> => {
+  const inputs: string[] = [];
+  const gh = async (args: string[], input?: string): Promise<Gh> => {
     calls.push(args);
+    if (input) inputs.push(input);
     const [a0, a1] = args;
+    if (a0 === 'api' && a1 === 'graphql') {
+      const { variables } = JSON.parse(input ?? '{}') as { variables: { owner: string; name: string; expression: string } };
+      if (!st.defaultWorkflows || `${variables.owner}/${variables.name}` !== REPO || variables.expression !== 'main:.github/workflows') return no('gh: Resource not accessible by personal access token (HTTP 403)');
+      const entries = Object.entries(st.defaultWorkflows).map(([name, text]) => ({ name, type: 'blob', object: { text } }));
+      return ok({ data: { repository: { object: entries.length ? { entries } : null } } });
+    }
     if (a0 === 'api' && a1 === 'user') return ok('octo\n');
     if (a0 === 'api' && a1 === 'user/installations?per_page=100') return st.installations ? ok({ total_count: st.installations.length, installations: st.installations }) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 === 'secret' && a1 === 'list') return st.secrets ? ok([...st.secrets].map((name) => ({ name }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
@@ -138,7 +148,7 @@ const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<stri
     }
     return no(`unexpected gh ${args.join(' ')}`);
   };
-  return { st, gh, calls };
+  return { st, gh, calls, inputs };
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the JSON document, read field by field
@@ -197,6 +207,9 @@ describe('kanon doctor on a healthy installation', () => {
     for (const c of github.calls) {
       expect(c[0] === 'api' ? !c.includes('-X') && !c.includes('--method') && !c.includes('-f') && !c.includes('-F') : (c[0] === 'secret' || c[0] === 'variable') && c[1] === 'list', c.join(' ')).toBe(true);
     }
+    // The one body it sends is the default branch's workflows (#418): a GraphQL query, never a mutation.
+    expect(github.inputs.length).toBeGreaterThan(0);
+    for (const i of github.inputs) expect((JSON.parse(i) as { query: string }).query).toMatch(/^query\(/);
     expect(execFileSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('');
   });
 
@@ -480,6 +493,138 @@ ${jobPerms}    steps:
     delete next.lanes['agent-code-audit']!.grant['id-token'];
     const moved = await run(dir, fakeGitHub({ releases: { [NEXT]: next } }), ['--to', NEXT, '--json']);
     expect(moved.json.idTokenHolders.map((h: { status: string }) => h.status)).toEqual(['unaccepted']);
+  });
+});
+
+// #418, L5's G14: doctor told the Owner to require "Lane check" while the lane check ran as a step
+// of another job, and before the pull request adding its job had merged, so every other open
+// pull request waited, approved and green, on a check its branch could never produce.
+describe('kanon doctor and the job behind a required check (#418)', () => {
+  /** Kanon's own shape before #394: the lane check as a step of another job. */
+  const asStep = `name: CI\non:\n  pull_request:\njobs:\n  test:\n    name: Lint, type-check and unit tests\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v7\n      - uses: yedeya-labs/kanon/actions/lane-check@${PINNED}\n`;
+  const withoutCheck = (github: ReturnType<typeof fakeGitHub>) => {
+    github.st.rulesets = [{ ...github.st.rulesets[0]!, rules: github.st.rulesets[0]!.rules.filter((x) => x.type !== 'required_status_checks') }];
+  };
+
+  it('asks for the rule once a job on the default branch reports the check', async () => {
+    const dir = checkout(healthyFiles());
+    const github = fakeGitHub();
+    withoutCheck(github);
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.rule-missing main']);
+    expect(r.json.findings[0].message).toContain('require the status check "Lane check"');
+  });
+
+  it("doesn't offer the rule for a check whose job is only on this checkout's branch: the job's pull request merges first", async () => {
+    const dir = checkout(healthyFiles());
+    const github = fakeGitHub();
+    withoutCheck(github);
+    github.st.defaultWorkflows = {};
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.check-unreported Lane check']);
+    expect(r.status).toBe(EXIT.findings);
+    const f = r.json.findings[0];
+    expect(f).toMatchObject({ category: 'ruleset', blocking: true, subject: 'Lane check', fix: { url: `https://github.com/yedeya-labs/kanon/blob/${PINNED}/actions/lane-check/README.md` } });
+    expect(f.message).toContain('so the ruleset can\'t require it yet');
+    expect(f.fix.text).toContain('This checkout adds it (.github/workflows/ci.yml#lanes): merge the pull request that adds it to main first.');
+    expect(f.fix.text).toContain('once the job is on main');
+  });
+
+  it('asks for a job of its own when the lane check runs as a step of another job, on the branch and the default branch alike', async () => {
+    const files = healthyFiles();
+    files['.github/workflows/ci.yml'] = asStep;
+    const dir = checkout(files);
+    const github = fakeGitHub();
+    withoutCheck(github);
+    github.st.defaultWorkflows = { 'ci.yml': asStep };
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.check-unreported Lane check']);
+    expect(r.json.findings[0].fix.text).toMatch(/^Add a job of its own named "Lane check", in a workflow that runs on pull_request/);
+  });
+
+  it('names a ruleset that already requires a check no job on the default branch reports', async () => {
+    const dir = checkout(healthyFiles());
+    const github = fakeGitHub();
+    github.st.defaultWorkflows = { 'ci.yml': asStep };
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.check-unreported Lane check']);
+    expect(r.json.findings[0].message).toContain('requires the status check "Lane check", but no job of a workflow on main reports it');
+    expect(r.json.findings[0].fix.text).toContain('Until it merges, every other pull request waits on the check.');
+  });
+
+  it("can't tell without the default branch's workflows: lists the check as unchecked, and doesn't ask for the rule", async () => {
+    const dir = checkout(healthyFiles());
+    const github = fakeGitHub();
+    withoutCheck(github);
+    github.st.defaultWorkflows = null;
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual([]);
+    expect(r.status).toBe(EXIT.incomplete);
+    expect(r.json.unchecked).toEqual([{ check: 'required-check', subject: 'Lane check', reason: expect.stringContaining("doesn't ask you to require it yet") }]);
+  });
+
+  it('is waived like any other finding, on the check it names', async () => {
+    const files = healthyFiles();
+    files['docs/qa/adoption.md'] += `- **${WAIVER_LABEL}:** \`ruleset.check-unreported\` on \`Lane check\` (another CI reports it)\n`;
+    const dir = checkout(files);
+    const github = fakeGitHub();
+    github.st.defaultWorkflows = {};
+    const r = await run(dir, github, ['--json']);
+    expect(r.status).toBe(EXIT.healthy);
+    expect(r.json.waived.map((w: { id: string; reason: string }) => [w.id, w.reason])).toEqual([['ruleset.check-unreported', 'another CI reports it']]);
+  });
+});
+
+describe("branchWorkflows: the default branch's workflows, read from GitHub (#418)", () => {
+  const read = (reply: Gh) => branchWorkflows({ gh: async () => reply } as unknown as Parameters<typeof branchWorkflows>[0], REPO, 'main');
+  const lane = 'on: pull_request\njobs:\n  lanes:\n    name: Lane check\n    runs-on: x\n';
+
+  it('reads each workflow file, and only files', async () => {
+    const r = await read(ok({ data: { repository: { object: { entries: [
+      { name: 'ci.yml', type: 'blob', object: { text: lane } },
+      { name: 'nested.yml', type: 'tree', object: { text: lane } },
+      { name: 'notes.md', type: 'blob', object: { text: lane } },
+      { name: 'broken.yml', type: 'blob', object: { text: 'a: &x 1\n' } },
+      { name: 'big.yml', type: 'blob', object: { text: null } },
+    ] } } } }));
+    expect(r.error).toBeNull();
+    expect([...r.workflows!.keys()]).toEqual(['.github/workflows/ci.yml']);
+  });
+
+  it('has none on a branch without the directory, and says why when GitHub refuses or errs', async () => {
+    expect([...(await read(ok({ data: { repository: { object: null } } }))).workflows!.keys()]).toEqual([]);
+    expect((await read(no('HTTP 403'))).error).toBe('HTTP 403');
+    expect((await read(ok({ errors: [{ message: 'Could not resolve to a Repository' }] }))).error).toBe('Could not resolve to a Repository');
+    expect((await read(ok({ data: { repository: null } }))).error).toBe('GitHub returned no repository');
+    expect((await read(ok('not json'))).error).toBe("GitHub's answer was not JSON");
+  });
+});
+
+describe('checkReporters: which jobs report a status check on a pull request (#418)', () => {
+  const wf = (on: unknown, jobs: Record<string, unknown>) => ({ on, jobs });
+  const job = { name: 'Lane check', 'runs-on': 'ubuntu-latest', steps: [] };
+  const one = (w: Record<string, unknown>) => checkReporters(new Map([['.github/workflows/x.yml', w]]), 'Lane check');
+
+  it("counts a job named exactly the check, in a workflow on pull_request, however `on` is written", () => {
+    expect(one(wf({ pull_request: null }, { lanes: job }))).toEqual(['.github/workflows/x.yml#lanes']);
+    expect(one(wf('pull_request', { lanes: job }))).toEqual(['.github/workflows/x.yml#lanes']);
+    expect(one(wf(['push', 'pull_request'], { lanes: job }))).toEqual(['.github/workflows/x.yml#lanes']);
+    expect(one(wf({ pull_request_target: null }, { lanes: job }))).toEqual(['.github/workflows/x.yml#lanes']);
+    // A job with no name reports its key.
+    expect(checkReporters(new Map([['w.yml', wf('pull_request', { lanes: { 'runs-on': 'x' } })]]), 'lanes')).toEqual(['w.yml#lanes']);
+  });
+
+  it('counts no job that reports under another name, or not on a pull request', () => {
+    expect(one(wf({ push: null, merge_group: null }, { lanes: job }))).toEqual([]);
+    expect(one(wf('push', { lanes: job }))).toEqual([]);
+    expect(one(wf(['push'], { lanes: job }))).toEqual([]);
+    expect(one(wf({ pull_request: null }, { lanes: { ...job, name: 'Lane checks' } }))).toEqual([]);
+    expect(one(wf({ pull_request: null }, { 'lane-check': { 'runs-on': 'x' } }))).toEqual([]);
+    // A reusable workflow's call reports "<name> / <its job>", a matrix job "<name> (<values>)".
+    expect(one(wf({ pull_request: null }, { lanes: { name: 'Lane check', uses: './.github/workflows/l.yml' } }))).toEqual([]);
+    expect(one(wf({ pull_request: null }, { lanes: { ...job, strategy: { matrix: { os: ['a', 'b'] } } } }))).toEqual([]);
+    // A strategy without a matrix keeps the name.
+    expect(one(wf({ pull_request: null }, { lanes: { ...job, strategy: { 'fail-fast': false } } }))).toEqual(['.github/workflows/x.yml#lanes']);
   });
 });
 

@@ -390,6 +390,18 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(skill('upgrade').body).toContain("the doctor skill's table");
   });
 
+  // #418, L5's G14: a status check required before a job on the default branch reports it
+  // blocks every other open pull request. Doctor asks for the job first; the skills ask for the
+  // rule only once the pull request adding the job has merged.
+  it('asks the person to require a status check only after the job that reports it has merged', () => {
+    const table = rows(section(skill('doctor').body, /^## Who fixes each finding of `kanon doctor`$/)!);
+    const row = (id: string) => table.find((c) => c[0] === `\`${id}\``)!;
+    expect(row('ruleset.rule-missing')[2]).toMatch(/never ask for a check it didn't name, or before the pull request that adds the check's job has merged/);
+    expect(row('ruleset.check-unreported')[1]).toBe('agent, person');
+    expect(row('ruleset.check-unreported')[2]).toMatch(/its step comes after that pull request merges/);
+    expect(section(skill('upgrade').body, /^## Steps$/)).toMatch(/\*\*Never ask the person to require a status check before this pull request merges\*\*.*`ruleset\.check-unreported`/);
+  });
+
   it('reads only fields its command documents', () => {
     const problems: string[] = [];
     let seen = 0;

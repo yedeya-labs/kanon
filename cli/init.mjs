@@ -648,6 +648,9 @@ export const rulesetBody = (mergeQueue) => ({
   ],
 });
 
+/** The gap `rulesetGaps` names for a status check the ruleset doesn't require. @param {string} check */
+export const requiredCheckGap = (check) => `require the status check "${check}"`;
+
 /**
  * What the rulesets covering the default branch lack of `K-ADOPT-1` step 8, one line each.
  * @param {any[]} covering
@@ -662,7 +665,7 @@ export const rulesetGaps = (covering) => {
   const methods = rules.filter((r) => r.type === 'pull_request').flatMap((r) => r.parameters?.allowed_merge_methods ?? ['merge', 'squash', 'rebase']);
   if (has('pull_request') && methods.some((m) => m !== 'squash')) gaps.push('allow the squash merge method only');
   const checks = rules.filter((r) => r.type === 'required_status_checks').flatMap((r) => r.parameters?.required_status_checks ?? []).map((c) => c.context);
-  if (!checks.includes(LANE_CHECK)) gaps.push(`require the status check "${LANE_CHECK}"`);
+  if (!checks.includes(LANE_CHECK)) gaps.push(requiredCheckGap(LANE_CHECK));
   return gaps;
 };
 
