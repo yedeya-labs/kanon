@@ -154,6 +154,15 @@ inputs:
 runs:
   using: composite
   steps:
+    # An AWS error names the account in ARNs that are not these secrets, so the runner would not
+    # mask it there: register the account id first (kanon#488).
+    - name: Mask the store's account id
+      shell: bash
+      env:
+        ROLE_ARN: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_ROLE_ARN }}
+        BUCKET: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET }}
+      run: |
+        printf '%s %s' "$ROLE_ARN" "$BUCKET" | grep -oE '[0-9]+' | grep -xE '[0-9]{12}' | sort -u | sed 's/^/::add-mask::/' || true
     - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.35.0
       with:
         operation: ${{ inputs.operation }}
@@ -167,7 +176,7 @@ runs:
         bucket: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET }}
 ```
 
-The hook reads its coordinates from the secrets alone. With either secret unset, or not mapped by the lane's caller, the AWS action has no role or no bucket, and fails: a read is then `degraded` and a write fails its job.
+The hook reads its coordinates from the secrets alone. Its first step masks your AWS account id on its own: the runner masks each secret as a whole value, but an AWS error, such as an `AccessDenied` from S3 or DynamoDB, names the account inside other ARNs (the assumed role's, the table's), which the runner wouldn't mask ([#488](https://github.com/yedeya-labs/kanon/issues/488)). Kanon's `qa-store` block masks it too, before it runs the hook, and the AWS action asks `configure-aws-credentials` to mask the account it assumed. Keep the step if you write your own hook. With either secret unset, or not mapped by the lane's caller, the AWS action has no role or no bucket, and fails: a read is then `degraded` and a write fails its job.
 
 <!-- x-release-please-end -->
 

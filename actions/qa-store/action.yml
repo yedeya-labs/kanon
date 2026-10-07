@@ -47,6 +47,15 @@
 # which GitHub prints before this block runs, and in every step after. This block hands
 # `secrets` to the hook unchanged; the hook reads one with `fromJSON(inputs.secrets || '{}').<NAME>`.
 #
+# THE ACCOUNT ID IS MASKED ON ITS OWN, FIRST (kanon#488). The runner masks each secret as a whole
+# value, but an AWS error names the account in other strings: `User: arn:aws:sts::<account>:
+# assumed-role/<role>/<session> is not authorized to perform: dynamodb:PutItem on resource:
+# arn:aws:dynamodb:<region>:<account>:table/<table>`. So this block's first step registers every
+# twelve-digit run in the store's secrets (the role ARN's account, and the bucket's, as the
+# template names it) with `::add-mask::`, and every later line of the job, the hook's and the AWS
+# CLI's errors among them, shows `***` in its place. It is here, not only in the hook, because
+# every adopter's store job runs this block, whatever its hook does.
+#
 # NO `variables` (kanon#479). Through v0.34.1 this block also took `toJSON(vars)` and handed it to
 # the hook, so a hook could read its coordinates from repository variables. Nothing masks a
 # variable, so every store step's log printed every repository variable, the store's role ARN and
@@ -146,6 +155,15 @@ outputs:
 runs:
   using: composite
   steps:
+    # First, before any step that can reach AWS: an AWS error names the account in ARNs that are
+    # not the secrets the runner masks whole (kanon#488).
+    - name: Mask the store's account id
+      if: inputs.operation != 'delete-export'
+      shell: bash
+      env:
+        STORE_SECRETS: ${{ inputs.secrets }}
+      run: node "$GITHUB_ACTION_PATH/qa-store.mjs" mask
+
     - name: Check out the store hook
       if: inputs.operation != 'delete-export'
       uses: actions/checkout@v7

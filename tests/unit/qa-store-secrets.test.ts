@@ -116,7 +116,7 @@ describe('the QA store\'s coordinates reach no log once they are secrets (#433)'
     for (const hook of [KANON_HOOK, TEMPLATE_HOOK]) expect(Object.keys(hook.inputs ?? {})).toEqual(['operation', 'kind', 'dir', 'from', 'to', 'secrets']);
     const without = chain(storeSteps[0]!.step, KANON_HOOK, { QA_STORE_ROLE_ARN: ARN, QA_STORE_BUCKET: BUCKET }, {});
     expect(without.check).toEqual({ ROLE_ARN: '', BUCKET: '' });
-    const run = String(KANON_HOOK.runs.steps[0]!.run);
+    const run = String(KANON_HOOK.runs.steps.find((s) => s.name === 'Check the store\'s coordinates')!.run);
     expect(run).toContain('if [ -z "$ROLE_ARN" ] || [ -z "$BUCKET" ]; then');
     expect(run).toContain('exit 1');
   });

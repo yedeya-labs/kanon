@@ -11,7 +11,7 @@
 # it printed a variable in each store job's log. The lane callers map `QA_STORE_ROLE_ARN` and
 # `QA_STORE_BUCKET` by name, the lane hands them to the `qa-store` block as `secrets`, and the
 # block hands them on to this hook, which reads nothing else: since kanon#479 the block passes no
-# repository variables. With either secret unset or unmapped, the first step below fails by name:
+# repository variables. With either secret unset or unmapped, the check step below fails by name:
 # a read is then `degraded`, and a write fails its job.
 #
 # Kanon's `qa-store` block reads this file from the checkout of the run's commit and calls it in a
@@ -31,6 +31,15 @@ inputs:
 runs:
   using: composite
   steps:
+    # An AWS error names the account in ARNs that are not these secrets, so the runner would not
+    # mask it there: register the account id first (kanon#488).
+    - name: Mask the store's account id
+      shell: bash
+      env:
+        ROLE_ARN: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_ROLE_ARN }}
+        BUCKET: ${{ fromJSON(inputs.secrets || '{}').QA_STORE_BUCKET }}
+      run: |
+        printf '%s %s' "$ROLE_ARN" "$BUCKET" | grep -oE '[0-9]+' | grep -xE '[0-9]{12}' | sort -u | sed 's/^/::add-mask::/' || true
     - name: Check the store's coordinates
       shell: bash
       env:

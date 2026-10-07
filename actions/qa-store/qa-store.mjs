@@ -99,6 +99,28 @@ export const absentLine = (/** @type {string} */ operation) =>
   `The QA store is absent: this repository has no \`${HOOK_PATH}\`, so \`${operation}\` did nothing and this run has no memory (\`K-OBS-17\`).`;
 
 /**
+ * The AWS account ids to mask before the hook runs (kanon#488): every run of exactly twelve digits
+ * in a value of the store's secrets, the JSON the block's `secrets` input carries. The runner masks
+ * each secret whole, but an AWS error names the account in strings that are not the secret: the
+ * assumed role's `arn:aws:sts::<account>:assumed-role/…`, a table's `arn:aws:dynamodb:…:<account>:…`.
+ * The role ARN carries the account id, and so does a bucket named as `template.yaml` names it.
+ * Malformed or empty JSON masks nothing: the hook then fails on its own, by name.
+ * @param {string|undefined} json
+ * @returns {string[]}
+ */
+export function accountMasks(json) {
+  /** @type {unknown} */
+  let secrets;
+  try { secrets = JSON.parse(json || '{}'); } catch { return []; }
+  if (secrets === null || typeof secrets !== 'object') return [];
+  const out = new Set();
+  for (const v of Object.values(secrets)) {
+    for (const m of String(v ?? '').matchAll(/\d+/g)) if (m[0].length === 12) out.add(m[0]);
+  }
+  return [...out];
+}
+
+/**
  * Check a store job's request, and say what's wrong with it. A wrong request is the lane's bug,
  * so it fails the job by name, whatever the operation.
  * @param {Record<string, string|undefined>} env
@@ -442,7 +464,9 @@ const writeSummary = (line) => {
 if (isCliEntry(import.meta.url)) {
   const mode = process.argv[2];
   try {
-    if (mode === 'prepare') {
+    if (mode === 'mask') {
+      for (const m of accountMasks(process.env.STORE_SECRETS)) console.log(`::add-mask::${m}`);
+    } else if (mode === 'prepare') {
       const { outputs, notices } = prepare(process.env);
       for (const n of notices) console.log(`::notice title=qa-store::${n}`);
       writeOutputs(outputs);
@@ -456,7 +480,7 @@ if (isCliEntry(import.meta.url)) {
       for (const l of lines) writeSummary(l);
       if (error) throw new Error(error);
     } else {
-      console.error('usage: qa-store.mjs prepare|finish|delete-export');
+      console.error('usage: qa-store.mjs mask|prepare|finish|delete-export');
       process.exit(2);
     }
   } catch (e) {

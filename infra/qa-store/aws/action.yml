@@ -75,6 +75,9 @@ runs:
       with:
         role-to-assume: ${{ inputs.role-arn }}
         aws-region: ${{ inputs.region }}
+        # The account id, and the assumed role's ARN, as secrets for the rest of the job: an AWS
+        # error names them in strings the runner never masks whole (kanon#488).
+        mask-aws-account-id: true
 
     - name: Run the store operation
       shell: bash

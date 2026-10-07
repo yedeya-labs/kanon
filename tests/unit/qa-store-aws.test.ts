@@ -242,7 +242,7 @@ describe('the actions', () => {
     const a = load('infra/qa-store/aws/action.yml');
     expect(Object.keys(a.inputs).sort()).toEqual(['bucket', 'dir', 'from', 'kind', 'operation', 'region', 'role-arn', 'table', 'to']);
     expect(a.runs.steps[0]?.uses).toBe('aws-actions/configure-aws-credentials@v6');
-    expect(a.runs.steps[0]?.with).toEqual({ 'role-to-assume': '${{ inputs.role-arn }}', 'aws-region': '${{ inputs.region }}' });
+    expect(a.runs.steps[0]?.with).toEqual({ 'role-to-assume': '${{ inputs.role-arn }}', 'aws-region': '${{ inputs.region }}', 'mask-aws-account-id': true });
     expect(a.runs.steps[1]?.run?.trim()).toBe('bash "$GITHUB_ACTION_PATH/store.sh"');
   });
 
