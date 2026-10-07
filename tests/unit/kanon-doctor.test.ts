@@ -1721,6 +1721,12 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
     });
   }
 
+  it('gives an App in use that the register doesn\'t name the line that creates it, not the one that reuses a slug', async () => {
+    const r = await l5(new Set([...all()].filter((n) => !appSecrets('releaser').includes(n))), { 'docs/qa/agent-identities.md': registerText(identitiesOf(LANES)) });
+    expect(r.json.apps.map((a: { identity: string }) => a.identity)).toContain('releaser');
+    expect(missing(r).map((f: { fix: { commands: string[] } }) => f.fix.commands)).toEqual([[preflight, 'kanon apps --owner acme --repo widgets --apps releaser']]);
+  });
+
   it('names every workflow that maps the secrets, and the caller of a lane that takes them without mapping them', async () => {
     const files = healthyFiles();
     const judge = appSecrets('judge');
