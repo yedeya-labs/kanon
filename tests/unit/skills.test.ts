@@ -402,6 +402,20 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(section(skill('upgrade').body, /^## Steps$/)).toMatch(/\*\*Never ask the person to require a status check before this pull request merges\*\*.*`ruleset\.check-unreported`/);
   });
 
+  // #444: init no longer requires the check before a job on the default branch reports it, and
+  // the adopt skill hands the rule over as a step for after the adopt pull request merges.
+  it('has the adopt skill leave the required check for after its pull request merges', () => {
+    const table = rows(section(skill('adopt').body, /^## Who fixes each finding of `kanon init`$/)!);
+    const row = table.find((c) => c[0] === '`ruleset.require-check`')!;
+    expect(row[1]).toBe('person');
+    expect(row[2]).toMatch(/never before/);
+    expect(row[2]).toMatch(/`## After merging`/);
+    const steps = section(skill('adopt').body, /^## Steps$/)!;
+    expect(steps).toMatch(/under `## After merging`, each step that waits for the merge \(`ruleset\.require-check`\)/);
+    expect(steps).toMatch(/\*\*Never ask the person to require the `Lane check` status check before this pull request merges\*\*/);
+    expect(steps).toMatch(/\*\*Do it now\*\* \(Recommended\) or \*\*Skip it for now\*\*: for `ruleset\.require-check`/);
+  });
+
   // #419, L5's G4, G11, G12 and G14: the steps that can only happen once the upgrade has merged
   // are kept in a list the person is handed, each with who does it, when, and what to run.
   it('keeps a post-merge checklist in the upgrade skill, built from doctor findings that exist', () => {
