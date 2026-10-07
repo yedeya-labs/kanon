@@ -28,9 +28,9 @@
 # THE QA STORE. Kanon's store hook is .github/actions/qa-store, so the store job exports the
 # Overseer's kind through it, and the agent's job reads the export without credentials. The hook
 # reads the store's role and bucket from the repository secrets QA_STORE_ROLE_ARN and
-# QA_STORE_BUCKET (kanon#433), which this caller maps once it pins a release after v0.33.0, the
-# first that takes them. Until then it reads the repository variables of the same names, which
-# v0.33.0's lane passes it, and which the store jobs' logs print.
+# QA_STORE_BUCKET (kanon#433), which this caller maps, so the runner masks them in every log. The
+# repository variables of the same names are a deprecated fallback, to be deleted once a store job
+# has run green on the secrets (docs/qa-store.md, "Move the coordinates to secrets").
 #
 # WHERE ITS FINDINGS GO. The adoption record declares `Upstream findings: filed here`, so a
 # finding only Kanon can act on is filed on Kanon, like any other (plan 0004 decision 12, as
@@ -72,3 +72,5 @@ jobs:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      QA_STORE_ROLE_ARN: ${{ secrets.QA_STORE_ROLE_ARN }}
+      QA_STORE_BUCKET: ${{ secrets.QA_STORE_BUCKET }}

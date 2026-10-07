@@ -395,12 +395,15 @@ describe('step 11a: Kanon audits its own code, through the lane at its last rele
     expect(wf.on).toEqual({ schedule: [{ cron: expect.stringMatching(/^\S+ \S+ \S+ \S+ \S+$/) }], workflow_dispatch: null });
   });
 
-  it('passes no inputs, and maps the three secrets by name, never inheriting', () => {
+  // The store's role and bucket are secrets the runner masks (kanon#433), mapped by name.
+  it('passes no inputs, and maps its five secrets by name, the QA store\'s two included, never inheriting', () => {
     expect(jobs[0]?.with).toBeUndefined();
     expect(jobs[0]?.secrets).toEqual({
       AUTHOR_APP_ID: '${{ secrets.AUTHOR_APP_ID }}',
       AUTHOR_APP_PRIVATE_KEY: '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}',
       CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
+      QA_STORE_ROLE_ARN: '${{ secrets.QA_STORE_ROLE_ARN }}',
+      QA_STORE_BUCKET: '${{ secrets.QA_STORE_BUCKET }}',
     });
   });
 
