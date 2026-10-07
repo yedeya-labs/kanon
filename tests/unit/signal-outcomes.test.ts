@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   FILER_LABELS, OUTCOME_LABELS, outcomeOf, precisionOf, readSignals, render, run, signalOf, tally, toJson,
 } from '../../scripts/signal-outcomes.mjs';
+import { auditTitle } from '../../scripts/overseer-file.mjs';
 import { readFlattened } from './helpers/called-workflow.js';
 
 /**
@@ -34,6 +35,12 @@ describe('signalOf', () => {
   it('is null for an issue no lane filed, whatever dispatch label it carries', () => {
     expect(signalOf(issue(3, ['agent:implement', 'enhancement']))).toBeNull();
     expect(signalOf(issue(4, ['agent:triage', 'signal:contract']))).toBeNull();
+  });
+
+  it("leaves out the Overseer's own audit issue: a templated report is evidence about no signal", () => {
+    expect(signalOf(issue(6, ['agent:overseer', 'pipeline-improvement'], { title: auditTitle(2) }))).toBeNull();
+    // A finding the Overseer filed is still its signal.
+    expect(signalOf(issue(7, ['agent:overseer', 'pipeline-improvement'], { title: 'Precision per signal is unmeasurable' }))).toBe('agent:overseer');
   });
 
   it('matches labels case-insensitively, as GitHub does', () => {
@@ -96,6 +103,13 @@ describe('tally and precisionOf', () => {
   it('is confirmed over confirmed plus false positive, with a floor that counts the unrecorded as false', () => {
     expect(precisionOf(t.get('agent:reviewer')!)).toEqual({ confirmed: 2, falsePositive: 1, unrecorded: 1, precision: 2 / 3, floor: 2 / 4 });
     expect(precisionOf(t.get('agent:explorer signal:contract')!)).toMatchObject({ confirmed: 1, precision: 1, floor: 1 });
+  });
+
+  it('counts a closed, unlabelled audit issue in no column', () => {
+    const audit = closed(9, ['agent:overseer', 'pipeline-improvement'], 'COMPLETED');
+    audit.title = auditTitle(1);
+    expect(tally([audit]).size).toBe(0);
+    expect(render(tally([...issues, audit]), 8)).toMatch(/^Unrecorded .*: #4$/m);
   });
 
   it('is undefined, not perfect, where nothing was confirmed or refuted', () => {

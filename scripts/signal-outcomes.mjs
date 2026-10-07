@@ -30,7 +30,9 @@
 //
 // A SIGNAL is the lane that filed the issue (its `agent:` filer label) and the `signal:*`
 // labels it carries, so `agent:explorer signal:contract` and `agent:reviewer` are counted
-// apart.
+// apart. The Overseer's own audit issue carries `agent:overseer` too, and each run closes the
+// last one, but a templated report is evidence about no signal (`K-SELF-13`), so an issue titled
+// as `overseer-file.mjs` titles an audit is left out, like one no lane filed.
 //
 // READ-ONLY and DEPENDENCY-FREE: `node:` and `gh` only (`K-SELF-8`), on the token in GH_TOKEN.
 // A failed or truncated read exits 1 with `signal-outcomes: UNAVAILABLE` on line 1, so an
@@ -41,6 +43,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { AUDIT_NUMBER } from './overseer-file.mjs';
 
 /** The labels that say which lane FILED an issue (`K-WORK-12`'s Agent family). The dispatch
  *  labels (`agent:implement`, `agent:triage`, ...) start a lane on an issue someone else filed,
@@ -62,6 +65,7 @@ export const MAX_PAGES = 30;
  * @typedef {{ number?: number, merged?: boolean }} ClosingPr
  * @typedef {{
  *   number: number,
+ *   title?: string,
  *   state?: string,
  *   stateReason?: string | null,
  *   labels?: Label[] | { nodes?: Label[] },
@@ -95,6 +99,7 @@ const closingPrs = (issue) => {
  * @returns {string | null}
  */
 export function signalOf(issue) {
+  if (AUDIT_NUMBER.test(issue.title ?? '')) return null;
   const names = labelNames(issue);
   const filer = FILER_LABELS.find((f) => names.includes(f));
   if (!filer) return null;
@@ -115,7 +120,9 @@ export function outcomeOf(issue) {
   const [only] = labelled;
   if (only) return only;
   if (String(issue.state ?? '').toUpperCase() !== 'CLOSED') return 'open';
-  // Closed as not planned is a person's call even when a merged pull request mentions it.
+  // Closed as not planned is a person's call even when a merged pull request mentions it. A
+  // duplicate (`DUPLICATE`, with no merged fix) is unrecorded too: only the closer knows
+  // whether the original was real.
   if (String(issue.stateReason ?? '').toUpperCase() === 'NOT_PLANNED') return 'unrecorded';
   return closingPrs(issue).some((p) => p?.merged === true) ? 'fixed' : 'unrecorded';
 }
@@ -216,7 +223,7 @@ const QUERY = `query($owner: String!, $name: String!, $labels: [String!], $curso
     issues(first: 100, after: $cursor, labels: $labels, orderBy: {field: CREATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number state stateReason
+        number title state stateReason
         labels(first: 50) { nodes { name } }
         closedByPullRequestsReferences(first: 20, includeClosedPrs: true) { nodes { number merged } }
       }
