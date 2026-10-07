@@ -1,0 +1,53 @@
+# Kanon resolves a merge conflict on the Implementer's own pull request (kanon#448).
+#
+# A trigger-only caller of Kanon's rebase lane, written by `kanon init` exactly as an adopter's
+# is (docs/lanes.md). It is named `rebase.yml` because `agent-rebase.yml` is the lane itself
+# (K-LAYOUT-18's exception for Kanon's own tree, as for review.yml and implement.yml), which the
+# adoption record waives by name.
+#
+# IT CALLS KANON'S LAST RELEASE, NEVER `$/` (ADR 0011's bootstrap), like implement.yml: through
+# `$/`, a branch could change the lane that resolves its own conflict.
+#
+# WHY KANON RUNS IT. The `kanon/role: implementer` status is bound to the head the Implementer's
+# run pushed (#324), and the revise lane and the Merger require it. A person's rebase or merge
+# gives the pull request a head without it, so the pull request leaves the Implementer's chain
+# and is a person's to finish (#438). This lane resolves the conflict as the Author App, by a
+# merge commit, and a fixed job after its agent's carries the status to the head it pushed.
+#
+# WHEN IT RUNS ON KANON. Kanon merges through a merge queue, so a merge to `main` doesn't start
+# it: the CI run on the queue's push names `github-merge-queue[bot]`, which the lane's gate turns
+# away (docs/lanes.md, #79). The daily schedule resolves the conflict up to a day later; to
+# resolve one sooner, dispatch it for the pull request (`gh workflow run rebase.yml -f
+# pr_number=N`).
+#
+# The secrets: as implement.yml, mapped by name, never inherited.
+name: Rebase (Implementer)
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "A single PR to consider (blank = every open PR)"
+        required: false
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+  statuses: read
+
+jobs:
+  rebase:
+    uses: yedeya-labs/kanon/.github/workflows/agent-rebase.yml@v0.30.0
+    with:
+      pr_number: ${{ inputs.pr_number }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

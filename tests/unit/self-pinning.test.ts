@@ -34,6 +34,9 @@ const files = [
 // the same release and for the same reason: through `$/`, a branch could change the lane that
 // builds or revises it.
 //
+// rebase.yml calls the rebase lane (kanon#448), at the same release and for the same reason:
+// through `$/`, a branch could change the lane that resolves its own conflict.
+//
 // code-audit.yml calls the code-audit lane (ADR 0011, the Explorer; plan 0004 step 11a), at the
 // same release and for the same reason: through `$/`, a dispatch from a branch would audit with
 // that branch's lane, and a lane change would be first exercised by auditing with itself.
@@ -69,6 +72,7 @@ const EXEMPT = new Set([
   '.github/workflows/review.yml: yedeya-labs/kanon/.github/workflows/agent-review.yml@vX.Y.Z',
   '.github/workflows/implement.yml: yedeya-labs/kanon/.github/workflows/agent-implement.yml@vX.Y.Z',
   '.github/workflows/implement-revise.yml: yedeya-labs/kanon/.github/workflows/agent-implement-revise.yml@vX.Y.Z',
+  '.github/workflows/rebase.yml: yedeya-labs/kanon/.github/workflows/agent-rebase.yml@vX.Y.Z',
   '.github/workflows/code-audit.yml: yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@vX.Y.Z',
   '.github/workflows/overseer.yml: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@vX.Y.Z',
   '.github/workflows/ci.yml: yedeya-labs/kanon/actions/lane-check@vX.Y.Z',
