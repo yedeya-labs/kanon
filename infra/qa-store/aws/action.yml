@@ -26,7 +26,8 @@
 # in a job that declares `id-token: write` and no environment, so on the default branch the OIDC
 # subject is `<prefix>:ref:refs/heads/<default branch>`, the one the role trusts (`<prefix>` is
 # `repo:<owner>/<repo>`, or the immutable form GitHub gives a newer repository). No agent job
-# runs this action, and no job but a store job holds `id-token: write`.
+# runs this action. A store job is not the only holder of `id-token: write` that the role admits:
+# `template.yaml`'s comment on the role names the others.
 #
 # THE SCRIPTS ARE THE REFERENCE ADOPTER'S, MOVED (ADR 0009): `push-run.sh` for `put`, the
 # Explorer gate's queries for `last-green` and `record-skip`, and the dispatch sweep's query for
