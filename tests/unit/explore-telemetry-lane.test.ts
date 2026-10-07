@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -145,6 +145,13 @@ describe('the agent\'s job: no cloud credentials, a token that reads, and someth
     expect(prompt).toContain('No findings is a good run');
     expect(prompt).toContain('qa-telemetry/aggregate.json');
     expect(prompt).not.toMatch(/aws |dynamodb|curl /i);
+  });
+
+  // Plan 0006 F2a (§4.1): the same skill the Overseer reads, from Kanon's tree at the lane's release.
+  it('is sent to the upstream-finding skill before it writes an upstream finding\'s evidence', () => {
+    expect(prompt).toContain("Before writing an upstream finding's `evidence` or `suggested_fix`, read and follow `$KANON/skills/upstream-finding/SKILL.md`.");
+    expect(existsSync('skills/upstream-finding/SKILL.md')).toBe(true);
+    expect(byId('agent').env?.KANON).toBe('${{ steps.kanon.outputs.path }}');
   });
 
   it('uploads its report whatever happened, after the telemetry row', () => {
