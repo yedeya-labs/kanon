@@ -19,15 +19,22 @@
 //                            by whoever merged, and one closed by hand by whoever closed it.
 //   pull_request `opened`    whoever opened it, `sender`, checked the same way.
 //   pull_request_target      as `pull_request`: the review lane's label trigger runs the base
-//                            branch's copy of its caller, with the same payload.
+//                            branch's copy of its caller, with the same payload. EXCEPT
+//                            `closed`, which a lane acts on only as a MERGE (the Overseer's
+//                            runtime-version trigger, kanon#423, and the rebase lane's start
+//                            after a merge, kanon#484): it is judged by `pull_request.merged_by`
+//                            alone, never `sender`, and a pull request closed unmerged is
+//                            refused. Anyone may close their own pull request, a fork's
+//                            included, and this event runs with the base's secrets. On a
+//                            merge-queue merge, `merged_by` is the member who queued it.
 //   workflow_run             whoever pushed the commit the finished workflow ran on,
 //                            `workflow_run.triggering_actor` (else `workflow_run.actor`),
 //                            checked the same way. The rebase lane fires on CI finishing on
 //                            the default branch, where the pusher is who acted. With a merge
 //                            queue the pusher is `github-merge-queue[bot]`, an App outside the
-//                            register, so that trigger is refused: the rebase lane and the
-//                            merge lane's sweep both wait for their schedules (kanon#79,
-//                            docs/lanes.md).
+//                            register, so that trigger is refused (kanon#79, docs/lanes.md):
+//                            the merge lane's sweep waits for its schedule, and the rebase
+//                            lane starts on the merged pull request instead (kanon#484).
 //   workflow_run, review     THE REVIEW LANE sets `LANE_GATE_WORKFLOW_RUN=review-label` and
 //                            is judged by whoever applied the review label on the PR, not the
 //                            pusher (kanon#81). Its CI completion is a deferred label: a label
@@ -100,7 +107,7 @@ const MEMBER_PERMISSIONS = ['admin', 'maintain', 'push', 'triage'];
  *   action?: string,
  *   sender?: User,
  *   review?: { user?: User, author_association?: string },
- *   pull_request?: { merged_by?: User },
+ *   pull_request?: { merged?: boolean, merged_by?: User },
  *   workflow_run?: { triggering_actor?: User, actor?: User, head_sha?: string },
  *   schedule?: string,
  *   repository?: { default_branch?: string },
@@ -128,6 +135,12 @@ export function triggeringActor(eventName, event, env) {
       if (event.action === 'labeled') return found(event.sender?.login, 'user who applied the label');
       if (eventName !== 'issues' && event.action === 'opened') return found(event.sender?.login, 'user who opened it');
       if (event.action === 'closed') {
+        // A `pull_request_target` close is acted on only as a merge, and judged by who merged it.
+        if (eventName === 'pull_request_target') {
+          return event.pull_request?.merged === true
+            ? found(event.pull_request.merged_by?.login, 'user who merged it')
+            : { refuse: 'the pull_request_target event closed a pull request without merging it, and a lane acts on that close only as a merge' };
+        }
         return eventName !== 'issues' && event.pull_request?.merged_by?.login
           ? found(event.pull_request.merged_by.login, 'user who merged it')
           : found(event.sender?.login, 'user who closed it');

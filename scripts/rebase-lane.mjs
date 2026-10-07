@@ -233,6 +233,40 @@ export function rebaseDecision(prs, {
  *  one edit — and `conflictState` throws rather than answering "clear" if it does. */
 export const PR_FIELDS = `number,author,body,state,isDraft,labels,headRefOid,headRefName,${CONFLICT_JSON}`;
 
+/** How many times `settledPrs` reads, and how long it waits between reads: a minute at most. */
+export const SETTLE_READS = 7;
+export const SETTLE_PAUSE_MS = 10_000;
+
+/** A blocking wait, for a CLI that does nothing else meanwhile. @param {number} ms */
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/**
+ * The open PRs, read again while GitHub is still computing whether any of them conflicts.
+ *
+ * A MERGED PULL REQUEST STARTS THIS LANE AT ONCE (kanon#484), before GitHub has recomputed the
+ * other open PRs' mergeability against the new `main`, so a first read can say `UNKNOWN` for
+ * exactly the PR the merge conflicted. `conflictState` calls that `computing`, which this lane
+ * skips, and the PR would wait for the daily floor. The read itself sets the computation going,
+ * so a few re-reads seconds apart settle it. CI completing on `main` comes minutes later and
+ * rarely meets it. Bounded: after `tries` reads the last one is used as it is, and a PR still
+ * computing then is left to the next run, as before.
+ *
+ * @param {() => any[]} read one `gh pr list`
+ * @param {{ only?: string|null, tries?: number, pause?: () => void }} [io]
+ * @returns {{ prs: any[], reads: number }}
+ */
+export function settledPrs(read, { only = null, tries = SETTLE_READS, pause = () => sleep(SETTLE_PAUSE_MS) } = {}) {
+  const pick = (all) => (only ? all.filter((p) => String(p.number) === String(only)) : all);
+  let prs = pick(read());
+  let reads = 1;
+  while (reads < tries && prs.some((pr) => conflictState(pr) === 'computing')) {
+    pause();
+    prs = pick(read());
+    reads += 1;
+  }
+  return { prs, reads };
+}
+
 // ── IO ──────────────────────────────────────────────────────────────────────
 
 const gh = (args) => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -276,8 +310,8 @@ function main() {
     process.exit(2);
   }
   const only = process.argv.includes('--pr') ? process.argv[process.argv.indexOf('--pr') + 1] : null;
-  const all = ghJson(['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '100', '--json', PR_FIELDS]);
-  const prs = only ? all.filter((p) => String(p.number) === String(only)) : all;
+  const { prs, reads } = settledPrs(() => ghJson(['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '100', '--json', PR_FIELDS]), { only });
+  if (reads > 1) console.error(`Read the open PRs ${reads} times while GitHub computed their mergeability.`);
   // The head's commit statuses, for the chain in `ineligible`, read only for a conflicting PR
   // (the only kind it is asked about). `null` on a failed read, which refuses.
   for (const pr of prs) {

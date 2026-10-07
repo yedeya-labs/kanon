@@ -826,7 +826,7 @@ describe('the callers kanon init writes', () => {
     ...(t.review ? ['pull_request_review:submitted'] : []),
     ...(t.pr ? [`pull_request:${[...t.pr].sort().join(',')}`] : []),
     ...(t.prTarget ? [`pull_request_target:${[...t.prTarget].sort().join(',')}`] : []),
-    ...(t.pinMoved ? ['pull_request_target:closed'] : []),
+    ...(t.pinMoved || t.merged ? ['pull_request_target:closed'] : []),
     ...(t.issues ? [`issues:${[...t.issues].sort().join(',')}`] : []),
     ...(t.schedule ? ['schedule'] : []),
     `workflow_dispatch:${Object.keys(t.dispatch).sort().join(',')}`,
@@ -837,7 +837,31 @@ describe('the callers kanon init writes', () => {
     expect(text).toContain('  pull_request_target:\n    types: [closed]\n    branches: [trunk]\n    paths:\n      - .github/workflows/agent-overseer.yml\n');
     // No other lane's caller gets it.
     for (const lane of Object.keys(REQ.lanes).filter((l) => l !== 'agent-overseer')) {
+      expect(callerFile(lane, REQ.lanes[lane]!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'trunk' }), lane).not.toContain('types: [closed]\n    branches: [trunk]\n    paths:');
+    }
+  });
+
+  // #484: through a merge queue the CI run on a merge is the queue's, which the gate turns away,
+  // so the rebase lane's caller also starts it on the merged pull request, on the default branch.
+  it("writes the rebase lane's merged-pull-request trigger on the default branch, any file, and no other lane's (kanon#484)", () => {
+    const text = callerFile('agent-rebase', REQ.lanes['agent-rebase']!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'trunk' });
+    const on = (parseYaml(text) as { on: Record<string, unknown> }).on;
+    expect(on.pull_request_target).toEqual({ types: ['closed'], branches: ['trunk'] });
+    expect(Object.keys(on)).toEqual(['workflow_run', 'pull_request_target', 'schedule', 'workflow_dispatch']);
+    const merged = Object.entries(TRIGGERS).filter(([, t]) => t.merged).map(([l]) => l);
+    expect(merged).toEqual(['agent-rebase']);
+    for (const lane of Object.keys(REQ.lanes).filter((l) => !merged.includes(l) && l !== 'agent-overseer')) {
       expect(callerFile(lane, REQ.lanes[lane]!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'trunk' }), lane).not.toContain('types: [closed]\n    branches:');
+    }
+  });
+
+  it('refuses a template that would write pull_request_target twice', () => {
+    const t = TRIGGERS['agent-rebase']!;
+    TRIGGERS['agent-rebase'] = { ...t, pinMoved: true };
+    try {
+      expect(() => callerFile('agent-rebase', REQ.lanes['agent-rebase']!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'trunk' })).toThrow(/pull_request_target` twice/);
+    } finally {
+      TRIGGERS['agent-rebase'] = t;
     }
   });
 
@@ -1595,8 +1619,10 @@ describe('kanon init and a merge queue on the default branch (#452)', () => {
   it("gives each catalogue lane what a merge queue changes for it, from docs/lanes.json", async () => {
     const d = parse(await run(checkout(), fakeGitHub(), ['--json', '--dry-run', '--no-apps']));
     const lanes = (d.catalogue as Array<{ lanes: Array<{ lane: string; mergeQueue: string | null }> }>).flatMap((g) => g.lanes);
-    expect(lanes.find((l) => l.lane === 'agent-rebase')!.mergeQueue).toBe(REQ.catalogue!.lanes['agent-rebase']!.mergeQueue);
-    expect(lanes.find((l) => l.lane === 'agent-rebase')!.mergeQueue).toMatch(/^Through a merge queue, a merge doesn't start it/);
+    expect(lanes.find((l) => l.lane === 'agent-merge')!.mergeQueue).toBe(REQ.catalogue!.lanes['agent-merge']!.mergeQueue);
+    expect(lanes.find((l) => l.lane === 'agent-merge')!.mergeQueue).toMatch(/^Through a merge queue, a merge doesn't start its sweep/);
+    // #484: the rebase lane's caller starts it on the merged pull request, which a queue doesn't change.
+    expect(lanes.find((l) => l.lane === 'agent-rebase')!.mergeQueue).toBeNull();
     expect(lanes.find((l) => l.lane === 'agent-review')!.mergeQueue).toBeNull();
   });
 });

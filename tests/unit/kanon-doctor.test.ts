@@ -7,7 +7,7 @@ import { parse } from 'yaml';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { RESULT_MARK, resultLine } from '../../cli/apps-check.mjs';
 import { appSecrets, appsCheckFile, callerFile, ciFile, dependabotFile, hookFile, loadRequirements, TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
-import { branchPattern, branchWorkflows, CATEGORIES, checkJobs, checkReporters, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, ITEMIZED, kanonPins, parseArgs, readHolderAcceptances, readWaivers, SCHEMA, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
+import { branchPattern, branchWorkflows, CATEGORIES, checkJobs, checkReporters, doctor, EXIT, FINDINGS, HOLDER_LABEL, idTokenGrant, ITEMIZED, kanonPins, parseArgs, readHolderAcceptances, readWaivers, SCHEMA, startsOnMerge, UNWAIVABLE, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { registerRolesOf, rulesetBody } from '../../cli/init.mjs';
 import { isKanonSource, pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { laneFiles, laneTree } from './helpers/requirements.js';
@@ -799,25 +799,65 @@ describe('kanon doctor and the job behind a required check, through a merge queu
   });
 });
 
-// #452 (#79): a merge through a merge queue doesn't start the rebase lane, so doctor notes it,
-// in the catalogue's words, for a lane the repository calls. It blocks nothing.
-describe('kanon doctor and a lane a merge queue changes (#452)', () => {
-  const withRebase = () => ({ ...healthyFiles(), '.github/workflows/agent-rebase.yml': callerFile('agent-rebase', REQ.lanes['agent-rebase']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }) });
+// #452 (#79): a merge through a merge queue doesn't start a lane on CI finishing on the default
+// branch, so doctor notes it, in the catalogue's words, for a lane the repository calls. It blocks
+// nothing. #484: the rebase lane's caller starts it on the merged pull request instead, so doctor
+// notes a rebase caller without that trigger, which an upgrade of the pin alone doesn't add.
+describe('kanon doctor and a lane a merge queue changes (#452, #484)', () => {
+  const rebaseCaller = callerFile('agent-rebase', REQ.lanes['agent-rebase']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' });
+  // A caller written before #484: the same, without the merged-pull-request trigger.
+  const before484 = rebaseCaller.replace(/ {2}# A merged pull request[^\n]*\n[^\n]*\n {2}pull_request_target:\n {4}types: \[closed\]\n {4}branches: \[main\]\n/, '');
+  const withRebase = (text = rebaseCaller) => ({ ...healthyFiles(), '.github/workflows/agent-rebase.yml': text });
+  const withMerge = () => ({ ...healthyFiles(), '.github/workflows/agent-merge.yml': callerFile('agent-merge', REQ.lanes['agent-merge']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }) });
   const noteOf = (r: Result) => (r.json.notes as string[]).filter((n) => n.includes('merges through a merge queue'));
-
-  it('notes a called lane that a merge through the queue does not start, and nothing else changes', async () => {
+  const queued = () => {
     const github = fakeGitHub();
     github.st.rulesets = [{ id: 7, ...rulesetBody(true) }];
-    const r = await run(checkout(withRebase()), github, ['--json']);
-    expect(noteOf(r)).toEqual([`main merges through a merge queue, and you call agent-rebase. ${REQ.catalogue!.lanes['agent-rebase']!.mergeQueue}`]);
+    return github;
+  };
+
+  it('notes a called lane that a merge through the queue does not start, and nothing else changes', async () => {
+    const r = await run(checkout(withMerge()), queued(), ['--json']);
+    expect(noteOf(r)).toEqual([`main merges through a merge queue, and you call agent-merge. ${REQ.catalogue!.lanes['agent-merge']!.mergeQueue}`]);
     expect(r.json.findings.filter((f: { blocking: boolean }) => f.blocking).map((f: { id: string }) => f.id)).not.toContain('ruleset.check-unreported');
   });
 
+  it("notes nothing for the rebase caller kanon init writes, which a merge through the queue starts", async () => {
+    expect(before484).not.toBe(rebaseCaller);
+    expect(before484).not.toContain('pull_request_target');
+    expect(noteOf(await run(checkout(withRebase()), queued(), ['--json']))).toEqual([]);
+  });
+
+  it('notes a rebase caller without the merged-pull-request trigger, by file, with what to add', async () => {
+    const notes = noteOf(await run(checkout(withRebase(before484)), queued(), ['--json']));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain('.github/workflows/agent-rebase.yml calls agent-rebase without a trigger on a merged pull request');
+    expect(notes[0]).toContain('`pull_request_target: { types: [closed], branches: [main] }`');
+  });
+
   it('notes nothing without a merge queue, or for a lane the repository does not call', async () => {
-    expect(noteOf(await run(checkout(withRebase()), fakeGitHub(), ['--json']))).toEqual([]);
-    const github = fakeGitHub();
-    github.st.rulesets = [{ id: 7, ...rulesetBody(true) }];
-    expect(noteOf(await run(checkout(healthyFiles()), github, ['--json']))).toEqual([]);
+    expect(noteOf(await run(checkout(withMerge()), fakeGitHub(), ['--json']))).toEqual([]);
+    expect(noteOf(await run(checkout(withRebase(before484)), fakeGitHub(), ['--json']))).toEqual([]);
+    expect(noteOf(await run(checkout(healthyFiles()), queued(), ['--json']))).toEqual([]);
+  });
+});
+
+describe('startsOnMerge: whether a caller runs on a pull request closed on the branch (#484)', () => {
+  const wf = (on: unknown) => ({ on });
+  it('needs `closed` in the types, which the default types lack', () => {
+    expect(startsOnMerge(wf({ pull_request_target: { types: ['closed'], branches: ['main'] } }), 'main')).toBe(true);
+    expect(startsOnMerge(wf({ pull_request_target: { types: 'closed' } }), 'main')).toBe(true);
+    expect(startsOnMerge(wf({ pull_request_target: { types: ['opened', 'labeled'] } }), 'main')).toBe(false);
+    expect(startsOnMerge(wf({ pull_request_target: null }), 'main')).toBe(false);
+    expect(startsOnMerge(wf({ pull_request: { types: ['closed'] } }), 'main')).toBe(false);
+    expect(startsOnMerge(wf('pull_request_target'), 'main')).toBe(false);
+    expect(startsOnMerge(wf(['pull_request_target']), 'main')).toBe(false);
+  });
+  it('and a branch filter that admits the branch', () => {
+    expect(startsOnMerge(wf({ pull_request_target: { types: ['closed'], branches: ['trunk'] } }), 'main')).toBe(false);
+    expect(startsOnMerge(wf({ pull_request_target: { types: ['closed'], branches: ['releases/**'] } }), 'main')).toBe(true);
+    expect(startsOnMerge(wf({ pull_request_target: { types: ['closed'], 'branches-ignore': ['main'] } }), 'main')).toBe(false);
+    expect(startsOnMerge(wf({ pull_request_target: { types: ['closed'], 'branches-ignore': ['other'] } }), 'main')).toBe(true);
   });
 });
 

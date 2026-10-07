@@ -40,3 +40,34 @@ describe('a CI completion on a merge-queue push (kanon#79)', () => {
     expect(verdict.reason).toContain('not in the App register');
   });
 });
+
+/**
+ * kanon#484: so the rebase lane's caller also starts it on the merged pull request
+ * (`pull_request_target`, `closed`), which fires once the queue has merged it. Measured on Kanon's
+ * own `main` (2026-10-07): a pull request the queue merged names the member who queued it as
+ * `merged_by`. The gate judges that member, never `sender`, and refuses a close that isn't a merge.
+ */
+describe('a pull request merged through the queue (kanon#484)', () => {
+  const env = {};
+  const merged = { action: 'closed', pull_request: { merged: true, merged_by: { login: 'a-member' } }, sender: { login: 'github-merge-queue[bot]' } };
+
+  it('is the member who queued it, by merged_by alone', () => {
+    expect(triggeringActor('pull_request_target', merged, env)).toEqual({ actor: { login: 'a-member', source: 'user who merged it' } });
+  });
+
+  it('refuses a close that is not a merge, whoever closed it', () => {
+    for (const pull_request of [{ merged: false, merged_by: null }, { merged: false, merged_by: { login: 'a-member' } }, {}, undefined]) {
+      const r = triggeringActor('pull_request_target', { action: 'closed', pull_request, sender: { login: 'a-member' } }, env);
+      expect(r, JSON.stringify(pull_request)).toEqual({ refuse: 'the pull_request_target event closed a pull request without merging it, and a lane acts on that close only as a merge' });
+    }
+  });
+
+  it('refuses a merge that names no merger, rather than reading the sender', () => {
+    expect(triggeringActor('pull_request_target', { action: 'closed', pull_request: { merged: true }, sender: { login: 'a-member' } }, env)).toHaveProperty('refuse');
+  });
+
+  it('leaves a pull_request close as it was: whoever merged it, else whoever closed it', () => {
+    expect(triggeringActor('pull_request', { action: 'closed', pull_request: { merged: false }, sender: { login: 'closer' } }, env))
+      .toEqual({ actor: { login: 'closer', source: 'user who closed it' } });
+  });
+});

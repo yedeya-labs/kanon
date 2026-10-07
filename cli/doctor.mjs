@@ -54,7 +54,7 @@ import { basename, join, resolve } from 'node:path';
 import { URL } from 'node:url';
 import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
-import { appSecrets, kanonRelease, loadRequirements } from './callers.mjs';
+import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
 import { appsArgs, inspect, LANE_CHECK, registerRolesOf, registerRows, requiredCheckGap, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
@@ -482,6 +482,25 @@ export const kanonCall = (uses) => {
  * @returns {string[] | null}
  */
 const triggers = (wf) => typeof wf.on === 'string' ? [wf.on] : Array.isArray(wf.on) ? wf.on.map(String) : isMap(wf.on) ? Object.keys(wf.on) : null;
+
+/**
+ * Whether a caller runs on a pull request closed on `branch` (`pull_request_target`, `closed`), the
+ * trigger that starts a lane after a merge through a merge queue (kanon#484). `types` must name
+ * `closed`, which GitHub's default types don't; a `branches` filter must match `branch` (by name,
+ * and a glob is taken to match), and a `branches-ignore` must not name it.
+ * @param {Record<string, any>} wf @param {string} branch
+ */
+export const startsOnMerge = (wf, branch) => {
+  const on = wf.on;
+  if (!isMap(on)) return false;
+  const t = on.pull_request_target;
+  if (!isMap(t)) return false;
+  /** @param {unknown} v @returns {string[]} */
+  const list = (v) => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.map(String) : []);
+  if (!list(t.types).includes('closed')) return false;
+  if (t.branches !== undefined) return list(t.branches).some((b) => b === branch || /[*?[]/.test(b));
+  return !list(t['branches-ignore']).includes(branch);
+};
 
 /**
  * Whether an expression reads the `secrets` context other than by a literal name: an index by an
@@ -1374,10 +1393,18 @@ export const diagnose = async (deps, opts) => {
   // A merge through the queue is pushed by the queue's bot, which a lane's gate turns away, so a
   // lane that starts on CI finishing on the default branch waits for its schedule. The release's
   // lane catalogue says so of each such lane; it blocks nothing.
+  // A lane whose caller starts it on the merged pull request as well (kanon#484) has no such
+  // sentence from a release that admits that trigger. Its caller still needs the trigger, which
+  // an upgrade of the pin alone doesn't add, so a caller without it is noted, with what to add.
   if (mergeQueueOn(s.covering)) {
     for (const l of installed) {
       const said = req.catalogue?.lanes[l]?.mergeQueue;
       if (said) notes.push(`${s.defaultBranch} merges through a merge queue, and you call ${l}. ${said}`);
+      else if (TRIGGERS[l]?.merged) {
+        for (const file of [...new Set(callers.filter((c) => c.lane === l && !startsOnMerge(c.wf, s.defaultBranch)).map((c) => c.file))]) {
+          notes.push(`${s.defaultBranch} merges through a merge queue, and ${file} calls ${l} without a trigger on a merged pull request, so a merge through the queue doesn't start it: the CI run on the merge is the queue's, which the lane's gate turns away. Add \`pull_request_target: { types: [closed], branches: [${s.defaultBranch}] }\` to its \`on:\`, as \`kanon init\` writes it (#484).`);
+        }
+      }
     }
   }
 

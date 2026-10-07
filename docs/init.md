@@ -154,7 +154,7 @@ What `--lanes` chooses from, so a person, or the adopt skill asking them, can ch
 | `needs` | array | Strings: what else it needs, such as project briefs. |
 | `cost` | string | What it costs to run, in one sentence: whether it runs a model, and how often. |
 | `when` | string | When it is recommended, in one sentence. |
-| `mergeQueue` | string or null | What a merge queue on the default branch changes for it, in one sentence, or null when nothing ([#452](https://github.com/yedeya-labs/kanon/issues/452)): a merge through the queue doesn't start a lane that runs on CI finishing on the default branch. |
+| `mergeQueue` | string or null | What a merge queue on the default branch changes for it, in one sentence, or null when nothing ([#452](https://github.com/yedeya-labs/kanon/issues/452)): a merge through the queue doesn't start a lane that runs on CI finishing on the default branch, unless its caller also runs on the merged pull request, as the rebase lane's does ([#484](https://github.com/yedeya-labs/kanon/issues/484)). |
 | `recommendedWith` | array | The lanes whose choice makes it recommended; empty for none. |
 | `recommended` | boolean | Whether it is recommended for this repository: the repository calls it already, it is the review lane, or it is recommended with a lane that is. |
 | `installed` | boolean | Whether the repository calls it already (`inspection.installedLanes`). |
