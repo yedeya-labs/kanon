@@ -122,6 +122,59 @@ describe('the QA store\'s coordinates reach no log once they are secrets (#433)'
   });
 });
 
+// #480: the maintenance workflow takes the store's role as the secret the documented caller maps,
+// reads it before the deprecated `role-arn` input, and so never prints it. When #479 removes the
+// input, the deprecated case below goes with it.
+describe('the QA store maintenance workflow and its documented caller (#480)', () => {
+  type Input = { type?: string; required?: boolean; default?: unknown };
+  type Workflow = { on: { workflow_call: { inputs: Record<string, Input>; secrets?: Record<string, unknown> } }; jobs: Record<string, { steps: Step[] }> };
+  type Caller = { on: { workflow_dispatch: { inputs: Record<string, Input> } }; jobs: Record<string, { uses: string; with?: Record<string, unknown>; secrets?: Record<string, unknown> }> };
+  const WF = yaml<Workflow>('.github/workflows/qa-store-aws-maintenance.yml');
+  const DOC = parse(readFileSync('docs/qa-store.md', 'utf8').split('### Maintenance')[1]!.split('```yaml\n')[1]!.split('```')[0]!) as Caller;
+  const call = WF.on.workflow_call;
+  const job = DOC.jobs.maintenance!;
+  const step = WF.jobs.maintenance!.steps.find((x) => x.uses === '$/infra/qa-store/aws/maintenance')!;
+
+  /** The maintenance step's header, called as `callerJob` calls it with `repo` the repository's secrets. */
+  const header = (callerJob: Caller['jobs'][string], repo: Record<string, string>) => {
+    const dispatched = Object.fromEntries(Object.entries(DOC.on.workflow_dispatch.inputs).map(([k, v]) => [k, v.default]));
+    const given = Object.fromEntries(Object.entries(callerJob.with ?? {}).map(([k, v]) => [k, interpolate(v, { inputs: dispatched })]));
+    const inputs = Object.fromEntries(Object.entries(call.inputs).map(([k, v]) => {
+      const raw = k in given ? given[k] : v.default ?? '';
+      return [k, v.type === 'boolean' ? raw === true || raw === 'true' : raw];
+    }));
+    // A called workflow sees only the secrets its caller maps.
+    const secrets = Object.fromEntries(Object.entries(callerJob.secrets ?? {}).map(([k, v]) => [k, interpolate(v, { secrets: repo })]));
+    return stepHeader(step, { inputs, secrets }, secrets);
+  };
+
+  it('declares the secret optional and every input the caller passes, and the caller passes every required one', () => {
+    expect(job.uses).toMatch(/^yedeya-labs\/kanon\/\.github\/workflows\/qa-store-aws-maintenance\.yml@v\d+\.\d+\.\d+$/);
+    expect(call.secrets?.QA_STORE_ROLE_ARN).toEqual({ required: false });
+    expect(call.inputs['role-arn']?.required).toBe(false);
+    // GitHub refuses a call that maps a secret, or passes an input, the called workflow doesn't declare.
+    expect(Object.keys(job.secrets ?? {}).filter((n) => !(n in (call.secrets ?? {})))).toEqual([]);
+    expect(Object.keys(job.with ?? {}).filter((k) => !(k in call.inputs))).toEqual([]);
+    expect(Object.entries(call.inputs).filter(([k, v]) => v.required && !(k in (job.with ?? {}))).map(([k]) => k)).toEqual([]);
+    expect(Object.keys(job.secrets ?? {})).toEqual(['QA_STORE_ROLE_ARN']);
+    expect(job.with).not.toHaveProperty('role-arn');
+  });
+
+  it('hands the documented caller\'s secret to the step as its role, and the log masks it', () => {
+    const h = header(job, { QA_STORE_ROLE_ARN: ARN });
+    expect(h.inputs['role-arn']).toBe(ARN);
+    expect(h.printed).not.toContain(ACCOUNT);
+    expect(h.printed).toContain('role-arn: ***');
+  });
+
+  it('reads the secret before the deprecated input, which it takes only while the secret is empty', () => {
+    const both = { ...job, with: { ...job.with, 'role-arn': 'arn:aws:iam::input' } };
+    expect(header(both, { QA_STORE_ROLE_ARN: ARN }).inputs['role-arn']).toBe(ARN);
+    const inputOnly = { ...both, secrets: {} };
+    expect(header(inputOnly, {}).inputs['role-arn']).toBe('arn:aws:iam::input');
+  });
+});
+
 describe('the expression fake behaves as the runner does', () => {
   it('builds the JSON the store step passes, and reads it back', () => {
     const json = interpolate(STORE_SECRETS_WITH, { secrets: { QA_STORE_ROLE_ARN: ARN, QA_STORE_BUCKET: '' } });

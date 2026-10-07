@@ -1727,6 +1727,18 @@ describe("kanon init and the QA store's secrets (#433)", () => {
     ]);
   });
 
+  it('names the store\'s secrets among those to check by hand, when the token can\'t list them, only with a hook (#480)', async () => {
+    const unreadable = async (files: Record<string, string>) => {
+      const d = parse(await run(checkout(files), fakeGitHub({ secrets: null }), ['--yes', '--json', '--no-apps', '--lanes', 'code-audit']));
+      return d.findings.find((f) => f.id === 'secret.unreadable')!.fix.text;
+    };
+    const without = await unreadable({});
+    expect(without).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+    for (const n of REQ.qaStore!.secrets) expect(without).not.toContain(n);
+    const withHook = await unreadable({ [HOOK]: 'name: QA store\n' });
+    for (const n of REQ.qaStore!.secrets) expect(withHook).toContain(n);
+  });
+
   it('with a hook, copies a variable that holds one, and never asks for a variable', async () => {
     const d = parse(await run(checkout({ [HOOK]: 'name: QA store\n' }), withVariables(['QA_STORE_ROLE_ARN']), ['--yes', '--json', '--no-apps', '--lanes', 'code-audit']));
     expect(store(d)!.fix.commands).toEqual([

@@ -1734,7 +1734,9 @@ const run = async (deps, opts, req, rep) => {
       });
     }
   } else {
-    const all = [...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))];
+    // The store's secrets only where the store hook exists, as secret.qa-store asks (#480).
+    const all = [...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))]
+      .filter((n) => !req.qaStore?.secrets.includes(n) || read(req.qaStore.hook) !== null);
     step({
       id: 'secret.unreadable',
       category: 'secret',
