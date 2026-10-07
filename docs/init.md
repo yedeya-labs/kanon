@@ -36,6 +36,10 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 
 The store's side is the operator's: the register entry, and the values of the repository variables `KANON_TELEMETRY_URL` and `KANON_TELEMETRY_WRITER_ROLE`. Until both are set the collector skips with a warning and stays green, and `init` reports the step left, `telemetry.register` (as `kanon doctor` does afterwards, `telemetry.unconfigured`): ask for registration with [the telemetry registration issue](https://github.com/yedeya-labs/kanon/issues/new?template=telemetry-registration.yml), then set the two variables the operator gives you.
 
+### Where a lane's caller goes
+
+A lane's caller goes at the lane's file name, `.github/workflows/<lane>.yml` (`K-LAYOUT-18`). In a repository that hosts Kanon's lanes, that path holds the lane itself, so its caller lives at another path, and the adoption record waives doctor's `caller.misplaced` finding on it ([`docs/doctor.md`](doctor.md#waiving-a-finding)). **`init` honours that waiver as the caller's path** ([#451](https://github.com/yedeya-labs/kanon/issues/451)): when the file at the lane's file name doesn't call the lane, and a `caller.misplaced` waiver under `## Choices` names a file that does, `init` compares the caller there instead, so a run offers the lane's caller at the path the record declares and counts the lane as installed. A file at the lane's file name that calls the lane stays its caller. A waiver of a file that doesn't exist yet, or calls another lane, names no lane, so the first time, take the caller's text from `files[].content` of its lane's file name (every caller's full text is there, whatever its status), write it at the path you choose, and add the waiver. No repository is special-cased.
+
 `kanon apps` opens a browser for each App it creates, and waits for you to click Create and Install there. A program that wants to run that step on its own, for instance to explain it first, passes `--no-apps`: the command it would have run is then the finding `app.create`.
 
 ## The JSON output
@@ -95,7 +99,8 @@ The store's side is the operator's: the register entry, and the values of the re
 | `hasCommits` | boolean | Whether the default branch has a commit. |
 | `admin` | boolean | Whether the token can administer the repository. |
 | `rulesets` | string | `yes`, `no` or `unknown`: whether the plan has rulesets. `no` means the platform can't enforce review (`K-ADOPT-3`). |
-| `mergeQueue` | string | `yes`, `no` or `unknown`. |
+| `mergeQueue` | string | `yes`, `no` or `unknown`: whether the plan has the merge queue. |
+| `defaultBranchMergeQueue` | boolean | Whether the default branch merges through a merge queue ([#452](https://github.com/yedeya-labs/kanon/issues/452)): an active ruleset on it has one, or, where none covers it yet, the ruleset `init` creates has one, because the plan has the queue. A lane's `mergeQueue`, in the catalogue, says what that changes for it. |
 | `defaultBranchRulesets` | array | The names of the active rulesets on the default branch. |
 | `inactiveRulesets` | array | Each `disabled` or `evaluate` ruleset on the default branch: `name` and `enforcement`. |
 | `labels` | array | The repository's label names, sorted. |
@@ -149,6 +154,7 @@ What `--lanes` chooses from, so a person, or the adopt skill asking them, can ch
 | `needs` | array | Strings: what else it needs, such as project briefs. |
 | `cost` | string | What it costs to run, in one sentence: whether it runs a model, and how often. |
 | `when` | string | When it is recommended, in one sentence. |
+| `mergeQueue` | string or null | What a merge queue on the default branch changes for it, in one sentence, or null when nothing ([#452](https://github.com/yedeya-labs/kanon/issues/452)): a merge through the queue doesn't start a lane that runs on CI finishing on the default branch. |
 | `recommendedWith` | array | The lanes whose choice makes it recommended; empty for none. |
 | `recommended` | boolean | Whether it is recommended for this repository: the repository calls it already, it is the review lane, or it is recommended with a lane that is. |
 | `installed` | boolean | Whether the repository calls it already (`inspection.installedLanes`). |
@@ -159,7 +165,7 @@ What `--lanes` chooses from, so a person, or the adopt skill asking them, can ch
 |---|---|---|
 | `path` | string | From the checkout's root. |
 | `status` | string | `new` (written, or in a dry run would be), `same` (already as `init` writes it), `kept` (a declaration or hook that is the project's, left alone) or `differs` (a workflow that differs from what `init` would write, left alone). |
-| `content` | string or null | What `init` writes, for a `new` file. |
+| `content` | string or null | What `init` writes, or would write, whatever the file's status ([#451](https://github.com/yedeya-labs/kanon/issues/451)): for a `differs` file it is the full text the diff compares with, so a program can write it at another path. Null only for a `kept` file, whose content is the project's to say. |
 | `diff` | array | Strings: for a file that `differs`, the lines that differ, `- ` for the file's and `+ ` for what `init` would write. |
 
 ### A change
@@ -195,7 +201,7 @@ Every finding is non-blocking, except `app.failed`: `blocking` means it makes th
 | `ruleset.gaps` | `ruleset` | The default branch's ruleset lacks some of `K-ADOPT-1` step 8. |
 | `ruleset.first-commit` | `ruleset` | The default branch has no commit yet, so no ruleset was created. |
 | `ruleset.create` | `ruleset` | The token could not create the default branch's ruleset. |
-| `ruleset.require-check` | `ruleset` | No job of a workflow on the default branch reports the status check `Lane check` on every pull request yet, or the token can't read the default branch's workflows, so the ruleset doesn't require it: a required check that nothing reports blocks every other pull request ([#444](https://github.com/yedeya-labs/kanon/issues/444)). Its subject is the check's name. It is a step for after the merge of the pull request that adds the job, never before: run `kanon init` again with a token that can administer the repository, which adds only that rule, or add it on the fix's page. |
+| `ruleset.require-check` | `ruleset` | No job of a workflow on the default branch reports the status check `Lane check` on every pull request yet (and, where the default branch merges through a merge queue, on its `merge_group` run too, [#459](https://github.com/yedeya-labs/kanon/issues/459)), or the token can't read the default branch's workflows, so the ruleset doesn't require it: a required check that nothing reports blocks every other pull request ([#444](https://github.com/yedeya-labs/kanon/issues/444)). Its subject is the check's name. It is a step for after the merge of the pull request that adds the job, never before: run `kanon init` again with a token that can administer the repository, which adds only that rule, or add it on the fix's page. |
 | `app.create` | `app` | The Apps the lanes need were not created: `--no-apps`, or the person said no. |
 | `app.failed` | `app` | `kanon apps` did not finish. |
 | `app.reuse` | `app` | The register lists an App, but the repository lacks its secrets; or the owner already has an App the register lacks, and the person chose to reuse it. |

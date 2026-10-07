@@ -699,6 +699,95 @@ describe('kanon doctor and the job behind a required check (#418)', () => {
   });
 });
 
+// #459: a ruleset with a merge queue waits for each required check on the queue's merge_group run,
+// so the job behind the check must run on that event too.
+describe('kanon doctor and the job behind a required check, through a merge queue (#459)', () => {
+  const queued = (github: ReturnType<typeof fakeGitHub>) => {
+    github.st.rulesets = [{ id: 7, ...rulesetBody(true) }];
+  };
+  const noQueueEvent = (text: string) => text.replace('  merge_group:\n', '');
+
+  it("doesn't count a job whose workflow doesn't run on merge_group, and names the job and the trigger", async () => {
+    const files = healthyFiles();
+    files['.github/workflows/ci.yml'] = noQueueEvent(files['.github/workflows/ci.yml']!);
+    const dir = checkout(files);
+    const github = fakeGitHub();
+    queued(github);
+    github.st.defaultWorkflows = { 'ci.yml': noQueueEvent(ciFile(PINNED, 'main')) };
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.check-unreported Lane check']);
+    const f = r.json.findings[0];
+    expect(f.message).toBe('The ruleset on main requires the status check "Lane check", but no job of a workflow on main reports it on every pull request and every queued merge, so every one that doesn\'t get it waits on it (K-ADOPT-1 step 8). .github/workflows/ci.yml#lanes doesn\'t run on merge_group, the event the merge queue on main runs its checks on, so a queued merge never gets the check and waits on it.');
+    expect(f.fix.text).toMatch(/^Run the job on every pull request and every queued merge: add merge_group to the triggers of \.github\/workflows\/ci\.yml, or move the job to a workflow of its own on pull_request and merge_group with no filter/);
+  });
+
+  it('says the checkout adds merge_group when its workflow runs on it', async () => {
+    const dir = checkout(healthyFiles());
+    const github = fakeGitHub();
+    queued(github);
+    github.st.defaultWorkflows = { 'ci.yml': noQueueEvent(ciFile(PINNED, 'main')) };
+    const r = await run(dir, github, ['--json']);
+    expect(ids(r)).toEqual(['ruleset.check-unreported Lane check']);
+    expect(r.json.findings[0].fix.text).toContain('This checkout adds it (.github/workflows/ci.yml#lanes): merge the pull request that adds it to main first.');
+  });
+
+  it("names a merge_group filter that skips the default branch, and a job of its own when none reports it", async () => {
+    const dir = checkout(healthyFiles());
+    const github = fakeGitHub();
+    queued(github);
+    github.st.defaultWorkflows = { 'ci.yml': ciFile(PINNED, 'main').replace('  merge_group:\n', '  merge_group:\n    branches: [release]\n') };
+    const r = await run(dir, github, ['--json']);
+    expect(r.json.findings[0].message).toContain('The job there that reports it (.github/workflows/ci.yml#lanes) runs on some runs only (merge_group.branches), and a run it skips never gets the check.');
+    github.st.defaultWorkflows = {};
+    const none = await run(checkout({ ...healthyFiles(), '.github/workflows/ci.yml': 'name: CI\non: push\njobs:\n  t:\n    runs-on: x\n    steps:\n      - run: "true"\n' }), github, ['--json']);
+    expect(none.json.findings.find((x: { id: string }) => x.id === 'ruleset.check-unreported').fix.text).toMatch(/^Add a job of its own named "Lane check", in a workflow that runs on pull_request and merge_group,/);
+  });
+
+  it('is healthy when the job runs on merge_group, and asks nothing of it without a merge queue', async () => {
+    const github = fakeGitHub();
+    queued(github);
+    expect(ids(await run(checkout(healthyFiles()), github, ['--json']))).toEqual([]);
+    const files = healthyFiles();
+    files['.github/workflows/ci.yml'] = noQueueEvent(files['.github/workflows/ci.yml']!);
+    const plain = fakeGitHub();
+    plain.st.defaultWorkflows = { 'ci.yml': noQueueEvent(ciFile(PINNED, 'main')) };
+    expect(ids(await run(checkout(files), plain, ['--json']))).toEqual([]);
+  });
+
+  it('is waived like any other finding', async () => {
+    const files = healthyFiles();
+    files['docs/qa/adoption.md'] += `- **${WAIVER_LABEL}:** \`ruleset.check-unreported\` on \`Lane check\` (the queue's checks run elsewhere)\n`;
+    const github = fakeGitHub();
+    queued(github);
+    github.st.defaultWorkflows = { 'ci.yml': noQueueEvent(ciFile(PINNED, 'main')) };
+    const r = await run(checkout(files), github, ['--json']);
+    expect(r.status).toBe(EXIT.healthy);
+    expect(r.json.waived.map((w: { id: string }) => w.id)).toEqual(['ruleset.check-unreported']);
+  });
+});
+
+// #452 (#79): a merge through a merge queue doesn't start the rebase lane, so doctor notes it,
+// in the catalogue's words, for a lane the repository calls. It blocks nothing.
+describe('kanon doctor and a lane a merge queue changes (#452)', () => {
+  const withRebase = () => ({ ...healthyFiles(), '.github/workflows/agent-rebase.yml': callerFile('agent-rebase', REQ.lanes['agent-rebase']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }) });
+  const noteOf = (r: Result) => (r.json.notes as string[]).filter((n) => n.includes('merges through a merge queue'));
+
+  it('notes a called lane that a merge through the queue does not start, and nothing else changes', async () => {
+    const github = fakeGitHub();
+    github.st.rulesets = [{ id: 7, ...rulesetBody(true) }];
+    const r = await run(checkout(withRebase()), github, ['--json']);
+    expect(noteOf(r)).toEqual([`main merges through a merge queue, and you call agent-rebase. ${REQ.catalogue!.lanes['agent-rebase']!.mergeQueue}`]);
+    expect(r.json.findings.filter((f: { blocking: boolean }) => f.blocking).map((f: { id: string }) => f.id)).not.toContain('ruleset.check-unreported');
+  });
+
+  it('notes nothing without a merge queue, or for a lane the repository does not call', async () => {
+    expect(noteOf(await run(checkout(withRebase()), fakeGitHub(), ['--json']))).toEqual([]);
+    const github = fakeGitHub();
+    github.st.rulesets = [{ id: 7, ...rulesetBody(true) }];
+    expect(noteOf(await run(checkout(healthyFiles()), github, ['--json']))).toEqual([]);
+  });
+});
+
 describe("branchWorkflows: the default branch's workflows, read from GitHub (#418)", () => {
   const read = (reply: Gh) => branchWorkflows({ gh: async () => reply } as unknown as Parameters<typeof branchWorkflows>[0], REPO, 'main');
   const lane = 'on: pull_request\njobs:\n  lanes:\n    name: Lane check\n    runs-on: x\n';

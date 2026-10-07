@@ -1,8 +1,9 @@
 // The jobs that report a status check on a pull request, read from a repository's workflows:
 // `kanon doctor` asks for a required-check rule only once a job on the default branch reports
 // the check on every pull request (#418, #446), and `kanon init` requires it on the same terms
-// (#444). Node built-ins only, and no import of another `cli/` module but the YAML reader, so
-// either may import it.
+// (#444). Where the default branch merges through a merge queue, the job must report it on the
+// queue's `merge_group` event too (#459). Node built-ins only, and no import of another `cli/`
+// module but the YAML reader, so either may import it.
 
 import { parseYaml } from './workflow-yaml.mjs';
 
@@ -16,6 +17,9 @@ const PR_EVENTS = ['pull_request', 'pull_request_target'];
 
 /** The activity types a pull-request trigger runs on when it names none. A list without any of them skips the pull requests they open or update (#446). */
 const PR_TYPES = ['opened', 'synchronize', 'reopened'];
+
+/** The activity types a `merge_group` trigger runs on when it names none: GitHub has only this one (#459). */
+const MERGE_GROUP_TYPES = ['checks_requested'];
 
 /** @param {unknown} v @returns {string[]} */
 const listOf = (v) => (Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]).map(String);
@@ -65,23 +69,24 @@ const branchesAdmit = (patterns, branch) => {
 };
 
 /**
- * The filters of one pull-request trigger that skip some pull request into `branch`: `paths` and
- * `paths-ignore` always (they skip a pull request by what it changes), `branches` that don't
- * admit it, `branches-ignore` that matches it, and `types` that leave out one of the defaults.
- * Without `branch`, any branch filter counts. GitHub never reports the check of a run it skips,
- * so a pull request it skips waits on a required check (#446).
- * @param {string} event @param {unknown} trigger @param {string | undefined} branch
+ * The filters of one trigger that skip some run on `branch`: for a pull-request trigger, `paths`
+ * and `paths-ignore` always (they skip a pull request by what it changes); for either kind,
+ * `branches` that don't admit it, `branches-ignore` that matches it, and `types` that leave out
+ * one of the defaults (`types`). Without `branch`, any branch filter counts. GitHub never reports
+ * the check of a run it skips, so a pull request it skips waits on a required check (#446), and
+ * so does a queued merge whose `merge_group` run it skips (#459).
+ * @param {string} event @param {unknown} trigger @param {string | undefined} branch @param {string[]} types
  * @returns {string[]}
  */
-const triggerFilters = (event, trigger, branch) => {
+const triggerFilters = (event, trigger, branch, types) => {
   if (!isMap(trigger)) return [];
   const has = (/** @type {string} */ k) => trigger[k] !== undefined && trigger[k] !== null;
   /** @type {string[]} */
   const out = [];
-  for (const k of ['paths', 'paths-ignore']) if (has(k)) out.push(`${event}.${k}`);
+  if (PR_EVENTS.includes(event)) for (const k of ['paths', 'paths-ignore']) if (has(k)) out.push(`${event}.${k}`);
   if (has('branches') && (branch === undefined || !branchesAdmit(listOf(trigger.branches), branch))) out.push(`${event}.branches`);
   if (has('branches-ignore') && (branch === undefined || listOf(trigger['branches-ignore']).some((p) => branchPattern(p).test(branch)))) out.push(`${event}.branches-ignore`);
-  if (has('types') && !PR_TYPES.every((t) => listOf(trigger.types).includes(t))) out.push(`${event}.types`);
+  if (has('types') && !types.every((t) => listOf(trigger.types).includes(t))) out.push(`${event}.types`);
   return out;
 };
 
@@ -99,9 +104,31 @@ const pullRequestFilters = (wf, branch) => {
   if (!isMap(on)) return null;
   const events = PR_EVENTS.filter((e) => e in on);
   if (!events.length) return null;
-  const each = events.map((e) => triggerFilters(e, on[e], branch));
+  const each = events.map((e) => triggerFilters(e, on[e], branch, PR_TYPES));
   return each.some((f) => !f.length) ? [] : each.flat();
 };
+
+/**
+ * Whether a workflow runs on every queued merge into `branch` (#459): null when it doesn't run on
+ * `merge_group` at all, and otherwise the filters of that trigger that skip one. A merge queue
+ * waits for each required check on the `merge_group` run, and a pull request's run doesn't count.
+ * @param {Record<string, any>} wf @param {string | undefined} branch
+ * @returns {string[] | null}
+ */
+const mergeGroupFilters = (wf, branch) => {
+  const on = wf.on;
+  if (typeof on === 'string') return on === 'merge_group' ? [] : null;
+  if (Array.isArray(on)) return on.includes('merge_group') ? [] : null;
+  if (!isMap(on) || !('merge_group' in on)) return null;
+  return triggerFilters('merge_group', on.merge_group, branch, MERGE_GROUP_TYPES);
+};
+
+/**
+ * Whether the rulesets that cover a branch merge it through a merge queue: one of them has the
+ * `merge_queue` rule (#459).
+ * @param {any[]} covering the rulesets, read whole
+ */
+export const mergeQueueOn = (covering) => covering.some((s) => Array.isArray(s?.rules) && s.rules.some((/** @type {any} */ r) => r?.type === 'merge_queue'));
 
 /**
  * The jobs that would report the status check `check` on a pull request into `branch`, each with
@@ -110,32 +137,42 @@ const pullRequestFilters = (wf, branch) => {
  * exactly the check's. A job that calls a reusable workflow reports `<its name> / <the called
  * job's>`, and a matrix job its name with the matrix's values, so neither counts:
  * actions/lane-check's README runs the check as a job of its own. A step of another job reports
- * nothing under its own name (L5's G14).
+ * nothing under its own name (L5's G14). With `mergeQueue`, the branch merges through a merge
+ * queue, so the job must run on `merge_group` too (#459): `missing` names that trigger when its
+ * workflow lacks it, and `filters` holds the filters of the one it has that skip a queued merge.
  * @param {Map<string, Record<string, any>>} workflows by path @param {string} check
  * @param {string} [branch] the branch the pull requests are into; without it, any branch filter skips some
- * @returns {Array<{ job: string, filters: string[] }>} `job` is `<workflow file>#<job>`
+ * @param {boolean} [mergeQueue] whether `branch` merges through a merge queue
+ * @returns {Array<{ job: string, filters: string[], missing: string[] }>} `job` is `<workflow file>#<job>`
  */
-export const checkJobs = (workflows, check, branch) => {
-  /** @type {Array<{ job: string, filters: string[] }>} */
+export const checkJobs = (workflows, check, branch, mergeQueue = false) => {
+  /** @type {Array<{ job: string, filters: string[], missing: string[] }>} */
   const out = [];
   for (const [file, wf] of workflows) {
-    const filters = pullRequestFilters(wf, branch);
-    if (filters === null) continue;
+    const pr = pullRequestFilters(wf, branch);
+    if (pr === null) continue;
+    const queued = mergeQueue ? mergeGroupFilters(wf, branch) : [];
+    const filters = [...pr, ...(queued ?? [])];
+    const missing = queued === null ? ['merge_group'] : [];
     for (const [key, job] of Object.entries(isMap(wf.jobs) ? wf.jobs : {})) {
       if (!isMap(job) || job.uses !== undefined || (isMap(job.strategy) && job.strategy.matrix !== undefined)) continue;
-      if ((job.name === undefined || job.name === null ? key : String(job.name)) === check) out.push({ job: `${file}#${key}`, filters });
+      if ((job.name === undefined || job.name === null ? key : String(job.name)) === check) out.push({ job: `${file}#${key}`, filters, missing });
     }
   }
   return out;
 };
 
 /**
- * The jobs that report the status check `check` on every pull request into `branch`
- * (`checkJobs`, without a filter that skips one).
- * @param {Map<string, Record<string, any>>} workflows @param {string} check @param {string} [branch]
+ * The jobs that report the status check `check` on every pull request into `branch`, and with
+ * `mergeQueue` on every queued merge into it too (`checkJobs`, without a filter that skips one or
+ * a trigger it lacks).
+ * @param {Map<string, Record<string, any>>} workflows @param {string} check @param {string} [branch] @param {boolean} [mergeQueue]
  * @returns {string[]} `<workflow file>#<job>`
  */
-export const checkReporters = (workflows, check, branch) => checkJobs(workflows, check, branch).filter((j) => !j.filters.length).map((j) => j.job);
+export const checkReporters = (workflows, check, branch, mergeQueue = false) =>
+  checkJobs(workflows, check, branch, mergeQueue)
+    .filter((j) => !j.filters.length && !j.missing.length)
+    .map((j) => j.job);
 
 /** One read of every workflow file on a branch, with its text. */
 const BRANCH_WORKFLOWS = 'query($owner: String!, $name: String!, $expression: String!) { repository(owner: $owner, name: $name) { object(expression: $expression) { ... on Tree { entries { name type object { ... on Blob { text } } } } } } }';
