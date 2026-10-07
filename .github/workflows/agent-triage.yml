@@ -13,13 +13,13 @@
 # THIS lane: when it fires, which issues it admits, and what the Implementer is told.
 #
 # Trigger: a bug issue is labeled `qa:needs-triage` (the Explorer's output).
-# Identity: the Implementer's GitHub App (its token authors the branch/PR/comments).
+# Identity: the Author App, as the Implementer (its token authors the branch/PR/comments).
 # See docs/qa/triage-fix-playbook.md and docs/qa/agent-identities.md.
 #
 # INERT until: (1) the caller + the docs/qa playbooks are on the default branch,
 # (2) the GitHub Apps exist + are installed, and (3) these secrets are set (plan 0001 §8):
-#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY   (the Implementer's App)
-#   CLAUDE_CODE_OAUTH_TOKEN                            (Claude subscription; `claude setup-token`)
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY   (the Author App, which holds the Implementer)
+#   CLAUDE_CODE_OAUTH_TOKEN                 (Claude subscription; `claude setup-token`)
 # Auth starts on the Claude subscription; graduate to API-key billing later — see the
 # note at the claude-code-action step.
 # KANON ROLE: Implementer

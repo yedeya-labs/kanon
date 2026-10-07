@@ -39,11 +39,11 @@
 # NO MODEL. This lane runs `merge-gate.mjs` and nothing else, so it takes no Claude token and
 # writes no telemetry row.
 #
-# INERT until: the caller is on the default branch + the Merger's App installed, with a row
-# in the App register + these secrets (plan 0001 §8):
+# INERT until: the caller is on the default branch + the Judge App installed, with the
+# Merger's row in the App register + these secrets (plan 0001 §8):
 #   JUDGE_APP_ID, JUDGE_APP_PRIVATE_KEY
-# The App must be a DIFFERENT identity from the Reviewer — GitHub lets an App merge a PR it
-# approved, but keeping them apart is what makes the audit trail readable.
+# The Merger and the Reviewer are both roles of the Judge App (plan 0005 §3.4), so they share
+# a login; the role marker on each post tells them apart.
 # KANON ROLE: Merger
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
 # role this lane mints for, as the Judge App's `JUDGE_APP_*` secrets no longer say. Its row

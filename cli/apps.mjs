@@ -252,6 +252,9 @@ export const ownerPages = (kind, owner) => {
 
 /** @typedef {ReturnType<typeof ownerPages>} OwnerPages */
 
+/** An App's install page, which names no owner: the person chooses one on it. @param {string} slug */
+const installPage = (slug) => `https://github.com/apps/${slug}/installations/new`;
+
 /**
  * Asks GitHub whether the owner is a personal account or an organisation (`GET /users/<login>`
  * answers both, with `type`). Throws with a message naming the owner when it is neither.
@@ -474,10 +477,10 @@ export const rotationSteps = (pages, owner, repos, apps) => [
  * Waits until the App is installed on the owner's account, then checks what it covers: every
  * repository named. One App per owner covers several (plan 0005 §3.2), so only an installation
  * on ALL of the owner's repositories warns (K-ADOPT-8, amended).
- * @param {{ owner: string, pages: OwnerPages, repos: string[], appId: number, pem: string, deps: Deps, wait?: boolean }} a
+ * @param {{ owner: string, pages: OwnerPages, repos: string[], appId: number, slug: string, pem: string, deps: Deps, wait?: boolean }} a
  * @returns {Promise<{ id: number, warnings: string[] }>}
  */
-const awaitInstallation = async ({ owner, pages, repos, appId, pem, deps, wait = true }) => {
+const awaitInstallation = async ({ owner, pages, repos, appId, slug, pem, deps, wait = true }) => {
   const deadline = deps.now() + deps.timeoutMs;
   for (;;) {
     const r = await api(deps, '/app/installations?per_page=100', { jwt: appJwt(appId, pem, deps.now()) });
@@ -512,7 +515,7 @@ const awaitInstallation = async ({ owner, pages, repos, appId, pem, deps, wait =
       }
       return { id: inst.id, warnings };
     }
-    if (!wait) throw new Error(`the App is not installed on ${owner}. Install it at https://github.com/apps/<slug>/installations/new, choosing ${repos.join(', ')}, then run the command again.`);
+    if (!wait) throw new Error(`the App is not installed on ${owner}. Install it at ${installPage(slug)}, choosing ${repos.join(', ')}, then run the command again.`);
     if (deps.now() >= deadline) throw new Error(`the App was not installed within ${Math.round(deps.timeoutMs / 60000)} minutes`);
     await deps.sleep(deps.pollMs);
   }
@@ -638,11 +641,11 @@ const createApp = async ({ owner, pages, repos, key, name, spec, register, deps 
   const names = await storeSecrets({ owner, repos, app: key, appId, slug, pem, pages, deps });
   out(`3. Stored ${names.id} and ${names.key} as Actions secrets on ${repos.map((r) => `${owner}/${r}`).join(', ')}.`);
 
-  const install = `https://github.com/apps/${slug}/installations/new`;
+  const install = installPage(slug);
   out(`4. Your browser is opening ${install}.`);
   out(`   Choose ${owner}, then "Only select repositories", pick ${repos.join(', ')}, and click "Install".`);
   deps.open(install);
-  const inst = await awaitInstallation({ owner, pages, repos, appId, pem, deps });
+  const inst = await awaitInstallation({ owner, pages, repos, appId, slug, pem, deps });
   for (const w of inst.warnings) deps.err(`warning: ${w}`);
   out(`5. Installed (installation ${inst.id}).`);
 
@@ -692,7 +695,7 @@ const reuseApp = async ({ owner, pages, repos, key, slug, file, spec, specs, reg
     );
   }
   out(`1. ${file} is a key of ${slug} (id ${appId}), which holds the ${spec.app}'s permissions.`);
-  const inst = await awaitInstallation({ owner, pages, repos, appId, pem, deps, wait: false });
+  const inst = await awaitInstallation({ owner, pages, repos, appId, slug, pem, deps, wait: false });
   for (const w of inst.warnings) deps.err(`warning: ${w}`);
   out(`2. Its installation (${inst.id}) covers ${repos.join(', ')}.`);
   const names = await storeSecrets({ owner, repos, app: key, appId, slug, pem, pages, deps, keyFile: file });

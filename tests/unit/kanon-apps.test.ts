@@ -74,7 +74,7 @@ type Scenario = {
   /** gh's exit status for `gh secret delete <name>`. */
   deleteStatus?: Record<string, number>;
   /** `--reuse judge:<slug>=<file>` instead of `--apps`: the slug GitHub's `GET /app` answers for the key. */
-  reuse?: { slug: string; keySlug?: string; keyText?: string; permissions?: Record<string, string> };
+  reuse?: { slug: string; keySlug?: string; keyText?: string; permissions?: Record<string, string>; notInstalled?: boolean };
   /** The repository's rulesets, as `gh api` answers them (#49); unset, every such read fails. */
   rulesets?: { list: Array<{ id: number; target: string }>; full: Record<number, unknown>; putStatus?: number };
 };
@@ -131,7 +131,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
   if (s.reuse) {
     realDeps.writeFile(keyFile, s.reuse.keyText ?? PEM);
     // The App is already installed: --reuse never opens a page.
-    installed = true;
+    installed = !s.reuse.notInstalled;
   }
   let pending: Promise<unknown> = Promise.resolve();
   let n = 0;
@@ -583,6 +583,16 @@ describe('one App per owner, reused across its repositories (plan 0005 §3.2)', 
       expect(r.writes).toEqual([]);
       rmSync(r.dir, { recursive: true, force: true });
     }
+  });
+
+  it('--reuse on an App not installed on the owner names its install page by slug, stores nothing and keeps the file (#361)', async () => {
+    const r = await run({ reuse: { slug: `${ORG}-judge`, notInstalled: true } });
+    expect(r.status).toBe(1);
+    expect(r.output).toContain(`the App is not installed on ${ORG}. Install it at https://github.com/apps/${ORG}-judge/installations/new, choosing ${REPO}, then run the command again.`);
+    expect(r.opened).toEqual([]);
+    expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT')).toEqual([]);
+    expect(statSync(join(r.dir, 'judge.pem')).isFile()).toBe(true);
+    rmSync(r.dir, { recursive: true, force: true });
   });
 
   it('--reuse refuses a file that holds no private key', async () => {
