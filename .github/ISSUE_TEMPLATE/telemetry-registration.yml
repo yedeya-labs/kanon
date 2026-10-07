@@ -1,0 +1,45 @@
+name: Telemetry registration
+description: Ask Kanon's operator to register your repository with the hosted telemetry store, after kanon init --telemetry wrote its collector's caller.
+title: "Telemetry registration"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `kanon init --telemetry` wrote `.github/workflows/telemetry.yml`, the caller of Kanon's telemetry collector. It sends nothing until the operator has added your repository to the store's register and you have set the two repository variables the operator gives you, `KANON_TELEMETRY_URL` and `KANON_TELEMETRY_WRITER_ROLE` ([docs/telemetry.md](https://github.com/yedeya-labs/kanon/blob/main/docs/telemetry.md), "Add a repository").
+
+        **This issue is public, and it names your repository.** The register itself stays private, and the store's rows carry an opaque key, never the repository's name. If the repository is private and its name must not appear here, don't file this: open a [Discussion](https://github.com/yedeya-labs/kanon/discussions) that says so without naming it, and the operator will arrange it with you there. To stop sending rows later, delete the caller; to have what was sent erased, ask in an issue like this one ("Erase an adopter").
+  - type: input
+    id: repository
+    attributes:
+      label: Repository
+      description: As `<owner>/<repo>`.
+    validations:
+      required: true
+  - type: input
+    id: default-branch
+    attributes:
+      label: Default branch
+      description: The writer trusts only the default branch's ref, so the collector runs there.
+      placeholder: main
+    validations:
+      required: true
+  - type: input
+    id: readers
+    attributes:
+      label: Branch refs your reading jobs run on
+      description: Usually just the default branch, as `ref:refs/heads/<branch>`. An environment or a pattern is refused.
+      placeholder: ref:refs/heads/main
+  - type: checkboxes
+    id: public
+    attributes:
+      label: Before you file
+      options:
+        - label: I understand this issue is public and names the repository above.
+          required: true
+        - label: The repository's OIDC subject template is GitHub's default (or I have listed its exact subjects below).
+          required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Exact OIDC subjects for a custom subject template, or anything the operator should know. Never paste a token or a secret.

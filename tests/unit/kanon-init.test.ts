@@ -7,6 +7,8 @@ import { writeRegisterRow } from '../../cli/app-register.mjs';
 import { loadRequirements, TRIGGERS } from '../../cli/callers.mjs';
 import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, laneCatalogue, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, usage, USAGE, workflowName } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
+import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
+import { TELEMETRY_QUESTION, TELEMETRY_REGISTRATION_URL } from '../../cli/init.mjs';
 
 /**
  * `kanon init` (plan 0005 §5.4, step L9). Every case runs the command against a real git
@@ -641,7 +643,7 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
       expect(keys(f.fix)).toEqual(['commands', 'text', 'url']);
     }
     expect(d.inspection).toMatchObject({ owner: 'acme', ownerKind: 'user', private: false, defaultBranch: 'main', rulesets: 'yes', installedLanes: [], callsRelease: false });
-    expect(d.answers).toEqual({ projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false, plugin: true });
+    expect(d.answers).toEqual({ projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false, plugin: true, telemetry: false });
     expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
     expect(d.files.find((f) => f.path === '.github/workflows/agent-review.yml')).toMatchObject({ status: 'new', content: read(dir, '.github/workflows/agent-review.yml'), diff: [] });
     expect(d.findings.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token']);
@@ -797,7 +799,7 @@ describe('kanon init, a flag for each question (#367)', () => {
     const dir = checkout({ '.github/workflows/release.yml': RELEASE_CALLER });
     const github = fakeGitHub();
     const asked: string[] = [];
-    const r = await run(dir, github, ['--no-releaser', '--keep-default-labels', '--no-delegation', '--no-plugin', '--no-apps'], undefined, REQ, {
+    const r = await run(dir, github, ['--no-releaser', '--keep-default-labels', '--no-delegation', '--no-plugin', '--no-telemetry', '--no-apps'], undefined, REQ, {
       ask: async (q: string, d: string) => (asked.push(q), q.endsWith('(y/n)') ? 'y' : d),
     });
     expect(r.status, r.err).toBe(0);
@@ -805,6 +807,7 @@ describe('kanon init, a flag for each question (#367)', () => {
     expect(github.st.labels.has('question')).toBe(true);
     expect(existsSync(join(dir, 'docs/qa/sign-off-delegation.md'))).toBe(false);
     expect(existsSync(join(dir, '.claude/settings.json'))).toBe(false);
+    expect(existsSync(join(dir, '.github/workflows/telemetry.yml'))).toBe(false);
     expect(read(dir, '.github/workflows/apps-check.yml')).not.toContain('RELEASER_APP_ID');
     expect(r.appsCalls).toEqual([]);
   });
@@ -821,7 +824,7 @@ describe('kanon init, a flag for each question (#367)', () => {
   });
 
   it('fails by name on each pair of flags that contradict each other', () => {
-    expect(CONFLICTS.length).toBe(7);
+    expect(CONFLICTS.length).toBe(8);
     for (const [x, y] of CONFLICTS) {
       const argv = [x, y].flatMap((f) => (f.startsWith('--delegate-') ? [f, 'v'] : [f]));
       expect(() => parseArgs(argv, REQ), `${x} ${y}`).toThrow(`${x} and ${y} contradict each other; give one`);
@@ -977,5 +980,94 @@ describe('kanon init and the lane catalogue (#428)', () => {
     for (const g of CATALOGUE.groups) expect(r.out).toContain(`\n  ${g.title}\n`);
     for (const [lane, e] of Object.entries(CATALOGUE.lanes)) expect(r.out).toMatch(new RegExp(`^ {4}${lane.slice('agent-'.length)} +${e.does.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm'));
     expect(r.out).toMatch(/^ {4}review +.* \(recommended\)$/m);
+  });
+});
+
+// #428: telemetry is asked, off by default, and installed only on an explicit yes. On yes, init
+// writes the collector's caller exactly as docs/telemetry.md gives it, and leaves the operator's
+// side (the register entry and the two variables) as a step.
+describe('kanon init and telemetry (#428)', () => {
+  const RELEASE = `v${JSON.parse(read(ROOT, 'package.json')).version}`;
+  const withVariables = (names: string[] | null) => {
+    const github = fakeGitHub();
+    const gh = github.gh;
+    github.gh = async (args: string[], input?: string) => {
+      if (args[0] === 'variable' && args[1] === 'list') {
+        github.calls.push({ args, input });
+        return names ? ok(names.map((name) => ({ name }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
+      }
+      return gh(args, input);
+    };
+    return github;
+  };
+
+  it("writes docs/telemetry.md's caller, byte for byte, pinned to the release it runs from", () => {
+    const doc = read(ROOT, 'docs/telemetry.md');
+    const block = doc.split('**The caller.**')[1]!.split('```yaml\n')[1]!.split('```')[0]!;
+    expect(telemetryCallerFile(RELEASE)).toBe(block);
+    expect(TELEMETRY_CALLER_PATH).toBe('.github/workflows/telemetry.yml');
+    expect(REQ.telemetry?.collector).toBe('telemetry-collect');
+    for (const v of REQ.telemetry!.variables) expect(telemetryCallerFile(RELEASE)).toContain(`\${{ vars.${v} }}`);
+  });
+
+  it('installs nothing without an explicit yes: the default, --yes, --json, a dry run and --no-telemetry', async () => {
+    for (const argv of [['--yes'], ['--yes', '--json', '--no-apps'], ['--yes', '--json', '--dry-run'], ['--yes', '--no-telemetry']]) {
+      const dir = checkout();
+      const github = fakeGitHub();
+      const r = await run(dir, github, argv);
+      expect(r.status, argv.join(' ')).toBe(0);
+      expect(existsSync(join(dir, TELEMETRY_CALLER_PATH)), argv.join(' ')).toBe(false);
+      expect(`${r.out}${r.err}`, argv.join(' ')).not.toContain(TELEMETRY_CALLER_PATH);
+      expect(github.calls.some((c) => c.args[0] === 'variable'), argv.join(' ')).toBe(false);
+      if (argv.includes('--json')) expect(parse(r).answers.telemetry).toBe(false);
+    }
+    // Asked without --yes, the default answer is no.
+    const asked: string[] = [];
+    const dir = checkout();
+    await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: async (q: string, d: string) => (asked.push(q), d) });
+    expect(asked.filter((q) => q.startsWith(TELEMETRY_QUESTION))).toHaveLength(1);
+    expect(existsSync(join(dir, TELEMETRY_CALLER_PATH))).toBe(false);
+  });
+
+  it('says what is sent, where, who reads it, and how to stop and erase, in its question', () => {
+    for (const s of ['no code', 'no logins', 'Frankfurt', '13 months', "Kanon's operator", 'at least three adopters', 'deleting .github/workflows/telemetry.yml', 'Erase an adopter']) expect(TELEMETRY_QUESTION).toContain(s);
+  });
+
+  it('on a yes, writes the caller and leaves the registration as a step until both variables are set', async () => {
+    const dir = checkout();
+    const d = parse(await run(dir, withVariables([]), ['--yes', '--json', '--no-apps', '--telemetry']));
+    expect(d.answers.telemetry).toBe(true);
+    expect(read(dir, TELEMETRY_CALLER_PATH)).toBe(telemetryCallerFile(RELEASE));
+    expect(d.files.find((f) => f.path === TELEMETRY_CALLER_PATH)).toMatchObject({ status: 'new', content: telemetryCallerFile(RELEASE) });
+    const f = d.findings.find((x) => x.id === 'telemetry.register')!;
+    expect(f).toMatchObject({ category: 'telemetry', blocking: false, subject: REPO });
+    expect(f.message).toContain('KANON_TELEMETRY_URL and KANON_TELEMETRY_WRITER_ROLE are not set');
+    expect(f.fix.url).toBe(TELEMETRY_REGISTRATION_URL);
+    expect(f.fix.commands).toEqual([
+      `gh variable set KANON_TELEMETRY_URL -R ${REPO} --body '<the URL the operator gives you>'`,
+      `gh variable set KANON_TELEMETRY_WRITER_ROLE -R ${REPO} --body '<the role ARN the operator gives you>'`,
+    ]);
+    expect(existsSync(join(ROOT, '.github/ISSUE_TEMPLATE/telemetry-registration.yml'))).toBe(true);
+    expect(TELEMETRY_REGISTRATION_URL).toMatch(/template=telemetry-registration\.yml$/);
+
+    // One variable set: still a step, naming the other.
+    const one = parse(await run(checkout(), withVariables(['KANON_TELEMETRY_URL']), ['--yes', '--json', '--no-apps', '--telemetry']));
+    expect(one.findings.find((x) => x.id === 'telemetry.register')!.message).toContain('KANON_TELEMETRY_WRITER_ROLE is not set');
+    // Variables it can't list: still a step, saying so.
+    const blind = parse(await run(checkout(), withVariables(null), ['--yes', '--json', '--no-apps', '--telemetry']));
+    expect(blind.findings.find((x) => x.id === 'telemetry.register')!.message).toContain("the token can't list its variables");
+    // Both set: no step, and a second run leaves the caller as written.
+    const both = parse(await run(dir, withVariables(['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE']), ['--yes', '--json', '--no-apps', '--telemetry']));
+    expect(both.findings.map((x) => x.id)).not.toContain('telemetry.register');
+    expect(both.files.find((x) => x.path === TELEMETRY_CALLER_PATH)).toMatchObject({ status: 'same' });
+  });
+
+  it('takes a yes to its question without --yes', async () => {
+    const dir = checkout();
+    const r = await run(dir, withVariables([]), ['--no-apps'], undefined, REQ, {
+      ask: async (q: string, d: string) => (q.startsWith(TELEMETRY_QUESTION) ? 'y' : d),
+    });
+    expect(r.status, r.err).toBe(0);
+    expect(read(dir, TELEMETRY_CALLER_PATH)).toBe(telemetryCallerFile(RELEASE));
   });
 });

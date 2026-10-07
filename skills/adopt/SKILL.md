@@ -126,6 +126,18 @@ Asked only when `.inspection.callsRelease` is true. Otherwise there is nothing t
 - **Recommended:** **Yes**, unless the person says nobody here uses Claude Code.
 - **Options:** **Yes** (`--plugin`): `init` writes `.claude/settings.json` declaring the kanon plugin at this release (or, when the file exists, the finding `plugin.declare` gives the keys to merge), so everyone who uses Claude Code here gets these skills once they trust the folder, and doctor checks the release against the pins. **No** (`--no-plugin`): each person installs the plugin themselves, and nothing checks its release.
 
+### `.answers.telemetry`: send run rows to Kanon's telemetry store
+
+Off unless the person says yes. Say, in the question itself, everything the person needs to decide:
+- **What is sent:** one row per agent run, plan 0002's fixed fields (the lane, the outcome, the model, cost, tokens, durations and counts, the run, pull request and issue numbers, the Kanon release). No code, no text, no logins, no file paths.
+- **Where it goes:** one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, kept 13 months.
+- **Who reads it:** Kanon's operator, to improve Kanon, who publishes only aggregates that at least three adopters contribute to; the repository's own reader role reads only its own rows.
+- **How to stop and erase:** delete `.github/workflows/telemetry.yml`; the operator erases what was sent on request (`docs/telemetry.md` in Kanon's repository, "Erase an adopter").
+- **What is left after a yes:** the operator registers the repository and gives the values of two repository variables; until then the collector skips, green. On a private repository each hourly run costs about an Actions minute.
+
+- **Recommended:** **No**. Telemetry is never recommended for the person: it is theirs to offer.
+- **Options:** **No** (`--no-telemetry`): nothing is written and nothing is sent. **Yes** (`--telemetry`): `init` writes the collector's caller, and the finding `telemetry.register` is the operator's step, walked through as a step only a person can do: the person files the registration issue the fix's page opens (it is public and names the repository; for a name that must stay private, the issue's form says what to do instead), then sets the two variables the operator gives them.
+
 ## Steps
 
 1. **Check where you are.** A git checkout of the repository to install in (`git rev-parse --show-toplevel`), `gh` signed in, and Node 24 or later. If the working tree has changes, ask the person to commit or stash them first; never do either yourself.
@@ -181,3 +193,4 @@ Asked only when `.inspection.callsRelease` is true. Otherwise there is nothing t
 | `secret.digest-webhook` | person | The person runs the fix's `gh secret set` with the chat webhook's URL. |
 | `secret.unreadable` | person | The token can't list the secrets: the person checks the ones the lanes need by hand, or the doctor skill does with a token that can. |
 | `plugin.declare` | agent | `.claude/settings.json` is the project's: merge the fix's keys into it, keeping every key it has, or set the `ref` of the kanon marketplace it already declares. Show the diff before you write. |
+| `telemetry.register` | person | Kanon's operator registers the repository and gives the two variables' values: the person files the issue the fix's page opens (it is public and names the repository), then runs the fix's `gh variable set` lines with the values. Record it as skipped if they'd rather do it later; doctor reports it until then. |

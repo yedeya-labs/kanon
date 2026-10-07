@@ -24,7 +24,8 @@ import { URL } from 'node:url';
  * @typedef {{ lanes: Record<string, Lane>, hook: { path: string, inputs: string[] },
  *   identities: { roles: Record<string, RoleIdentity>, apps: Record<string, AppIdentity> }, labels: string[],
  *   declarations?: Record<string, { baseline: boolean, requiredSections: string[] }>,
- *   release?: { dcoExemptsReleaser?: boolean }, catalogue?: Catalogue }} Requirements
+ *   release?: { dcoExemptsReleaser?: boolean }, catalogue?: Catalogue,
+ *   telemetry?: { collector: string, variables: string[] } }} Requirements
  * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, recommend: 'always' | string[], when: string }} CatalogueEntry
  * @typedef {{ groups: Array<{ id: string, title: string, header: string }>, lanes: Record<string, CatalogueEntry> }} Catalogue
  */
@@ -113,6 +114,43 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch }) => {
   for (const s of secrets) out.push(`      ${s}: \${{ secrets.${s} }}`);
   return `${out.join('\n')}\n`;
 };
+
+/** Where `init` writes the telemetry collector's caller: Kanon's own caller's name (docs/telemetry.md). */
+export const TELEMETRY_CALLER_PATH = '.github/workflows/telemetry.yml';
+
+/**
+ * The caller of Kanon's telemetry collector, exactly as docs/telemetry.md's "The caller" gives it
+ * (tests/unit/kanon-init.test.ts holds the two byte for byte), pinned to `release`. `kanon init`
+ * writes it only on an explicit yes (`--telemetry`, #428): it sends this repository's run rows to
+ * Kanon's hosted store.
+ * @param {string} release
+ */
+export const telemetryCallerFile = (release) =>
+  [
+    "# Sends this repository's agent-run rows to Kanon's hosted telemetry store (docs/telemetry.md).",
+    '# Delete this file to stop; the operator erases what was sent on request.',
+    'name: Telemetry',
+    'on:',
+    '  schedule:',
+    '    - cron: "40 * * * *"',
+    '  workflow_dispatch:',
+    '    inputs:',
+    '      window_minutes:',
+    '        description: Force an exact sweep span, in minutes. Leave empty to sweep back to the last successful sweep.',
+    '        required: false',
+    '        default: ""',
+    'permissions:',
+    '  actions: read',
+    '  id-token: write',
+    'jobs:',
+    '  collect:',
+    `    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@${release}`,
+    '    with:',
+    '      url: ${{ vars.KANON_TELEMETRY_URL }}',
+    '      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}',
+    '      window_minutes: ${{ inputs.window_minutes }}',
+    '',
+  ].join('\n');
 
 /** The `<NAME>_APP_ID` and `<NAME>_APP_PRIVATE_KEY` secrets of an identity. @param {string} identity */
 export const appSecrets = (identity) => [`${identity.toUpperCase()}_APP_ID`, `${identity.toUpperCase()}_APP_PRIVATE_KEY`];

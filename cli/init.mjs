@@ -58,6 +58,8 @@ import {
   kanonRelease,
   laneCheckFile,
   loadRequirements,
+  TELEMETRY_CALLER_PATH,
+  telemetryCallerFile,
   TRIGGERS,
 } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
@@ -120,6 +122,9 @@ The answers, one flag per question (without --yes, the questions no flag answers
   --plugin               declare the kanon plugin in .claude/settings.json, pinned to this
                          release, for everyone who uses Claude Code here (the default)
   --no-plugin            don't
+  --telemetry            send this repository's agent-run rows to Kanon's hosted telemetry
+                         store: writes the collector's caller (docs/telemetry.md)
+  --no-telemetry         don't (the default)
   --create-apps          run \`kanon apps\` for the Apps the lanes lack (the default)
   --no-apps              don't run \`kanon apps\`; print the command instead
 
@@ -264,7 +269,7 @@ export const realDeps = {
  * @typedef {{
  *   projectOwner?: string, maintainer?: string, stakeholder?: string, gates?: string, testDatabase?: 'none' | 'hook',
  *   delegation?: boolean, delegateName?: string, delegateEmail?: string, deleteDefaults?: boolean,
- *   releaser?: boolean, plugin?: boolean, createApps?: boolean,
+ *   releaser?: boolean, plugin?: boolean, telemetry?: boolean, createApps?: boolean,
  * }} Given
  */
 
@@ -277,6 +282,7 @@ export const CONFLICTS = [
   ['--delete-default-labels', '--keep-default-labels'],
   ['--releaser', '--no-releaser'],
   ['--plugin', '--no-plugin'],
+  ['--telemetry', '--no-telemetry'],
   ['--create-apps', '--no-apps'],
 ];
 
@@ -327,6 +333,8 @@ export const parseArgs = (argv, req) => {
     else if (flag === '--no-releaser') g.releaser = false;
     else if (flag === '--plugin') g.plugin = true;
     else if (flag === '--no-plugin') g.plugin = false;
+    else if (flag === '--telemetry') g.telemetry = true;
+    else if (flag === '--no-telemetry') g.telemetry = false;
     // `--owner` names the GitHub account everywhere else (`kanon apps --owner`), so init's Owner
     // question is `--project-owner`, and a bare `--owner` is refused with that name (Owner, 2026-10-06).
     else if (flag === '--owner') throw new Error('unknown argument "--owner": the project\'s Owner is --project-owner; --owner names the GitHub account, in kanon apps');
@@ -694,10 +702,47 @@ export const askAll = async (deps, opts, ctx) => {
   // Dependabot's bump and doctor's check can be read beside it (docs/skills.md). Yes by default:
   // the declaration does nothing until each person trusts the folder in Claude Code.
   const plugin = await yesNo("Declare the kanon plugin in .claude/settings.json, pinned to this release, so everyone who uses Claude Code here gets Kanon's skills (docs/skills.md)?", true, g.plugin);
-  return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser, plugin };
+  // TELEMETRY (#428), no by default and never without an explicit yes: it sends this
+  // repository's run rows out of it, to Kanon's hosted store (plan 0002, docs/telemetry.md).
+  const telemetry = await yesNo(TELEMETRY_QUESTION, false, g.telemetry);
+  return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser, plugin, telemetry };
 };
 
+/**
+ * The telemetry question (#428), saying what is sent, where, who reads it, and how to stop and
+ * erase it, from plan 0002 and docs/telemetry.md.
+ */
+export const TELEMETRY_QUESTION =
+  "Send this repository's agent-run rows to Kanon's hosted telemetry store? Each row is plan 0002's fixed fields about one lane run (lane, outcome, model, cost, tokens, durations, counts, the run, pull request and issue numbers, the Kanon release): no code, no text, no logins or file paths. They go to one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, and are kept 13 months. Kanon's operator reads them to improve Kanon, and publishes only aggregates of at least three adopters; your repository's own reader role reads only its rows. Stop by deleting .github/workflows/telemetry.yml; the operator erases what was sent on request (docs/telemetry.md, \"Erase an adopter\").";
+
 /** @typedef {Awaited<ReturnType<typeof askAll>>} Answers */
+
+/** The repository variables the telemetry collector's caller passes (docs/telemetry.md). */
+export const TELEMETRY_VARIABLES = ['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE'];
+
+/** Where an adopter asks Kanon's operator to register a repository with the telemetry store. */
+export const TELEMETRY_REGISTRATION_URL = 'https://github.com/yedeya-labs/kanon/issues/new?template=telemetry-registration.yml';
+
+/**
+ * The step left to a person once the collector's caller is written: the operator registers the
+ * repository and gives the two variables' values. `init` and `doctor` print the same one.
+ * @param {string} repo @param {string[]} unset the variables not set @param {boolean} readable whether the token could list them
+ */
+export const telemetryStep = (repo, unset, readable) => ({
+  id: 'telemetry.register',
+  category: 'telemetry',
+  subject: repo,
+  prose: `Ask Kanon's operator to register ${repo} with the telemetry store (an issue from the template below; it names the repository publicly), then set the two variables the operator gives you:`,
+  message: readable
+    ? `${repo} calls Kanon's telemetry collector, and ${unset.join(' and ')} ${unset.length > 1 ? 'are' : 'is'} not set, so it sends nothing yet: the collector skips with a warning.`
+    : `${repo} calls Kanon's telemetry collector, and the token can't list its variables, so whether ${TELEMETRY_VARIABLES.join(' and ')} are set is not known; until both are, it sends nothing.`,
+  text: "The store's register entry and the two variables' values are Kanon's operator's to give (docs/telemetry.md, \"Add a repository\"): ask for them with the telemetry registration issue, then set both variables.",
+  commands: [
+    `gh variable set KANON_TELEMETRY_URL -R ${repo} --body '<the URL the operator gives you>'`,
+    `gh variable set KANON_TELEMETRY_WRITER_ROLE -R ${repo} --body '<the role ARN the operator gives you>'`,
+  ],
+  url: TELEMETRY_REGISTRATION_URL,
+});
 
 /** @param {string} who */
 const person = (who) => (/^[A-Za-z0-9-]+$/.test(who) ? `\`@${who}\`` : who);
@@ -821,6 +866,8 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read }) => {
   // has is the project's, and the keys to merge into it are a finding (`plugin.declare`).
   const settings = read(SETTINGS_PATH);
   if (a.plugin && (settings === null || settings === pluginSettingsFile(release))) files.set(SETTINGS_PATH, pluginSettingsFile(release));
+  // The telemetry collector's caller, only on an explicit yes (#428).
+  if (a.telemetry === true) files.set(TELEMETRY_CALLER_PATH, telemetryCallerFile(release));
   return files;
 };
 
@@ -1021,6 +1068,7 @@ const run = async (deps, opts, req, rep) => {
     deleteDefaultLabels: a.deleteDefaults,
     releaser: a.releaser,
     plugin: a.plugin,
+    telemetry: a.telemetry,
   };
 
   /** @type {string[]} what changed (or, in a dry run, would) */
@@ -1113,6 +1161,16 @@ const run = async (deps, opts, req, rep) => {
       text: `Merge these keys into ${SETTINGS_PATH}, keeping its own, or set the kanon marketplace's ref there to ${release} and enable its plugin.`,
       commands: lines,
     });
+  }
+
+  // The telemetry store's side (#428): the register entry and the two repository variables are
+  // the Kanon operator's to give (docs/telemetry.md, "Add a repository"), so a yes leaves them as
+  // a step, until both variables are set. Until then the collector skips with a warning.
+  if (a.telemetry === true) {
+    const vars = await ghJson(deps, ['variable', 'list', '-R', repo, '--json', 'name']);
+    const have = new Set(vars.ok ? vars.json.map((/** @type {any} */ v) => String(v.name)) : []);
+    const unset = TELEMETRY_VARIABLES.filter((v) => !have.has(v));
+    if (unset.length) step(telemetryStep(repo, unset, vars.ok));
   }
 
   // 4. Labels, milestones, the merge setting and the ruleset.

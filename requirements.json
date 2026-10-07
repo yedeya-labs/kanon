@@ -930,5 +930,12 @@
   },
   "release": {
     "dcoExemptsReleaser": true
+  },
+  "telemetry": {
+    "collector": "telemetry-collect",
+    "variables": [
+      "KANON_TELEMETRY_URL",
+      "KANON_TELEMETRY_WRITER_ROLE"
+    ]
   }
 }

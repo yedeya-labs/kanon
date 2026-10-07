@@ -22,11 +22,18 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 | Delete GitHub's default labels outside the taxonomy? | `--delete-default-labels`, `--keep-default-labels` | keep |
 | Create the optional Releaser App? (asked only of a repository that calls Kanon's release workflow) | `--releaser`, `--no-releaser` | no |
 | Declare the kanon plugin in `.claude/settings.json`? | `--plugin`, `--no-plugin` | yes |
+| Send this repository's agent-run rows to Kanon's hosted telemetry store? | `--telemetry`, `--no-telemetry` | no |
 | Create the Apps now? | `--create-apps`, `--no-apps` | yes |
 
-**What fails, by name, before anything changes:** a flag `init` doesn't know, `--owner` among them, with a hint naming `--project-owner`; a value flag given twice; a value `init` doesn't take (`--test-database` other than `none` or `hook`, a lane Kanon doesn't ship); two flags that contradict each other (`--delegation` and `--no-delegation`, `--delegate-name` or `--delegate-email` with `--no-delegation`, `--delete-default-labels` and `--keep-default-labels`, `--releaser` and `--no-releaser`, `--plugin` and `--no-plugin`, `--create-apps` and `--no-apps`); and `--releaser` for a repository that doesn't call Kanon's release workflow. Each exits 2.
+**What fails, by name, before anything changes:** a flag `init` doesn't know, `--owner` among them, with a hint naming `--project-owner`; a value flag given twice; a value `init` doesn't take (`--test-database` other than `none` or `hook`, a lane Kanon doesn't ship); two flags that contradict each other (`--delegation` and `--no-delegation`, `--delegate-name` or `--delegate-email` with `--no-delegation`, `--delete-default-labels` and `--keep-default-labels`, `--releaser` and `--no-releaser`, `--plugin` and `--no-plugin`, `--telemetry` and `--no-telemetry`, `--create-apps` and `--no-apps`); and `--releaser` for a repository that doesn't call Kanon's release workflow. Each exits 2.
 
 **Why `--project-owner`, not `--owner`** (the Owner, 2026-10-06): `--owner` names the GitHub account that owns the repository, in `kanon apps` and everywhere else, so the person who is the project's Owner gets a flag of their own, and `answers.projectOwner` in the JSON.
+
+### Telemetry
+
+**Telemetry is off unless you say yes** (#428). With `--telemetry`, or a yes to its question, `init` writes the caller of Kanon's telemetry collector, `.github/workflows/telemetry.yml`, exactly as [`docs/telemetry.md`](telemetry.md#collect-the-rows) gives it and pinned to this release. Hourly, it sends each agent run's row: plan 0002's fixed fields about the run (its lane, outcome, model, cost, tokens, durations and counts, the run, pull request and issue numbers, and the Kanon release), and never code, text, logins or file paths. The rows go to one table in Kanon's AWS account in Frankfurt, under an opaque key, and are kept 13 months. Kanon's operator reads them, and publishes only aggregates that at least three adopters contribute to; your repository's own reader role reads only its rows. To stop, delete the caller; to have what was sent erased, ask the operator ([Erase an adopter](telemetry.md#erase-an-adopter)).
+
+The store's side is the operator's: the register entry, and the values of the repository variables `KANON_TELEMETRY_URL` and `KANON_TELEMETRY_WRITER_ROLE`. Until both are set the collector skips with a warning and stays green, and `init` reports the step left, `telemetry.register` (as `kanon doctor` does afterwards, `telemetry.unconfigured`): ask for registration with [the telemetry registration issue](https://github.com/yedeya-labs/kanon/issues/new?template=telemetry-registration.yml), then set the two variables the operator gives you.
 
 `kanon apps` opens a browser for each App it creates, and waits for you to click Create and Install there. A program that wants to run that step on its own, for instance to explain it first, passes `--no-apps`: the command it would have run is then the finding `app.create`.
 
@@ -110,6 +117,7 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 | `deleteDefaultLabels` | boolean | Whether to delete GitHub's default labels outside the taxonomy. |
 | `releaser` | boolean | Whether to create the optional Releaser. |
 | `plugin` | boolean | Whether to declare the kanon plugin in `.claude/settings.json`, pinned to this release. |
+| `telemetry` | boolean | Whether to send the repository's agent-run rows to Kanon's hosted telemetry store, by writing the collector's caller, `.github/workflows/telemetry.yml` ([below](#telemetry)). |
 
 ### The lane catalogue
 
@@ -189,4 +197,5 @@ Every finding is non-blocking, except `app.failed`: `blocking` means it makes th
 | `secret.claude-code-oauth-token` | `secret` | The repository lacks `CLAUDE_CODE_OAUTH_TOKEN`. |
 | `secret.digest-webhook` | `secret` | The repository lacks `DIGEST_WEBHOOK`. |
 | `secret.unreadable` | `secret` | The token can't list the repository's secret names. |
+| `telemetry.register` | `telemetry` | The repository calls Kanon's telemetry collector, and `KANON_TELEMETRY_URL` and `KANON_TELEMETRY_WRITER_ROLE` aren't both set, or the token can't list its variables: the register entry and the two values are the Kanon operator's to give, and the fix says how to ask. |
 | `plugin.declare` | `plugin` | `.claude/settings.json` exists, and doesn't declare the kanon plugin at this release: the file is the project's, so `init` leaves it alone, and the fix lists the keys to merge into it. |
