@@ -319,12 +319,16 @@ export const COLLECTOR_JOB = 'collect';
 /** What the collector's script step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
 export const COLLECTOR_ENV = ['GH_TOKEN', 'KANON_TELEMETRY_URL', 'WINDOW'];
 const COLLECTOR_RUN = 'node "$KANON/scripts/telemetry-collect.mjs"';
+const COLLECTOR_MASK_RUN = 'node "$KANON/scripts/telemetry-collect.mjs" mask';
+/** What the masking step reads: the writer role's ARN, and nothing else (kanon#514). */
+const COLLECTOR_MASK_ENV = { ROLE: '${{ inputs.writer-role }}' };
 const CREDENTIALS = /^aws-actions\/configure-aws-credentials@v\d+(\.\d+){0,2}$/;
 const only = (o: object | undefined, keys: string[]) => Object.keys(o ?? {}).every((k) => keys.includes(k));
 
 /**
  * The telemetry collector's job (plan 0002 S7): `collect` in `telemetry-collect.yml`, and only
- * when its steps are exactly Kanon's path, the AWS credentials for the writer role, and the
+ * when its steps are exactly Kanon's path, the step that masks the writer role's account id
+ * (kanon#514), reading the role alone, the AWS credentials for the writer role, and the
  * collector script, with nothing beside them that could run other code: no job `env:`,
  * `container:`, `services:` or `defaults:` (`STORE_JOB_KEYS`), and only the script's own
  * variables on its step. The writer trusts every default-branch job that holds `id-token`
@@ -333,11 +337,13 @@ const only = (o: object | undefined, keys: string[]) => Object.keys(o ?? {}).eve
 export function isCollectorJob(file: string | undefined, name: string, j: Job): boolean {
   if (file !== COLLECTOR_FILE || name !== COLLECTOR_JOB || !only(j, STORE_JOB_KEYS)) return false;
   const steps = (j.steps ?? []) as Array<Record<string, unknown>>;
-  if (steps.length !== 3) return false;
-  const [path, creds, run] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
+  if (steps.length !== 4) return false;
+  const [path, mask, creds, run] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
   return only(path, ['uses']) && path.uses === '$/actions/kanon-path'
+    && only(mask, ['name', 'env', 'run']) && String(mask.run).trim() === COLLECTOR_MASK_RUN
+    && JSON.stringify(mask.env) === JSON.stringify(COLLECTOR_MASK_ENV)
     && only(creds, ['uses', 'with']) && CREDENTIALS.test(String(creds.uses))
-    && only(creds.with as object, ['role-to-assume', 'aws-region', 'role-session-name'])
+    && only(creds.with as object, ['role-to-assume', 'aws-region', 'role-session-name', 'mask-aws-account-id'])
     && only(run, ['name', 'env', 'run']) && String(run.run).trim() === COLLECTOR_RUN
     && only(run.env as object, COLLECTOR_ENV);
 }
