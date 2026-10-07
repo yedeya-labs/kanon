@@ -65,7 +65,8 @@ Some steps are the person's alone (**Only a person can**, above): creating and i
 
 <!-- x-release-please-end -->
 
-3. **Ask, then wait.** **Do it now** (Recommended), and tell me when it's done; or **Skip it for now**, recorded under `## Left to do` with the finding's id. When it's done, check it: `gh secret list`, the register rows it wrote in `docs/qa/agent-identities.md` (they go in the commit), or the doctor skill. When it exits non-zero, ask what it said, and give the line again once they've fixed it.
+3. **Say what else it changes, before they run it.** When the command creates or reuses the Releaser, it also edits the default branch's rulesets with the person's token: it adds the Releaser App to the bypass list of each repository ruleset that covers the default branch, for pull requests only, and removes nobody (`K-MERGE-8`; step 7 of `docs/apps.md` in Kanon's repository). Where the token can't edit a ruleset, or it is an organisation's, it changes nothing there and prints the step instead.
+4. **Ask, then wait.** **Do it now** (Recommended), and tell me when it's done; or **Skip it for now**, recorded under `## Left to do` with the finding's id. When it's done, check it: `gh secret list`, the register rows it wrote in `docs/qa/agent-identities.md` (they go in the commit), or the doctor skill. When it exits non-zero, ask what it said, and give the line again once they've fixed it.
 
 ## The questions
 

@@ -461,6 +461,9 @@ describe('each skill is held to the kanon command it drives', () => {
       const line = code(run!).find((c) => c.startsWith('! cd '));
       expect(line, dir).toMatch(/^! cd <the checkout's root> && npx --yes --package github:yedeya-labs\/kanon#v\d+\.\d+\.\d+ kanon apps --owner <owner> --repo <repo> --apps <apps>$/);
       expect(run, dir).toMatch(/\*\*Do it now\*\* \(Recommended\).*\*\*Skip it for now\*\*/);
+      // #382: for the Releaser, kanon apps also edits the default branch's rulesets (setReleaserBypass),
+      // so the person is told before they run it, not only by docs/apps.md.
+      expect(run, dir).toMatch(/\*\*Say what else it changes, before they run it\.\*\*[^\n]*Releaser[^\n]*bypass list[^\n]*for pull requests only[^\n]*`K-MERGE-8`/);
       // Every finding whose fix is a kanon apps command sends the agent to that section, and none
       // tells the agent to run it itself.
       const table = rows(section(s.body, /^## Who fixes each finding of `kanon [a-z]+`$/)!);
