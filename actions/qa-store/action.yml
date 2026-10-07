@@ -120,7 +120,7 @@ outputs:
     description: "`cost-rows`: the answer, `{rows, error}`, as one line of JSON, for a reader in another job. Its `error` is set when the store is absent or the read degraded."
     value: ${{ steps.finish.outputs.rows }}
   dir:
-    description: The job's store directory; `cost-rows.json` is in it.
+    description: "The job's store directory; `cost-rows.json` is in it. No Kanon lane reads it: it stays for a caller's later step in the same job, which reads the answer whole (kanon#342)."
     value: ${{ steps.prepare.outputs.dir }}
   artifact-name:
     description: "`export`: the artifact the agent job downloads."
