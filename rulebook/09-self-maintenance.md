@@ -92,7 +92,7 @@ This chapter governs how a Kanon pipeline keeps itself honest: the guards that c
 
 **Why.** It can only audit what is instrumented. Building it first produces an auditor with nothing to read and findings that are really "no data".
 
-**Enforced by.** Its prompt.
+**Enforced by.** Its prompt. Precision per signal is counted by [`scripts/signal-outcomes.mjs`](../scripts/signal-outcomes.mjs), which the prompt runs: an outcome label (`K-AGENT-12`) is the record, a signal closed by a merged pull request counts as confirmed, and a signal closed with neither is listed for whoever closed it to label.
 
 **Class.** framework
 

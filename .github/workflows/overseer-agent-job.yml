@@ -149,7 +149,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           KANON: ${{ steps.kanon.outputs.path }}
-        run: node "$KANON/scripts/ensure-labels.mjs" qa:false-positive follow-up pipeline-improvement capability
+        run: node "$KANON/scripts/ensure-labels.mjs" qa:false-positive qa:reproduced follow-up pipeline-improvement capability
 
       - uses: $/actions/agent-run
         id: agent
@@ -202,10 +202,17 @@ jobs:
             open issues, and add no finding already tracked.
 
             WHAT TO AUDIT:
-            - GitHub issues, pull requests and labels: precision per signal
-              (`qa:false-positive` against confirmed), pending promotions, and loop
-              self-deception (bugs closed without a real fix, vacuous or trivially-passing
-              tests, gamed gates).
+            - GitHub issues, pull requests and labels: precision per signal, pending
+              promotions, and loop self-deception (bugs closed without a real fix, vacuous or
+              trivially-passing tests, gamed gates). PRECISION PER SIGNAL IS COUNTED FOR YOU:
+              run `node "$KANON/scripts/signal-outcomes.mjs"` and paste its output VERBATIM
+              under a `## Precision per signal` heading; do not recount it. An outcome label
+              wins, and a signal that a merged pull request closed counts as confirmed. Its
+              `Unrecorded` line lists the signals a person closed with neither: name them in
+              ONE line asking whoever closed each to label it `qa:false-positive` or
+              `qa:reproduced`, and file nothing for them. If its first line is not
+              `signal-outcomes: ok`, say precision is UNAVAILABLE and why. These are
+              observations, never a target: propose no precision threshold.
             - Follow-up leakage: scan recently-merged pull requests' review bodies for
               deferred-work findings ("follow-up", "recommend", "worth a") and flag any with
               NO matching `follow-up` issue.

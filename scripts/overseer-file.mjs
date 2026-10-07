@@ -100,7 +100,8 @@ export const LABELS = ['pipeline-improvement', 'agent:overseer'];
 export const BUCKET = 'Development Automation';
 /** The audit issue's title, numbered. `workflow-health.mjs` finds it by `audit-summary` in the title. */
 export const auditTitle = (/** @type {number} */ n) => `[pipeline] audit-summary — Overseer audit #${n}`;
-const AUDIT_NUMBER = /audit-summary — Overseer audit #(\d+)\s*$/;
+/** An audit issue's title, as `auditTitle` writes it; `signal-outcomes.mjs` leaves these out of every signal. */
+export const AUDIT_NUMBER = /audit-summary — Overseer audit #(\d+)\s*$/;
 const MAX_TITLE = 256;
 
 export class ReportError extends Error {}
