@@ -29,6 +29,7 @@
     { "name": "pipeline-improvement", "family": "Kind of item", "color": "5319e7", "description": "Improvement to the pipeline itself; also a platform project's tracking issue" },
     { "name": "capability", "family": "Kind of item", "color": "006b75", "description": "Capability investigation: the cohort the Overseer's interlock counts" },
     { "name": "signal:spec-violation", "family": "Signal that produced a finding", "color": "fef2c0", "description": "Contradicts a promoted behavioural invariant" },
+    { "name": "signal:security", "family": "Signal that produced a finding", "color": "b60205", "description": "A security anti-pattern the code audit cites: credentials, secret compare, isolation, injection" },
     { "name": "signal:<name>", "family": "Signal that produced a finding", "color": "fef2c0", "description": "One per objective signal on the project's list (K-AGENT-9); b60205 for a security signal", "createdBy": "the project's signal list (K-AGENT-9), never a lane" },
     { "name": "review:please", "family": "Review and escalation", "color": "d4c5f9", "description": "Asks the Reviewer to review this PR" },
     { "name": "gate-candidate", "family": "Review and escalation", "color": "d93f0b", "description": "Filer says launch-gating (sev:critical or sev:high); the Stakeholder decides if it joins the gate" },

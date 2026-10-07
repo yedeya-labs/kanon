@@ -221,7 +221,7 @@ jobs:
             the text `(targeted-invariant mode)` — the environment field below carries
             it. `lead-reconcile.mjs` reads it to know the finding is this project's own
             work (a failed acceptance criterion), which holds the project open; the
-            general sweep uses the same `signal:*` label, so without it the finding is
+            general sweep uses the same `signal:spec-violation` label, so without it the finding is
             read as carried out (RA-1783).
 
             Before filing, SEARCH open issues for the same criterion and comment on
