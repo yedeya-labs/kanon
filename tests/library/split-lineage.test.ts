@@ -12,6 +12,7 @@ const { declaresMembership, parseProposed } = await import('../../scripts/lead-r
 import { writeStub } from '../unit/helpers/stub-bin.js';
 import { laneBlockOf, stepsAsRun } from '../unit/helpers/spine.js';
 import { readFlattened, workflowText } from '../unit/helpers/called-workflow.js';
+import { SPAWNS } from '../unit/helpers/spawns.js';
 const { isPreStandard } = await import('../../scripts/brief-guard.mjs');
 
 /**
@@ -144,7 +145,8 @@ describe('splitGate', () => {
   });
 });
 
-describe('the gate, run as a CLI — module evaluation is part of the contract (the Reviewer, RA-2407)', () => {
+// Its cases run the gate in `node`, so the block takes the spawn budget (#436).
+describe('the gate, run as a CLI — module evaluation is part of the contract (the Reviewer, RA-2407)', SPAWNS, () => {
   // A pure `splitGate` test cannot see a module-evaluation deadlock: the first option-(b)
   // push exited 13 with no verdict for EVERY project member and stayed green.
   //

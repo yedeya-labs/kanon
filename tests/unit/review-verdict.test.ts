@@ -9,6 +9,7 @@ import { writeStub } from './helpers/stub-bin.js';
 import { trailerFor } from '../../scripts/review-trailer.mjs';
 import { headerLine } from '../../scripts/lib/role-marker.mjs';
 import { handedIn, readFlattened } from './helpers/called-workflow.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * RA-1351 — a review run that posts nothing must not read as normal.
@@ -229,7 +230,8 @@ describe('the job fails unless a verdict was actually posted (RA-1351)', () => {
  * until now nothing wrote it down. These EXECUTE the step (RA-1032) rather than matching
  * its source, because the failure that matters is a stamp that silently never lands.
  */
-describe('stamping the commit this run reviewed (RA-1680)', () => {
+// Its cases run the step in `bash` against a stub `gh`, so the block takes the spawn budget (#436).
+describe('stamping the commit this run reviewed (RA-1680)', SPAWNS, () => {
   const stampStep = wf.jobs.review.steps.find(
     (s: { name?: string }) => s.name === 'Stamp the commit this run reviewed onto the verdict it posted');
 
@@ -564,7 +566,8 @@ describe('the step is wired so it can actually run (RA-1351)', () => {
  * group queues the second behind the first; the `claim` step then stands it down.
  * EXECUTED against a stub `gh` that runs the step's real `--jq` filter (RA-1032).
  */
-describe('one review of a head at a time (RA-2026)', () => {
+// Its cases run the step in `bash` against a stub `gh`, so the block takes the spawn budget (#436).
+describe('one review of a head at a time (RA-2026)', SPAWNS, () => {
   const review = wf.jobs.review;
   const claim = review.steps.find((s: { id?: string }) => s.id === 'claim');
   const RUN_START = '2026-09-21T15:10:10Z';

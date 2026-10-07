@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { SPAWNS } from './helpers/spawns.js';
 
 const { CONTEXT, byApp, carryDecision, pickOpened } = await import('../../actions/implementer-status/implementer-status.mjs');
 
@@ -29,7 +30,8 @@ const ours = [{ ref: 'feat/1-new', sha: sha('a') }, { ref: 'HEAD', sha: sha('a')
 const opened = (prs: ReturnType<typeof pr>[], commits: Record<string, ReturnType<typeof commitBy>>, over: Record<string, unknown> = {}) =>
   pickOpened({ prs, repo: REPO, since: SINCE, branchesBefore: before, email: EMAIL, heads: ours, headCommit: (s: string) => commits[s], ...over });
 
-describe('the summary an adopter reads when the App lacks Commit statuses write (L4)', () => {
+// Its cases run the step in `bash` against a stub `gh`, so the block takes the spawn budget (#436).
+describe('the summary an adopter reads when the App lacks Commit statuses write (L4)', SPAWNS, () => {
   it('says what now requires the status, and no longer that nothing does', () => {
     const src = readFileSync('actions/implementer-status/implementer-status.mjs', 'utf8');
     expect(src).not.toMatch(/until L4/);

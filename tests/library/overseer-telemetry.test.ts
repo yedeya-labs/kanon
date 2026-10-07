@@ -1,11 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LANES } from '../../infra/telemetry/function/schema.mjs';
 import { FILES, REGION, STATUSES, TABLE, WINDOW_DAYS, checkStore, masksOf, merge, read, readerOf, reasonOf } from '../../scripts/overseer-telemetry.mjs';
+import { SPAWNS } from '../unit/helpers/spawns.js';
+import { writeStub } from '../unit/helpers/stub-bin.js';
 
 /**
  * kanon#470 (the Owner's decision, option A): the Overseer's own cost view. The lane's
@@ -203,13 +205,14 @@ describe('the merge into the export', () => {
   });
 });
 
-describe('the script, as the lane runs it', () => {
+// Its cases run the script in `node` against a stub `aws`, so the block takes the spawn budget (#436).
+describe('the script, as the lane runs it', SPAWNS, () => {
   /** A stand-in `aws` on the PATH that records its arguments and answers rows. */
   const fakeAws = (answer: string) => {
     const bin = temp();
     const log = join(bin, 'calls');
-    writeFileSync(join(bin, 'aws'), `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${log}"\nprintf '%s' '${answer}'\n`);
-    chmodSync(join(bin, 'aws'), 0o755);
+    // A link to the shared shim, never a new executable that macOS scans on its first run (#436).
+    writeStub(join(bin, 'aws'), `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${log}"\nprintf '%s' '${answer}'\n`);
     return { bin, log };
   };
   const run = (mode: string, env: Record<string, string>) => spawnSync(process.execPath, [SCRIPT, mode], { env: { PATH: process.env.PATH ?? '', ...env }, encoding: 'utf8' });

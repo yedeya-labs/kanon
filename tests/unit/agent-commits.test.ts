@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { checkCommit, parseDelegation, parseRegister } from '../../actions/dco/dco.mjs';
 import { writeStub } from './helpers/stub-bin.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * An agent's commits pass the adopter's own `dco` check (K-AGENT-44, kanon#234).
@@ -282,7 +283,8 @@ describe('the agent-setup block runs it, and the lanes give it the App token', (
   });
 });
 
-describe("Kanon's own records (K-LAYOUT-14, K-LAYOUT-6, K-LAYOUT-16)", () => {
+// Its cases run `git` over Kanon's history, so the block takes the spawn budget (#436).
+describe("Kanon's own records (K-LAYOUT-14, K-LAYOUT-6, K-LAYOUT-16)", SPAWNS, () => {
   const kanonTrust = () => {
     const reg = parseRegister(readFileSync(join(ROOT, 'docs/qa/agent-identities.md'), 'utf8'));
     const del = parseDelegation(readFileSync(join(ROOT, RECORD), 'utf8'));

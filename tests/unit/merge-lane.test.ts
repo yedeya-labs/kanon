@@ -6,6 +6,7 @@ import { parse } from 'yaml';
 import { MERGE_CALLER, SELF_CHECKS } from '../../scripts/lib/protocol-spellings.mjs';
 import { ownRegister, runRegisterStep, withSlug, withoutRole } from './helpers/register-step.js';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * The Merger's lane, `agent-merge.yml` (plan 0004 step 7), moved from the reference adopter
@@ -396,7 +397,8 @@ describe("a review on a PR that was never the Merger's starts no runner (RA-2596
   });
 });
 
-describe('the Merger job asserts the App it minted is the one it guards on', () => {
+// Its cases run the step in `bash`, so the block takes the spawn budget (#436).
+describe('the Merger job asserts the App it minted is the one it guards on', SPAWNS, () => {
   const SLUG = merge.steps!.find((st) => st.id === 'slug')!;
   /** The step, executed in a checkout holding the fixture register, as `merge-gate.mjs` reads it. */
   const assertSlug = (env: Record<string, string>) => {

@@ -8,6 +8,7 @@ import { writeStub } from './helpers/stub-bin.js';
 import { STACK_NAME, TEMPLATE_PATH, deployCommands, lifecycleProblems, readTemplate, trustProblems, trustedSubjects } from '../../infra/qa-store/aws/provision.mjs';
 import { toRow, unmarshal } from '../../infra/qa-store/aws/export.mjs';
 import { readCostRowsFile } from '../../actions/qa-store/qa-store.mjs';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * Plan 0004 step P9: Kanon's AWS implementation of the QA store contract (`infra/qa-store/aws`).
@@ -172,7 +173,8 @@ describe('the template\'s cost and shape', () => {
   });
 });
 
-describe('the provisioning script', () => {
+// Its cases run the script in `bash` against a stub `aws`, so the block takes the spawn budget (#436).
+describe('the provisioning script', SPAWNS, () => {
   it('deploys the stack, protects it from termination, and prints its outputs', () => {
     const subjects = ['repo:o/r:ref:refs/heads/main'];
     const [deploy, protect, describe_] = deployCommands({ repository: 'o/r', subjects, defaultBranch: 'main', region: 'eu-central-1', profile: 'p' });
@@ -256,7 +258,8 @@ describe('the actions', () => {
   });
 });
 
-describe('the scripts, against a stub aws', () => {
+// Its cases run the store's scripts in `bash` against a stub `aws`, so the block takes the spawn budget (#436).
+describe('the scripts, against a stub aws', SPAWNS, () => {
   let work: string;
   let bin: string;
   let dir: string;

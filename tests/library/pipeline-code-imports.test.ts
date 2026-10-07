@@ -8,6 +8,7 @@ import { mentionsWithoutTitle } from '../../scripts/spec-coverage.mjs';
 import { readsCodeComments } from '../../scripts/citation-shift.mjs';
 import { UNDECLARED } from '../../scripts/lib/code-areas.mjs';
 import { ROOT } from './helpers/adopter.js';
+import { SPAWNS } from '../unit/helpers/spawns.js';
 
 /**
  * kanon#54: a test that imports the adopter's own pipeline code is a test of the tooling, and
@@ -78,7 +79,8 @@ describe('qaToolingImport reads the declared pipeline-code directories', () => {
   });
 });
 
-describe("the CLIs read the declaration, and name Kanon's default without it", () => {
+// Its cases run the CLIs in `node`, so the block takes the spawn budget (#436).
+describe("the CLIs read the declaration, and name Kanon's default without it", SPAWNS, () => {
   const run = (script: string, dir: string, ...args: string[]) =>
     spawnSync(process.execPath, [join(ROOT, 'scripts', script), ...args], { cwd: dir, encoding: 'utf8' });
 

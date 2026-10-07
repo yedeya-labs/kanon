@@ -3,11 +3,13 @@
 // `gh` on PATH that answers from fixtures. The scripts are read out of release.yml, so
 // what is tested is what runs.
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { SPAWNS } from './helpers/spawns.js';
+import { writeStub } from './helpers/stub-bin.js';
 
 type Step = { id?: string; name?: string; run?: string; shell?: string };
 type Workflow = { jobs: Record<string, { steps: Step[] }> };
@@ -21,7 +23,7 @@ const explain = steps.find((s) => s.name === 'Explain a failed release');
 
 const REPO = 'acme/widget';
 const fileFor = (path: string) => `${path.replace(/[^A-Za-z0-9._-]/g, '_')}.json`;
-const FAKE_GH = `#!/bin/sh
+const FAKE_GH = `#!/usr/bin/env bash
 echo "$*" >> "$FAKE_GH_DIR/calls.log"
 f="$FAKE_GH_DIR/$(printf %s "$2" | tr -c 'A-Za-z0-9._-' '_').json"
 if [ -f "$f" ]; then cat "$f"; else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
@@ -29,8 +31,8 @@ if [ -f "$f" ]; then cat "$f"; else echo "gh: Not Found (HTTP 404)" >&2; exit 1;
 
 const runStep = (step: Step | undefined, responses: Record<string, unknown>, env: Record<string, string> = {}) => {
   const dir = mkdtempSync(join(tmpdir(), 'kanon-release-'));
-  writeFileSync(join(dir, 'gh'), FAKE_GH);
-  chmodSync(join(dir, 'gh'), 0o755);
+  // A link to the shared shim, never a new executable that macOS scans on its first run (#436).
+  writeStub(join(dir, 'gh'), FAKE_GH);
   for (const [path, body] of Object.entries(responses)) writeFileSync(join(dir, fileFor(path)), JSON.stringify(body));
   const script = join(dir, 'step');
   writeFileSync(script, step?.run ?? 'process.exit(99)');
@@ -59,7 +61,8 @@ const good = {
 };
 const settings = (overrides: Record<string, unknown>) => ({ [`repos/${REPO}`]: { full_name: REPO, ...good, ...overrides } });
 
-describe('K-SHIP-3 the merge-settings guard', () => {
+// Its cases run the guard in `node` against a stub `gh`, so the block takes the spawn budget (#436).
+describe('K-SHIP-3 the merge-settings guard', SPAWNS, () => {
   it('passes squash-only settings with the PR title and body, and records when it ran', () => {
     const result = runStep(guard, settings({}));
     expect(result.status).toBe(0);
@@ -115,7 +118,8 @@ describe('K-SHIP-3 the merge-settings guard', () => {
   });
 });
 
-describe('K-SHIP-7 explaining a failed release', () => {
+// Its cases run the script in `node` against a stub `gh`, so the block takes the spawn budget (#436).
+describe('K-SHIP-7 explaining a failed release', SPAWNS, () => {
   const branch = 'release-please--branches--main--components--widget';
   const now = new Date();
   const later = new Date(now.getTime() + 5_000).toISOString();

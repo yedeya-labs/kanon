@@ -9,6 +9,7 @@ import {
   absentLine, checkRequest, deleteExport, finish, prepare, pruneReports, readCostRowsFile,
 } from '../../actions/qa-store/qa-store.mjs';
 import { STORE_SECRETS_WITH } from './helpers/store-jobs.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * Plan 0004 step P9: the QA store contract's block, `actions/qa-store`. The hook is the
@@ -349,7 +350,8 @@ describe('the block\'s steps', () => {
   });
 });
 
-describe('the script, as the block runs it', () => {
+// Its cases run the block's script in `bash` against a stub hook, so the block takes the spawn budget (#436).
+describe('the script, as the block runs it', SPAWNS, () => {
   const script = 'actions/qa-store/qa-store.mjs';
   it('fails a bad request by name, and writes the outputs to GITHUB_OUTPUT', () => {
     const out = join(work, 'out');

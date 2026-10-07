@@ -6,6 +6,7 @@ import { parse } from 'yaml';
 import { ownRegister, runRegisterStep, withSlug, withoutRole } from './helpers/register-step.js';
 import { writeStub } from './helpers/stub-bin.js';
 import { runWorkflowStep, type WorkflowStep } from './helpers/workflow-step.js';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * The Lead's reconciler, `agent-lead-reconcile.yml` (plan 0004 step 8), moved from the reference
@@ -132,7 +133,8 @@ describe('the Lead’s login comes from the App register on the default branch (
   });
 });
 
-describe('the Actions probe names the declared deploy workflow (plan 0004 P6)', () => {
+// Its cases run the probe in `bash` against a stub `gh`, so the block takes the spawn budget (#436).
+describe('the Actions probe names the declared deploy workflow (plan 0004 P6)', SPAWNS, () => {
   const probe = step((s) => String(s.name).startsWith('Probe that the App can read Actions'));
   const RECORD = (decl: string) => `# Adoption record\n\n## Choices\n\n${decl}`;
   const DECLARED = RECORD('- **Reference environment:** `preview`\n- **Reference deploy workflow:** `deploy-preview.yml`\n- **Reference deploy job:** `ship`\n');

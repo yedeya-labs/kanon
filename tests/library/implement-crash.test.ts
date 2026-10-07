@@ -14,6 +14,7 @@ import { writeStub } from '../unit/helpers/stub-bin.js';
 import { SPLIT_LABEL, splitMarker } from '../../scripts/split-lineage.mjs';
 import { AGENT_LOGIN } from '../../scripts/dispatch-sweep.mjs';
 import { ROOT } from './helpers/adopter.js';
+import { SPAWNS } from '../unit/helpers/spawns.js';
 
 /**
  * RA-2118 — a crashed implementer run must not hold a WIP slot for 48 hours.
@@ -403,7 +404,8 @@ describe('an empty run takes the crash path — retry, marker and cap (kanon#181
   });
 });
 
-describe('MODE=detect, run (kanon#181)', () => {
+// Its cases run the script in `node`, so the block takes the spawn budget (#436).
+describe('MODE=detect, run (kanon#181)', SPAWNS, () => {
   const SINCE = '2026-10-02T00:00:00Z';
   const run = ({ comments = [] as unknown[], branches = [] as string[], dates = {} as Record<string, string>, prs = [] as unknown[], state = 'OPEN', mode = 'detect', kind = '' } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'implement-empty-'));

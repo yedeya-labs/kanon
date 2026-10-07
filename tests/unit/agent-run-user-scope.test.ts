@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { claudeArgWords, loadsNoProjectSettings, settingSources } from '../../scripts/lib/claude-args.mjs';
+import { SPAWNS } from './helpers/spawns.js';
 
 /**
  * kanon#283 — a lane whose flags load no project settings gets a user scope its own job made.
@@ -87,7 +88,8 @@ describe("which of Kanon's lanes get a user scope of their own", () => {
   });
 });
 
-describe('the user-scope script', () => {
+// Its cases run the script in `bash`, so the block takes the spawn budget (#436).
+describe('the user-scope script', SPAWNS, () => {
   const dirs: string[] = [];
   afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 

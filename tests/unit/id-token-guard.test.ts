@@ -18,9 +18,12 @@ import { idTokenProblems, idTokenSource, type Job, type Workflow } from './helpe
  * variables, so a job that holds none cannot ask for a token at all.
  */
 const WORKFLOWS = '.github/workflows';
-const load = (): Record<string, Workflow> => Object.fromEntries(readdirSync(WORKFLOWS)
+// Every workflow is read and parsed once, and each case gets its own copy to change: parsing them
+// all again for each mutation made one case take over 5 s under a loaded run (#436).
+const PARSED: Record<string, Workflow> = Object.fromEntries(readdirSync(WORKFLOWS)
   .filter((f) => /\.ya?ml$/.test(f))
   .map((f) => [f, parse(readFileSync(join(WORKFLOWS, f), 'utf8')) as Workflow]));
+const load = (): Record<string, Workflow> => structuredClone(PARSED);
 const mutate = (change: (w: Record<string, Workflow>) => void) => {
   const w = load();
   change(w);

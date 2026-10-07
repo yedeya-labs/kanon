@@ -1,9 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { SPAWNS } from './helpers/spawns.js';
+import { writeStub } from './helpers/stub-bin.js';
 
 const { asRole, headerLine, markedRole, personaHeader, roleMarker, setMarkerPhase, signed, signedAs, withPersona } = await import('../../scripts/lib/role-marker.mjs');
 const { personaEnv, resolvePersona, resolveRole, speaksAsNoRole } = await import('../../actions/agent-setup/persona.mjs');
@@ -51,7 +53,8 @@ describe('the header and the marker', () => {
   });
 });
 
-describe("signedAs: a fixed step makes a post read as the role it knows it is (kanon#336)", () => {
+// Its cases run a step in `bash`, so the block takes the spawn budget (#436).
+describe("signedAs: a fixed step makes a post read as the role it knows it is (kanon#336)", SPAWNS, () => {
   it("opens a body unless its first marker is already the role's, whatever another role's says", () => {
     expect(signedAs('Approve.', 'Reviewer')).toBe(`${headerLine('Reviewer')}\n\nApprove.`);
     expect(signedAs('Approve.', 'Reviewer', 'Thea')).toBe(`${headerLine('Reviewer', 'Thea')}\n\nApprove.`);
@@ -99,7 +102,8 @@ describe('asRole: the login decides at L3, and the login and the marker at L4', 
   });
 });
 
-describe('the agent is asked to open every post with its header (agent-run)', () => {
+// Its cases run a step in `bash`, so the block takes the spawn budget (#436).
+describe('the agent is asked to open every post with its header (agent-run)', SPAWNS, () => {
   it('appends the instruction with the exact header line, and nothing else changes', () => {
     const out = withPersona('Do the work.\n', 'Reviewer', headerLine('Reviewer'));
     expect(out.startsWith('Do the work.\n\nWHO YOU SPEAK AS')).toBe(true);
@@ -254,7 +258,8 @@ describe('every fixed step that posts as an App opens the post with its header (
 });
 
 /** The register's optional `Persona` column (plan 0005 §3.3; decided by the Owner, 2026-10-05). */
-describe('personas live in the App register\'s optional Persona column', () => {
+// Its cases run steps in `bash`, so the block takes the spawn budget (#436).
+describe('personas live in the App register\'s optional Persona column', SPAWNS, () => {
   const reg = (rows: string, header = '| Role | App slug | Persona |', sep = '|---|---|---|') => `# Agent identities\n\n${header}\n${sep}\n${rows}`;
   const ROWS = '| Implementer | `acme-implementer` | The Builder |\n| Reviewer | `acme-reviewer` |  |\n| Lead | `acme-lead` | Lead |\n';
 
@@ -309,8 +314,7 @@ describe('personas live in the App register\'s optional Persona column', () => {
     const dir = mkdtempSync(join(tmpdir(), 'persona-step-'));
     try {
       writeFileSync(join(dir, 'register'), reg(ROWS));
-      writeFileSync(join(dir, 'gh'), `#!/usr/bin/env bash\ncat "${dir}/register"\n`);
-      chmodSync(join(dir, 'gh'), 0o755);
+      writeStub(join(dir, 'gh'), `#!/usr/bin/env bash\ncat "${dir}/register"\n`);
       const envFile = join(dir, 'env');
       writeFileSync(envFile, '');
       const r = spawnSync(process.execPath, ['actions/agent-setup/persona.mjs'], { encoding: 'utf8',
@@ -327,8 +331,7 @@ describe('personas live in the App register\'s optional Persona column', () => {
     const dir = mkdtempSync(join(tmpdir(), 'persona-fail-'));
     try {
       writeFileSync(join(dir, 'register'), reg(ROWS));
-      writeFileSync(join(dir, 'gh'), `#!/usr/bin/env bash\ncat "${dir}/register"\n`);
-      chmodSync(join(dir, 'gh'), 0o755);
+      writeStub(join(dir, 'gh'), `#!/usr/bin/env bash\ncat "${dir}/register"\n`);
       const envFile = join(dir, 'env');
       const step = (ROLE: string, APP_SLUG: string) => {
         writeFileSync(envFile, '');
