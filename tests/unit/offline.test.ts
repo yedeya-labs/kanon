@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { SPAWNS } from './helpers/spawns.js';
 import { writeStub } from './helpers/stub-bin.js';
 
 /**
@@ -74,10 +75,12 @@ describe('the real gh and aws are unreachable from the test suite (#524)', () =>
 
   // The real aws, reached through a PATH without the trap, with a [default] profile in
   // ~/.aws as a developer's machine has: it must find no credentials. Skipped where no
-  // real aws is installed; CI's runners have one.
+  // real aws is installed, or one too old to have export-credentials (v1, early v2); CI's
+  // runners have a current one. It starts the CLI's bundled Python, so it takes the spawn
+  // budget (#436).
   const outside = (process.env.PATH ?? '').split(delimiter).filter((d) => !d.includes('kanon-test-offline-'));
   const realAws = outside.map((d) => join(d, 'aws')).find((p) => existsSync(p));
-  it.skipIf(!realAws)('a real aws, outside the trap, finds no credentials in a ~/.aws default profile', () => {
+  it.skipIf(!realAws)('a real aws, outside the trap, finds no credentials in a ~/.aws default profile', SPAWNS, (ctx) => {
     const home = join(bin, 'home');
     mkdirSync(join(home, '.aws'), { recursive: true });
     writeFileSync(join(home, '.aws', 'credentials'),
@@ -88,6 +91,7 @@ describe('the real gh and aws are unreachable from the test suite (#524)', () =>
       encoding: 'utf8', timeout: 20_000, env: { ...process.env, HOME: home, PATH: outside.join(delimiter) },
     });
     expect(r.error).toBeUndefined();
+    if (/invalid choice/i.test(r.stderr)) ctx.skip(`${realAws} has no \`aws configure export-credentials\``);
     expect(r.stdout).not.toContain('AKIAIOSFODNN7EXAMPLE');
     expect(r.status).not.toBe(0);
     expect(r.stderr).toMatch(/no credentials found|Unable to locate credentials/i);
