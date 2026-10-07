@@ -5,11 +5,21 @@
 // RUN ONE FILE of them. Until #20 the answer to all three was the reference adopter's:
 // TypeScript files under `tests/` and `e2e/`, titles in `it('[AREA-1] …')`, and `npx vitest`.
 //
-// A FIXED TABLE, NOT A SETTING (ADR 0002). The adopter chooses nothing here. A file's own
-// extension picks its row, so a repository is never "declared" to be one language: a Python
-// service with a TypeScript front end has both rows, each for its own files. A language that
-// is not in the table is never read, so an id its tests assert stays Bare and unverifiable —
-// "nothing checked", the fail-safe reading — until a row is added for it.
+// A FIXED TABLE, NOT A SETTING (ADR 0002). A file's own extension picks its row, so a
+// repository is never "declared" to be one language: a Python service with a TypeScript front
+// end has both rows, each for its own files. A language that is not in the table is never
+// read, so an id its tests assert stays Bare and unverifiable — "nothing checked", the
+// fail-safe reading — until a row is added for it.
+//
+// THE JAVASCRIPT ROW'S TREES ARE THE ADOPTER'S (ADR 0012 as amended, the Owner's decision of
+// 2026-10-06 on kanon#20). JavaScript has no one test-file convention: where the tests live,
+// and which runner runs them, is how the project set up its runners. So the row reads the
+// `tests` trees the stack document declares under `## Code areas` (`K-LAYOUT-17`,
+// `scripts/lib/code-areas.mjs`), each with the runner that runs it. With none declared, a
+// JavaScript test is a `*.test.*` or `*.spec.*` file, the suffix the common runners discover
+// by default, and no runner is assumed for it: it is read, never run. Python's and Go's rows
+// are their runners' own discovery rules, so they take no declaration. The callers pass the
+// declared trees in, so this table reads no file.
 //
 // ADDING A LANGUAGE is one row here, and nothing in the tools that read it:
 //   1. `extensions`, and `isTest`: the language's own test-file convention, as its standard
@@ -26,15 +36,17 @@ import { basename, dirname } from 'node:path';
 
 /**
  * @typedef {'vitest' | 'playwright' | 'pytest' | 'go' | 'unknown'} Runner
+ * @typedef {{ path: string, runner?: string }} TestTree a declared `tests` tree, a
+ *   repository-relative directory ending in `/`, and the runner it names, if any
  * @typedef {{
  *   language: string,
  *   extensions: string[],
- *   isTest: (path: string) => boolean,
+ *   isTest: (path: string, trees: readonly TestTree[]) => boolean,
  *   titleConvention: string,
  *   titles: ((text: string) => string) | null,
  *   mentions: ((text: string) => string) | null,
  *   comment: 'slash' | 'hash',
- *   runner: (path: string) => Runner,
+ *   runner: (path: string, trees: readonly TestTree[]) => Runner,
  * }} Convention
  */
 
@@ -302,14 +314,31 @@ export const goTestFunctions = (text) =>
 
 const JS_EXT = ['ts', 'tsx', 'mjs', 'js'];
 
+/**
+ * The runners a declared `tests` tree may name: the JavaScript row's, the only row whose runner
+ * depends on the tree. Python's and Go's are their language's own.
+ */
+export const TREE_RUNNERS = /** @type {const} */ (['vitest', 'playwright']);
+
+/** The JavaScript suffix convention, what applies when no `tests` tree is declared. */
+const JS_SUFFIX = /\.(?:test|spec)\.[^./]+$/;
+
+/**
+ * The declared tree a path is in, the deepest when trees nest, or undefined.
+ * @param {string} path @param {readonly TestTree[]} trees
+ */
+const treeOf = (path, trees) =>
+  trees.filter((t) => path.startsWith(t.path)).sort((a, b) => b.path.length - a.path.length)[0];
+
 /** @type {Convention[]} */
 export const CONVENTIONS = [
   {
     language: 'JavaScript and TypeScript',
     extensions: JS_EXT,
-    // Every source file under `tests/` and `e2e/`, as Vitest and Playwright are set up in the
-    // reference adopter. Unchanged by #20, so no lock moves.
-    isTest: (p) => /^(tests|e2e)\//.test(p),
+    // Every source file in a declared `tests` tree, fixtures and helpers included, as a runner
+    // configured on that tree sees them; with none declared, a `*.test.*` or `*.spec.*` file
+    // wherever it is.
+    isTest: (p, trees) => (trees.length ? treeOf(p, trees) !== undefined : JS_SUFFIX.test(basename(p))),
     titleConvention: "the first argument of `describe`, `it` or `test`: `it('[ORD-1] …')`",
     // The JavaScript scanner predates this table and lives in `spec-coverage.mjs`
     // (`titlesIn`, `outsideStrings`), where its long history is recorded; null sends a
@@ -317,7 +346,12 @@ export const CONVENTIONS = [
     titles: null,
     mentions: null,
     comment: 'slash',
-    runner: (p) => (p.startsWith('tests/') ? 'vitest' : p.startsWith('e2e/') ? 'playwright' : 'unknown'),
+    // The runner its tree names. A tree that names none, or no tree, is `unknown`: Kanon never
+    // picks a JavaScript runner for the project.
+    runner: (p, trees) => {
+      const r = treeOf(p, trees)?.runner;
+      return r === 'vitest' || r === 'playwright' ? r : 'unknown';
+    },
   },
   {
     language: 'Python',
@@ -349,11 +383,20 @@ export const conventionFor = (path) => {
   return ext === undefined ? undefined : CONVENTIONS.find((c) => c.extensions.includes(ext));
 };
 
-/** Is this file a test file, by its language's convention? @param {string} path */
-export const isTestFile = (path) => conventionFor(path)?.isTest(path) ?? false;
+/**
+ * Is this file a test file, by its language's convention and the declared `tests` trees?
+ * @param {string} path
+ * @param {readonly TestTree[]} trees the stack document's `tests` areas, empty when it declares none
+ */
+export const isTestFile = (path, trees) => conventionFor(path)?.isTest(path, trees) ?? false;
 
-/** Which runner owns a test file, or `unknown`. @param {string} path @returns {Runner} */
-export const runnerFor = (path) => (isTestFile(path) ? conventionFor(path)?.runner(path) ?? 'unknown' : 'unknown');
+/**
+ * Which runner owns a test file, or `unknown`.
+ * @param {string} path
+ * @param {readonly TestTree[]} trees the stack document's `tests` areas, empty when it declares none
+ * @returns {Runner}
+ */
+export const runnerFor = (path, trees) => (isTestFile(path, trees) ? conventionFor(path)?.runner(path, trees) ?? 'unknown' : 'unknown');
 
 /** Every extension in the table, as a regex alternation. */
 export const TABLE_EXT = CONVENTIONS.flatMap((c) => c.extensions).join('|');

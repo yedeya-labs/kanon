@@ -341,7 +341,7 @@ SZZ stays possible later as a **diagnostic,** never a headline: the dry run (§7
 | `workflows` | `.github/workflows/**`, `.github/actions/**` |
 | `migrations` | the paths the adopter's escalation list puts in the `migrations` category, plus `**/migrations/**` |
 | `specs` | the spec corpus (`docs/qa/specs/**`, `K-LAYOUT-2`) |
-| `tests` | the adopter's test convention: today a JavaScript one (`*.test.*`, `*.spec.*`, `tests/**`, `__tests__/**`); per language once #20 lands |
+| `tests` | the adopter's tests: the `tests` trees its stack document declares under `## Code areas` (`K-LAYOUT-17`), else each file its language's convention calls a test (ADR 0012), `*.test.*` and `*.spec.*` in JavaScript and TypeScript (`isTestPath`, `scripts/lib/code-areas.mjs`) |
 | `docs` | `*.md`, `docs/**` |
 | `config` | dotfiles and root-level configuration files |
 | `code` | everything else |

@@ -10,20 +10,24 @@
 // (ADR 0002).
 //
 // ONE OPTIONAL SECTION OF THE STACK DOCUMENT, one bullet per area: a repository-relative path
-// in backticks, an em dash, the area's kind, a colon, and what it holds:
+// in backticks, for a `tests` tree optionally the runner that runs it in backticks, an em dash,
+// the area's kind, a colon, and what it holds:
 //
 //   ## Code areas
 //   - `src/` — code: the application
 //   - `scripts/` — code: build and release scripts
-//   - `tests/` — tests: unit and integration tests
-//   - `e2e/` — tests: the browser suite
+//   - `tests/` `vitest` — tests: unit and integration tests
+//   - `e2e/` `playwright` — tests: the browser suite
 //   - `src/server/services/` — audit: the service layer, where tenant scope and authorisation live
 //
 //   code    a tree of the project's own source. `citation-shift` reads its comments, and the
 //           spec-id reference corpus walks it.
 //   tests   a tree of tests, and of the fixtures they read. `doc-path-guard` doesn't hold its
 //           files to rule 2, the spec-id sweeps don't count a tooling test in it, and the
-//           corpus walks it.
+//           corpus walks it. Every JavaScript or TypeScript file in it is a test (ADR 0012's
+//           JavaScript row, moved here by the Owner's decision of 2026-10-06, kanon#20), run
+//           by the runner the entry names, one of `TREE_RUNNERS`; an entry that names none is
+//           read and never run.
 //   audit   what the code audit reads first, in order: a directory ending in `/`, or a file.
 //           The description is what the audit looks for there.
 //
@@ -39,7 +43,8 @@
 //           (kanon#266): every tracked file `citation-shift` can read comments in, and every
 //           tracked file the corpus can read;
 //   tests   what the file's language convention calls a test (`K-SPEC-6`,
-//           `scripts/lib/test-conventions.mjs`), file by file;
+//           `scripts/lib/test-conventions.mjs`), file by file: in JavaScript and TypeScript a
+//           `*.test.*` or `*.spec.*` file, which no runner runs;
 //   audit   the declared `code` trees, or the whole repository when none is declared.
 // A tree a guard should have read and didn't is the silent failure (kanon#180 was one), and
 // one it read and shouldn't have is a finding the project answers by declaring its trees. So
@@ -54,7 +59,7 @@ import { join } from 'node:path';
 
 import { fencedLines } from '../spec-lib.mjs';
 import { DeclarationError, bulletsOf, linesOf } from './declarations.mjs';
-import { isTestFile } from './test-conventions.mjs';
+import { TREE_RUNNERS, isTestFile } from './test-conventions.mjs';
 
 /** The stack document's fixed path (`K-LAYOUT-17`). */
 export const STACK_FILE = 'docs/qa/stack.md';
@@ -71,12 +76,13 @@ const FILE = { file: STACK_FILE, rule: 'K-LAYOUT-17' };
 /** @param {string} message */
 const fail = (message) => new DeclarationError(`${message} (K-LAYOUT-17)`);
 
-const ENTRY = /^`([^`]+)`\s+—\s+([a-z]+):\s+(\S.*)$/;
+const ENTRY = /^`([^`]+)`(?:\s+`([^`]+)`)?\s+—\s+([a-z]+):\s+(\S.*)$/;
 
 const EXAMPLE = '- `src/` — code: the application';
 
 /**
- * @typedef {{ path: string, what: string }} Area
+ * @typedef {{ path: string, what: string, runner?: string }} Area `runner`: a `tests` tree's, when
+ *   its entry names one
  * @typedef {{ declared: boolean, code: Area[], tests: Area[], audit: Area[] }} CodeAreas
  *   `declared` is whether the section exists; a kind with no bullets is undeclared.
  */
@@ -144,17 +150,25 @@ export function parseCodeAreas(text) {
   for (const { line, text: entryText } of bulletsOf(FILE, body, CODE_AREAS_HEADING)) {
     const entry = ENTRY.exec(entryText);
     if (!entry) {
-      throw fail(`${STACK_FILE}:${line}, under \`${CODE_AREAS_HEADING}\`, isn't an area: write a path in backticks, an em dash, its kind (${KINDS.join(', ')}), a colon and what it holds, as in: ${EXAMPLE}`);
+      throw fail(`${STACK_FILE}:${line}, under \`${CODE_AREAS_HEADING}\`, isn't an area: write a path in backticks, for a tests tree optionally its runner in backticks, an em dash, its kind (${KINDS.join(', ')}), a colon and what it holds, as in: ${EXAMPLE}`);
     }
-    const [, value, kind, what] = /** @type {[string, string, string, string]} */ (/** @type {unknown} */ (entry));
+    const [, value, runner, kind, what] = /** @type {[string, string, string | undefined, string, string]} */ (/** @type {unknown} */ (entry));
     if (!(/** @type {readonly string[]} */ (KINDS)).includes(kind)) {
       throw fail(`${STACK_FILE}:${line}: \`${kind}\` isn't a kind of code area; write one of ${KINDS.join(', ')}`);
+    }
+    // A runner runs a tree of tests, so only a `tests` entry names one, and only one Kanon knows
+    // how to run and read: a name it doesn't know would leave the tree's tests never run.
+    if (runner !== undefined && kind !== 'tests') {
+      throw fail(`${STACK_FILE}:${line} names the runner \`${runner}\` on a \`${kind}\` area: only a \`tests\` tree names a runner`);
+    }
+    if (runner !== undefined && !(/** @type {readonly string[]} */ (TREE_RUNNERS)).includes(runner)) {
+      throw fail(`${STACK_FILE}:${line}: \`${runner}\` isn't a runner Kanon runs a tests tree with: write ${TREE_RUNNERS.map((r) => `\`${r}\``).join(' or ')}, or none for a tree that is read and never run`);
     }
     const path = checkPath(value, kind, line);
     const key = `${kind} ${path}`;
     if (seen.has(key)) throw fail(`${STACK_FILE}:${line} declares the ${kind} area \`${path}\` again, already declared on line ${seen.get(key)}`);
     seen.set(key, line);
-    areas[/** @type {'code'|'tests'|'audit'} */ (kind)].push({ path, what: what.trim() });
+    areas[/** @type {'code'|'tests'|'audit'} */ (kind)].push({ path, what: what.trim(), ...(runner === undefined ? {} : { runner }) });
   }
   return areas;
 }
@@ -184,7 +198,7 @@ export function readCodeAreas(root = process.cwd()) {
  */
 export function codeAreasDefaults(areas) {
   if (areas.declared) return [];
-  return [`${STACK_FILE} declares no \`${CODE_AREAS_HEADING}\`, so Kanon's default applies: the code is the whole repository, and a test is what its language's convention calls one (K-LAYOUT-17)`];
+  return [`${STACK_FILE} declares no \`${CODE_AREAS_HEADING}\`, so Kanon's default applies: the code is the whole repository, and a test is what its language's convention calls one, in JavaScript and TypeScript a \`*.test.*\` or \`*.spec.*\` file that no runner runs (K-LAYOUT-17)`];
 }
 
 /**
@@ -216,7 +230,7 @@ export function isCodePath(path, areas) {
  * @param {CodeAreas} areas
  */
 export function isTestPath(path, areas) {
-  if (areas.tests.length === 0) return isTestFile(path);
+  if (areas.tests.length === 0) return isTestFile(path, []);
   return areas.tests.some((a) => path.startsWith(a.path));
 }
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -13,6 +13,9 @@ import { applyRuns, interpretRun, runTests } from '../../scripts/verify-acs.mjs'
  * where the real runner would (vitest: the `--outputFile=` argument; Playwright: the
  * `PLAYWRIGHT_JSON_OUTPUT_NAME` env var), then exits the way the scenario says.
  */
+/** The test trees the reference stack declares, each with its runner (`## Code areas`, kanon#20). */
+const TREES = [{ path: 'tests/', runner: 'vitest' }, { path: 'e2e/', runner: 'playwright' }];
+
 type Scenario = { report?: unknown; exit?: 'ok' | 'fail' | 'enoent' | 'timeout' };
 
 const vitestReport = (file: string, statuses: string[]) => ({
@@ -44,8 +47,38 @@ const fakeExec = (byFile: Record<string, Scenario>) => {
 const run = (files: string[], byFile: Record<string, Scenario>) => {
   const { exec, calls } = fakeExec(byFile);
   const outDir = mkdtempSync(join(tmpdir(), 'verify-acs-test-'));
-  return { results: runTests(files, { exec: exec as never, outDir, cwd: '/repo' }), calls };
+  return { results: runTests(files, { exec: exec as never, outDir, cwd: '/repo', trees: TREES }), calls };
 };
+
+describe("runTests runs a JavaScript file with its declared tree's runner (kanon#20)", () => {
+  const stackIn = (stack: string | null) => {
+    const dir = mkdtempSync(join(tmpdir(), 'verify-acs-stack-'));
+    if (stack !== null) {
+      mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+      writeFileSync(join(dir, 'docs/qa/stack.md'), stack);
+    }
+    return dir;
+  };
+  const ran = (cwd: string, f: string) => {
+    const { exec, calls } = fakeExec({ [f]: { report: vitestReport(f, ['passed']) } });
+    const results = runTests([f], { exec: exec as never, cwd, outDir: mkdtempSync(join(tmpdir(), 'verify-acs-test-')) });
+    return { result: results.get(f), bins: calls.map((c) => c.cmd) };
+  };
+
+  it("reads the trees from the stack document in `cwd` by default, and runs the runner it names", () => {
+    const cwd = stackIn('# Stack\n\n## Code areas\n\n- `tests/` `vitest` — tests: the suite\n');
+    expect(ran(cwd, 'tests/a.test.ts')).toEqual({ result: true, bins: ['node_modules/.bin/vitest'] });
+  });
+
+  it('runs nothing for a tree that names no runner, or with no declaration: not-run, never a guessed runner', () => {
+    expect(ran(stackIn('# Stack\n\n## Code areas\n\n- `tests/` — tests: the suite\n'), 'tests/a.test.ts')).toEqual({ result: undefined, bins: [] });
+    expect(ran(stackIn(null), 'tests/a.test.ts')).toEqual({ result: undefined, bins: [] });
+  });
+
+  it('fails by name on a malformed declaration, rather than running with none', () => {
+    expect(() => ran(stackIn('# Stack\n\n## Code areas\n\n- `tests/` `jest` — tests: the suite\n'), 'tests/a.test.ts')).toThrow(/docs\/qa\/stack\.md:5: `jest` isn't a runner/);
+  });
+});
 
 describe('runTests — could-not-run is not-run, never failed (RA-1075)', () => {
   it('a real assertion failure is `false`', () => {
@@ -97,7 +130,7 @@ describe('runTests — could-not-run is not-run, never failed (RA-1075)', () => 
       seen.push(a.find((x) => x.startsWith('--outputFile='))!.slice('--outputFile='.length));
       return exec(c, a, o);
     };
-    expect(runTests([f], { exec: spy as never }).get(f)).toBe(true);
+    expect(runTests([f], { exec: spy as never, trees: TREES }).get(f)).toBe(true);
     expect(existsSync(dirname(seen[0]))).toBe(false);
   });
 
@@ -171,7 +204,7 @@ describe('runTests in the other languages of the table (kanon#20)', () => {
       return a.stdout ?? '';
     };
     const outDir = mkdtempSync(join(tmpdir(), 'verify-acs-lang-'));
-    return { results: runTests(files, { exec: exec as never, outDir, cwd: '/repo', read }), calls };
+    return { results: runTests(files, { exec: exec as never, outDir, cwd: '/repo', read, trees: TREES }), calls };
   };
 
   it('pytest: runs the one file through `python -m pytest`, never npx, and reads its JUnit report', () => {

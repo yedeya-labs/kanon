@@ -38,11 +38,13 @@ import { idPattern, loadPrefixes, parseAll, qaToolingImport } from './spec-lib.m
 import { printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
 import { LOCKED_SET, byId, readLockedSet, serialiseLockedSet } from './locked-set.mjs';
 import { conventionFor, isTestFile } from './lib/test-conventions.mjs';
+import { codeAreasDefaults, readCodeAreas } from './lib/code-areas.mjs';
 import { execFileSync } from 'node:child_process';
 
-/** Where the JavaScript row's tests live. Other languages name a test file by its name
- *  (`test_*.py`, `*_test.go`) wherever it is, so the table, not this list, decides. */
-export const TEST_DIRS = ['tests', 'e2e'];
+/** The `tests` trees the stack document declares (`K-LAYOUT-17`), which decide the JavaScript
+ *  row's test files (ADR 0012, kanon#20), read from the working tree each time, so a run in
+ *  another directory reads that directory's. A malformed declaration throws by name. */
+export const testTrees = () => readCodeAreas().tests;
 
 /** Every test source file the scanner reads, in every language of the per-language table
  *  (`scripts/lib/test-conventions.mjs`, kanon#20). Exported so the AST oracle (RA-1255)
@@ -52,7 +54,7 @@ export const TEST_DIRS = ['tests', 'e2e'];
  *  The tree is read through git — tracked files and untracked ones it does not ignore — so a
  *  virtualenv or a vendored module, which `.gitignore` already names, is never read as the
  *  project's tests. Outside a git repository it walks the tree instead. */
-export const testFiles = () => sourceFiles().filter(isTestFile);
+export const testFiles = (trees = testTrees()) => sourceFiles().filter((f) => isTestFile(f, trees));
 
 const sourceFiles = () => {
   try {
@@ -576,7 +578,7 @@ export function mentionsWithoutTitle(known, optedOut, pipelineDirs) {
   return found;
 }
 
-/** Every invariant ID cited in a TEST TITLE under tests/ and e2e/, with where.
+/** Every invariant ID cited in a TEST TITLE, in every test file `testFiles()` reads, with where.
  *
  *  Said precisely because the previous wording — "cited anywhere under tests/ and
  *  e2e/" — was a verbatim description of the whole-file scan this module was changed
@@ -769,13 +771,13 @@ export const failures = ({ dangling, missingFiles, locked, baseline = lockedBase
     `the acknowledgement.`);
   return out;
 };
-const claimsIn = (inv) => [...new Set([...inv.raw.matchAll(CLAIM)].map((m) => m[1]).filter(isTestFile))];
+const claimsIn = (inv, trees) => [...new Set([...inv.raw.matchAll(CLAIM)].map((m) => m[1]).filter((f) => isTestFile(f, trees)))];
 
 /** Whether a claim names a test file that exists (kanon#127). A path is checked from the
  *  repository root. A BARE name, with no `/`, is how a spec names a pytest or Go test file,
  *  whose row decides by the name alone wherever the file is (`test_core.py`, `core_test.go`),
- *  so it exists if a test file of that name exists anywhere the scanner reads. The JavaScript
- *  row never reaches here with a bare name: its `isTest` needs the `tests/` or `e2e/` prefix.
+ *  so it exists if a test file of that name exists anywhere the scanner reads. A bare JavaScript
+ *  name reaches here only by the suffix convention (`a.test.ts`), and is read the same way.
  *  @param {Set<string>} testBasenames the base names of `testFiles()` */
 export const claimExists = (claim, testBasenames) =>
   existsSync(claim) || (!claim.includes('/') && testBasenames.has(claim));
@@ -796,6 +798,15 @@ function pipelineDirs() {
 }
 
 function main() {
+  let trees;
+  try {
+    const areas = readCodeAreas();
+    for (const d of codeAreasDefaults(areas)) console.error(`spec-coverage: ${d}`);
+    trees = areas.tests;
+  } catch (e) {
+    console.error(`spec-coverage: ${/** @type {Error} */ (e).message}`);
+    process.exit(1);
+  }
   const invariants = parseAll();
   const cited = citations();
   const known = new Set(invariants.map((i) => i.id));
@@ -809,12 +820,12 @@ function main() {
   // Claimed is the MIGRATION LIST, so a clause that declares it will never be locked is
   // held out of it and reported as its own tier (RA-1654).
   const unlockableIds = declaredUnlockable(invariants);
-  const claimedAll = bare.filter((i) => claimsIn(i).length > 0);
+  const claimedAll = bare.filter((i) => claimsIn(i, trees).length > 0);
   const claimed = claimedAll.filter((i) => !unlockableIds.has(i.id));
   const unlockable = claimedAll.filter((i) => unlockableIds.has(i.id));
-  const testBasenames = new Set(testFiles().map((f) => f.slice(f.lastIndexOf('/') + 1)));
+  const testBasenames = new Set(testFiles(trees).map((f) => f.slice(f.lastIndexOf('/') + 1)));
   const missingFiles = invariants
-    .flatMap((i) => claimsIn(i).filter((f) => !claimExists(f, testBasenames)).map((f) => ({ id: i.id, file: i.file, claim: f })));
+    .flatMap((i) => claimsIn(i, trees).filter((f) => !claimExists(f, testBasenames)).map((f) => ({ id: i.id, file: i.file, claim: f })));
 
   if (WRITE_LOCKED) {
     writeFileSync(LOCKED_SET, serialiseLockedSet(locked.map((i) => i.id)));

@@ -21,7 +21,11 @@ const STATIC = (path: string) => `import { check } from '${path}';\n`;
 const SPEC = '# S\n\n**Id prefix:** `STORE`\n\n## A\n\n- `[STORE-102]` `[seed]` one\n- `[STORE-103]` `[seed]` two\n';
 const ESCALATIONS = (pipeline: string) => `# Escalation paths\n\n## Escalation paths\n\n## Pipeline code\n\n${pipeline}\n`;
 
-const adopter = (escalations: string | null) => {
+// The adopter declares its test tree, so the only default a CLI can take here is the escalation
+// file's.
+const STACK = '# Stack\n\n## Gates\n\n1. `make test`\n\n## Code areas\n\n- `tests/` — tests: the suite\n';
+
+const adopter = (escalations: string | null, stack: string | null = STACK) => {
   const dir = mkdtempSync(join(tmpdir(), 'pipeline-imports-'));
   const w = (f: string, t: string) => { mkdirSync(join(dir, f, '..'), { recursive: true }); writeFileSync(join(dir, f), t); };
   w('docs/qa/specs/storefront.md', SPEC);
@@ -30,6 +34,7 @@ const adopter = (escalations: string | null) => {
   // A tooling test under the declared directory's name: its id is a fixture.
   w('tests/tool.test.ts', `${STATIC('../tools/pipeline/guard.mjs')}// [STORE-102] is a fixture here\n`);
   if (escalations !== null) w('docs/qa/escalation-paths.md', escalations);
+  if (stack !== null) w('docs/qa/stack.md', stack);
   return dir;
 };
 
@@ -113,6 +118,34 @@ describe("the CLIs read the declaration, and name Kanon's default without it", (
     expect(missing.status).toBe(none.status);
     expect(missing.stdout).toBe(none.stdout);
     expect(missing.stderr.replace(/^.*Kanon's default applies.*\n/m, '')).toBe(none.stderr);
+  });
+
+  it('spec-coverage reads a JavaScript test by the declared trees, or by its suffix when none is declared (kanon#20)', () => {
+    const locks = (stack: string | null) => {
+      const dir = adopter(ESCALATIONS(''), stack);
+      mkdirSync(join(dir, 'e2e'), { recursive: true });
+      writeFileSync(join(dir, 'e2e/checkout.ts'), "test('[STORE-103] checks out', () => {});\n");
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(join(dir, 'src/cart.spec.ts'), "it('[STORE-102] adds to the cart', () => {});\n");
+      // A spec's back-link is a claim only when it names a test file, by the same trees.
+      writeFileSync(join(dir, 'docs/qa/specs/storefront.md'), SPEC.replace('one\n', 'one (Confirmed by `e2e/smoke.ts`)\n'));
+      const r = run('spec-coverage.mjs', dir, '--json');
+      expect(r.status, r.stderr).toBe(0);
+      const { seedWithTest, claimsMissingFile } = JSON.parse(r.stdout);
+      return { locked: seedWithTest, claims: claimsMissingFile.map((c: { claim: string }) => c.claim) };
+    };
+    // Declared: every file in `e2e/` is a test, suffix or not, and a suffixed file outside every tree isn't.
+    expect(locks(`${STACK}- \`e2e/\` \`playwright\` — tests: the browser suite\n`)).toEqual({ locked: ['STORE-103'], claims: ['e2e/smoke.ts'] });
+    // Undeclared: only the suffix makes a test.
+    expect(locks(null)).toEqual({ locked: ['STORE-102'], claims: [] });
+  });
+
+  it("spec-coverage names the stack document's default when it declares no `## Code areas`, and fails by name on a malformed one (kanon#20)", () => {
+    const missing = run('spec-coverage.mjs', adopter(ESCALATIONS(''), null), '--json');
+    expect(missing.stderr).toMatch(/^spec-coverage: docs\/qa\/stack\.md declares no `## Code areas`, so Kanon's default applies: .*a `\*\.test\.\*` or `\*\.spec\.\*` file that no runner runs \(K-LAYOUT-17\)$/m);
+    const malformed = run('spec-coverage.mjs', adopter(ESCALATIONS(''), `${STACK}- \`tests/\` \`jest\` — tests: x\n`), '--json');
+    expect(malformed.status).toBe(1);
+    expect(malformed.stderr).toMatch(/^spec-coverage: docs\/qa\/stack\.md:\d+: `jest` isn't a runner/m);
   });
 
   it.each([
