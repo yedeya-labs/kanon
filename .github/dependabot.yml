@@ -29,6 +29,9 @@
 # DAILY, NOT WEEKLY. The cooldown exemption only helps once Dependabot looks: a weekly entry
 # still reached a new Kanon release up to a week late, and a Dependabot run can't be started
 # from the UI. Daily matches the entry adopters are given (actions/pr-title/README.md).
+#
+# TO ASK FOR A RUN NOW, change this file. A merged change to it on the default branch starts a
+# Dependabot run, so a release reaches the pins without waiting for the next daily check.
 version: 2
 updates:
   - package-ecosystem: github-actions
