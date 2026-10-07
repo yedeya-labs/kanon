@@ -1709,6 +1709,13 @@ describe('kanon init and telemetry (#428)', () => {
     for (const s of ['no code', 'no logins', 'Frankfurt', '13 months', "Kanon's operator", 'at least three adopters', 'deleting .github/workflows/telemetry.yml', 'Erase an adopter']) expect(TELEMETRY_QUESTION).toContain(s);
   });
 
+  it('says what the adopter gets for it, here, in the adopt skill and in the docs (#41 §2)', () => {
+    for (const s of ['Kanon notices failures it caused in your runs', 'cross-adopter cost and reliability baselines']) expect(TELEMETRY_QUESTION).toContain(s);
+    expect(read(ROOT, 'skills/adopt/SKILL.md')).toMatch(/^- \*\*What the person gets:\*\* Kanon notices failures that Kanon caused in their runs/m);
+    expect(read(ROOT, 'docs/telemetry.md')).toContain('**What an adopter gets by opting in**');
+    expect(read(ROOT, 'docs/telemetry.md')).toMatch(/erasure, which completes within 35 days/);
+  });
+
   it('on a yes, writes the caller and leaves the registration as a step until both variables are set', async () => {
     const dir = checkout();
     const d = parse(await run(dir, withVariables([]), ['--yes', '--json', '--no-apps', '--telemetry']));

@@ -158,6 +158,7 @@ An owner has one Author and one Judge (and at most one Releaser), reused across 
 Off unless the person says yes. Say, in the question itself, everything the person needs to decide:
 - **What is sent:** one row per agent run, plan 0002's fixed fields (the lane, the outcome, the model, cost, tokens, durations and counts, the run, pull request and issue numbers, the Kanon release). No code, no text, no logins, no file paths.
 - **Where it goes:** one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, kept 13 months.
+- **What the person gets:** Kanon notices failures that Kanon caused in their runs, and often fixes them before they would have to report one; they also get cross-adopter cost and reliability baselines (`docs/telemetry.md` in Kanon's repository, "What an adopter gets by opting in").
 - **Who reads it:** Kanon's operator, to improve Kanon, who publishes only aggregates that at least three adopters contribute to; the repository's own reader role reads only its own rows.
 - **How to stop and erase:** delete `.github/workflows/telemetry.yml`; the operator erases what was sent on request (`docs/telemetry.md` in Kanon's repository, "Erase an adopter").
 - **What is left after a yes:** the operator registers the repository and gives the values of two repository variables; until then the collector skips, green. On a private repository each hourly run costs about an Actions minute.
