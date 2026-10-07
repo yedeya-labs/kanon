@@ -608,6 +608,90 @@ describe('kanon init and the required check (#444)', () => {
   });
 });
 
+// #451: in a repository that hosts the lanes, `.github/workflows/<lane>.yml` is the lane itself,
+// so its caller lives elsewhere, which the adoption record waives (`caller.misplaced`, #390).
+// init honours that waiver as the caller's path, and its JSON always holds each caller's text.
+describe("kanon init and a caller at the path the adoption record declares (#451)", () => {
+  const LANE = 'name: Rebase lane\non:\n  workflow_call:\njobs:\n  rebase:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n';
+  const record = (bullets: string) => `# Adoption record\n\n## Choices\n\n${bullets}`;
+  const waiver = (path: string) => `- **Waived doctor finding:** \`caller.misplaced\` on \`${path}\` (the lane itself holds its name)\n`;
+  const RELEASE = `v${JSON.parse(read(ROOT, 'package.json')).version}`;
+  const at = (lane: string, path: string, release = RELEASE) => callerFile(lane, REQ.lanes[lane]!, { release, ciName: 'CI', defaultBranch: 'main', path });
+  const fileOf = (d: Doc, path: string) => d.files.find((f) => f.path === path);
+
+  it('compares the caller at the waived path, not the lane at the default one, and counts the lane as installed', async () => {
+    const dir = checkout({
+      '.github/workflows/agent-rebase.yml': LANE,
+      '.github/workflows/rebase.yml': at('agent-rebase', '.github/workflows/rebase.yml', 'v1.0.0'),
+      'docs/qa/adoption.md': record(waiver('.github/workflows/rebase.yml')),
+    });
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase']));
+    expect(fileOf(d, '.github/workflows/agent-rebase.yml')).toBeUndefined();
+    const caller = fileOf(d, '.github/workflows/rebase.yml')!;
+    expect(caller.status).toBe('differs');
+    expect(caller.content).toBe(at('agent-rebase', '.github/workflows/rebase.yml'));
+    expect(caller.diff).toContain(`+     uses: yedeya-labs/kanon/.github/workflows/agent-rebase.yml@${RELEASE}`);
+    expect(d.inspection.installedLanes).toContain('agent-rebase');
+  });
+
+  it("gives every caller's full content, whatever its status, and none of a declaration that is the project's", async () => {
+    const dir = checkout({ '.github/workflows/agent-rebase.yml': LANE, 'docs/qa/stack.md': '# Stack\n' });
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase']));
+    // Without a waiver the default path is offered, and its text is there to write elsewhere.
+    const offered = fileOf(d, '.github/workflows/agent-rebase.yml')!;
+    expect(offered).toMatchObject({ status: 'differs', content: at('agent-rebase', '.github/workflows/agent-rebase.yml') });
+    expect(fileOf(d, 'docs/qa/stack.md')).toMatchObject({ status: 'kept', content: null });
+    // A caller already as init writes it.
+    const same = checkout({ '.github/workflows/agent-review.yml': at('agent-review', '.github/workflows/agent-review.yml') });
+    const s = parse(await run(same, fakeGitHub(), ['--json', '--dry-run', '--no-apps']));
+    expect(fileOf(s, '.github/workflows/agent-review.yml')).toMatchObject({ status: 'same', content: at('agent-review', '.github/workflows/agent-review.yml') });
+  });
+
+  it('writes the caller at the waived path, the runtime-version trigger naming that path', async () => {
+    const dir = checkout({
+      '.github/workflows/agent-overseer.yml': LANE,
+      '.github/workflows/overseer.yml': at('agent-overseer', '.github/workflows/overseer.yml', 'v1.0.0'),
+      'docs/qa/adoption.md': record(waiver('.github/workflows/overseer.yml')),
+    });
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,overseer']));
+    const caller = fileOf(d, '.github/workflows/overseer.yml')!;
+    expect(caller.content).toContain('    paths:\n      - .github/workflows/overseer.yml\n');
+    expect(caller.content).not.toContain('agent-overseer.yml\n');
+  });
+
+  it("keeps the default path when the waived file doesn't call the lane, or the default path already does", async () => {
+    // The waived file calls another lane: the waiver is that lane's.
+    const other = checkout({
+      '.github/workflows/agent-rebase.yml': LANE,
+      '.github/workflows/rebase.yml': at('agent-review', '.github/workflows/rebase.yml'),
+      'docs/qa/adoption.md': record(waiver('.github/workflows/rebase.yml')),
+    });
+    const o = parse(await run(other, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase']));
+    expect(fileOf(o, '.github/workflows/agent-rebase.yml')!.status).toBe('differs');
+    expect(o.inspection.installedLanes).not.toContain('agent-rebase');
+    // A waived file that isn't there.
+    const missing = checkout({ '.github/workflows/agent-rebase.yml': LANE, 'docs/qa/adoption.md': record(waiver('.github/workflows/rebase.yml')) });
+    expect(fileOf(parse(await run(missing, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase'])), '.github/workflows/agent-rebase.yml')).toBeDefined();
+    // The default path is the lane's caller already: a second caller elsewhere doesn't move it.
+    const both = checkout({
+      '.github/workflows/agent-rebase.yml': at('agent-rebase', '.github/workflows/agent-rebase.yml'),
+      '.github/workflows/rebase.yml': at('agent-rebase', '.github/workflows/rebase.yml'),
+      'docs/qa/adoption.md': record(waiver('.github/workflows/rebase.yml')),
+    });
+    const b = parse(await run(both, fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase']));
+    expect(fileOf(b, '.github/workflows/agent-rebase.yml')!.status).toBe('same');
+    expect(fileOf(b, '.github/workflows/rebase.yml')).toBeUndefined();
+  });
+
+  it('honours only a waiver of caller.misplaced, under ## Choices', async () => {
+    const files = (record: string) => ({ '.github/workflows/agent-rebase.yml': LANE, '.github/workflows/rebase.yml': at('agent-rebase', '.github/workflows/rebase.yml'), 'docs/qa/adoption.md': record });
+    const paths = async (text: string) => parse(await run(checkout(files(text)), fakeGitHub(), ['--json', '--dry-run', '--no-apps', '--lanes', 'review,rebase'])).files.map((f) => String(f.path)).filter((p) => /rebase/.test(p));
+    expect(await paths(record(waiver('.github/workflows/rebase.yml')))).toEqual(['.github/workflows/rebase.yml']);
+    expect(await paths(record(waiver('.github/workflows/rebase.yml').replace('caller.misplaced', 'caller.name')))).toEqual(['.github/workflows/agent-rebase.yml']);
+    expect(await paths(`# Adoption record\n\n## People\n\n${waiver('.github/workflows/rebase.yml')}`)).toEqual(['.github/workflows/agent-rebase.yml']);
+  });
+});
+
 describe('kanon init, safely', () => {
   it('changes nothing in a dry run, and lists what it would do', async () => {
     const dir = checkout();

@@ -36,6 +36,10 @@ Each question `init` asks has a flag. A flag answers its question; `--yes` takes
 
 The store's side is the operator's: the register entry, and the values of the repository variables `KANON_TELEMETRY_URL` and `KANON_TELEMETRY_WRITER_ROLE`. Until both are set the collector skips with a warning and stays green, and `init` reports the step left, `telemetry.register` (as `kanon doctor` does afterwards, `telemetry.unconfigured`): ask for registration with [the telemetry registration issue](https://github.com/yedeya-labs/kanon/issues/new?template=telemetry-registration.yml), then set the two variables the operator gives you.
 
+### Where a lane's caller goes
+
+A lane's caller goes at the lane's file name, `.github/workflows/<lane>.yml` (`K-LAYOUT-18`). In a repository that hosts Kanon's lanes, that path holds the lane itself, so its caller lives at another path, and the adoption record waives doctor's `caller.misplaced` finding on it ([`docs/doctor.md`](doctor.md#waiving-a-finding)). **`init` honours that waiver as the caller's path** ([#451](https://github.com/yedeya-labs/kanon/issues/451)): when the file at the lane's file name doesn't call the lane, and a `caller.misplaced` waiver under `## Choices` names a file that does, `init` compares the caller there instead, so a run offers the lane's caller at the path the record declares and counts the lane as installed. A file at the lane's file name that calls the lane stays its caller. A waiver of a file that doesn't exist yet, or calls another lane, names no lane, so the first time, take the caller's text from `files[].content` of its lane's file name (every caller's full text is there, whatever its status), write it at the path you choose, and add the waiver. No repository is special-cased.
+
 `kanon apps` opens a browser for each App it creates, and waits for you to click Create and Install there. A program that wants to run that step on its own, for instance to explain it first, passes `--no-apps`: the command it would have run is then the finding `app.create`.
 
 ## The JSON output
@@ -161,7 +165,7 @@ What `--lanes` chooses from, so a person, or the adopt skill asking them, can ch
 |---|---|---|
 | `path` | string | From the checkout's root. |
 | `status` | string | `new` (written, or in a dry run would be), `same` (already as `init` writes it), `kept` (a declaration or hook that is the project's, left alone) or `differs` (a workflow that differs from what `init` would write, left alone). |
-| `content` | string or null | What `init` writes, for a `new` file. |
+| `content` | string or null | What `init` writes, or would write, whatever the file's status ([#451](https://github.com/yedeya-labs/kanon/issues/451)): for a `differs` file it is the full text the diff compares with, so a program can write it at another path. Null only for a `kept` file, whose content is the project's to say. |
 | `diff` | array | Strings: for a file that `differs`, the lines that differ, `- ` for the file's and `+ ` for what `init` would write. |
 
 ### A change

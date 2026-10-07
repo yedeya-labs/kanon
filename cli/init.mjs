@@ -921,14 +921,40 @@ export const checkoutWorkflows = (deps, root) => {
   return out;
 };
 
+/** The `uses:` line of a caller of `lane`. @param {string} lane */
+const callsLane = (lane) => `uses: yedeya-labs/kanon/.github/workflows/${lane}.yml@`;
+
+/**
+ * Where each lane's caller lives (#451): at its lane's file name, `.github/workflows/<lane>.yml`
+ * (`K-LAYOUT-18`), unless the file there doesn't call the lane and the adoption record waives
+ * `caller.misplaced` on a file that does (#390). In a repository that hosts Kanon's lanes, the
+ * lane's file name holds the lane itself, so its caller lives at the path the waiver names, and
+ * init compares and writes it there. Only a waived file that already calls the lane names it: a
+ * waiver says nothing of which lane a file it doesn't hold yet would call.
+ * @param {string[]} lanes @param {(rel: string) => string | null} read
+ * @param {string[]} waived the subjects of the record's `caller.misplaced` waivers, in its order
+ * @returns {Map<string, string>} lane → path from the checkout's root
+ */
+export const callerPaths = (lanes, read, waived) => {
+  /** @type {Map<string, string>} */
+  const out = new Map();
+  for (const lane of lanes) {
+    const own = `.github/workflows/${lane}.yml`;
+    const declared = (read(own) ?? '').includes(callsLane(lane)) ? undefined : waived.find((p) => (read(p) ?? '').includes(callsLane(lane)));
+    out.set(lane, declared ?? own);
+  }
+  return out;
+};
+
 /**
  * Every file `init` would write, by path relative to the checkout. A file it leaves to its
  * default is not here.
- * @param {{ s: Inspection, a: Answers, req: Requirements, release: string, repo: string, today: string, read: (rel: string) => string | null, workflows: Map<string, Record<string, any>> }} c
- *   `workflows`: the checkout's, parsed, by path (`checkoutWorkflows`)
+ * @param {{ s: Inspection, a: Answers, req: Requirements, release: string, repo: string, today: string, read: (rel: string) => string | null, workflows: Map<string, Record<string, any>>, callers?: Map<string, string> }} c
+ *   `workflows`: the checkout's, parsed, by path (`checkoutWorkflows`); `callers`: where each
+ *   lane's caller lives, when not at its lane's file name (`callerPaths`)
  * @returns {Map<string, string>}
  */
-export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows }) => {
+export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows, callers = new Map() }) => {
   /** @type {Map<string, string>} */
   const files = new Map();
   files.set('docs/qa/adoption.md', adoptionFile(s, a, repo, today));
@@ -940,7 +966,8 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows 
   const ci = read('.github/workflows/ci.yml');
   const ciName = ci === null ? 'CI' : workflowName(ci, '.github/workflows/ci.yml');
   for (const lane of a.lanes) {
-    files.set(`.github/workflows/${lane}.yml`, callerFile(lane, /** @type {import('./callers.mjs').Lane} */ (req.lanes[lane]), { release, ciName, defaultBranch: s.defaultBranch }));
+    const path = callers.get(lane) ?? `.github/workflows/${lane}.yml`;
+    files.set(path, callerFile(lane, /** @type {import('./callers.mjs').Lane} */ (req.lanes[lane]), { release, ciName, defaultBranch: s.defaultBranch, path }));
   }
   const identities = appIdentities(a, req);
   if (identities.length) files.set('.github/workflows/apps-check.yml', appsCheckFile(identities, release));
@@ -1145,9 +1172,14 @@ const run = async (deps, opts, req, rep) => {
   } catch (e) {
     return stop(1, [`${/** @type {Error} */ (e).message}. Nothing was changed.`]);
   }
-  // A lane counts as installed when its caller calls it, not when a file has its name: in
-  // Kanon's own tree that path holds the lane itself.
-  const installed = Object.keys(req.lanes).filter((l) => (read(`.github/workflows/${l}.yml`) ?? '').includes(`uses: yedeya-labs/kanon/.github/workflows/${l}.yml@`));
+  // A lane counts as installed when its caller calls it, not when a file has its name: in a
+  // repository that hosts the lanes that path holds the lane itself, and its caller lives where
+  // the adoption record's caller.misplaced waiver says (#451). Doctor reads the waivers, and init
+  // reads them as doctor does; doctor imports init, so init loads it only once both are loaded.
+  const { ADOPTION_RECORD, readWaivers } = await import('./doctor.mjs');
+  const waived = readWaivers(read(ADOPTION_RECORD)).waivers.filter((w) => w.id === 'caller.misplaced').map((w) => w.subject);
+  const callers = callerPaths(Object.keys(req.lanes), read, waived);
+  const installed = Object.keys(req.lanes).filter((l) => (read(/** @type {string} */ (callers.get(l))) ?? '').includes(callsLane(l)));
   rep.inspection = {
     owner: s.owner,
     ownerKind: s.kind === 'User' ? 'user' : 'organization',
@@ -1258,13 +1290,13 @@ const run = async (deps, opts, req, rep) => {
   out('');
   out('== Files ==');
   const workflows = checkoutWorkflows(deps, root);
-  const files = plannedFiles({ s, a, req, release, repo, today: deps.today(), read, workflows });
+  const files = plannedFiles({ s, a, req, release, repo, today: deps.today(), read, workflows, callers });
   let wrote = false;
   for (const [rel, text] of files) {
     const have = read(rel);
     if (have === text) {
       out(`${rel}: already as init writes it.`);
-      rep.files.push({ path: rel, status: 'same', content: null, diff: [] });
+      rep.files.push({ path: rel, status: 'same', content: text, diff: [] });
       continue;
     }
     if (have !== null && (rel.startsWith('docs/') || rel === req.hook.path)) {
@@ -1278,7 +1310,9 @@ const run = async (deps, opts, req, rep) => {
       out(`${rel}: exists and differs from what init would write; left unchanged. The difference:`);
       const diff = lineDiff(have, text).filter((l) => !l.startsWith('  '));
       for (const l of diff) out(`    ${l}`);
-      rep.files.push({ path: rel, status: 'differs', content: null, diff });
+      // Its full text too, so a program can write it elsewhere, such as a caller whose lane's
+      // file name another file holds (#451).
+      rep.files.push({ path: rel, status: 'differs', content: text, diff });
       continue;
     }
     if (!dry) deps.writeFile(join(root, rel), text);

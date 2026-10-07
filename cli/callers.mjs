@@ -76,9 +76,10 @@ const y = (s) => (/^[A-Za-z0-9_][A-Za-z0-9_ ./()—-]*$/.test(s) && !/[ ]$/.test
  * `permissions` and one job that passes its inputs through, maps exactly the lane's secrets and
  * names the lane at `release`.
  * @param {string} lane the lane's file name without `.yml` @param {Lane} spec
- * @param {{ release: string, ciName: string, defaultBranch: string }} o
+ * @param {{ release: string, ciName: string, defaultBranch: string, path?: string }} o `path`: where
+ *   the caller lives, when not at its lane's file name (#451); a trigger on the file itself names it
  */
-export const callerFile = (lane, spec, { release, ciName, defaultBranch }) => {
+export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = `.github/workflows/${lane}.yml` }) => {
   const t = TRIGGERS[lane];
   if (!t) throw new Error(`no caller template for the lane ${lane}: add its triggers to TRIGGERS in cli/callers.mjs`);
   const out = [`# The caller of Kanon's ${lane} lane, written by \`kanon init\` (docs/lanes.md). The triggers are yours;`, '# the rest is the lane\'s, and `lane-check` holds this file to it.'];
@@ -107,7 +108,7 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch }) => {
   }
   if (t.pinMoved) {
     out.push('  # The runtime-version trigger: a merged pull request that moves this file\'s Kanon pin.',
-      '  pull_request_target:', '    types: [closed]', `    branches: [${y(defaultBranch)}]`, '    paths:', `      - .github/workflows/${lane}.yml`);
+      '  pull_request_target:', '    types: [closed]', `    branches: [${y(defaultBranch)}]`, '    paths:', `      - ${path}`);
   }
   out.push('', 'permissions:');
   for (const [k, v] of Object.entries(spec.grant)) out.push(`  ${k}: ${v}`);
