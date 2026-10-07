@@ -1,0 +1,13 @@
+{
+  "model": "jev-1.13.0",
+  "answers": {
+    "kind": {
+      "type": "choice",
+      "choice": "kanon_bug",
+      "probabilities": { "kanon_bug": 0.94, "adopter_configuration": 0.04, "platform": 0.0, "unclear": 0.02 },
+      "confidence": 0.93
+    },
+    "actionable": { "type": "noul", "noul": 0.96 }
+  },
+  "usage": { "input_tokens": 612, "output_tokens": 20 }
+}
