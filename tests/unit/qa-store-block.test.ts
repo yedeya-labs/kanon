@@ -401,6 +401,27 @@ describe('delete-export, and a re-run of the agent job alone (kanon#224)', () =>
       + 'The agent job was skipped rather than run without the store. Use "Re-run all jobs", which exports again.');
   });
 
+  // kanon#499: the Overseer's `delete-telemetry` job deletes its telemetry reports with the same
+  // operation, and what it says names them, not the store's export.
+  it('names the telemetry reports, not the export, when the artifact is the telemetry read\'s', async () => {
+    const t = { ...base, ARTIFACT_KIND: 'telemetry' };
+    expect(await deleteExport(t, api(204))).toEqual({ lines: ['Deleted the telemetry reports (artifact 42).'], error: null });
+    expect(await deleteExport(t, api(404))).toEqual({ lines: ['The telemetry reports (artifact 42) were already deleted.'], error: null });
+    expect((await deleteExport(t, api(500))).error).toBe('deleting the telemetry reports (artifact 42) failed: HTTP 500');
+    expect((await deleteExport({ ...t, EXPORT_ATTEMPT: '' }, api(204))).error).toBe("delete-export needs export-attempt, the telemetry job's attempt output");
+    expect(await deleteExport({ ...t, ARTIFACT_ID: '' }, api(204))).toEqual({ lines: ['No telemetry reports to delete: the telemetry job uploaded none.'], error: null });
+    const r = await deleteExport({ ...t, RUN_ATTEMPT: '2', AGENT_RESULT: 'skipped' }, api(404));
+    expect(r.error).toBe('attempt 2 re-ran the agent job without the telemetry job, whose telemetry reports, from attempt 1, were deleted when that attempt finished. '
+      + 'The agent job was skipped rather than run without them. Use "Re-run all jobs", which reads the telemetry again.');
+    expect(r.error).not.toMatch(/export/);
+  });
+
+  it('the block hands the kind to the delete step, defaulting to the export', () => {
+    const block = parse(readFileSync('actions/qa-store/action.yml', 'utf8')) as { inputs: Record<string, { default?: string }>; runs: { steps: Array<{ name?: string; env?: Record<string, string> }> } };
+    expect(block.inputs['artifact-kind']?.default).toBe('export');
+    expect(block.runs.steps.find((x) => x.name === 'Delete the export')?.env?.ARTIFACT_KIND).toBe('${{ inputs.artifact-kind }}');
+  });
+
   it('leaves green a re-run of the delete job alone, and an agent skipped on the export\'s own attempt', async () => {
     // Attempt 1's agent succeeded and its delete failed: attempt 2 re-runs only the delete.
     expect((await deleteExport({ ...base, RUN_ATTEMPT: '2' }, api(204))).error).toBeNull();

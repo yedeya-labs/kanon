@@ -327,7 +327,17 @@ aws cloudformation describe-stacks --stack-name kanon-telemetry --profile kanon 
   | gh secret set KANON_TELEMETRY_READER_ROLE -R <owner>/<repo>
 ```
 
-then map it in the Overseer's caller, under the job's `secrets:`, once the caller pins a release that declares it: `KANON_TELEMETRY_READER_ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}`. The job masks the account id and the key in the role's name before any other step names them. A run on a ref the role doesn't trust, such as a dispatch from another branch or the runtime-version trigger's pull request, reads nothing, and the audit says the read `failed`.
+then map it in the Overseer's caller, under the job's `secrets:`, once the caller pins a release that declares it: `KANON_TELEMETRY_READER_ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}`. The job masks the account id and the key in the role's name before any other step names them. A run on a ref the role doesn't trust, such as a dispatch from another branch, reads nothing, and the audit says the read `failed`. On the runtime-version trigger, whose `pull_request_target` token the role refuses, the job doesn't try: the audit says the read was `not run on this trigger` (the Owner's decision on [#499](https://github.com/yedeya-labs/kanon/pull/499)).
+
+**A self-hosted telemetry store** is read the same way. The table and region default to the hosted store's, `kanon-telemetry` in `eu-central-1`. A caller reading its own stack sets them in its job's `with:`, beside its `uses:` of the lane:
+
+```yaml
+    with:
+      telemetry-table: <its table>
+      telemetry-region: <its region>
+```
+
+`lane-check` admits a plain value there, since the lane marks both inputs as caller settings. The lane checks the table against DynamoDB's table-name shape and the region against an AWS region code before the credentials step uses either, and stops the read by name on one that isn't.
 
 ### The Explorer's lane
 

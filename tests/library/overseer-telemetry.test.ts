@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LANES } from '../../infra/telemetry/function/schema.mjs';
-import { FILES, REGION, STATUSES, TABLE, WINDOW_DAYS, masksOf, merge, read, readerOf, reasonOf } from '../../scripts/overseer-telemetry.mjs';
+import { FILES, REGION, STATUSES, TABLE, WINDOW_DAYS, checkStore, masksOf, merge, read, readerOf, reasonOf } from '../../scripts/overseer-telemetry.mjs';
 
 /**
  * kanon#470 (the Owner's decision, option A): the Overseer's own cost view. The lane's
@@ -47,16 +47,27 @@ describe('the reader role', () => {
     expect(masksOf({})).toEqual([]);
   });
 
-  it('reads the hosted store, where it lives', () => {
+  it('reads the hosted store by default, where it lives', () => {
     expect(TABLE).toBe('kanon-telemetry');
     expect(REGION).toBe('eu-central-1');
     expect(WINDOW_DAYS).toBe(14);
+    expect(checkStore({})).toEqual({ table: TABLE, region: REGION, problems: [] });
+    expect(checkStore({ TABLE: '', REGION: ' ' })).toEqual({ table: TABLE, region: REGION, problems: [] });
+  });
+
+  // kanon#499: a self-hosted store's table and region, as the caller sets them, held to their shapes.
+  it('takes a self-hosted table and region, and refuses one of the wrong shape by name', () => {
+    expect(checkStore({ TABLE: 'acme_telemetry.v2', REGION: 'us-gov-west-1' })).toEqual({ table: 'acme_telemetry.v2', region: 'us-gov-west-1', problems: [] });
+    expect(checkStore({ REGION: 'ap-southeast-2' }).problems).toEqual([]);
+    for (const table of ['ab', 'a b', 'kanon/telemetry', '${{ x }}', 't'.repeat(256)]) expect(checkStore({ TABLE: table }).problems, table).toEqual([expect.stringMatching(/the telemetry-table input .* is not a DynamoDB table name/)]);
+    for (const region of ['eu-central', 'EU-CENTRAL-1', 'eu-central-1; rm', 'europe', '1-a-1']) expect(checkStore({ REGION: region }).problems, region).toEqual([expect.stringMatching(/the telemetry-region input .* is not an AWS region code/)]);
   });
 });
 
 describe('the read', () => {
-  const queried: Array<{ pk: string, from: string, attributes: readonly string[] }> = [];
-  const query = (items: (lane: string) => unknown[]) => (q: { pk: string, from: string, attributes: readonly string[] }) => {
+  type Q = { pk: string, from: string, attributes: readonly string[], table?: string, region?: string };
+  const queried: Q[] = [];
+  const query = (items: (lane: string) => unknown[]) => (q: Q) => {
     queried.push(q);
     return items(q.pk.slice(q.pk.indexOf('#') + 1)) as never;
   };
@@ -102,6 +113,16 @@ describe('the read', () => {
     const r = read({ ROLE, CREDENTIALS: 'success' }, { query: () => { throw new Error('ExpiredToken'); }, now: NOW, workflows: WORKFLOWS });
     expect(r).toMatchObject({ status: 'failed', files: {} });
     expect(r.lines[0]).toMatch(/none of the \d+ lane partitions could be read \(ExpiredToken\)/);
+  });
+
+  it('reads the table and region it is given, and refuses a malformed one before any query', () => {
+    queried.length = 0;
+    read({ ROLE, CREDENTIALS: 'success', TABLE: 'acme-telemetry', REGION: 'us-east-2' }, { query: query(() => []), now: NOW, workflows: WORKFLOWS });
+    expect(new Set(queried.map((q) => `${q.table}@${q.region}`))).toEqual(new Set(['acme-telemetry@us-east-2']));
+    const never = () => { throw new Error('must not query'); };
+    const bad = read({ ROLE, CREDENTIALS: 'success', REGION: 'nowhere' }, { query: never, now: NOW, workflows: WORKFLOWS });
+    expect(bad).toMatchObject({ status: 'failed', files: {} });
+    expect(bad.lines[0]).toMatch(/^The telemetry read failed: the telemetry-region input `nowhere` is not an AWS region code/);
   });
 
   it('fails, reading nothing, when the role could not be assumed or isn\'t a reader role', () => {
@@ -164,7 +185,15 @@ describe('the merge into the export', () => {
     expect(readdirSync(missing)).toEqual(['manifest.json']);
     expect(manifestOf(missing).telemetry).toBe('failed');
     for (const odd of ['', 'yes', undefined]) expect(merge({ TELEMETRY_STATUS: odd, EXPORT_DIR: exportDir(PRESENT) }).status).toBe('failed');
-    expect(STATUSES).toEqual(['ran', 'not configured', 'failed']);
+    expect(STATUSES).toEqual(['ran', 'not configured', 'not run on this trigger', 'failed']);
+  });
+
+  // kanon#499: on the runtime-version trigger the read isn't tried, and the manifest says so.
+  it('records `not run on this trigger` as it is, passing a hook\'s own files on', () => {
+    const dir = exportDir(PRESENT, { 'areas.json': '[]', 'cache-ttl.md': 'hook\n' });
+    expect(merge({ TELEMETRY_STATUS: 'not run on this trigger', TELEMETRY_DIR: telemetry(), EXPORT_DIR: dir })).toEqual({ status: 'not run on this trigger', line: "Telemetry read: not run on this trigger. The store hook's own files are passed on." });
+    expect(readFileSync(join(dir, 'cache-ttl.md'), 'utf8')).toBe('hook\n');
+    expect(manifestOf(dir)).toMatchObject({ telemetry: 'not run on this trigger', files: ['areas.json', 'cache-ttl.md'] });
   });
 
   it('writes a manifest even when the export\'s is unreadable, saying so', () => {
@@ -214,8 +243,22 @@ describe('the script, as the lane runs it', () => {
     expect(r.stdout).toMatch(/::warning title=overseer telemetry::The telemetry read failed/);
   });
 
-  it('mask: registers the three masks first', () => {
-    expect(run('mask', { ROLE }).stdout.split('\n').slice(0, 3)).toEqual([`::add-mask::${ROLE}`, `::add-mask::${ACCOUNT}`, `::add-mask::${KEY}`]);
+  it('mask: registers the three masks first, then checks the table and region', () => {
+    const ok = run('mask', { ROLE });
+    expect(ok.status).toBe(0);
+    expect(ok.stdout.split('\n').slice(0, 3)).toEqual([`::add-mask::${ROLE}`, `::add-mask::${ACCOUNT}`, `::add-mask::${KEY}`]);
+    expect(ok.stdout).toContain('Reading the telemetry table kanon-telemetry in eu-central-1.');
+    const bad = run('mask', { ROLE, TABLE: 'a b', REGION: 'eu-central-1' });
+    expect(bad.status).toBe(1);
+    expect(bad.stdout.split('\n').slice(0, 3)).toEqual([`::add-mask::${ROLE}`, `::add-mask::${ACCOUNT}`, `::add-mask::${KEY}`]);
+    expect(bad.stdout).toMatch(/::error title=overseer telemetry::the telemetry-table input `a b` is not a DynamoDB table name/);
+  });
+
+  it('read: queries the table and region it is handed', () => {
+    const { bin, log } = fakeAws(JSON.stringify({ Items: [] }));
+    const r = run('read', { PATH: `${bin}:${process.env.PATH}`, ROLE, CREDENTIALS: 'success', OUT: join(temp(), 'out'), GITHUB_OUTPUT: join(temp(), 'o'), TABLE: 'acme-telemetry', REGION: 'us-east-2' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(log, 'utf8').split('\n')[0]).toContain('dynamodb query --table-name acme-telemetry --region us-east-2');
   });
 
   it('refuses an unknown mode', () => {

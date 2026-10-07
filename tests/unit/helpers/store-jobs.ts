@@ -404,14 +404,17 @@ const OT_READ_RUN = 'node "$KANON/scripts/overseer-telemetry.mjs" read';
 /** The role the job assumes, and the masking step reads: the lane's secret, mapped by name in its caller. */
 const OT_ROLE = '${{ secrets.KANON_TELEMETRY_READER_ROLE }}';
 /** What the read step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
-export const OT_READ_ENV = { ROLE: OT_ROLE, CREDENTIALS: '${{ steps.creds.outcome }}', OUT: '${{ runner.temp }}/overseer-telemetry' };
+/** The store's table and region, the lane's caller settings (kanon#499), which the mask step checks first. */
+const OT_STORE = { TABLE: '${{ inputs.telemetry-table }}', REGION: '${{ inputs.telemetry-region }}' };
+export const OT_MASK_ENV = { ROLE: OT_ROLE, ...OT_STORE };
+export const OT_READ_ENV = { ROLE: OT_ROLE, CREDENTIALS: '${{ steps.creds.outcome }}', OUT: '${{ runner.temp }}/overseer-telemetry', ...OT_STORE };
 
 /**
  * The Overseer's `telemetry` job (kanon#470; plan 0002 §6): `telemetry` in `agent-overseer.yml`,
  * and only in exactly this shape: Kanon's path; the step that masks the role's account id and key;
- * the AWS credentials for the reader role, from the lane's secret, continuing on error so a
- * refusal is a `failed` read; the read script, handed only the role, the credentials' outcome and
- * its output directory; and the upload of the two reports from the runner's temp directory. Its
+ * the AWS credentials for the reader role, from the lane's secret, in the region the lane's input
+ * names, continuing on error so a refusal is a `failed` read; the read script, handed only the
+ * role, the credentials' outcome, its output directory and the table and region inputs; and the upload of the two reports from the runner's temp directory. Its
  * grant is `id-token: write` and nothing else, and it carries no job `env:`, `container:`,
  * `services:` or `defaults:` (`STORE_JOB_KEYS`). The reader role trusts every default-branch job
  * that holds `id-token`, so the shape is what keeps the set to this job.
@@ -425,11 +428,12 @@ export function isOverseerTelemetryJob(file: string | undefined, name: string, j
   const w = (upload.with ?? {}) as Record<string, unknown>;
   return only(path, ['uses']) && path.uses === '$/actions/kanon-path'
     && only(mask, ['name', 'env', 'run']) && String(mask.run).trim() === OT_MASK_RUN
-    && JSON.stringify(mask.env) === JSON.stringify({ ROLE: OT_ROLE })
+    && JSON.stringify(mask.env) === JSON.stringify(OT_MASK_ENV)
     && only(creds, ['uses', 'id', 'continue-on-error', 'with']) && CREDENTIALS.test(String(creds.uses))
     && creds.id === 'creds'
     && only(creds.with as object, ['role-to-assume', 'aws-region', 'role-session-name'])
     && (creds.with as Record<string, unknown>)['role-to-assume'] === OT_ROLE
+    && (creds.with as Record<string, unknown>)['aws-region'] === OT_STORE.REGION
     && only(read, ['name', 'id', 'env', 'run']) && String(read.run).trim() === OT_READ_RUN
     && JSON.stringify(read.env) === JSON.stringify(OT_READ_ENV)
     && only(upload, ['name', 'id', 'if', 'uses', 'with']) && UPLOAD.test(String(upload.uses))

@@ -442,7 +442,7 @@ export function finish(env, now = Date.now()) {
  * An artifact already gone (404) is not an error: the export not existing is the goal.
  *
  * @param {Record<string, string | undefined>} env `ARTIFACT_ID`, `EXPORT_ATTEMPT`, `RUN_ATTEMPT`,
- *   `AGENT_RESULT`, `REPO`, `GH_TOKEN`, `GITHUB_API_URL`
+ *   `AGENT_RESULT`, `ARTIFACT_KIND` (`telemetry` for the Overseer's telemetry reports), `REPO`, `GH_TOKEN`, `GITHUB_API_URL`
  * @param {typeof fetch} fetchImpl
  * @returns {Promise<{ lines: string[], error: string | null }>}
  */
@@ -450,23 +450,37 @@ export async function deleteExport(env, fetchImpl = fetch) {
   const id = env.ARTIFACT_ID ?? '';
   const exportAttempt = env.EXPORT_ATTEMPT ?? '';
   const runAttempt = env.RUN_ATTEMPT ?? '';
+  // WHAT THE ARTIFACT HOLDS, for what the delete says (kanon#499): the QA store's export, or the
+  // Overseer's telemetry reports, which its `telemetry` job uploads and `delete-telemetry` deletes.
+  const telemetry = env.ARTIFACT_KIND === 'telemetry';
+  const What = telemetry ? 'The telemetry reports' : 'The QA store export';
+  const what = What.charAt(0).toLowerCase() + What.slice(1);
+  const job = telemetry ? 'the telemetry job' : 'the export job';
   /** @type {string[]} */
   const lines = [];
   if (id !== '' && !/^\d+$/.test(id)) return { lines, error: `artifact-id '${id}' is not a number` };
-  if (id !== '' && exportAttempt === '') return { lines, error: 'delete-export needs export-attempt, the export job\'s attempt output' };
+  if (id !== '' && exportAttempt === '') return { lines, error: telemetry ? 'delete-export needs export-attempt, the telemetry job\'s attempt output' : 'delete-export needs export-attempt, the export job\'s attempt output' };
   if (id === '') {
-    lines.push('No export artifact to delete: the export job uploaded none.');
+    lines.push(telemetry ? 'No telemetry reports to delete: the telemetry job uploaded none.' : 'No export artifact to delete: the export job uploaded none.');
   } else {
     const api = env.GITHUB_API_URL || 'https://api.github.com';
     const res = await fetchImpl(`${api}/repos/${env.REPO}/actions/artifacts/${id}`, {
       method: 'DELETE',
       headers: { authorization: `Bearer ${env.GH_TOKEN}`, accept: 'application/vnd.github+json' },
     });
-    if (res.status === 404) lines.push(`The QA store export (artifact ${id}) was already deleted.`);
-    else if (res.ok) lines.push(`Deleted the QA store export (artifact ${id}).`);
-    else return { lines, error: `deleting the QA store export (artifact ${id}) failed: HTTP ${res.status}` };
+    if (res.status === 404) lines.push(`${What} (artifact ${id}) ${telemetry ? 'were' : 'was'} already deleted.`);
+    else if (res.ok) lines.push(`Deleted ${what} (artifact ${id}).`);
+    else return { lines, error: `deleting ${what} (artifact ${id}) failed: HTTP ${res.status}` };
   }
   if (exportAttempt !== '' && exportAttempt !== runAttempt && env.AGENT_RESULT === 'skipped') {
+    if (telemetry) {
+      return {
+        lines,
+        error: `attempt ${runAttempt} re-ran the agent job without ${job}, whose telemetry reports, from attempt ${exportAttempt}, `
+          + 'were deleted when that attempt finished. The agent job was skipped rather than run without them. '
+          + 'Use "Re-run all jobs", which reads the telemetry again.',
+      };
+    }
     return {
       lines,
       error: `attempt ${runAttempt} re-ran the agent job without the export job, whose export, from attempt ${exportAttempt}, `

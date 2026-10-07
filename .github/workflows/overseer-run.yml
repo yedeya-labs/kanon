@@ -28,7 +28,7 @@ on:
         type: string
         default: "off"
       telemetry-status:
-        description: The telemetry read's status, `ran`, `not configured` or `failed`, from the lane (kanon#470).
+        description: The telemetry read's status, `ran`, `not configured`, `not run on this trigger` or `failed`, from the lane (kanon#470, kanon#499).
         required: false
         type: string
         default: not configured

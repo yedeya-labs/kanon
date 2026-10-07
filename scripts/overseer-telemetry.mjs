@@ -3,7 +3,8 @@
 // `token-trend.md` and `cache-ttl.md`, computed from this repository's own telemetry rows, read
 // with its telemetry reader role, and handed to the agent as two Markdown files, never as rows.
 //
-//   node "$KANON/scripts/overseer-telemetry.mjs" mask    the lane's `telemetry` job, first
+//   node "$KANON/scripts/overseer-telemetry.mjs" mask    the lane's `telemetry` job, first; it also
+//                                                        checks the table and region inputs
 //   node "$KANON/scripts/overseer-telemetry.mjs" read    the lane's `telemetry` job, after the
 //                                                        credentials step
 //   node "$KANON/scripts/overseer-telemetry.mjs" merge   the agent's job, before the agent
@@ -22,8 +23,10 @@
 // THE STATUS IS ALWAYS SAID. The agent's job adds the files to the QA store's export, and writes
 // the read's status into the export's manifest as `telemetry`: `ran` (the read worked, and the two
 // files are Kanon's), `not configured` (no reader role is mapped: the repository didn't opt in to
-// telemetry, or hasn't mapped the secret) or `failed` (the role couldn't be assumed, or no
-// partition could be read). The prompt reports that status and nothing more: a missing file never
+// telemetry, or hasn't mapped the secret), `not run on this trigger` (the runtime-version
+// trigger's `pull_request_target`, whose token the reader role refuses, so the lane doesn't try;
+// the Owner's decision on kanon#499) or `failed` (the table or region isn't valid, the role
+// couldn't be assumed, or no partition could be read). The prompt reports that status and nothing more: a missing file never
 // means the store is absent. A repository whose own store hook writes the two files keeps them
 // whenever this read didn't run.
 //
@@ -39,15 +42,36 @@ import { isCliEntry } from './lib/cli-entry.mjs';
 import { DAY_MS, TREND_ATTRIBUTES, render as renderTrend, summarize as summarizeTrend } from './lib/token-trend.mjs';
 import { TTL_ATTRIBUTES, pinnedLanes, render as renderTtl, summarize as summarizeTtl } from './lib/cache-ttl.mjs';
 
-/** The hosted store's table and region (docs/telemetry.md): the account denies every other region. */
+/** The hosted store's table and region (docs/telemetry.md), the lane's defaults. A caller reading a
+ *  self-hosted telemetry store sets the lane's `telemetry-table` and `telemetry-region` inputs
+ *  (the Owner's decision on kanon#499); `checkStore` holds both to these shapes before any use. */
 export const TABLE = 'kanon-telemetry';
 export const REGION = 'eu-central-1';
+/** A DynamoDB table name, as AWS allows it. */
+export const TABLE_PATTERN = /^[A-Za-z0-9_.-]{3,255}$/;
+/** An AWS region code: `eu-central-1`, `us-gov-west-1`, `ap-southeast-2`. */
+export const REGION_PATTERN = /^[a-z]{2}(?:-gov|-iso[a-z]?)?-[a-z]+-\d{1,2}$/;
+
+/**
+ * The table and region to read, or why they can't be: an empty value is the default.
+ * @param {{ TABLE?: string, REGION?: string }} env
+ * @returns {{ table: string, region: string, problems: string[] }}
+ */
+export function checkStore(env) {
+  const table = String(env.TABLE ?? '').trim() || TABLE;
+  const region = String(env.REGION ?? '').trim() || REGION;
+  /** @type {string[]} */
+  const problems = [];
+  if (!TABLE_PATTERN.test(table)) problems.push(`the telemetry-table input \`${table.slice(0, 80)}\` is not a DynamoDB table name (3 to 255 of A-Z, a-z, 0-9, \`_\`, \`-\` and \`.\`)`);
+  if (!REGION_PATTERN.test(region)) problems.push(`the telemetry-region input \`${region.slice(0, 80)}\` is not an AWS region code such as \`eu-central-1\``);
+  return { table, region, problems };
+}
 /** Two weeks: the token trend compares this week with the one before. */
 export const WINDOW_DAYS = 14;
 /** The files the read writes and the export carries. */
 export const FILES = /** @type {const} */ (['token-trend.md', 'cache-ttl.md']);
 /** The statuses the manifest's `telemetry` takes. */
-export const STATUSES = /** @type {const} */ (['ran', 'not configured', 'failed']);
+export const STATUSES = /** @type {const} */ (['ran', 'not configured', 'not run on this trigger', 'failed']);
 
 /** Kanon's lane definitions, the release this runs from: where the 5m pins are read. */
 const WORKFLOWS = fileURLToPath(new URL('../.github/workflows', import.meta.url));
@@ -84,15 +108,15 @@ const stamp = (ms) => `${new Date(ms).toISOString().slice(0, 19).replace(/[-:]/g
 
 /**
  * One `aws dynamodb query` of a partition since `from`, projected to `attributes`, every page.
- * @param {{ pk: string, from: string, attributes: readonly string[] }} q
+ * @param {{ pk: string, from: string, attributes: readonly string[], table?: string, region?: string }} q
  * @returns {import('./lib/token-trend.mjs').Item[]}
  */
-export function awsQuery({ pk, from, attributes }) {
+export function awsQuery({ pk, from, attributes, table = TABLE, region = REGION }) {
   const names = Object.fromEntries(attributes.map((a, i) => [`#a${i}`, a]));
   const out = execFileSync('aws', [
     'dynamodb', 'query',
-    '--table-name', TABLE,
-    '--region', REGION,
+    '--table-name', table,
+    '--region', region,
     '--key-condition-expression', '#pk = :p AND #sk > :from',
     '--projection-expression', Object.keys(names).join(', '),
     '--expression-attribute-names', JSON.stringify({ ...names, '#pk': 'pk', '#sk': 'sk' }),
@@ -115,24 +139,26 @@ export function reasonOf(e, key) {
 
 /**
  * The read: both reports from this repository's own rows, or why there are none.
- * @param {{ ROLE?: string, CREDENTIALS?: string, OUT?: string }} env
+ * @param {{ ROLE?: string, CREDENTIALS?: string, OUT?: string, TABLE?: string, REGION?: string }} env
  * @param {{ query?: typeof awsQuery, now?: number, workflows?: string }} [io]
  * @returns {{ status: 'ran' | 'failed', lines: string[], files: Record<string, string> }}
  */
 export function read(env, { query = awsQuery, now = Date.now(), workflows = WORKFLOWS } = {}) {
+  const store = checkStore(env);
+  if (store.problems.length) return { status: 'failed', files: {}, lines: [`The telemetry read failed: ${store.problems.join('; ')}.`] };
   const reader = readerOf(env.ROLE);
   if (!reader) {
     return { status: 'failed', files: {}, lines: ['The telemetry read failed: the KANON_TELEMETRY_READER_ROLE secret is not a telemetry reader role\'s ARN (`arn:aws:iam::<account>:role/kanon-telemetry-<key>-reader`, the stack\'s `ReaderRole<id>` output; docs/telemetry.md).'] };
   }
   if (env.CREDENTIALS !== 'success') {
-    return { status: 'failed', files: {}, lines: ['The telemetry read failed: the reader role could not be assumed. Its trust names the default branch\'s ref, so a run on another ref (a dispatch from a branch, the runtime-version trigger\'s pull request) is refused; on the default branch, check the role\'s trust and the secret.'] };
+    return { status: 'failed', files: {}, lines: ['The telemetry read failed: the reader role could not be assumed. Its trust names the default branch\'s ref, so a run on another ref (a dispatch from a branch) is refused; on the default branch, check the role\'s trust and the secret.'] };
   }
   const from = stamp(now - WINDOW_DAYS * DAY_MS);
   const attributes = [...new Set([...TREND_ATTRIBUTES, ...TTL_ATTRIBUTES])];
   /** @type {Array<{ lane: string, items: import('./lib/token-trend.mjs').Item[], error?: string }>} */
   const partitions = LANES.map((lane) => {
     try {
-      return { lane, items: query({ pk: `${reader.key}#${lane}`, from, attributes }) };
+      return { lane, items: query({ pk: `${reader.key}#${lane}`, from, attributes, table: store.table, region: store.region }) };
     } catch (e) {
       return { lane, items: [], error: reasonOf(e, reader.key) };
     }
@@ -203,6 +229,13 @@ if (isCliEntry(import.meta.url)) {
   if (mode === 'mask') {
     for (const m of masksOf(process.env)) process.stdout.write(`::add-mask::${m}\n`);
     console.log('Masked the reader role, its account id and its key.');
+    // THE TABLE AND REGION ARE CHECKED HERE, before the credentials step uses the region: a value
+    // that isn't one stops the job by name, and the agent's job reports the read `failed`.
+    const { table, region, problems } = checkStore(process.env);
+    if (problems.length) {
+      for (const p of problems) console.log(`::error title=overseer telemetry::${p}`);
+      process.exitCode = 1;
+    } else console.log(`Reading the telemetry table ${table} in ${region}.`);
   } else if (mode === 'read') {
     const { status, files, lines } = read(process.env);
     const out = process.env.OUT ?? '';

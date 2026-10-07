@@ -42,8 +42,11 @@
 # never a row (plan 0004 step 13; `scripts/overseer-telemetry.mjs`). Its steps are fixed: the
 # id-token guard allows it by its exact shape. The agent's job adds the two files to the export and
 # writes the read's status into the manifest as `telemetry`: `ran`, `not configured` (no reader
-# role mapped, as for a repository that didn't opt in to telemetry) or `failed`. A store hook that
-# writes the two files itself keeps them whenever the read didn't run.
+# role mapped, as for a repository that didn't opt in to telemetry), `not run on this trigger` (the
+# runtime-version trigger, whose token the role refuses, so the job doesn't try) or `failed`. A
+# store hook that writes the two files itself keeps them whenever the read didn't run. The table
+# and region default to Kanon's hosted store; a caller reading a self-hosted one sets the
+# `telemetry-table` and `telemetry-region` inputs.
 #
 # ── WHO FILES WHAT (decision 12) ─────────────────────────────────────────────────────────
 #
@@ -101,10 +104,15 @@ name: Overseer
 # OPTIONAL SECRET: QA_STORE_BUCKET
 # OPTIONAL SECRET: QA_STORE_ROLE_ARN
 # OPTIONAL SECRET: KANON_TELEMETRY_READER_ROLE
+# CALLER SETTING: telemetry-table
+# CALLER SETTING: telemetry-region
 # The lines above are read by `lane-check` and the requirements file (kanon#433): the QA store's
 # secrets, which a caller maps once its repository has a store hook, and may leave out until then;
 # and the telemetry reader role (kanon#470), which a caller maps once its repository is registered
-# with Kanon's telemetry store, and may leave out until then.
+# with Kanon's telemetry store, and may leave out until then. The `CALLER SETTING` lines name the
+# inputs a caller may set to a literal value (the Owner's decision on kanon#499): the telemetry
+# store's table and region, for a repository that reads a self-hosted store. `lane-check` admits a
+# literal there, and the lane checks each value's shape before it uses it.
 on:
   workflow_call:
     inputs:
@@ -113,6 +121,16 @@ on:
         required: false
         type: string
         default: ""
+      telemetry-table:
+        description: The telemetry store's DynamoDB table, for a self-hosted store. Kanon's hosted store by default.
+        required: false
+        type: string
+        default: kanon-telemetry
+      telemetry-region:
+        description: The telemetry store's AWS region, for a self-hosted store. Kanon's hosted store by default.
+        required: false
+        type: string
+        default: eu-central-1
     secrets:
       AUTHOR_APP_ID:
         required: true
@@ -253,10 +271,12 @@ jobs:
   # summarised into the two files, and nothing else. Its steps are fixed: the id-token guard allows
   # this job by its exact shape, so a step added here turns the guard red. It declares no
   # environment, which would replace the ref in its token's subject. A role it can't assume (a run
-  # on another ref, the runtime-version trigger's pull request) is a `failed` read, said, and green.
+  # on another ref) is a `failed` read, said, and green. On the runtime-version trigger it doesn't
+  # run at all: the role refuses a `pull_request_target` token, so the read is `not run on this
+  # trigger` (the Owner's decision on kanon#499).
   telemetry:
     needs: gate
-    if: needs.gate.outputs.member == 'true' && needs.gate.outputs.due == 'true' && needs.gate.outputs.reader == 'true'
+    if: needs.gate.outputs.member == 'true' && needs.gate.outputs.due == 'true' && needs.gate.outputs.reader == 'true' && github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -269,17 +289,21 @@ jobs:
     steps:
       - uses: $/actions/kanon-path
       # MASKED FIRST: the account id and the key in the role's name, so no later step prints them.
+      # It also checks the table and region inputs, before the credentials step uses the region.
       - name: Mask the reader role's account id and key
         env:
           ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
+          TABLE: ${{ inputs.telemetry-table }}
+          REGION: ${{ inputs.telemetry-region }}
         run: node "$KANON/scripts/overseer-telemetry.mjs" mask
-      # The STS call goes to Frankfurt, where the hosted store lives. A refusal is a `failed` read.
+      # The STS call goes to the store's region: Frankfurt for the hosted store. A refusal is a
+      # `failed` read.
       - uses: aws-actions/configure-aws-credentials@v6
         id: creds
         continue-on-error: true
         with:
           role-to-assume: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
-          aws-region: eu-central-1
+          aws-region: ${{ inputs.telemetry-region }}
           role-session-name: kanon-overseer-telemetry
       - name: Read this repository's telemetry into the two reports
         id: read
@@ -287,6 +311,8 @@ jobs:
           ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
           CREDENTIALS: ${{ steps.creds.outcome }}
           OUT: ${{ runner.temp }}/overseer-telemetry
+          TABLE: ${{ inputs.telemetry-table }}
+          REGION: ${{ inputs.telemetry-region }}
         run: node "$KANON/scripts/overseer-telemetry.mjs" read
       # One day; a job of its own deletes it after the agent's job.
       - name: Upload the two reports for the agent's job
@@ -317,9 +343,10 @@ jobs:
       artifact-name: ${{ needs.export.outputs.artifact-name }}
       # The gate job's reading of the record, never anything the agent wrote.
       capability-watch: ${{ needs.gate.outputs.watch }}
-      # The telemetry read's status (kanon#470): `not configured` without a reader role; `ran`
-      # only when this attempt's read wrote its two files; anything else `failed`.
-      telemetry-status: ${{ needs.gate.outputs.reader != 'true' && 'not configured' || (needs.telemetry.outputs.status == 'ran' && needs.telemetry.outputs.attempt == github.run_attempt) && 'ran' || 'failed' }}
+      # The telemetry read's status (kanon#470, kanon#499): `not configured` without a reader role;
+      # `not run on this trigger` on the runtime-version trigger; `ran` only when this attempt's
+      # read wrote its two files; anything else `failed`.
+      telemetry-status: ${{ needs.gate.outputs.reader != 'true' && 'not configured' || github.event_name == 'pull_request_target' && 'not run on this trigger' || (needs.telemetry.outputs.status == 'ran' && needs.telemetry.outputs.attempt == github.run_attempt) && 'ran' || 'failed' }}
       telemetry-artifact-name: kanon-overseer-telemetry-${{ github.run_id }}-${{ github.run_attempt }}
     secrets:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
@@ -440,3 +467,5 @@ jobs:
           artifact-id: ${{ needs.telemetry.outputs.artifact-id }}
           export-attempt: ${{ needs.telemetry.outputs.attempt }}
           agent-result: ${{ needs.overseer.result }}
+          # Names the telemetry reports, not the store's export, in what the delete says.
+          artifact-kind: telemetry

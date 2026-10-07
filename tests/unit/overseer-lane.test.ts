@@ -423,7 +423,8 @@ describe('the workflow around it', () => {
   it('keeps the weekly schedule, and a dispatch with no inputs', () => {
     expect(caller.on.schedule).toEqual([{ cron: '0 7 * * 1' }]);
     expect(LANE_TEXT).toContain('schedule: "0 7 * * 1"');
-    expect(callerInputs(wf.on.workflow_call.inputs)).toBeUndefined();
+    // No dispatch input: the only inputs a caller may set are the telemetry store's settings (kanon#499).
+    expect(Object.keys(callerInputs(wf.on.workflow_call.inputs) ?? {})).toEqual(['telemetry-table', 'telemetry-region']);
   });
 
   it('the caller grants what the store job, the agent job and the delete job need', () => {
@@ -501,7 +502,7 @@ describe('the runtime-version trigger', () => {
     // Everything that spends goes through the export: the agent's job needs it to succeed. It
     // also needs the gate, for the capability watch the gate read (kanon#477).
     expect(overseer.needs).toEqual(['gate', 'export', 'telemetry']);
-    expect(wf.jobs.telemetry!.if).toBe("needs.gate.outputs.member == 'true' && needs.gate.outputs.due == 'true' && needs.gate.outputs.reader == 'true'");
+    expect(wf.jobs.telemetry!.if).toBe("needs.gate.outputs.member == 'true' && needs.gate.outputs.due == 'true' && needs.gate.outputs.reader == 'true' && github.event_name != 'pull_request_target'");
   });
 
   // The review on #430: the agent must learn the trigger from the workflow, and on it the weekly
@@ -589,7 +590,9 @@ describe('the telemetry read job (kanon#470)', () => {
     expect(job.environment).toBeUndefined();
     expect(s.map((x) => x.uses ?? x.name)).toEqual(['$/actions/kanon-path', "Mask the reader role's account id and key",
       'aws-actions/configure-aws-credentials@v6', "Read this repository's telemetry into the two reports", 'actions/upload-artifact@v7']);
-    expect(s[2]!.with).toEqual({ 'role-to-assume': '${{ secrets.KANON_TELEMETRY_READER_ROLE }}', 'aws-region': 'eu-central-1', 'role-session-name': 'kanon-overseer-telemetry' });
+    expect(s[1]!.env).toEqual({ ROLE: '${{ secrets.KANON_TELEMETRY_READER_ROLE }}', TABLE: '${{ inputs.telemetry-table }}', REGION: '${{ inputs.telemetry-region }}' });
+    expect(s[2]!.with).toEqual({ 'role-to-assume': '${{ secrets.KANON_TELEMETRY_READER_ROLE }}', 'aws-region': '${{ inputs.telemetry-region }}', 'role-session-name': 'kanon-overseer-telemetry' });
+    expect(s[3]!.env).toMatchObject({ TABLE: '${{ inputs.telemetry-table }}', REGION: '${{ inputs.telemetry-region }}' });
     expect(s[2]!['continue-on-error']).toBe(true);
     expect(s[4]!.if).toBe("steps.read.outputs.status == 'ran'");
     expect(s[4]!.with).toMatchObject({ path: '${{ runner.temp }}/overseer-telemetry', 'retention-days': 1 });
@@ -603,13 +606,13 @@ describe('the telemetry read job (kanon#470)', () => {
   });
 
   it('hands the agent\'s job a status and the artifact, never the role, and deletes the artifact after it', () => {
-    expect(handedIn(LANE_FILE, 'overseer', 'telemetry-status')).toBe("${{ needs.gate.outputs.reader != 'true' && 'not configured' || (needs.telemetry.outputs.status == 'ran' && needs.telemetry.outputs.attempt == github.run_attempt) && 'ran' || 'failed' }}");
+    expect(handedIn(LANE_FILE, 'overseer', 'telemetry-status')).toBe("${{ needs.gate.outputs.reader != 'true' && 'not configured' || github.event_name == 'pull_request_target' && 'not run on this trigger' || (needs.telemetry.outputs.status == 'ran' && needs.telemetry.outputs.attempt == github.run_attempt) && 'ran' || 'failed' }}");
     expect(handedIn(LANE_FILE, 'overseer', 'telemetry-artifact-name')).toBe('kanon-overseer-telemetry-${{ github.run_id }}-${{ github.run_attempt }}');
     expect(JSON.stringify(overseer)).not.toContain('KANON_TELEMETRY_READER_ROLE');
     const del = wf.jobs['delete-telemetry']!;
     expect(del.if).toBe('always()');
     expect(del.permissions).toEqual({ 'actions': 'write' });
-    expect(del.steps).toEqual([{ uses: '$/actions/qa-store', with: { operation: 'delete-export', 'artifact-id': '${{ needs.telemetry.outputs.artifact-id }}', 'export-attempt': '${{ needs.telemetry.outputs.attempt }}', 'agent-result': '${{ needs.overseer.result }}' } }]);
+    expect(del.steps).toEqual([{ uses: '$/actions/qa-store', with: { operation: 'delete-export', 'artifact-id': '${{ needs.telemetry.outputs.artifact-id }}', 'export-attempt': '${{ needs.telemetry.outputs.attempt }}', 'agent-result': '${{ needs.overseer.result }}', 'artifact-kind': 'telemetry' } }]);
   });
 
   it('adds the two files and the status to the export before the token trend and the agent', () => {
@@ -627,10 +630,66 @@ describe('the telemetry read job (kanon#470)', () => {
   });
 
   it('tells the agent to report the read\'s status, and never to infer an absent store', () => {
-    expect(flat).toContain('`ran` (both files are computed from this repository\'s own telemetry rows), `not configured` (no telemetry reader role is mapped, so it wasn\'t read) or `failed`');
+    expect(flat).toContain('`ran` (both files are computed from this repository\'s own telemetry rows), `not configured` (no telemetry reader role is mapped, so it wasn\'t read), `not run on this trigger`');
+    expect(flat).toContain('or `failed` (the read was tried and didn\'t work)');
     expect(flat).toContain('a missing file NEVER means that the telemetry store, the QA store or telemetry itself is absent or not installed, so never say so.');
     expect(flat).toContain('`cache-ttl: UNAVAILABLE — no cache-ttl.md (telemetry read: <status>)`');
-    expect(flat).toContain('ON THE RUNTIME-VERSION TRIGGER (`pull_request_target`) a `failed` read is EXPECTED');
+    expect(flat).toContain('ON THE RUNTIME-VERSION TRIGGER (`pull_request_target`) the status is `not run on this trigger`: report it as it is, in one line, and raise no finding for it.');
+    expect(flat).toContain('`not run on this trigger` (the runtime-version trigger, whose token the reader role refuses, so the read wasn\'t tried)');
+  });
+
+  // kanon#499: on the runtime-version trigger the role refuses the token, so the job isn't run
+  // and the status says so, as a fourth value.
+  describe('the runtime-version trigger: the read is not run, and says so', () => {
+    type Ctx = Record<string, string | boolean | undefined>;
+    type Cond = ReturnType<typeof parseCondition>;
+    const value = (n: Cond, ctx: Ctx): unknown => {
+      switch (n.kind) {
+        case 'lit': return n.value;
+        case 'ref': return ctx[n.path];
+        case 'not': return !value(n.arg, ctx);
+        case 'and': { const l = value(n.left, ctx); return l ? value(n.right, ctx) : l; }
+        case 'or': { const l = value(n.left, ctx); return l ? l : value(n.right, ctx); }
+        case 'cmp': {
+          const [l, r] = [value(n.left, ctx), value(n.right, ctx)];
+          if (n.op === '==') return l === r;
+          if (n.op === '!=') return l !== r;
+          throw new Error(`unmodelled ${n.op}`);
+        }
+        default: throw new Error(`unmodelled ${n.kind}`);
+      }
+    };
+    const expr = (e: string) => e.replace(/^\$\{\{\s*|\s*\}\}$/g, '');
+    const runs = (event: string) => Boolean(value(parseCondition(String(wf.jobs.telemetry!.if)), {
+      'needs.gate.outputs.member': 'true', 'needs.gate.outputs.due': 'true', 'needs.gate.outputs.reader': 'true', 'github.event_name': event,
+    }));
+    const status = (ctx: Ctx) => value(parseCondition(expr(String(handedIn(LANE_FILE, 'overseer', 'telemetry-status')))), {
+      'needs.gate.outputs.reader': 'true', 'github.event_name': 'schedule', 'github.run_attempt': '1', 'needs.telemetry.outputs.attempt': '1', 'needs.telemetry.outputs.status': 'ran', ...ctx,
+    });
+
+    it('runs the read job on the schedule and a dispatch, and not on the trigger', () => {
+      expect(runs('schedule')).toBe(true);
+      expect(runs('workflow_dispatch')).toBe(true);
+      expect(runs('pull_request_target')).toBe(false);
+    });
+
+    it('hands the agent each of the four statuses', () => {
+      expect(status({})).toBe('ran');
+      expect(status({ 'needs.gate.outputs.reader': 'false' })).toBe('not configured');
+      expect(status({ 'github.event_name': 'pull_request_target', 'needs.telemetry.outputs.status': undefined, 'needs.telemetry.outputs.attempt': undefined })).toBe('not run on this trigger');
+      expect(status({ 'needs.gate.outputs.reader': 'false', 'github.event_name': 'pull_request_target' })).toBe('not configured');
+      expect(status({ 'needs.telemetry.outputs.status': 'failed' })).toBe('failed');
+      expect(status({ 'needs.telemetry.outputs.attempt': '2' })).toBe('failed');
+    });
+  });
+
+  // kanon#499: the table and region are the lane's caller settings, for a self-hosted store.
+  it('takes the table and region as inputs defaulting to the hosted store, marked as caller settings', () => {
+    const inputs = wf.on.workflow_call.inputs as Record<string, { default?: string; type?: string }>;
+    expect(inputs['telemetry-table']).toMatchObject({ type: 'string', default: 'kanon-telemetry' });
+    expect(inputs['telemetry-region']).toMatchObject({ type: 'string', default: 'eu-central-1' });
+    expect(LANE_TEXT).toMatch(/^# CALLER SETTING: telemetry-table$/m);
+    expect(LANE_TEXT).toMatch(/^# CALLER SETTING: telemetry-region$/m);
   });
 
   describe('mutations: each turns the id-token guard red, by name', () => {
@@ -651,6 +710,8 @@ describe('the telemetry read job (kanon#470)', () => {
     it('a wider grant', () => expect(red((j) => { j.permissions = { 'id-token': 'write', contents: 'read' }; })).toEqual(named));
     it('the upload from the workspace', () => expect(red((j) => { (j.steps![4]!.with as Record<string, unknown>).path = 'overseer-telemetry'; })).toEqual(named));
     it('a job env', () => expect(red((j) => { (j as Record<string, unknown>).env = { NODE_OPTIONS: '-r x' }; })).toEqual(named));
+    it('a region from anywhere but the input', () => expect(red((j) => { (j.steps![2]!.with as Record<string, unknown>)['aws-region'] = '${{ vars.REGION }}'; })).toEqual(named));
+    it('the inputs left out of the mask step, which checks them first', () => expect(red((j) => { j.steps![1]!.env = { ROLE: '${{ secrets.KANON_TELEMETRY_READER_ROLE }}' }; })).toEqual(named));
     it('the same job under another name, or in another workflow, is not allowed by this shape', () => {
       const w = all();
       w['agent-code-audit.yml']!.jobs.telemetry = structuredClone(w['agent-overseer.yml']!.jobs.telemetry!);

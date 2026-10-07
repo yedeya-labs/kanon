@@ -366,7 +366,16 @@
         "QA_STORE_BUCKET",
         "QA_STORE_ROLE_ARN"
       ],
-      "inputs": {},
+      "inputs": {
+        "telemetry-table": {
+          "type": "string",
+          "description": "The telemetry store's DynamoDB table, for a self-hosted store. Kanon's hosted store by default."
+        },
+        "telemetry-region": {
+          "type": "string",
+          "description": "The telemetry store's AWS region, for a self-hosted store. Kanon's hosted store by default."
+        }
+      },
       "grant": {
         "actions": "write",
         "contents": "read",

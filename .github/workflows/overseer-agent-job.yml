@@ -34,7 +34,8 @@ on:
         description: >-
           The telemetry read's status (kanon#470): `ran` when the lane's `telemetry` job read this
           repository's own rows into `token-trend.md` and `cache-ttl.md`, `not configured` without
-          a reader role, `failed` otherwise. Written into the export's manifest as `telemetry`.
+          a reader role, `not run on this trigger` on the runtime-version trigger, `failed`
+          otherwise. Written into the export's manifest as `telemetry`.
         required: false
         type: string
         default: not configured
@@ -292,13 +293,15 @@ jobs:
             - THE TELEMETRY READ, which wrote the two cost files below. `manifest.json`'s
               `telemetry` says how it went: `ran` (both files are computed from this
               repository's own telemetry rows), `not configured` (no telemetry reader role is
-              mapped, so it wasn't read) or `failed` (the read was tried and didn't work). A
-              file can also come from this project's own store hook. When a file is missing,
+              mapped, so it wasn't read), `not run on this trigger` (the runtime-version trigger,
+              whose token the reader role refuses, so the read wasn't tried) or `failed` (the
+              read was tried and didn't work). A file can also come from this project's own
+              store hook. When a file is missing,
               REPORT THAT STATUS, in those words, and nothing more: a missing file NEVER means
               that the telemetry store, the QA store or telemetry itself is absent or not
               installed, so never say so. ON THE RUNTIME-VERSION TRIGGER (`pull_request_target`)
-              a `failed` read is EXPECTED, for the same reason as the store's: say so in one
-              line, and raise no finding for it.
+              the status is `not run on this trigger`: report it as it is, in one line, and raise
+              no finding for it.
             - The prompt-cache TTL, as facts you do not derive: paste ALL of
               `qa-store-export/cache-ttl.md` into the audit VERBATIM, every line in the order
               written. Its `cache-ttl:` lines and the unprefixed lines under them are the
