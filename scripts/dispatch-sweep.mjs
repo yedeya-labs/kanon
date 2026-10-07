@@ -735,6 +735,11 @@ export function classify(issue, comments, hasPr, opts = {}) {
   // A bounded wasted run beats an unbounded silent hold. `tests/unit/dispatch-sweep.
   // test.ts` pins this ("the human-held hold is per-lane"); changing the ruling means
   // changing that test and this paragraph together.
+  const humanRepliedToSweep = Boolean(
+    lastSweep &&
+    conversation.some((c) => !isBot(c.login) && after(c, lastSweep)) &&
+    !after(lastAgent, lastSweep));
+
   // UNMARKED IS NAMED, NOT ONLY SILENT (kanon#380). Since L4 `byAgent` needs the role marker
   // beside the login, so a comment the agent posted without its header drops out of
   // `agentComments`, and an issue whose agent stopped in an unmarked comment reads `never-ran`.
@@ -743,12 +748,19 @@ export function classify(issue, comments, hasPr, opts = {}) {
   // assert the run never happened. Only those after the agent's last marked word, which is
   // what the classification already read, and never one carrying another role's marker (the
   // Lead's, on the same App): that is that role's.
+  //
+  // AND THE ISSUE IS STILL RE-DISPATCHED: THE OWNER'S CALL (kanon#393, 2026-10-06 on PR #383).
+  // An unmarked comment may be a stop ("Stopping: this needs design"), and holding the issue
+  // for a human was weighed and declined, keeping L4's rule that an unmarked comment is
+  // silence. A hold would also leave an unmarked progress note holding an issue with nothing
+  // to lift it. So `unmarked` changes no state and no action. It is named in the re-dispatch comment (`redispatchReason`), the
+  // step summary and a `::warning`, and the waste a stop costs stays bounded by the cooldown
+  // and `MAX_REDISPATCH`, after which `stop()` hands the issue to a human. The digest's
+  // member line reads it the same way (`classifyDispatch` in project-digest.mjs). Holding
+  // instead means changing this paragraph and the kanon#393 test in
+  // tests/library/dispatch-sweep.test.ts together.
   const unmarked = conversation.filter((c) => slugOf(c.login) === slugOf(lane.agent)
     && markedRole(c.body) === null && (!lastAgent || after(c, lastAgent))).length;
-  const humanRepliedToSweep = Boolean(
-    lastSweep &&
-    conversation.some((c) => !isBot(c.login) && after(c, lastSweep)) &&
-    !after(lastAgent, lastSweep));
 
   // STATE describes the world; ACTION is decided separately below. Keeping them
   // apart is what stops the re-dispatch cap from being applied to an issue that

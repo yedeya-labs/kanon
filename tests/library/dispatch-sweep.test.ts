@@ -1327,6 +1327,16 @@ describe('kanon#380 — an unmarked implementer comment is named, not only read 
     expect(answered).toContain('2 comment(s) by the agent\'s App carry no role marker');
   });
 
+  it('changes no action: the issue is re-dispatched, the Owner\'s call on kanon#393', () => {
+    // Holding it for a human was weighed and declined (PR #383, 2026-10-06): an unmarked
+    // comment is still silence, and the cooldown and the cap bound what a stop costs.
+    expect(verdict([unmarked(100)]), 'past the cooldown').toMatchObject({ state: 'never-ran', act: 'dispatch', unmarked: 1 });
+    expect(verdict([sweepComment(100), unmarked(50)]), 'after a re-dispatch too').toMatchObject({ state: 'never-ran', act: 'dispatch', unmarked: 1 });
+    expect(verdict([sweepComment(3), unmarked(2)]), 'inside the cooldown').toMatchObject({ state: 'never-ran', act: null, unmarked: 1 });
+    expect(verdict([sweepComment(300), sweepComment(200), unmarked(100)]), 'at the cap, a human gets it')
+      .toMatchObject({ state: 'exhausted', act: 'stop', sawAgent: false, unmarked: 1 });
+  });
+
   it('the report names them in the State cell', () => {
     const { text } = renderReport([verdict([unmarked(100)])], { apply: false });
     expect(text).toContain('`never-ran` (1 unmarked)');
