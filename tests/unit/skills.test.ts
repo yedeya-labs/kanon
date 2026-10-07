@@ -433,6 +433,39 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(section(skill('doctor').body, /^## Steps$/)).toMatch(/under `## After merging`/);
   });
 
+  // #420, L5's G8 and G10: an agent client refused to run kanon apps (it creates Apps and writes
+  // secrets), and the person's first run stopped at the token's pre-check. So the skills say up
+  // front that it is the person's step, check the token first, and give the exact `!` line.
+  it("hands kanon apps to the person: the token checked first, then the exact ! line", () => {
+    for (const dir of ['adopt', 'doctor']) {
+      const s = skill(dir);
+      const run = section(s.body, /^## Running `kanon apps`$/);
+      expect(run, dir).not.toBeNull();
+      expect(run, dir).toMatch(/\*\*it is the person's step,\*\*/);
+      expect(invocations(run!).some((c) => c.command === 'apps' && c.flags.includes('--preflight')), dir).toBe(true);
+      expect(run, dir).toContain('**Secrets: read and write**');
+      const line = code(run!).find((c) => c.startsWith('! cd '));
+      expect(line, dir).toMatch(/^! cd <the checkout's root> && npx --yes --package github:yedeya-labs\/kanon#v\d+\.\d+\.\d+ kanon apps --owner <owner> --repo <repo> --apps <apps>$/);
+      expect(run, dir).toMatch(/\*\*Do it now\*\* \(Recommended\).*\*\*Skip it for now\*\*/);
+      // Every finding whose fix is a kanon apps command sends the agent to that section, and none
+      // tells the agent to run it itself.
+      const table = rows(section(s.body, /^## Who fixes each finding of `kanon [a-z]+`$/)!);
+      for (const c of table.filter((x) => /`kanon apps(?: --[a-z-]+)?` command|`kanon apps --/.test(x[2] ?? ''))) expect(c[2], `${dir} ${c[0]}`).toContain('"Running `kanon apps`"');
+      expect(s.body, dir).not.toMatch(/(?:you )?run (?:the fix's|the finding's) `kanon apps`/i);
+    }
+    expect(section(skill('upgrade').body, /^## Steps$/)).toMatch(/\*\*Say up front that each `kanon apps` command a fix names is the person's step\*\*.*"Running `kanon apps`"/);
+  });
+
+  it('offers the Releaser to a repository that calls the release workflow without it, as the person\'s choice', () => {
+    const offer = section(skill('doctor').body, /^## Offering the Releaser$/);
+    expect(offer).not.toBeNull();
+    expect(offer).toContain('`.apps[].identity` lists no `releaser`');
+    expect(offer).toMatch(/It is the person's choice/);
+    expect(invocations(offer!).some((c) => c.command === 'apps' && c.text.includes('--apps releaser'))).toBe(true);
+    for (const n of ['RELEASER_APP_ID', 'RELEASER_APP_PRIVATE_KEY']) expect(offer).toContain(`\`${n}\``);
+    expect(section(skill('upgrade').body, /^## Steps$/)).toContain('"Offering the Releaser"');
+  });
+
   it('reads only fields its command documents', () => {
     const problems: string[] = [];
     let seen = 0;

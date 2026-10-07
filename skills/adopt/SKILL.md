@@ -50,6 +50,23 @@ Some steps are the person's alone (**Only a person can**, above): creating and i
 3. On **Do it now**, give the exact step (the finding's `.findings[].fix.text`, its `.findings[].fix.commands` and `.findings[].fix.url`), and wait for the person to say it's done. Check it where you can: a dry run again, `gh secret list`, or the doctor skill.
 4. On **Skip it for now**, add it to the skipped list with the finding's id, and go on. Never pretend it was done.
 
+## Running `kanon apps`
+
+`kanon apps` creates GitHub Apps and writes the repository's Actions secrets, so **it is the person's step,** whoever types it: say so as soon as a finding's fix (`app.create`, `app.failed`, `app.reuse`) names it ([#420](https://github.com/yedeya-labs/kanon/issues/420)). Your agent client may refuse to run it for you, and the person clicks **Create** and **Install** in their browser anyway. Before you hand it over:
+
+1. **Check the token first.** Run `kanon apps --owner <owner> --repo <repo> --preflight`. It creates no App, opens no page and writes no file: it checks the checkout, the token and the owner, and sets and deletes a throwaway secret, `KANON_APPS_PREFLIGHT`, because GitHub has no read-only way to show that a token can write secrets. If your client won't run it either, the person runs it as the line below, with the pre-check's flag in place of the App flags. On exit 1, say what it said, and name the permission: the token `gh` uses (`GH_TOKEN`, then `GITHUB_TOKEN`, then its stored login) needs **Secrets: read and write** on the repository, for a fine-grained token the repository permission *Secrets* set to *Read and write*. Fixing the token is a step only a person can do. Run the check again once they say it's done.
+2. **Give the exact line,** every placeholder filled in: the checkout's root (`git rev-parse --show-toplevel`), and after `kanon` the command the fix names, flag for flag. In Claude Code the person types it at the prompt, `!` first, which runs it in this session; in another client they run it in their own terminal, without the `!`:
+
+<!-- x-release-please-start-version -->
+
+```sh
+! cd <the checkout's root> && npx --yes --package github:yedeya-labs/kanon#v0.33.0 kanon apps --owner <owner> --repo <repo> --apps <apps>
+```
+
+<!-- x-release-please-end -->
+
+3. **Ask, then wait.** **Do it now** (Recommended), and tell me when it's done; or **Skip it for now**, recorded under `## Left to do` with the finding's id. When it's done, check it: `gh secret list`, the register rows it wrote in `docs/qa/agent-identities.md` (they go in the commit), or the doctor skill. When it exits non-zero, ask what it said, and give the line again once they've fixed it.
+
 ## The questions
 
 Ask them in this order, each as **How to ask** says. One answer of `kanon init` is one question, except the lanes, which are one question per group. Each says where its recommended option comes from, and the flag each answer becomes.
@@ -157,7 +174,7 @@ Off unless the person says yes. Say, in the question itself, everything the pers
 
 6. **Write.** `kanon init --json --no-apps` with the person's flags. `--no-apps` leaves the Apps to step 7, so you can explain them first. Read `.status`: on `failed`, show `.failures` and what it did (`.changes`), and stop; on `error`, show `.error` and stop. Show the person `git status` and the diff.
 
-7. **The Apps,** a step only a person can do. When `.apps.outcome` is `left-to-you`, the finding `app.create` holds the command. Explain first: the Apps the lanes run as (`.apps.identities`), that each opens a page in their browser where they check the permissions and click **Create**, then a second page where they click **Install** and choose this repository, and that the command stores each App's id and key as Actions secrets itself, never printing the key. Ask **Do it now** or **Skip it for now**. On **Do it now**, run the finding's `kanon apps` command (in the background, because it waits for their clicks), and wait for them. When it exits 0, the register rows it wrote in `docs/qa/agent-identities.md` go in the commit. When it doesn't, show its exit code and what it said, and run it again once they've fixed it.
+7. **The Apps,** a step only a person can do. When `.apps.outcome` is `left-to-you`, the finding `app.create` holds the command. Explain first: the Apps the lanes run as (`.apps.identities`), that each opens a page in their browser where they check the permissions and click **Create**, then a second page where they click **Install** and choose this repository, and that the command stores each App's id and key as Actions secrets itself, never printing the key. Then hand it over as "Running `kanon apps`" says: check the token with the pre-check, give the person the exact line for the finding's `kanon apps` command, and ask **Do it now** or **Skip it for now**. When it has run, the register rows it wrote in `docs/qa/agent-identities.md` go in the commit.
 
 8. **The rest of the findings,** in their order, as the table below says. A finding an agent fixes, you fix, after showing the diff. A finding only a person can fix is asked as a step only a person can do, when you reach it. Each `.findings[].fix` has the text, the commands and the page: a command that starts `kanon ` you run as above, one that starts `gh secret set` the person runs in their own terminal, pasting the value on standard input, and any other line is a line to add to the file the finding's `.findings[].subject` names.
 
@@ -186,9 +203,9 @@ Off unless the person says yes. Say, in the question itself, everything the pers
 | `ruleset.gaps` | person | The person adds the rules the fix names on the ruleset's page. |
 | `ruleset.first-commit` | agent | Run `kanon init --json --no-apps` with the same flags again after the first commit is pushed; it creates the ruleset then. |
 | `ruleset.create` | person | The person creates the ruleset as the fix says, or runs `kanon init` again in their own terminal with a token that can administer the repository. |
-| `app.create` | person | Step 6: you run the command; the person clicks **Create** and **Install**. |
-| `app.failed` | person | Show what `kanon apps` said; once the person has fixed it, run the fix's command again. |
-| `app.reuse` | person | The owner already has the App. The person adds this repository to its installation and generates a private key on its settings page, then gives you only the key file's path; you run the fix's `kanon apps --reuse` command with it, which stores the secrets and deletes the file. |
+| `app.create` | person | Step 7: you check the token, then the person runs the command ("Running `kanon apps`") and clicks **Create** and **Install**. |
+| `app.failed` | person | Show what `kanon apps` said; once the person has fixed it, they run the fix's command again ("Running `kanon apps`"). |
+| `app.reuse` | person | The owner already has the App. The person adds this repository to its installation and generates a private key on its settings page, then runs the fix's `kanon apps --reuse` command with the key file's path ("Running `kanon apps`"), which stores the secrets and deletes the file. |
 | `secret.claude-code-oauth-token` | person | The person creates the token (`claude setup-token`) and runs the fix's `gh secret set` in their own terminal. |
 | `secret.digest-webhook` | person | The person runs the fix's `gh secret set` with the chat webhook's URL. |
 | `secret.unreadable` | person | The token can't list the secrets: the person checks the ones the lanes need by hand, or the doctor skill does with a token that can. |

@@ -387,11 +387,11 @@ describe('kanon apps, end to end with GitHub mocked', () => {
   // The live failure behind this (#39): the token could read Actions secrets but not write
   // them, so `gh secret list` passed, the App was created, and its key was lost.
   type Gh = { status: number | null; stdout: string; stderr: string };
-  const preflightRun = async (reply: (args: string[]) => Gh | Promise<Gh>, env: Record<string, string> = {}) => {
+  const preflightRun = async (reply: (args: string[]) => Gh | Promise<Gh>, env: Record<string, string> = {}, argv = ['--apps', 'judge']) => {
     const calls: string[] = [];
     const out: string[] = [];
     let opened = 0;
-    const status = await apps(['--owner', ORG, '--repo', REPO, '--apps', 'judge'], {
+    const status = await apps(['--owner', ORG, '--repo', REPO, ...argv], {
       env,
       git: (args) => checkoutOf(`https://github.com/${ORG}/${REPO}.git`, '/work/widgets')(args, ''),
       gh: async (args) => {
@@ -448,6 +448,31 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     expect(r.opened).toBe(0);
     expect(r.output).toContain(`cannot delete it (HTTP 403). Delete it by hand: gh secret delete KANON_APPS_PREFLIGHT -R ${ORG}/${REPO}`);
     expect(r.calls).toEqual([SET, DELETE]);
+  });
+
+  // #420, L5's G10: the person was sent to run kanon apps, and it stopped at this pre-check.
+  // --preflight runs it alone, so the agent can check the token before it hands the command over.
+  it('--preflight runs the pre-check alone: exits 0 when the token can write secrets, creating and opening nothing', async () => {
+    for (const argv of [['--preflight'], ['--apps', 'author,judge', '--preflight']]) {
+      const r = await preflightRun(() => ok, {}, argv);
+      expect(r.status, r.output).toBe(0);
+      expect(r.opened).toBe(0);
+      expect(r.calls).toEqual([SET, DELETE]);
+      expect(r.output).toContain(`The token can write the Actions secrets of ${ORG}/${REPO}, so kanon apps can run from here. Nothing was created.`);
+    }
+  });
+
+  it('--preflight exits 1 naming the permission when the token cannot write secrets', async () => {
+    const r = await preflightRun((args) => (args[1] === 'set' ? { status: 1, stdout: '', stderr: 'HTTP 403' } : ok), { GH_TOKEN: 'x' }, ['--preflight']);
+    expect(r.status).toBe(1);
+    expect(r.output).toContain('needs Secrets: read and write on the repository');
+    expect(r.output).not.toContain('Nothing was created');
+  });
+
+  it('still needs --apps or --reuse without --preflight', async () => {
+    const out: string[] = [];
+    expect(await apps(['--owner', ORG, '--repo', REPO], { err: (l) => out.push(l) })).toBe(2);
+    expect(out.join('\n')).toContain('--apps or --reuse is required');
   });
 
   it('names the exit status when gh says nothing, and gives no token advice for a failure GitHub did not refuse', async () => {

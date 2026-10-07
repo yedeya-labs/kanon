@@ -45,7 +45,8 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 2. **Say what it checked.** The release (`.checking`), the lanes (`.lanes`), the Apps (`.apps[].identity` and `.apps[].slug`), and whose token it used. If `.checkout.branch` is not `.checkout.defaultBranch`, say that the id-token holders, and the secrets the workflows map, are counted on this branch, not the default one. List what the adoption record waives (`.waived`): each `.waived[].id` on `.waived[].subject`, and the record's reason, `.waived[].reason`. A waived finding doesn't block, and you leave it alone unless the person asks.
 
 3. **Explain the findings, in their order.** `.findings` is already in the order to fix it. Blocking ones (`.findings[].blocking`) first. For each: what it means in plain words (from `.findings[].message` and the table below), who fixes it, and the exact fix (`.findings[].fix.text`, `.findings[].fix.commands`, `.findings[].fix.url`). Read the fix's commands this way:
-   - one that starts `kanon ` you run as above, after saying what it does. A `kanon init` you always run as `kanon init --json --no-apps`, with the adopt skill's answer flags when the person has given them: without the JSON flag it refuses in a shell whose standard input isn't a terminal, and without the no-apps flag it would start the Apps' browser flow unannounced;
+   - one that starts `kanon apps` is the person's ("Running `kanon apps`", below): you check the token first, and give them the exact line;
+   - any other that starts `kanon ` you run as above, after saying what it does. A `kanon init` you always run as `kanon init --json --no-apps`, with the adopt skill's answer flags when the person has given them: without the JSON flag it refuses in a shell whose standard input isn't a terminal, and without the no-apps flag it would start the Apps' browser flow unannounced;
    - one that starts `gh secret set` is the person's: they run it in their own terminal and paste the value on standard input;
    - any other line is a line to add to, or remove from, the file the finding's `.findings[].subject` names, as its `.findings[].fix.text` says.
 
@@ -54,6 +55,27 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 5. **Run it again,** and repeat from step 1 until it exits 0, or until every finding left is one only a person can do. Then list those, each with its exact step, and stop.
 
 6. **Open the pull request** if you changed files: commit (signed off by the person), push the branch, and `gh pr create` with a title that passes the repository's PR-title check, such as `ci: fix the Kanon installation`. Its body lists, under `## Left to do`, each person's step that was skipped, with its finding's id, and under `## After merging`, each step that waits for the merge, as the upgrade skill's "After the merge" lists them, such as requiring a check whose job this pull request adds. Never merge it.
+
+## Running `kanon apps`
+
+`kanon apps` creates GitHub Apps and writes the repository's Actions secrets, so **it is the person's step,** whoever types it: say so as soon as a finding's fix (`register.missing-row`, `register.split-slug`, `register.shared-slug`, `secret.missing`) names it ([#420](https://github.com/yedeya-labs/kanon/issues/420)). Your agent client may refuse to run it for you, and the person clicks **Create** and **Install** in their browser anyway. Before you hand it over:
+
+1. **Check the token first.** Run `kanon apps --owner <owner> --repo <repo> --preflight`. It creates no App, opens no page and writes no file: it checks the checkout, the token and the owner, and sets and deletes a throwaway secret, `KANON_APPS_PREFLIGHT`, because GitHub has no read-only way to show that a token can write secrets. If your client won't run it either, the person runs it as the line below, with the pre-check's flag in place of the App flags. On exit 1, say what it said, and name the permission: the token `gh` uses (`GH_TOKEN`, then `GITHUB_TOKEN`, then its stored login) needs **Secrets: read and write** on the repository, for a fine-grained token the repository permission *Secrets* set to *Read and write*. Fixing the token is a step only a person can do. Run the check again once they say it's done.
+2. **Give the exact line,** every placeholder filled in: the checkout's root (`git rev-parse --show-toplevel`), and after `kanon` the command the fix names, flag for flag. In Claude Code the person types it at the prompt, `!` first, which runs it in this session; in another client they run it in their own terminal, without the `!`:
+
+<!-- x-release-please-start-version -->
+
+```sh
+! cd <the checkout's root> && npx --yes --package github:yedeya-labs/kanon#v0.33.0 kanon apps --owner <owner> --repo <repo> --apps <apps>
+```
+
+<!-- x-release-please-end -->
+
+3. **Ask, then wait.** **Do it now** (Recommended), and tell me when it's done; or **Skip it for now**, recorded under `## Left to do` with the finding's id. When it's done, check it: `gh secret list`, the register rows it wrote in `docs/qa/agent-identities.md` (they go in the commit), or the doctor skill. When it exits non-zero, ask what it said, and give the line again once they've fixed it.
+
+## Offering the Releaser
+
+When the repository calls Kanon's release workflow (a job whose `uses:` is Kanon's `.github/workflows/release.yml` at a release) and `.apps[].identity` lists no `releaser`, its release pull requests are opened with the workflow's token, so they run no CI, and a ruleset that requires checks blocks them unless an admin bypasses it. Plan 0005 gives such a repository the optional Releaser ([#420](https://github.com/yedeya-labs/kanon/issues/420)). Offer it, as a question, once: **Create the Releaser** (Recommended when an active ruleset covers the default branch), which opens the release pull requests so their CI runs and becomes the ruleset's only bypass actor (`K-MERGE-8`); or **Not now**, which keeps the workflow's token. It is the person's choice. On **Create the Releaser**, the person runs `kanon apps --owner <owner> --repo <repo> --apps releaser` ("Running `kanon apps`"); then you map `RELEASER_APP_ID` and `RELEASER_APP_PRIVATE_KEY` under that job's `secrets:` (`docs/release.md` in Kanon's repository, "With the Releaser"), show the diff, and run doctor again: it now checks the Releaser, its register row and its bypass.
 
 ## Waiving a finding
 
@@ -75,13 +97,13 @@ Propose the bullet and ask for the reason; never invent one. Write it only once 
 |---|---|---|
 | `pin.mixed` | agent | Make every `yedeya-labs/kanon` reference under `.github/` name the one release the person chooses (`.releases.pins` lists them). |
 | `plugin.version-mismatch` | agent | Doesn't block. Set the `ref` the fix names on the kanon marketplace in `.claude/settings.json`, changing nothing else there, and show the diff. Once it is on their checkout, the person runs `/reload-plugins`: Claude Code fetches the marketplace again from the changed source. If the fix's release is newer than this skill's, say that this session still runs the older skills until they reload. |
-| `register.missing-row` | agent, person | Run the fix's `kanon apps` command when it has one: the person clicks **Create** and **Install** in the browser it opens. Otherwise add the register rows the fix names. Commit `docs/qa/agent-identities.md`. |
+| `register.missing-row` | agent, person | When the fix has a `kanon apps` command, the person runs it ("Running `kanon apps`") and clicks **Create** and **Install** in the browser it opens. Otherwise add the register rows the fix names. Commit `docs/qa/agent-identities.md`. |
 | `register.split-slug` | decision | Ask the person which slug is the App's, then make the register's rows for that App name only it. |
-| `register.shared-slug` | person | Each App needs its own. Ask the person which identity gets a new App, run `kanon apps --owner <owner> --repo <repo> --apps <identity>` for it (they click **Create** and **Install**), and commit the register rows it writes. |
+| `register.shared-slug` | person | Each App needs its own. Ask the person which identity gets a new App; they run `kanon apps --owner <owner> --repo <repo> --apps <identity>` for it ("Running `kanon apps`"), and you commit the register rows it writes. |
 | `app.permission-missing` | person | The person widens the App's permissions on `.findings[].fix.url`, then accepts the new permissions on the App's installation. |
 | `app.permission-extra` | decision | Doesn't block. Say that `apps-check` fails it; the person may narrow it on `.findings[].fix.url`, or leave it. |
 | `app.unused` | person | Doesn't block. Once the replacing Apps have run green for a week, and no other repository's register still names it, the person uninstalls the App on `.findings[].fix.url` and deletes it on its Advanced page. |
-| `secret.missing` | person | If the fix is a `kanon apps` command, run it (for `kanon apps --reuse`, the person first generates a key on the App's page and gives you only the file's path; the command deletes the file). If it is `gh secret set`, the person runs it. |
+| `secret.missing` | person | If the fix is a `kanon apps` command, the person runs it ("Running `kanon apps`"; for `kanon apps --reuse`, they first generate a key on the App's page, and the command deletes the file). If it is `gh secret set`, the person runs it. |
 | `secret.stale` | decision | Doesn't block. Offer the fix's `gh secret delete` command, and run it only on a yes. |
 | `declaration.missing` | agent | Run `kanon init --dry-run --json`, show the file it would write, then write it with `kanon init --json --no-apps` (with the adopt skill's answer flags), or by hand. |
 | `declaration.section-missing` | agent | Add the section, or remove the duplicate, as the fix says. Ask the person for content only they know, such as the stack's gates. |
