@@ -49,7 +49,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { URL } from 'node:url';
-import { REGISTER_PATH, apps as runApps, checkoutCheck, ownerInstallations, ownerKanonApps, remoteRepo } from './apps.mjs';
+import { REGISTER_PATH, apps as runApps, checkoutCheck, ownerInstallations, ownerKanonApps, ownersOwn, remoteRepo } from './apps.mjs';
 import {
   appSecrets,
   appsCheckFile,
@@ -1213,7 +1213,9 @@ const run = async (deps, opts, req, rep) => {
   const gitEmail = deps.git(['-C', root, 'config', 'user.email']).stdout.trim();
   // THE OWNER'S APPS (#363): Kanon's Apps the owner already has, from its installations (the
   // reader `kanon doctor` shares), looked for only when this register lacks one of them. An
-  // installation whose App this register already names is this repository's own.
+  // installation whose App this register already names is this repository's own. Each App is
+  // matched alike, the Releaser as strictly as the Author and the Judge (#462): its exact
+  // permissions, no events, and an App of the owner's own, never another account's.
   const rows = registerRows(read(REGISTER_PATH));
   const named = new Set(rows.values());
   const lacking = Object.keys(req.identities.apps).filter((i) => registerRolesOf(i, req).some((r) => !rows.has(r)));
@@ -1223,7 +1225,7 @@ const run = async (deps, opts, req, rep) => {
   let unlisted = null;
   if (lacking.length) {
     const { listed, installs } = await ownerInstallations(deps.gh, s.owner, s.kind);
-    if (installs) ownerApps = ownerKanonApps(installs, s.owner, req.identities.apps).filter((f) => !named.has(f.slug));
+    if (installs) ownerApps = await ownersOwn(deps.gh, s.owner, ownerKanonApps(installs, s.owner, req.identities.apps).filter((f) => !named.has(f.slug)));
     else {
       ownerApps = null;
       unlisted = `the token can't list ${s.owner}'s App installations (${listed.stderr.trim() || `exit ${listed.status}`}), so init can't tell whether ${s.owner} already has Kanon's Apps. ${

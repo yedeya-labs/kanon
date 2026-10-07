@@ -74,6 +74,8 @@ type State = {
   rulesetUpdateFails?: boolean;
   /** The owner's App installations, as `GET orgs/<org>/installations` or `user/installations` lists them; unset, the token can't list them. */
   installations?: Array<Record<string, unknown>>;
+  /** The public Apps, as `GET /apps/<slug>` answers them (#462); any other slug is private, which it answers 404 to a person's token. */
+  publicApps?: Record<string, { owner: { login: string } }>;
 };
 
 /** A fake GitHub for one repository. Every call is recorded; the mutating ones change the state. */
@@ -119,6 +121,8 @@ const fakeGitHub = (over: Partial<State> = {}) => {
     if (a1 === (st.kind === 'Organization' ? 'orgs/acme/installations?per_page=100' : 'user/installations?per_page=100')) {
       return st.installations ? ok({ total_count: st.installations.length, installations: st.installations }) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     }
+    const app = /^apps\/([\w-]+)$/.exec(a1 ?? '');
+    if (app && !args.includes('-X')) return st.publicApps?.[app[1]!] ? ok({ slug: app[1], ...st.publicApps[app[1]!] }) : no('gh: Not Found (HTTP 404)');
     const method = args.includes('-X') ? args[args.indexOf('-X') + 1] : 'GET';
     const path = args.find((x, i) => i > 0 && /^(repos|orgs)\//.test(x)) ?? '';
     if (method === 'PATCH' && path === `repos/${REPO}`) {
@@ -866,7 +870,7 @@ describe('the callers kanon init writes', () => {
 // to reuse one whose permissions are exactly an App's, rather than create a second set.
 describe("kanon init and the Apps the owner already has (#363)", () => {
   const APPS = REQ.identities.apps;
-  const install = (slug: string, app: string, over: Record<string, unknown> = {}) => ({ id: slug.length, app_id: 900 + slug.length, app_slug: slug, account: { login: 'acme', type: 'Organization' }, permissions: { ...APPS[app]!.permissions }, repository_selection: 'selected', ...over });
+  const install = (slug: string, app: string, over: Record<string, unknown> = {}) => ({ id: slug.length, app_id: 900 + slug.length, app_slug: slug, account: { login: 'acme', type: 'Organization' }, permissions: { ...APPS[app]!.permissions }, events: [], repository_selection: 'selected', ...over });
   const installsCalls = (github: ReturnType<typeof fakeGitHub>) => github.calls.filter((c) => /installations/.test(c.args.join(' ')));
 
   it('finds the Judge among an organisation\'s installations, reuses it by default, and prints the --reuse step with its slug', async () => {
@@ -940,6 +944,32 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
     expect(d.answers.reuseApps).toBeNull();
     expect(d.apps).toMatchObject({ missing: ['author'], reuse: [], outcome: 'ran' });
   });
+
+  // #462: the Releaser's three permissions are ones an ordinary bot can hold, so every App is
+  // matched as strictly: exactly its permissions, no events, and an App of the owner's own.
+  const RELEASE_CALLER = 'name: Release\non:\n  push:\n    branches: [main]\npermissions: {}\njobs:\n  release:\n    uses: yedeya-labs/kanon/.github/workflows/release.yml@v1.2.3\n';
+  const releaserOffer = async (installations: Array<Record<string, unknown>>, publicApps: Record<string, { owner: { login: string } }> = {}) => {
+    const github = fakeGitHub({ kind: 'Organization', orgPlan: 'free', installations: [install('acme-judge', 'judge'), ...installations], publicApps });
+    return parse(await run(checkout({ '.github/workflows/release.yml': RELEASE_CALLER }), github, ['--json', '--lanes', 'review', '--releaser'])).inspection.ownerApps;
+  };
+
+  it("offers the owner's own Releaser, private or public, as it does the Judge (#462, the mutations' baseline)", async () => {
+    expect(await releaserOffer([install('acme-releaser', 'releaser')])).toEqual([{ app: 'judge', slug: 'acme-judge' }, { app: 'releaser', slug: 'acme-releaser' }]);
+    expect(await releaserOffer([install('acme-releaser', 'releaser')], { 'acme-releaser': { owner: { login: 'ACME' } } })).toEqual([{ app: 'judge', slug: 'acme-judge' }, { app: 'releaser', slug: 'acme-releaser' }]);
+  }, 60_000);
+
+  it("offers no App of another account's, none that subscribes to events, and none GitHub can't say whose it is, as the Releaser or the Judge (#462)", async () => {
+    const theirs = { 'release-bot': { owner: { login: 'bot-maker' } }, 'acme-judge': { owner: { login: 'bot-maker' } } };
+    expect(await releaserOffer([install('release-bot', 'releaser')], theirs)).toEqual([]);
+    expect(await releaserOffer([install('acme-releaser', 'releaser', { events: ['push'] })])).toEqual([{ app: 'judge', slug: 'acme-judge' }]);
+    expect(await releaserOffer([install('acme-releaser', 'releaser', { events: undefined })])).toEqual([{ app: 'judge', slug: 'acme-judge' }]);
+    const github = fakeGitHub({ kind: 'Organization', orgPlan: 'free', installations: [install('acme-judge', 'judge'), install('acme-releaser', 'releaser')] });
+    const gh = github.gh;
+    github.gh = async (args: string[], input?: string) => (args[1] === 'apps/acme-releaser' ? no('gh: Bad Gateway (HTTP 502)') : gh(args, input));
+    const d = parse(await run(checkout({ '.github/workflows/release.yml': RELEASE_CALLER }), github, ['--json', '--lanes', 'review', '--releaser']));
+    expect(d.inspection.ownerApps).toEqual([{ app: 'judge', slug: 'acme-judge' }]);
+    expect(d.apps).toMatchObject({ missing: ['judge', 'releaser'], reuse: [{ app: 'judge', slug: 'acme-judge' }] });
+  }, 60_000);
 
   it("doesn't list the installations when the register names every App", async () => {
     const register = ['| Role | App slug |', '|---|---|', ...['Reviewer', 'Merger'].map((r) => `| ${r} | \`acme-judge\` |`), ...registerRolesOf('author', REQ).map((r) => `| ${r} | \`acme-author\` |`), ...registerRolesOf('releaser', REQ).map((r) => `| ${r} | \`acme-releaser\` |`), ''].join('\n');
