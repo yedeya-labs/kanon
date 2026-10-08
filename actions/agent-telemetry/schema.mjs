@@ -19,7 +19,8 @@
 // one agent run. A `work_item` row (version 1, plan 0003 §3.3) describes one pull request; S1
 // ships its field list only, and nothing writes one until plan 0003's M4. A `finding` row
 // (version 1, plan 0006 §2) carries one upstream finding, a finding only Kanon can act on; F1
-// ships its field list and checks, and nothing writes one until plan 0006's F3.
+// ships its field list and checks; the Overseer's and the telemetry Explorer's filing steps write
+// them (F3, `scripts/lib/finding-rows.mjs`), and the collector sends them (F4).
 
 import { KANON_PATH, SCRUB_VERSION, verify } from './scrub.mjs';
 

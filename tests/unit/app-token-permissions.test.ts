@@ -65,6 +65,10 @@ const MORE: Record<string, Perms> = {
   // Files each finding that passes the check against the aggregate, and comments on an open
   // issue with the same signature, after the agent has finished (plan 0004 step 14).
   'agent-explore-telemetry.yml#file-token': { issues: 'write' },
+  // With `sent with evidence` only, reads the latest issues' and pull requests' participants and
+  // the collaborators, whose logins the scrub removes from the evidence it sends (plan 0006
+  // §4.2; the Owner's decision on kanon#606). Read-only: it writes nothing.
+  'agent-explore-telemetry.yml#names-token': { issues: 'read', 'pull-requests': 'read' },
 };
 /**
  * The implementer status (plan 0005 §3.3, question 6; step L3), keyed `<file>#<step id>`: a

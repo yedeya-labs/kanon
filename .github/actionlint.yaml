@@ -5,8 +5,15 @@
 # and made `app-id` optional and deprecated. Kanon's mint steps pass `client-id`, so without
 # these two entries actionlint reports every one of them twice. Drop them when a released
 # actionlint knows `client-id`; tests/unit/app-token-input.test.ts still requires it.
+#
+# The same release doesn't know the `job` context's `workflow_ref` and `workflow_sha`, the
+# reusable workflow that defines the job, which `kanonVersion` reads the Kanon release from
+# (kanon#454; actions/agent-telemetry/action.yml). The lanes' filing jobs pass both to stamp a
+# finding row's `kanon_version` (plan 0006 F3). Drop these two when a released actionlint knows them.
 paths:
   .github/workflows/**/*.{yml,yaml}:
     ignore:
       - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"\.'
       - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"\.'
+      - 'property "workflow_ref" is not defined in object type \{check_run_id: number; container:'
+      - 'property "workflow_sha" is not defined in object type \{check_run_id: number; container:'

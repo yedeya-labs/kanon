@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { ROOT } from './helpers/adopter.js';
+import { validate } from '../../actions/agent-telemetry/schema.mjs';
+import { kanonFileIn } from '../../scripts/lib/finding-rows.mjs';
 import { checkAggregate } from '../../scripts/aggregate-read.mjs';
 import {
   LABELS,
@@ -273,5 +276,151 @@ describe('milestoneFor: the backstop\'s routing, never a fixed bucket (K-WORK-4,
     expect(milestoneFor([...LABELS.bug, 'sev:high'])).toBe('Product Backlog');
     expect(milestoneFor(LABELS['spec-delta'])).toBe('Product Backlog');
     expect(milestoneFor([...LABELS['spec-delta'], 'pipeline-improvement'])).toBe('Development Automation');
+  });
+});
+
+// Plan 0006 §5, steps 1 and 2 (F3, kanon#588). With `sent` or `sent with evidence`, each drafted
+// finding is also written as a finding row for Kanon's telemetry store: its codes are the signal
+// it rests on, checked against the aggregate, never the agent's own; its text is the report's
+// `upstream.evidence` and `upstream.suggested_fix`, through the scrub, and through the same
+// figure check the prose gets, since the draft is the run's summary.
+describe('findings sent to Kanon (plan 0006 §5, F3)', () => {
+  const REPO = 'acme-corp/widget-shop';
+  type Opts = { nameHashes?: string[] | null; participants?: 'throws'; collaborators?: 'throws' };
+  /**
+   * A `gh` that answers the participants' and collaborators' reads, as the read-only token sees
+   * them (the Owner's decision on kanon#606), and records every call.
+   */
+  const sendingGh = (o: Opts) => {
+    const base = fakeGh();
+    const gh = (args: string[], input?: string) => {
+      const json = args[args.indexOf('--json') + 1] ?? '';
+      if ((args[0] === 'issue' || args[0] === 'pr') && args[1] === 'list' && json.includes('author')) {
+        base.calls.push({ args, input });
+        if (o.participants === 'throws') throw new Error('HTTP 401: Bad credentials');
+        return JSON.stringify(args[0] === 'pr'
+          ? [{ author: { login: 'pat-author' }, assignees: [], comments: [], latestReviews: [{ author: { login: 'octo-reviewer' } }], reviewRequests: [] }]
+          : [{ author: { login: 'issue-opener' }, assignees: [], comments: [{ author: { login: 'chatty-commenter' } }] }]);
+      }
+      if (args[0] === 'api' && String(args[1]).endsWith('/collaborators')) {
+        base.calls.push({ args, input });
+        if (o.collaborators === 'throws') throw new Error('HTTP 403');
+        return 'collab-person\n';
+      }
+      return base.gh(args, input);
+    };
+    return { ...base, gh };
+  };
+  const sending = (upstream: string | null, findings: unknown[], o: Opts = {}) => {
+    const gh = sendingGh(o);
+    const written: Array<Record<string, unknown>[]> = [];
+    const summary: string[] = [];
+    const log: string[] = [];
+    const code = fileFindings({
+      repo: REPO, text: report(findings), aggregateText: JSON.stringify(AGG), agentOutcome: 'success', gh: gh.gh,
+      log: (l) => log.push(l), summary: (l) => summary.push(l), upstream: upstream ?? undefined,
+      send: {
+        run: { id: 99, attempt: 2 }, tag: 'test', recordedAt: '2026-10-07T12:00:00.000Z', kanonVersion: '0.38.0', actor: 'run-actor',
+        nameHashes: o.nameHashes === undefined ? [] : o.nameHashes, isKanonFile: kanonFileIn(ROOT), write: (rows: Record<string, unknown>[]) => written.push(rows),
+      },
+    });
+    return { code, gh, written, rows: written.flat(), summary: summary.join('\n'), log };
+  };
+  const withUpstream = (upstream: Record<string, unknown>, extra: Record<string, unknown> = {}) => finding({ upstream, ...extra });
+
+  it('with `sent`, writes one row per drafted finding at `codes`, from the signal it rests on, and files nothing', () => {
+    const r = sending('sent', [withUpstream({ lane: 'implement', reason: 'turn_cap', fix_category: 'lane-behaviour', rules: ['K-AGENT-9'], evidence: 'some text' })]);
+    expect(r.code).toBe(0);
+    expect(r.gh.calls).toEqual([]);
+    expect(r.rows).toHaveLength(1);
+    expect(validate(r.rows[0])).toEqual({ ok: true });
+    // The signal's codes, not the agent's: `implement` and `turn_cap` are its own claim.
+    expect(r.rows[0]).toEqual({
+      schema_version: 1, row_kind: 'finding', tag: 'test', recorded_at: '2026-10-07T12:00:00.000Z', run_id: 99, run_attempt: 2, finding_index: 0,
+      reporter: 'explore-telemetry', subject: 'lane', lane: 'review', failed_stage: 'agent', reason: 'did_not_finish', kanon_version: '0.32.0',
+      rules: 'K-AGENT-9', fix_category: 'lane-behaviour', evidence_level: 'codes',
+    });
+    expect(r.summary).toContain('**Sent to Kanon**');
+    expect(r.summary).toMatch(/1 finding row\(s\) written for Kanon's telemetry store, at `codes`/);
+  });
+
+  it('a finding on cells alone is about the cell\'s lane, at the lane\'s own release', () => {
+    const r = sending('sent', [withUpstream({ fix_category: 'other' }, { title: 'A tail cost', body: 'The tail is far above the median.', severity: '', signals: [], cells: [ownRef] })]);
+    expect(r.rows[0]).toMatchObject({ lane: 'review', kanon_version: '0.38.0', subject: 'lane' });
+    expect(r.rows[0]).not.toHaveProperty('reason');
+  });
+
+  it('with `sent with evidence`, the text in the artifact equals the draft\'s, placeholders included', () => {
+    const r = sending('sent with evidence', [withUpstream({ fix_category: 'lane-behaviour', evidence: '**Observed:** the review lane stops at its agent stage; widget-shop saw it, per https://example.test/x.', suggested_fix: 'Ask @someone first.' })]);
+    const row = r.rows[0]!;
+    expect(validate(row)).toEqual({ ok: true });
+    expect(row.evidence).toBe('**Observed:** the review lane stops at its agent stage; [name] saw it, per [url]');
+    expect(row.suggested_fix).toBe('Ask [login] first.');
+    const at = (what: string) => new RegExp(`Its ${what}, as sent:\\n\\n(\`{3,})text\\n([\\s\\S]*?)\\n\\1\\n`).exec(r.summary)?.[2];
+    expect(at('evidence')).toBe(row.evidence);
+    expect(at('suggested fix')).toBe(row.suggested_fix);
+  });
+
+  it('FAILS CLOSED: evidence that quotes a figure is withheld, as the prose would be refused, and the draft says why', () => {
+    const r = sending('sent with evidence', [withUpstream({ fix_category: 'lane-behaviour', evidence: 'It failed 12 times this week.' })]);
+    expect(r.rows[0]!.evidence_level).toBe('codes');
+    expect(r.summary).toMatch(/withheld, and the finding was sent as codes only: its prose quotes a figure/);
+    expect(r.summary).not.toContain('12 times');
+  });
+
+  it('FAILS CLOSED: without the App register\'s names, the text is withheld', () => {
+    const r = sending('sent with evidence', [withUpstream({ fix_category: 'lane-behaviour', evidence: 'plain words' })], { nameHashes: null });
+    expect(r.rows[0]!.evidence_level).toBe('codes');
+  });
+
+  // The Owner's decision on kanon#606: the agent reads this repository's issues to deduplicate,
+  // so the scrub's names include the participants and collaborators, read on the file job's
+  // read-only token exactly as the Overseer reads them (`scrubContext`).
+  it('removes a bare login the agent could read, with no `@`: an issue opener\'s, a commenter\'s, a PR reviewer\'s, a collaborator\'s and the actor\'s', () => {
+    const r = sending('sent with evidence', [withUpstream({ fix_category: 'lane-behaviour', evidence: 'issue-opener, chatty-commenter, octo-reviewer, collab-person and run-actor saw it.' })]);
+    expect(r.rows[0]!.evidence_level).toBe('evidence');
+    expect(r.rows[0]!.evidence).toBe('[name], [name], [name], [name] and [name] saw it.');
+    // Only reads: the participants of issues and pull requests, and the collaborators.
+    expect(r.gh.calls.map((c) => c.args.slice(0, 2).join(' '))).toEqual(['issue list', 'pr list', `api repos/${REPO}/collaborators`]);
+    expect(r.gh.creates()).toEqual([]);
+    expect(r.gh.comments()).toEqual([]);
+  });
+
+  it('FAILS CLOSED: when the participants can\'t be read (no token, or a refused one), every text is withheld, and the draft says why', () => {
+    const r = sending('sent with evidence', [
+      withUpstream({ fix_category: 'lane-behaviour', evidence: 'issue-opener saw it.', suggested_fix: 'Ask chatty-commenter.' }),
+      withUpstream({ fix_category: 'guard', evidence: 'plain words' }, { title: 'Another', signals: [], cells: [ownRef], severity: '' }),
+    ], { participants: 'throws' });
+    expect(r.rows.map((x) => x.evidence_level)).toEqual(['codes', 'codes']);
+    for (const row of r.rows) {
+      expect(row).not.toHaveProperty('evidence');
+      expect(row).not.toHaveProperty('suggested_fix');
+    }
+    expect(r.summary).toContain('withheld, and the finding was sent as codes only: the run\'s issue and pull request participants could not be read (HTTP 401: Bad credentials)');
+    expect(r.summary).not.toContain('issue-opener saw it');
+  });
+
+  it('a collaborator list it can\'t read is a notice, not a withheld text, as for the Overseer', () => {
+    const r = sending('sent with evidence', [withUpstream({ fix_category: 'lane-behaviour', evidence: 'issue-opener saw it.' })], { collaborators: 'throws' });
+    expect(r.rows[0]!.evidence).toBe('[name] saw it.');
+    expect(r.log.join('\n')).toMatch(/::notice title=telemetry explorer finding rows::the repository's collaborators could not be listed/);
+  });
+
+  it('reads no participant below `sent with evidence`, where no token is minted for it', () => {
+    for (const upstream of ['sent', 'drafted', null]) {
+      expect(sending(upstream, [withUpstream({ fix_category: 'lane-behaviour', evidence: 'issue-opener saw it.' })]).gh.calls, String(upstream)).toEqual([]);
+    }
+  });
+
+  it('with `drafted` or `filed here`, no artifact', () => {
+    for (const upstream of ['drafted', 'filed here', null]) {
+      expect(sending(upstream, [withUpstream({ fix_category: 'guard' })]).written, String(upstream)).toEqual([]);
+    }
+  });
+
+  it('sends no refused finding, and one row per signature', () => {
+    const r = sending('sent', [finding(), finding({ title: 'The same, again' }), finding({ body: 'Adopter 3fa9c0d1 fails.' })]);
+    expect(r.rows).toHaveLength(1);
+    expect(r.code).toBe(1);
   });
 });

@@ -236,6 +236,18 @@ jobs:
               nothing of this project, not its issues, paths, people, product or data.
               Before writing an upstream finding's `evidence` or `suggested_fix`, read and
               follow `$KANON/skills/upstream-finding/SKILL.md`.
+              Give each such finding an `upstream` object, in Kanon's vocabulary, which the
+              step sends to Kanon's telemetry store when the record says so (it reads the
+              record, not you), and drafts either way:
+              "upstream": {"lane": "...", "failed_stage": "...", "kanon_error": "...",
+                "reason": "...", "rules": ["K-..."], "kanon_paths": ["scripts/..."],
+                "fix_category": "...", "evidence": "...", "suggested_fix": "..."}
+              Leave out any field you can't fill. The codes are the telemetry schema's own
+              (`$KANON/actions/agent-telemetry/schema.mjs`): `lane` from its lane list,
+              `rules` rulebook ids, `kanon_paths` files of Kanon's tree from its root, and
+              `fix_category` one of `lane-behaviour`, `guard`, `rule-text`, `documentation`,
+              `codes-or-schema`, `default-value`, `permissions` or `other`. The step drops a
+              code outside its list, and sends the text only through its scrub.
             A finding that fits no subject goes upstream, unfiled. When in doubt about who
             can act, say so in the body and choose the subject you can defend.
             Each finding's body leads with the evidence and the CONSTRAINT the change must

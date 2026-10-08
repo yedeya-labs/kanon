@@ -25,8 +25,9 @@
 // send it to Kanon's telemetry store over the telemetry channel: the collector sends the rows, so
 // both need a workflow that calls Kanon's telemetry collector. Without one nothing is sent, and
 // `lane-check` and `kanon doctor` say so (`upstream.unsent`, `unsentMessage`), naming both fixes.
-// The lanes build the rows in plan 0006's F3, and the collector sends them in F4: until then a
-// sent finding is drafted, and nothing is sent.
+// The lanes build the rows (plan 0006's F3, `finding-rows.mjs`) and upload them as `kanon-finding-*`
+// artifacts, and the collector sends them (F4): a sent finding is drafted, its row is written,
+// and the collector sends the row to Kanon's telemetry store.
 //
 // OMITTED, IT IS KANON'S DEFAULT, `drafted` (plan 0005 §5.2): a record without the bullet, or no
 // record, routes upstream findings exactly as before the choice existed.

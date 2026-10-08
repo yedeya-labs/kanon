@@ -44,20 +44,43 @@
 // exactly as it would be filed, and nothing is filed, commented on or listed. Nothing is ever
 // filed in another repository.
 //
+// SENT TO KANON, AND STILL DRAFTED (plan 0006 §3.1 and §5, F3). With `sent` or `sent with
+// evidence`, each drafted finding is also written as a finding row for Kanon's telemetry store
+// (`scripts/lib/finding-rows.mjs`), into one file the lane's next step uploads as
+// `kanon-finding-explore-telemetry-<run id>-<attempt>`. Its codes are the first signal it rests
+// on, as checked against the aggregate, or the first cell's lane, never the agent's own; its rule
+// ids, Kanon paths and fix category come from its `upstream` object, each kept only when it is in
+// the schema's list; and at level 2 its `upstream.evidence` and `upstream.suggested_fix` go
+// through the scrub and then through `proseProblem`, as the prose does, since the draft shows
+// them in the run's summary. A text either refuses is withheld, and the finding is sent as codes.
+// The scrub's names are the App register's, which the gate job hashed, this repository's, the
+// run's actor, and the logins of the issues' and pull requests' participants and the
+// collaborators (§4.2), read exactly as the Overseer reads them (`scrubContext` in
+// `overseer-file.mjs`): the agent reads this repository's issues on its read token, to
+// deduplicate, so a bare login it read there must be removed too. With `sent with evidence` the
+// lane's `file` job mints a read-only filing token for those reads (issues and pull requests:
+// read), and no other level mints one for them (the Owner's decision on kanon#606, `K-AGENT-46`).
+// If the participants can't be read, every text is withheld, and the findings are sent as codes
+// only: fail closed.
+//
 // THE REPORT, `qa-telemetry-findings.json`, written by the agent at the repository root:
 //
 //   { "examined": "<what was looked at>", "held_back": ["<a candidate not filed, and why>"],
 //     "findings": [ { "title": "...", "body": "...", "severity": "sev:medium",
 //       "signals": [ { "lane", "reason", "failed_stage", "kanon_error", "kanon_version" } ],
-//       "cells": [ { "source": "own", "label": "...", "lane", "model" } | { "source": "cross_adopter", "lane", "model" } ] } ] }
+//       "cells": [ { "source": "own", "label": "...", "lane", "model" } | { "source": "cross_adopter", "lane", "model" } ],
+//       "upstream": { "rules": [], "kanon_paths": [], "fix_category", "evidence", "suggested_fix" } } ] }
 //
 // THE OUTCOME. No report, or one that doesn't parse, files nothing and exits 1: the run was lost.
 // A refused finding is named by its position and why, never filed, and the step exits 1 after
 // filing the rest. An agent that exited non-zero after a valid report is a warning.
 //
 //   node "$KANON/scripts/telemetry-file.mjs"
-//   env: GH_TOKEN (issues write; only for `filed here`), GITHUB_REPOSITORY, AGENT_OUTCOME,
-//        REPORT_PATH, AGGREGATE_PATH, UPSTREAM (`filed here` or `drafted`), GITHUB_STEP_SUMMARY
+//   env: GH_TOKEN (issues write for `filed here`; issues and pull requests read for `sent with
+//        evidence`, to read the participants; none otherwise), GITHUB_REPOSITORY, AGENT_OUTCOME,
+//        REPORT_PATH, AGGREGATE_PATH, UPSTREAM (`filed here`, `drafted`, `sent` or `sent with
+//        evidence`), GITHUB_STEP_SUMMARY; and for the rows: KANON, APP_NAME_HASHES (the gate
+//        job's), TAG, KANON_WORKFLOW_REF, KANON_WORKFLOW_SHA, FINDINGS_PATH, GITHUB_OUTPUT
 //
 // `node:` builtins only, like every script under scripts/ (`K-SELF-8`).
 
@@ -70,7 +93,8 @@ import { appPersona } from './app-register.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
 import { decide } from './issue-triage-defaults.mjs';
-import { upstreamChoice } from './overseer-file.mjs';
+import { buildRows, notWritten, readUpstream, renderSent, sendFromEnv, sentSentence } from './lib/finding-rows.mjs';
+import { scrubContext, upstreamChoice } from './overseer-file.mjs';
 import { signed } from './lib/role-marker.mjs';
 
 /** The report the agent writes, at the repository root. */
@@ -104,9 +128,11 @@ export class ReportError extends Error {}
  * @typedef {import('./aggregate-read.mjs').Signal} Signal
  * @typedef {{ lane: string, reason: string | null, failed_stage: string | null, kanon_error: string | null, kanon_version: string | null }} SignalRef
  * @typedef {{ source: 'own', label: string, lane: string, model: string } | { source: 'cross_adopter', lane: string, model: string }} CellRef
- * @typedef {{ title: string, body: string, severity: string, signals: unknown[], cells: unknown[] }} Finding
+ * @typedef {{ title: string, body: string, severity: string, signals: unknown[], cells: unknown[], upstream?: unknown }} Finding
  * @typedef {{ examined: string, held_back: string[], findings: Finding[] }} Report
  * @typedef {{ kind: 'bug' | 'spec-delta', signals: Signal[], cells: Array<{ source: string, cell: Cell }>, signature: string }} Checked
+ * @typedef {import('./lib/finding-rows.mjs').Level} Level
+ * @typedef {import('./lib/finding-rows.mjs').Send} Send
  */
 
 /**
@@ -141,6 +167,7 @@ export function parseReport(text) {
         severity: typeof o.severity === 'string' ? o.severity.trim() : '',
         signals: Array.isArray(o.signals) ? o.signals : [],
         cells: Array.isArray(o.cells) ? o.cells : [],
+        ...(Object.hasOwn(o, 'upstream') ? { upstream: o.upstream } : {}),
       };
     }),
   };
@@ -295,14 +322,54 @@ const issueNumber = (url) => {
 /** @typedef {(args: string[], input?: string) => string} Gh */
 
 /**
+ * The finding rows of this run's drafts (plan 0006 §5, step 1), written in one go, and what each
+ * draft shows of them, by signature. The codes are what the finding rests on, checked against
+ * the aggregate; the agent's `upstream` adds only rule ids, Kanon paths, a fix category and text.
+ * The scrub's context is the Overseer's (`scrubContext`), read on `gh`, the read-only filing token.
+ * @param {{ repo: string, gh: Gh, a: Aggregate, drafts: Array<{ f: Finding, c: Checked }>, level: Level, send: Send | undefined,
+ *   log: (line: string) => void }} o
+ * @returns {{ blocks: Map<string, string>, written: number, failed: boolean }}
+ */
+function sendFindings({ repo, gh, a, drafts, level, send, log }) {
+  /** @type {Map<string, string>} */
+  const blocks = new Map();
+  if (!send) {
+    log('::warning title=telemetry explorer finding rows::the repository sends its findings to Kanon, but this step was given nowhere to write their rows, so none was sent');
+    return { blocks, written: 0, failed: false };
+  }
+  const items = drafts.map(({ f, c }) => {
+    const s = c.signals[0];
+    const lane = s ? s.lane : c.cells[0]?.cell.lane;
+    const raw = { ...(typeof f.upstream === 'object' && f.upstream !== null && !Array.isArray(f.upstream) ? f.upstream : {}),
+      lane, failed_stage: s?.failed_stage ?? undefined, kanon_error: s?.kanon_error ?? undefined, reason: s?.reason ?? undefined };
+    return { subject: 'lane', ...readUpstream(raw, send.isKanonFile), ...(s?.kanon_version ? { kanon_version: s.kanon_version } : {}) };
+  });
+  const needsContext = level === 'evidence' && items.some((i) => i.evidence || i.suggested_fix);
+  const { context, contextProblem } = needsContext ? scrubContext(repo, gh, send, log, 'telemetry explorer') : {};
+  const { rows, outcomes } = buildRows({ reporter: 'explore-telemetry', level, items, send, context, contextProblem, check: (t) => proseProblem(t, a) });
+  if (rows.length) {
+    try {
+      send.write(rows);
+    } catch (e) {
+      const why = String(/** @type {Error} */ (e).message).split('\n')[0] ?? '';
+      log(`::error title=telemetry explorer finding rows::${why}: the ${rows.length} finding row(s) of this run were not written, so none was sent to Kanon`);
+      for (const { c } of drafts) blocks.set(c.signature, notWritten(why));
+      return { blocks, written: 0, failed: true };
+    }
+  }
+  drafts.forEach(({ c }, i) => blocks.set(c.signature, renderSent(/** @type {import('./lib/finding-rows.mjs').Outcome} */ (outcomes[i]))));
+  return { blocks, written: rows.length, failed: false };
+}
+
+/**
  * The whole step. Returns the exit code; prints its annotations through `log` and its summary
- * through `summary`.
+ * through `summary`. With `sent` or `sent with evidence`, `send` is where its rows go.
  * @param {{ repo: string, text: string | null, aggregateText: string | null, agentOutcome: string, gh: Gh,
- *   log?: (line: string) => void, summary?: (line: string) => void, upstream?: string }} o
+ *   log?: (line: string) => void, summary?: (line: string) => void, upstream?: string, send?: Send }} o
  * @returns {number}
  */
-export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log = console.log, summary = () => {}, upstream: declared }) {
-  const { upstream: choice, unknown } = upstreamChoice(declared);
+export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log = console.log, summary = () => {}, upstream: declared, send }) {
+  const { upstream: choice, unknown, level } = upstreamChoice(declared);
   if (unknown !== undefined) {
     log(`::warning title=telemetry explorer upstream choice::the lane passed \`${unknown}\`, which is neither \`drafted\` nor \`filed here\`, so the findings are drafted, not filed (K-LAYOUT-10)`);
   }
@@ -343,14 +410,24 @@ export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log 
 
   if (choice !== 'filed here') {
     const seenDraft = new Set();
+    /** @type {Array<{ f: Finding, c: Checked }>} */
+    const drafts = [];
     for (const { f, c } of ok) {
       if (seenDraft.has(c.signature)) { summary(`- **Held:** "${f.title}": another finding this run has the same signature.`); continue; }
       seenDraft.add(c.signature);
+      drafts.push({ f, c });
+    }
+    const sent = level ? sendFindings({ repo, gh, a, drafts, level, send, log }) : null;
+    if (sent?.failed) failed += 1;
+    if (level && drafts.length) summary(sentSentence(level));
+    for (const { f, c } of drafts) {
       const names = labelsFor(c.kind, f.severity);
-      summary(`\n### Draft: ${f.title}\n\nLabels: ${names.map((l) => `\`${l}\``).join(', ')}. Milestone: ${milestoneFor(names)}.\n\n${f.body.trim()}\n\n${renderEvidence(c, a)}\n`);
+      const block = sent?.blocks.get(c.signature);
+      summary(`\n### Draft: ${f.title}\n\nLabels: ${names.map((l) => `\`${l}\``).join(', ')}. Milestone: ${milestoneFor(names)}.\n\n${f.body.trim()}\n\n${renderEvidence(c, a)}\n${block ? `\n${block}\n` : ''}`);
     }
     log(`${seenDraft.size} finding(s) drafted in the run's summary, none filed: this repository's adoption record doesn't say \`Upstream findings: filed here\` (K-LAYOUT-10).`);
     summary(`- ${report.findings.length} finding(s) in the report, ${seenDraft.size} drafted above and not filed (this repository doesn't declare \`Upstream findings: filed here\`), ${report.held_back.length} candidate(s) the agent held back.`);
+    if (sent) summary(`- ${sent.written} finding row(s) written for Kanon's telemetry store, at \`${level}\`.`);
     if (agentOutcome === 'failure') log(`::warning title=telemetry explorer exited non-zero after writing its report::The agent exited non-zero, but its ${REPORT} was valid, so it was drafted from.`);
     return failed > 0 ? 1 : 0;
   }
@@ -425,6 +502,7 @@ if (isCliEntry(import.meta.url)) {
     agentOutcome: String(process.env.AGENT_OUTCOME ?? ''),
     upstream: process.env.UPSTREAM,
     gh,
+    send: sendFromEnv(process.env),
     summary: (line) => { if (out) appendFileSync(out, `${line}\n`); },
   });
 }
