@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.38.0](https://github.com/yedeya-labs/kanon/compare/v0.37.0...v0.38.0) (2026-10-08)
+
+
+### Features
+
+* **init:** upstream findings sent or sent with evidence, asked at install (plan 0006 F2) ([#599](https://github.com/yedeya-labs/kanon/issues/599)) ([826ef32](https://github.com/yedeya-labs/kanon/commit/826ef3245ed9b5fb819022d83fd6b3eaab0e346a))
+* **skills:** the upstream-finding skill, and both lanes reading it ([#595](https://github.com/yedeya-labs/kanon/issues/595)) ([586ae0a](https://github.com/yedeya-labs/kanon/commit/586ae0a1534d1554deee65b5264237ca6c9fc462))
+* **telemetry:** accept finding rows at intake, and let the collector send them (plan 0006 F4) ([#604](https://github.com/yedeya-labs/kanon/issues/604)) ([348cc70](https://github.com/yedeya-labs/kanon/commit/348cc7029f98f5edad8bacd4573a0b7c7a9cd515))
+* **telemetry:** jev.mjs, a pure Jev client that fails closed (plan 0006 F6) ([#596](https://github.com/yedeya-labs/kanon/issues/596)) ([97ec5f1](https://github.com/yedeya-labs/kanon/commit/97ec5f1102b942953cf792c2499ede0dfb7828c4))
+* **telemetry:** plan the [#41](https://github.com/yedeya-labs/kanon/issues/41) job's private filing of upstream findings (plan 0006 F5) ([#608](https://github.com/yedeya-labs/kanon/issues/608)) ([f06fd47](https://github.com/yedeya-labs/kanon/commit/f06fd473acd88a53d8a0154b1936efe16c64fa3f))
+* **telemetry:** the finding row, the scrub and the shared signature (plan 0006 F1) ([#600](https://github.com/yedeya-labs/kanon/issues/600)) ([2c01e72](https://github.com/yedeya-labs/kanon/commit/2c01e7209f516bc097f869cf55bd6c16bca84429))
+* **telemetry:** the Overseer and the telemetry Explorer write finding rows (plan 0006 F3) ([#605](https://github.com/yedeya-labs/kanon/issues/605)) ([db31ec4](https://github.com/yedeya-labs/kanon/commit/db31ec4d312d110625b3c2aabc4c3dc5ae436f8f))
+
+
+### Documentation
+
+* fix statements that drifted after L4, L5 and [#279](https://github.com/yedeya-labs/kanon/issues/279) ([#594](https://github.com/yedeya-labs/kanon/issues/594)) ([df3d04a](https://github.com/yedeya-labs/kanon/commit/df3d04a4f4036648df7cc4565f87a86120d621aa))
+* **plans:** plan 0006, upstream findings reach Kanon through the telemetry channel, promoted by Jev ([#573](https://github.com/yedeya-labs/kanon/issues/573)) ([a20714e](https://github.com/yedeya-labs/kanon/commit/a20714e3237bbc4b54d4be94742f243f750857aa))
+
+
+### CI
+
+* **deps:** Bump anthropics/claude-code-action from 1.0.241 to 1.0.242 in /actions/agent-run in the github-actions group across 1 directory ([#613](https://github.com/yedeya-labs/kanon/issues/613)) ([e3f9eb2](https://github.com/yedeya-labs/kanon/commit/e3f9eb2b7399fdf0db769ae0875c43afac3dc5eb))
+
 ## [0.37.0](https://github.com/yedeya-labs/kanon/compare/v0.36.0...v0.37.0) (2026-10-07)
 
 
