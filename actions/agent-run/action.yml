@@ -120,7 +120,7 @@ runs:
     # while `.github/scripts/reviewer-grant-record.json` or `lead-grant-record.json` names
     # another version: a maintainer runs `.github/scripts/reviewer-grant-probe.mjs` against
     # the CLI the new version installs and commits the records it writes.
-    - uses: anthropics/claude-code-action@v1.0.241
+    - uses: anthropics/claude-code-action@v1.0.242
       id: agent
       env:
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}
