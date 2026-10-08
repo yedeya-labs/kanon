@@ -26,7 +26,7 @@ Kanon isn't on npm. Run the command straight from a tagged Kanon release, from t
 <!-- x-release-please-start-version -->
 
 ```sh
-npx --yes --package github:yedeya-labs/kanon#v0.37.0 kanon apps --owner <owner> --repo <repo>[,<repo>...] --apps author,judge
+npx --yes --package github:yedeya-labs/kanon#v0.38.0 kanon apps --owner <owner> --repo <repo>[,<repo>...] --apps author,judge
 ```
 
 <!-- x-release-please-end -->
@@ -81,7 +81,7 @@ jobs:
   apps:
     permissions:
       contents: read
-    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@v0.37.0
+    uses: yedeya-labs/kanon/.github/workflows/apps-check.yml@v0.38.0
     secrets:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
