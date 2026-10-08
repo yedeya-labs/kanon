@@ -50,7 +50,7 @@ runs:
           echo "::error title=QA store hook::the repository secrets QA_STORE_ROLE_ARN and QA_STORE_BUCKET must both be set, and mapped by the lane's caller (docs/qa-store.md)"
           exit 1
         fi
-    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.36.0
+    - uses: yedeya-labs/kanon/infra/qa-store/aws@v0.37.0
       with:
         operation: ${{ inputs.operation }}
         kind: ${{ inputs.kind }}
