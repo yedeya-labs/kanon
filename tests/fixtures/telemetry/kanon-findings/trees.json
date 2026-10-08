@@ -1,0 +1,8 @@
+{
+  "0.37.0": [
+    ".github/workflows/agent-merge.yml",
+    "scripts/merge-gate.mjs",
+    "scripts/lib/upstream-findings.mjs",
+    "rulebook/08-observability-and-cost.md"
+  ]
+}
