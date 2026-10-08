@@ -1,0 +1,7 @@
+{
+  "repositories": [
+    { "key": "a1b2c3d4", "repository": "example-org/widgets-alpha", "readers": [] },
+    { "key": "e5f6a7b8", "repository": "example-org/gadgets-beta", "readers": [] },
+    { "key": "kfixture3", "repository": "example-org/gizmos-gamma", "readers": [] }
+  ]
+}

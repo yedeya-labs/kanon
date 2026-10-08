@@ -390,6 +390,26 @@ A signal is **new** when its signature is not in the `--known` list. The signatu
 
 **What an issue holds.** Counts, Kanon's codes, Kanon versions, dates to the day, and the number of adopters. Never an adopter key, a repository, a run id, a login or a path. That is structural: a row's lane, stage, error, reason and outcome are read only when they are in the schema's closed lists, and its version only when it matches the schema's pattern, so a row with anything else is skipped and counted, and every string in a signal is one of Kanon's codes, a version or a time. The output is also checked against every adopter key the input held, and refused whole if one appears. `tests/unit/kanon-bugs.test.ts` proves it with rows that carry keys, a repository, a login, paths and run ids.
 
+### Upstream findings, filed privately beside the signals
+
+[Plan 0006](plans/0006-upstream-findings.md) §6 (step F5). The same private job also reads the finding rows (`<key>#finding`) and runs [`scripts/telemetry/kanon-findings.mjs`](../scripts/telemetry/kanon-findings.mjs), which is pure like `kanon-bugs.mjs`: rows in, a plan of private issues out.
+
+```sh
+node scripts/telemetry/kanon-findings.mjs --rows <run and finding rows> [--known <signatures.json>] [--tag test] \
+  --trees <trees.json> --register <register.json> --json
+```
+
+- **One issue per signature.** It runs `detect` over the run rows, unchanged, and groups the findings by the signals' own `signature()` (§2.4). A finding with a signal's signature goes on that signal's issue, below its counts, so the job updates the one issue and files no second. Every later finding with the signature is one more entry on it. A finding with no signal gets an issue of its own, with a title built from its codes. Each issue is labelled `kanon-bug` and `finding`, plus the signal's class label (`platform` or `adopter`) when it has one.
+- **The gate.** Each finding is checked again at the release the job pins:
+  - `validate`;
+  - the scrub's `verify` on its text, with that key's name hashes (from the register, as `render.mjs` builds them for intake) and the release's tree;
+  - an adopter key, as a field's value or as a word in it;
+  - each `kanon_paths` entry against the file list of its `kanon_version`.
+
+  A finding that fails is still filed privately, marked `gate: failed` with the field and rule, and labelled `gate-failed`. Its text, and any path outside the tree, are left out of the issue.
+- **The tree.** `--trees` maps each release to its file list, as `git ls-tree -r --name-only v<version>` prints it from a Kanon clone. A release with no list, `dev` included, fails any finding of it that carries a path or a text.
+- **What leaves.** Signals and rises come out exactly as `kanon-bugs.mjs` returns them, so a public issue never holds a finding. The evidence and suggested fix appear only in the private issue, and only for a finding that passed the gate. The whole output is checked for every key in the rows and the register, as a value and as a word, and refused whole if one appears. `tests/unit/kanon-findings.test.ts` proves each check.
+
 ## The importer and the backfill role
 
 These roles are created only for their step and deleted after it (§7). Add `--importer` (S5) or `--backfill` (S7a) to `render.mjs`, package and deploy, and the function accepts that role. Such a caller names the adopter's key as `?key=<key>` on the URL, and the key must be in the register:
