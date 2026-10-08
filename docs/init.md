@@ -46,7 +46,7 @@ An upstream finding is one about Kanon itself, a lane's behaviour, a guard, a ru
 - **`sent with evidence`** (`--upstream-findings sent-with-evidence`): asked only after `sent`, codes only by default. It also sends each finding's evidence and suggested fix, as text, which may rarely still contain personal data, and which Kanon's maintainer and a third-party decision provider, TypeSafe, read. The question says so in plan 0006 decision 14's words.
 - **`filed-here`**: filed as issues in this repository, for a repository that maintains Kanon itself or a fork of it.
 
-**Not sent yet.** The lanes build the rows in plan 0006's F3 and upload them as `kanon-finding-*` artifacts, and the collector sends them in F4. Until it lands, a lane drafts each finding of a record that says `sent` or `sent with evidence`, writes its row, and sends nothing.
+**How they travel.** The lanes build the rows (plan 0006's F3) and upload them as `kanon-finding-*` artifacts, and the collector sends them (F4). A lane drafts each finding of a record that says `sent` or `sent with evidence`, writes its row, and the collector sends the row at the level the record declares.
 
 ### Where a lane's caller goes
 

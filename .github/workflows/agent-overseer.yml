@@ -430,8 +430,11 @@ jobs:
 
       # THE FINDING ROWS (plan 0006 §5, F3): written by the step above only when the repository
       # sends its upstream findings to Kanon, and sent by the telemetry collector, which holds
-      # the writer role (`K-OBS-13`; it lists `kanon-finding-*` from F4). This job holds no
-      # credential for the store. Kept 8 days: the store refuses a row recorded longer ago.
+      # the writer role (`K-OBS-13`) and lists `kanon-finding-*` (F4). This job holds no
+      # credential for the store. Kept 8 days: the store refuses a row recorded longer ago. The
+      # name and the file are `findingArtifactName` and `FINDING_ARTIFACT_FILE`
+      # (`scripts/lib/telemetry-artifacts.mjs`), which the collector reads; the lane's test holds
+      # this literal to them.
       - name: Upload the finding rows for the collector
         if: ${{ !cancelled() && steps.file.outputs.finding-rows != '' }}
         uses: actions/upload-artifact@v7

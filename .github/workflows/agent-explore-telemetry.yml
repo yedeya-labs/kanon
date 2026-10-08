@@ -43,7 +43,8 @@
 #   Explorer's, narrowed to read the tree and issues: it files nothing. It writes its findings to
 #   `qa-telemetry-findings.json`, which the job uploads.
 # - `file` FILES, WITH NO AGENT. On a fresh runner that checks out nothing, it downloads the
-#   aggregate and the findings, mints the Explorer's filing token, and runs
+#   aggregate and the findings, mints the Explorer's filing token (with `filed here`) or a
+#   read-only token for the scrub's names (with `sent with evidence`), and runs
 #   `scripts/telemetry-file.mjs`: each finding must rest on entries of the aggregate, by their
 #   identifying fields; its prose may quote no figure, and nothing shaped like an adopter key;
 #   the step renders the figures itself, from the aggregate. A finding that fails is refused by
@@ -55,7 +56,8 @@
 # reads from the default branch before any agent runs and hands to the `file` job. `filed here`
 # files each finding in this repository; anything else, the default, is `drafted`: the checked
 # finding, rendered exactly as it would be filed, goes into the run's summary, and nothing is
-# filed or minted. Nothing is ever filed in another repository.
+# filed. No filing token is minted for a draft; only `sent with evidence` mints a read-only one,
+# for the scrub's names (kanon#606). Nothing is ever filed in another repository.
 #
 # WHAT THE LOG SHOWS (kanon#433). The role's ARN holds the AWS account id, and a public
 # repository's run logs are public, so it is a secret, which GitHub masks wherever it appears.
@@ -267,7 +269,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Nothing on the workflow token: the downloads read this run's artifacts with the runner's
-    # own token, and every write is the filing App token's.
+    # own token, every write is the filing App token's, and the scrub's reads (with `sent with
+    # evidence`) are the read-only App token's.
     permissions: {}
     steps:
       # A PARTIAL RE-RUN (kanon#286): "Re-run failed jobs" after a failed `file` re-runs this job
@@ -311,13 +314,31 @@ jobs:
           private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
           permission-issues: write
 
+      # THE SCRUB'S NAMES, A READ-ONLY TOKEN (plan 0006 §4.2; the Owner's decision on kanon#606,
+      # `K-AGENT-46`), minted in this job, which runs no agent, and only when the repository sends
+      # its findings to Kanon with evidence: the filing step reads the participants of the latest
+      # issues and pull requests, and the collaborators, which the agent could read, so their
+      # logins join the scrub's names. Issues and pull requests read, nothing else. No other level
+      # mints it. If it isn't minted or the read fails, every text is withheld (codes only).
+      - name: Mint the Explorer's read-only token for the scrub's names
+        id: names-token
+        if: needs.gate.outputs.upstream == 'sent with evidence'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+          permission-issues: read
+          permission-pull-requests: read
+
       # THE CHECK, AND THE FILING OR THE DRAFTS (see the header). No report, or an unparseable
       # one, files nothing and reds the job: the run was lost. A refused finding reds it too,
       # after the others are filed or drafted.
       - name: Check the findings against the aggregate, and file or draft them
         id: file
         env:
-          GH_TOKEN: ${{ steps.file-token.outputs.token }}
+          # The filing token with `filed here`, the read-only one with `sent with evidence`, and
+          # none otherwise: at most one of the two steps above runs.
+          GH_TOKEN: ${{ steps.file-token.outputs.token || steps.names-token.outputs.token }}
           AGENT_OUTCOME: ${{ needs.explore.outputs.agent-outcome }}
           REPORT_PATH: ${{ runner.temp }}/report/qa-telemetry-findings.json
           AGGREGATE_PATH: ${{ runner.temp }}/aggregate/aggregate.json
@@ -336,8 +357,11 @@ jobs:
 
       # THE FINDING ROWS (plan 0006 §5, F3): written by the step above only when the repository
       # sends its upstream findings to Kanon, and sent by the telemetry collector, which holds
-      # the writer role (`K-OBS-13`; it lists `kanon-finding-*` from F4). This job holds no
-      # credential for the store. Kept 8 days: the store refuses a row recorded longer ago.
+      # the writer role (`K-OBS-13`) and lists `kanon-finding-*` (F4). This job holds no
+      # credential for the store. Kept 8 days: the store refuses a row recorded longer ago. The
+      # name and the file are `findingArtifactName` and `FINDING_ARTIFACT_FILE`
+      # (`scripts/lib/telemetry-artifacts.mjs`), which the collector reads; the lane's test holds
+      # this literal to them.
       - name: Upload the finding rows for the collector
         if: ${{ !cancelled() && steps.file.outputs.finding-rows != '' }}
         uses: actions/upload-artifact@v7

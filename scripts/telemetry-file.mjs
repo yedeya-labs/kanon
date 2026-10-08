@@ -53,11 +53,15 @@
 // the schema's list; and at level 2 its `upstream.evidence` and `upstream.suggested_fix` go
 // through the scrub and then through `proseProblem`, as the prose does, since the draft shows
 // them in the run's summary. A text either refuses is withheld, and the finding is sent as codes.
-// The scrub's names are the App register's, which the gate job hashed, this repository's and the
-// run's actor. That is narrower than §4.2's: the agent also reads this repository's issues on its
-// read token, to deduplicate, so a bare login it read there is not redacted (an `@login` is, by
-// the `mention` rule). Reading those participants here needs a token this job doesn't mint
-// unless the record says `filed here` (`K-AGENT-46`), which is the Owner's decision: kanon#606.
+// The scrub's names are the App register's, which the gate job hashed, this repository's, the
+// run's actor, and the logins of the issues' and pull requests' participants and the
+// collaborators (§4.2), read exactly as the Overseer reads them (`scrubContext` in
+// `overseer-file.mjs`): the agent reads this repository's issues on its read token, to
+// deduplicate, so a bare login it read there must be removed too. With `sent with evidence` the
+// lane's `file` job mints a read-only filing token for those reads (issues and pull requests:
+// read), and no other level mints one for them (the Owner's decision on kanon#606, `K-AGENT-46`).
+// If the participants can't be read, every text is withheld, and the findings are sent as codes
+// only: fail closed.
 //
 // THE REPORT, `qa-telemetry-findings.json`, written by the agent at the repository root:
 //
@@ -72,7 +76,8 @@
 // filing the rest. An agent that exited non-zero after a valid report is a warning.
 //
 //   node "$KANON/scripts/telemetry-file.mjs"
-//   env: GH_TOKEN (issues write; only for `filed here`), GITHUB_REPOSITORY, AGENT_OUTCOME,
+//   env: GH_TOKEN (issues write for `filed here`; issues and pull requests read for `sent with
+//        evidence`, to read the participants; none otherwise), GITHUB_REPOSITORY, AGENT_OUTCOME,
 //        REPORT_PATH, AGGREGATE_PATH, UPSTREAM (`filed here`, `drafted`, `sent` or `sent with
 //        evidence`), GITHUB_STEP_SUMMARY; and for the rows: KANON, APP_NAME_HASHES (the gate
 //        job's), TAG, KANON_WORKFLOW_REF, KANON_WORKFLOW_SHA, FINDINGS_PATH, GITHUB_OUTPUT
@@ -88,9 +93,8 @@ import { appPersona } from './app-register.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
 import { decide } from './issue-triage-defaults.mjs';
-import { nameContext } from '../actions/agent-telemetry/scrub.mjs';
 import { buildRows, notWritten, readUpstream, renderSent, sendFromEnv, sentSentence } from './lib/finding-rows.mjs';
-import { upstreamChoice } from './overseer-file.mjs';
+import { scrubContext, upstreamChoice } from './overseer-file.mjs';
 import { signed } from './lib/role-marker.mjs';
 
 /** The report the agent writes, at the repository root. */
@@ -321,11 +325,12 @@ const issueNumber = (url) => {
  * The finding rows of this run's drafts (plan 0006 §5, step 1), written in one go, and what each
  * draft shows of them, by signature. The codes are what the finding rests on, checked against
  * the aggregate; the agent's `upstream` adds only rule ids, Kanon paths, a fix category and text.
- * @param {{ repo: string, a: Aggregate, drafts: Array<{ f: Finding, c: Checked }>, level: Level, send: Send | undefined,
+ * The scrub's context is the Overseer's (`scrubContext`), read on `gh`, the read-only filing token.
+ * @param {{ repo: string, gh: Gh, a: Aggregate, drafts: Array<{ f: Finding, c: Checked }>, level: Level, send: Send | undefined,
  *   log: (line: string) => void }} o
  * @returns {{ blocks: Map<string, string>, written: number, failed: boolean }}
  */
-function sendFindings({ repo, a, drafts, level, send, log }) {
+function sendFindings({ repo, gh, a, drafts, level, send, log }) {
   /** @type {Map<string, string>} */
   const blocks = new Map();
   if (!send) {
@@ -340,10 +345,7 @@ function sendFindings({ repo, a, drafts, level, send, log }) {
     return { subject: 'lane', ...readUpstream(raw, send.isKanonFile), ...(s?.kanon_version ? { kanon_version: s.kanon_version } : {}) };
   });
   const needsContext = level === 'evidence' && items.some((i) => i.evidence || i.suggested_fix);
-  const context = needsContext && send.nameHashes !== null
-    ? { nameHashes: new Set([...send.nameHashes, ...nameContext({ repository: repo, actor: send.actor ?? '' })]), kanonFiles: send.isKanonFile }
-    : {};
-  const contextProblem = needsContext && send.nameHashes === null ? 'the App register\'s names were not read in the gate job' : undefined;
+  const { context, contextProblem } = needsContext ? scrubContext(repo, gh, send, log, 'telemetry explorer') : {};
   const { rows, outcomes } = buildRows({ reporter: 'explore-telemetry', level, items, send, context, contextProblem, check: (t) => proseProblem(t, a) });
   if (rows.length) {
     try {
@@ -415,7 +417,7 @@ export function fileFindings({ repo, text, aggregateText, agentOutcome, gh, log 
       seenDraft.add(c.signature);
       drafts.push({ f, c });
     }
-    const sent = level ? sendFindings({ repo, a, drafts, level, send, log }) : null;
+    const sent = level ? sendFindings({ repo, gh, a, drafts, level, send, log }) : null;
     if (sent?.failed) failed += 1;
     if (level && drafts.length) summary(sentSentence(level));
     for (const { f, c } of drafts) {

@@ -286,8 +286,33 @@ describe('milestoneFor: the backstop\'s routing, never a fixed bucket (K-WORK-4,
 // figure check the prose gets, since the draft is the run's summary.
 describe('findings sent to Kanon (plan 0006 §5, F3)', () => {
   const REPO = 'acme-corp/widget-shop';
-  const sending = (upstream: string | null, findings: unknown[], o: { nameHashes?: string[] | null } = {}) => {
-    const gh = fakeGh();
+  type Opts = { nameHashes?: string[] | null; participants?: 'throws'; collaborators?: 'throws' };
+  /**
+   * A `gh` that answers the participants' and collaborators' reads, as the read-only token sees
+   * them (the Owner's decision on kanon#606), and records every call.
+   */
+  const sendingGh = (o: Opts) => {
+    const base = fakeGh();
+    const gh = (args: string[], input?: string) => {
+      const json = args[args.indexOf('--json') + 1] ?? '';
+      if ((args[0] === 'issue' || args[0] === 'pr') && args[1] === 'list' && json.includes('author')) {
+        base.calls.push({ args, input });
+        if (o.participants === 'throws') throw new Error('HTTP 401: Bad credentials');
+        return JSON.stringify(args[0] === 'pr'
+          ? [{ author: { login: 'pat-author' }, assignees: [], comments: [], latestReviews: [{ author: { login: 'octo-reviewer' } }], reviewRequests: [] }]
+          : [{ author: { login: 'issue-opener' }, assignees: [], comments: [{ author: { login: 'chatty-commenter' } }] }]);
+      }
+      if (args[0] === 'api' && String(args[1]).endsWith('/collaborators')) {
+        base.calls.push({ args, input });
+        if (o.collaborators === 'throws') throw new Error('HTTP 403');
+        return 'collab-person\n';
+      }
+      return base.gh(args, input);
+    };
+    return { ...base, gh };
+  };
+  const sending = (upstream: string | null, findings: unknown[], o: Opts = {}) => {
+    const gh = sendingGh(o);
     const written: Array<Record<string, unknown>[]> = [];
     const summary: string[] = [];
     const log: string[] = [];
@@ -346,6 +371,45 @@ describe('findings sent to Kanon (plan 0006 §5, F3)', () => {
   it('FAILS CLOSED: without the App register\'s names, the text is withheld', () => {
     const r = sending('sent with evidence', [withUpstream({ fix_category: 'lane-behaviour', evidence: 'plain words' })], { nameHashes: null });
     expect(r.rows[0]!.evidence_level).toBe('codes');
+  });
+
+  // The Owner's decision on kanon#606: the agent reads this repository's issues to deduplicate,
+  // so the scrub's names include the participants and collaborators, read on the file job's
+  // read-only token exactly as the Overseer reads them (`scrubContext`).
+  it('removes a bare login the agent could read, with no `@`: an issue opener\'s, a commenter\'s, a PR reviewer\'s, a collaborator\'s and the actor\'s', () => {
+    const r = sending('sent with evidence', [withUpstream({ fix_category: 'lane-behaviour', evidence: 'issue-opener, chatty-commenter, octo-reviewer, collab-person and run-actor saw it.' })]);
+    expect(r.rows[0]!.evidence_level).toBe('evidence');
+    expect(r.rows[0]!.evidence).toBe('[name], [name], [name], [name] and [name] saw it.');
+    // Only reads: the participants of issues and pull requests, and the collaborators.
+    expect(r.gh.calls.map((c) => c.args.slice(0, 2).join(' '))).toEqual(['issue list', 'pr list', `api repos/${REPO}/collaborators`]);
+    expect(r.gh.creates()).toEqual([]);
+    expect(r.gh.comments()).toEqual([]);
+  });
+
+  it('FAILS CLOSED: when the participants can\'t be read (no token, or a refused one), every text is withheld, and the draft says why', () => {
+    const r = sending('sent with evidence', [
+      withUpstream({ fix_category: 'lane-behaviour', evidence: 'issue-opener saw it.', suggested_fix: 'Ask chatty-commenter.' }),
+      withUpstream({ fix_category: 'guard', evidence: 'plain words' }, { title: 'Another', signals: [], cells: [ownRef], severity: '' }),
+    ], { participants: 'throws' });
+    expect(r.rows.map((x) => x.evidence_level)).toEqual(['codes', 'codes']);
+    for (const row of r.rows) {
+      expect(row).not.toHaveProperty('evidence');
+      expect(row).not.toHaveProperty('suggested_fix');
+    }
+    expect(r.summary).toContain('withheld, and the finding was sent as codes only: the run\'s issue and pull request participants could not be read (HTTP 401: Bad credentials)');
+    expect(r.summary).not.toContain('issue-opener saw it');
+  });
+
+  it('a collaborator list it can\'t read is a notice, not a withheld text, as for the Overseer', () => {
+    const r = sending('sent with evidence', [withUpstream({ fix_category: 'lane-behaviour', evidence: 'issue-opener saw it.' })], { collaborators: 'throws' });
+    expect(r.rows[0]!.evidence).toBe('[name] saw it.');
+    expect(r.log.join('\n')).toMatch(/::notice title=telemetry explorer finding rows::the repository's collaborators could not be listed/);
+  });
+
+  it('reads no participant below `sent with evidence`, where no token is minted for it', () => {
+    for (const upstream of ['sent', 'drafted', null]) {
+      expect(sending(upstream, [withUpstream({ fix_category: 'lane-behaviour', evidence: 'issue-opener saw it.' })]).gh.calls, String(upstream)).toEqual([]);
+    }
   });
 
   it('with `drafted` or `filed here`, no artifact', () => {

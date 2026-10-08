@@ -6,6 +6,7 @@ import { AGGREGATE_FILE, AGGREGATE_JOB, agentJobProblems, idTokenProblems, isAgg
 import { handedIn, mintFor, readFlattened, workflowText } from './helpers/called-workflow.js';
 import { LANES, LANE_ROLES } from '../../actions/agent-telemetry/schema.mjs';
 import { TRIGGERS } from '../../cli/callers.mjs';
+import { FINDING_ARTIFACT_FILE, findingArtifactName } from '../../scripts/lib/telemetry-artifacts.mjs';
 
 /**
  * Plan 0004 step 14 (decision 13), plan 0002 §6.1: the Explorer's telemetry mode, a lane of its
@@ -165,13 +166,38 @@ describe('the agent\'s job: no cloud credentials, a token that reads, and someth
 describe('the file job: no agent, and the only token that writes', () => {
   const file = wf.jobs.file!;
   const fsteps = (file.steps ?? []) as Step[];
+  const perms = (s: Step) => Object.entries(s.with ?? {}).filter(([k]) => k.startsWith('permission-'));
   it('checks out nothing, runs no agent, and mints issues: write alone, only when the repository files its findings itself', () => {
     expect(fsteps.some((s) => /agent-(run|setup|finish)|claude-code-action|actions\/checkout@/.test(s.uses ?? ''))).toBe(false);
     expect(file.permissions).toEqual({});
     const mint = fsteps.filter((s) => s.uses?.startsWith('actions/create-github-app-token@'));
-    expect(mint.map((s) => s.id)).toEqual(['file-token']);
+    expect(mint.map((s) => s.id)).toEqual(['file-token', 'names-token']);
     expect(mint[0]!.if).toBe("needs.gate.outputs.upstream == 'filed here'");
-    expect(Object.entries(mint[0]!.with ?? {}).filter(([k]) => k.startsWith('permission-'))).toEqual([['permission-issues', 'write']]);
+    expect(perms(mint[0]!)).toEqual([['permission-issues', 'write']]);
+  });
+
+  // The Owner's decision on kanon#606 (`K-AGENT-46`): with `sent with evidence`, and only then,
+  // the file job mints a READ-ONLY token, so the filing step can read the participants and the
+  // collaborators whose logins the scrub removes (plan 0006 §4.2).
+  it('mints a read-only token (issues and pull requests: read) only when the record says `sent with evidence`, and hands it to the filing step', () => {
+    const names = fsteps.find((s) => s.id === 'names-token')!;
+    expect(names.uses).toBe('actions/create-github-app-token@v3');
+    expect(perms(names)).toEqual([['permission-issues', 'read'], ['permission-pull-requests', 'read']]);
+    expect(names.with).toMatchObject({ 'client-id': '${{ secrets.AUTHOR_APP_ID }}', 'private-key': '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}' });
+    // Minted for exactly one value of the record, and never together with the filing token.
+    const minted = (s: Step, value: string) => {
+      const m = /^needs\.gate\.outputs\.upstream == '([^']*)'$/.exec(s.if ?? '');
+      if (!m) throw new Error(`${s.id}'s condition is not a single equality on the record: ${s.if}`);
+      return m[1] === value;
+    };
+    const fileToken = fsteps.find((s) => s.id === 'file-token')!;
+    for (const value of ['drafted', 'filed here', 'sent', 'sent with evidence', '']) {
+      expect(minted(names, value), value).toBe(value === 'sent with evidence');
+      expect(minted(names, value) && minted(fileToken, value), value).toBe(false);
+    }
+    const step = fsteps.find((s) => s.id === 'file')!;
+    expect(fsteps.indexOf(names)).toBeLessThan(fsteps.indexOf(step));
+    expect(step.env!.GH_TOKEN).toBe('${{ steps.file-token.outputs.token || steps.names-token.outputs.token }}');
   });
 
   it('judges the findings against the aggregate the read job uploaded, downloaded outside a workspace', () => {
@@ -182,7 +208,7 @@ describe('the file job: no agent, and the only token that writes', () => {
     ]);
     const last = fsteps.find((x) => x.id === 'file')!;
     expect(last.run).toBe('node "$KANON/scripts/telemetry-file.mjs"');
-    expect(last.env).toMatchObject({ UPSTREAM: '${{ needs.gate.outputs.upstream }}', GH_TOKEN: '${{ steps.file-token.outputs.token }}', AGGREGATE_PATH: '${{ runner.temp }}/aggregate/aggregate.json', REPORT_PATH: '${{ runner.temp }}/report/qa-telemetry-findings.json' });
+    expect(last.env).toMatchObject({ UPSTREAM: '${{ needs.gate.outputs.upstream }}', AGGREGATE_PATH: '${{ runner.temp }}/aggregate/aggregate.json', REPORT_PATH: '${{ runner.temp }}/report/qa-telemetry-findings.json' });
   });
 
   it('starts on the agent job\'s success, whatever the agent concluded, and refuses an earlier attempt\'s report first', () => {
@@ -249,6 +275,12 @@ describe('finding rows for Kanon\'s telemetry store (plan 0006 F3)', () => {
       name: 'kanon-finding-explore-telemetry-${{ github.run_id }}-${{ github.run_attempt }}',
       path: file.env!.FINDINGS_PATH, 'retention-days': 8, 'if-no-files-found': 'error',
     });
+  });
+
+  it('names the artifact and its file as the collector reads them (`telemetry-artifacts.mjs`)', () => {
+    const up = fsteps.at(-1)!;
+    expect(up.with!.name).toBe(findingArtifactName('explore-telemetry', '${{ github.run_id }}', '${{ github.run_attempt }}'));
+    expect(String(file.env!.FINDINGS_PATH).split('/').at(-1)).toBe(FINDING_ARTIFACT_FILE);
   });
 
   it('tells the agent what `upstream` holds, that its codes are the signal\'s, and that the no-digit rule holds for its text', () => {

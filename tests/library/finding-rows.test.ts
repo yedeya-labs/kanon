@@ -5,9 +5,11 @@ import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 import { RULE_IDS, validate } from '../../actions/agent-telemetry/schema.mjs';
 import { nameContext, verify } from '../../actions/agent-telemetry/scrub.mjs';
+import * as telemetryArtifacts from '../../scripts/lib/telemetry-artifacts.mjs';
 import {
-  FINDING_FILE,
-  artifactName,
+  FINDING_ARTIFACT_FILE,
+  FINDING_ARTIFACT_PREFIX,
+  findingArtifactName,
   buildRows,
   cutText,
   kanonFileIn,
@@ -40,14 +42,14 @@ describe('levelOf: the declared value, as the row\'s level', () => {
 });
 
 describe('sentSentence: says what the draft\'s rows are, true for the release it ships in', () => {
-  // Until F4's collector lists `kanon-finding-*`, a row is written and uploaded, and nothing
-  // leaves the repository; the sentence must not say a row was sent (PR #605's review).
-  it('says the collector sends the rows only from F4, and that until then nothing leaves', () => {
+  // F4's collector lists `kanon-finding-*` and sends each row (plan 0006 §5, step 3), so the
+  // sentence says the collector sends it, and no longer that nothing leaves the repository (the
+  // Owner's decision on PR #605, 2026-10-08).
+  it('says the collector sends the row, and never that it stays in the repository', () => {
     for (const level of ['codes', 'evidence'] as const) {
       const s = sentSentence(level);
-      expect(s).toMatch(/once the collector sends finding rows \(plan 0006 F4\)/);
-      expect(s).toContain('nothing leaves the repository');
-      expect(s).not.toMatch(/telemetry collector sends it, and/);
+      expect(s).toContain('This repository\'s telemetry collector sends the row to Kanon from this run\'s artifact on its next sweep.');
+      expect(s).not.toMatch(/nothing leaves the repository|once the collector sends finding rows|plan 0006 F4/);
     }
   });
 });
@@ -232,7 +234,7 @@ describe('sendFromEnv: the lane\'s run, from the filing job\'s environment', () 
     const s = sendFromEnv({
       GITHUB_RUN_ID: '777', GITHUB_RUN_ATTEMPT: '3', GITHUB_ACTOR: 'someone', TAG: 'smoke', KANON: ROOT,
       KANON_WORKFLOW_REF: 'yedeya-labs/kanon/.github/workflows/agent-overseer.yml@refs/tags/v0.38.0', KANON_WORKFLOW_SHA: 'a'.repeat(40),
-      APP_NAME_HASHES: `${'b'.repeat(64)},${'c'.repeat(64)}`, FINDINGS_PATH: join(dir, 'finding', FINDING_FILE), GITHUB_OUTPUT: out,
+      APP_NAME_HASHES: `${'b'.repeat(64)},${'c'.repeat(64)}`, FINDINGS_PATH: join(dir, 'finding', FINDING_ARTIFACT_FILE), GITHUB_OUTPUT: out,
     }, () => '2026-10-07T12:00:00.000Z');
     expect(s.run).toEqual({ id: 777, attempt: 3 });
     expect(s.tag).toBe('smoke');
@@ -240,7 +242,7 @@ describe('sendFromEnv: the lane\'s run, from the filing job\'s environment', () 
     expect(s.nameHashes).toEqual(['b'.repeat(64), 'c'.repeat(64)]);
     expect(s.isKanonFile('scripts/overseer-file.mjs')).toBe(true);
     s.write([{ a: 1 }]);
-    expect(JSON.parse(readFileSync(join(dir, 'finding', FINDING_FILE), 'utf8'))).toEqual([{ a: 1 }]);
+    expect(JSON.parse(readFileSync(join(dir, 'finding', FINDING_ARTIFACT_FILE), 'utf8'))).toEqual([{ a: 1 }]);
     expect(readFileSync(out, 'utf8')).toBe('finding-rows=1\n');
   });
 
@@ -252,7 +254,16 @@ describe('sendFromEnv: the lane\'s run, from the filing job\'s environment', () 
     expect(sendFromEnv({ KANON_WORKFLOW_REF: 'x/y/.github/workflows/a.yml@refs/heads/main', KANON_WORKFLOW_SHA: 'a'.repeat(40) }).kanonVersion).toBe('dev');
   });
 
-  it('names the artifact by reporter, run and attempt', () => {
-    expect(artifactName('overseer', 1, 2)).toBe('kanon-finding-overseer-1-2');
+  it('names the artifact by reporter, run and attempt, with the collector\'s own constants', () => {
+    expect(findingArtifactName('overseer', 1, 2)).toBe('kanon-finding-overseer-1-2');
+    expect(FINDING_ARTIFACT_PREFIX).toBe(telemetryArtifacts.FINDING_ARTIFACT_PREFIX);
+    expect(FINDING_ARTIFACT_FILE).toBe(telemetryArtifacts.FINDING_ARTIFACT_FILE);
+    expect(findingArtifactName).toBe(telemetryArtifacts.findingArtifactName);
+    expect(telemetryArtifacts.FINDING_ARTIFACT.test(findingArtifactName('explore-telemetry', 7, 1))).toBe(true);
+  });
+
+  it('writes the rows only into the file the collector reads', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'finding-rows-'));
+    expect(() => sendFromEnv({ FINDINGS_PATH: join(dir, 'rows.json') }).write([{ a: 1 }])).toThrow(/must name kanon-finding\.json/);
   });
 });

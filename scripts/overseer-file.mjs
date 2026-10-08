@@ -332,11 +332,14 @@ export function readParticipants(repo, gh) {
 
 /**
  * The scrub's context for this run (plan 0006 §4.2), or why it can't be had. The collaborators
- * are read where the token may list them; their absence is a notice, not a withheld text.
+ * are read where the token may list them; their absence is a notice, not a withheld text. The
+ * telemetry Explorer's filing step builds its context here too (the Owner's decision on
+ * kanon#606), so both lanes fail closed the same way; `lane` only names the notice.
  * @param {string} repo @param {Gh} gh @param {Send} send @param {(line: string) => void} log
+ * @param {string} [lane]
  * @returns {{ context?: import('../actions/agent-telemetry/scrub.mjs').Context, contextProblem?: string }}
  */
-function scrubContext(repo, gh, send, log) {
+export function scrubContext(repo, gh, send, log, lane = 'overseer') {
   if (send.nameHashes === null) return { contextProblem: 'the App register\'s names were not read in the gate job' };
   /** @type {string[]} */
   let participants;
@@ -350,7 +353,7 @@ function scrubContext(repo, gh, send, log) {
   try {
     collaborators = gh(['api', `repos/${repo}/collaborators`, '--paginate', '--jq', '.[].login']).split('\n').map((l) => l.trim()).filter(Boolean);
   } catch (e) {
-    log(`::notice title=overseer finding rows::the repository's collaborators could not be listed (${String(/** @type {Error} */ (e).message).split('\n')[0]}), so the scrub removes the other names it reads (plan 0006 §4.2)`);
+    log(`::notice title=${lane} finding rows::the repository's collaborators could not be listed (${String(/** @type {Error} */ (e).message).split('\n')[0]}), so the scrub removes the other names it reads (plan 0006 §4.2)`);
   }
   const names = nameContext({ repository: repo, actor: send.actor ?? '', participants, collaborators });
   return { context: { nameHashes: new Set([...send.nameHashes, ...names]), kanonFiles: send.isKanonFile } };

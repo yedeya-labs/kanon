@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { unlinkedQuery } from '../../scripts/capability-interlock.mjs';
+import { FINDING_ARTIFACT_FILE, findingArtifactName } from '../../scripts/lib/telemetry-artifacts.mjs';
 import { STORE_SECRETS, STORE_SECRETS_WITH, idTokenProblems, isOverseerTelemetryJob, storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 import { handedIn, mintFor, readFlattened, workflowText } from './helpers/called-workflow.js';
 import { callerInputs, realGroup } from './helpers/smoke-group.js';
@@ -786,6 +787,12 @@ describe('finding rows for Kanon\'s telemetry store (plan 0006 F3)', () => {
       name: 'kanon-finding-overseer-${{ github.run_id }}-${{ github.run_attempt }}',
       path: file.env!.FINDINGS_PATH, 'retention-days': 8, 'if-no-files-found': 'error',
     });
+  });
+
+  it('names the artifact and its file as the collector reads them (`telemetry-artifacts.mjs`)', () => {
+    const up = fsteps.at(-1)!;
+    expect(up.with!.name).toBe(findingArtifactName('overseer', '${{ github.run_id }}', '${{ github.run_attempt }}'));
+    expect(String(file.env!.FINDINGS_PATH).split('/').at(-1)).toBe(FINDING_ARTIFACT_FILE);
   });
 
   it('tells the agent to give a Kanon finding an `upstream` object in Kanon\'s vocabulary, which the step reads the record to send', () => {

@@ -23,25 +23,26 @@
 //
 // WHAT IS WRITTEN. Every row passes `validate` before it is written; one that doesn't is not
 // sent, and the draft names its fields. At most `MAX_FINDINGS` (20) a run, the first ones; the
-// draft of each one after says it was held back. The rows go into one file, `kanon-finding.json`,
-// which the lane's next step uploads as `kanon-finding-<reporter>-<run id>-<attempt>`, the
-// artifact the telemetry collector sends (plan 0006 §5, step 3; F4).
+// draft of each one after says it was held back. The rows go into one file,
+// `FINDING_ARTIFACT_FILE` (`kanon-finding.json`), which the lane's next step uploads as
+// `findingArtifactName(reporter, run id, attempt)`, the artifact the telemetry collector lists and
+// sends (plan 0006 §5, step 3; F4). Both come from `telemetry-artifacts.mjs`, which the collector
+// reads them from too, so the two can't drift.
 //
 // `node:` builtins only, like every script under scripts/ (`K-SELF-8`).
 
 import { appendFileSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { kanonVersion } from '../../actions/agent-telemetry/agent-telemetry.mjs';
 import { FIX_CATEGORIES, KANON_ERRORS, LANES, MAX_FINDINGS, REASONS, RULE_IDS, SCHEMAS, STAGES, TAGS, describeErrors, validate } from '../../actions/agent-telemetry/schema.mjs';
 import { KANON_PATH, RULE_NAMES, SCRUB_VERSION, redact, verify } from '../../actions/agent-telemetry/scrub.mjs';
 
-/** Every finding artifact's name starts with this; the collector lists it beside `kanon-telemetry-`. */
-export const ARTIFACT_PREFIX = 'kanon-finding-';
-/** The file inside the artifact: a JSON array of finding rows. */
-export const FINDING_FILE = 'kanon-finding.json';
-/** @param {string} reporter @param {number | string} id @param {number | string} attempt */
-export const artifactName = (reporter, id, attempt) => `${ARTIFACT_PREFIX}${reporter}-${id}-${attempt}`;
+import { FINDING_ARTIFACT_FILE, FINDING_ARTIFACT_PREFIX, findingArtifactName } from './telemetry-artifacts.mjs';
+
+// The artifact's name and file are the collector's (plan 0006 §5, step 3), so a lane and the
+// collector can't disagree on them.
+export { FINDING_ARTIFACT_FILE, FINDING_ARTIFACT_PREFIX, findingArtifactName };
 
 /** A finding field's `max`, the schema's own. @param {string} name */
 const maxOf = (name) => /** @type {Record<string, { max: number }>} */ (/** @type {unknown} */ (SCHEMAS.finding?.[1] ?? {}))[name]?.max ?? 0;
@@ -291,7 +292,7 @@ export function sentSentence(level) {
   const readers = level === 'codes'
     ? 'Kanon\'s operator\'s private job reads it'
     : 'Kanon\'s operator\'s private job reads it, and the text is read by Kanon\'s maintainer and by a third-party decision provider, which decides whether a finding becomes a public Kanon issue holding the codes alone';
-  return `This repository's adoption record says \`Upstream findings: ${value}\` (K-LAYOUT-10). Each finding marked "Sent to Kanon" was also written as a finding row for Kanon's telemetry store, ${what}. This repository's telemetry collector sends it once the collector sends finding rows (plan 0006 F4); until then it stays in this run's artifact, and nothing leaves the repository. Once sent, ${readers}. Nothing here was filed.`;
+  return `This repository's adoption record says \`Upstream findings: ${value}\` (K-LAYOUT-10). Each finding marked "Sent to Kanon" was also written as a finding row for Kanon's telemetry store, ${what}. This repository's telemetry collector sends the row to Kanon from this run's artifact on its next sweep. Once sent, ${readers}. Nothing here was filed.`;
 }
 
 /**
@@ -300,7 +301,7 @@ export function sentSentence(level) {
  * (`kanonVersion` of `job.workflow_sha` and `job.workflow_ref`, as the telemetry row reads it),
  * the App register's names the gate job hashed (`APP_NAME_HASHES`: hashes, `none`, or nothing
  * when it couldn't read them), Kanon's tree (`KANON`), and where to write the rows
- * (`FINDINGS_PATH`), counting them in the step's `finding-rows` output for the upload.
+ * (`FINDINGS_PATH`, a file named `FINDING_ARTIFACT_FILE`, or the write throws), counting them in the step's `finding-rows` output for the upload.
  * @param {Record<string, string | undefined>} env
  * @param {() => string} [now]
  * @returns {Send}
@@ -321,6 +322,7 @@ export function sendFromEnv(env, now = () => new Date().toISOString()) {
     write: (rows) => {
       const at = env.FINDINGS_PATH;
       if (!at) throw new Error('FINDINGS_PATH is not set');
+      if (basename(at) !== FINDING_ARTIFACT_FILE) throw new Error(`FINDINGS_PATH must name ${FINDING_ARTIFACT_FILE}, the file the collector reads`);
       mkdirSync(dirname(at), { recursive: true });
       writeFileSync(at, JSON.stringify(rows));
       if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `finding-rows=${rows.length}\n`);
