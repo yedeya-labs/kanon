@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { sha256 } from '../../actions/agent-telemetry/public-words.mjs';
-import { redact } from '../../actions/agent-telemetry/scrub.mjs';
-import { KANON_WORDS, appNameWords, upstreamNames, upstreamNamesCli } from '../../scripts/upstream-names.mjs';
+import { KANON_WORDS, redact } from '../../actions/agent-telemetry/scrub.mjs';
+import { appNameWords, upstreamNames, upstreamNamesCli } from '../../scripts/upstream-names.mjs';
 
 /**
  * Plan 0006 §4.2 (F3): the App register's names, which the scrub's `name` rule removes from an
@@ -37,8 +37,8 @@ const fakeRun = (register: string | null | 'throws' = REGISTER) => {
 };
 
 describe('appNameWords: an App slug\'s words, without Kanon\'s own', () => {
-  it('keeps the adopter\'s words and leaves out every role, App, lane and Kanon word', () => {
-    expect(appNameWords(['acme-kanon-author', 'acme-reviewer', 'widgets-explore-telemetry-bot'])).toEqual(['acme', 'widgets', 'bot']);
+  it('keeps the adopter\'s words and leaves out every role, App, lane, platform and Kanon word', () => {
+    expect(appNameWords(['acme-kanon-author', 'acme-reviewer', 'widgets-explore-telemetry-bot'])).toEqual(['acme', 'widgets']);
   });
 
   it('Kanon\'s words are its roles, its Apps, its lanes\' words and its own name', () => {

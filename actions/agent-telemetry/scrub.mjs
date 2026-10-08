@@ -58,19 +58,50 @@ export const KANON_PATH = /^(?!.*(?:^|\/)\.{1,2}(?:\/|$))(?:actions|cli|scripts|
  */
 
 /**
+ * KANON'S OWN VOCABULARY, WHICH IS NEVER A NAME (kanon#588, from F1's review; kanon#612). The
+ * `name` rule removes every word of every name in its context, wherever it appears, and the
+ * evidence is written in Kanon's terms: "the reviewer", "the Author App", "GitHub Actions", "the
+ * flags Kanon writes". A login holds these words (`<adopter>-reviewer`, `github-actions`, a
+ * repository named `kanon`), so no source of the context hashes one: the adopter's own words
+ * still are, and a login is still removed wherever it appears whole, since one of its words is.
+ *
+ * The words: `kanon`; every role's (the schema's `ROLES`, the App register's `ROLES`); every
+ * App's (`APP_OF`); every lane's (the schema's `LANES`); and the platform's, `app`, `bot`,
+ * `github` and `actions`. This module imports only its own directory, so it can't derive them from
+ * `scripts/app-register.mjs`, and the schema imports it: `tests/unit/telemetry-scrub.test.ts`
+ * fails if a role, App or lane word is missing here. The trade is the Owner's (kanon#612): a
+ * person's login made only of these words is not removed.
+ */
+/** @type {ReadonlySet<string>} */
+export const KANON_WORDS = new Set([
+  'kanon',
+  // Roles and Apps.
+  'explorer', 'implementer', 'reviewer', 'merger', 'lead', 'overseer', 'releaser', 'intake', 'author', 'judge',
+  // The lanes' words.
+  'review', 'merge', 'reconcile', 'implement', 'revise', 'triage', 'rebase', 'split', 'explore', 'code', 'audit',
+  'telemetry', 'verify', 'acs', 'weekly', 'digest', 'project',
+  // The platform's.
+  'app', 'bot', 'github', 'actions',
+]);
+
+/**
  * The words the `name` rule removes, as hashes (plan 0006 §4.2): the repository's owner and name;
  * the logins and slugs of its App register; the run's actor; its collaborators, where the filing
  * job's token may list them; the logins of the run's issue and PR participants (authors, assignees,
  * reviewers and commenters); and the logins and names of the commit authors the lane read. Each
- * name counts as its lowercase `[a-z0-9]` runs, as `namesForbiddenWord` reads text, and an App's
- * `[bot]` suffix is not a name.
+ * name counts as its lowercase `[a-z0-9]` runs, as `namesForbiddenWord` reads text, but for
+ * `KANON_WORDS`. A login's format markers are not names: an App's `[bot]` suffix, and `gh`'s
+ * `app/` prefix on an App's login.
  * @param {{ repository?: string, apps?: readonly string[], actor?: string, collaborators?: readonly string[],
  *   participants?: readonly string[], commitAuthors?: readonly string[] }} sources
  * @returns {Set<string>}
  */
 export function nameContext({ repository = '', apps = [], actor = '', collaborators = [], participants = [], commitAuthors = [] } = {}) {
   const names = [repository, ...apps, actor, ...collaborators, ...participants, ...commitAuthors];
-  return new Set(names.flatMap((n) => String(n).replace(/\[bot\]/gi, ' ').toLowerCase().match(/[a-z0-9]+/g) ?? []).map(sha256));
+  return new Set(names
+    .flatMap((n) => String(n).replace(/\[bot\]/gi, ' ').replace(/^app\//i, '').toLowerCase().match(/[a-z0-9]+/g) ?? [])
+    .filter((w) => !KANON_WORDS.has(w))
+    .map(sha256));
 }
 
 // ------------------------------------------------------------------------- the rules

@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import { KANON_PATH, RULE_NAMES, SCRUB_VERSION, nameContext, redact, verify } from '../../actions/agent-telemetry/scrub.mjs';
+import { KANON_PATH, KANON_WORDS, RULE_NAMES, SCRUB_VERSION, nameContext, redact, verify } from '../../actions/agent-telemetry/scrub.mjs';
 import { sha256 } from '../../actions/agent-telemetry/public-words.mjs';
+import { LANES, ROLES as SCHEMA_ROLES } from '../../actions/agent-telemetry/schema.mjs';
+import { APP_OF, ROLES as REGISTER_ROLES } from '../../scripts/app-register.mjs';
 
 /**
  * Plan 0006 step F1: the scrub (§4.2), its two halves and its eight rules. Every name below is
@@ -165,6 +167,60 @@ describe('the name context (§4.2)', () => {
   it('a word only partly a name is still removed whole, and so is a name inside punctuation', () => {
     expect(redact('Observed: (widget-shop).', CTX).text).toBe('Observed: ([name]).');
     expect(redact('Observed: x_quietcollab_y', CTX).text).toBe('Observed: [name]');
+  });
+});
+
+// kanon#612, the Owner's decision: Kanon's own vocabulary is never a name, from any source of the
+// context, so the evidence can describe Kanon. The lanes' context and intake's `NAME_HASHES` both
+// come from `nameContext`, so both read this one list.
+describe('Kanon\'s own vocabulary is never a name (kanon#612)', () => {
+  const PLATFORM = ['kanon', 'app', 'bot', 'github', 'actions'];
+  const words = (list: Iterable<string>) => [...list].flatMap((w) => w.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+
+  it('the list holds every role, App and lane word, Kanon\'s name and the platform words', () => {
+    for (const w of [...PLATFORM, ...words(SCHEMA_ROLES), ...words(LANES), ...words(REGISTER_ROLES), ...words(Object.values(APP_OF))]) {
+      expect(KANON_WORDS.has(w), w).toBe(true);
+    }
+    expect(KANON_WORDS.has('acme')).toBe(false);
+  });
+
+  it('no source of the context hashes one of its words: the register, participants, collaborators, commit authors, the actor or the repository', () => {
+    const vocabulary = [...KANON_WORDS];
+    const sources = ['repository', 'apps', 'actor', 'collaborators', 'participants', 'commitAuthors'] as const;
+    for (const source of sources) {
+      const value = source === 'repository' || source === 'actor' ? 'acme-corp/kanon' : ['acme-reviewer', 'github-actions', ...vocabulary];
+      const hashes = nameContext({ [source]: value });
+      for (const w of vocabulary) expect(hashes.has(sha256(w)), `${source}: ${w}`).toBe(false);
+      expect(hashes.has(sha256('acme')), source).toBe(true);
+    }
+  });
+
+  it('`app/` and `[bot]` are a login\'s format markers, not names', () => {
+    const hashes = nameContext({ participants: ['app/acme-kanon-author', 'github-actions[bot]', 'github-actions', 'widgetbot-checkwright[bot]'] });
+    expect([...hashes].sort()).toEqual(['acme', 'widgetbot', 'checkwright'].map(sha256).sort());
+  });
+
+  it('the case seen live: "the flags Kanon writes" passes the scrub for a sender whose repository is `kanon`', () => {
+    const ctx = {
+      nameHashes: nameContext({ repository: 'acme-corp/kanon', apps: ['acme-reviewer'], participants: ['app/acme-kanon-author', 'github-actions'] }),
+      kanonFiles: KANON_FILES,
+    };
+    const text = 'Observed: the flags Kanon writes. The Author App and the reviewer ran on GitHub Actions. Nothing to change in Kanon.';
+    expect(verify(text, ctx)).toEqual([]);
+    expect(redact(text, ctx)).toEqual({ text, fired: [] });
+  });
+
+  it('`acme-reviewer` still removes `acme`, wherever it stands, and the slug whole', () => {
+    const ctx = { nameHashes: nameContext({ apps: ['acme-reviewer'] }), kanonFiles: KANON_FILES };
+    expect(redact('Observed: acme-reviewer approved, and the acme team saw the reviewer.', ctx).text)
+      .toBe('Observed: [name] approved, and the [name] team saw the reviewer.');
+  });
+
+  it('a real person\'s login is still removed', () => {
+    const ctx = { nameHashes: nameContext({ participants: ['harbor-captain', 'app/acme-kanon-author'], collaborators: ['quietcollab'] }), kanonFiles: KANON_FILES };
+    const text = 'Observed: harbor-captain and quietcollab merged it.';
+    expect(verify(text, ctx)).toEqual(['name']);
+    expect(redact(text, ctx).text).toBe('Observed: [name] and [name] merged it.');
   });
 });
 

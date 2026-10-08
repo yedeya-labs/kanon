@@ -149,7 +149,8 @@ const RESOLVED_VALUE_BYTES = 64;
 
 /**
  * `NAME_HASHES` for the ingest function: per key, the SHA-256 of each word of its repository's
- * owner and name, sorted, never the words (plan 0006 §4.2).
+ * owner and name, sorted, never the words, and none of Kanon's own vocabulary, which `nameContext`
+ * leaves out for the lanes too (plan 0006 §4.2, kanon#612).
  * @param {Entry[]} entries
  */
 export const nameHashesVariable = (entries) =>

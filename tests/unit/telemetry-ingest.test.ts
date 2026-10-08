@@ -14,6 +14,7 @@ import {
 import { sign } from '../../infra/telemetry/function/sigv4.mjs';
 import { LANES } from '../../actions/agent-telemetry/schema.mjs';
 import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
+import { nameHashesVariable } from '../../infra/telemetry/render.mjs';
 
 /**
  * Plan 0002 step S3: the ingest function (§4), its stamps (§10) and its signer, against fake
@@ -263,6 +264,18 @@ describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
     // The same in the suggested fix.
     const fix = await call(event([{ ...withText(CLEAN), suggested_fix: 'Rename the Shop step.' }]), findingEnv);
     expect(errorsOf(fix)).toEqual([{ field: 'suggested_fix', problem: 'name' }]);
+  });
+
+  // kanon#612, the case seen live: Kanon's own name in the evidence of a sender whose repository is `kanon`.
+  it("Kanon's own vocabulary is never a name: \"the flags Kanon writes\" is stored from a sender whose repository is `kanon`", async () => {
+    const kanonEnv = { NAME_HASHES: nameHashesVariable([{ key: 'k1', repository: 'acme-corp/kanon' }]) };
+    const text = 'Observed: the flags Kanon writes. The Author App ran on GitHub Actions.';
+    const r = await call(event([{ ...withText(text), suggested_fix: 'Nothing to change in Kanon.' }]), kanonEnv);
+    expect(r.status).toBe(200);
+    expect(r.puts[0]).toMatchObject({ evidence: text, suggested_fix: 'Nothing to change in Kanon.' });
+    // The sender's own word is still refused.
+    const own = await call(event([withText('Observed: the Acme lane stopped.')]), kanonEnv);
+    expect(errorsOf(own)).toEqual([{ field: 'evidence', problem: 'name' }]);
   });
 
   it("stores no finding for a key without name hashes, or with malformed ones: the sender's check can't run", async () => {

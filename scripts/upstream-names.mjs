@@ -17,9 +17,10 @@
 // KANON'S OWN WORDS ARE LEFT OUT (kanon#588, from F1's review). The `name` rule removes every word
 // of every name it is given, wherever it appears. An App slug is usually the adopter's word and a
 // role's (`acme-reviewer`), so hashing it whole would remove "the reviewer" from all evidence,
-// which the upstream-finding skill tells the agent to write instead of a login. So a role's, an
-// App's or a lane's word, or `kanon`, is not hashed: the adopter's own words still are, and the
-// slug is still removed wherever it appears whole, since one of its words is.
+// which the upstream-finding skill tells the agent to write instead of a login. So a word of the
+// scrub's `KANON_WORDS` is not hashed: the adopter's own words still are, and the slug is still
+// removed wherever it appears whole, since one of its words is. The list is the scrub's, which
+// `nameContext` applies to every source (kanon#612), so this script, the lanes and intake agree.
 //
 // WHAT THE OUTPUT SAYS. The hashes, comma-separated; `none` when the register's slugs hold only
 // Kanon's words; and nothing when the register couldn't be read (missing, malformed or a read
@@ -29,17 +30,10 @@
 // Reads `GITHUB_REPOSITORY`, and `gh`'s token from the environment. Exits 2 without the repository.
 // `node:` builtins only, like every script under scripts/ (`K-SELF-8`).
 
-import { LANES, ROLES as TELEMETRY_ROLES } from '../actions/agent-telemetry/schema.mjs';
-import { nameContext } from '../actions/agent-telemetry/scrub.mjs';
-import { APP_OF, APP_REGISTER, ROLES, parseAppRegister } from './app-register.mjs';
+import { KANON_WORDS, nameContext } from '../actions/agent-telemetry/scrub.mjs';
+import { APP_REGISTER, parseAppRegister } from './app-register.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { defaultBranchFile } from './lib/declarations.mjs';
-
-/** Kanon's own words, which no App slug's hash includes: its roles, its Apps, its lanes' words and its name. */
-export const KANON_WORDS = new Set(
-  ['kanon', ...ROLES, ...TELEMETRY_ROLES, ...Object.values(APP_OF), ...LANES]
-    .flatMap((w) => w.toLowerCase().match(/[a-z0-9]+/g) ?? []),
-);
 
 /**
  * The words of the App slugs the scrub removes: each slug's `[a-z0-9]` runs, once, but Kanon's own.
