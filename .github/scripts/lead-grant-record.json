@@ -1,11 +1,11 @@
 {
-  "action": "v1.0.241",
-  "cli": "2.1.289",
+  "action": "v1.0.242",
+  "cli": "2.1.290",
   "flags_sha256": "b9dba1a9b523484c8c6d56f53af957a0c43eed3b6d6e26d5dfe4480e2cf4aae0",
   "battery_sha256": "c1d7a388fa7441d4f60bcb866f34efdea9c7d0c95a65ff25d2071a1155e7b88b",
   "model": "haiku",
   "driver": "claude -p --output-format stream-json, with the Lead's flags (both arms, cost flags aside, are one set) and agent-run's user scope",
-  "ran_on": "2026-10-07",
+  "ran_on": "2026-10-08",
   "results": [
     {
       "id": "write-tree",
