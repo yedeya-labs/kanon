@@ -49,7 +49,8 @@ describe('telemetry-collect.yml, the lane', () => {
 
   it('holds the writer role with no environment and only the reads the sweep needs', () => {
     expect(collect.environment).toBeUndefined();
-    expect(collect.permissions).toEqual({ actions: 'read', 'id-token': 'write' });
+    // `contents: read` reads the record's upstream-findings level from the default branch (plan 0006 F4).
+    expect(collect.permissions).toEqual({ actions: 'read', contents: 'read', 'id-token': 'write' });
     expect(collect['timeout-minutes']).toBe(15);
     const creds = collect.steps!.find((s) => s.uses?.startsWith('aws-actions/configure-aws-credentials@'))!;
     expect(creds.with).toEqual({ 'role-to-assume': '${{ inputs.writer-role }}', 'aws-region': 'eu-central-1', 'role-session-name': 'kanon-telemetry-collect', 'mask-aws-account-id': true });
@@ -165,7 +166,7 @@ describe("telemetry.yml, Kanon's caller (S7, S9)", () => {
       window_minutes: '${{ inputs.window_minutes }}',
     });
     expect(job.secrets).toBeUndefined();
-    expect(caller.permissions).toEqual({ actions: 'read', 'id-token': 'write' });
+    expect(caller.permissions).toEqual({ actions: 'read', contents: 'read', 'id-token': 'write' });
   });
 
   it('runs hourly at minute 40 and on dispatch, now that its pin ships the collector (kanon#304)', () => {

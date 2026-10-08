@@ -29,6 +29,20 @@
 // function refuses a `recorded_at` older than 8 days (§4), and an artifact past the repository's
 // retention is gone. A watermark older than the cap means rows were lost, and the run says so.
 //
+// FINDING ROWS (plan 0006 §5, step 3). The Overseer's and the telemetry Explorer's filing jobs
+// upload their upstream findings as `kanon-finding-<reporter>-<run id>-<attempt>`, a JSON array of
+// finding rows. The same sweep lists them beside the run rows, and sends them under the level the
+// adoption record declares ON THE DEFAULT BRANCH, read again by this job before it sends any
+// (§3.1, `K-LAYOUT-10`): `drafted` or `filed here` sends none; `sent` sends each row as codes
+// only, stripped of its evidence fields; `sent with evidence` sends each row as the lane built it.
+// So turning the level down stops the text at the next sweep, even for artifacts written before,
+// and nothing the lane or its agent wrote can raise it. A record that is malformed or can't be read
+// sends no finding row, and turns the run red; the run rows are still sent.
+// Each finding row is checked against its artifact (reporter, run, attempt), then the scrub's
+// `verify` runs on its text with the context intake will use, this repository's owner and name: a
+// text that fails it is sent at `codes`, with a warning naming the rule, so an older lane's weaker
+// scrub can't turn the collector red forever (§5). Then `validate`, as for a run row.
+//
 // LOGS HOLD COUNTS, IDS, LANES AND FIELD NAMES, NEVER A ROW'S VALUE (ADR 0007).
 //
 // `mask` FIRST (kanon#514). The writer role's ARN is a repository variable, which the runner
@@ -38,11 +52,13 @@
 
 import { appendFileSync } from 'node:fs';
 
-import { describeErrors, validate } from '../actions/agent-telemetry/schema.mjs';
+import { describeErrors, MAX_FINDINGS, SCHEMAS, validate } from '../actions/agent-telemetry/schema.mjs';
+import { nameContext, verify } from '../actions/agent-telemetry/scrub.mjs';
 import { sign } from '../infra/telemetry/function/sigv4.mjs';
 import { masksOf } from './aggregate-mask.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
-import { ARTIFACT_FILE, ghApi, ghDownload, listTelemetryArtifacts, readZipEntry } from './lib/telemetry-artifacts.mjs';
+import { ARTIFACT_FILE, FINDING_ARTIFACT_FILE, ghApi, ghDownload, listTelemetryArtifacts, readZipEntry } from './lib/telemetry-artifacts.mjs';
+import { readUpstreamFindingsFrom, SENT_VALUES } from './lib/upstream-findings.mjs';
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
@@ -63,6 +79,50 @@ export const COLLECT_JOB = 'Collect telemetry rows';
  * rows in between without a warning (kanon#315).
  */
 export const COLLECT_JOB_OVERRIDE = `${COLLECT_JOB} (window override)`;
+
+/** A finding row's free-text fields (plan 0006 §2.2), read from the schema: the `text` type. */
+export const TEXT_FIELDS = Object.freeze(Object.entries(/** @type {Record<string, { type: string }>} */ (SCHEMAS.finding?.[1] ?? {}))
+  .filter(([, f]) => f.type === 'text').map(([name]) => name));
+/** What `sent` strips from a row: the text, and the scrub version that goes with it. */
+const EVIDENCE_FIELDS = Object.freeze([...TEXT_FIELDS, 'scrub_version']);
+
+/**
+ * A finding row at `codes`: the evidence fields dropped, the level lowered. A copy.
+ * @param {Record<string, unknown>} row
+ */
+export function codesOnly(row) {
+  /** @type {Record<string, unknown>} */
+  const out = { ...row, evidence_level: 'codes' };
+  for (const f of EVIDENCE_FIELDS) delete out[f];
+  return out;
+}
+
+/**
+ * A finding row as the adoption record's level lets it leave (plan 0006 §3.1), or null when the
+ * level sends none. `sent` strips the evidence of a row above it; `sent with evidence` sends it as
+ * built. Never raises a row's level.
+ * @param {Record<string, unknown>} row
+ * @param {string} level the record's `Upstream findings` value
+ * @returns {{ row: Record<string, unknown>, stripped: boolean } | null}
+ */
+export function underLevel(row, level) {
+  if (!(/** @type {readonly string[]} */ (SENT_VALUES)).includes(level)) return null;
+  if (level === 'sent' && row.evidence_level !== 'codes') return { row: codesOnly(row), stripped: true };
+  return { row, stripped: false };
+}
+
+/**
+ * The scrub rules that would still fire on a finding row's text, by field, with the context intake
+ * uses for this repository: its owner's and name's words (plan 0006 §4.2). Never the text.
+ * @param {Record<string, unknown>} row
+ * @param {Set<string>} nameHashes
+ * @returns {{ field: string, rules: string[] }[]}
+ */
+export function textFailures(row, nameHashes) {
+  return TEXT_FIELDS.filter((f) => typeof row[f] === 'string')
+    .map((field) => ({ field, rules: verify(/** @type {string} */ (row[field]), { nameHashes }) }))
+    .filter((x) => x.rules.length);
+}
 
 /**
  * @typedef {import('./lib/telemetry-artifacts.mjs').Api} Api
@@ -162,13 +222,16 @@ export const signedPost = (url, region, env) => async (rows) => {
 /**
  * One sweep. Pure apart from what it is given.
  *
+ * `level` reads the adoption record's `Upstream findings` value from the default branch; it is
+ * called at most once a sweep, and only when there is a finding artifact to send.
+ *
  * @param {{
  *   repo: string, now: number, lastSuccess: string | null, window?: string,
- *   api: Api, download: Download, post: Post, log?: (line: string) => void,
+ *   api: Api, download: Download, post: Post, log?: (line: string) => void, level?: () => string,
  * }} opts
- * @returns {Promise<{ since: number, listed: number, sent: number, stored: number, foreign: number, failures: string[], warnings: string[] }>}
+ * @returns {Promise<{ since: number, listed: number, sent: number, stored: number, foreign: number, withheld: number, failures: string[], warnings: string[] }>}
  */
-export async function collect({ repo, now, lastSuccess, window = '', api, download, post, log = () => {} }) {
+export async function collect({ repo, now, lastSuccess, window = '', api, download, post, log = () => {}, level = () => readUpstreamFindingsFrom(repo) }) {
   const overridden = window.trim() !== '';
   const windowMinutes = overridden ? Number(window) : WINDOW_MINUTES;
   /** @type {string[]} */
@@ -176,7 +239,7 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
   /** @type {string[]} */
   const warnings = [];
   if (overridden && !(Number.isInteger(windowMinutes) && windowMinutes > 0)) {
-    return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, failures: [`window_minutes is '${window}', not a whole number of minutes`], warnings };
+    return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, withheld: 0, failures: [`window_minutes is '${window}', not a whole number of minutes`], warnings };
   }
 
   // One listing back to the furthest the sweep could reach; the span is cut from it below, once
@@ -184,10 +247,10 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
   // which must not read as "there was nothing".
   let listing;
   try {
-    listing = listTelemetryArtifacts({ repo, from: now - SWEEP_CAP_DAYS * DAY, api });
+    listing = listTelemetryArtifacts({ repo, from: now - SWEEP_CAP_DAYS * DAY, api, findings: true });
   } catch (err) {
     failures.push(`could not list artifacts (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
-    return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, failures, warnings };
+    return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, withheld: 0, failures, warnings };
   }
   const { since, capped, capDays } = sweepSince({ lastSuccess, now, windowMinutes, overridden, retentionDays: listing.retentionDays });
   if (capped) {
@@ -206,7 +269,66 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
 
   /** @type {{ row: Record<string, unknown>, where: string }[]} */
   const rows = [];
+  // The record's level, read once, and only when a finding artifact is about to be sent. Null
+  // when it can't be read: then no finding row is sent.
+  /** @type {string | null | undefined} */
+  let declared;
+  const levelOf = () => {
+    if (declared === undefined) {
+      try {
+        declared = level();
+      } catch (err) {
+        declared = null;
+        failures.push(`no finding row is sent: the adoption record's Upstream findings level can't be read on the default branch (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
+      }
+    }
+    return declared;
+  };
+  const names = nameContext({ repository: repo });
+  let withheld = 0;
   for (const a of artifacts) {
+    if (a.kind === 'finding') {
+      const where = `${a.lane} findings run ${a.runId} attempt ${a.attempt} (artifact ${a.id})`;
+      /** @type {unknown} */
+      let list;
+      try {
+        const file = readZipEntry(download(a.id), FINDING_ARTIFACT_FILE);
+        if (!file) throw new Error(`no ${FINDING_ARTIFACT_FILE}`);
+        list = JSON.parse(file.toString('utf8'));
+      } catch (err) {
+        failures.push(`${where}: unreadable (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
+        continue;
+      }
+      if (!Array.isArray(list) || list.length === 0 || list.length > MAX_FINDINGS) {
+        failures.push(`${where}: not a list of 1 to ${MAX_FINDINGS} finding rows`);
+        continue;
+      }
+      const value = levelOf();
+      if (value === null) continue;
+      for (const [i, raw] of list.entries()) {
+        const at = `${where} row ${i}`;
+        const r = /** @type {Record<string, unknown>} */ (raw);
+        if (!r || typeof r !== 'object' || r.row_kind !== 'finding' || r.reporter !== a.lane || r.run_id !== a.runId || r.run_attempt !== a.attempt) {
+          failures.push(`${at}: the row's row_kind, reporter, run_id or run_attempt is not its artifact's`);
+          continue;
+        }
+        const leaving = underLevel(r, value);
+        if (!leaving) { withheld += 1; continue; }
+        let out = leaving.row;
+        const fired = textFailures(out, names);
+        if (fired.length) {
+          out = codesOnly(out);
+          warnings.push(`${at}: sent at codes, without its text, because the scrub still finds ${fired.map((x) => `${x.field} (${x.rules.join(', ')})`).join(', ')} (plan 0006 §5)`);
+        }
+        const v = validate(out);
+        if (!v.ok) {
+          failures.push(`${at}: fails the schema (${describeErrors(v.errors)})`);
+          continue;
+        }
+        rows.push({ row: out, where: at });
+      }
+      continue;
+    }
     const where = `${a.lane} run ${a.runId} attempt ${a.attempt} (artifact ${a.id})`;
     let row;
     try {
@@ -251,7 +373,8 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
       else failures.push(`${where}: the store failed to write it`);
     });
   }
-  return { since, listed: artifacts.length, sent: rows.length, stored, foreign: listing.foreign, failures, warnings };
+  if (withheld) log(`withheld ${withheld} finding row(s): the adoption record's Upstream findings level is \`${String(declared)}\`, which sends none`);
+  return { since, listed: artifacts.length, sent: rows.length, stored, foreign: listing.foreign, withheld, failures, warnings };
 }
 
 async function main() {
@@ -287,7 +410,7 @@ async function main() {
     log: (line) => console.log(line),
   });
   for (const w of result.warnings) console.log(`::warning title=telemetry-collect::${w}`);
-  const line = `Telemetry collector: ${result.stored} of ${result.sent} row(s) stored from ${result.listed} artifact(s) since ${new Date(result.since).toISOString()}; ${result.failures.length} failure(s).`;
+  const line = `Telemetry collector: ${result.stored} of ${result.sent} row(s) stored from ${result.listed} artifact(s) since ${new Date(result.since).toISOString()}; ${result.withheld ? `${result.withheld} finding row(s) withheld by the adoption record; ` : ''}${result.failures.length} failure(s).`;
   console.log(line);
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${line}\n`);
   // A red run is the page (§9): the next sweep re-covers the same span through the watermark, so

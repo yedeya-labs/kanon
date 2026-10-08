@@ -114,12 +114,21 @@ export const buildRequirements = (root: string) => {
   // The telemetry collector (plan 0002 S7, #428): a caller `kanon init --telemetry` writes, and
   // `kanon doctor` recognises as Kanon's, with the repository variables it passes. Read from the
   // collector's own workflow and from the caller docs/telemetry.md gives, which init writes byte
-  // for byte, so the file can't name a variable the caller doesn't pass.
+  // for byte, so the file can't name a variable the caller doesn't pass. Its grant is what its jobs
+  // ask for, which the caller's permissions: must cover (plan 0006 F4 added `contents: read`).
   const collector = 'telemetry-collect';
   const collectorDoc = parse(readFileSync(join(root, '.github/workflows', `${collector}.yml`), 'utf8')) as Doc;
   const callerBlock = readFileSync(join(root, 'docs/telemetry.md'), 'utf8').split('**The caller.**')[1]!.split('```yaml\n')[1]!.split('```')[0]!;
+  const collectorGrant: Record<string, string> = {};
+  for (const j of Object.values((collectorDoc.jobs ?? {}) as Record<string, Doc>)) {
+    for (const [k, v] of Object.entries((j.permissions ?? {}) as Record<string, string>)) if (level(v) > level(collectorGrant[k])) collectorGrant[k] = v;
+  }
   const telemetry = collectorDoc.on && typeof collectorDoc.on === 'object' && 'workflow_call' in collectorDoc.on
-    ? { collector, variables: [...new Set([...callerBlock.matchAll(/\$\{\{ vars\.([A-Z0-9_]+) \}\}/g)].map((m) => m[1]!))].sort() }
+    ? {
+      collector,
+      variables: [...new Set([...callerBlock.matchAll(/\$\{\{ vars\.([A-Z0-9_]+) \}\}/g)].map((m) => m[1]!))].sort(),
+      grant: Object.fromEntries(Object.entries(collectorGrant).sort(([a], [b]) => a.localeCompare(b))),
+    }
     : undefined;
   // The QA store (kanon#433): the adopter's hook, which the `qa-store` block calls, and the
   // secrets the store-coupled lanes take for it. `kanon init` and `kanon doctor` ask for the

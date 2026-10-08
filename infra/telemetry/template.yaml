@@ -158,8 +158,11 @@ Resources:
         Variables:
           TABLE_NAME: kanon-telemetry
           ACCOUNT_ID: { Ref: AWS::AccountId }
-          # Set by render.mjs from the register.
+          # Set by render.mjs from the register: every key; and per key, the SHA-256 of each word
+          # of its repository's owner and name, never the words, which a finding row's text is
+          # checked against (plan 0006 §4.2).
           WRITER_KEYS: ''
+          NAME_HASHES: ''
           IMPORTER_ROLE: { 'Fn::If': [ImporterOn, kanon-telemetry-importer, ''] }
           BACKFILL_ROLE: { 'Fn::If': [BackfillOn, kanon-telemetry-backfill, ''] }
 

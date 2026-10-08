@@ -6,13 +6,15 @@ import {
   MAX_ROWS,
   SWEEP_CAP_DAYS,
   WINDOW_MINUTES,
+  codesOnly,
   collect,
   lastSuccessfulSweep,
   regionOf,
   sweepSince,
+  underLevel,
   workflowFileOf,
 } from '../../scripts/telemetry-collect.mjs';
-import { ARTIFACT_FILE } from '../../scripts/lib/telemetry-artifacts.mjs';
+import { ARTIFACT_FILE, FINDING_ARTIFACT_FILE, findingArtifactName } from '../../scripts/lib/telemetry-artifacts.mjs';
 import { zipOf } from './helpers/zip.js';
 
 /**
@@ -300,5 +302,177 @@ describe('a row that cannot be sent turns the run red, by name and never by valu
     const res = await run(github([artifact(row(5 * MIN, { lane: 'nope' })), artifact(row(6 * MIN))]), s);
     expect(res.stored).toBe(1);
     expect(res.failures).toHaveLength(1);
+  });
+});
+
+describe('finding rows (plan 0006 §5 step 3, F4): sent under the level the record declares on the default branch', () => {
+  /** A valid finding row of the overseer's run `runId`, recorded `ago` ms before NOW. */
+  const finding = (runId: number, index: number, over: Record<string, unknown> = {}) => ({
+    schema_version: 1, row_kind: 'finding', tag: 'run', recorded_at: iso(NOW - 5 * MIN), run_id: runId, run_attempt: 1, finding_index: index,
+    reporter: 'overseer', subject: 'lane', lane: 'review', reason: 'did_not_finish', kanon_version: '0.37.0', fix_category: 'lane-behaviour',
+    evidence_level: 'codes', ...over,
+  });
+  const TEXT = { evidence_level: 'evidence', evidence: 'Expected: the review lane finishes (K-AGENT-12).\nObserved: it stopped at stage `agent`.', suggested_fix: 'Cap the re-reads.', scrub_version: 1 };
+  function findingArtifact(rows: Record<string, unknown>[], opts: { name?: string; content?: string; retentionDays?: number; runId?: number; fork?: boolean } = {}): Fake {
+    const runId = opts.runId ?? Number(rows[0]?.run_id);
+    const created = NOW - 4 * MIN;
+    nextId += 1;
+    return {
+      id: nextId,
+      name: opts.name ?? findingArtifactName('overseer', runId, 1),
+      created_at: iso(created),
+      expires_at: iso(created + (opts.retentionDays ?? 90) * DAY),
+      workflow_run: { id: runId, repository_id: OWN, head_repository_id: opts.fork ? FORK : OWN },
+      zip: zipOf(FINDING_ARTIFACT_FILE, opts.content ?? JSON.stringify(rows)),
+    };
+  }
+  const sweep = (gh: ReturnType<typeof github>, s: ReturnType<typeof store>, level: () => string) =>
+    collect({ repo: REPO, now: NOW, lastSuccess: iso(NOW - 60 * MIN), window: '', api: gh.api, download: gh.download, post: s.post, level });
+  const sent = (s: ReturnType<typeof store>) => s.posts.flat().filter((r) => r.row_kind === 'finding');
+
+  it('agrees with the lanes on the artifact: its name and its file come from one module', () => {
+    expect(findingArtifactName('explore-telemetry', 42, 2)).toBe('kanon-finding-explore-telemetry-42-2');
+    expect(FINDING_ARTIFACT_FILE).toBe('kanon-finding.json');
+  });
+
+  it('`sent with evidence`: sends every row as the lane built it, beside the run rows', async () => {
+    nextRun += 1;
+    const rows = [finding(nextRun, 0), finding(nextRun, 1, TEXT)];
+    const r = row(5 * MIN);
+    const s = store();
+    const res = await sweep(github([artifact(r), findingArtifact(rows)]), s, () => 'sent with evidence');
+    expect(res).toMatchObject({ listed: 2, sent: 3, stored: 3, withheld: 0, failures: [], warnings: [] });
+    expect(sent(s)).toEqual(rows);
+  });
+
+  it('`sent`: sends each row as codes only, with no evidence, suggested fix or scrub version', async () => {
+    nextRun += 1;
+    const rows = [finding(nextRun, 0), finding(nextRun, 1, TEXT)];
+    const s = store();
+    const res = await sweep(github([findingArtifact(rows)]), s, () => 'sent');
+    expect(res).toMatchObject({ sent: 2, stored: 2, failures: [] });
+    expect(sent(s)).toEqual([rows[0], finding(nextRun, 1)]);
+    expect(JSON.stringify(s.posts)).not.toContain('Observed');
+  });
+
+  it('a record turned from `sent with evidence` to `sent` sends the next sweep the same level-2 artifact without its text', async () => {
+    nextRun += 1;
+    const gh = github([findingArtifact([finding(nextRun, 0, TEXT)])]);
+    const first = store();
+    await sweep(gh, first, () => 'sent with evidence');
+    expect(sent(first)[0]).toMatchObject({ evidence_level: 'evidence', evidence: TEXT.evidence });
+    const next = store();
+    await sweep(gh, next, () => 'sent');
+    expect(sent(next)).toEqual([finding(nextRun, 0)]);
+  });
+
+  it('`drafted` and `filed here` send none, and say how many they held back; the run rows still go', async () => {
+    for (const value of ['drafted', 'filed here']) {
+      nextRun += 1;
+      const s = store();
+      const lines: string[] = [];
+      const gh = github([artifact(row(5 * MIN)), findingArtifact([finding(nextRun, 0), finding(nextRun, 1)])]);
+      const res = await collect({ repo: REPO, now: NOW, lastSuccess: iso(NOW - 60 * MIN), api: gh.api, download: gh.download, post: s.post, level: () => value, log: (l) => lines.push(l) });
+      expect(sent(s)).toEqual([]);
+      expect(res).toMatchObject({ stored: 1, withheld: 2, failures: [] });
+      expect(lines).toContainEqual(expect.stringContaining(`level is \`${value}\`, which sends none`));
+    }
+  });
+
+  it('reads the level once a sweep, and not at all when there is no finding artifact', async () => {
+    let reads = 0;
+    const level = () => { reads += 1; return 'sent'; };
+    await sweep(github([artifact(row(5 * MIN))]), store(), level);
+    expect(reads).toBe(0);
+    nextRun += 1;
+    const a = nextRun;
+    nextRun += 1;
+    await sweep(github([findingArtifact([finding(a, 0)]), findingArtifact([finding(nextRun, 0)])]), store(), level);
+    expect(reads).toBe(1);
+  });
+
+  it("a record that can't be read sends no finding row and turns the run red; the run rows are still sent", async () => {
+    nextRun += 1;
+    const s = store();
+    const res = await sweep(github([artifact(row(5 * MIN)), findingArtifact([finding(nextRun, 0)])]), s, () => { throw new Error('docs/qa/adoption.md:7 is malformed (K-LAYOUT-10)'); });
+    expect(sent(s)).toEqual([]);
+    expect(res.stored).toBe(1);
+    expect(res.failures).toEqual([expect.stringMatching(/^no finding row is sent: .*can't be read on the default branch \(docs\/qa\/adoption.md:7 is malformed/)]);
+  });
+
+  it("refuses a row whose reporter, run or attempt isn't its artifact's, or that is not a finding", async () => {
+    nextRun += 1;
+    const id = nextRun;
+    const rows = [finding(id, 0, { reporter: 'explore-telemetry' }), finding(id + 1, 1), finding(id, 2, { run_attempt: 2 }), row(5 * MIN, { run_id: id }), finding(id, 4)];
+    const s = store();
+    const res = await sweep(github([findingArtifact(rows, { runId: id })]), s, () => 'sent');
+    expect(res.failures).toHaveLength(4);
+    expect(res.failures.every((f) => f.endsWith("the row's row_kind, reporter, run_id or run_attempt is not its artifact's"))).toBe(true);
+    expect(sent(s)).toEqual([rows[4]]);
+  });
+
+  it('sends a text the scrub still finds something in as codes, with a warning naming the field and the rule, never the text', async () => {
+    // An older lane's weaker scrub, or a word of this repository's own name (`example/adopter`).
+    nextRun += 1;
+    const rows = [
+      finding(nextRun, 0, { ...TEXT, evidence: 'Observed: the lane read https://SECRET.example.com/x first.' }),
+      finding(nextRun, 1, { ...TEXT, suggested_fix: 'Rename the Example step.' }),
+    ];
+    const s = store();
+    const res = await sweep(github([findingArtifact(rows)]), s, () => 'sent with evidence');
+    expect(res.failures).toEqual([]);
+    expect(sent(s)).toEqual([finding(nextRun, 0), finding(nextRun, 1)]);
+    expect(res.warnings).toEqual([
+      expect.stringMatching(/row 0: sent at codes, without its text, because the scrub still finds evidence \(url, path/),
+      expect.stringMatching(/row 1: sent at codes, without its text, because the scrub still finds suggested_fix \(name\)/),
+    ]);
+    expect(res.warnings.join('\n')).not.toContain('SECRET');
+  });
+
+  it('an artifact that is not a list of 1 to 20 rows, or is unreadable, is a failure', async () => {
+    nextRun += 1;
+    const many = Array.from({ length: 21 }, (_, i) => finding(nextRun, i % 20));
+    const res = await sweep(github([
+      findingArtifact(many),
+      findingArtifact([], { runId: nextRun + 1 }),
+      findingArtifact([], { runId: nextRun + 2, content: '{"not":"a list"}' }),
+      findingArtifact([], { runId: nextRun + 3, content: '{nope' }),
+    ]), store(), () => 'sent');
+    nextRun += 3;
+    expect(res.failures).toHaveLength(4);
+    expect(res.failures.filter((f) => f.endsWith('not a list of 1 to 20 finding rows'))).toHaveLength(3);
+    expect(res.failures).toContainEqual(expect.stringMatching(/: unreadable \(.*JSON/));
+  });
+
+  it("ignores a fork's finding artifact, and a name with a reporter outside the schema's list", async () => {
+    nextRun += 1;
+    const s = store();
+    const res = await sweep(github([
+      findingArtifact([finding(nextRun, 0)], { fork: true }),
+      findingArtifact([finding(nextRun, 0)], { name: `kanon-finding-review-${nextRun}-1` }),
+    ]), s, () => 'sent');
+    expect(res).toMatchObject({ listed: 0, sent: 0, foreign: 1, failures: [] });
+  });
+
+  it("measures the retention from the run artifacts alone: a finding artifact's own does not move the cap", async () => {
+    nextRun += 1;
+    const gh = github([artifact(row(5 * MIN)), findingArtifact([finding(nextRun, 0)], { retentionDays: 1 })]);
+    const s = store();
+    // The last sweep was two days ago: a one-day cap would cut the span and warn that rows were lost.
+    const res = await collect({ repo: REPO, now: NOW, lastSuccess: iso(NOW - 2 * DAY), api: gh.api, download: gh.download, post: s.post, level: () => 'sent' });
+    expect(res.since).toBe(NOW - 2 * DAY);
+    expect(res.warnings.filter((w) => w.includes('cap'))).toEqual([]);
+    expect(res.stored).toBe(2);
+  });
+
+  it('strips by level, and never raises one', () => {
+    const coded = finding(1, 0);
+    const texted = finding(1, 0, TEXT);
+    expect(underLevel(texted, 'sent')).toEqual({ row: coded, stripped: true });
+    expect(underLevel(coded, 'sent')).toEqual({ row: coded, stripped: false });
+    expect(underLevel(texted, 'sent with evidence')).toEqual({ row: texted, stripped: false });
+    expect(underLevel(coded, 'drafted')).toBeNull();
+    expect(underLevel(coded, 'filed here')).toBeNull();
+    expect(codesOnly(texted)).toEqual(coded);
   });
 });

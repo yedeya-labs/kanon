@@ -4,8 +4,8 @@
 //   node infra/telemetry/erase.mjs --key <key> [--profile kanon] [--apply]
 //
 // Without --apply it only counts. It walks every partition the ingest function can write for
-// the key, `<key>#<lane>` for each lane in the schema's enum and `<key>#work`, so it is
-// complete without a scan. The table's resource policy lets only the function's role and the
+// the key, `<key>#<lane>` for each lane in the schema's enum, `<key>#work` and `<key>#finding`
+// (plan 0006 §2.3), so it is complete without a scan. The table's resource policy lets only the function's role and the
 // Owner's role delete, so it runs with the Owner's profile. Remove the key from the register
 // and redeploy first (step 1), so nothing writes while it runs. It prints counts only.
 

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { DENIED_WRITES, OTHER_KEY, PROBE_PK, runChecks, testRow } from '../../infra/telemetry/verify.mjs';
+import { DENIED_WRITES, OTHER_KEY, PROBE_PK, runChecks, testFinding, testRow } from '../../infra/telemetry/verify.mjs';
 import { erase, partitionsOf } from '../../infra/telemetry/erase.mjs';
 import { handle, SHORT_RETENTION_MS } from '../../infra/telemetry/function/index.mjs';
 import { validate, LANES } from '../../actions/agent-telemetry/schema.mjs';
+import { nameContext, verify } from '../../actions/agent-telemetry/scrub.mjs';
 
 /**
  * Plan 0002 step S3: the Owner's verify script (its falsifiers) and the erase script (§10),
@@ -22,6 +23,8 @@ function fakeAws(over: {
   // kanon#101: the writes the table's resource policy denies (all four when it is deployed as
   // written; `[]` is a table with no resource policy), and a stack without the probe role.
   tableDenies?: string[], noProbe?: boolean,
+  // Plan 0006 F4: a stack deployed without --importer.
+  noImporter?: boolean,
 } = {}) {
   const tableDenies = over.tableDenies ?? DENIED_WRITES;
   const table = new Map<string, Record<string, { S?: string, N?: string }>>();
@@ -37,7 +40,8 @@ function fakeAws(over: {
       if (over.noVerify) return { code: 254, stdout: '', stderr: 'AccessDenied' };
       const role = arg(args, '--role-arn');
       if (role.endsWith('-verify-probe') && over.noProbe) return { code: 254, stdout: '', stderr: 'AccessDenied' };
-      const kind = role.endsWith('-writer') ? 'writer' : role.endsWith('-verify-probe') ? 'probe' : 'reader';
+      if (role.endsWith('-importer') && over.noImporter) return { code: 254, stdout: '', stderr: 'AccessDenied' };
+      const kind = role.endsWith('-writer') ? 'writer' : role.endsWith('-verify-probe') ? 'probe' : role.endsWith('-importer') ? 'importer' : 'reader';
       return ok({ Credentials: { AccessKeyId: kind, SecretAccessKey: SECRET, SessionToken: 'tok' } });
     }
     if (op === 'query') {
@@ -58,21 +62,25 @@ function fakeAws(over: {
     if (op === 'get-item') {
       const k = JSON.parse(arg(args, '--key'));
       const item = table.get(`${k.pk.S}|${k.sk.S}`);
-      return ok(item ? { Item: { expires_at: item.expires_at } } : {});
+      const attr = arg(args, '--projection-expression');
+      return ok(item ? { Item: { [attr]: item[attr] } } : {});
     }
     return { code: 1, stdout: '', stderr: 'unexpected' };
   };
-  const post = async (_url: string, body: string, creds: Creds) => {
+  const post = async (url: string, body: string, creds: Creds) => {
+    const role = creds.accessKeyId === 'importer' ? 'kanon-telemetry-importer' : `kanon-telemetry-kk-${creds.accessKeyId}`;
+    const key = new URL(url).searchParams.get('key');
     const ev = {
-      requestContext: { http: { method: 'POST' }, authorizer: { iam: { userArn: `arn:aws:sts::${ACCOUNT}:assumed-role/kanon-telemetry-kk-${creds.accessKeyId}/v` } } },
+      requestContext: { http: { method: 'POST' }, authorizer: { iam: { userArn: `arn:aws:sts::${ACCOUNT}:assumed-role/${role}/v` } } },
+      ...(key !== null ? { queryStringParameters: { key } } : {}),
       body,
     };
     const res = await handle(ev, {
-      env: { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, WRITER_KEYS: 'kk' },
+      env: { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, WRITER_KEYS: 'kk', IMPORTER_ROLE: 'kanon-telemetry-importer', NAME_HASHES: `kk=${[...nameContext({ repository: 'acme-corp/widget-shop' })].join(':')}` },
       now: () => NOW,
       put: async (item: Record<string, unknown>) => {
         const expires = over.brokenHandler ? (item.expires_at as number) + 86_400 : item.expires_at;
-        table.set(`${item.pk}|${item.sk}`, { pk: { S: String(item.pk) }, expires_at: { N: String(expires) } });
+        table.set(`${item.pk}|${item.sk}`, { pk: { S: String(item.pk) }, sk: { S: String(item.sk) }, row_kind: { S: String(item.row_kind) }, expires_at: { N: String(expires) } });
       },
       log: () => {},
     });
@@ -82,6 +90,15 @@ function fakeAws(over: {
 }
 
 const PROBE_CHECK = "every write by a role allowed them is denied by the table's resource policy";
+/** Plan 0006 F4's checks, 8 to 13, in order. */
+const FINDING_CHECKS = [
+  'a valid finding gets 200 and lands in <key>#finding',
+  'a finding with a URL in its evidence gets 422 naming evidence (url)',
+  'a finding holding a registered key gets 422',
+  'the importer sending a finding gets 422',
+  "the aggregate's answer is unchanged by a stored finding",
+  "erase.mjs's walk of the key reaches the stored finding in <key>#finding",
+] as const;
 const WRITE_OPS: Record<string, string> = { 'put-item': 'PutItem', 'update-item': 'UpdateItem', 'delete-item': 'DeleteItem', 'batch-write-item': 'BatchWriteItem' };
 const NOW = Date.parse('2026-10-02T12:00:00Z');
 let n = 100;
@@ -93,7 +110,14 @@ describe('verify.mjs runs S3\'s falsifiers', () => {
     expect(testRow(NOW, 1).tag).toBe('test');
   });
 
-  it('passes all seven against a store that behaves', async () => {
+  it('its test finding is a valid finding row tagged test, at evidence, whose text passes the scrub', () => {
+    const f = testFinding(NOW, 1);
+    expect(validate(f)).toEqual({ ok: true });
+    expect(f).toMatchObject({ tag: 'test', evidence_level: 'evidence' });
+    expect(verify(String(f.evidence))).toEqual([]);
+  });
+
+  it('passes all thirteen against a store that behaves', async () => {
     const results = await runChecks('kk', 'kanon', deps(fakeAws()));
     expect(results.map((r) => [r.name, r.pass])).toEqual([
       ['a valid row gets 200', true],
@@ -103,7 +127,45 @@ describe('verify.mjs runs S3\'s falsifiers', () => {
       ['a direct PutItem with the writer role is denied', true],
       ["the stored row's expires_at is 30 days out", true],
       [PROBE_CHECK, true],
+      ...FINDING_CHECKS.map((name) => [name, true]),
     ]);
+  });
+
+  // Plan 0006 F4's checks, each against a store that gets one thing wrong.
+  it('fails the finding checks against an ingest function that refuses every finding, as F1 left it', async () => {
+    const f = fakeAws();
+    const refusing = async (url: string, body: string, creds: Creds) => {
+      const rows = JSON.parse(body) as Array<{ row_kind: string }>;
+      if (rows[0]!.row_kind === 'finding') return { status: 422, json: { results: [{ status: 'rejected', errors: [{ field: 'row_kind', problem: 'not-allowed' }] }] } };
+      return f.post(url, body, creds);
+    };
+    const r = await runChecks('kk', 'kanon', { ...deps(f), post: refusing });
+    expect(r.filter((x) => !x.pass).map((x) => x.name)).toEqual([
+      FINDING_CHECKS[0], FINDING_CHECKS[1], FINDING_CHECKS[2], FINDING_CHECKS[5],
+    ]);
+  });
+
+  it('fails the importer check when the stack has no importer, saying so', async () => {
+    const r = await runChecks('kk', 'kanon', deps(fakeAws({ noImporter: true })));
+    expect(r.filter((x) => !x.pass)).toEqual([{ name: FINDING_CHECKS[3], pass: false,
+      why: 'assume-role failed for kanon-telemetry-importer: is the stack deployed with --importer?' }]);
+  });
+
+  it('fails the aggregate check when a stored finding changes the figures', async () => {
+    const f = fakeAws();
+    // An aggregate that read the finding partition would count the finding as a run of its lane.
+    const leaky = (args: string[], creds?: Creds) => {
+      if (args[1] === 'query' && args.includes('--filter-expression')) {
+        const p = JSON.parse(args[args.indexOf('--expression-attribute-values') + 1]!)[':p'].S as string;
+        if (p === 'kk#review') {
+          const found = [...f.table.values()].filter((i) => i.row_kind?.S === 'finding');
+          return { code: 0, stdout: JSON.stringify({ Items: found.map(() => ({ pk: { S: 'kk#review' }, row_kind: { S: 'run' }, tag: { S: 'run' }, recorded_at: { S: new Date(NOW).toISOString() }, lane: { S: 'review' }, outcome: { S: 'failed' }, reason: { S: 'did_not_finish' }, failed_stage: { S: 'agent' }, kanon_version: { S: 'dev' } })) }), stderr: '' };
+        }
+      }
+      return f.aws(args, creds);
+    };
+    const r = await runChecks('kk', 'kanon', { ...deps(f), aws: leaky });
+    expect(r.filter((x) => !x.pass)).toEqual([{ name: FINDING_CHECKS[4], pass: false, why: 'it changed' }]);
   });
 
   // kanon#101: check 5 passes on the writer's identity policy alone, so a table with no
@@ -153,7 +215,7 @@ describe('verify.mjs runs S3\'s falsifiers', () => {
     const r = await runChecks('kk', 'kanon', deps(fakeAws({ noProbe: true })));
     expect(r.filter((x) => !x.pass).map((x) => [x.name, x.why])).toEqual([[PROBE_CHECK,
       'assume-role failed for kanon-telemetry-verify-probe: is the stack deployed with --verify?']]);
-    expect(r).toHaveLength(7);
+    expect(r).toHaveLength(13);
   });
 
   it('fails the reader check when the reader can read another key', async () => {
@@ -180,6 +242,7 @@ describe('verify.mjs runs S3\'s falsifiers', () => {
       'a row with an extra field gets 422 naming that field',
       'a row naming a partition gets 422',
       "the stored row's expires_at is 30 days out",
+      FINDING_CHECKS[0], FINDING_CHECKS[1], FINDING_CHECKS[2], FINDING_CHECKS[3], FINDING_CHECKS[5],
     ]);
   });
 
@@ -192,6 +255,7 @@ describe('verify.mjs runs S3\'s falsifiers', () => {
       'a row with an extra field gets 422 naming that field',
       'a row naming a partition gets 422',
       "the stored row's expires_at is 30 days out",
+      FINDING_CHECKS[0], FINDING_CHECKS[1], FINDING_CHECKS[2], FINDING_CHECKS[3], FINDING_CHECKS[5],
     ]);
     const accepted = async () => ({ status: 202, json: { results: [{ status: 'stored' }] } });
     const r2 = await runChecks('kk', 'kanon', { ...deps(f), post: accepted });
@@ -208,6 +272,8 @@ describe('verify.mjs runs S3\'s falsifiers', () => {
       { name: 'the reader querying another key gets AccessDeniedException', pass: false, why: 'ResourceNotFoundException' },
       { name: 'a direct PutItem with the writer role is denied', pass: false, why: 'ResourceNotFoundException' },
       { name: PROBE_CHECK, pass: false, why: 'PutItem: ResourceNotFoundException' },
+      { name: FINDING_CHECKS[4], pass: false, why: 'the aggregate could not be computed' },
+      { name: FINDING_CHECKS[5], pass: false, why: 'a query failed' },
     ]);
   });
 
@@ -247,6 +313,26 @@ describe('erase.mjs deletes every partition of a key (§10)', () => {
 
   it('walks every lane\'s partition, the work partition and the finding partition (plan 0006 §2.3)', () => {
     expect(partitionsOf('kk')).toEqual([...LANES.map((l) => `kk#${l}`), 'kk#work', 'kk#finding']);
+  });
+
+  it('erasing a key with a stored finding leaves <key>#finding empty (plan 0006 F4)', async () => {
+    // The finding is stored by the real ingest function, through verify's fake account.
+    const f = fakeAws();
+    await runChecks('kk', 'kanon', deps(f));
+    const inFindings = () => [...f.table.values()].filter((i) => i.pk!.S === 'kk#finding').length;
+    expect(inFindings()).toBe(1);
+    const owner = (args: string[]) => {
+      if (args[1] === 'batch-write-item') {
+        const req = JSON.parse(args[args.indexOf('--request-items') + 1]!) as Record<string, Array<{ DeleteRequest: { Key: { pk: { S: string }, sk: { S: string } } } }>>;
+        for (const d of req['kanon-telemetry'] ?? []) f.table.delete(`${d.DeleteRequest.Key.pk.S}|${d.DeleteRequest.Key.sk.S}`);
+        return { code: 0, stdout: JSON.stringify({ UnprocessedItems: {} }) };
+      }
+      return f.aws(args);
+    };
+    const counts = erase('kk', { aws: owner, profile: 'kanon', apply: true });
+    expect(counts.find((c) => c.partition === 'kk#finding')).toEqual({ partition: 'kk#finding', rows: 1 });
+    expect(inFindings()).toBe(0);
+    expect([...f.table.keys()].filter((k) => k.startsWith('kk#'))).toEqual([]);
   });
 
   it('only counts without --apply', () => {
