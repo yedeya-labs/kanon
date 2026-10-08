@@ -7,7 +7,7 @@ import { FUNCTION_DIR, registerProblems, render, TEMPLATE_PATH } from '../../inf
 import { PROJECTION } from '../../infra/telemetry/function/aggregate.mjs';
 import { nameHashesOf } from '../../infra/telemetry/function/index.mjs';
 import { sha256 } from '../../actions/agent-telemetry/public-words.mjs';
-import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
+import { KANON_WORDS, nameContext } from '../../actions/agent-telemetry/scrub.mjs';
 
 /**
  * Plan 0002 step S3: the store's CloudFormation template, as rendered from the example
@@ -103,8 +103,8 @@ describe('the ingest function and its URL (§4)', () => {
     expect(fn.Environment.Variables.IMPORTER_ROLE).toEqual({ 'Fn::If': ['ImporterOn', 'kanon-telemetry-importer', ''] });
     expect(fn.Environment.Variables.BACKFILL_ROLE).toEqual({ 'Fn::If': ['BackfillOn', 'kanon-telemetry-backfill', ''] });
   });
-  it("is told each key's repository as the hashes of its words, never the words (plan 0006 §4.2, F4)", () => {
-    const words = repo.toLowerCase().match(/[a-z0-9]+/g)!;
+  it("is told each key's repository as the hashes of its words, never the words, and none of Kanon's own (plan 0006 §4.2, F4; kanon#612)", () => {
+    const words = repo.toLowerCase().match(/[a-z0-9]+/g)!.filter((w) => !KANON_WORDS.has(w));
     expect(fn.Environment.Variables.NAME_HASHES).toBe(`${key}=${[...new Set(words.map(sha256))].sort().join(':')}`);
     for (const w of words) expect(fn.Environment.Variables.NAME_HASHES).not.toContain(w);
     // The function reads back exactly the scrub's context for that repository.

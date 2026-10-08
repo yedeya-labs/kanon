@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ROOT } from './helpers/adopter.js';
 import { validate } from '../../actions/agent-telemetry/schema.mjs';
+import { redact, verify } from '../../actions/agent-telemetry/scrub.mjs';
 import { kanonFileIn } from '../../scripts/lib/finding-rows.mjs';
 import {
   BUCKET,
@@ -15,6 +16,7 @@ import {
   parseReport,
   renderAudit,
   route,
+  scrubContext,
   upstreamChoice,
 } from '../../scripts/overseer-file.mjs';
 
@@ -519,5 +521,37 @@ describe('upstream findings sent to Kanon (plan 0006 §5, F3)', () => {
     const log: string[] = [];
     fileAudit({ repo: REPO, text: fixture(), agentOutcome: 'success', gh: sendingGh({}).gh, interlock: () => ({ count: 0 }), log: (l) => log.push(l), upstream: 'sent' });
     expect(log.join('\n')).toMatch(/::warning title=overseer finding rows::/);
+  });
+});
+
+// kanon#612, the case seen live: both lanes' scrub context (`scrubContext`) must not treat Kanon's
+// own vocabulary as a name, from the participants and collaborators as from the App register.
+describe('the lanes\' scrub context never treats Kanon\'s own vocabulary as a name (kanon#612)', () => {
+  /** A `gh` that lists Kanon's Apps and GitHub's bot among the participants, as `gh` writes their logins. */
+  const gh = (args: string[]) => {
+    if (args[0] === 'pr' && args[1] === 'list') {
+      return JSON.stringify([{
+        author: { login: 'app/acme-kanon-author' }, assignees: [], comments: [{ author: { login: 'github-actions' } }],
+        latestReviews: [{ author: { login: 'acme-reviewer' } }], reviewRequests: [],
+      }]);
+    }
+    if (args[0] === 'issue' && args[1] === 'list') return JSON.stringify([{ author: { login: 'harbor-captain' }, assignees: [], comments: [] }]);
+    if (args[0] === 'api') return 'acme-kanon-author[bot]\nquietcollab\n';
+    return '';
+  };
+  const { context } = scrubContext('acme-corp/kanon', gh, {
+    run: { id: 1, attempt: 1 }, tag: 'test', recordedAt: '2026-10-08T12:00:00.000Z', kanonVersion: '0.38.0', actor: 'acme-kanon-author[bot]',
+    nameHashes: [], isKanonFile: kanonFileIn(ROOT), write: () => {},
+  }, () => {});
+
+  it('evidence saying "the flags Kanon writes" passes the scrub for a sender whose repository is `kanon`', () => {
+    const text = 'Observed: the flags Kanon writes. The Author App and the reviewer ran on GitHub Actions. Nothing to change in Kanon.';
+    expect(verify(text, context)).toEqual([]);
+    expect(redact(text, context).text).toBe(text);
+  });
+
+  it('`acme-reviewer` still removes `acme`, and a real person\'s login is still removed', () => {
+    expect(redact('Observed: acme-reviewer approved, harbor-captain and quietcollab merged, for the acme team.', context).text)
+      .toBe('Observed: [name] approved, [name] and [name] merged, for the [name] team.');
   });
 });
