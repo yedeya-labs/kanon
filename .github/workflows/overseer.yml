@@ -76,7 +76,7 @@ permissions:
 
 jobs:
   oversee:
-    uses: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@v0.36.0
+    uses: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@v0.38.0
     secrets:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
