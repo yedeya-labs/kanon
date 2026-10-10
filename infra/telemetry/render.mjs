@@ -12,6 +12,11 @@
 // repository appears only in the two trust policies' `sub` conditions, never with a wildcard.
 // The roles carry the opaque key, and so does every row.
 //
+// WHAT IT PRINTS NAMES NO KEY (kanon#628). The key is opaque and says nothing about the
+// repository (docs/telemetry.md), so its pairing with one is the register's to keep. Standard
+// output and error land in scrollback, CI logs and agent transcripts, so what this prints names an
+// entry by its repository, for the subjects the Owner checks, or by its index, for a refusal.
+//
 // THE WRITER TRUSTS THE DEFAULT BRANCH'S REF, NEVER AN ENVIRONMENT (plan 0002 §3, as the Owner
 // decided on 2026-10-05 to drop GitHub Environments). Its subject is
 // `<prefix>:ref:refs/heads/<default branch>`, and each reader subject is `<prefix>:<reader>`. Both
@@ -73,7 +78,8 @@ export const firstReviewExpired = (firstReview, now) =>
   addMonths(Date.parse(firstReview.review_recorded_at), RETENTION_MONTHS) <= now;
 
 /**
- * Check the register, and say what's wrong with it without echoing anything but its keys.
+ * Check the register, and say what's wrong with it, naming each entry by its index and echoing
+ * nothing in it, its key least of all.
  * A time to first review past its 13 months is a problem too (decision 18), so no render, and so
  * no deploy, goes out while the register still holds one.
  * @param {any} register
@@ -329,14 +335,15 @@ export function render(register, opts = {}) {
   if (problems.length) throw new Error(`register: ${problems.join('; ')}`);
   /** @type {Record<string, Subjects>} */
   const subjects = {};
+  /** @type {string[]} */
   const refused = [];
-  for (const entry of register.repositories) {
+  register.repositories.forEach((entry, i) => {
     try {
       subjects[entry.key] = entrySubjects(entry, opts.gh);
     } catch (e) {
-      refused.push(`${entry.key}: ${e instanceof Error ? e.message : String(e)}`);
+      refused.push(`repositories[${i}]: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }
+  });
   if (refused.length) throw new Error(`register: ${refused.join('; ')}`);
   const template = parse(opts.templateText ?? readFileSync(TEMPLATE_PATH, 'utf8'));
   const fn = template.Resources.IngestFunction.Properties;
@@ -388,14 +395,19 @@ if (isCliEntry(import.meta.url)) {
     process.exit(2);
   }
   try {
+    const text = readFileSync(values.register, 'utf8');
     /** @type {Register} */
-    const register = JSON.parse(readFileSync(values.register, 'utf8'));
+    let register;
+    // JSON.parse's message quotes the text around the fault, which may be a key.
+    try { register = JSON.parse(text); } catch { throw new Error(`register: ${values.register} is not JSON`); }
     const { template, parameters, subjects } = render(register, values);
-    // The Owner checks these before deploying: each is what that repository's tokens carry.
-    for (const [key, s] of Object.entries(subjects)) console.log(`${key}: writer trusts ${s.writer.join(', ')}; reader trusts ${s.readers.join(', ')}`);
+    // The Owner checks these before deploying: each is what that repository's tokens carry. By
+    // repository, never by key.
     for (const e of register.repositories) {
-      if (e.aggregate_invoker === true) console.log(`${e.key}: aggregate invoker trusts ${subjects[e.key]?.writer.join(', ')}`);
-      if (e.publish_own_figures_as !== undefined) console.log(`${e.key}: own figures publishable as ${e.publish_own_figures_as}`);
+      const s = /** @type {Subjects} */ (subjects[e.key]);
+      console.log(`${e.repository}: writer trusts ${s.writer.join(', ')}; reader trusts ${s.readers.join(', ')}`);
+      if (e.aggregate_invoker === true) console.log(`${e.repository}: aggregate invoker trusts ${s.writer.join(', ')}`);
+      if (e.publish_own_figures_as !== undefined) console.log(`${e.repository}: own figures publishable as ${e.publish_own_figures_as}`);
     }
     mkdirSync(values.out, { recursive: true });
     writeFileSync(join(values.out, 'template.json'), `${JSON.stringify(template, null, 2)}\n`);

@@ -88,7 +88,7 @@ REG=$HOME/kanon-private/telemetry/register.json
 OUT=$HOME/kanon-private/telemetry/build
 
 node infra/telemetry/render.mjs --register "$REG" --out "$OUT"
-# prints, per key: "<key>: writer trusts <subject>; reader trusts <subjects>"
+# prints, per repository: "<owner>/<repo>: writer trusts <subject>; reader trusts <subjects>"
 aws cloudformation package --profile kanon --region eu-central-1 \
   --template-file "$OUT/template.json" --s3-bucket <artifacts bucket> \
   --use-json --output-template-file "$OUT/packaged.json"
@@ -100,7 +100,7 @@ aws cloudformation describe-stacks --profile kanon --region eu-central-1 \
   --stack-name kanon-telemetry --query 'Stacks[0].Outputs'
 ```
 
-Before packaging, read the subjects `render.mjs` printed: each writer's must be `<prefix>:ref:refs/heads/<default branch>`, where the prefix is `repo:<owner>/<repo>` for a repository created before 2026-07-15 and `repo:<owner>@<id>/<repo>@<id>` for one created after. It refuses to render when GitHub doesn't answer for a repository, when a repository customizes its subject template and its entry names no exact subjects, and when an exact subject fails the checks below.
+Before packaging, read the subjects `render.mjs` printed: each writer's must be `<prefix>:ref:refs/heads/<default branch>`, where the prefix is `repo:<owner>/<repo>` for a repository created before 2026-07-15 and `repo:<owner>@<id>/<repo>@<id>` for one created after. It prints each entry by its repository and never by its key, and a refusal names an entry by its index, so its output can sit in a terminal's scrollback or a log without pairing a key with its repository ([#628](https://github.com/yedeya-labs/kanon/issues/628)). It refuses to render when GitHub doesn't answer for a repository, when a repository customizes its subject template and its entry names no exact subjects, and when an exact subject fails the checks below.
 
 The outputs name the ingest URL and each repository's two roles, and the aggregate function's URL and each invoker role ([The aggregate function](#the-aggregate-function)).
 
@@ -299,7 +299,7 @@ It walks `<key>#<lane>` for every key in the register and every lane in the enum
 The Owner's to run; agents run none. It costs about a cent a month (plan 0002 decision 10's terms, below).
 
 1. **In the register,** on Kanon's entry, add `"publish_own_figures_as": "kanon"` and `"aggregate_invoker": true`. Any other adopter may ask for either, the same way.
-2. **Render, and read what it prints.** Besides each writer and reader, it prints `<key>: aggregate invoker trusts <subject>`, which must be the default-branch ref, like the writer's, and `<key>: own figures publishable as <label>` for each declaring adopter. Check that only the adopters that asked are listed:
+2. **Render, and read what it prints.** Besides each writer and reader, it prints `<owner>/<repo>: aggregate invoker trusts <subject>`, which must be the default-branch ref, like the writer's, and `<owner>/<repo>: own figures publishable as <label>` for each declaring adopter. Check that only the adopters that asked are listed:
 
    ```sh
    node infra/telemetry/render.mjs --register "$REG" --out "$OUT"
