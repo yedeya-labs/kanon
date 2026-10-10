@@ -482,7 +482,7 @@ describe('kanon metrics: arguments', () => {
     expect(() => parseArgs(['dry-run', '--since', '2026-02-30', '--repo', REPO])).toThrow(/takes a date/);
     expect(() => parseArgs(['dry-run', '--since', SINCE, '--until', SINCE, '--repo', REPO])).toThrow(/after --since/);
     expect(() => parseArgs(['dry-run', '--since', SINCE])).toThrow(/--repo/);
-    expect(() => parseArgs(['report'])).toThrow(/unknown subcommand/);
+    expect(() => parseArgs(['nope'])).toThrow(/unknown subcommand/);
     expect(() => parseArgs(['dry-run', '--since', SINCE, '--dir', '--json'])).toThrow(/not the flag/);
   });
 
