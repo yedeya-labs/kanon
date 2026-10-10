@@ -170,6 +170,8 @@ export const telemetryCallerFile = (release) =>
     '  actions: read',
     '  contents: read',
     '  id-token: write',
+    '  issues: read',
+    '  pull-requests: read',
     'jobs:',
     '  collect:',
     `    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@${release}`,

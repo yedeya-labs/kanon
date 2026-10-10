@@ -43,6 +43,14 @@
 // text that fails it is sent at `codes`, with a warning naming the rule, so an older lane's weaker
 // scrub can't turn the collector red forever (§5). Then `validate`, as for a run row.
 //
+// WORK-ITEM ROWS (plan 0003 §3.1, M4). The same sweep then runs the work-item step
+// (`telemetry-work-items.mjs`): one row per pull request closed in the span, and the row again of
+// an earlier item a merge in the span reverted or fixed, or whose Reviewer follow-up closed. They
+// are derived from GitHub with this job's token, as `kanon metrics dry-run` derives them, and sent
+// in the same batches as the run rows. The store keys each by its PR number alone, so a row sent
+// again overwrites the one before. A read that fails turns the run red, and the next sweep covers
+// the same span again.
+//
 // LOGS HOLD COUNTS, IDS, LANES AND FIELD NAMES, NEVER A ROW'S VALUE (ADR 0007).
 //
 // `mask` FIRST (kanon#514). The writer role's ARN is a repository variable, which the runner
@@ -59,6 +67,7 @@ import { masksOf } from './aggregate-mask.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { ARTIFACT_FILE, FINDING_ARTIFACT_FILE, ghApi, ghDownload, listTelemetryArtifacts, readZipEntry } from './lib/telemetry-artifacts.mjs';
 import { readUpstreamFindingsFrom, SENT_VALUES } from './lib/upstream-findings.mjs';
+import { ghAsync, workItemStep } from './telemetry-work-items.mjs';
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
@@ -129,6 +138,7 @@ export function textFailures(row, nameHashes) {
  * @typedef {import('./lib/telemetry-artifacts.mjs').Download} Download
  * @typedef {{ status: number, json: any }} PostResult
  * @typedef {(rows: object[]) => Promise<PostResult>} Post
+ * @typedef {(since: number) => Promise<import('./telemetry-work-items.mjs').StepResult>} WorkItems
  */
 
 /**
@@ -225,13 +235,18 @@ export const signedPost = (url, region, env) => async (rows) => {
  * `level` reads the adoption record's `Upstream findings` value from the default branch; it is
  * called at most once a sweep, and only when there is a finding artifact to send.
  *
+ * `workItems` is the work-item step (plan 0003 M4), given the span's start: its rows are sent
+ * beside the run rows, and its failures turn the run red as theirs do. Left out, no work-item row
+ * is derived.
+ *
  * @param {{
  *   repo: string, now: number, lastSuccess: string | null, window?: string,
  *   api: Api, download: Download, post: Post, log?: (line: string) => void, level?: () => string,
+ *   workItems?: WorkItems,
  * }} opts
- * @returns {Promise<{ since: number, listed: number, sent: number, stored: number, foreign: number, withheld: number, failures: string[], warnings: string[] }>}
+ * @returns {Promise<{ since: number, listed: number, sent: number, stored: number, foreign: number, withheld: number, workItems: number, failures: string[], warnings: string[] }>}
  */
-export async function collect({ repo, now, lastSuccess, window = '', api, download, post, log = () => {}, level = () => readUpstreamFindingsFrom(repo) }) {
+export async function collect({ repo, now, lastSuccess, window = '', api, download, post, log = () => {}, level = () => readUpstreamFindingsFrom(repo), workItems }) {
   const overridden = window.trim() !== '';
   const windowMinutes = overridden ? Number(window) : WINDOW_MINUTES;
   /** @type {string[]} */
@@ -239,7 +254,7 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
   /** @type {string[]} */
   const warnings = [];
   if (overridden && !(Number.isInteger(windowMinutes) && windowMinutes > 0)) {
-    return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, withheld: 0, failures: [`window_minutes is '${window}', not a whole number of minutes`], warnings };
+    return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, withheld: 0, workItems: 0, failures: [`window_minutes is '${window}', not a whole number of minutes`], warnings };
   }
 
   // One listing back to the furthest the sweep could reach; the span is cut from it below, once
@@ -250,7 +265,7 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
     listing = listTelemetryArtifacts({ repo, from: now - SWEEP_CAP_DAYS * DAY, api, findings: true });
   } catch (err) {
     failures.push(`could not list artifacts (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
-    return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, withheld: 0, failures, warnings };
+    return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, withheld: 0, workItems: 0, failures, warnings };
   }
   const { since, capped, capDays } = sweepSince({ lastSuccess, now, windowMinutes, overridden, retentionDays: listing.retentionDays });
   if (capped) {
@@ -351,6 +366,16 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
     rows.push({ row, where });
   }
 
+  // The work-item rows (plan 0003 M4), over the same span.
+  let items = 0;
+  if (workItems) {
+    const step = await workItems(since);
+    rows.push(...step.rows);
+    failures.push(...step.failures);
+    warnings.push(...step.warnings);
+    items = step.rows.length;
+  }
+
   let stored = 0;
   for (let i = 0; i < rows.length; i += MAX_ROWS) {
     const batch = rows.slice(i, i + MAX_ROWS);
@@ -374,7 +399,7 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
     });
   }
   if (withheld) log(`withheld ${withheld} finding row(s): the adoption record's Upstream findings level is \`${String(declared)}\`, which sends none`);
-  return { since, listed: artifacts.length, sent: rows.length, stored, foreign: listing.foreign, withheld, failures, warnings };
+  return { since, listed: artifacts.length, sent: rows.length, stored, foreign: listing.foreign, withheld, workItems: items, failures, warnings };
 }
 
 async function main() {
@@ -404,13 +429,15 @@ async function main() {
       console.log(`::warning title=telemetry-collect::could not read the last successful sweep, so this one takes everything reachable (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
     }
   }
+  const now = Date.now();
   const result = await collect({
-    repo, now: Date.now(), lastSuccess, window: env.WINDOW ?? '',
+    repo, now, lastSuccess, window: env.WINDOW ?? '',
     api, download: ghDownload(repo), post: signedPost(url, /** @type {string} */ (region), env),
     log: (line) => console.log(line),
+    workItems: (since) => workItemStep({ repo, since, now, gh: ghAsync, log: (line) => console.log(line), callerFile: file }),
   });
   for (const w of result.warnings) console.log(`::warning title=telemetry-collect::${w}`);
-  const line = `Telemetry collector: ${result.stored} of ${result.sent} row(s) stored from ${result.listed} artifact(s) since ${new Date(result.since).toISOString()}; ${result.withheld ? `${result.withheld} finding row(s) withheld by the adoption record; ` : ''}${result.failures.length} failure(s).`;
+  const line = `Telemetry collector: ${result.stored} of ${result.sent} row(s) stored from ${result.listed} artifact(s) and ${result.workItems} work item(s) since ${new Date(result.since).toISOString()}; ${result.withheld ? `${result.withheld} finding row(s) withheld by the adoption record; ` : ''}${result.failures.length} failure(s).`;
   console.log(line);
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${line}\n`);
   // A red run is the page (§9): the next sweep re-covers the same span through the watermark, so
