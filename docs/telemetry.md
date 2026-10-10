@@ -410,6 +410,24 @@ node scripts/telemetry/kanon-findings.mjs --rows <run and finding rows> [--known
 - **The tree.** `--trees` maps each release to its file list, as `git ls-tree -r --name-only v<version>` prints it from a Kanon clone. A release with no list, `dev` included, fails any finding of it that carries a path or a text.
 - **What leaves.** Signals and rises come out exactly as `kanon-bugs.mjs` returns them, so a public issue never holds a finding. The evidence and suggested fix appear only in the private issue, and only for a finding that passed the gate. The whole output is checked for every key in the rows and the register, as a value and as a word, and refused whole if one appears. `tests/unit/kanon-findings.test.ts` proves each check.
 
+## Kanon's health
+
+[Plan 0003](plans/0003-metrics.md) M8: the group 9 measures Kanon computes itself (§4, "Group 9, field by field"). [`scripts/metrics/health.mjs`](../scripts/metrics/health.mjs) computes them and renders the health view. It is pure, like the rest of the metrics module. [`scripts/telemetry/kanon-health.mjs`](../scripts/telemetry/kanon-health.mjs) reads Kanon's repository through `gh`, read-only, and prints the view, or one `kanon-health/v1` JSON document with `--json`.
+
+```sh
+node scripts/telemetry/kanon-health.mjs [--rows <rows.json>] [--json]
+```
+
+- **Disputed rules** (decision 15). These are issues filed with the [Dispute a rule](../.github/ISSUE_TEMPLATE/rule-dispute.yml) form, counted open and closed per rule id. A dispute is recognised by the heading GitHub writes for the form's rule field, `### Disputed rule`, so it needs no label. A rule id is shown only when the rulebook has it (`RULE_IDS`). Anything else in the field is counted as unreadable and never printed.
+- **Time to fix Kanon's own bugs.** These are the issues [#41's job](#kanons-own-bugs) files, recognised by its `kanon-bug` label and its `kanon:bug-signature` marker together. Two times are measured from filing:
+  - to the close, for each issue closed as completed;
+  - to the first release that contains the fix. That is the first release published at or after the fix merged, where the fix is the pull request or commit that closed the issue. Kanon releases from one branch, so a release cut after the merge holds the fix.
+
+  An open issue, or one closed as not planned or as a duplicate, is counted and left out of both times. So is a fix that is in no release yet, and a close with no pull request or commit behind it. Each time is shown as a median and a 90th percentile, in days, with its count.
+- **Upgrade lag.** This needs the run rows (`--rows`, the same input `kanon-bugs.mjs` reads). It compares each adopter's newest `kanon_version`, the highest release on its `tag: run` rows, with Kanon's releases published by then. It counts how many releases are newer, and how many days have passed since the first of them came out. `dev` and rows without a version are not read. The figure combines adopters, so it is shown only as a distribution (median and 90th percentile), and only when at least `MIN_ADOPTERS` adopters contribute. That is the aggregate's three-adopter rule, imported, not restated. With fewer, it is withheld, and the view doesn't say how many adopters there are. The output holds numbers only, never a key.
+
+The view is a section of the public page ([plan 0003](plans/0003-metrics.md) §6.1, M7). `tests/unit/kanon-health.test.ts` seeds a dispute and a #41 issue, and checks that each appears in it.
+
 ## The importer and the backfill role
 
 These roles are created only for their step and deleted after it (§7). Add `--importer` (S5) or `--backfill` (S7a) to `render.mjs`, package and deploy, and the function accepts that role. Such a caller names the adopter's key as `?key=<key>` on the URL, and the key must be in the register:
