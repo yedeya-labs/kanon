@@ -265,11 +265,11 @@ Every label the pipeline applies must be in this table. The table is the authori
 
 ### `K-WORK-19` Record where a follow-up came from; let the pipeline derive the rest
 
-**Rule.** A follow-up states its origin in the form `Surfaced by PR #N review`. Never hand-write its project membership: the reconciler derives membership from the origin. A reviewer never labels its own follow-up for implementation; a human decides whether and when it is built.
+**Rule.** A follow-up states its origin in the form `Surfaced by PR #N review`. Never hand-write its project membership: the reconciler derives membership from the origin. A reviewer never labels its own follow-up for implementation; a human decides whether and when it is built, either by labelling the issue or by opening the backlog feeder's valve for the repository. An opened valve stays bounded: it is off by default, feeds only a follow-up at `sev:medium` or below, on a named bucket milestone and without `gate-candidate`, and feeds no more while one it fed still holds a slot.
 
-**Why.** A hand-written membership marker pre-empts the derivation and goes stale. Capturing follow-ups is automatic, but dispatching them is gated by a human, so a reviewer cannot put its own findings straight into an implementer's queue.
+**Why.** A hand-written membership marker pre-empts the derivation and goes stale. Capturing follow-ups is automatic, but dispatching them is gated by a human, so a reviewer cannot put its own findings straight into an implementer's queue. The premise that every follow-up waits on a person's act on that issue no longer holds once a repository opens the feeder: the reviewer's own labels then decide which of its findings are eligible, and the person's act is opening the valve, once, for the whole repository. The bounds are what keep that act a decision rather than a blank cheque: the gate severities, unplanned work and a growing queue still wait on a person.
 
-**Enforced by.** The reconciler derives follow-up membership from the origin line. Not self-labelling is prose only.
+**Enforced by.** The reconciler derives follow-up membership from the origin line. The backlog feeder checks its own bounds before it labels anything: the valve, the severity, the milestone, the excluded labels and a fed issue still in flight. Not self-labelling is prose only.
 
 **Class.** framework
 
