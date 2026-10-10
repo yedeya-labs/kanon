@@ -62,6 +62,9 @@ import { isReleasePr } from './metrics/release.mjs';
 
 const DAY = 86_400_000;
 
+/** GitHub's answer to a commit SHA the repository doesn't have: 422 (`No commit found for SHA`), or 404. */
+export const UNKNOWN_SHA = /HTTP 4(?:04|22)\b/;
+
 /**
  * @typedef {import('../cli/metrics-read.mjs').Gh} Gh
  * @typedef {import('./metrics/types.mjs').PullRequest} PullRequest
@@ -187,6 +190,20 @@ export async function workItemStep({ repo, since, now, gh, sleep = (ms) => wait(
   };
 
   // 2 and 3. The earlier items the span's merges and follow-up closes may have changed.
+  /**
+   * The pull requests a commit belongs to. A SHA this repository doesn't have (a revert of a
+   * commit cherry-picked from elsewhere) is GitHub's 422, or 404: no candidate, not a failure.
+   * Any other error is thrown, and the sweep turns red.
+   * @param {string} sha
+   */
+  const pullsOf = async (sha) => {
+    try {
+      return await rest(gh, `repos/${repo}/commits/${sha}/pulls`);
+    } catch (e) {
+      if (UNKNOWN_SHA.test(firstLine(e) ?? '')) return [];
+      throw e;
+    }
+  };
   /** @type {Set<number>} */
   const candidates = new Set();
   /** @type {Set<number>} */
@@ -197,7 +214,7 @@ export async function workItemStep({ repo, since, now, gh, sleep = (ms) => wait(
       for (const text of [r.body, ...(r.commits ?? []).map((c) => c.message)]) {
         const t = revertTargets(text ?? '', repo);
         for (const n of t.prs) candidates.add(n);
-        for (const sha of t.shas) for (const p of await rest(gh, `repos/${repo}/commits/${sha}/pulls`)) if (typeof p?.number === 'number') candidates.add(p.number);
+        for (const sha of t.shas) for (const p of await pullsOf(sha)) if (typeof p?.number === 'number') candidates.add(p.number);
       }
       const bugs = (r.closing_issues ?? []).filter((i) => i.labels.includes(BUG_LABEL));
       if (bugs.length === 0) continue;

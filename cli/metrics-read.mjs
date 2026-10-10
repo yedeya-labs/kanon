@@ -390,6 +390,9 @@ export async function readPullRequests(deps, repo, window, { prPage = 15, nested
   };
 }
 
+/** `graphql`'s error for a number with no issue or pull request behind it, and no other error. */
+export const NOT_FOUND = /answered with an error \(NOT_FOUND\): Could not resolve to an issue or pull request/;
+
 /** The query for one pull request by number, whole, or the issue that number is. @param {number} nested */
 export const oneQuery = (nested) => `query WorkItemOne($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -461,7 +464,18 @@ export async function referencingCommits(deps, repo, number) {
  */
 export async function readPullRequest(deps, repo, number, { nestedPage = 100 } = {}) {
   const [owner = '', name = ''] = repo.split('/');
-  const data = await graphql(deps, oneQuery(nestedPage), { owner, name, number });
+  /** @type {any} */
+  let data;
+  try {
+    data = await graphql(deps, oneQuery(nestedPage), { owner, name, number });
+  } catch (e) {
+    // A number nothing answers to (a hex colour's `#0`, a deleted issue, a discussion) is no
+    // pull request: GitHub says so with a `NOT_FOUND` error and a null node, as
+    // `scripts/label-guard.mjs` reads it. Any other error, a 5xx, a rate limit or a permission,
+    // says nothing about the number, so it is thrown and the caller's sweep turns red.
+    if (e instanceof ReadError && NOT_FOUND.test(e.message)) return { none: true };
+    throw e;
+  }
   const node = data.repository?.issueOrPullRequest;
   if (!node || node.__typename !== 'PullRequest') return { none: true };
   try {
