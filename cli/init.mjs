@@ -4,8 +4,11 @@
 //    repository is public or private, which plan features it has (rulesets, the merge queue;
 //    environments are not needed, decision 4), its labels, milestones, rulesets, secret names,
 //    declaration files, callers and App register.
-// 2. ASKS what it can't infer, each question with a default (`--yes` takes them all): the people,
-//    the stack's gates, the test database, a sign-off delegation, which lanes to install.
+// 2. ASKS three questions (plan 0007 §3): the feature, a fixed set of lanes (or the lanes one by
+//    one), whether the repository holds private or sensitive material, and one consent question
+//    for sharing. Everything else it infers or defaults (§4), and it shows every value in one
+//    summary, with where each came from, which the person confirms, changes or stops at (`--yes`
+//    takes the defaults and confirms).
 // 3. WRITES the declarations, only the sections that differ from their documented defaults (an
 //    omitted section means its default, plan 0005 §5.2), the lane callers, the `apps-check`
 //    caller, `lane-check` in CI, the Dependabot entry, a starting project-setup hook and, when the
@@ -115,27 +118,53 @@ Options:
                          prose on standard error; asks nothing, as --yes
   -h, --help             this text
 
-The answers, one flag per question (without --yes, the questions no flag answers are asked):
+Without --yes it asks three questions, what Kanon should do here, whether the repository holds
+private or sensitive material, and whether to share with Kanon, then shows one summary of
+every value, asked, inferred or defaulted, and asks whether to install, change something or
+stop. The flags below answer the questions and set the values the summary shows.
+
+The questions:
+  --feature <which>      what Kanon does here, a fixed set of lanes (docs/lanes.md, "The
+                         features"): review, build (Review + build) or full (Full pipeline);
+                         --lanes is the advanced choice, lane by lane, and not with it
+                         (default: the feature the lanes already called make up, or review)
+  --review-trigger <which>  which pull requests the Reviewer reviews: labelled, only those
+                         labelled review:please (the default); every-pr isn't built yet
+  --sensitive-data       record that the repository holds private or sensitive material, in
+                         the adoption record's ## Data
+  --no-sensitive-data    record that it holds none (default: not declared)
+  --consent <level>      share with Kanon (docs/sharing.md): yes, run data and scrubbed bug
+                         evidence; codes, run data and Kanon bugs as codes; or no (the
+                         default); not with --telemetry or --upstream-findings
+
+The other values, each inferred or defaulted, as the summary shows:
   --project-owner <who>  the project's Owner (K-ADOPT-1 step 2), a GitHub login or a name
-                         (default: the token's login); --owner is kanon apps' account
+                         (default: the one user CODEOWNERS names for *, else the token's
+                         login); --owner is kanon apps' account
   --maintainer <who>     the Maintainer (default: the Owner)
   --stakeholder <who>    the Stakeholder (default: the Owner)
-  --lanes <list>         comma-separated lanes to install, e.g. review,implement
-                         (default: the lanes already called, or review; the lanes are
+  --lanes <list>         comma-separated lanes to install, e.g. review,implement, the
+                         Customise choice (default: the feature's lanes; the lanes are
                          listed below)
   --gates <list>         the stack's gates, comma-separated commands, or none
                          (default: suggested from what the repository holds)
-  --test-database <how>  none, or hook: the project-setup hook starts one (default: none)
-  --delegation           record a sign-off delegation (K-AGENT-44)
-  --no-delegation        don't (the default)
+  --test-database <how>  none, or hook: the project-setup hook starts one (default: hook
+                         when a compose file has a database service, an example environment
+                         file sets DATABASE_URL or a migrations directory exists, else none)
+  --delegation           record a sign-off delegation (K-AGENT-44) (the default when a lane
+                         runs as the Author and a workflow runs Kanon's DCO check)
+  --no-delegation        don't
   --delegate-name <name> the delegate, as their sign-off writes their name; implies
                          --delegation (default: git config user.name)
   --delegate-email <e>   the delegate's email; implies --delegation (default: user.email)
-  --delete-default-labels  delete GitHub's default labels outside Kanon's taxonomy
-  --keep-default-labels  keep them (the default)
+  --delete-default-labels  delete GitHub's default labels outside Kanon's taxonomy (the
+                         default on a repository with no commit yet)
+  --keep-default-labels  keep them (the default otherwise)
   --releaser             create the optional Releaser App; only for a repository that
-                         calls Kanon's release workflow
-  --no-releaser          don't (the default)
+                         calls Kanon's release workflow (the default there)
+  --no-releaser          don't (the default otherwise)
+  --releases             the same as --releaser
+  --no-releases          the same as --no-releaser
   --plugin               declare the kanon plugin in .claude/settings.json, pinned to this
                          release, for everyone who uses Claude Code here (the default)
   --no-plugin            don't
@@ -302,8 +331,12 @@ export const realDeps = {
  *   delegation?: boolean, delegateName?: string, delegateEmail?: string, deleteDefaults?: boolean,
  *   releaser?: boolean, reuseApps?: boolean, plugin?: boolean, telemetry?: boolean, createApps?: boolean,
  *   upstreamFindings?: import('../scripts/lib/upstream-findings.mjs').Value,
+ *   feature?: 'review' | 'build' | 'full', reviewTrigger?: 'labelled', sensitiveData?: boolean, consent?: Consent,
  * }} Given
  */
+
+/** The flags that take a value. */
+const VALUE_FLAGS = ['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email', '--upstream-findings', '--feature', '--review-trigger', '--consent'];
 
 /** Pairs of flags that contradict each other, refused by name when both are given. */
 /** @type {Array<[string, string]>} */
@@ -317,6 +350,17 @@ export const CONFLICTS = [
   ['--plugin', '--no-plugin'],
   ['--telemetry', '--no-telemetry'],
   ['--create-apps', '--no-apps'],
+  // Plan 0007 §6. `--releases` is `--releaser` by another name, so either of one pair contradicts
+  // either of the other; `--consent` sets what the telemetry and upstream-findings flags set, and
+  // `--feature` chooses the lanes `--lanes` chooses one by one.
+  ['--releases', '--no-releases'],
+  ['--releaser', '--no-releases'],
+  ['--releases', '--no-releaser'],
+  ['--sensitive-data', '--no-sensitive-data'],
+  ['--consent', '--telemetry'],
+  ['--consent', '--no-telemetry'],
+  ['--consent', '--upstream-findings'],
+  ['--feature', '--lanes'],
   // `--help` prints the usage, which is no document: with `--json` it would leave standard
   // output empty, so the pair is refused, and the refusal is the error document (#372).
   ['--help', '--json'],
@@ -328,7 +372,7 @@ export const CONFLICTS = [
  * @param {string[]} argv @param {Requirements} req
  */
 export const parseArgs = (argv, req) => {
-  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, json: boolean, apps: boolean, help: boolean, given: Given }} */
+  /** @type {{ repo: string, dir: string, lanes: string[] | null, yes: boolean, dryRun: boolean, json: boolean, apps: boolean, help: boolean, given: Given, releaserFlag?: string }} */
   const opts = { repo: '', dir: process.cwd(), lanes: null, yes: false, dryRun: false, json: false, apps: true, help: false, given: {} };
   const g = opts.given;
   /** @type {Set<string>} */
@@ -369,8 +413,28 @@ export const parseArgs = (argv, req) => {
     else if (flag === '--delegate-email') g.delegateEmail = value();
     else if (flag === '--delete-default-labels') g.deleteDefaults = true;
     else if (flag === '--keep-default-labels') g.deleteDefaults = false;
-    else if (flag === '--releaser') g.releaser = true;
-    else if (flag === '--no-releaser') g.releaser = false;
+    else if (flag === '--releaser' || flag === '--releases') {
+      g.releaser = true;
+      opts.releaserFlag = flag;
+    } else if (flag === '--no-releaser' || flag === '--no-releases') g.releaser = false;
+    else if (flag === '--feature') {
+      const v = value();
+      if (v !== 'review' && v !== 'build' && v !== 'full') throw new Error(`--feature takes review, build or full, not "${v}"; to choose lane by lane, give --lanes instead`);
+      g.feature = v;
+    } else if (flag === '--review-trigger') {
+      const v = value();
+      // The review lane reviews only a labelled pull request until plan 0007's step G7 is built,
+      // so init never writes a trigger the pinned lane doesn't read (K-LAYOUT-10).
+      if (v === 'every-pr') throw new Error('--review-trigger every-pr is not built yet (plan 0007 step G7): the review lane reviews only a pull request labelled review:please. Give --review-trigger labelled, or leave it out');
+      if (v !== 'labelled') throw new Error(`--review-trigger takes labelled or every-pr, not "${v}"`);
+      g.reviewTrigger = v;
+    } else if (flag === '--sensitive-data') g.sensitiveData = true;
+    else if (flag === '--no-sensitive-data') g.sensitiveData = false;
+    else if (flag === '--consent') {
+      const v = value();
+      if (v !== 'yes' && v !== 'codes' && v !== 'no') throw new Error(`--consent takes yes, codes or no, not "${v}"`);
+      g.consent = v;
+    }
     else if (flag === '--reuse-apps') g.reuseApps = true;
     else if (flag === '--no-reuse-apps') g.reuseApps = false;
     else if (flag === '--plugin') g.plugin = true;
@@ -387,7 +451,7 @@ export const parseArgs = (argv, req) => {
     // question is `--project-owner`, and a bare `--owner` is refused with that name (Owner, 2026-10-06).
     else if (flag === '--owner') throw new Error('unknown argument "--owner": the project\'s Owner is --project-owner; --owner names the GitHub account, in kanon apps');
     else throw new Error(`unknown argument "${arg}"`);
-    if (inline !== undefined && !['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email', '--upstream-findings'].includes(flag)) {
+    if (inline !== undefined && !VALUE_FLAGS.includes(flag)) {
       throw new Error(`${flag} takes no value, not "${inline}"`);
     }
     seen.add(flag === '-h' ? '--help' : flag);
@@ -400,6 +464,8 @@ export const parseArgs = (argv, req) => {
     const flag = Object.entries(UPSTREAM_FLAG_VALUES).find(([, v]) => v === g.upstreamFindings)?.[0];
     throw new Error(`--upstream-findings ${flag} needs --telemetry: sent findings travel over the telemetry channel (plan 0006 §3.1). Give --telemetry too, or choose drafted or filed-here`);
   }
+  // A review trigger without the review lane is no answer (plan 0007 §6).
+  if (g.reviewTrigger && opts.lanes && !opts.lanes.includes(REVIEW_LANE)) throw new Error(`--review-trigger is for a lane set with the review lane, and --lanes ${opts.lanes.map((l) => l.slice('agent-'.length)).join(',')} has none`);
   if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
   // `--json` asks nothing (docs/cli-json.md): each question takes its flag or its default.
   if (opts.json) opts.yes = true;
@@ -782,69 +848,415 @@ export const rulesetGaps = (covering) => {
   return gaps;
 };
 
+/** The review lane, the one the review trigger is for. */
+export const REVIEW_LANE = 'agent-review';
+
+/** @typedef {'yes' | 'codes' | 'no'} Consent */
+/** @typedef {'flag' | 'asked' | 'inferred' | 'default'} Source */
+/** @typedef {{ source: Source, reason: string }} Why */
+/** @typedef {import('./callers.mjs').Feature} Feature */
+
+/** Where the caveats of sharing are, beyond what the consent question says itself (plan 0007 G1). */
+export const SHARING_PAGE = 'docs/sharing.md';
+/** The sharing page at the release init runs from. @param {string} release */
+export const sharingUrl = (release) => `https://github.com/yedeya-labs/kanon/blob/${release}/${SHARING_PAGE}`;
+
 /**
- * The answers: each from its flag when one was given (#367), else asked with a default, or the
- * default itself with `--yes`.
- * @param {Deps} deps @param {{ yes: boolean, lanes: string[] | null, given?: Given }} opts @param {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements, defaultLanes: string[], releases?: boolean, reusable?: (identities: string[]) => Array<{ app: string, slug: string }> }} ctx
+ * An option of a question: the value it sets, its label and its one-line consequence (plan 0007
+ * §3 and §9), and the words a terminal answer may name it by besides its number and its label.
+ * @template T
+ * @typedef {{ value: T, label: string, does: string, names?: string[] }} Option
+ */
+
+/** Q1 (plan 0007 §3): the feature, or the lanes one by one. Its options are the features' titles and `does`, then Customise. */
+export const FEATURE_QUESTION = 'What should Kanon do in this repo?';
+/** Q1's last option, the advanced one. @type {Option<string>} */
+export const CUSTOMISE = { value: 'custom', label: 'Customise', does: 'Choose lane by lane (advanced).', names: ['custom', 'customise', 'customize'] };
+
+/**
+ * Q2 (plan 0007 §3), which pull requests the Reviewer reviews. Not asked until step G7 builds the
+ * review lane's trigger without a label: until then one option is no decision, and the trigger is
+ * the summary's `labelled` line.
+ */
+export const REVIEW_TRIGGER_QUESTION = 'Which pull requests should the Reviewer review?';
+/** @type {Array<Option<'labelled' | 'every-pr'>>} */
+export const REVIEW_TRIGGER_OPTIONS = [
+  { value: 'labelled', label: 'Only labelled ones', does: 'Only pull requests you label `review:please` get a verdict.' },
+  { value: 'every-pr', label: 'Every pull request', does: "Each member's pull request gets a verdict when its CI finishes, one model run per pushed head." },
+];
+
+/** Q3 (plan 0007 §3): the adoption record's `## Data` section (K-LAYOUT-10). */
+export const DATA_QUESTION = 'Does this repo hold private or sensitive material?';
+/** @type {Array<Option<boolean>>} */
+export const DATA_OPTIONS = [
+  { value: true, label: 'Yes', does: 'The record says so; the lanes still read the files and diffs they need.', names: ['y'] },
+  { value: false, label: 'No', does: 'The record says it holds none.', names: ['n'] },
+];
+
+/**
+ * Q4 (plan 0007 §3), the one consent question, which sets telemetry, where upstream findings go
+ * and their evidence. Its second sentence, and *Yes*'s consequence, are the disclosure ADR 0007
+ * and `K-OBS-16` require the question itself to make (Owner decision 15): the evidence text may
+ * rarely hold personal data, and it is read by Kanon's maintainer and a third-party decision
+ * provider. The readers named are the evidence's, never the run data's, which only Kanon's store
+ * holds. `<link>` is the sharing page at the pinned release (`consentQuestion`). The adopt skill
+ * asks it word for word.
+ */
+export const CONSENT_QUESTION = 'Help improve Kanon by sharing anonymous run data and the Kanon bugs your lanes find? Evidence text may rarely hold personal data; details: <link>.';
+/** The consent question with its link. @param {string} release */
+export const consentQuestion = (release) => CONSENT_QUESTION.replace('<link>', sharingUrl(release));
+/** @type {Array<Option<Consent>>} */
+export const CONSENT_OPTIONS = [
+  { value: 'yes', label: 'Yes', does: "Run data, and scrubbed bug evidence read by Kanon's maintainer and a third-party decision provider.", names: ['y'] },
+  { value: 'codes', label: 'Codes only', does: 'Run data, and Kanon bugs as codes with no text.', names: ['codes'] },
+  { value: 'no', label: 'No', does: 'Nothing leaves this repo; Kanon bugs stay drafts here.', names: ['n'] },
+];
+/**
+ * What each consent level sets (plan 0007 §3). *Yes* is `sent with evidence` whatever the feature
+ * (Owner decision 7): the record holds what the person consented to.
+ * @type {Record<Consent, { telemetry: boolean, upstreamFindings: import('../scripts/lib/upstream-findings.mjs').Value, upstreamEvidence: boolean | null }>}
+ */
+export const CONSENT_LEVELS = {
+  yes: { telemetry: true, upstreamFindings: 'sent with evidence', upstreamEvidence: true },
+  codes: { telemetry: true, upstreamFindings: 'sent', upstreamEvidence: false },
+  no: { telemetry: false, upstreamFindings: 'drafted', upstreamEvidence: null },
+};
+/**
+ * The consent level a telemetry answer and an upstream-findings value make, or null for a
+ * combination no level names, such as telemetry with `drafted`, or `filed here`.
+ * @param {boolean} telemetry @param {string} upstreamFindings
+ * @returns {Consent | null}
+ */
+export const consentOf = (telemetry, upstreamFindings) =>
+  /** @type {Consent | undefined} */ (Object.entries(CONSENT_LEVELS).find(([, l]) => l.telemetry === telemetry && l.upstreamFindings === upstreamFindings)?.[0]) ?? null;
+
+/** Q5 (plan 0007 §3), asked after the summary. */
+export const CONFIRM_QUESTION = 'Install Kanon with these settings?';
+/** @type {Array<Option<'install' | 'change' | 'stop'>>} */
+export const CONFIRM_OPTIONS = [
+  { value: 'install', label: 'Install', does: 'Writes the files and makes the changes init lists; it commits nothing.', names: ['i', 'y', 'yes'] },
+  { value: 'change', label: 'Change something', does: 'Pick a line of the summary to change.', names: ['change', 'c'] },
+  { value: 'stop', label: 'Stop', does: 'Nothing is written.', names: ['s', 'n', 'no'] },
+];
+/** The groups of the summary's lines that **Change something** offers, each asked in today's shape. */
+export const CHANGE_GROUPS = ['People', 'Lanes and Apps', 'Gates, database and delegation', 'Labels, plugin and pin', 'Data and sharing'];
+
+/** How to ask for a review (plan 0007 §3), said in the summary when the review lane is chosen. */
+export const REVIEW_HOW = 'To get a review, add the label `review:please` to the pull request; the Reviewer posts its verdict once CI has finished. After a verdict, push a new commit, or remove and add the label again, to ask for another look.';
+
+/**
+ * A question with options, asked at the terminal: the question, then each option numbered with
+ * its label and its consequence, the recommended one first and marked `(Recommended)`. The answer
+ * is a number, a label or one of the option's names. Pressing Enter takes `fallback`, shown in
+ * brackets: the question was shown, so Enter is the person's answer to it (Owner decision 16 of
+ * plan 0007). Any other answer takes `otherwise`, the safe side, so nothing is chosen on a guess:
+ * for the consent question Enter is Yes, the recommended answer, and an answer it doesn't know is
+ * No.
+ * @template T
+ * @param {Pick<Deps, 'ask'>} deps @param {string} question @param {Array<Option<T>>} options @param {T} recommended @param {T} fallback @param {T} [otherwise]
+ * @returns {Promise<T>}
+ */
+export const choose = async (deps, question, options, recommended, fallback, otherwise = fallback) => {
+  const ordered = [...options.filter((o) => o.value === recommended), ...options.filter((o) => o.value !== recommended)];
+  const text = [question, ...ordered.map((o, i) => `  ${i + 1}. ${o.label}${o.value === recommended ? ' (Recommended)' : ''}: ${o.does}`), `Answer 1-${ordered.length}, or a name`].join('\n');
+  const fb = /** @type {Option<T>} */ (ordered.find((o) => o.value === fallback) ?? ordered[0]);
+  const answer = (await deps.ask(text, fb.label)).trim().toLowerCase();
+  const n = /^\d+$/.test(answer) ? Number(answer) : 0;
+  const hit = ordered[n - 1] ?? ordered.find((o) => o.label.toLowerCase() === answer || (o.names ?? []).includes(answer));
+  if (hit) return hit.value;
+  return answer === '' ? fb.value : otherwise;
+};
+
+/**
+ * A feature's lanes here: its own, and each conditional lane whose condition holds (plan 0007 §2).
+ * @param {Feature} f @param {(lane: string) => boolean} met
+ */
+export const featureLanes = (f, met) => [...f.lanes, ...Object.keys(f.conditional ?? {}).filter((l) => met(l))];
+
+/**
+ * The feature a set of lanes makes up: the one whose lanes it holds, and no lane beyond them but
+ * its conditional ones; `custom` when none does.
+ * @param {string[]} lanes @param {Feature[]} features
+ * @returns {string}
+ */
+export const featureOf = (lanes, features) =>
+  features.find((f) => f.lanes.every((l) => lanes.includes(l)) && lanes.every((l) => f.lanes.includes(l) || Object.hasOwn(f.conditional ?? {}, l)))?.feature ?? 'custom';
+
+/**
+ * The features as `init`'s JSON gives them (plan 0007 §6), from the requirements file: each one's
+ * lanes, its conditional lanes with their conditions and whether each holds here, the lanes it
+ * leaves out, its Apps, the secrets its lanes map (a caller's optional ones aside) and the steps
+ * left to a person.
+ * @param {Requirements} req @param {(lane: string) => boolean} met
+ */
+export const featureCatalogue = (req, met) =>
+  (req.features ?? []).map((f) => {
+    const all = [...f.lanes, ...Object.keys(f.conditional ?? {})];
+    return {
+      feature: f.feature,
+      title: f.title,
+      does: f.does,
+      lanes: f.lanes,
+      conditional: Object.entries(f.conditional ?? {}).map(([lane, c]) => ({ lane, condition: c.condition, met: met(lane) })),
+      leftOut: Object.entries(f.leftOut ?? {}).map(([lane, reason]) => ({ lane, reason })),
+      apps: f.apps,
+      secrets: [...new Set(all.flatMap((l) => (req.lanes[l]?.secrets ?? []).filter((n) => !(req.lanes[l]?.optionalSecrets ?? []).includes(n))))],
+      steps: f.steps,
+    };
+  });
+
+/** The gates answer: comma-separated commands, or none. @param {string} answer */
+const parseGates = (answer) => (/^none( yet)?$/i.test(answer.trim()) ? [] : answer.split(',').map((x) => x.trim()).filter(Boolean));
+
+/** The lanes question, today's, for Customise. @param {Pick<Deps, 'ask'>} deps @param {Requirements} req @param {string[]} fallback */
+const askLanes = async (deps, req, fallback) =>
+  parseLanes(await deps.ask(`Which lanes to install? (${Object.keys(req.lanes).map((l) => l.slice(6)).join(', ')})`, fallback.map((l) => l.slice(6)).join(',')), req);
+
+/** The Releaser's question, in today's shape. */
+const RELEASER_QUESTION = 'Create the optional Releaser App, so the release PR runs CI (docs/release.md, "With the Releaser")?';
+
+/**
+ * What `askAll` infers from: the token's login, the suggested gates, git's name and email, the
+ * requirements, the lanes the repository calls, whether it calls the release workflow, the
+ * owner's Apps it could reuse, the user owners of `*` in CODEOWNERS, why a test database is
+ * inferred (or null), whether a workflow runs Kanon's DCO check, whether the default branch has a
+ * commit, whether the repository is private, whether a feature's conditional lane's condition
+ * holds here, and the release init runs from.
+ * @typedef {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements,
+ *   installed?: string[], releases?: boolean, reusable?: (identities: string[]) => Array<{ app: string, slug: string, from?: string }>,
+ *   codeowners?: string[] | null, database?: string | null, runsDco?: boolean, hasCommits?: boolean, isPrivate?: boolean,
+ *   met?: (lane: string) => boolean, release?: string }} AskContext
+ */
+
+/**
+ * Q1's terms here: the recommended feature, the one the lanes the repository calls make up, else
+ * Review; what Enter and `--yes` take, that same feature, or `custom` for lanes no feature makes
+ * up, and Review when it calls none; and each feature's lanes, with the conditional ones whose
+ * condition holds or that the repository calls.
+ * @param {AskContext} ctx
+ */
+const featureTerms = (ctx) => {
+  const features = ctx.req.features ?? [];
+  const installed = ctx.installed ?? [];
+  const met = ctx.met ?? (() => false);
+  const here = installed.length && features.length ? featureOf(installed, features) : null;
+  const fallback = here ?? 'review';
+  const lanesFor = (/** @type {string} */ id) => {
+    const f = features.find((x) => x.feature === id);
+    return f ? featureLanes(f, (l) => met(l) || installed.includes(l)) : [...DEFAULT_LANES];
+  };
+  return { features, recommended: here && here !== 'custom' ? here : 'review', lanes: fallback === 'custom' ? installed : lanesFor(fallback), lanesFor };
+};
+
+/**
+ * Q1 at the terminal, and the lane question after Customise.
+ * @param {Pick<Deps, 'ask'>} deps @param {AskContext} ctx @param {string[]} current
+ */
+const askFeature = async (deps, ctx, current) => {
+  const t = featureTerms(ctx);
+  if (!t.features.length) return askLanes(deps, ctx.req, current);
+  /** @type {Array<Option<string>>} */
+  const options = [...t.features.map((f) => ({ value: f.feature, label: f.title, does: f.does, names: [f.feature] })), CUSTOMISE];
+  const picked = await choose(deps, FEATURE_QUESTION, options, t.recommended, featureOf(current, t.features));
+  return picked === 'custom' ? askLanes(deps, ctx.req, current) : t.lanesFor(picked);
+};
+
+/**
+ * The answers that follow from others, unless a flag or the person gave them: the feature the
+ * lanes make up, the review trigger, the delegation, whether to reuse the owner's Apps, and the
+ * consent level the sharing answers make (plan 0007 §4). Run again after **Change something**.
+ * @param {Answers} a @param {AskContext} ctx @param {Given} [g]
+ */
+export const derive = (a, ctx, g = {}) => {
+  const why = a.why;
+  const fixed = (/** @type {string} */ f) => why[f]?.source === 'flag' || why[f]?.source === 'asked';
+  a.feature = ctx.req.features?.length ? featureOf(a.lanes, ctx.req.features) : 'custom';
+  why.feature = why.lanes ?? { source: 'default', reason: '' };
+  if (!a.lanes.includes(REVIEW_LANE)) {
+    // A Customise without the review lane drops the trigger (plan 0007 §3, Q2).
+    if (g.reviewTrigger && !a.notes.some((n) => n.startsWith('--review-trigger'))) a.notes.push('--review-trigger was given, and the lanes chosen have no review lane, so it is dropped.');
+    a.reviewTrigger = null;
+    why.reviewTrigger = { source: 'default', reason: 'no review lane' };
+  } else {
+    a.reviewTrigger = 'labelled';
+    why.reviewTrigger = { source: g.reviewTrigger ? 'flag' : 'default', reason: '' };
+  }
+  if (!fixed('delegation')) {
+    const author = identitiesOf(a.lanes, ctx.req).includes('author');
+    const named = Boolean(ctx.gitName && ctx.gitEmail);
+    a.delegation = author && ctx.runsDco && named ? { name: ctx.gitName, email: ctx.gitEmail } : null;
+    why.delegation = {
+      source: 'inferred',
+      reason: !author ? 'no Author lane' : !ctx.runsDco ? 'no Kanon DCO check' : !named ? "git's user.name or user.email is unset" : "an Author lane and Kanon's DCO check",
+    };
+  }
+  // AN APP THE OWNER ALREADY HAS (#363): reused unless a flag or the person says otherwise, since
+  // a second set doubles the Apps and keys the owner manages; null when there is none to reuse.
+  const found = ctx.reusable?.(appIdentities(a, ctx.req)) ?? [];
+  if (!found.length) {
+    a.reuseApps = null;
+    why.reuseApps = { source: 'inferred', reason: 'the owner has none the register lacks' };
+  } else {
+    if (!fixed('reuseApps')) why.reuseApps = { source: 'inferred', reason: 'the owner already has them' };
+    a.reuseApps ??= true;
+  }
+  a.consent = consentOf(a.telemetry, a.upstreamFindings);
+  return a;
+};
+
+/**
+ * The answers (plan 0007 §3, §4). Without `--yes`, three questions are asked, each unless its flag
+ * answers it: the feature (Q1, and the lanes one by one after Customise), whether the repository
+ * holds private or sensitive material (Q3), and the one consent question (Q4). Q2, the review
+ * trigger, waits for step G7. Every other answer is inferred from the repository or defaulted, as
+ * plan 0007 §4's table says, unless its flag gives it, and the summary shows each with where it
+ * came from (`why`). At the prompt, Enter takes the recommended answer, Yes for sharing among them
+ * (Owner decision 16). **Recommended is not a default:** with `--yes` and no flag, sharing is No,
+ * the review trigger `labelled` and the Data section `not declared`.
+ * @param {Pick<Deps, 'ask'>} deps @param {{ yes: boolean, lanes: string[] | null, given?: Given }} opts @param {AskContext} ctx
  */
 export const askAll = async (deps, opts, ctx) => {
   const g = opts.given ?? {};
-  const ask = (/** @type {string} */ q, /** @type {string} */ d, /** @type {string | undefined} */ given) =>
-    given !== undefined ? Promise.resolve(given) : opts.yes ? Promise.resolve(d) : deps.ask(q, d);
-  const yesNo = async (/** @type {string} */ q, /** @type {boolean} */ d, /** @type {boolean | undefined} */ given) =>
-    given !== undefined ? given : /^y/i.test(await ask(`${q} (y/n)`, d ? 'y' : 'n', undefined));
-  const owner = await ask('Who is the Owner (K-ADOPT-1 step 2)?', ctx.login, g.projectOwner);
-  const maintainer = await ask('Who is the Maintainer?', owner, g.maintainer);
-  const stakeholder = await ask('Who is the Stakeholder?', owner, g.stakeholder);
-  const lanes = opts.lanes ?? parseLanes(await ask(`Which lanes to install? (${Object.keys(ctx.req.lanes).map((l) => l.slice(6)).join(', ')})`, ctx.defaultLanes.map((l) => l.slice(6)).join(','), undefined), ctx.req);
-  const gatesAnswer = await ask("The stack's gates, the commands a change must pass, comma-separated", ctx.gates.join(', ') || 'none yet', g.gates);
-  const gates = /^none( yet)?$/i.test(gatesAnswer.trim()) ? [] : gatesAnswer.split(',').map((x) => x.trim()).filter(Boolean);
-  const database = /^hook$/i.test(await ask('Does a lane need a test database your project-setup hook starts? (none/hook)', 'none', g.testDatabase)) ? 'hook' : 'none';
-  const delegate = await yesNo("Record a sign-off delegation, so agents' commits pass a required dco check (K-AGENT-44)?", false, g.delegation);
-  let delegation = null;
-  if (delegate) {
-    delegation = { name: await ask('The delegate, as their sign-off writes their name', ctx.gitName, g.delegateName), email: await ask("The delegate's email", ctx.gitEmail, g.delegateEmail) };
-  }
-  const deleteDefaults = await yesNo("Delete GitHub's default labels that aren't in Kanon's taxonomy?", false, g.deleteDefaults);
-  // THE OPTIONAL RELEASER (plan 0005 §3.1), asked only of a repository that calls Kanon's release
-  // workflow, and no by default: moving to it moves the ruleset's bypass too (`kanon apps` adds the
-  // Releaser's; the admin's goes once the pinned dco check exempts the Releaser, #337, #49), and
-  // release PRs then merge through the front door (docs/release.md, "With the Releaser"). `init`
-  // refuses `--releaser` for a repository that doesn't call it, before asking anything.
-  const releaser = ctx.releases
-    ? await yesNo('Create the optional Releaser App, so the release PR runs CI (docs/release.md, "With the Releaser")?', false, g.releaser)
-    : false;
-  // AN APP THE OWNER ALREADY HAS (#363; the Owner, 2026-10-07): one Author and one Judge per
-  // owner, reused across its repositories (plan 0005 §3.2). Asked only when the owner's
-  // installations hold an App the chosen lanes need and this register lacks; yes by default,
-  // since a second set doubles the Apps and keys the owner manages. Null when not asked.
-  const found = ctx.reusable?.(appIdentities({ lanes, releaser }, ctx.req)) ?? [];
-  const reuseApps = found.length ? await yesNo(reuseQuestion(found, ctx.req), true, g.reuseApps) : null;
-  // THE KANON PLUGIN (#376), declared at project scope so its release is in the repository, where
-  // Dependabot's bump and doctor's check can be read beside it (docs/skills.md). Yes by default:
-  // the declaration does nothing until each person trusts the folder in Claude Code.
-  const plugin = await yesNo("Declare the kanon plugin in .claude/settings.json, pinned to this release, so everyone who uses Claude Code here gets Kanon's skills (docs/skills.md)?", true, g.plugin);
-  // TELEMETRY (#428), no by default and never without an explicit yes: it sends this
-  // repository's run rows out of it, to Kanon's hosted store (plan 0002, docs/telemetry.md).
-  const telemetry = await yesNo(TELEMETRY_QUESTION, false, g.telemetry);
-  // UPSTREAM FINDINGS (plan 0006 §3.2), `drafted` by default: sending is the person's to offer, as
-  // telemetry is, and `sent` is offered only on a telemetry yes, since it travels over that
-  // channel. The evidence text is asked about only after `sent`, codes only by default. A flag
-  // answers both questions; an answer it didn't offer is the default, so nothing is sent on a guess.
-  /** @type {import('../scripts/lib/upstream-findings.mjs').Value} */
-  let upstreamFindings = g.upstreamFindings ?? UPSTREAM_DEFAULT;
+  /** @type {Why} */
+  const flag = { source: 'flag', reason: '' };
+  /** @type {Why} */
+  const asked = { source: 'asked', reason: '' };
+  /** @type {Record<string, Why>} */
+  const why = {};
+  const t = featureTerms(ctx);
+
+  // Q1. A feature, or the lanes one by one.
+  /** @type {string[]} */
+  let lanes;
+  if (opts.lanes) [lanes, why.lanes] = [opts.lanes, flag];
+  else if (g.feature) [lanes, why.lanes] = [t.lanesFor(g.feature), flag];
+  else if (opts.yes) [lanes, why.lanes] = [t.lanes, (ctx.installed ?? []).length ? { source: 'inferred', reason: 'from the lanes the repository calls' } : { source: 'default', reason: '' }];
+  else [lanes, why.lanes] = [await askFeature(deps, ctx, t.lanes), asked];
+
+  // Q3. Private or sensitive material: recommended Yes on a private repository, No on a public one.
   /** @type {boolean | null} */
-  let upstreamEvidence = sends(g.upstreamFindings) ? g.upstreamFindings === 'sent with evidence' : null;
-  if (g.upstreamFindings === undefined) {
-    const answer = (await ask(upstreamFindingsQuestion(telemetry), UPSTREAM_DEFAULT, undefined)).trim().toLowerCase().replace(/\s+/g, '-');
-    const where = UPSTREAM_FLAG_VALUES[answer];
-    upstreamFindings = where === 'drafted' || where === 'filed here' || (where === 'sent' && telemetry) ? where : UPSTREAM_DEFAULT;
-    if (upstreamFindings === 'sent') {
-      upstreamEvidence = await yesNo(UPSTREAM_EVIDENCE_QUESTION, false, undefined);
-      if (upstreamEvidence) upstreamFindings = 'sent with evidence';
+  let sensitiveData;
+  if (g.sensitiveData !== undefined) [sensitiveData, why.sensitiveData] = [g.sensitiveData, flag];
+  else if (opts.yes) [sensitiveData, why.sensitiveData] = [null, { source: 'default', reason: 'nobody answered' }];
+  else [sensitiveData, why.sensitiveData] = [await choose(deps, DATA_QUESTION, DATA_OPTIONS, Boolean(ctx.isPrivate), Boolean(ctx.isPrivate)), asked];
+
+  // Q4. The one consent question; the older flags still set its three answers one by one.
+  /** @type {{ telemetry: boolean, upstreamFindings: import('../scripts/lib/upstream-findings.mjs').Value, upstreamEvidence: boolean | null }} */
+  let sharing;
+  if (g.consent) [sharing, why.consent] = [CONSENT_LEVELS[g.consent], flag];
+  else if (g.telemetry !== undefined || g.upstreamFindings !== undefined) {
+    const up = g.upstreamFindings ?? UPSTREAM_DEFAULT;
+    sharing = { telemetry: g.telemetry ?? false, upstreamFindings: up, upstreamEvidence: sends(up) ? up === 'sent with evidence' : null };
+    why.consent = flag;
+  } else if (opts.yes) [sharing, why.consent] = [CONSENT_LEVELS.no, { source: 'default', reason: 'only an explicit answer sends anything (K-OBS-18)' }];
+  else [sharing, why.consent] = [CONSENT_LEVELS[await choose(deps, consentQuestion(ctx.release ?? 'main'), CONSENT_OPTIONS, 'yes', 'yes', 'no')], asked];
+
+  // The rest, inferred or defaulted (plan 0007 §4), each unless its flag gives it.
+  const single = ctx.codeowners?.length === 1 ? ctx.codeowners[0] : undefined;
+  const owner = g.projectOwner ?? single ?? ctx.login;
+  why.projectOwner = g.projectOwner !== undefined ? flag : { source: 'inferred', reason: single ? 'from CODEOWNERS' : "the token's login" };
+  const maintainer = g.maintainer ?? owner;
+  why.maintainer = g.maintainer !== undefined ? flag : { source: 'inferred', reason: 'the Owner' };
+  const stakeholder = g.stakeholder ?? owner;
+  why.stakeholder = g.stakeholder !== undefined ? flag : { source: 'inferred', reason: 'the Owner' };
+  const gates = g.gates !== undefined ? parseGates(g.gates) : ctx.gates;
+  why.gates = g.gates !== undefined ? flag : ctx.gates.length ? { source: 'inferred', reason: 'suggested from what the repository holds' } : { source: 'default', reason: 'none suggested' };
+  /** @type {'none' | 'hook'} */
+  const database = g.testDatabase ?? (ctx.database ? 'hook' : 'none');
+  why.testDatabase = g.testDatabase !== undefined ? flag : { source: 'inferred', reason: ctx.database ?? 'no database service, DATABASE_URL or migrations directory' };
+  /** @type {{ name: string, email: string } | null} */
+  let delegation = null;
+  if (g.delegation !== undefined) {
+    why.delegation = flag;
+    if (g.delegation) delegation = { name: g.delegateName ?? ctx.gitName, email: g.delegateEmail ?? ctx.gitEmail };
+  }
+  const deleteDefaults = g.deleteDefaults ?? !ctx.hasCommits;
+  why.deleteDefaultLabels = g.deleteDefaults !== undefined ? flag : { source: 'default', reason: ctx.hasCommits ? 'issues may carry them' : 'the repository has no commit yet' };
+  // THE OPTIONAL RELEASER (plan 0005 §3.1, plan 0007 §2.4): on when the repository calls Kanon's
+  // release workflow, off otherwise. `init` refuses `--releaser` for a repository that doesn't
+  // call it, before asking anything.
+  const releaser = g.releaser ?? Boolean(ctx.releases);
+  why.releaser = g.releaser !== undefined ? flag : { source: 'inferred', reason: ctx.releases ? "the repository calls Kanon's release workflow" : 'no release workflow' };
+  // THE KANON PLUGIN (#376), yes by default: the declaration does nothing until each person
+  // trusts the folder in Claude Code.
+  const plugin = g.plugin ?? true;
+  why.plugin = g.plugin !== undefined ? flag : { source: 'default', reason: '' };
+  if (g.reuseApps !== undefined) why.reuseApps = flag;
+
+  /** @type {Answers} */
+  const a = {
+    feature: 'custom', owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser,
+    reuseApps: g.reuseApps ?? null, plugin, ...sharing, reviewTrigger: null, sensitiveData, consent: null, why, notes: [],
+  };
+  return derive(a, ctx, g);
+};
+
+/**
+ * **Change something** (plan 0007 §3): one question of the summary's groups, then each chosen
+ * group's questions in today's shape, each with its current value as what Enter takes. Sharing
+ * is asked here as its three answers, so `filed here`, for a repository that maintains Kanon or
+ * a fork, is reached only through it (plan 0007 §4).
+ * @param {Pick<Deps, 'ask'>} deps @param {Answers} a @param {AskContext} ctx @param {Given} [g]
+ */
+export const changeSomething = async (deps, a, ctx, g = {}) => {
+  const text = ['Which lines to change? Their numbers, comma-separated:', ...CHANGE_GROUPS.map((x, i) => `  ${i + 1}. ${x}`)].join('\n');
+  const picked = new Set((await deps.ask(text, 'none')).split(',').map((x) => Number(x.trim())));
+  const asked = (/** @type {string[]} */ ...fields) => {
+    for (const f of fields) a.why[f] = { source: 'asked', reason: '' };
+  };
+  const yesNo = async (/** @type {string} */ q, /** @type {boolean} */ d) => /^y/i.test(await deps.ask(`${q} (y/n)`, d ? 'y' : 'n'));
+  if (picked.has(1)) {
+    a.owner = await deps.ask('Who is the Owner (K-ADOPT-1 step 2)?', a.owner);
+    a.maintainer = await deps.ask('Who is the Maintainer?', a.maintainer);
+    a.stakeholder = await deps.ask('Who is the Stakeholder?', a.stakeholder);
+    asked('projectOwner', 'maintainer', 'stakeholder');
+  }
+  if (picked.has(2)) {
+    a.lanes = await askFeature(deps, ctx, a.lanes);
+    asked('lanes');
+    if (ctx.releases) {
+      a.releaser = await yesNo(RELEASER_QUESTION, a.releaser);
+      asked('releaser');
+    }
+    const found = ctx.reusable?.(appIdentities(a, ctx.req)) ?? [];
+    if (found.length) {
+      a.reuseApps = await yesNo(reuseQuestion(found, ctx.req), a.reuseApps ?? true);
+      asked('reuseApps');
     }
   }
-  return { owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser, reuseApps, plugin, telemetry, upstreamFindings, upstreamEvidence };
+  if (picked.has(3)) {
+    a.gates = parseGates(await deps.ask("The stack's gates, the commands a change must pass, comma-separated", a.gates.join(', ') || 'none yet'));
+    a.database = /^hook$/i.test(await deps.ask('Does a lane need a test database your project-setup hook starts? (none/hook)', a.database)) ? 'hook' : 'none';
+    a.delegation = (await yesNo("Record a sign-off delegation, so agents' commits pass a required dco check (K-AGENT-44)?", a.delegation !== null))
+      ? { name: await deps.ask('The delegate, as their sign-off writes their name', a.delegation?.name ?? ctx.gitName), email: await deps.ask("The delegate's email", a.delegation?.email ?? ctx.gitEmail) }
+      : null;
+    asked('gates', 'testDatabase', 'delegation');
+  }
+  if (picked.has(4)) {
+    a.deleteDefaults = await yesNo("Delete GitHub's default labels that aren't in Kanon's taxonomy?", a.deleteDefaults);
+    a.plugin = await yesNo("Declare the kanon plugin in .claude/settings.json, pinned to this release, so everyone who uses Claude Code here gets Kanon's skills (docs/skills.md)?", a.plugin);
+    asked('deleteDefaultLabels', 'plugin');
+  }
+  if (picked.has(5)) {
+    a.sensitiveData = await choose(deps, DATA_QUESTION, DATA_OPTIONS, Boolean(ctx.isPrivate), a.sensitiveData ?? Boolean(ctx.isPrivate));
+    // TELEMETRY (#428) and UPSTREAM FINDINGS (plan 0006 §3.2), as their own questions: `sent` is
+    // offered only on a telemetry yes, since it travels over that channel, and the evidence text is
+    // asked about only after `sent`. An answer it didn't offer is the default, so nothing is sent
+    // on a guess.
+    a.telemetry = await yesNo(TELEMETRY_QUESTION, a.telemetry);
+    const now = Object.entries(UPSTREAM_FLAG_VALUES).find(([, v]) => v === (a.upstreamFindings === 'sent with evidence' ? 'sent' : a.upstreamFindings))?.[0] ?? 'drafted';
+    const answer = (await deps.ask(upstreamFindingsQuestion(a.telemetry), a.telemetry || !sends(a.upstreamFindings) ? now : 'drafted')).trim().toLowerCase().replace(/\s+/g, '-');
+    const where = UPSTREAM_FLAG_VALUES[answer];
+    const evidence = a.upstreamEvidence === true;
+    a.upstreamFindings = where === 'drafted' || where === 'filed here' || (where === 'sent' && a.telemetry) ? where : UPSTREAM_DEFAULT;
+    a.upstreamEvidence = null;
+    if (a.upstreamFindings === 'sent') {
+      a.upstreamEvidence = await yesNo(UPSTREAM_EVIDENCE_QUESTION, evidence);
+      if (a.upstreamEvidence) a.upstreamFindings = 'sent with evidence';
+    }
+    asked('sensitiveData', 'consent');
+  }
+  return derive(a, ctx, g);
 };
 
 /**
@@ -898,7 +1310,15 @@ export const reuseQuestion = (found, req) => {
 export const TELEMETRY_QUESTION =
   "Send this repository's agent-run rows to Kanon's hosted telemetry store? Each row is plan 0002's fixed fields about one lane run (lane, outcome, model, cost, tokens, durations, counts, the run, pull request and issue numbers, the Kanon release): no code, no text, no logins or file paths. They go to one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, and are kept 13 months. Kanon's operator reads them to improve Kanon: Kanon notices failures it caused in your runs, often fixing them before you would report one, and you get cross-adopter cost and reliability baselines. The operator publishes only aggregates of at least three adopters; your repository's own reader role reads only its rows. Stop by deleting .github/workflows/telemetry.yml; the operator erases what was sent on request (docs/telemetry.md, \"Erase an adopter\").";
 
-/** @typedef {Awaited<ReturnType<typeof askAll>>} Answers */
+/**
+ * The answers `askAll` gives, with where each came from (`why`, by its `.answers` field) and the
+ * notes the answers make.
+ * @typedef {{ feature: string, owner: string, maintainer: string, stakeholder: string, lanes: string[], gates: string[],
+ *   database: 'none' | 'hook', delegation: { name: string, email: string } | null, deleteDefaults: boolean, releaser: boolean,
+ *   reuseApps: boolean | null, plugin: boolean, telemetry: boolean, upstreamFindings: import('../scripts/lib/upstream-findings.mjs').Value,
+ *   upstreamEvidence: boolean | null, reviewTrigger: 'labelled' | null, sensitiveData: boolean | null, consent: Consent | null,
+ *   why: Record<string, Why>, notes: string[] }} Answers
+ */
 
 /** The repository variables the telemetry collector's caller passes (docs/telemetry.md). */
 export const TELEMETRY_VARIABLES = ['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE'];
@@ -967,9 +1387,24 @@ export const adoptionFile = (s, a, repo, today) => {
   );
   lines.push('- **Environments:** no Kanon lane needs one.', '', '## Bootstrap', '', `\`in bootstrap since ${today}\``, '');
   const choices = [];
+  // The feature and the review trigger (plan 0007 §6, K-LAYOUT-10): without the bullets the record
+  // means `custom` and `labelled`, so `custom` writes none, and a trigger is written only beside
+  // the review lane. `every pull request` is never written until step G7 builds it.
+  if (a.feature && a.feature !== 'custom') choices.push(`- **Feature:** \`${a.feature}\``);
+  if (a.reviewTrigger === 'labelled') choices.push('- **Review trigger:** `labelled`');
   if (a.lanes.includes('agent-overseer')) choices.push('- **Overseer:** `installed`');
   if (a.upstreamFindings && a.upstreamFindings !== UPSTREAM_DEFAULT) choices.push(`- **${UPSTREAM_LABEL}:** \`${a.upstreamFindings}\``);
   if (choices.length) lines.push('## Choices', '', ...choices, '');
+  // Q3's answer (plan 0007 §3, K-LAYOUT-10), after `## Choices`: `not declared` when nobody answered.
+  const data = a.sensitiveData === true ? 'yes' : a.sensitiveData === false ? 'no' : 'not declared';
+  lines.push(
+    '## Data',
+    '',
+    `Whether this repository holds private or sensitive material, ${data === 'not declared' ? 'which nobody declared' : 'as declared'} at install. The lanes read the files and diffs their work needs either way.`,
+    '',
+    `- **Private or sensitive material:** \`${data}\``,
+    '',
+  );
   return lines.join('\n');
 };
 
@@ -1115,6 +1550,152 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   return files;
 };
 
+/** Where GitHub looks for CODEOWNERS, in its order: the first that exists is the one it reads. */
+const CODEOWNERS_PATHS = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'];
+
+/**
+ * The user owners of `*` in the repository's CODEOWNERS (plan 0007 §4): the logins of the last
+ * `*` line, as GitHub's last matching pattern wins, without its teams (`@org/team`) and emails.
+ * Null when there is no CODEOWNERS, or it has no `*` line.
+ * @param {(rel: string) => string | null} read
+ * @returns {string[] | null}
+ */
+export const codeownersOf = (read) => {
+  const text = CODEOWNERS_PATHS.map((p) => read(p)).find((t) => t !== null);
+  if (text === undefined || text === null) return null;
+  /** @type {string[] | null} */
+  let owners = null;
+  for (const line of text.split('\n')) {
+    const [pattern, ...who] = line.replace(/(^|\s)#.*$/, '').trim().split(/\s+/);
+    if (pattern === '*') owners = who.filter((w) => /^@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(w)).map((w) => w.slice(1));
+  }
+  return owners;
+};
+
+/** The compose files, example environment files and migrations directories a test database is inferred from. */
+const COMPOSE_FILES = ['compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml'];
+const ENV_EXAMPLES = ['.env.example', '.env.sample', '.env.template', '.env.dist'];
+const MIGRATIONS = ['migrations', 'db/migrate', 'db/migrations', 'prisma/migrations', 'supabase/migrations'];
+const DATABASE_IMAGE = /^\s*image:\s*["']?(?:[\w.-]+\/)*(postgres|postgis|mysql|mariadb|mongo|mssql|cockroach)/im;
+
+/**
+ * Why the repository's tests need a database, or null (plan 0007 §4): a database service in a
+ * compose file, `DATABASE_URL` in an example environment file, or a migrations directory.
+ * @param {(rel: string) => string | null} read @param {(rel: string) => string[]} list
+ * @returns {string | null}
+ */
+export const testDatabaseSignal = (read, list) => {
+  for (const f of COMPOSE_FILES) if (DATABASE_IMAGE.test(read(f) ?? '')) return `a database service in ${f}`;
+  for (const f of ENV_EXAMPLES) if (/^\s*(?:export\s+)?DATABASE_URL\s*=/m.test(read(f) ?? '')) return `DATABASE_URL in ${f}`;
+  for (const d of MIGRATIONS) if (list(d).length) return `a migrations directory, ${d}/`;
+  return null;
+};
+
+/** Whether a workflow of the checkout runs Kanon's DCO check (`K-AGENT-44`). @param {(rel: string) => string | null} read @param {string[]} workflows their paths */
+export const runsDco = (read, workflows) => workflows.some((p) => /^\s*-?\s*uses:\s*yedeya-labs\/kanon\/actions\/dco@/m.test(read(p) ?? ''));
+
+/**
+ * What `init` does with a file it plans: `same`, already as it writes it; `kept`, a declaration
+ * or the project-setup hook that exists, the project's; `differs`, a workflow that exists and
+ * differs; or `new`.
+ * @param {string} rel @param {string} text @param {string | null} have @param {Requirements} req
+ * @returns {'same' | 'kept' | 'differs' | 'new'}
+ */
+export const fileStatus = (rel, text, have, req) => (have === text ? 'same' : have !== null && (rel.startsWith('docs/') || rel === req.hook.path) ? 'kept' : have !== null ? 'differs' : 'new');
+
+/**
+ * A line of the summary (plan 0007 §4): its name, the `.answers` fields it shows (none for a line
+ * that is what `init` does rather than an answer), its value, where the value came from, and why.
+ * @typedef {{ answer: string, fields: string[], value: string, source: Source, reason: string }} SummaryLine
+ */
+
+/**
+ * The summary (plan 0007 §4): one line per value, each with where it came from, shown before
+ * anything is written. Every answer is on a line, so nothing is silent.
+ * @param {{ s: Inspection, a: Answers, req: Requirements, repo: string, release: string, read: (rel: string) => string | null,
+ *   files: Map<string, string>, rows: Map<string, string>, ownerApps: Array<{ app: string, slug: string, from: string }> | null,
+ *   met: (lane: string) => boolean }} c
+ * @returns {SummaryLine[]}
+ */
+export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerApps, met }) => {
+  /** @type {SummaryLine[]} */
+  const lines = [];
+  const why = (/** @type {string} */ f) => a.why[f] ?? { source: /** @type {Source} */ ('default'), reason: '' };
+  const line = (/** @type {string} */ answer, /** @type {string[]} */ fields, /** @type {string} */ value, /** @type {Why} */ w) => lines.push({ answer, fields, value, source: w.source, reason: w.reason });
+  const inferred = (/** @type {string} */ reason) => /** @type {Why} */ ({ source: 'inferred', reason });
+  const byDefault = (/** @type {string} */ reason = '') => /** @type {Why} */ ({ source: 'default', reason });
+  const feature = req.features?.find((f) => f.feature === a.feature);
+  line('Feature', ['feature', 'lanes'], `${feature ? feature.title : 'Customised'}: ${a.lanes.join(', ')}`, why('lanes'));
+  // A conditional lane of the feature whose condition doesn't hold, and agent-merge, each said in one line (plan 0007 §2.3).
+  if (feature) {
+    const out = Object.entries(feature.conditional ?? {}).filter(([l]) => !a.lanes.includes(l));
+    if (out.length) line('Left out', [], out.map(([l, c]) => `${l}, only ${c.condition}`).join('; '), inferred(out.some(([l]) => met(l)) ? '' : 'none of their conditions holds here'));
+  }
+  if (a.lanes.includes('agent-merge')) line('Merger', [], 'agent-merge is in: the catalogue recommends it once people have merged the approved Implementer PRs by hand for a while', byDefault());
+  line('Review', ['reviewTrigger'], a.reviewTrigger === 'labelled' ? 'labelled: add `review:please` to a PR to get a verdict' : 'none: no review lane', why('reviewTrigger'));
+  line('Data', ['sensitiveData'], a.sensitiveData === true ? 'holds private material (## Data)' : a.sensitiveData === false ? 'holds none (## Data)' : 'not declared (## Data)', why('sensitiveData'));
+  const sharing = {
+    yes: 'yes: telemetry on, findings sent with evidence',
+    codes: 'codes only: telemetry on, findings sent as codes',
+    no: 'no: nothing leaves this repo, findings drafted',
+  };
+  line('Sharing', ['consent', 'telemetry', 'upstreamFindings', 'upstreamEvidence'], a.consent ? sharing[a.consent] : `custom: telemetry ${a.telemetry ? 'on' : 'off'}, findings ${a.upstreamFindings}`, why('consent'));
+  const identities = appIdentities(a, req);
+  const appName = (/** @type {string} */ i) => req.identities.apps[i]?.name ?? i;
+  const apps = identities.map((i) => {
+    if (registerRolesOf(i, req).every((r) => rows.has(r))) return `${appName(i)}: registered`;
+    const own = a.reuseApps ? (ownerApps ?? []).find((f) => f.app === i) : undefined;
+    if (own) return `${appName(i)}: reuse ${own.slug}, from ${own.from.startsWith('register:') ? `${own.from.slice('register:'.length)}'s register` : "the owner's installations"}`;
+    return `${appName(i)}: create`;
+  });
+  line('Apps', ['reuseApps'], apps.length ? apps.join('; ') : 'none: the lanes run as no App', why('reuseApps'));
+  line('Releases', ['releaser'], a.releaser ? 'on: the Releaser App opens the release PRs' : 'off', why('releaser'));
+  const people = a.owner === a.maintainer && a.owner === a.stakeholder ? `Owner, Maintainer, Stakeholder: ${a.owner}` : `Owner ${a.owner}; Maintainer ${a.maintainer}; Stakeholder ${a.stakeholder}`;
+  line('People', ['projectOwner', 'maintainer', 'stakeholder'], people, why('projectOwner'));
+  line('Gates', ['gates'], a.gates.length ? a.gates.join('; ') : 'none yet', why('gates'));
+  line('Test database', ['testDatabase'], a.database === 'hook' ? 'hook: your project-setup hook starts it' : 'none', why('testDatabase'));
+  line('Delegation', ['delegation'], a.delegation ? `${a.delegation.name} <${a.delegation.email}>` : 'none', why('delegation'));
+  line('Labels', ['deleteDefaultLabels'], `create Kanon's taxonomy; ${a.deleteDefaults ? 'delete' : 'keep'} GitHub's defaults`, why('deleteDefaultLabels'));
+  line('Milestones', [], 'the bucket milestones', byDefault());
+  const ruleset =
+    s.rulesets === 'no' ? ['none: the plan has no rulesets, so nothing on GitHub enforces review', 'the plan']
+    : s.covering.length ? [`keep ${s.covering.map((c) => c.name).join(', ')}; Lane check once a job on ${s.defaultBranch} reports it`, 'rulesets cover the default branch']
+    : !s.hasCommits ? [`none yet: after the first commit to ${s.defaultBranch}`, 'the default branch has no commit']
+    : s.admin ? [`create on ${s.defaultBranch}; Lane check once a job there reports it`, 'the token administers it']
+    : [`a step for you: the token can't administer ${repo}`, "the token can't administer it"];
+  line('Ruleset', [], ruleset[0] ?? '', inferred(ruleset[1] ?? ''));
+  line('Merging', [], 'squash only', byDefault());
+  line('Plugin', ['plugin'], a.plugin ? `declared in ${SETTINGS_PATH} at ${release}` : 'not declared', why('plugin'));
+  line('Pin', [], `${release}, the release init runs from`, inferred(''));
+  line('CI', [], read('.github/workflows/ci.yml') === null ? 'write .github/workflows/ci.yml' : 'keep .github/workflows/ci.yml', inferred(''));
+  const dep = read('.github/dependabot.yml');
+  line('Dependabot', [], dep === null ? 'write .github/dependabot.yml with the Kanon entry' : /yedeya-labs\/kanon\*/.test(dep) ? 'has the Kanon entry' : 'add the Kanon entry', byDefault());
+  /** @type {Record<string, number>} */
+  const count = { new: 0, kept: 0, same: 0, differs: 0 };
+  for (const [rel, text] of files) count[fileStatus(rel, text, read(rel), req)] = (count[fileStatus(rel, text, read(rel), req)] ?? 0) + 1;
+  line('Files', [], `${count.new} new, ${count.kept} kept, ${count.same} already as written, ${count.differs} differ`, inferred('from the checkout'));
+  const steps = [
+    ...apps.filter((x) => / create$/.test(x)).map((x) => `create the ${x.split(':')[0]} App`),
+    ...apps.filter((x) => /: reuse /.test(x)).map((x) => `1 key for the ${x.split(':')[0]}`),
+    ...([...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))].filter((n) => n === 'CLAUDE_CODE_OAUTH_TOKEN' || n === 'DIGEST_WEBHOOK').filter((n) => !s.secrets?.has(n)).map((n) => (n === 'DIGEST_WEBHOOK' ? 'the chat webhook' : 'the Claude token'))),
+    'merge the PR',
+    ...(a.lanes.includes(REVIEW_LANE) ? ['1 test PR'] : []),
+  ];
+  line('Your steps', [], steps.join(', '), inferred(''));
+  return lines;
+};
+
+/**
+ * The summary as a person reads it: a heading with the repository, then a line per value, its
+ * name, its value and where it came from.
+ * @param {SummaryLine[]} lines @param {{ s: Inspection, repo: string, release: string }} c
+ */
+export const summaryText = (lines, { s, repo, release }) => [
+  `Kanon ${release} for ${repo} (${s.isPrivate ? 'private' : 'public'}, ${s.kind === 'User' ? 'personal account' : 'organisation'}; rulesets: ${s.rulesets})`,
+  '',
+  ...lines.map((l) => `${l.answer.padEnd(15)}${l.value.padEnd(52)} ${l.source}${!l.reason ? '' : l.reason.startsWith('from ') ? ` ${l.reason}` : `: ${l.reason}`}`),
+];
+
 /** The JSON output's contract (docs/init.md). A breaking change to it changes this. */
 export const SCHEMA = 'kanon-init/v1';
 
@@ -1134,6 +1715,8 @@ export const SCHEMA = 'kanon-init/v1';
  *   inspection: Record<string, unknown> | null,
  *   answers: Record<string, unknown> | null,
  *   catalogue: ReturnType<typeof laneCatalogue>,
+ *   features: ReturnType<typeof featureCatalogue>,
+ *   summary: SummaryLine[],
  *   files: Array<{ path: string, status: 'new' | 'same' | 'kept' | 'differs', content: string | null, diff: string[] }>,
  *   changes: Array<{ kind: string, subject: string, message: string }>,
  *   apps: { identities: string[], missing: string[], reuse: Array<{ app: string, slug: string }>, command: string | null, outcome: string, exitCode: number | null } | null,
@@ -1181,7 +1764,7 @@ export const init = async (argv, overrides = {}) => {
   const deps = wantsJson ? { ...base, out: base.err } : base;
   const { out, err } = deps;
   /** @type {Report} */
-  const rep = { repository: null, token: null, dryRun: false, inspection: null, answers: null, catalogue: [], files: [], changes: [], apps: null, findings: [], notes: [], failures: [], error: null };
+  const rep = { repository: null, token: null, dryRun: false, inspection: null, answers: null, catalogue: [], features: [], summary: [], files: [], changes: [], apps: null, findings: [], notes: [], failures: [], error: null };
   const emit = (/** @type {number} */ code) => {
     if (wantsJson) base.out(JSON.stringify(document(rep, code, deps.release()), null, 2));
     return code;
@@ -1244,6 +1827,8 @@ export const document = (rep, exitCode, release) => {
     inspection: rep.inspection,
     answers: rep.answers,
     catalogue: rep.catalogue,
+    features: rep.features,
+    summary: rep.summary,
     files: rep.files,
     changes: rep.changes,
     apps: rep.apps,
@@ -1285,7 +1870,7 @@ const run = async (deps, opts, req, rep) => {
   const read = (/** @type {string} */ rel) => deps.readFile(join(root, rel));
   const releases = callsRelease(read('.github/workflows/release.yml'));
   if (opts.given.releaser && !releases) {
-    return stop(2, ["--releaser is for a repository that calls Kanon's release workflow from .github/workflows/release.yml (docs/release.md), and this one doesn't. Nothing was changed."]);
+    return stop(2, [`${opts.releaserFlag ?? '--releaser'} is for a repository that calls Kanon's release workflow from .github/workflows/release.yml (docs/release.md), and this one doesn't. Nothing was changed.`]);
   }
 
   const who = await whoami(deps.gh, deps.env);
@@ -1326,8 +1911,16 @@ const run = async (deps, opts, req, rep) => {
     secrets: s.secrets ? [...s.secrets].sort() : null,
     installedLanes: installed,
     callsRelease: releases,
+    codeowners: codeownersOf(read),
   };
   rep.catalogue = laneCatalogue(req, installed);
+  // A feature's conditional lane is in when its condition holds here (plan 0007 §2.3): the hook it
+  // calls exists in the checkout, or the repository holds the secret it takes.
+  const met = (/** @type {string} */ lane) => {
+    const c = req.features?.flatMap((f) => Object.entries(f.conditional ?? {})).find(([l]) => l === lane)?.[1];
+    return Boolean(c && ((c.hook && read(c.hook) !== null) || (c.secret && s.secrets?.has(c.secret))));
+  };
+  rep.features = featureCatalogue(req, met);
   out('');
   out(`== ${repo}, at Kanon ${release}${dry ? ' (dry run: nothing will change)' : ''} ==`);
   out(`- ${s.kind === 'User' ? 'A personal account' : 'An organisation'}'s ${s.isPrivate ? 'private' : 'public'} repository; default branch ${s.defaultBranch}${s.hasCommits ? '' : ', with no commit yet'}.`);
@@ -1366,16 +1959,57 @@ const run = async (deps, opts, req, rep) => {
   }
   rep.inspection.ownerApps = ownerApps && ownerApps.map((f) => ({ app: f.app, slug: f.slug, from: f.from }));
   out('');
-  const a = await askAll(deps, opts, {
+  const workflows = checkoutWorkflows(deps, root);
+  /** @type {AskContext} */
+  const ctx = {
     login: who.login ?? ownerName,
     gates: suggestGates(read),
     gitName,
     gitEmail,
     req,
-    defaultLanes: installed.length ? installed : DEFAULT_LANES,
+    installed,
     releases,
     reusable: (ids) => (ownerApps ?? []).filter((f) => ids.includes(f.app) && lacking.includes(f.app)),
-  });
+    codeowners: /** @type {string[] | null} */ (rep.inspection.codeowners),
+    database: testDatabaseSignal(read, (rel) => deps.listDir(join(root, rel))),
+    runsDco: runsDco(read, deps.listDir(join(root, '.github/workflows')).filter((n) => /\.ya?ml$/.test(n)).map((n) => `.github/workflows/${n}`)),
+    hasCommits: s.hasCommits,
+    isPrivate: s.isPrivate,
+    met,
+    release,
+  };
+  const a = await askAll(deps, opts, ctx);
+  // THE SUMMARY (plan 0007 §4): every value, and where it came from, before anything is written.
+  // Without --yes it is confirmed in one question, or changed, a group at a time, and shown again.
+  const plan = () => plannedFiles({ s, a, req, release, repo, today: deps.today(), read, workflows, callers });
+  for (;;) {
+    rep.summary = summaryOf({ s, a, req, repo, release, read, files: plan(), rows, ownerApps, met });
+    out('');
+    for (const l of summaryText(rep.summary, { s, repo, release })) out(l);
+    if (a.lanes.includes(REVIEW_LANE)) {
+      out('');
+      out(REVIEW_HOW);
+    }
+    if (opts.yes) break;
+    out('');
+    // An answer it doesn't recognise is Stop, the safe side: this is the last gate before anything changes.
+    const go = await choose(deps, CONFIRM_QUESTION, CONFIRM_OPTIONS, 'install', 'install', 'stop');
+    if (go === 'install') break;
+    if (go === 'stop') {
+      out('Stopped: nothing was written or changed.');
+      return 0;
+    }
+    await changeSomething(deps, a, ctx, opts.given);
+  }
+  for (const n of a.notes) {
+    out(n);
+    rep.notes.push(n);
+  }
+  if (a.sensitiveData === null) {
+    const line = "Whether the repository holds private or sensitive material is not declared: the adoption record's ## Data section says so. Give --sensitive-data or --no-sensitive-data to declare it.";
+    out(line);
+    rep.notes.push(line);
+  }
   rep.answers = {
     projectOwner: a.owner,
     maintainer: a.maintainer,
@@ -1391,6 +2025,10 @@ const run = async (deps, opts, req, rep) => {
     telemetry: a.telemetry,
     upstreamFindings: a.upstreamFindings,
     upstreamEvidence: a.upstreamEvidence,
+    feature: a.feature,
+    reviewTrigger: a.reviewTrigger,
+    sensitiveData: a.sensitiveData,
+    consent: a.consent,
   };
 
   /** @type {string[]} what changed (or, in a dry run, would) */
@@ -1426,8 +2064,7 @@ const run = async (deps, opts, req, rep) => {
   // 3. Write the files.
   out('');
   out('== Files ==');
-  const workflows = checkoutWorkflows(deps, root);
-  const files = plannedFiles({ s, a, req, release, repo, today: deps.today(), read, workflows, callers });
+  const files = plan();
   let wrote = false;
   for (const [rel, text] of files) {
     const have = read(rel);

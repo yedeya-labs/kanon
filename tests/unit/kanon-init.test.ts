@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -10,6 +10,7 @@ import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, lan
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
 import { TELEMETRY_QUESTION, TELEMETRY_REGISTRATION_URL, UPSTREAM_EVIDENCE_QUESTION, upstreamFindingsQuestion } from '../../cli/init.mjs';
+import { codeownersOf, CONSENT_LEVELS, CONSENT_OPTIONS, CONSENT_QUESTION, consentOf, consentQuestion, DATA_QUESTION, FEATURE_QUESTION, featureOf, REVIEW_HOW, sharingUrl, testDatabaseSignal } from '../../cli/init.mjs';
 import { parseUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -37,6 +38,8 @@ if (!hasYq && process.env.CI) throw new Error('kanon init tests need yq on PATH 
 const REQ = loadRequirements();
 const TAXONOMY = (JSON.parse(readFileSync(join(ROOT, 'rulebook/labels.json'), 'utf8')).labels as Array<{ name: string }>).map((l) => l.name).filter((n) => !/<[a-z]+>$/.test(n));
 const REPO = 'acme/widgets';
+/** The release this tree is, which everything init writes pins. */
+const PINNED = `v${JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version}`;
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -247,6 +250,26 @@ const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: str
   return { status, out: out.join('\n'), err: err.join('\n'), appsCalls, milestoneCalls };
 };
 
+/** The confirmation `init` asks after its summary (plan 0007 §3, Q5). */
+const CONFIRM = 'Install Kanon with these settings?';
+
+/**
+ * A person at the terminal: a question that contains a key gets its answer, an array's one at a
+ * time (its last one after that), and any other question its default. Every question is recorded.
+ */
+const person = (answers: Record<string, string | string[]>, asked: string[] = []) => async (q: string, d: string) => {
+  asked.push(q);
+  const key = Object.keys(answers).find((k) => q.includes(k));
+  if (!key) return d;
+  const v = answers[key]!;
+  if (!Array.isArray(v)) return v;
+  return (v.length > 1 ? v.shift() : v[0]) ?? d;
+};
+
+/** **Change something** on the summary, the groups given, then **Install**. */
+const changing = (groups: string, answers: Record<string, string | string[]> = {}, asked: string[] = []) =>
+  person({ [CONFIRM]: ['2', '1'], 'Which lines to change': groups, ...answers }, asked);
+
 const laneCheck = (dir: string) => {
   const r = spawnSync('bash', [LANE_CHECK_SH], { cwd: dir, encoding: 'utf8', env: { ...process.env, KANON_ROOT: ROOT, ACTION_REF: '' } });
   return { status: r.status, out: `${r.stdout}${r.stderr}` };
@@ -270,7 +293,12 @@ describe('kanon init, on an empty repository with every default (plan 0005 L9)',
       expect(existsSync(join(dir, f)), f).toBe(false);
     }
     expect(read(dir, 'docs/qa/stack.md')).not.toMatch(/## (Schema changes|Data isolation|Generated files)/);
-    expect(read(dir, 'docs/qa/adoption.md')).not.toContain('## Choices');
+    // Its only choices are the feature and the review trigger, and the Data section says nobody
+    // declared it (plan 0007 §6, K-LAYOUT-10).
+    const record = read(dir, 'docs/qa/adoption.md');
+    expect(record.split('## Choices\n\n')[1]!.split('\n\n')[0]).toBe('- **Feature:** `review`\n- **Review trigger:** `labelled`');
+    expect(record).toMatch(/## Data\n\n[^\n]+\n\n- \*\*Private or sensitive material:\*\* `not declared`\n$/);
+    expect(record.indexOf('## Data')).toBeGreaterThan(record.indexOf('## Choices'));
   }, 30_000);
 
   it('pins every Kanon reference it writes to the release it runs from', async () => {
@@ -812,7 +840,8 @@ describe('kanon init, safely', () => {
 describe('kanon init, from the answers', () => {
   it.skipIf(!hasYq)('writes the gates, a sign-off delegation and a test-database declaration that the readers accept', async () => {
     const dir = checkout({ 'package.json': JSON.stringify({ scripts: { lint: 'eslint .', test: 'vitest' } }) });
-    const r = await run(dir, fakeGitHub(), [], { 'sign-off delegation': 'y', 'test database': 'hook', 'Who is the Owner': 'grace' });
+    // Changed through the summary's Change something (plan 0007 §3), each in today's question.
+    const r = await run(dir, fakeGitHub(), [], undefined, REQ, { ask: changing('1,3', { 'sign-off delegation': 'y', 'test database': 'hook', 'Who is the Owner': 'grace' }) });
     expect(r.status, r.err).toBe(0);
     expect(read(dir, 'docs/qa/stack.md')).toContain('1. `npm run lint`\n2. `npm test`');
     expect(read(dir, 'docs/qa/sign-off-delegation.md')).toContain('| Ada Lovelace | ada@example.com | 2026-10-05 |');
@@ -825,7 +854,7 @@ describe('kanon init, from the answers', () => {
 
   it("deletes GitHub's default labels outside the taxonomy only when asked", async () => {
     const github = fakeGitHub();
-    await run(checkout(), github, [], { "Delete GitHub's default labels": 'y' });
+    await run(checkout(), github, [], undefined, REQ, { ask: changing('4', { "Delete GitHub's default labels": 'y' }) });
     expect(github.st.labels.has('question')).toBe(false);
     expect(github.st.labels.has('documentation')).toBe(false);
     // `bug` and `enhancement` are in the taxonomy, so they stay.
@@ -996,7 +1025,7 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
       expect(registerReads(github)[0]!.input).toContain('ownerAffiliations: [OWNER], isFork: false');
     }
     const asked: string[] = [];
-    await run(checkout(), fakeGitHub({ kind: 'User', registers: { site: SIBLING } }), [], undefined, REQ, { ask: async (q: string, d: string) => (asked.push(q), d) });
+    await run(checkout(), fakeGitHub({ kind: 'User', registers: { site: SIBLING } }), [], undefined, REQ, { ask: changing('2', {}, asked) });
     expect(asked.find((q) => /Reuse/.test(q))).toBe("The owner already has the Judge (acme-judge), named in acme/site's App register. Reuse it here with kanon apps --reuse, rather than create a second one? (y/n)");
   });
 
@@ -1019,9 +1048,7 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
     expect(parse(no).apps).toMatchObject({ reuse: [], outcome: 'ran' });
     expect(no.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge', '--dir', expect.any(String)]]);
     const asked: string[] = [];
-    const said = await run(checkout(), fakeGitHub(owned), [], { 'Reuse it here': 'n' }, REQ, {
-      ask: async (q: string, d: string) => (asked.push(q), /Reuse it here/.test(q) ? 'n' : d),
-    });
+    const said = await run(checkout(), fakeGitHub(owned), [], undefined, REQ, { ask: changing('2', { 'Reuse it here': 'n' }, asked) });
     expect(asked.find((q) => /Reuse/.test(q))).toBe('The owner already has the Judge (acme-kanon-judge), installed with exactly its permissions. Reuse it here with kanon apps --reuse, rather than create a second one? (y/n)');
     expect(said.appsCalls).toHaveLength(1);
     const yes = await run(checkout(), fakeGitHub(owned), [], undefined, REQ, { ask: async (_q: string, d: string) => d });
@@ -1145,13 +1172,22 @@ describe('the Apps (plan 0005 step L4)', () => {
     expect(r.err).toContain("If acme already has these Apps for another repository, don't create them again");
   });
 
-  it('creates the Releaser beside the Judge when the repository calls the release workflow and the adopter says yes', async () => {
+  // Plan 0007 §2.4: Releases is inferred, never asked: on for a repository that calls the release
+  // workflow, off otherwise, and shown in the summary either way.
+  it('creates the Releaser beside the Judge when the repository calls the release workflow, unless told not to', async () => {
     const caller = 'name: Release\non:\n  push:\n    branches: [main]\npermissions: {}\njobs:\n  release:\n    uses: yedeya-labs/kanon/.github/workflows/release.yml@v1.2.3\n';
-    const yes = await run(checkout({ '.github/workflows/release.yml': caller }), fakeGitHub(), ['--lanes', 'review'], { 'optional Releaser': 'y' });
+    const yes = await run(checkout({ '.github/workflows/release.yml': caller }), fakeGitHub(), ['--yes', '--lanes', 'review']);
     expect(yes.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge,releaser', '--dir', expect.any(String)]]);
-    const no = await run(checkout({ '.github/workflows/release.yml': caller }), fakeGitHub(), ['--yes', '--lanes', 'review']);
-    expect(no.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge', '--dir', expect.any(String)]]);
-    const none = await run(checkout(), fakeGitHub(), ['--lanes', 'review'], { 'optional Releaser': 'y' });
+    expect(yes.out).toMatch(/^Releases {7}on: the Releaser App opens the release PRs +inferred: the repository calls Kanon's release workflow$/m);
+    for (const flag of ['--no-releases', '--no-releaser']) {
+      const no = await run(checkout({ '.github/workflows/release.yml': caller }), fakeGitHub(), ['--yes', '--lanes', 'review', flag]);
+      expect(no.appsCalls, flag).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge', '--dir', expect.any(String)]]);
+    }
+    // Changed through the summary, in today's question.
+    const changed = await run(checkout({ '.github/workflows/release.yml': caller }), fakeGitHub(), [], undefined, REQ, { ask: changing('2', { 'optional Releaser': 'n' }) });
+    expect(changed.appsCalls[0]).toEqual(['--owner', 'acme', '--repo', 'widgets', '--apps', 'judge', '--dir', expect.any(String)]);
+    const none = await run(checkout(), fakeGitHub(), ['--lanes', 'review'], undefined, REQ, { ask: changing('2', { 'optional Releaser': 'y' }) });
+    expect(none.out).toMatch(/^Releases {7}off +inferred: no release workflow$/m);
     expect(none.appsCalls[0]).toContain('judge');
     expect(none.out).not.toContain('Releaser');
   }, 60_000);
@@ -1223,6 +1259,8 @@ type Doc = Record<string, unknown> & {
   files: Array<Record<string, unknown>>; changes: Array<Record<string, unknown>>; apps: Record<string, unknown>;
   findings: Array<{ id: string; category: string; blocking: boolean; subject: string; message: string; fix: { text: string; commands: string[]; url: string | null } }>;
   notes: string[]; failures: string[];
+  features: Array<Record<string, unknown> & { feature: string; lanes: string[]; conditional: Array<{ lane: string; condition: string; met: boolean }> }>;
+  summary: Array<{ answer: string; fields: string[]; value: string; source: string; reason: string }>;
 };
 const parse = (r: Run): Doc => JSON.parse(r.out) as Doc;
 const keys = (o: object) => Object.keys(o).sort();
@@ -1253,12 +1291,20 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(d.files.length).toBeGreaterThan(0);
     for (const f of d.files) expect(keys(f)).toEqual(fields('### A file').sort());
     for (const c of d.changes) expect(keys(c)).toEqual(fields('### A change').sort());
+    expect(d.features.map((f) => f.feature)).toEqual(['review', 'build', 'full']);
+    for (const f of d.features) expect(keys(f)).toEqual(fields('### A feature').sort());
+    expect(d.summary.length).toBeGreaterThan(15);
+    for (const l of d.summary) expect(keys(l)).toEqual(fields('### A summary line').sort());
     for (const f of d.findings) {
       expect(keys(f)).toEqual(['blocking', 'category', 'fix', 'id', 'message', 'subject']);
       expect(keys(f.fix)).toEqual(['commands', 'text', 'url']);
     }
     expect(d.inspection).toMatchObject({ owner: 'acme', ownerKind: 'user', private: false, defaultBranch: 'main', rulesets: 'yes', installedLanes: [], callsRelease: false });
-    expect(d.answers).toEqual({ projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false, reuseApps: null, plugin: true, telemetry: false, upstreamFindings: 'drafted', upstreamEvidence: null });
+    expect(d.answers).toEqual({
+      projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false,
+      reuseApps: null, plugin: true, telemetry: false, upstreamFindings: 'drafted', upstreamEvidence: null, feature: 'review', reviewTrigger: 'labelled', sensitiveData: null, consent: 'no',
+    });
+    expect(d.inspection.codeowners).toBeNull();
     expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], reuse: [], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
     expect(d.files.find((f) => f.path === '.github/workflows/agent-review.yml')).toMatchObject({ status: 'new', content: read(dir, '.github/workflows/agent-review.yml'), diff: [] });
     expect(d.findings.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token']);
@@ -1478,18 +1524,13 @@ describe('kanon init, a flag for each question (#367)', () => {
     expect(r.out).toContain('Create the Apps the lanes run as, from this checkout');
   });
 
-  it('asks, without --yes, only the questions no flag answers', async () => {
+  it('asks, without --yes, only the questions no flag answers, then confirms the summary', async () => {
     const asked: string[] = [];
-    const r = await run(checkout(), fakeGitHub(), ['--project-owner', 'grace', '--gates', 'none', '--no-delegation', '--create-apps'], undefined, REQ, {
+    const r = await run(checkout(), fakeGitHub(), ['--feature', 'review', '--sensitive-data', '--project-owner', 'grace', '--create-apps'], undefined, REQ, {
       ask: async (q: string, d: string) => (asked.push(q), d),
     });
     expect(r.status, r.err).toBe(0);
-    expect(asked.some((q) => q.includes('Who is the Owner'))).toBe(false);
-    expect(asked.some((q) => q.includes("stack's gates"))).toBe(false);
-    expect(asked.some((q) => q.includes('sign-off delegation'))).toBe(false);
-    expect(asked.some((q) => q.includes('Create the Apps'))).toBe(false);
-    expect(asked.some((q) => q.includes('Who is the Maintainer'))).toBe(true);
-    expect(asked.some((q) => q.includes('test database'))).toBe(true);
+    expect(asked.map((q) => q.split('\n')[0])).toEqual([consentQuestion(PINNED), CONFIRM]);
     expect(r.appsCalls).toHaveLength(1);
   });
 
@@ -1522,9 +1563,10 @@ describe('kanon init, a flag for each question (#367)', () => {
   });
 
   it('fails by name on each pair of flags that contradict each other', () => {
-    expect(CONFLICTS.length).toBe(10);
+    expect(CONFLICTS.length).toBe(18);
+    const values: Record<string, string> = { '--delegate-name': 'v', '--delegate-email': 'v', '--consent': 'yes', '--upstream-findings': 'drafted', '--feature': 'review', '--lanes': 'review' };
     for (const [x, y] of CONFLICTS) {
-      const argv = [x, y].flatMap((f) => (f.startsWith('--delegate-') ? [f, 'v'] : [f]));
+      const argv = [x, y].flatMap((f) => (values[f] ? [f, values[f]] : [f]));
       expect(() => parseArgs(argv, REQ), `${x} ${y}`).toThrow(`${x} and ${y} contradict each other; give one`);
     }
     expect(parseArgs(['--delegate-email', 'e@x'], REQ).given.delegation).toBe(true);
@@ -1636,12 +1678,10 @@ describe('kanon init and the kanon plugin (#376)', () => {
     expect(await message(at)).toBeUndefined();
   });
 
-  it('asks the question without --yes, and takes the answer', async () => {
+  it('asks the question through Change something, and takes the answer', async () => {
     const asked: string[] = [];
     const dir = checkout();
-    const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, {
-      ask: async (q: string, d: string) => (asked.push(q), q.startsWith('Declare the kanon plugin') ? 'n' : d),
-    });
+    const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: changing('4', { 'Declare the kanon plugin': 'n' }, asked) });
     expect(r.status, r.err).toBe(0);
     expect(asked.filter((q) => q.startsWith('Declare the kanon plugin'))).toHaveLength(1);
     expect(existsSync(join(dir, SETTINGS))).toBe(false);
@@ -1781,12 +1821,26 @@ describe('kanon init and telemetry (#428)', () => {
       expect(github.calls.some((c) => c.args[0] === 'variable'), argv.join(' ')).toBe(false);
       if (argv.includes('--json')) expect(parse(r).answers.telemetry).toBe(false);
     }
-    // Asked without --yes, the default answer is no.
+    // Asked without --yes, in the one consent question (plan 0007 §3): an answer it doesn't recognise is No, the safe side.
     const asked: string[] = [];
     const dir = checkout();
-    await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: async (q: string, d: string) => (asked.push(q), d) });
-    expect(asked.filter((q) => q.startsWith(TELEMETRY_QUESTION))).toHaveLength(1);
+    await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: async (q: string, d: string) => (asked.push(q), q.startsWith(consentQuestion(RELEASE)) ? 'maybe' : d) });
+    const consent = asked.filter((q) => q.startsWith(consentQuestion(RELEASE)));
+    expect(consent).toHaveLength(1);
+    expect(consent[0]).toMatch(/^ {2}1\. Yes \(Recommended\): /m);
     expect(existsSync(join(dir, TELEMETRY_CALLER_PATH))).toBe(false);
+  });
+
+  // Owner decision 16 of plan 0007: the question was shown, so Enter is the person's answer to it,
+  // and takes the recommended Yes; `--yes`, which shows no question, still sends nothing (above).
+  it('takes Enter on the shown consent question as its recommended Yes', async () => {
+    for (const enter of [(_q: string, d: string) => d, () => '']) {
+      const dir = checkout();
+      const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: async (q: string, d: string) => enter(q, d) });
+      expect(r.status, r.err).toBe(0);
+      expect(read(dir, TELEMETRY_CALLER_PATH)).toBe(telemetryCallerFile(RELEASE));
+      expect(parseUpstreamFindings(read(dir, 'docs/qa/adoption.md'))).toBe('sent with evidence');
+    }
   });
 
   it('says what is sent, where, who reads it, and how to stop and erase, in its question', () => {
@@ -1829,13 +1883,17 @@ describe('kanon init and telemetry (#428)', () => {
     expect(both.files.find((x) => x.path === TELEMETRY_CALLER_PATH)).toMatchObject({ status: 'same' });
   });
 
-  it('takes a yes to its question without --yes', async () => {
+  it('takes a yes to the consent question without --yes, and to its own question through Change something', async () => {
     const dir = checkout();
     const r = await run(dir, withVariables([]), ['--no-apps'], undefined, REQ, {
-      ask: async (q: string, d: string) => (q.startsWith(TELEMETRY_QUESTION) ? 'y' : d),
+      ask: async (q: string, d: string) => (q.startsWith(consentQuestion(RELEASE)) ? 'yes' : d),
     });
     expect(r.status, r.err).toBe(0);
     expect(read(dir, TELEMETRY_CALLER_PATH)).toBe(telemetryCallerFile(RELEASE));
+    const own = checkout();
+    const changed = await run(own, withVariables([]), ['--no-apps'], undefined, REQ, { ask: changing('5', { [TELEMETRY_QUESTION]: 'y' }) });
+    expect(changed.status, changed.err).toBe(0);
+    expect(read(own, TELEMETRY_CALLER_PATH)).toBe(telemetryCallerFile(RELEASE));
   });
 });
 
@@ -1892,9 +1950,7 @@ describe('kanon init and upstream findings (plan 0006 F2)', () => {
   it('asks without telemetry, offering no sent option, and never asks about the evidence', async () => {
     const asked: string[] = [];
     const dir = checkout();
-    const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, {
-      ask: async (q: string, d: string) => (asked.push(q), q.startsWith(WHERE) ? 'sent' : d),
-    });
+    const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: changing('5', { 'Help improve Kanon': 'no', [WHERE]: 'sent' }, asked) });
     expect(r.status, r.err).toBe(0);
     const where = asked.filter((q) => q.startsWith(WHERE));
     expect(where).toEqual([upstreamFindingsQuestion(false)]);
@@ -1910,15 +1966,7 @@ describe('kanon init and upstream findings (plan 0006 F2)', () => {
     for (const [evidence, value] of [['n', 'sent'], ['y', 'sent with evidence']] as const) {
       const asked: string[] = [];
       const dir = checkout();
-      const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, {
-        ask: async (q: string, d: string) => {
-          asked.push(q);
-          if (q.startsWith(TELEMETRY_QUESTION)) return 'y';
-          if (q.startsWith(WHERE)) return 'sent';
-          if (q.startsWith(EVIDENCE)) return evidence;
-          return d;
-        },
-      });
+      const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: changing('5', { [TELEMETRY_QUESTION]: 'y', [WHERE]: 'sent', [EVIDENCE]: evidence }, asked) });
       expect(r.status, r.err).toBe(0);
       expect(asked.filter((q) => q.startsWith(WHERE))).toEqual([upstreamFindingsQuestion(true)]);
       expect(upstreamFindingsQuestion(true)).toMatch(/\(drafted\/sent\/filed-here\)$/);
@@ -1932,6 +1980,264 @@ describe('kanon init and upstream findings (plan 0006 F2)', () => {
     for (const s of ['third-party decision provider', 'TypeSafe', 'Jev', 'It may rarely still contain personal data', "Kanon's maintainer", 'never published', '13 months in Frankfurt', 'erased on request']) {
       expect(UPSTREAM_EVIDENCE_QUESTION).toContain(s);
     }
+  });
+});
+
+// Plan 0007 step G5 (kanon#645): init's three questions (the feature, the Data section, one
+// consent question), one summary of every value with where it came from, the confirmation, and
+// the flags and JSON fields behind them, all additive within kanon-init/v1 (§6).
+describe('kanon init, a feature, three questions and one summary (plan 0007 G5)', () => {
+  const callers = (dir: string) => readdirSync(join(dir, '.github/workflows')).filter((f) => f.startsWith('agent-')).map((f) => f.replace(/\.yml$/, '')).sort();
+  const choices = (dir: string) => read(dir, 'docs/qa/adoption.md').split('## Choices\n\n')[1]?.split('\n\n')[0]?.split('\n') ?? [];
+  const featureLanes = (id: string) => REQ.features!.find((f) => f.feature === id)!.lanes;
+
+  it('--feature review writes exactly the review lane\'s caller, and records the feature and the trigger', async () => {
+    const dir = checkout();
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps', '--feature', 'review']));
+    expect(d.status).toBe('steps-left');
+    expect(callers(dir)).toEqual(['agent-review']);
+    expect(d.answers).toMatchObject({ feature: 'review', lanes: ['agent-review'], reviewTrigger: 'labelled' });
+    expect(choices(dir)).toEqual(['- **Feature:** `review`', '- **Review trigger:** `labelled`']);
+  });
+
+  it('--feature build and full write their lanes, a conditional lane only where its condition holds', async () => {
+    const build = checkout();
+    const b = parse(await run(build, fakeGitHub(), ['--json', '--no-apps', '--feature', 'build']));
+    expect(callers(build)).toEqual([...featureLanes('build')].sort());
+    expect(b.answers.feature).toBe('build');
+    expect(choices(build)).toContain('- **Feature:** `build`');
+    // Full, with neither the sweep hook nor the webhook: the three conditional lanes are left out, and the summary says so.
+    const bare = checkout();
+    const f = parse(await run(bare, fakeGitHub(), ['--json', '--no-apps', '--feature', 'full']));
+    expect(callers(bare)).toEqual([...featureLanes('full')].sort());
+    expect(f.answers.feature).toBe('full');
+    expect(f.features.find((x) => x.feature === 'full')!.conditional.every((c) => !c.met)).toBe(true);
+    const out = f.summary.find((l) => l.answer === 'Left out')!;
+    for (const lane of ['agent-explore', 'agent-weekly-digest', 'agent-project-digest']) expect(out.value).toContain(lane);
+    expect(f.summary.find((l) => l.answer === 'Merger')!.value).toMatch(/^agent-merge is in/);
+    expect(choices(bare)).toEqual(['- **Feature:** `full`', '- **Review trigger:** `labelled`', '- **Overseer:** `installed`']);
+    // With both: all three are in, and the lanes still make up Full.
+    const both = checkout({ '.github/actions/explore-sweep/action.yml': 'runs:\n  using: composite\n  steps: []\n' });
+    const w = parse(await run(both, fakeGitHub({ secrets: new Set(['DIGEST_WEBHOOK']) }), ['--json', '--no-apps', '--feature', 'full']));
+    expect(callers(both)).toEqual([...featureLanes('full'), 'agent-explore', 'agent-project-digest', 'agent-weekly-digest'].sort());
+    expect(w.answers.feature).toBe('full');
+    expect(w.summary.some((l) => l.answer === 'Left out')).toBe(false);
+  });
+
+  it('takes the feature the called lanes make up by default, and lanes no feature makes up as custom, with no Feature bullet', async () => {
+    const lanes = featureLanes('build');
+    const files = Object.fromEntries(lanes.map((l) => [`.github/workflows/${l}.yml`, callerFile(l, REQ.lanes[l]!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'main', path: `.github/workflows/${l}.yml` })]));
+    const d = parse(await run(checkout(files), fakeGitHub(), ['--json', '--no-apps', '--dry-run']));
+    expect(d.answers).toMatchObject({ feature: 'build', lanes });
+    expect(d.summary.find((l) => l.answer === 'Feature')).toMatchObject({ source: 'inferred', reason: 'from the lanes the repository calls' });
+    const odd = { '.github/workflows/agent-implement.yml': files['.github/workflows/agent-implement.yml']! };
+    const c = checkout(odd);
+    const custom = parse(await run(c, fakeGitHub(), ['--json', '--no-apps']));
+    expect(custom.answers).toMatchObject({ feature: 'custom', lanes: ['agent-implement'], reviewTrigger: null });
+    expect(choices(c)).toEqual([]);
+    expect(featureOf(['agent-review', 'agent-code-audit'], REQ.features!)).toBe('custom');
+  });
+
+  it('--consent yes writes the collector and `sent with evidence`, codes writes `sent`, and no neither', async () => {
+    for (const [level, bullet] of [['yes', 'sent with evidence'], ['codes', 'sent'], ['no', null]] as const) {
+      const dir = checkout();
+      const d = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps', '--consent', level]));
+      expect(d.answers, level).toMatchObject({ consent: level, ...CONSENT_LEVELS[level] });
+      expect(existsSync(join(dir, TELEMETRY_CALLER_PATH)), level).toBe(level !== 'no');
+      expect(parseUpstreamFindings(read(dir, 'docs/qa/adoption.md')), level).toBe(bullet);
+      expect(d.summary.find((l) => l.answer === 'Sharing')!.source).toBe('flag');
+    }
+    // Yes is `sent with evidence` whatever the feature (Owner decision 7).
+    expect(parse(await run(checkout(), fakeGitHub(), ['--json', '--no-apps', '--dry-run', '--feature', 'review', '--consent', 'yes'])).answers.upstreamFindings).toBe('sent with evidence');
+  });
+
+  it('--yes alone sends nothing, declares no Data, and says so', async () => {
+    const dir = checkout();
+    const d = parse(await run(dir, fakeGitHub(), ['--yes', '--json', '--no-apps']));
+    expect(d.answers).toMatchObject({ consent: 'no', telemetry: false, upstreamFindings: 'drafted', sensitiveData: null, reviewTrigger: 'labelled' });
+    expect(existsSync(join(dir, TELEMETRY_CALLER_PATH))).toBe(false);
+    expect(d.summary.find((l) => l.answer === 'Sharing')).toMatchObject({ value: 'no: nothing leaves this repo, findings drafted', source: 'default' });
+    expect(d.summary.find((l) => l.answer === 'Data')).toMatchObject({ value: 'not declared (## Data)', source: 'default' });
+    expect(d.notes.some((n) => n.startsWith('Whether the repository holds private or sensitive material is not declared'))).toBe(true);
+  });
+
+  it('writes the Data section from --sensitive-data and --no-sensitive-data', async () => {
+    for (const [flag, value] of [['--sensitive-data', 'yes'], ['--no-sensitive-data', 'no']] as const) {
+      const dir = checkout();
+      const d = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps', flag]));
+      expect(d.answers.sensitiveData).toBe(value === 'yes');
+      expect(read(dir, 'docs/qa/adoption.md')).toMatch(new RegExp(`## Data\\n\\n[^\\n]+\\n\\n- \\*\\*Private or sensitive material:\\*\\* \`${value}\`\\n$`));
+    }
+  });
+
+  it('refuses, exit 2 and before any call to GitHub, what plan 0007 §6 refuses', async () => {
+    const release = 'name: Release\non:\n  push:\n    branches: [main]\npermissions: {}\njobs:\n  release:\n    uses: yedeya-labs/kanon/.github/workflows/release.yml@v1.2.3\n';
+    for (const [argv, message] of [
+      [['--consent', 'yes', '--telemetry'], '--consent and --telemetry contradict each other'],
+      [['--consent', 'no', '--no-telemetry'], '--consent and --no-telemetry contradict each other'],
+      [['--consent', 'codes', '--upstream-findings', 'filed-here'], '--consent and --upstream-findings contradict each other'],
+      [['--feature', 'review', '--lanes', 'review'], '--feature and --lanes contradict each other'],
+      [['--review-trigger', 'every-pr'], '--review-trigger every-pr is not built yet (plan 0007 step G7)'],
+      [['--review-trigger', 'labelled', '--lanes', 'implement'], '--review-trigger is for a lane set with the review lane'],
+      [['--releases', '--no-releaser'], '--releases and --no-releaser contradict each other'],
+      [['--sensitive-data', '--no-sensitive-data'], '--sensitive-data and --no-sensitive-data contradict each other'],
+      [['--feature', 'custom'], '--feature takes review, build or full, not "custom"'],
+      [['--consent', 'maybe'], '--consent takes yes, codes or no, not "maybe"'],
+      [['--releases'], "--releases is for a repository that calls Kanon's release workflow"],
+    ] as const) {
+      const github = fakeGitHub();
+      const r = await run(checkout(), github, ['--json', '--no-apps', ...argv]);
+      expect(r.status, argv.join(' ')).toBe(2);
+      expect(parse(r).error, argv.join(' ')).toContain(message);
+      expect(github.calls, argv.join(' ')).toEqual([]);
+    }
+    // The same answer by both names is no contradiction.
+    const both = parse(await run(checkout({ '.github/workflows/release.yml': release }), fakeGitHub(), ['--json', '--no-apps', '--releases', '--releaser']));
+    expect(both.answers.releaser).toBe(true);
+    expect(parse(await run(checkout(), fakeGitHub(), ['--json', '--no-apps', '--review-trigger', 'labelled'])).answers.reviewTrigger).toBe('labelled');
+  });
+
+  it('shows every answer on a line of the summary, each naming where it came from (nothing is silent)', async () => {
+    const d = parse(await run(checkout(), fakeGitHub(), ['--json', '--no-apps', '--project-owner', 'grace']));
+    expect(new Set(d.summary.flatMap((l) => l.fields))).toEqual(new Set(Object.keys(d.answers)));
+    for (const l of d.summary) {
+      expect(['flag', 'inferred', 'default'], l.answer).toContain(l.source);
+      expect(l.value, l.answer).not.toBe('');
+    }
+    expect(d.summary.find((l) => l.answer === 'People')).toMatchObject({ value: 'Owner, Maintainer, Stakeholder: grace', source: 'flag' });
+    expect(d.summary.map((l) => l.answer).slice(0, 4)).toEqual(['Feature', 'Review', 'Data', 'Sharing']);
+  });
+
+  it('prints the summary before it writes anything, and says how to ask for a review', async () => {
+    const r = await run(checkout(), fakeGitHub(), ['--yes', '--no-apps']);
+    expect(r.out).toContain(`Kanon ${PINNED} for ${REPO} (public, personal account; rulesets: yes)`);
+    expect(r.out).toMatch(/^Feature {8}Review: agent-review +default$/m);
+    expect(r.out).toMatch(/^Review {9}labelled: add `review:please` to a PR to get a verdict +default$/m);
+    expect(r.out).toContain(REVIEW_HOW);
+    expect(r.out.indexOf(REVIEW_HOW)).toBeLessThan(r.out.indexOf('== Files =='));
+    expect(REVIEW_HOW).toBe('To get a review, add the label `review:please` to the pull request; the Reviewer posts its verdict once CI has finished. After a verdict, push a new commit, or remove and add the label again, to ask for another look.');
+  });
+
+  it('asks three questions at the terminal, in the plan\'s words, then the confirmation, and asks nothing else', async () => {
+    const asked: string[] = [];
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub({ private: true }), ['--no-apps'], undefined, REQ, { ask: async (q: string, d: string) => (asked.push(q), d) });
+    expect(r.status, r.err).toBe(0);
+    expect(asked.map((q) => q.split('\n')[0])).toEqual([FEATURE_QUESTION, DATA_QUESTION, consentQuestion(PINNED), CONFIRM]);
+    expect(asked[0]).toBe([
+      'What should Kanon do in this repo?',
+      '  1. Review (Recommended): An AI reviewer approves or requests changes on pull requests, with one GitHub App.',
+      '  2. Review + build: Also writes code from issues you label and revises it, with a second App.',
+      '  3. Full pipeline: Also plans projects, merges approved work and audits the pipeline, with the same two Apps.',
+      '  4. Customise: Choose lane by lane (advanced).',
+      'Answer 1-4, or a name',
+    ].join('\n'));
+    // Yes is recommended on a private repository, and taken by Enter.
+    expect(asked[1]).toContain('  1. Yes (Recommended): The record says so; the lanes still read the files and diffs they need.\n  2. No: The record says it holds none.');
+    expect(asked[2]).toContain([
+      `${CONSENT_QUESTION.replace('<link>', sharingUrl(PINNED))}`,
+      "  1. Yes (Recommended): Run data, and scrubbed bug evidence read by Kanon's maintainer and a third-party decision provider.",
+      '  2. Codes only: Run data, and Kanon bugs as codes with no text.',
+      '  3. No: Nothing leaves this repo; Kanon bugs stay drafts here.',
+    ].join('\n'));
+    expect(asked[3]).toMatch(/^Install Kanon with these settings\?\n {2}1\. Install \(Recommended\): .+\n {2}2\. Change something: Pick a line of the summary to change\.\n {2}3\. Stop: Nothing is written\./);
+    // Enter takes each recommended answer: the feature, the Data answer and Yes for sharing (Owner decision 16).
+    expect(read(dir, 'docs/qa/adoption.md')).toContain('- **Private or sensitive material:** `yes`');
+    expect(existsSync(join(dir, TELEMETRY_CALLER_PATH))).toBe(true);
+    expect(callers(dir)).toEqual(['agent-review']);
+  });
+
+  it('takes answers by number or name, asks the lanes after Customise, and writes and changes nothing on Stop', async () => {
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: person({ [FEATURE_QUESTION]: '2', [DATA_QUESTION]: 'no', 'Help improve Kanon': 'codes' }) });
+    expect(r.status, r.err).toBe(0);
+    expect(callers(dir)).toEqual([...featureLanes('build')].sort());
+    expect(read(dir, 'docs/qa/adoption.md')).toContain('- **Private or sensitive material:** `no`');
+    expect(parseUpstreamFindings(read(dir, 'docs/qa/adoption.md'))).toBe('sent');
+    const custom = checkout();
+    await run(custom, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: person({ [FEATURE_QUESTION]: 'customise', 'Which lanes to install': 'review,code-audit' }) });
+    expect(callers(custom)).toEqual(['agent-code-audit', 'agent-review']);
+    const github = fakeGitHub();
+    const stop = checkout();
+    const stopped = await run(stop, github, [], undefined, REQ, { ask: person({ [CONFIRM]: 'stop' }) });
+    expect(stopped.status).toBe(0);
+    expect(stopped.out).toContain('Stopped: nothing was written or changed.');
+    expect(existsSync(join(stop, 'docs/qa/adoption.md'))).toBe(false);
+    expect(writes(github.calls)).toEqual([]);
+    expect(stopped.appsCalls).toEqual([]);
+  });
+
+  // The confirmation is the last gate before anything changes: a typo there is Stop, never Install.
+  it('writes and changes nothing on an answer to the confirmation it does not recognise', async () => {
+    for (const typo of ['sotp', 'q', 'cancel', 'abort', '9']) {
+      const github = fakeGitHub();
+      const dir = checkout();
+      const r = await run(dir, github, [], undefined, REQ, { ask: person({ [CONFIRM]: typo }) });
+      expect(r.status, typo).toBe(0);
+      expect(r.out, typo).toContain('Stopped: nothing was written or changed.');
+      expect(existsSync(join(dir, 'docs/qa/adoption.md')), typo).toBe(false);
+      expect(writes(github.calls), typo).toEqual([]);
+      expect(r.appsCalls, typo).toEqual([]);
+    }
+  });
+
+  it('shows the summary again after Change something, with the changed line asked', async () => {
+    const r = await run(checkout(), fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: changing('1', { 'Who is the Owner': 'grace' }) });
+    const people = r.out.split('\n').filter((l) => l.startsWith('People'));
+    expect(people).toEqual([expect.stringMatching(/^People {9}Owner, Maintainer, Stakeholder: octo +inferred: the token's login$/), expect.stringMatching(/^People {9}Owner grace; Maintainer octo; Stakeholder octo +asked$/)]);
+  });
+
+  it('infers the Owner from CODEOWNERS, a test database, the delegation, and deleting the default labels before a first commit', async () => {
+    const dco = 'name: DCO\non: pull_request\npermissions: {}\njobs:\n  dco:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: yedeya-labs/kanon/actions/dco@v1.2.3\n';
+    const dir = checkout({ '.github/CODEOWNERS': '# owners\n*.md @docs-team/writers\n* @grace @acme/core\n', 'compose.yaml': 'services:\n  db:\n    image: postgres:16\n', '.github/workflows/dco.yml': dco });
+    const d = parse(await run(dir, fakeGitHub({ hasCommits: false }), ['--json', '--no-apps', '--feature', 'build']));
+    expect(d.inspection.codeowners).toEqual(['grace']);
+    expect(d.answers).toMatchObject({ projectOwner: 'grace', maintainer: 'grace', testDatabase: 'hook', delegation: { name: 'Ada Lovelace', email: 'ada@example.com' }, deleteDefaultLabels: true });
+    expect(d.summary.find((l) => l.answer === 'People')).toMatchObject({ source: 'inferred', reason: 'from CODEOWNERS' });
+    expect(d.summary.find((l) => l.answer === 'Test database')).toMatchObject({ value: 'hook: your project-setup hook starts it', source: 'inferred', reason: 'a database service in compose.yaml' });
+    expect(d.summary.find((l) => l.answer === 'Delegation')).toMatchObject({ value: 'Ada Lovelace <ada@example.com>', reason: "an Author lane and Kanon's DCO check" });
+    // Review alone runs no Author lane, so no delegation; two users in CODEOWNERS make no Owner.
+    const review = parse(await run(checkout({ CODEOWNERS: '* @grace @linus\n', '.github/workflows/dco.yml': dco }), fakeGitHub(), ['--json', '--no-apps', '--dry-run']));
+    expect(review.answers).toMatchObject({ projectOwner: 'octo', delegation: null, testDatabase: 'none', deleteDefaultLabels: false });
+    expect(review.inspection.codeowners).toEqual(['grace', 'linus']);
+    expect(codeownersOf(() => null)).toBeNull();
+    expect(codeownersOf((p) => (p === 'CODEOWNERS' ? '*.js @a\n' : null))).toBeNull();
+    expect(testDatabaseSignal((p) => (p === '.env.example' ? 'export DATABASE_URL=postgres://x\n' : null), () => [])).toBe('DATABASE_URL in .env.example');
+    expect(testDatabaseSignal(() => null, (p) => (p === 'db/migrate' ? ['001.sql'] : []))).toBe('a migrations directory, db/migrate/');
+    expect(testDatabaseSignal((p) => (p === 'compose.yml' ? 'services:\n  cache:\n    image: nginx\n' : null), () => [])).toBeNull();
+  });
+
+  it('gives the features from the requirements file, with their secrets', async () => {
+    const d = parse(await run(checkout(), fakeGitHub(), ['--json', '--no-apps', '--dry-run']));
+    for (const f of d.features) {
+      const spec = REQ.features!.find((x) => x.feature === f.feature)!;
+      expect(f).toMatchObject({ title: spec.title, does: spec.does, lanes: spec.lanes, apps: spec.apps, steps: spec.steps });
+      expect(f.conditional.map((c) => c.lane)).toEqual(Object.keys(spec.conditional));
+    }
+    expect(new Set(d.features[0]!.secrets as string[])).toEqual(new Set(['JUDGE_APP_ID', 'JUDGE_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']));
+    expect(d.features[2]!.secrets).toContain('DIGEST_WEBHOOK');
+  });
+
+  // Plan 0007 §9, Owner decision 15: the disclosure ADR 0007 and K-OBS-16 require stays in Q4.
+  it('says, in the consent question itself, that the evidence may hold personal data, and who reads the evidence', () => {
+    expect(CONSENT_QUESTION).toContain('may rarely hold personal data');
+    expect(CONSENT_QUESTION).toContain('<link>');
+    // The adopt skill asks it word for word (plan 0007 §9).
+    expect(read(ROOT, 'skills/adopt/SKILL.md')).toContain(`"${CONSENT_QUESTION}"`);
+    const yes = CONSENT_OPTIONS.find((o) => o.value === 'yes')!;
+    expect(CONSENT_OPTIONS[0]).toBe(yes);
+    expect(yes.does).toContain("scrubbed bug evidence read by Kanon's maintainer and a third-party decision provider");
+    // The readers are the evidence's, never the run data's.
+    expect(yes.does).toMatch(/^Run data, and scrubbed bug evidence read by/);
+    // Plan 0007 §9's budgets: a question of at most 160 characters, the link not counted; labels of at most four words; consequences of at most 100 characters.
+    for (const q of [FEATURE_QUESTION, DATA_QUESTION, CONSENT_QUESTION.replace('<link>', ''), CONFIRM]) expect(q.length, q).toBeLessThanOrEqual(160);
+    for (const o of [...CONSENT_OPTIONS, ...REQ.features!.map((f) => ({ label: f.title, does: f.does }))]) {
+      expect(o.label.split(' ').length, o.label).toBeLessThanOrEqual(4);
+      expect(o.does.length, o.does).toBeLessThanOrEqual(100);
+    }
+    expect(consentOf(true, 'drafted')).toBeNull();
+    expect(consentOf(false, 'filed here')).toBeNull();
+    expect(consentOf(true, 'sent with evidence')).toBe('yes');
   });
 });
 
