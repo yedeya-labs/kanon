@@ -11,6 +11,7 @@ Cite a rule by its id; don't restate it (`K-PRIN-2`).
 3. Write the failing test first, and say so honestly when something can't be tested (`K-AGENT-15`).
 4. Run the gates in the stack document's `## Gates` before you push, and follow its `## Schema changes` and `## Generated files` when the change touches them.
 5. Sweep a claim before changing it, and state the blast radius (`K-AGENT-20`).
+6. When you fix a bug and find the pull request whose change caused it, write `Introduced by #<n>` in your pull request's body: GitHub records it as a cross-reference on #<n>, the link Kanon's metrics count an escaped defect by. Name it on evidence, never a guess.
 
 ## Follow-ups: branch off the open parent
 

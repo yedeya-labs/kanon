@@ -125,7 +125,7 @@ See the [roadmap](ROADMAP.md) for what comes next.
 |---|---|
 | [`rulebook/`](rulebook/) | The rules. This is Kanon's specification. |
 | [`docs/decisions/`](docs/decisions/) | Architecture decision records: why Kanon is shaped the way it is. |
-| [`cli/`](cli/) | The `kanon` command: [`kanon init`](docs/init.md), [`kanon doctor`](docs/doctor.md), `kanon milestones`, [`kanon apps`](docs/apps.md) and [`kanon metrics dry-run`](docs/metrics.md). |
+| [`cli/`](cli/) | The `kanon` command: [`kanon init`](docs/init.md), [`kanon doctor`](docs/doctor.md), `kanon milestones`, [`kanon apps`](docs/apps.md) and [`kanon metrics dry-run` and `kanon metrics report`](docs/metrics.md). |
 | [`skills/`](skills/) | The agent skills, adopt, doctor and upgrade, shipped as the `kanon` Claude Code plugin from [`.claude-plugin/`](.claude-plugin/) ([docs/skills.md](docs/skills.md)). |
 | [`actions/`](actions/) | Kanon's checks, the lane check and the agent-lane blocks, each a versioned composite action. |
 | [`scripts/`](scripts/) | The pipeline library: the scripts the lanes run, through [`kanon-path`](actions/kanon-path/README.md). |
