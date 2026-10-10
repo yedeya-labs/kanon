@@ -504,6 +504,54 @@ export const registerRows = (text) => {
   return rows;
 };
 
+const OWNER_REGISTERS = `query($owner: String!, $after: String) { repositoryOwner(login: $owner) { repositories(first: 100, after: $after, ownerAffiliations: [OWNER], isFork: false, orderBy: { field: PUSHED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { name object(expression: "HEAD:${REGISTER_PATH}") { ... on Blob { text } } } } } }`;
+
+/**
+ * Kanon's Apps named in the App registers of the owner's other repositories the token can read
+ * (plan 0007 G4), each with `from`, the register that names it. In the order of the Apps, then of
+ * the repositories, the most recently pushed first, at most ten pages of a hundred. A fork is left
+ * out: its register names its upstream's Apps, which are never the owner's. `ownersOwn` then drops
+ * an App of someone else's. Null when the repositories can't be read.
+ * @param {(args: string[], input?: string) => Promise<{ status: number | null, stdout: string, stderr: string }>} gh
+ * @param {string} owner @param {string} repoName this repository, whose register is the checkout's
+ * @param {Requirements} req
+ * @returns {Promise<Array<{ app: string, slug: string, from: string }> | null>}
+ */
+export const ownerRegisters = async (gh, owner, repoName, req) => {
+  const apps = Object.keys(req.identities.apps);
+  /** @type {Array<{ app: string, slug: string, from: string }>} */
+  const found = [];
+  /** @type {string | null} */
+  let after = null;
+  for (let page = 0; page < 10; page++) {
+    const r = await gh(['api', 'graphql', '--input', '-'], JSON.stringify({ query: OWNER_REGISTERS, variables: { owner, after } }));
+    /** @type {any} */
+    let repos;
+    try {
+      const j = r.status === 0 ? JSON.parse(r.stdout) : null;
+      repos = Array.isArray(j?.errors) && j.errors.length ? null : j?.data?.repositoryOwner?.repositories;
+    } catch {
+      repos = null;
+    }
+    if (!Array.isArray(repos?.nodes)) {
+      if (!page) return null;
+      break;
+    }
+    for (const n of repos.nodes) {
+      if (typeof n?.name !== 'string' || n.name.toLowerCase() === repoName.toLowerCase() || typeof n.object?.text !== 'string') continue;
+      const rows = registerRows(n.object.text);
+      for (const app of apps) {
+        for (const slug of new Set(registerRolesOf(app, req).map((role) => rows.get(role)))) {
+          if (slug && !found.some((f) => f.app === app && f.slug === slug)) found.push({ app, slug, from: `register:${owner}/${n.name}` });
+        }
+      }
+    }
+    if (!repos.pageInfo?.hasNextPage || typeof repos.pageInfo.endCursor !== 'string') break;
+    after = repos.pageInfo.endCursor;
+  }
+  return found.sort((x, y) => apps.indexOf(x.app) - apps.indexOf(y.app));
+};
+
 /**
  * The gates the repository suggests, from what it holds: an npm project's scripts, a Makefile's
  * `test` target, a Cargo or Go module. The stack document's `## Gates` has no default (plan 0005
@@ -830,14 +878,17 @@ export const UPSTREAM_EVIDENCE_QUESTION =
   "Also send each finding's evidence and suggested fix, as text? The agent writes it for Kanon's maintainer, to Kanon's template, without names, logins, URLs, repository names or quotes of this repository's text, and before it leaves, an automatic scrub removes URLs, this repository's name, the logins and names the lane can see, and every path outside Kanon's own files. It may rarely still contain personal data, such as a name the scrub didn't know. The text is read by Kanon's maintainer, and by a third-party decision provider, TypeSafe, whose model, Jev, decides whether a finding becomes a public Kanon issue. The text itself is never published: a public issue holds only the codes. It is kept 13 months in Frankfurt and erased on request, like telemetry.";
 
 /**
- * The question for Apps the owner already has (#363).
- * @param {Array<{ app: string, slug: string }>} found @param {Requirements} req
+ * The question for Apps the owner already has (#363), saying where they were found: its
+ * installations, or another repository's register (plan 0007 G4).
+ * @param {Array<{ app: string, slug: string, from?: string }>} found @param {Requirements} req
  */
 export const reuseQuestion = (found, req) => {
   const name = (/** @type {string} */ app) => req.identities.apps[app]?.name ?? app;
   const apps = [...new Set(found.map((f) => f.app))];
   const list = apps.map((app) => `the ${name(app)} (${found.filter((f) => f.app === app).map((f) => f.slug).join(' or ')})`).join(' and ');
-  return `The owner already has ${list}, installed with exactly ${apps.length > 1 ? 'their' : 'its'} permissions. Reuse ${apps.length > 1 ? 'them' : 'it'} here with kanon apps --reuse, rather than create a second ${apps.length > 1 ? 'set' : 'one'}?`;
+  const registers = [...new Set(found.flatMap((f) => (f.from?.startsWith('register:') ? [f.from.slice('register:'.length)] : [])))];
+  const where = registers.length ? `named in ${registers.map((r) => `${r}'s`).join(' and ')} App register${registers.length > 1 ? 's' : ''}` : `installed with exactly ${apps.length > 1 ? 'their' : 'its'} permissions`;
+  return `The owner already has ${list}, ${where}. Reuse ${apps.length > 1 ? 'them' : 'it'} here with kanon apps --reuse, rather than create a second ${apps.length > 1 ? 'set' : 'one'}?`;
 };
 
 /**
@@ -1291,25 +1342,29 @@ const run = async (deps, opts, req, rep) => {
   // reader `kanon doctor` shares), looked for only when this register lacks one of them. An
   // installation whose App this register already names is this repository's own. Each App is
   // matched alike, the Releaser as strictly as the Author and the Judge (#462): its exact
-  // permissions, no events, and an App of the owner's own, never another account's.
+  // permissions, no events, and an App of the owner's own, never another account's. When the
+  // installations can't be listed, the registers of the owner's other repositories name the Apps
+  // it has (plan 0007 G4); when they can, they decide, so an App they show drifted isn't offered.
   const rows = registerRows(read(REGISTER_PATH));
   const named = new Set(rows.values());
   const lacking = Object.keys(req.identities.apps).filter((i) => registerRolesOf(i, req).some((r) => !rows.has(r)));
-  /** @type {Array<{ app: string, slug: string, installation: number }> | null} null when they can't be listed */
+  /** @type {Array<{ app: string, slug: string, appId: number | null, from: string }> | null} null when neither the installations nor another register names one */
   let ownerApps = [];
-  /** @type {string | null} why they can't be listed */
+  /** @type {string | null} why the installations can't be listed */
   let unlisted = null;
   if (lacking.length) {
     const { listed, installs } = await ownerInstallations(deps.gh, s.owner, s.kind);
-    if (installs) ownerApps = await ownersOwn(deps.gh, s.owner, ownerKanonApps(installs, s.owner, req.identities.apps).filter((f) => !named.has(f.slug)));
+    if (installs) ownerApps = (await ownersOwn(deps.gh, s.owner, ownerKanonApps(installs, s.owner, req.identities.apps).filter((f) => !named.has(f.slug)))).map((f) => ({ ...f, from: 'installation' }));
     else {
-      ownerApps = null;
-      unlisted = `the token can't list ${s.owner}'s App installations (${listed.stderr.trim() || `exit ${listed.status}`}), so init can't tell whether ${s.owner} already has Kanon's Apps. ${
+      const registered = await ownerRegisters(deps.gh, s.owner, repoName, req);
+      const own = registered ? await ownersOwn(deps.gh, s.owner, registered.filter((f) => !named.has(f.slug))) : [];
+      ownerApps = own.length ? own.map((f) => ({ ...f, appId: null })) : null;
+      unlisted =`the token can't list ${s.owner}'s App installations (${listed.stderr.trim() || `exit ${listed.status}`}), so init can't tell whether ${s.owner} already has Kanon's Apps. ${
         s.kind === 'Organization' ? `Only an owner of ${s.owner} can list them, with the organisation's Administration permission (read).` : "On a personal account gh's token can't list them."
       }`;
     }
   }
-  rep.inspection.ownerApps = ownerApps && ownerApps.map((f) => ({ app: f.app, slug: f.slug }));
+  rep.inspection.ownerApps = ownerApps && ownerApps.map((f) => ({ app: f.app, slug: f.slug, from: f.from }));
   out('');
   const a = await askAll(deps, opts, {
     login: who.login ?? ownerName,
@@ -1677,22 +1732,30 @@ const run = async (deps, opts, req, rep) => {
   const owned = ownerApps ?? [];
   const reusing = a.reuseApps ? missing.filter((i) => owned.some((f) => f.app === i)) : [];
   const toCreate = missing.filter((i) => !reusing.includes(i));
-  rep.apps = { identities, missing, reuse: reusing.map((i) => ({ app: i, slug: /** @type {{ slug: string }} */ (owned.find((f) => f.app === i)).slug })), command: null, outcome: failures ? 'failed' : 'none', exitCode: null };
+  const first = (/** @type {string} */ i) => /** @type {{ slug: string, appId: number | null, from: string }} */ (owned.find((f) => f.app === i));
+  rep.apps = { identities, missing, reuse: reusing.map((i) => ({ app: i, slug: first(i).slug, appId: first(i).appId })), command: null, outcome: failures ? 'failed' : 'none', exitCode: null };
   const appsRep = rep.apps;
   if (missing.length && ownerApps === null && unlisted) note(`Not looked for: ${unlisted}`);
   for (const i of reusing) {
     const all = owned.filter((f) => f.app === i);
-    const slug = /** @type {{ slug: string }} */ (all[0]).slug;
+    // The App ID, when its installation carries it, is filled in, so the person needn't copy it
+    // from the App's page (#640); a register names only the slug.
+    const { slug, appId, from } = first(i);
     const name = req.identities.apps[i]?.name ?? i;
-    const also = all.length > 1 ? ` (it also has ${all.slice(1).map((f) => f.slug).join(', ')} with the same permissions: give the one ${repoName} should share)` : '';
+    const also = all.length > 1 ? ` (it also has ${all.slice(1).map((f) => (f.appId ? `${f.slug}, App ID ${f.appId},` : f.slug)).join(', ')} with the same permissions: give the one ${repoName} should share)` : '';
+    const where = from.startsWith('register:') ? ` (${from.slice('register:'.length)}'s App register names it)` : '';
+    const todo = appId ? `Add ${repoName} to its installation and generate a private key on its settings page, then run this with the key` : `Add ${repoName} to its installation, generate a private key on its settings page and copy its App ID from the same page, then run this with both`;
+    const todoText = appId
+      ? `Add ${repoName} to the App's installation and generate a private key on its settings page, then run kanon apps --reuse with the key`
+      : `Add ${repoName} to the App's installation, generate a private key on its settings page and copy its App ID from the same page, then run kanon apps --reuse with both`;
     step({
       id: 'app.reuse',
       category: 'app',
       subject: i,
-      prose: `${s.owner} already has the ${name} App ${slug}${also}. Add ${repoName} to its installation, generate a private key on its settings page and copy its App ID from the same page, then run this with both, and commit the register rows it writes:`,
-      message: `${s.owner} already has the ${name} App ${slug}, which the chosen lanes run as, and the register lacks it.`,
-      text: `Add ${repoName} to the App's installation, generate a private key on its settings page and copy its App ID from the same page, then run kanon apps --reuse with both, and commit the register rows it writes.${also}`,
-      commands: [`kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${i}:${slug}@<App ID>=<downloaded>.pem`],
+      prose: `${s.owner} already has the ${name} App ${slug}${where}${also}. ${todo}, and commit the register rows it writes:`,
+      message: `${s.owner} already has the ${name} App ${slug}, which the chosen lanes run as, and the register lacks it${where}.`,
+      text: `${todoText}, and commit the register rows it writes.${also}`,
+      commands: [`kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${i}:${slug}@${appId ?? '<App ID>'}=<downloaded>.pem`],
       url: s.kind === 'User' ? `https://github.com/settings/apps/${slug}` : `https://github.com/organizations/${s.owner}/settings/apps/${slug}`,
     });
   }
@@ -1717,9 +1780,10 @@ const run = async (deps, opts, req, rep) => {
     const cmd = `kanon apps ${argvApps.join(' ')}`;
     appsRep.command = cmd;
     // One App per owner (plan 0005 §3.2): when the owner's installations can't be listed, an App
-    // it already has for another repository looks missing here (#363), so the step says to
-    // reuse such an App rather than create a second one.
-    const reuseInstead = ownerApps !== null ? '' : ` If ${s.owner} already has ${toCreate.length > 1 ? 'these Apps' : 'this App'} for another repository, don't create ${toCreate.length > 1 ? 'them' : 'it'} again: add ${repoName} to ${toCreate.length > 1 ? 'each' : 'its'} installation, generate a private key on its settings page and copy its App ID from there, and run kanon apps --owner ${s.owner} --repo ${repoName} --reuse <app>:<slug>@<App ID>=<key file> instead (docs/apps.md, "A repository added later").`;
+    // it already has for another repository looks missing here (#363), even with another
+    // register naming some (plan 0007 G4), so the step says to reuse such an App rather than
+    // create a second one.
+    const reuseInstead = unlisted === null ? '' : ` If ${s.owner} already has ${toCreate.length > 1 ? 'these Apps' : 'this App'} for another repository, don't create ${toCreate.length > 1 ? 'them' : 'it'} again: add ${repoName} to ${toCreate.length > 1 ? 'each' : 'its'} installation, generate a private key on its settings page and copy its App ID from there, and run kanon apps --owner ${s.owner} --repo ${repoName} --reuse <app>:<slug>@<App ID>=<key file> instead (docs/apps.md, "A repository added later").`;
     const createStep = () =>
       step({
         id: 'app.create',
