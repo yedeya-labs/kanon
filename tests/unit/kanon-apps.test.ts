@@ -628,7 +628,7 @@ describe('one App per owner, reused across its repositories (plan 0005 §3.2)', 
     expect(r.issuers).toEqual(['9999']);
     expect(r.output).toContain(
       `kanon apps: GitHub refused the key in ${join(r.dir, 'judge.pem')} as the App 9999's (HTTP 401): either 9999 is not ${ORG}-judge's App ID or Client ID, or the key is not one of its keys. ` +
-        `Both IDs are under "About" on https://github.com/organizations/${ORG}/settings/apps/${ORG}-judge, and its keys under "Private keys". Nothing was stored; the file is kept.`,
+        `Both IDs are under "About" on https://github.com/organizations/${ORG}/settings/apps/${ORG}-judge, and its keys under Credentials → Key pairs. Nothing was stored; the file is kept.`,
     );
     expect(r.output).not.toMatch(/Check the slug/);
     expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT')).toEqual([]);
