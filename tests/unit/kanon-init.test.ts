@@ -1196,8 +1196,25 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], reuse: [], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
     expect(d.files.find((f) => f.path === '.github/workflows/agent-review.yml')).toMatchObject({ status: 'new', content: read(dir, '.github/workflows/agent-review.yml'), diff: [] });
     expect(d.findings.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token']);
-    expect(d.findings[0]!.fix.commands).toEqual(['gh secret set CLAUDE_CODE_OAUTH_TOKEN -R acme/widgets   # paste it on standard input']);
+    expect(d.findings[0]!.fix.commands).toEqual(['gh secret set CLAUDE_CODE_OAUTH_TOKEN -R acme/widgets   # in your own terminal, never with ! at the Claude Code prompt']);
     expect(d.notes).toContain('init commits nothing: review the files, then commit them on a branch and open a pull request.');
+  });
+
+  // #625: with `!` at the Claude Code prompt, standard input isn't a terminal, so a `gh secret set`
+  // that reads the value there stores an empty secret without a word. A real secret's step says
+  // to run it in the person's own terminal, or read the value from a file.
+  it("sends a real secret's gh secret set to the person's own terminal or a file, never `!` (#625)", async () => {
+    const all = Object.keys(REQ.lanes).map((l) => l.slice('agent-'.length)).join(',');
+    const d = parse(await run(checkout(), fakeGitHub(), ['--yes', '--json', '--no-apps', '--lanes', all]));
+    const real = d.findings.filter((f) => ['secret.claude-code-oauth-token', 'secret.digest-webhook'].includes(f.id));
+    expect(real.map((f) => f.id)).toEqual(['secret.claude-code-oauth-token', 'secret.digest-webhook']);
+    for (const f of real) {
+      expect(f.fix.text, f.id).toMatch(/in your own terminal/);
+      expect(f.fix.text, f.id).toMatch(/never with `!` at the Claude Code prompt/);
+      expect(f.fix.text, f.id).toMatch(/empty secret/);
+      expect(f.fix.text, f.id).toContain('`< <file>`');
+      expect(f.fix.commands, f.id).toEqual([`gh secret set ${f.subject} -R ${REPO}   # in your own terminal, never with ! at the Claude Code prompt`]);
+    }
   });
 
   it('is the same run as the prose: the same exit code, changes in the summary\'s order, findings in its numbering', async () => {
@@ -1887,8 +1904,8 @@ describe("kanon init and the QA store's secrets (#433)", () => {
     const d = parse(await run(checkout({ [HOOK]: 'name: QA store\n' }), withVariables([]), ['--yes', '--json', '--no-apps', '--lanes', 'code-audit']));
     expect(store(d)).toMatchObject({ category: 'secret', subject: 'QA_STORE_BUCKET, QA_STORE_ROLE_ARN' });
     expect(store(d)!.fix.commands).toEqual([
-      `gh secret set QA_STORE_BUCKET -R ${REPO}   # paste the stack's BucketName output on standard input`,
-      `gh secret set QA_STORE_ROLE_ARN -R ${REPO}   # paste the stack's RoleArn output on standard input`,
+      `gh secret set QA_STORE_BUCKET -R ${REPO} --body '<BucketName>'`,
+      `gh secret set QA_STORE_ROLE_ARN -R ${REPO} --body '<RoleArn>'`,
     ]);
   });
 
@@ -1907,7 +1924,7 @@ describe("kanon init and the QA store's secrets (#433)", () => {
   it('with a hook, copies a variable that holds one, and never asks for a variable', async () => {
     const d = parse(await run(checkout({ [HOOK]: 'name: QA store\n' }), withVariables(['QA_STORE_ROLE_ARN']), ['--yes', '--json', '--no-apps', '--lanes', 'code-audit']));
     expect(store(d)!.fix.commands).toEqual([
-      `gh secret set QA_STORE_BUCKET -R ${REPO}   # paste the stack's BucketName output on standard input`,
+      `gh secret set QA_STORE_BUCKET -R ${REPO} --body '<BucketName>'`,
       `gh variable get QA_STORE_ROLE_ARN -R ${REPO} | gh secret set QA_STORE_ROLE_ARN -R ${REPO}`,
     ]);
     expect(store(d)!.fix.text).toContain('which you then delete once a store job has run green');

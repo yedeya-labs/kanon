@@ -56,7 +56,7 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, inspect, LANE_CHECK, registerRolesOf, registerRows, requiredCheckGap, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
+import { appsArgs, inspect, LANE_CHECK, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -1199,7 +1199,18 @@ export const diagnose = async (deps, opts) => {
       })();
       findItems('secret.missing', repo, lacks, (xs) => {
         const who = whoNeeds(xs);
-        return [`lacks ${xs.join(' and ')}, the ${id} App's ${xs.length > 1 ? 'secrets' : 'secret'}${who ? `: ${who}` : ''}.`, slug
+        // The App's id alone isn't secret, so it goes on the line with --body, which works at the
+        // Claude Code prompt with `!`, where a line that reads standard input stores an empty
+        // secret (#625); and it needs no new key. GitHub shows a private App's id only on its page.
+        const [idName] = appSecrets(id);
+        const appId = appIdOf.get(id);
+        return [`lacks ${xs.join(' and ')}, the ${id} App's ${xs.length > 1 ? 'secrets' : 'secret'}${who ? `: ${who}` : ''}.`, slug && xs.length === 1 && xs[0] === idName
+        ? {
+          text: `Store the App's id${appId === undefined ? ", the App ID its settings page shows, in place of the line's <…>" : ''}. It isn't secret, so it goes on the line with --body, which works at the Claude Code prompt with \`!\` as well:`,
+          commands: [`gh secret set ${idName} -R ${repo} --body ${appId ?? '<the App ID on its settings page>'}`],
+          url: s.kind === 'Organization' ? `https://github.com/organizations/${s.owner}/settings/apps/${slug}` : `https://github.com/settings/apps/${slug}`,
+        }
+        : slug
         ? { text: `Add ${repoName} to the ${id} App's installation, and generate a private key on its settings page. kanon apps is your step: check the token with the first command (it creates nothing), then store the key with the second (it checks the key, stores both secrets and deletes the file):`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}=<downloaded>.pem`] }
         : { text: `Create the ${id} App from this checkout. kanon apps is your step: check the token with the first command (it creates nothing), then create the App with the second, which stores its secrets:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] }];
       });
@@ -1207,15 +1218,16 @@ export const diagnose = async (deps, opts) => {
     // A store secret a variable still holds is `qa-store.variables`, above, while the checked
     // release still passes the variables, so the store still works; once it doesn't (kanon#479),
     // the secret is missing, and the fix copies it from the variable.
+    const output = (/** @type {string} */ n) => (n === 'QA_STORE_ROLE_ARN' ? 'RoleArn' : 'BucketName');
     for (const n of needSecrets.filter((x) => !/_APP_(ID|PRIVATE_KEY)$/.test(x) && !s.secrets?.has(x) && (secretsOnly || !storeVariables.includes(x)))) {
       const by = installed.filter((l) => req.lanes[l]?.secrets.includes(n));
       const who = whoNeeds([n]);
       findItems('secret.missing', repo, [n], () => [`lacks ${n}${by.length ? `, which ${by.join(', ')} ${by.length > 1 ? 'take' : 'takes'}` : ''}${who ? `: ${who}` : ''}.`, {
-        text: n === 'CLAUDE_CODE_OAUTH_TOKEN' ? "Store the token of the Claude subscription the agents run on, made with `claude setup-token` (docs/lanes.md), pasting it on standard input:"
+        text: n === 'CLAUDE_CODE_OAUTH_TOKEN' ? `Store the token of the Claude subscription the agents run on, made with \`claude setup-token\` (docs/lanes.md), ${OWN_TERMINAL}:`
           : storeVariables.includes(n) ? `${req.qaStore?.hook} exists, and Kanon ${checked} hands it the store's coordinates as secrets alone, never the variable ${n} that holds this one (kanon#479): copy the variable into the secret, through a pipe, so the value is never printed (docs/qa-store.md, "Move the coordinates to secrets"):`
-          : storeSecrets.includes(n) ? `${req.qaStore?.hook} exists, so the store-coupled lanes need the store's coordinates: store the stack's ${n === 'QA_STORE_ROLE_ARN' ? 'RoleArn' : 'BucketName'} output, pasting it on standard input (docs/qa-store.md, "Provision a store"):`
-          : `Store it, pasting the value on standard input:`,
-        commands: [storeVariables.includes(n) ? `gh variable get ${n} -R ${repo} | gh secret set ${n} -R ${repo}` : `gh secret set ${n} -R ${repo}`],
+          : storeSecrets.includes(n) ? `${req.qaStore?.hook} exists, so the store-coupled lanes need the store's coordinates: store the stack's ${output(n)} output, putting it in for the line's <${output(n)}>. It isn't secret, so it goes on the line with --body, which works at the Claude Code prompt with \`!\` as well (docs/qa-store.md, "Provision a store"):`
+          : `Store it ${OWN_TERMINAL}:`,
+        commands: [storeVariables.includes(n) ? `gh variable get ${n} -R ${repo} | gh secret set ${n} -R ${repo}` : storeSecrets.includes(n) ? `gh secret set ${n} -R ${repo} --body '<${output(n)}>'` : `gh secret set ${n} -R ${repo}`],
       }]);
     }
     // An App secret no App in use reads and no workflow maps: left from the per-role Apps, or from

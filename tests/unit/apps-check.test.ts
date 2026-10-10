@@ -296,9 +296,43 @@ describe('main check, with GitHub mocked', () => {
 
   it('fails when GitHub refuses, and when an input is missing', async () => {
     expect((await run({ status: 404 })).output).toMatch(/::error title=apps-check::GitHub answered 404 for GET \/app\/installations\/9/);
-    const r = await run({}, { APP_SLUG: '' });
+    const r = await run({}, { REGISTER_SLUG: '' });
     expect(r.status).toBe(1);
-    expect(r.output).toContain('::error title=apps-check::APP_SLUG is not set');
+    expect(r.output).toContain('::error title=apps-check::REGISTER_SLUG is not set');
+  });
+
+  // #625: GitHub never shows a secret's value, and `gh secret set` typed with `!` at the Claude
+  // Code prompt stores an empty one without a word. The mint from it fails with the action's own
+  // message, so the check, which runs after a failed mint, names the empty secret as the likely
+  // cause, and how to store it again, before anything else.
+  const unminted = { APP_SLUG: '', INSTALLATION_ID: '', TOKEN: '' };
+  const idLine = `gh secret set JUDGE_APP_ID -R ${REPO} --body <the App ID on its settings page>`;
+  const keyLine = `gh secret set JUDGE_APP_PRIVATE_KEY -R ${REPO} < <key>.pem`;
+  for (const [empty, says, lines] of [
+    [{ APP_ID: '' }, 'JUDGE_APP_ID is', [idLine]],
+    [{ APP_PRIVATE_KEY: '' }, 'JUDGE_APP_PRIVATE_KEY is', [keyLine]],
+    [{ APP_ID: '', APP_PRIVATE_KEY: '' }, 'JUDGE_APP_ID and JUDGE_APP_PRIVATE_KEY are', [idLine, keyLine]],
+  ] as Array<[Record<string, string>, string, string[]]>) {
+    it(`names ${says.split(' ').slice(0, -1).join(' ')} empty as the likely cause of a failed mint (#625)`, async () => {
+      const r = await run({}, { ...unminted, ...empty });
+      expect(r.status).toBe(1);
+      expect(r.calls).toEqual([]);
+      expect(r.output).toContain(`::error title=apps-check::Judge: ${says} empty, or not mapped by the caller, so the App's token can't be minted.`);
+      expect(r.output).toMatch(/An empty secret is a likely cause/);
+      expect(r.output).toMatch(/with `!` at the Claude Code prompt stores an empty one/);
+      for (const l of [idLine, keyLine]) expect(r.output.includes(l), l).toBe(lines.includes(l));
+      expect(r.output).toContain('kanon apps --reuse');
+      // One annotation: the empty secret, not a missing input after it.
+      expect(r.output.split('\n').filter((l) => l.startsWith('::error'))).toHaveLength(1);
+    });
+  }
+
+  it('says the token was not minted, and names no empty secret, when both are set (#625)', async () => {
+    const r = await run({}, unminted);
+    expect(r.status).toBe(1);
+    expect(r.calls).toEqual([]);
+    expect(r.output).toContain("::error title=apps-check::Judge: the App's token wasn't minted from JUDGE_APP_ID and JUDGE_APP_PRIVATE_KEY");
+    expect(r.output).not.toMatch(/empty/);
   });
 
   // #417: a person's token can't read a private App, so doctor reads what apps-check found.
@@ -337,7 +371,7 @@ describe('main check, with GitHub mocked', () => {
 });
 
 describe('the apps-check workflow', () => {
-  type Step = { name?: string; uses?: string; run?: string; with?: Record<string, string>; env?: Record<string, string> };
+  type Step = { name?: string; uses?: string; run?: string; if?: string; 'continue-on-error'?: boolean; with?: Record<string, string>; env?: Record<string, string> };
   type Job = { permissions?: Record<string, string>; needs?: string; secrets?: unknown; strategy?: { matrix: Record<string, string> }; steps: Step[] };
   const text = readFileSync(join(ROOT, '.github/workflows/apps-check.yml'), 'utf8');
   const wf = parse(text) as { on: Record<string, unknown>; permissions: unknown; jobs: Record<string, Job> };
@@ -389,6 +423,14 @@ describe('the apps-check workflow', () => {
     const env = check.steps.at(-1)!.env!;
     expect(mint.with!['client-id']).toBe(env.APP_ID);
     expect(mint.with!['private-key']).toBe(env.APP_PRIVATE_KEY);
+  });
+
+  // #625: a mint from an empty secret fails with the action's own message. The steps after it
+  // still run, so the check can name the empty secret; the job fails at the check all the same.
+  it('runs the check after a failed mint, so it can name an empty secret (#625)', () => {
+    expect(check.steps[0]!['continue-on-error']).toBe(true);
+    for (const s of check.steps.slice(1)) expect(s.if, s.name ?? s.uses).toBeUndefined();
+    expect(check.steps.filter((s) => s['continue-on-error'] !== undefined)).toEqual([check.steps[0]]);
   });
 
   // The Owner, 2026-10-07 (kanon#440, kanon#437): each App's secrets are read by their literal

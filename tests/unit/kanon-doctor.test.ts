@@ -737,6 +737,10 @@ describe("kanon doctor and the QA store's secrets (#433)", () => {
     expect(ids(r)).toEqual([`secret.missing ${REPO}`, `secret.missing ${REPO}`]);
     expect(r.json.findings.map((f: { message: string }) => f.message)).toEqual([`lacks QA_STORE_BUCKET, which agent-code-audit takes: ${CALLER} maps it.`, `lacks QA_STORE_ROLE_ARN, which agent-code-audit takes: ${CALLER} maps it.`]);
     expect(r.json.findings[1].fix.text).toContain("store the stack's RoleArn output");
+    // #625: a store's coordinates aren't secret, so the line carries them with --body, which
+    // works at the Claude Code prompt with `!`, where a line that reads standard input stores an
+    // empty secret.
+    expect(r.json.findings.map((f: { fix: { commands: string[] } }) => f.fix.commands)).toEqual([[`gh secret set QA_STORE_BUCKET -R ${REPO} --body '<BucketName>'`], [`gh secret set QA_STORE_ROLE_ARN -R ${REPO} --body '<RoleArn>'`]]);
   });
 
   it('against a release that passes no variables (#479), blocks on each store secret a variable alone holds, and copies it from the variable', async () => {

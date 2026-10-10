@@ -84,6 +84,15 @@ export const RULESET_NAME = 'Kanon: default branch';
 export const LANE_CHECK = 'Lane check';
 /** GitHub's default labels, which `init` offers to delete when the taxonomy doesn't hold them (K-WORK-12). */
 export const GITHUB_DEFAULT_LABELS = ['bug', 'documentation', 'duplicate', 'enhancement', 'good first issue', 'help wanted', 'invalid', 'question', 'wontfix'];
+/**
+ * Where a person runs a `gh secret set` that reads a real secret's value on standard input
+ * (#625). With `!` at the Claude Code prompt it runs in the session, whose standard input isn't a
+ * terminal, so gh asks for nothing and stores an empty secret without a word, and GitHub never
+ * shows a secret's value to tell. A value that isn't secret goes on the line with `--body`.
+ */
+export const OWN_TERMINAL = 'in your own terminal, pasting the value when gh asks for it: never with `!` at the Claude Code prompt, where gh reads no value and stores an empty secret without a word. Or read it from a file, with `< <file>` at the end of the line';
+/** The note on a line that reads a real secret on standard input (#625). */
+export const OWN_TERMINAL_NOTE = '# in your own terminal, never with ! at the Claude Code prompt';
 
 export const USAGE = `Usage: kanon init [options]
 
@@ -1775,16 +1784,18 @@ const run = async (deps, opts, req, rep) => {
     const others = [...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))].filter((n) => !/_APP_(ID|PRIVATE_KEY)$/.test(n) && !s.secrets?.has(n));
     const secretsUrl = `https://github.com/${repo}/settings/secrets/actions`;
     if (others.includes('CLAUDE_CODE_OAUTH_TOKEN')) {
-      const prose = 'Store the token of the Claude subscription the agents run on, made with `claude setup-token` (docs/lanes.md):';
-      step({ id: 'secret.claude-code-oauth-token', category: 'secret', subject: 'CLAUDE_CODE_OAUTH_TOKEN', prose, message: 'The repository lacks CLAUDE_CODE_OAUTH_TOKEN, which the chosen lanes map.', text: prose.replace(/:$/, '.'), commands: [`gh secret set CLAUDE_CODE_OAUTH_TOKEN -R ${repo}   # paste it on standard input`], url: secretsUrl });
+      const prose = `Store the token of the Claude subscription the agents run on, made with \`claude setup-token\` (docs/lanes.md), ${OWN_TERMINAL}:`;
+      step({ id: 'secret.claude-code-oauth-token', category: 'secret', subject: 'CLAUDE_CODE_OAUTH_TOKEN', prose, message: 'The repository lacks CLAUDE_CODE_OAUTH_TOKEN, which the chosen lanes map.', text: prose.replace(/:$/, '.'), commands: [`gh secret set CLAUDE_CODE_OAUTH_TOKEN -R ${repo}   ${OWN_TERMINAL_NOTE}`], url: secretsUrl });
     }
     if (others.includes('DIGEST_WEBHOOK')) {
-      step({ id: 'secret.digest-webhook', category: 'secret', subject: 'DIGEST_WEBHOOK', prose: 'Store the chat webhook the digests post to:', message: 'The repository lacks DIGEST_WEBHOOK, which the chosen lanes map.', text: 'Store the chat webhook the digests post to.', commands: [`gh secret set DIGEST_WEBHOOK -R ${repo}   # paste it on standard input`], url: secretsUrl });
+      const prose = `Store the chat webhook the digests post to, ${OWN_TERMINAL}:`;
+      step({ id: 'secret.digest-webhook', category: 'secret', subject: 'DIGEST_WEBHOOK', prose, message: 'The repository lacks DIGEST_WEBHOOK, which the chosen lanes map.', text: prose.replace(/:$/, '.'), commands: [`gh secret set DIGEST_WEBHOOK -R ${repo}   ${OWN_TERMINAL_NOTE}`], url: secretsUrl });
     }
     // The QA store's coordinates (kanon#433): secrets, which the runner masks in the store jobs'
     // logs. Asked for only where the store hook exists: without one the lanes run without memory,
     // and their callers map the two empty. A variable of the same name, v0.33.0's way, which the
-    // lanes no longer read (kanon#479), is copied.
+    // lanes no longer read (kanon#479), is copied. They aren't secret, so the line carries each with
+    // `--body`, which works at the Claude Code prompt with `!` too (#625).
     const storeLacks = (req.qaStore?.secrets ?? []).filter((n) => others.includes(n));
     if (storeLacks.length && req.qaStore && read(req.qaStore.hook) !== null) {
       const vars = await ghJson(deps, ['variable', 'list', '-R', repo, '--json', 'name']);
@@ -1796,10 +1807,10 @@ const run = async (deps, opts, req, rep) => {
         subject: storeLacks.join(', '),
         prose: `${req.qaStore.hook} exists, so store the QA store's coordinates as secrets, never as variables: the lanes hand the hook no variables (kanon#479), and a variable is never masked in a log (docs/qa-store.md):`,
         message: `The repository has a QA store hook, and lacks ${storeLacks.join(' and ')}, which the store-coupled lanes map.`,
-        text: `Store the stack's ${storeLacks.map(output).join(' and ')} ${storeLacks.length > 1 ? 'outputs' : 'output'} as ${storeLacks.join(' and ')}${storeLacks.some((n) => asVariable.has(n)) ? ', copying each from the variable of the same name, which you then delete once a store job has run green' : ''}.`,
+        text: `Store the stack's ${storeLacks.map(output).join(' and ')} ${storeLacks.length > 1 ? 'outputs' : 'output'} as ${storeLacks.join(' and ')}${storeLacks.some((n) => asVariable.has(n)) ? ', copying each from the variable of the same name, which you then delete once a store job has run green' : ''}${storeLacks.some((n) => !asVariable.has(n)) ? `, putting the output in for its \`<…>\` on the line: it isn't secret, and with \`--body\` the line works at the Claude Code prompt with \`!\` too` : ''}.`,
         commands: storeLacks.flatMap((n) => (asVariable.has(n)
           ? [`gh variable get ${n} -R ${repo} | gh secret set ${n} -R ${repo}`]
-          : [`gh secret set ${n} -R ${repo}   # paste the stack's ${output(n)} output on standard input`])),
+          : [`gh secret set ${n} -R ${repo} --body '<${output(n)}>'`])),
         url: secretsUrl,
       });
     }
