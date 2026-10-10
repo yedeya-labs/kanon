@@ -1,0 +1,29 @@
+name: Dispute a rule
+description: A rule did the wrong thing on your project. Say which rule and what it did; you don't need to propose a change.
+title: "Dispute a rule: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Kanon counts disputes per rule, open and closed, so the rules that cost adopters most show up in its health view ([plan 0003](https://github.com/yedeya-labs/kanon/blob/main/docs/plans/0003-metrics.md), decision 15). The view shows the rule id and the counts, never what you write here. If you know what the rule should say instead, use the Rule change form.
+  - type: input
+    id: rule
+    attributes:
+      label: Disputed rule
+      description: The rule's id, for example K-MERGE-7. One rule per issue, so each dispute counts against one rule.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What the rule did
+      description: What you were doing, and what the rule, or the check that enforces it, did.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it is wrong here
+      description: Why the outcome was wrong for your project. A real incident is the strongest argument.
+    validations:
+      required: true

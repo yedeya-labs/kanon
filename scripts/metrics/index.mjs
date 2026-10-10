@@ -10,6 +10,9 @@ export {
   introducedBy, isFixPr, oldRanges, revertedBy, reverts, revertsOf, sharedCodeFiles, szzLinks,
 } from './detectors.mjs';
 export { AdapterError, toDetectorPr } from './adapter.mjs';
+export {
+  DISPUTE_FIELD, DISPUTE_FORM, disputedRule, healthView, releaseList, ruleDisputes, timeToFix, upgradeLag,
+} from './health.mjs';
 export { ORIGINS, originOf } from './origin.mjs';
 export { RELEASE_LABELS, RELEASE_TITLE, isReleasePr } from './release.mjs';
 export {
