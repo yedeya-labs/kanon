@@ -31,8 +31,11 @@
 //     a fact about that adopter, so a signal names none.
 //   - `adopter`: the rest, one adopter only, such as a `failed_stage: hook`.
 // Beside the signals, a RISE: a lane whose failure rate on one release is `RISE.points` or more
-// above its rate on the release before, with at least `RISE.minRuns` runs on each. Platform-coded
-// runs are not counted as failures there, so an outage after a release is not a regression.
+// above its rate on the release before, with at least `RISE.minRuns` runs on each. The release
+// before is the lane's own: the most recent earlier release on which that lane ran `RISE.minRuns`
+// times or more, across its adopters, skipping any it barely ran or never ran (the Owner's
+// decision of 2026-10-10 on #569); with none, there is no rise. Platform-coded runs are not
+// counted as failures there, so an outage after a release is not a regression.
 //
 // PUBLIC OR PRIVATE (decision 2 on #41). A signal or a rise is `public` only when at least
 // `MIN_ADOPTERS` distinct adopters contributed to it: the aggregate's three-adopter rule (#449,
@@ -223,10 +226,19 @@ export function detect(rows, { known = [], tag = 'run' } = {}) {
   }
 
   const releases = [...versions].filter((v) => v !== 'dev').sort(compareVersions);
-  /** The release before `v` among those seen, or null; `dev` is not among them, so it has none. */
-  const previousOf = (/** @type {string} */ v) => {
-    const i = releases.indexOf(v);
-    return i > 0 ? /** @type {string} */ (releases[i - 1]) : null;
+  /**
+   * The last release before `v` on which `lane` ran at least `RISE.minRuns` times, across its
+   * adopters, and its totals there, or null (#569). A release the lane barely ran or never ran is
+   * skipped: it says nothing about the lane. `dev` is no release, so `indexOf` finds none before it.
+   * @param {string} lane @param {string} v
+   */
+  const lanePrevious = (lane, v) => {
+    for (let i = releases.indexOf(v) - 1; i >= 0; i -= 1) {
+      const version = /** @type {string} */ (releases[i]);
+      const totalsThere = totals.get(`${lane}\u0000${version}`);
+      if (totalsThere && totalsThere.runs >= RISE.minRuns) return { version, totals: totalsThere };
+    }
+    return null;
   };
   /**
    * The last release before `v` on which adopter `k` ran `lane`, and its runs there, or null.
@@ -268,9 +280,10 @@ export function detect(rows, { known = [], tag = 'run' } = {}) {
   const rises = [];
   for (const [tk, t] of totals) {
     const [lane = '', version = ''] = tk.split('\u0000');
-    const previous = previousOf(version);
-    const p = previous ? totals.get(`${lane}\u0000${previous}`) : undefined;
-    if (!previous || !p || t.runs < RISE.minRuns || p.runs < RISE.minRuns) continue;
+    if (t.runs < RISE.minRuns) continue;
+    const before = lanePrevious(lane, version);
+    if (!before) continue;
+    const { version: previous, totals: p } = before;
     const rate = t.failures / t.runs;
     const previousRate = p.failures / p.runs;
     // Compared in whole hundredths of a percent, so floating-point noise never decides a threshold.
