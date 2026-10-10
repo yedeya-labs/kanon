@@ -138,7 +138,7 @@ function causes(fix, prs) {
 }
 
 /** Whether two SHAs name the same commit, either being a prefix of 7 or more. @param {string} a @param {string} b */
-function sameSha(a, b) {
+export function sameSha(a, b) {
   const [x, y] = [a.toLowerCase(), b.toLowerCase()];
   return Math.min(x.length, y.length) >= 7 && (x.startsWith(y) || y.startsWith(x));
 }

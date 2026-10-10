@@ -24,9 +24,19 @@
 // the row it gets when it closes reads the follow-up's fate then.
 //
 // A REWRITE IS ONE WHOLE DERIVATION (§3.1). An earlier item's later reverts and fixes are found
-// from ITS side too: the PRs that cross-reference it, and the PRs that close the `bug` issues
-// that cross-reference it, are read for the detectors beside the span's PRs. So a row rewritten
-// because a follow-up closed keeps the revert or the fix an earlier sweep found.
+// from ITS side too, and read for the detectors beside the span's PRs: the PRs that
+// cross-reference it; the PRs that close a `bug` issue that cross-references it, or whose
+// "Introduced by" names it by a bare number, which GitHub doesn't link; and the PRs of the commits
+// that reference it and revert its merge commit, which is how a `git revert` names it (kanon#672).
+// So a row rewritten because a follow-up closed keeps the revert or the fix an earlier sweep found.
+// A revert whose commit names neither the item's number nor its merge commit, nor its body the
+// Revert button's `Reverts <repo>#<n>`, is found only by the sweep it merges in.
+//
+// WHAT A REWRITE COSTS. Only when the span has an earlier merged item: ONE listing a sweep of the
+// `bug` issues updated since the oldest such item merged (a call per 100 of them), and for each
+// item, a call per 100 commits that reference it, a call per bug issue linked to it, and a whole
+// read of each PR so found, each PR read once a sweep. A commit that names the item without
+// reverting it, and a bug issue introduced by another PR, cost no read.
 //
 // THE KANON VERSION (§3.3) is the tag the collector's own caller pins, read from that file at the
 // merge commit, or, for a PR closed unmerged, at the default branch's head when it closed. A file
@@ -42,10 +52,10 @@ import { setTimeout as wait } from 'node:timers/promises';
 
 import { addMonths, RETENTION_MONTHS } from '../infra/telemetry/function/index.mjs';
 import { declarations } from '../cli/metrics.mjs';
-import { issueClosers, readPullRequest, readPullRequests } from '../cli/metrics-read.mjs';
+import { issueClosers, readPullRequest, readPullRequests, referencingCommits } from '../cli/metrics-read.mjs';
 import { revertTargets } from './lib/reverts.mjs';
 import { toDetectorPr } from './metrics/adapter.mjs';
-import { BUG_LABEL, codeAreaTest, fixesOf, introducedBy, revertsOf } from './metrics/detectors.mjs';
+import { BUG_LABEL, codeAreaTest, fixesOf, introducedBy, revertsOf, sameSha } from './metrics/detectors.mjs';
 import { deriveRows } from './metrics/derive.mjs';
 import { FOLLOWUP_LABELS } from './metrics/followups.mjs';
 import { isReleasePr } from './metrics/release.mjs';
@@ -246,21 +256,39 @@ export async function workItemStep({ repo, since, now, gh, sleep = (ms) => wait(
       if (named || linked) earlier.push(pr);
     }
     // The earlier items' own later PRs, for a whole derivation: the PRs that cross-reference each,
-    // and the PRs that close a `bug` issue that does (§3.5's conditions 1 and 2).
-    for (const item of earlier) {
-      if (!item.merged_at) continue;
+    // the PRs that close a `bug` issue that does (§3.5's conditions 1 and 2), and the two links
+    // that leave no cross-reference (kanon#672): a revert's commit, and a bare "Introduced by".
+    const mergedEarlier = earlier.filter((p) => p.merged_at);
+    const oldest = Math.min(...mergedEarlier.map((p) => Date.parse(/** @type {string} */ (p.merged_at))));
+    /** @type {any[]} */
+    const bugs = mergedEarlier.length === 0 ? [] : await rest(gh, `repos/${repo}/issues?state=all&labels=${BUG_LABEL}&since=${iso(oldest)}&per_page=100`, { paginate: true });
+    for (const item of mergedEarlier) {
       /** @type {Set<number>} */
       const linked = new Set();
+      /** @type {Set<number>} */
+      const issues = new Set();
       for (const ev of item.timeline ?? []) {
         const s = ev.source;
         if (ev.event !== 'cross-referenced' || !s || !sameRepo(s.repository)) continue;
         if (s.type === 'pull_request') linked.add(s.number);
-        else if (!s.labels || s.labels.includes(BUG_LABEL)) for (const n of await issueClosers(readDeps, repo, s.number)) linked.add(n);
+        else if (!s.labels || s.labels.includes(BUG_LABEL)) issues.add(s.number);
+      }
+      // A bug form's "Introduced by" holding a bare number names the item without linking it.
+      for (const b of bugs) if (!b?.pull_request && typeof b?.number === 'number' && introducedBy(b.body, repo).includes(item.number)) issues.add(b.number);
+      for (const n of [...issues].sort((a, b) => a - b)) for (const c of await issueClosers(readDeps, repo, n)) linked.add(c);
+      // A `git revert` of the item names it only in its commit, whose message quotes the item's
+      // subject and so its `(#n)`: GitHub's `referenced` event. Only a commit that reverts the
+      // item's merge commit is followed to its PR.
+      const sha = item.merge_commit_sha;
+      if (sha) {
+        for (const c of await referencingCommits(readDeps, repo, item.number)) {
+          if (revertTargets(c.message, repo).shas.some((t) => sameSha(t, sha))) for (const n of c.prs) linked.add(n);
+        }
       }
       for (const n of [...linked].sort((a, b) => a - b)) {
         if (n === item.number) continue;
         const pr = await readOne(n);
-        if (pr?.merged_at && Date.parse(pr.merged_at) > Date.parse(item.merged_at) && !context.includes(pr)) context.push(pr);
+        if (pr?.merged_at && Date.parse(pr.merged_at) > Date.parse(/** @type {string} */ (item.merged_at)) && !context.includes(pr)) context.push(pr);
       }
     }
   } catch (e) {
