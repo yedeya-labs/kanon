@@ -1,6 +1,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { fencedLines } from '../../scripts/spec-lib.mjs';
+import { linesOf } from '../../scripts/lib/declarations.mjs';
 
 /**
  * `docs/qa/adoption.md` is Kanon's own adoption record (`K-LAYOUT-10`). This test checks the
@@ -106,6 +108,58 @@ const recordProblems = (text: string, rules: Map<string, string | undefined>): s
   return problems;
 };
 
+/**
+ * The install's choices plan 0007 adds (step G1): the feature and the review trigger under
+ * `## Choices`, and whether the repository holds private or sensitive material under `## Data`.
+ * Each is one bullet, its value one code span and nothing after it, and each has a meaning when
+ * absent: the record means what it meant before the choice existed (plan 0005 §5.2).
+ */
+const INSTALL_CHOICES = [
+  { key: 'feature', label: 'Feature', heading: '## Choices', values: ['review', 'build', 'full', 'custom'], absent: 'custom' },
+  { key: 'reviewTrigger', label: 'Review trigger', heading: '## Choices', values: ['labelled', 'every pull request'], absent: 'labelled' },
+  { key: 'sensitiveMaterial', label: 'Private or sensitive material', heading: '## Data', values: ['yes', 'no', 'not declared'], absent: 'not declared' },
+] as const;
+const RECORD_PATH = 'docs/qa/adoption.md';
+
+/** The install's choices a record declares, or their meaning when absent. Throws naming the line of a malformed one. */
+const installChoices = (text: string): Record<(typeof INSTALL_CHOICES)[number]['key'], string> => {
+  const lines = linesOf(text);
+  const fenced = fencedLines(lines);
+  if (fenced.unclosed !== -1) throw new Error(`${RECORD_PATH}:${fenced.unclosed + 1} opens a code fence that never closes`);
+  const headingAt = (heading: string): number => {
+    const at = lines.flatMap((l, i) => (!fenced.has(i) && l.trimEnd() === heading ? [i] : []));
+    if (at.length > 1) throw new Error(`${RECORD_PATH} has the \`${heading}\` heading ${at.length} times, on lines ${at.map((i) => i + 1).join(', ')}`);
+    return at[0] ?? -1;
+  };
+  const endOf = (start: number): number => {
+    for (let i = start + 1; i < lines.length; i += 1) if (!fenced.has(i) && /^#{1,2}\s/.test(lines[i] ?? '')) return i;
+    return lines.length;
+  };
+  const starts: Record<string, number> = { '## Choices': headingAt('## Choices'), '## Data': headingAt('## Data') };
+  const [choices = -1, data = -1] = [starts['## Choices'], starts['## Data']];
+  if (choices !== -1 && data !== -1 && data < choices) throw new Error(`${RECORD_PATH}:${data + 1} puts \`## Data\` before \`## Choices\`: it comes after`);
+
+  const out = {} as Record<(typeof INSTALL_CHOICES)[number]['key'], string>;
+  for (const { key, label, heading, values, absent } of INSTALL_CHOICES) {
+    const mention = new RegExp(`^\\s*(?:>\\s*)*(?:(?:[-*+]|\\d+[.)])\\s+)?\\*\\*${label}:\\*\\*`);
+    const at = lines.flatMap((l, i) => (!fenced.has(i) && mention.test(l) ? [i] : []));
+    const [first, second] = at;
+    if (first === undefined) {
+      out[key] = absent;
+      continue;
+    }
+    if (second !== undefined) throw new Error(`${RECORD_PATH}:${second + 1} repeats \`${label}\`, already declared on line ${first + 1}`);
+    const start = starts[heading] ?? -1;
+    if (start === -1 || first < start || first >= endOf(start)) throw new Error(`${RECORD_PATH}:${first + 1} declares \`${label}\` outside \`${heading}\``);
+    const entry = new RegExp(`^[-*] \\*\\*${label}:\\*\\* \`([^\`]*)\`\\s*$`).exec(lines[first] ?? '');
+    if (!entry) throw new Error(`${RECORD_PATH}:${first + 1}, under \`${heading}\`, isn't a declaration: write \`- **${label}:** \` and the value as one code span, nothing after it`);
+    const value = entry[1] ?? '';
+    if (!(values as readonly string[]).includes(value)) throw new Error(`${RECORD_PATH}:${first + 1}: \`${label}\` is \`${value}\`; write ${values.map((v) => `\`${v}\``).join(', ')}`);
+    out[key] = value;
+  }
+  return out;
+};
+
 describe("Kanon's adoption record (K-LAYOUT-10, K-ADOPT-9)", () => {
   const rules = rulebookRules();
 
@@ -178,4 +232,70 @@ describe('the record check fails on each broken shape', () => {
       expect(recordProblems(text, rules).join('\n')).toMatch(problem);
     });
   }
+});
+
+describe("the install's choices: feature, review trigger and data (K-LAYOUT-10, plan 0007 G1)", () => {
+  const RULEBOOK = readFileSync(join(ROOT, 'rulebook/11-repository-layout.md'), 'utf8');
+  const rule = RULEBOOK.slice(RULEBOOK.indexOf('### `K-LAYOUT-10`'), RULEBOOK.indexOf('### `K-LAYOUT-14`'));
+  const record = (choices: string[], tail: string[] = []): string =>
+    ['# Adoption record', '', '## Choices', '', '- **Overseer:** `installed`', ...choices, '', ...tail, ''].join('\n');
+  const DATA = (line: string): string[] => ['## Data', '', 'What the lanes read here.', '', line];
+
+  it("parses Kanon's own record", () => {
+    expect(() => installChoices(readFileSync(RECORD, 'utf8'))).not.toThrow();
+  });
+
+  it('K-LAYOUT-10 writes each bullet, its values and its section, as this check reads them', () => {
+    expect(rule.length).toBeGreaterThan(1000);
+    expect(rule).toMatch(/^- `## Data`: /m);
+    for (const { label, values } of INSTALL_CHOICES) {
+      expect(rule).toContain(`- **${label}:** \``);
+      for (const value of values) expect(rule).toContain(`\`${value}\``);
+    }
+  });
+
+  it('means custom, labelled and not declared without the bullets', () => {
+    expect(installChoices(record([]))).toEqual({ feature: 'custom', reviewTrigger: 'labelled', sensitiveMaterial: 'not declared' });
+  });
+
+  it('reads every value of each bullet, beside the other choices', () => {
+    for (const { key, label, heading, values } of INSTALL_CHOICES) {
+      for (const value of values) {
+        const line = `- **${label}:** \`${value}\``;
+        const text = heading === '## Data' ? record([], DATA(line)) : record([line]);
+        expect(installChoices(text)[key]).toBe(value);
+      }
+    }
+    expect(installChoices(record(['- **Feature:** `review`', '- **Review trigger:** `labelled`'], DATA('- **Private or sensitive material:** `yes`')))).toEqual({
+      feature: 'review',
+      reviewTrigger: 'labelled',
+      sensitiveMaterial: 'yes',
+    });
+  });
+
+  it('reads nothing inside a code fence', () => {
+    expect(installChoices(record(['```markdown', '- **Feature:** `full`', '```'])).feature).toBe('custom');
+  });
+
+  it.each([
+    ['a `Review trigger:` of `sometimes`', record(['- **Review trigger:** `sometimes`']), /adoption\.md:6: `Review trigger` is `sometimes`; write `labelled`, `every pull request`/],
+    ['a feature of another value', record(['- **Feature:** `everything`']), /adoption\.md:6: `Feature` is `everything`/],
+    ['a feature in another case', record(['- **Feature:** `Review`']), /`Feature` is `Review`/],
+    ['the feature twice', record(['- **Feature:** `review`', '- **Feature:** `review`']), /adoption\.md:7 repeats `Feature`, already declared on line 6/],
+    ['the review trigger twice', record(['- **Review trigger:** `labelled`', '* **Review trigger:** `labelled`']), /adoption\.md:7 repeats `Review trigger`/],
+    ['the feature outside `## Choices`', `- **Feature:** \`review\`\n${record([])}`, /adoption\.md:1 declares `Feature` outside `## Choices`/],
+    ['the review trigger under `## Data`', record([], ['## Data', '', '- **Review trigger:** `labelled`']), /adoption\.md:9 declares `Review trigger` outside `## Choices`/],
+    ['the feature with no value span', record(['- **Feature:** review']), /adoption\.md:6, under `## Choices`, isn't a declaration/],
+    ['the feature with something after it', record(['- **Feature:** `review` for now']), /isn't a declaration/],
+    ['the feature as a numbered item', record(['1. **Feature:** `review`']), /isn't a declaration/],
+    ['the data bullet under `## Choices`', record(['- **Private or sensitive material:** `yes`']), /adoption\.md:6 declares `Private or sensitive material` outside `## Data`/],
+    ['the data bullet with no `## Data`', record([], ['## Mechanisms', '', '- **Private or sensitive material:** `no`']), /outside `## Data`/],
+    ['the data bullet twice', record([], [...DATA('- **Private or sensitive material:** `yes`'), '- **Private or sensitive material:** `no`']), /repeats `Private or sensitive material`/],
+    ['the data bullet with another value', record([], DATA('- **Private or sensitive material:** `some`')), /`Private or sensitive material` is `some`; write `yes`, `no`, `not declared`/],
+    ['`## Data` twice', record([], [...DATA('- **Private or sensitive material:** `yes`'), '## Data']), /has the `## Data` heading 2 times/],
+    ['`## Data` before `## Choices`', `# Adoption record\n\n## Data\n\n- **Private or sensitive material:** \`no\`\n\n${record([]).replace('# Adoption record\n', '')}`, /adoption\.md:3 puts `## Data` before `## Choices`/],
+    ['a fence that never closes', record(['```', '- **Feature:** `review`']), /opens a code fence that never closes/],
+  ])('fails %s, by line', (_name, text, message) => {
+    expect(() => installChoices(text)).toThrow(message);
+  });
 });

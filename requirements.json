@@ -1,5 +1,5 @@
 {
-  "$comment": "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. `catalogue` is the lane catalogue, copied from docs/lanes.json.",
+  "$comment": "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. `catalogue` is the lane catalogue, and `features` the fixed sets of lanes offered in place of a choice per lane (plan 0007 §2), both copied from docs/lanes.json.",
   "lanes": {
     "agent-code-audit": {
       "identities": [
@@ -838,6 +838,9 @@
         "recommend": [
           "agent-implement"
         ],
+        "requires": [
+          "agent-implement"
+        ],
         "when": "With implement: without it, a change request on the Implementer's pull request waits for a person."
       },
       "agent-explore": {
@@ -903,6 +906,9 @@
         "recommend": [
           "agent-lead"
         ],
+        "requires": [
+          "agent-lead"
+        ],
         "when": "With the Lead's brief: without it, a change request on a brief waits for a person."
       },
       "agent-lead-split": {
@@ -914,6 +920,9 @@
         ],
         "cost": "A model run per labelled issue.",
         "recommend": [
+          "agent-lead"
+        ],
+        "requires": [
           "agent-lead"
         ],
         "when": "With the Lead's brief, so an issue too big for one run is split rather than stalled."
@@ -930,6 +939,9 @@
         "recommend": [
           "agent-lead"
         ],
+        "requires": [
+          "agent-lead"
+        ],
         "when": "With the Lead's brief: it is what turns an approved brief into work."
       },
       "agent-verify-acs": {
@@ -941,6 +953,9 @@
         ],
         "cost": "A model run per project verified.",
         "recommend": [
+          "agent-lead-reconcile"
+        ],
+        "requires": [
           "agent-lead-reconcile"
         ],
         "when": "With the reconciler, which asks it to verify a project before closing it."
@@ -1013,6 +1028,108 @@
       }
     }
   },
+  "features": [
+    {
+      "feature": "review",
+      "title": "Review",
+      "does": "An AI reviewer approves or requests changes on pull requests, with one GitHub App.",
+      "lanes": [
+        "agent-review"
+      ],
+      "conditional": {},
+      "apps": [
+        "judge"
+      ],
+      "steps": [
+        "the Judge App: create it, or reuse one with a new key",
+        "the Claude token",
+        "merging the install pull request",
+        "the ruleset, where the token can't create it",
+        "the `Lane check` rule, after the merge"
+      ]
+    },
+    {
+      "feature": "build",
+      "title": "Review + build",
+      "does": "Also writes code from issues you label and revises it, with a second App.",
+      "lanes": [
+        "agent-review",
+        "agent-implement",
+        "agent-implement-revise",
+        "agent-triage",
+        "agent-rebase",
+        "agent-dispatch-sweep",
+        "agent-merge-reconcile"
+      ],
+      "conditional": {},
+      "apps": [
+        "author",
+        "judge"
+      ],
+      "steps": [
+        "the Judge App: create it, or reuse one with a new key",
+        "the Claude token",
+        "merging the install pull request",
+        "the ruleset, where the token can't create it",
+        "the `Lane check` rule, after the merge",
+        "the Author App: create it, or reuse one with a new key",
+        "the sign-off delegation, your own act (`K-AGENT-44`), where the repository runs Kanon's DCO check"
+      ]
+    },
+    {
+      "feature": "full",
+      "title": "Full pipeline",
+      "does": "Also plans projects, merges approved work and audits the pipeline, with the same two Apps.",
+      "lanes": [
+        "agent-review",
+        "agent-implement",
+        "agent-implement-revise",
+        "agent-triage",
+        "agent-rebase",
+        "agent-dispatch-sweep",
+        "agent-merge-reconcile",
+        "agent-lead",
+        "agent-lead-revise",
+        "agent-lead-split",
+        "agent-lead-reconcile",
+        "agent-verify-acs",
+        "agent-merge",
+        "agent-overseer",
+        "agent-code-audit"
+      ],
+      "conditional": {
+        "agent-explore": {
+          "hook": ".github/actions/explore-sweep/action.yml",
+          "condition": "when the repository has the sweep hook you write (docs/explore-sweep.md)"
+        },
+        "agent-weekly-digest": {
+          "secret": "DIGEST_WEBHOOK",
+          "condition": "when the repository holds the chat channel's webhook, `DIGEST_WEBHOOK`"
+        },
+        "agent-project-digest": {
+          "secret": "DIGEST_WEBHOOK",
+          "condition": "when the repository holds the chat channel's webhook, `DIGEST_WEBHOOK`"
+        }
+      },
+      "leftOut": {
+        "agent-explore-telemetry": "It needs an aggregate invoker role that Kanon's operator issues after registration (docs/telemetry.md), so nothing done at install makes it work."
+      },
+      "apps": [
+        "author",
+        "judge"
+      ],
+      "steps": [
+        "the Judge App: create it, or reuse one with a new key",
+        "the Claude token",
+        "merging the install pull request",
+        "the ruleset, where the token can't create it",
+        "the `Lane check` rule, after the merge",
+        "the Author App: create it, or reuse one with a new key",
+        "the sign-off delegation, your own act (`K-AGENT-44`), where the repository runs Kanon's DCO check",
+        "the chat channel's webhook, `DIGEST_WEBHOOK`, when the digests are in"
+      ]
+    }
+  ],
   "release": {
     "dcoExemptsReleaser": true
   },
