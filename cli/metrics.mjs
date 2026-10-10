@@ -42,13 +42,11 @@ import { ACTOR_CLASSES } from '../actions/agent-telemetry/schema.mjs';
 import { APP_REGISTER, parseAppRegister } from '../scripts/app-register.mjs';
 import { parseCodeAreas, STACK_FILE, UNDECLARED } from '../scripts/lib/code-areas.mjs';
 import { defaultEscalationFile, ESCALATION_FILE, parseEscalationFile } from '../scripts/lib/escalation-paths.mjs';
-import { toDetectorPr } from '../scripts/metrics/adapter.mjs';
 import { AREAS } from '../scripts/metrics/areas.mjs';
 import { BANDS } from '../scripts/metrics/band.mjs';
-import { accuracyFields, codeAreaTest, detectorCounts, isFixPr } from '../scripts/metrics/detectors.mjs';
+import { deriveRows } from '../scripts/metrics/derive.mjs';
+import { detectorCounts, isFixPr } from '../scripts/metrics/detectors.mjs';
 import { ORIGINS } from '../scripts/metrics/origin.mjs';
-import { isReleasePr } from '../scripts/metrics/release.mjs';
-import { WorkItemError, workItemRow } from '../scripts/metrics/work-item.mjs';
 import { remoteRepo } from './apps.mjs';
 import { kanonRelease } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
@@ -266,7 +264,7 @@ function checkoutOf(deps, dir, repo) {
  * quote the file, goes to standard error only.
  * @param {Deps} deps @param {string} repo @param {string | null} root
  */
-async function declarations(deps, repo, root) {
+export async function declarations(deps, repo, root) {
   /** @param {string} rel @returns {Promise<string | null>} */
   const read = async (rel) => {
     if (root) return deps.readFile(join(root, rel));
@@ -397,48 +395,20 @@ export async function dryRun(deps, opts) {
   const { decl, found } = await declarations(deps, repo, root);
   const read = await readPullRequests({ gh: deps.gh, sleep: deps.sleep, progress: deps.err }, repo, { since, until: opts.until }, deps.sizes);
 
-  // Release PRs are left out of every count and of the detectors' items (§1.2, the Owner on
-  // kanon#538). The detectors' view goes through the one adapter; a PR it refuses is left out.
+  // The rows, as the collector's work-item step derives them (`deriveRows`, plan 0003 M4): release
+  // PRs left out of every count and of the detectors' items (§1.2, the Owner on kanon#538), and a
+  // PR the detectors' adapter refuses left out as unreadable.
+  const recordedAt = deps.now().toISOString();
+  const version = deps.release().replace(/^v/, '');
+  const derived = deriveRows(read.prs, { declarations: decl, repo, recordedAt, kanonVersion: version });
+  const { rows, invalid, dprs, isCode } = derived;
   /** @type {{ pr: number, reason: string }[]} */
-  const leftOut = [...read.leftOut];
-  /** @type {import('../scripts/metrics/types.mjs').PullRequest[]} */
-  const prs = [];
-  /** @type {import('../scripts/metrics/detectors.mjs').DetectorPr[]} */
-  const dprs = [];
-  for (const pr of read.prs) {
-    if (isReleasePr(pr, decl.register)) {
-      leftOut.push({ pr: pr.number, reason: 'release' });
-      continue;
-    }
-    try {
-      dprs.push(toDetectorPr(pr));
-      prs.push(pr);
-    } catch {
-      leftOut.push({ pr: pr.number, reason: 'unreadable' });
-    }
-  }
-  const isCode = codeAreaTest({ codeAreas: decl.codeAreas, escalationFile: decl.escalationFile });
+  const leftOut = [...read.leftOut, ...derived.leftOut];
+  const prs = derived.prs;
   const fixes = dprs.filter((p) => p.mergedAt && isFixPr(p));
   const szz = szzSetup(deps, root, fixes);
   const det = await detectorCounts(dprs, { repo, isCode, blame: szz.ran && szz.blame ? szz.blame : () => [] });
   const blameFailures = szz.ran && szz.failures ? szz.failures.count : 0;
-
-  // The rows.
-  const recordedAt = deps.now().toISOString();
-  const version = deps.release().replace(/^v/, '');
-  /** @type {Record<string, unknown>[]} */
-  const rows = [];
-  /** @type {{ pr: number, fields: string[] }[]} */
-  const invalid = [];
-  prs.forEach((pr, k) => {
-    const links = pr.merged_at ? accuracyFields(/** @type {any} */ (dprs[k]), dprs, { repo, isCode }) : {};
-    try {
-      rows.push(workItemRow({ pr, declarations: decl, tag: 'run', recorded_at: recordedAt, kanon_version: version, links }));
-    } catch (e) {
-      if (!(e instanceof WorkItemError)) throw e;
-      invalid.push({ pr: pr.number, fields: e.fields.length ? e.fields : ['(row)'] });
-    }
-  });
 
   // The counts.
   const merged = rows.filter((r) => r.fate === 'merged');

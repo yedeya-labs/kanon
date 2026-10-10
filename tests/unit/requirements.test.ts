@@ -40,7 +40,7 @@ describe('requirements.json', () => {
     expect(built.telemetry).toEqual({
       collector: 'telemetry-collect',
       variables: ['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE'],
-      grant: { actions: 'read', contents: 'read', 'id-token': 'write' },
+      grant: { actions: 'read', contents: 'read', 'id-token': 'write', issues: 'read', 'pull-requests': 'read' },
     });
   });
 
