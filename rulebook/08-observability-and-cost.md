@@ -225,7 +225,7 @@ The lanes reach the QA store only through Kanon's **store contract**: a hook the
 
 **Why.** An open-source tool that sends data home by default loses the trust it depends on. Thirteen months allows year-on-year comparisons, and no more. Opting in is also what feeds the cross-adopter improvement work, so the value of opting in has to be visible to the adopter, not assumed.
 
-**Enforced by.** Prose only; the opt-in will be a step in the installer.
+**Enforced by.** Prose only; the installer's opt-in is one consent question that sets both opt-ins, *Yes*, *Codes only* or *No*, sends nothing without an explicit answer, and links [`docs/sharing.md`](../docs/sharing.md) for what is sent, where it is kept and for how long, who reads it, and how to stop and erase it ([plan 0007](../docs/plans/0007-guided-install.md) §3, Q4). `kanon init` and the adopt skill ask it from plan 0007's steps G5 and G6; until then, `kanon init` asks the same opt-ins as three questions, each defaulting to sending nothing.
 
 **Class.** framework
 
