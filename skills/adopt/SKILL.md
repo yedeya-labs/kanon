@@ -106,7 +106,16 @@ The Stakeholder places work on the roadmap and decides what is a gate candidate.
 - **Recommended:** the Owner.
 - **Options:** the Owner (`--stakeholder <owner>`); or someone else, typed (`--stakeholder <who>`).
 
+### `.answers.feature`: what Kanon does here
+
+A feature is a fixed set of lanes, listed in `.features` (`docs/lanes.md` in Kanon's repository, "The features"). Ask, in these words: "What should Kanon do in this repo?", with each feature of `.features` as an option, its title as the label and its `does` as the consequence, and **Customise** last.
+
+- **Recommended:** the dry run's `.answers.feature` when the repository already calls lanes and they make up a feature; otherwise **Review**.
+- **Options:** **Review** (`--feature review`), **Review + build** (`--feature build`) or **Full pipeline** (`--feature full`): `init` installs the feature's lanes, and each conditional lane whose condition holds here, and the lanes question below is not asked. **Customise**: Choose lane by lane (advanced): ask the lanes question below, which passes `--lanes <list>`, never beside `--feature`, which `init` refuses.
+
 ### `.answers.lanes`: which lanes, a group at a time
+
+Asked only after **Customise**.
 
 The lanes are the agents' workflows. Ask one question per group of `.catalogue`, in its order, as a multi-select question headed with the group's `.catalogue[].header`; for a group of one lane, ask **Install it** or **Not now** instead.
 
@@ -117,6 +126,20 @@ The lanes are the agents' workflows. Ask one question per group of `.catalogue`,
 - **The review lane stays first and recommended:** its App's approval is what ends bootstrap. If the person leaves it out, say what that means and ask once more.
 - **A lane the repository already calls** (`.inspection.installedLanes`) that the person leaves out is not uninstalled by `kanon init`: say so.
 - **The flag:** every lane chosen, in every group, as one `--lanes <list>`, by the names in `.catalogue[].lanes[].lane`. At least one lane must be chosen.
+
+### `.answers.reviewTrigger`: which pull requests the Reviewer reviews
+
+Not asked by this release: the review lane reviews only a pull request labelled `review:please` until its trigger without a label is built (plan 0007 step G7 in Kanon's repository), and `init` refuses `--review-trigger every-pr` until then. Say so, in the summary's words: "To get a review, add the label `review:please` to the pull request; the Reviewer posts its verdict once CI has finished. After a verdict, push a new commit, or remove and add the label again, to ask for another look."
+
+- **Recommended:** **Only labelled ones**.
+- **Options:** **Only labelled ones** (`--review-trigger labelled`, the default with the review lane): only pull requests you label `review:please` get a verdict. **Every pull request** (`--review-trigger every-pr`): not offered until step G7 ships.
+
+### `.answers.sensitiveData`: private or sensitive material
+
+Ask, in these words: "Does this repo hold private or sensitive material?" The answer goes in the adoption record's `## Data` section.
+
+- **Recommended:** **Yes** on a private repository (`.inspection.private` is true), **No** on a public one.
+- **Options:** **Yes** (`--sensitive-data`): the record says so; the lanes still read the files and diffs they need. **No** (`--no-sensitive-data`): the record says it holds none.
 
 ### `.answers.gates`: the stack's gates
 
@@ -152,7 +175,7 @@ Kanon's label taxonomy replaces GitHub's default labels it doesn't use, such as 
 Asked only when `.inspection.callsRelease` is true. Otherwise there is nothing to choose: say so, and pass neither flag.
 
 - **Recommended:** **Yes** when `.inspection.rulesets` is `yes`, because a release pull request opened without an App runs no CI, so a ruleset that requires checks blocks it unless an admin bypasses it; otherwise **No**.
-- **Options:** **Yes** (`--releaser`): `kanon apps` creates a third App, the Releaser, which opens the release pull requests so their CI runs, and becomes the ruleset's only bypass actor (`K-MERGE-8`). **No** (`--no-releaser`): release pull requests keep being opened with the workflow's token.
+- **Options:** **Yes** (`--releaser`, or `--releases`): `kanon apps` creates a third App, the Releaser, which opens the release pull requests so their CI runs, and becomes the ruleset's only bypass actor (`K-MERGE-8`). **No** (`--no-releaser`, or `--no-releases`): release pull requests keep being opened with the workflow's token.
 
 ### `.answers.reuseApps`: reuse an App the owner already has
 
@@ -165,6 +188,14 @@ An owner has one Author and one Judge (and at most one Releaser), reused across 
 
 - **Recommended:** **Yes**, unless the person says nobody here uses Claude Code.
 - **Options:** **Yes** (`--plugin`): `init` writes `.claude/settings.json` declaring the kanon plugin at this release (or, when the file exists, the finding `plugin.declare` gives the keys to merge), so everyone who uses Claude Code here gets these skills once they trust the folder, and doctor checks the release against the pins. **No** (`--no-plugin`): each person installs the plugin themselves, and nothing checks its release.
+
+### `.answers.consent`: share with Kanon
+
+One question sets telemetry, where upstream findings go and their evidence (`docs/sharing.md` in Kanon's repository). Ask it in `init`'s words, `CONSENT_QUESTION`, with `<link>` the sharing page at the release `init` runs from: "Help improve Kanon by sharing anonymous run data and the Kanon bugs your lanes find? Evidence text may rarely hold personal data; details: <link>."
+
+- **Recommended:** **Yes**. Recommended is not a default: the person answers, and `init --yes` without the flag sends nothing.
+- **Options:** **Yes** (`--consent yes`): run data, and scrubbed bug evidence read by Kanon's maintainer and a third-party decision provider; telemetry on, findings `sent with evidence`. **Codes only** (`--consent codes`): run data, and Kanon bugs as codes with no text. **No** (`--consent no`): nothing leaves this repo; Kanon bugs stay drafts here.
+- **The three questions below** are asked only when the person wants what no level gives, such as **Filed here**; then pass their own flags, never beside `--consent`, which `init` refuses.
 
 ### `.answers.telemetry`: send run rows to Kanon's telemetry store
 
