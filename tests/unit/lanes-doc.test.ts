@@ -229,6 +229,55 @@ describe("docs/lanes.md's catalogue table is the lane catalogue (kanon#428)", ()
   });
 });
 
+/**
+ * The features table (plan 0007 §2, step G2), built from `requirements.json`'s `features`, which
+ * is docs/lanes.json's: a row per feature, its lanes and person steps as what it adds to the one
+ * before it, its Apps by name, and its secrets from its lanes, the ones a caller may leave out
+ * aside (the QA store's, and the Overseer's telemetry reader role), and then those its
+ * conditional lanes add.
+ */
+const featuresTable = (): string => {
+  const req = loadRequirements();
+  const features = req.features ?? [];
+  const tick = (xs: string[]) => xs.map((x) => `\`${x}\``).join(', ');
+  const secretsOf = (lanes: string[]) => [...new Set(lanes.flatMap((l) => req.lanes[l]!.secrets.filter((s) => !(req.lanes[l]!.optionalSecrets ?? []).includes(s))))].sort();
+  /** What a feature adds to the one before it, said as such: "Review's, plus …", or "Review's" alone. */
+  const added = (prev: { title: string } | undefined, now: string): string => (!prev ? now : now ? `${prev.title}'s, plus ${now}` : `${prev.title}'s`);
+  const out = ['| Feature | What it does | Lanes | Apps | Secrets | Your steps |', '|---|---|---|---|---|---|'];
+  features.forEach((f, i) => {
+    const prev = features[i - 1];
+    const lanes = [
+      added(prev, tick(f.lanes.filter((l) => !prev?.lanes.includes(l)))),
+      ...Object.entries(f.conditional).map(([l, c]) => `\`${l}\`, only ${c.condition}`),
+      ...Object.entries(f.leftOut ?? {}).map(([l, why]) => `Left out: \`${l}\`. ${why}`),
+    ];
+    const secrets = secretsOf(f.lanes);
+    const before = prev ? secretsOf(prev.lanes) : [];
+    const ifIn = secretsOf(Object.keys(f.conditional)).filter((s) => !secrets.includes(s));
+    out.push(
+      `| ${f.title} | ${f.does} | ${lanes.join('<br>')} | ${f.apps.map((a) => `the ${req.identities.apps[a]!.name}`).join(' and ')} | ${added(prev, tick(secrets.filter((s) => !before.includes(s))))}${ifIn.length ? `; with a conditional lane, ${tick(ifIn)}` : ''} | ${added(prev, f.steps.filter((s) => !prev?.steps.includes(s)).join('; '))} |`,
+    );
+  });
+  return `\n\n${out.join('\n')}\n\n`;
+};
+
+describe("docs/lanes.md's features table is the features of docs/lanes.json (plan 0007 §2)", () => {
+  const OPEN = '<!-- lane-features:table -->';
+  const CLOSE = '<!-- /lane-features:table -->';
+  const doc = read('docs/lanes.md');
+  if (process.env.KANON_WRITE_LANES_DOC && doc.includes(OPEN)) writeFileSync(join(ROOT, 'docs/lanes.md'), `${doc.slice(0, doc.indexOf(OPEN) + OPEN.length)}${featuresTable()}${doc.slice(doc.indexOf(CLOSE))}`);
+
+  it('is built from the features, row for row', () => {
+    expect(between(read('docs/lanes.md'), OPEN, CLOSE), "docs/lanes.md's features table is stale: rebuild it with KANON_WRITE_LANES_DOC=1 npx vitest run tests/unit/lanes-doc.test.ts").toBe(featuresTable());
+  });
+
+  it('has a row for each feature, so the check above is not vacuous', () => {
+    const rows = between(read('docs/lanes.md'), OPEN, CLOSE).split('\n').filter((l) => /^\| [^-|]/.test(l) && !l.startsWith('| Feature |'));
+    expect(rows.map((r) => r.split(' | ')[0]!.slice(2))).toEqual(['Review', 'Review + build', 'Full pipeline']);
+    expect(rows[0]).toContain('`agent-review`');
+  });
+});
+
 // #626: the review lane reviews a pull request only once it carries one of its labels, or when
 // dispatched, and a person installing it read that nowhere they looked. Both of docs/lanes.md's
 // tables state it in the review lane's row, with the labels the lane gates on.
