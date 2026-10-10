@@ -1200,7 +1200,7 @@ export const diagnose = async (deps, opts) => {
       findItems('secret.missing', repo, lacks, (xs) => {
         const who = whoNeeds(xs);
         return [`lacks ${xs.join(' and ')}, the ${id} App's ${xs.length > 1 ? 'secrets' : 'secret'}${who ? `: ${who}` : ''}.`, slug
-        ? { text: `Add ${repoName} to the ${id} App's installation, and generate a private key on its settings page. kanon apps is your step: check the token with the first command (it creates nothing), then store the key with the second (it checks the key, stores both secrets and deletes the file):`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}=<downloaded>.pem`] }
+        ? { text: `Add ${repoName} to the ${id} App's installation, generate a private key on its settings page, and copy its App ID from the same page. kanon apps is your step: check the token with the first command (it creates nothing), then store the key with the second (it checks the key, stores both secrets and deletes the file):`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}@<App ID>=<downloaded>.pem`] }
         : { text: `Create the ${id} App from this checkout. kanon apps is your step: check the token with the first command (it creates nothing), then create the App with the second, which stores its secrets:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] }];
       });
     }

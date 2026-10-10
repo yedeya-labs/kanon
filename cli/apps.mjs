@@ -20,9 +20,10 @@
 //
 // The key GitHub returns at creation is in memory once, so the repositories named at creation
 // get it in the same run. A repository added later uses a key the Owner generates on the App's
-// settings page: `--reuse <app>:<slug>=<key file>` reads it, checks it is a key of that slug
+// settings page: `--reuse <app>:<slug>@<id>=<key file>` reads it, checks it is a key of that slug
 // and that the slug's App holds the named App's permissions (#366), stores it, and deletes the
-// file (plan 0005 §3.2).
+// file (plan 0005 §3.2). The id is the App ID or the Client ID from the same page: GitHub answers
+// 404 to a person's token for a private App, as Kanon's are, so the command can't look it up (#623).
 //
 // Before anything else it refuses to run outside a checkout of one of the repositories it is
 // for (the register would land wherever it ran), and says which token `gh` uses and whose it
@@ -65,7 +66,7 @@ export const appRoles = (spec) => {
 };
 
 export const USAGE = `Usage: kanon apps --owner <login> --repo <repo>[,<repo>...] --apps <app>[,<app>...] [options]
-       kanon apps --owner <login> --repo <repo>[,<repo>...] --reuse <app>:<slug>=<key file> [options]
+       kanon apps --owner <login> --repo <repo>[,<repo>...] --reuse <app>:<slug>@<id>=<key file> [options]
        kanon apps --owner <login> --repo <repo>[,<repo>...] --preflight
 
 Creates Kanon's GitHub Apps for an owner, one manifest flow each, with exactly each App's
@@ -85,10 +86,11 @@ Options:
                          are for. Each gets the Apps' secrets in this run
   --apps <list>          comma-separated: ${Object.keys(loadApps()).join(', ')}. The Author and the
                          Judge run the lanes; the Releaser is optional, for releases alone
-  --reuse <app>:<slug>=<file>
-                         add these repositories to an App that exists: the key file is one you
-                         generated on the App's settings page. It is checked against the App,
-                         stored, and deleted. Repeatable; takes the place of --apps
+  --reuse <app>:<slug>@<id>=<file>
+                         add these repositories to an App that exists: <id> is its App ID or
+                         Client ID, and the key file one you generated, both from the App's
+                         settings page. It is checked against the App, stored, and deleted.
+                         Repeatable; takes the place of --apps
   --name <app>=<name>    the App's name (default <owner>-<app>); repeatable
   --dir <path>           the checkout (default: here)
   --preflight            run only the checks that come before any App: the checkout, the
@@ -178,7 +180,7 @@ export const realDeps = {
  * @param {Record<string, AppSpec>} apps
  */
 export const parseArgs = (argv, apps) => {
-  /** @type {{ owner: string, viaOrg: boolean, repos: string[], apps: string[], reuse: Array<{ app: string, slug: string, file: string }>, names: Record<string, string>, dir: string, register: string, preflight: boolean, help: boolean }} */
+  /** @type {{ owner: string, viaOrg: boolean, repos: string[], apps: string[], reuse: Array<{ app: string, slug: string, id: string, file: string }>, names: Record<string, string>, dir: string, register: string, preflight: boolean, help: boolean }} */
   const opts = { owner: '', viaOrg: false, repos: [], apps: [], reuse: [], names: {}, dir: process.cwd(), register: '', preflight: false, help: false };
   const list = (/** @type {string} */ v) => [...new Set(v.split(',').map((r) => r.trim()).filter(Boolean))];
   for (let i = 0; i < argv.length; i++) {
@@ -204,9 +206,10 @@ export const parseArgs = (argv, apps) => {
       throw new Error('--roles is gone since plan 0005\'s L4: the lanes run as two Apps per owner, the Author and the Judge, and the Releaser for releases. Pass --apps author,judge (and ,releaser)');
     } else if (flag === '--reuse') {
       const v = value();
-      const m = /^([a-z]+):([a-z0-9]+(?:-[a-z0-9]+)*)=(.+)$/.exec(v);
-      if (!m) throw new Error(`--reuse takes <app>:<slug>=<key file>, not "${v}"`);
-      opts.reuse.push({ app: /** @type {string} */ (m[1]), slug: /** @type {string} */ (m[2]), file: /** @type {string} */ (m[3]) });
+      // The id is optional here only so that its absence is refused with the App's page (#623).
+      const m = /^([a-z]+):([a-z0-9]+(?:-[a-z0-9]+)*)(?:@([A-Za-z0-9.]+))?=(.+)$/.exec(v);
+      if (!m) throw new Error(`--reuse takes <app>:<slug>@<App ID or Client ID>=<key file>, not "${v}"`);
+      opts.reuse.push({ app: /** @type {string} */ (m[1]), slug: /** @type {string} */ (m[2]), id: m[3] ?? '', file: /** @type {string} */ (m[4]) });
     } else if (flag === '--name') {
       const v = value();
       const eq = v.indexOf('=');
@@ -470,7 +473,7 @@ export const rotationSteps = (pages, owner, repos, apps) => [
   ...apps.flatMap((a) => repos.map((r) => `  gh secret set ${secretNames(a).key} -R ${owner}/${r} < <downloaded>.pem`)),
   '  rm <downloaded>.pem',
   'Then delete the old key on the same page. To add a repository later, generate a key the same way and run',
-  `  kanon apps --owner ${owner} --repo <repo> --reuse <app>:<slug>=<downloaded>.pem`,
+  `  kanon apps --owner ${owner} --repo <repo> --reuse <app>:<slug>@<App ID>=<downloaded>.pem`,
 ];
 
 /**
@@ -537,7 +540,7 @@ const storeSecrets = async ({ owner, repos, app, appId, slug, pem, pages, deps, 
             (keyFile
               ? `The key file ${keyFile} is kept: fix the token and run the command again.`
               : `The key was never saved anywhere, so it is lost: generate a new one at ${pages.app(slug)}, and run ` +
-                `"kanon apps --owner ${owner} --repo ${repos.join(',')} --reuse ${app}:${slug}=<file>.pem".`),
+                `"kanon apps --owner ${owner} --repo ${repos.join(',')} --reuse ${app}:${slug}@${appId}=<file>.pem".`),
         );
       }
     }
@@ -686,28 +689,36 @@ const createApp = async ({ owner, pages, repos, key, name, spec, register, deps 
   return { slug, appId, warnings: inst.warnings };
 };
 
+/** Where an App's App ID and Client ID are, for an error that asks for one. @param {OwnerPages} pages @param {string} slug */
+const idsAt = (pages, slug) => `under "About" on ${pages.app(slug)}`;
+
 /**
  * Adds the repositories to an App that exists, from a key file the Owner generated on the
  * App's settings page (plan 0005 §3.2): checks the key is that App's and the installation
- * covers each repository, stores it, writes the rows, and deletes the file.
- * @param {{ owner: string, pages: OwnerPages, repos: string[], key: string, slug: string, file: string, spec: AppSpec, specs: Record<string, AppSpec>, register: string, deps: Deps }} a
+ * covers each repository, stores it, writes the rows, and deletes the file. `id` is the App ID
+ * or Client ID the person copied from the same page, since GitHub tells a person's token nothing
+ * about a private App (#623); GitHub takes either as the JWT's issuer.
+ * @param {{ owner: string, pages: OwnerPages, repos: string[], key: string, slug: string, id: string, file: string, spec: AppSpec, specs: Record<string, AppSpec>, register: string, deps: Deps }} a
  */
-const reuseApp = async ({ owner, pages, repos, key, slug, file, spec, specs, register, deps }) => {
+const reuseApp = async ({ owner, pages, repos, key, slug, id, file, spec, specs, register, deps }) => {
   const { out } = deps;
   out('');
   out(`== The ${spec.app} (${appRoles(spec).join(', ')}): the App ${slug}, from ${file} ==`);
   const pem = deps.readFile(file);
   if (pem === null || !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(pem)) throw new Error(`${file} is not a private key file`);
-  const app = await deps.gh(['api', `apps/${slug}`, '--jq', '.id']);
-  const appId = Number(app.stdout.trim());
-  if (app.status !== 0 || !Number.isInteger(appId) || appId <= 0) {
-    throw new Error(`GitHub could not say which App \`${slug}\` is (${app.stderr.trim() || `exit ${app.status}`}). Check the slug.`);
+  // The key is this App's only if GitHub accepts a JWT it signed as this App, and answers its slug.
+  const me = await api(deps, '/app', { jwt: appJwt(id, pem, deps.now()) });
+  if (me.status !== 200) {
+    throw new Error(
+      `GitHub refused the key in ${file} as the App ${id}'s (HTTP ${me.status}): either ${id} is not ${slug}'s App ID or Client ID, or the key is not one of its keys. ` +
+        `Both IDs are ${idsAt(pages, slug)}, and its keys under "Private keys". Nothing was stored; the file is kept.`,
+    );
   }
-  // The key is this App's only if GitHub accepts a JWT it signed as this App's id.
-  const me = await api(deps, '/app', { jwt: appJwt(appId, pem, deps.now()) });
-  if (me.status !== 200 || String(me.json?.slug) !== slug) {
-    throw new Error(`the key in ${file} is not a key of ${slug} (GitHub answered ${me.status}). Nothing was stored; the file is kept.`);
+  if (String(me.json?.slug) !== slug) {
+    throw new Error(`the ID ${id} and the key in ${file} are the App ${me.json?.slug}'s, not ${slug}'s. Nothing was stored; the file is kept.`);
   }
+  const appId = Number(me.json?.id);
+  if (!Number.isInteger(appId) || appId <= 0) throw new Error(`GitHub's answer for ${slug} named no App ID. Nothing was stored; the file is kept.`);
   // The App is the one named only if it holds that App's permissions (#366): a slug of the
   // Author given as the Judge's would otherwise store the Author's key under JUDGE_ secrets and
   // write the Reviewer's and Merger's rows naming it. apps-check fails on any difference, so an
@@ -720,7 +731,7 @@ const reuseApp = async ({ owner, pages, repos, key, slug, file, spec, specs, reg
     throw new Error(
       `${slug} does not hold the ${spec.app}'s permissions (${drift.map((k) => `${k}: ${got[k] ?? 'none'}, the ${spec.app}'s ${spec.permissions[k] ?? 'none'}`).join('; ')}). ` +
         (other
-          ? `They are the ${other[1].app}'s: if ${slug} is your ${other[1].app}, give it as --reuse ${other[0]}:${slug}=<key file>. `
+          ? `They are the ${other[1].app}'s: if ${slug} is your ${other[1].app}, give it as --reuse ${other[0]}:${slug}@${id}=<key file>. `
           : `If ${slug} is your ${spec.app}, set its permissions to the ${spec.app}'s at ${pages.app(slug)}/permissions, then run the command again. `) +
         'Nothing was stored; the file is kept.',
     );
@@ -896,6 +907,15 @@ export const apps = async (argv, overrides = {}) => {
   deps.out(`${owner} is ${account.kind === 'User' ? 'a personal account' : 'an organisation'}; its Apps are created at ${pages.newApp}.`);
   deps.out(`The App register is ${register}.`);
 
+  // A reused App's ID, asked for before anything changes, with the page it is on (#623).
+  const unnamed = opts.reuse.filter((r) => !r.id);
+  if (unnamed.length) {
+    for (const { app, slug } of unnamed) {
+      deps.err(`kanon apps: --reuse ${app}:${slug} needs the App's ID: give it as --reuse ${app}:${slug}@<App ID>=<key file>. The App ID, or the Client ID, is ${idsAt(pages, slug)}. Nothing was changed.`);
+    }
+    return 2;
+  }
+
   // Fail before any App exists if a key could not be stored: an App whose key has nowhere to
   // go is one more App to delete by hand. Reading the secrets proves nothing about writing
   // them (a token can hold Secrets: read alone), so the probe writes one, on each repository.
@@ -923,9 +943,9 @@ export const apps = async (argv, overrides = {}) => {
       warnings += r.warnings.length;
       done.push({ spec, slug: r.slug, appId: r.appId });
     }
-    for (const { app: key, slug, file } of opts.reuse) {
+    for (const { app: key, slug, id, file } of opts.reuse) {
       const spec = /** @type {AppSpec} */ (specs[key]);
-      const r = await reuseApp({ owner, pages, repos, key, slug, file: resolve(file), spec, specs, register, deps });
+      const r = await reuseApp({ owner, pages, repos, key, slug, id, file: resolve(file), spec, specs, register, deps });
       warnings += r.warnings.length;
       done.push({ spec, slug: r.slug, appId: r.appId });
     }
