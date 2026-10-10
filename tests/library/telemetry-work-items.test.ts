@@ -137,7 +137,12 @@ class World {
       if (query.includes('WorkItemOne')) {
         const n = Number(vars.number);
         const p = this.prs.get(n);
-        return ok({ repository: { issueOrPullRequest: p ? this.shape(p) : this.issues.has(n) ? { __typename: 'Issue' } : null } });
+        // GitHub's answer for a number nothing answers to: a null node AND a NOT_FOUND error, and gh exits 1.
+        if (!p && !this.issues.has(n)) {
+          const message = `Could not resolve to an issue or pull request with the number of ${n}.`;
+          return { status: 1, stdout: JSON.stringify({ data: { repository: { issueOrPullRequest: null } }, errors: [{ type: 'NOT_FOUND', path: ['repository', 'issueOrPullRequest'], message }] }), stderr: `gh: ${message}` };
+        }
+        return ok({ repository: { issueOrPullRequest: p ? this.shape(p) : { __typename: 'Issue' } } });
       }
       if (query.includes('WorkItemClosers')) {
         const n = Number(vars.number);
@@ -154,7 +159,12 @@ class World {
       return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
     }
     const pulls = /^repos\/example\/adopter\/commits\/(\w+)\/pulls$/.exec(path);
-    if (pulls) return json([...this.prs.values()].filter((p) => p.mergeCommit?.oid === pulls[1]).map((p) => ({ number: p.number })));
+    if (pulls) {
+      const of = [...this.prs.values()].filter((p) => p.mergeCommit?.oid === pulls[1] || p.commits.some((c: Node) => c.commit.oid === pulls[1]));
+      // GitHub's answer for a SHA the repository doesn't have.
+      if (!of.length) return { status: 1, stdout: '', stderr: `gh: No commit found for SHA: ${pulls[1]} (HTTP 422)` };
+      return json(of.map((p) => ({ number: p.number })));
+    }
     if (/^repos\/example\/adopter\/commits\?until=/.test(path)) return json([{ sha: 'base' }]);
     const comments = /^repos\/example\/adopter\/issues\/(\d+)\/comments/.exec(path);
     if (comments) return json([(this.comments.get(Number(comments[1])) ?? []).map((body) => ({ body }))]);
@@ -361,6 +371,48 @@ describe('a later event rewrites the earlier row, whole (plan 0003 §3.1, §3.5)
     world.closeIssue(31, at - 15 * MIN, 'COMPLETED');
     await sweep(world, store, at);
     expect(store.row(30)).toBeUndefined();
+  });
+
+  it('a bug-fixing PR mentioning a number nothing answers to (a hex colour, a deleted issue) is no candidate and no failure', async () => {
+    const { world, store } = await start();
+    const at = T0 + 5 * DAY;
+    world.issue(90, { labels: ['bug'], body: '### Introduced by\n\n#41\n\n### What happened\n\nThe border went #000000, see #9999.' });
+    world.comments.set(90, ['Also #123456.']);
+    world.pr(91, { opened: at - 50 * MIN, closed: at - 10 * MIN, title: 'fix: zebra', closes: [90], files: ['app/zebra.ts'], body: 'Fixes it; step #7654321.' });
+    world.mention(41, 90, at - 2 * DAY);
+    const res = await sweep(world, store, at);
+    expect(res.failures).toEqual([]);
+    expect(store.row(41)).toMatchObject({ fix_prs: '91' });
+  });
+
+  it('a closed follow-up mentioning a number nothing answers to is no candidate and no failure', async () => {
+    const { world, store } = await start();
+    world.issue(60, { labels: ['follow-up', 'agent:reviewer'], body: 'Surfaced by PR #41; colour #0 in #8888.' });
+    world.mention(41, 60, T0 - 20 * MIN);
+    const at = T0 + DAY;
+    world.closeIssue(60, at - 15 * MIN, 'COMPLETED');
+    const res = await sweep(world, store, at);
+    expect(res.failures).toEqual([]);
+    expect(store.row(41)).toMatchObject({ followups_completed: 1 });
+  });
+
+  it('a revert naming a commit this repository lacks (cherry-picked from elsewhere) is no candidate and no failure', async () => {
+    const { world, store } = await start();
+    const at = T0 + DAY;
+    world.pr(53, { opened: at - 50 * MIN, closed: at - 10 * MIN, body: 'Upstream revert', commits: [`Revert\n\nThis reverts commit ${'f'.repeat(40)}.`] });
+    const res = await sweep(world, store, at);
+    expect(res.failures).toEqual([]);
+    expect(store.row(53)).toMatchObject({ fate: 'merged' });
+  });
+
+  it('a GitHub error other than not-found, on a candidate, still turns the sweep red', async () => {
+    const { world, store } = await start();
+    const at = T0 + DAY;
+    world.pr(54, { opened: at - 50 * MIN, closed: at - 10 * MIN, commits: [`Revert\n\nThis reverts commit ${'e'.repeat(40)}.`] });
+    const gh = world.gh;
+    world.gh = async (args: string[]) => (/commits\/e+\/pulls$/.test(args.at(-1) ?? '') ? { status: 1, stdout: '', stderr: 'gh: Resource not accessible by integration (HTTP 403)' } : gh(args));
+    const res = await sweep(world, store, at);
+    expect(res.failures).toEqual([expect.stringMatching(/^work items: the span's reverts, fixes and follow-ups could not be read/)]);
   });
 
   it("turns the sweep red, naming the PR, when an earlier item can't be read", async () => {
