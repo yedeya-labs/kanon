@@ -603,16 +603,17 @@ export const ownerInstallations = async (gh, owner, kind) => {
  * Which of Kanon's Apps the owner already has: each of its installations whose permissions are
  * exactly one App's in rulebook/agent-permissions.json (#363), as apps-check holds them, and that
  * subscribes to no events, as `buildManifest` creates each of Kanon's Apps (#462). In the order of
- * the Apps, then of the installations. `ownersOwn` then drops an App of someone else's.
+ * the Apps, then of the installations. `ownersOwn` then drops an App of someone else's. Each keeps
+ * its App's ID, null when the installation doesn't carry one, so `init` can fill it in (#640).
  * @param {any[]} installs @param {string} owner @param {Record<string, { permissions: Record<string, string> }>} specs
- * @returns {Array<{ app: string, slug: string, installation: number }>}
+ * @returns {Array<{ app: string, slug: string, installation: number, appId: number | null }>}
  */
 export const ownerKanonApps = (installs, owner, specs) =>
   Object.entries(specs).flatMap(([app, spec]) =>
     installs
       .filter((i) => String(i?.account?.login ?? '').toLowerCase() === owner.toLowerCase() && typeof i?.app_slug === 'string' && i?.permissions && typeof i.permissions === 'object' && !permissionDrift(i.permissions, spec.permissions).length)
       .filter((i) => Array.isArray(i.events) && !i.events.length)
-      .map((i) => ({ app, slug: String(i.app_slug), installation: Number(i.id) })),
+      .map((i) => ({ app, slug: String(i.app_slug), installation: Number(i.id), appId: Number.isInteger(i.app_id) && i.app_id > 0 ? i.app_id : null })),
   );
 
 /**
