@@ -53,6 +53,7 @@ import { remoteRepo } from './apps.mjs';
 import { kanonRelease } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
 import { ReadError, readPullRequests } from './metrics-read.mjs';
+import { report } from './metrics-report.mjs';
 
 /** The JSON output's contract (docs/metrics.md). A breaking change to it changes this. */
 export const SCHEMA = 'kanon-metrics-dry-run/v1';
@@ -64,6 +65,7 @@ export const DETAILS_SCHEMA = 'kanon-metrics-details/v1';
 export const EXIT = /** @type {const} */ ({ ok: 0, invalid: 1, usage: 2, error: 3, incomplete: 4 });
 
 export const USAGE = `Usage: kanon metrics dry-run --since <YYYY-MM-DD> [options]
+       kanon metrics report --rows <file> [options]   (kanon metrics report --help)
 
 Derives the work-item row of every pull request closed in the window (plan 0003 §3.3) from
 GitHub, validates each against the telemetry schema, runs the revert and linked-fix detectors,
@@ -151,7 +153,7 @@ export const parseArgs = (argv) => {
   const opts = { sub: '', since: null, until: null, repo: '', dir: null, json: false, details: null, help: false };
   const [sub, ...rest] = argv;
   if (sub === '-h' || sub === '--help' || sub === undefined) return { ...opts, help: true };
-  if (sub !== 'dry-run') throw new Error(`unknown subcommand "${sub}"; the one there is: dry-run`);
+  if (sub !== 'dry-run') throw new Error(`unknown subcommand "${sub}"; the ones there are: dry-run, report`);
   opts.sub = sub;
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i] ?? '';
@@ -189,6 +191,7 @@ const errorDocument = (deps, exitCode, error) => ({ schema: SCHEMA, kanon: deps.
  */
 export const metrics = async (argv, overrides = {}) => {
   const deps = { ...realDeps, ...overrides };
+  if (argv[0] === 'report') return report(argv.slice(1), deps);
   const wantsJson = argv.includes('--json');
   /** @type {ReturnType<typeof parseArgs>} */
   let opts;

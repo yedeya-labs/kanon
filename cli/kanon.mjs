@@ -22,7 +22,8 @@ Commands:
                (kanon apps --help)
   milestones   create the two bucket milestones when missing (kanon milestones --help)
   metrics      dry-run: derive the work-item rows of the pull requests closed since a date,
-               read-only, and print counts only (kanon metrics --help)`;
+               read-only, and print counts only; report: the three headline indicators by
+               band, from exported telemetry rows (kanon metrics --help)`;
 
 const [command, ...rest] = process.argv.slice(2);
 if (command === 'init') process.exitCode = await init(rest);

@@ -1,4 +1,6 @@
-# `kanon metrics dry-run`
+# `kanon metrics`
+
+Two subcommands: `kanon metrics dry-run` derives work-item rows from GitHub and prints counts (below), and [`kanon metrics report`](#kanon-metrics-report) reports the three headline indicators from stored rows.
 
 `kanon metrics dry-run` derives the work-item row of every pull request closed in a window, from GitHub, and prints counts only ([plan 0003](plans/0003-metrics.md) §7, step M2, [#516](https://github.com/yedeya-labs/kanon/issues/516)). It is how the metrics module is tried on a real history before the collector writes a single work-item row (M4). **It writes nothing to GitHub and sends nothing to the telemetry store.**
 
@@ -83,3 +85,53 @@ Plan 0003 §7 accepts M2 on the reference adopter, with the Owner:
 1. Run `kanon metrics dry-run --since 2026-09-04 --until 2026-10-02 --dir <checkout>` and compare the merged bands with §1.2's (S 74, M 97, L 90, XL 75). [Measurements](plans/0003-metrics.md#measurements)' script counts commits on main by commit time and leaves out release commits; the dry run counts pull requests by `closed_at`, and leaves release pull requests out as the script leaves release commits out. Each pull request the two see differently is explained.
 2. Run it again with `--details` into the private ops repository. From its `fixes`, the Owner hand-checks a random 30 with an explicit link and 30 `fix` pull requests without one, and puts the precision and recall in the pull request that closes M2, with how many of the undetected touch no code-area file.
 3. The explicit and SZZ counts go into that pull request side by side, as printed.
+
+## `kanon metrics report`
+
+`kanon metrics report` reports [plan 0003](plans/0003-metrics.md)'s three headline indicators by complexity band (§2, step M6, [#659](https://github.com/yedeya-labs/kanon/issues/659)), from one adopter's stored rows. It reads only the files it's given, and calls nothing.
+
+```sh
+kanon metrics report --rows runs-and-items.json                       # Markdown, the last 28 days
+kanon metrics report --rows runs.jsonl --rows work.jsonl --until 2026-10-01 --json
+```
+
+**Its input** is the adopter's run rows and work-item rows, exported from the telemetry store with its reader role ([plan 0002](plans/0002-hosted-telemetry-store.md) §6), as a JSON array, JSON Lines, or a JSON object with a `rows` array. Give `--rows` once per file. Only `tag: run` rows count (§2.1). A row of another kind, or one missing what the report needs to place it (a time, a lane, a PR number, a fate), is counted as left out, never guessed at. The window ends at `--until` (00:00 UTC, not included; default now) and reaches back `--days` (default 28), by close date.
+
+**What it prints**, always together, per band (S, M, L, XL) and pooled, with the pooled cells' band mix:
+
+| Indicator | What it is | Minimum | Interval |
+|---|---|---|---|
+| Cost per merged item | The median and p90, over merged items closed in the window, of the summed `total_cost_usd` of every delivery-lane run joined to the item. **API list price**, not what anyone paid. Items with no run row are left out, not counted as zero. | median 10, p90 30 | order statistics |
+| Yield | The cost of delivery runs joined to a merged item over the cost of all delivery runs, over the items settled in the window. Runs that never reached a PR are a **No PR** column. | 20 | bootstrap, 2,000 resamples, fixed seed |
+| Escaped defects, 30 and 90 days | Agent-authored merged items with an explicit revert or linked fix within the horizon, over those merged in the window that far back, so each has had its whole horizon. A **lower bound** (§3.5). Human-authored items are printed beside, pooled, as a comparison cohort. | 50 | Wilson |
+| First-review approval | Merged items whose first Reviewer verdict was `approved`, over those with a verdict. | 20 | Wilson |
+| Human-correction rate | Agent-authored merged items with a human commit or a human's change request after the Reviewer approved, over those where that is known. | 20 | Wilson |
+
+- **A cell below its minimum shows `not enough data (N)`**, with its count, never a number (§2.1, decision 11).
+- **The band validity check (§3.6).** The report computes Kendall's τ-b between band and cost per merged item, with a bootstrap interval. Unless the interval sits entirely above zero, or when there are fewer than 10 such items in two bands, **the pooled view replaces the banded one, with a warning**, for every indicator. The median cost per band is printed with the check.
+- **The band is recomputed** from each row's stored counts with the newest band version, never read from the row, so one report never mixes versions.
+- **Overhead,** the Explorer's, the code audit's, the telemetry Explorer's, the Overseer's and the digests' spend, is printed beside cost, never inside it, and is left out of yield.
+
+**How runs join items** is §3.4's rule, in `scripts/metrics/join.mjs`, which every reader uses: a run joins the item whose PR it names; a run naming only an issue joins the first item closing that issue to close after the run (on a tie, the lowest PR number). So a run joins at most one item. A run that joins nothing settles, not merged, 30 days after the last run on its PR or issue; the report reads no issue's state, so an issue closed without a PR settles the same way.
+
+**Exit codes:** 0 the report was made (a cell with too little data or a pooled view is not a failure); 2 a usage error; 3 a rows file that can't be read or isn't JSON rows. The message names the file, never its content.
+
+### Its JSON output
+
+`--json` prints one document, `kanon-metrics-report/v1`, following [the convention](cli-json.md):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema`, `kanon`, `status`, `exitCode` | | As in [`docs/cli-json.md`](cli-json.md). `status` is `ok` (the banded view), `pooled` (the validity check replaced it) or `error`. |
+| `window` | object | `from`, `until` (`YYYY-MM-DD`) and `days`. |
+| `bandVersion`, `costBasis` | number, string | The band version every item was banded with; `API list price`. |
+| `view`, `warnings` | string, array | `banded` or `pooled`, and why, as sentences. |
+| `rows` | object | `runs`, `workItems`, `runsJoined`, `runsUnjoined`, and `ignored`: `notRun`, `otherKind`, `unreadable`. |
+| `validity` | object | `status` (`valid`, `invalid`, `not-enough-data`), `n`, `tau`, `low`, `high`, and `medianCost` per band. |
+| `cost` | object | `cells` (each with `median` and `p90`), `mergedWithoutRuns`, `runsWithoutCost`, `overhead` (`runs`, `usd`). |
+| `yield` | object | `cells`, each with `yield`. |
+| `escape` | object | `d30` and `d90`, each with `mergedFrom`, `mergedUntil`, and `agent` and `human` cells, each with `rate`. |
+| `approval`, `correction` | object | `cells`, each with `rate`. |
+| `bootstrap` | object | `resamples` and `seed`. |
+
+`cells` holds `S`, `M`, `L`, `XL` in the banded view only, `pooled` always with its `bandMix`, and, for yield, `noPr`. Each estimate is `{ "status": "ok", "n", "value", "low", "high" }`, `{ "status": "not-enough-data", "n", "minimum" }` or, for a yield with no spend, `{ "status": "no-spend", "n" }`. Dollars and shares are rounded to four decimals.
