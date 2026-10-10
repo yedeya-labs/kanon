@@ -1689,10 +1689,10 @@ const run = async (deps, opts, req, rep) => {
       id: 'app.reuse',
       category: 'app',
       subject: i,
-      prose: `${s.owner} already has the ${name} App ${slug}${also}. Add ${repoName} to its installation, generate a private key on its settings page, then run this, and commit the register rows it writes:`,
+      prose: `${s.owner} already has the ${name} App ${slug}${also}. Add ${repoName} to its installation, generate a private key on its settings page and copy its App ID from the same page, then run this with both, and commit the register rows it writes:`,
       message: `${s.owner} already has the ${name} App ${slug}, which the chosen lanes run as, and the register lacks it.`,
-      text: `Add ${repoName} to the App's installation, generate a private key on its settings page, then run kanon apps --reuse with the downloaded key, and commit the register rows it writes.${also}`,
-      commands: [`kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${i}:${slug}=<downloaded>.pem`],
+      text: `Add ${repoName} to the App's installation, generate a private key on its settings page and copy its App ID from the same page, then run kanon apps --reuse with both, and commit the register rows it writes.${also}`,
+      commands: [`kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${i}:${slug}@<App ID>=<downloaded>.pem`],
       url: s.kind === 'User' ? `https://github.com/settings/apps/${slug}` : `https://github.com/organizations/${s.owner}/settings/apps/${slug}`,
     });
   }
@@ -1719,7 +1719,7 @@ const run = async (deps, opts, req, rep) => {
     // One App per owner (plan 0005 §3.2): when the owner's installations can't be listed, an App
     // it already has for another repository looks missing here (#363), so the step says to
     // reuse such an App rather than create a second one.
-    const reuseInstead = ownerApps !== null ? '' : ` If ${s.owner} already has ${toCreate.length > 1 ? 'these Apps' : 'this App'} for another repository, don't create ${toCreate.length > 1 ? 'them' : 'it'} again: add ${repoName} to ${toCreate.length > 1 ? 'each' : 'its'} installation, generate a private key on its settings page, and run kanon apps --owner ${s.owner} --repo ${repoName} --reuse <app>:<slug>=<key file> instead (docs/apps.md, "A repository added later").`;
+    const reuseInstead = ownerApps !== null ? '' : ` If ${s.owner} already has ${toCreate.length > 1 ? 'these Apps' : 'this App'} for another repository, don't create ${toCreate.length > 1 ? 'them' : 'it'} again: add ${repoName} to ${toCreate.length > 1 ? 'each' : 'its'} installation, generate a private key on its settings page and copy its App ID from there, and run kanon apps --owner ${s.owner} --repo ${repoName} --reuse <app>:<slug>@<App ID>=<key file> instead (docs/apps.md, "A repository added later").`;
     const createStep = () =>
       step({
         id: 'app.create',
@@ -1773,10 +1773,10 @@ const run = async (deps, opts, req, rep) => {
           id: 'app.reuse',
           category: 'app',
           subject: i,
-          prose: `The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}. Add ${repoName} to the App's installation, generate a private key on its settings page, then:`,
+          prose: `The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}. Add ${repoName} to the App's installation, generate a private key on its settings page and copy its App ID from the same page, then:`,
           message: `The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}.`,
-          text: `Add ${repoName} to the App's installation, generate a private key on its settings page, then run kanon apps --reuse with the downloaded key.`,
-          commands: [`kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${i}:${slug}=<downloaded>.pem`],
+          text: `Add ${repoName} to the App's installation, generate a private key on its settings page and copy its App ID from the same page, then run kanon apps --reuse with both.`,
+          commands: [`kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${i}:${slug}@<App ID>=<downloaded>.pem`],
           url: known ? (s.kind === 'User' ? `https://github.com/settings/apps/${known}` : `https://github.com/organizations/${s.owner}/settings/apps/${known}`) : null,
         });
       }

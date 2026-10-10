@@ -15,7 +15,7 @@
     "agent-review": {
       "name": "Review",
       "group": "review",
-      "does": "Reviews each pull request once CI finishes on its head, and approves it or requests changes.",
+      "does": "Reviews a pull request labelled `review:please` (or `agent:triage` / `agent:implement`) once CI finishes on its head, or one you dispatch it for, and approves it or requests changes.",
       "needs": ["your CI at `.github/workflows/ci.yml`, whose runs it reads"],
       "cost": "A model run per reviewed head.",
       "recommend": "always",

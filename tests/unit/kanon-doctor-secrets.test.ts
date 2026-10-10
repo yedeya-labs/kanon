@@ -139,7 +139,7 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
     expect(missing(r).map((f: { message: string }) => f.message.split(',')[0])).toEqual(APPS.map((a) => `lacks ${appSecrets(a).join(' and ')}`));
     const releaser = missing(r)[2];
     expect(releaser.message).toContain('the releaser App\'s secrets: .github/workflows/apps-check.yml, .github/workflows/release-please.yml map them.');
-    expect(releaser.fix.commands).toEqual([preflight, 'kanon apps --owner acme --repo widgets --reuse releaser:widgets-releaser=<downloaded>.pem']);
+    expect(releaser.fix.commands).toEqual([preflight, 'kanon apps --owner acme --repo widgets --reuse releaser:widgets-releaser@<App ID>=<downloaded>.pem']);
   });
 
   for (const app of APPS) {
@@ -149,7 +149,7 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
       expect(r.json.findings[0].message).toMatch(new RegExp(`^lacks ${appSecrets(app).join(' and ')}, the ${app} App's secrets: \\S`));
       expect(r.json.findings[0].fix.commands[0]).toBe(preflight);
       // The App the register names gets the line that stores a new key for it.
-      expect(r.json.findings[0].fix.commands[1]).toBe(`kanon apps --owner acme --repo widgets --reuse ${app}:widgets-${app}=<downloaded>.pem`);
+      expect(r.json.findings[0].fix.commands[1]).toBe(`kanon apps --owner acme --repo widgets --reuse ${app}:widgets-${app}@<App ID>=<downloaded>.pem`);
     });
   }
 
@@ -172,9 +172,9 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
     expect(missing(hidden)[0].fix.url).toBe('https://github.com/settings/apps/widgets-judge');
     // Mutation: the key gone too, or alone, still takes kanon apps, which reads the key from its file.
     const both = await l5(new Set([...all()].filter((n) => !appSecrets('judge').includes(n))), {}, (g) => { g.st.apps['widgets-judge']!.id = 4242; });
-    expect(missing(both)[0].fix.commands[1]).toBe('kanon apps --owner acme --repo widgets --reuse judge:widgets-judge=<downloaded>.pem');
+    expect(missing(both)[0].fix.commands[1]).toBe('kanon apps --owner acme --repo widgets --reuse judge:widgets-judge@<App ID>=<downloaded>.pem');
     const keyOnly = await l5(new Set([...all()].filter((n) => n !== key)), {}, (g) => { g.st.apps['widgets-judge']!.id = 4242; });
-    expect(missing(keyOnly)[0].fix.commands[1]).toBe('kanon apps --owner acme --repo widgets --reuse judge:widgets-judge=<downloaded>.pem');
+    expect(missing(keyOnly)[0].fix.commands[1]).toBe('kanon apps --owner acme --repo widgets --reuse judge:widgets-judge@<App ID>=<downloaded>.pem');
   });
 
   // #625: a real secret's line reads standard input, so the fix sends it to the person's own
@@ -219,7 +219,7 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
     expect(judgeFinding.message).toBe(`lacks ${appSecrets('judge').join(' and ')}, the judge App's secrets: .github/workflows/apps-check.yml, .github/workflows/local-review.yml map them.`);
     // No lane doctor reads runs as the Judge, so its slug is the register's own row.
     expect(r.json.apps.map((a: { identity: string }) => a.identity)).toEqual(['author']);
-    expect(judgeFinding.fix.commands).toEqual([preflight, 'kanon apps --owner acme --repo widgets --reuse judge:widgets-judge=<downloaded>.pem']);
+    expect(judgeFinding.fix.commands).toEqual([preflight, 'kanon apps --owner acme --repo widgets --reuse judge:widgets-judge@<App ID>=<downloaded>.pem']);
     expect(digest.message).toBe('lacks DIGEST_WEBHOOK: .github/workflows/local-review.yml maps it.');
     expect(digest.fix.commands).toEqual([`gh secret set DIGEST_WEBHOOK -R ${REPO}`]);
   });

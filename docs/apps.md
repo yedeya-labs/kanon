@@ -39,13 +39,15 @@ Or, from a Kanon checkout: `node cli/kanon.mjs apps --owner <owner> --repo <repo
 
 ### A repository added later: `--reuse`
 
-GitHub has no API that makes a new private key for an existing App. To add a repository to Apps you created earlier, generate a key on each App's settings page (**Private keys → Generate a private key**), add the repository to the App's installation, then run:
+GitHub has no API that makes a new private key for an existing App. To add a repository to Apps you created earlier, generate a key on each App's settings page (**Private keys → Generate a private key**), copy the App's **App ID** from the top of the same page (under **About**; its **Client ID** works too), add the repository to the App's installation, then run:
 
 ```sh
-kanon apps --owner <owner> --repo <new repo> --reuse author:<author slug>=<key file> --reuse judge:<judge slug>=<key file>
+kanon apps --owner <owner> --repo <new repo> --reuse author:<author slug>@<author App ID>=<key file> --reuse judge:<judge slug>@<judge App ID>=<key file>
 ```
 
-For each App it checks the key is a key of the slug (GitHub accepts a token it signs only if it is), checks the slug's App holds exactly the permissions of the App you named (`rulebook/agent-permissions.json`, as `apps-check` checks them), checks the installation covers the repository, stores the two secrets, **deletes the key file**, and writes the register rows. A key that isn't the slug's, a slug whose App holds other permissions (the Author's slug given as the Judge's, say: it names which App's they are), or an installation that misses the repository, stops it with nothing stored and the file kept. An organisation may instead hold the secrets once, as organisation secrets, where its plan offers them to its repositories.
+The command needs the ID from you because Kanon's Apps are private, and GitHub answers 404 to your token when asked for a private App by its slug (`GET /apps/<slug>`, [#623](https://github.com/yedeya-labs/kanon/issues/623)). Without it, the command stops before it changes anything and names the page to copy it from.
+
+For each App it checks the key is a key of the slug (GitHub accepts a token the key signs as that ID only if it is, and then names the App's slug, which must be the one you gave), checks the slug's App holds exactly the permissions of the App you named (`rulebook/agent-permissions.json`, as `apps-check` checks them), checks the installation covers the repository, stores the two secrets, **deletes the key file**, and writes the register rows. An ID or a key that isn't the slug's App's, a slug whose App holds other permissions (the Author's slug given as the Judge's, say: it names which App's they are), or an installation that misses the repository, stops it with nothing stored and the file kept. An organisation may instead hold the secrets once, as organisation secrets, where its plan offers them to its repositories.
 
 ## What happens, and what you click
 

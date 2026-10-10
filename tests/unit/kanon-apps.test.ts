@@ -38,6 +38,8 @@ type Run = {
   gh: Array<{ args: string[]; input: string | undefined }>;
   git: string[][];
   api: string[];
+  /** The issuer of each JWT `GET /app` was called with. */
+  issuers: string[];
   writes: string[];
   opened: string[];
   removed: string[];
@@ -73,8 +75,11 @@ type Scenario = {
   setStatus?: Record<string, number>;
   /** gh's exit status for `gh secret delete <name>`. */
   deleteStatus?: Record<string, number>;
-  /** `--reuse judge:<slug>=<file>` instead of `--apps`: the slug GitHub's `GET /app` answers for the key. */
-  reuse?: { slug: string; keySlug?: string; keyText?: string; permissions?: Record<string, string>; notInstalled?: boolean };
+  /**
+   * `--reuse judge:<slug>@<id>=<file>` instead of `--apps`: the slug GitHub's `GET /app` answers
+   * for the key. `id` is the App ID or Client ID given (default the App ID, 4242); '' gives none.
+   */
+  reuse?: { slug: string; id?: string; keySlug?: string; keyText?: string; permissions?: Record<string, string>; notInstalled?: boolean };
   /** The repository's rulesets, as `gh api` answers them (#49); unset, every such read fails. */
   rulesets?: { list: Array<{ id: number; target: string }>; full: Record<number, unknown>; putStatus?: number };
 };
@@ -99,14 +104,23 @@ afterEach(() => {
   log.mockRestore();
 });
 
-const verifyJwt = (auth: string | undefined, appId: string) => {
+/** The App's Client ID, which GitHub accepts as a JWT's issuer as well as its App ID, 4242. */
+const CLIENT_ID = 'Iv23liJudgeAcme01234';
+
+/** The issuer of a JWT the key signed; throws on any other JWT. */
+const jwtIssuer = (auth: string | undefined) => {
   const jwt = (auth ?? '').replace(/^Bearer /, '');
   const [h, p, s] = jwt.split('.');
   if (!h || !p || !s) throw new Error('not a JWT');
   if (!verify('RSA-SHA256', Buffer.from(`${h}.${p}`), PUBLIC, Buffer.from(s, 'base64url'))) throw new Error('bad JWT signature');
   const header = JSON.parse(Buffer.from(h, 'base64url').toString());
   const claims = JSON.parse(Buffer.from(p, 'base64url').toString());
-  if (header.alg !== 'RS256' || claims.iss !== appId || claims.exp - claims.iat > 600) throw new Error('bad JWT claims');
+  if (header.alg !== 'RS256' || claims.exp - claims.iat > 600) throw new Error('bad JWT claims');
+  return String(claims.iss);
+};
+
+const verifyJwt = (auth: string | undefined, appId: string) => {
+  if (jwtIssuer(auth) !== appId) throw new Error('bad JWT claims');
 };
 
 /** A git that answers as a checkout, at `root`, whose one remote is `url`. */
@@ -126,7 +140,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
   const dir = mkdtempSync(join(tmpdir(), 'kanon-apps-'));
   if (s.register !== undefined) realDeps.writeFile(join(dir, 'docs/qa/agent-identities.md'), s.register);
   let installed = false as boolean;
-  const r: Run = { status: -1, output: '', manifest: null, action: '', callbackStatus: 0, gh: [], git: [], api: [], writes: [], opened: [], removed: [], dir };
+  const r: Run = { status: -1, output: '', manifest: null, action: '', callbackStatus: 0, gh: [], git: [], api: [], issuers: [], writes: [], opened: [], removed: [], dir };
   const keyFile = join(dir, 'judge.pem');
   if (s.reuse) {
     realDeps.writeFile(keyFile, s.reuse.keyText ?? PEM);
@@ -136,7 +150,7 @@ const run = async (s: Scenario = {}): Promise<Run> => {
   let pending: Promise<unknown> = Promise.resolve();
   let n = 0;
 
-  const argv = [s.ownerFlag ?? '--owner', ORG, '--repo', (s.repoList ?? [REPO]).join(','), ...(s.reuse ? ['--reuse', `judge:${s.reuse.slug}=${keyFile}`] : ['--apps', s.apps ?? 'judge']), ...(s.noDir ? [] : ['--dir', dir]), ...(s.extraArgs ?? [])];
+  const argv = [s.ownerFlag ?? '--owner', ORG, '--repo', (s.repoList ?? [REPO]).join(','), ...(s.reuse ? ['--reuse', `judge:${s.reuse.slug}${s.reuse.id === '' ? '' : `@${s.reuse.id ?? '4242'}`}=${keyFile}`] : ['--apps', s.apps ?? 'judge']), ...(s.noDir ? [] : ['--dir', dir]), ...(s.extraArgs ?? [])];
   const status = await apps(argv, {
     env: s.env ?? {},
     git: (args) => {
@@ -159,7 +173,8 @@ const run = async (s: Scenario = {}): Promise<Run> => {
       r.gh.push({ args, input });
       if (args[0] === 'api' && args[1] === 'user') return s.user ?? { status: 0, stdout: 'octo\n', stderr: '' };
       if (args[0] === 'api' && args[1] === `users/${ORG}`) return { status: 0, stdout: JSON.stringify({ login: ORG, type: s.kind ?? 'Organization' }), stderr: '' };
-      if (args[0] === 'api' && args[1] === `apps/${s.reuse?.slug}`) return { status: 0, stdout: '4242\n', stderr: '' };
+      // Kanon's Apps are private, and GitHub answers 404 to a person's token for a private App (#623).
+      if (args[0] === 'api' && args[1] === `apps/${s.reuse?.slug}`) return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
       if (args[0] === 'api' && String(args[1] ?? '').startsWith(`repos/${ORG}/${REPO}`)) {
         const rs = s.rulesets;
         if (!rs) return { status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
@@ -215,7 +230,10 @@ const run = async (s: Scenario = {}): Promise<Run> => {
         });
       }
       if (method === 'GET' && u.pathname === '/app') {
-        verifyJwt(auth, '4242');
+        // GitHub takes the App ID or the Client ID as the issuer, and refuses any other.
+        const iss = jwtIssuer(auth);
+        r.issuers.push(iss);
+        if (iss !== '4242' && iss !== CLIENT_ID) return json(401, { message: 'A JSON web token could not be decoded' });
         // GitHub's `GET /app` reports the App's permissions, metadata among them; by default the Judge's.
         return json(200, { id: 4242, slug: s.reuse?.keySlug ?? s.reuse?.slug, permissions: s.reuse?.permissions ?? loadApps().judge!.permissions });
       }
@@ -324,7 +342,7 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     const r = await run({ setStatus: { JUDGE_APP_PRIVATE_KEY: 1 } });
     expect(r.status).toBe(1);
     expect(r.gh.at(-1)?.input).toBe(PEM);
-    expect(r.output).toMatch(/gh could not set JUDGE_APP_PRIVATE_KEY on acme\/widgets .*it is lost: generate a new one .* --reuse judge:acme-judge=<file>\.pem/);
+    expect(r.output).toMatch(/gh could not set JUDGE_APP_PRIVATE_KEY on acme\/widgets .*it is lost: generate a new one .* --reuse judge:acme-judge@4242=<file>\.pem/);
     expect(leaks(r.output)).toBe(false);
     expect(r.writes).toEqual([]);
     rmSync(r.dir, { recursive: true, force: true });
@@ -489,7 +507,7 @@ describe('kanon apps, end to end with GitHub mocked', () => {
     expect(await apps(['--owner', ORG, '--repo', REPO, '--apps', 'reviewer'], { err })).toBe(2);
     expect(await apps(['--owner', ORG, '--repo', REPO, '--roles', 'reviewer'], { err })).toBe(2);
     expect(await apps(['--owner', ORG, '--repo', REPO, '--apps', 'judge', '--name', 'author=x'], { err })).toBe(2);
-    expect(await apps(['--owner', ORG, '--repo', REPO, '--apps', 'judge', '--reuse', 'author:a-b=k.pem'], { err })).toBe(2);
+    expect(await apps(['--owner', ORG, '--repo', REPO, '--apps', 'judge', '--reuse', 'author:a-b@1=k.pem'], { err })).toBe(2);
     expect(await apps(['--owner', ORG, '--repo', `${REPO},${ORG}/gadgets`, '--apps', 'judge'], { err })).toBe(2);
     const text = out.join('\n');
     expect(text).toMatch(/"reviewer" is not one of Kanon's Apps; they are author, judge, releaser/);
@@ -538,6 +556,7 @@ describe('one App per owner, reused across its repositories (plan 0005 §3.2)', 
     expect(r.api).toContain('GET /app');
     const sets = r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT');
     expect(sets.map((c) => c.args[2])).toEqual(['JUDGE_APP_ID', 'JUDGE_APP_PRIVATE_KEY']);
+    expect(sets[0]?.input).toBe('4242');
     expect(sets[1]?.input).toBe(PEM);
     expect(r.removed).toEqual([join(r.dir, 'judge.pem')]);
     expect(() => statSync(join(r.dir, 'judge.pem'))).toThrow();
@@ -546,10 +565,62 @@ describe('one App per owner, reused across its repositories (plan 0005 §3.2)', 
     rmSync(r.dir, { recursive: true, force: true });
   });
 
+  // #623: GitHub answers 404 to a person's token for a private App, as Kanon creates its Apps,
+  // so --reuse takes the App's ID from the person and never asks `GET /apps/<slug>` for it.
+  it('--reuse of a private App, which `apps/<slug>` answers 404 for, signs the JWT with the App ID given and stores the secrets', async () => {
+    const r = await run({ reuse: { slug: `${ORG}-judge`, id: '4242' } });
+    expect(r.status, r.output).toBe(0);
+    expect(r.gh.filter((c) => c.args[0] === 'api' && String(c.args[1]).startsWith('apps/'))).toEqual([]);
+    expect(r.issuers).toEqual(['4242']);
+    const sets = r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT');
+    expect(sets.map((c) => c.args[2])).toEqual(['JUDGE_APP_ID', 'JUDGE_APP_PRIVATE_KEY']);
+    expect(sets[0]?.input).toBe('4242');
+    expect(r.output).toContain(`1. ${join(r.dir, 'judge.pem')} is a key of ${ORG}-judge (id 4242), which holds the Judge's permissions.`);
+    expect(r.removed).toEqual([join(r.dir, 'judge.pem')]);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('--reuse takes the App\'s Client ID instead, signs the JWT with it, and stores the App ID GitHub answers (#623)', async () => {
+    const r = await run({ reuse: { slug: `${ORG}-judge`, id: CLIENT_ID } });
+    expect(r.status, r.output).toBe(0);
+    expect(r.issuers).toEqual([CLIENT_ID]);
+    const id = r.gh.find((c) => c.args[1] === 'set' && c.args[2] === 'JUDGE_APP_ID');
+    expect(id?.input).toBe('4242');
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('--reuse without the App\'s ID says what to give and where it is on the App\'s page, before anything changes (#623)', async () => {
+    const r = await run({ reuse: { slug: `${ORG}-judge`, id: '' } });
+    expect(r.status).toBe(2);
+    expect(r.output).toContain(
+      `kanon apps: --reuse judge:${ORG}-judge needs the App's ID: give it as --reuse judge:${ORG}-judge@<App ID>=<key file>. ` +
+        `The App ID, or the Client ID, is under "About" on https://github.com/organizations/${ORG}/settings/apps/${ORG}-judge. Nothing was changed.`,
+    );
+    expect(r.output).not.toMatch(/Check the slug/);
+    expect(r.gh.filter((c) => c.args[1] === 'set')).toEqual([]);
+    expect(r.api).toEqual([]);
+    expect(statSync(join(r.dir, 'judge.pem')).isFile()).toBe(true);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  it('--reuse with a wrong ID says the ID or the key is not the App\'s and where to find both, never blaming the slug (#623)', async () => {
+    const r = await run({ reuse: { slug: `${ORG}-judge`, id: '9999' } });
+    expect(r.status).toBe(1);
+    expect(r.issuers).toEqual(['9999']);
+    expect(r.output).toContain(
+      `kanon apps: GitHub refused the key in ${join(r.dir, 'judge.pem')} as the App 9999's (HTTP 401): either 9999 is not ${ORG}-judge's App ID or Client ID, or the key is not one of its keys. ` +
+        `Both IDs are under "About" on https://github.com/organizations/${ORG}/settings/apps/${ORG}-judge, and its keys under "Private keys". Nothing was stored; the file is kept.`,
+    );
+    expect(r.output).not.toMatch(/Check the slug/);
+    expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT')).toEqual([]);
+    expect(statSync(join(r.dir, 'judge.pem')).isFile()).toBe(true);
+    rmSync(r.dir, { recursive: true, force: true });
+  });
+
   it('--reuse refuses a key that is another App\'s, stores nothing and keeps the file', async () => {
     const r = await run({ reuse: { slug: `${ORG}-judge`, keySlug: `${ORG}-author` } });
     expect(r.status).toBe(1);
-    expect(r.output).toMatch(/is not a key of acme-judge .* the file is kept/);
+    expect(r.output).toContain(`kanon apps: the ID 4242 and the key in ${join(r.dir, 'judge.pem')} are the App ${ORG}-author's, not ${ORG}-judge's. Nothing was stored; the file is kept.`);
     expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT')).toEqual([]);
     expect(r.removed).toEqual([]);
     expect(statSync(join(r.dir, 'judge.pem')).isFile()).toBe(true);
@@ -562,7 +633,7 @@ describe('one App per owner, reused across its repositories (plan 0005 §3.2)', 
     expect(r.status).toBe(1);
     expect(r.output).toContain(`kanon apps: ${ORG}-author does not hold the Judge's permissions (`);
     expect(r.output).toContain("workflows: write, the Judge's none");
-    expect(r.output).toContain(`They are the Author's: if ${ORG}-author is your Author, give it as --reuse author:${ORG}-author=<key file>. Nothing was stored; the file is kept.`);
+    expect(r.output).toContain(`They are the Author's: if ${ORG}-author is your Author, give it as --reuse author:${ORG}-author@4242=<key file>. Nothing was stored; the file is kept.`);
     expect(r.gh.filter((c) => c.args[1] === 'set' && c.args[2] !== 'KANON_APPS_PREFLIGHT')).toEqual([]);
     expect(r.removed).toEqual([]);
     expect(statSync(join(r.dir, 'judge.pem')).isFile()).toBe(true);

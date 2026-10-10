@@ -6,6 +6,7 @@ import { workflowText } from './helpers/called-workflow.js';
 import { loadRequirements } from '../../cli/callers.mjs';
 import { laneCatalogue } from '../../cli/init.mjs';
 import { SECTIONS as EXCERPTED } from '../../scripts/playbook-excerpt.mjs';
+import { REVIEW_LABELS } from '../../scripts/lane-gate.mjs';
 
 /**
  * What an adopter copies into a lane caller comes from docs/lanes.md, not from the lane's
@@ -225,5 +226,23 @@ describe("docs/lanes.md's catalogue table is the lane catalogue (kanon#428)", ()
   it('has a row for every lane', () => {
     const rows = between(read('docs/lanes.md'), OPEN, CLOSE).split('\n').filter((l) => /^\| [^-|][^|]* \| `agent-/.test(l));
     expect(rows.map((r) => /`(agent-[a-z-]+)\.yml`/.exec(r)![1]).sort()).toEqual(LANES.map((f) => f.replace(/\.yml$/, '')).sort());
+  });
+});
+
+// #626: the review lane reviews a pull request only once it carries one of its labels, or when
+// dispatched, and a person installing it read that nowhere they looked. Both of docs/lanes.md's
+// tables state it in the review lane's row, with the labels the lane gates on.
+describe("docs/lanes.md's tables say the review lane is opt-in (kanon#626)", () => {
+  const doc = read('docs/lanes.md');
+  const row = (part: string): string => doc.split('\n').find((l) => l.startsWith('| Review |') && l.includes(part)) ?? '';
+
+  it.each([
+    ['the lanes table', '| `agent-review.yml` | Reviewer |'],
+    ['the catalogue table', '| `agent-review.yml` | Reviews '],
+  ])("names every review label, and the dispatch, in %s's review row", (_, part) => {
+    const r = row(part);
+    expect(r, part).not.toBe('');
+    for (const label of REVIEW_LABELS) expect(r, label).toContain(`\`${label}\``);
+    expect(r).toMatch(/dispatch/);
   });
 });

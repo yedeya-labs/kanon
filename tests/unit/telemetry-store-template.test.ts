@@ -1,4 +1,6 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -8,6 +10,7 @@ import { PROJECTION } from '../../infra/telemetry/function/aggregate.mjs';
 import { nameHashesOf } from '../../infra/telemetry/function/index.mjs';
 import { sha256 } from '../../actions/agent-telemetry/public-words.mjs';
 import { KANON_WORDS, nameContext } from '../../actions/agent-telemetry/scrub.mjs';
+import { writeStub } from './helpers/stub-bin.js';
 
 /**
  * Plan 0002 step S3: the store's CloudFormation template, as rendered from the example
@@ -409,8 +412,8 @@ describe('the subjects come from GitHub, in the form each repository issues (§3
     const both = ['repo:o/r:ref:refs/heads/main', 'repo:o@11/r@22:ref:refs/heads/main'];
     expect(sub(one({}, { writer_subjects: both }).template.Resources.WriterRolek1)).toEqual(both);
   });
-  it('a repository GitHub does not answer for stops the render, under its key', () => {
-    expect(() => render({ ...register, repositories: [{ ...entry, repository: 'o/gone' }] }, { gh })).toThrow(/^register: k1: gh: HTTP 404/);
+  it('a repository GitHub does not answer for stops the render, under its index, never its key', () => {
+    expect(() => render({ ...register, repositories: [{ ...entry, repository: 'o/gone' }] }, { gh })).toThrow(/^register: repositories\[0\]: gh: HTTP 404/);
   });
   it('refuses an entry GitHub spells differently: a rename redirect, or another case', () => {
     expect(() => one({ full_name: 'o/renamed' })).toThrow(/GitHub calls o\/r 'o\/renamed'/);
@@ -418,5 +421,59 @@ describe('the subjects come from GitHub, in the form each repository issues (§3
   });
   it('refuses a default branch GitHub reports with pattern characters', () => {
     expect(() => one({ default_branch: 'ma*n' })).toThrow(/default branch/);
+  });
+});
+
+describe('what render.mjs prints names each entry by its repository, never by its key (docs/telemetry.md, kanon#628)', () => {
+  // A key no other text holds, so finding it anywhere in the output is the leak.
+  const secret = 'kq7x2z9wleak';
+  const entries = [
+    { key: secret, repository: 'o/r', readers: ['ref:refs/heads/main'], publish_own_figures_as: 'own-label', aggregate_invoker: true },
+    { key: 'kother', repository: 'o/s', readers: ['ref:refs/heads/main'] },
+  ];
+  /** Run the CLI as the Owner does, with `gh` answering for `o/r` and `o/s` only. */
+  const run = (repositories: object[] | string) => {
+    const dir = mkdtempSync(join(tmpdir(), 'telemetry-render-'));
+    writeStub(join(dir, 'gh'), [
+      '#!/usr/bin/env bash',
+      'case "$2" in',
+      '  repos/o/r|repos/o/s) printf \'{"full_name":"%s","default_branch":"main"}\' "${2#repos/}" ;;',
+      '  repos/o/r/actions/oidc/customization/sub|repos/o/s/actions/oidc/customization/sub) echo \'{"use_default":true}\' ;;',
+      '  *) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;',
+      'esac',
+      '',
+    ].join('\n'));
+    const reg = join(dir, 'register.json');
+    writeFileSync(reg, typeof repositories === 'string' ? repositories : JSON.stringify({ ...register, repositories }));
+    return spawnSync('node', ['infra/telemetry/render.mjs', '--register', reg, '--out', join(dir, 'out')], {
+      encoding: 'utf8', timeout: 30_000, env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+    });
+  };
+
+  it('prints the subjects the Owner checks, by repository, and no key on stdout or stderr', () => {
+    const r = run(entries);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain('o/r: writer trusts repo:o/r:ref:refs/heads/main; reader trusts repo:o/r:ref:refs/heads/main\n');
+    expect(r.stdout).toContain('o/s: writer trusts repo:o/s:ref:refs/heads/main; reader trusts repo:o/s:ref:refs/heads/main\n');
+    expect(r.stdout).toContain('o/r: aggregate invoker trusts repo:o/r:ref:refs/heads/main\n');
+    expect(r.stdout).toContain('o/r: own figures publishable as own-label\n');
+    expect(r.stdout + r.stderr).not.toContain(secret);
+    expect(r.stdout + r.stderr).not.toContain('kother');
+  });
+
+  it('names a refused entry by its index, never by its key', () => {
+    const r = run([entries[0]!, { ...entries[1]!, repository: 'o/gone' }]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^register: repositories\[1\]: /m);
+    expect(r.stdout + r.stderr).not.toContain(secret);
+    expect(r.stdout + r.stderr).not.toContain('kother');
+  });
+
+  it('a register that is not JSON is refused without quoting it', () => {
+    // Unquoted, so JSON.parse's own message would quote the text around it, the key's start.
+    const r = run(`{ "repositories": [{ "key": ${secret} }] }`);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/is not JSON/);
+    expect(r.stdout + r.stderr).not.toContain(secret.slice(0, 8));
   });
 });

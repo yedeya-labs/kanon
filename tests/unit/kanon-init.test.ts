@@ -893,7 +893,8 @@ describe('the callers kanon init writes', () => {
     const section = readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8').split('## Which lanes are available')[1]!.split('\n## ')[0]!;
     const rows = [...section.matchAll(/^\| [^|]+\| `(agent-[a-z-]+)\.yml` \| [^|]+\| (.+) \|$/gm)];
     expect(rows.length).toBe(Object.keys(TRIGGERS).length);
-    for (const [, lane, cell] of rows) expect(fromTriggers(TRIGGERS[lane!]!).sort(), lane).toEqual(fromTable(cell!).sort());
+    // A cell's triggers are its first sentence; a later one is a note about them (kanon#626).
+    for (const [, lane, cell] of rows) expect(fromTriggers(TRIGGERS[lane!]!).sort(), lane).toEqual(fromTable(cell!.split('. ')[0]!).sort());
   });
 
   it.skipIf(!hasYq)('passes lane-check with a caller for every lane at once', async () => {
@@ -939,8 +940,8 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
         subject: 'judge',
         message: 'acme already has the Judge App acme-kanon-judge, which the chosen lanes run as, and the register lacks it.',
         fix: {
-          text: "Add widgets to the App's installation, generate a private key on its settings page, then run kanon apps --reuse with the downloaded key, and commit the register rows it writes.",
-          commands: ['kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge=<downloaded>.pem'],
+          text: "Add widgets to the App's installation, generate a private key on its settings page and copy its App ID from the same page, then run kanon apps --reuse with both, and commit the register rows it writes.",
+          commands: ['kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge@<App ID>=<downloaded>.pem'],
           url: 'https://github.com/organizations/acme/settings/apps/acme-kanon-judge',
         },
       },
@@ -962,7 +963,7 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
     expect(said.appsCalls).toHaveLength(1);
     const yes = await run(checkout(), fakeGitHub(owned), [], undefined, REQ, { ask: async (_q: string, d: string) => d });
     expect(yes.appsCalls).toEqual([]);
-    expect(yes.out).toContain('kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge=<downloaded>.pem');
+    expect(yes.out).toContain('kanon apps --owner acme --repo widgets --reuse judge:acme-kanon-judge@<App ID>=<downloaded>.pem');
   });
 
   it('reuses the Apps the owner has and creates the rest, and names a second match', async () => {
@@ -972,7 +973,7 @@ describe("kanon init and the Apps the owner already has (#363)", () => {
     expect(d.apps).toMatchObject({ missing: ['author', 'judge'], reuse: [{ app: 'judge', slug: 'acme-judge-a' }], outcome: 'ran' });
     expect(r.appsCalls).toEqual([['--owner', 'acme', '--repo', 'widgets', '--apps', 'author', '--dir', expect.any(String)]]);
     const reuse = d.findings.find((x) => x.id === 'app.reuse')!;
-    expect(reuse.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-judge-a=<downloaded>.pem']);
+    expect(reuse.fix.commands).toEqual(['kanon apps --owner acme --repo widgets --reuse judge:acme-judge-a@<App ID>=<downloaded>.pem']);
     expect(reuse.fix.text).toContain('(it also has acme-judge-b with the same permissions: give the one widgets should share)');
   });
 
@@ -1066,7 +1067,7 @@ describe('the Apps (plan 0005 step L4)', () => {
     const r = await run(dir, fakeGitHub(), ['--yes', '--lanes', 'review']);
     expect(r.status, r.err).toBe(0);
     expect(r.appsCalls).toEqual([]);
-    expect(r.out).toContain('kanon apps --owner acme --repo widgets --reuse judge:acme-judge=<downloaded>.pem');
+    expect(r.out).toContain('kanon apps --owner acme --repo widgets --reuse judge:acme-judge@<App ID>=<downloaded>.pem');
     expect(r.out).not.toMatch(/gh secret set JUDGE_APP/);
   });
 
@@ -1075,7 +1076,7 @@ describe('the Apps (plan 0005 step L4)', () => {
     const f = parse(r).findings.find((x) => x.id === 'app.create')!;
     expect(f.subject).toBe('author, judge');
     expect(f.fix.commands).toEqual([expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps author,judge --dir /)]);
-    expect(f.fix.text).toContain("If acme already has these Apps for another repository, don't create them again: add widgets to each installation, generate a private key on its settings page, and run kanon apps --owner acme --repo widgets --reuse <app>:<slug>=<key file> instead");
+    expect(f.fix.text).toContain("If acme already has these Apps for another repository, don't create them again: add widgets to each installation, generate a private key on its settings page and copy its App ID from there, and run kanon apps --owner acme --repo widgets --reuse <app>:<slug>@<App ID>=<key file> instead");
     expect(r.err).toContain("If acme already has these Apps for another repository, don't create them again");
   });
 

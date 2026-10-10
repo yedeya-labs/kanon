@@ -11,7 +11,7 @@ Kanon ships each agent lane as a **reusable workflow** ([plan 0001](plans/0001-m
 | Implement, revise | `agent-implement-revise.yml` | Implementer | `pull_request_review: [submitted]`; `pull_request: [labeled]`; `workflow_dispatch` with `pr_number` and `reset` |
 | Lead, revise | `agent-lead-revise.yml` | Lead | `pull_request_review: [submitted]`; `pull_request: [labeled]`; `workflow_dispatch` with `pr_number` and `reset` |
 | Merge reconcile | `agent-merge-reconcile.yml` | Reviewer | `pull_request: [closed]`; `pull_request_review: [submitted]`; `workflow_dispatch` with `pr_number` |
-| Review | `agent-review.yml` | Reviewer | `workflow_run` of your `CI` workflow, `types: [completed]`; `pull_request_target: [opened, labeled]`; `workflow_dispatch` with `pr_number` |
+| Review | `agent-review.yml` | Reviewer | `workflow_run` of your `CI` workflow, `types: [completed]`; `pull_request_target: [opened, labeled]`; `workflow_dispatch` with `pr_number`. Review is opt-in: it reviews a pull request only once it carries `review:please`, `agent:triage` or `agent:implement`, or when you dispatch it with the pull request's number |
 | Verify acceptance criteria | `agent-verify-acs.yml` | Explorer | `workflow_dispatch` with `project` and `ref`; `issues: [labeled]` |
 | Lead, brief | `agent-lead.yml` | Lead | `workflow_dispatch` with `mandate` and `context` |
 | Lead, split | `agent-lead-split.yml` | Lead | `issues: [labeled]`; `workflow_dispatch` with `issue` |
@@ -73,7 +73,7 @@ What each lane does, what it needs, what it costs and when it is worth installin
 
 | Group | Lane | What it does | Needs | Cost | Recommended |
 |---|---|---|---|---|---|
-| Review | `agent-review.yml` | Reviews each pull request once CI finishes on its head, and approves it or requests changes. | the Judge App; `CLAUDE_CODE_OAUTH_TOKEN`; your CI at `.github/workflows/ci.yml`, whose runs it reads | A model run per reviewed head. | Always, and first: its App's approval is what ends bootstrap (`K-ADOPT-6`). |
+| Review | `agent-review.yml` | Reviews a pull request labelled `review:please` (or `agent:triage` / `agent:implement`) once CI finishes on its head, or one you dispatch it for, and approves it or requests changes. | the Judge App; `CLAUDE_CODE_OAUTH_TOKEN`; your CI at `.github/workflows/ci.yml`, whose runs it reads | A model run per reviewed head. | Always, and first: its App's approval is what ends bootstrap (`K-ADOPT-6`). |
 | Review | `agent-merge-reconcile.yml` | After a reviewed pull request merges, files a follow-up issue for each review suggestion it didn't apply. | the Judge App; `CLAUDE_CODE_OAUTH_TOKEN` | A model run per merged pull request the Reviewer reviewed. | When the Reviewer's suggestions that a merge left out should become issues rather than be lost. |
 | Implement and revise | `agent-implement.yml` | Builds a feature or resolves a spec delta from an issue labelled `agent:implement`, and opens a pull request. | the Author App; `CLAUDE_CODE_OAUTH_TOKEN` | A model run per labelled issue. | When you want agents to write code from the issues you label, once the Reviewer runs green. |
 | Implement and revise | `agent-implement-revise.yml` | Revises the Implementer's own pull request when the Reviewer requests changes. | the Author App; `CLAUDE_CODE_OAUTH_TOKEN` | A model run per change request, capped in rounds. | With implement: without it, a change request on the Implementer's pull request waits for a person. |
