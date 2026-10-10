@@ -1,6 +1,6 @@
 # Plan 0007: a guided install built on features, a short runbook and one confirmation
 
-- **Status:** proposed, 2026-10-10. The Owner took five decisions on 2026-10-10, before this plan was drafted, from the first timed install; they are recorded in [Owner decisions (2026-10-10)](#owner-decisions-2026-10-10) and not reopened here. What the plan decides on its own, and the Owner may change, is listed in [Decisions left to the Owner](#decisions-left-to-the-owner), each with its proposed default.
+- **Status:** decided, 2026-10-10. The Owner took five decisions on 2026-10-10, before this plan was drafted, from the first timed install, and decided the plan's eight open points the same day, on its pull request: all are recorded in [Owner decisions (2026-10-10)](#owner-decisions-2026-10-10). The Owner changed one proposal: **the recommended review trigger is labelled only, `review:please`, as today**, so the every-PR lane change is optional and built on demand (step G7). No question remains open.
 - **Why now:** the first timed install of the adoption wedge, a review-only adoption on a private repository through `/kanon:adopt`, took **about 36 minutes of the adopter's time against a 15-minute target**, and **about 11 of them went on questions**. The rest went on one GitHub App (about 10 minutes, four of them lost to a key page GitHub has moved), the Claude token (about 2) and the merge and its required check (about 3). The Owner's verdict, during the run: *"we need to offer features that include a set of agents and their modes, it doesn't make sense to go over each agent and mode combination. This is too complex to install."*
 - **Tracks:** #288. **Builds on:** [plan 0005](0005-lean-installation.md) (L9 `kanon init`, L11 the skills) and [plan 0006](0006-upstream-findings.md) (§3.2, the upstream-findings questions). **Supersedes:** #428's rule that the adopt skill asks every input as its own question ([§8](#8-428s-decision-and-what-replaces-it)). **Governed by:** [ADR 0002](../decisions/0002-standardise-dont-parameterise.md), [ADR 0007](../decisions/0007-data-boundary.md), whose "asked as their own questions" step G1 amends, [ADR 0014](../decisions/0014-adopter-audiences.md) (the skills drive the commands through their JSON only), `K-LAYOUT-10`, `K-OBS-18` and `K-AGENT-45`.
 - **Measured on** the friction log of that first timed install, on Kanon's `origin/main` at `a074df5` (v0.38.0 plus two commits), and on `skills/adopt/SKILL.md`, `docs/init.md`, `docs/lanes.json` and `requirements.json` there. Nothing in this plan has run yet; step T2 is the measurement.
@@ -10,13 +10,13 @@
 **Today.** `/kanon:adopt` asks every answer of `kanon init` as its own question (#428): the three people, nine lane groups (three question rounds even for a review-only install), the gates, the test database, the delegation, the default labels, the Releaser, App reuse, the plugin, and three questions about sharing data, telemetry, upstream findings and their evidence, each with a paragraph of caveats and each recommending its most restrictive answer. It then hands over the steps only a person can do as blocks of text, with commands whose inputs don't exist yet, and with a key page GitHub no longer has.
 
 **Where it ends.**
-- **Four questions, asked at once:** what Kanon should do (a **feature**: Review, Review + build, Full pipeline, or Customise), which pull requests the Reviewer reviews, whether the repository holds sensitive material, and one consent question for sharing.
+- **Four questions, asked at once** (three until the optional every-PR trigger ships, §3): what Kanon should do (a **feature**: Review, Review + build, Full pipeline, or Customise), which pull requests the Reviewer reviews (labelled `review:please` only, recommended, as today), whether the repository holds sensitive material, and one consent question for sharing.
 - **Everything else is inferred or defaulted, and shown in one summary** the person confirms or edits. Nothing is silent: every value says where it came from.
 - **A runbook of person steps,** one at a time: a direct link, one action, "done?", then the next, with every command filled in with real values, and shown only once its inputs exist.
 - **Style rules for every skill question,** held by a guard: one decision, two short sentences at most, short options with a one-line consequence, the recommended first, caveats behind a link.
 - **Under 15 minutes** from `/kanon:adopt` to the Reviewer's first verdict on a stranger's repository, measured by timed run 2.
 
-**How it gets there.** The rules and the feature definitions first, as data a guard holds to the lane list. Then the review trigger, the one lane change. Then `kanon init`'s flags and JSON, additive within `kanon-init/v1`, and the `kanon apps --reuse` fix the run tripped on. Then the skills: the questions, the summary, the runbook and the style guard. Then `/kanon:upgrade`'s mapping, and the timed run.
+**How it gets there.** The rules and the feature definitions first, as data a guard holds to the lane list. Then `kanon init`'s flags and JSON, additive within `kanon-init/v1`, and the `kanon apps --reuse` fix the run tripped on. Then the skills: the questions, the summary, the runbook and the style guard. Then `/kanon:upgrade`'s mapping, and the timed run. Reviewing every pull request without a label, the one lane change, is optional and comes last, built only on demand.
 
 ## 1. What the first timed install showed
 
@@ -68,7 +68,7 @@ Adds the Implementer and the lanes that keep its pull requests moving, and the A
 **The edge lanes, and why:**
 - **`agent-triage` is in.** It runs as the Implementer with the same playbook, and it is one of the two lanes that open an Implementer pull request and start the implementer status chain (plan 0005 §3.3). A build feature without it leaves `qa:needs-triage` bugs to a person.
 - **`agent-rebase` and `agent-dispatch-sweep` are in.** The catalogue recommends both with implement or triage: without the first, a conflicting agent pull request waits for a person, whose rebase takes it out of the Implementer's chain; without the second, a label whose event never arrived never starts its run.
-- **`agent-merge-reconcile` is here, not in Review.** It runs as the Judge, but what it produces is follow-up issues for review suggestions a merge left out, which is the Implementer's input. On a review-only repository those issues wait for a person, and it costs a model run per merged reviewed pull request (decision left to the Owner 3).
+- **`agent-merge-reconcile` is here, not in Review.** It runs as the Judge, but what it produces is follow-up issues for review suggestions a merge left out, which is the Implementer's input. On a review-only repository those issues wait for a person, and it costs a model run per merged reviewed pull request (Owner decision 9).
 - **`agent-code-audit` is not.** It is the Explorer's lane, and files bugs on its own schedule; it belongs with the rest of the unattended pipeline.
 
 ### 2.3 Full pipeline
@@ -87,13 +87,13 @@ Adds the Lead and its project lanes, the Merger, the Explorer's code audit, the 
 **The edge lanes, and why:**
 - **`agent-explore`, the sweep, only with a sweep hook.** It needs `.github/actions/explore-sweep/action.yml`, which the adopter writes ([`docs/explore-sweep.md`](../explore-sweep.md)); `init` can't write one. Inferred: in when the hook exists, otherwise left out, and the summary says so with the page to read.
 - **The two digests only with a chat channel.** Both post to `DIGEST_WEBHOOK`. Inferred: in when the repository already holds the secret; otherwise the summary's *Chat channel* line says "none yet, digests left out", and editing it adds them and a runbook step for the webhook.
-- **`agent-explore-telemetry` is left out at install.** It needs an aggregate invoker role that Kanon's operator issues after registration ([`docs/telemetry.md`](../telemetry.md)), so nothing an adopter does at install makes it work. Once the role exists, `kanon doctor` offers it (decision left to the Owner 4).
+- **`agent-explore-telemetry` is left out at install.** It needs an aggregate invoker role that Kanon's operator issues after registration ([`docs/telemetry.md`](../telemetry.md)), so nothing an adopter does at install makes it work. Once the role exists, `kanon doctor` offers it (Owner decision 10).
 - **`agent-lead-reconcile` and the reference environment.** It is what turns an approved brief into work, so it is in. Without a declared reference environment no project closes (`K-PROJ-11`); the summary shows the inferred deploy workflow, or "none" with that consequence.
 - **`agent-merge` is in,** as the Owner decided, although the catalogue recommends it only after a person has merged the Implementer's approved pull requests by hand for a while. The summary says that, in one line, so the person can take it out.
 
 ### 2.4 Releases, an add-on
 
-The Releaser App and its bypass (`K-MERGE-8`, plan 0005 §3.1), with `RELEASER_APP_ID` and `RELEASER_APP_PRIVATE_KEY` mapped by the release workflow's caller. It goes with any feature, and is not one of the four options: it is inferred, **on when the repository calls Kanon's release workflow** (`.inspection.callsRelease`), off otherwise, and shown in the summary either way. A repository that doesn't release yet keeps it off; `init` writes no release-please configuration (decision left to the Owner 5).
+The Releaser App and its bypass (`K-MERGE-8`, plan 0005 §3.1), with `RELEASER_APP_ID` and `RELEASER_APP_PRIVATE_KEY` mapped by the release workflow's caller. It goes with any feature, and is not one of the four options: it is inferred, **on when the repository calls Kanon's release workflow** (`.inspection.callsRelease`), off otherwise, and shown in the summary either way. A repository that doesn't release yet keeps it off; `init` writes no release-please configuration (Owner decision 11).
 
 ### 2.5 Customise
 
@@ -105,7 +105,7 @@ The advanced last option. It keeps today's per-group lane questions from the cat
 
 ## 3. The questions
 
-Asked once, together: in Claude Code as **one** `AskUserQuestion` call holding the four questions, which its tool allows; in another client, as one numbered message. The words below are the words asked. Each option is a label and a one-line consequence, the recommended one first.
+Asked once, together: in Claude Code as **one** `AskUserQuestion` call holding the questions, at most four, which its tool allows (three until G7 ships: Q2 waits for it); in another client, as one numbered message. The words below are the words asked. Each option is a label and a one-line consequence, the recommended one first.
 
 **Q1. "What should Kanon do in this repo?"**
 
@@ -122,10 +122,13 @@ Recommended: the feature that equals the lanes the repository already calls, whe
 
 | Option | Consequence |
 |---|---|
-| **Every pull request (Recommended)** | Each member's pull request gets a verdict when its CI finishes, one model run per pushed head. |
-| **Only labelled ones** | Only pull requests you label `review:please` get a verdict. |
+| **Only labelled ones (Recommended)** | Only pull requests you label `review:please` get a verdict. |
+| **Every pull request** | Each member's pull request gets a verdict when its CI finishes, one model run per pushed head. |
 
-The agents' own pull requests carry their labels, so they are reviewed either way. **Every pull request is new** (step G3): today the review lane reviews only a labelled pull request.
+The agents' own pull requests carry their labels, so they are reviewed either way. **Every pull request is optional and not built yet** (step G7, on demand): today the review lane reviews only a labelled pull request. **Until G7 ships, Q2 is not asked,** since one option is no decision: the trigger is `labelled`, a line of the summary like any default, and the first call holds three questions. Once G7 ships, Q2 is asked as above, labelled first.
+
+**How to ask for a review** is said in the summary, in the runbook's last step and in the skill's closing message, in these words: "To get a review, add the label `review:please` to the pull request; the Reviewer posts its verdict once CI has finished. After a verdict, push a new commit, or remove and add the label again, to ask for another look."
+
 
 **Q3. "Does this repo hold private or sensitive material?"** The answer goes in the adoption record's `## Data` section.
 
@@ -144,7 +147,7 @@ Recommended, and listed first: **Yes** on a private repository, **No** on a publ
 | **Codes only** | Sends run data, and Kanon bugs as codes with no text. | telemetry on, `Upstream findings: sent` |
 | **No** | Nothing leaves this repo; Kanon bugs stay drafts here. | no telemetry, `Upstream findings: drafted` |
 
-**Yes is `sent with evidence` whatever the feature.** Review and Review + build run no lane that finds upstream findings (only the Overseer and the telemetry Explorer do), so nothing more leaves the repository for it. The record holds what the person consented to, not what today's lanes produce, so a later move to Full needs no second question, and *Codes only* stays a level of its own (decision left to the Owner 2).
+**Yes is `sent with evidence` whatever the feature.** Review and Review + build run no lane that finds upstream findings (only the Overseer and the telemetry Explorer do), so nothing more leaves the repository for it. The record holds what the person consented to, not what today's lanes produce, so a later move to Full needs no second question, and *Codes only* stays a level of its own (Owner decision 7).
 
 **Q5, the confirmation: "Install Kanon with these settings?"** asked after the summary (§4).
 
@@ -166,7 +169,7 @@ One message, after the dry run with every flag, and before anything is written. 
 Kanon v<release> for <owner>/<repo> (private, organisation; rulesets: yes)
 
 Feature        Review: agent-review                                 asked
-Review         every pull request                                   asked
+Review         labelled: add `review:please` to a PR to get a verdict  default
 Data           holds private material (## Data)                     asked
 Sharing        yes: telemetry on, findings sent with evidence       asked
 Apps           Judge: reuse <slug>, from <other repo>'s register    inferred
@@ -207,7 +210,7 @@ Your steps     1 key for the Judge, the Claude token, merge the PR, 1 test PR
 | `upstreamFindings` | asked | from Q4 | §3; `filed here` only through **Change something**, for a repository that maintains Kanon or a fork |
 | `upstreamEvidence` | asked after `sent` | from Q4 | true for *Yes* |
 | `feature` (new) | | asked, Q1 | |
-| `reviewTrigger` (new) | | asked, Q2 | |
+| `reviewTrigger` (new) | | asked, Q2, once G7 ships | until then the default, `labelled` |
 | `sensitiveData` (new) | | asked, Q3 | |
 | `consent` (new) | | asked, Q4 | |
 
@@ -231,7 +234,7 @@ For a review install whose owner already has a Judge App, in order:
 | **R6. Store the Claude token** | none | In the same terminal, run `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R <owner>/<repo>`, and paste the token when it asks. | `gh secret list` shows it |
 | **R7. Merge the install** | the pull request | Review it, then **Squash and merge**. In bootstrap, a person merges it (`K-ADOPT-4`). | `gh pr view` says `MERGED` |
 | **R8. The required check** | none | Run, as printed: `kanon init` with a token that can administer the repository, which adds only the `Lane check` rule. Skipped when the skill's own token can, which then adds it. | `kanon doctor` reports no `ruleset.check-unreported` |
-| **R9. The first review** | the test pull request the skill opened: a one-line change outside `docs/qa/` and every judging input | With the labelled trigger, nothing: the skill applies `review:please` as the person's first request. Then wait for the verdict, which the skill watches for. | the Reviewer's review exists, from the Judge |
+| **R9. The first review** | the test pull request the skill opened: a one-line change outside `docs/qa/` and every judging input | Add the label `review:please` to it. That is how every review is asked for: the Reviewer posts its verdict once CI has finished, and a new commit, or the label removed and added again, asks for another look. The skill watches for the verdict. | the Reviewer's review exists, from the Judge |
 
 **When the owner has no App,** R1 to R4 are one step: run the printed `kanon apps --owner <owner> --repo <repo> --apps judge` (or `author,judge`), and on the two pages it opens, click **Create GitHub App**, then **Install** on `<repo>` only. Checked by the register rows it writes and `gh secret list`.
 
@@ -245,7 +248,7 @@ All additive within `kanon-init/v1` (`docs/init.md`, "Its shape is a contract"):
 |---|---|---|---|
 | `--feature review\|build\|full` | Q1; sets the lanes per §2 | `review`, or the feature the repository's lanes already equal | `--lanes`, which is Customise |
 | `--releases`, `--no-releases` | §2.4; the same answer as `--releaser`, `--no-releaser`, which stay | inferred, §2.4 | each other, and the old pair contradicting them |
-| `--review-trigger every-pr\|labelled` | Q2 | `labelled` | a lane set without the review lane |
+| `--review-trigger every-pr\|labelled` | Q2 | `labelled` | a lane set without the review lane; and `every-pr` until step G7 ships |
 | `--sensitive-data`, `--no-sensitive-data` | Q3 | none: the `## Data` section says "not declared", and `init` notes it | each other |
 | `--consent yes\|codes\|no` | Q4; sets `telemetry`, `upstreamFindings` and `upstreamEvidence` per §3 | `no` | `--telemetry`, `--no-telemetry` or `--upstream-findings` |
 
@@ -298,33 +301,33 @@ These are acceptance criteria for every question a person skill asks (adopt, upg
 | **G0** | Kanon, docs and CLI text | **The key page, now.** `docs/apps.md`, the adopt skill and `kanon apps`'s printed key-rotation steps say **Credentials → Key pairs → New key**, link GitHub's page, and warn against a client secret. Independent of the rest, and first. | `grep -rn "Generate a private key" docs skills cli` prints nothing. **Mutation:** restoring the old words in `cli/apps.mjs` fails `kanon-apps.test.ts`, which pins the printed steps. |
 | **G1** | Kanon, docs | **The rules.** `K-LAYOUT-10` gains the `Feature:` and `Review trigger:` bullets and the `## Data` section; ADR 0007's "asked during install as their own questions" becomes "asked during install, in one consent question that sets both levels"; `K-OBS-18`'s Enforced by names the question; `docs/sharing.md` holds every caveat the three questions carry today. | `adoption-record.test.ts` parses each new bullet and section, and fails a record with the bullet twice or another value. **Mutation:** a `Review trigger:` of `sometimes` is malformed by line. A test reads `docs/sharing.md` for each caveat the evidence question states today: the scrub, the third-party decision provider, Frankfurt, 13 months, erasure. |
 | **G2** | Kanon | **The features, as data** (§2). `features` in `docs/lanes.json`, copied into `requirements.json`; `docs/lanes.md` gains a features table built from it. | §2.6's guard. `lanes-doc.test.ts` fails a table that differs from the data. |
-| **G3** | Kanon vN, a lane change | **The review trigger.** The review lane's filter reads `Review trigger:` from the default branch's record; on `every pull request` it admits a finished CI run on an open pull request from the same repository whose author is a member (`K-AGENT-45`), as if requested by that author. A fork's head, and a pull request whose author isn't a member, such as a dependency bot's, are still refused without a label. | `review-filter.test.ts`: with the bullet, a member's unlabelled pull request is reviewed; without it, skipped, as today. **Mutations:** a fork's head, and a non-member's pull request, with the bullet and no label, are refused; a `labelled` record still skips an unlabelled pull request. |
 | **G4** | Kanon vN | **`kanon apps --reuse` by App ID, and Apps found in registers.** `--reuse <app>:<App ID>=<key file>`: the command signs a JWT with the key, reads the App's slug and owner from `GET /app`, refuses a key whose App the owner doesn't own, and never looks a slug up with the person's token. The slug form is still read for one release, through the same JWT. `init`'s `inspection.ownerApps` also reads `docs/qa/agent-identities.md` in the owner's other repositories the token can read. | `kanon-apps.test.ts`: a private organisation App whose slug lookup answers 404 is reused from its ID and key; a key of another owner's App is refused. **Mutation:** looking the slug up with the person's token again makes the 404 fixture fail. `kanon-init.test.ts`: with installations unreadable and a sibling register naming the Judge, `ownerApps` names it, `from: register:<owner>/<repo>`. |
 | **G5** | Kanon vN | **`kanon init`'s flags and JSON** (§6), including the terminal prompt's four questions and its summary. | `kanon-init.test.ts`: `--feature review` writes exactly `agent-review`'s caller; `--consent yes` writes the collector and `sent with evidence`; `--consent no` neither; `--consent` with `--telemetry`, and `--feature` with `--lanes`, exit 2; `--yes` alone sends nothing; every `summary` line names a source. **Mutation:** a `--yes` default of `yes` for consent fails the test that `--yes` alone writes no collector. |
-| **G6** | Kanon vN+1 | **The skills.** The adopt skill's questions (§3), summary (§4) and runbook (§5); the style guard and the answers table (§9); the upgrade skill's mapping (§7). | §9's guard. `skills.test.ts`: the four questions are asked in one call; every runbook step names a link or a command and one action; no `gh secret set` in any skill lacks `--body` or a file, except in a step that says *your own terminal*. **Mutations:** a fifth question in the first call, a 200-character question, an option without a consequence, a consent question recommending *No*, a `! gh secret set` without `--body`: each fails it. |
+| **G6** | Kanon vN+1 | **The skills.** The adopt skill's questions (§3), summary (§4) and runbook (§5); the style guard and the answers table (§9); the upgrade skill's mapping (§7). | §9's guard. `skills.test.ts`: the first questions are asked in one call, Q2 only from the release that ships G7; every runbook step names a link or a command and one action; no `gh secret set` in any skill lacks `--body` or a file, except in a step that says *your own terminal*. **Mutations:** a fifth question in the first call, a 200-character question, an option without a consequence, a consent question recommending *No*, a `! gh secret set` without `--body`: each fails it. |
 | **T2** | the Owner, a stranger's repository | **Timed run 2,** on the release that completes G6 (below). | The record holds the timestamps, a row per stage and the friction log. The target holds if the adopter's time is under 15 minutes; if not, the record names the stage that dominated, and a follow-up is filed against it. |
+| **G7** | Kanon, a lane change, **optional and on demand** | **Every pull request, without a label.** Built only when the Owner or an adopter asks for it; the recommended path, and timed run 2, don't need it. The review lane's filter reads `Review trigger:` from the default branch's record; on `every pull request` it admits a finished CI run on an open pull request from the same repository whose author is a member (`K-AGENT-45`), as if requested by that author. A fork's head, and a pull request whose author isn't a member, such as a dependency bot's, are still refused without a label. | `kanon-init.test.ts` and `skills.test.ts`: `init` takes `--review-trigger every-pr`, and the skill asks Q2, only from the release that ships it. `review-filter.test.ts`: with the bullet, a member's unlabelled pull request is reviewed; without it, skipped, as today. **Mutations:** a fork's head, and a non-member's pull request, with the bullet and no label, are refused; a `labelled` record still skips an unlabelled pull request. |
 
 **Why this order:**
 - **G0 first:** it cost the first run four minutes, and is words.
 - **Rules and data before code** (G1, G2): `init` and the skills read the features and the record's bullets, and the guards must agree with them first.
-- **The trigger before `init`** (G3 before G5): `init` must not write a `Review trigger: every pull request` bullet that the pinned lane doesn't read.
+- **The every-PR trigger last, and only on demand** (G7): the recommended trigger is today's label, so nothing on the path to the first verdict waits for a lane change. Until it ships, `init` refuses `--review-trigger every-pr`, so it never writes a bullet the pinned lane doesn't read.
 - **The skills last** (G6): they drive `init`'s JSON only (ADR 0014), so they wait for its fields.
 
 ## 11. The target, and how it is measured
 
-**The target:** under **15 minutes** of the adopter's time, from typing `/kanon:adopt` to the Reviewer's first verdict on a test pull request, for the Review feature with the labelled or every-PR trigger, on a stranger's repository.
+**The target:** under **15 minutes** of the adopter's time, from typing `/kanon:adopt` to the Reviewer's first verdict on a test pull request, for the Review feature with the recommended labelled trigger, on a stranger's repository. Adding `review:please` to the test pull request is a runbook step, and on the clock.
 
 **Timed run 2:**
 - **The repository:** an existing repository with its own history and CI, on an account where Kanon has no App yet, so creating the Judge is on the clock. Not a repository made for the run.
 - **The clock** starts when `/kanon:adopt` is typed, with the plugin already installed (its install is timed and reported apart), and stops at the verdict's `submitted_at`. A break the person takes is recorded and taken out, as in run 1, and so is the Kanon operator's telemetry registration, which is not the adopter's step.
 - **The record:** a row per stage, with the same columns as run 1's friction log (stage, what happened, minutes stalled, whether the person left the flow, the suggested fix), and the time of each runbook step.
-- **The budget it is held to:** the four questions and the summary in 2 minutes; the App and its key in 4; the Claude token in 2; the install pull request merged in 2; CI and the first review in 5, the repository's own CI time reported beside it.
+- **The budget it is held to:** the questions and the summary in 2 minutes; the App and its key in 4; the Claude token in 2; the install pull request merged in 2; CI and the first review in 5, the repository's own CI time reported beside it.
 
 ## 12. Cost
 
 **AWS: none.** No step adds a resource.
 
-**Actions minutes:** the every-PR trigger adds a Reviewer run per pushed head of a member's pull request that wasn't labelled before, on `CLAUDE_CODE_OAUTH_TOKEN`, so quota rather than a bill, and a short filter job on every CI run, as today. The question says so in its consequence.
+**Actions minutes:** unchanged on the recommended path, which keeps today's label. The every-PR trigger, if G7 is built, adds a Reviewer run per pushed head of a member's pull request that wasn't labelled before, on `CLAUDE_CODE_OAUTH_TOKEN`, so quota rather than a bill, and a short filter job on every CI run, as today. The question says so in its consequence.
 
 **The Owner's time:** timed run 2.
 
@@ -350,15 +353,16 @@ Taken by the Owner from the first timed install, before this plan was drafted, a
 4. **The person-step runbook:** one step at a time, a direct link and one action, then "done?", then the next. Commands appear only once their inputs exist, with real values filled in. App keys are made at **Credentials → Key pairs → New key**. Never `gh secret set` without `--body` or a file; a real secret goes through the person's own terminal.
 5. **Question style rules for every skill:** one decision per question; at most two short sentences; each option a short label and a one-line consequence, the recommended first; caveats behind a link; never recommend against what Kanon wants, such as opting in.
 
-## Decisions left to the Owner
+### Decided by the Owner on the plan (2026-10-10)
 
-Each is decided in this plan as proposed, and changes nothing else if the Owner changes it:
+The plan's eight open points, decided by the Owner on its pull request. Status: **decided**.
 
-1. **The recommended review trigger.** Proposed: **every pull request**, so a stranger's first pull request gets a verdict without knowing a label, which is what the wedge measures. Against it: a model run per pushed head of every member's pull request. The default under `--yes` stays `labelled` either way.
-2. **Yes means `sent with evidence` whatever the feature** (§3). Proposed as written: the record holds the consent, nothing more leaves a repository without the Overseer or the telemetry Explorer, and a move to Full asks nothing again. The alternative, `sent` without those lanes, needs Q4 asked again on that move.
-3. **`agent-merge-reconcile` in Review + build, not Review** (§2.2). Proposed as written.
-4. **Full's conditional lanes** (§2.3): the sweep only with its hook, the digests only with a webhook, the telemetry Explorer left to doctor once the operator issues its role. Proposed as written.
-5. **Releases is inferred, never asked,** and `init` writes no release-please configuration (§2.4). Proposed as written.
-6. **The Data question's recommended answer** follows the repository's visibility, and **a Yes changes no default,** sharing included: the evidence is scrubbed of the repository's text either way. Proposed as written.
-7. **The style budget's numbers:** 160 characters per question, four words per label, 100 characters per consequence. Proposed as written; G6 measures every current question against them first, and the numbers move only if a question that already reads well fails.
-8. **The consent page's name,** `docs/sharing.md`. Proposed as written.
+6. **The review trigger: labelled only, `review:please`, recommended, as today.** Changed from the plan's proposal of every pull request. Q2's first option is **Only labelled ones (Recommended)**, and **Every pull request** comes second. The every-PR lane change stays in the plan as step G7, optional and built on demand, after the install steps; until it ships Q2 is not asked, and the trigger is the summary's `labelled` line. The summary, the runbook's last step and the skill's closing message say plainly how to ask for a review (§3).
+7. **Consent *Yes* means `sent with evidence` whatever the feature** (§3). Accepted as proposed: the record holds the consent, nothing more leaves a repository without the Overseer or the telemetry Explorer, and a move to Full asks nothing again.
+8. **`kanon init --yes` defaults sharing to *No*.** Accepted: consent is never implied, and only an explicit answer sends anything (`K-OBS-18`).
+9. **`agent-merge-reconcile` is in Review + build, not Review** (§2.2). Accepted as proposed.
+10. **Full's conditional lanes** (§2.3): the sweep only with its hook, the digests only with a webhook, the telemetry Explorer left to doctor once the operator issues its role. Accepted as proposed.
+11. **Releases is inferred, never asked,** and `init` writes no release-please configuration (§2.4). Accepted as proposed.
+12. **The Data question's recommended answer** follows the repository's visibility, and a *Yes* changes no default (§3). Accepted as proposed.
+13. **The style budget:** 160 characters per question, four words per label, 100 characters per consequence (§9). Accepted as proposed; G6 measures every current question against them first.
+14. **The consent page is `docs/sharing.md`.** Accepted as proposed.
