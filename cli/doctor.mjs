@@ -89,6 +89,28 @@ export const HOLDER_LABEL = 'Accepted id-token holder';
 /** The bullet's bold label that waives one finding, under `## Choices`. */
 export const WAIVER_LABEL = 'Waived doctor finding';
 
+/** The dispatch sweep's backlog feeder's valve, a repository variable (#609). */
+export const BACKLOG_FEED = 'QA_BACKLOG_FEED';
+
+/**
+ * The note on the backlog feeder's valve (#609): informational in every state, since unset is
+ * the feeder's default, off. Reads the value as `scripts/backlog-feed.mjs` does: a whole number,
+ * and anything else closed.
+ * @param {string[]} files the callers of a sweep that feeds
+ * @param {Map<string, string> | null} vars the repository's variables, or null when unlisted
+ * @param {string} repo
+ */
+export function backlogFeedNote(files, vars, repo) {
+  const who = `${files.join(', ')} ${files.length > 1 ? 'run' : 'runs'} the dispatch sweep, whose backlog feeder`;
+  const how = '(docs/lanes.md, "The backlog feeder")';
+  if (!vars) return `${who} reads ${BACKLOG_FEED}, and the token can't list ${repo}'s variables, so doctor can't tell whether it feeds ${how}.`;
+  const raw = (vars.get(BACKLOG_FEED) ?? '').trim();
+  const milestones = (vars.get('QA_BACKLOG_MILESTONES') ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  if (raw === '' || raw === '0') return `${who} is off: ${BACKLOG_FEED} is ${raw === '' ? 'unset' : '0'}. Set it to the number of reviewer follow-ups to label agent:implement a day ${how}: \`gh variable set ${BACKLOG_FEED} -R ${repo} --body 1\`.`;
+  if (!/^\d+$/.test(raw)) return `${who} is off: ${BACKLOG_FEED} is \`${raw}\`, which is not a whole number, so the feeder reads it as 0 ${how}.`;
+  return `${who} labels up to ${raw} reviewer follow-up${raw === '1' ? '' : 's'} a day agent:implement, from ${milestones.length ? milestones.join(', ') : 'Product Backlog'}, into implementer slots nothing else is using ${how}.`;
+}
+
 /**
  * The finding ids no waiver waives, each with why (docs/doctor.md, "Waiving a finding"). A
  * waiver of one is malformed. The record's own findings can't be waived, or a waiver could hide
@@ -1486,6 +1508,22 @@ export const diagnose = async (deps, opts) => {
         }
       }
     }
+  }
+
+  // ── The backlog feeder (#609) ─────────────────────────────────────────────────────────────
+  // Where a caller runs a dispatch sweep that feeds the backlog at the checked release, the state
+  // of its valve, as a note: unset is the feeder's default, off, and no finding.
+  const feeders = callers.filter((c) => req.lanes[c.lane]?.optionalVariables?.includes(BACKLOG_FEED)).map((c) => c.file);
+  if (feeders.length) {
+    const listed = await deps.gh(['variable', 'list', '-R', repo, '--json', 'name,value']);
+    /** @type {Map<string, string> | null} */
+    let vars = null;
+    try {
+      if (listed.status === 0) vars = new Map(JSON.parse(listed.stdout).map((/** @type {any} */ v) => [String(v.name), String(v.value ?? '')]));
+    } catch {
+      vars = null;
+    }
+    notes.push(backlogFeedNote(feeders, vars, repo));
   }
 
   // ── The id-token holders ────────────────────────────────────────────────────────────────────

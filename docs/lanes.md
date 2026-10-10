@@ -381,6 +381,17 @@ The Lead's dispatch sweep reconciles the two lanes that a label starts, implemen
 
 It needs the Author App (the Lead's), with `Issues: write`, `Pull requests: read` and `Actions: read` on the installation. Until the App's secrets are set, the sweep skips with a warning instead of going red.
 
+## The backlog feeder
+
+The sweep can also feed the Implementer from your backlog ([#609](https://github.com/yedeya-labs/kanon/issues/609)). Each reviewer follow-up is already a spec, with a file cite, a failure scenario and a severity, so after its reconcile the sweep may label up to `QA_BACKLOG_FEED` of them `agent:implement` (`scripts/backlog-feed.mjs`). It is off until you set that repository variable: unset or `0` reads and writes nothing, and the run's summary says the valve is closed. Setting it is the human decision `K-WORK-19` asks for, made once for the repository rather than once per issue, and the bounds below are what keep it one. `kanon doctor` reports the variable's state as a note.
+
+- **Only into a free slot.** It counts the implementer slots in use across every open `agent:implement` issue, as the reconciler counts them: an issue parked on a person (a stop the sweep reads as waiting on a person, `qa:needs-info` or `qa:human-action`) holds none. It feeds nothing once the reconciler's shared cap (`QA_LEAD_GLOBAL_WIP`, default 3) is reached, and nothing while an issue it fed still holds a slot. So projects keep priority, and fed issues go through one batch at a time.
+- **What it feeds.** An open issue labelled `follow-up` and `agent:reviewer`, at `sev:medium` or `sev:low`, on a bucket milestone named in `QA_BACKLOG_MILESTONES` (comma-separated, default `Product Backlog`; a milestone with a due date is a roadmap milestone and never fed). It skips an issue carrying `agent:implement`, `qa:needs-info`, `qa:human-action`, `qa:needs-split`, `blocked`, `qa:needs-triage`, `qa:verify` or `gate-candidate`, a project member (a `<!-- qa:project N -->` marker or a `project:N` label), one it fed before, and one the Implementer already posted on, whoever dispatched it. `sev:medium` goes before `sev:low`, then the oldest first.
+- **What it writes.** It adds `agent:implement` and then a comment of the Lead's carrying `<!-- qa:backlog-feed -->`, which names the tick and why this issue was chosen. The marker is its only state. To take an issue back, remove the label: it is never fed again.
+- **A dispatch is a dry run** unless you tick `apply`, as for the sweep. The summary always says the slots in use, the candidates, and the issue chosen and why, or why nothing was fed.
+
+**What it costs.** Each fed issue costs about one implementer run, two or three review rounds and a merge check: about $15 at API prices, measured on the reference adopter. One a day is about $450 a month of your Claude subscription's quota, and no cloud: the feeder itself runs no model. An issue whose acceptance needs a person's act, such as a vendor portal or live credentials, costs one implementer run that stops.
+
 ## The code audit
 
 The Explorer's code-reading mode reads your code and your specs every few days, and files a bug only on an objective contradiction: a consumer that can't work, a security anti-pattern, a bypassable contract, or code that contradicts a promoted invariant (`K-WORK-9`'s rubric rates it). It reads what your stack document declares under `## Code areas` (above), and the playbook's "Code-reading mode" section. Its caller:

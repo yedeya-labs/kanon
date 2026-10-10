@@ -116,7 +116,7 @@ export const ok = (v: unknown): Gh => ({ status: 0, stdout: typeof v === 'string
 export const no = (stderr: string): Gh => ({ status: 1, stdout: '', stderr });
 
 /** A fake GitHub: the repository, its Apps, and Kanon's requirements file at each release. */
-export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<string, Req | null>; variables?: Set<string> | null } = {}) => {
+export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<string, Req | null>; variables?: Set<string> | Map<string, string> | null } = {}) => {
   const ids = identitiesOf(LANES);
   const st = {
     labels: new Set(TAXONOMY),
@@ -150,7 +150,8 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     if (a0 === 'api' && a1 === 'user') return ok('octo\n');
     if (a0 === 'api' && (a1 === 'user/installations?per_page=100' || a1 === 'orgs/acme/installations?per_page=100')) return st.installations ? ok({ total_count: st.installations.length, installations: st.installations }) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 === 'secret' && a1 === 'list') return st.secrets ? ok([...st.secrets].map((name) => ({ name }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
-    if (a0 === 'variable' && a1 === 'list') return st.variables ? ok([...st.variables].map((name) => ({ name }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
+    // A Set names variables only; a Map gives their values too (#609).
+    if (a0 === 'variable' && a1 === 'list') return st.variables ? ok(st.variables instanceof Map ? [...st.variables].map(([name, value]) => ({ name, value })) : [...st.variables].map((name) => ({ name, value: '' }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 !== 'api' || args.includes('-X')) return no(`unexpected gh ${args.join(' ')}`);
     const path = args.find((x, i) => i > 0 && /^(repos|orgs|apps)\//.test(x)) ?? '';
     if (path === `repos/${REPO}`) return ok({ private: false, default_branch: 'main', owner: { login: 'acme', type: st.ownerType }, permissions: { admin: true } });

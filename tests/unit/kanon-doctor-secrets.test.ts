@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
 import { appSecrets, callerFile, TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
-import { doctor, EXIT, WAIVER_LABEL } from '../../cli/doctor.mjs';
+import { backlogFeedNote, doctor, EXIT, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { checkout, clone, fakeGitHub, healthyFiles, identitiesOf, ids, LANES, NEXT, PINNED, put, registerText, releaseBy, releaserFiles, releaserOn, REPO, REQ, run, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 
@@ -363,5 +363,43 @@ describe('kanon doctor and upstream findings sent without the telemetry collecto
     const r = await run(checkout({ ...healthyFiles(), ...record('sent', waiver) }), fakeGitHub(), ['--json']);
     expect(ids(r).sort()).toEqual(['declaration.malformed docs/qa/adoption.md', 'upstream.unsent docs/qa/adoption.md']);
     expect(r.json.findings.find((f: { id: string }) => f.id === 'declaration.malformed').message).toContain("waives `upstream.unsent`, which can't be waived");
+  });
+});
+
+// #609: a caller of a dispatch sweep that feeds the backlog at the checked release gets a note on
+// the feeder's valve, never a finding: unset is the feeder's default, off.
+describe("kanon doctor and the backlog feeder's valve (#609)", () => {
+  const SWEEP = '.github/workflows/agent-dispatch-sweep.yml';
+  const withSweep = () => ({ ...healthyFiles(), [SWEEP]: callerFile('agent-dispatch-sweep', REQ.lanes['agent-dispatch-sweep']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }) });
+  const feedNotes = (r: Result) => r.json.notes.filter((n: string) => n.includes('backlog feeder'));
+
+  it('says the feeder is off when QA_BACKLOG_FEED is unset, as a note and not a finding', async () => {
+    const r = await run(checkout(withSweep()), fakeGitHub(), ['--json']);
+    expect(feedNotes(r)).toEqual([expect.stringContaining('is off: QA_BACKLOG_FEED is unset')]);
+    expect(r.json.findings.filter((f: { message: string }) => /QA_BACKLOG|backlog/i.test(f.message))).toEqual([]);
+    expect(r.json.unchecked).toEqual([]);
+  });
+
+  it('says how many it feeds a day, and from where, when the variable is set', async () => {
+    const r = await run(checkout(withSweep()), fakeGitHub({ variables: new Map([['QA_BACKLOG_FEED', '2'], ['QA_BACKLOG_MILESTONES', 'Product Backlog, Tech Debt']]) }), ['--json']);
+    expect(feedNotes(r)).toEqual([expect.stringContaining('labels up to 2 reviewer follow-ups a day agent:implement, from Product Backlog, Tech Debt')]);
+  });
+
+  it('reads a value that is not a whole number as closed, as the feeder does', () => {
+    expect(backlogFeedNote(['x.yml'], new Map([['QA_BACKLOG_FEED', 'yes']]), REPO)).toContain('which is not a whole number');
+    expect(backlogFeedNote(['x.yml'], new Map([['QA_BACKLOG_FEED', '0']]), REPO)).toContain('is off: QA_BACKLOG_FEED is 0');
+    expect(backlogFeedNote(['x.yml'], null, REPO)).toContain("can't list acme/widgets's variables");
+  });
+
+  it('asks nothing of a repository without a sweep caller, or against a release whose sweep does not feed', async () => {
+    const github = fakeGitHub({ variables: null });
+    await run(checkout(healthyFiles()), github, ['--json']);
+    expect(github.calls.some((c) => c[0] === 'variable')).toBe(false);
+    // Mutation: the checked release's sweep declares no feeder variable, so no note.
+    const old = clone(REQ);
+    delete (old.lanes['agent-dispatch-sweep'] as { optionalVariables?: string[] }).optionalVariables;
+    const out: string[] = [];
+    await doctor(['--dir', checkout(withSweep()), '--json'], { gh: fakeGitHub().gh, env: {}, out: (l: string) => out.push(l), err: () => {}, requirements: () => old, release: () => PINNED });
+    expect(JSON.parse(out.join('\n')).notes.filter((n: string) => n.includes('backlog feeder'))).toEqual([]);
   });
 });

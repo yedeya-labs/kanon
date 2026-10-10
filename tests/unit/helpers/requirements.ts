@@ -83,6 +83,10 @@ export const buildRequirements = (root: string) => {
     // declares `required: false`, as `lane-check` reads them.
     const optional = comment(text, 'OPTIONAL SECRET').filter((n) => secrets.includes(n) && call.secrets[n]?.required === false).sort();
     if (optional.length) lane.optionalSecrets = optional;
+    // The repository variables a lane reads by name and a repository may leave unset (kanon#609),
+    // as the lane marks them, and only those it really reads.
+    const variables = comment(text, 'OPTIONAL VARIABLE').filter((n) => text.includes(`vars.${n} `)).sort();
+    if (variables.length) lane.optionalVariables = variables;
     const name = comment(text, 'CALLER NAME')[0];
     if (name) lane.callerName = name;
     const runName = comment(text, 'CALLER RUN-NAME ENDS WITH')[0];

@@ -58,6 +58,10 @@
       "optionalSecrets": [
         "QA_STORE_BUCKET",
         "QA_STORE_ROLE_ARN"
+      ],
+      "optionalVariables": [
+        "QA_BACKLOG_FEED",
+        "QA_BACKLOG_MILESTONES"
       ]
     },
     "agent-explore-telemetry": {

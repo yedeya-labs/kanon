@@ -2775,6 +2775,41 @@ export function isParkedOnHuman({
  */
 const PARKED_LANE_STATES = new Set(['awaiting-human', 'human-held']);
 
+/**
+ * An issue's PR read and whether it is parked on a human, read as `readWorld` reads them
+ * (RA-2038). Exported for the backlog feeder (kanon#609), which counts implementer slots
+ * across every open issue and must count a parked one exactly as this file does: a slot
+ * check that read labels alone held a bailed issue's slot forever.
+ *
+ * BOUNDED BY CONSTRUCTION, and cheaper than it looks. It asks only about issues that
+ * already cost a `linkedPrs` read — `agent:implement` and OPEN — and only when that read
+ * came back EMPTY, because an issue with a live PR is by definition not parked. So the
+ * common tick adds zero calls: the slots that are working have PRs.
+ *
+ * `qa:needs-info` needs no read at all; it IS the label for "the implementer asked a
+ * question". The lane is read only when the cheap gates leave it decisive — the comment
+ * fetch is the one cost here, and `isParkedOnHuman` is pure so it cannot do it itself.
+ *
+ * @param {number} number
+ * @param {{ labels: string[], state: string }} issue  label names, and `OPEN` or `CLOSED`
+ * @param {{ prs?: (n: number) => { prs: object[], ok: boolean }, lane?: (n: number, o: { labels: string[] }) => { state: string|null, lastAt: string|null } }} [io]
+ */
+export function parkedRead(number, { labels, state }, { prs = linkedPrsRead, lane = laneStateOf } = {}) {
+  const prRead = labels.includes(IMPLEMENT) && state === 'OPEN' ? prs(number) : { prs: [], ok: true };
+  const needsLane = prRead.ok && prRead.prs.length === 0
+    && labels.includes(IMPLEMENT) && state === 'OPEN' && !labels.includes(NEEDS_INFO);
+  const l = needsLane ? lane(number, { labels }) : { state: null, lastAt: null };
+  const parkedOnHuman = isParkedOnHuman({
+    labels,
+    state,
+    hasPr: prRead.prs.length > 0,
+    prOk: prRead.ok,
+    laneState: l.state,
+    laneLastAt: l.lastAt,
+  });
+  return { prRead, parkedOnHuman };
+}
+
 /** The declared environment's name, read once per tick: every project names the same one. */
 let declaredEnvironmentRead;
 const declaredEnvironment = () => {
@@ -2831,38 +2866,14 @@ function readWorld(project) {
       // RA-1081 exists to make trustworthy. It also doubled the PR reads, which at WIP 3
       // is ~6 extra `gh` calls a tick against the "two `gh` calls per tick" the cost
       // note claimed. Deriving both from one array makes the agreement structural.
-      const prRead = (i.labels || []).some((l) => l.name === IMPLEMENT) && i.state === 'OPEN'
-        ? linkedPrsRead(i.number)
-        : { prs: [], ok: true };
-      const prs = prRead.prs;
       const labels = (i.labels || []).map((l) => l.name);
       // PARKED ON A HUMAN — computed HERE, where the `gh` access already lives, so
       // `nextActions` stays pure (RA-2038). It is called speculatively for `demand`
       // on the exhausted-budget path, and a counter that fetched would make that
-      // re-derivation cost a request per call.
-      //
-      // BOUNDED BY CONSTRUCTION, and cheaper than it looks. It asks only about
-      // issues that already cost a `linkedPrs` read — `agent:implement` and OPEN,
-      // at most `QA_LEAD_WIP` (3) per project — and only when that read came back
-      // EMPTY, because an issue with a live PR is by definition not parked. So the
-      // common tick adds zero calls: the slots that are working have PRs.
-      //
-      // `qa:needs-info` needs no read at all; it IS the label for "the implementer
-      // asked a question".
-      // Read the lane only when the cheap gates leave it decisive — the comment
-      // fetch is the one cost here, and `isParkedOnHuman` is pure so it cannot do
-      // it itself.
-      const needsLane = prRead.ok && prs.length === 0
-        && labels.includes(IMPLEMENT) && i.state === 'OPEN' && !labels.includes(NEEDS_INFO);
-      const lane = needsLane ? laneStateOf(i.number, { labels }) : { state: null, lastAt: null };
-      const parkedOnHuman = isParkedOnHuman({
-        labels,
-        state: i.state,
-        hasPr: prs.length > 0,
-        prOk: prRead.ok,
-        laneState: lane.state,
-        laneLastAt: lane.lastAt,
-      });
+      // re-derivation cost a request per call. `parkedRead` is the read, shared with the
+      // backlog feeder (kanon#609), which counts the same slots.
+      const { prRead, parkedOnHuman } = parkedRead(i.number, { labels, state: i.state });
+      const prs = prRead.prs;
       return {
         ...i,
         labels,
