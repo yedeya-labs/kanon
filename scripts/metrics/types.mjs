@@ -52,13 +52,27 @@
  * always fills `repository`: the linked-fix detector reads a source without one as this
  * repository, so another repository's issue #7 would pass for this one's (kanon#527). Other
  * events may be passed and are ignored.
+ *
+ * An issue source also carries its `labels`, `state` and `state_reason`, as they are when the
+ * reader reads them (plan 0003 M4): a Reviewer follow-up is an issue labelled `follow-up` and
+ * `agent:reviewer` that cross-references the PR, and its fate is its state now (§3.3, group 4).
+ * A reader that didn't read them, or read only part of the labels, leaves them out, and the
+ * row's follow-up fields are then unknown (`followupsOf`, `followups.mjs`).
+ * @typedef {{
+ *   type: 'issue' | 'pull_request',
+ *   number: number,
+ *   repository?: string,
+ *   labels?: string[],
+ *   state?: 'open' | 'closed',
+ *   state_reason?: 'completed' | 'not_planned' | 'reopened' | 'duplicate' | null,
+ * }} TimelineSource
  * @typedef {{
  *   event: string,
  *   created_at: string,
  *   actor?: Actor | null,
  *   label?: string,
  *   commit_id?: string,
- *   source?: { type: 'issue' | 'pull_request', number: number, repository?: string },
+ *   source?: TimelineSource,
  * }} TimelineEvent
  */
 

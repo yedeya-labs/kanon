@@ -168,8 +168,9 @@ The other values, each inferred or defaulted, as the summary shows:
   --plugin               declare the kanon plugin in .claude/settings.json, pinned to this
                          release, for everyone who uses Claude Code here (the default)
   --no-plugin            don't
-  --telemetry            send this repository's agent-run rows to Kanon's hosted telemetry
-                         store: writes the collector's caller (docs/telemetry.md)
+  --telemetry            send this repository's agent-run and work-item rows to Kanon's
+                         hosted telemetry store: writes the collector's caller
+                         (docs/telemetry.md)
   --no-telemetry         don't (the default)
   --upstream-findings <where>  where findings only Kanon can act on go: drafted (the
                          default), filed-here, or, with --telemetry, sent or
@@ -1308,7 +1309,7 @@ export const reuseQuestion = (found, req) => {
  * erase it, from plan 0002 and docs/telemetry.md.
  */
 export const TELEMETRY_QUESTION =
-  "Send this repository's agent-run rows to Kanon's hosted telemetry store? Each row is plan 0002's fixed fields about one lane run (lane, outcome, model, cost, tokens, durations, counts, the run, pull request and issue numbers, the Kanon release): no code, no text, no logins or file paths. They go to one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, and are kept 13 months. Kanon's operator reads them to improve Kanon: Kanon notices failures it caused in your runs, often fixing them before you would report one, and you get cross-adopter cost and reliability baselines. The operator publishes only aggregates of at least three adopters; your repository's own reader role reads only its rows. Stop by deleting .github/workflows/telemetry.yml; the operator erases what was sent on request (docs/telemetry.md, \"Erase an adopter\").";
+  "Send this repository's agent-run and work-item rows to Kanon's hosted telemetry store? One row per lane run: plan 0002's fixed fields (lane, outcome, model, cost, tokens, durations, counts, the run, pull request and issue numbers, the Kanon release). One row per closed pull request: plan 0003's fields (sizes, times, outcome, actor classes, pull request and issue numbers). The rows hold no code, no text, no titles, no logins or file paths. They go to one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, and are kept 13 months. Kanon's operator reads them to improve Kanon: Kanon notices failures it caused in your runs, often fixing them before you would report one, and you get cross-adopter cost and reliability baselines. The operator publishes only aggregates of at least three adopters; your repository's own reader role reads only its rows. Stop by deleting .github/workflows/telemetry.yml; the operator erases what was sent on request (docs/telemetry.md, \"Erase an adopter\").";
 
 /**
  * The answers `askAll` gives, with where each came from (`why`, by its `.answers` field) and the

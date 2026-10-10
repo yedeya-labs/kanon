@@ -40,6 +40,12 @@ const PR_EVENTS = [
 ];
 
 const ACTOR = 'login __typename';
+/**
+ * The labels read of an issue that cross-references a pull request: enough for a Reviewer
+ * follow-up's (`follow-up`, `agent:reviewer`, a `sev:*`, a milestone's few). An issue with more
+ * is read as having unknown labels, and the PR's follow-up fields are left out (plan 0003 M4).
+ */
+export const SOURCE_LABELS = 20;
 const PAGE = 'pageInfo { hasNextPage endCursor }';
 
 /** Each nested list: where it hangs, its arguments and the fields of one node. */
@@ -63,7 +69,7 @@ const LISTS = {
       ... on RemovedFromMergeQueueEvent { createdAt actor { ${ACTOR} } }
       ... on CrossReferencedEvent { createdAt actor { ${ACTOR} } source {
         __typename
-        ... on Issue { number repository { nameWithOwner } }
+        ... on Issue { number repository { nameWithOwner } state stateReason labels(first: ${SOURCE_LABELS}) { totalCount nodes { name } } }
         ... on PullRequest { number repository { nameWithOwner } } } }`,
   },
   closingIssuesReferences: { on: 'pullRequest', args: '', node: '', counted: true }, // node: ISSUE, below
@@ -236,10 +242,18 @@ function timelineEvent(ev) {
     case 'CrossReferencedEvent': {
       const s = ev.source;
       if (!s || typeof s.number !== 'number' || !s.repository?.nameWithOwner) return { event: 'cross-referenced', ...base };
-      return {
-        event: 'cross-referenced', ...base,
-        source: { type: s.__typename === 'PullRequest' ? 'pull_request' : 'issue', number: s.number, repository: s.repository.nameWithOwner },
-      };
+      /** @type {import('../scripts/metrics/types.mjs').TimelineSource} */
+      const source = { type: s.__typename === 'PullRequest' ? 'pull_request' : 'issue', number: s.number, repository: s.repository.nameWithOwner };
+      // An issue's labels and state, for its follow-up fate (plan 0003 M4); labels cut short by
+      // the page are left out, as unknown, never read as the whole list.
+      if (source.type === 'issue') {
+        const labels = s.labels?.nodes;
+        if (Array.isArray(labels) && typeof s.labels.totalCount === 'number' && labels.length >= s.labels.totalCount) source.labels = labels.map((/** @type {any} */ l) => l.name);
+        if (s.state === 'OPEN' || s.state === 'CLOSED') source.state = s.state === 'OPEN' ? 'open' : 'closed';
+        if (typeof s.stateReason === 'string') source.state_reason = /** @type {any} */ (s.stateReason.toLowerCase());
+        else if (s.stateReason === null && source.state) source.state_reason = null;
+      }
+      return { event: 'cross-referenced', ...base, source };
     }
     default: return null;
   }
@@ -374,4 +388,68 @@ export async function readPullRequests(deps, repo, window, { prPage = 15, nested
     leftOut: [...left].map(([pr, reason]) => ({ pr, reason })).sort(byNumber),
     calls,
   };
+}
+
+/** `graphql`'s error for a number with no issue or pull request behind it, and no other error. */
+export const NOT_FOUND = /answered with an error \(NOT_FOUND\): Could not resolve to an issue or pull request/;
+
+/** The query for one pull request by number, whole, or the issue that number is. @param {number} nested */
+export const oneQuery = (nested) => `query WorkItemOne($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issueOrPullRequest(number: $number) { __typename ... on PullRequest { ${prNode(nested)} } }
+  }
+  ${RATE}
+}`;
+
+/** The query for the pull requests that close one issue, merged or closed, as GitHub links them. */
+export const closersQuery = `query WorkItemClosers($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) { closedByPullRequestsReferences(first: 25, includeClosedPrs: true) { nodes { number } } }
+  }
+  ${RATE}
+}`;
+
+/**
+ * One pull request of `repo` by number, read whole as `readPullRequests` reads each (plan 0003
+ * M4: the collector's work-item step reads an earlier item again when a later PR or a follow-up
+ * changes its story). `none` when the number is an issue, or nothing; `leftOut` when a nested
+ * list is truncated or can't be read.
+ * @param {ReadDeps} deps @param {string} repo `owner/name` @param {number} number @param {ReadSizes} [sizes]
+ * @returns {Promise<{ pr: import('../scripts/metrics/types.mjs').PullRequest } | { leftOut: 'truncated' | 'unreadable' } | { none: true }>}
+ */
+export async function readPullRequest(deps, repo, number, { nestedPage = 100 } = {}) {
+  const [owner = '', name = ''] = repo.split('/');
+  /** @type {any} */
+  let data;
+  try {
+    data = await graphql(deps, oneQuery(nestedPage), { owner, name, number });
+  } catch (e) {
+    // A number nothing answers to (a hex colour's `#0`, a deleted issue, a discussion) is no
+    // pull request: GitHub says so with a `NOT_FOUND` error and a null node, as
+    // `scripts/label-guard.mjs` reads it. Any other error, a 5xx, a rate limit or a permission,
+    // says nothing about the number, so it is thrown and the caller's sweep turns red.
+    if (e instanceof ReadError && NOT_FOUND.test(e.message)) return { none: true };
+    throw e;
+  }
+  const node = data.repository?.issueOrPullRequest;
+  if (!node || node.__typename !== 'PullRequest') return { none: true };
+  try {
+    return { pr: await complete(deps, { owner, name }, node, nestedPage) };
+  } catch (e) {
+    if (e instanceof LeftOut) return { leftOut: e.reason };
+    throw e;
+  }
+}
+
+/**
+ * The numbers of the pull requests GitHub links as closing an issue, closed ones included.
+ * @param {ReadDeps} deps @param {string} repo `owner/name` @param {number} number
+ * @returns {Promise<number[]>}
+ */
+export async function issueClosers(deps, repo, number) {
+  const [owner = '', name = ''] = repo.split('/');
+  const data = await graphql(deps, closersQuery, { owner, name, number });
+  const nodes = data.repository?.issue?.closedByPullRequestsReferences?.nodes;
+  if (!Array.isArray(nodes)) throw new ReadError(`GitHub returned no closing pull requests for issue #${number}`);
+  return nodes.map((/** @type {any} */ n) => n.number).filter((/** @type {unknown} */ n) => typeof n === 'number');
 }

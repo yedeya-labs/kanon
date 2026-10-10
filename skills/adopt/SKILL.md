@@ -200,7 +200,7 @@ One question sets telemetry, where upstream findings go and their evidence (`doc
 ### `.answers.telemetry`: send run rows to Kanon's telemetry store
 
 Off unless the person says yes. Say, in the question itself, everything the person needs to decide:
-- **What is sent:** one row per agent run, plan 0002's fixed fields (the lane, the outcome, the model, cost, tokens, durations and counts, the run, pull request and issue numbers, the Kanon release). No code, no text, no logins, no file paths.
+- **What is sent:** one row per agent run, plan 0002's fixed fields (the lane, the outcome, the model, cost, tokens, durations and counts, the run, pull request and issue numbers, the Kanon release). Also one row per closed pull request, plan 0003's work-item fields (its sizes, times, outcome and the classes of its actors, with pull request and issue numbers). No code, no text, no titles, no logins, no file paths.
 - **Where it goes:** one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, kept 13 months.
 - **What the person gets:** Kanon notices failures that Kanon caused in their runs, and often fixes them before they would have to report one; they also get cross-adopter cost and reliability baselines (`docs/telemetry.md` in Kanon's repository, "What an adopter gets by opting in").
 - **Who reads it:** Kanon's operator, to improve Kanon, who publishes only aggregates that at least three adopters contribute to; the repository's own reader role reads only its own rows.

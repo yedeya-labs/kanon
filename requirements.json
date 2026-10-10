@@ -1146,7 +1146,9 @@
     "grant": {
       "actions": "read",
       "contents": "read",
-      "id-token": "write"
+      "id-token": "write",
+      "issues": "read",
+      "pull-requests": "read"
     }
   },
   "qaStore": {
