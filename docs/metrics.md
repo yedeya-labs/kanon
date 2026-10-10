@@ -110,7 +110,8 @@ kanon metrics report --rows runs.jsonl --rows work.jsonl --until 2026-10-01 --js
 - **A cell below its minimum shows `not enough data (N)`**, with its count, never a number (§2.1, decision 11).
 - **The band validity check (§3.6).** The report computes Kendall's τ-b between band and cost per merged item, with a bootstrap interval. Unless the interval sits entirely above zero, or when there are fewer than 10 such items in two bands, **the pooled view replaces the banded one, with a warning**, for every indicator. The median cost per band is printed with the check.
 - **The band is recomputed** from each row's stored counts with the newest band version, never read from the row, so one report never mixes versions.
-- **Overhead,** the Explorer's, the code audit's, the telemetry Explorer's, the Overseer's and the digests' spend, is printed beside cost, never inside it, and is left out of yield.
+- **Overhead,** the Explorer's, the code audit's, the telemetry Explorer's, the Overseer's and the digests' spend, and the Lead's runs that join no item (a brief run, or a split of a tracking issue no PR closes: planning, §3.4), is printed beside cost, never inside it, and is left out of yield's numerator and denominator alike. A Lead run that joins an item is in that item's cost and yield (§2.2).
+- **A missing cost is unknown, never $0.** A merged item none of whose delivery runs reports `total_cost_usd` is left out of cost and yield, and counted; so are the runs without a cost inside the items that are costed.
 
 **How runs join items** is §3.4's rule, in `scripts/metrics/join.mjs`, which every reader uses: a run joins the item whose PR it names; a run naming only an issue joins the first item closing that issue to close after the run (on a tie, the lowest PR number). So a run joins at most one item. A run that joins nothing settles, not merged, 30 days after the last run on its PR or issue; the report reads no issue's state, so an issue closed without a PR settles the same way.
 
@@ -128,7 +129,7 @@ kanon metrics report --rows runs.jsonl --rows work.jsonl --until 2026-10-01 --js
 | `view`, `warnings` | string, array | `banded` or `pooled`, and why, as sentences. |
 | `rows` | object | `runs`, `workItems`, `runsJoined`, `runsUnjoined`, and `ignored`: `notRun`, `otherKind`, `unreadable`. |
 | `validity` | object | `status` (`valid`, `invalid`, `not-enough-data`), `n`, `tau`, `low`, `high`, and `medianCost` per band. |
-| `cost` | object | `cells` (each with `median` and `p90`), `mergedWithoutRuns`, `runsWithoutCost`, `overhead` (`runs`, `usd`). |
+| `cost` | object | `cells` (each with `median` and `p90`), `mergedWithoutRuns`, `mergedWithoutCost` (merged items whose runs report no cost), `runsWithoutCost` (runs without a cost inside the costed items), `overhead` (`runs`, `usd`). |
 | `yield` | object | `cells`, each with `yield`. |
 | `escape` | object | `d30` and `d90`, each with `mergedFrom`, `mergedUntil`, and `agent` and `human` cells, each with `rate`. |
 | `approval`, `correction` | object | `cells`, each with `rate`. |

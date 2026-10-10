@@ -43,6 +43,14 @@ export const ESCAPE_DAYS = /** @type {const} */ ([30, 90]);
 export const OVERHEAD_LANES = Object.freeze(['explore', 'code-audit', 'explore-telemetry', 'overseer', 'weekly-digest', 'project-digest']);
 export const DELIVERY_LANES = Object.freeze(LANES.filter((l) => !OVERHEAD_LANES.includes(l)));
 
+/**
+ * The Lead's lanes. A Lead run that joins an item is in that item's cost and yield (§2.2 names
+ * "the Lead's lead, lead-revise and lead-split runs that name the item"); one that joins nothing,
+ * such as a brief run or a split of a tracking issue, is planning, and planning is overhead
+ * (§3.4, "Ambiguity, stated"): on the overhead line, and out of yield's sums alike.
+ */
+export const LEAD_LANES = Object.freeze(['lead', 'lead-revise', 'lead-split']);
+
 /** The roles that author agent work: an item authored by one is the agents' cohort (§2.4). */
 const AGENT_AUTHORS = new Set(['explorer', 'implementer', 'reviewer', 'merger', 'lead', 'overseer']);
 
@@ -200,19 +208,23 @@ export function metricsReport(rows, { until, days = WINDOW_DAYS }) {
     else runsOf.set(pr, [run]);
   });
   const delivery = (/** @type {RunRow} */ r) => DELIVERY_LANES.includes(r.lane);
+  const hasCost = (/** @type {RunRow} */ r) => typeof r.total_cost_usd === 'number';
   const costOf = (/** @type {readonly RunRow[]} */ rs) => rs.reduce((s, r) => s + (typeof r.total_cost_usd === 'number' ? r.total_cost_usd : 0), 0);
 
   // ── Cost per merged item (§2.2) ────────────────────────────────────────────────────────────
   const merged = items.filter((i) => i.fate === 'merged' && inWindow(Date.parse(i.closed_at)));
   const costed = merged
     .map((item) => ({ item, band: bandKey(item), runs: (runsOf.get(item.pr_number) ?? []).filter(delivery) }))
-    .filter((c) => c.runs.length > 0)
+    // An item none of whose delivery runs reports a cost has an unknown cost, never $0 (§3.1).
+    .filter((c) => c.runs.some(hasCost))
     .map((c) => ({ ...c, cost: costOf(c.runs) }));
   const costCell = (/** @type {{ cost: number }[]} */ cs) => {
     const sorted = cs.map((c) => c.cost).sort((a, b) => a - b);
     return { median: quantileEstimate(sorted, 0.5, MINIMUM.median), p90: quantileEstimate(sorted, 0.9, MINIMUM.p90) };
   };
-  const overheadRuns = runs.filter((r) => !delivery(r) && inWindow(Date.parse(r.recorded_at)));
+  // Overhead: the overhead lanes' runs, and the Lead's runs that join no item (§3.4).
+  const unjoinedLead = (/** @type {RunRow} */ r, /** @type {number} */ k) => LEAD_LANES.includes(r.lane) && joined[k] === null;
+  const overheadRuns = runs.filter((r, k) => (!delivery(r) || unjoinedLead(r, k)) && inWindow(Date.parse(r.recorded_at)));
 
   // ── The band validity check (§3.6) ─────────────────────────────────────────────────────────
   const points = costed.filter((c) => c.band !== 'none').map((c) => ({ group: BANDS.indexOf(/** @type {any} */ (c.band)), value: c.cost }));
@@ -245,14 +257,14 @@ export function metricsReport(rows, { until, days = WINDOW_DAYS }) {
   for (const item of items) {
     if (!inWindow(Date.parse(item.closed_at))) continue;
     const rs = (runsOf.get(item.pr_number) ?? []).filter(delivery);
-    if (rs.length) yieldUnits.push({ band: bandKey(item), cost: costOf(rs), merged: item.fate === 'merged' });
+    if (rs.some(hasCost)) yieldUnits.push({ band: bandKey(item), cost: costOf(rs), merged: item.fate === 'merged' });
   }
   // Delivery runs that join no item: a PR with no row yet, an issue that never got a PR, or a
   // run that names neither. Each settles, unmerged, 30 days after the last run on it.
   /** @type {Map<string, { band: BandKey | 'noPr', last: number, runs: RunRow[] }>} */
   const loose = new Map();
   runs.forEach((run, k) => {
-    if (!delivery(run) || joined[k] !== null) return;
+    if (!delivery(run) || joined[k] !== null || unjoinedLead(run, k)) return;
     const key = Number.isInteger(run.pr_number) ? `pr:${run.pr_number}` : Number.isInteger(run.issue_number) ? `issue:${run.issue_number}` : `run:${k}`;
     const at = Date.parse(run.recorded_at);
     const g = loose.get(key);
@@ -314,7 +326,8 @@ export function metricsReport(rows, { until, days = WINDOW_DAYS }) {
     validity,
     cost: {
       cells: view(cellsByBand(costed, (c) => c.band, costCell)),
-      mergedWithoutRuns: merged.length - costed.length,
+      mergedWithoutRuns: merged.filter((i) => !(runsOf.get(i.pr_number) ?? []).some(delivery)).length,
+      mergedWithoutCost: merged.filter((i) => { const rs = (runsOf.get(i.pr_number) ?? []).filter(delivery); return rs.length > 0 && !rs.some(hasCost); }).length,
       runsWithoutCost: costed.reduce((s, c) => s + c.runs.filter((r) => typeof r.total_cost_usd !== 'number').length, 0),
       overhead: { runs: overheadRuns.length, usd: round(costOf(overheadRuns)) },
     },
@@ -390,7 +403,7 @@ export function renderReport(r) {
     '',
     `Band validity (§3.6): ${r.validity.status}. Kendall's τ between band and cost ${r.validity.tau === null ? 'not computed' : `${r.validity.tau} (${r.validity.low ?? '?'} to ${r.validity.high ?? '?'})`}, over ${r.validity.n} merged items. Median cost by band: ${BANDS.map((b) => `${b} ${cellText(r.validity.medianCost[b], dollars)}`).join('; ')}.`,
     '',
-    `Overhead, beside cost and never inside it (the Explorer, the code audit, the Overseer, the digests): ${dollars(r.cost.overhead.usd)} over ${r.cost.overhead.runs} runs. Merged items with no run row, left out of cost: ${r.cost.mergedWithoutRuns}.`,
+    `Overhead, beside cost and never inside it, and out of yield (the Explorer, the code audit, the telemetry Explorer, the Overseer, the digests, and the Lead's runs that join no item): ${dollars(r.cost.overhead.usd)} over ${r.cost.overhead.runs} runs. Left out of cost: ${r.cost.mergedWithoutRuns} merged items with no run row, and ${r.cost.mergedWithoutCost} whose runs report no cost (unknown, never $0); ${r.cost.runsWithoutCost} runs inside the costed items report no cost.`,
     '',
     `Rows read: ${r.rows.runs} runs (${r.rows.runsJoined} joined to a work item, ${r.rows.runsUnjoined} to none) and ${r.rows.workItems} work items; left out: ${r.rows.ignored.notRun} not \`tag: run\`, ${r.rows.ignored.otherKind} of another kind, ${r.rows.ignored.unreadable} unreadable. Yield's interval: a bootstrap over work items, ${r.bootstrap.resamples} resamples, seed ${r.bootstrap.seed}.`,
   ];

@@ -18,6 +18,6 @@ export {
 export { WorkItemError, checkWorkItemRow, workItemRow } from './work-item.mjs';
 export { closingIssues, joinRuns } from './join.mjs';
 export {
-  DELIVERY_LANES, ESCAPE_DAYS, IDLE_DAYS, MINIMUM, OVERHEAD_LANES, WINDOW_DAYS, cellText, metricsReport, notEnough, renderReport, sortRows,
+  DELIVERY_LANES, ESCAPE_DAYS, IDLE_DAYS, LEAD_LANES, MINIMUM, OVERHEAD_LANES, WINDOW_DAYS, cellText, metricsReport, notEnough, renderReport, sortRows,
 } from './report.mjs';
 export { RESAMPLES, SEED, binomialCdf, bootstrap, kendallTauB, orderStatisticInterval, quantile, seededRandom, wilson } from './stats.mjs';

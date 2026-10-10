@@ -212,6 +212,48 @@ describe('the indicators', () => {
     expect(correction.value).toBeCloseTo((4 * 4) / 81, 3);
   });
 
+  it("counts a Lead run that joins nothing as overhead, out of yield, and one that joins an item in that item's cost (§3.4)", () => {
+    const rows = [
+      ...risingRows({ S: 20, M: 20, L: 20, XL: 20 }),
+      itemRow(700, { closed: ago(2), band: 'S', issues: [70] }),
+      runRow('implement', { pr: 700, at: ago(4), cost: 1 }),
+      runRow('lead-revise', { issue: 70, at: ago(5), cost: 0.5 }), // joins 700 by rule 2
+      runRow('lead', { at: ago(35), cost: 4 }), // a brief run: no issue, no PR
+      runRow('lead-split', { issue: 71, at: ago(40), cost: 6 }), // a tracking issue no PR closes
+    ];
+    // A 60-day window holds both Lead runs, and the day each would settle as a No PR unit.
+    const r = report(rows, 60);
+    expect(r.cost.overhead).toEqual({ runs: 2, usd: 10 });
+    expect((r.yield.cells as Cells).noPr.yield).toEqual({ status: 'not-enough-data', n: 0, minimum: 20 });
+    expect((r.yield.cells as Cells).pooled.bandMix.noPr).toBe(0);
+    expect((r.yield.cells as Cells).pooled.yield.value).toBe(1);
+    expect(r.rows.runsJoined).toBe(rows.filter((x) => x.row_kind === 'run').length - 2);
+    // 700's cost is $1.50, the Lead's revise run inside it: the S cell's maximum.
+    expect(r.validity.medianCost.S).toMatchObject({ status: 'ok', n: 21 });
+    expect(renderReport(r).join('\n')).toMatch(/the Lead's runs that join no item\): \$10\.00 over 2 runs/);
+    // Items whose only runs are the Lead's, joined by their issue, cost what those runs cost.
+    const led = report(Array.from({ length: 10 }, (_, k) => [itemRow(1 + k, { closed: ago(2), band: 'S', issues: [100 + k] }), runRow('lead-split', { issue: 100 + k, at: ago(3), cost: 2 })]).flat());
+    expect((led.cost.cells as Cells).pooled.median).toMatchObject({ status: 'ok', n: 10, value: 2 });
+    expect(led.cost.overhead).toEqual({ runs: 0, usd: 0 });
+  });
+
+  it('leaves an item whose runs report no cost out of cost and yield, as unknown, never $0', () => {
+    const rows = [
+      ...risingRows({ S: 20, M: 20, L: 20, XL: 20 }),
+      ...Array.from({ length: 10 }, (_, k) => [itemRow(800 + k, { closed: ago(2), band: 'S' }), runRow('implement', { pr: 800 + k, at: ago(3) })]).flat(),
+      itemRow(900, { closed: ago(2), band: 'S' }),
+      runRow('implement', { pr: 900, at: ago(4), cost: 1 }),
+      runRow('review', { pr: 900, at: ago(3) }),
+    ];
+    const r = report(rows);
+    expect((r.cost.cells as Cells).S.median.n).toBe(21);
+    expect((r.cost.cells as Cells).S.median.value).toBe(1);
+    expect((r.yield.cells as Cells).S.yield.n).toBe(21);
+    expect(r.cost.mergedWithoutCost).toBe(10);
+    expect(r.cost.runsWithoutCost).toBe(1);
+    expect(renderReport(r).join('\n')).toMatch(/10 whose runs report no cost \(unknown, never \$0\); 1 runs inside the costed items report no cost/);
+  });
+
   it("bands every item with the newest version from its counts, never the row's stored band", () => {
     const stale = { ...itemRow(1, { closed: ago(2), band: 'S' }), band: 'XL' };
     const r = report([stale, runRow('implement', { pr: 1, at: ago(3), cost: 1 })]);
