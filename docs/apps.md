@@ -39,7 +39,7 @@ Or, from a Kanon checkout: `node cli/kanon.mjs apps --owner <owner> --repo <repo
 
 ### A repository added later: `--reuse`
 
-GitHub has no API that makes a new private key for an existing App. To add a repository to Apps you created earlier, generate a key on each App's settings page (**Private keys → Generate a private key**), add the repository to the App's installation, then run:
+GitHub has no API that makes a new private key for an existing App. To add a repository to Apps you created earlier, generate a key on each App's settings page (**Credentials → Key pairs → New key**, [GitHub's steps](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps); a key pair, not a client secret), add the repository to the App's installation, then run:
 
 ```sh
 kanon apps --owner <owner> --repo <new repo> --reuse author:<author slug>=<key file> --reuse judge:<judge slug>=<key file>
@@ -104,7 +104,7 @@ gh workflow run apps-check.yml -R <owner>/<repo>
 
 ## Limits
 
-- **Key rotation stays manual.** GitHub has no API that makes a new private key for an existing App, so the command can't rotate one. It prints the steps at the end of every run: generate a key on the App's settings page, `gh secret set <APP>_APP_PRIVATE_KEY -R <owner>/<repo> < key.pem` for each repository the App covers, delete the file, then delete the old key.
+- **Key rotation stays manual.** GitHub has no API that makes a new private key for an existing App, so the command can't rotate one. It prints the steps at the end of every run: generate a key on the App's settings page (**Credentials → Key pairs → New key**, [GitHub's steps](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps); not a client secret), `gh secret set <APP>_APP_PRIVATE_KEY -R <owner>/<repo> < key.pem` for each repository the App covers, delete the file, then delete the old key.
 - **A lost key can't be recovered.** The pre-check makes this unlikely, but if `gh secret set` still fails after the App is created, the key existed only in memory. The command says so, and how to generate a new one and store it with `--reuse`.
 - **It creates and reuses Apps; it doesn't change them.** It doesn't change an existing App's permissions or rename a secret. Moving from the per-role Apps of earlier releases is the migration in the release notes of plan 0005's L4: create the Author and the Judge, rename the secrets, rewrite the register, then uninstall the old Apps.
 - **Blast radius.** Any key of an App mints tokens for every repository its installation covers, with that App's grant. That is the cost of one App per owner (plan 0005 §3.2), and why no agent's job holds a key (`K-AGENT-49`).

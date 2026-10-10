@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeRegisterRow } from '../../cli/app-register.mjs';
-import { appRoles, apps, buildManifest, checkoutCheck, loadApps, loadRoles, realDeps, remoteRepo } from '../../cli/apps.mjs';
+import { appRoles, apps, buildManifest, checkoutCheck, loadApps, loadRoles, ownerPages, realDeps, remoteRepo, rotationSteps } from '../../cli/apps.mjs';
 import { appsTable, grantsOf } from './helpers/roles-table.js';
 
 /**
@@ -266,6 +266,25 @@ describe('the manifest (K-ADOPT-8, plan 0005 §3.1)', () => {
       expect(m.default_events).toEqual([]);
     });
   }
+});
+
+describe('rotationSteps: the key steps it prints at the end of every run (#624)', () => {
+  const steps = rotationSteps(ownerPages('Organization', ORG), ORG, [REPO], ['judge']).join('\n');
+
+  it("names GitHub's current place for a new key, Credentials, Key pairs, New key, and links GitHub's page", () => {
+    expect(steps).toContain('Credentials → Key pairs → New key');
+    expect(steps).toContain('https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps');
+    expect(steps).not.toMatch(/Generate a private\s+key/);
+  });
+
+  it('says not to create a client secret', () => {
+    expect(steps).toMatch(/not a client secret/i);
+  });
+
+  it('still stores the key on every repository and deletes the file', () => {
+    expect(steps).toContain(`gh secret set JUDGE_APP_PRIVATE_KEY -R ${ORG}/${REPO} < <downloaded>.pem`);
+    expect(steps).toContain('rm <downloaded>.pem');
+  });
 });
 
 describe('kanon apps, end to end with GitHub mocked', () => {
