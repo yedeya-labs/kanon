@@ -17,6 +17,7 @@ Kanon runs no bug-fix (triage) lane, no Lead and no reconciler yet. You are star
 7. **Run every gate** in the stack document's `## Gates` before each push, and read the real exit codes.
 8. **The pull request.** A conventional title with one of Kanon's types and no trailing `(#n)` (`K-SHIP-4`); `Closes #n` in the body's first paragraph; Kanon's pull-request template, with the acceptance criteria you built to and how each was checked.
 9. **Your commits are signed off for you.** Kanon's project-setup hook authors them as your App and adds the delegate's `Signed-off-by:` from [the delegation record](sign-off-delegation.md) (`K-AGENT-44`). Don't add a sign-off of your own, never pass `--no-verify`, and never add an AI or bot `Signed-off-by:`. If the `dco` check fails on your pull request, say so in a comment and stop: the fix is the Owner's.
+10. **Name the pull request that introduced a bug.** When you fix a defect and find the pull request whose change caused it, write `Introduced by #<n>` in your pull request's body. GitHub records that as a cross-reference on #<n>, which is the link the metrics count an escaped defect by ([plan 0003](../plans/0003-metrics.md) §3.5). Name it on evidence, such as the blame or bisect that shows its change made the code wrong, never a guess: a wrong name counts an escape against work that had none.
 
 ### Stop and hand it to the Owner
 

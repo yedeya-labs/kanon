@@ -23,3 +23,11 @@ body:
       description: Cite the rule id (for example K-SHIP-4) if a rule says what should happen.
     validations:
       required: true
+  - type: input
+    id: introduced-by
+    attributes:
+      label: Introduced by
+      description: The Kanon pull request that caused this, if you know it, written as `#123`. GitHub links the two, and Kanon's metrics count the link as an escaped defect, so leave it empty if you aren't sure.
+      placeholder: "#123"
+    validations:
+      required: false
