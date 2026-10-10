@@ -159,7 +159,7 @@ Recommended, and listed first: **Yes** on a private repository, **No** on a publ
 | **Change something** | Pick a line of the summary to change. |
 | **Stop** | Nothing is written. |
 
-**Change something** asks one multi-select question of the summary's groups (People; Lanes and Apps; Gates, database and delegation; Labels, plugin and pin), then each chosen line's own question, in today's shape, then shows the summary again. **Customise** inserts the per-group lane questions between Q4 and the summary.
+**Change something** asks one multi-select question of the summary's groups (People; Lanes and Apps; Gates, database and delegation; Labels, plugin and pin; Data and sharing), then each chosen line's own question, in today's shape, then shows the summary again. **Data and sharing**, the fifth group, added by step G5, re-asks Q3 and then sharing as its three questions (telemetry, where upstream findings go, the evidence), since §4 says every line can be changed and `filed here` is reached only through **Change something**. At `init`'s terminal, an answer to Q5 that `init` doesn't recognise is **Stop**, never **Install**. **Customise** inserts the per-group lane questions between Q4 and the summary.
 
 **Recommended is not a default.** Under `kanon init --yes`, with no flag, sharing is **No** and the review trigger **labelled**: an explicit answer is needed to send anything (`K-OBS-18`), and a record without the new bullets reads as today's behaviour (plan 0005 §5.2). The skill always asks, so it never takes those defaults. **At `init`'s own terminal prompt, Enter takes the recommended answer,** Yes for Q4 among them: the question was shown, so Enter is the person's answer to it; an answer `init` doesn't recognise is No (Owner decision 16).
 
@@ -248,7 +248,7 @@ All additive within `kanon-init/v1` (`docs/init.md`, "Its shape is a contract"):
 
 | Flag | Answers | Default under `--yes` | Refused (exit 2) with |
 |---|---|---|---|
-| `--feature review\|build\|full` | Q1; sets the lanes per §2 | `review`, or the feature the repository's lanes already equal | `--lanes`, which is Customise |
+| `--feature review\|build\|full` | Q1; sets the lanes per §2 | the feature the lanes the repository already calls make up; when they make up none, those lanes, as `custom`, so `init` keeps comparing the callers it installed (step G5); `review` when it calls none. Q1 still recommends Review there, and Enter at `init`'s prompt keeps the called lanes | `--lanes`, which is Customise |
 | `--releases`, `--no-releases` | §2.4; the same answer as `--releaser`, `--no-releaser`, which stay | inferred, §2.4 | each other, and the old pair contradicting them |
 | `--review-trigger every-pr\|labelled` | Q2 | `labelled` | a lane set without the review lane; and `every-pr` until step G7 ships |
 | `--sensitive-data`, `--no-sensitive-data` | Q3 | none: the `## Data` section says "not declared", and `init` notes it | each other |

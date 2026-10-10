@@ -1992,7 +1992,8 @@ const run = async (deps, opts, req, rep) => {
     }
     if (opts.yes) break;
     out('');
-    const go = await choose(deps, CONFIRM_QUESTION, CONFIRM_OPTIONS, 'install', 'install');
+    // An answer it doesn't recognise is Stop, the safe side: this is the last gate before anything changes.
+    const go = await choose(deps, CONFIRM_QUESTION, CONFIRM_OPTIONS, 'install', 'install', 'stop');
     if (go === 'install') break;
     if (go === 'stop') {
       out('Stopped: nothing was written or changed.');

@@ -2167,6 +2167,20 @@ describe('kanon init, a feature, three questions and one summary (plan 0007 G5)'
     expect(stopped.appsCalls).toEqual([]);
   });
 
+  // The confirmation is the last gate before anything changes: a typo there is Stop, never Install.
+  it('writes and changes nothing on an answer to the confirmation it does not recognise', async () => {
+    for (const typo of ['sotp', 'q', 'cancel', 'abort', '9']) {
+      const github = fakeGitHub();
+      const dir = checkout();
+      const r = await run(dir, github, [], undefined, REQ, { ask: person({ [CONFIRM]: typo }) });
+      expect(r.status, typo).toBe(0);
+      expect(r.out, typo).toContain('Stopped: nothing was written or changed.');
+      expect(existsSync(join(dir, 'docs/qa/adoption.md')), typo).toBe(false);
+      expect(writes(github.calls), typo).toEqual([]);
+      expect(r.appsCalls, typo).toEqual([]);
+    }
+  });
+
   it('shows the summary again after Change something, with the changed line asked', async () => {
     const r = await run(checkout(), fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: changing('1', { 'Who is the Owner': 'grace' }) });
     const people = r.out.split('\n').filter((l) => l.startsWith('People'));
