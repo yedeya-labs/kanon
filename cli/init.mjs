@@ -947,21 +947,24 @@ export const REVIEW_HOW = 'To get a review, add the label `review:please` to the
 /**
  * A question with options, asked at the terminal: the question, then each option numbered with
  * its label and its consequence, the recommended one first and marked `(Recommended)`. The answer
- * is a number, a label or one of the option's names; any other is the fallback, so nothing is
- * chosen on a guess. The fallback is what pressing Enter takes: for the consent question it is
- * No, since recommended is not a default (plan 0007 §3, `K-OBS-18`).
+ * is a number, a label or one of the option's names. Pressing Enter takes `fallback`, shown in
+ * brackets: the question was shown, so Enter is the person's answer to it (Owner decision 16 of
+ * plan 0007). Any other answer takes `otherwise`, the safe side, so nothing is chosen on a guess:
+ * for the consent question Enter is Yes, the recommended answer, and an answer it doesn't know is
+ * No.
  * @template T
- * @param {Pick<Deps, 'ask'>} deps @param {string} question @param {Array<Option<T>>} options @param {T} recommended @param {T} fallback
+ * @param {Pick<Deps, 'ask'>} deps @param {string} question @param {Array<Option<T>>} options @param {T} recommended @param {T} fallback @param {T} [otherwise]
  * @returns {Promise<T>}
  */
-export const choose = async (deps, question, options, recommended, fallback) => {
+export const choose = async (deps, question, options, recommended, fallback, otherwise = fallback) => {
   const ordered = [...options.filter((o) => o.value === recommended), ...options.filter((o) => o.value !== recommended)];
   const text = [question, ...ordered.map((o, i) => `  ${i + 1}. ${o.label}${o.value === recommended ? ' (Recommended)' : ''}: ${o.does}`), `Answer 1-${ordered.length}, or a name`].join('\n');
   const fb = /** @type {Option<T>} */ (ordered.find((o) => o.value === fallback) ?? ordered[0]);
   const answer = (await deps.ask(text, fb.label)).trim().toLowerCase();
   const n = /^\d+$/.test(answer) ? Number(answer) : 0;
   const hit = ordered[n - 1] ?? ordered.find((o) => o.label.toLowerCase() === answer || (o.names ?? []).includes(answer));
-  return (hit ?? fb).value;
+  if (hit) return hit.value;
+  return answer === '' ? fb.value : otherwise;
 };
 
 /**
@@ -1107,7 +1110,8 @@ export const derive = (a, ctx, g = {}) => {
  * holds private or sensitive material (Q3), and the one consent question (Q4). Q2, the review
  * trigger, waits for step G7. Every other answer is inferred from the repository or defaulted, as
  * plan 0007 §4's table says, unless its flag gives it, and the summary shows each with where it
- * came from (`why`). **Recommended is not a default:** with `--yes` and no flag, sharing is No,
+ * came from (`why`). At the prompt, Enter takes the recommended answer, Yes for sharing among them
+ * (Owner decision 16). **Recommended is not a default:** with `--yes` and no flag, sharing is No,
  * the review trigger `labelled` and the Data section `not declared`.
  * @param {Pick<Deps, 'ask'>} deps @param {{ yes: boolean, lanes: string[] | null, given?: Given }} opts @param {AskContext} ctx
  */
@@ -1145,7 +1149,7 @@ export const askAll = async (deps, opts, ctx) => {
     sharing = { telemetry: g.telemetry ?? false, upstreamFindings: up, upstreamEvidence: sends(up) ? up === 'sent with evidence' : null };
     why.consent = flag;
   } else if (opts.yes) [sharing, why.consent] = [CONSENT_LEVELS.no, { source: 'default', reason: 'only an explicit answer sends anything (K-OBS-18)' }];
-  else [sharing, why.consent] = [CONSENT_LEVELS[await choose(deps, consentQuestion(ctx.release ?? 'main'), CONSENT_OPTIONS, 'yes', 'no')], asked];
+  else [sharing, why.consent] = [CONSENT_LEVELS[await choose(deps, consentQuestion(ctx.release ?? 'main'), CONSENT_OPTIONS, 'yes', 'yes', 'no')], asked];
 
   // The rest, inferred or defaulted (plan 0007 §4), each unless its flag gives it.
   const single = ctx.codeowners?.length === 1 ? ctx.codeowners[0] : undefined;

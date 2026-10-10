@@ -1821,14 +1821,26 @@ describe('kanon init and telemetry (#428)', () => {
       expect(github.calls.some((c) => c.args[0] === 'variable'), argv.join(' ')).toBe(false);
       if (argv.includes('--json')) expect(parse(r).answers.telemetry).toBe(false);
     }
-    // Asked without --yes, in the one consent question (plan 0007 §3), Enter answers No.
+    // Asked without --yes, in the one consent question (plan 0007 §3): an answer it doesn't recognise is No, the safe side.
     const asked: string[] = [];
     const dir = checkout();
-    await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: async (q: string, d: string) => (asked.push(q), d) });
+    await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: async (q: string, d: string) => (asked.push(q), q.startsWith(consentQuestion(RELEASE)) ? 'maybe' : d) });
     const consent = asked.filter((q) => q.startsWith(consentQuestion(RELEASE)));
     expect(consent).toHaveLength(1);
     expect(consent[0]).toMatch(/^ {2}1\. Yes \(Recommended\): /m);
     expect(existsSync(join(dir, TELEMETRY_CALLER_PATH))).toBe(false);
+  });
+
+  // Owner decision 16 of plan 0007: the question was shown, so Enter is the person's answer to it,
+  // and takes the recommended Yes; `--yes`, which shows no question, still sends nothing (above).
+  it('takes Enter on the shown consent question as its recommended Yes', async () => {
+    for (const enter of [(_q: string, d: string) => d, () => '']) {
+      const dir = checkout();
+      const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: async (q: string, d: string) => enter(q, d) });
+      expect(r.status, r.err).toBe(0);
+      expect(read(dir, TELEMETRY_CALLER_PATH)).toBe(telemetryCallerFile(RELEASE));
+      expect(parseUpstreamFindings(read(dir, 'docs/qa/adoption.md'))).toBe('sent with evidence');
+    }
   });
 
   it('says what is sent, where, who reads it, and how to stop and erase, in its question', () => {
@@ -1938,7 +1950,7 @@ describe('kanon init and upstream findings (plan 0006 F2)', () => {
   it('asks without telemetry, offering no sent option, and never asks about the evidence', async () => {
     const asked: string[] = [];
     const dir = checkout();
-    const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: changing('5', { [WHERE]: 'sent' }, asked) });
+    const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: changing('5', { 'Help improve Kanon': 'no', [WHERE]: 'sent' }, asked) });
     expect(r.status, r.err).toBe(0);
     const where = asked.filter((q) => q.startsWith(WHERE));
     expect(where).toEqual([upstreamFindingsQuestion(false)]);
@@ -2129,9 +2141,9 @@ describe('kanon init, a feature, three questions and one summary (plan 0007 G5)'
       '  3. No: Nothing leaves this repo; Kanon bugs stay drafts here.',
     ].join('\n'));
     expect(asked[3]).toMatch(/^Install Kanon with these settings\?\n {2}1\. Install \(Recommended\): .+\n {2}2\. Change something: Pick a line of the summary to change\.\n {2}3\. Stop: Nothing is written\./);
-    // Enter takes the recommended feature and Data answer, and No for sharing.
+    // Enter takes each recommended answer: the feature, the Data answer and Yes for sharing (Owner decision 16).
     expect(read(dir, 'docs/qa/adoption.md')).toContain('- **Private or sensitive material:** `yes`');
-    expect(existsSync(join(dir, TELEMETRY_CALLER_PATH))).toBe(false);
+    expect(existsSync(join(dir, TELEMETRY_CALLER_PATH))).toBe(true);
     expect(callers(dir)).toEqual(['agent-review']);
   });
 

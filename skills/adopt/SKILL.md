@@ -193,7 +193,7 @@ An owner has one Author and one Judge (and at most one Releaser), reused across 
 
 One question sets telemetry, where upstream findings go and their evidence (`docs/sharing.md` in Kanon's repository). Ask it in `init`'s words, `CONSENT_QUESTION`, with `<link>` the sharing page at the release `init` runs from: "Help improve Kanon by sharing anonymous run data and the Kanon bugs your lanes find? Evidence text may rarely hold personal data; details: <link>."
 
-- **Recommended:** **Yes**. Recommended is not a default: the person answers, and `init --yes` without the flag sends nothing.
+- **Recommended:** **Yes**. The person answers; `init --yes` without the flag, where no question is shown, sends nothing.
 - **Options:** **Yes** (`--consent yes`): run data, and scrubbed bug evidence read by Kanon's maintainer and a third-party decision provider; telemetry on, findings `sent with evidence`. **Codes only** (`--consent codes`): run data, and Kanon bugs as codes with no text. **No** (`--consent no`): nothing leaves this repo; Kanon bugs stay drafts here.
 - **The three questions below** are asked only when the person wants what no level gives, such as **Filed here**; then pass their own flags, never beside `--consent`, which `init` refuses.
 
