@@ -119,9 +119,11 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
   const all = () => new Set([...LANES.flatMap((l) => REQ.lanes[l]!.secrets), ...APPS.flatMap(appSecrets)]);
   const preflight = `kanon apps --owner acme --repo widgets --preflight`;
   /** The L5 shape: the lanes Kanon pins, and a release caller that reaches release.yml by `$/`. */
-  const l5 = (secrets: Set<string>, extra: Record<string, string> = {}) => {
+  const l5 = (secrets: Set<string>, extra: Record<string, string> = {}, tweak: (g: ReturnType<typeof fakeGitHub>) => void = () => {}) => {
     const dir = checkout({ ...releaserFiles(healthyFiles()), '.github/workflows/release-please.yml': releaseBy('$/.github/workflows/release.yml'), ...extra });
-    return run(dir, releaserOn(fakeGitHub({ secrets, releases: { [NEXT]: clone(REQ) } })), ['--to', NEXT, '--json']);
+    const github = releaserOn(fakeGitHub({ secrets, releases: { [NEXT]: clone(REQ) } }));
+    tweak(github);
+    return run(dir, github, ['--to', NEXT, '--json']);
   };
   const missing = (r: Result) => r.json.findings.filter((f: { id: string }) => f.id === 'secret.missing');
 
@@ -150,6 +152,44 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
       expect(r.json.findings[0].fix.commands[1]).toBe(`kanon apps --owner acme --repo widgets --reuse ${app}:widgets-${app}@<App ID>=<downloaded>.pem`);
     });
   }
+
+  // #625: an App's id isn't secret. When it alone is gone, the fix stores it with `--body`, which
+  // works at the Claude Code prompt with `!`, where a line that reads standard input stores an
+  // empty secret; and it needs no new key.
+  it('stores an App id alone with `gh secret set --body`, filled in when GitHub shows the App (#625)', async () => {
+    const [appId, key] = appSecrets('judge') as [string, string];
+    const r = await l5(new Set([...all()].filter((n) => n !== appId)), {}, (g) => { g.st.apps['widgets-judge']!.id = 4242; });
+    expect(ids(r)).toEqual([`secret.missing ${REPO}`]);
+    const f = missing(r)[0];
+    expect(f.message).toMatch(/^lacks JUDGE_APP_ID, the judge App's secret: /);
+    expect(f.fix.commands).toEqual([`gh secret set ${appId} -R ${REPO} --body 4242`]);
+    expect(f.fix.text).toMatch(/isn't secret/);
+    expect(f.fix.text).toMatch(/`!`/);
+    expect(f.fix.url).toBe('https://github.com/settings/apps/widgets-judge');
+    // A private App, whose id GitHub shows only on its settings page: the line says where it is.
+    const hidden = await l5(new Set([...all()].filter((n) => n !== appId)), {}, (g) => { g.st.private.add('widgets-judge'); });
+    expect(missing(hidden)[0].fix.commands).toEqual([`gh secret set ${appId} -R ${REPO} --body <the App ID on its settings page>`]);
+    expect(missing(hidden)[0].fix.url).toBe('https://github.com/settings/apps/widgets-judge');
+    // Mutation: the key gone too, or alone, still takes kanon apps, which reads the key from its file.
+    const both = await l5(new Set([...all()].filter((n) => !appSecrets('judge').includes(n))), {}, (g) => { g.st.apps['widgets-judge']!.id = 4242; });
+    expect(missing(both)[0].fix.commands[1]).toBe('kanon apps --owner acme --repo widgets --reuse judge:widgets-judge@<App ID>=<downloaded>.pem');
+    const keyOnly = await l5(new Set([...all()].filter((n) => n !== key)), {}, (g) => { g.st.apps['widgets-judge']!.id = 4242; });
+    expect(missing(keyOnly)[0].fix.commands[1]).toBe('kanon apps --owner acme --repo widgets --reuse judge:widgets-judge@<App ID>=<downloaded>.pem');
+  });
+
+  // #625: a real secret's line reads standard input, so the fix sends it to the person's own
+  // terminal, never `!` at the Claude Code prompt, or to a file.
+  it("sends a real secret's gh secret set to the person's own terminal or a file, never `!` (#625)", async () => {
+    const r = await l5(new Set([...all()].filter((n) => !['CLAUDE_CODE_OAUTH_TOKEN', 'DIGEST_WEBHOOK'].includes(n))), { '.github/workflows/digest.yml': ['name: Digest', 'on: push', 'jobs:', '  post:', '    runs-on: ubuntu-latest', '    env:', '      HOOK: ${{ secrets.DIGEST_WEBHOOK }}', '    steps:', '      - run: "true"', ''].join('\n') });
+    const real = missing(r).filter((f: { message: string }) => /^lacks (CLAUDE_CODE_OAUTH_TOKEN|DIGEST_WEBHOOK)\b/.test(f.message));
+    expect(real.length).toBe(2);
+    for (const f of real) {
+      expect(f.fix.text, f.message).toMatch(/in your own terminal/);
+      expect(f.fix.text, f.message).toMatch(/never with `!` at the Claude Code prompt/);
+      expect(f.fix.text, f.message).toMatch(/empty secret/);
+      expect(f.fix.text, f.message).toContain('`< <file>`');
+    }
+  });
 
   it('gives an App in use that the register doesn\'t name the line that creates it, not the one that reuses a slug', async () => {
     const r = await l5(new Set([...all()].filter((n) => !appSecrets('releaser').includes(n))), { 'docs/qa/agent-identities.md': registerText(identitiesOf(LANES)) });

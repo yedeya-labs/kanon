@@ -603,6 +603,27 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(section(skill('upgrade').body, /^## Steps$/)).toMatch(/\*\*Say up front that each `kanon apps` command a fix names is the person's step\*\*.*"Running `kanon apps`"/);
   });
 
+  // #625: the skills show `!` for the person's own commands, and with `!` at the Claude Code
+  // prompt standard input isn't a terminal, so a `gh secret set` that reads the value there stores
+  // an empty secret without a word. A value that isn't secret goes with `--body`; a real secret,
+  // to the person's own terminal or a file, and never with `!`.
+  it('hands gh secret set over without `!` for a real secret, and with `--body` for a value that isn\'t one (#625)', () => {
+    for (const dir of ['adopt', 'doctor']) {
+      const s = skill(dir).body;
+      const run = section(s, /^## Running `gh secret set`$/);
+      expect(run, dir).not.toBeNull();
+      expect(run, dir).toMatch(/\*\*Never with `!` at the Claude Code prompt\*\*[^\n]*standard input isn't a terminal[^\n]*stores an \*\*empty\*\* secret/);
+      expect(run, dir).toMatch(/\*\*A value that isn't secret,\*\* such as an App's id[^\n]*`… --body <value>`[^\n]*works with `!`/);
+      expect(run, dir).toMatch(/\*\*A real secret,\*\* such as a private key, `CLAUDE_CODE_OAUTH_TOKEN` or a webhook's URL[^\n]*in their own terminal, without the `!`/);
+      expect(code(run!), dir).toContain('gh secret set <NAME> -R <owner>/<repo> < <file>');
+      expect(run, dir).toContain('`kanon apps --reuse`');
+      // Where the skill says how to read a fix's commands, a `gh secret set` one goes through it,
+      // and nothing still sends the value to standard input unqualified.
+      expect(s, dir).toMatch(/one that starts `gh secret set` is the person's \("Running `gh secret set`"/);
+      expect(s, dir).not.toMatch(/pasting the value on standard input|paste the value on standard input/);
+    }
+  });
+
   // #406, the Owner's 2026-10-07 decision: a waiver of a finding that lists items names them, or
   // is malformed. The skills show which bullet waives which items, write waivers that name them,
   // and the upgrade rewrites an old item-less one before or with the move.

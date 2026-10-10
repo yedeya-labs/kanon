@@ -205,6 +205,28 @@ const get = async (deps, path, auth) => {
   return JSON.parse(text);
 };
 
+/**
+ * Why the App's token wasn't minted, or null when it was. GitHub never shows a secret's value, so
+ * an empty one is seen only here, and `gh secret set` typed with `!` at the Claude Code prompt,
+ * where standard input isn't a terminal, stores one without a word (#625). An empty secret and
+ * one the caller doesn't map look the same to the job, so the message names both.
+ * @param {string} app the App's name @param {string} key its key, `author`, `judge` or `releaser`
+ * @param {string} repository @param {Record<string, string | undefined>} env
+ * @returns {string | null}
+ */
+export const unmintedMessage = (app, key, repository, env) => {
+  if (env.APP_SLUG && env.INSTALLATION_ID && env.TOKEN) return null;
+  const id = `${key.toUpperCase()}_APP_ID`;
+  const pem = `${key.toUpperCase()}_APP_PRIVATE_KEY`;
+  const empty = [env.APP_ID ? null : id, env.APP_PRIVATE_KEY ? null : pem].filter((n) => n !== null);
+  if (!empty.length) return `${app}: the App's token wasn't minted from ${id} and ${pem} (the step above says why): they may not be this App's id and key, or its installation may be gone (docs/apps.md).`;
+  return [
+    `${app}: ${empty.join(' and ')} ${empty.length > 1 ? 'are' : 'is'} empty, or not mapped by the caller, so the App's token can't be minted.`,
+    `An empty secret is a likely cause: GitHub never shows a secret's value, and \`gh secret set\` typed with \`!\` at the Claude Code prompt stores an empty one without a word (kanon#625).`,
+    `Store ${empty.length > 1 ? 'them' : 'it'} again${empty.includes(id) ? `, the id with \`gh secret set ${id} -R ${repository} --body <the App ID on its settings page>\`` : ''}${empty.includes(pem) ? `${empty.includes(id) ? ' and' : ','} the key from its file with \`gh secret set ${pem} -R ${repository} < <key>.pem\`` : ''}, or both with \`kanon apps --reuse\` (docs/apps.md), then run apps-check again.`,
+  ].join(' ');
+};
+
 /** @param {Deps} deps @param {string} name */
 const need = (deps, name) => {
   const v = deps.env[name];
@@ -226,6 +248,9 @@ const check = async (deps) => {
   if (!spec) throw new Error(`"${key}" is not one of Kanon's Apps (${Object.keys(loadApps()).join(', ')})`);
   const roles = need(deps, 'ROLES').split(',').filter(Boolean);
   const repository = need(deps, 'REPOSITORY');
+  // The mint step continues on error, so this runs after a failed mint and can say why (#625).
+  const unminted = unmintedMessage(spec.app, key, repository, deps.env);
+  if (unminted) throw new Error(unminted);
   const registerSlug = need(deps, 'REGISTER_SLUG');
   const appSlug = need(deps, 'APP_SLUG');
   const installation = need(deps, 'INSTALLATION_ID');
