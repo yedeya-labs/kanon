@@ -72,6 +72,11 @@ name: Lead (Lead) — dispatch sweep
 # OPTIONAL SECRET: QA_STORE_ROLE_ARN
 # The lines above are read by `lane-check` and the requirements file (kanon#433): the QA store's
 # secrets, which a caller maps once its repository has a store hook, and may leave out until then.
+# OPTIONAL VARIABLE: QA_BACKLOG_FEED
+# OPTIONAL VARIABLE: QA_BACKLOG_MILESTONES
+# The lines above are read by the requirements file (kanon#609): the backlog feeder's repository
+# variables, which the lane reads by name and a repository may leave unset (the feeder is then
+# off). `kanon doctor` reports QA_BACKLOG_FEED's state as a note.
 on:
   workflow_call:
     # The caller's `workflow_dispatch` input, passed through. Empty on the schedule, so it is
@@ -257,6 +262,24 @@ jobs:
           QA_STORE_COST_ROWS_IMPLEMENTER: ${{ needs.store.outputs.implementer }}
           QA_STORE_COST_ROWS_TRIAGE_FIX: ${{ needs.store.outputs.triage-fix }}
         run: node "$KANON/scripts/dispatch-sweep.mjs"
+
+      # THE BACKLOG FEEDER (kanon#609). Labels up to `QA_BACKLOG_FEED` eligible reviewer
+      # follow-ups `agent:implement`, only into an implementer slot nothing else is using, and
+      # never while one it fed is still in flight; `scripts/backlog-feed.mjs` says what is
+      # eligible. AFTER the sweep, so the sweep never classifies a dispatch made this tick. The
+      # Lead's App token, because a label the workflow token adds starts nothing. The variable
+      # defaults to closed: unset or 0 reads and writes nothing, and the summary says the valve
+      # is closed. Named, never the whole `vars` context (kanon#479). `!cancelled()`: a sweep
+      # that failed above is no reason to skip, and the feeder never throws.
+      - name: Feed the backlog
+        if: ${{ !cancelled() && steps.app-token.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          APPLY: ${{ (github.event_name == 'schedule' || inputs.apply == 'true') && '1' || '' }}
+          QA_BACKLOG_FEED: ${{ vars.QA_BACKLOG_FEED }}
+          QA_BACKLOG_MILESTONES: ${{ vars.QA_BACKLOG_MILESTONES }}
+        run: node "$KANON/scripts/backlog-feed.mjs"
 
       # THE GATE-CANDIDATE EXIT (`K-WORK-10`, kanon#171). Not a dispatch, but the same kind of
       # job: an issue-hygiene reconcile on a timer, needing `issues: write` and the Lead's App,

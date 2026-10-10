@@ -4925,8 +4925,14 @@ describe('one PR snapshot per in-flight issue per tick (RA-1207)', () => {
     // wrapper had no callers and was deleted, so the alternation that allowed for
     // it is gone too. The invariant is unchanged and is about the number of READS,
     // not the name — one snapshot per issue per tick.
-    const reads = (fn.match(/linkedPrsRead\(i\.number\)/g) ?? []).length;
+    // Since kanon#609 the read is `parkedRead`'s, shared with the backlog feeder: `readWorld`
+    // calls it once per issue, and it reads the PRs once.
+    const reads = (fn.match(/parkedRead\(i\.number\b/g) ?? []).length;
     expect(reads, 'exactly one read per issue').toBe(1);
+    expect(fn, 'and readWorld reads no PR list of its own').not.toMatch(/linkedPrsRead\(/);
+    const shared = src.slice(src.indexOf('export function parkedRead('), src.indexOf('function readWorld(project) {'));
+    expect((shared.match(/\bprs\(number\)/g) ?? []).length, 'parkedRead reads the PRs once').toBe(1);
+    expect(fn, 'prs is that read').toMatch(/const prs = prRead\.prs;/);
     expect(fn, 'and both fields derive from it').toMatch(/reviewBlocked: isReviewBlocked\(prs\)/);
   });
 

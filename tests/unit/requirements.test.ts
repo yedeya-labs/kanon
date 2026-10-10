@@ -44,6 +44,13 @@ describe('requirements.json', () => {
     });
   });
 
+  it('names the repository variables a lane reads and a repository may leave unset: the backlog feeder\'s (#609)', () => {
+    // `kanon doctor` reports QA_BACKLOG_FEED's state only against a release whose sweep reads it.
+    const lanes = built.lanes as Record<string, { optionalVariables?: string[] }>;
+    expect(lanes['agent-dispatch-sweep']?.optionalVariables).toEqual(['QA_BACKLOG_FEED', 'QA_BACKLOG_MILESTONES']);
+    expect(Object.entries(lanes).filter(([, l]) => l.optionalVariables).map(([k]) => k)).toEqual(['agent-dispatch-sweep']);
+  });
+
   it("names the QA store's hook and the secrets the store-coupled lanes take for it, which a caller may leave out (#433)", () => {
     // `secretsOnly` (#479): the block takes no `variables`, so doctor treats a store secret a
     // variable still holds as missing. Read from the block's own inputs.

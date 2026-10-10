@@ -124,7 +124,10 @@ describe('the cost rows reach the sweep from the store job', () => {
   });
 
   it('names no cloud anywhere in the lane', () => {
-    expect(LANE_TEXT).not.toMatch(/configure-aws-credentials|role-to-assume|QA_DYNAMO_TABLE|vars\.QA_/);
+    // A store or cloud variable, not every `vars.QA_`: the backlog feeder's valve is a variable
+    // (`QA_BACKLOG_FEED`, kanon#609), and carries no coordinate.
+    expect(LANE_TEXT).not.toMatch(/configure-aws-credentials|role-to-assume|QA_DYNAMO_TABLE|vars\.QA_(STORE|DYNAMO|S3|AWS)/);
+    expect(LANE_TEXT.match(/vars\.[A-Z_]+/g)?.sort()).toEqual(['vars.QA_BACKLOG_FEED', 'vars.QA_BACKLOG_MILESTONES']);
   });
 });
 
