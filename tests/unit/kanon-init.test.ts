@@ -893,7 +893,8 @@ describe('the callers kanon init writes', () => {
     const section = readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8').split('## Which lanes are available')[1]!.split('\n## ')[0]!;
     const rows = [...section.matchAll(/^\| [^|]+\| `(agent-[a-z-]+)\.yml` \| [^|]+\| (.+) \|$/gm)];
     expect(rows.length).toBe(Object.keys(TRIGGERS).length);
-    for (const [, lane, cell] of rows) expect(fromTriggers(TRIGGERS[lane!]!).sort(), lane).toEqual(fromTable(cell!).sort());
+    // A cell's triggers are its first sentence; a later one is a note about them (kanon#626).
+    for (const [, lane, cell] of rows) expect(fromTriggers(TRIGGERS[lane!]!).sort(), lane).toEqual(fromTable(cell!.split('. ')[0]!).sort());
   });
 
   it.skipIf(!hasYq)('passes lane-check with a caller for every lane at once', async () => {

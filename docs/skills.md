@@ -8,7 +8,7 @@ Kanon ships three skills for Claude Code that install Kanon and keep it healthy,
 | [doctor](../skills/doctor/SKILL.md) | `/kanon:doctor`, or ask the agent whether Kanon is set up right | Runs `kanon doctor`, explains each finding, fixes what can be fixed from the checkout, and walks you through the rest, until the installation is healthy. |
 | [upgrade](../skills/upgrade/SKILL.md) | `/kanon:upgrade` | Moves the repository's pins to the plugin's release: `kanon doctor --to` that release first, so you see what it needs before anything changes, then the pin bump on a branch, the fixes through doctor, and the pull request, whose body lists what waits for the merge: a check to require once its job is on the default branch, the admin's bypass to remove, the `apps-check` run and the live checks, and, after a week of green runs, the Apps and secrets to delete. |
 
-adopt and upgrade change things, so they run only when you ask for them by name; the agent may start doctor on its own, and doctor changes nothing without asking.
+**Only you can start** `/kanon:adopt` and `/kanon:upgrade`: type the command in Claude Code. Each one writes your repository and walks you through steps only you can take, such as creating the Apps, typing a secret and merging, so the agent can't start it on its own (each sets `disable-model-invocation`), and asking the agent to install or upgrade Kanon won't start it. The agent may start doctor on its own, and doctor changes nothing without asking.
 
 ## Why a plugin
 
