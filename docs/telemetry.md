@@ -188,7 +188,7 @@ Plan 0002 S7. The lanes hold no store credentials. Each run uploads its version-
 <!-- x-release-please-start-version -->
 
 ```yaml
-# Sends this repository's agent-run rows to Kanon's hosted telemetry store (docs/telemetry.md).
+# Sends this repository's agent-run rows, and a work-item row per closed pull request, to Kanon's hosted telemetry store (docs/telemetry.md).
 # Delete this file to stop; the operator erases what was sent on request.
 name: Telemetry
 on:
@@ -230,7 +230,7 @@ gh variable set KANON_TELEMETRY_WRITER_ROLE -R <owner>/<repo> --body '<the Write
 
 Until both are set, the collector skips with a warning and stays green.
 
-**The check.** Dispatch the caller on the default branch. The run is green, and its summary says how many rows the store accepted. The rows are under `<key>#<lane>`, and the reader role can query them.
+**The check.** Dispatch the caller on the default branch. The run is green, and its summary says how many rows the store accepted. The run rows are under `<key>#<lane>`, the work-item rows under `<key>#work`, and the reader role can query them.
 
 **Kanon's own caller** is [`telemetry.yml`](../.github/workflows/telemetry.yml). It is pinned like Kanon's other callers ([ADR 0011](decisions/0011-kanon-runs-its-own-lanes.md)). It runs hourly at minute 40, from the change after its pin reached v0.27.0, the first release that ships the collector it calls ([#304](https://github.com/yedeya-labs/kanon/issues/304)).
 
