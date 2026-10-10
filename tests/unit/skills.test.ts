@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { SCHEMA as DOCTOR_SCHEMA } from '../../cli/doctor.mjs';
 import { SCHEMA as INIT_SCHEMA, UPSTREAM_EVIDENCE_QUESTION } from '../../cli/init.mjs';
+import { REVIEW_LABELS } from '../../scripts/lane-gate.mjs';
 
 /**
  * The agent skills (plan 0005 step L11, ADR 0014 audience 1; docs/skills.md) are held to the
@@ -259,6 +260,23 @@ describe('the plugin that ships the skills (docs/skills.md)', () => {
       expect(s.front['user-invocable'] === false, s.dir).toBe(LANE_SKILLS.includes(s.dir));
     }
   });
+
+  // #626: a person who asked their agent to "install Kanon" got an agent that couldn't, and
+  // nothing they read said why. Each skill the agent can't start, but the person can, is named
+  // in docs/skills.md as one only the person starts, with why, and the README says to type it.
+  it('says which skills only the person can start, why, and that asking the agent will not', () => {
+    const typed = ALL_SKILLS.filter((s) => s.front['disable-model-invocation'] === true && s.front['user-invocable'] !== false).map((s) => s.dir);
+    expect(typed.sort()).toEqual(['adopt', 'upgrade']);
+    const doc = read('docs/skills.md');
+    const para = doc.split('\n\n').find((p) => /\*\*Only you can start\*\*/.test(p));
+    expect(para, 'docs/skills.md has no "**Only you can start**" paragraph').toBeDefined();
+    const named = [...para!.matchAll(/`\/kanon:([a-z-]+)`/g)].map((m) => m[1]!);
+    expect([...new Set(named)].sort()).toEqual(typed.sort());
+    expect(para).toMatch(/writes? your repository/);
+    expect(para).toMatch(/steps only you can take/);
+    expect(para).toMatch(/asking the agent .*won't start/);
+    expect(read('README.md')).toMatch(/Type `\/kanon:adopt`/);
+  });
 });
 
 /**
@@ -506,6 +524,22 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(steps).toMatch(/under `## After merging`, each step that waits for the merge \(`ruleset\.require-check`\)/);
     expect(steps).toMatch(/\*\*Never ask the person to require the `Lane check` status check before this pull request merges\*\*/);
     expect(steps).toMatch(/\*\*Do it now\*\* \(Recommended\) or \*\*Skip it for now\*\*: for `ruleset\.require-check`/);
+  });
+
+  // #626: the review lane reviews a pull request only once it carries one of its labels, and
+  // the agent told a person installing it that no label was needed. The adopt skill's pull
+  // request body and its hand-over say how review starts, with the labels the lane gates on.
+  it('has the adopt skill say how review starts: a review label or a dispatch, and never the install pull request', () => {
+    const steps = section(skill('adopt').body, /^## Steps$/)!;
+    const step = (n: number): string => steps.split('\n').find((l) => l.startsWith(`${n}. `)) ?? '';
+    for (const n of [9, 11]) {
+      for (const label of REVIEW_LABELS) expect(step(n), `step ${n}: ${label}`).toContain(`\`${label}\``);
+      expect(step(n), `step ${n}`).toMatch(/once its CI has finished/);
+      expect(step(n), `step ${n}`).toMatch(/-f pr_number=/);
+    }
+    expect(step(9)).toMatch(/under `## After merging`[^.]*how review starts/);
+    expect(step(9)).toMatch(/this pull request itself is never reviewed/);
+    expect(step(11)).toMatch(/never that no label is needed/);
   });
 
   // #419, L5's G4, G11, G12 and G14: the steps that can only happen once the upgrade has merged

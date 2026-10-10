@@ -71,7 +71,7 @@ npx --yes --package github:yedeya-labs/kanon#v0.38.0 kanon init --dry-run
 
 Each release also ships [`requirements.json`](requirements.json): what its lanes need of an adopter (secrets, the caller's grant, the documents and workflows they read, the hooks they call, the Apps they run as), built from the lanes and held to them by a test.
 
-**Or let your agent do it, with Kanon's skills for Claude Code** ([docs/skills.md](docs/skills.md)). `/kanon:adopt` runs `kanon init` for you: a dry run first, each choice explained and asked, the files written on a branch, and each step only you can take (clicking **Create** and **Install** for the Apps, typing a secret) walked through, then the pull request, which you merge. `/kanon:doctor` checks an installation and fixes what it can, and `/kanon:upgrade` moves your pins to a new release. Install them as a plugin, pinned to the same release as everything else:
+**Or let your agent do it, with Kanon's skills for Claude Code** ([docs/skills.md](docs/skills.md)). Type `/kanon:adopt`, which runs `kanon init` for you (the agent can't start it on its own, so asking it to install Kanon won't): a dry run first, each choice explained and asked, the files written on a branch, and each step only you can take (clicking **Create** and **Install** for the Apps, typing a secret) walked through, then the pull request, which you merge. `/kanon:doctor` checks an installation and fixes what it can, and `/kanon:upgrade` moves your pins to a new release. Install them as a plugin, pinned to the same release as everything else:
 
 <!-- x-release-please-start-version -->
 
