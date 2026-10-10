@@ -462,14 +462,18 @@ const api = async (deps, path, o = {}) => {
 /** The fixed secret names of one of Kanon's Apps (plan 0005 §3.5). @param {string} app */
 export const secretNames = (app) => ({ id: `${app.toUpperCase()}_APP_ID`, key: `${app.toUpperCase()}_APP_PRIVATE_KEY` });
 
+/** GitHub's page on an App's private keys, which the key steps link (#624). */
+export const KEYS_HELP = 'https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps';
+
 /**
  * The steps that stay manual, printed at the end of every run.
  * @param {OwnerPages} pages @param {string} owner @param {string[]} repos @param {string[]} apps
  */
 export const rotationSteps = (pages, owner, repos, apps) => [
   'Key rotation stays manual: GitHub has no API that makes a new private key for an existing App.',
-  `To rotate an App's key: open ${pages.app('<slug>')}, choose`,
-  '"Generate a private key", then store it on every repository the App covers and delete the downloaded file:',
+  `To rotate an App's key: open ${pages.app('<slug>')}, choose Credentials → Key pairs → New key`,
+  `(a key pair, not a client secret; GitHub's steps: ${KEYS_HELP}),`,
+  'then store it on every repository the App covers and delete the downloaded file:',
   ...apps.flatMap((a) => repos.map((r) => `  gh secret set ${secretNames(a).key} -R ${owner}/${r} < <downloaded>.pem`)),
   '  rm <downloaded>.pem',
   'Then delete the old key on the same page. To add a repository later, generate a key the same way and run',
@@ -539,7 +543,7 @@ const storeSecrets = async ({ owner, repos, app, appId, slug, pem, pages, deps, 
           `gh could not set ${secret} on ${owner}/${repo} (${r.stderr.trim() || `exit ${r.status}`}). ` +
             (keyFile
               ? `The key file ${keyFile} is kept: fix the token and run the command again.`
-              : `The key was never saved anywhere, so it is lost: generate a new one at ${pages.app(slug)}, and run ` +
+              : `The key was never saved anywhere, so it is lost: generate a new one at ${pages.app(slug)} (Credentials → Key pairs → New key), and run ` +
                 `"kanon apps --owner ${owner} --repo ${repos.join(',')} --reuse ${app}:${slug}@${appId}=<file>.pem".`),
         );
       }
@@ -711,7 +715,7 @@ const reuseApp = async ({ owner, pages, repos, key, slug, id, file, spec, specs,
   if (me.status !== 200) {
     throw new Error(
       `GitHub refused the key in ${file} as the App ${id}'s (HTTP ${me.status}): either ${id} is not ${slug}'s App ID or Client ID, or the key is not one of its keys. ` +
-        `Both IDs are ${idsAt(pages, slug)}, and its keys under "Private keys". Nothing was stored; the file is kept.`,
+        `Both IDs are ${idsAt(pages, slug)}, and its keys under Credentials → Key pairs. Nothing was stored; the file is kept.`,
     );
   }
   if (String(me.json?.slug) !== slug) {
