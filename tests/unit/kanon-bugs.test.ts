@@ -307,6 +307,39 @@ describe('rising after a release (RISE)', () => {
     expect(detect([...runs('0.35.0', 40, 0), ...runs('0.36.0', RISE.minRuns - 1, 10)]).rises).toEqual([]);
   });
 
+  // #569, the Owner's decision of 2026-10-10: the release compared with is the lane's own, the
+  // most recent earlier one on which that lane reached `RISE.minRuns` runs.
+  it("compares with the lane's last release of the minimum sample, skipping one it barely ran or never ran", () => {
+    const other = (v: string) => many(5, (i) => row(`k${i % 3}`, { kanon_version: v, lane: 'triage', role: 'implementer' }));
+    const barely = [...runs('0.35.0', 20, 2), ...runs('0.35.1', RISE.minRuns - 1, 0), ...runs('0.36.0', 20, 4)];
+    const never = [...runs('0.35.0', 20, 2), ...other('0.35.1'), ...runs('0.36.0', 20, 4)];
+    for (const rows of [barely, never]) {
+      expect(detect(rows).rises).toEqual([expect.objectContaining({
+        lane: 'review', kanon_version: '0.36.0', previous_version: '0.35.0',
+        previous_runs: 20, previous_failures: 2, previous_rate: 0.1, previous_adopters: 3,
+      })]);
+    }
+  });
+
+  it('compares with the most recent release that qualifies, not an older one', () => {
+    // 0.35.0 already failed as often as 0.36.0; only 0.34.0, two releases back, is ten points under.
+    expect(detect([...runs('0.34.0', 20, 0), ...runs('0.35.0', 20, 4), ...runs('0.35.1', 5, 0), ...runs('0.36.0', 20, 4)]).rises)
+      .toEqual([expect.objectContaining({ kanon_version: '0.35.0', previous_version: '0.34.0' })]);
+  });
+
+  it('is no rise when no earlier release of the lane has the minimum sample', () => {
+    expect(detect([...runs('0.34.0', 10, 0), ...runs('0.35.0', RISE.minRuns - 1, 0), ...runs('0.36.0', 40, 20)]).rises).toEqual([]);
+  });
+
+  it('takes its visibility from the release it is compared with', () => {
+    const two = (v: string, n: number, fail: number) => many(n, (i) => (i < fail ? failed(`k${i % 2}`, { kanon_version: v }) : row(`k${i % 2}`, { kanon_version: v })));
+    // 0.35.1 has only two adopters but is skipped for its sample; 0.35.0, compared with, has three.
+    expect(detect([...runs('0.35.0', 20, 0), ...two('0.35.1', 4, 0), ...runs('0.36.0', 20, 10)]).rises[0])
+      .toMatchObject({ previous_version: '0.35.0', previous_adopters: 3, visibility: 'public' });
+    expect(detect([...two('0.35.0', 20, 0), ...runs('0.35.1', 4, 0), ...runs('0.36.0', 20, 10)]).rises[0])
+      .toMatchObject({ previous_version: '0.35.0', previous_adopters: 2, visibility: 'private' });
+  });
+
   it('does not count platform failures, so an outage after a release is not a regression', () => {
     expect(detect([...runs('0.35.0', 20, 0), ...runs('0.36.0', 20, 10, { api_error_status: 529 })]).rises).toEqual([]);
   });
