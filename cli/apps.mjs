@@ -715,7 +715,7 @@ const reuseApp = async ({ owner, pages, repos, key, slug, id, file, spec, specs,
   if (me.status !== 200) {
     throw new Error(
       `GitHub refused the key in ${file} as the App ${id}'s (HTTP ${me.status}): either ${id} is not ${slug}'s App ID or Client ID, or the key is not one of its keys. ` +
-        `Both IDs are ${idsAt(pages, slug)}, and its keys under "Private keys". Nothing was stored; the file is kept.`,
+        `Both IDs are ${idsAt(pages, slug)}, and its keys under Credentials → Key pairs. Nothing was stored; the file is kept.`,
     );
   }
   if (String(me.json?.slug) !== slug) {
