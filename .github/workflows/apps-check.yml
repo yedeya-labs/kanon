@@ -77,9 +77,12 @@ jobs:
         app: ${{ fromJSON(needs.register.outputs.apps) }}
     steps:
       # Scoped to the owner, not the repository, so an installation that misses this
-      # repository still mints, and the check below can say so.
+      # repository still mints, and the check below can say so. A failed mint goes on to the
+      # check too, which fails the job and says why, naming an empty secret (kanon#625): the
+      # action's own error doesn't, and GitHub never shows a secret's value.
       - name: Mint the App's token
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ matrix.app.key == 'author' && secrets.AUTHOR_APP_ID || matrix.app.key == 'judge' && secrets.JUDGE_APP_ID || matrix.app.key == 'releaser' && secrets.RELEASER_APP_ID || '' }}
