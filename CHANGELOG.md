@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.39.0](https://github.com/yedeya-labs/kanon/compare/v0.38.0...v0.39.0) (2026-10-10)
+
+
+### Features
+
+* **init:** find reusable Apps in the owner's other registers, and fill in the App ID ([#648](https://github.com/yedeya-labs/kanon/issues/648)) ([da3cef6](https://github.com/yedeya-labs/kanon/commit/da3cef68724336a2ba7e9f6b6637f9cae086dc45))
+* **init:** plan 0007 G5, the feature, consent and data flags, three questions and one summary ([#656](https://github.com/yedeya-labs/kanon/issues/656)) ([dd469ee](https://github.com/yedeya-labs/kanon/commit/dd469eef35e10c5314f32af7d5debfc7581c307b))
+* **intake:** an Introduced by field on the bug form, and the triage line asking for the cause ([#663](https://github.com/yedeya-labs/kanon/issues/663)) ([e242e6a](https://github.com/yedeya-labs/kanon/commit/e242e6a4d3c3c8371789056f8f9189d008673daa))
+* **lanes:** plan 0007 G2, the install features as data in lanes.json and requirements.json ([#650](https://github.com/yedeya-labs/kanon/issues/650)) ([8b8a819](https://github.com/yedeya-labs/kanon/commit/8b8a819085028254842b22fe357c56a5211c4519))
+* **metrics:** kanon metrics report, the three headline indicators by band (plan 0003 M6) ([#667](https://github.com/yedeya-labs/kanon/issues/667)) ([4caa54b](https://github.com/yedeya-labs/kanon/commit/4caa54b098223520d750b15f5ee6215963559259))
+* **metrics:** Kanon's health view: rule disputes, time to fix Kanon's own bugs, upgrade lag ([#665](https://github.com/yedeya-labs/kanon/issues/665)) ([215e941](https://github.com/yedeya-labs/kanon/commit/215e94118bd76ab8a36dc3406e3038b72e64672c))
+* **sweep:** feed eligible reviewer follow-ups to the Implementer from the backlog ([#655](https://github.com/yedeya-labs/kanon/issues/655)) ([3b3a40b](https://github.com/yedeya-labs/kanon/commit/3b3a40be07ac7f75b177a2f1d8197a99e6cf7ea7))
+
+
+### Bug Fixes
+
+* **apps:** reuse a private App by the App ID or Client ID the person gives ([#636](https://github.com/yedeya-labs/kanon/issues/636)) ([b682b15](https://github.com/yedeya-labs/kanon/commit/b682b155ee334a1f51df62e90d75c461a6edf463))
+* **skills:** never hand a real secret's gh secret set to ! at the Claude Code prompt ([#639](https://github.com/yedeya-labs/kanon/issues/639)) ([403d0ca](https://github.com/yedeya-labs/kanon/commit/403d0ca87e7345842b781686319473e69987884b))
+* **telemetry:** compare a rise with the lane's own last release of twenty runs ([#654](https://github.com/yedeya-labs/kanon/issues/654)) ([16158d5](https://github.com/yedeya-labs/kanon/commit/16158d58cb62eb521fdba09ad0d5b8ae866f85c1))
+* **telemetry:** never treat Kanon's own vocabulary as a name in the scrub ([#618](https://github.com/yedeya-labs/kanon/issues/618)) ([a074df5](https://github.com/yedeya-labs/kanon/commit/a074df5671af3365dae70a43858a8a24ddeaa65a))
+* **telemetry:** render.mjs prints each entry by its repository, never its key ([#634](https://github.com/yedeya-labs/kanon/issues/634)) ([0fb23d7](https://github.com/yedeya-labs/kanon/commit/0fb23d723ae6ea7221bbfb1d15cc7a3d52963255))
+
+
+### Documentation
+
+* **apps:** name GitHub's Credentials, Key pairs, New key for an App's key ([#632](https://github.com/yedeya-labs/kanon/issues/632)) ([e55da3b](https://github.com/yedeya-labs/kanon/commit/e55da3b6dd5941db03a587780218c05d0faeffed))
+* **plans:** plan 0007, a guided install built on features, a short runbook and one confirmation ([#633](https://github.com/yedeya-labs/kanon/issues/633)) ([2bbd240](https://github.com/yedeya-labs/kanon/commit/2bbd2401ee1ec61739b2b01a235816b36026ab0a))
+* **plans:** record the Owner's F7 decisions on Jev errors and the Owner's shadow call ([#615](https://github.com/yedeya-labs/kanon/issues/615)) ([a8973f2](https://github.com/yedeya-labs/kanon/commit/a8973f2e125f31fe16dc7d4d642c7dba92cdfbf0))
+* **rulebook:** plan 0007 G1, record the feature, review trigger, Data section and one consent question ([#649](https://github.com/yedeya-labs/kanon/issues/649)) ([d6735ce](https://github.com/yedeya-labs/kanon/commit/d6735ce54e6d2d8a5419f994796f5f4dd81513c6))
+* **skills:** say that review is opt-in, and that /kanon:adopt is typed by the person ([#635](https://github.com/yedeya-labs/kanon/issues/635)) ([b5b1592](https://github.com/yedeya-labs/kanon/commit/b5b15920d851ec22960eb4abe91891dc7fca0e91))
+
+
+### CI
+
+* **deps:** Bump anthropics/claude-code-action from 1.0.242 to 1.0.244 in /actions/agent-run in the github-actions group across 1 directory ([#620](https://github.com/yedeya-labs/kanon/issues/620)) ([360efca](https://github.com/yedeya-labs/kanon/commit/360efcadeaba31af72e89e3cf495329c67880526))
+* **deps:** Bump the kanon group across 2 directories with 9 updates ([#619](https://github.com/yedeya-labs/kanon/issues/619)) ([f6ab1e8](https://github.com/yedeya-labs/kanon/commit/f6ab1e87237652c96f3e08e0a32edf014cc8e40c))
+
 ## [0.38.0](https://github.com/yedeya-labs/kanon/compare/v0.37.0...v0.38.0) (2026-10-08)
 
 
