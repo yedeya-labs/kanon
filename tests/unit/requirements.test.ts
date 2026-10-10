@@ -99,7 +99,7 @@ describe('requirements.json', () => {
   // built from it, so a lane without an entry would be installed without anyone being told what
   // it does.
   describe('the lane catalogue (docs/lanes.json)', () => {
-    type Entry = { name: string; group: string; does: string; needs: string[]; cost: string; recommend: 'always' | string[]; when: string; mergeQueue?: string };
+    type Entry = { name: string; group: string; does: string; needs: string[]; cost: string; recommend: 'always' | string[]; when: string; mergeQueue?: string; requires?: string[] };
     const cat = built.catalogue as { groups: Array<{ id: string; title: string; header: string }>; lanes: Record<string, Entry> };
     const lanes = built.lanes as Record<string, { secrets: string[] }>;
     const groupOf = (lane: string) => cat.groups.findIndex((g) => g.id === cat.lanes[lane]!.group);
@@ -110,8 +110,10 @@ describe('requirements.json', () => {
 
     it('fills in every field of every entry', () => {
       for (const [lane, e] of Object.entries(cat.lanes)) {
-        // `mergeQueue` only on a lane a merge queue changes (#452).
-        expect(Object.keys(e).filter((k) => k !== 'mergeQueue').sort(), lane).toEqual(['cost', 'does', 'group', 'name', 'needs', 'recommend', 'when']);
+        // `mergeQueue` only on a lane a merge queue changes (#452), `requires` only on a lane that
+        // depends on another (plan 0007 §2.6).
+        expect(Object.keys(e).filter((k) => k !== 'mergeQueue' && k !== 'requires').sort(), lane).toEqual(['cost', 'does', 'group', 'name', 'needs', 'recommend', 'when']);
+        if ('requires' in e) expect(e.requires!.length, `${lane} requires`).toBeGreaterThan(0);
         for (const k of ['name', 'does', 'cost', 'when'] as const) expect(e[k].trim().length, `${lane} ${k}`).toBeGreaterThan(3);
         // One line each: --help prints it on one, and a question's option shows it as one.
         for (const k of ['does', 'cost', 'when'] as const) expect(e[k], `${lane} ${k}`).toMatch(/^[A-Z][^\n]*\.$/);
@@ -173,5 +175,210 @@ describe('requirements.json', () => {
         expect(e.cost.startsWith('No model'), lane).toBe(!lanes[lane]!.secrets.includes('CLAUDE_CODE_OAUTH_TOKEN'));
       }
     });
+
+    it("records the five dependencies of plan 0007 §2.6 in `requires`, each a lane that acts only on what its base lane made", () => {
+      const requires = Object.fromEntries(Object.entries(cat.lanes).filter(([, e]) => e.requires !== undefined).map(([l, e]) => [l, e.requires]));
+      expect(requires).toEqual({
+        'agent-implement-revise': ['agent-implement'],
+        'agent-lead-revise': ['agent-lead'],
+        'agent-lead-split': ['agent-lead'],
+        'agent-lead-reconcile': ['agent-lead'],
+        'agent-verify-acs': ['agent-lead-reconcile'],
+      });
+    });
+  });
+
+  // THE FEATURES (plan 0007 §2, step G2): a feature is a fixed set of lanes, with the Apps and the
+  // person steps that follow from them, which `kanon init` and the adopt skill offer in place of a
+  // choice per lane. Each contains the one before it. Hand-written in docs/lanes.json beside the
+  // catalogue and copied here; §2.6 says what this guard holds them to.
+  describe('the features (docs/lanes.json, plan 0007 §2)', () => {
+    type Entry = { requires?: string[]; recommend: 'always' | string[] };
+    const cat = built.catalogue as { lanes: Record<string, Entry> };
+    const lanes = built.lanes as Record<string, { identities: string[]; secrets: string[]; hooks: string[] }>;
+    const features = built.features as Feature[];
+
+    it('copies them from docs/lanes.json, and keeps them out of the catalogue', () => {
+      expect(features).toEqual(JSON.parse(readFileSync(join(ROOT, 'docs/lanes.json'), 'utf8')).features);
+      expect(Object.keys(built.catalogue)).toEqual(['groups', 'lanes']);
+    });
+
+    it('are Review, Review + build and Full pipeline, in that order', () => {
+      expect(features.map((f) => [f.feature, f.title])).toEqual([['review', 'Review'], ['build', 'Review + build'], ['full', 'Full pipeline']]);
+    });
+
+    it('fill in every field, and say what each does in one line a question can show', () => {
+      for (const f of features) {
+        expect(Object.keys(f).filter((k) => k !== 'leftOut').sort(), f.feature).toEqual(['apps', 'conditional', 'does', 'feature', 'lanes', 'steps', 'title']);
+        // §9's budget for an option's consequence, which Q1 shows it as.
+        expect(f.does, f.feature).toMatch(/^[A-Z][^\n]*\.$/);
+        expect(f.does.length, f.feature).toBeLessThanOrEqual(100);
+        for (const s of f.steps) expect(s.trim().length, f.feature).toBeGreaterThan(3);
+        // A clause, which the features table and init's summary say after the lane.
+        for (const c of Object.values(f.conditional)) expect(c.condition, f.feature).toMatch(/^when [^\n]*[^.]$/);
+        for (const r of Object.values(f.leftOut ?? {})) expect(r, f.feature).toMatch(/^[A-Z][^\n]*\.$/);
+      }
+    });
+
+    it('pass the guard of plan 0007 §2.6', () => {
+      expect(featureProblems(features, cat.lanes, lanes)).toEqual([]);
+    });
+
+    it('put each lane where §2 does', () => {
+      const [review, build, full] = features;
+      expect(review!.lanes).toEqual(['agent-review']);
+      expect(build!.lanes).toEqual(['agent-review', 'agent-implement', 'agent-implement-revise', 'agent-triage', 'agent-rebase', 'agent-dispatch-sweep', 'agent-merge-reconcile']);
+      expect(full!.lanes).toEqual([...build!.lanes, 'agent-lead', 'agent-lead-revise', 'agent-lead-split', 'agent-lead-reconcile', 'agent-verify-acs', 'agent-merge', 'agent-overseer', 'agent-code-audit']);
+      expect(Object.keys(full!.conditional).sort()).toEqual(['agent-explore', 'agent-project-digest', 'agent-weekly-digest']);
+      expect(full!.conditional['agent-explore']).toMatchObject({ hook: '.github/actions/explore-sweep/action.yml' });
+      expect(full!.conditional['agent-weekly-digest']).toMatchObject({ secret: 'DIGEST_WEBHOOK' });
+      expect(full!.conditional['agent-project-digest']).toMatchObject({ secret: 'DIGEST_WEBHOOK' });
+      expect(Object.keys(full!.leftOut ?? {})).toEqual(['agent-explore-telemetry']);
+      expect(features.map((f) => f.apps)).toEqual([['judge'], ['author', 'judge'], ['author', 'judge']]);
+    });
+
+    // §2.6: the catalogue's `recommend` is a trigger, not a dependency. `agent-triage` is
+    // recommended with the explore and code-audit lanes, and is in Review + build without them,
+    // since it also triages the bugs people file (§2.2). A guard that read `recommend` as a
+    // dependency would fail here.
+    it('reads `requires`, never `recommend`, as a dependency: agent-triage is in Review + build without the lanes it is recommended with', () => {
+      const build = features.find((f) => f.feature === 'build')!;
+      expect(build.lanes).toContain('agent-triage');
+      expect(cat.lanes['agent-triage']!.recommend).toEqual(['agent-explore', 'agent-code-audit']);
+      for (const w of cat.lanes['agent-triage']!.recommend) expect(build.lanes).not.toContain(w);
+      expect(featureProblems(features, cat.lanes, lanes)).toEqual([]);
+    });
+
+    // Each mutation §2.6 names, applied to a copy of the real data: the guard must name it.
+    describe('fails each mutation §2.6 names', () => {
+      const copy = () => structuredClone({ features, cat: cat.lanes, lanes });
+      const at = (fs: Feature[], id: string) => fs.find((f) => f.feature === id)!;
+
+      it('a new lane in the catalogue and in no feature', () => {
+        const c = copy();
+        c.cat['agent-new'] = { recommend: [] };
+        c.lanes['agent-new'] = { identities: [], secrets: [], hooks: [] };
+        expect(featureProblems(c.features, c.cat, c.lanes)).toEqual(['agent-new is in no feature, and not left out of Full']);
+      });
+
+      it('agent-implement-revise in Review', () => {
+        const c = copy();
+        at(c.features, 'review').lanes.push('agent-implement-revise');
+        // Review's Apps are the Judge's, so the Author's lane also widens them.
+        expect(featureProblems(c.features, c.cat, c.lanes)).toEqual([
+          'review: agent-implement-revise requires agent-implement, which it lacks',
+          'review: its Apps are judge, but its lanes take author, judge',
+        ]);
+      });
+
+      it('agent-verify-acs in a feature without agent-lead-reconcile', () => {
+        const c = copy();
+        at(c.features, 'build').lanes.push('agent-verify-acs');
+        expect(featureProblems(c.features, c.cat, c.lanes)).toEqual(['build: agent-verify-acs requires agent-lead-reconcile, which it lacks']);
+      });
+
+      it("author missing from Review + build's Apps", () => {
+        const c = copy();
+        at(c.features, 'build').apps = ['judge'];
+        expect(featureProblems(c.features, c.cat, c.lanes)).toEqual(['build: its Apps are judge, but its lanes take author, judge']);
+      });
+
+      it('a feature without a lane of the one before it', () => {
+        const c = copy();
+        const build = at(c.features, 'build');
+        build.lanes = build.lanes.filter((l) => l !== 'agent-review');
+        expect(featureProblems(c.features, c.cat, c.lanes)).toEqual(['build: lacks agent-review, which review has']);
+      });
+
+      it('a lane both in Full and left out of it', () => {
+        const c = copy();
+        at(c.features, 'full').leftOut!['agent-merge'] = 'Left out.';
+        expect(featureProblems(c.features, c.cat, c.lanes)).toEqual(['full: agent-merge is in it and also left out']);
+      });
+
+      it("a condition on a hook or a secret the lane doesn't take", () => {
+        const c = copy();
+        const full = at(c.features, 'full');
+        full.conditional['agent-explore'] = { hook: '.github/actions/other/action.yml', condition: 'when it can be' };
+        full.conditional['agent-weekly-digest'] = { secret: 'NO_SUCH_SECRET', condition: 'when it can be' };
+        expect(featureProblems(c.features, c.cat, c.lanes)).toEqual([
+          'full: agent-explore is conditional on the hook .github/actions/other/action.yml, which the lane does not call',
+          'full: agent-weekly-digest is conditional on the secret NO_SUCH_SECRET, which the lane does not take',
+        ]);
+      });
+
+      it('a `requires` naming no lane, or the lane itself', () => {
+        const c = copy();
+        c.cat['agent-merge']!.requires = ['agent-nowhere'];
+        c.cat['agent-rebase']!.requires = ['agent-rebase'];
+        expect(featureProblems(c.features, c.cat, c.lanes)).toEqual([
+          'agent-merge requires agent-nowhere, which is no lane',
+          'agent-rebase requires itself',
+          'full: agent-merge requires agent-nowhere, which it lacks',
+        ]);
+      });
+    });
   });
 });
+
+type Feature = {
+  feature: string;
+  title: string;
+  does: string;
+  lanes: string[];
+  conditional: Record<string, { hook?: string; secret?: string; condition: string }>;
+  leftOut?: Record<string, string>;
+  apps: string[];
+  steps: string[];
+};
+
+/**
+ * Plan 0007 §2.6's guard: what is wrong with the features, one line each, or nothing. Every lane is
+ * in Full, conditional in it, or left out of it with its reason; each feature contains the one
+ * before it; a feature's Apps are exactly the union of its lanes' identities; a conditional lane's
+ * condition names a hook it calls or a secret it takes; and a lane that `requires` a base lane is
+ * in no feature without it. A conditional lane may require a lane that is conditional too.
+ * `recommend` is never read: it is a trigger, not a dependency.
+ */
+function featureProblems(
+  features: Feature[],
+  cat: Record<string, { requires?: string[] }>,
+  lanes: Record<string, { identities: string[]; secrets: string[]; hooks: string[] }>,
+): string[] {
+  const out: string[] = [];
+  for (const [lane, e] of Object.entries(cat)) {
+    for (const r of e.requires ?? []) {
+      if (r === lane) out.push(`${lane} requires itself`);
+      else if (!(r in cat)) out.push(`${lane} requires ${r}, which is no lane`);
+    }
+  }
+  const full = features.at(-1);
+  const placed = new Set(full ? [...full.lanes, ...Object.keys(full.conditional), ...Object.keys(full.leftOut ?? {})] : []);
+  for (const lane of Object.keys(cat)) if (!placed.has(lane)) out.push(`${lane} is in no feature, and not left out of Full`);
+  features.forEach((f, i) => {
+    const conditional = Object.keys(f.conditional);
+    const all = [...f.lanes, ...conditional];
+    for (const l of [...all, ...Object.keys(f.leftOut ?? {})]) if (!(l in cat)) out.push(`${f.feature}: ${l} is no lane`);
+    for (const l of Object.keys(f.leftOut ?? {})) if (all.includes(l)) out.push(`${f.feature}: ${l} is in it and also left out`);
+    for (const l of f.lanes) if (conditional.includes(l)) out.push(`${f.feature}: ${l} is in it and also conditional`);
+    const before = features[i - 1];
+    if (before) {
+      for (const l of before.lanes) if (!f.lanes.includes(l)) out.push(`${f.feature}: lacks ${l}, which ${before.feature} has`);
+      for (const l of Object.keys(before.conditional)) if (!all.includes(l)) out.push(`${f.feature}: lacks ${l}, which ${before.feature} has`);
+      for (const s of before.steps) if (!f.steps.includes(s)) out.push(`${f.feature}: lacks the step "${s}", which ${before.feature} has`);
+    }
+    for (const l of all) {
+      // A lane in the feature needs its base lane in it; a conditional lane, at least beside it.
+      const base = f.lanes.includes(l) ? f.lanes : all;
+      for (const r of cat[l]?.requires ?? []) if (!base.includes(r)) out.push(`${f.feature}: ${l} requires ${r}, which it lacks`);
+    }
+    for (const [l, c] of Object.entries(f.conditional)) {
+      if ((c.hook === undefined) === (c.secret === undefined)) out.push(`${f.feature}: ${l}'s condition names neither or both of a hook and a secret`);
+      if (c.hook !== undefined && !lanes[l]?.hooks.includes(c.hook)) out.push(`${f.feature}: ${l} is conditional on the hook ${c.hook}, which the lane does not call`);
+      if (c.secret !== undefined && !lanes[l]?.secrets.includes(c.secret)) out.push(`${f.feature}: ${l} is conditional on the secret ${c.secret}, which the lane does not take`);
+    }
+    const apps = [...new Set(all.flatMap((l) => lanes[l]?.identities ?? []))].sort();
+    if (JSON.stringify([...f.apps].sort()) !== JSON.stringify(apps)) out.push(`${f.feature}: its Apps are ${f.apps.join(', ')}, but its lanes take ${apps.join(', ')}`);
+  });
+  return out;
+}
