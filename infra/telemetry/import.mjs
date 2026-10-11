@@ -176,19 +176,21 @@ export function report(/** @type {ReturnType<typeof dryRun>} */ d) {
 
 /**
  * §7 step 4: send the rows with the importer role, 25 to a `POST`. Returns the rows stored and
- * the rows refused, by field name.
+ * the rows refused, by field name. The work-item backfill (plan 0003 M5, `backfill.mjs`) sends
+ * through it too, as the backfill role.
  * @param {Record<string, any>[]} rows
  * @param {string} key
- * @param {{ aws: typeof aws, post: typeof post, profile: string }} deps
+ * @param {{ aws: typeof aws, post: typeof post, profile: string, role?: 'importer' | 'backfill' }} deps
  */
 export async function send(rows, key, deps) {
+  const role = deps.role ?? 'importer';
   const owner = ['--profile', deps.profile, '--region', REGION, '--output', 'json'];
   const who = JSON.parse(deps.aws(['sts', 'get-caller-identity', ...owner]).stdout || '{}');
   const stack = JSON.parse(deps.aws(['cloudformation', 'describe-stacks', '--stack-name', STACK, ...owner]).stdout || '{}');
   const url = (stack?.Stacks?.[0]?.Outputs ?? []).find((/** @type {any} */ o) => o.OutputKey === 'IngestUrl')?.OutputValue;
-  const c = JSON.parse(deps.aws(['sts', 'assume-role', '--role-arn', `arn:aws:iam::${who.Account}:role/kanon-telemetry-importer`,
-    '--role-session-name', 'kanon-import', ...owner]).stdout || '{}')?.Credentials;
-  if (!who.Account || !url || !c) throw new Error('the stack or the importer role is not reachable: is it deployed with --importer?');
+  const c = JSON.parse(deps.aws(['sts', 'assume-role', '--role-arn', `arn:aws:iam::${who.Account}:role/kanon-telemetry-${role}`,
+    '--role-session-name', `kanon-${role}`, ...owner]).stdout || '{}')?.Credentials;
+  if (!who.Account || !url || !c) throw new Error(`the stack or the ${role} role is not reachable: is it deployed with --${role}?`);
   const creds = { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken };
   let stored = 0;
   /** @type {Record<string, number>} */

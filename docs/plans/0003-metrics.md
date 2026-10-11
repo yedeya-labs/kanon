@@ -671,6 +671,8 @@ gh api repos/$RA_REPO/issues/<n>/timeline --paginate --jq '.[] | select((.event 
 gh pr list -R $RA_REPO --state closed --limit 1000 --search 'closed:2026-09-01..2026-09-30' --json number --jq length
 ```
 
+This count includes release PRs, which have no row: the metrics leave them out (kanon#538, the Owner, 2026-10-07), as `scripts/metrics/release.mjs` recognises them. So the check as run is the backfill's dry run (`infra/telemetry/backfill.mjs`, kanon#660), which lists the closed PRs from GitHub, leaves the release PRs out, and puts the rest beside the rows per month.
+
 **Not run: the prices.** DynamoDB and Lambda as in plan 0002's [Measurements](0002-hosted-telemetry-store.md#measurements); GitHub's per-minute Actions price on its pricing page; the BI service's seat price on its vendor's page.
 
 ## Decisions for the Owner
