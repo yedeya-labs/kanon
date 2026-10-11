@@ -16,7 +16,7 @@ A repository that maintains Kanon or a fork of it may file Kanon bugs as issues 
 
 ## Run data
 
-**What is sent:** one row per agent run, plan 0002's fixed fields: the lane, the outcome, the model, cost, tokens, durations and counts, the run, pull request and issue numbers, and the Kanon release ([`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs)). No code, no text, no logins, no file paths (`K-OBS-16`).
+**What is sent:** one row per agent run, plan 0002's fixed fields: the lane, the outcome, the model, cost, tokens, durations and counts, the run, pull request and issue numbers, and the Kanon release. Also one row per closed pull request, merged or not, plan 0003's work-item fields: its sizes, times, outcome and the classes of its actors (an agent role, a human or another bot), with pull request and issue numbers ([`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs)). No code, no text, no titles, no logins, no file paths (`K-OBS-16`).
 
 **Where it is kept:** one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, kept 13 months ([the hosted telemetry store](telemetry.md)).
 

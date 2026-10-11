@@ -1844,7 +1844,7 @@ describe('kanon init and telemetry (#428)', () => {
   });
 
   it('says what is sent, where, who reads it, and how to stop and erase, in its question', () => {
-    for (const s of ['no code', 'no logins', 'Frankfurt', '13 months', "Kanon's operator", 'at least three adopters', 'deleting .github/workflows/telemetry.yml', 'Erase an adopter']) expect(TELEMETRY_QUESTION).toContain(s);
+    for (const s of ['no code', 'no titles', 'no logins', 'One row per lane run', 'One row per closed pull request', 'actor classes', 'Frankfurt', '13 months', "Kanon's operator", 'at least three adopters', 'deleting .github/workflows/telemetry.yml', 'Erase an adopter']) expect(TELEMETRY_QUESTION).toContain(s);
   });
 
   it('says what the adopter gets for it, here, in the adopt skill and in the docs (#41 §2)', () => {

@@ -154,7 +154,7 @@ export const TELEMETRY_CALLER_PATH = '.github/workflows/telemetry.yml';
  */
 export const telemetryCallerFile = (release) =>
   [
-    "# Sends this repository's agent-run rows to Kanon's hosted telemetry store (docs/telemetry.md).",
+    "# Sends this repository's agent-run rows, and a work-item row per closed pull request, to Kanon's hosted telemetry store (docs/telemetry.md).",
     '# Delete this file to stop; the operator erases what was sent on request.',
     'name: Telemetry',
     'on:',
@@ -170,6 +170,8 @@ export const telemetryCallerFile = (release) =>
     '  actions: read',
     '  contents: read',
     '  id-token: write',
+    '  issues: read',
+    '  pull-requests: read',
     'jobs:',
     '  collect:',
     `    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@${release}`,

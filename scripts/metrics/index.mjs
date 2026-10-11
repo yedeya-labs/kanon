@@ -1,6 +1,6 @@
 // The metrics module (plan 0003, M2): pure functions over the input shape in `types.mjs`, with
 // no network and no file reads. The dry run (`kanon metrics dry-run`), the report (`kanon metrics
-// report`, M6) and, later, the collector's work-item step import it from here.
+// report`, M6) and the collector's work-item step (M4) import it from here.
 
 export { BAND_THRESHOLDS, BAND_VERSION, BANDS, bandOf, diffSize, isExcludedFromSize } from './band.mjs';
 export { AREAS, areaCounts, areaOf, escalationFlags } from './areas.mjs';
@@ -24,3 +24,5 @@ export {
   DELIVERY_LANES, ESCAPE_DAYS, IDLE_DAYS, LEAD_LANES, MINIMUM, OVERHEAD_LANES, WINDOW_DAYS, cellText, metricsReport, notEnough, renderReport, sortRows,
 } from './report.mjs';
 export { RESAMPLES, SEED, binomialCdf, bootstrap, kendallTauB, orderStatisticInterval, quantile, seededRandom, wilson } from './stats.mjs';
+export { FOLLOWUP_LABELS, followupsOf, isReviewerFollowup } from './followups.mjs';
+export { deriveRows } from './derive.mjs';

@@ -35,11 +35,14 @@ on:
 
 # The ceiling for the collector: it reads the artifacts and runs, and the adoption record's
 # upstream-findings level (plan 0006 F4), and its collect job mints the OIDC token for the writer
-# role. Nothing else is granted.
+# role. It reads the pull requests and issues its work-item rows are derived from (plan 0003 M4).
+# Nothing else is granted.
 permissions:
   actions: read
   contents: read
   id-token: write
+  issues: read
+  pull-requests: read
 
 jobs:
   collect:

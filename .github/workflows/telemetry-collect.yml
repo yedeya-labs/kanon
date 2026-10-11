@@ -4,9 +4,14 @@
 #
 # A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER (docs/telemetry.md, "Collect
 # the rows"). The caller holds the triggers listed above `on:` below, a `permissions:` ceiling of
-# `actions: read`, `contents: read` and `id-token: write`, and one job that `uses:` this file at
+# `actions: read`, `contents: read`, `id-token: write`, `issues: read` and `pull-requests: read`,
+# and one job that `uses:` this file at
 # an exact Kanon tag, passing the store's function URL and the repository's writer role, which are repository
 # variables and not secrets: neither is a credential.
+#
+# THE WORK-ITEM ROWS (plan 0003 M4) ride on the same sweep: the script derives one row per pull
+# request closed in the span, and again for an earlier item whose story the span changed, and
+# sends them with the run rows, to the store's `<key>#work` partition.
 #
 # WHY A COLLECTOR, AND WHY HOURLY. The lanes hold no store credentials (`K-OBS-13`): each run
 # uploads its version-2 row as a `kanon-telemetry-*` artifact, and only this job, on the
@@ -98,11 +103,16 @@ jobs:
     # The reference adopter's: a week's recovery is a few hundred downloads.
     timeout-minutes: 15
     # `contents: read` reads the adoption record on the default branch, whose `Upstream findings`
-    # level decides which finding rows leave (plan 0006 §3.1, F4); nothing is checked out.
+    # level decides which finding rows leave (plan 0006 §3.1, F4), and the declarations and the
+    # caller's pin the work-item rows are derived with; nothing is checked out. `issues: read` and
+    # `pull-requests: read` read the pull requests closed in the span, and the issues and
+    # follow-ups that change an item's story (plan 0003 §3.1, M4).
     permissions:
       actions: read
       contents: read
       id-token: write
+      issues: read
+      pull-requests: read
     steps:
       - uses: $/actions/kanon-path
       # MASKED FIRST, BEFORE ANY AWS CALL (kanon#514): the role's ARN is a variable, which the

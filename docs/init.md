@@ -28,7 +28,7 @@ Each question has a flag, and so does each value the summary shows. A flag answe
 | Create the optional Releaser App? | `--releases`, `--no-releases`, or the same answer as `--releaser`, `--no-releaser` | yes for a repository that calls Kanon's release workflow (`inspection.callsRelease`), else no |
 | Reuse an App the owner already has, rather than create a second? (only when the owner's installations, or another of its repositories' registers, hold one the chosen lanes need and the register lacks, `inspection.ownerApps`) | `--reuse-apps`, `--no-reuse-apps` | yes |
 | Declare the kanon plugin in `.claude/settings.json`? | `--plugin`, `--no-plugin` | yes |
-| Send this repository's agent-run rows to Kanon's hosted telemetry store? (one of the three answers the consent question sets) | `--telemetry`, `--no-telemetry` | no |
+| Send this repository's agent-run and work-item rows to Kanon's hosted telemetry store? (one of the three answers the consent question sets) | `--telemetry`, `--no-telemetry` | no |
 | Where do upstream findings go? And, after `sent`: also send each finding's evidence and suggested fix, as text? ([below](#upstream-findings); the other two answers the consent question sets, and `filed-here` only through **Change something**) | `--upstream-findings drafted\|filed-here\|sent\|sent-with-evidence`; `sent` and `sent-with-evidence` need `--telemetry` | `drafted` |
 | Create the Apps now? | `--create-apps`, `--no-apps` | yes |
 
@@ -157,7 +157,7 @@ A lane's caller goes at the lane's file name, `.github/workflows/<lane>.yml` (`K
 | `releaser` | boolean | Whether to create the optional Releaser. |
 | `reuseApps` | boolean or null | Whether to reuse the Apps in `inspection.ownerApps` that the chosen lanes need, with `kanon apps --reuse`, rather than create a second set; null when there was none to ask about. |
 | `plugin` | boolean | Whether to declare the kanon plugin in `.claude/settings.json`, pinned to this release. |
-| `telemetry` | boolean | Whether to send the repository's agent-run rows to Kanon's hosted telemetry store, by writing the collector's caller, `.github/workflows/telemetry.yml` ([below](#telemetry)). |
+| `telemetry` | boolean | Whether to send the repository's agent-run and work-item rows to Kanon's hosted telemetry store, by writing the collector's caller, `.github/workflows/telemetry.yml` ([below](#telemetry)). |
 | `upstreamFindings` | string | Where upstream findings go, as the adoption record's `Upstream findings:` choice writes it: `drafted`, `filed here`, `sent` or `sent with evidence` ([above](#upstream-findings)). |
 | `upstreamEvidence` | boolean or null | Whether each sent finding also carries its evidence and suggested fix, as text; null when nothing is sent, so it wasn't asked. |
 | `feature` | string | What Kanon does here: `review`, `build` or `full`, the feature whose lanes `lanes` holds, with no lane beyond them but its conditional ones, or `custom` when they make up none. The adoption record's `Feature:` bullet, written unless `custom` (`K-LAYOUT-10`). |
