@@ -450,6 +450,17 @@ node infra/telemetry/import.mjs --export "$OUT/cost-rows.json" --key <key> --app
 
 The export holds the adopter's rows, so it stays beside the register, outside the public tree. The dry run prints counts, field names and enum values only, and exits non-zero while any row stops; plan 0002 §7 lists what stops a row.
 
+**The work-item backfill (S7a, [plan 0003](plans/0003-metrics.md) M5)** derives a repository's work-item rows with the collector's own step, over one span from `--since` to now, read with the Owner's `gh` token. It sends them as the backfill role:
+
+```sh
+node infra/telemetry/backfill.mjs --repo <owner/name> --since 2026-09-04
+node infra/telemetry/backfill.mjs --repo <owner/name> --since 2026-09-04 --key <key> --apply --profile kanon
+```
+
+`--caller` names the repository's collector caller under `.github/workflows` (default `telemetry.yml`), whose pin at each merge gives the row's `kanon_version`.
+
+The dry run prints M5's check, counts only. For each month, it shows the pull requests closed, from GitHub's own listing with release PRs left out, beside the rows derived. Earlier items whose rows the span rewrites are counted apart. It exits non-zero when a month differs or the step failed, and `--apply` sends nothing when the step failed. A re-sent row overwrites itself, so a span that overlaps the collector's is harmless.
+
 ## Cost and paging
 
 Plan 0002 §9 estimates about $0.05 a month, under a $1 ceiling watched by the account's budget alert. The template creates nothing outside that estimate:
