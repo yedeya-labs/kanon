@@ -165,6 +165,14 @@ describe('the explicit linked-fix detector (§3.5)', () => {
     expect(explicitLink({ ...fix, closingIssues: [bug(30, '### Introduced by\n\n#11\n')] }, { ...item, timeline: [] }, opts)).toBeNull();
   });
 
+  it('condition 2 (#676): a bare number in the field, which GitHub never links, still names the item; the fix\'s own body is not the field', () => {
+    const bare = { ...fix, closingIssues: [bug(30, '### Introduced by\n\n10\n')] };
+    expect(explicitLink(bare, { ...item, timeline: [] }, opts)?.via).toEqual(['introduced-by']);
+    expect(fixesOf({ ...item, timeline: [] }, [item, bare], opts)).toEqual([{ pr: 20, days: 4 }]);
+    // §3.5 reads the bug issue's field, not a field-shaped block in the fix's body.
+    expect(explicitLink({ ...fix, body: '### Introduced by\n\n#10\n' }, { ...item, timeline: [] }, opts)).toBeNull();
+  });
+
   it('condition 1: the closing issue must be labelled `bug`', () => {
     expect(explicitLink({ ...fix, closingIssues: [{ number: 30, labels: ['enhancement'] }] }, item, opts)).toBeNull();
     expect(explicitLink({ ...fix, closingIssues: [{ number: 30, labels: ['bug'] }] }, item, opts)).not.toBeNull();
