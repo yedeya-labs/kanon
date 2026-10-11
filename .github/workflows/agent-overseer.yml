@@ -39,7 +39,9 @@
 # telemetry store. The `telemetry` job assumes the repository's reader role,
 # `kanon-telemetry-<key>-reader`, from the `KANON_TELEMETRY_READER_ROLE` secret the caller maps by
 # name, reads its own lanes' partitions, and uploads only `token-trend.md` and `cache-ttl.md`,
-# never a row (plan 0004 step 13; `scripts/overseer-telemetry.mjs`). Its steps are fixed: the
+# never a row (plan 0004 step 13; `scripts/overseer-telemetry.mjs`). Its last step reports the
+# headline indicators, `kanon metrics report` over the same role's read of the work items and the
+# runs, to its own job summary (kanon#668; plan 0003 §6.4). Its steps are fixed: the
 # id-token guard allows it by its exact shape. The agent's job adds the two files to the export and
 # writes the read's status into the manifest as `telemetry`: `ran`, `not configured` (no reader
 # role mapped, as for a repository that didn't opt in to telemetry), `not run on this trigger` (the
@@ -270,7 +272,7 @@ jobs:
           kind: overseer
 
   # THE TELEMETRY STORE JOB (kanon#470): the reader role's read of this repository's own rows,
-  # summarised into the two files, and nothing else. Its steps are fixed: the id-token guard allows
+  # summarised into the two files and the headline report (kanon#668), and nothing else. Its steps are fixed: the id-token guard allows
   # this job by its exact shape, so a step added here turns the guard red. It declares no
   # environment, which would replace the ref in its token's subject. A role it can't assume (a run
   # on another ref) is a `failed` read, said, and green. On the runtime-version trigger it doesn't
@@ -329,6 +331,17 @@ jobs:
           path: ${{ runner.temp }}/overseer-telemetry
           retention-days: 1
           if-no-files-found: error
+      # THE HEADLINE INDICATORS (kanon#668; plan 0003 §6.4, option A): `kanon metrics report` over
+      # this repository's work items and runs, the store's thirteen months, written to this job's
+      # summary and nowhere else. Last, so a slow or failed report never holds up the two files.
+      # It exits 0 whatever happens, and withholds the report when any partition can't be read.
+      - name: Report the headline indicators to the job summary
+        env:
+          ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
+          CREDENTIALS: ${{ steps.creds.outcome }}
+          TABLE: ${{ steps.resolve.outputs.table }}
+          REGION: ${{ steps.resolve.outputs.region }}
+        run: node "$KANON/scripts/overseer-telemetry.mjs" report
 
   # THE LANE'S RUN, AS A CALLED WORKFLOW (kanon#279, `K-AGENT-49`). `overseer-run.yml` mints the
   # token in a job that holds the key and runs nothing else, then hands it to the agent's job

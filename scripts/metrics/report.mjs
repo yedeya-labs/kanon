@@ -1,6 +1,6 @@
 // The report module (plan 0003 §7, M6): the three headline indicators by complexity band, from one
 // adopter's stored rows. Rows in, report out: no network, no file, no clock but the `until` it is
-// given (`K-SELF-8`). `kanon metrics report` prints it; the Overseer's weekly job is to run it.
+// given (`K-SELF-8`). `kanon metrics report` prints it; the Overseer's weekly job runs it (kanon#668).
 //
 // THE THREE, ALWAYS TOGETHER (§2.1, decision 5): cost per merged work item (§2.2), yield (§2.3)
 // and the escaped-defect rate (§2.4), with first-review approval and the human-correction rate
@@ -502,7 +502,7 @@ export function metricsReport(rows, { until, days = WINDOW_DAYS }) {
 /** @typedef {ReturnType<typeof metricsReport>} Report */
 
 // ── The report as Markdown ───────────────────────────────────────────────────────────────────
-// What `kanon metrics report` prints, and what the Overseer's weekly job is to write to its job
+// What `kanon metrics report` prints, and what the Overseer's weekly job writes to its job
 // summary (§6.4). Numbers, dates and field names only: a row holds nothing else (ADR 0007).
 
 /** The "not enough data (N)" text every cell below its minimum shows (§2.1). @param {number} n */
