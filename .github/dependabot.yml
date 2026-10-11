@@ -32,7 +32,7 @@
 #
 # TO ASK FOR A RUN NOW, change this file. A merged change to it on the default branch starts a
 # Dependabot run, so a release reaches the pins without waiting for the next daily check. A
-# comment-only change is enough.
+# comment-only change is enough. Last asked for: v0.39.0's pins (2026-10-11).
 version: 2
 updates:
   - package-ecosystem: github-actions
