@@ -254,6 +254,31 @@ describe('the indicators', () => {
     expect(renderReport(r).join('\n')).toMatch(/10 whose runs report no cost \(unknown, never \$0\); 1 runs inside the costed items report no cost/);
   });
 
+  it('leaves a settled unit whose runs report no cost out of yield, on the work-item path and the no-item path alike', () => {
+    const rows = [
+      ...risingRows({ S: 20, M: 20, L: 20, XL: 20 }),
+      // Ten closed-unmerged S items whose runs report no cost: unknown, so out of S's yield.
+      ...Array.from({ length: 10 }, (_, k) => [itemRow(600 + k, { closed: ago(3), fate: 'closed_unmerged', band: 'S' }), runRow('implement', { pr: 600 + k, at: ago(4) })]).flat(),
+      // Nineteen issues whose runs never reached a PR and report a cost, one short of the minimum...
+      ...Array.from({ length: 19 }, (_, k) => runRow('implement', { issue: 800 + k, at: ago(31 + k), cost: 2 })),
+      // ...and five that report none, which must not lift the No PR cell over it.
+      ...Array.from({ length: 5 }, (_, k) => runRow('implement', { issue: 850 + k, at: ago(31 + k) })),
+      // A PR with no work-item row yet whose runs report no cost: out of the pooled cell too.
+      runRow('implement', { pr: 950, at: ago(40) }),
+      runRow('review', { pr: 950, at: ago(39) }),
+    ];
+    const r = report(rows);
+    const cells = r.yield.cells as Cells;
+    expect(cells.S.yield.n).toBe(20);
+    expect(cells.S.yield.value).toBe(1);
+    expect(cells.noPr.yield).toEqual({ status: 'not-enough-data', n: 19, minimum: 20 });
+    expect(cells.pooled.bandMix.noPr).toBe(19);
+    expect(cells.pooled.bandMix.none).toBe(0);
+    expect(cells.pooled.yield.n).toBe(80 + 19);
+    expect(r.yield.unjoinedWithoutCost).toBe(6);
+    expect(renderReport(r).join('\n')).toMatch(/Left out of yield: 6 settled groups of runs that join no item and report no cost \(unknown, never \$0\)\./);
+  });
+
   it("bands every item with the newest version from its counts, never the row's stored band", () => {
     const stale = { ...itemRow(1, { closed: ago(2), band: 'S' }), band: 'XL' };
     const r = report([stale, runRow('implement', { pr: 1, at: ago(3), cost: 1 })]);
