@@ -1,6 +1,11 @@
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { AGENT_LANES, dryRun, reasonCode, report, send, transform } from '../../infra/telemetry/import.mjs';
+import { AGENT_LANES, dryRun, reasonCode, report, send, sendFailure, transform } from '../../infra/telemetry/import.mjs';
 import { LANE_ROLES, LANES, validate } from '../../actions/agent-telemetry/schema.mjs';
 import { classifyResult } from '../../actions/agent-classify/classify-agent-result.mjs';
 
@@ -14,6 +19,7 @@ type V1 = Record<string, string | number | boolean | undefined>;
 
 /** A placeholder account id, built rather than written, as the other telemetry tests do. */
 const ACCOUNT = '4'.repeat(12);
+const IMPORT = fileURLToPath(new URL('../../infra/telemetry/import.mjs', import.meta.url));
 
 /** A version-1 `COST#` item in DynamoDB's attribute-value form, as `aws dynamodb scan` prints it. */
 const item = (over: V1 = {}): Record<string, Attr> => {
@@ -177,5 +183,99 @@ describe('§7 step 4: send', () => {
   it('refuses to send when the importer role is not deployed', async () => {
     const aws = (args: string[]) => ({ code: args[1] === 'assume-role' ? 254 : 0, stdout: args[1] === 'assume-role' ? '' : JSON.stringify({ Account: '1', Stacks: [{ Outputs: [{ OutputKey: 'IngestUrl', OutputValue: 'u' }] }] }), stderr: '' });
     await expect(send([rowOf()], 'k2', { aws, post: async () => ({ status: 200, json: {} }), profile: 'kanon' })).rejects.toThrow(/--importer/);
+  });
+});
+
+/** What `aws` prints to stderr when the calls fail, with the placeholder account in each ARN, as `aws` would. */
+const STDERR = {
+  ssoExpired: '\nThe SSO session associated with this profile has expired or is otherwise invalid. To refresh this SSO session run aws sso login with the corresponding profile.\n',
+  noCredentials: '\nUnable to locate credentials. You can configure credentials by running "aws configure".\n',
+  noStack: '\nAn error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id kanon-telemetry does not exist\n',
+  denied: `\nAn error occurred (AccessDenied) when calling the AssumeRole operation: User: arn:aws:sts::${ACCOUNT}:assumed-role/Owner/someone is not authorized to perform: sts:AssumeRole on resource: arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-importer\n`,
+  throttled: `\nAn error occurred (Throttling) when calling the GetCallerIdentity operation (reached max retries: 2): Rate exceeded for ${ACCOUNT}\n`,
+};
+
+/** A fake `aws` whose `failing` call exits 254 with `stderr` and prints nothing, as `aws` does; the others answer. */
+const failingAws = (failing: string, stderr: string, calls: string[] = []) => (args: string[]) => {
+  calls.push(args[1] ?? '');
+  if (args[1] === failing) return { code: 254, stdout: '', stderr };
+  const out = args[1] === 'get-caller-identity' ? { Account: ACCOUNT }
+    : args[1] === 'describe-stacks' ? { Stacks: [{ Outputs: [{ OutputKey: 'IngestUrl', OutputValue: 'https://u.example/' }] }] }
+      : { Credentials: { AccessKeyId: 'a', SecretAccessKey: 's', SessionToken: 't' } };
+  return { code: 0, stdout: JSON.stringify(out), stderr: '' };
+};
+const refusedPost = async () => { throw new Error('nothing may be posted'); };
+const reason = async (aws: ReturnType<typeof failingAws>) => {
+  try {
+    await send([rowOf()], 'k2', { aws, post: refusedPost, profile: 'kanon' });
+  } catch (e) {
+    return (e as Error).message;
+  }
+  throw new Error('send did not fail');
+};
+
+describe('§7 step 4: send says why it could not reach the store (kanon#693)', () => {
+  it('names an expired SSO session, the call that met it, and the login command', async () => {
+    const calls: string[] = [];
+    const message = await reason(failingAws('get-caller-identity', STDERR.ssoExpired, calls));
+    expect(message).toMatch(/get-caller-identity/);
+    expect(message).toMatch(/expired/);
+    expect(message).toContain('aws sso login --profile kanon');
+    expect(calls).toEqual(['get-caller-identity']);
+  });
+
+  it('names a missing session with the same login command', async () => {
+    const message = await reason(failingAws('get-caller-identity', STDERR.noCredentials));
+    expect(message).toMatch(/no AWS session/);
+    expect(message).toContain('aws sso login --profile kanon');
+  });
+
+  it('names describe-stacks and a stack that is not deployed', async () => {
+    const message = await reason(failingAws('describe-stacks', STDERR.noStack));
+    expect(message).toMatch(/describe-stacks/);
+    expect(message).toMatch(/kanon-telemetry is not deployed/);
+  });
+
+  it('names assume-role and the role flag, and never the account or the role\'s ARN', async () => {
+    const message = await reason(failingAws('assume-role', STDERR.denied));
+    expect(message).toMatch(/assume-role/);
+    expect(message).toMatch(/--importer/);
+    expect(message).not.toContain(ACCOUNT);
+    expect(message).not.toMatch(/arn:/);
+  });
+
+  it('names any other failing call with its exit code and aws\'s own first line, the account cut out', async () => {
+    const message = await reason(failingAws('get-caller-identity', STDERR.throttled));
+    expect(message).toMatch(/get-caller-identity exited 254/);
+    expect(message).toMatch(/Rate exceeded/);
+    expect(message).not.toContain(ACCOUNT);
+  });
+
+  it('sendFailure is one line and never carries the key, the account or an ARN', () => {
+    const line = sendFailure(new Error(`posting to https://u.example/?key=s3cr3t-key failed for arn:aws:iam::${ACCOUNT}:role/kanon-telemetry-importer\n    at post (verify.mjs:1:1)`), 's3cr3t-key');
+    expect(line.split('\n')).toHaveLength(1);
+    expect(line).toMatch(/^send failed: /);
+    for (const secret of ['s3cr3t-key', ACCOUNT, 'arn:']) expect(line).not.toContain(secret);
+  });
+
+  it('the CLI prints that line to stdout and exits non-zero, with no stack trace', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kanon-import-'));
+    try {
+      const bin = join(dir, 'bin');
+      mkdirSync(bin);
+      // The fake `aws` first on PATH: every call fails as an expired SSO session does.
+      writeFileSync(join(bin, 'aws'), `#!/bin/sh\nprintf '%s' '${STDERR.ssoExpired.trim()}' >&2\nexit 255\n`, { mode: 0o755 });
+      writeFileSync(join(dir, 'scan.json'), JSON.stringify({ Items: [item()] }));
+      const r = spawnSync(process.execPath, [IMPORT, '--export', join(dir, 'scan.json'), '--key', 's3cr3t-key', '--apply', '--profile', 'kanon'], {
+        encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      });
+      expect(r.status).toBe(1);
+      const last = r.stdout.trim().split('\n').at(-1);
+      expect(last).toMatch(/^send failed: .*get-caller-identity.*aws sso login --profile kanon/);
+      expect(r.stdout + r.stderr).not.toContain('s3cr3t-key');
+      expect(r.stderr).not.toMatch(/\n\s+at /);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

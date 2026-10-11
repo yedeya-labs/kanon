@@ -102,8 +102,20 @@ describe('send as the backfill role', () => {
     expect(calls.find((c) => c[1] === 'assume-role')).toContain(`arn:aws:iam::${'4'.repeat(12)}:role/kanon-telemetry-backfill`);
   });
 
-  it('names the backfill flag when the role is not deployed', async () => {
-    const aws = (args: string[]) => ({ code: args[1] === 'assume-role' ? 254 : 0, stdout: args[1] === 'assume-role' ? '' : JSON.stringify({ Account: '1', Stacks: [{ Outputs: [{ OutputKey: 'IngestUrl', OutputValue: 'u' }] }] }), stderr: '' });
-    await expect(send([{}], 'k2', { aws, post: async () => ({ status: 200, json: {} }), profile: 'kanon', role: 'backfill' })).rejects.toThrow(/--backfill/);
+  it('names the backfill flag when the role is not deployed, and never the account or the role\'s ARN', async () => {
+    const account = '4'.repeat(12);
+    const stderr = `\nAn error occurred (AccessDenied) when calling the AssumeRole operation: User: arn:aws:sts::${account}:assumed-role/Owner/someone is not authorized to perform: sts:AssumeRole on resource: arn:aws:iam::${account}:role/kanon-telemetry-backfill\n`;
+    const aws = (args: string[]) => ({ code: args[1] === 'assume-role' ? 254 : 0, stdout: args[1] === 'assume-role' ? '' : JSON.stringify({ Account: account, Stacks: [{ Outputs: [{ OutputKey: 'IngestUrl', OutputValue: 'u' }] }] }), stderr: args[1] === 'assume-role' ? stderr : '' });
+    const sent = send([{}], 'k2', { aws, post: async () => ({ status: 200, json: {} }), profile: 'kanon', role: 'backfill' });
+    await expect(sent).rejects.toThrow(/assume-role.*--backfill/);
+    await expect(sent).rejects.not.toThrow(new RegExp(`${account}|arn:`));
+  });
+
+  it('names an expired SSO session and the login command (kanon#693)', async () => {
+    const aws = (args: string[]) => (args[1] === 'get-caller-identity'
+      ? { code: 255, stdout: '', stderr: '\nThe SSO session associated with this profile has expired or is otherwise invalid. To refresh this SSO session run aws sso login with the corresponding profile.\n' }
+      : { code: 0, stdout: JSON.stringify({ Stacks: [{ Outputs: [{ OutputKey: 'IngestUrl', OutputValue: 'u' }] }], Credentials: {} }), stderr: '' });
+    await expect(send([{}], 'k2', { aws, post: async () => ({ status: 200, json: {} }), profile: 'owner-sso', role: 'backfill' }))
+      .rejects.toThrow(/get-caller-identity.*expired.*aws sso login --profile owner-sso/);
   });
 });

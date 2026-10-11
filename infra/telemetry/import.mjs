@@ -174,10 +174,55 @@ export function report(/** @type {ReturnType<typeof dryRun>} */ d) {
   return [...lines, `stopped in all: ${d.stopped}`];
 }
 
+/** An account id, and an ARN, which carries one: neither is printed (kanon#693). */
+const SECRET_SHAPES = [/arn:[^\s"',]+/g, /\b\d{12}\b/g];
+
+/** `text`'s first line, with every ARN, account id and the key cut out. @param {unknown} text @param {string} [key] */
+function redact(text, key = '') {
+  let line = String(text).trim().split('\n')[0] ?? '';
+  // As given, and as the ingest URL carries it.
+  for (const k of key ? [key, encodeURIComponent(key)] : []) line = line.split(k).join('<key>');
+  return SECRET_SHAPES.reduce((l, shape) => l.replace(shape, (m) => (m.startsWith('arn:') ? '<arn>' : '<account>')), line);
+}
+
+/**
+ * Why an `aws` call failed, from its exit code and stderr: the call it was, then the cause.
+ * An expired or missing session names the login command; a stack that isn't there says so.
+ * @param {string} call @param {{ code: number, stderr: string }} r @param {string} profile @param {string} [role] the role it assumes, if any
+ */
+function awsFailure(call, r, profile, role) {
+  const stderr = r.stderr ?? '';
+  const login = `run \`aws sso login --profile ${profile}\`, then re-run`;
+  if (/SSO session .*(expired|invalid)|Token has expired|ExpiredToken|Error loading SSO Token|sso.*token.*(expired|does not exist)/i.test(stderr)) {
+    return `aws ${call} failed: the AWS session for profile ${profile} has expired; ${login}`;
+  }
+  if (/config profile .* could not be found/i.test(stderr)) {
+    return `aws ${call} failed: the AWS profile ${profile} is not configured; add it with \`aws configure sso --profile ${profile}\``;
+  }
+  if (/Unable to locate credentials/i.test(stderr)) {
+    return `aws ${call} failed: no AWS session for profile ${profile}; ${login}`;
+  }
+  if (call === 'cloudformation describe-stacks' && /does not exist/.test(stderr)) {
+    return `aws ${call} failed: the stack ${STACK} is not deployed`;
+  }
+  const said = redact(stderr);
+  return `aws ${call} exited ${r.code}${said ? `: ${said}` : ''}${role ? `; is the ${role} role deployed with --${role}?` : ''}`;
+}
+
+/**
+ * The one line the CLIs print when `send` throws: `send failed: ` and why, never the key, an
+ * account id or an ARN (kanon#693).
+ * @param {unknown} e @param {string} key
+ */
+export function sendFailure(e, key) {
+  return `send failed: ${redact(/** @type {Error} */ (e)?.message ?? e, key)}`;
+}
+
 /**
  * §7 step 4: send the rows with the importer role, 25 to a `POST`. Returns the rows stored and
  * the rows refused, by field name. The work-item backfill (plan 0003 M5, `backfill.mjs`) sends
- * through it too, as the backfill role.
+ * through it too, as the backfill role. An `aws` call that exits non-zero stops it with the call
+ * and the cause, before anything is posted (kanon#693).
  * @param {Record<string, any>[]} rows
  * @param {string} key
  * @param {{ aws: typeof aws, post: typeof post, profile: string, role?: 'importer' | 'backfill' }} deps
@@ -185,12 +230,19 @@ export function report(/** @type {ReturnType<typeof dryRun>} */ d) {
 export async function send(rows, key, deps) {
   const role = deps.role ?? 'importer';
   const owner = ['--profile', deps.profile, '--region', REGION, '--output', 'json'];
-  const who = JSON.parse(deps.aws(['sts', 'get-caller-identity', ...owner]).stdout || '{}');
-  const stack = JSON.parse(deps.aws(['cloudformation', 'describe-stacks', '--stack-name', STACK, ...owner]).stdout || '{}');
+  /** @param {string[]} args @param {string} [assumes] */
+  const call = (args, assumes) => {
+    const r = deps.aws([...args, ...owner]);
+    if (r.code !== 0) throw new Error(awsFailure(args.slice(0, 2).join(' '), r, deps.profile, assumes));
+    return JSON.parse(r.stdout || '{}');
+  };
+  const who = call(['sts', 'get-caller-identity']);
+  const stack = call(['cloudformation', 'describe-stacks', '--stack-name', STACK]);
   const url = (stack?.Stacks?.[0]?.Outputs ?? []).find((/** @type {any} */ o) => o.OutputKey === 'IngestUrl')?.OutputValue;
-  const c = JSON.parse(deps.aws(['sts', 'assume-role', '--role-arn', `arn:aws:iam::${who.Account}:role/kanon-telemetry-${role}`,
-    '--role-session-name', `kanon-${role}`, ...owner]).stdout || '{}')?.Credentials;
-  if (!who.Account || !url || !c) throw new Error(`the stack or the ${role} role is not reachable: is it deployed with --${role}?`);
+  if (!who.Account || !url) throw new Error(`the stack ${STACK} is not reachable: it has no IngestUrl, or no account answered`);
+  const c = call(['sts', 'assume-role', '--role-arn', `arn:aws:iam::${who.Account}:role/kanon-telemetry-${role}`,
+    '--role-session-name', `kanon-${role}`], role)?.Credentials;
+  if (!c) throw new Error(`the ${role} role is not reachable: is it deployed with --${role}?`);
   const creds = { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken };
   let stored = 0;
   /** @type {Record<string, number>} */
@@ -218,7 +270,14 @@ if (isCliEntry(import.meta.url)) {
   const d = dryRun(items);
   for (const line of report(d)) console.log(line);
   if (values.apply) {
-    const { stored, refused } = await send(d.rows, /** @type {string} */ (values.key), { aws, post, profile: values.profile });
+    let sent;
+    try {
+      sent = await send(d.rows, /** @type {string} */ (values.key), { aws, post, profile: values.profile });
+    } catch (e) {
+      console.log(sendFailure(e, /** @type {string} */ (values.key)));
+      process.exit(1);
+    }
+    const { stored, refused } = sent;
     console.log(`stored ${stored}; refused ${Object.entries(refused).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}`);
     process.exit(d.stopped === 0 && Object.keys(refused).length === 0 ? 0 : 1);
   }
