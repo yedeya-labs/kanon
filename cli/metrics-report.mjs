@@ -1,5 +1,6 @@
-// `kanon metrics report` (plan 0003 §7, M6, kanon#659): the three headline indicators by band,
-// from one adopter's stored rows. It reads the rows from local files, which the caller exported
+// `kanon metrics report` (plan 0003 §7, M6, kanon#659 and kanon#669): the three headline
+// indicators by band, their secondary measures, and the trend, by-version and A/B views, from one
+// adopter's stored rows. It reads the rows from local files, which the caller exported
 // from the telemetry store with its reader role (plan 0002 §6), and prints Markdown, or one JSON
 // document with `--json` (docs/cli-json.md). It calls nothing: no GitHub, no store.
 //
@@ -15,6 +16,7 @@
 // Node built-ins only, like the other commands; the file reading is `kanon metrics`'s.
 
 import { metricsReport, renderReport, WINDOW_DAYS } from '../scripts/metrics/report.mjs';
+import { metricsViews, renderViews, TREND_WINDOWS } from '../scripts/metrics/views.mjs';
 
 /** The JSON output's contract (docs/metrics.md). A breaking change to it changes this. */
 export const SCHEMA = 'kanon-metrics-report/v1';
@@ -27,15 +29,20 @@ export const USAGE = `Usage: kanon metrics report --rows <file> [--rows <file> �
 Reports the three headline indicators of plan 0003 §2 by complexity band: cost per merged work
 item (median and p90, API list price), yield (the share of delivery spend that ended in merged
 work) and the escaped-defect rate at 30 and 90 days, with first-review approval and the
-human-correction rate beside it. Each with its 95% interval; a cell below its minimum sample says
-"not enough data (N)". When cost doesn't rise with the band, the pooled view replaces the banded
-one, with a warning. Reads only the files it is given; calls nothing.
+human-correction rate beside it, and their secondary measures: cost per acceptance criterion,
+cache savings, review rounds, lead time by stage and human wait. Each with its 95% interval; a
+cell below its minimum sample says "not enough data (N)". When cost doesn't rise with the band,
+the pooled view replaces the banded one, with a warning. Then the views (plan 0003 §6.1): the
+trend over consecutive windows of --days, the indicators by Kanon version, and the configuration A/B per lane.
+Reads only the files it is given; calls nothing.
 
 Options:
   --rows <file>          one adopter's stored rows, run and work-item, as a JSON array, JSON
                          Lines, or a JSON object with a "rows" array. Repeat for several files
   --until <YYYY-MM-DD>   the window's end, 00:00 UTC, not included (default: now)
   --days <n>             the window's length in days, by close date (default: ${WINDOW_DAYS})
+  --windows <n>          the trend's windows, ending at --until; the by-version and A/B views
+                         read the same span (default: ${TREND_WINDOWS})
   --json                 print one JSON document (docs/metrics.md) instead of Markdown
   -h, --help             this text
 
@@ -57,8 +64,8 @@ Exit codes: 0 the report was made; 2 usage error; 3 could not run (docs/metrics.
  * @param {string[]} argv
  */
 export function parseReportArgs(argv) {
-  /** @type {{ rows: string[], until: Date | null, days: number, json: boolean, help: boolean }} */
-  const opts = { rows: [], until: null, days: WINDOW_DAYS, json: false, help: false };
+  /** @type {{ rows: string[], until: Date | null, days: number, windows: number, json: boolean, help: boolean }} */
+  const opts = { rows: [], until: null, days: WINDOW_DAYS, windows: TREND_WINDOWS, json: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
     const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
@@ -79,6 +86,10 @@ export function parseReportArgs(argv) {
       const v = value();
       if (!/^\d{1,3}$/.test(v) || Number(v) < 1 || Number(v) > 366) throw new Error(`--days takes a whole number of days from 1 to 366, not "${v}"`);
       opts.days = Number(v);
+    } else if (flag === '--windows') {
+      const v = value();
+      if (!/^\d{1,2}$/.test(v) || Number(v) < 1 || Number(v) > 26) throw new Error(`--windows takes a whole number of windows from 1 to 26, not "${v}"`);
+      opts.windows = Number(v);
     } else if (flag === '--json') opts.json = true;
     else throw new Error(`unknown argument "${arg}"`);
   }
@@ -160,8 +171,10 @@ export function report(argv, deps) {
     else deps.err(`kanon metrics report: ${message}`);
     return EXIT.error;
   }
-  const result = metricsReport(rows, { until: opts.until ?? deps.now(), days: opts.days });
-  if (opts.json) deps.out(JSON.stringify({ schema: SCHEMA, kanon: deps.release(), status: result.view === 'banded' ? 'ok' : 'pooled', exitCode: EXIT.ok, ...result }, null, 2));
-  else for (const line of renderReport(result)) deps.out(line);
+  const until = opts.until ?? deps.now();
+  const result = metricsReport(rows, { until, days: opts.days });
+  const views = metricsViews(rows, { until, days: opts.days, windows: opts.windows });
+  if (opts.json) deps.out(JSON.stringify({ schema: SCHEMA, kanon: deps.release(), status: result.view === 'banded' ? 'ok' : 'pooled', exitCode: EXIT.ok, ...result, ...views }, null, 2));
+  else for (const line of [...renderReport(result), ...renderViews(views)]) deps.out(line);
   return EXIT.ok;
 }

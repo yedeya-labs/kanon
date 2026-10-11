@@ -52,6 +52,7 @@ import { RETENTION_MONTHS, addMonths } from '../infra/telemetry/function/index.m
 import { LANES, RESERVED_PARTITION } from '../infra/telemetry/function/schema.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { metricsReport, renderReport } from './metrics/report.mjs';
+import { metricsViews, renderViews } from './metrics/views.mjs';
 import { DAY_MS, TREND_ATTRIBUTES, render as renderTrend, summarize as summarizeTrend } from './lib/token-trend.mjs';
 import { TTL_ATTRIBUTES, pinnedLanes, render as renderTtl, summarize as summarizeTtl } from './lib/cache-ttl.mjs';
 
@@ -250,7 +251,10 @@ export function headline(env, { query = awsQuery, now = Date.now() } = {}) {
     if (p.name === RESERVED_PARTITION) items = got.length;
     for (const item of got) rows.push(rowOf(item));
   }
-  const markdown = `${renderReport(metricsReport(rows, { until: new Date(now) })).join('\n')}\n`;
+  // The same Markdown as `kanon metrics report` with its defaults: the indicators, then the views
+  // (kanon#669), so the summary and the command never differ.
+  const until = new Date(now);
+  const markdown = `${[...renderReport(metricsReport(rows, { until })), ...renderViews(metricsViews(rows, { until }))].join('\n')}\n`;
   return {
     status: 'ran',
     markdown,

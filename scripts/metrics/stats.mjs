@@ -8,6 +8,9 @@
 //   at zero: 0 of 50 gives 0% to 7.1% (§2.4).
 // - The band validity check (§3.6): Kendall's τ-b between band and cost, its interval by the same
 //   seeded bootstrap.
+// - The configuration A/B's quality margins (§6.1, decision 11): NEWCOMBE's interval for the
+//   difference of two escape rates, and a two-sample seeded bootstrap for the difference of two
+//   yields.
 //
 // Pure, and imports nothing (`K-SELF-8`).
 
@@ -213,4 +216,51 @@ export function kendallTauB(points) {
   const n0 = (n * (n - 1)) / 2;
   const denom = Math.sqrt((n0 - groupTies) * (n0 - tiedPairs(all)));
   return denom > 0 ? (concordant - discordant) / denom : Number.NaN;
+}
+
+/**
+ * Newcombe's hybrid score interval for a difference of two proportions, x1/n1 − x2/n2, 95%
+ * (Newcombe 1998, method 10): each side's Wilson interval, combined. Like Wilson, it behaves at
+ * zero, so two arms with no escapes still get an interval as wide as their samples leave it (§6.1).
+ * @param {number} x1 @param {number} n1 > 0 @param {number} x2 @param {number} n2 > 0
+ * @returns {{ value: number, low: number, high: number }}
+ */
+export function newcombe(x1, n1, x2, n2) {
+  const p1 = x1 / n1;
+  const p2 = x2 / n2;
+  const a = wilson(x1, n1);
+  const b = wilson(x2, n2);
+  const value = p1 - p2;
+  return {
+    value,
+    low: value - Math.sqrt((p1 - a.low) ** 2 + (b.high - p2) ** 2),
+    high: value + Math.sqrt((a.high - p1) ** 2 + (p2 - b.low) ** 2),
+  };
+}
+
+/**
+ * The 2.5th and 97.5th percentiles of `statistic(new) − statistic(old)` over `RESAMPLES` paired
+ * draws, each arm resampled on its own from one generator seeded with `SEED` (§6.1's yield
+ * difference). A draw whose difference is not a finite number is drawn again, not counted.
+ * @template T
+ * @param {readonly T[]} older @param {readonly T[]} newer @param {(sample: T[]) => number} statistic
+ * @param {{ resamples?: number, seed?: number }} [opts]
+ * @returns {{ low: number, high: number } | null}
+ */
+export function bootstrapDifference(older, newer, statistic, { resamples = RESAMPLES, seed = SEED } = {}) {
+  if (older.length === 0 || newer.length === 0) return null;
+  const rand = seededRandom(seed);
+  const draw = (/** @type {readonly T[]} */ units) => Array.from({ length: units.length }, () => /** @type {T} */ (units[Math.floor(rand() * units.length)]));
+  /** @type {number[]} */
+  const stats = [];
+  let tries = 0;
+  while (stats.length < resamples && tries < resamples * 10) {
+    tries += 1;
+    const d = statistic(draw(newer)) - statistic(draw(older));
+    if (Number.isFinite(d)) stats.push(d);
+  }
+  if (stats.length < resamples) return null;
+  stats.sort((a, b) => a - b);
+  const alpha = (1 - LEVEL) / 2;
+  return { low: /** @type {number} */ (stats[Math.floor(alpha * resamples)]), high: /** @type {number} */ (stats[Math.ceil((1 - alpha) * resamples) - 1]) };
 }

@@ -88,11 +88,12 @@ Plan 0003 §7 accepts M2 on the reference adopter, with the Owner:
 
 ## `kanon metrics report`
 
-`kanon metrics report` reports [plan 0003](plans/0003-metrics.md)'s three headline indicators by complexity band (§2, step M6, [#659](https://github.com/yedeya-labs/kanon/issues/659)), from one adopter's stored rows. It reads only the files it's given, and calls nothing.
+`kanon metrics report` reports [plan 0003](plans/0003-metrics.md)'s three headline indicators by complexity band (§2, step M6, [#659](https://github.com/yedeya-labs/kanon/issues/659)), their secondary measures, and the trend, by-version and configuration A/B views (§6.1, [#669](https://github.com/yedeya-labs/kanon/issues/669)), from one adopter's stored rows. It reads only the files it's given, and calls nothing.
 
 ```sh
 kanon metrics report --rows runs-and-items.json                       # Markdown, the last 28 days
 kanon metrics report --rows runs.jsonl --rows work.jsonl --until 2026-10-01 --json
+kanon metrics report --rows runs-and-items.json --windows 12           # a trend over 12 windows
 ```
 
 **The Overseer runs it every week** ([#668](https://github.com/yedeya-labs/kanon/issues/668), §6.4), for a repository that maps a telemetry reader role to that lane ([The Overseer's cost view](telemetry.md#the-overseers-cost-view)). The last step of the lane's `telemetry` job reads the repository's work-item partition and each lane's partition, over the store's thirteen months, and writes this Markdown, for the default 28 days to the run's time, to the job's summary. The rows stay in that step: no file, log line or artifact holds one. A partition it can't read withholds the whole report and says which, since a report missing a lane's cost or the work items would be wrong. The report never fails the job.
@@ -115,6 +116,23 @@ kanon metrics report --rows runs.jsonl --rows work.jsonl --until 2026-10-01 --js
 - **Overhead,** the Explorer's, the code audit's, the telemetry Explorer's, the Overseer's and the digests' spend, and the Lead's runs that join no item (a brief run, or a split of a tracking issue no PR closes: planning, §3.4), is printed beside cost, never inside it, and is left out of yield's numerator and denominator alike. A Lead run that joins an item is in that item's cost and yield (§2.2).
 - **A missing cost is unknown, never $0.** A merged item none of whose delivery runs reports `total_cost_usd` is left out of cost and yield, and counted; so are the runs without a cost inside the items that are costed. A settled item of either fate, or a settled group of delivery runs that join no item, whose runs report no cost is left out of yield, so it never counts toward a cell's minimum; the groups are counted.
 
+**Beside the indicators**, in the same cells and the same view, banded or pooled (§2.2, §2.3):
+
+| Measure | What it is | Minimum |
+|---|---|---|
+| Cost per acceptance criterion | The median, over costed merged items whose first closing issue has criteria (`ac_count` above 0), of the item's cost over its `ac_count`. | 10 |
+| Review rounds to approval | The median `review_rounds` over merged items the Reviewer reviewed at least once. | 10 |
+| Lead time to merge, and each stage | The median and p90 of `lead_time_s` over merged items, and of each stage's `t_<stage>_s` (§3.3's partition: `human`, `merge_queue`, `agent`, `review`, `ci`, `rework`, `queue`, `other`). | median 10, p90 30 |
+| Human wait | The median `t_human_s` over merged items. | 10 |
+| Cache savings | Over every run recorded in the window: `cache_read_tokens` × (input price − cache-read price), at **API list price**, from the dated price table (`scripts/metrics/prices.mjs`), with the share of what the priced runs would have cost uncached. A run is priced at its `model` by the table entry in force when it ran. A run the table can't price (a model it doesn't hold, a long-context `[1m]` model, no cache count) is counted, and its model named: unknown, never $0. | |
+
+**The issue-side cross-check (§3.6)** is printed beside the band validity check: Kendall's τ-b between cost and each issue-side size, `ac_count` and `issue_body_chars`, with a bootstrap interval, over brief-driven merged items (`origin: brief`) with criteria. It *rises* when the interval sits entirely above zero, and needs 10 such items. It is a cross-check only, and never changes the view.
+
+**The views (§6.1)** read the span of `--windows` windows (default 6) of `--days` each, ending at `--until`. Their cells are the headline's, pooled across bands with the band mix beside them; the banded cells are the headline's, for the latest window.
+- **Trend:** the headline for each window, oldest first, each with its interval. A Kanon version starts in the window its first item closed in, and the trend marks it there, except where no versioned item came before.
+- **By Kanon version:** the headline per item `kanon_version`, for each version with at least 10 merged items in the span; the others are listed with their counts.
+- **Configuration A/B:** per delivery lane that ran on two or more `config_fingerprint`s in the span, its newest fingerprint (by first run) against the one before it. An item is in an arm when every run of the lane joined to it ran on that fingerprint; an item on both is left out and counted. A change is a **win** only if its cost at equal size has an interval entirely below zero, from the reference adopter's log-linear fit (log cost on log(1 + `changed_lines`) and the configuration, over merged items of the two arms, 10 per arm at least), **and** its quality holds within decision 11's margins, new minus old: yield's lower bound above −5 points (a two-sample seeded bootstrap, 20 settled items per arm), and the 30-day escape rate's upper bound below +2 points (Newcombe's interval, 50 matured agent-authored items per arm). A cheaper change whose quality isn't shown to hold is **cheaper, quality not shown to hold**, never a win. An arm's cost is its items' whole delivery cost, as the headline's, so a change that is cheaper in its lane and dearer downstream is not called cheaper.
+
 **How runs join items** is §3.4's rule, in `scripts/metrics/join.mjs`, which every reader uses: a run joins the item whose PR it names; a run naming only an issue joins the first item closing that issue to close after the run (on a tie, the lowest PR number). So a run joins at most one item. A delivery run that joins nothing, other than a Lead's (overhead, above), settles, not merged, 30 days after the last run on its PR or issue; the report reads no issue's state, so an issue closed without a PR settles the same way.
 
 **Exit codes:** 0 the report was made (a cell with too little data or a pooled view is not a failure); 2 a usage error; 3 a rows file that can't be read or isn't JSON rows. The message names the file, never its content.
@@ -135,6 +153,12 @@ kanon metrics report --rows runs.jsonl --rows work.jsonl --until 2026-10-01 --js
 | `yield` | object | `cells`, each with `yield`, and `unjoinedWithoutCost` (settled groups of delivery runs that join no item and report no cost, left out of yield). |
 | `escape` | object | `d30` and `d90`, each with `mergedFrom`, `mergedUntil`, and `agent` and `human` cells, each with `rate`. |
 | `approval`, `correction` | object | `cells`, each with `rate`. |
+| `secondary` | object | `costPerAc`, `reviewRounds` and `humanWait`, each with `cells` holding `median`; `leadTime`, whose `cells` hold `median`, `p90` and `stages` (each stage's `median` and `p90`); and `cacheSavings`: `usd`, `runs` (priced), `share` (or null), `unpriced` and `unpricedModels`. |
+| `validity.issueSide` | object | `n` (brief-driven costed items with criteria), and `acCount` and `bodyChars`, each `{ "status": "rises" \| "not-shown", "n", "tau", "low", "high" }` or `not-enough-data`. |
+| `span` | object | The views' span: `from`, `until`, `windows`, `days`. |
+| `trend` | array | One entry per window, oldest first: `window`, `cost` (`median`, `p90`), `yield`, `escape` (`d30`, `d90`), `approval`, `correction` (each an estimate), `bandMix` and `versionsIntroduced`. |
+| `byVersion` | object | `minimum`, `versions` (each `version`, `items` and the trend's cells), `fewer` (`version`, `items`) and `unversioned`. |
+| `ab` | object | `margins` (`yield`, `escape30`) and `lanes`: each `lane`, `old` and `new` (`fingerprint`, `firstRun`, `lastRun`, `items`, `cost`, `yield`, `escape.rate`), `mixed`, `costAtEqualSize` (`{ "ok": true, "n", "pct", "loPct", "hiPct" }` or `{ "ok": false, "reason" }`), `yieldDifference` and `escapeDifference` (`{ "status": "ok", "value", "low", "high" }` or `not-enough-data`), and `verdict`: `win`, `cheaper-quality-not-shown`, `not-shown-cheaper` or `not-enough-data`. |
 | `bootstrap` | object | `resamples` and `seed`. |
 
 `cells` holds `S`, `M`, `L`, `XL` in the banded view only, `pooled` always with its `bandMix`, and, for yield, `noPr`. Each estimate is `{ "status": "ok", "n", "value", "low", "high" }`, `{ "status": "not-enough-data", "n", "minimum" }` or, for a yield with no spend, `{ "status": "no-spend", "n" }`. Dollars and shares are rounded to four decimals.

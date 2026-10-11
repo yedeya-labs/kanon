@@ -18,7 +18,7 @@ export type Band = keyof typeof LINES;
 
 let runId = 1_000;
 
-export function runRow(lane: string, opts: { pr?: number; issue?: number; at: string; cost?: number; tag?: string }) {
+export function runRow(lane: string, opts: { pr?: number; issue?: number; at: string; cost?: number; tag?: string; fields?: Record<string, unknown> }) {
   runId += 1;
   return {
     schema_version: 2,
@@ -35,6 +35,7 @@ export function runRow(lane: string, opts: { pr?: number; issue?: number; at: st
     ...(opts.pr !== undefined ? { pr_number: opts.pr } : {}),
     ...(opts.issue !== undefined ? { issue_number: opts.issue } : {}),
     ...(opts.cost !== undefined ? { total_cost_usd: opts.cost } : {}),
+    ...opts.fields,
   };
 }
 
@@ -50,6 +51,8 @@ export function itemRow(pr: number, opts: {
   humanCommits?: number;
   humanCr?: number;
   tag?: string;
+  /** Any other stored fields, as the row has them (`ac_count`, `lead_time_s`, `kanon_version`, …). */
+  fields?: Record<string, unknown>;
 }) {
   return {
     schema_version: 1,
@@ -67,6 +70,7 @@ export function itemRow(pr: number, opts: {
     ...(opts.verdict ? { first_verdict: opts.verdict } : {}),
     ...(opts.humanCommits !== undefined ? { human_commits: opts.humanCommits } : {}),
     ...(opts.humanCr !== undefined ? { human_cr_after_approval: opts.humanCr } : {}),
+    ...opts.fields,
   };
 }
 
