@@ -15,7 +15,9 @@
 // (release PRs left out, as the metrics leave them out) beside the rows derived, and the month
 // marked when the two differ. An earlier item (closed before the span) whose story a PR in the
 // span changed is rewritten too, as the collector rewrites it; its row is counted apart, as
-// `earlier`, not in a month. It exits non-zero when the step failed or a month differs. The
+// `earlier`, not in a month. Both sides stop at the run's start, `now`: a PR closed while the
+// step runs is left out of the listing, and its row, if the step read it, is counted apart as
+// `during`. It exits non-zero when the step failed or a month differs. The
 // counts of PRs closed come from GitHub's own listing, not from the step, so the check is
 // independent of the derivation it checks.
 //
@@ -57,24 +59,26 @@ const asPr = (p) => /** @type {any} */ ({
  * M5's check: per month, the PRs closed in the span (release PRs left out) beside the rows.
  * @param {any[]} listed GitHub's closed pull requests, as listed
  * @param {Array<{ closed_at: string }>} rows the derived work-item rows
- * @param {{ since: number, register: Map<string, string> }} opts
- * @returns {{ months: Array<{ month: string, closed: number, rows: number }>, earlier: number }}
+ * @param {{ since: number, until: number, register: Map<string, string> }} opts
+ * @returns {{ months: Array<{ month: string, closed: number, rows: number }>, earlier: number, during: number }}
  */
-export function monthCounts(listed, rows, { since, register }) {
+export function monthCounts(listed, rows, { since, until, register }) {
   /** @type {Map<string, { month: string, closed: number, rows: number }>} */
   const by = new Map();
   const at = (/** @type {string} */ month) => by.get(month) ?? by.set(month, { month, closed: 0, rows: 0 }).get(month);
   for (const p of listed) {
-    if (typeof p?.closed_at !== 'string' || Date.parse(p.closed_at) < since) continue;
+    if (typeof p?.closed_at !== 'string' || Date.parse(p.closed_at) < since || Date.parse(p.closed_at) >= until) continue;
     if (isReleasePr(asPr(p), register)) continue;
     /** @type {{ closed: number }} */ (at(monthOf(p.closed_at))).closed += 1;
   }
   let earlier = 0;
+  let during = 0;
   for (const r of rows) {
     if (Date.parse(r.closed_at) < since) earlier += 1;
+    else if (Date.parse(r.closed_at) >= until) during += 1;
     else /** @type {{ rows: number }} */ (at(monthOf(r.closed_at))).rows += 1;
   }
-  return { months: [...by.values()].sort((a, b) => a.month.localeCompare(b.month)), earlier };
+  return { months: [...by.values()].sort((a, b) => a.month.localeCompare(b.month)), earlier, during };
 }
 
 /**
@@ -82,12 +86,13 @@ export function monthCounts(listed, rows, { since, register }) {
  * @param {ReturnType<typeof monthCounts>} counts
  * @param {{ failures: string[], warnings: string[] }} step
  */
-export function report({ months, earlier }, step) {
+export function report({ months, earlier, during }, step) {
   const lines = ['month    PRs closed  rows'];
   for (const m of months) lines.push(`${m.month}  ${String(m.closed).padStart(10)}  ${String(m.rows).padStart(4)}${m.closed === m.rows ? '' : '  differs'}`);
   const total = months.reduce((t, m) => ({ closed: t.closed + m.closed, rows: t.rows + m.rows }), { closed: 0, rows: 0 });
   lines.push(`total    ${String(total.closed).padStart(10)}  ${String(total.rows).padStart(4)}`);
   lines.push(`earlier items rewritten: ${earlier}`);
+  lines.push(`closed while the step ran: ${during}`);
   lines.push(`${step.warnings.length} warning(s), ${step.failures.length} failure(s)`);
   // A warning or failure names a PR number and why, never a row's values.
   for (const w of step.warnings) lines.push(`warning: ${w}`);
@@ -120,11 +125,18 @@ if (isCliEntry(import.meta.url)) {
   const since = Date.parse(`${sinceText}T00:00:00Z`);
   const now = Date.now();
   const step = await workItemStep({ repo, since, now, gh: ghAsync, log: (line) => console.error(line), callerFile: values.caller });
-  const { decl } = await declarations(/** @type {any} */ ({ gh: ghAsync, err: () => {}, readFile: () => null }), repo, null);
+  /** @type {Map<string, string>} */
+  let register = new Map();
+  try {
+    register = (await declarations(/** @type {any} */ ({ gh: ghAsync, err: () => {}, readFile: () => null }), repo, null)).decl.register;
+  } catch (e) {
+    // The step read the same declarations and has recorded the failure; the report says so.
+    step.failures.push(`the declarations could not be read for the check (${String(/** @type {Error} */ (e)?.message ?? e).split('\n')[0]})`);
+  }
   // Closed pull requests, newest update first: one listing, every page, cut to the span.
   const listed = await listAll(ghAsync, `repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100`);
   const rows = step.rows.map((r) => r.row);
-  const counts = monthCounts(listed, /** @type {any} */ (rows), { since, register: decl.register });
+  const counts = monthCounts(listed, /** @type {any} */ (rows), { since, until: now, register });
   for (const line of report(counts, step)) console.log(line);
   if (!values.apply) process.exit(passed(counts, step) ? 0 : 1);
   if (step.failures.length) {

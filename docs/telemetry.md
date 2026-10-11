@@ -11,6 +11,7 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 | `erase.mjs` | Deletes one adopter's rows (§10). |
 | `aggregate.mjs` | The aggregate (§6, §6.1), run by you: what the aggregate function answers, plus the totals only you see. |
 | `import.mjs` | The reference adopter's history import (§7, S5): its transform, dry run and send. |
+| `backfill.mjs` | The work-item backfill ([plan 0003](plans/0003-metrics.md) M5, §7 S7a): M5's check as a dry run, and the send as the backfill role. |
 | `register.example.json` | The register's shape, naming only Kanon. |
 
 The collector that writes to it is [`telemetry-collect.yml`](../.github/workflows/telemetry-collect.yml) ([Collect the rows](#collect-the-rows)).
