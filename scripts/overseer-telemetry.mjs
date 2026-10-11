@@ -7,6 +7,8 @@
 //                                                        resolves and checks the table and region
 //   node "$KANON/scripts/overseer-telemetry.mjs" read    the lane's `telemetry` job, after the
 //                                                        credentials step
+//   node "$KANON/scripts/overseer-telemetry.mjs" report  the lane's `telemetry` job, last: the
+//                                                        headline indicators, to its job summary
 //   node "$KANON/scripts/overseer-telemetry.mjs" merge   the agent's job, before the agent
 //
 // WHO READS WHAT (the Owner's decision on kanon#470, option A). The lane's `telemetry` job is the
@@ -30,6 +32,15 @@
 // means the store is absent. A repository whose own store hook writes the two files keeps them
 // whenever this read didn't run.
 //
+// THE HEADLINE INDICATORS, TO THE JOB SUMMARY (kanon#668; plan 0003 §6.4, option A). The same
+// job, in its last step, runs `kanon metrics report` over this repository's own rows: the
+// work-item partition, `<key>#work`, whole, and each lane's partition over the store's thirteen
+// months (plan 0002 §10), every attribute, since the report reads most of them. It writes the
+// report's Markdown to the job's summary, and nothing else anywhere: the rows stay in the step's
+// memory, never in a file, the log or the artifact. A partition it can't read withholds the whole
+// report, naming the partition: a report missing a lane's cost, or the work items, would print
+// numbers that are wrong. It never fails the job, so the agent's two files are never held up by it.
+//
 // `node:` built-ins and the `aws` CLI on GitHub's runner only (`K-SELF-8`).
 
 import { execFileSync } from 'node:child_process';
@@ -37,8 +48,10 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, read
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
-import { LANES } from '../infra/telemetry/function/schema.mjs';
+import { RETENTION_MONTHS, addMonths } from '../infra/telemetry/function/index.mjs';
+import { LANES, RESERVED_PARTITION } from '../infra/telemetry/function/schema.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { metricsReport, renderReport } from './metrics/report.mjs';
 import { DAY_MS, TREND_ATTRIBUTES, render as renderTrend, summarize as summarizeTrend } from './lib/token-trend.mjs';
 import { TTL_ATTRIBUTES, pinnedLanes, render as renderTtl, summarize as summarizeTtl } from './lib/cache-ttl.mjs';
 
@@ -68,6 +81,8 @@ export function checkStore(env) {
 }
 /** Two weeks: the token trend compares this week with the one before. */
 export const WINDOW_DAYS = 14;
+/** The headline report reads back as far as the store keeps a row: thirteen months (plan 0002 §10). */
+export const REPORT_MONTHS = RETENTION_MONTHS;
 /** The files the read writes and the export carries. */
 export const FILES = /** @type {const} */ (['token-trend.md', 'cache-ttl.md']);
 /** The statuses the manifest's `telemetry` takes. */
@@ -107,23 +122,42 @@ export function masksOf(env) {
 const stamp = (ms) => `${new Date(ms).toISOString().slice(0, 19).replace(/[-:]/g, '')}Z`;
 
 /**
- * One `aws dynamodb query` of a partition since `from`, projected to `attributes`, every page.
- * @param {{ pk: string, from: string, attributes: readonly string[], table?: string, region?: string }} q
+ * One `aws dynamodb query` of a partition, every page: since `from` when given, or the whole
+ * partition; projected to `attributes` when given, or every attribute.
+ * @param {{ pk: string, from?: string, attributes?: readonly string[], table?: string, region?: string }} q
  * @returns {import('./lib/token-trend.mjs').Item[]}
  */
 export function awsQuery({ pk, from, attributes, table = TABLE, region = REGION }) {
-  const names = Object.fromEntries(attributes.map((a, i) => [`#a${i}`, a]));
+  const names = Object.fromEntries((attributes ?? []).map((a, i) => [`#a${i}`, a]));
   const out = execFileSync('aws', [
     'dynamodb', 'query',
     '--table-name', table,
     '--region', region,
-    '--key-condition-expression', '#pk = :p AND #sk > :from',
-    '--projection-expression', Object.keys(names).join(', '),
-    '--expression-attribute-names', JSON.stringify({ ...names, '#pk': 'pk', '#sk': 'sk' }),
-    '--expression-attribute-values', JSON.stringify({ ':p': { S: pk }, ':from': { S: from } }),
+    '--key-condition-expression', from === undefined ? '#pk = :p' : '#pk = :p AND #sk > :from',
+    ...(attributes ? ['--projection-expression', Object.keys(names).join(', ')] : []),
+    '--expression-attribute-names', JSON.stringify({ ...names, '#pk': 'pk', ...(from === undefined ? {} : { '#sk': 'sk' }) }),
+    '--expression-attribute-values', JSON.stringify({ ':p': { S: pk }, ...(from === undefined ? {} : { ':from': { S: from } }) }),
     '--output', 'json',
-  ], { encoding: 'utf8', timeout: 120_000, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  ], { encoding: 'utf8', timeout: 120_000, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   return JSON.parse(out).Items ?? [];
+}
+
+/**
+ * A stored item as the row it was written from: each attribute's value, without the store's own
+ * key. The writer stores strings, numbers and booleans only (`toAttributes`).
+ * @param {import('./lib/token-trend.mjs').Item} item
+ * @returns {Record<string, string | number | boolean>}
+ */
+export function rowOf(item) {
+  /** @type {Record<string, string | number | boolean>} */
+  const row = {};
+  for (const [k, v] of Object.entries(item)) {
+    if (k === 'pk' || k === 'sk' || !v) continue;
+    if (v.S !== undefined) row[k] = v.S;
+    else if (v.N !== undefined) row[k] = Number(v.N);
+    else if (v.BOOL !== undefined) row[k] = v.BOOL;
+  }
+  return row;
 }
 
 /**
@@ -144,15 +178,10 @@ export function reasonOf(e, key) {
  * @returns {{ status: 'ran' | 'failed', lines: string[], files: Record<string, string> }}
  */
 export function read(env, { query = awsQuery, now = Date.now(), workflows = WORKFLOWS } = {}) {
+  const refused = refusalOf(env);
+  if (refused) return { status: 'failed', files: {}, lines: [`The telemetry read failed: ${refused}`] };
   const store = checkStore(env);
-  if (store.problems.length) return { status: 'failed', files: {}, lines: [`The telemetry read failed: ${store.problems.join('; ')}.`] };
-  const reader = readerOf(env.ROLE);
-  if (!reader) {
-    return { status: 'failed', files: {}, lines: ['The telemetry read failed: the KANON_TELEMETRY_READER_ROLE secret is not a telemetry reader role\'s ARN (`arn:aws:iam::<account>:role/kanon-telemetry-<key>-reader`, the stack\'s `ReaderRole<id>` output; docs/telemetry.md).'] };
-  }
-  if (env.CREDENTIALS !== 'success') {
-    return { status: 'failed', files: {}, lines: ['The telemetry read failed: the reader role could not be assumed. Its trust names the default branch\'s ref, so a run on another ref (a dispatch from a branch) is refused; on the default branch, check the role\'s trust and the secret.'] };
-  }
+  const reader = /** @type {{ key: string }} */ (readerOf(env.ROLE));
   const from = stamp(now - WINDOW_DAYS * DAY_MS);
   const attributes = [...new Set([...TREND_ATTRIBUTES, ...TTL_ATTRIBUTES])];
   /** @type {Array<{ lane: string, items: import('./lib/token-trend.mjs').Item[], error?: string }>} */
@@ -175,6 +204,58 @@ export function read(env, { query = awsQuery, now = Date.now(), workflows = WORK
     files: { 'token-trend.md': `${trend}\n`, 'cache-ttl.md': `${ttl}\n` },
     // Counts only: the rows themselves are never printed.
     lines: [`The telemetry read ran: ${read.length} of ${LANES.length} lane partitions read, ${rows} row(s) over the last ${WINDOW_DAYS} days, summarised into ${FILES.join(' and ')}.`],
+  };
+}
+
+/**
+ * Why a read can't start, or `null`: a malformed table or region, a role that isn't a reader
+ * role, or credentials that weren't issued. The read and the report check the same.
+ * @param {{ ROLE?: string, CREDENTIALS?: string, TABLE?: string, REGION?: string }} env
+ */
+function refusalOf(env) {
+  const store = checkStore(env);
+  if (store.problems.length) return `${store.problems.join('; ')}.`;
+  if (!readerOf(env.ROLE)) return 'the KANON_TELEMETRY_READER_ROLE secret is not a telemetry reader role\'s ARN (`arn:aws:iam::<account>:role/kanon-telemetry-<key>-reader`, the stack\'s `ReaderRole<id>` output; docs/telemetry.md).';
+  if (env.CREDENTIALS !== 'success') return 'the reader role could not be assumed. Its trust names the default branch\'s ref, so a run on another ref (a dispatch from a branch) is refused; on the default branch, check the role\'s trust and the secret.';
+  return null;
+}
+
+/**
+ * The headline report (kanon#668): `kanon metrics report`'s Markdown over this repository's own
+ * work items and runs, or why there is none. Every partition is read, or no report is made.
+ * @param {{ ROLE?: string, CREDENTIALS?: string, TABLE?: string, REGION?: string }} env
+ * @param {{ query?: typeof awsQuery, now?: number }} [io]
+ * @returns {{ status: 'ran' | 'failed', markdown: string, lines: string[] }}
+ */
+export function headline(env, { query = awsQuery, now = Date.now() } = {}) {
+  const refused = refusalOf(env);
+  if (refused) return { status: 'failed', markdown: '', lines: [`The headline report was not made: ${refused}`] };
+  const { table, region } = checkStore(env);
+  const { key } = /** @type {{ key: string }} */ (readerOf(env.ROLE));
+  const from = stamp(addMonths(now, -REPORT_MONTHS));
+  // A work item's sort key is its PR number, not a time, so its partition is read whole; the
+  // store's TTL keeps it to thirteen months after each item closed.
+  const partitions = [{ name: RESERVED_PARTITION, from: undefined }, ...LANES.map((lane) => ({ name: lane, from }))];
+  /** @type {Record<string, string | number | boolean>[]} */
+  const rows = [];
+  let items = 0;
+  for (const p of partitions) {
+    /** @type {import('./lib/token-trend.mjs').Item[]} */
+    let got;
+    try {
+      got = query({ pk: `${key}#${p.name}`, ...(p.from === undefined ? {} : { from: p.from }), table, region });
+    } catch (e) {
+      return { status: 'failed', markdown: '', lines: [`The headline report was not made: the \`${p.name}\` partition could not be read (${reasonOf(e, key)}), and a report without it would be wrong.`] };
+    }
+    if (p.name === RESERVED_PARTITION) items = got.length;
+    for (const item of got) rows.push(rowOf(item));
+  }
+  const markdown = `${renderReport(metricsReport(rows, { until: new Date(now) })).join('\n')}\n`;
+  return {
+    status: 'ran',
+    markdown,
+    // Counts only: the rows themselves are never printed.
+    lines: [`The headline report ran: ${partitions.length} partitions read, ${items} work item(s) and ${rows.length - items} run row(s) over the last ${REPORT_MONTHS} months, written to the job summary.`],
   };
 }
 
@@ -252,11 +333,17 @@ if (isCliEntry(import.meta.url)) {
     }
     for (const l of lines) say(l);
     writeOutputs({ status });
+  } else if (mode === 'report') {
+    // The Markdown goes to the summary only: the log says counts, or why there is no report.
+    const { status, markdown, lines } = headline(process.env);
+    if (status === 'ran' && process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);
+    if (status !== 'ran') for (const l of lines) console.log(`::warning title=overseer metrics::${l}`);
+    for (const l of lines) say(l);
   } else if (mode === 'merge') {
     const { line } = merge(process.env);
     say(line);
   } else {
-    console.error('usage: overseer-telemetry.mjs mask|read|merge');
+    console.error('usage: overseer-telemetry.mjs mask|read|report|merge');
     process.exitCode = 2;
   }
 }

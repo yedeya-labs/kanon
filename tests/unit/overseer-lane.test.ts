@@ -602,11 +602,22 @@ describe('the telemetry read job (kanon#470)', () => {
     expect(job.permissions).toEqual({ 'id-token': 'write' });
     expect(job.environment).toBeUndefined();
     expect(s.map((x) => x.uses ?? x.name)).toEqual(['$/actions/kanon-path', "Mask the reader role's account id and key, and resolve the store",
-      'aws-actions/configure-aws-credentials@v6', "Read this repository's telemetry into the two reports", 'actions/upload-artifact@v7']);
+      'aws-actions/configure-aws-credentials@v6', "Read this repository's telemetry into the two reports", 'actions/upload-artifact@v7',
+      'Report the headline indicators to the job summary']);
     expect(s[2]!.with).toEqual({ 'role-to-assume': '${{ secrets.KANON_TELEMETRY_READER_ROLE }}', 'aws-region': '${{ steps.resolve.outputs.region }}', 'role-session-name': 'kanon-overseer-telemetry' });
     expect(s[2]!['continue-on-error']).toBe(true);
     expect(s[4]!.if).toBe("steps.read.outputs.status == 'ran'");
     expect(s[4]!.with).toMatchObject({ path: '${{ runner.temp }}/overseer-telemetry', 'retention-days': 1 });
+  });
+
+  // kanon#668 (plan 0003 §6.4, option A): `kanon metrics report` over the store's own rows, to the
+  // job summary, as the job's last step, so a report that fails can't stop the agent's two files.
+  it('reports the headline indicators last, to the job summary, handed only the role, the credentials and the store', () => {
+    expect(s[5]).toEqual({
+      name: 'Report the headline indicators to the job summary',
+      env: { ROLE: '${{ secrets.KANON_TELEMETRY_READER_ROLE }}', CREDENTIALS: '${{ steps.creds.outcome }}', TABLE: '${{ steps.resolve.outputs.table }}', REGION: '${{ steps.resolve.outputs.region }}' },
+      run: 'node "$KANON/scripts/overseer-telemetry.mjs" report',
+    });
   });
 
   it('runs only with a reader role, which the gate job says without printing it', () => {
@@ -726,6 +737,11 @@ describe('the telemetry read job (kanon#470)', () => {
     it('the role from anywhere but the lane\'s secret', () => expect(red((j) => { (j.steps![2]!.with as Record<string, unknown>)['role-to-assume'] = '${{ vars.KANON_TELEMETRY_READER_ROLE }}'; })).toEqual(named));
     it('a wider grant', () => expect(red((j) => { j.permissions = { 'id-token': 'write', contents: 'read' }; })).toEqual(named));
     it('the upload from the workspace', () => expect(red((j) => { (j.steps![4]!.with as Record<string, unknown>).path = 'overseer-telemetry'; })).toEqual(named));
+    it('the report step handed NODE_OPTIONS', () => expect(red((j) => { j.steps![5]!.env = { ...j.steps![5]!.env, NODE_OPTIONS: '-r x' }; })).toEqual(named));
+    it('the report step handed the artifact\'s directory, where its rows could be uploaded', () => expect(red((j) => { j.steps![5]!.env = { ...j.steps![5]!.env, OUT: '${{ runner.temp }}/overseer-telemetry' }; })).toEqual(named));
+    it('another command in the report step', () => expect(red((j) => { j.steps![5]!.run = 'node "$KANON/scripts/overseer-telemetry.mjs" report && curl evil'; })).toEqual(named));
+    it('the report step with a key of its own', () => expect(red((j) => { (j.steps![5] as Record<string, unknown>).shell = 'node {0}'; })).toEqual(named));
+    it('the report step moved before the upload', () => expect(red((j) => { j.steps!.splice(4, 0, j.steps!.pop()!); })).toEqual(named));
     it('a job env', () => expect(red((j) => { (j as Record<string, unknown>).env = { NODE_OPTIONS: '-r x' }; })).toEqual(named));
     it('a region read raw, not the one the mask step resolved', () => expect(red((j) => { (j.steps![2]!.with as Record<string, unknown>)['aws-region'] = '${{ vars.KANON_TELEMETRY_REGION }}'; })).toEqual(named));
     it('a table read raw by the read step', () => expect(red((j) => { j.steps![3]!.env = { ...j.steps![3]!.env, TABLE: '${{ vars.KANON_TELEMETRY_TABLE }}' }; })).toEqual(named));
