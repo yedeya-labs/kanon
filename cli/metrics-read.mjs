@@ -410,6 +410,51 @@ export const closersQuery = `query WorkItemClosers($owner: String!, $name: Strin
 }`;
 
 /**
+ * The query for a page of the commits that reference one pull request (`#n` in their message,
+ * GitHub's `referenced` event), each with the pull requests it belongs to.
+ */
+export const referencesQuery = `query WorkItemReferences($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      timelineItems(first: 100, after: $after, itemTypes: [REFERENCED_EVENT]) { ${PAGE} nodes {
+        ... on ReferencedEvent { commit { message associatedPullRequests(first: 5) { nodes { number repository { nameWithOwner } } } } }
+      } }
+    }
+  }
+  ${RATE}
+}`;
+
+/**
+ * The commits that reference a pull request of `repo`, each with the numbers of the pull requests
+ * of `repo` it belongs to (plan 0003 M4, kanon#672: a `git revert` names its item only so). A
+ * commit GitHub no longer shows is skipped.
+ * @param {ReadDeps} deps @param {string} repo `owner/name` @param {number} number
+ * @returns {Promise<{ message: string, prs: number[] }[]>}
+ */
+export async function referencingCommits(deps, repo, number) {
+  const [owner = '', name = ''] = repo.split('/');
+  /** @type {{ message: string, prs: number[] }[]} */
+  const commits = [];
+  /** @type {string | null} */
+  let after = null;
+  for (;;) {
+    const data = await graphql(deps, referencesQuery, { owner, name, number, after });
+    const conn = data.repository?.pullRequest?.timelineItems;
+    if (!conn) throw new ReadError(`GitHub returned no timeline for pull request #${number}`);
+    for (const ev of conn.nodes) {
+      const c = ev?.commit;
+      if (typeof c?.message !== 'string') continue;
+      const prs = (c.associatedPullRequests?.nodes ?? [])
+        .filter((/** @type {any} */ p) => typeof p?.number === 'number' && String(p.repository?.nameWithOwner).toLowerCase() === repo.toLowerCase())
+        .map((/** @type {any} */ p) => p.number);
+      commits.push({ message: c.message, prs });
+    }
+    if (!conn.pageInfo?.hasNextPage) return commits;
+    after = conn.pageInfo.endCursor;
+  }
+}
+
+/**
  * One pull request of `repo` by number, read whole as `readPullRequests` reads each (plan 0003
  * M4: the collector's work-item step reads an earlier item again when a later PR or a follow-up
  * changes its story). `none` when the number is an issue, or nothing; `leftOut` when a nested
