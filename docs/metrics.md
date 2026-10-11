@@ -111,9 +111,9 @@ kanon metrics report --rows runs.jsonl --rows work.jsonl --until 2026-10-01 --js
 - **The band validity check (§3.6).** The report computes Kendall's τ-b between band and cost per merged item, with a bootstrap interval. Unless the interval sits entirely above zero, or when there are fewer than 10 such items in two bands, **the pooled view replaces the banded one, with a warning**, for every indicator. The median cost per band is printed with the check.
 - **The band is recomputed** from each row's stored counts with the newest band version, never read from the row, so one report never mixes versions.
 - **Overhead,** the Explorer's, the code audit's, the telemetry Explorer's, the Overseer's and the digests' spend, and the Lead's runs that join no item (a brief run, or a split of a tracking issue no PR closes: planning, §3.4), is printed beside cost, never inside it, and is left out of yield's numerator and denominator alike. A Lead run that joins an item is in that item's cost and yield (§2.2).
-- **A missing cost is unknown, never $0.** A merged item none of whose delivery runs reports `total_cost_usd` is left out of cost and yield, and counted; so are the runs without a cost inside the items that are costed.
+- **A missing cost is unknown, never $0.** A merged item none of whose delivery runs reports `total_cost_usd` is left out of cost and yield, and counted; so are the runs without a cost inside the items that are costed. A settled item of either fate, or a settled group of delivery runs that join no item, whose runs report no cost is left out of yield, so it never counts toward a cell's minimum; the groups are counted.
 
-**How runs join items** is §3.4's rule, in `scripts/metrics/join.mjs`, which every reader uses: a run joins the item whose PR it names; a run naming only an issue joins the first item closing that issue to close after the run (on a tie, the lowest PR number). So a run joins at most one item. A run that joins nothing settles, not merged, 30 days after the last run on its PR or issue; the report reads no issue's state, so an issue closed without a PR settles the same way.
+**How runs join items** is §3.4's rule, in `scripts/metrics/join.mjs`, which every reader uses: a run joins the item whose PR it names; a run naming only an issue joins the first item closing that issue to close after the run (on a tie, the lowest PR number). So a run joins at most one item. A delivery run that joins nothing, other than a Lead's (overhead, above), settles, not merged, 30 days after the last run on its PR or issue; the report reads no issue's state, so an issue closed without a PR settles the same way.
 
 **Exit codes:** 0 the report was made (a cell with too little data or a pooled view is not a failure); 2 a usage error; 3 a rows file that can't be read or isn't JSON rows. The message names the file, never its content.
 
@@ -130,7 +130,7 @@ kanon metrics report --rows runs.jsonl --rows work.jsonl --until 2026-10-01 --js
 | `rows` | object | `runs`, `workItems`, `runsJoined`, `runsUnjoined`, and `ignored`: `notRun`, `otherKind`, `unreadable`. |
 | `validity` | object | `status` (`valid`, `invalid`, `not-enough-data`), `n`, `tau`, `low`, `high`, and `medianCost` per band. |
 | `cost` | object | `cells` (each with `median` and `p90`), `mergedWithoutRuns`, `mergedWithoutCost` (merged items whose runs report no cost), `runsWithoutCost` (runs without a cost inside the costed items), `overhead` (`runs`, `usd`). |
-| `yield` | object | `cells`, each with `yield`. |
+| `yield` | object | `cells`, each with `yield`, and `unjoinedWithoutCost` (settled groups of delivery runs that join no item and report no cost, left out of yield). |
 | `escape` | object | `d30` and `d90`, each with `mergedFrom`, `mergedUntil`, and `agent` and `human` cells, each with `rate`. |
 | `approval`, `correction` | object | `cells`, each with `rate`. |
 | `bootstrap` | object | `resamples` and `seed`. |

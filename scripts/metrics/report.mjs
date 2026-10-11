@@ -260,7 +260,8 @@ export function metricsReport(rows, { until, days = WINDOW_DAYS }) {
     if (rs.some(hasCost)) yieldUnits.push({ band: bandKey(item), cost: costOf(rs), merged: item.fate === 'merged' });
   }
   // Delivery runs that join no item: a PR with no row yet, an issue that never got a PR, or a
-  // run that names neither. Each settles, unmerged, 30 days after the last run on it.
+  // run that names neither. Each settles, unmerged, 30 days after the last run on it; one whose
+  // runs report no cost is unknown, never $0, so it is left out like an item and counted (§3.1).
   /** @type {Map<string, { band: BandKey | 'noPr', last: number, runs: RunRow[] }>} */
   const loose = new Map();
   runs.forEach((run, k) => {
@@ -271,8 +272,11 @@ export function metricsReport(rows, { until, days = WINDOW_DAYS }) {
     if (g) { g.runs.push(run); g.last = Math.max(g.last, at); }
     else loose.set(key, { band: key.startsWith('pr:') ? 'none' : 'noPr', last: at, runs: [run] });
   });
+  let unjoinedWithoutCost = 0;
   for (const g of loose.values()) {
-    if (inWindow(g.last + IDLE_DAYS * DAY_MS)) yieldUnits.push({ band: g.band, cost: costOf(g.runs), merged: false });
+    if (!inWindow(g.last + IDLE_DAYS * DAY_MS)) continue;
+    if (g.runs.some(hasCost)) yieldUnits.push({ band: g.band, cost: costOf(g.runs), merged: false });
+    else unjoinedWithoutCost += 1;
   }
 
   // ── Accuracy (§2.4) ────────────────────────────────────────────────────────────────────────
@@ -331,7 +335,10 @@ export function metricsReport(rows, { until, days = WINDOW_DAYS }) {
       runsWithoutCost: costed.reduce((s, c) => s + c.runs.filter((r) => typeof r.total_cost_usd !== 'number').length, 0),
       overhead: { runs: overheadRuns.length, usd: round(costOf(overheadRuns)) },
     },
-    yield: { cells: view(cellsByBand(yieldUnits, (u) => u.band, (us) => ({ yield: yieldEstimate(us) }), { noPr: true })) },
+    yield: {
+      cells: view(cellsByBand(yieldUnits, (u) => u.band, (us) => ({ yield: yieldEstimate(us) }), { noPr: true })),
+      unjoinedWithoutCost,
+    },
     escape,
     approval: { cells: view(approval) },
     correction: { cells: view(corrections) },
@@ -403,7 +410,7 @@ export function renderReport(r) {
     '',
     `Band validity (§3.6): ${r.validity.status}. Kendall's τ between band and cost ${r.validity.tau === null ? 'not computed' : `${r.validity.tau} (${r.validity.low ?? '?'} to ${r.validity.high ?? '?'})`}, over ${r.validity.n} merged items. Median cost by band: ${BANDS.map((b) => `${b} ${cellText(r.validity.medianCost[b], dollars)}`).join('; ')}.`,
     '',
-    `Overhead, beside cost and never inside it, and out of yield (the Explorer, the code audit, the telemetry Explorer, the Overseer, the digests, and the Lead's runs that join no item): ${dollars(r.cost.overhead.usd)} over ${r.cost.overhead.runs} runs. Left out of cost: ${r.cost.mergedWithoutRuns} merged items with no run row, and ${r.cost.mergedWithoutCost} whose runs report no cost (unknown, never $0); ${r.cost.runsWithoutCost} runs inside the costed items report no cost.`,
+    `Overhead, beside cost and never inside it, and out of yield (the Explorer, the code audit, the telemetry Explorer, the Overseer, the digests, and the Lead's runs that join no item): ${dollars(r.cost.overhead.usd)} over ${r.cost.overhead.runs} runs. Left out of cost: ${r.cost.mergedWithoutRuns} merged items with no run row, and ${r.cost.mergedWithoutCost} whose runs report no cost (unknown, never $0); ${r.cost.runsWithoutCost} runs inside the costed items report no cost. Left out of yield: ${r.yield.unjoinedWithoutCost} settled groups of runs that join no item and report no cost (unknown, never $0).`,
     '',
     `Rows read: ${r.rows.runs} runs (${r.rows.runsJoined} joined to a work item, ${r.rows.runsUnjoined} to none) and ${r.rows.workItems} work items; left out: ${r.rows.ignored.notRun} not \`tag: run\`, ${r.rows.ignored.otherKind} of another kind, ${r.rows.ignored.unreadable} unreadable. Yield's interval: a bootstrap over work items, ${r.bootstrap.resamples} resamples, seed ${r.bootstrap.seed}.`,
   ];
