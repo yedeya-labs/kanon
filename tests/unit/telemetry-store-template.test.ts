@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 import { FUNCTION_DIR, registerProblems, render, TEMPLATE_PATH } from '../../infra/telemetry/render.mjs';
-import { PROJECTION } from '../../infra/telemetry/function/aggregate.mjs';
+import { ATTRIBUTES } from '../../infra/telemetry/function/aggregate.mjs';
 import { nameHashesOf } from '../../infra/telemetry/function/index.mjs';
 import { sha256 } from '../../actions/agent-telemetry/public-words.mjs';
 import { KANON_WORDS, nameContext } from '../../actions/agent-telemetry/scrub.mjs';
@@ -131,6 +131,12 @@ describe('the code that is packaged (§5)', () => {
     expect(lstatSync(join(FUNCTION_DIR, 'schema.mjs')).isSymbolicLink()).toBe(true);
     expect(realpathSync(join(FUNCTION_DIR, 'schema.mjs'))).toBe(realpathSync('actions/agent-telemetry/schema.mjs'));
   });
+  it('its indicators ARE the report\'s core, linked with the import-free files it reads (plan 0003 M7)', () => {
+    for (const f of ['indicators.mjs', 'band.mjs', 'join.mjs', 'stats.mjs']) {
+      expect(lstatSync(join(FUNCTION_DIR, f)).isSymbolicLink(), f).toBe(true);
+      expect(realpathSync(join(FUNCTION_DIR, f)), f).toBe(realpathSync(`scripts/metrics/${f}`));
+    }
+  });
   it('its scrub and the scrub\'s word check ARE the lanes\' files, linked like the schema (plan 0006 §4.2)', () => {
     for (const [f, real] of [['scrub.mjs', 'actions/agent-telemetry/scrub.mjs'], ['public-words.mjs', 'actions/agent-telemetry/public-words.mjs']] as const) {
       expect(lstatSync(join(FUNCTION_DIR, f)).isSymbolicLink(), f).toBe(true);
@@ -253,7 +259,7 @@ describe('the aggregate-only function (§6.1, decided by the Owner 2026-10-07)',
     const [q, logs, ...rest] = statements(role.Policies[0].PolicyDocument);
     expect(rest).toEqual([]);
     expect(q.Action).toBe('dynamodb:Query');
-    expect([...q.Condition['ForAllValues:StringEquals']['dynamodb:Attributes']].sort()).toEqual([...PROJECTION, 'sk'].sort());
+    expect([...q.Condition['ForAllValues:StringEquals']['dynamodb:Attributes']].sort()).toEqual([...ATTRIBUTES, 'sk'].sort());
     expect(q.Condition.StringEquals).toEqual({ 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' });
     expect(Object.keys(q.Condition).sort()).toEqual(['ForAllValues:StringEquals', 'StringEquals']);
     expect([...logs.Action].sort()).toEqual(['logs:CreateLogStream', 'logs:PutLogEvents']);

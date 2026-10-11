@@ -24,6 +24,12 @@
 //        role's, from the credentials step), GITHUB_OUTPUT, GITHUB_STEP_SUMMARY
 //   writes: $OUT/aggregate.json; outputs `empty` (`true` when there is nothing to look at)
 //
+// THE METRICS PAGE'S READ (plan 0003 M7, kanon#661): `node "$KANON/scripts/aggregate-read.mjs"
+// page` asks the same function for its page view (`?view=page`), the declaring adopters' work-item
+// indicators, checks it as strictly (`checkPage`: exactly the page view's keys, codes, dates,
+// versions and numbers, no text, a threshold of three, one adopter per entry) and writes
+// $OUT/page.json, which the page job renders (`.github/scripts/metrics-page.mjs`).
+//
 // `node:` built-ins only, like every script under scripts/ (`K-SELF-8`).
 
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -36,6 +42,8 @@ import { isCliEntry } from './lib/cli-entry.mjs';
 export const MIN_ADOPTERS = 3;
 /** The file the agent's job reads. */
 export const AGGREGATE_FILE = 'aggregate.json';
+/** The file the metrics page's job reads (plan 0003 M7). */
+export const PAGE_FILE = 'page.json';
 
 const TOP = ['computed_at', 'min_adopters', 'signal_days', 'cross_adopter', 'own', 'signals'];
 const CELL = ['lane', 'model', 'runs', 'median_cost_usd', 'p90_cost_usd'];
@@ -161,24 +169,109 @@ export function checkAggregate(body) {
   };
 }
 
+// ── The page view (plan 0003 M7) ──────────────────────────────────────────────────────────────
+
+const PAGE_TOP = ['computed_at', 'view', 'min_adopters', 'band_version', 'cost_basis', 'window_days', 'trend_windows', 'minimum', 'bootstrap', 'own'];
+const PAGE_ENTRY = ['label', 'adopters', 'window', 'headline', 'trend', 'by_version'];
+/** Every key the page view's figures use, at any depth below an entry: bands, indicators, estimates, windows and versions. */
+const PAGE_KEYS = new Set([
+  'S', 'M', 'L', 'XL', 'none', 'noPr', 'pooled', 'bandMix',
+  'view', 'validity', 'cost', 'yield', 'escape', 'd30', 'd90', 'approval', 'correction', 'cells', 'merged_from', 'merged_until',
+  'median', 'p90', 'rate', 'status', 'n', 'value', 'low', 'high', 'minimum', 'tau',
+  'window', 'from', 'until', 'days', 'versionsIntroduced', 'versions', 'version', 'items', 'fewer', 'unversioned',
+]);
+/** The only strings a figure may hold: an estimate's or a check's status, the view, a date, a Kanon version. */
+const PAGE_STRING = /^(ok|not-enough-data|no-spend|valid|invalid|banded|pooled|\d{4}-\d{2}-\d{2}|\d+\.\d+\.\d+|dev)$/;
+
+/**
+ * A figure tree, checked and copied: objects with only `PAGE_KEYS`, lists, finite numbers, null,
+ * and `PAGE_STRING` strings. Throws naming the path, never the value.
+ * @param {unknown} v @param {string} at
+ * @returns {unknown}
+ */
+function figuresOf(v, at) {
+  if (v === null) return null;
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) throw new AggregateError(`${at} is not a figure`);
+    return v;
+  }
+  if (typeof v === 'string') {
+    if (!PAGE_STRING.test(v)) throw new AggregateError(`${at} is not a code`);
+    return v;
+  }
+  if (Array.isArray(v)) return v.map((x, i) => figuresOf(x, `${at}[${i}]`));
+  if (!isObject(v)) throw new AggregateError(`${at} is not a figure, a code, a list or an object`);
+  const o = /** @type {Record<string, unknown>} */ (v);
+  const extra = Object.keys(o).filter((k) => !PAGE_KEYS.has(k));
+  if (extra.length) throw new AggregateError(`${at} holds ${extra.map((k) => `\`${k}\``).join(', ')}, which the page view never answers`);
+  return Object.fromEntries(Object.entries(o).map(([k, x]) => [k, figuresOf(x, `${at}.${k}`)]));
+}
+
+/**
+ * The page view's answer, checked and rebuilt from what was checked. Throws `AggregateError`
+ * naming the first problem, and never a value.
+ * @param {unknown} body
+ * @returns {Record<string, any>}
+ */
+export function checkPage(body) {
+  const a = exactly(body, PAGE_TOP, 'the answer');
+  if (a.view !== 'page') throw new AggregateError('the answer is not the page view');
+  if (typeof a.computed_at !== 'string' || Number.isNaN(Date.parse(a.computed_at))) throw new AggregateError('`computed_at` is not a time');
+  const min = count(a.min_adopters, '`min_adopters`');
+  if (min < MIN_ADOPTERS) throw new AggregateError(`\`min_adopters\` is below ${MIN_ADOPTERS}, so a figure could combine fewer than ${MIN_ADOPTERS} adopters`);
+  if (a.cost_basis !== 'API list price') throw new AggregateError('`cost_basis` is not the API list price');
+  const minimum = exactly(a.minimum, ['median', 'p90', 'proportion', 'yield', 'escape', 'validity'], '`minimum`');
+  const bootstrap = exactly(a.bootstrap, ['resamples', 'seed'], '`bootstrap`');
+  const labels = new Set();
+  return {
+    computed_at: new Date(a.computed_at).toISOString(),
+    view: 'page',
+    min_adopters: min,
+    band_version: count(a.band_version, '`band_version`'),
+    cost_basis: a.cost_basis,
+    window_days: count(a.window_days, '`window_days`'),
+    trend_windows: count(a.trend_windows, '`trend_windows`'),
+    minimum: Object.fromEntries(Object.entries(minimum).map(([k, v]) => [k, count(v, `minimum.${k}`)])),
+    bootstrap: { resamples: count(bootstrap.resamples, 'bootstrap.resamples'), seed: count(bootstrap.seed, 'bootstrap.seed') },
+    own: list(a.own, '`own`').map((v, i) => {
+      const o = exactly(v, PAGE_ENTRY, `own[${i}]`);
+      const label = code(o.label, LABEL, `own[${i}].label`);
+      if (labels.has(label)) throw new AggregateError(`own[${i}].label repeats another entry's`);
+      labels.add(label);
+      // An entry is one adopter's own figures (plan 0002 §6.1, item 2), never a combination.
+      if (o.adopters !== 1) throw new AggregateError(`own[${i}].adopters is not 1, and an entry is one adopter's own figures`);
+      return {
+        label,
+        adopters: 1,
+        window: figuresOf(o.window, `own[${i}].window`),
+        headline: figuresOf(o.headline, `own[${i}].headline`),
+        trend: figuresOf(list(o.trend, `own[${i}].trend`), `own[${i}].trend`),
+        by_version: figuresOf(o.by_version, `own[${i}].by_version`),
+      };
+    }),
+  };
+}
+
 /** Nothing to look at: no cell and no signal. @param {Aggregate} a */
 export const isEmpty = (a) => a.cross_adopter.length === 0 && a.signals.length === 0 && a.own.every((o) => o.cells.length === 0);
 
 /**
  * The read. Returns the checked aggregate; throws `AggregateError` naming what went wrong, with
  * no URL, credential or body in the message.
- * @param {{ url: string, env: Record<string, string | undefined>, fetchImpl?: typeof fetch, now?: Date }} o
- * @returns {Promise<Aggregate>}
+ * With `view: 'page'`, asks for the page view and checks it as one (`checkPage`).
+ * @param {{ url: string, env: Record<string, string | undefined>, fetchImpl?: typeof fetch, now?: Date, view?: 'page' }} o
+ * @returns {Promise<any>}
  */
-export async function readAggregate({ url, env, fetchImpl = fetch, now }) {
+export async function readAggregate({ url, env, fetchImpl = fetch, now, view }) {
   const region = regionOfAggregateUrl(url);
   if (!region) throw new AggregateError("KANON_AGGREGATE_URL is not a Lambda function URL (https://<id>.lambda-url.<region>.on.aws/): set it to the telemetry stack's AggregateUrl output");
   const credentials = { accessKeyId: env.AWS_ACCESS_KEY_ID ?? '', secretAccessKey: env.AWS_SECRET_ACCESS_KEY ?? '', sessionToken: env.AWS_SESSION_TOKEN };
   if (!credentials.accessKeyId || !credentials.secretAccessKey) throw new AggregateError('no AWS credentials in the environment: the credentials step for the invoker role did not run');
+  const target = view === 'page' ? `${url.endsWith('/') ? url : `${url}/`}?view=page` : url;
   /** @type {Response} */
   let res;
   try {
-    res = await fetchImpl(url, { method: 'GET', headers: sign({ method: 'GET', url, region, service: 'lambda', credentials, ...(now ? { now } : {}) }) });
+    res = await fetchImpl(target, { method: 'GET', headers: sign({ method: 'GET', url: target, region, service: 'lambda', credentials, ...(now ? { now } : {}) }) });
   } catch (e) {
     throw new AggregateError(`the aggregate function could not be reached (${e instanceof Error ? e.name : 'error'})`);
   }
@@ -193,7 +286,7 @@ export async function readAggregate({ url, env, fetchImpl = fetch, now }) {
   } catch {
     throw new AggregateError('the aggregate function answered something that is not JSON');
   }
-  return checkAggregate(body);
+  return view === 'page' ? checkPage(body) : checkAggregate(body);
 }
 
 /** The step summary's line: counts only, never a figure. @param {Aggregate} a */
@@ -209,6 +302,21 @@ if (isCliEntry(import.meta.url)) {
   if (!out) {
     console.log('::error title=aggregate::OUT must name the directory the aggregate is written to');
     process.exit(2);
+  }
+  if (process.argv[2] === 'page') {
+    try {
+      const p = await readAggregate({ url: env.KANON_AGGREGATE_URL ?? '', env, view: 'page' });
+      mkdirSync(out, { recursive: true });
+      writeFileSync(join(out, PAGE_FILE), `${JSON.stringify(p, null, 2)}\n`);
+      const line = `Page view computed ${p.computed_at}: the own figures of ${p.own.length} declaring adopter(s), each one adopter's.`;
+      console.log(line);
+      if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${line}\n`);
+    } catch (e) {
+      const why = e instanceof AggregateError ? e.message : `an unexpected error (${e instanceof Error ? e.name : 'error'})`;
+      console.log(`::error title=aggregate::${why}. Nothing was handed to the page.`);
+      process.exit(1);
+    }
+    process.exit(0);
   }
   try {
     const a = await readAggregate({ url: env.KANON_AGGREGATE_URL ?? '', env });

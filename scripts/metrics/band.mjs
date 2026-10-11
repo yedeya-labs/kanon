@@ -83,8 +83,10 @@ export function isExcludedFromSize(path) {
 /**
  * A diff's size, as the row stores it (§3.3, group 1): lines (additions plus deletions),
  * files and distinct directories, each over the files `isExcludedFromSize` keeps, and the
- * lines it left out, so nothing is hidden. The root is one directory.
- * @param {readonly import('./types.mjs').ChangedFile[]} files
+ * lines it left out, so nothing is hidden. The root is one directory. The files are
+ * `types.mjs`'s `ChangedFile`s, typed by the fields read here: the aggregate function's package
+ * links this file in without `types.mjs` (kanon#661).
+ * @param {readonly { path: string, additions: number, deletions: number }[]} files
  * @returns {{ changed_lines: number, changed_files: number, changed_dirs: number, excluded_lines: number }}
  */
 export function diffSize(files) {

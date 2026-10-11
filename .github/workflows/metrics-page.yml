@@ -1,0 +1,174 @@
+# The public metrics page's weekly refresh (plan 0003 M7, §6.4 as the Owner amended it on
+# 2026-10-11, kanon#661). Kanon's own, not a lane: it runs on Kanon's repository, which GitHub
+# Pages serves from `main`'s `/docs` folder, so the page is `docs/metrics/index.html`.
+#
+# A PULL REQUEST, NEVER A PUSH. The `page` job renders the page and, when it changed, proposes it
+# as a pull request opened by the Author App, on the fixed branch `kanon/metrics-page` (a refresh
+# not yet merged is replaced by the next). The Owner reads the figures and merges it; nothing here
+# publishes on its own.
+#
+# TWO JOBS, SO THE STORE'S CREDENTIALS NEVER MEET THE APP'S KEY.
+#
+# 1. `aggregate` holds `id-token: write` and nothing else, and assumes the aggregate-invoker role
+#    (`KANON_AGGREGATE_ROLE`, as the telemetry Explorer does) to ask the store's aggregate
+#    function for its page view: one signed GET of `?view=page`, checked by
+#    `scripts/aggregate-read.mjs page` as strictly as the Explorer's read, so nothing but codes,
+#    dates, versions and numbers reaches the artifact. The id-token guard holds the job to
+#    exactly these steps (`tests/unit/helpers/store-jobs.ts`, `isMetricsPageJob`).
+# 2. `page` holds no `id-token`. It reads Kanon's health from Kanon's issues with the default
+#    token, renders the page with `.github/scripts/metrics-page.mjs`, which refuses a page whose
+#    figures lack the "Measured on Kanon's own projects" heading or fall below their minimum
+#    samples (§6.3), and only then mints the Author App's token, with `contents` and
+#    `pull-requests` write and nothing else, for the commit and the pull request. The commit is
+#    authored as the App and carries the delegate's sign-off (`agent-commits.sh`, `K-AGENT-44`).
+#
+# KANON ROLE: Implementer
+# The role the App's token is held to (`tests/unit/app-token-permissions.test.ts`): the
+# Implementer's row grants `contents` and `pull-requests` write, the two the mint asks for.
+#
+# The default branch only: the invoker role trusts the default branch's ref alone, so a
+# dispatch elsewhere is skipped rather than turned red at the credentials step.
+name: Metrics page
+
+on:
+  # Weekly, Monday 07:15 UTC: after the hourly collector's Sunday sweeps, and clear of the
+  # telemetry Explorer's Tuesday read.
+  schedule:
+    - cron: "15 7 * * 1"
+  workflow_dispatch:
+
+# Each job declares its own.
+permissions: {}
+
+concurrency:
+  group: metrics-page
+  cancel-in-progress: false
+
+jobs:
+  aggregate:
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+    steps:
+      - uses: $/actions/kanon-path
+      # MASKED FIRST (kanon#433): every later step's header then prints `***` for the URL and the
+      # account id. The role's ARN is a secret, masked already. This step's own `env:` is printed
+      # before it runs, so the URL appears here, once.
+      - name: Mask the aggregate function's URL and the account id
+        env:
+          URL: ${{ vars.KANON_AGGREGATE_URL }}
+          ROLE: ${{ secrets.KANON_AGGREGATE_ROLE }}
+        run: node "$KANON/scripts/aggregate-mask.mjs"
+      # The STS call goes to Frankfurt, where the hosted store lives: the account's region policy
+      # denies every other region.
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.KANON_AGGREGATE_ROLE }}
+          aws-region: eu-central-1
+          role-session-name: kanon-metrics-page
+      - name: Read the page view
+        id: read
+        env:
+          KANON_AGGREGATE_URL: ${{ vars.KANON_AGGREGATE_URL }}
+          OUT: ${{ runner.temp }}/aggregate
+        run: node "$KANON/scripts/aggregate-read.mjs" page
+      # One day: the page job reads it within the run.
+      - name: Upload the page view for the page job
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-metrics-page-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aggregate/page.json
+          retention-days: 1
+          if-no-files-found: error
+
+  page:
+    needs: aggregate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # `contents: read` checks out the generator; `issues: read` reads Kanon's health from its
+    # issues. The commit and the pull request use the Author App's token, minted last.
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@v8
+        with:
+          name: kanon-metrics-page-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aggregate
+      - name: Read Kanon's health
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/telemetry/kanon-health.mjs --json > "$RUNNER_TEMP/health.json"
+      # The release is the last one `main` records; the commit is the one this run checked out.
+      - name: Render the page
+        run: |
+          release="$(node -p "require('./.release-please-manifest.json')['.']")"
+          node .github/scripts/metrics-page.mjs \
+            --page "$RUNNER_TEMP/aggregate/page.json" \
+            --health "$RUNNER_TEMP/health.json" \
+            --release "$release" \
+            --commit "$GITHUB_SHA" \
+            --out docs/metrics/index.html
+      - name: Say whether the page changed
+        id: diff
+        run: |
+          git add --intent-to-add docs/metrics/index.html
+          if git diff --quiet -- docs/metrics/index.html; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "The metrics page is unchanged; nothing to propose." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Mint the Author App's token
+        id: app-token
+        if: steps.diff.outputs.changed == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+          # The commit to the branch (`contents`) and the pull request (`pull-requests`).
+          permission-contents: write
+          permission-pull-requests: write
+      # The App's bot identity as the commit's author and committer, and the delegate's
+      # `Signed-off-by:` from the default branch's record, as every lane's commits carry them.
+      - name: Author the commit as the App, with the delegate's sign-off
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          GH_TOKEN: ${{ github.token }}
+        run: DCO_MJS="$GITHUB_WORKSPACE/actions/dco/dco.mjs" bash actions/agent-setup/agent-commits.sh
+      - name: Propose the page
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          branch=kanon/metrics-page
+          title="docs(metrics): refresh the public metrics page"
+          git switch -C "$branch"
+          git add docs/metrics/index.html
+          git commit -m "$title" -m "Generated by the metrics-page workflow from the aggregate function's page view and Kanon's health, at $GITHUB_SHA."
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$branch"
+          printf '%s\n' \
+            '**Implementer** <!-- kanon:role=implementer -->' \
+            '' \
+            "The weekly refresh of the public metrics page (plan 0003 M7), generated at $GITHUB_SHA by the metrics-page workflow." \
+            '' \
+            'Read the figures before merging: merging publishes them on GitHub Pages. The page was checked as it was generated: every section of figures from fewer than three adopters carries the "Measured on Kanon'"'"'s own projects" heading, no number is below its minimum sample, and nothing names a repository, a login, a key or an account.' \
+            > "$RUNNER_TEMP/body.md"
+          open="$(gh pr list --head "$branch" --base "$BASE" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$open" ]; then
+            gh pr edit "$open" --body-file "$RUNNER_TEMP/body.md"
+            echo "Updated the open refresh, #$open." >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh pr create --base "$BASE" --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          fi

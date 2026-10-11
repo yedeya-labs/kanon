@@ -17,23 +17,48 @@
 // one as a value. `notes` (cells withheld, rows left out) are totals over every adopter, so they
 // are the Owner's only: `publicView` drops them, and the function returns `publicView`.
 //
+// THE PAGE VIEW (plan 0003 M7, kanon#661), ONLY WHEN ASKED (`?view=page`): the work-item
+// indicators the public page shows, cost per merged item, yield and the escape rates by band, with
+// their trend and their by-version view, computed by `indicators.mjs` (the report's own core,
+// linked into this package) over each DECLARING adopter's run partitions and its `#work`
+// partition, under its label. No other adopter's partitions are read for it, so it holds no
+// cross-adopter figure: the three-adopter rule holds by construction, and the subtraction guard
+// with it. A figure combining adopters (plan 0003 decision 19) is not computed yet. The default
+// answer is unchanged, so a reader pinned to an earlier release, which refuses any key it doesn't
+// know, keeps reading it.
+//
 // The same module is the Owner's script's core (`infra/telemetry/aggregate.mjs`) and the
 // aggregate-only function's code. The function reads the table with its own role, which IAM
 // holds to `Query` with exactly `PROJECTION` (`dynamodb:Attributes`, `dynamodb:Select`), so it
 // can't fetch any other field of a row. `node:` built-ins only, like the ingest function.
 
+import { BAND_VERSION } from './band.mjs';
+import {
+  MINIMUM, TREND_WINDOWS, WINDOW_DAYS, byVersionOf, deliveryLanes, headlineCells, measure, prepareRows, trendOf,
+} from './indicators.mjs';
 import { LANES } from './schema.mjs';
 import { sign } from './sigv4.mjs';
+import { RESAMPLES, SEED } from './stats.mjs';
 
 /** Plan 0002 decision 7: a cell that combines adopters is published only at this many or more. */
 export const MIN_ADOPTERS = 3;
 /** How far back `signals` look, by `recorded_at`: the Explorer's week. */
 export const SIGNAL_DAYS = 7;
-/** Every attribute the aggregate reads. The function's role may read these and no others. */
+/** Every attribute the aggregate reads of a run row. `pr_number` and `issue_number` join a run to its work item (plan 0003 §3.4). */
 export const PROJECTION = Object.freeze([
   'pk', 'row_kind', 'tag', 'recorded_at', 'lane', 'model', 'total_cost_usd', 'expires_at',
-  'outcome', 'reason', 'failed_stage', 'kanon_error', 'kanon_version',
+  'outcome', 'reason', 'failed_stage', 'kanon_error', 'kanon_version', 'pr_number', 'issue_number',
 ]);
+/** Every attribute the page view reads of a work-item row: counts, times, enums and the joined numbers, no text. */
+export const WORK_PROJECTION = Object.freeze([
+  'pk', 'row_kind', 'tag', 'recorded_at', 'expires_at', 'pr_number', 'closed_at', 'fate', 'closing_issues',
+  'changed_lines', 'changed_files', 'changed_dirs', 'author_kind', 'revert_days', 'first_fix_days', 'first_verdict',
+  'human_commits', 'human_cr_after_approval', 'kanon_version',
+]);
+/** What the function's role may read, and nothing else: the template's `dynamodb:Attributes`, with `sk`. */
+export const ATTRIBUTES = Object.freeze([...new Set([...PROJECTION, ...WORK_PROJECTION])]);
+/** The one view a caller may ask for by name (`?view=page`); a GET without one is the aggregate. */
+export const PAGE_VIEW = 'page';
 const KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const INVOKER_ROLE = /^kanon-telemetry-([a-z0-9][a-z0-9-]{0,31})-aggregates$/;
 const ASSUMED_ROLE = /^arn:aws[a-z-]*:sts::(\d+):assumed-role\/([^/]+)\/[^/]+$/;
@@ -187,24 +212,28 @@ export function configOf(env) {
 /** The value of one DynamoDB attribute, or undefined. */
 const plain = (/** @type {any} */ v) => (v === undefined ? undefined : 'S' in v ? v.S : 'N' in v ? Number(v.N) : undefined);
 
-/** A DynamoDB item, projected, as a plain row. */
-export const rowOf = (/** @type {Record<string, any>} */ item) =>
-  /** @type {StoredRow} */ (Object.fromEntries(PROJECTION.map((a) => [a, plain(item[a])])));
+/**
+ * A DynamoDB item, projected, as a plain row, with the attributes it holds.
+ * @param {Record<string, any>} item @param {readonly string[]} [projection]
+ */
+export const rowOf = (item, projection = PROJECTION) =>
+  /** @type {StoredRow} */ (Object.fromEntries(projection.map((a) => [a, plain(item[a])]).filter(([, v]) => v !== undefined)));
 
 /**
- * The Query request for one partition: `tag = run` rows, exactly `PROJECTION`, and `Select`
+ * The Query request for one partition: `tag = run` rows, exactly `projection`, and `Select`
  * named, because the role's policy requires it.
  * @param {string} table
  * @param {string} partition
  * @param {Record<string, any>} [start]
+ * @param {readonly string[]} [projection]
  */
-export function queryRequest(table, partition, start) {
+export function queryRequest(table, partition, start, projection = PROJECTION) {
   return {
     TableName: table,
     KeyConditionExpression: '#pk = :p',
     FilterExpression: '#tag = :run',
-    ProjectionExpression: PROJECTION.map((a) => `#${a}`).join(', '),
-    ExpressionAttributeNames: Object.fromEntries(PROJECTION.map((a) => [`#${a}`, a])),
+    ProjectionExpression: projection.map((a) => `#${a}`).join(', '),
+    ExpressionAttributeNames: Object.fromEntries(projection.map((a) => [`#${a}`, a])),
     ExpressionAttributeValues: { ':p': { S: partition }, ':run': { S: 'run' } },
     Select: 'SPECIFIC_ATTRIBUTES',
     ...(start ? { ExclusiveStartKey: start } : {}),
@@ -232,6 +261,100 @@ export async function readAll(keys, query, table) {
     }
   }
   return rows;
+}
+
+/**
+ * The page view's rows: each declaring adopter's run partitions, every lane, and its `#work`
+ * partition, and no other adopter's (plan 0003 M7).
+ * @param {Record<string, string>} own the declaring adopters' keys, to their labels
+ * @param {(request: Record<string, any>) => Promise<{ Items?: Record<string, any>[], LastEvaluatedKey?: Record<string, any> }>} query
+ * @param {string} table
+ */
+export async function readPage(own, query, table) {
+  const keys = Object.keys(own);
+  const rows = await readAll(keys, query, table);
+  for (const key of keys) {
+    /** @type {Record<string, any> | undefined} */
+    let start;
+    do {
+      const page = await query(queryRequest(table, `${key}#work`, start, WORK_PROJECTION));
+      for (const item of page.Items ?? []) rows.push(rowOf(item, WORK_PROJECTION));
+      start = page.LastEvaluatedKey;
+    } while (start);
+  }
+  return rows;
+}
+
+const DAY_MS = 86_400_000;
+/** The schema's delivery lanes, for the indicators' cost and yield. */
+const DELIVERY = deliveryLanes(LANES);
+
+/**
+ * The page view (plan 0003 M7, §6.1's headline, trend and by-version views): for each adopter
+ * that declared its own figures, under its label, the indicators over its rows alone, as one
+ * adopter. Rows of any other adopter are not read, so nothing here combines adopters. The window
+ * ends at the start of the UTC day of `now`, so a page computed twice in a day is the same. Pure.
+ * @param {readonly Record<string, unknown>[]} rows stored rows, run and work-item, in the projections
+ * @param {{ now: number, own?: Record<string, string> }} opts
+ */
+export function pageView(rows, { now, own = {} }) {
+  const end = Math.floor(now / DAY_MS) * DAY_MS;
+  const width = WINDOW_DAYS * DAY_MS;
+  /** @type {Map<string, Record<string, unknown>[]>} */
+  const byKey = new Map();
+  /** @type {Set<string>} */
+  const keys = new Set();
+  for (const row of rows) {
+    const key = keyOf(row.pk);
+    if (!key) continue;
+    keys.add(key);
+    if (!Object.hasOwn(own, key)) continue;
+    if (typeof row.expires_at === 'number' && row.expires_at * 1000 <= now) continue;
+    const { pk } = row;
+    const plainRow = { ...row };
+    delete plainRow.pk;
+    delete plainRow.expires_at;
+    if (row.row_kind === 'run' && (typeof row.lane !== 'string' || !LANES.includes(row.lane) || pk !== `${key}#${row.lane}`)) continue;
+    if (row.row_kind === 'work_item' && pk !== `${key}#work`) continue;
+    const list = byKey.get(key) ?? [];
+    byKey.set(key, list);
+    list.push(plainRow);
+  }
+  const entries = Object.entries(own).map(([key, label]) => {
+    const ctx = prepareRows(byKey.get(key) ?? [], DELIVERY);
+    const h = headlineCells(measure(ctx, { start: end - width, end }));
+    const escape = (/** @type {any} */ e) => ({ merged_from: e.mergedFrom, merged_until: e.mergedUntil, cells: e.agent });
+    return {
+      label,
+      adopters: 1,
+      window: { from: new Date(end - width).toISOString().slice(0, 10), until: new Date(end).toISOString().slice(0, 10), days: WINDOW_DAYS },
+      headline: {
+        view: h.view,
+        validity: { status: h.validity.status, n: h.validity.n, tau: h.validity.tau, low: h.validity.low, high: h.validity.high },
+        cost: h.cost,
+        yield: h.yield,
+        escape: { d30: escape(h.escape.d30), d90: escape(h.escape.d90) },
+        approval: h.approval,
+        correction: h.correction,
+      },
+      trend: trendOf(ctx, { end, days: WINDOW_DAYS, windows: TREND_WINDOWS }),
+      by_version: byVersionOf(ctx, { start: end - TREND_WINDOWS * width, end }),
+    };
+  }).sort((a, b) => a.label.localeCompare(b.label));
+  const result = {
+    computed_at: new Date(now).toISOString(),
+    view: PAGE_VIEW,
+    min_adopters: MIN_ADOPTERS,
+    band_version: BAND_VERSION,
+    cost_basis: 'API list price',
+    window_days: WINDOW_DAYS,
+    trend_windows: TREND_WINDOWS,
+    minimum: { ...MINIMUM },
+    bootstrap: { resamples: RESAMPLES, seed: SEED },
+    own: entries,
+  };
+  assertNoKey(result, keys);
+  return result;
 }
 
 /**
@@ -281,8 +404,22 @@ export function callerAllowed(event, env, invokers) {
 }
 
 /**
- * The aggregate-only function: a GET answers `publicView` of the aggregate, and nothing else.
- * It takes no input, so a caller can't narrow a cell to one adopter.
+ * Which view a request asks for: the aggregate, with no query; the page view, with exactly
+ * `view=page`; anything else is refused, so a caller can't name an adopter or narrow a cell.
+ * @param {any} event
+ * @returns {'aggregate' | 'page' | null}
+ */
+export function viewOf(event) {
+  const params = event?.queryStringParameters ?? {};
+  const names = Object.keys(params);
+  if (names.length === 0) return 'aggregate';
+  return names.length === 1 && params.view === PAGE_VIEW ? 'page' : null;
+}
+
+/**
+ * The aggregate-only function: a GET answers `publicView` of the aggregate, or, asked for it by
+ * name, the page view, and nothing else. It takes no other input, so a caller can't narrow a cell
+ * to one adopter.
  * @param {any} event
  * @param {{ env?: Record<string, string | undefined>, now?: () => number,
  *   query?: (request: Record<string, any>) => Promise<any>, log?: (line: string) => void }} [deps]
@@ -299,11 +436,19 @@ export async function handle(event, deps = {}) {
     return reply(500, { error: 'configuration' });
   }
   if (!callerAllowed(event, env, config.invokers)) return reply(403, { error: 'caller' });
+  const view = viewOf(event);
+  if (view === null) return reply(400, { error: 'view' });
   const now = (deps.now ?? Date.now)();
   const query = deps.query ?? ((/** @type {Record<string, any>} */ r) => dynamoQuery(r, env.AWS_REGION ?? 'eu-central-1'));
+  const table = env.TABLE_NAME ?? 'kanon-telemetry';
   let result;
   try {
-    result = aggregate(await readAll(config.keys, query, env.TABLE_NAME ?? 'kanon-telemetry'), { now, own: config.own });
+    if (view === 'page') {
+      const page = pageView(await readPage(config.own, query, table), { now, own: config.own });
+      log(`aggregate: page view, ${page.own.length} own`);
+      return reply(200, page);
+    }
+    result = aggregate(await readAll(config.keys, query, table), { now, own: config.own });
   } catch (e) {
     // No detail but DynamoDB's status: any other message could carry a partition, and so a key.
     const status = e instanceof Error && /^Query \d{3}$/.test(e.message) ? e.message : 'error';
