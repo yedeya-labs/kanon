@@ -295,15 +295,17 @@ const DELIVERY = deliveryLanes(LANES);
  * adopter. Rows of any other adopter are not read, so nothing here combines adopters. The window
  * ends at the start of the UTC day of `now`, so a page computed twice in a day is the same. Pure.
  * @param {readonly Record<string, unknown>[]} rows stored rows, run and work-item, in the projections
- * @param {{ now: number, own?: Record<string, string> }} opts
+ * @param {{ now: number, own?: Record<string, string>, keys?: readonly string[] }} opts `keys`: every
+ *   adopter's key, which no label may equal. The rows hold only the declaring adopters' keys, so
+ *   without them a label equal to another adopter's key would pass.
  */
-export function pageView(rows, { now, own = {} }) {
+export function pageView(rows, { now, own = {}, keys: known = [] }) {
   const end = Math.floor(now / DAY_MS) * DAY_MS;
   const width = WINDOW_DAYS * DAY_MS;
   /** @type {Map<string, Record<string, unknown>[]>} */
   const byKey = new Map();
   /** @type {Set<string>} */
-  const keys = new Set();
+  const keys = new Set(known);
   for (const row of rows) {
     const key = keyOf(row.pk);
     if (!key) continue;
@@ -444,7 +446,7 @@ export async function handle(event, deps = {}) {
   let result;
   try {
     if (view === 'page') {
-      const page = pageView(await readPage(config.own, query, table), { now, own: config.own });
+      const page = pageView(await readPage(config.own, query, table), { now, own: config.own, keys: config.keys });
       log(`aggregate: page view, ${page.own.length} own`);
       return reply(200, page);
     }

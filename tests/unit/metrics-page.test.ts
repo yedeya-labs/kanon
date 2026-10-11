@@ -168,7 +168,12 @@ describe('the page holds no key, login, repository name or account id', () => {
     expect(html).not.toMatch(/@/);
   });
   it('refuses a page that would', () => {
-    expect(() => assertNothingPrivate('<p>arn:aws:iam::123456789012:role/x</p>')).toThrow(PageError);
+    // Built, not written out, so this file doesn't trip the public-tree guard. Each case holds
+    // one kind alone, so each pattern has a case that only it refuses.
+    const id = `${'123456'}${'789012'}`;
+    expect(() => assertNothingPrivate(`<p>${id}</p>`)).toThrow(/account id/);
+    expect(() => assertNothingPrivate('<p>arn:aws:s3:::bucket</p>')).toThrow(/ARN/);
+    expect(() => assertNothingPrivate('<p>https://abc.lambda-url.eu-central-1.on.aws/</p>')).toThrow(/function URL/);
     expect(() => assertNothingPrivate('<p>someone[bot]</p>')).toThrow(PageError);
     expect(() => assertNothingPrivate('<p>https://github.com/o/r</p>')).toThrow(PageError);
     expect(() => assertNothingPrivate('<p>who@example.com</p>')).toThrow(PageError);

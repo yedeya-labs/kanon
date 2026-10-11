@@ -108,6 +108,12 @@ describe('the page view: the work-item indicators of each declaring adopter (pla
     expect(() => page(items('alpha', 3), { alpha: 'alpha' })).toThrow(/adopter key/);
   });
 
+  it("refuses a label equal to the key of an adopter whose rows it does not read", () => {
+    const rows = items('alpha', 3);
+    expect(() => pageView(rows, { now: NOW, own: { alpha: 'beta' }, keys: ['alpha', 'beta'] })).toThrow(/adopter key/);
+    expect(entry(pageView(rows, { now: NOW, own: { alpha: 'kanon' }, keys: ['alpha', 'beta'] }))).toBeDefined();
+  });
+
   it('reads no row past its expiry, and no row not tagged run', () => {
     const expired = items('alpha', 12).map((r) => (r.pr_number === 1 && r.row_kind === 'work_item' ? { ...r, expires_at: Math.floor(NOW / 1000) } : r));
     expect(entry(page(expired)).headline.cost.pooled.median.n).toBe(11);
@@ -175,6 +181,12 @@ describe('the function answers the page view only when asked, and the default an
     expect((await call(urlEvent({ view: 'rows' }))).status).toBe(400);
     expect((await call(urlEvent({ view: 'page', key: 'beta' }))).status).toBe(400);
     expect((await call(urlEvent({ adopter: 'beta' }))).status).toBe(400);
+  });
+
+  it("returns nothing when a declared label is another adopter's key, though that adopter's rows are not read", async () => {
+    const res = await handle(urlEvent({ view: 'page' }), { env: { ...env, OWN_FIGURES: 'alpha=beta' }, now: () => NOW, query: fakeQuery(items('alpha', 3)).query, log: () => {} });
+    expect(res.statusCode).toBe(502);
+    expect(res.body).not.toMatch(/alpha|beta/);
   });
 
   it('answers a direct invoke with the page view too, for the Owner to reproduce the page', async () => {
