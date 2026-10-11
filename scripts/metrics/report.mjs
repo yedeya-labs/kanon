@@ -255,12 +255,17 @@ export function measure(ctx, { start, end, keepItem = () => true, keepRuns = () 
     const rs = runsOfItem(item);
     if (rs.some(hasCost)) yieldUnits.push({ band: bandKey(item), cost: costOf(rs), merged: item.fate === 'merged' });
   }
+  // A settled group whose runs report no cost is unknown, never $0, so it is left out like an
+  // item and counted (§3.1).
+  let unjoinedWithoutCost = 0;
   for (const g of ctx.loose) {
-    if (keepRuns(g.runs) && inWindow(g.last + IDLE_DAYS * DAY_MS)) yieldUnits.push({ band: g.band, cost: costOf(g.runs), merged: false });
+    if (!keepRuns(g.runs) || !inWindow(g.last + IDLE_DAYS * DAY_MS)) continue;
+    if (g.runs.some(hasCost)) yieldUnits.push({ band: g.band, cost: costOf(g.runs), merged: false });
+    else unjoinedWithoutCost += 1;
   }
   /** @type {Record<number, ItemRow[]>} */
   const matured = Object.fromEntries(ESCAPE_DAYS.map((d) => [d, items.filter((i) => i.fate === 'merged' && inWindow(Date.parse(i.closed_at), d * DAY_MS))]));
-  return { start, end, merged, costed, yieldUnits, matured };
+  return { start, end, merged, costed, yieldUnits, unjoinedWithoutCost, matured };
 }
 
 /** @typedef {ReturnType<typeof measure>} Measured */
@@ -482,7 +487,10 @@ export function metricsReport(rows, { until, days = WINDOW_DAYS }) {
       runsWithoutCost: costed.reduce((s, c) => s + c.runs.filter((r) => typeof r.total_cost_usd !== 'number').length, 0),
       overhead: { runs: overheadRuns.length, usd: round(costOf(overheadRuns)) },
     },
-    yield: { cells: view(cellsByBand(m.yieldUnits, (u) => u.band, (us) => ({ yield: yieldEstimate(us) }), { noPr: true })) },
+    yield: {
+      cells: view(cellsByBand(m.yieldUnits, (u) => u.band, (us) => ({ yield: yieldEstimate(us) }), { noPr: true })),
+      unjoinedWithoutCost: m.unjoinedWithoutCost,
+    },
     escape,
     approval: { cells: view(approval) },
     correction: { cells: view(corrections) },
@@ -592,7 +600,7 @@ export function renderReport(r) {
     '',
     issueSideText(r.validity.issueSide),
     '',
-    `Overhead, beside cost and never inside it, and out of yield (the Explorer, the code audit, the telemetry Explorer, the Overseer, the digests, and the Lead's runs that join no item): ${dollars(r.cost.overhead.usd)} over ${r.cost.overhead.runs} runs. Left out of cost: ${r.cost.mergedWithoutRuns} merged items with no run row, and ${r.cost.mergedWithoutCost} whose runs report no cost (unknown, never $0); ${r.cost.runsWithoutCost} runs inside the costed items report no cost.`,
+    `Overhead, beside cost and never inside it, and out of yield (the Explorer, the code audit, the telemetry Explorer, the Overseer, the digests, and the Lead's runs that join no item): ${dollars(r.cost.overhead.usd)} over ${r.cost.overhead.runs} runs. Left out of cost: ${r.cost.mergedWithoutRuns} merged items with no run row, and ${r.cost.mergedWithoutCost} whose runs report no cost (unknown, never $0); ${r.cost.runsWithoutCost} runs inside the costed items report no cost. Left out of yield: ${r.yield.unjoinedWithoutCost} settled groups of runs that join no item and report no cost (unknown, never $0).`,
     '',
     `Rows read: ${r.rows.runs} runs (${r.rows.runsJoined} joined to a work item, ${r.rows.runsUnjoined} to none) and ${r.rows.workItems} work items; left out: ${r.rows.ignored.notRun} not \`tag: run\`, ${r.rows.ignored.otherKind} of another kind, ${r.rows.ignored.unreadable} unreadable. Yield's interval: a bootstrap over work items, ${r.bootstrap.resamples} resamples, seed ${r.bootstrap.seed}.`,
   ];

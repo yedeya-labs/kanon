@@ -4,7 +4,7 @@ import { SCHEMAS, validate } from '../../actions/agent-telemetry/schema.mjs';
 import { collect } from '../../scripts/telemetry-collect.mjs';
 import { mentionsOf, pinOf, workItemStep } from '../../scripts/telemetry-work-items.mjs';
 import { followupsOf } from '../../scripts/metrics/followups.mjs';
-import { SOURCE_LABELS, toPullRequest } from '../../cli/metrics-read.mjs';
+import { referencingCommits, SOURCE_LABELS, toPullRequest } from '../../cli/metrics-read.mjs';
 import { workItemRow } from '../../scripts/metrics/work-item.mjs';
 
 /**
@@ -66,6 +66,7 @@ class World {
         oid: sha(`h${number}${k}`), message, committedDate: iso(o.opened + MIN), author: { name: 'x', user: { login: AUTHOR.login } }, committer: { name: 'x', user: { login: AUTHOR.login } },
       } })),
       timelineItems: [],
+      referenced: [],
       closes: o.closes ?? [],
     };
     this.prs.set(number, node);
@@ -83,6 +84,14 @@ class World {
     const p = this.prs.get(pr)!;
     p.timelineItems.push({ __typename: 'CrossReferencedEvent', createdAt: iso(at), actor: HUMAN, source: { __typename: this.prs.has(by) ? 'PullRequest' : 'Issue', number: by } });
     p.updatedAt = iso(Math.max(Date.parse(p.updatedAt), at));
+  }
+
+  /** GitHub's record of a commit naming a PR (`#n` in its message): a referenced event on the PR, for each of `by`'s commits. */
+  reference(pr: number, by: number) {
+    const p = this.prs.get(pr)!;
+    for (const { commit } of this.prs.get(by)!.commits) {
+      p.referenced.push({ __typename: 'ReferencedEvent', commit: { oid: commit.oid, message: commit.message, associatedPullRequests: { nodes: [{ number: by, repository: { nameWithOwner: REPO } }] } } });
+    }
   }
 
   merge(number: number, at: number) {
@@ -148,6 +157,10 @@ class World {
         const n = Number(vars.number);
         return ok({ repository: { issue: { closedByPullRequestsReferences: { nodes: [...this.prs.values()].filter((p) => p.closes.includes(n)).map((p) => ({ number: p.number })) } } } });
       }
+      if (query.includes('WorkItemReferences')) {
+        const p = this.prs.get(Number(vars.number));
+        return ok({ repository: { pullRequest: p ? { timelineItems: this.conn(p.referenced) } : null } });
+      }
       return { status: 1, stdout: '', stderr: `unexpected query ${query.slice(0, 40)}` };
     }
     const path = args.at(-1) ?? '';
@@ -174,6 +187,13 @@ class World {
       return json([[...this.issues.values()]
         .filter((i) => i.state === 'CLOSED' && i.labels.includes('follow-up') && i.labels.includes('agent:reviewer') && i.updatedAt >= since)
         .map((i) => ({ number: i.number, body: i.body, closed_at: iso(i.closedAt), labels: i.labels.map((name: string) => ({ name })) }))]);
+    }
+    const bugs = /^repos\/example\/adopter\/issues\?state=all&labels=bug&since=([^&]+)&per_page=100$/.exec(path);
+    if (bugs) {
+      const since = Date.parse(bugs[1]!);
+      return json([[...this.issues.values()]
+        .filter((i) => i.labels.includes('bug') && i.updatedAt >= since)
+        .map((i) => ({ number: i.number, body: i.body, labels: i.labels.map((name: string) => ({ name })) }))]);
     }
     return { status: 1, stdout: '', stderr: `unexpected gh ${args.join(' ')}` };
   };
@@ -373,6 +393,66 @@ describe('a later event rewrites the earlier row, whole (plan 0003 §3.1, §3.5)
     expect(store.row(30)).toBeUndefined();
   });
 
+  it('a plain git revert, which never cross-references the item, is kept when a follow-up of the item closes later', async () => {
+    const { world, store } = await start();
+    world.issue(60, { labels: ['follow-up', 'agent:reviewer', 'sev:low'], body: 'Surfaced by PR #41.' });
+    world.mention(41, 60, T0 - 20 * MIN);
+    // `git revert` of the squash commit `feat: zebra-title-41 (#41)`, in a PR that names only the
+    // SHA. Its commit's `#41` is GitHub's one record of it on the item: a referenced event.
+    const revertAt = T0 + 3 * DAY;
+    world.pr(51, { opened: revertAt - 50 * MIN, closed: revertAt - 10 * MIN, body: `Reverts ${sha(41).slice(0, 7)}`, commits: [`Revert "feat: zebra-title-41 (#41)"\n\nThis reverts commit ${sha(41)}.`] });
+    world.reference(41, 51);
+    await sweep(world, store, revertAt);
+    expect(store.row(41)).toMatchObject({ revert_pr: 51, revert_days: 3 });
+    // A day on, the follow-up is closed as not planned, and the row is written again.
+    const at = T0 + 4 * DAY;
+    world.closeIssue(60, at - 15 * MIN, 'NOT_PLANNED');
+    const res = await sweep(world, store, at);
+    expect(res.failures).toEqual([]);
+    expect(store.row(41)).toMatchObject({ followups_not_planned: 1, revert_pr: 51, revert_days: 3, recorded_at: iso(at) });
+  });
+
+  it('a linked fix named by a bare "Introduced by" number, which GitHub never links, is kept when a revert rewrites the item later', async () => {
+    const { world, store } = await start();
+    const fixAt = T0 + 5 * DAY;
+    world.issue(90, { labels: ['bug'], body: '### Introduced by\n\n41\n\n### What happened\n\nzebra' });
+    world.pr(91, { opened: fixAt - 50 * MIN, closed: fixAt - 10 * MIN, title: 'fix: zebra', closes: [90], files: ['app/zebra.ts'] });
+    world.closeIssue(90, fixAt - 10 * MIN, 'COMPLETED');
+    await sweep(world, store, fixAt);
+    expect(store.row(41)).toMatchObject({ fix_prs: '91', first_fix_days: 5 });
+    // Two days on, a revert of #41 merges, and the row is written again.
+    const at = T0 + 7 * DAY;
+    world.pr(50, { opened: at - 50 * MIN, closed: at - 10 * MIN, body: `Reverts ${REPO}#41` });
+    world.mention(41, 50, at - 50 * MIN);
+    const res = await sweep(world, store, at);
+    expect(res.failures).toEqual([]);
+    expect(store.row(41)).toMatchObject({ revert_pr: 50, revert_days: 7, fix_prs: '91', first_fix_days: 5, recorded_at: iso(at) });
+  });
+
+  it('reads, per earlier item, its referencing commits once and only the PRs whose commit reverts it, and the bug issues once a sweep', async () => {
+    const { world, store } = await start();
+    const named = (args: string[], query: string, n?: number) => args.join(' ').includes(query) && (n === undefined || args.includes(`number=${n}`));
+    const count = (query: string, n?: number) => world.calls.filter((a) => named(a, query, n)).length;
+    // A sweep with no earlier item reads neither.
+    expect(count('WorkItemReferences') + count('labels=bug')).toBe(0);
+    world.issue(60, { labels: ['follow-up', 'agent:reviewer'], body: 'Surfaced by PR #41.' });
+    world.mention(41, 60, T0 - 20 * MIN);
+    // A commit that names #41 without reverting it, and a bug issue introduced by another PR.
+    world.pr(45, { opened: T0 + DAY - 50 * MIN, closed: T0 + DAY - 10 * MIN, commits: ['refactor: zebra, after #41'] });
+    world.reference(41, 45);
+    world.issue(92, { labels: ['bug'], body: '### Introduced by\n\n30', updated: T0 + DAY });
+    const at = T0 + 4 * DAY;
+    world.closeIssue(60, at - 15 * MIN, 'NOT_PLANNED');
+    world.calls = [];
+    const res = await sweep(world, store, at);
+    expect(res.failures).toEqual([]);
+    expect(store.row(41)).toMatchObject({ followups_not_planned: 1 });
+    expect(count('WorkItemReferences', 41)).toBe(1);
+    expect(count('labels=bug')).toBe(1);
+    expect(count('WorkItemOne', 45)).toBe(0);
+    expect(count('WorkItemClosers', 92)).toBe(0);
+  });
+
   it('a bug-fixing PR mentioning a number nothing answers to (a hex colour, a deleted issue) is no candidate and no failure', async () => {
     const { world, store } = await start();
     const at = T0 + 5 * DAY;
@@ -430,6 +510,19 @@ describe('what the step reads a candidate from', () => {
   it("finds this repository's numbers in a text, never another's", () => {
     expect(mentionsOf(`Surfaced by PR #41, see ${REPO}#7 and https://github.com/${REPO}/pull/9; not other/place#11, &#12; or a#13`, REPO)).toEqual([7, 9, 41]);
     expect(mentionsOf(null, REPO)).toEqual([]);
+  });
+
+  it("reads every page of a PR's referencing commits, with only this repository's PRs, and skips a commit GitHub hides", async () => {
+    const commit = (message: string, ...prs: [number, string][]) => ({ commit: { message, associatedPullRequests: { nodes: prs.map(([number, nameWithOwner]) => ({ number, repository: { nameWithOwner } })) } } });
+    const pages: Record<string, Node> = {
+      first: { pageInfo: { hasNextPage: true, endCursor: 'p2' }, nodes: [commit('one', [51, REPO], [7, 'other/place']), { commit: null }] },
+      p2: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [commit('two', [52, REPO.toUpperCase()])] },
+    };
+    const gh = async (args: string[]) => {
+      const after = args.find((a) => a.startsWith('after='))?.slice('after='.length) ?? 'first';
+      return { status: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { timelineItems: pages[after] } }, rateLimit: { remaining: 4000 } } }), stderr: '' };
+    };
+    expect(await referencingCommits({ gh, sleep: async () => {}, progress: () => {} }, REPO, 41)).toEqual([{ message: 'one', prs: [51] }, { message: 'two', prs: [52] }]);
   });
 
   it("reads the caller's pin of the collector, and nothing else", () => {
