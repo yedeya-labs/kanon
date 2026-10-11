@@ -415,6 +415,7 @@ export const OVERSEER_TELEMETRY_FILE = 'agent-overseer.yml';
 export const OVERSEER_TELEMETRY_JOB = 'telemetry';
 const OT_MASK_RUN = 'node "$KANON/scripts/overseer-telemetry.mjs" mask';
 const OT_READ_RUN = 'node "$KANON/scripts/overseer-telemetry.mjs" read';
+const OT_REPORT_RUN = 'node "$KANON/scripts/overseer-telemetry.mjs" report';
 /** The role the job assumes, and the masking step reads: the lane's secret, mapped by name in its caller. */
 const OT_ROLE = '${{ secrets.KANON_TELEMETRY_READER_ROLE }}';
 /** The mask step reads the store's table and region from the repository variables, by name, and
@@ -423,13 +424,17 @@ export const OT_MASK_ENV = { ROLE: OT_ROLE, TABLE: '${{ vars.KANON_TELEMETRY_TAB
 const OT_RESOLVED = { TABLE: '${{ steps.resolve.outputs.table }}', REGION: '${{ steps.resolve.outputs.region }}' };
 /** What the read step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
 export const OT_READ_ENV = { ROLE: OT_ROLE, CREDENTIALS: '${{ steps.creds.outcome }}', OUT: '${{ runner.temp }}/overseer-telemetry', ...OT_RESOLVED };
+/** What the report step may be handed (kanon#668): the read's, but no directory, since it writes
+ *  only to its job summary, and the artifact's directory would let its rows be uploaded. */
+export const OT_REPORT_ENV = { ROLE: OT_ROLE, CREDENTIALS: '${{ steps.creds.outcome }}', ...OT_RESOLVED };
 
 /**
  * The Overseer's `telemetry` job (kanon#470; plan 0002 §6): `telemetry` in `agent-overseer.yml`,
  * and only in exactly this shape: Kanon's path; the step that masks the role's account id and key;
  * the AWS credentials for the reader role, from the lane's secret, in the region the mask step
  * resolved, continuing on error so a refusal is a `failed` read; the read script, handed only the
- * role, the credentials' outcome, its output directory and the resolved table and region; and the upload of the two reports from the runner's temp directory. Its
+ * role, the credentials' outcome, its output directory and the resolved table and region; the upload of the two reports from the runner's temp directory; and, last,
+ * the headline report (kanon#668), handed what the read is but its output directory. Its
  * grant is `id-token: write` and nothing else, and it carries no job `env:`, `container:`,
  * `services:` or `defaults:` (`STORE_JOB_KEYS`). The reader role trusts every default-branch job
  * that holds `id-token`, so the shape is what keeps the set to this job.
@@ -438,8 +443,8 @@ export function isOverseerTelemetryJob(file: string | undefined, name: string, j
   if (file !== OVERSEER_TELEMETRY_FILE || name !== OVERSEER_TELEMETRY_JOB || !only(j, STORE_JOB_KEYS)) return false;
   if (JSON.stringify(j.permissions) !== JSON.stringify({ 'id-token': 'write' })) return false;
   const steps = (j.steps ?? []) as Array<Record<string, unknown>>;
-  if (steps.length !== 5) return false;
-  const [path, mask, creds, read, upload] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
+  if (steps.length !== 6) return false;
+  const [path, mask, creds, read, upload, report] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
   const w = (upload.with ?? {}) as Record<string, unknown>;
   return only(path, ['uses']) && path.uses === '$/actions/kanon-path'
     && only(mask, ['name', 'id', 'env', 'run']) && mask.id === 'resolve' && String(mask.run).trim() === OT_MASK_RUN
@@ -453,7 +458,9 @@ export function isOverseerTelemetryJob(file: string | undefined, name: string, j
     && JSON.stringify(read.env) === JSON.stringify(OT_READ_ENV)
     && only(upload, ['name', 'id', 'if', 'uses', 'with']) && UPLOAD.test(String(upload.uses))
     && only(w, ['name', 'path', 'retention-days', 'if-no-files-found'])
-    && typeof w.path === 'string' && TEMP_PATH.test(w.path.trim());
+    && typeof w.path === 'string' && TEMP_PATH.test(w.path.trim())
+    && only(report, ['name', 'env', 'run']) && String(report.run).trim() === OT_REPORT_RUN
+    && JSON.stringify(report.env) === JSON.stringify(OT_REPORT_ENV);
 }
 
 /** A holder of `id-token: write` the guard admits by its shape, and how the guard and the docs name it. */
