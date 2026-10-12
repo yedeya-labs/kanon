@@ -19,8 +19,10 @@
  * launch gate itself — the one place an agent decided a roadmap placement.
  * The developer's decision (2026-09-24, on RA-1616) is that agents SUGGEST and
  * only the developer places work on a roadmap milestone. So nothing here ever
- * proposes a milestone other than a bucket; the RA-729 signal survives as a
- * label a human acts on, which is where a human step is cheapest to justify.
+ * proposes a milestone other than a bucket, except a roadmap milestone `plan()`
+ * transcribes as given from an approved brief (`K-WORK-5`); the RA-729 signal
+ * survives as a label a human acts on, which is where a human step is cheapest
+ * to justify.
  *
  * SEVERITY IS READ, NEVER DERIVED. Nothing here looks at the issue title or
  * body. Severity is a claim about reachability and impact that lives in the diff
@@ -48,9 +50,25 @@
  * A missing severity degrades to the DEFAULT bucket and no candidacy: absence is
  * not a severity claim.
  *
+ * ONE MODULE, TWO CALLERS (kanon#164, `K-WORK-8`). `decide()` is the backstop's, for
+ * an issue that arrives bare. `plan()` is the filer's: it takes the labels the filer
+ * chose (its severity among them) and an explicit milestone transcribed from an
+ * approved brief, and returns the exact `--label` and `--milestone` arguments of one
+ * atomic `gh issue create` (`K-WORK-2`). They do not yet keep to separate issues:
+ * `decide()` writes a milestone only on a bare issue, but on a filed one it still adds
+ * `gate-candidate` and `qa:needs-severity` until the filers move to `plan()`, which
+ * leaves neither to add. Retiring those writes is migration step 2's to decide.
+ *
+ * THE SHADOW (kanon#164, migration step 1). Until the filers move to `plan()`, the
+ * backstop logs what `plan()` would have chosen for each filed issue next to what its
+ * filer chose, and writes nothing from it, so a week of real filings shows where the
+ * two disagree before any prompt's routing prose is deleted.
+ *
  * Exercised by tests/unit/issue-triage-defaults.test.ts. Run it locally exactly
  * as the workflow does:
  *   gh issue view <n> --json milestone,labels | node scripts/issue-triage-defaults.mjs
+ * and as a filer does:
+ *   node scripts/issue-triage-defaults.mjs plan --label follow-up --label agent:reviewer --label sev:high
  */
 
 import { isCliEntry } from './lib/cli-entry.mjs';
@@ -93,6 +111,7 @@ export const NEEDS_SEVERITY_LABEL = 'qa:needs-severity';
 
 const FOLLOW_UP = 'follow-up';
 const REVIEWER = 'agent:reviewer';
+const EXPLORER = 'agent:explorer';
 const PIPELINE_IMPROVEMENT = 'pipeline-improvement';
 
 /**
@@ -179,6 +198,100 @@ export function decide({ labels = [], milestone = '' } = {}) {
   return { milestone: DEFAULT_MILESTONE, reason: 'no unambiguous destination', ...flags };
 }
 
+/** What `plan()` throws for a filing it won't plan: the filer fixes its labels and asks again. */
+export class PlanRefusal extends Error {}
+
+/**
+ * The stream an issue belongs to, which never takes a roadmap milestone or a candidacy
+ * (`K-WORK-11`), or null. Pipeline work is read from its label, as the bucket routing reads it.
+ */
+function streamOf(set) {
+  if (set.has(EXPLORER)) return 'an Explorer bug';
+  if (set.has(PIPELINE_IMPROVEMENT)) return 'pipeline work';
+  return null;
+}
+
+/**
+ * Plan one filing: the labels and the milestone a filer passes to a single `gh issue create`.
+ *
+ * It owns the rule `decide()` applies to a bare issue, and adds what only a filer can be held
+ * to: a reviewer follow-up names its severity (`K-WORK-9`), a candidacy is the rule's and never
+ * the filer's (`K-WORK-10`), and neither stream goes on a roadmap milestone (`K-WORK-11`). Each
+ * of those REFUSES rather than corrects, so the filer sees its mistake instead of an issue filed
+ * as something it didn't mean.
+ *
+ * A stream's explicit milestone is held to the BUCKETS by name, not to "not dated": the bucket
+ * names are fixed (`K-WORK-4`), so anything else is a roadmap milestone or a typo, and telling
+ * which would need a read of the repository this function doesn't make.
+ *
+ * @param {string[]} labels the filer's choice, its `sev:*` included
+ * @param {{explicitMilestone?: string}} [options] a milestone transcribed from an approved
+ *   brief (`K-WORK-5`), passed through as given; never an agent's own routing choice
+ * @returns {{milestone: string, labels: string[], severity: string|null, gateCandidate: boolean, reason: string, args: string[]}}
+ */
+export function plan(labels = [], { explicitMilestone = '' } = {}) {
+  const set = new Set(labels);
+  const explicit = String(explicitMilestone ?? '').trim();
+
+  const severities = SEVERITY_LABELS.filter((sev) => set.has(sev));
+  if (severities.length > 1) {
+    throw new PlanRefusal(`carries ${severities.join(' and ')}: a filer applies exactly one sev:* (K-WORK-9)`);
+  }
+  if (isReviewerFollowUp(labels) && severities.length === 0) {
+    throw new PlanRefusal('a follow-up + agent:reviewer issue needs its sev:*, which only its filer can judge (K-WORK-9)');
+  }
+
+  const stream = streamOf(set);
+  if (explicit && stream && !BUCKET_MILESTONES.includes(explicit)) {
+    throw new PlanRefusal(`"${explicit}" is not a bucket, and ${stream} never goes on a roadmap milestone (K-WORK-11)`);
+  }
+
+  const milestone = explicit || (set.has(PIPELINE_IMPROVEMENT) ? PIPELINE_MILESTONE : DEFAULT_MILESTONE);
+  const reason = explicit
+    ? 'transcribed from an approved brief'
+    : set.has(PIPELINE_IMPROVEMENT) ? `labelled ${PIPELINE_IMPROVEMENT}` : 'no unambiguous destination';
+
+  const gateCandidate = isGateCandidate(labels, milestone);
+  if (set.has(GATE_CANDIDATE_LABEL) && !gateCandidate) {
+    throw new PlanRefusal(
+      `carries ${GATE_CANDIDATE_LABEL}, which K-WORK-10 gives only a sev:critical or sev:high follow-up + agent:reviewer issue on the product bucket: drop it, plan() adds it where the rule does`,
+    );
+  }
+
+  const planned = [...set];
+  if (gateCandidate && !set.has(GATE_CANDIDATE_LABEL)) planned.push(GATE_CANDIDATE_LABEL);
+  const args = [...planned.flatMap((label) => ['--label', label]), '--milestone', milestone];
+  return { milestone, labels: planned, severity: severities[0] ?? null, gateCandidate, reason, args };
+}
+
+/**
+ * The backstop's shadow of `plan()` (kanon#164, migration step 1): what it would have chosen
+ * for a filed issue next to what the filer chose. Null on a bare issue, which has no filer's
+ * choice and is the backstop's own.
+ *
+ * @param {{labels: string[], milestone?: string}} issue the live re-read, as `decide()` takes it
+ */
+export function shadow({ labels = [], milestone = '' } = {}) {
+  if (!milestone) return null;
+  const filed = { milestone, gateCandidate: labels.includes(GATE_CANDIDATE_LABEL) };
+  try {
+    const p = plan(labels);
+    const planned = { milestone: p.milestone, gateCandidate: p.gateCandidate };
+    const agrees = planned.milestone === filed.milestone && planned.gateCandidate === filed.gateCandidate;
+    return { planned, filed, agrees, refused: null };
+  } catch (err) {
+    if (!(err instanceof PlanRefusal)) throw err;
+    return { planned: null, filed, agrees: false, refused: err.message };
+  }
+}
+
+/** The shadow's one log line. */
+export function shadowLine(s) {
+  const candidate = (yes) => (yes ? ' with gate-candidate' : '');
+  const would = s.refused ? `plan() would refuse: ${s.refused}` : `plan() would file on "${s.planned.milestone}"${candidate(s.planned.gateCandidate)}`;
+  return `shadow (writes nothing): ${would}; the filer chose "${s.filed.milestone}"${candidate(s.filed.gateCandidate)} — ${s.agrees ? 'agrees' : 'differs'}`;
+}
+
 /**
  * The comment the presence check leaves on the issue. It lives here rather than
  * in the workflow's bash for the same reason the routing table does: it restates
@@ -213,30 +326,76 @@ export function needsSeverityComment() {
   ].join('\n');
 }
 
+/** One argument as a POSIX shell reads it back: bare when it is safe, single-quoted when not. */
+const shellQuote = (arg) => (/^[\w.:/@=+-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`);
+
+const PLAN_USAGE = 'usage: issue-triage-defaults.mjs plan --label <name>... [--explicit-milestone <title>]';
+
 /**
- * CLI: `gh issue view … --json milestone,labels` on stdin, one JSON decision on
- * stdout. Keeping the routing table out of the workflow's bash means there is
- * only one copy of it, and it is the copy under test (the drift argument
- * pr-title.yml settled for the commit-taxonomy pattern).
+ * `plan --label <name>... [--explicit-milestone <title>]`: one JSON plan on stdout, with
+ * `ghArgs`, the arguments as one shell-quoted string. A refusal exits 1 and prints only
+ * `{refused}`, so no arguments exist to file with. There is no `--milestone`: a filer's own
+ * routing choice is exactly what this replaces, and only a brief's milestone is explicit.
  */
-async function main() {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  const issue = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-  const decision = decide({
+function planCli(argv) {
+  const labels = [];
+  let explicitMilestone = '';
+  for (let i = 0; i < argv.length; i += 2) {
+    const [flag, value] = [argv[i], argv[i + 1]];
+    if (value === undefined || !['--label', '--explicit-milestone'].includes(flag)) {
+      return { code: 2, out: '', err: `${PLAN_USAGE}\n` };
+    }
+    if (flag === '--label') labels.push(value);
+    else explicitMilestone = value;
+  }
+  try {
+    const p = plan(labels, { explicitMilestone });
+    return { code: 0, out: JSON.stringify({ ...p, ghArgs: p.args.map(shellQuote).join(' ') }), err: '' };
+  } catch (err) {
+    if (!(err instanceof PlanRefusal)) throw err;
+    return { code: 1, out: JSON.stringify({ refused: err.message }), err: `plan refused: ${err.message}\n` };
+  }
+}
+
+/**
+ * CLI. With no arguments it is the backstop: `gh issue view … --json milestone,labels` on
+ * stdin, one JSON decision on stdout, and the shadow's line on stderr. Keeping the routing
+ * table out of the workflow's bash means there is only one copy of it, and it is the copy
+ * under test (the drift argument pr-title.yml settled for the commit-taxonomy pattern).
+ *
+ * @param {string[]} argv
+ * @param {string} stdin
+ * @returns {{code: number, out: string, err: string}}
+ */
+export function cli(argv, stdin) {
+  if (argv[0] === 'plan') return planCli(argv.slice(1));
+  const issue = JSON.parse(stdin || '{}');
+  const live = {
     labels: (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name)),
     milestone: issue.milestone?.title ?? '',
+  };
+  const decision = decide(live);
+  const s = shadow(live);
+  const out = JSON.stringify({
+    ...decision,
+    needsSeverityLabel: NEEDS_SEVERITY_LABEL,
+    gateCandidateLabel: GATE_CANDIDATE_LABEL,
+    comment: decision.needsSeverity ? needsSeverityComment() : '',
+    shadow: s,
   });
-  process.stdout.write(
-    JSON.stringify({
-      ...decision,
-      needsSeverityLabel: NEEDS_SEVERITY_LABEL,
-      gateCandidateLabel: GATE_CANDIDATE_LABEL,
-      comment: decision.needsSeverity ? needsSeverityComment() : '',
-    }),
-  );
+  return { code: 0, out, err: s ? `${shadowLine(s)}\n` : '' };
 }
 
 if (isCliEntry(import.meta.url)) {
-  await main();
+  const argv = process.argv.slice(2);
+  let stdin = '';
+  if (argv[0] !== 'plan') {
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    stdin = Buffer.concat(chunks).toString('utf8');
+  }
+  const { code, out, err } = cli(argv, stdin);
+  process.stdout.write(out);
+  process.stderr.write(err);
+  process.exitCode = code;
 }
