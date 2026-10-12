@@ -158,9 +158,12 @@ const REF = new RegExp(`yedeya-labs/kanon/[^@ \\t\\n\\v\\f\\r]+@[^ \\t\\n\\v\\f\
 const TAGS = sortU(ymlFiles('.github').flatMap((f) => readFileSync(f, 'utf8').split('\n')
   .filter((l) => l.includes('yedeya-labs/kanon/') && !new RegExp(`^${SP}*#`).test(l))
   .flatMap((l) => [...l.matchAll(REF)].map((m) => m[0].slice(m[0].lastIndexOf('@') + 1)))));
-const EXACT = /^v[0-9]+\.[0-9]+\.[0-9]+$/;
+// An exact version is a stable release, `vX.Y.Z`, or a candidate, `candidate-vX.Y.Z`, the same
+// code before it is promoted (K-ADOPT-11, plan 0009). Both are compared as strings below, so a
+// candidate beside its own stable release is two versions.
+const EXACT = /^(?:candidate-)?v[0-9]+\.[0-9]+\.[0-9]+$/;
 for (const tag of TAGS) {
-  if (!EXACT.test(tag)) fail('.github', `a Kanon reference pins '${tag}', not an exact version vX.Y.Z (K-ADOPT-11)`);
+  if (!EXACT.test(tag)) fail('.github', `a Kanon reference pins '${tag}', not an exact version: a stable release vX.Y.Z or a candidate candidate-vX.Y.Z (K-ADOPT-11)`);
 }
 if (TAGS.length > 1) {
   fail('.github', `Kanon references pin ${TAGS.join(',')}: every caller, action and lane must pin one version`);

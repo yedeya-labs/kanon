@@ -1,3 +1,5 @@
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TRIAGE, IMPL, adopter, check, red, job, type Tree, type Caller, laneCheck } from './helpers/lane-check.js';
 
@@ -40,6 +42,26 @@ laneCheck(() => {
     it('refuses a version other than the one lane-check runs at', () =>
       red(() => {}, 'lane-check runs at v9.9.9, but the Kanon references pin v1.2.3', { ACTION_REF: 'v9.9.9' }));
     it('accepts the version lane-check runs at', () => expect(check(adopter(), { ACTION_REF: 'v1.2.3' }).status).toBe(0));
+    // Plan 0009 S2: a candidate, `candidate-vX.Y.Z`, is an exact version too; nothing shorter is.
+    const candidate = () => {
+      const t = adopter();
+      const files = (readdirSync(join(t.dir, '.github'), { recursive: true }) as string[]).filter((f) => /\.ya?ml$/.test(f));
+      for (const f of files) retag(t, join('.github', f), 'candidate-v1.2.3');
+      return t;
+    };
+    it('accepts a candidate pinned everywhere', () => expect(check(candidate()).status).toBe(0));
+    it('accepts a candidate that lane-check runs at', () => expect(check(candidate(), { ACTION_REF: 'candidate-v1.2.3' }).status).toBe(0));
+    it('refuses a candidate other than the one lane-check runs at', () => {
+      const r = check(candidate(), { ACTION_REF: 'v1.2.3' });
+      expect(r.status).not.toBe(0);
+      expect(r.out).toContain('lane-check runs at v1.2.3, but the Kanon references pin candidate-v1.2.3');
+    });
+    for (const tag of ['candidate-v1', 'candidate-v1.2', 'stable', 'v0', 'candidate-v1.2.3x', 'xcandidate-v1.2.3']) {
+      it(`refuses '${tag}', naming both exact forms`, () =>
+        red((t) => retag(t, TRIAGE, tag), `pins '${tag}', not an exact version: a stable release vX.Y.Z or a candidate candidate-vX.Y.Z`));
+    }
+    it('refuses a candidate beside its own stable release, as two versions', () =>
+      red((t) => retag(t, TRIAGE, 'candidate-v1.2.3'), 'pin candidate-v1.2.3,v1.2.3'));
     it('counts a pin in any workflow, not only in a caller', () =>
       red((t) => t.write('.github/workflows/other.yml', 'on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: yedeya-labs/kanon/actions/pr-title@v1.0.0\n'), 'pin v1.0.0,v1.2.3'));
     it('ignores a commented-out reference, which is not a pin', () => {

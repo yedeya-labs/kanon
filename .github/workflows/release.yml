@@ -14,8 +14,10 @@
 #   3. If release-please fails, says whether GitHub refused to let Actions open the
 #      release PR, and names the two settings that allow it, organisation first.
 #   4. After a release, creates or moves the major tag (v0, later v1, ...) to the
-#      released commit. Adopters still pin an exact version; the major tag is a
-#      convenience, not the supported form.
+#      released commit, only when the release's tag is a plain vX.Y.Z: a candidate's
+#      (candidate-vX.Y.Z, plan 0009) or a monorepo component's tag never moves it.
+#      Adopters still pin an exact version; the major tag is a convenience, not the
+#      supported form.
 #   5. Guard (#73). Fails, and comments on the release PR, when the open release PR
 #      changes anything but version strings outside the changelog and the files its
 #      release type owns (`simple`: its version file, version.txt by default; `node` and
@@ -227,8 +229,15 @@ jobs:
           REPO: ${{ github.repository }}
           MAJOR: ${{ steps.release.outputs.major }}
           SHA: ${{ steps.release.outputs.sha }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
         run: |
           set -euo pipefail
+          # Only a plain vX.Y.Z moves the major tag: a candidate (candidate-vX.Y.Z) is not yet
+          # stable, and a component's tag (<component>-vX.Y.Z) is not the repository's release.
+          if [[ ! "${TAG_NAME:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Left the major tag where it is: the release's tag, ${TAG_NAME:-(none)}, is not a plain vX.Y.Z" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           TAG="v$MAJOR"
           if gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
             gh api -X PATCH "repos/$REPO/git/refs/tags/$TAG" -f sha="$SHA" -F force=true

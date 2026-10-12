@@ -123,6 +123,7 @@ Propose the bullet and ask for the reason; never invent one. Write it only once 
 | Id | Who | What you do |
 |---|---|---|
 | `pin.mixed` | agent | Make every `yedeya-labs/kanon` reference under `.github/` name the one release the person chooses (`.releases.pins` lists them). |
+| `pin.candidate` | decision | Doesn't block. Say the repository runs ahead of stable on a candidate, and name the latest stable release (`.releases.stable`, null when doctor couldn't read it). Ask whether the person means to; to follow stable instead, they move the pins with `/kanon:upgrade`. Change nothing on your own. |
 | `plugin.version-mismatch` | agent | Doesn't block. Set the `ref` the fix names on the kanon marketplace in `.claude/settings.json`, changing nothing else there, and show the diff. Once it is on their checkout, the person runs `/reload-plugins`: Claude Code fetches the marketplace again from the changed source. If the fix's release is newer than this skill's, say that this session still runs the older skills until they reload. |
 | `register.missing-row` | agent, person | When the fix has a `kanon apps` command, the person runs it ("Running `kanon apps`") and clicks **Create** and **Install** in the browser it opens. Otherwise add the register rows the fix names. Commit `docs/qa/agent-identities.md`. |
 | `register.split-slug` | decision | Ask the person which slug is the App's, then make the register's rows for that App name only it. |

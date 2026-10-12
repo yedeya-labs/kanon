@@ -81,6 +81,16 @@ export const EXIT = /** @type {const} */ ({ healthy: 0, findings: 1, usage: 2, e
 /** Where Kanon's releases are, whose tags carry each release's requirements file. */
 export const KANON_REPO = 'yedeya-labs/kanon';
 
+/**
+ * An exact release (`K-ADOPT-11`): a stable one, `vX.Y.Z`, or a candidate, `candidate-vX.Y.Z`, the
+ * same code before it is promoted (plan 0009). Compared as strings, so a candidate beside its own
+ * stable release is two releases.
+ */
+export const EXACT_RELEASE = /^(?:candidate-)?v\d+\.\d+\.\d+$/;
+
+/** A stable release only, `vX.Y.Z`: what GitHub's latest release names. */
+const STABLE_RELEASE = /^v\d+\.\d+\.\d+$/;
+
 /** The adoption record (`K-LAYOUT-10`), where an id-token holder is accepted. */
 export const ADOPTION_RECORD = 'docs/qa/adoption.md';
 
@@ -185,6 +195,7 @@ export const CATEGORIES = ['pin', 'app', 'secret', 'declaration', 'caller', 'lab
  */
 export const FINDINGS = {
   'pin.mixed': { category: 'pin', blocking: true },
+  'pin.candidate': { category: 'pin', blocking: false },
   'plugin.version-mismatch': { category: 'pin', blocking: false },
   'register.missing-row': { category: 'app', blocking: true },
   'register.split-slug': { category: 'app', blocking: true },
@@ -239,7 +250,8 @@ job of your own workflows that holds id-token: write. Writes nothing.
 
 Options:
   --to <vX.Y.Z>          check against this release's requirements instead of the pinned one's
-                         (run it before you merge the pin bump)
+                         (run it before you merge the pin bump; a candidate,
+                         candidate-vX.Y.Z, is an exact release too)
   --json                 print one JSON document (docs/doctor.md) instead of prose
   --repo <owner>/<repo>  the repository (default: the checkout's origin remote)
   --dir <path>           the checkout (default: here)
@@ -341,7 +353,7 @@ export const parseArgs = (argv) => {
   // standard output, so the pair is refused, and the refusal is the error document (#457).
   if (opts.help && opts.json) throw new Error('--help and --json contradict each other; give one');
   if (opts.repo && !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new Error(`--repo takes <owner>/<repo>, not "${opts.repo}"`);
-  if (opts.to && !/^v\d+\.\d+\.\d+$/.test(opts.to)) throw new Error(`--to takes an exact release, vX.Y.Z, not "${opts.to}"`);
+  if (opts.to && !EXACT_RELEASE.test(opts.to)) throw new Error(`--to takes an exact release, vX.Y.Z or candidate-vX.Y.Z, not "${opts.to}"`);
   return opts;
 };
 
@@ -353,8 +365,8 @@ const level = (v) => (v === 'write' ? 2 : v === 'read' ? 1 : 0);
 /** @param {unknown} v @returns {v is Record<string, any>} */
 const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** A semantic version's parts, for ordering. @param {string} v */
-const semver = (v) => (/^v(\d+)\.(\d+)\.(\d+)$/.exec(v) ?? []).slice(1).map(Number);
+/** A semantic version's parts, for ordering; a candidate's are its release's. @param {string} v */
+const semver = (v) => (/^(?:candidate-)?v(\d+)\.(\d+)\.(\d+)$/.exec(v) ?? []).slice(1).map(Number);
 
 /** @param {string} a @param {string} b */
 const newer = (a, b) => {
@@ -677,6 +689,24 @@ export const requirementsAt = async (deps, release) => {
   }
 };
 
+/**
+ * Kanon's latest stable release, as GitHub's latest release names it (plan 0009 §4): a candidate
+ * is a pre-release, which GitHub never makes the latest. Null when the call fails or names no
+ * stable release, so the caller says it couldn't tell.
+ * @param {Deps} deps
+ * @returns {Promise<string | null>}
+ */
+export const latestStable = async (deps) => {
+  try {
+    const r = await deps.gh(['api', `repos/${KANON_REPO}/releases/latest`]);
+    if (r.status !== 0) return null;
+    const tag = JSON.parse(r.stdout)?.tag_name;
+    return typeof tag === 'string' && STABLE_RELEASE.test(tag) ? tag : null;
+  } catch {
+    return null;
+  }
+};
+
 // ── The run ───────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -780,8 +810,8 @@ export const diagnose = async (deps, opts) => {
 
   // The release the callers pin, and the one to check against.
   const pins = kanonPins(texts);
-  const exact = [...pins.keys()].filter((r) => /^v\d+\.\d+\.\d+$/.test(r));
-  if (!exact.length) return { error: `nothing in ${repo}'s .github/ pins Kanon to an exact release (yedeya-labs/kanon/...@vX.Y.Z). Install it with kanon init first.` };
+  const exact = [...pins.keys()].filter((r) => EXACT_RELEASE.test(r));
+  if (!exact.length) return { error: `nothing in ${repo}'s .github/ pins Kanon to an exact release (yedeya-labs/kanon/...@vX.Y.Z, or @candidate-vX.Y.Z). Install it with kanon init first.` };
   const laneCallers = [...workflows].flatMap(([, wf]) => Object.values(isMap(wf.jobs) ? wf.jobs : {}).map((j) => kanonCall(j?.uses)).filter((c) => c && c.workflow.startsWith('agent-')).map((c) => /** @type {{ ref: string }} */ (c).ref));
   const count = (/** @type {string} */ r) => laneCallers.filter((x) => x === r).length;
   const pinned = /** @type {string} */ ([...exact].sort((a, b) => count(b) - count(a) || newer(b, a))[0]);
@@ -849,6 +879,21 @@ export const diagnose = async (deps, opts) => {
     const list = [...pins].map(([r, files]) => `${r} (${files.join(', ')})`).join('; ');
     find('pin.mixed', '.github', `Kanon's references pin more than one release, or a ref that is not an exact release: ${list}. lane-check requires one exact release everywhere (K-ADOPT-11).`, {
       text: `Pin every yedeya-labs/kanon reference under .github/ to ${checked}.`,
+    });
+  }
+
+  // ── A candidate pin (plan 0009 §4, K-ADOPT-11) ─────────────────────────────────────────
+  // Running ahead of stable is allowed, so it is a note with the latest stable release beside it,
+  // never a fault. The same for every repository: nothing here asks which one it is.
+  const stable = await latestStable(deps);
+  if (!STABLE_RELEASE.test(pinned)) {
+    const promoted = pinned.replace(/^candidate-/, '');
+    find('pin.candidate', '.github', stable
+      ? `Kanon's references pin a candidate, ${pinned}; the latest stable release is ${stable}. A candidate is an exact release, the same code before it is promoted to ${promoted}, so running ahead of stable is allowed (K-ADOPT-11).`
+      : `Kanon's references pin a candidate, ${pinned}; doctor couldn't tell the latest stable release (it could not read ${KANON_REPO}'s latest release). Running ahead of stable is allowed (K-ADOPT-11).`, {
+      text: stable && newer(stable, pinned) >= 0
+        ? `Nothing to do while you mean to run ahead. To follow stable, move every yedeya-labs/kanon reference under .github/, and the plugin's ref, to ${stable}; the upgrade skill does it.`
+        : `Nothing to do while you mean to run ahead. To follow stable, move every yedeya-labs/kanon reference under .github/, and the plugin's ref, to ${promoted} once it is promoted.`,
     });
   }
 
@@ -1788,7 +1833,7 @@ export const diagnose = async (deps, opts) => {
       repository: repo,
       checkout: { branch: branchName, defaultBranch: s.defaultBranch, head: head.status === 0 ? head.stdout.trim() : null },
       token: { source: who.source, login: who.login },
-      releases: { pins: [...pins.keys()].sort(newer), pinned, to: opts.to, checked },
+      releases: { pins: [...pins.keys()].sort(newer), pinned, to: opts.to, checked, stable },
       checking,
       status,
       exitCode: EXIT[status],
