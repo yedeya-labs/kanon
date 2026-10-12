@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { upstreamFindingsCli } from '../../scripts/upstream-findings.mjs';
 import {
@@ -13,6 +14,7 @@ import {
   readUpstreamFindingsFrom,
 } from '../../scripts/lib/upstream-findings.mjs';
 import { declarationFindings } from '../../actions/lane-check/declarations.mjs';
+import { SCHEMAS } from '../../actions/agent-telemetry/schema.mjs';
 
 /**
  * `K-LAYOUT-10`, `K-SELF-11`, kanon#423 (plan 0004 decision 12, amended 2026-10-06): where the
@@ -157,5 +159,38 @@ describe('the lane reads it from the default branch (K-MERGE-17)', () => {
     expect(upstreamFindingsCli({ repo: 'o/r', run: run(() => RECORD([BULLET])) })).toEqual({ code: 0, out: 'filed here' });
     expect(upstreamFindingsCli({ repo: 'o/r', run: run(() => RECORD([`- **${LABEL}:**`])) }).code).toBe(1);
     expect(upstreamFindingsCli({ repo: '' })).toEqual({ code: 2, out: 'upstream-findings: GITHUB_REPOSITORY must be set' });
+  });
+});
+
+/**
+ * kanon#602: once the collector sends findings (plan 0006 F4), what says which values the choice
+ * takes, or what leaves an adopter's repository, covers all four.
+ */
+describe('what describes the choice', () => {
+  const read = (path: string) => readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), 'utf8');
+  /** A script's header: its leading comment, after the shebang. */
+  const header = (path: string) => {
+    const lines = read(path).split('\n');
+    const end = lines.findIndex((l, i) => !(i === 0 && l.startsWith('#!')) && !l.startsWith('//') && l !== '');
+    return lines.slice(0, end).join('\n');
+  };
+
+  it('the header of the gate script, and of each script that reads its `UPSTREAM`, lists every value', () => {
+    for (const path of ['scripts/upstream-findings.mjs', 'scripts/overseer-file.mjs', 'scripts/telemetry-file.mjs']) {
+      const text = header(path).replace(/\n\/\/\s*/g, ' ');
+      for (const v of VALUES) expect(text, `${path} names \`${v}\``).toContain(`\`${v}\``);
+    }
+  });
+
+  it("docs/telemetry.md's privacy sentence names what upstream findings add: Kanon's own paths, and the text at `sent with evidence`", () => {
+    const doc = read('docs/telemetry.md');
+    const sentence = /What leaves your project is exactly[^\n]*?never code, prompts, text, file paths or usernames[^.]*\./.exec(doc)?.[0] ?? '';
+    expect(sentence).toContain('upstream findings');
+    expect(sentence).toContain("Kanon's own file paths");
+    expect(sentence).toContain('`sent with evidence`');
+    // Every free-text field of the finding row, by name: what `sent` strips and `sent with evidence` sends.
+    const textFields = Object.entries(SCHEMAS.finding![1]!).filter(([, f]) => f.type === 'text').map(([name]) => name.replace(/_/g, ' '));
+    expect(textFields).toEqual(['evidence', 'suggested fix']);
+    for (const f of textFields) expect(sentence).toContain(f);
   });
 });

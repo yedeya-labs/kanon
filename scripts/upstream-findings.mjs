@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Prints where upstream findings go (the Overseer's and the telemetry Explorer's): `drafted` or `filed here`, as the adoption
-// record on the default branch declares it (`K-LAYOUT-10`, kanon#423), or Kanon's default,
+// Prints where upstream findings go (the Overseer's and the telemetry Explorer's): `drafted`,
+// `filed here`, `sent` or `sent with evidence`, as the adoption record on the default branch
+// declares it (`K-LAYOUT-10`, kanon#423, plan 0006 §3.1), or Kanon's default,
 // `drafted`, when it declares nothing. For the gate job of each of those lanes, which hands the
 // value to its filing job before any agent runs:
 //
