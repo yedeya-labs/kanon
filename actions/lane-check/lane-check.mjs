@@ -16,11 +16,13 @@
 // ENV  KANON_ROOT   Kanon's tree (default: this script's ../..)
 //      ACTION_REF   the ref this action was called at
 //
-// Prints one `::error` per violation and exits 1 if there is any; exits 2 when it cannot run.
+// Prints one `::error` per violation and exits 1 if there is any; exits 2 when it cannot run. A
+// rule in its release of warning (caller-names.mjs) prints a `::warning` and does not fail.
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { callerNameFindings, kanonVersion } from './caller-names.mjs';
 import { declarationFindings } from './declarations.mjs';
 import { LEDGER, readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
 
@@ -28,6 +30,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const KANON_ROOT = process.env.KANON_ROOT || join(HERE, '../..');
 const ACTION_REF = process.env.ACTION_REF ?? '';
 const SPINE = 'agent-lane';
+/** The Kanon version this check runs at, from its own tree. */
+const KANON_VERSION = kanonVersion(KANON_ROOT);
 const SPINE_JOB = 'lane-agent-job';
 const HOOK = '.github/actions/project-setup/action.yml';
 const REGISTER = 'docs/qa/agent-identities.md';
@@ -44,10 +48,16 @@ const die = (msg) => {
 };
 let ERRORS = 0;
 let DEFAULTS = 0;
+let WARNINGS = 0;
 /** @param {string} file @param {string} msg */
 const fail = (file, msg) => {
   out(`::error file=${file},title=lane-check::${msg}`);
   ERRORS += 1;
+};
+/** A rule in its release of warning before it fails (kanon#728). @param {string} file @param {string} msg */
+const warn = (file, msg) => {
+  out(`::warning file=${file},title=lane-check::${msg}`);
+  WARNINGS += 1;
 };
 /** A default taken (plan 0005 §5.2). @param {string} file @param {string} msg */
 const note = (file, msg) => {
@@ -342,6 +352,16 @@ for (const f of WORKFLOWS) {
   const njobs = Array.isArray(doc.jobs) || typeof doc.jobs === 'string' ? doc.jobs.length : isObject(doc.jobs) ? Object.keys(doc.jobs).length : 0;
   if (String(njobs) !== '1') fail(f, `a lane caller has exactly one job, not ${njobs}`);
   const job = /** @type {any} */ (Object.values(isObject(doc.jobs) ? doc.jobs : {})[0] ?? null);
+  // The review, implement-revise and merge-reconcile callers' names, and the two racers' job
+  // ids, which the Merger also tells apart by (kanon#728): read from the gate's own constants,
+  // not from a line in the lane, and a warning until `FAILS_FROM` in caller-names.mjs. A lane
+  // that says its caller's name on a `# CALLER NAME:` line is held to that line above instead.
+  if (!wantName) {
+    const jobId = String(njobs) === '1' && isObject(doc.jobs) ? /** @type {string} */ (Object.keys(doc.jobs)[0]) : null;
+    for (const { level, message } of callerNameFindings(lane, raw(alt(doc.name, '')), jobId, KANON_VERSION)) {
+      (level === 'error' ? fail : warn)(f, message);
+    }
+  }
   const jobExtra = isObject(job) ? keys(job).filter((k) => !['name', 'uses', 'with', 'secrets', 'permissions'].includes(k)).join(', ') : '';
   if (jobExtra) fail(f, `the calling job holds only uses, with, secrets and permissions; it also has: ${jobExtra}`);
 
@@ -621,4 +641,4 @@ if (ERRORS > 0) {
   out(`lane-check: ${ERRORS} problem(s) in ${CALLERS} lane caller(s)`);
   process.exit(1);
 }
-out(`lane-check: ${CALLERS} lane caller(s) pass, with ${DEFAULTS} documented default(s) taken`);
+out(`lane-check: ${CALLERS} lane caller(s) pass, with ${DEFAULTS} documented default(s) taken${WARNINGS ? ` and ${WARNINGS} warning(s) that fail in a later release` : ''}`);
