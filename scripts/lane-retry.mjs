@@ -35,7 +35,10 @@
 // the token every one of these readers already holds (`Actions: read`) — no new App
 // permission, no store read, no annotation parsing (annotations need `Checks: read`,
 // which the lead App does not have). `workflow-retry-breadcrumbs` in the unit tier holds
-// the four workflows and these names together.
+// the four workflows and these names together. The review lane's `no_verdict` comes from
+// neither: its job leaves `NO_VERDICT_STEP` (below) itself, from the agent step's outcome
+// and the reconcile step's `verdict=none`, because the classifier has no class for a run
+// that succeeded.
 //
 // NODE BUILTINS ONLY: `agent-lead-reconcile.yml` and `agent-rebase.yml`'s filter job run
 // with no `npm ci` (RA-1957).
