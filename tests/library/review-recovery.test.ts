@@ -276,11 +276,14 @@ describe('the bound is the evidence, not a counter', () => {
     // and be churned — the one thing this must never do, and it degrades on a busy day.
     const calls: string[][] = [];
     reviewRunsFor(HEAD, { repo: 'o/r', json: (args: string[]) => { calls.push(args); return { workflow_runs: [] }; } });
-    expect(calls[0].join(' ')).toContain(`head_sha=${HEAD}`);
+    // The first read is the lane-caller lookup (kanon#726); here it finds no caller, so the
+    // runs are read under the lane's own name, as before.
+    const listing = calls.filter((c) => c[1] !== 'graphql');
+    expect(listing[0].join(' ')).toContain(`head_sha=${HEAD}`);
     // AND server-side by workflow. The repo-wide `actions/runs` form makes this workflow
     // compete for 100 unpaginated slots with every other workflow on the head (26 on the
     // busiest measured), and an under-count means a churn into a live or broken run.
-    expect(calls[0].join(' ')).toContain('actions/workflows/agent-review.yml/runs');
+    expect(listing[0].join(' ')).toContain('actions/workflows/agent-review.yml/runs');
   });
 });
 

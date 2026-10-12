@@ -97,7 +97,8 @@ export const CHURN_LABEL = 'review:please';
 
 function gh(args) {
   beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
-  return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  // 32 MiB, not the 1 MiB default: the lane-caller read returns every workflow's text (kanon#726).
+  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 const ghJson = (args) => JSON.parse(gh(args));
 

@@ -64,6 +64,7 @@ import { appLogin, appPersona } from './app-register.mjs';
 import { asRole, signed } from './lib/role-marker.mjs';
 import { declaredEnvironmentFrom, readReferenceDeployFrom } from './lib/reference-deploy.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { laneCallerFile } from './lib/lane-caller.mjs';
 import { beforeApply, taxonomyLabel } from './lib/labels.mjs';
 // What a commit message says it reverts lives in `lib/reverts.mjs`, shared with the metrics
 // detectors (plan 0003 §3.5), so the Lead and the escape rate read a revert the same way.
@@ -2021,9 +2022,13 @@ export function chargeable(actions) {
  */
 export { startedAfter };
 
+/** The implementer's revise lane, whose caller's runs `reviseRunsFor` reads. */
+export const REVISE_WORKFLOW = 'agent-implement-revise.yml';
+
 export function reviseRunsFor(sha, since, { json = ghJson, churnedAfter = /** @type {string|null} */ (null) } = {}) {
   try {
-    const runs = json(['run', 'list', '--repo', REPO, '--workflow', 'agent-implement-revise.yml',
+    // The lane's CALLER, under whatever name the adopter gave it (kanon#726).
+    const runs = json(['run', 'list', '--repo', REPO, '--workflow', laneCallerFile(REVISE_WORKFLOW, { repo: REPO, json }),
       '--commit', sha, '--limit', '100', '--json', 'headSha,event,status,conclusion,databaseId,createdAt']);
     return reviseDeliveries(runs, { sha, since, churnedAfter });
   } catch {

@@ -1035,11 +1035,18 @@ import {
 } from './lib/protocol-spellings.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
+import { laneCallerFile } from './lib/lane-caller.mjs';
 
 const gh = (args, opts = {}) => {
   beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   return execFileSync('gh', args, { encoding: 'utf8', ...opts });
 };
+
+/** A read, parsed: the lane-caller lookup's, which returns every workflow's text (kanon#726). @param {string[]} args */
+const readJson = (args) => JSON.parse(execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
+
+/** The review lane, whose caller the Merger dispatches to re-review a head. */
+export const REVIEW_LANE_FILE = 'agent-review.yml';
 
 /**
  * Block for a moment without pulling in a scheduler. This runs in a one-shot CI step
@@ -1372,7 +1379,7 @@ export function verifyClosed(pr, repo, say, { retries = 3, waitMs = 4000, sleep 
   }
 }
 
-export function apply(pr, verdict, repo, { dryRun = true } = {}) {
+export function apply(pr, verdict, repo, { dryRun = true, json = readJson } = {}) {
   const say = (msg) => console.log(`  ${dryRun ? 'would ' : ''}${msg}`);
   if (verdict.action === 'merge') {
     say(`merge #${pr.number} (squash)`);
@@ -1437,11 +1444,14 @@ export function apply(pr, verdict, repo, { dryRun = true } = {}) {
     if (alreadySaid(pr.number, repo, verdict.rule, pr.headSha)) return say(`already re-dispatched for #${pr.number} on this commit`);
     say(`re-dispatch the reviewer for #${pr.number}: ${verdict.rule}`);
     if (!dryRun) {
-      gh(['workflow', 'run', 'agent-review.yml', '--repo', repo, '-f', `pr_number=${pr.number}`]);
+      // The review lane's CALLER, under whatever name the adopter gave it (kanon#726): a
+      // dispatch of the lane's own file fails wherever the caller lives elsewhere.
+      const caller = laneCallerFile(REVIEW_LANE_FILE, { repo, json });
+      gh(['workflow', 'run', caller, '--repo', repo, '-f', `pr_number=${pr.number}`]);
       // The record IS the idempotence key, so it is written even though it is noise
       // on a healthy PR. A re-dispatch that leaves no trace re-fires every hour.
       gh(['pr', 'comment', String(pr.number), '--repo', repo, '--body',
-          signed(`🔁 the Merger asked ${'`agent-review.yml`'} to re-review this commit — ${verdict.why}\n\n${mark}`, 'Merger', appPersona('Merger'))]);
+          signed(`🔁 the Merger asked \`${caller}\` to re-review this commit — ${verdict.why}\n\n${mark}`, 'Merger', appPersona('Merger'))]);
     }
     return;
   }

@@ -2351,7 +2351,9 @@ describe('reviewRecovery', () => {
     // workflow compete for 100 unpaginated slots with every other workflow on the head,
     // and the direction of that loss is the forbidden one: under-counted attempts mean a
     // churn into a live or broken run.
-    expect(fn, 'and to this workflow, server-side').toMatch(/actions\/workflows\/\$\{REVIEW_WORKFLOW_FILE\}\/runs/);
+    // The workflow is the review lane's CALLER, wherever it lives (kanon#726).
+    expect(fn, 'and to this workflow, server-side').toMatch(/actions\/workflows\/\$\{file\}\/runs/);
+    expect(fn, 'the review lane\'s caller').toMatch(/const file = laneCallerFile\(REVIEW_WORKFLOW_FILE, \{ repo, json \}\);/);
   });
 
   it('only looks at in-flight issues', () => {
