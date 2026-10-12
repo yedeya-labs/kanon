@@ -75,9 +75,13 @@ jobs:
           # The agent's job revokes it when it ends. The default would revoke it as THIS job ends.
           skip-token-revoke: "true"
           # Narrowed to what this step uses (#48, `K-AGENT-46`): it reviews, comments, labels and files follow-ups; `contents: write` stays because the role holds it so its approval satisfies the ruleset (03-agents.md).
+          # It reads the head's check runs, status contexts and Actions runs, because `K-AGENT-24` has it read every test tier and the red-test result from its check (#691).
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write
+          permission-checks: read
+          permission-statuses: read
+          permission-actions: read
       - name: Seal the token for the agent's job
         id: seal
         env:

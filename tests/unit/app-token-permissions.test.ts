@@ -22,8 +22,10 @@ const DIRECT: Record<string, { step: string; perms: Perms }> = {
   // Reads the merged PR's reviews and the tree; files follow-up issues.
   'agent-merge-reconcile.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write', 'pull-requests': 'read' } },
   // Posts and stamps the review, comments, labels, files follow-ups. `contents: write` is the
-  // role's so its approval satisfies the ruleset (03-agents.md), so the review keeps it.
-  'agent-review.yml': { step: 'app-token', perms: { contents: 'write', issues: 'write', 'pull-requests': 'write' } },
+  // role's so its approval satisfies the ruleset (03-agents.md), so the review keeps it. Reads
+  // the head's check runs, status contexts and Actions runs, because `K-AGENT-24` has it read
+  // every test tier and the red-test result from its check rather than re-derive them (#691).
+  'agent-review.yml': { step: 'app-token', perms: { contents: 'write', issues: 'write', 'pull-requests': 'write', checks: 'read', statuses: 'read', actions: 'read' } },
   // Reads the tree and pull requests; files and comments on issues.
   'agent-verify-acs.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write', 'pull-requests': 'read' } },
   // Reads the tree and the pull requests that touched a failing route; files and comments on issues.
@@ -233,6 +235,15 @@ describe('every token a lane mints is narrowed to what its step uses (#48, K-AGE
     }).apps.releaser!.permissions;
     for (const [scope, level] of Object.entries(perms)) {
       expect(releaser[scope.replace('-', '_')], `${key} asks ${scope}: ${level}`).toBe(level);
+    }
+  });
+
+  it("K-AGENT-24: the Reviewer's token can read the checks, statuses and Actions runs it reads every test tier from (#691)", () => {
+    const mint = mints.find((m) => m.name === 'agent-review.yml' && m.step.id === 'app-token');
+    expect(mint, 'agent-review.yml#app-token mints nothing').toBeDefined();
+    const perms = requested(mint!.step.with);
+    for (const scope of ['checks', 'statuses', 'actions']) {
+      expect(['read', 'write'], `the Reviewer's mint asks ${scope}: ${perms[scope] ?? 'none'}, so it can't read the checks K-AGENT-24 has it read`).toContain(perms[scope]);
     }
   });
 

@@ -964,9 +964,10 @@ describe('the register row (K-LAYOUT-6)', () => {
   };
 
   it('adds a row to an existing table, keeping the rows already there', () => {
-    const { text, diff } = write(FIXTURE, 'Reviewer', 'example-reviewer');
-    expect(diff).toEqual(['+| Reviewer | `example-reviewer` | Read & write | Read & write | Read & write | No access |']);
-    for (const [role, slug] of [['Reviewer', 'example-reviewer'], ['Implementer', 'example-implementer'], ['Lead', 'example-lead']]) {
+    // The Explorer's row has a column for each of its permissions, so the table keeps its shape.
+    const { text, diff } = write(FIXTURE, 'Explorer', 'example-explorer');
+    expect(diff).toEqual(['+| Explorer | `example-explorer` | Read | Read & write | Read | No access |']);
+    for (const [role, slug] of [['Explorer', 'example-explorer'], ['Implementer', 'example-implementer'], ['Lead', 'example-lead']]) {
       expect(slugOf(text, role!).stdout.trim()).toBe(slug);
     }
   });
@@ -1000,7 +1001,7 @@ describe('the register row (K-LAYOUT-6)', () => {
   it('keeps a project column it does not know on update, and leaves it empty on insert', () => {
     const custom = '| Role | App slug | What it does | Contents | Issues | Pull requests | Workflows | Actions |\n|---|---|---|---|---|---|---|---|\n| Reviewer | `old` | Reviews PRs | Read | Read | Read | No access | No access |\n';
     const { text } = write(custom, 'Reviewer', 'new-reviewer');
-    expect(text).toContain('| Reviewer | `new-reviewer` | Reviews PRs | Read & write | Read & write | Read & write | No access | No access |');
+    expect(text).toContain('| Reviewer | `new-reviewer` | Reviews PRs | Read & write | Read & write | Read & write | No access | Read | Checks: Read, Commit statuses: Read |');
     expect(write(custom, 'Overseer', 'o').text).toContain('| Overseer | `o` |  | Read | Read & write | Read | No access | Read |');
   });
 

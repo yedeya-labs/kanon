@@ -11,7 +11,7 @@
     },
     "reviewer": {
       "role": "Reviewer",
-      "permissions": { "contents": "write", "issues": "write", "pull_requests": "write", "metadata": "read" }
+      "permissions": { "contents": "write", "issues": "write", "pull_requests": "write", "checks": "read", "statuses": "read", "actions": "read", "metadata": "read" }
     },
     "merger": {
       "role": "Merger",
