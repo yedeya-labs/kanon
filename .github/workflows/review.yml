@@ -16,7 +16,12 @@
 #
 # The secrets: JUDGE_APP_ID and JUDGE_APP_PRIVATE_KEY (the Judge App, whose Reviewer row is in
 # docs/qa/agent-identities.md) and CLAUDE_CODE_OAUTH_TOKEN, mapped by name, never inherited.
-name: Review
+#
+# ITS NAME IS FIXED (docs/lanes.md, "Four callers have fixed names"). GitHub reports the lane's
+# checks under this name, and the Merger leaves its own and the review's checks out of the ones
+# it waits on by it; under another name the Merger, which Kanon runs since 2026-10-12 (ADR 0011),
+# would wait on the review that woke it.
+name: Review (Reviewer)
 
 # The lane's runs are found by their title, so it ends with the head SHA (the lane says so,
 # and lane-check holds this line to it).

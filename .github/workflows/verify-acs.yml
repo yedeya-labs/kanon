@@ -1,0 +1,30 @@
+# The caller of Kanon's agent-verify-acs lane, written by `kanon init` (docs/lanes.md). The triggers are yours;
+# the rest is the lane's, and `lane-check` holds this file to it.
+name: Verify acceptance criteria (Explorer)
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Project tracking-issue number (the brief is docs/projects/<n>.md)"
+        required: false
+      ref:
+        description: "Tag or SHA to verify; empty for the default branch"
+        required: false
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  verify:
+    uses: yedeya-labs/kanon/.github/workflows/agent-verify-acs.yml@v0.39.0
+    with:
+      project: ${{ inputs.project }}
+      ref: ${{ inputs.ref }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

@@ -1,0 +1,37 @@
+# The caller of Kanon's agent-lead-reconcile lane, written by `kanon init` (docs/lanes.md). The triggers are yours;
+# the rest is the lane's, and `lane-check` holds this file to it.
+name: Lead (Lead) — reconcile
+
+on:
+  pull_request:
+    types: [closed]
+  issues:
+    types: [closed]
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Tracking issue number of the project (blank = every open project)"
+        required: false
+      apply:
+        description: "'true' to actually file and dispatch on a dispatch (anything else = dry run)"
+        required: false
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: read
+  pull-requests: read
+  statuses: read
+
+jobs:
+  reconcile:
+    uses: yedeya-labs/kanon/.github/workflows/agent-lead-reconcile.yml@v0.39.0
+    with:
+      project: ${{ inputs.project }}
+      apply: ${{ inputs.apply }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}

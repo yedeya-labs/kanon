@@ -263,7 +263,7 @@ Every finding is non-blocking, except `app.failed`: `blocking` means it makes th
 | `label.create` | `label` | The token could not create some of the taxonomy's labels. |
 | `label.delete-default` | `label` | The token could not delete a default label it was asked to. |
 | `milestone.buckets` | `milestone` | `kanon milestones` did not create the bucket milestones. |
-| `merge.settings` | `merge` | The token could not set squash-only merging. |
+| `merge.settings` | `merge` | The token could not set squash-only merging. A token that can't read the merge settings (GitHub leaves them out of its answer without Administration: read) gets a note saying they are not known, and `init` neither checks nor changes them. |
 | `ruleset.gaps` | `ruleset` | The default branch's ruleset lacks some of `K-ADOPT-1` step 8. |
 | `ruleset.first-commit` | `ruleset` | The default branch has no commit yet, so no ruleset was created. |
 | `ruleset.create` | `ruleset` | The token could not create the default branch's ruleset. |

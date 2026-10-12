@@ -60,6 +60,8 @@ describe('every Kanon workflow', () => {
       // Kanon's own caller of the code-audit lane (plan 0004 step 11a): it calls a lane with
       // store jobs, so it grants their id-token, and no job of its own runs anything.
       'code-audit.yml:audit',
+      // And of the dispatch sweep (ADR 0011, amended 2026-10-12): its one holder is the lane's store job.
+      'dispatch-sweep.yml:sweep',
       // And of the telemetry Explorer's lane (kanon#443): its one holder is the lane's aggregate job.
       'explore-telemetry.yml:explore',
       // The public metrics page's refresh (plan 0003 M7, kanon#661): its read job calls the

@@ -1,10 +1,10 @@
 # Implementer playbook: Kanon
 
-This is how the Implementer builds an issue on Kanon's own repository, and how it revises its own pull request. Kanon calls its implement lanes at its last release, never through `$/` ([ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md)), and no agent merges here: the Owner merges every pull request.
+This is how the Implementer builds an issue on Kanon's own repository, and how it revises its own pull request. Kanon calls its implement lanes at its last release, never through `$/` ([ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md)). Since 2026-10-12 the Merger merges your pull request once the Reviewer approves it, every check is green and it touches none of Kanon's [escalation paths](escalation-paths.md); the Owner merges the rest.
 
 The rules live in the [rulebook](../../rulebook/README.md), and this playbook only says where to look. Cite a rule by its id; don't restate it (`K-PRIN-2`). The [reviewer playbook](reviewer-playbook.md) lists what the Reviewer checks on every Kanon pull request, and yours is reviewed against it, so read its `## What to check` before you start. Kanon's gates are in the [stack document](stack.md).
 
-Kanon runs no bug-fix (triage) lane, no Lead and no reconciler yet. You are started by a member's `agent:implement` label or a dispatch, and by a changes-request on a pull request you opened.
+Since 2026-10-12 Kanon runs its full suite, the triage lane, the Lead, its reconciler and the dispatch sweep among it (ADR 0011, amended that day). You are started by a member's `agent:implement` label or a dispatch, by the triage lane's `qa:needs-triage` label, by the Lead's reconciler or the dispatch sweep re-delivering an issue, and by a changes-request on a pull request you opened.
 
 ## Implementer mode
 

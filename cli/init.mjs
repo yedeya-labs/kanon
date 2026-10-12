@@ -753,13 +753,18 @@ export const inspect = async (deps, repo) => {
     mergeQueue,
     covering,
     inactive,
-    settings: {
+    // GitHub leaves the merge settings out of its answer to a token that can't read the
+    // repository's administration settings, such as a fine-grained token without
+    // Administration: read, whatever the person's own role: then they are not known, which is
+    // not the same as different. null says so, and nothing claims to set them.
+    /** @type {Record<string, unknown> | null} */
+    settings: Object.keys(MERGE_SETTINGS).every((k) => k in r) ? {
       allow_squash_merge: r.allow_squash_merge,
       allow_merge_commit: r.allow_merge_commit,
       allow_rebase_merge: r.allow_rebase_merge,
       squash_merge_commit_title: r.squash_merge_commit_title,
       squash_merge_commit_message: r.squash_merge_commit_message,
-    },
+    } : null,
     labels: new Set(labels.json.map((/** @type {any} */ l) => String(l.name))),
     milestones: new Set(ms.json.map((/** @type {any} */ m) => String(m.title))),
     /** @type {Set<string> | null} null when the token can't list them */
@@ -2195,10 +2200,12 @@ const run = async (deps, opts, req, rep) => {
 
   out('');
   out('== Merging ==');
-  const settingDiff = Object.entries(MERGE_SETTINGS).filter(([k, v]) => /** @type {Record<string, unknown>} */ (s.settings)[k] !== v);
+  const merging = s.settings;
+  const settingDiff = merging ? Object.entries(MERGE_SETTINGS).filter(([k, v]) => merging[k] !== v) : [];
   const patch = ['api', '-X', 'PATCH', `repos/${repo}`, ...settingDiff.flatMap(([k, v]) => [typeof v === 'boolean' ? '-F' : '-f', `${k}=${v}`])];
   const settingList = settingDiff.map(([k, v]) => `${k}=${v}`).join(', ');
-  if (!settingDiff.length) out('Squash merge only, with the PR\'s title and body: already set (K-SHIP-3).');
+  if (!merging) note(`Merge settings not known: GitHub leaves them out for a token without Administration: read, so init neither checked nor changed them. Squash should be the only merge method, with the PR's title and body as the commit's (K-SHIP-3).`);
+  else if (!settingDiff.length) out('Squash merge only, with the PR\'s title and body: already set (K-SHIP-3).');
   else if (dry) change('merge-settings', repo, `Would set ${settingList} (K-SHIP-3)`);
   else {
     const r = s.admin ? await deps.gh(patch) : null;

@@ -10,11 +10,15 @@
 # only on a changes-request standing on a pull request the Implementer opened, whose author it
 # reads from the App register on the default branch. Anything else concludes in that one cheap
 # job. So until the Implementer has opened a pull request, every run skips.
-# `agent:revise` is the lane's re-delivery label; a member adds it by hand on Kanon, since no
-# reconciler runs here.
+# `agent:revise` is the lane's re-delivery label: the Lead's reconciler (`lead-reconcile.yml`,
+# since 2026-10-12) adds it inside a project, and a member may add it by hand.
 #
 # The secrets: as implement.yml, mapped by name, never inherited.
-name: Implement — revise
+#
+# ITS NAME AND ITS JOB ID ARE FIXED (docs/lanes.md, "Four callers have fixed names"): the Merger
+# leaves this lane's `revise / filter` check, which races it on the same review event, out of the
+# checks it waits on, by this name and that id.
+name: Implement (Implementer) — revise
 
 on:
   pull_request_review:
