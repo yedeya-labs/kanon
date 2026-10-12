@@ -525,3 +525,41 @@ describe("branchPattern: a branch filter's pattern, as GitHub matches it (#446)"
     expect([m('a\\*b', 'a*b'), m('a\\*b', 'axb'), m('[ab', '[ab'), m('[z-a]', 'z')]).toEqual([true, false, true, false]);
   });
 });
+
+// #749: the Lead writes each brief from docs/projects/_template.md, which an adopter copies
+// unchanged from Kanon's brief template (K-LAYOUT-11), and `kanon init` writes beside its caller.
+describe("kanon doctor and the Lead's brief template (#749)", () => {
+  const TEMPLATE = 'docs/projects/_template.md';
+  const withLead = (template: string | null) => {
+    const files = healthyFiles();
+    files['.github/workflows/agent-lead.yml'] = callerFile('agent-lead', REQ.lanes['agent-lead']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' });
+    if (template !== null) files[TEMPLATE] = template;
+    return files;
+  };
+  const lead = (r: Result) => r.json.findings.filter((f: { id: string }) => f.id === 'lead.template-missing');
+
+  it('lead.template-missing: names the template, without blocking, where the Lead\'s caller exists and the template does not', async () => {
+    const r = await run(checkout(withLead(null)), fakeGitHub(), ['--json']);
+    expect(lead(r)).toEqual([{
+      id: 'lead.template-missing',
+      category: 'declaration',
+      blocking: false,
+      subject: TEMPLATE,
+      message: `is missing; the Lead, which .github/workflows/agent-lead.yml calls, writes each brief from it (K-LAYOUT-11).`,
+      fix: {
+        text: `Copy Kanon's brief template to it unchanged, as kanon init writes it, from the release you check (${PINNED}):`,
+        commands: [
+          'mkdir -p docs/projects',
+          `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/yedeya-labs/kanon/contents/rulebook/templates/brief.md?ref=${PINNED}' > ${TEMPLATE}`,
+        ],
+        url: `https://github.com/yedeya-labs/kanon/blob/${PINNED}/rulebook/templates/brief.md`,
+      },
+    }]);
+  });
+
+  it("is absent where the template exists, whatever it holds, or nothing calls the Lead", async () => {
+    expect(lead(await run(checkout(withLead('# Our brief template\n')), fakeGitHub(), ['--json']))).toEqual([]);
+    const r = await run(checkout(healthyFiles()), fakeGitHub(), ['--json']);
+    expect(r.json.findings).toEqual([]);
+  });
+});

@@ -50,13 +50,13 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { URL } from 'node:url';
 import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, inspect, LANE_CHECK, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
+import { appsArgs, BRIEF_TEMPLATE_PATH, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -200,6 +200,7 @@ export const FINDINGS = {
   'hook.missing': { category: 'declaration', blocking: true },
   'hook.input-missing': { category: 'declaration', blocking: true },
   'workflow.missing': { category: 'declaration', blocking: true },
+  'lead.template-missing': { category: 'declaration', blocking: false },
   'waiver.stale': { category: 'declaration', blocking: false },
   'caller.lane-removed': { category: 'caller', blocking: true },
   'caller.misplaced': { category: 'caller', blocking: true },
@@ -1371,6 +1372,19 @@ export const diagnose = async (deps, opts) => {
         find('workflow.missing', `.github/workflows/${w}`, `is missing; the lane ${l} reads its runs by that file name (K-LAYOUT-18).`, { text: `Name the project's CI workflow .github/workflows/${w}, or let kanon init write one.` });
       }
     }
+  }
+  // The Lead writes each brief from the brief template, which an adopter copies unchanged from
+  // Kanon's (K-LAYOUT-11), and init writes beside the Lead's caller (#749).
+  const leadCallers = callers.filter((c) => c.lane === LEAD_LANE).map((c) => c.file);
+  if (leadCallers.length && read(BRIEF_TEMPLATE_PATH) === null) {
+    find('lead.template-missing', BRIEF_TEMPLATE_PATH, `is missing; the Lead, which ${leadCallers.join(', ')} call${leadCallers.length > 1 ? '' : 's'}, writes each brief from it (K-LAYOUT-11).`, {
+      text: `Copy Kanon's brief template to it unchanged, as kanon init writes it, from the release you check (${checked}):`,
+      commands: [
+        `mkdir -p ${dirname(BRIEF_TEMPLATE_PATH)}`,
+        `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/${KANON_REPO}/contents/rulebook/templates/brief.md?ref=${checked}' > ${BRIEF_TEMPLATE_PATH}`,
+      ],
+      url: `https://github.com/${KANON_REPO}/blob/${checked}/rulebook/templates/brief.md`,
+    });
   }
 
   // ── The apps-check caller ───────────────────────────────────────────────────────────────────

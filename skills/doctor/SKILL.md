@@ -140,6 +140,7 @@ Propose the bullet and ask for the reason; never invent one. Write it only once 
 | `hook.missing` | agent | As `declaration.missing`. |
 | `hook.input-missing` | agent | Add the inputs the fix lists to the hook. |
 | `workflow.missing` | agent | Rename the project's CI workflow to the file name the fix gives, or let `kanon init --json --no-apps` write one. |
+| `lead.template-missing` | agent | Doesn't block. Run the fix's commands, which copy Kanon's brief template unchanged into `docs/projects/_template.md`, and commit it. Never write a template of your own: the brief guard runs against Kanon's (`K-LAYOUT-11`). |
 | `caller.lane-removed` | decision | The release no longer ships that lane: ask the person whether to remove the caller, and read them the release notes. |
 | `caller.misplaced` | agent, decision | If nothing is at the target path, run the fix's `git mv`. If a file is already there, never move or overwrite either one: show the person both files, and offer a waiver (above). |
 | `caller.secrets-inherited` | agent | Replace `secrets: inherit` with the lines the fix lists. |
