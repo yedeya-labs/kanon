@@ -28,17 +28,25 @@ type Counts = { inForce: number; enforced: number; proseOnly: number };
 const RULE_HEADING = /^### `(K-[A-Z]+-\d+)`(.*)$/;
 const ENFORCED_BY = /^\*\*Enforced by\.\*\*\s*(.*)$/;
 
-/** The rules a chapter declares, each with whether it is retired and its Enforced-by lines. */
+/**
+ * The rules a chapter declares, each with whether it is retired and its Enforced-by lines. A
+ * rule runs to the next heading of any kind, so a chapter section after it is not read as its.
+ * A fenced block is an example, not the chapter's own text: a heading in one ends nothing.
+ */
 const rulesOf = (chapter: string): Rule[] => {
   const rules: Rule[] = [];
+  let rule: Rule | undefined;
+  let fenced = false;
   for (const line of chapter.split('\n')) {
+    if (/^\s*```/.test(line)) fenced = !fenced;
+    if (fenced) continue;
     const heading = RULE_HEADING.exec(line);
     if (heading) {
-      rules.push({ id: heading[1]!, retired: /\*\*retired\*\*/i.test(heading[2]!), enforcedBy: [] });
+      rule = { id: heading[1]!, retired: /\*\*retired\*\*/i.test(heading[2]!), enforcedBy: [] };
+      rules.push(rule);
       continue;
     }
-    if (/^#{1,3} /.test(line)) continue;
-    const rule = rules.at(-1);
+    if (/^#{1,6} /.test(line)) rule = undefined;
     if (!rule) continue;
     if (/^\*\*Retired\.\*\*/.test(line)) rule.retired = true;
     const enforced = ENFORCED_BY.exec(line);
@@ -48,6 +56,11 @@ const rulesOf = (chapter: string): Rule[] => {
 };
 
 const isProseOnly = (rule: Rule): boolean => /^Prose only\b/i.test(rule.enforcedBy[0] ?? '');
+
+/** Each rule the count can't classify: one in force without exactly one Enforced-by line, or a retired one with any. */
+const unclassifiableOf = (rules: Rule[]): string[] =>
+  rules.filter((r) => r.enforcedBy.length !== (r.retired ? 0 : 1))
+    .map((r) => `${r.id} (${r.retired ? 'retired' : 'in force'}) has ${r.enforcedBy.length} "Enforced by" lines`);
 
 const countsOf = (rules: Rule[]): Counts => {
   const live = rules.filter((r) => !r.retired);
@@ -83,6 +96,10 @@ describe('the rule counter classifies a rule the way the README counts it', () =
     '**Enforced by.** Prose only.',
     '',
     '### `K-EX-3` A prose-only rule with a planned guard',
+    '```markdown',
+    '## An example file\'s heading',
+    '**Enforced by.** An example\'s line, not the rule\'s.',
+    '```',
     '**Enforced by.** Prose only; a guard is planned.',
     '',
     '### `K-EX-4` A prose-only rule that describes a partial check',
@@ -106,6 +123,13 @@ describe('the rule counter classifies a rule the way the README counts it', () =
     expect(countsOf(rules)).toEqual({ inForce: 4, enforced: 1, proseOnly: 3 });
   });
 
+  it('ends a rule at the next heading, so a chapter section\'s line is not the rule\'s, and skips a fenced example', () => {
+    const rules = rulesOf(chapter);
+    expect(rules.find((r) => r.id === 'K-EX-6')?.enforcedBy).toEqual([]);
+    expect(rules.find((r) => r.id === 'K-EX-3')?.enforcedBy).toEqual(['Prose only; a guard is planned.']);
+    expect(unclassifiableOf(rules)).toEqual([]);
+  });
+
   it('reads the three figures from the README section, and none from elsewhere', () => {
     const readme = [
       '# Example',
@@ -123,9 +147,7 @@ describe('the rule counter classifies a rule the way the README counts it', () =
 
 describe('the README\'s rule counts are the rulebook\'s', () => {
   it('every rule in force has one "Enforced by" line, and a retired rule has none', () => {
-    const unclassifiable = RULES.filter((r) => r.enforcedBy.length !== (r.retired ? 0 : 1))
-      .map((r) => `${r.id} (${r.retired ? 'retired' : 'in force'}) has ${r.enforcedBy.length} "Enforced by" lines`);
-    expect(unclassifiable).toEqual([]);
+    expect(unclassifiableOf(RULES)).toEqual([]);
   });
 
   it('README.md states the rulebook\'s rules in force, the enforced ones and the prose-only ones', () => {
