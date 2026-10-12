@@ -171,7 +171,7 @@ These rules decide what leaves an adopter's project, where it is kept, and who m
 ### `K-OBS-16` Telemetry is metadata, never content
 
 **Rule.** A telemetry row may contain only:
-- the repository, and the issue or PR number;
+- the opaque key the store files it under, and the issue or PR number;
 - the agent **role**, never a GitHub username or account;
 - the lane, model, token counts, cost and duration;
 - the outcome, and a bail or failure reason chosen from a fixed list of codes;
@@ -218,14 +218,14 @@ The lanes reach the QA store only through Kanon's **store contract**: a hook the
 ### `K-OBS-18` Hosted telemetry is opt-in, EU-hosted, and kept for thirteen months
 
 **Rule.**
-- **Opt-in.** Telemetry is written to the adopter's own store by default, by the same collector. Sending it to the Kanon-hosted service is an explicit opt-in.
+- **Opt-in.** By default telemetry stays in the adopter's own repository: each lane run keeps its row as one of the run's artifacts, and no collector sends it anywhere, which is what the answer **No** gives. Sending it to the Kanon-hosted service is an explicit opt-in.
 - **Upstream findings are a second opt-in.** Sending upstream findings to the Kanon-hosted service, with or without their evidence text, is declared on its own in the adoption record, and needs the first.
 - **Where and how long.** Hosted telemetry is kept in the EU (Frankfurt) for thirteen months, and an adopter's data is deleted on request.
 - **Who sees what.** An adopter sees only their own data. Anything shared across adopters, including published cost figures, is aggregated and anonymised.
 
 **Why.** An open-source tool that sends data home by default loses the trust it depends on. Thirteen months allows year-on-year comparisons, and no more. Opting in is also what feeds the cross-adopter improvement work, so the value of opting in has to be visible to the adopter, not assumed.
 
-**Enforced by.** Prose only; the installer's opt-in is one consent question that sets both opt-ins, *Yes*, *Codes only* or *No*, sends nothing without an explicit answer, and links [`docs/sharing.md`](../docs/sharing.md) for what is sent, where it is kept and for how long, who reads it, and how to stop and erase it ([plan 0007](../docs/plans/0007-guided-install.md) §3, Q4). `kanon init` and the adopt skill ask it from plan 0007's steps G5 and G6; until then, `kanon init` asks the same opt-ins as three questions, each defaulting to sending nothing.
+**Enforced by.** The installer's opt-in is one consent question that sets both opt-ins, *Yes*, *Codes only* or *No*, sends nothing without an explicit answer, and links [`docs/sharing.md`](../docs/sharing.md) for what is sent, where it is kept and for how long, who reads it, and how to stop and erase it ([plan 0007](../docs/plans/0007-guided-install.md) §3, Q4). `kanon init` asks it, as `CONSENT_QUESTION` in `cli/init.mjs`, and the `/kanon:adopt` skill asks it word for word ([`docs/init.md`](../docs/init.md#sharing)). [`tests/unit/kanon-init.test.ts`](../tests/unit/kanon-init.test.ts) fails when `init` writes the collector's caller without an explicit yes (by default, under `--yes`, `--json` or a dry run, or on an answer it doesn't recognise), when `--yes` alone records upstream findings as anything but `drafted`, and when the skill's question differs from `init`'s.
 
 **Class.** framework
 
