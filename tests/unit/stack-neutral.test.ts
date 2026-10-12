@@ -354,6 +354,60 @@ describe('citation-shift on the Python adopter, with only node and git on PATH (
   });
 });
 
+// The red-test check (`K-MERGE-13`) on the Python adopter: its tests are pytest's by the
+// convention table, its source is Python wherever it is, and its runner is the toolchain the hook
+// installs, never one Kanon fetches. Its cases run git and node, so the block takes the spawn budget.
+describe('the red-test check on the Python adopter, with only node and git on PATH', SPAWNS, () => {
+  /** Commit the fixture, apply `change`, commit it, and run red-test over the two commits. */
+  const redTest = (change: (dir: string) => void, ...args: string[]) => {
+    const dir = checkout();
+    try {
+      const git = (...a: string[]) => {
+        const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: dir, encoding: 'utf8' });
+        if (r.status !== 0) throw new Error(`git ${a.join(' ')}: ${r.stderr}`);
+        return r.stdout.trim();
+      };
+      git('commit', '-qm', 'base');
+      const base = git('rev-parse', 'HEAD');
+      change(dir);
+      git('add', '-A');
+      git('commit', '-qm', 'head');
+      const r = spawnSync('node', [join(ROOT, 'scripts/red-test.mjs'), '--base', base, '--head', git('rev-parse', 'HEAD'), ...args], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { PATH: bareBin, HOME: dir, KANON: ROOT },
+      });
+      return { status: r.status, out: `${r.stdout}${r.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const fix = (dir: string) => {
+    edit(dir, 'src/orders/core.py', (s) => `${s}\n\ndef count() -> int:\n    return len(_orders)\n`);
+    edit(dir, 'tests/test_core.py', (s) => `${s}\n\ndef test_count_counts_each_order_once():\n    from orders.core import count\n    place("c", "cup")\n    assert count() >= 1\n`);
+  };
+
+  it('reads the Python source and the pytest file, and plans a verification', () => {
+    const r = redTest(fix, '--plan');
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toContain('1 source file(s), 1 test file(s).');
+    expect(r.out).toMatch(/^verify=true$/m);
+  });
+
+  it('plans none when only the test changed: nothing to revert', () => {
+    const r = redTest((dir) => edit(dir, 'tests/test_core.py', (s) => `${s}\n# a note\n`), '--plan');
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toMatch(/^verify=false$/m);
+  });
+
+  it('with no pytest installed, fails closed as INCONCLUSIVE rather than fetching one or passing', () => {
+    const r = redTest(fix);
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('| `tests/test_core.py` | ⚪ no data: the runner reported nothing for this file |');
+    expect(r.out).toContain('**INCONCLUSIVE');
+  });
+});
+
 /**
  * What ships to an adopter, read line by line, minus comments. A line naming a package
  * manager or its files is an assumption about the adopter's stack unless it is listed here

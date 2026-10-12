@@ -77,6 +77,9 @@ const EXEMPT = new Set([
   '.github/workflows/rebase-agent-job.yml: ./.github/actions/project-setup',
   // verify-acs runs the hook in its `criteria` job, which holds no token (kanon#243).
   '.github/workflows/agent-verify-acs.yml: ./.github/actions/project-setup',
+  // The red-test check installs the PR's toolchain with the hook before it reverts and re-runs
+  // the PR's tests (K-MERGE-13), in a job that holds no secret and no App token.
+  '.github/workflows/red-test.yml: ./.github/actions/project-setup',
   '.github/workflows/dco.yml: yedeya-labs/kanon/actions/dco@vX.Y.Z',
   '.github/workflows/pr-title.yml: yedeya-labs/kanon/actions/pr-title@vX.Y.Z',
   '.github/workflows/review.yml: yedeya-labs/kanon/.github/workflows/agent-review.yml@vX.Y.Z',

@@ -326,6 +326,33 @@ A project closes only once its merges are deployed to your reference environment
 
 The reconciler reads it from your default branch, through [`scripts/lib/reference-deploy.mjs`](../scripts/lib/reference-deploy.mjs). Without it, the reconciler names the missing declaration when a project reaches its deploy phase, and that project can't close. A step of your own that needs the same names, such as a probe that your Author App (the Lead's) can read Actions, prints one with `node "$KANON/scripts/reference-deploy.mjs" workflow` (or `job`, or `environment`), with `GITHUB_REPOSITORY` and a `gh` token in its environment. Add the declaration before, or with, the upgrade that brings it.
 
+## The red-test check
+
+On an agent-authored pull request, one labelled `agent:implement` or `agent:triage`, the red-test check reverts the non-test part of the change to the merge base, re-runs the changed tests, and fails when they still pass (`K-MERGE-13`). A person's pull request is not subject to it, and concludes skipped. It is not a lane: [`red-test.yml`](../.github/workflows/red-test.yml) runs no agent and takes no secret, so `lane-check` holds its caller only to the pin. Call it from a caller of your own on `pull_request`:
+
+<!-- x-release-please-start-version -->
+
+```yaml
+name: Red-test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  red-test:
+    uses: yedeya-labs/kanon/.github/workflows/red-test.yml@v0.39.0
+```
+
+<!-- x-release-please-end -->
+
+- **It runs your tests your way.** The `verify` job calls your project-setup hook (`lane: red-test`, `install: 'true'`, the database your `docs/qa/test-database.md` declares), then runs each changed test file on its own, with the runner its [code area](#code-areas) names, or pytest or `go test` for a Python or Go test ([ADR 0012](decisions/0012-test-conventions-by-language.md)). A JavaScript test in no `tests` tree that names a runner is reported, never run, and a Playwright tree is out of its scope. It reverts every changed file in a language Kanon's test conventions read, or a shell script, except a test runner's own configuration.
+- **Its verdicts.** `PASS` when a changed test fails an assertion against the reverted source, and `PASS, weakly` when one only fails to load; `BLOCKED` when every changed test still passed; `UNVERIFIABLE` when a changed file was left unreverted (a doc, a migration, a runner config) or an unreverted test helper could explain a load failure; `INCONCLUSIVE` when the runner reported nothing. All but the passes fail the check. The `Red-test scope` job decides first, so a diff with no test or no source to revert concludes skipped, never green.
+- **The verifier is Kanon's,** at the version your caller pins: a pull request can change its tests, never the check that judges them.
+
 ## The Merger
 
 The merge lane merges a pull request with no person in the loop only inside the green zone (`K-MERGE-4`): an `agent:implement` or `agent:triage` pull request the Implementer authored, approved by the Reviewer on its current head, with every check green, no escalating path or label, and no invariant promoted to `[confirmed]` (`K-SPEC-9`). It merges through the front door with the Judge App (the Merger's), never as a ruleset bypass actor, and runs no model. Its caller:
