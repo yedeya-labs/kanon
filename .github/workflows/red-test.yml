@@ -1,0 +1,174 @@
+# The red-test check (`K-MERGE-13`), as a reusable workflow. Moved from the reference adopter
+# (plan 0001 §7). On an agent-authored PR it reverts the non-test part of the change, re-runs the
+# changed tests, and fails when they still pass: the "confirm it fails" step of `K-AGENT-15` is
+# the one step with no artifact, and the most attractive one to fake. `scripts/red-test.mjs`
+# holds the classification, the verdicts and the messages, and says why each one is what it is.
+#
+# NOT A LANE. It runs no agent, mints no token and takes no secret, so it isn't an `agent-*`
+# workflow and `lane-check` holds its caller to no lane rule, only to the pin and the secrets
+# rule, as the release workflow's. An adopter calls it from a thin caller of its own, pinned to
+# an exact Kanon version (`K-ADOPT-11`), on `pull_request`; docs/lanes.md gives the caller.
+#
+# SCOPED TO WHERE THE CLAIM IS MADE (ADR 0004 §7). Only a PR carrying `agent:implement` or
+# `agent:triage` is checked: a person's PR never claimed "confirmed it fails", and applied to
+# people's PRs the check was measured blocking about half of them wrongly. A PR without either
+# label concludes SKIPPED.
+#
+# THE VERIFIER IS KANON'S, AT THE CALLER'S PIN, NEVER THE PR'S. In the adopter the script lived in
+# the repository it judged, so the workflow took the BASE revision's copy: a PR's own copy could
+# widen its skip paths and turn the check green on a PR whose tests prove nothing. Here
+# `kanon-path` runs `scripts/red-test.mjs` from the runner's action cache at the version the
+# caller pins, outside the workspace, so no PR branch can change the verifier script. The TESTS
+# still come from the PR, and so do two inputs the verifier reads: the stack document's `## Code
+# areas` (which files are tests, and their runners) and the project-setup hook, which installs the
+# toolchain. A PR that changes either touches an escalation path (`K-MERGE-4`), so a person
+# merges it; pinning those too is tracked as hardening.
+#
+# THE TREE IS THE PR'S HEAD, NOT GITHUB'S MERGE REF. On `pull_request`, `actions/checkout` checks
+# out `refs/pull/N/merge` unless told otherwise, and the script reverts and restores against the
+# head and its merge base. On the merge ref, the base tip's changes would sit in the tree beside
+# the reverted source, and could supply a false strong PASS: the case the merge-base diff exists
+# to prevent. So both checkouts name the head commit.
+#
+# WHAT IS A TEST, AND HOW IT RUNS, IS THE PROJECT'S (ADR 0012). The script reads the stack
+# document's `## Code areas` (`K-LAYOUT-17`): a `tests` tree's runner runs its tests, a Python or
+# Go test runs with pytest or `go test`, and each file runs through the toolchain the
+# project-setup hook installed. Without a declaration, a JavaScript test has no runner and is
+# reported, never run.
+#
+# THE CODE UNDER TEST RUNS HERE, and this workflow holds nothing it could reach: no secret, no App
+# token, a read-only workflow token, and no persisted credential in either checkout.
+name: Red-test
+
+on:
+  workflow_call:
+
+# ONLY A RUN THAT WILL VERIFY MAY CANCEL ONE.
+#
+# Concurrency is evaluated when the run is CREATED, before any job `if` is read. So with one group
+# per PR, every event created a run that took the slot and cancelled its predecessor, including the
+# label events the `scope` job then declines. Measured in the reference adopter: the Implementer
+# applies `agent:implement` and `review:please` in the same second, the `review:please` run
+# cancelled the `agent:implement` run two seconds in, then skipped, and the agent PR's head
+# carried no red-test verdict at all, silently.
+#
+# So the group is keyed on the SAME predicate as the `scope` job's `if`. A run whose job will
+# execute joins the PR's shared group, where the newest still supersedes an older one (a new push
+# replaces the verification of the old head). A run whose job will skip gets a group of its own,
+# keyed on its run id, so it can neither cancel a verification nor be cancelled by one.
+# `tests/library/red-test.test.ts` evaluates both fields over every event shape and fails when
+# they drift apart; keep them character-for-character identical.
+concurrency:
+  group: >-
+    red-test-${{ github.event.pull_request.number }}-${{
+    ((github.event.action != 'labeled'
+        || github.event.label.name == 'agent:implement'
+        || github.event.label.name == 'agent:triage')
+      && (contains(github.event.pull_request.labels.*.name, 'agent:implement')
+        || contains(github.event.pull_request.labels.*.name, 'agent:triage')))
+    && 'verify' || format('noop-{0}', github.run_id) }}
+  cancel-in-progress: true
+
+# A called workflow's permissions can only narrow its caller's. Reading the repository is all
+# either job does.
+permissions:
+  contents: read
+
+jobs:
+  # "NOT CHECKED" MUST NOT LOOK LIKE "VERIFIED".
+  #
+  # A diff with tests but no source change has nothing to revert, and the script says so and exits
+  # 0, so `Red-test verification` would conclude SUCCESS, identical in the rollup to a claim that
+  # was verified. A job whose steps all succeed IS success, whatever it printed; the only way the
+  # check concludes SKIPPED is for the job not to run. So this cheap job (no install, no database)
+  # asks the script's `--plan` first, and `verify` runs only on `verify=true`. If THIS job fails (no
+  # merge base, a malformed declaration), its own check reads FAILURE and `verify` is skipped
+  # behind it: fail closed, visibly.
+  scope:
+    name: Red-test scope
+    # Only where "confirmed it fails" was asserted, and, on a `labeled` event, only for a label
+    # that CHANGES the answer. `labeled` is load-bearing (an agent opens its PR before labelling
+    # it, so the `opened` run always evaluates this as false), but it fires on EVERY label, from
+    # any actor: a review label used to re-run the whole verification minutes later, and two
+    # labels a second apart guaranteed one run cancelled the other.
+    if: >-
+      (github.event.action != 'labeled'
+        || github.event.label.name == 'agent:implement'
+        || github.event.label.name == 'agent:triage')
+      && (contains(github.event.pull_request.labels.*.name, 'agent:implement')
+        || contains(github.event.pull_request.labels.*.name, 'agent:triage'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      verify: ${{ steps.plan.outputs.verify }}
+    steps:
+      # Full history: the script diffs against the merge base of the PR's base and head.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/actions/kanon-path
+        id: kanon
+      - name: Decide whether there is a claim to verify
+        id: plan
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          node "$KANON/scripts/red-test.mjs" --plan --base "$BASE" --head "$HEAD" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "${PIPESTATUS[0]}"
+
+  verify:
+    # The CHECK-RUN name is the job's. Named because the Reviewer reads this result from the
+    # rollup, and because a ruleset matches a required check by its literal context string: a bare
+    # `verify` would be both uninformative and collision-prone there.
+    name: Red-test verification
+    needs: scope
+    # The label predicate lives on `scope`; a skipped `scope` skips this too. Here only the plan's
+    # answer is read, so a diff with nothing to verify concludes SKIPPED.
+    if: needs.scope.outputs.verify == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # Full history: the job diffs against the merge base and checks files out of it.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Kanon's scripts at the caller's pin, BEFORE the hook so the project's own toolchain still
+      # wins the PATH for its tests, and read from this step's OUTPUT afterwards, which the hook
+      # cannot rewrite as it can `$GITHUB_ENV`.
+      - uses: $/actions/kanon-path
+        id: kanon
+
+      # The project's test database, as it declares one (`K-LAYOUT-16`): changed tests may need it.
+      - uses: $/actions/test-database
+        id: database
+
+      # INSTALL BEFORE THE REVERT, at the PR's tree, so a dependency the new test needs is present.
+      # The manifests and lockfiles are never reverted for the same reason: a failure there would
+      # have nothing to do with the claim.
+      - uses: ./.github/actions/project-setup
+        with:
+          lane: red-test
+          install: "true"
+          database: ${{ steps.database.outputs.database }}
+          browsers: "false"
+
+      # `--base` is the base branch's TIP, and the script derives the MERGE BASE from it: it diffs
+      # and reverts against `merge-base(base, head)`, so a branch that has not just been rebased
+      # does not revert and run the default branch's commits as though they were the PR's.
+      - name: Verify the changed tests fail without the source change
+        env:
+          KANON: ${{ steps.kanon.outputs.path }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          node "$KANON/scripts/red-test.mjs" --base "$BASE" --head "$HEAD" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "${PIPESTATUS[0]}"
