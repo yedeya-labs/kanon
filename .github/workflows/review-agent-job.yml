@@ -1266,7 +1266,7 @@ jobs:
           if [ "$AGENT" = "failure" ]; then
             echo "::error title=no verdict posted::No verdict was posted for ${HEAD_SHA:0:7} and the review agent did not finish. PR #$PR_NUMBER has no review and nothing retries. Read the classifier's annotation, from a later step of this job, for whether to re-run NOW or wait for a cap or outage to clear — then: gh workflow run agent-review.yml -f pr_number=$PR_NUMBER (RA-1351/RA-1408)."
           else
-            echo "::error title=no verdict posted::The review agent exited ZERO but posted no verdict for ${HEAD_SHA:0:7} — the RA-356 shape, which used to leave a GREEN check on an unreviewed PR. PR #$PR_NUMBER has no review. Re-run with: gh workflow run agent-review.yml -f pr_number=$PR_NUMBER (RA-1351)."
+            echo "::error title=no verdict posted::The review agent exited ZERO but posted no verdict for ${HEAD_SHA:0:7} — the RA-356 shape, which used to leave a GREEN check on an unreviewed PR. PR #$PR_NUMBER has no review. The reconciler's review recovery, where it runs, retries this head once after its cool-down (kanon#622). To review it now: gh workflow run agent-review.yml -f pr_number=$PR_NUMBER (RA-1351)."
           fi
           echo "**No verdict was posted for \`${HEAD_SHA:0:7}\`** — this job is red so that is visible now, rather than as silence on the PR." >> "$GITHUB_STEP_SUMMARY"
           exit 1
@@ -1375,6 +1375,14 @@ jobs:
       - name: "Retryable once the cause clears: the model API failed mid-run"
         if: failure() && steps.claim.outputs.proceed == 'true' && steps.classify.outputs.retry == 'api_error'
         run: echo "The model API failed part-way through. reviewRecovery retries this head once, after the cool-down (RA-2519)."
+      # AND A RUN THAT EXITED ZERO WITH NO VERDICT (kanon#622). The classifier has nothing to say
+      # about an agent that succeeded, so this one reads two facts fixed before the quality step
+      # runs the PR's code: the runner's outcome of the agent step, and the reconcile step's
+      # `verdict=none`. Without it a red head whose only review went silent had no owner. The
+      # name must match `NO_VERDICT_STEP` in .kanon/scripts/lane-retry.mjs.
+      - name: "Retryable once: the review agent exited zero and posted no verdict"
+        if: failure() && steps.claim.outputs.proceed == 'true' && steps.reconcile.outputs.verdict == 'none' && steps.agent.outcome == 'success'
+        run: echo "The review agent exited zero and posted no verdict. reviewRecovery retries this head once, after the cool-down (kanon#622)."
 
       # THE FINISH BLOCK, with the reviewer's own columns passed through. Same row as
       # before: `agent: reviewer`, the same flag block, the execution file, the PR, and the
