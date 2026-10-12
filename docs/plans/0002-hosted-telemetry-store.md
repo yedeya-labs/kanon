@@ -235,6 +235,8 @@ CloudFormation needs only the AWS CLI. AWS keeps the state. `DeletionPolicy: Ret
 
 The collector and the readers call the operations, never DynamoDB by name. The same template deployed in an adopter's own account is the **default, self-hosted** telemetry store that `K-OBS-18` requires: hosted telemetry is the same stack with more than one adopter in its register. The no-cloud implementation is #19's work.
 
+**Note, 2026-10-12: `K-OBS-18` no longer requires a self-hosted store by default** ([#707](https://github.com/yedeya-labs/kanon/issues/707), and [ADR 0007](../decisions/0007-data-boundary.md)'s amendment of the same day). No install makes one: by default each lane run keeps its row as a run artifact and no collector sends it anywhere, which is what the install's answer **No** gives. An adopter may still deploy this template in its own account; nothing requires it.
+
 ## 6. Reads (decision 6)
 
 **Each adopter reads only its own rows,** by construction: the reader role's `LeadingKeys` condition is the adopter's key. A query on another key is denied by IAM, not filtered by code.

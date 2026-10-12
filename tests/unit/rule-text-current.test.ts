@@ -45,6 +45,21 @@ describe('K-OBS-18 describes the consent question as it ships (kanon#707)', () =
   });
 });
 
+describe('ADR 0007 records that rules 1 and 3 now say what K-OBS-16 and K-OBS-18 say (kanon#708)', () => {
+  const adr = read('docs/decisions/0007-data-boundary.md');
+  const amendment = /^\*\*Amended 2026-10-12[^\n]*\n((?:- [^\n]*\n)+)/m.exec(adr)?.[1] ?? '';
+
+  it("amends rule 1's repository to the opaque key, and rule 3's default to no collector", () => {
+    expect(amendment).toMatch(/^- \*\*Rule 1's "the repository" is the opaque key/m);
+    expect(amendment).toMatch(/^- \*\*Rule 3's default is not an adopter-owned store[^\n]*\*\*No\*\*/m);
+  });
+
+  it('points rules 1 and 3 at the amendment, beside the text it changes', () => {
+    expect(/^1\. [\s\S]*?^2\. /m.exec(adr)?.[0]).toContain('amendment of 2026-10-12, below');
+    expect(/^3\. .*$/m.exec(adr)?.[0]).toContain('amended 2026-10-12, below');
+  });
+});
+
 describe("K-OBS-16 lists what a row carries, and a row names no repository (kanon#707)", () => {
   it('no row kind has a field naming the repository or its owner, and the store sets the key', () => {
     for (const [kind, versions] of Object.entries(SCHEMAS)) {
@@ -69,7 +84,10 @@ describe('K-ADOPT-1 names the installer that runs its steps today (kanon#707)', 
   it('says what runs and checks which steps, and leaves prose only to the rest', () => {
     expect(enforced).not.toMatch(/is planned|first pieces/);
     for (const s of ['`kanon init`', '`kanon doctor`', '`/kanon:adopt`', '`kanon milestones`', '`kanon apps`']) expect(enforced).toContain(s);
-    expect(enforced).toMatch(/[Ss]teps 3, 9, 10, 11 and 14[^.]*prose only/);
+    expect(enforced).toMatch(/[Tt]he rest of step 4 \([^)]*\) and of step 13 \(the mechanism list and the reference environment's deploy\), steps 3, 9, 10, 11 and 14[^.]*prose only/);
+    // Neither tool lays down these parts of step 4, so the rule must leave them to prose (kanon#708).
+    const rest = /rest of step 4 \(([^)]*)\)/.exec(enforced)?.[1] ?? '';
+    for (const s of ['agent instruction files', 'brief template', 'spec directory', 'observability document', '`.gitignore`']) expect(rest).toContain(s);
   });
 });
 
