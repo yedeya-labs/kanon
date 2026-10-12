@@ -10,7 +10,7 @@ import { writeStub } from './helpers/stub-bin.js';
 const { asRole, headerLine, markedRole, personaHeader, roleMarker, setMarkerPhase, signed, signedAs, withPersona } = await import('../../scripts/lib/role-marker.mjs');
 const { personaEnv, resolvePersona, resolveRole, speaksAsNoRole } = await import('../../actions/agent-setup/persona.mjs');
 const { appPersona, parsePersonas } = await import('../../scripts/app-register.mjs');
-const { withBaselines } = await import('../../actions/agent-run/persona-prompt.mjs');
+const { withBaselines, withHeadless } = await import('../../actions/agent-run/persona-prompt.mjs');
 
 /**
  * Plan 0005 §3.3, step L3: the persona header, the role marker, and the persona as the agent's
@@ -111,23 +111,23 @@ describe('the agent is asked to open every post with its header (agent-run)', SP
     expect(withPersona('Do the work.', '', '')).toBe('Do the work.');
   });
 
-  it('writes the prompt to $GITHUB_OUTPUT under a delimiter, unchanged with no role', () => {
+  it('writes the prompt to $GITHUB_OUTPUT under a delimiter, with only the headless rule added with no role', () => {
     const dir = mkdtempSync(join(tmpdir(), 'persona-prompt-'));
     try {
       const out = join(dir, 'out');
       const runIt = (env: Record<string, string>) => {
         writeFileSync(out, '');
-        const r = spawnSync(process.execPath, ['actions/agent-run/persona-prompt.mjs'], { encoding: 'utf8', env: { ...process.env, GITHUB_OUTPUT: out, ...env } });
+        const r = spawnSync(process.execPath, ['actions/agent-run/persona-prompt.mjs'], { encoding: 'utf8', env: { ...process.env, KANON_BASELINE_PLAYBOOKS: '', GITHUB_OUTPUT: out, ...env } });
         expect(r.status, r.stderr).toBe(0);
         const m = /^text<<(KANON_PROMPT_[0-9a-f]{32})\n([\s\S]*)\n\1\n$/.exec(readFileSync(out, 'utf8'));
         expect(m).not.toBeNull();
         return m![2];
       };
       expect(runIt({ PROMPT: 'line one\nline two', KANON_ROLE: 'Implementer', KANON_POST_HEADER: headerLine('Implementer') }))
-        .toBe(withPersona('line one\nline two', 'Implementer', headerLine('Implementer')));
-      expect(runIt({ PROMPT: 'line one', KANON_ROLE: '', KANON_POST_HEADER: '' })).toBe('line one');
+        .toBe(withHeadless(withPersona('line one\nline two', 'Implementer', headerLine('Implementer'))));
+      expect(runIt({ PROMPT: 'line one', KANON_ROLE: '', KANON_POST_HEADER: '' })).toBe(withHeadless('line one'));
       expect(runIt({ PROMPT: 'line one', KANON_ROLE: 'Implementer', KANON_POST_HEADER: headerLine('Implementer'), KANON_BASELINE_PLAYBOOKS: 'docs/qa/lead-playbook.md' }))
-        .toBe(withBaselines(withPersona('line one', 'Implementer', headerLine('Implementer')), 'docs/qa/lead-playbook.md'));
+        .toBe(withHeadless(withBaselines(withPersona('line one', 'Implementer', headerLine('Implementer')), 'docs/qa/lead-playbook.md')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
