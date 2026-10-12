@@ -19,8 +19,10 @@
  * launch gate itself — the one place an agent decided a roadmap placement.
  * The developer's decision (2026-09-24, on RA-1616) is that agents SUGGEST and
  * only the developer places work on a roadmap milestone. So nothing here ever
- * proposes a milestone other than a bucket; the RA-729 signal survives as a
- * label a human acts on, which is where a human step is cheapest to justify.
+ * proposes a milestone other than a bucket, except a roadmap milestone `plan()`
+ * transcribes as given from an approved brief (`K-WORK-5`); the RA-729 signal
+ * survives as a label a human acts on, which is where a human step is cheapest
+ * to justify.
  *
  * SEVERITY IS READ, NEVER DERIVED. Nothing here looks at the issue title or
  * body. Severity is a claim about reachability and impact that lives in the diff
@@ -52,8 +54,10 @@
  * an issue that arrives bare. `plan()` is the filer's: it takes the labels the filer
  * chose (its severity among them) and an explicit milestone transcribed from an
  * approved brief, and returns the exact `--label` and `--milestone` arguments of one
- * atomic `gh issue create` (`K-WORK-2`). The two never act on the same issue: a filed
- * issue carries a milestone, and `decide()` leaves a milestoned issue alone.
+ * atomic `gh issue create` (`K-WORK-2`). They do not yet keep to separate issues:
+ * `decide()` writes a milestone only on a bare issue, but on a filed one it still adds
+ * `gate-candidate` and `qa:needs-severity` until the filers move to `plan()`, which
+ * leaves neither to add. Retiring those writes is migration step 2's to decide.
  *
  * THE SHADOW (kanon#164, migration step 1). Until the filers move to `plan()`, the
  * backstop logs what `plan()` would have chosen for each filed issue next to what its
