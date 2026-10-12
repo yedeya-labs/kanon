@@ -50,28 +50,29 @@ export function cliQuery({ aws, profile }) {
       '--no-paginate', '--profile', profile, '--region', REGION, '--output', 'json']);
     // The partition is not printed: it holds the key.
     if (r.code !== 0) throw new Error('a query failed');
-    return JSON.parse(r.stdout);
+    // JSON.parse's message quotes the text around the fault, which may hold a key.
+    try { return JSON.parse(r.stdout); } catch { throw new Error('a query answered something that is not JSON'); }
   };
 }
 
 /**
  * The register's keys, and the label of each adopter that declared its own figures publishable.
- * Says what's wrong without echoing anything of the register.
+ * Says what's wrong by field and index, without echoing anything of the register.
  * @param {any} register
  * @returns {{ keys: string[], own: Record<string, string> }}
  */
 export function fromRegister(register) {
   const entries = Array.isArray(register?.repositories) ? register.repositories : [];
+  if (entries.length === 0) throw new Error('register: the register has no repositories');
   const keys = entries.map((/** @type {any} */ e) => e?.key);
-  if (keys.length === 0 || !keys.every((/** @type {unknown} */ k) => typeof k === 'string' && KEY.test(k))) {
-    throw new Error('the register has no repositories, or an entry without a valid key');
-  }
+  const bad = keys.findIndex((/** @type {unknown} */ k) => typeof k !== 'string' || !KEY.test(k));
+  if (bad !== -1) throw new Error(`register: repositories[${bad}] is an entry without a valid key`);
   /** @type {Record<string, string>} */
   const own = {};
-  for (const e of entries) {
+  for (const [i, e] of entries.entries()) {
     if (e.publish_own_figures_as === undefined) continue;
     if (typeof e.publish_own_figures_as !== 'string' || !KEY.test(e.publish_own_figures_as) || keys.includes(e.publish_own_figures_as)) {
-      throw new Error('a publish_own_figures_as is not a label, or is a key');
+      throw new Error(`register: repositories[${i}].publish_own_figures_as is not a label, or is a key`);
     }
     own[e.key] = e.publish_own_figures_as;
   }
@@ -89,7 +90,18 @@ if (isCliEntry(import.meta.url)) {
     const r = spawnSync('aws', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     return { code: r.status ?? 1, stdout: r.stdout ?? '' };
   };
-  const { keys, own } = fromRegister(JSON.parse(readFileSync(values.register, 'utf8')));
-  const rows = await readAll(keys, cliQuery({ aws, profile: values.profile }), TABLE);
-  console.log(JSON.stringify(aggregate(rows, { now: Date.now(), own }), null, 2));
+  // Every failure prints its message alone, never a stack or the text it failed on, and exits 1.
+  try {
+    const text = readFileSync(values.register, 'utf8');
+    /** @type {unknown} */
+    let register;
+    // JSON.parse's message quotes the text around the fault, which may be a key.
+    try { register = JSON.parse(text); } catch { throw new Error(`register: ${values.register} is not JSON`); }
+    const { keys, own } = fromRegister(register);
+    const rows = await readAll(keys, cliQuery({ aws, profile: values.profile }), TABLE);
+    console.log(JSON.stringify(aggregate(rows, { now: Date.now(), own }), null, 2));
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(1);
+  }
 }
