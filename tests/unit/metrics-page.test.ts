@@ -107,7 +107,7 @@ describe('the minimum samples on the page (§2.1, decision 11)', () => {
   });
 });
 
-describe('every number states its window, band version, sample size, interval, command and release (K-PRIN-14)', () => {
+describe('every number states its window, band version, sample size, interval, release and where its command is (K-PRIN-14)', () => {
   let html = '';
   beforeAll(() => { html = render(); });
   it('states the window, the band version and the cost basis', () => {
@@ -118,12 +118,11 @@ describe('every number states its window, band version, sample size, interval, c
   it('states each figure with its sample size and its 95% interval', () => {
     expect(html).toMatch(/\$6\.50 \(\$\d+\.\d{2} to \$\d+\.\d{2}\), n 12/);
   });
-  it('states the commands that produced it, and the release and commit it ran at', () => {
-    expect(html).toContain('node "$KANON/scripts/aggregate-read.mjs" page');
-    expect(html).toContain('node scripts/telemetry/kanon-health.mjs --json');
-    expect(html).toContain('node .github/scripts/metrics-page.mjs');
+  it('states the release and commit it ran at, and where the commands are, without operator commands on the public page', () => {
     expect(html).toContain('Kanon 0.39.0');
     expect(html).toContain(COMMIT);
+    expect(html).toContain('<code>docs/metrics.md</code> under "Reproduce a page"');
+    expect(html).not.toMatch(/aggregate-read\.mjs|aws lambda|--function-name/);
   });
   it('shows the trend and the by-version view', () => {
     expect(html).toContain('Trend, 6 windows of 28 days');
