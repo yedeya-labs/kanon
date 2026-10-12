@@ -73,6 +73,9 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
     // step in the same job to read whole, where `rows` is one line for another job. Kanon's
     // lanes read `rows`.
     'qa-store': { dir: 'cost-rows.json for a step after the block, in the same job' },
+    // Which Claude credential the agent ran on (plan 0009 §10, step A1). The run's telemetry
+    // row reads it once the store accepts the field (plan 0009 §12); until then no lane does.
+    'agent-run': { auth: 'subscription or api-key, for the telemetry row plan 0009 §12 adds' },
   };
 
   /**
@@ -216,6 +219,7 @@ describe('the blocks run their scripts from the action cache, never from the wor
     expect(scripts.sort()).toEqual([
       'agent-classify: $GITHUB_ACTION_PATH/classify-agent-result.mjs',
       'agent-finish: $GITHUB_ACTION_PATH/agent-quality-prs.mjs',
+      'agent-run: $GITHUB_ACTION_PATH/credential-check.mjs',
       'agent-run: $GITHUB_ACTION_PATH/persona-prompt.mjs',
       'agent-run: $GITHUB_ACTION_PATH/user-scope.mjs',
       'agent-setup: $GITHUB_ACTION_PATH/persona.mjs',

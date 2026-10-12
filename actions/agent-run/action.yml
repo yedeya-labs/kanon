@@ -14,9 +14,18 @@
 # to take that copy back out is gone with the loading it undid.
 #
 # SECRETS ARRIVE AS INPUTS. A composite action cannot read `secrets` (RA-1540 is what
-# writing one cost), so the lane hands in the OAuth token and the App token. Nothing
+# writing one cost), so the lane hands in the Claude credential and the App token. Nothing
 # here exports an input to the environment except where a step names it, which is the
 # same exposure the action had when its `env:` read the secret directly.
+#
+# ONE CLAUDE CREDENTIAL, THROUGH `env:` ONLY (plan 0009 §10, step A1). The caller maps either
+# the subscription token or an Anthropic API key, and the lane hands each down by its own name,
+# `claude-token` or `anthropic-api-key`. The credential check fails the block before the agent
+# starts when both are set or neither is, or when one holds the other's shape. The agent step
+# then reads them from its `env:`, NEVER from a `with:` of `claude-code-action`: the action
+# copies every input into its main step's `ALL_INPUTS` and its API key input into its
+# inline-comment step, and an environment variable reaches neither.
+# `tests/unit/agent-run-credential.test.ts` holds all of it.
 #
 # THE STARTING MAP AND THE FAILURES-ONLY SWITCH ARE NOT HERE (RA-2694). Both are this
 # project's, and the project-setup hook (`.github/actions/project-setup`) does them before
@@ -24,8 +33,8 @@
 # agent step inherits exactly as it read the value its own `env:` used to set.
 name: Agent lane — run the agent
 description: >-
-  Run claude-code-action with the lane's prompt and flags, after stamping when the agent
-  started.
+  Run claude-code-action with the lane's prompt and flags, on the one Claude credential the
+  lane was given, after stamping when the agent started.
 
 inputs:
   prompt:
@@ -35,8 +44,17 @@ inputs:
     description: The flag block. The lane passes the SAME value to agent-finish, so the cost row cannot disagree.
     required: true
   claude-token:
-    description: The Claude OAuth token (the lane's secret, passed in — a composite action cannot read secrets).
-    required: true
+    description: >-
+      The Claude subscription token, `CLAUDE_CODE_OAUTH_TOKEN` (the lane's secret, passed in — a
+      composite action cannot read secrets). Exactly one of this and `anthropic-api-key` is set.
+    required: false
+    default: ""
+  anthropic-api-key:
+    description: >-
+      An Anthropic API key, `ANTHROPIC_API_KEY`, in place of the subscription token. Exactly one
+      of this and `claude-token` is set.
+    required: false
+    default: ""
   github-token:
     description: The minted App token. The agent authenticates as the App, never the default token.
     required: true
@@ -61,6 +79,11 @@ outputs:
   started-at:
     description: When the agent step was about to start (UTC, ISO 8601), for agent-finish's quality window.
     value: ${{ steps.started.outputs.at }}
+  auth:
+    description: >-
+      Which credential the agent ran on, `subscription` or `api-key`: a name, never anything the
+      secret holds. No Kanon lane reads it yet; the run's telemetry row will (plan 0009 §12).
+    value: ${{ steps.credential.outputs.auth }}
 
 runs:
   using: composite
@@ -75,6 +98,18 @@ runs:
       id: started
       shell: bash -e {0}
       run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+    # THE CLAUDE CREDENTIAL, CHECKED BEFORE ANYTHING ELSE THE AGENT NEEDS (plan 0009 §10).
+    # Both or neither set, or a value whose shape doesn't match its name, fails here, by the
+    # secret's name and never its value. The values reach the script through `env:` only, never
+    # a `run:` line. Never `continue-on-error`: a run with no single credential must not start.
+    - name: Check the Claude credential
+      id: credential
+      shell: bash -e {0}
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: node "$GITHUB_ACTION_PATH/credential-check.mjs"
 
     # WHO THE AGENT SPEAKS AS (plan 0005 §3.3, step L3). `agent-setup` resolved the role and
     # exported its header line; this appends one instruction to the lane's prompt: open every
@@ -144,7 +179,10 @@ runs:
     - uses: anthropics/claude-code-action@v1.0.244
       id: agent
       env:
+        # Exactly one is non-empty: the credential check above guarantees it. Each is read
+        # from the environment by the action, and never passed as one of its inputs.
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         # Empty leaves the CLI default, which is what an unpinned arm wants — Actions
         # treats an empty env value as set-but-blank, and the CLI reads blank as absent.
         CLAUDE_CODE_PROMPT_CACHE_TTL: ${{ inputs.prompt-cache-ttl }}
