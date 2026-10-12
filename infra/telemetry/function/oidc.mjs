@@ -1,6 +1,6 @@
 // The OIDC token verifier (plan 0008 §2.2 to §2.5, step J1): checks a GitHub Actions OIDC token
-// claim by claim, against GitHub's published keys, for one endpoint of the store. NOTHING CALLS IT
-// YET: the endpoints that will (J3, J4) stand behind it, so it is built and reviewed alone.
+// claim by claim, against GitHub's published keys, for one endpoint of the store. The ingest
+// function's five endpoints (`token.mjs`, J3) stand behind it; the aggregate function's are J4's.
 //
 // The checks run in §2.2's order and STOP AT THE FIRST FAILURE. A missing claim, a claim of the
 // wrong type, or an extra value where one is expected is a refusal, never a skip, and each refusal
@@ -17,6 +17,8 @@
 //                   owner differs from the registration's; 404 `not-registered`: no registration;
 //   403 `ref`       check 9: `ref_type` is not `branch`, `ref` is not a branch's, or `ref` differs
 //                   from the registration's `default_ref`, except on a `schedule` (§2.3, below).
+//                   A TOMBSTONE (§7: `erased`, no key) keeps no `default_ref`, so its `ref` is held
+//                   to a branch's form only: all a tombstone answers is that it is erased (J3).
 //
 // A NAME, NOT A JOB. A token names the workflow file it was minted in, so each endpoint admits its
 // workflows (`ENDPOINT_WORKFLOWS`); which jobs of them may mint a token is the id-token guard's.
@@ -43,13 +45,13 @@ import { Buffer } from 'node:buffer';
 
 /** @typedef {import('node:crypto').KeyObject} KeyObject */
 /** @typedef {{ ok: false, status: number, error: string }} Refusal */
-/** @typedef {{ repository_owner_id?: unknown, default_ref?: unknown }} Registration */
+/** @typedef {{ repository_owner_id?: unknown, default_ref?: unknown, status?: unknown, key?: unknown }} Registration */
 /**
  * @typedef {{
  *   ok: true,
  *   caller: {
  *     repository_id: string, repository_owner_id: string, ref: string, event_name: string,
- *     workflow: string, version: string,
+ *     workflow: string, version: string, repository: string | null,
  *   },
  *   registration: Registration | undefined,
  *   ref_moved: boolean,
@@ -275,7 +277,8 @@ export async function verifyToken(token, { audience, endpoint, now = Date.now(),
   if (c.ref_type !== 'branch') return refuse(403, 'ref');
   if (typeof ref !== 'string' || !BRANCH_REF.test(ref)) return refuse(403, 'ref');
   let refMoved = false;
-  if (registration) {
+  const tombstone = registration?.status === 'erased' && registration.key === undefined && registration.default_ref === undefined;
+  if (registration && !tombstone) {
     if (typeof registration.default_ref !== 'string') return refuse(403, 'ref');
     if (ref !== registration.default_ref) {
       if (eventName !== 'schedule') return refuse(403, 'ref');
@@ -285,7 +288,11 @@ export async function verifyToken(token, { audience, endpoint, now = Date.now(),
 
   return {
     ok: true,
-    caller: { repository_id: repositoryId, repository_owner_id: ownerId, ref, event_name: eventName, workflow, version },
+    // `repository` is not checked: it names the sender's words for its name hashes (§3.4), nothing more.
+    caller: {
+      repository_id: repositoryId, repository_owner_id: ownerId, ref, event_name: eventName, workflow, version,
+      repository: typeof c.repository === 'string' ? c.repository : null,
+    },
     registration,
     ref_moved: refMoved,
   };

@@ -1,7 +1,9 @@
 # The hosted telemetry store (plan 0002 §3 to §5, §6.1, §7, §9, §10): one DynamoDB table, written
 # only by a validating function behind an IAM-authenticated URL, with a writer and a reader role
 # per registered repository, and an aggregate-only function behind a second such URL. Beside them,
-# the register table of plan 0008 §5, which nothing uses until the token path (J3).
+# the register table of plan 0008 §5, and the ingest function's token path (plan 0008 §3, J3): a
+# public URL on its `live` alias, its `erase` alias, and the self-read role. No lane calls the
+# token path until the collector moves to it (J5).
 #
 # THIS FILE IS NOT DEPLOYED AS IT IS. The register (who is opted in) is private (§5), so
 # `render.mjs` reads it and adds each repository's roles to this template. `docs/telemetry.md`
@@ -44,6 +46,22 @@ Parameters:
   OperatorJobRoleArns:
     Type: CommaDelimitedList
     Description: The operator's private jobs' roles (plan 0008, section 5.3), comma-separated, which the register table's resource policy lets in. Empty names none.
+    Default: ''
+  Audience:
+    Type: String
+    Description: The audience a token must carry on the token path (plan 0008, section 2.2, check 4). A test store takes its own.
+    AllowedPattern: '^[A-Za-z0-9._:-]{1,128}$'
+    Default: kanon-telemetry
+  MinTokenVersion:
+    Type: String
+    Description: The lowest Kanon release, X.Y.Z, whose collector the token path admits (plan 0008, section 2.2, check 7). Empty admits no token.
+    AllowedPattern: '^$|^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$'
+    Default: ''
+  CursorKey:
+    Type: String
+    NoEcho: true
+    Description: 64 hex characters, new on every deploy (openssl rand -hex 32), sealing GET /v1/rows/self's cursor (plan 0008, section 3.2). Empty refuses that endpoint.
+    AllowedPattern: '^$|^[0-9a-f]{64}$'
     Default: ''
   ReservedConcurrency:
     Type: Number
@@ -91,7 +109,9 @@ Resources:
         AttributeName: expires_at
         Enabled: true
       # The function is the only writer by construction (plan 0002, section 4): every write is denied to every
-      # principal but the function's role and the Owner's erase procedure (§10).
+      # principal but the function's role and the Owner's erase procedure (§10), and the self-read
+      # role, which only the function assumes, for the erasure walk's deletes under a session held
+      # to the erased key (plan 0008 §7).
       ResourcePolicy:
         PolicyDocument:
           Version: '2012-10-17'
@@ -111,10 +131,11 @@ Resources:
                   aws:PrincipalArn:
                     - { 'Fn::GetAtt': [IngestRole, Arn] }
                     - { Ref: OwnerPrincipalArn }
+                    - { 'Fn::GetAtt': [SelfReadRole, Arn] }
 
   # The register (plan 0008 §5): who is registered, under which key, and the operator's fields,
-  # outside any repository. Nothing reads or writes it until the token path (plan 0008 J3); the
-  # operator's `register.mjs` is its only user before then. Its lifecycle is the rows table's
+  # outside any repository. The ingest function reads and writes it on both of its paths (plan
+  # 0008 J3), and the operator writes it with `register.mjs`. Its lifecycle is the rows table's
   # (K-OBS-17): retained, deletion-protected, point-in-time recovery. Encrypted with the
   # AWS-managed key `aws/dynamodb` (Owner decision 4 of 2026-10-12): no key fee, and every use of
   # the key is in CloudTrail, but its key policy can't be narrowed, so it is not an access
@@ -193,7 +214,7 @@ Resources:
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: { 'Fn::GetAtt': [IngestLogGroup, Arn] }
-        # The register (plan 0008 §5.3). Unused until the token path (J3).
+        # The register (plan 0008 §5.3), on both paths since J3.
         - PolicyName: read-and-write-the-register
           PolicyDocument:
             Version: '2012-10-17'
@@ -219,8 +240,8 @@ Resources:
               # first_review are not listed, so IAM refuses the function a write that SETS one.
               # It does not keep them: a whole-item PutItem of these fields alone replaces an item
               # and drops its operator fields without naming them. Keeping them across the
-              # function's writes is J3's conditional writes to hold. A TransactWriteItems is
-              # authorized per item, as these actions.
+              # function's writes is its conditional writes' to hold (function/register-store.mjs).
+              # A TransactWriteItems is authorized per item, as these actions.
               - Sid: WriteNoOperatorField
                 Effect: Allow
                 Action: [dynamodb:PutItem, dynamodb:UpdateItem]
@@ -256,6 +277,47 @@ Resources:
                 Condition:
                   ForAllValues:StringLike:
                     dynamodb:LeadingKeys: ['key#*']
+        # The token path (plan 0008 §3.5, §7): a session of the self-read role for each read of the
+        # adopter's own rows and each erasure walk, held by its session policy to one key; and the
+        # erasure walk started on the function's own `erase` alias, which nothing else may invoke.
+        - PolicyName: token-path
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AssumeTheSelfReadRole
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/kanon-telemetry-self-read
+              - Sid: StartTheErasureWalk
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kanon-telemetry-ingest:erase
+
+  # The adopter's own rows (plan 0008 §3.5) and the erasure walk (§7): Query and delete on the
+  # rows table, assumed only by the ingest function, which passes a session policy whose
+  # dynamodb:LeadingKeys is the one key the registration gave, so a query or a delete can't leave
+  # that key (Owner decision 2 of 2026-10-12). Replaces the per-adopter reader roles at vM+1.
+  SelfReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: kanon-telemetry-self-read
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: { 'Fn::GetAtt': [IngestRole, Arn] } }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: query-and-delete-rows
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:Query, dynamodb:BatchWriteItem]
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry
 
   # Keys and field names only (the function never logs a value), kept 30 days (§10).
   IngestLogGroup:
@@ -293,12 +355,61 @@ Resources:
           NAME_HASHES: ''
           IMPORTER_ROLE: { 'Fn::If': [ImporterOn, kanon-telemetry-importer, ''] }
           BACKFILL_ROLE: { 'Fn::If': [BackfillOn, kanon-telemetry-backfill, ''] }
+          # The token path (plan 0008 J3). Since J3 the SigV4 path reads its keys and name hashes
+          # from the register too; WRITER_KEYS and NAME_HASHES stay, unread, until J9.
+          REGISTER_TABLE: kanon-telemetry-register
+          AUDIENCE: { Ref: Audience }
+          MIN_TOKEN_VERSION: { Ref: MinTokenVersion }
+          SELF_READ_ROLE: { 'Fn::GetAtt': [SelfReadRole, Arn] }
+          CURSOR_KEY: { Ref: CursorKey }
 
   IngestUrl:
     Type: AWS::Lambda::Url
     Properties:
       TargetFunctionArn: { 'Fn::GetAtt': [IngestFunction, Arn] }
       AuthType: AWS_IAM
+
+  # The token path's two aliases (plan 0008 §7, §9), on $LATEST, so a deploy moves them with the
+  # function. The handler reads which one it was invoked through from the ARN Lambda passes it,
+  # never from the request: `live` serves the five endpoints, `erase` the erasure walk, and the
+  # unqualified function the SigV4 path above.
+  IngestLiveAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: { Ref: IngestFunction }
+      FunctionVersion: $LATEST
+      Name: live
+  IngestEraseAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: { Ref: IngestFunction }
+      FunctionVersion: $LATEST
+      Name: erase
+
+  # The token path's URL: public, since the token is the gate (plan 0008 §2, §12), and bounded by
+  # the reserved concurrency, a precondition of deploying it (§9 step 2). It serves the `live`
+  # alias alone, so an IAM-signed request on it reaches the token path, which refuses it.
+  IngestLiveUrl:
+    Type: AWS::Lambda::Url
+    DependsOn: IngestLiveAlias
+    Properties:
+      TargetFunctionArn: { 'Fn::GetAtt': [IngestFunction, Arn] }
+      Qualifier: live
+      AuthType: NONE
+  IngestLiveUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: { Ref: IngestLiveAlias }
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+  IngestLiveInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: { Ref: IngestLiveAlias }
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
 
   OidcProvider:
     Type: AWS::IAM::OIDCProvider
@@ -538,5 +649,7 @@ Outputs:
     Value: { Ref: RegisterTable }
   IngestUrl:
     Value: { 'Fn::GetAtt': [IngestUrl, FunctionUrl] }
+  IngestTokenUrl:
+    Value: { 'Fn::GetAtt': [IngestLiveUrl, FunctionUrl] }
   AggregateUrl:
     Value: { 'Fn::GetAtt': [AggregateUrl, FunctionUrl] }
