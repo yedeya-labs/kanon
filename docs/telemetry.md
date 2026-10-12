@@ -23,7 +23,7 @@ Every AWS command here is the Owner's to run. Agents run none (§5).
 
 ## What the template creates
 
-- **The table, `kanon-telemetry`:** on demand, keyed `pk` and `sk`. It has point-in-time recovery, TTL on `expires_at`, deletion protection, and `DeletionPolicy: Retain`, so deleting the stack never deletes it (`K-OBS-17`). Its resource policy denies `PutItem`, `UpdateItem`, `DeleteItem` and `BatchWriteItem` to every principal except the function's role and the Owner's role.
+- **The table, `kanon-telemetry`:** on demand, keyed `pk` and `sk`. It has point-in-time recovery, TTL on `expires_at`, deletion protection, and `DeletionPolicy: Retain`, so deleting the stack never deletes it (`K-OBS-17`). Its resource policy denies `PutItem`, `UpdateItem`, `DeleteItem` and `BatchWriteItem` to every principal except three: the function's role, the Owner's role, and `kanon-telemetry-self-read`, which only the function assumes, for the erasure walk's deletes under a session held to one key (plan 0008 J3).
 - **The register table, `kanon-telemetry-register`** ([plan 0008](plans/0008-self-service-registration.md) §5): KMS-encrypted, retained and deletion-protected, with point-in-time recovery. The ingest function reads it on both of its paths, and writes registrations, erasures and quota counters on the token path; you write the operator's fields with `register.mjs` ([The register table](#the-register-table)).
 - **The ingest function, `kanon-telemetry-ingest`:** Node 24, 128 MB, no VPC. Its unqualified URL has `AuthType: AWS_IAM`, and its `live` alias has a second, public URL for the token path ([The token path's endpoints](#the-token-paths-endpoints-plan-0008-j3)). For each row it:
   - validates the row with the schema module, and rejects it with the offending field names if it fails;
@@ -291,14 +291,14 @@ Shared by all: 401 for checks 1 to 5 with `WWW-Authenticate: Bearer error="inval
 - **Erasure** (§7): `DELETE` sets `status: erased` and `erased_at` at once, conditional on `active`, so every later write and read is refused (410), and starts the walk as an asynchronous invocation of the `erase` alias, naming the repository id, never the key. The walk deletes every partition of the key, each lane, `work` and `finding`, with `BatchWriteItem` under a session held to that key, hands itself on when its time runs short, and then deletes the key item and writes the **tombstone**, the two ids, `status`, `erased_at` and `rows_erased_at`, as one transaction. A tombstone keeps no default branch, so the verifier holds a token's `ref` to a branch's form only there: all a tombstone answers is that it is erased. Re-registering takes `{ "reregister": true }` and gets a new key.
 - **Suspension** is yours (`register.mjs suspend`). Every endpoint but the status read answers 403 `suspended`, and the SigV4 path does too. The function's writes never undo it: none sets `status` over `suspended`.
 
-**Before the deploy that admits tokens** (plan 0008 §9 step 2, J6), `render.mjs` doesn't yet write `MinTokenVersion` or `CursorKey` into `parameters.json`, so the template's defaults keep the token path closed. Admitting it takes both, given with the parameters file; J5 or J6 adds them to `render.mjs`.
+**Before the deploy that admits tokens** (plan 0008 §9 step 3a, J6), `render.mjs` doesn't yet write `MinTokenVersion` or `CursorKey` into `parameters.json`, so the template's defaults keep the token path closed. Admitting it takes both, given with the parameters file; J5 or J6 adds them to `render.mjs`.
 
 ## Erase an adopter
 
 Plan 0002 §10. Deletion is immediate in the table, and complete in backups within 35 days, which is how long point-in-time recovery keeps them.
 
 1. Remove the adopter's entry from the register, and in the same edit its time from install to first review, which sits beside the key (plan 0003). Record the date and the key there, not the repository. Then render, package and deploy. That deletes both roles, so its writes and reads stop at once.
-2. Count the rows, then delete them. The script walks `<key>#<lane>` for every lane in the schema's enum, `<key>#work` and `<key>#finding`, so it needs no scan. It runs as your role, which is the one role besides the function's that the table lets delete.
+2. Count the rows, then delete them. The script walks `<key>#<lane>` for every lane in the schema's enum, `<key>#work` and `<key>#finding`, so it needs no scan. It runs as your role. The table lets only three principals delete: the function's role, yours, and the self-read role, which only the function assumes.
 
    ```sh
    node infra/telemetry/erase.mjs --key <key> --profile kanon
@@ -307,7 +307,7 @@ Plan 0002 §10. Deletion is immediate in the table, and complete in backups with
 
 ## The register table
 
-[Plan 0008](plans/0008-self-service-registration.md) §5 moves the register out of the private file and into a table, `kanon-telemetry-register`, for the token path that plan builds. **Since J3 the ingest function reads it on both of its paths:** a SigV4 writer's key, and the key the importer or the backfill role names, must have an `active` registration there (§9), and the token path registers, erases and counts quotas in it ([The token path's endpoints](#the-token-paths-endpoints-plan-0008-j3)). So **import the register before you deploy a template that carries J3** (`register.mjs import`, below), or every SigV4 call is refused until you do. The aggregate function still takes its keys from the environment `render.mjs` writes until J4, and the writer, reader and invoker roles stay until J9.
+[Plan 0008](plans/0008-self-service-registration.md) §5 moves the register out of the private file and into a table, `kanon-telemetry-register`, for the token path that plan builds. **Since J3 the ingest function reads it on both of its paths:** a SigV4 writer's key, and the key the importer or the backfill role names, must have an `active` registration there (§9), and the token path registers, erases and counts quotas in it ([The token path's endpoints](#the-token-paths-endpoints-plan-0008-j3)). So **import the register before you deploy a template that carries J3** (`register.mjs import`, below), or every SigV4 call is refused, 403 `caller`, until you do: deploy the register table from J2's commit first, import, check that `register.mjs list` shows each entry `active`, and only then deploy J3 (plan 0008 §9 steps 2, 3 and 3a). The aggregate function still takes its keys from the environment `render.mjs` writes until J4, and the writer, reader and invoker roles stay until J9.
 
 **What the template creates for it**, beside the rows table and in the same stack:
 - **The table:** on demand, keyed `pk` alone, TTL on `expires_at` (for the quota counters, plan 0008 §6), point-in-time recovery, deletion protection and `DeletionPolicy: Retain`, as the rows table has.
