@@ -9,7 +9,8 @@ import { FUNCTION_DIR, registerProblems, render, TEMPLATE_PATH } from '../../inf
 import { ATTRIBUTES } from '../../infra/telemetry/function/aggregate.mjs';
 import { nameHashesOf } from '../../infra/telemetry/function/index.mjs';
 import {
-  AGGREGATE_GET, AGGREGATE_SCAN, FUNCTION_FIELDS, INGEST_SCAN, OPERATOR_FIELDS, REGISTER_TABLE, TOMBSTONE_FIELDS,
+  AGGREGATE_GET, AGGREGATE_SCAN, FUNCTION_FIELDS, INGEST_SCAN, KEY_ITEM_PREFIX, OPERATOR_FIELDS, REGISTER_TABLE, REGISTRATION_PREFIX,
+  TOMBSTONE_FIELDS,
 } from '../../infra/telemetry/function/register-fields.mjs';
 import { sha256 } from '../../actions/agent-telemetry/public-words.mjs';
 import { KANON_WORDS, nameContext } from '../../actions/agent-telemetry/scrub.mjs';
@@ -114,20 +115,29 @@ describe('the register table (plan 0008 §5.1, §5.3)', () => {
     expect(template.Parameters.OperatorJobRoleArns).toMatchObject({ Type: 'CommaDelimitedList', Default: '' });
     expect(template.Conditions.HasOperatorJobRoles).toEqual({ 'Fn::Not': [{ 'Fn::Equals': [{ 'Fn::Join': ['', { Ref: 'OperatorJobRoleArns' }] }, ''] }] });
   });
-  it("the ingest role's writes list every field but the operator's, so IAM refuses it an operator field", () => {
-    const writes = onRegister('IngestRole').filter((s) => actions(s).some((a) => /Put|Update|Delete|Write/.test(a)));
+  it("the ingest role's writes list every field but the operator's, so IAM refuses it a write that sets one", () => {
+    const writes = onRegister('IngestRole').filter((s) => actions(s).some((a) => /Put|Update|Write/.test(a)));
     expect(writes).toHaveLength(1);
     const [w] = writes;
-    expect(actions(w).sort()).toEqual(['dynamodb:DeleteItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem']);
+    expect(actions(w).sort()).toEqual(['dynamodb:PutItem', 'dynamodb:UpdateItem']);
     expect(Object.keys(w.Condition)).toEqual(['ForAllValues:StringEquals']);
     expect(attributes(w)).toEqual([...FUNCTION_FIELDS].sort());
     for (const f of OPERATOR_FIELDS) expect(attributes(w), f).not.toContain(f);
     expect(attributes(w).filter((f) => /^(quota_|suspended_)/.test(f))).toEqual([]);
     expect(FUNCTION_FIELDS.filter((f) => OPERATOR_FIELDS.includes(f))).toEqual([]);
   });
+  it('the ingest role may delete key items alone, which is the one delete §5.3 grants, on erasure', () => {
+    // A DeleteItem names no attribute, so dynamodb:Attributes can't hold it: the partition can.
+    const deletes = onRegister('IngestRole').filter((s) => actions(s).some((a) => /Delete/.test(a)));
+    expect(deletes).toHaveLength(1);
+    const [d] = deletes;
+    expect(actions(d)).toEqual(['dynamodb:DeleteItem']);
+    expect(d.Condition).toEqual({ 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${KEY_ITEM_PREFIX}*`] } });
+    expect(`${KEY_ITEM_PREFIX}*`.startsWith(REGISTRATION_PREFIX)).toBe(false);
+  });
   it("the ingest role reads registrations, and Scans pk alone, for assertNoKey's keys", () => {
     const s = onRegister('IngestRole');
-    expect(s.map(actions)).toEqual([['dynamodb:GetItem', 'dynamodb:Query'], ['dynamodb:Scan'], expect.any(Array)]);
+    expect(s.map(actions)).toEqual([['dynamodb:GetItem', 'dynamodb:Query'], ['dynamodb:Scan'], expect.any(Array), ['dynamodb:DeleteItem']]);
     expect(s[0].Condition).toBeUndefined();
     expect(attributes(s[1])).toEqual([...INGEST_SCAN]);
     expect(s[1].Condition.StringEquals).toEqual({ 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' });
@@ -406,6 +416,15 @@ describe('the register (§5)', () => {
     ]);
     expect(render(register, { verify: true, importer: true, backfill: true, gh }).parameters.slice(3))
       .toEqual(['EnableVerify=true', 'EnableImporter=true', 'EnableBackfill=true']);
+  });
+  it("writes OperatorJobRoleArns only when given, as role ARNs, so a later deploy without it keeps the stack's value (plan 0008 §5.3)", () => {
+    const a = `arn:aws:iam::${'1'.repeat(12)}:role/ops-job-a`;
+    const b = `arn:aws:iam::${'1'.repeat(12)}:role/ops-job-b`;
+    expect(parameters.some((p: string) => p.startsWith('OperatorJobRoleArns='))).toBe(false);
+    expect(render(register, { operatorJobRoles: `${a},${b}`, gh }).parameters.at(-1)).toBe(`OperatorJobRoleArns=${a},${b}`);
+    for (const bad of ['', `${a},`, 'arn:aws:iam::*:role/x', `${a},arn:aws:sts::${'1'.repeat(12)}:assumed-role/x/y`]) {
+      expect(() => render(register, { operatorJobRoles: bad, gh }), bad).toThrow(/--operator-job-roles must list role ARNs/);
+    }
   });
   it('the example names only Kanon', () => {
     expect(example.repositories.map((r: { repository: string }) => r.repository)).toEqual(['yedeya-labs/kanon']);

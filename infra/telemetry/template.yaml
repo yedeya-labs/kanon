@@ -216,11 +216,14 @@ Resources:
                     dynamodb:Select: SPECIFIC_ATTRIBUTES
               # Every field but the operator's (function/register-fields.mjs, FUNCTION_FIELDS):
               # aggregate_invoker, publish_own_figures_as, page_reader, quota_*, suspended_* and
-              # first_review are not listed, so IAM refuses the function a write that names one,
-              # to set it or to remove it. A TransactWriteItems is authorized per item, as these.
+              # first_review are not listed, so IAM refuses the function a write that SETS one.
+              # It does not keep them: a whole-item PutItem of these fields alone replaces an item
+              # and drops its operator fields without naming them. Keeping them across the
+              # function's writes is J3's conditional writes to hold. A TransactWriteItems is
+              # authorized per item, as these actions.
               - Sid: WriteNoOperatorField
                 Effect: Allow
-                Action: [dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem]
+                Action: [dynamodb:PutItem, dynamodb:UpdateItem]
                 Resource:
                   Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry-register
                 Condition:
@@ -242,6 +245,17 @@ Resources:
                       - source
                       - n
                       - expires_at
+              # A DeleteItem names no attribute, so dynamodb:Attributes can't hold it. It is held
+              # to the key items instead (`key#<key>`), the one delete §5.3 grants, on erasure (§7):
+              # a registration becomes its tombstone by a PutItem, and counters expire by TTL.
+              - Sid: DeleteKeyItemsOnly
+                Effect: Allow
+                Action: dynamodb:DeleteItem
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry-register
+                Condition:
+                  ForAllValues:StringLike:
+                    dynamodb:LeadingKeys: ['key#*']
 
   # Keys and field names only (the function never logs a value), kept 30 days (§10).
   IngestLogGroup:
@@ -459,8 +473,9 @@ Resources:
                     dynamodb:Select: SPECIFIC_ATTRIBUTES
               # The caller's registration, for checks 8 and 9 and its two operator flags. GetItem
               # takes no Select parameter, so dynamodb:Select is held only where present; the
-              # projection is held by dynamodb:Attributes. verify.mjs shows a GetItem without a
-              # projection refused before the aggregate relies on it (plan 0008 §13, J6).
+              # projection is held by dynamodb:Attributes. verify.mjs shows this role's GetItem
+              # with no projection, and with `repository` projected, denied (plan 0008 §13's
+              # added checks, which J6 runs) before the aggregate relies on it (J4).
               - Sid: GetTheCallersRegistration
                 Effect: Allow
                 Action: dynamodb:GetItem

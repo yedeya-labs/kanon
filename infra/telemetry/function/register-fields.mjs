@@ -4,12 +4,17 @@
 // here and not there, or there and not here, is red.
 //
 // THE OPERATOR'S FIELDS ARE THE CLI'S ALONE. `infra/telemetry/register.mjs`, run with the Owner's
-// profile, writes them; the ingest function's role may not name one in any write, which IAM
-// holds with `dynamodb:Attributes`, whatever the function's code does. So the function can't
-// make itself an aggregate invoker, a page reader, give itself a label, raise its own quota, or
-// clear a suspension's reason. It also can't REMOVE one, since a removed attribute is named in
-// the request too: the tombstone of §7 is therefore written whole, with a `PutItem` of
-// `TOMBSTONE_FIELDS`, which replaces the item, never with an `UpdateItem` that removes fields.
+// profile, writes them; the ingest function's role may not name one in a `PutItem` or an
+// `UpdateItem`, which IAM holds with `dynamodb:Attributes`, whatever the function's code does. So
+// the function can't SET one: it can't make itself an aggregate invoker or a page reader, give
+// itself a label, raise its own quota, or write a suspension.
+//
+// IAM DOES NOT KEEP THEM. A whole-item `PutItem` of function fields alone replaces the item and
+// drops its operator fields without naming them, and the tombstone of §7 is written exactly so,
+// a `PutItem` of `TOMBSTONE_FIELDS` (an `UpdateItem` that REMOVEs them would name them, and be
+// refused). That the function's other writes keep the operator's fields is its conditional
+// writes to hold (plan 0008 J3). Its `DeleteItem` is held to the key items, `key#<key>`, by
+// `dynamodb:LeadingKeys`, since a delete names no attribute.
 //
 // `status` is the function's too (`active` at registration, `erased` on erasure), so IAM can't
 // tell a suspension's `status` from the function's; that a suspended registration stays
@@ -67,3 +72,7 @@ export const SUSPENDED_REASONS = Object.freeze(['abuse', 'quota', 'owner-changed
 
 /** The register table's name, in the same stack and account as the rows table (§5.1). */
 export const REGISTER_TABLE = 'kanon-telemetry-register';
+
+/** A registration's partition key is this and the repository id; a key item's, the other and the key (§5.2). */
+export const REGISTRATION_PREFIX = 'repo#';
+export const KEY_ITEM_PREFIX = 'key#';

@@ -34,7 +34,9 @@ import { ISO_UTC } from '../../actions/agent-telemetry/schema.mjs';
 import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
 import { erase as walk, REGION } from './erase.mjs';
-import { REGISTER_TABLE, SUSPENDED_REASONS, TOMBSTONE_FIELDS } from './function/register-fields.mjs';
+import {
+  KEY_ITEM_PREFIX as KEY_ITEM, REGISTER_TABLE, REGISTRATION_PREFIX as REGISTRATION, SUSPENDED_REASONS, TOMBSTONE_FIELDS,
+} from './function/register-fields.mjs';
 import { firstReviewExpired, KEY, registerProblems } from './render.mjs';
 
 /**
@@ -59,8 +61,6 @@ const USAGE = [
   '       register.mjs import --register <register.json>',
 ].join('\n');
 
-const REGISTRATION = 'repo#';
-const KEY_ITEM = 'key#';
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const COUNT = /^[1-9][0-9]{0,8}$/;
 
