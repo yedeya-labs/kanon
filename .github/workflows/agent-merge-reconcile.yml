@@ -154,35 +154,29 @@ jobs:
           # model pass re-reading reviews to conclude what the Reviewer already knew. The
           # review prompt has him end every verdict with `<!-- qa:open-items N -->`: the
           # actionable items raised, this round or carried over, that are neither applied
-          # nor filed. When every author's LATEST review on the PR says 0, and each was
-          # formed on the merged head, the model is not run.
+          # nor filed. When every review on the PR is a Reviewer verdict, and the latest was
+          # read on the merged head and declares 0, the model is not run, and the step summary
+          # names the verdict that decided it. The latest decides: its count includes what
+          # earlier rounds left neither applied nor filed.
           #
-          # IT FAILS OPEN. Any author whose latest review carries no marker (an older
-          # review, a person's review, a reply to a review thread, which GitHub records as
-          # a review too), a count above 0, a review read on an earlier commit than the
-          # merged head (a commit landed after it), an unknown head or an unreadable answer
-          # all run the model as before. The last marker in a body counts, so a review
-          # that quotes the format before declaring its own count is read by its own. The
-          # commit a review read is its `reviewed: sha=` stamp where present, its commit
-          # otherwise, the selection the review lane uses. A review landing after the
-          # merge re-runs this step on its own event, so it is read by the same rule.
-          HEAD="$(printf '%s' "$STATE" | jq -r '.headRefOid // empty')"
-          OPEN="$(printf '%s' "$STATE" | jq -r --arg head "$HEAD" '
-            def marker: [(.body // "") | scan("<!--[ ]*qa:open-items[ ]+([0-9]+)[ ]*-->")] | (.[-1] // [])[0];
-            def read_at: ([(.body // "") | scan("<!--[ ]*reviewed:[ ]*sha=([[:xdigit:]]{7,40})")] | (.[-1] // [])[0]) // (.commit.oid // "") | ascii_downcase;
-            [.reviews | group_by(.author.login // "") | .[] | max_by(.submittedAt // "")] as $latest
-            | if ($head | test("^[[:xdigit:]]{40}$") | not) then "the merged head is unknown"
-              elif any($latest[]; marker == null) then "a latest review carries no open-items marker"
-              elif any($latest[]; (marker | tonumber) > 0) then "a latest review declares open items"
-              elif any($latest[]; read_at as $r | ($r | length) < 7 or (($head | ascii_downcase) | startswith($r) | not))
-                then "a latest review was read before the merged head"
-              else "zero" end' 2>/dev/null || true)"
-          if [ "$OPEN" = "zero" ]; then
-            printf '%s\n' "**Skipped:** every latest review on \`${HEAD:0:7}\` declares zero open items (kanon#177)." >> "$GITHUB_STEP_SUMMARY"
-            skip "every latest review on ${HEAD:0:7} declares zero open items (kanon#177)"
+          # IT FAILS OPEN, and the decision is `scripts/merge-reconcile-gate.mjs`'s, which
+          # says each case: a review that is not the Reviewer's (a person's, another App's,
+          # the Judge App's without the Reviewer's role marker), no Reviewer verdict, a
+          # latest Reviewer verdict with no marker, a garbled one or a count above 0, a commit
+          # after it, an unknown head or Reviewer, or an unreadable answer all run
+          # the model as before. The Reviewer's login is the App register's, read from the
+          # default branch (`K-LAYOUT-6`) so a PR cannot choose whose count is trusted; an
+          # unreadable register leaves it unknown, which runs the model. A review landing
+          # after the merge re-runs this step on its own event, so it is read by the same rule.
+          REGISTER="$(gh api "repos/$REPO/contents/docs/qa/agent-identities.md" -H "Accept: application/vnd.github.raw" 2>/dev/null || true)"
+          GATE="$(printf '%s' "$STATE" | REGISTER="$REGISTER" node "$KANON/scripts/merge-reconcile-gate.mjs" 2>/dev/null || true)"
+          WHY="$(printf '%s' "$GATE" | jq -r '.why // empty' 2>/dev/null || true)"
+          if [ "$(printf '%s' "$GATE" | jq -r '.skip == true' 2>/dev/null || true)" = "true" ]; then
+            printf '%s\n' "$GATE" | jq -r '.summary' >> "$GITHUB_STEP_SUMMARY"
+            skip "$WHY"
           fi
           echo "run=true" >> "$GITHUB_OUTPUT"
-          echo "→ reconcile PR $PR ($NREVIEWS reviews; ${OPEN:-open items unreadable})"
+          echo "→ reconcile PR $PR ($NREVIEWS reviews; ${WHY:-the open-items gate gave no answer})"
 
   # THE LANE'S RUN, AS A CALLED WORKFLOW (kanon#279, `K-AGENT-49`). `merge-reconcile-run.yml` mints the
   # token in a job that holds the key and runs nothing else, then hands it to the agent's job
