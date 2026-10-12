@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  ATTRIBUTES, PROJECTION, WORK_PROJECTION, handle, pageView, queryRequest, readPage,
+  ATTRIBUTES, PROJECTION, WORK_PROJECTION, handle, pageReaderOf, pageView, queryRequest, readPage,
 } from '../../infra/telemetry/function/aggregate.mjs';
+import { ENDPOINT_WORKFLOWS, verifyToken } from '../../infra/telemetry/function/oidc.mjs';
 import { MINIMUM, TREND_WINDOWS, WINDOW_DAYS } from '../../scripts/metrics/indicators.mjs';
 import { LANES } from '../../actions/agent-telemetry/schema.mjs';
+import {
+  ALIAS_ARN, AUDIENCE, DEFAULT_REF, EXPLORE, fakeRegister, keys, METRICS_PAGE, MIN_VERSION, OWNER, pageToken, type Registration,
+  token, tokenEnv, tokenEvent,
+} from './helpers/aggregate-register.js';
 
 /**
  * Plan 0003 M7 (kanon#661): the aggregate function's page view, the work-item indicators the
@@ -150,14 +155,17 @@ describe("the page view's reads", () => {
 
 describe('the function answers the page view only when asked, and the default answer is unchanged', () => {
   const ACCOUNT = '5'.repeat(12);
-  const env = { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, AGGREGATE_KEYS: 'alpha,beta', OWN_FIGURES: 'alpha=kanon', INVOKER_KEYS: 'alpha' };
+  const env = { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, INVOKER_KEYS: 'alpha' };
+  const regs: Registration[] = [{ repository_id: '1', key: 'alpha', label: 'kanon', aggregate_invoker: true }, { repository_id: '2', key: 'beta' }];
   const urlEvent = (query?: Record<string, string>) => ({
     requestContext: { http: { method: 'GET' }, authorizer: { iam: { userArn: `arn:aws:sts::${ACCOUNT}:assumed-role/kanon-telemetry-alpha-aggregates/GitHubActions` } } },
     ...(query ? { queryStringParameters: query, rawQueryString: new URLSearchParams(query).toString() } : {}),
   });
   const call = async (event: unknown) => {
     const logs: string[] = [];
-    const res = await handle(event, { env, now: () => NOW, query: fakeQuery([...items('alpha', 12), ...items('beta', 12, 100)]).query, log: (l) => logs.push(l) });
+    const res = await handle(event, {
+      env, now: () => NOW, query: fakeQuery([...items('alpha', 12), ...items('beta', 12, 100)]).query, scan: fakeRegister(regs).scan, log: (l) => logs.push(l),
+    });
     return { status: res.statusCode, body: JSON.parse(res.body), logs };
   };
 
@@ -184,12 +192,137 @@ describe('the function answers the page view only when asked, and the default an
   });
 
   it("returns nothing when a declared label is another adopter's key, though that adopter's rows are not read", async () => {
-    const res = await handle(urlEvent({ view: 'page' }), { env: { ...env, OWN_FIGURES: 'alpha=beta' }, now: () => NOW, query: fakeQuery(items('alpha', 3)).query, log: () => {} });
+    const clash = [{ ...regs[0]!, label: 'beta' }, regs[1]!];
+    const res = await handle(urlEvent({ view: 'page' }), { env, now: () => NOW, query: fakeQuery(items('alpha', 3)).query, scan: fakeRegister(clash).scan, log: () => {} });
     expect(res.statusCode).toBe(502);
     expect(res.body).not.toMatch(/alpha|beta/);
+    // Nor a suspended adopter's key: every key the table holds is checked, whatever its status.
+    const suspended = [{ ...regs[0]!, label: 'beta' }, { ...regs[1]!, status: 'suspended' }];
+    expect((await handle(urlEvent({ view: 'page' }), { env, now: () => NOW, query: fakeQuery([]).query, scan: fakeRegister(suspended).scan, log: () => {} })).statusCode).toBe(502);
+    // The default view reads no suspended key's rows, so only the register's check stands between its key and `own`.
+    const plain = await handle(urlEvent(), { env, now: () => NOW, query: fakeQuery(items('alpha', 3)).query, scan: fakeRegister(suspended).scan, log: () => {} });
+    expect(plain.statusCode).toBe(502);
+    expect(plain.body).not.toMatch(/beta/);
   });
 
   it('answers a direct invoke with the page view too, for the Owner to reproduce the page', async () => {
     expect((await call({ queryStringParameters: { view: 'page' } })).body.view).toBe('page');
+  });
+});
+
+describe("the page view's partitions come from the register table (plan 0008 §3.6, J4)", () => {
+  const env = { TABLE_NAME: 'kanon-telemetry', INVOKER_KEYS: '' };
+  const stored = [...items('alpha', 12), ...items('beta', 12, 100), ...items('gamma', 12, 200)];
+  const read = async (regs: Registration[]) => {
+    const { query, requests } = fakeQuery(stored);
+    const res = await handle({ queryStringParameters: { view: 'page' } }, { env, now: () => NOW, query, scan: fakeRegister(regs).scan, log: () => {} });
+    return { body: JSON.parse(res.body), partitions: requests.map((r) => r.ExpressionAttributeValues[':p'].S as string).sort() };
+  };
+  const partitionsOf = (...keys: string[]) => keys.flatMap((k) => [...LANES.map((l) => `${k}#${l}`), `${k}#work`]).sort();
+
+  it('reads exactly the partitions of registrations with publish_own_figures_as', async () => {
+    const one = await read([{ repository_id: '1', key: 'alpha', label: 'kanon' }, { repository_id: '2', key: 'beta' }, { repository_id: '3', key: 'gamma' }]);
+    expect(one.partitions).toEqual(partitionsOf('alpha'));
+    const two = await read([{ repository_id: '1', key: 'alpha', label: 'kanon' }, { repository_id: '2', key: 'beta', label: 'bee' }, { repository_id: '3', key: 'gamma' }]);
+    expect(two.partitions).toEqual(partitionsOf('alpha', 'beta'));
+    expect(two.body.own.map((o: J) => o.label)).toEqual(['bee', 'kanon']);
+  });
+
+  it("a suspended key's rows are in no page view, though it declared a label", async () => {
+    const r = await read([
+      { repository_id: '1', key: 'alpha', label: 'kanon' }, { repository_id: '2', key: 'beta', label: 'bee', status: 'suspended' },
+    ]);
+    expect(r.partitions).toEqual(partitionsOf('alpha'));
+    expect(r.body.own.map((o: J) => o.label)).toEqual(['kanon']);
+    expect(JSON.stringify(r.body)).not.toContain('bee');
+  });
+});
+
+describe("§2.2's one exception: Kanon's metrics page workflow reads the page view only (plan 0008 §2.5's last four rows, J4)", () => {
+  // Kanon's registration carries page_reader; the Explorer's lane on it is separate (aggregate_invoker).
+  const KANON: Registration = { repository_id: '1', key: 'alpha', label: 'kanon', page_reader: true };
+  const stored = [...items('alpha', 12), ...items('beta', 12, 100)];
+  const call = async (bearer: string, query?: Record<string, string>, regs: Registration[] = [KANON, { repository_id: '2', key: 'beta', page_reader: false }]) => {
+    const register = fakeRegister(regs);
+    const res = await handle(tokenEvent(bearer, query), {
+      env: tokenEnv, now: () => NOW, query: fakeQuery(stored).query, scan: register.scan, getItem: register.getItem, keys: keys(), invokedArn: ALIAS_ARN, log: () => {},
+    });
+    return { status: res.statusCode, body: JSON.parse(res.body) };
+  };
+  const page = { view: 'page' };
+
+  it('a metrics-page.yml token at the default branch is answered on `?view=page`', async () => {
+    const { status, body } = await call(pageToken(NOW, '1'), page);
+    expect(status).toBe(200);
+    expect(body.view).toBe('page');
+    expect(body.own.map((o: J) => o.label)).toEqual(['kanon']);
+    // A job_workflow_ref equal to workflow_ref is the same job, and is admitted too.
+    expect((await call(pageToken(NOW, '1', { job_workflow_ref: `${METRICS_PAGE}@refs/heads/main` }), page)).status).toBe(200);
+    expect((await call(pageToken(NOW, '1', { event_name: 'workflow_dispatch' }), page)).status).toBe(200);
+  });
+
+  it('the metrics page exception not held to the page view: its token asking the default view, and on any ingest endpoint, is refused', async () => {
+    expect(await call(pageToken(NOW, '1'))).toMatchObject({ status: 403, body: { error: 'workflow' } });
+    expect(await call(pageToken(NOW, '1'), { view: 'rows' })).toMatchObject({ status: 400 });
+    const registrationOf = async () => ({ repository_owner_id: OWNER, default_ref: DEFAULT_REF });
+    for (const endpoint of Object.keys(ENDPOINT_WORKFLOWS).filter((e) => e !== 'aggregate')) {
+      const verdict = await verifyToken(pageToken(NOW, '1'), { audience: AUDIENCE, endpoint, now: NOW, keys: keys(), minTokenVersion: MIN_VERSION, registrationOf });
+      expect(verdict, endpoint).toEqual({ ok: false, status: 403, error: 'workflow' });
+    }
+  });
+
+  it("the exception's workflow_ref not anchored, or its branch not compared: other branches, a tag and other repositories are refused", async () => {
+    for (const ref of [
+      `${METRICS_PAGE}@refs/heads/other`,
+      `${METRICS_PAGE}@refs/tags/v9.0.0`,
+      'evil/kanon/.github/workflows/metrics-page.yml@refs/heads/main',
+      'yedeya-labs/kanon-fork/.github/workflows/metrics-page.yml@refs/heads/main',
+      'yedeya-labs/kanon/.github/workflows/metrics-page.yml.bak@refs/heads/main',
+      'yedeya-labs/kanon/.github/workflows/xmetrics-page.yml@refs/heads/main',
+      `${METRICS_PAGE}@refs/heads/main/x`,
+      `x${METRICS_PAGE}@refs/heads/main`,
+    ]) {
+      expect(await call(pageToken(NOW, '1', { workflow_ref: ref }), page), ref).toMatchObject({ status: 403, body: { error: 'workflow' } });
+    }
+    // Its own branch named, but the run's ref is another: check 9 still holds.
+    expect(await call(pageToken(NOW, '1', { ref: 'refs/heads/other', event_name: 'workflow_dispatch' }), page)).toMatchObject({ status: 403, body: { error: 'ref' } });
+    expect(await call(pageToken(NOW, '1', { ref_type: 'tag' }), page)).toMatchObject({ status: 403, body: { error: 'ref' } });
+    // A registration whose default branch is another refuses `@refs/heads/main`.
+    expect(await call(pageToken(NOW, '1'), page, [{ ...KANON, default_ref: 'refs/heads/trunk' }])).toMatchObject({ status: 403, body: { error: 'workflow' } });
+  });
+
+  it('job_workflow_ref not compared with workflow_ref under the exception: a token naming another workflow in it is refused', async () => {
+    for (const other of [`${EXPLORE}@refs/heads/main`, `${METRICS_PAGE}@refs/heads/other`, 'yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@refs/heads/main', '']) {
+      expect(await call(pageToken(NOW, '1', { job_workflow_ref: other }), page), other).toMatchObject({ status: 403, body: { error: 'workflow' } });
+    }
+  });
+
+  it('page_reader not checked: a metrics-page.yml token from a registration without page_reader is refused', async () => {
+    expect(await call(pageToken(NOW, '2'), page)).toMatchObject({ status: 403, body: { error: 'workflow' } });
+    expect(await call(pageToken(NOW, '1'), page, [{ ...KANON, page_reader: undefined }])).toMatchObject({ status: 403, body: { error: 'workflow' } });
+    // aggregate_invoker is the Explorer's flag, not the page's.
+    expect(await call(pageToken(NOW, '1'), page, [{ ...KANON, page_reader: undefined, aggregate_invoker: true }])).toMatchObject({ status: 403, body: { error: 'workflow' } });
+  });
+
+  it('holds checks 1 to 6, 8 and 9 as for any token, and a suspension', async () => {
+    const valid = pageToken(NOW, '1');
+    const [h, p, s] = valid.split('.');
+    const forged = `${h}.${Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(p!, 'base64url').toString()), repository_id: '2' })).toString('base64url')}.${s}`;
+    expect(await call(forged, page)).toMatchObject({ status: 401, body: { error: 'signature' } });
+    expect(await call(pageToken(NOW, '1', { aud: 'other' }), page)).toMatchObject({ status: 401, body: { error: 'aud' } });
+    expect(await call(pageToken(NOW - 11 * 60_000, '1'), page)).toMatchObject({ status: 401, body: { error: 'time' } });
+    expect(await call(pageToken(NOW, '1', { event_name: 'pull_request' }), page)).toMatchObject({ status: 403, body: { error: 'event' } });
+    expect(await call(pageToken(NOW, '1', { repository_owner_id: '1' }), page)).toMatchObject({ status: 403, body: { error: 'owner' } });
+    expect(await call(pageToken(NOW, '1', { repository_id: 'x' }), page)).toMatchObject({ status: 403, body: { error: 'owner' } });
+    expect(await call(pageToken(NOW, '99'), page)).toMatchObject({ status: 404, body: { error: 'not-registered' } });
+    expect(await call(valid, page, [{ ...KANON, status: 'suspended' }])).toMatchObject({ status: 403, body: { error: 'suspended' } });
+  });
+
+  it('is decided after the verifier, so a token it refuses before check 7 never reaches the exception', async () => {
+    const calls: string[] = [];
+    const registrationOf = async (id: string) => { calls.push(id); return { ...KANON, status: 'active', repository_owner_id: OWNER, default_ref: DEFAULT_REF }; };
+    expect(await pageReaderOf(token(NOW, '1'), registrationOf)).toBeUndefined();
+    expect(calls).toEqual([]);
+    expect(await pageReaderOf(pageToken(NOW, '1'), registrationOf)).toMatchObject({ ok: true });
   });
 });

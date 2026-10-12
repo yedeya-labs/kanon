@@ -5,12 +5,17 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  aggregate, assertNoKey, callerAllowed, configOf, handle, keyOf, median, MIN_ADOPTERS, percentile, PROJECTION,
-  publicView, queryRequest, readAll, SIGNAL_DAYS,
+  aggregate, assertNoKey, bearerOf, callerAllowed, configOf, handle, keyOf, median, MIN_ADOPTERS, pathOf, percentile, PROJECTION,
+  publicView, queryRequest, readAll, REGISTER_TTL_MS, registerCache, registrationsFrom, scanRegister, scanRequest, SIGNAL_DAYS,
 } from '../../infra/telemetry/function/aggregate.mjs';
+import { AGGREGATE_GET, AGGREGATE_SCAN } from '../../infra/telemetry/function/register-fields.mjs';
+import { AwsError } from '../../infra/telemetry/function/aws.mjs';
 import { cliQuery, fromRegister, TABLE } from '../../infra/telemetry/aggregate.mjs';
 import { LANES } from '../../actions/agent-telemetry/schema.mjs';
 import { writeStub } from './helpers/stub-bin.js';
+import {
+  ALIAS_ARN, EXPLORE, fakeRegister, keys, type Registration, token, tokenEnv, tokenEvent, UNQUALIFIED_ARN,
+} from './helpers/aggregate-register.js';
 
 /**
  * Plan 0002 §6 and §6.1 (decided by the Owner, 2026-10-07, #443): the aggregate. Cross-adopter
@@ -380,17 +385,25 @@ describe('a malformed register or answer is refused without quoting it (#638)', 
   });
 });
 
-describe('the aggregate-only function (§6.1)', () => {
+describe('the aggregate-only function (§6.1), on the IAM URL', () => {
   const ACCOUNT = '5'.repeat(12);
-  const env = { TABLE_NAME: TABLE, ACCOUNT_ID: ACCOUNT, AGGREGATE_KEYS: 'alpha,beta,gamma,delta', OWN_FIGURES: 'alpha=kanon', INVOKER_KEYS: 'alpha' };
+  // Plan 0008 J4: only INVOKER_KEYS is still read from the environment; whose rows are read, and
+  // under which labels, comes from the register table.
+  const env = { TABLE_NAME: TABLE, ACCOUNT_ID: ACCOUNT, INVOKER_KEYS: 'alpha' };
+  const registered: Registration[] = [
+    { repository_id: '1', key: 'alpha', label: 'kanon', aggregate_invoker: true },
+    { repository_id: '2', key: 'beta' }, { repository_id: '3', key: 'gamma' }, { repository_id: '4', key: 'delta' },
+  ];
   const urlEvent = (role = 'kanon-telemetry-alpha-aggregates', method = 'GET', account = ACCOUNT) => ({
     requestContext: { http: { method }, authorizer: { iam: { userArn: `arn:aws:sts::${account}:assumed-role/${role}/GitHubActions` } } },
   });
   const failed = { outcome: 'failed', reason: 'did_not_finish', failed_stage: 'agent' };
   const items = [...three(), row('delta', 4), row('alpha', 5, { lane: 'implement' }), row('beta', 7, { lane: 'implement', ...failed })];
-  const call = async (event: unknown, over: Partial<typeof env> = {}, q = fakeQuery(items).query) => {
+  const call = async (event: unknown, { over = {}, q = fakeQuery(items).query, regs = registered, arn }: {
+    over?: Record<string, string>, q?: (r: Record<string, J>) => Promise<J>, regs?: Registration[], arn?: string,
+  } = {}) => {
     const logs: string[] = [];
-    const res = await handle(event, { env: { ...env, ...over }, now: () => NOW, query: q, log: (l) => logs.push(l) });
+    const res = await handle(event, { env: { ...env, ...over }, now: () => NOW, query: q, scan: fakeRegister(regs).scan, invokedArn: arn, log: (l) => logs.push(l) });
     return { status: res.statusCode, body: JSON.parse(res.body), logs };
   };
 
@@ -412,8 +425,18 @@ describe('the aggregate-only function (§6.1)', () => {
     expect(text).not.toMatch(/_usd":7\b/);
   });
 
+  it('the IAM path still answers as today, through the unqualified function, from a register equal to the old environment', async () => {
+    const today = await call(urlEvent());
+    const unqualified = await call(urlEvent(), { arn: UNQUALIFIED_ARN });
+    expect(unqualified.status).toBe(200);
+    expect(unqualified.body).toEqual(today.body);
+    // The environment's old keys and labels are no longer read: a malformed one changes nothing.
+    expect((await call(urlEvent(), { over: { AGGREGATE_KEYS: 'Al#pha', OWN_FIGURES: 'zeta=x' } })).body).toEqual(today.body);
+  });
+
   it('declares nobody\'s own figures when the register declares none', async () => {
-    expect((await call(urlEvent(), { OWN_FIGURES: '' })).body.own).toEqual([]);
+    const regs = registered.map((r) => ({ ...r, label: undefined }));
+    expect((await call(urlEvent(), { regs })).body.own).toEqual([]);
   });
 
   it('answers only a registered invoker role in this account, by GET', async () => {
@@ -425,25 +448,218 @@ describe('the aggregate-only function (§6.1)', () => {
     expect((await call({})).status).toBe(200);
   });
 
+  it("refuses an invoker role whose key's registration is suspended or missing (plan 0008 §9)", async () => {
+    const suspended = registered.map((r) => (r.key === 'alpha' ? { ...r, status: 'suspended' } : r));
+    expect(await call(urlEvent(), { regs: suspended })).toMatchObject({ status: 403, body: { error: 'suspended' } });
+    expect(await call(urlEvent(), { regs: registered.filter((r) => r.key !== 'alpha') })).toMatchObject({ status: 404, body: { error: 'not-registered' } });
+  });
+
+  it('refuses a bearer token on the IAM URL, and any alias but the token path\'s', async () => {
+    const withBearer = { ...urlEvent(), headers: { authorization: 'Bearer a.b.c' } };
+    expect(await call(withBearer)).toMatchObject({ status: 403, body: { error: 'caller' } });
+    // A SigV4 signature is not a bearer token.
+    expect((await call({ ...urlEvent(), headers: { authorization: 'AWS4-HMAC-SHA256 Credential=x' } })).status).toBe(200);
+    expect((await call(urlEvent(), { arn: `${UNQUALIFIED_ARN}:other` })).status).toBe(403);
+    expect((await call(urlEvent(), { arn: 'not-an-arn' })).status).toBe(403);
+  });
+
   it('says only that it failed when a query fails, never which partition', async () => {
-    const { status, body, logs } = await call(urlEvent(), {}, fakeQuery(items, { failOn: 'beta#lead' }).query);
+    const { status, body, logs } = await call(urlEvent(), { q: fakeQuery(items, { failOn: 'beta#lead' }).query });
     expect(status).toBe(502);
     expect(JSON.stringify(body) + logs.join('')).not.toContain('beta');
     expect(logs).toEqual(['aggregate: failed (error)']);
     const denied = async () => { throw new Error('Query 400'); };
-    expect((await call(urlEvent(), {}, denied)).logs).toEqual(['aggregate: failed (Query 400)']);
+    expect((await call(urlEvent(), { q: denied })).logs).toEqual(['aggregate: failed (Query 400)']);
   });
 
-  it('refuses a malformed configuration rather than guess', async () => {
-    expect((await call(urlEvent(), { OWN_FIGURES: 'alpha' })).status).toBe(500);
-    expect((await call(urlEvent(), { OWN_FIGURES: 'zeta=kanon' })).status).toBe(500);
-    expect((await call(urlEvent(), { AGGREGATE_KEYS: 'Al#pha' })).status).toBe(500);
-    expect(configOf(env)).toEqual({ keys: ['alpha', 'beta', 'gamma', 'delta'], own: { alpha: 'kanon' }, invokers: ['alpha'] });
+  it('says only that it failed when the register can\'t be read', async () => {
+    const logs: string[] = [];
+    const res = await handle(urlEvent(), { env, now: () => NOW, query: fakeQuery(items).query, scan: fakeRegister(registered, { failScan: true }).scan, log: (l) => logs.push(l) });
+    expect(res.statusCode).toBe(502);
+    expect(logs).toEqual(['aggregate: failed (Scan 400)']);
+    // DynamoDB's own failure, as `function/aws.mjs` throws it: the operation and AWS's code, nothing of its message.
+    const awsLogs: string[] = [];
+    const denied = async () => { throw new AwsError('Scan', 'AccessDeniedException'); };
+    await handle(urlEvent(), { env, now: () => NOW, query: fakeQuery(items).query, scan: denied, log: (l) => awsLogs.push(l) });
+    expect(awsLogs).toEqual(['aggregate: failed (Scan AccessDeniedException)']);
+  });
+
+  it('refuses a malformed configuration or register rather than guess', async () => {
+    expect((await call(urlEvent(), { over: { INVOKER_KEYS: 'Al#pha' } })).status).toBe(500);
+    const relabel = (label: string) => registered.map((r) => (r.key === 'beta' ? { ...r, label } : r));
+    expect((await call(urlEvent(), { regs: relabel('alpha') })).status).toBe(502);
+    expect((await call(urlEvent(), { regs: relabel('kanon') })).status).toBe(502);
+    expect((await call(urlEvent(), { regs: relabel('Not A Label') })).status).toBe(502);
+    expect((await call(urlEvent(), { regs: [...registered, { repository_id: '9', key: 'Bad#Key' }] })).status).toBe(502);
+    expect(configOf(env)).toEqual({ invokers: ['alpha'] });
   });
 
   it('checks the caller by role name, account and invoker list', () => {
     expect(callerAllowed(urlEvent(), env, ['alpha'])).toBe(true);
     expect(callerAllowed(urlEvent(), env, [])).toBe(false);
     expect(callerAllowed(urlEvent('kanon-telemetry-alpha-aggregates-x'), env, ['alpha'])).toBe(false);
+  });
+});
+
+describe('whose rows are read comes from the register table (plan 0008 §3.6, J4)', () => {
+  const env = { TABLE_NAME: TABLE, INVOKER_KEYS: '' };
+  const failed = { outcome: 'failed', reason: 'did_not_finish', failed_stage: 'agent' };
+
+  it('takes active registrations\' keys and labels, and keeps every key to check labels against', () => {
+    const items = [
+      { pk: 'repo#1', key: 'alpha', status: 'active', publish_own_figures_as: 'kanon' },
+      { pk: 'repo#2', key: 'beta', status: 'active' },
+      { pk: 'repo#3', key: 'gamma', status: 'suspended', publish_own_figures_as: 'gee' },
+      { pk: 'repo#4', status: 'erased' },
+      { pk: 'key#alpha' },
+      { pk: 'count#all#2026-10-07' },
+    ];
+    expect(registrationsFrom(items)).toEqual({ keys: ['alpha', 'beta'], known: ['alpha', 'beta', 'gamma'], own: { alpha: 'kanon' } });
+    expect(() => registrationsFrom([...items, { pk: 'repo#5', key: 'delta', status: 'active', publish_own_figures_as: 'gamma' }])).toThrow(/label/);
+  });
+
+  it("reads the register with exactly the aggregate role's Scan projection, following every page", async () => {
+    const register = fakeRegister([{ repository_id: '1', key: 'alpha' }, { repository_id: '2', key: 'beta' }]);
+    const items = await scanRegister(register.scan, 'kanon-telemetry-register');
+    expect(items.filter((i) => i.key).map((i) => i.key)).toEqual(['alpha', 'beta']);
+    expect(register.scans.length).toBe(5);
+    for (const req of register.scans) {
+      expect(req).toMatchObject({ TableName: 'kanon-telemetry-register', Select: 'SPECIFIC_ATTRIBUTES' });
+      expect(Object.values(req.ExpressionAttributeNames).sort()).toEqual([...AGGREGATE_SCAN].sort());
+    }
+    expect(scanRequest('t')).not.toHaveProperty('FilterExpression');
+  });
+
+  it("a suspended key's rows are in no cell and no signal, and its partitions are never read", async () => {
+    const regs: Registration[] = [
+      { repository_id: '1', key: 'alpha' }, { repository_id: '2', key: 'beta' }, { repository_id: '3', key: 'gamma' },
+      { repository_id: '4', key: 'delta', status: 'suspended' },
+    ];
+    const rows = [...three(), row('delta', 4), row('delta', 9, { lane: 'implement', ...failed })];
+    const answer = async (r: Registration[]) => {
+      const { query, requests } = fakeQuery(rows);
+      const res = await handle({}, { env, now: () => NOW, query, scan: fakeRegister(r).scan, log: () => {} });
+      return { body: JSON.parse(res.body), partitions: requests.map((q) => q.ExpressionAttributeValues[':p'].S as string) };
+    };
+    const active = await answer(regs.map((r) => ({ ...r, status: 'active' })));
+    expect(active.body.cross_adopter).toEqual([{ lane: 'review', model: MODEL, runs: 4, median_cost_usd: 2.5, p90_cost_usd: 4 }]);
+    expect(active.body.signals).toHaveLength(1);
+    const quarantined = await answer(regs);
+    expect(quarantined.body.cross_adopter).toEqual([{ lane: 'review', model: MODEL, runs: 3, median_cost_usd: 2, p90_cost_usd: 3 }]);
+    expect(quarantined.body.signals).toEqual([]);
+    expect(quarantined.partitions.some((p) => p.startsWith('delta#'))).toBe(false);
+    // Two active adopters left: the cell is withheld, not computed from the suspended key's rows.
+    const two = await answer([...regs.slice(0, 2), { repository_id: '3', key: 'gamma', status: 'suspended' }, regs[3]!]);
+    expect(two.body.cross_adopter).toEqual([]);
+  });
+
+  it('publishes a cross-adopter cell from three keys of one repository owner: adopters are counted by key (Owner decision 7)', async () => {
+    const regs: Registration[] = ['alpha', 'beta', 'gamma'].map((key, i) => ({ repository_id: String(i + 1), key, owner: '42' }));
+    const res = await handle({}, { env, now: () => NOW, query: fakeQuery(three()).query, scan: fakeRegister(regs).scan, log: () => {} });
+    expect(JSON.parse(res.body).cross_adopter).toEqual([{ lane: 'review', model: MODEL, runs: 3, median_cost_usd: 2, p90_cost_usd: 3 }]);
+  });
+
+  it('holds the scan for five minutes in a container, and never holds a failure', async () => {
+    const cache = registerCache();
+    let loads = 0;
+    const load = async () => { loads += 1; return [{ pk: 'repo#1', key: `k${loads}`, status: 'active' }]; };
+    expect((await cache.get(NOW, load))[0]!.key).toBe('k1');
+    expect((await cache.get(NOW + REGISTER_TTL_MS - 1, load))[0]!.key).toBe('k1');
+    expect((await cache.get(NOW + REGISTER_TTL_MS, load))[0]!.key).toBe('k2');
+    const fresh = registerCache();
+    await expect(fresh.get(NOW, async () => { throw new Error('Scan 500'); })).rejects.toThrow();
+    expect((await fresh.get(NOW, load))[0]!.key).toBe('k3');
+  });
+});
+
+describe('the token path (plan 0008 §3.6, J4): the Explorer at a release, on its own alias\'s URL', () => {
+  const regs: Registration[] = [
+    { repository_id: '1', key: 'alpha', label: 'kanon', aggregate_invoker: true },
+    { repository_id: '2', key: 'beta' }, { repository_id: '3', key: 'gamma' }, { repository_id: '4', key: 'delta', aggregate_invoker: false },
+  ];
+  const items = [...three(), row('delta', 4), row('alpha', 5, { lane: 'implement' })];
+  const call = async (event: unknown, { r = regs, env = tokenEnv, arn = ALIAS_ARN }: { r?: Registration[], env?: Record<string, string>, arn?: string } = {}) => {
+    const logs: string[] = [];
+    const register = fakeRegister(r);
+    const res = await handle(event, {
+      env, now: () => NOW, query: fakeQuery(items).query, scan: register.scan, getItem: register.getItem, keys: keys(), invokedArn: arn, log: (l) => logs.push(l),
+    });
+    return { status: res.statusCode, headers: res.headers, body: JSON.parse(res.body), logs, gets: register.gets };
+  };
+
+  it('answers the Explorer\'s token from a registration whose aggregate_invoker is true, either view, as the IAM path does', async () => {
+    const { status, body, logs, gets } = await call(tokenEvent(token(NOW, '1')));
+    expect(status).toBe(200);
+    expect(body.cross_adopter).toEqual([{ lane: 'review', model: MODEL, runs: 3, median_cost_usd: 3, p90_cost_usd: 4 }]);
+    expect(body.own.map((o: J) => o.label)).toEqual(['kanon']);
+    expect(JSON.stringify(body) + logs.join('\n')).not.toMatch(/alpha|beta|gamma|delta/);
+    expect(gets).toHaveLength(1);
+    expect(gets[0]).toMatchObject({ TableName: 'kanon-telemetry-register', Key: { pk: { S: 'repo#1' } } });
+    expect(Object.values(gets[0].ExpressionAttributeNames).sort()).toEqual([...AGGREGATE_GET].sort());
+    expect((await call(tokenEvent(token(NOW, '1'), { view: 'page' }))).body.view).toBe('page');
+  });
+
+  it('a registration without aggregate_invoker gets 403', async () => {
+    expect(await call(tokenEvent(token(NOW, '2')))).toMatchObject({ status: 403, body: { error: 'invoker' } });
+    expect(await call(tokenEvent(token(NOW, '4')))).toMatchObject({ status: 403, body: { error: 'invoker' } });
+    expect(await call(tokenEvent(token(NOW, '2'), { view: 'page' }))).toMatchObject({ status: 403, body: { error: 'invoker' } });
+  });
+
+  it('a suspended caller gets 403 suspended, an erased one 410, and an unregistered one 404', async () => {
+    const as = (status: string) => regs.map((x) => (x.key === 'alpha' ? { ...x, status } : x));
+    expect(await call(tokenEvent(token(NOW, '1')), { r: as('suspended') })).toMatchObject({ status: 403, body: { error: 'suspended' } });
+    expect(await call(tokenEvent(token(NOW, '1')), { r: as('erased') })).toMatchObject({ status: 410, body: { error: 'erased' } });
+    expect(await call(tokenEvent(token(NOW, '99')))).toMatchObject({ status: 404, body: { error: 'not-registered' } });
+  });
+
+  it('answers the verifier\'s refusal by its code alone, with the bearer challenge on a 401', async () => {
+    const none = await call(tokenEvent(undefined));
+    expect(none).toMatchObject({ status: 401, body: { error: 'token' } });
+    expect(none.headers['www-authenticate']).toBe('Bearer error="invalid_token"');
+    expect((await call({ ...tokenEvent(undefined), headers: { authorization: 'Basic x' } })).status).toBe(401);
+    expect(await call(tokenEvent(token(NOW, '1', { aud: 'sts.amazonaws.com' })))).toMatchObject({ status: 401, body: { error: 'aud' } });
+    expect(await call(tokenEvent(token(NOW, '1', { event_name: 'push' })))).toMatchObject({ status: 403, body: { error: 'event' } });
+    const overseer = 'yedeya-labs/kanon/.github/workflows/agent-overseer.yml@refs/tags/v0.40.0';
+    expect(await call(tokenEvent(token(NOW, '1', { job_workflow_ref: overseer })))).toMatchObject({ status: 403, body: { error: 'workflow' } });
+    expect(await call(tokenEvent(token(NOW, '1', { job_workflow_ref: `${EXPLORE}@refs/tags/v0.39.0` })))).toMatchObject({ status: 403, body: { error: 'workflow' } });
+    expect(await call(tokenEvent(token(NOW, '1', { repository_owner_id: '1' })))).toMatchObject({ status: 403, body: { error: 'owner' } });
+    expect(await call(tokenEvent(token(NOW, '1', { event_name: 'workflow_dispatch', ref: 'refs/heads/other' })))).toMatchObject({ status: 403, body: { error: 'ref' } });
+  });
+
+  it('refuses an IAM-shaped request on the alias\'s URL, and answers nothing without a token there', async () => {
+    const iam = { ...tokenEvent(token(NOW, '1')), requestContext: { http: { method: 'GET' }, authorizer: { iam: { userArn: 'x' } } } };
+    expect(await call(iam)).toMatchObject({ status: 403, body: { error: 'caller' } });
+    expect((await call({})).status).toBe(401);
+    expect((await call({ ...tokenEvent(token(NOW, '1')), requestContext: { http: { method: 'POST' } } })).status).toBe(405);
+  });
+
+  it('refuses any view but the two, after the token', async () => {
+    expect((await call(tokenEvent(token(NOW, '1'), { view: 'rows' }))).status).toBe(400);
+    expect((await call(tokenEvent(token(NOW, '2'), { view: 'rows' }))).status).toBe(403);
+  });
+
+  it('answers 503 `config` without its audience or version floor, as the ingest function does, and 502 when the registration can\'t be read', async () => {
+    expect(await call(tokenEvent(token(NOW, '1')), { env: { ...tokenEnv, AUDIENCE: '' } })).toMatchObject({ status: 503, body: { error: 'config' } });
+    expect(await call(tokenEvent(token(NOW, '1')), { env: { ...tokenEnv, MIN_TOKEN_VERSION: 'v1' } })).toMatchObject({ status: 503, body: { error: 'config' } });
+    // The template's default floor, empty, admits no token.
+    expect(await call(tokenEvent(token(NOW, '1')), { env: { ...tokenEnv, MIN_TOKEN_VERSION: '' } })).toMatchObject({ status: 503, body: { error: 'config' } });
+    const logs: string[] = [];
+    const res = await handle(tokenEvent(token(NOW, '1')), {
+      env: tokenEnv, now: () => NOW, query: fakeQuery(items).query, scan: fakeRegister(regs).scan,
+      getItem: async () => { throw new Error('GetItem 400'); }, keys: keys(), invokedArn: ALIAS_ARN, log: (l) => logs.push(l),
+    });
+    expect(res.statusCode).toBe(502);
+    expect(logs).toEqual(['aggregate: failed (GetItem 400)']);
+  });
+
+  it('tells the two URLs apart by the invoked ARN alone', () => {
+    expect(pathOf(ALIAS_ARN)).toBe('token');
+    expect(pathOf(UNQUALIFIED_ARN)).toBe('iam');
+    expect(pathOf(`${UNQUALIFIED_ARN}:$LATEST`)).toBe(null);
+    expect(pathOf(`${UNQUALIFIED_ARN}:import`)).toBe(null);
+    expect(pathOf('')).toBe(null);
+    expect(bearerOf({ headers: { Authorization: 'Bearer t' } })).toBe('t');
+    expect(bearerOf({ headers: { authorization: 'Bearer ' } })).toBe('');
+    expect(bearerOf({})).toBe(undefined);
   });
 });

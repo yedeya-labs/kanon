@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 import { FUNCTION_DIR, registerProblems, render, TEMPLATE_PATH } from '../../infra/telemetry/render.mjs';
-import { ATTRIBUTES } from '../../infra/telemetry/function/aggregate.mjs';
+import { ATTRIBUTES, TOKEN_ALIAS } from '../../infra/telemetry/function/aggregate.mjs';
 import { nameHashesOf } from '../../infra/telemetry/function/index.mjs';
 import {
   AGGREGATE_GET, AGGREGATE_SCAN, FUNCTION_FIELDS, INGEST_SCAN, KEY_ITEM_PREFIX, OPERATOR_FIELDS, REGISTER_TABLE, REGISTRATION_PREFIX,
@@ -176,20 +176,25 @@ describe('the register table (plan 0008 §5.1, §5.3)', () => {
 
 describe('the ingest function and its URL (§4)', () => {
   const fn = R.IngestFunction!.Properties;
-  it('the unqualified URLs are IAM-authenticated; the one public URL is the ingest function\'s `live` alias\'s (plan 0008 §9)', () => {
-    expect(byType('AWS::Lambda::Url').map(([name, r]) => [name, r.Properties.AuthType, r.Properties.Qualifier]))
-      .toEqual([['IngestUrl', 'AWS_IAM', undefined], ['IngestLiveUrl', 'NONE', 'live'], ['AggregateUrl', 'AWS_IAM', undefined]]);
+  it('the unqualified URLs are IAM-authenticated; the public ones are each function\'s `live` alias\'s (plan 0008 §9, J3 and J4)', () => {
+    expect(byType('AWS::Lambda::Url').map(([name, r]) => [name, r.Properties.AuthType, r.Properties.Qualifier])).toEqual([
+      ['IngestUrl', 'AWS_IAM', undefined], ['IngestLiveUrl', 'NONE', 'live'], ['AggregateUrl', 'AWS_IAM', undefined], ['AggregateLiveUrl', 'NONE', TOKEN_ALIAS],
+    ]);
     expect(R.IngestLiveUrl!.Properties.TargetFunctionArn).toEqual({ 'Fn::GetAtt': ['IngestFunction', 'Arn'] });
   });
-  it('the aliases are `live` and `erase`, on $LATEST, and no URL serves `erase`', () => {
-    expect(byType('AWS::Lambda::Alias').map(([name, r]) => [name, r.Properties.Name, r.Properties.FunctionVersion, r.Properties.FunctionName]))
-      .toEqual([['IngestLiveAlias', 'live', '$LATEST', { Ref: 'IngestFunction' }], ['IngestEraseAlias', 'erase', '$LATEST', { Ref: 'IngestFunction' }]]);
+  it('the aliases are `live` and `erase`, and the aggregate function\'s `live`, on $LATEST, and no URL serves `erase`', () => {
+    expect(byType('AWS::Lambda::Alias').map(([name, r]) => [name, r.Properties.Name, r.Properties.FunctionVersion, r.Properties.FunctionName])).toEqual([
+      ['IngestLiveAlias', 'live', '$LATEST', { Ref: 'IngestFunction' }], ['IngestEraseAlias', 'erase', '$LATEST', { Ref: 'IngestFunction' }],
+      ['AggregateLiveAlias', TOKEN_ALIAS, '$LATEST', { Ref: 'AggregateFunction' }],
+    ]);
   });
-  it('the only public permissions are the `live` alias\'s, through its URL; every other is held to IAM auth', () => {
+  it('the only public permissions are the two `live` aliases\', through their URLs; every other is held to IAM auth', () => {
     const open = byType('AWS::Lambda::Permission').filter(([, p]) => p.Properties.Principal === '*');
     expect(open.map(([name, p]) => [name, p.Properties])).toEqual([
       ['IngestLiveUrlPermission', { FunctionName: { Ref: 'IngestLiveAlias' }, Action: 'lambda:InvokeFunctionUrl', Principal: '*', FunctionUrlAuthType: 'NONE' }],
       ['IngestLiveInvokePermission', { FunctionName: { Ref: 'IngestLiveAlias' }, Action: 'lambda:InvokeFunction', Principal: '*', InvokedViaFunctionUrl: true }],
+      ['AggregateLiveUrlPermission', { FunctionName: { Ref: 'AggregateLiveAlias' }, Action: 'lambda:InvokeFunctionUrl', Principal: '*', FunctionUrlAuthType: 'NONE' }],
+      ['AggregateLiveInvokePermission', { FunctionName: { Ref: 'AggregateLiveAlias' }, Action: 'lambda:InvokeFunction', Principal: '*', InvokedViaFunctionUrl: true }],
     ]);
     for (const [, p] of byType('AWS::Lambda::Permission')) {
       if (p.Properties.Principal === '*') continue;
@@ -433,6 +438,25 @@ describe('the aggregate-only function (§6.1, decided by the Owner 2026-10-07)',
       const principal = p.Properties.Principal['Fn::GetAtt'][0] as string;
       expect(p.Properties.FunctionName.Ref).toBe(principal.startsWith('AggregateInvokerRole') ? 'AggregateFunction' : 'IngestFunction');
     }
+  });
+  it('its token URL is on its own alias, `live`, which the handler tells apart by the invoked ARN (plan 0008 §9, J4)', () => {
+    expect(R.AggregateLiveAlias).toEqual({
+      Type: 'AWS::Lambda::Alias',
+      Properties: { FunctionName: { Ref: 'AggregateFunction' }, FunctionVersion: '$LATEST', Name: TOKEN_ALIAS },
+    });
+    expect(R.AggregateLiveUrl!.Properties).toEqual({ TargetFunctionArn: { 'Fn::GetAtt': ['AggregateFunction', 'Arn'] }, Qualifier: TOKEN_ALIAS, AuthType: 'NONE' });
+    expect(template.Outputs.AggregateTokenUrl).toEqual({ Value: { 'Fn::GetAtt': ['AggregateLiveUrl', 'FunctionUrl'] } });
+    // Its IAM URL stays on the unqualified function for the overlap, and no invoker reaches the alias.
+    expect(R.AggregateUrl!.Properties.Qualifier).toBeUndefined();
+    expect(JSON.stringify(invoker.Policies)).not.toContain('AggregateLiveAlias');
+  });
+  it('is told the same audience, version floor and register table as the ingest function, and its public URL is bounded by a reservation (plan 0008 §12)', () => {
+    expect(fn.Environment.Variables).toMatchObject({
+      AUDIENCE: { Ref: 'Audience' }, MIN_TOKEN_VERSION: { Ref: 'MinTokenVersion' }, REGISTER_TABLE: REGISTER_TABLE,
+    });
+    // One definition of each, shared with the ingest function (J3): the floor's default, empty, admits no token.
+    expect(template.Parameters.MinTokenVersion.Default).toBe('');
+    expect(fn.ReservedConcurrentExecutions).toEqual(R.IngestFunction!.Properties.ReservedConcurrentExecutions);
   });
 });
 

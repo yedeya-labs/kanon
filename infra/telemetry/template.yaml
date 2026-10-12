@@ -1,9 +1,10 @@
 # The hosted telemetry store (plan 0002 §3 to §5, §6.1, §7, §9, §10): one DynamoDB table, written
 # only by a validating function behind an IAM-authenticated URL, with a writer and a reader role
 # per registered repository, and an aggregate-only function behind a second such URL. Beside them,
-# the register table of plan 0008 §5, and the ingest function's token path (plan 0008 §3, J3): a
-# public URL on its `live` alias, its `erase` alias, and the self-read role. No lane calls the
-# token path until the collector moves to it (J5).
+# the register table of plan 0008 §5, and the token paths: the ingest function's (plan 0008 §3,
+# J3), a public URL on its `live` alias, its `erase` alias and the self-read role; and the
+# aggregate function's (§3.6, J4), a public URL on its own `live` alias. No lane calls either
+# until the collector and the reading lanes move to them (J5, J7).
 #
 # THIS FILE IS NOT DEPLOYED AS IT IS. The register (who is opted in) is private (§5), so
 # `render.mjs` reads it and adds each repository's roles to this template. `docs/telemetry.md`
@@ -54,7 +55,7 @@ Parameters:
     Default: kanon-telemetry
   MinTokenVersion:
     Type: String
-    Description: The lowest Kanon release, X.Y.Z, whose collector the token path admits (plan 0008, section 2.2, check 7). Empty admits no token.
+    Description: The lowest Kanon release, X.Y.Z, whose workflows the token paths admit (plan 0008, section 2.2, check 7). Empty admits no token.
     AllowedPattern: '^$|^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$'
     Default: ''
   CursorKey:
@@ -65,7 +66,7 @@ Parameters:
     Default: ''
   ReservedConcurrency:
     Type: Number
-    Description: The function's reserved concurrency (plan 0002, section 4). 0 sets none, for an account whose concurrency quota can't spare it.
+    Description: Each function's reserved concurrency (plan 0002, section 4; plan 0008, section 12). 0 sets none, for an account whose concurrency quota can't spare it.
     MinValue: 0
     Default: 2
 
@@ -135,7 +136,8 @@ Resources:
 
   # The register (plan 0008 §5): who is registered, under which key, and the operator's fields,
   # outside any repository. The ingest function reads and writes it on both of its paths (plan
-  # 0008 J3), and the operator writes it with `register.mjs`. Its lifecycle is the rows table's
+  # 0008 J3), the aggregate function reads it on both of its (J4), and the operator writes it with
+  # `register.mjs`. Its lifecycle is the rows table's
   # (K-OBS-17): retained, deletion-protected, point-in-time recovery. Encrypted with the
   # AWS-managed key `aws/dynamodb` (Owner decision 4 of 2026-10-12): no key fee, and every use of
   # the key is in CloudTrail, but its key policy can't be narrowed, so it is not an access
@@ -564,8 +566,8 @@ Resources:
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: { 'Fn::GetAtt': [AggregateLogGroup, Arn] }
-        # The register (plan 0008 §3.6, §5.3), each read held to exactly its projection. Unused
-        # until the aggregate function reads its keys from the table (J4).
+        # The register (plan 0008 §3.6, §5.3), each read held to exactly its projection: the
+        # aggregate function's keys, labels and callers come from the table (J4).
         - PolicyName: read-the-register-projections
           PolicyDocument:
             Version: '2012-10-17'
@@ -586,7 +588,7 @@ Resources:
               # takes no Select parameter, so dynamodb:Select is held only where present; the
               # projection is held by dynamodb:Attributes. verify.mjs shows this role's GetItem
               # with no projection, and with `repository` projected, denied (plan 0008 §13's
-              # added checks, which J6 runs) before the aggregate relies on it (J4).
+              # added checks, which J6 runs) before the token URL is published.
               - Sid: GetTheCallersRegistration
                 Effect: Allow
                 Action: dynamodb:GetItem
@@ -618,25 +620,70 @@ Resources:
       MemorySize: 256
       Timeout: 60
       Role: { 'Fn::GetAtt': [AggregateRole, Arn] }
+      # Its token URL is public (plan 0008 §12): the reservation bounds what a flood can cost.
+      ReservedConcurrentExecutions:
+        Fn::If: [HasReservedConcurrency, { Ref: ReservedConcurrency }, { Ref: AWS::NoValue }]
       LoggingConfig:
         LogGroup: { Ref: AggregateLogGroup }
         LogFormat: Text
       Environment:
         Variables:
           TABLE_NAME: kanon-telemetry
+          REGISTER_TABLE: kanon-telemetry-register
           ACCOUNT_ID: { Ref: AWS::AccountId }
-          # Set by render.mjs from the register: every key; `key=label` for each adopter that
-          # declared its own figures publishable; the keys whose invoker role may call the URL.
+          AUDIENCE: { Ref: Audience }
+          MIN_TOKEN_VERSION: { Ref: MinTokenVersion }
+          # Set by render.mjs from the register file. Only INVOKER_KEYS is still read: the keys
+          # whose invoker role may call the IAM URL. Whose rows are aggregated, and under which
+          # labels, comes from the register table on both URLs (plan 0008 §3.6, §9), so
+          # AGGREGATE_KEYS and OWN_FIGURES are unused, and go with render.mjs at vM+1.
           AGGREGATE_KEYS: ''
           OWN_FIGURES: ''
           INVOKER_KEYS: ''
 
   # Only the invoker roles render.mjs adds may call it: AWS_IAM auth, and a permission per role.
+  # The unqualified function's URL; the handler refuses a bearer token on it (plan 0008 §9).
   AggregateUrl:
     Type: AWS::Lambda::Url
     Properties:
       TargetFunctionArn: { 'Fn::GetAtt': [AggregateFunction, Arn] }
       AuthType: AWS_IAM
+
+  # The token path (plan 0008 §3.6, §9): an alias of its own, `live`, on the latest code, whose
+  # URL takes no IAM auth. GitHub's OIDC token is the gate, checked by the function, which tells
+  # the two URLs apart by the alias in the ARN Lambda invoked, never by the request.
+  AggregateLiveAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: { Ref: AggregateFunction }
+      FunctionVersion: $LATEST
+      Name: live
+
+  AggregateLiveUrl:
+    Type: AWS::Lambda::Url
+    DependsOn: AggregateLiveAlias
+    Properties:
+      TargetFunctionArn: { 'Fn::GetAtt': [AggregateFunction, Arn] }
+      Qualifier: live
+      AuthType: NONE
+
+  # A public URL needs both grants, each on the alias alone: InvokeFunctionUrl held to the URL's
+  # NONE auth, and InvokeFunction held to calls through a function URL (since October 2025).
+  AggregateLiveUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: { Ref: AggregateLiveAlias }
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  AggregateLiveInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: { Ref: AggregateLiveAlias }
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
 
   # render.mjs adds, per registered repository: WriterRole<id>, ReaderRole<id> and
   # WriterUrlPermission<id>, from the shapes it holds; and, for an entry that sets
@@ -653,3 +700,5 @@ Outputs:
     Value: { 'Fn::GetAtt': [IngestLiveUrl, FunctionUrl] }
   AggregateUrl:
     Value: { 'Fn::GetAtt': [AggregateUrl, FunctionUrl] }
+  AggregateTokenUrl:
+    Value: { 'Fn::GetAtt': [AggregateLiveUrl, FunctionUrl] }
