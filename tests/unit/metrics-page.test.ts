@@ -8,7 +8,7 @@ import {
 } from '../../.github/scripts/metrics-page.mjs';
 import { pageView } from '../../infra/telemetry/function/aggregate.mjs';
 import { checkPage } from '../../scripts/aggregate-read.mjs';
-import { MINIMUM } from '../../scripts/metrics/indicators.mjs';
+import { IDLE_DAYS, MINIMUM } from '../../scripts/metrics/indicators.mjs';
 
 /**
  * Plan 0003 M7 (kanon#661), §6.3: the public metrics page and its generator. The page shows the
@@ -123,6 +123,12 @@ describe('every number states its window, band version, sample size, interval, r
     expect(html).toContain(COMMIT);
     expect(html).toContain('<code>docs/metrics.md</code> under "Reproduce a page"');
     expect(html).not.toMatch(/aggregate-read\.mjs|aws lambda|--function-name/);
+  });
+  it('says that a bail counts against yield only after the idle days, so a new project reads high', () => {
+    expect(IDLE_DAYS).toBe(30);
+    expect(html).toContain('<h3>When a bail counts against yield</h3>');
+    expect(html).toContain('counts only once its issue has had no run for 30 days');
+    expect(html).toContain("in a project's first 30 days");
   });
   it('shows the trend and the by-version view', () => {
     expect(html).toContain('Trend, 6 windows of 28 days');

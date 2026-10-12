@@ -30,7 +30,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { RULE_IDS } from '../../actions/agent-telemetry/schema.mjs';
 import { checkPage } from '../../scripts/aggregate-read.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
-import { MINIMUM } from '../../scripts/metrics/indicators.mjs';
+import { IDLE_DAYS, MINIMUM } from '../../scripts/metrics/indicators.mjs';
 
 /** The generated heading every section of figures from fewer than three adopters opens with (§6.3). */
 export const OWN_HEADING = "Measured on Kanon's own projects";
@@ -340,6 +340,8 @@ function transparency(page, release, commit) {
 </dl>
 <h3>The detection gap</h3>
 <p>An escape is counted only when someone linked a revert or a fix to the item. A defect nobody linked is not counted, so the escape rates are lower bounds.</p>
+<h3>When a bail counts against yield</h3>
+<p>A merged item counts in the window it closes in. A run that stopped before opening a pull request counts only once its issue has had no run for ${esc(IDLE_DAYS)} days, so that a run still being retried isn't counted as abandoned. So in a project's first ${esc(IDLE_DAYS)} days, and for ${esc(IDLE_DAYS)} days after any burst of such runs, yield reads high, and the "no PR" figure low, until they settle.</p>
 <h3>Bands, windows, samples and intervals</h3>
 <p>Band version ${esc(page.band_version)}. Each window is ${esc(page.window_days)} days and ends at the start of the UTC day the page was computed. The figures are shown by band only when the band validity check finds cost rising with band (a Kendall τ-b interval above zero, from at least ${esc(m.validity)} items); otherwise they are pooled, with the band mix beside them.</p>
 <p>Each figure shows its value, its 95% interval and its sample (n). Medians and p90s use an order-statistic interval, rates a Wilson interval, and yield a bootstrap of ${esc(page.bootstrap.resamples)} resamples with seed ${esc(page.bootstrap.seed)}. A figure from fewer items than its minimum shows "not enough data (N)": ${esc(m.median)} for a median, ${esc(m.p90)} for a p90, ${esc(m.proportion)} for approval and correction, ${esc(m.yield)} for yield, and ${esc(m.escape)} for an escape rate.</p>
