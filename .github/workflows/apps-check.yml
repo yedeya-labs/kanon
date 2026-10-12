@@ -26,7 +26,7 @@
 # computed name, so `kanon doctor` sees exactly which secrets this workflow reads and
 # can list any other App secret as stale (#440): a new App adds its line to each of the four. Called, it takes each App's two secrets by their fixed names (plan 0005 §3.5),
 # all optional: a caller maps the Apps its register lists, and an App the register lists
-# whose secrets are not mapped fails at the mint.
+# whose secrets are not mapped fails at the check, which names them.
 name: apps-check
 
 on:

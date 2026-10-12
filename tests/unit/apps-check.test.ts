@@ -433,6 +433,19 @@ describe('the apps-check workflow', () => {
     expect(check.steps.filter((s) => s['continue-on-error'] !== undefined)).toEqual([check.steps[0]]);
   });
 
+  // kanon#641: since #639 an App whose secrets aren't mapped fails at the check, which names
+  // them, so neither this workflow's header nor docs/apps.md says it fails at the mint.
+  it('says an App whose secrets are not mapped fails at the check, which names them, not at the mint (kanon#641)', () => {
+    const header = text.slice(0, text.indexOf('\nname:'));
+    const bullet = readFileSync(join(ROOT, 'docs/apps.md'), 'utf8').split('\n').find((l) => l.startsWith('- **Map secrets by name')) ?? '';
+    for (const [where, prose] of [['the header', header], ['docs/apps.md', bullet]] as const) {
+      const said = prose.replace(/\n#\s*/g, ' ');
+      expect(said, where).toMatch(/not mapped|didn't map/);
+      expect(said, where).not.toMatch(/at the mint/);
+      expect(said, where).toMatch(/fails at the check, which names/);
+    }
+  });
+
   // The Owner, 2026-10-07 (kanon#440, kanon#437): each App's secrets are read by their literal
   // names, so doctor can tell which App secrets the workflow reads, and lists any other as stale.
   const picks = () => {
