@@ -37,7 +37,7 @@ Type `/kanon:adopt` next; asking the agent to install Kanon won't start it. It a
 
 ## What is enforced, honestly
 
-The [rulebook](rulebook/) has 223 rules, each with its reason. 156 name what enforces them, in whole or in part: a CI check, a test, a GitHub setting or the Reviewer's checklist. **67 are prose only**: their "Enforced by" line says so, and they are Kanon's own backlog. Kanon is pre-1.0 and runs its own lanes on itself ([ADR 0011](docs/decisions/0011-kanon-runs-its-own-lanes.md)).
+The [rulebook](rulebook/) has 223 rules, each with its reason. 158 name what enforces them, in whole or in part: a CI check, a test, a GitHub setting or the Reviewer's checklist. **65 are prose only**: their "Enforced by" line says so, and they are Kanon's own backlog. Kanon is pre-1.0 and runs its own lanes on itself ([ADR 0011](docs/decisions/0011-kanon-runs-its-own-lanes.md)).
 
 ## Read on
 
