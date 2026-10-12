@@ -112,8 +112,9 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | The lint chain runner, the path guard, the flag guard and the permissions guard | `K-SELF-1`, `K-SELF-3`, `K-SELF-4`, `K-AGENT-37` | not yet installed |
 | The citation guard on Kanon's own `docs/`, the `Citation guard` job of `ci.yml`, which runs the base's copy and is meant to be a required check, and `citation-shift` on every pull request, advisory as for adopters (`citation-shift.yml`, [#377](https://github.com/yedeya-labs/kanon/issues/377), [#343](https://github.com/yedeya-labs/kanon/pull/343)). Both also read `rulebook/` and the READMEs, passed with `--path` ([#388](https://github.com/yedeya-labs/kanon/issues/388)) | `K-SELF-3` | installed 2026-10-06 |
 | The calibration record, the run-record writer, and the capability ledger's watermark reader. The ledger exists (2026-10-06), and the reader, which the Overseer's runtime-version trigger runs, installs when `overseer.yml` first pins a release that includes it | `K-SELF-13`, `K-SELF-15`, `K-SELF-17`, `K-LAYOUT-7` | not yet installed |
+| `lane-check`'s exact-pin and Dependabot-entry checks, in CI's `Lane check` job at the release Kanon pins (the Dependabot entry's cooldown exemption since 2026-10-04), and `kanon doctor`'s read of the pinned release since 2026-10-12. Both accept only `vX.Y.Z` until plan 0009's step S2 | `K-ADOPT-11` | installed 2026-10-02 |
 | The installer, `kanon init` with `kanon doctor` (Owner decision 2026-10-12, #709): Kanon's lanes from the full suite on were written by `kanon init --feature full` run against this repository; its setup before 2026-10-12 was by hand, or by `kanon apps`, before Kanon ran `kanon init` on itself | `K-ADOPT-1`, `K-ADOPT-2`, `K-ADOPT-3`, `K-ADOPT-7`, `K-OBS-18` | installed 2026-10-12 |
-| Planned guards the rules name but Kanon hasn't built | `K-PRIN-2`, `K-PRIN-18`, `K-WORK-22`, `K-SPEC-9`, `K-SPEC-10`, `K-MERGE-8`, `K-PROJ-14`, `K-PROJ-18`, `K-OBS-16`, `K-OBS-17`, `K-SELF-14`, `K-ADOPT-10`, `K-ADOPT-11` | not yet installed |
+| Planned guards the rules name but Kanon hasn't built | `K-PRIN-2`, `K-PRIN-18`, `K-WORK-22`, `K-SPEC-9`, `K-SPEC-10`, `K-MERGE-8`, `K-PROJ-14`, `K-PROJ-18`, `K-OBS-16`, `K-OBS-17`, `K-SELF-14`, `K-ADOPT-10` | not yet installed |
 | The sign-off delegation record (`docs/qa/sign-off-delegation.md`), naming the Owner, and Kanon's project-setup hook adding its sign-off to the Implementer's commits | `K-AGENT-44`, `K-LAYOUT-14` | installed 2026-10-04 |
 | The exemptions file (`docs/qa/exemptions.md`), read by the brief guard and the doc-path guard; Kanon runs neither guard on itself yet | `K-LAYOUT-15` | not yet installed |
 
@@ -134,6 +135,7 @@ These rules' lines are prose only with a note, and name nothing to install: `K-P
 - **Chat channel:** not yet decided. None is configured.
 - **Who merges:** the Merger, an Implementer pull request the Reviewer approved that touches none of the paths in [`escalation-paths.md`](escalation-paths.md), and the Owner, everything else (ADR 0011, amended 2026-10-12).
 - **Production promotion:** human-gated (the weekly release pull request, which the Owner merges: a release is what reaches adopters)
+- **Release cadence:** `weekly, Monday`
 - **Which pull requests are reviewed:** members' only (ADR 0011).
 - **Overseer:** `installed`
 - **Upstream findings:** `filed here`
