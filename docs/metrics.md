@@ -169,6 +169,8 @@ Plan 0003 M7 ([#661](https://github.com/yedeya-labs/kanon/issues/661)), §6 opti
 
 **Measured on Kanon's own projects.** Until three adopters declare their figures, every project on the page is one the Owner runs: Kanon and the operator's second repository, which is published under a neutral label and never named or linked. The page's section of figures says so under the generated heading "Measured on Kanon's own projects", with how many projects that is. Each project is shown alone; no figure combines projects. Until then, set `publish_own_figures_as` only on the Owner's own projects' register entries, each with a label that names no repository, organisation or person ([The aggregate function](telemetry.md#the-aggregate-function)).
 
+**When a bail counts against yield.** The page says, beside the method, that a run which stopped before opening a pull request counts against yield only once its issue has been idle for `IDLE_DAYS` (30, `scripts/metrics/indicators.mjs`), while a merged item counts when it closes. So a project's first month, and the month after any burst of such runs, reads yield high until they settle ([#703](https://github.com/yedeya-labs/kanon/issues/703)).
+
 **How it is refreshed.** `.github/workflows/metrics-page.yml`, weekly on Monday at 07:15 UTC or by dispatch, on the default branch:
 
 1. its `aggregate` job assumes the aggregate-invoker role and reads the function's [page view](telemetry.md#the-page-view) with `scripts/aggregate-read.mjs page`, which refuses anything but the view's keys, codes, dates, versions and numbers;
