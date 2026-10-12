@@ -1,0 +1,34 @@
+# The caller of Kanon's agent-merge lane, written by `kanon init` (docs/lanes.md). The triggers are yours;
+# the rest is the lane's, and `lane-check` holds this file to it.
+name: Merge (Merger)
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  pull_request_review:
+    types: [submitted]
+  schedule:
+    - cron: "37 * * * *"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "A single PR to consider (blank = sweep every open PR)"
+        required: false
+      apply:
+        description: "'true' to actually merge, comment and label on a dispatch (anything else = report only)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    uses: yedeya-labs/kanon/.github/workflows/agent-merge.yml@v0.39.0
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      apply: ${{ inputs.apply }}
+    secrets:
+      JUDGE_APP_ID: ${{ secrets.JUDGE_APP_ID }}
+      JUDGE_APP_PRIVATE_KEY: ${{ secrets.JUDGE_APP_PRIVATE_KEY }}

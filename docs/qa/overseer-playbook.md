@@ -19,12 +19,23 @@ Tell a run that died from one that skipped by reading full run records, never a 
 | Code audit | `code-audit.yml` | every three days, a dispatch |
 | Overseer | `overseer.yml` | weekly, a dispatch, a merged pull request that moves its Kanon pin |
 | Explore the telemetry | `explore-telemetry.yml` | weekly (Tuesday 06:30 UTC), a dispatch |
+| Triage | `triage.yml` | an issue label (`qa:needs-triage`), a dispatch; since 2026-10-12 |
+| Dispatch sweep | `dispatch-sweep.yml` | daily (04:30 UTC), a dispatch; since 2026-10-12 |
+| Merge reconcile | `merge-reconcile.yml` | a review submitted, a pull request closed, a dispatch; since 2026-10-12 |
+| Lead, brief | `lead.yml` | a dispatch only; since 2026-10-12 |
+| Lead, revise | `lead-revise.yml` | a review submitted, a label, a dispatch; since 2026-10-12 |
+| Lead, split | `lead-split.yml` | an issue label (`qa:needs-split`), a dispatch; since 2026-10-12 |
+| Lead, reconcile | `lead-reconcile.yml` | hourly (minute 7), a pull request or issue closed, a dispatch; since 2026-10-12 |
+| Verify acceptance criteria | `verify-acs.yml` | an issue label, a dispatch; since 2026-10-12 |
+| Merge (the Merger) | `merge.yml` | CI finishing on `main`, a review submitted, hourly (minute 37), a dispatch; since 2026-10-12 |
+
+**The library's re-delivery logic doesn't know this yet.** It lists a lane's runs, and dispatches a re-review, by the lane's file name (`agent-review.yml`, `agent-implement-revise.yml`, `agent-lead-revise.yml`, `agent-lead-split.yml`), so on Kanon it finds no run and its dispatch fails ([the adoption record](adoption.md)'s re-delivery row). A re-delivery, or a failed re-review dispatch, on a Kanon pull request whose lane did run is that known gap: name it once, with the run that did deliver, and file nothing new for it.
 
 Read them with `gh run list --workflow <caller> --json databaseId,event,status,conclusion,createdAt,headBranch` and `gh run view <id> --json jobs`. The runs filed under `agent-lanes-smoke.yml`, `agent-blocks-smoke.yml` and the other smoke workflows are tests of the lane code on a pull request, not the pipeline running: never count them as a lane's runs.
 
 **A run whose gate job concluded `skipped`, or whose agent job never started, is a skip, not a death:** the membership gate turned the event away (a label other than the lane's, a stranger's act, a closed pull request that didn't merge), or the Overseer's runtime-version check found the runtime no newer than the watermark. A death is a run whose agent or filing job failed or was cancelled. **`explore-telemetry.yml` is the exception to "agent job never started":** its agent job (`explore`) needs the `aggregate` job, so a run whose `aggregate` job failed or was cancelled is a death (the role's trust, the function or the answer check broke), while a run that ended at `unconfigured`, or whose `aggregate` succeeded with nothing in it and so skipped `explore`, is a skip.
 
-**Kanon's schedules fire only now and then** ([#397](https://github.com/yedeya-labs/kanon/issues/397), closed as not planned: GitHub started 3 scheduled runs in about 15 hourly slots). So a missing scheduled run of any scheduled caller in the table above (the code audit, the Overseer, the rebase lane or the telemetry Explorer) is that, not a lane that died. Name it once, in the audit, and file nothing new for it. The rebase lane starts after every merge through the queue, on the merged pull request, and a dispatch is the immediate retry: a conflicting Implementer pull request that stays conflicting after a later merge's rebase run is a skip or a death to judge, and worth naming.
+**Kanon's schedules fire only now and then** ([#397](https://github.com/yedeya-labs/kanon/issues/397), closed as not planned: GitHub started 3 scheduled runs in about 15 hourly slots). So a missing scheduled run of any scheduled caller in the table above (the code audit, the Overseer, the rebase lane, the telemetry Explorer, the dispatch sweep, the Lead's reconciler or the Merger) is that, not a lane that died. Name it once, in the audit, and file nothing new for it. The rebase lane starts after every merge through the queue, on the merged pull request, and a dispatch is the immediate retry: a conflicting Implementer pull request that stays conflicting after a later merge's rebase run is a skip or a death to judge, and worth naming.
 
 ## Backlog dynamics
 

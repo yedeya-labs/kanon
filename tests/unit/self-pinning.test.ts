@@ -49,6 +49,12 @@ const files = [
 // same release and for the same reason: through `$/`, a dispatch from a branch would read the
 // aggregate with that branch's lane, and its filing job would file with that branch's script.
 //
+// triage.yml, dispatch-sweep.yml, merge-reconcile.yml, lead.yml, lead-revise.yml, lead-split.yml,
+// lead-reconcile.yml, verify-acs.yml and merge.yml call the rest of the full pipeline (ADR 0011,
+// amended 2026-10-12), at the same release and for the same reason: through `$/`, a branch could
+// change the lane that plans, builds, reconciles or merges it, and a pull request could bring the
+// Merger that judges it.
+//
 // The smoke run's python fixture hook is the first exception again, on a fixture (kanon#110):
 // the project-setup hook of the fixture adopter in Kanon's own checkout, run to show that a
 // hook with no `KANON` and no Node leaves a guard running on Kanon's Node.
@@ -80,6 +86,15 @@ const EXEMPT = new Set([
   '.github/workflows/code-audit.yml: yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@vX.Y.Z',
   '.github/workflows/overseer.yml: yedeya-labs/kanon/.github/workflows/agent-overseer.yml@vX.Y.Z',
   '.github/workflows/explore-telemetry.yml: yedeya-labs/kanon/.github/workflows/agent-explore-telemetry.yml@vX.Y.Z',
+  '.github/workflows/triage.yml: yedeya-labs/kanon/.github/workflows/agent-triage.yml@vX.Y.Z',
+  '.github/workflows/dispatch-sweep.yml: yedeya-labs/kanon/.github/workflows/agent-dispatch-sweep.yml@vX.Y.Z',
+  '.github/workflows/merge-reconcile.yml: yedeya-labs/kanon/.github/workflows/agent-merge-reconcile.yml@vX.Y.Z',
+  '.github/workflows/lead.yml: yedeya-labs/kanon/.github/workflows/agent-lead.yml@vX.Y.Z',
+  '.github/workflows/lead-revise.yml: yedeya-labs/kanon/.github/workflows/agent-lead-revise.yml@vX.Y.Z',
+  '.github/workflows/lead-split.yml: yedeya-labs/kanon/.github/workflows/agent-lead-split.yml@vX.Y.Z',
+  '.github/workflows/lead-reconcile.yml: yedeya-labs/kanon/.github/workflows/agent-lead-reconcile.yml@vX.Y.Z',
+  '.github/workflows/verify-acs.yml: yedeya-labs/kanon/.github/workflows/agent-verify-acs.yml@vX.Y.Z',
+  '.github/workflows/merge.yml: yedeya-labs/kanon/.github/workflows/agent-merge.yml@vX.Y.Z',
   '.github/workflows/ci.yml: yedeya-labs/kanon/actions/lane-check@vX.Y.Z',
   // telemetry.yml calls the telemetry collector (plan 0002 S7), at the same release: its job
   // holds the store's writer credentials, so the code that runs with them is a released one.
