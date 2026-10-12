@@ -89,10 +89,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # `contents: read` checks out the generator; `issues: read` reads Kanon's health from its
-    # issues. The commit and the pull request use the Author App's token, minted last.
+    # issues, and `pull-requests: read` the pull request that closed each bug (the closer query
+    # in kanon-health.mjs, #696). The commit and the pull request use the Author App's token,
+    # minted last.
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
