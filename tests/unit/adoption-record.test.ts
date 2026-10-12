@@ -112,12 +112,16 @@ const recordProblems = (text: string, rules: Map<string, string | undefined>): s
  * The install's choices plan 0007 adds (step G1): the feature and the review trigger under
  * `## Choices`, and whether the repository holds private or sensitive material under `## Data`.
  * Each is one bullet, its value one code span and nothing after it, and each has a meaning when
- * absent: the record means what it meant before the choice existed (plan 0005 §5.2).
+ * absent: the record means what it meant before the choice existed (plan 0005 §5.2). The release
+ * cadence (`K-SHIP-7`, plan 0009 S1) has the same shape, so the same parser reads it: `every merge`
+ * when absent, or `weekly, ` and the day the release pull request merges.
  */
+const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 const INSTALL_CHOICES = [
   { key: 'feature', label: 'Feature', heading: '## Choices', values: ['review', 'build', 'full', 'custom'], absent: 'custom' },
   { key: 'reviewTrigger', label: 'Review trigger', heading: '## Choices', values: ['labelled', 'every pull request'], absent: 'labelled' },
   { key: 'sensitiveMaterial', label: 'Private or sensitive material', heading: '## Data', values: ['yes', 'no', 'not declared'], absent: 'not declared' },
+  { key: 'releaseCadence', label: 'Release cadence', heading: '## Choices', values: ['every merge', ...WEEKDAYS.map((day) => `weekly, ${day}`)], absent: 'every merge' },
 ] as const;
 const RECORD_PATH = 'docs/qa/adoption.md';
 
@@ -234,7 +238,7 @@ describe('the record check fails on each broken shape', () => {
   }
 });
 
-describe("the install's choices: feature, review trigger and data (K-LAYOUT-10, plan 0007 G1)", () => {
+describe("the record's choices: feature, review trigger, data and release cadence (K-LAYOUT-10, plan 0007 G1, plan 0009 S1)", () => {
   const RULEBOOK = readFileSync(join(ROOT, 'rulebook/11-repository-layout.md'), 'utf8');
   const rule = RULEBOOK.slice(RULEBOOK.indexOf('### `K-LAYOUT-10`'), RULEBOOK.indexOf('### `K-LAYOUT-14`'));
   const record = (choices: string[], tail: string[] = []): string =>
@@ -255,7 +259,7 @@ describe("the install's choices: feature, review trigger and data (K-LAYOUT-10, 
   });
 
   it('means custom, labelled and not declared without the bullets', () => {
-    expect(installChoices(record([]))).toEqual({ feature: 'custom', reviewTrigger: 'labelled', sensitiveMaterial: 'not declared' });
+    expect(installChoices(record([]))).toEqual({ feature: 'custom', reviewTrigger: 'labelled', sensitiveMaterial: 'not declared', releaseCadence: 'every merge' });
   });
 
   it('reads every value of each bullet, beside the other choices', () => {
@@ -270,7 +274,19 @@ describe("the install's choices: feature, review trigger and data (K-LAYOUT-10, 
       feature: 'review',
       reviewTrigger: 'labelled',
       sensitiveMaterial: 'yes',
+      releaseCadence: 'every merge',
     });
+  });
+
+  it("reads Kanon's own release cadence from `## Choices`: weekly, on Monday (K-SHIP-7, plan 0009 S1)", () => {
+    expect(installChoices(readFileSync(RECORD, 'utf8')).releaseCadence).toBe('weekly, Monday');
+  });
+
+  it('K-SHIP-7 names the cadence bullet K-LAYOUT-10 defines', () => {
+    const shipping = readFileSync(join(ROOT, 'rulebook/06-shipping.md'), 'utf8');
+    const ship7 = shipping.slice(shipping.indexOf('### `K-SHIP-7`'), shipping.indexOf('### `K-SHIP-8`'));
+    expect(ship7).toContain('`` - **Release cadence:** `weekly, Monday` ``');
+    expect(ship7).toContain('`K-LAYOUT-10`');
   });
 
   it('reads nothing inside a code fence', () => {
@@ -294,6 +310,12 @@ describe("the install's choices: feature, review trigger and data (K-LAYOUT-10, 
     ['the data bullet with another value', record([], DATA('- **Private or sensitive material:** `some`')), /`Private or sensitive material` is `some`; write `yes`, `no`, `not declared`/],
     ['`## Data` twice', record([], [...DATA('- **Private or sensitive material:** `yes`'), '## Data']), /has the `## Data` heading 2 times/],
     ['`## Data` before `## Choices`', `# Adoption record\n\n## Data\n\n- **Private or sensitive material:** \`no\`\n\n${record([]).replace('# Adoption record\n', '')}`, /adoption\.md:3 puts `## Data` before `## Choices`/],
+    ['a cadence with no day', record(['- **Release cadence:** `weekly`']), /adoption\.md:6: `Release cadence` is `weekly`; write `every merge`, `weekly, Monday`/],
+    ['a cadence on a day that is not one', record(['- **Release cadence:** `weekly, Funday`']), /`Release cadence` is `weekly, Funday`/],
+    ['a cadence in another case', record(['- **Release cadence:** `weekly, monday`']), /`Release cadence` is `weekly, monday`/],
+    ['a cadence as plain text', record(['- **Release cadence:** weekly, Monday']), /adoption\.md:6, under `## Choices`, isn't a declaration/],
+    ['the cadence twice', record(['- **Release cadence:** `weekly, Monday`', '- **Release cadence:** `every merge`']), /adoption\.md:7 repeats `Release cadence`/],
+    ['the cadence under `## Data`', record([], ['## Data', '', '- **Release cadence:** `weekly, Monday`']), /adoption\.md:9 declares `Release cadence` outside `## Choices`/],
     ['a fence that never closes', record(['```', '- **Feature:** `review`']), /opens a code fence that never closes/],
   ])('fails %s, by line', (_name, text, message) => {
     expect(() => installChoices(text)).toThrow(message);

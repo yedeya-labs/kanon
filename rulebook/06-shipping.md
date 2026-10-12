@@ -76,15 +76,15 @@ A `!` after the type, or a `BREAKING CHANGE` footer, marks a breaking change. `c
 
 ## Release and deploy
 
-### `K-SHIP-7` Release on every merge
+### `K-SHIP-7` Release on every merge, or on the cadence the project declares
 
-**Rule.** Every merge to the main branch produces a version and a release, and release tags drive the deploy to the pre-production stage.
+**Rule.** Every merge to the main branch produces a version and a release, and release tags drive the deploy to the pre-production stage. A project whose releases other repositories pin may instead declare a **release cadence** under `## Choices` in its adoption record (`K-LAYOUT-10`), such as `` - **Release cadence:** `weekly, Monday` ``. Its merges then pool into the release pull request, which merges on the declared day, so a week's changes, breaking ones included, ship as one release. A fix that can't wait may release on another day, and the release pull request says why. A project that declares no cadence releases on every merge (Owner decision 2026-10-12, plan 0009).
 
-**Why.** One merge, one version keeps every deployed build traceable to exactly one change, and removes "cutting a release" as a separate human task.
+**Why.** One merge, one version keeps every deployed build traceable to exactly one change, and removes "cutting a release" as a separate human task. A release that other repositories pin is different: each one is an upgrade every pinning repository has to review, and releasing on every merge sends them upgrades faster than they can. A framework that released on every merge once cut fifteen releases in a day, one in five of its releases asked its adopters to change something, and the upgrades reached them the day they were tagged. A declared day pools them into one, and is written where any reader looks, rather than kept by a maintainer's habit.
 
-**Enforced by.** Kanon's reusable release workflow ([`release.yml`](../docs/release.md)), called on every push to the main branch, which first runs its merge-settings guard (`K-SHIP-3`) and then release-please; and a deploy workflow triggered by release tags.
+**Enforced by.** Kanon's reusable release workflow ([`release.yml`](../docs/release.md)), called on every push to the main branch, which first runs its merge-settings guard (`K-SHIP-3`) and then release-please; and a deploy workflow triggered by release tags. A declared cadence is prose only: whoever merges the release pull request merges it on the declared day, and on Kanon's own record [`tests/unit/adoption-record.test.ts`](../tests/unit/adoption-record.test.ts) reads the bullet's shape.
 
-**Class.** split. Releasing on every merge, and the release tool (release-please, with the changelog sections matching `K-SHIP-4`'s types), are framework. **The project supplies:** its stages.
+**Class.** split. Releasing on every merge, and the release tool (release-please, with the changelog sections matching `K-SHIP-4`'s types), are framework. **The project supplies:** its stages, and its release cadence, if it declares one.
 
 ### `K-SHIP-8` A red main never deploys, and it reaches a human
 

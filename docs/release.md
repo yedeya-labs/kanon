@@ -158,6 +158,16 @@ With the Releaser's secrets mapped, release-please pushes the release branch and
 
 **Decided by the Owner, 2026-10-06** (#337, #49): the `dco` exemption of the Releaser's release commits, by its App identity as above, is accepted; and from plan 0005's L5 on, Kanon's release PRs merge through the front door (CI, the Owner's approval, the merge queue), with the Releaser's bypass held but unused.
 
+## Channels: candidates and stable
+
+Kanon releases itself weekly, and in two steps, so every release runs on Kanon before an adopter's Dependabot proposes it ([plan 0009](plans/0009-release-channels-and-api-key.md), decided by the Owner on 2026-10-12). **Not built yet:** plan 0009's steps S2 to S5 build it, and until then every Kanon release is tagged `vX.Y.Z` when its release PR merges, as above.
+
+- **A release cadence.** Any project may declare one in its adoption record, `` - **Release cadence:** `weekly, Monday` `` under `## Choices` (`K-SHIP-7`, `K-LAYOUT-10`): its release PR then merges on that day, and a week's merges ship as one release. Kanon declares `weekly, Monday`. A project that declares none releases on every merge, and this workflow behaves the same either way: the cadence is when someone merges the release PR.
+- **Candidates.** Kanon's release PR, merged on the release day, tags a candidate, `candidate-vX.Y.Z`, published as a GitHub pre-release, which GitHub's latest release never names. Kanon's own callers move to it the same day (ADR 0011, decision 2).
+- **Stable.** A candidate is promoted once it has been Kanon's pin for at least 72 hours, with no revert of its changes, no serious bug traced to it and no unexplained red run of Kanon's lanes: the stable tag, `vX.Y.Z`, goes on the candidate's commit, its Release becomes the latest, and the major tag moves with it.
+- **What an adopter pins.** An exact version, as today (`K-ADOPT-11`): a stable `vX.Y.Z`, which its Dependabot entry proposes, or, to run ahead on purpose, a candidate. Nothing in an adopter's repository changes for the stable channel.
+- **Your own releases** are untouched: candidates and promotion are Kanon's own operation, and this workflow keeps tagging `vX.Y.Z` for you.
+
 ## Known limits
 
 All are accepted on the workflow's own token, the default. Mapping the Releaser removes the first and the last, and with its bypass moved, the merge queue one (see [With the Releaser](#with-the-releaser)). The stale-release-PR guard's limits hold either way.
@@ -169,5 +179,5 @@ All are accepted on the workflow's own token, the default. Mapping the Releaser 
   - **In a monorepo, a version may move to any version the release sets**, not only its own package's. The guard reads one set of released versions, not which file belongs to which package. A stale line that moves a version forward to another package's new version still passes.
   - **A diff too large for GitHub's API to return** (it omits a file's patch above a size limit) fails the guard rather than passing unchecked.
 - **With a merge queue, the release PR can't be queued** on the workflow's token, because its required checks never report, so an admin merges it directly through the ruleset's pull-request bypass (`gh pr merge <n> --squash --admin`, or "Merge without waiting for requirements to be met" in the web UI). A bypass actor's merge skips the queue as well as the checks, which `K-MERGE-8` already allows for the release bot's PRs. This is confirmed on Kanon: with the queue on, release 0.4.2 was merged through the admin bypass on 2026-09-30. Closing and reopening the release PR as a person also works: the reopen triggers the PR's workflows, and once they pass it can be queued like any other.
-- **Releases pool into a release PR that a human merges.** During bootstrap a merge doesn't produce a release by itself, which falls short of `K-SHIP-7`'s "every merge produces a release".
+- **Releases pool into a release PR that a human merges.** During bootstrap a merge doesn't produce a release by itself, which falls short of `K-SHIP-7`'s "every merge produces a release". A project that declares a release cadence (`K-SHIP-7`) uses exactly this: its release PR merges on the declared day.
 - **The release tag triggers no workflows either**, for the same reason. A deploy workflow `on: push: tags` (`K-SHIP-7`'s deploy leg) won't fire from these tags; that needs the release App too.
