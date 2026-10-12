@@ -10,7 +10,10 @@ import {
   putItem,
   stamp,
   TEXT_FIELDS,
+  toAttributes,
 } from '../../infra/telemetry/function/index.mjs';
+import { rowOf, WORK_PROJECTION } from '../../infra/telemetry/function/aggregate.mjs';
+import { closingIssues } from '../../scripts/metrics/join.mjs';
 import { sign } from '../../infra/telemetry/function/sigv4.mjs';
 import { LANES } from '../../actions/agent-telemetry/schema.mjs';
 import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
@@ -491,5 +494,32 @@ describe('the write and its signature', () => {
 
   it('the partitions erasure walks are every lane, work and finding (plan 0006 §2.3)', () => {
     expect(PARTITIONS).toEqual([...LANES, 'work', 'finding']);
+  });
+});
+
+describe("a work item's closing_issues, through the write and back (kanon#754)", () => {
+  it('is stored as the schema declares a list, a comma-separated string, and the page view reads it back', () => {
+    const s = stamp(workRow({ closing_issues: '12,34' }), { caller: { kind: 'writer', key: 'k1' }, key: 'k1', now: NOW });
+    if (!s.ok) throw new Error('row did not validate');
+    const item = toAttributes(s.item);
+    expect(item.closing_issues).toEqual({ S: '12,34' });
+    const read = rowOf(item, WORK_PROJECTION) as Record<string, unknown>;
+    expect(read.closing_issues).toBe('12,34');
+    expect(closingIssues(read.closing_issues as string)).toEqual([12, 34]);
+  });
+
+  it('an array is refused at intake, naming the field, never stored without it', async () => {
+    const r = await call(event([workRow({ closing_issues: [12, 34] })]));
+    expect(r.status).toBe(422);
+    expect(r.body.results[0].errors).toEqual([{ field: 'closing_issues', problem: 'type' }]);
+    expect(r.puts).toHaveLength(0);
+  });
+
+  it('toAttributes refuses a value it has no form for, naming the field and never the value', () => {
+    for (const v of [[12, 34], { n: 12 }, null]) {
+      expect(() => toAttributes({ pk: 'k1#work', closing_issues: v })).toThrow(/^toAttributes: closing_issues is not a string, number or boolean$/);
+    }
+    // An undefined field is an absent one, as JSON carries it.
+    expect(toAttributes({ pk: 'k1#work', closing_issues: undefined })).toEqual({ pk: { S: 'k1#work' } });
   });
 });
