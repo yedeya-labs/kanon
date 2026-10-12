@@ -112,6 +112,8 @@ describe('kanon doctor, the guard K-ADOPT-6 promises: an ended bootstrap needs t
       const [f] = r.json.findings;
       expect(f).toMatchObject({ category: 'ruleset', blocking: true });
       expect(f.message).toContain('ended 2026-10-02');
+      // What it found, and not its opposite.
+      expect(f.message).toContain('the ruleset on main (Kanon: default branch) requires no approving review.');
       expect(f.message).toContain('K-ADOPT-6');
       expect(JSON.parse(f.fix.commands[1]).rules.find((x: { type: string }) => x.type === 'pull_request').parameters.required_approving_review_count).toBe(1);
     }
@@ -139,6 +141,20 @@ describe('kanon doctor, the guard K-ADOPT-6 promises: an ended bootstrap needs t
     g.st.rulesets = [];
     const r = await run(checkout(files), g, ['--json']);
     expect(ids(r)).toEqual(['ruleset.missing main', 'ruleset.approval-off main']);
+    expect(has(r, 'ruleset.approval-off')[0].message).toContain('no active ruleset covers main, so nothing requires an approving review.');
+  });
+
+  it('fails an ended bootstrap on a private repository whose plan has no rulesets', async () => {
+    const files = healthyFiles();
+    files['docs/qa/adoption.md'] = record('ended 2026-10-02');
+    const g = github(0, false);
+    g.st.noRulesetsOnPlan = true;
+    const r = await run(checkout(files), g, ['--json']);
+    const [f] = has(r, 'ruleset.approval-off');
+    expect(f).toMatchObject({ subject: 'main', blocking: true });
+    expect(f.message).toContain('acme/widgets has no rulesets on its plan, so nothing requires an approving review.');
+    expect(f.fix.text).toContain('K-ADOPT-3');
+    expect(r.status).toBe(EXIT.findings);
   });
 
   it("can't be waived: a waiver of it is malformed", async () => {

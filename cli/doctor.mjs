@@ -1508,7 +1508,7 @@ export const diagnose = async (deps, opts) => {
     };
     if (ended && approvals < 1) {
       const fix = switchOn();
-      find('ruleset.approval-off', s.defaultBranch, `${ADOPTION_RECORD} says bootstrap \`ended ${ended}\`, but ${s.rulesets === 'no' ? `${repo} has no rulesets on its plan, so` : s.covering.length ? `the ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')})` : `no active ruleset covers ${s.defaultBranch}, so nothing`} requires an approving review. Bootstrap never returns: an approval no longer required is an incident to fix, and until it is, any merge needs no approval (K-ADOPT-6).`, fix);
+      find('ruleset.approval-off', s.defaultBranch, `${ADOPTION_RECORD} says bootstrap \`ended ${ended}\`, but ${s.rulesets === 'no' ? `${repo} has no rulesets on its plan, so nothing requires an approving review` : s.covering.length ? `the ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) requires no approving review` : `no active ruleset covers ${s.defaultBranch}, so nothing requires an approving review`}. Bootstrap never returns: an approval no longer required is an incident to fix, and until it is, any merge needs no approval (K-ADOPT-6).`, fix);
     } else if (!ended && approvals < 1 && judge && s.rulesets === 'yes' && s.covering.length) {
       const onDefault = await defaultWorkflows();
       if (onDefault.error !== null) {
