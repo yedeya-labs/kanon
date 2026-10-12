@@ -145,6 +145,24 @@ const pathShaped = (/** @type {string} */ t) =>
 const treePath = (/** @type {string} */ t) =>
   t.replace(/^(?:\$KANON\/|\$\{KANON\}\/|\.\/)/, '').replace(/(?::\d+(?::\d+)?|#L\d+(?:-L?\d+)?)$/, '');
 
+/** A path-shaped token without the sentence punctuation after it. */
+const pathCore = (/** @type {string} */ tok) => tok.replace(/[.:!?]+$/, '');
+
+/**
+ * WHERE THE `name` RULE DOESN'T LOOK (kanon#603): the spans of the path-shaped tokens the `path`
+ * rule keeps because they are Kanon's own files, `[start, end)` over the token's core. Kanon's
+ * paths are public, so a word inside one is not the adopter's: `scripts/merge-gate.mjs` stays
+ * whole when a name the lane can see holds `gate`, and `redact`'s output then verifies. A span is
+ * one `isKanon` accepts in full, after only `treePath`'s fixed decorations (`$KANON/`, `./`, a
+ * line or an anchor), so nothing else rides along in it: `scripts/merge-gate.mjs.bak` is not
+ * Kanon's file, and the same word anywhere else is still removed.
+ * @param {string} text @param {Resolved} ctx @returns {[number, number][]}
+ */
+const keptKanonSpans = (text, ctx) => [...text.matchAll(PATH_TOKEN)].flatMap((m) => {
+  const core = pathCore(m[0]);
+  return core !== '' && pathShaped(core) && ctx.isKanon(treePath(core)) ? [[/** @type {number} */ (m.index), m.index + core.length]] : [];
+});
+
 /**
  * THE RULES, IN ORDER (`scrub_version` 1). Each replaces what it finds with its placeholder, and
  * `redact` runs them in this order, each on what the ones before left.
@@ -183,16 +201,21 @@ const RULES = Object.freeze([
     // A path-shaped token, kept only when it is a file in Kanon's tree. `owner/name` falls here.
     name: 'path',
     apply: (t, ctx) => t.replace(PATH_TOKEN, (tok) => {
-      const core = tok.replace(/[.:!?]+$/, '');
+      const core = pathCore(tok);
       if (core === '' || !pathShaped(core) || ctx.isKanon(treePath(core))) return tok;
       return `[path]${tok.slice(core.length)}`;
     }),
   },
   {
-    // `public-words.mjs`'s check, once with the context's hashes and once with its own list.
+    // `public-words.mjs`'s check, once with the context's hashes and once with its own list. A
+    // word wholly inside a Kanon path the `path` rule kept is left alone (kanon#603).
     name: 'name',
-    apply: (t, ctx) => t.replace(WORD_TOKEN, (tok) =>
-      (namesForbiddenWord(tok, ctx.names) || namesForbiddenWord(tok) ? '[name]' : tok)),
+    apply: (t, ctx) => {
+      const kept = keptKanonSpans(t, ctx);
+      return t.replace(WORD_TOKEN, (tok, /** @type {number} */ at) =>
+        (kept.some(([from, to]) => at >= from && at + tok.length <= to) ? tok
+          : namesForbiddenWord(tok, ctx.names) || namesForbiddenWord(tok) ? '[name]' : tok));
+    },
   },
 ]);
 
