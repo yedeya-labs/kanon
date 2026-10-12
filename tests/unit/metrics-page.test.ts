@@ -129,6 +129,7 @@ describe('every number states its window, band version, sample size, interval, r
     expect(html).toContain('<h3>When a bail counts against yield</h3>');
     expect(html).toContain('counts only once its issue has had no run for 30 days');
     expect(html).toContain("in a project's first 30 days");
+    expect(html).toContain('the "no PR" figure has few or no items');
   });
   it('shows the trend and the by-version view', () => {
     expect(html).toContain('Trend, 6 windows of 28 days');
