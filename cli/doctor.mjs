@@ -1375,7 +1375,7 @@ export const diagnose = async (deps, opts) => {
   }
   // The Lead writes each brief from the brief template, which an adopter copies unchanged from
   // Kanon's (K-LAYOUT-11), and init writes beside the Lead's caller (#749).
-  const leadCallers = callers.filter((c) => c.lane === LEAD_LANE).map((c) => c.file);
+  const leadCallers = [...new Set(callers.filter((c) => c.lane === LEAD_LANE).map((c) => c.file))];
   if (leadCallers.length && read(BRIEF_TEMPLATE_PATH) === null) {
     find('lead.template-missing', BRIEF_TEMPLATE_PATH, `is missing; the Lead, which ${leadCallers.join(', ')} call${leadCallers.length > 1 ? '' : 's'}, writes each brief from it (K-LAYOUT-11).`, {
       text: `Copy Kanon's brief template to it unchanged, as kanon init writes it, from the release you check (${checked}):`,

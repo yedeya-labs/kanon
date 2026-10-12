@@ -69,11 +69,11 @@ An upstream finding is one about Kanon itself, a lane's behaviour, a guard, a ru
 
 A lane's caller goes at the lane's file name, `.github/workflows/<lane>.yml` (`K-LAYOUT-18`). In a repository that hosts Kanon's lanes, that path holds the lane itself, so its caller lives at another path, and the adoption record waives doctor's `caller.misplaced` finding on it ([`docs/doctor.md`](doctor.md#waiving-a-finding)). **`init` honours that waiver as the caller's path** ([#451](https://github.com/yedeya-labs/kanon/issues/451)): when the file at the lane's file name doesn't call the lane, and a `caller.misplaced` waiver under `## Choices` names a file that does, `init` compares the caller there instead, so a run offers the lane's caller at the path the record declares and counts the lane as installed. A file at the lane's file name that calls the lane stays its caller. A waiver of a file that doesn't exist yet, or calls another lane, names no lane, so the first time, take the caller's text from `files[].content` of its lane's file name (every caller's full text is there, whatever its status), write it at the path you choose, and add the waiver. No repository is special-cased.
 
+`kanon apps` opens a browser for each App it creates, and waits for you to click Create and Install there. A program that wants to run that step on its own, for instance to explain it first, passes `--no-apps`: the command it would have run is then the finding `app.create`.
+
 ### The Lead's brief template
 
 The Lead writes each brief from `docs/projects/_template.md`, which an adopter copies unchanged from Kanon's [`rulebook/templates/brief.md`](../rulebook/templates/brief.md) (`K-LAYOUT-11`). **`init` writes it wherever it writes the Lead's caller** ([#749](https://github.com/yedeya-labs/kanon/issues/749)): with the **Full pipeline** feature, or a customised set of lanes that holds `lead`, never with Review or Review + build. It copies the template of the release it runs from, and a template the repository has is the project's, `kept` and left alone. Without one, [`kanon doctor`](doctor.md) reports `lead.template-missing`.
-
-`kanon apps` opens a browser for each App it creates, and waits for you to click Create and Install there. A program that wants to run that step on its own, for instance to explain it first, passes `--no-apps`: the command it would have run is then the finding `app.create`.
 
 ## The JSON output
 

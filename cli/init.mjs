@@ -11,9 +11,10 @@
 //    takes the defaults and confirms).
 // 3. WRITES the declarations, only the sections that differ from their documented defaults (an
 //    omitted section means its default, plan 0005 §5.2), the lane callers, the `apps-check`
-//    caller, `lane-check` in CI, the Dependabot entry, a starting project-setup hook and, when the
-//    person says yes, the kanon plugin's declaration in `.claude/settings.json` (#376), every
-//    Kanon reference pinned to the release it runs from, and prints the diff. It commits nothing.
+//    caller, `lane-check` in CI, the Dependabot entry, a starting project-setup hook, the Lead's
+//    brief template beside the Lead's caller (#749) and, when the person says yes, the kanon
+//    plugin's declaration in `.claude/settings.json` (#376), every Kanon reference pinned to the
+//    release it runs from, and prints the diff. It commits nothing.
 // 4. CREATES the taxonomy's labels (rulebook/labels.json), the bucket milestones (`kanon
 //    milestones`), the squash-only merge setting and, where the plan has rulesets and the token
 //    can administer the repository, the default branch's ruleset. The ruleset requires the

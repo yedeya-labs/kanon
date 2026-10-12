@@ -557,6 +557,16 @@ describe("kanon doctor and the Lead's brief template (#749)", () => {
     }]);
   });
 
+  it('names a file that calls the Lead from two jobs once', async () => {
+    const files = withLead(null);
+    const caller = files['.github/workflows/agent-lead.yml']!;
+    files['.github/workflows/agent-lead.yml'] = caller + caller.slice(caller.indexOf('  brief:')).replace('  brief:', '  again:');
+    const r = await run(checkout(files), fakeGitHub(), ['--json']);
+    expect(lead(r).map((f: { message: string }) => f.message)).toEqual([
+      `is missing; the Lead, which .github/workflows/agent-lead.yml calls, writes each brief from it (K-LAYOUT-11).`,
+    ]);
+  });
+
   it("is absent where the template exists, whatever it holds, or nothing calls the Lead", async () => {
     expect(lead(await run(checkout(withLead('# Our brief template\n')), fakeGitHub(), ['--json']))).toEqual([]);
     const r = await run(checkout(healthyFiles()), fakeGitHub(), ['--json']);
