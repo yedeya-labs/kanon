@@ -24,11 +24,15 @@
 #
 # INERT until: the caller is on the default branch + the Judge App installed, with the
 # Reviewer's row in the App register + these secrets (plan 0001 §8):
-#   JUDGE_APP_ID, JUDGE_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+#   JUDGE_APP_ID, JUDGE_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY
 # KANON ROLE: Reviewer
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
 # role this lane mints for, as the Judge App's `JUDGE_APP_*` secrets no longer say. Its row
 # in the App register must exist, and this lane's tokens fit inside that role's row.
+# ONE OF SECRETS: CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY
+# The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
+# credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
+# `agent-run` refuses both or neither, by name, before the agent starts.
 name: Merge Reconcile (Reviewer)
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -56,7 +60,9 @@ on:
       JUDGE_APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
-        required: true
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
 
 concurrency:
   # Per-PR, and DON'T cancel in progress: a merge-close run and a later
@@ -192,3 +198,4 @@ jobs:
       app-id: ${{ secrets.JUDGE_APP_ID }}
       app-private-key: ${{ secrets.JUDGE_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

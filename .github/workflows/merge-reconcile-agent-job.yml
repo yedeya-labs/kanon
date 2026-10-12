@@ -40,7 +40,9 @@ on:
           value is dropped). Arrives masked, as every secret does.
         required: true
       claude-token:
-        required: true
+        required: false
+      anthropic-api-key:
+        required: false
 
 jobs:
   reconcile:
@@ -154,6 +156,7 @@ jobs:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
           claude-token: ${{ secrets.claude-token }}
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
           github-token: ${{ steps.app-token.outputs.token }}
           # 5-MINUTE PROMPT CACHE, DELIBERATELY (RA-2058). Unset, this auth path takes the
           # 1-HOUR TTL automatically — that is the documented default for a Claude

@@ -84,6 +84,49 @@ const RECEIVE = SPINE_STEPS.find((s) => s.id === 'app-token')!;
 const REVOKE = SPINE_STEPS.at(-1)!;
 const tokenStep = (s: Step) => ({ name: s.name, env: s.env, run: s.run });
 
+/**
+ * THE CLAUDE CREDENTIALS (plan 0009 §10, step A2): the subscription token or an Anthropic API key,
+ * each handed down by its own name, both optional, from the lane to the `agent-run` block, which
+ * puts the one the caller mapped in the agent step's `env:`. The spine's declarations and its
+ * `agent-run` step are what every pair repeats.
+ */
+const CREDENTIALS = ['claude-token', 'anthropic-api-key'] as const;
+const isAgentRun = (s: Step) => /(^|\/)actions\/agent-run(@|$)/.test(String(s.uses ?? ''));
+const SPINE_CALL_SECRETS = docs['agent-lane.yml']!.on!.workflow_call!.secrets!;
+const SPINE_JOB_SECRETS = docs['lane-agent-job.yml']!.on!.workflow_call!.secrets!;
+const SPINE_AGENT_RUN = SPINE_STEPS.find(isAgentRun)!;
+const credentialInputs = (s: Step) => Object.fromEntries(CREDENTIALS.map((k) => [k, s.with?.[k]]));
+
+/** A reference to a Claude credential's secret, by any of its names, or a computed one. */
+const CREDENTIAL = /secrets\s*(?:\.\s*(?:CLAUDE_CODE_OAUTH_TOKEN|claude-token|ANTHROPIC_API_KEY|anthropic-api-key)\b|\[[^\]]*(?:oauth|api[-_]key|claude|anthropic)[^\]]*\])/i;
+/** The `agent-run` input each credential may reach, read from the reference's name. */
+const inputFor = (v: string) => (/ANTHROPIC_API_KEY|anthropic-api-key/i.test(v) ? 'anthropic-api-key' : 'claude-token');
+/**
+ * Every place a Claude credential reaches other than its two channels: a reusable call's
+ * `secrets:`, and the `agent-run` input of its own name, which the block moves into the agent
+ * step's `env:` (A1). So never a `run:`, an `env:`, a mint job, or a `with:` of anything else,
+ * `claude-code-action`'s above all, which copies every input into `ALL_INPUTS` (§8).
+ */
+const credentialLeaks = (all: Record<string, Workflow>): string[] =>
+  Object.entries(all).flatMap(([f, doc]) => Object.entries(doc.jobs ?? {}).flatMap(([name, job]) => {
+    if (job.uses === undefined && holdsKey(job) && CREDENTIAL.test(JSON.stringify(job))) return [`${f}:${name}: a Claude credential in the job that holds the App key`];
+    const { steps = [], secrets, ...rest } = job;
+    const out: string[] = [];
+    if (CREDENTIAL.test(JSON.stringify(rest))) out.push(`${f}:${name}: a Claude credential outside the call's secrets:`);
+    if (secrets !== undefined && job.uses === undefined && CREDENTIAL.test(JSON.stringify(secrets))) out.push(`${f}:${name}: secrets: on a job that calls no workflow`);
+    steps.forEach((s, i) => {
+      const at = `${f}:${name}:${s.id ?? s.name ?? i}`;
+      const { with: inputs = {}, ...other } = s;
+      if (CREDENTIAL.test(JSON.stringify(other))) out.push(`${at}: a Claude credential in its run:, env: or if:`);
+      for (const [k, v] of Object.entries(inputs)) {
+        if (!CREDENTIAL.test(String(v))) continue;
+        if (!isAgentRun(s)) out.push(`${at}: \`${k}\` hands a Claude credential to \`${String(s.uses)}\``);
+        else if (k !== inputFor(String(v))) out.push(`${at}: \`${k}\` is handed the other credential`);
+      }
+    });
+    return out;
+  }));
+
 describe('K-AGENT-49: no job that runs an agent or project code holds an App private key', () => {
   it('finds the jobs it is about, so the check is not vacuous', () => {
     const running = Object.entries(docs).flatMap(([f, d]) => Object.entries(d.jobs ?? {}).filter(([, j]) => runsOthersCode(j)).map(([n]) => `${f}:${n}`));
@@ -112,7 +155,7 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
   const run = docs[runFile]!;
 
   it('declares no key it could be handed, and is one job that never mints', () => {
-    expect(Object.keys(agent.on?.workflow_call?.secrets ?? {}).sort()).toEqual(['app-token', 'claude-token']);
+    expect(Object.keys(agent.on?.workflow_call?.secrets ?? {}).sort()).toEqual(['anthropic-api-key', 'app-token', 'claude-token']);
     expect(KEY.test(readFileSync(join(WF, agentFile), 'utf8'))).toBe(false);
     expect(Object.keys(agent.jobs ?? {})).toHaveLength(1);
     expect(steps.some((s) => String(s.uses ?? '').startsWith('actions/create-github-app-token@'))).toBe(false);
@@ -122,7 +165,7 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
     expect(call, `${agentFile} is called by no workflow`).toBeDefined();
     expect(more.map((c) => `${c.file}:${c.name}`)).toEqual([]);
     expect(Object.keys(run.jobs ?? {}).sort()).toEqual([call.name, 'mint'].sort());
-    expect(Object.keys(run.on?.workflow_call?.secrets ?? {})).toEqual(expect.arrayContaining(['app-id', 'app-private-key', 'claude-token']));
+    expect(Object.keys(run.on?.workflow_call?.secrets ?? {})).toEqual(expect.arrayContaining(['app-id', 'app-private-key', 'claude-token', 'anthropic-api-key']));
   });
 
   it('the mint runs only the mint and the seal, and leaves the revoke to the agent\'s job', () => {
@@ -143,7 +186,7 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
     expect(c.needs).toBe('mint');
     // A failed mint still reaches the agent's job, so the run is recorded as `token=failure`.
     expect(c.if).toMatch(/!cancelled\(\)/);
-    expect(c.secrets).toEqual({ 'app-token': '${{ needs.mint.outputs.sealed }}', 'claude-token': '${{ secrets.claude-token }}' });
+    expect(c.secrets).toEqual({ 'app-token': '${{ needs.mint.outputs.sealed }}', 'claude-token': '${{ secrets.claude-token }}', 'anthropic-api-key': '${{ secrets.anthropic-api-key }}' });
     expect(holdsKey(c)).toBe(false);
     expect(c.with?.['app-slug']).toBe('${{ needs.mint.outputs.app-slug }}');
     expect(c.with?.['mint-attempt']).toBe('${{ needs.mint.outputs.attempt }}');
@@ -155,6 +198,16 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
     // it, and a token minted before a wait can expire under it. Those sit on the lane's call.
     expect(c.concurrency).toBeUndefined();
     expect(c.strategy).toBeUndefined();
+  });
+
+  it('hands both Claude credentials down byte for byte as the spine does, each to its own input of `agent-run` (plan 0009 §10)', () => {
+    for (const k of CREDENTIALS) {
+      expect(run.on?.workflow_call?.secrets?.[k], `${runFile} ${k}`).toEqual(SPINE_CALL_SECRETS[k]);
+      expect(agent.on?.workflow_call?.secrets?.[k], `${agentFile} ${k}`).toEqual(SPINE_JOB_SECRETS[k]);
+    }
+    const runs = steps.filter(isAgentRun);
+    expect(runs).toHaveLength(1);
+    expect(credentialInputs(runs[0]!)).toEqual(credentialInputs(SPINE_AGENT_RUN));
   });
 
   it('receives the token with the spine\'s step: masked before any output, a stale attempt refused', () => {
@@ -173,6 +226,39 @@ describe.each(PAIRS)('$agentFile gets the token from a mint job of its own (kano
   it('revokes the token as its last step, whatever happened before', () => {
     expect(tokenStep(steps.at(-1)!)).toEqual(tokenStep(REVOKE));
     expect(steps.at(-1)!.if).toBe('always()');
+  });
+});
+
+describe('the Claude credentials reach only `agent-run`, each by its own input (plan 0009 §10, step A2)', () => {
+  it('in every workflow, no credential is in a run:, an env:, a mint job, or any other with:', () => {
+    expect(credentialLeaks(docs)).toEqual([]);
+  });
+
+  it('the spine declares both optional and hands each to its own input', () => {
+    for (const k of CREDENTIALS) {
+      expect(SPINE_CALL_SECRETS[k], k).toEqual({ required: false });
+      expect(SPINE_JOB_SECRETS[k], k).toEqual({ required: false });
+      expect(docs['agent-lane.yml']!.jobs!.run!.secrets, k).toMatchObject({ [k]: `\${{ secrets.${k} }}` });
+    }
+    expect(credentialInputs(SPINE_AGENT_RUN)).toEqual({ 'claude-token': '${{ secrets.claude-token }}', 'anthropic-api-key': '${{ secrets.anthropic-api-key }}' });
+  });
+
+  it('catches what it is for: the key in a mint job, a run:, an env:, the action\'s with:, or the wrong input', () => {
+    const KEY_REF = '${{ secrets.ANTHROPIC_API_KEY }}';
+    const mintStep: Step = { uses: 'actions/create-github-app-token@v3', with: { 'private-key': '${{ secrets.app-private-key }}' } };
+    const bad: Record<string, Workflow> = { 'x.yml': { jobs: {
+      mint: { env: { ANTHROPIC_API_KEY: KEY_REF }, steps: [mintStep] } as Job,
+      run: { steps: [{ run: 'echo ${{ secrets.anthropic-api-key }}' }] },
+      env: { steps: [{ uses: '$/actions/agent-run', env: { ANTHROPIC_API_KEY: KEY_REF } }] },
+      action: { steps: [{ uses: 'anthropics/claude-code-action@v1', with: { anthropic_api_key: KEY_REF } }] },
+      swapped: { steps: [{ uses: '$/actions/agent-run', with: { 'claude-token': KEY_REF } }] },
+    } } };
+    expect(credentialLeaks(bad).map((l) => l.split(':').slice(0, 2).join(':'))).toEqual(['x.yml:mint', 'x.yml:run', 'x.yml:env', 'x.yml:action', 'x.yml:swapped']);
+    const good: Record<string, Workflow> = { 'x.yml': { jobs: {
+      call: { uses: '$/.github/workflows/x-run.yml', secrets: { 'anthropic-api-key': KEY_REF } },
+      agent: { steps: [{ uses: '$/actions/agent-run', with: { 'anthropic-api-key': '${{ secrets.anthropic-api-key }}', 'claude-token': '${{ secrets.claude-token }}' } }] },
+    } } };
+    expect(credentialLeaks(good)).toEqual([]);
   });
 });
 

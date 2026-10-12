@@ -395,14 +395,16 @@ for (const f of WORKFLOWS) {
   // Secrets: exactly the lane's, by their fixed names, each mapped explicitly, except that a
   // caller may leave out one the lane marks `# OPTIONAL SECRET:` and declares `required: false`
   // (kanon#433): the QA store's, which only a repository with a store hook has. GitHub passes an
-  // unmapped one empty. Any other optional secret is still mapped, as before.
+  // unmapped one empty. Any other optional secret is still mapped, as before. The Claude
+  // credential pair, `# ONE OF SECRETS:` (plan 0009 §10, step A2), may be left out the same way:
+  // a caller maps the one it uses, and `agent-run` refuses both or neither at run time.
   const secrets = isObject(job) ? job.secrets : null;
   if (!isObject(secrets)) {
     fail(f, "maps no secrets explicitly (`secrets: inherit` would hand every secret to Kanon's code; plan 0001 decision 7)");
   } else {
     const declared = alt(isObject(onCall) ? onCall.secrets : null, {});
     const declaredKeys = isObject(declared) ? keys(declared) : [];
-    const markedOptional = words(marked(laneFile, '# OPTIONAL SECRET: '));
+    const markedOptional = words([...marked(laneFile, '# OPTIONAL SECRET: '), ...marked(laneFile, '# ONE OF SECRETS: ')]);
     const optional = declaredKeys.filter((k) => markedOptional.includes(k) && isObject(declared[k]) && declared[k].required === false);
     const got = keys(secrets);
     const want = declaredKeys.filter((k) => !optional.includes(k) || got.includes(k)).join(',');

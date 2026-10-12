@@ -28,7 +28,9 @@ on:
       app-private-key:
         required: true
       claude-token:
-        required: true
+        required: false
+      anthropic-api-key:
+        required: false
 
 # NO `permissions:` BLOCK: the lane's calling job sets this call's ceiling, and without a block
 # here each job gets exactly what that job was given.
@@ -77,3 +79,4 @@ jobs:
     secrets:
       app-token: ${{ needs.mint.outputs.sealed }}
       claude-token: ${{ secrets.claude-token }}
+      anthropic-api-key: ${{ secrets.anthropic-api-key }}

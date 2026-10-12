@@ -68,7 +68,9 @@ on:
           value is dropped). Arrives masked, as every secret does.
         required: true
       claude-token:
-        required: true
+        required: false
+      anthropic-api-key:
+        required: false
 
 jobs:
   verify:
@@ -274,6 +276,7 @@ jobs:
             --allowedTools Read,Bash,Grep,Glob
             --exclude-dynamic-system-prompt-sections
           claude-token: ${{ secrets.claude-token }}
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
           github-token: ${{ steps.app-token.outputs.token }}
 
       # Explain a red run (RA-1408) and record what it cost (RA-1485), in the finish block.

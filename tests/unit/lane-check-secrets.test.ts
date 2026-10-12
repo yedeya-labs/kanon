@@ -13,7 +13,20 @@ laneCheck(() => {
     it('refuses `secrets: inherit` (decision 7)', () =>
       red((t) => t.edit(TRIAGE, (d) => { job(d).secrets = 'inherit'; }), 'maps no secrets explicitly'));
     it('refuses a missing secret', () =>
-      red((t) => t.edit(TRIAGE, (d) => { delete (job(d).secrets as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN; }), 'takes exactly [AUTHOR_APP_ID,AUTHOR_APP_PRIVATE_KEY,CLAUDE_CODE_OAUTH_TOKEN]'));
+      red((t) => t.edit(TRIAGE, (d) => { delete (job(d).secrets as Record<string, string>).AUTHOR_APP_ID; }), 'takes exactly [ANTHROPIC_API_KEY,AUTHOR_APP_ID,AUTHOR_APP_PRIVATE_KEY,CLAUDE_CODE_OAUTH_TOKEN], and may leave out [ANTHROPIC_API_KEY,CLAUDE_CODE_OAUTH_TOKEN]'));
+    // Plan 0009 §10, step A2: the lane's `# ONE OF SECRETS:` pair may be left out as an
+    // `# OPTIONAL SECRET:` may, so a caller maps the token, as every caller did, or the key in
+    // its place. That it maps exactly one is `agent-run`'s check at run time until step A3.
+    it('accepts a caller that maps the Claude token alone, or an API key in its place', () => {
+      expect(check(adopter()).status).toBe(0);
+      const t = adopter();
+      t.edit(TRIAGE, (d) => {
+        const sec = job(d).secrets as Record<string, string>;
+        delete sec.CLAUDE_CODE_OAUTH_TOKEN;
+        sec.ANTHROPIC_API_KEY = '${{ secrets.ANTHROPIC_API_KEY }}';
+      });
+      expect(check(t).status).toBe(0);
+    });
     it('refuses a secret under a name the lane does not take', () =>
       red((t) => t.edit(TRIAGE, (d) => { (job(d).secrets as Record<string, string>).QA_TRIAGE_APP_ID = '${{ secrets.QA_TRIAGE_APP_ID }}'; }), 'the Kanon lane agent-triage takes exactly'));
     it('refuses a secret mapped to anything but one repository secret', () =>

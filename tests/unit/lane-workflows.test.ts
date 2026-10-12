@@ -69,12 +69,14 @@ describe('plan 0001 §3: each lane is a reusable workflow, called with its input
     expect(Object.keys(lane(file).on)).toEqual(['workflow_call']);
   });
 
-  it.each(LANES)('%s takes its secrets by their fixed names, all required (§8, decision 7)', (file) => {
+  it.each(LANES)('%s takes its secrets by their fixed names, the App\'s required and the Claude credential pair optional (§8, decision 7)', (file) => {
     const secrets = lane(file).on.workflow_call!.secrets ?? {};
     const role = ROLE[file];
-    const claude = NO_MODEL.includes(file) ? [] : ['CLAUDE_CODE_OAUTH_TOKEN'];
+    // A caller maps one of the two, the subscription's token or an API key (plan 0009 §10), and
+    // `agent-run` refuses both or neither before the agent starts.
+    const claude = NO_MODEL.includes(file) ? [] : ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
     expect(Object.keys(secrets).sort()).toEqual([`${role}_APP_ID`, `${role}_APP_PRIVATE_KEY`, ...claude].sort());
-    for (const s of Object.values(secrets)) expect(s.required).toBe(true);
+    for (const [k, s] of Object.entries(secrets)) expect(s.required, k).toBe(!claude.includes(k));
   });
 
   it.each(LANES)('%s takes no required input, so every trigger of its caller can pass them through', (file) => {
@@ -97,6 +99,7 @@ describe('plan 0001 §3: each lane is a reusable workflow, called with its input
       'app-id': `\${{ secrets.${role}_APP_ID }}`,
       'app-private-key': `\${{ secrets.${role}_APP_PRIVATE_KEY }}`,
       'claude-token': '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
+      'anthropic-api-key': '${{ secrets.ANTHROPIC_API_KEY }}',
     });
   });
 

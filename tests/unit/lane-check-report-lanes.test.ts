@@ -34,7 +34,7 @@ laneCheck(() => {
           delete secrets.DIGEST_WEBHOOK;
           secrets.SLACK_RELEASE_WEBHOOK = '${{ secrets.SLACK_RELEASE_WEBHOOK }}';
         });
-      }, 'the Kanon lane agent-weekly-digest takes exactly [CLAUDE_CODE_OAUTH_TOKEN,DIGEST_WEBHOOK]'));
+      }, 'the Kanon lane agent-weekly-digest takes exactly [ANTHROPIC_API_KEY,CLAUDE_CODE_OAUTH_TOKEN,DIGEST_WEBHOOK]'));
     it('refuses a caller that passes `dry_run` as a setting rather than its own input', () =>
       red((t) => { extra(t, WEEKLY); t.edit(WEEKLY, (d) => { (job(d).with as Record<string, string>).dry_run = 'true'; }); }, 'passes `dry_run: true`'));
   });

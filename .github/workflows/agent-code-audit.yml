@@ -43,11 +43,15 @@
 #
 # INERT until: the caller is on the default branch + the Author App installed, with the
 # Explorer's row in the App register + these secrets (plan 0001 §8):
-#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY
 # KANON ROLE: Explorer
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
 # role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
 # in the App register must exist, and this lane's tokens fit inside that role's row.
+# ONE OF SECRETS: CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY
+# The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
+# credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
+# `agent-run` refuses both or neither, by name, before the agent starts.
 name: Code audit (Explorer)
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -73,7 +77,9 @@ on:
       AUTHOR_APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
-        required: true
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
       # THE QA STORE'S COORDINATES (kanon#433): secrets, so the runner masks them in every log of
       # the store job, the store step's own `with:` included. Optional: a repository with no store
       # hook maps nothing, and the store is absent. The store steps below hand them to the
@@ -162,6 +168,7 @@ jobs:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
   put:
     needs: audit

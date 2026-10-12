@@ -50,7 +50,8 @@ describe('where the mode lives: a lane of its own, any repository can install', 
     const vars = [...new Set([...text.matchAll(/vars\.([A-Z_]+)/g)].map((m) => m[1]))].sort();
     expect(vars).toEqual(['KANON_AGGREGATE_URL']);
     expect(wf.on.workflow_call.secrets).toEqual({
-      AUTHOR_APP_ID: { required: true }, AUTHOR_APP_PRIVATE_KEY: { required: true }, CLAUDE_CODE_OAUTH_TOKEN: { required: true },
+      AUTHOR_APP_ID: { required: true }, AUTHOR_APP_PRIVATE_KEY: { required: true }, CLAUDE_CODE_OAUTH_TOKEN: { required: false },
+      ANTHROPIC_API_KEY: { required: false },
       KANON_AGGREGATE_ROLE: { required: false },
     });
   });

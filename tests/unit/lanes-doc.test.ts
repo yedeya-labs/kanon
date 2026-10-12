@@ -68,6 +68,9 @@ const ticked = (cell: string): string[] => [...cell.matchAll(/`([^`]+)`/g)].map(
 
 type Row = { lane: string; secrets: string[]; grants: Perms; reads: string[] };
 
+/** The Claude credential pair (plan 0009 §10): every model lane takes both, and its caller maps one. */
+const CLAUDE = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
+
 const contract = (doc: string): Row[] =>
   between(doc, '<!-- lane-contract:table -->', '<!-- /lane-contract:table -->')
     .split('\n')
@@ -94,15 +97,16 @@ describe("docs/lanes.md's lane-contract table is what each lane declares", () =>
     expect(rows.map((r) => r.lane).sort()).toEqual(LANES);
   });
 
-  it.each(LANES)('%s: the row maps exactly the App secrets the lane declares, and the lane takes the Claude token only if it runs a model', (file) => {
+  it.each(LANES)('%s: the row maps exactly the App secrets the lane declares, and the lane takes a Claude credential only if it runs a model', (file) => {
     const declared = Object.keys(lane(file).on.workflow_call?.secrets ?? {}).sort();
     const row = rows.find((r) => r.lane === file);
-    expect(row?.secrets).toEqual(declared.filter((s) => s !== 'CLAUDE_CODE_OAUTH_TOKEN'));
+    expect(row?.secrets).toEqual(declared.filter((s) => !CLAUDE.includes(s)));
     // A lane runs a model through the spine or the run block; one that runs none (the
-    // Merger, plan 0004 step 7) must not ask its caller for the subscription's token.
+    // Merger, plan 0004 step 7) must not ask its caller for a Claude credential. One that does
+    // takes both, the subscription's token or an API key (plan 0009 §10), and its caller maps one.
     const text = workflowText(join(WORKFLOWS, file));
     const runsModel = /uses: \$\/(\.github\/workflows\/agent-lane\.yml|actions\/agent-run)\b/.test(text);
-    expect(declared.includes('CLAUDE_CODE_OAUTH_TOKEN'), file).toBe(runsModel);
+    for (const s of CLAUDE) expect(declared.includes(s), `${file} ${s}`).toBe(runsModel);
   });
 
   it.each(LANES)('%s: the row grants exactly the most any of the lane\'s jobs declares', (file) => {
