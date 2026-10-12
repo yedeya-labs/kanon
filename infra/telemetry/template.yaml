@@ -387,7 +387,7 @@ Resources:
       Name: erase
 
   # The token path's URL: public, since the token is the gate (plan 0008 §2, §12), and bounded by
-  # the reserved concurrency, a precondition of deploying it (§9 step 2). It serves the `live`
+  # the reserved concurrency, a precondition of deploying it (§9 step 3a). It serves the `live`
   # alias alone, so an IAM-signed request on it reaches the token path, which refuses it.
   IngestLiveUrl:
     Type: AWS::Lambda::Url
