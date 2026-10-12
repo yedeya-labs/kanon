@@ -148,7 +148,8 @@ Propose the bullet and ask for the reason; never invent one. Write it only once 
 | `caller.secret-stale` | agent | Remove the lines the fix lists. |
 | `caller.input-stale` | agent | Remove the input the fix names. |
 | `caller.grant-missing` | agent | Add the grant lines the fix lists. |
-| `caller.name` | agent | Set the workflow's `name:` as the fix says. |
+| `caller.name` | agent | Set the workflow's `name:` as the fix says. For the review, implement-revise and merge-reconcile callers it doesn't block before Kanon 0.41.0, as `lane-check` only warns; fix it anyway, before the pin reaches that release. |
+| `caller.job-id` | agent | Rename the calling job as the fix says. It doesn't block before Kanon 0.41.0, as `lane-check` only warns; fix it anyway, before the pin reaches that release. |
 | `caller.run-name` | agent | Set the `run-name:` as the fix says. |
 | `apps-check.secret-missing` | agent | Add the lines the fix lists to the `apps-check` caller. |
 | `apps-check.secret-stale` | agent | Remove the lines the fix lists. |

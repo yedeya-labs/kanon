@@ -588,12 +588,30 @@ describe('each skill is held to the kanon command it drives', () => {
     const step = (n: number): string => steps.split('\n').find((l) => l.startsWith(`${n}. `)) ?? '';
     for (const n of [9, 11]) {
       for (const label of REVIEW_LABELS) expect(step(n), `step ${n}: ${label}`).toContain(`\`${label}\``);
-      expect(step(n), `step ${n}`).toMatch(/once its CI has finished/);
+      // The Owner, 2026-10-12: the review lane waits for CI itself (its workflow_run on CI's
+      // completion reviews a labelled pull request), so the label goes on when the pull request opens.
+      expect(step(n), `step ${n}`).toMatch(/`review:please`[^.]*to a pull request when it opens, without waiting for its CI \(the review lane waits for CI itself/);
+      expect(step(n), `step ${n}`).not.toMatch(/once its CI has finished/);
       expect(step(n), `step ${n}`).toMatch(/-f pr_number=/);
     }
     expect(step(9)).toMatch(/under `## After merging`[^.]*how review starts/);
     expect(step(9)).toMatch(/this pull request itself is never reviewed/);
     expect(step(11)).toMatch(/never that no label is needed/);
+  });
+
+  // #652: with the installations unlisted, a sibling register naming some Apps says nothing of the
+  // rest, so the adopt skill asks about each App init couldn't look for, not only when ownerApps is null.
+  it('has the adopt skill ask about each App init could not look for, whatever ownerApps holds', () => {
+    const body = skill('adopt').body;
+    const reuse = section(body, /^### `\.answers\.reuseApps`: reuse an App the owner already has$/)!;
+    const steps = section(body, /^## Steps$/)!;
+    const step7 = steps.split('\n').find((l) => l.startsWith('7. ')) ?? '';
+    for (const [where, text] of [['reuseApps', reuse], ['step 7', step7]] as const) {
+      expect(text, where).toContain('`.inspection.appsNotLookedFor`');
+      expect(text, where).not.toMatch(/When `\.inspection\.ownerApps` is null/);
+    }
+    expect(reuse).toMatch(/For each of them that a chosen lane runs as/);
+    expect(step7).toMatch(/for each such App by name, \*\*Does the owner already have the <App> App for another repository\?\*\*/);
   });
 
   // #419, L5's G4, G11, G12 and G14: the steps that can only happen once the upgrade has merged

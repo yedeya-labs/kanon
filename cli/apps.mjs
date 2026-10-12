@@ -466,6 +466,12 @@ export const secretNames = (app) => ({ id: `${app.toUpperCase()}_APP_ID`, key: `
 export const KEYS_HELP = 'https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps';
 
 /**
+ * How a finding that asks for an App's key says where it is made (#637): the place on the App's
+ * settings page, which `rotationSteps` names too, and GitHub's page on it.
+ */
+export const NEW_KEY = `generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP})`;
+
+/**
  * The steps that stay manual, printed at the end of every run.
  * @param {OwnerPages} pages @param {string} owner @param {string[]} repos @param {string[]} apps
  */

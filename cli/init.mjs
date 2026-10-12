@@ -53,7 +53,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { URL } from 'node:url';
-import { REGISTER_PATH, apps as runApps, checkoutCheck, ownerInstallations, ownerKanonApps, ownersOwn, remoteRepo } from './apps.mjs';
+import { NEW_KEY, REGISTER_PATH, apps as runApps, checkoutCheck, ownerInstallations, ownerKanonApps, ownersOwn, remoteRepo } from './apps.mjs';
 import {
   appSecrets,
   appsCheckFile,
@@ -1971,12 +1971,16 @@ const run = async (deps, opts, req, rep) => {
       const registered = await ownerRegisters(deps.gh, s.owner, repoName, req);
       const own = registered ? await ownersOwn(deps.gh, s.owner, registered.filter((f) => !named.has(f.slug))) : [];
       ownerApps = own.length ? own.map((f) => ({ ...f, appId: null })) : null;
-      unlisted =`the token can't list ${s.owner}'s App installations (${listed.stderr.trim() || `exit ${listed.status}`}), so init can't tell whether ${s.owner} already has Kanon's Apps. ${
+      unlisted = `the token can't list ${s.owner}'s App installations (${listed.stderr.trim() || `exit ${listed.status}`}), so init can't tell whether ${s.owner} already has Kanon's Apps. ${
         s.kind === 'Organization' ? `Only an owner of ${s.owner} can list them, with the organisation's Administration permission (read).` : "On a personal account gh's token can't list them."
       }`;
     }
   }
   rep.inspection.ownerApps = ownerApps && ownerApps.map((f) => ({ app: f.app, slug: f.slug, from: f.from }));
+  // The Apps the register lacks that no installation list could rule out (#652): with the
+  // installations unlisted, another register naming some says nothing of the rest, so the adopt
+  // skill asks about each of these, not only when `ownerApps` is null.
+  rep.inspection.appsNotLookedFor = unlisted === null ? [] : lacking.filter((i) => !(ownerApps ?? []).some((f) => f.app === i));
   out('');
   const workflows = checkoutWorkflows(deps, root);
   /** @type {AskContext} */
@@ -2393,19 +2397,25 @@ const run = async (deps, opts, req, rep) => {
   const first = (/** @type {string} */ i) => /** @type {{ slug: string, appId: number | null, from: string }} */ (owned.find((f) => f.app === i));
   rep.apps = { identities, missing, reuse: reusing.map((i) => ({ app: i, slug: first(i).slug, appId: first(i).appId })), command: null, outcome: failures ? 'failed' : 'none', exitCode: null };
   const appsRep = rep.apps;
-  if (missing.length && ownerApps === null && unlisted) note(`Not looked for: ${unlisted}`);
+  // Said whenever an App the chosen lanes need was found nowhere and the installations weren't
+  // listed, so a partial find from another register doesn't hide it (#652).
+  const unfound = missing.filter((i) => !owned.some((f) => f.app === i));
+  if (unlisted && unfound.length) {
+    const partly = owned.length ? ` Another of its repositories' App registers names ${[...new Set(owned.map((f) => f.app))].join(' and ')}, but none names ${unfound.join(' or ')}, which ${s.owner} may have all the same.` : '';
+    note(`Not looked for: ${unlisted}${partly}`);
+  }
   for (const i of reusing) {
     const all = owned.filter((f) => f.app === i);
     // The App ID, when its installation carries it, is filled in, so the person needn't copy it
     // from the App's page (#640); a register names only the slug.
     const { slug, appId, from } = first(i);
     const name = req.identities.apps[i]?.name ?? i;
-    const also = all.length > 1 ? ` (it also has ${all.slice(1).map((f) => (f.appId ? `${f.slug}, App ID ${f.appId},` : f.slug)).join(', ')} with the same permissions: give the one ${repoName} should share)` : '';
+    const also = all.length > 1 ? ` (it also has ${all.slice(1).map((f) => (f.appId ? `${f.slug} (App ID ${f.appId})` : f.slug)).join(', ')} with the same permissions: give the one ${repoName} should share)` : '';
     const where = from.startsWith('register:') ? ` (${from.slice('register:'.length)}'s App register names it)` : '';
-    const todo = appId ? `Add ${repoName} to its installation and generate a private key on its settings page, then run this with the key` : `Add ${repoName} to its installation, generate a private key on its settings page and copy its App ID from the same page, then run this with both`;
+    const todo = appId ? `Add ${repoName} to its installation and ${NEW_KEY}, then run this with the key` : `Add ${repoName} to its installation, ${NEW_KEY} and copy its App ID from the same page, then run this with both`;
     const todoText = appId
-      ? `Add ${repoName} to the App's installation and generate a private key on its settings page, then run kanon apps --reuse with the key`
-      : `Add ${repoName} to the App's installation, generate a private key on its settings page and copy its App ID from the same page, then run kanon apps --reuse with both`;
+      ? `Add ${repoName} to the App's installation and ${NEW_KEY}, then run kanon apps --reuse with the key`
+      : `Add ${repoName} to the App's installation, ${NEW_KEY} and copy its App ID from the same page, then run kanon apps --reuse with both`;
     step({
       id: 'app.reuse',
       category: 'app',
@@ -2441,7 +2451,7 @@ const run = async (deps, opts, req, rep) => {
     // it already has for another repository looks missing here (#363), even with another
     // register naming some (plan 0007 G4), so the step says to reuse such an App rather than
     // create a second one.
-    const reuseInstead = unlisted === null ? '' : ` If ${s.owner} already has ${toCreate.length > 1 ? 'these Apps' : 'this App'} for another repository, don't create ${toCreate.length > 1 ? 'them' : 'it'} again: add ${repoName} to ${toCreate.length > 1 ? 'each' : 'its'} installation, generate a private key on its settings page and copy its App ID from there, and run kanon apps --owner ${s.owner} --repo ${repoName} --reuse <app>:<slug>@<App ID>=<key file> instead (docs/apps.md, "A repository added later").`;
+    const reuseInstead = unlisted === null ? '' : ` If ${s.owner} already has ${toCreate.length > 1 ? 'these Apps' : 'this App'} for another repository, don't create ${toCreate.length > 1 ? 'them' : 'it'} again: add ${repoName} to ${toCreate.length > 1 ? 'each' : 'its'} installation, ${NEW_KEY} and copy its App ID from there, and run kanon apps --owner ${s.owner} --repo ${repoName} --reuse <app>:<slug>@<App ID>=<key file> instead (docs/apps.md, "A repository added later").`;
     const createStep = () =>
       step({
         id: 'app.create',
@@ -2495,9 +2505,9 @@ const run = async (deps, opts, req, rep) => {
           id: 'app.reuse',
           category: 'app',
           subject: i,
-          prose: `The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}. Add ${repoName} to the App's installation, generate a private key on its settings page and copy its App ID from the same page, then:`,
+          prose: `The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}. Add ${repoName} to the App's installation, ${NEW_KEY} and copy its App ID from the same page, then:`,
           message: `The register lists the ${i} App, but the repository lacks ${lacks.join(' and ')}.`,
-          text: `Add ${repoName} to the App's installation, generate a private key on its settings page and copy its App ID from the same page, then run kanon apps --reuse with both.`,
+          text: `Add ${repoName} to the App's installation, ${NEW_KEY} and copy its App ID from the same page, then run kanon apps --reuse with both.`,
           commands: [`kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${i}:${slug}@<App ID>=<downloaded>.pem`],
           url: known ? (s.kind === 'User' ? `https://github.com/settings/apps/${known}` : `https://github.com/organizations/${s.owner}/settings/apps/${known}`) : null,
         });
