@@ -55,7 +55,8 @@ export const FUNCTION_DIR = join(HERE, 'function');
 const OIDC_HOST = 'token.actions.githubusercontent.com';
 
 const OWNER = /^arn:aws:iam::\d{12}:role\/.+$/;
-const KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
+/** A key, and a label for own figures, which shares its pattern. */
+export const KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const READER = /^ref:refs\/heads\/[A-Za-z0-9._/-]+$/;
 

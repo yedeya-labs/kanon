@@ -4,7 +4,7 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 
 | File | What it is |
 |---|---|
-| `template.yaml` | The CloudFormation template: the table, the ingest function and its URL, the aggregate function and its URL, their log groups, the GitHub OIDC provider, and the importer and backfill roles. |
+| `template.yaml` | The CloudFormation template: the table, the register table (unused until plan 0008's token path), the ingest function and its URL, the aggregate function and its URL, their log groups, the GitHub OIDC provider, and the importer and backfill roles. |
 | `render.mjs` | Adds each registered repository's writer and reader roles to the template, from the private register and GitHub's API. |
 | `function/` | The ingest function (`index.mjs`) and the aggregate function (`aggregate.mjs`), one package with two handlers. `schema.mjs` there is a link to [`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), so the function validates with the same file the lanes use; `scrub.mjs` and `public-words.mjs` are links too, the scrub that schema runs on a finding's text (plan 0006 §4.2). `oidc.mjs` is plan 0008's token verifier, which nothing calls yet ([The token verifier](#the-token-verifier-plan-0008-j1)). |
 | `verify.mjs` | Step S3's checks, run against the deployed store. |
@@ -13,6 +13,7 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 | `import.mjs` | The reference adopter's history import (§7, S5): its transform, dry run and send. |
 | `backfill.mjs` | The work-item backfill ([plan 0003](plans/0003-metrics.md) M5, §7 S7a): M5's check as a dry run, and the send as the backfill role. |
 | `register.example.json` | The register's shape, naming only Kanon. |
+| `register.mjs` | Your CLI for the register table of [plan 0008](plans/0008-self-service-registration.md) §5: `list`, `suspend`, `resume`, `set`, `erase` and `import` ([The register table](#the-register-table)). Nothing else uses the table yet. |
 
 The collector that writes to it is [`telemetry-collect.yml`](../.github/workflows/telemetry-collect.yml) ([Collect the rows](#collect-the-rows)).
 
@@ -23,6 +24,7 @@ Every AWS command here is the Owner's to run. Agents run none (§5).
 ## What the template creates
 
 - **The table, `kanon-telemetry`:** on demand, keyed `pk` and `sk`. It has point-in-time recovery, TTL on `expires_at`, deletion protection, and `DeletionPolicy: Retain`, so deleting the stack never deletes it (`K-OBS-17`). Its resource policy denies `PutItem`, `UpdateItem`, `DeleteItem` and `BatchWriteItem` to every principal except the function's role and the Owner's role.
+- **The register table, `kanon-telemetry-register`** ([plan 0008](plans/0008-self-service-registration.md) §5): KMS-encrypted, retained and deletion-protected, with point-in-time recovery. Nothing uses it until plan 0008's token path, and only you write it, with `register.mjs` ([The register table](#the-register-table)).
 - **The ingest function, `kanon-telemetry-ingest`:** Node 24, 128 MB, no VPC. Its URL has `AuthType: AWS_IAM`. For each row it:
   - validates the row with the schema module, and rejects it with the offending field names if it fails;
   - takes the key from the caller's role, never from the row (a row that sends `pk`, `sk`, `source`, `received_at` or `expires_at` fails validation);
@@ -273,6 +275,43 @@ Plan 0002 §10. Deletion is immediate in the table, and complete in backups with
    node infra/telemetry/erase.mjs --key <key> --profile kanon --apply
    ```
 
+## The register table
+
+[Plan 0008](plans/0008-self-service-registration.md) §5 moves the register out of the private file and into a table, `kanon-telemetry-register`, for the token path that plan builds. **Nothing reads or writes it yet.** The ingest and aggregate functions still take their keys from the environment `render.mjs` writes, and the writer, reader and invoker roles stay, until the token path's endpoints (plan 0008 J3 and J4). Until then, the table is yours alone, through `register.mjs`, and the private register file stays the one that decides who can write.
+
+**What the template creates for it**, beside the rows table and in the same stack:
+- **The table:** on demand, keyed `pk` alone, TTL on `expires_at` (for the quota counters, plan 0008 §6), point-in-time recovery, deletion protection and `DeletionPolicy: Retain`, as the rows table has.
+- **Encryption with KMS** under the AWS-managed key `aws/dynamodb` (Owner decision 4 of 2026-10-12). There is no key fee, and every use of the key is in CloudTrail. The key's policy can't be narrowed, so it is not an access control. The resource policy and the roles are.
+- **Its resource policy** denies every DynamoDB action to every principal except four: the ingest function's role, the aggregate function's role, your role (`OwnerPrincipalArn`), and the operator's private jobs' roles. You name those with the `OperatorJobRoleArns` parameter, comma-separated, and it is empty by default. Add it to the deploy after the parameters file: `--parameter-overrides "file://$OUT/parameters.json" OperatorJobRoleArns=<role ARN>,<role ARN>`. The projection those jobs may read (plan 0008 §5.3) goes on their roles, in the operator's repository.
+- **The ingest role's grants on it:** `GetItem` and `Query`; a `Scan` of `pk` alone, for the key check on findings; and `PutItem`, `UpdateItem` and `DeleteItem` naming only the fields the function writes (`function/register-fields.mjs`, `FUNCTION_FIELDS`). The operator's fields, `aggregate_invoker`, `publish_own_figures_as`, `page_reader`, `quota_rows_per_day`, `quota_requests_per_hour`, `suspended_at`, `suspended_reason` and `first_review`, aren't listed. So IAM refuses the function any write that sets or removes one, whatever its code does.
+- **The aggregate role's grants on it:** a `Scan` of exactly `pk`, `key`, `status` and `publish_own_figures_as`, with no name or owner id. Also a `GetItem` of exactly `pk`, `key`, `status`, `repository_owner_id`, `default_ref`, `aggregate_invoker` and `page_reader`.
+
+`tests/unit/telemetry-store-template.test.ts` holds each of these, and fails if any operator field reaches the ingest role's list.
+
+**What it holds** (plan 0008 §5.2). A registration is at `repo#<repository id>`: the ids, the repository's name (encrypted with the table, and readable only by the ingest role and yours), the key, `status`, `default_ref`, `name_hashes`, the dates, and your fields. A key item is at `key#<key>`, holding the repository id, so no two registrations share a key. An erased registration becomes a **tombstone**: the two ids, `status`, `erased_at` and `rows_erased_at`, kept with no expiry (Owner decision 5), so a deleted and restored caller is never registered again unasked.
+
+### `register.mjs`
+
+Your CLI for the table. Run it with your profile (`--profile`, default `kanon`). **It never prints a key.** Every line names a registration by its repository, an entry of a register file by its index, and a tombstone, which has no name, by its repository id. A failed `aws` call is reported by its operation and DynamoDB's error code, never by its own error text, which can quote the request. It exits non-zero on any refusal.
+
+```sh
+node infra/telemetry/register.mjs list
+node infra/telemetry/register.mjs suspend --repository <owner/name> --reason abuse|quota|owner-changed|request|other
+node infra/telemetry/register.mjs resume --repository <owner/name>
+node infra/telemetry/register.mjs set --repository <owner/name> [--aggregate-invoker true|false] \
+  [--publish-own-figures-as <label> | --no-publish-own-figures] [--page-reader true|false] \
+  [--rows-per-day <n>] [--requests-per-hour <n>] [--first-review <minutes>@<recorded_at>]
+node infra/telemetry/register.mjs erase --repository <owner/name> [--apply]
+node infra/telemetry/register.mjs import --register "$REG"
+```
+
+- **`list`** prints the counts by status, then one line per registration: its status, the suspension's reason, and which operator fields are set. It never asks the table for the key.
+- **`suspend` and `resume`** are one `UpdateItem` each, with no deploy. `resume` removes the suspension's date and reason. Once the token path is built, a suspended key is refused on every endpoint and left out of every aggregate (plan 0008 §3.6). Until then the suspension is recorded and nothing enforces it.
+- **`set`** writes your fields in one `UpdateItem`, and refuses an erased registration. A label follows `render.mjs`'s rules: the key's pattern, never a key, and unique. A refusal never echoes the label, which could be a key. `--first-review` takes the review row's `recorded_at` as the row holds it, and is refused past its 13 months (plan 0002 decision 18). `--page-reader true` is for Kanon's own registration alone (plan 0008 §2.2).
+- **`erase`** is plan 0008 §7's erasure, run by you. Without `--apply` it counts the rows by lane and writes nothing. With it, the registration's `status` becomes `erased` at once. Then `erase.mjs`'s walk deletes every partition of the key, and a second walk checks that nothing is left. Only then are the key item and the registration replaced by the tombstone. Run it again to finish an erasure that stopped. **Until the token path is built**, the writer role still writes through today's path, so remove the entry from the register file and deploy first, as [Erase an adopter](#erase-an-adopter) says.
+- **`import`** is plan 0008 §9 step 3's one-time move from the register file. It checks the file as `render.mjs` does, then reads each repository's id, owner id and default branch from GitHub with `gh api repos/<owner>/<name>`. If an entry can't be resolved, or GitHub spells its name differently, the import stops before it writes anything. Each registration and its key item are written in one transaction, each conditional on not existing. **Every key is kept exactly**, and `aggregate_invoker`, `publish_own_figures_as` and `first_review` are carried across. A rerun leaves an imported registration as it is. A repository already registered under another key is refused, and so is a key already registered to another repository. After the import, set `--page-reader true` on Kanon's registration.
+
+`tests/unit/telemetry-register.test.ts` runs every subcommand against a register full of keys. Each `aws` call answers with an error that quotes every key, and the test checks that no line on either stream holds one.
 
 ## The aggregate function
 
@@ -480,7 +519,7 @@ When `--apply` can't reach the store, either script prints one `send failed:` li
 ## Cost and paging
 
 Plan 0002 §9 estimates about $0.05 a month, under a $1 ceiling watched by the account's budget alert. The template creates nothing outside that estimate:
-- on-demand DynamoDB, with the AWS-owned key;
+- on-demand DynamoDB, with the AWS-owned key for the rows table and the AWS-managed KMS key for the register table, which has no key fee and a few KMS requests a month at most (plan 0008 §12);
 - two functions, ingest and aggregate, with no schedule, no VPC and no NAT;
 - two log groups kept 30 days;
 - IAM roles and the OIDC provider, which are free.

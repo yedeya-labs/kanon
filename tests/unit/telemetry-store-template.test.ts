@@ -8,6 +8,9 @@ import { parse } from 'yaml';
 import { FUNCTION_DIR, registerProblems, render, TEMPLATE_PATH } from '../../infra/telemetry/render.mjs';
 import { ATTRIBUTES } from '../../infra/telemetry/function/aggregate.mjs';
 import { nameHashesOf } from '../../infra/telemetry/function/index.mjs';
+import {
+  AGGREGATE_GET, AGGREGATE_SCAN, FUNCTION_FIELDS, INGEST_SCAN, OPERATOR_FIELDS, REGISTER_TABLE, TOMBSTONE_FIELDS,
+} from '../../infra/telemetry/function/register-fields.mjs';
 import { sha256 } from '../../actions/agent-telemetry/public-words.mjs';
 import { KANON_WORDS, nameContext } from '../../actions/agent-telemetry/scrub.mjs';
 import { writeStub } from './helpers/stub-bin.js';
@@ -69,6 +72,93 @@ describe('the table (§5, §10, K-OBS-17)', () => {
     expect(deny).toMatchObject({ Effect: 'Deny', Principal: '*' });
     expect([...deny.Action].sort()).toEqual(['dynamodb:BatchWriteItem', 'dynamodb:DeleteItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem']);
     expect(deny.Condition).toEqual({ ArnNotEquals: { 'aws:PrincipalArn': [{ 'Fn::GetAtt': ['IngestRole', 'Arn'] }, { Ref: 'OwnerPrincipalArn' }] } });
+  });
+});
+
+describe('the register table (plan 0008 §5.1, §5.3)', () => {
+  const table = R.RegisterTable!;
+  const tableArn = { 'Fn::Sub': 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry-register' };
+  /** Every statement of a role's policies that names the register table. */
+  const onRegister = (role: string): J[] => (R[role]!.Properties.Policies as J[])
+    .flatMap((p) => statements(p.PolicyDocument))
+    .filter((s) => JSON.stringify(s.Resource ?? '').includes('table/kanon-telemetry-register'));
+  const actions = (s: J): string[] => [s.Action].flat();
+  const attributes = (s: J): string[] => [...s.Condition['ForAllValues:StringEquals']['dynamodb:Attributes']].sort();
+
+  it('is retained on delete and on replace, deletion-protected, with point-in-time recovery', () => {
+    expect(table.DeletionPolicy).toBe('Retain');
+    expect(table.UpdateReplacePolicy).toBe('Retain');
+    expect(table.Properties.DeletionProtectionEnabled).toBe(true);
+    expect(table.Properties.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
+  });
+  it('is on demand, keyed pk alone, named kanon-telemetry-register, with TTL on expires_at for the counters', () => {
+    expect(table.Properties.TableName).toBe(REGISTER_TABLE);
+    expect(table.Properties.BillingMode).toBe('PAY_PER_REQUEST');
+    expect(table.Properties.KeySchema).toEqual([{ AttributeName: 'pk', KeyType: 'HASH' }]);
+    expect(table.Properties.TimeToLiveSpecification).toEqual({ AttributeName: 'expires_at', Enabled: true });
+  });
+  it('is encrypted with KMS under the AWS-managed key, not a customer-managed one (Owner decision 4)', () => {
+    expect(table.Properties.SSESpecification).toEqual({ SSEEnabled: true, SSEType: 'KMS' });
+    expect(byType('AWS::KMS::Key')).toEqual([]);
+  });
+  it('its resource policy denies every action to every principal but the four of §5.3', () => {
+    const [deny, ...rest] = statements(table.Properties.ResourcePolicy.PolicyDocument);
+    expect(rest).toEqual([]);
+    expect(deny).toMatchObject({ Effect: 'Deny', Principal: '*', Action: 'dynamodb:*', Resource: tableArn });
+    expect(Object.keys(deny.Condition)).toEqual(['ArnNotEquals']);
+    expect(Object.keys(deny.Condition.ArnNotEquals)).toEqual(['aws:PrincipalArn']);
+    const three = [{ 'Fn::GetAtt': ['IngestRole', 'Arn'] }, { 'Fn::GetAtt': ['AggregateRole', 'Arn'] }, { Ref: 'OwnerPrincipalArn' }];
+    // Without the operator's job roles, exactly three; with them, the same three and the list.
+    expect(deny.Condition.ArnNotEquals['aws:PrincipalArn']).toEqual({ 'Fn::If': ['HasOperatorJobRoles',
+      { 'Fn::Split': [',', { 'Fn::Join': [',', [...three, { 'Fn::Join': [',', { Ref: 'OperatorJobRoleArns' }] }]] }] }, three] });
+    expect(template.Parameters.OperatorJobRoleArns).toMatchObject({ Type: 'CommaDelimitedList', Default: '' });
+    expect(template.Conditions.HasOperatorJobRoles).toEqual({ 'Fn::Not': [{ 'Fn::Equals': [{ 'Fn::Join': ['', { Ref: 'OperatorJobRoleArns' }] }, ''] }] });
+  });
+  it("the ingest role's writes list every field but the operator's, so IAM refuses it an operator field", () => {
+    const writes = onRegister('IngestRole').filter((s) => actions(s).some((a) => /Put|Update|Delete|Write/.test(a)));
+    expect(writes).toHaveLength(1);
+    const [w] = writes;
+    expect(actions(w).sort()).toEqual(['dynamodb:DeleteItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem']);
+    expect(Object.keys(w.Condition)).toEqual(['ForAllValues:StringEquals']);
+    expect(attributes(w)).toEqual([...FUNCTION_FIELDS].sort());
+    for (const f of OPERATOR_FIELDS) expect(attributes(w), f).not.toContain(f);
+    expect(attributes(w).filter((f) => /^(quota_|suspended_)/.test(f))).toEqual([]);
+    expect(FUNCTION_FIELDS.filter((f) => OPERATOR_FIELDS.includes(f))).toEqual([]);
+  });
+  it("the ingest role reads registrations, and Scans pk alone, for assertNoKey's keys", () => {
+    const s = onRegister('IngestRole');
+    expect(s.map(actions)).toEqual([['dynamodb:GetItem', 'dynamodb:Query'], ['dynamodb:Scan'], expect.any(Array)]);
+    expect(s[0].Condition).toBeUndefined();
+    expect(attributes(s[1])).toEqual([...INGEST_SCAN]);
+    expect(s[1].Condition.StringEquals).toEqual({ 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' });
+  });
+  it("the aggregate role Scans exactly pk, key, status and the label, and GetItems exactly the caller's checks", () => {
+    const [scan, get, ...rest] = onRegister('AggregateRole');
+    expect(rest).toEqual([]);
+    expect(actions(scan)).toEqual(['dynamodb:Scan']);
+    expect(attributes(scan)).toEqual([...AGGREGATE_SCAN].sort());
+    expect(attributes(scan)).not.toContain('repository');
+    expect(attributes(scan)).not.toContain('repository_owner_id');
+    expect(scan.Condition.StringEquals).toEqual({ 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' });
+    expect(actions(get)).toEqual(['dynamodb:GetItem']);
+    expect(attributes(get)).toEqual([...AGGREGATE_GET].sort());
+    expect(attributes(get)).not.toContain('repository');
+    expect(get.Condition.StringEqualsIfExists).toEqual({ 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' });
+    expect(Object.keys(get.Condition).sort()).toEqual(['ForAllValues:StringEquals', 'StringEqualsIfExists']);
+  });
+  it('no other role names the register table, and nothing is granted on it with a wildcard', () => {
+    for (const [name, r] of byType('AWS::IAM::Role')) {
+      if (name === 'IngestRole' || name === 'AggregateRole') continue;
+      expect(JSON.stringify(r.Properties.Policies ?? []), name).not.toContain('kanon-telemetry-register');
+    }
+    for (const s of [...onRegister('IngestRole'), ...onRegister('AggregateRole')]) {
+      expect(s.Effect).toBe('Allow');
+      for (const a of actions(s)) expect(a).not.toContain('*');
+    }
+  });
+  it('the tombstone keeps the two ids, the status and two dates, and the ingest role may write each', () => {
+    expect([...TOMBSTONE_FIELDS].sort()).toEqual(['erased_at', 'pk', 'repository_id', 'repository_owner_id', 'rows_erased_at', 'status']);
+    for (const f of TOMBSTONE_FIELDS) expect(FUNCTION_FIELDS).toContain(f);
   });
 });
 
