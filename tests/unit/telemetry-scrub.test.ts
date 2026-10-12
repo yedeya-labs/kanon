@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { KANON_PATH, KANON_WORDS, RULE_NAMES, SCRUB_VERSION, nameContext, redact, verify } from '../../actions/agent-telemetry/scrub.mjs';
@@ -122,6 +123,81 @@ describe('what the scrub keeps', () => {
     const text = 'Expected: K-OBS-16 on v0.37.0, e.g. the reason `did_not_finish` at stage `agent`, i.e. issue #41.';
     expect(verify(text, CTX)).toEqual([]);
     expect(redact(text, CTX).text).toBe(text);
+  });
+});
+
+// kanon#603: the `name` rule ran across the paths the `path` rule had kept, so a name word inside
+// one (`merge` in `scripts/merge-gate.mjs`) left `scripts/[name].mjs`, which `verify` then refused
+// as a path, and the finding's evidence was withheld. A word wholly inside a kept Kanon path is
+// now left alone; everywhere else the scrub is as strict as before.
+describe('a name word inside a kept Kanon path (kanon#603)', () => {
+  /** A context holding these words' hashes directly, as any source of the context could. */
+  const hashing = (...words: string[]) => ({ nameHashes: new Set(words.map(sha256)), kanonFiles: KANON_FILES });
+
+  it('the issue\'s case: `acme/merge-tools` and evidence citing `scripts/merge-gate.mjs` round-trips with the path intact', () => {
+    // `merge` is a lane word, so `nameContext` no longer hashes it (kanon#612); the hashes are set
+    // here as a context that did would hold them, and `gate` shows the same through `nameContext`.
+    const text = 'Where: scripts/merge-gate.mjs:120 at this release.';
+    for (const ctx of [hashing('acme', 'merge', 'tools'), { nameHashes: nameContext({ repository: 'acme/gate-tools' }), kanonFiles: KANON_FILES }]) {
+      expect(verify(text, ctx)).toEqual([]);
+      const r = redact(text, ctx);
+      expect(r).toEqual({ text, fired: [] });
+      expect(verify(r.text, ctx)).toEqual([]);
+    }
+    // At intake, with no tree, the path is Kanon's by the row's pattern, and is kept the same way.
+    expect(verify(text, { nameHashes: new Set(['merge', 'gate'].map(sha256)) })).toEqual([]);
+  });
+
+  it('every file in Kanon\'s tree, cited bare, with a line, an anchor, $KANON or ./, verifies after redact with every word of its own path as a name', () => {
+    const roots = ['actions', 'cli', 'scripts', 'skills', 'rulebook', 'docs', 'infra', '.github/workflows', '.github/scripts'];
+    const files = roots
+      .flatMap((root) => (readdirSync(root, { recursive: true }) as string[]).map((f) => join(root, f)))
+      .filter((p) => !p.includes('node_modules') && KANON_PATH.test(p) && statSync(p).isFile());
+    expect(files.length).toBeGreaterThan(100);
+    const tree = { kanonFiles: (p: string) => files.includes(p) };
+    for (const file of files) {
+      const words = file.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+      const nameHashes = new Set(words.map(sha256));
+      // No prose: every word of the path is a name, so a word of the text's own would be removed.
+      const text = `${file}, ${file}:12, ${file}#L3-L9, $KANON/${file}, ./${file}.`;
+      for (const ctx of [{ nameHashes, ...tree }, { nameHashes }]) {
+        const r = redact(text, ctx);
+        expect(verify(r.text, ctx), file).toEqual([]);
+        expect(r.text, file).toBe(text);
+      }
+      // Each segment's word, alone in prose, is still a name.
+      for (const w of new Set(words)) {
+        expect(redact(`Observed: ${w} ran.`, { nameHashes: new Set([sha256(w)]), ...tree }).text, `${file}: ${w}`).toBe('Observed: [name] ran.');
+      }
+    }
+  });
+
+  it('the same word in prose is still a name, beside the kept path', () => {
+    const ctx = hashing('merge');
+    const r = redact('Where: scripts/merge-gate.mjs, where the merge ran.', ctx);
+    expect(r).toEqual({ text: 'Where: scripts/merge-gate.mjs, where the [name] ran.', fired: ['name'] });
+    expect(verify(r.text, ctx)).toEqual([]);
+  });
+
+  it('the same word in a path that is not Kanon\'s is caught by both rules, and redacted', () => {
+    const ctx = hashing('merge');
+    expect(verify('Where: src/merge-gate.mjs', ctx)).toEqual(['path', 'name']);
+    expect(redact('Where: src/merge-gate.mjs', ctx).text).toBe('Where: [path]');
+  });
+
+  it('a near miss is not Kanon\'s file, and is not kept', () => {
+    const ctx = hashing('merge');
+    for (const near of ['scripts/merge-gate.mjs.bak', 'scriptsx/merge-gate.mjs', 'xscripts/merge-gate.mjs', 'scripts/merge-gate.mjsx', 'scripts/merge-gate']) {
+      expect(verify(`Where: ${near}.`, ctx), near).toEqual(['path', 'name']);
+      const r = redact(`Where: ${near}.`, ctx);
+      expect(r.text, near).toBe('Where: [path].');
+      expect(verify(r.text, ctx), near).toEqual([]);
+    }
+  });
+
+  it('a word that runs on past the kept path is still checked', () => {
+    // `[bot]` is the one suffix a word takes past a path's end.
+    expect(verify('Where: scripts/merge-gate.mjs[bot]', hashing('mjs'))).toContain('name');
   });
 });
 
