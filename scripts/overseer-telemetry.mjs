@@ -39,7 +39,11 @@
 // report's Markdown to the job's summary, and nothing else anywhere: the rows stay in the step's
 // memory, never in a file, the log or the artifact. A partition it can't read withholds the whole
 // report, naming the partition: a report missing a lane's cost, or the work items, would print
-// numbers that are wrong. It never fails the job, so the agent's two files are never held up by it.
+// numbers that are wrong. It never fails the job, so the agent's two files are never held up by it
+// (kanon#682): it holds a deadline of its own, `REPORT_BY_MS` after the mask step stamped the job's
+// start, well inside the job's `timeout-minutes`; no query outlives it, and a report not read by
+// then is withheld with a warning. Any throw on the way, from the report or from the summary's
+// write, is a warning too, and the step exits 0.
 //
 // `node:` built-ins and the `aws` CLI on GitHub's runner only (`K-SELF-8`).
 
@@ -84,6 +88,32 @@ export function checkStore(env) {
 export const WINDOW_DAYS = 14;
 /** The headline report reads back as far as the store keeps a row: thirteen months (plan 0002 §10). */
 export const REPORT_MONTHS = RETENTION_MONTHS;
+/** The `telemetry` job's `timeout-minutes` (`.github/workflows/agent-overseer.yml`). */
+export const JOB_TIMEOUT_MINUTES = 10;
+/** The report's deadline, counted from the mask step's stamp: two minutes short of the job's
+ *  timeout, for the job's setup, the steps before the mask and the post-steps after the report. */
+export const REPORT_BY_MS = (JOB_TIMEOUT_MINUTES - 2) * 60_000;
+/** The report's own budget when the job's start can't be read: from the step's start. */
+export const REPORT_FALLBACK_MS = 3 * 60_000;
+/** One query's own limit, when the deadline is further off. */
+export const QUERY_TIMEOUT_MS = 120_000;
+/** Where the mask step stamps the job's start, under the runner's temp directory: never under the
+ *  read's output directory, which is uploaded. */
+export const STARTED_FILE = 'kanon-overseer-telemetry-started';
+
+/**
+ * When the report must have read every partition: `REPORT_BY_MS` after the job's start, as the mask
+ * step stamped it, or `REPORT_FALLBACK_MS` after `at` when the stamp is missing or not a time
+ * before `at` within the job's timeout.
+ * @param {string | undefined} stamp the stamp's text, as the mask step wrote it
+ * @param {number} at the step's start
+ */
+export function deadlineOf(stamp, at) {
+  const started = Number(String(stamp ?? '').trim() || NaN);
+  const fresh = Number.isFinite(started) && started <= at && at - started < JOB_TIMEOUT_MINUTES * 60_000;
+  return fresh ? started + REPORT_BY_MS : at + REPORT_FALLBACK_MS;
+}
+
 /** The files the read writes and the export carries. */
 export const FILES = /** @type {const} */ (['token-trend.md', 'cache-ttl.md']);
 /** The statuses the manifest's `telemetry` takes. */
@@ -124,11 +154,12 @@ const stamp = (ms) => `${new Date(ms).toISOString().slice(0, 19).replace(/[-:]/g
 
 /**
  * One `aws dynamodb query` of a partition, every page: since `from` when given, or the whole
- * partition; projected to `attributes` when given, or every attribute.
- * @param {{ pk: string, from?: string, attributes?: readonly string[], table?: string, region?: string }} q
+ * partition; projected to `attributes` when given, or every attribute. The CLI is killed outright
+ * once `timeout` milliseconds have passed, and the query throws.
+ * @param {{ pk: string, from?: string, attributes?: readonly string[], table?: string, region?: string, timeout?: number }} q
  * @returns {import('./lib/token-trend.mjs').Item[]}
  */
-export function awsQuery({ pk, from, attributes, table = TABLE, region = REGION }) {
+export function awsQuery({ pk, from, attributes, table = TABLE, region = REGION, timeout = QUERY_TIMEOUT_MS }) {
   const names = Object.fromEntries((attributes ?? []).map((a, i) => [`#a${i}`, a]));
   const out = execFileSync('aws', [
     'dynamodb', 'query',
@@ -139,7 +170,7 @@ export function awsQuery({ pk, from, attributes, table = TABLE, region = REGION 
     '--expression-attribute-names', JSON.stringify({ ...names, '#pk': 'pk', ...(from === undefined ? {} : { '#sk': 'sk' }) }),
     '--expression-attribute-values', JSON.stringify({ ':p': { S: pk }, ...(from === undefined ? {} : { ':from': { S: from } }) }),
     '--output', 'json',
-  ], { encoding: 'utf8', timeout: 120_000, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  ], { encoding: 'utf8', timeout, killSignal: 'SIGKILL', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   return JSON.parse(out).Items ?? [];
 }
 
@@ -169,7 +200,7 @@ export function rowOf(item) {
 export function reasonOf(e, key) {
   const err = /** @type {{ stderr?: string | Buffer, message?: string }} */ (e);
   const raw = String(err?.stderr || err?.message || (e instanceof Error ? '' : e ?? '')).split('\n').map((l) => l.trim()).find(Boolean) ?? 'the query failed';
-  return raw.split(key).join('<key>').replace(/\b\d{12}\b/g, '<account>').replace(/arn:aws[^\s"')]*/g, '<arn>').slice(0, 200);
+  return (key ? raw.split(key).join('<key>') : raw).replace(/\b\d{12}\b/g, '<account>').replace(/arn:aws[^\s"')]*/g, '<arn>').slice(0, 200);
 }
 
 /**
@@ -224,11 +255,14 @@ function refusalOf(env) {
 /**
  * The headline report (kanon#668): `kanon metrics report`'s Markdown over this repository's own
  * work items and runs, or why there is none. Every partition is read, or no report is made.
+ * Every partition is read by `deadline` too (kanon#682): none is started after it, and none is
+ * given longer than what is left of it, so the step never holds the job past its timeout.
  * @param {{ ROLE?: string, CREDENTIALS?: string, TABLE?: string, REGION?: string }} env
- * @param {{ query?: typeof awsQuery, now?: number }} [io]
+ * @param {{ query?: typeof awsQuery, now?: number, clock?: () => number, deadline?: number }} [io]
+ *   `now` dates the report; `clock` measures the time left before `deadline`
  * @returns {{ status: 'ran' | 'failed', markdown: string, lines: string[] }}
  */
-export function headline(env, { query = awsQuery, now = Date.now() } = {}) {
+export function headline(env, { query = awsQuery, now = Date.now(), clock = Date.now, deadline = Infinity } = {}) {
   const refused = refusalOf(env);
   if (refused) return { status: 'failed', markdown: '', lines: [`The headline report was not made: ${refused}`] };
   const { table, region } = checkStore(env);
@@ -240,12 +274,17 @@ export function headline(env, { query = awsQuery, now = Date.now() } = {}) {
   /** @type {Record<string, string | number | boolean>[]} */
   const rows = [];
   let items = 0;
+  /** @param {string} name @param {string} when */
+  const late = (name, when) => ({ status: /** @type {const} */ ('failed'), markdown: '', lines: [`The headline report was not made: its time ran out ${when} the \`${name}\` partition was read (the step keeps inside the job's ${JOB_TIMEOUT_MINUTES}-minute timeout), and a report without it would be wrong.`] });
   for (const p of partitions) {
+    const left = deadline - clock();
+    if (!(left > 0)) return late(p.name, 'before');
     /** @type {import('./lib/token-trend.mjs').Item[]} */
     let got;
     try {
-      got = query({ pk: `${key}#${p.name}`, ...(p.from === undefined ? {} : { from: p.from }), table, region });
+      got = query({ pk: `${key}#${p.name}`, ...(p.from === undefined ? {} : { from: p.from }), table, region, timeout: Math.ceil(Math.min(QUERY_TIMEOUT_MS, left)) });
     } catch (e) {
+      if (!(deadline - clock() > 0)) return late(p.name, 'while');
       return { status: 'failed', markdown: '', lines: [`The headline report was not made: the \`${p.name}\` partition could not be read (${reasonOf(e, key)}), and a report without it would be wrong.`] };
     }
     if (p.name === RESERVED_PARTITION) items = got.length;
@@ -261,6 +300,46 @@ export function headline(env, { query = awsQuery, now = Date.now() } = {}) {
     // Counts only: the rows themselves are never printed.
     lines: [`The headline report ran: ${partitions.length} partitions read, ${items} work item(s) and ${rows.length - items} run row(s) over the last ${REPORT_MONTHS} months, written to the job summary.`],
   };
+}
+
+/**
+ * The report step, whole (kanon#682): the headline report's Markdown to the job summary, or a
+ * warning saying why there is none. It never throws: a throw from the report or from a write is
+ * a warning, so the step exits 0 and the job keeps its status.
+ * @param {{ ROLE?: string, CREDENTIALS?: string, TABLE?: string, REGION?: string, GITHUB_STEP_SUMMARY?: string, RUNNER_TEMP?: string }} env
+ * @param {{ query?: typeof awsQuery, now?: number, clock?: () => number, append?: (path: string, text: string) => void, log?: (line: string) => void, stamp?: () => string | undefined }} [io]
+ */
+export function reportStep(env, io = {}) {
+  const { clock = Date.now, append = appendFileSync, log = console.log } = io;
+  const summary = env.GITHUB_STEP_SUMMARY;
+  /** @param {string} line */
+  const warn = (line) => {
+    try {
+      log(`::warning title=overseer metrics::${line}`);
+    } catch { /* the summary may still take it */ }
+    try {
+      if (summary) append(summary, `${line}\n`);
+    } catch { /* the log has it */ }
+  };
+  try {
+    const at = clock();
+    const readStamp = io.stamp ?? (() => (env.RUNNER_TEMP ? readFileSync(join(env.RUNNER_TEMP, STARTED_FILE), 'utf8') : undefined));
+    /** @type {string | undefined} */
+    let started;
+    try { started = readStamp(); } catch { started = undefined; }
+    const { status, markdown, lines } = headline(env, { ...(io.query ? { query: io.query } : {}), now: io.now ?? at, clock, deadline: deadlineOf(started, at) });
+    // The Markdown goes to the summary only: the log says counts, or why there is no report.
+    if (status === 'ran' && summary) append(summary, markdown);
+    for (const l of lines) {
+      if (status !== 'ran') warn(l);
+      else {
+        log(l);
+        if (summary) append(summary, `${l}\n`);
+      }
+    }
+  } catch (e) {
+    warn(`The headline report stopped on an error (${reasonOf(e, readerOf(env.ROLE)?.key ?? '')}); the job is not failed for it.`);
+  }
 }
 
 /**
@@ -312,6 +391,11 @@ const say = (line) => {
 if (isCliEntry(import.meta.url)) {
   const mode = process.argv[2];
   if (mode === 'mask') {
+    // The job's start, for the report's deadline (kanon#682): this is the job's first step after
+    // Kanon's path. Only a time, under the runner's temp directory, never the uploaded one.
+    try {
+      if (process.env.RUNNER_TEMP) writeFileSync(join(process.env.RUNNER_TEMP, STARTED_FILE), `${Date.now()}\n`);
+    } catch { /* the report falls back to a budget of its own */ }
     for (const m of masksOf(process.env)) process.stdout.write(`::add-mask::${m}\n`);
     console.log('Masked the reader role, its account id and its key.');
     // THE TABLE AND REGION ARE RESOLVED HERE, ONCE (the Owner's decision on kanon#499): the
@@ -338,11 +422,8 @@ if (isCliEntry(import.meta.url)) {
     for (const l of lines) say(l);
     writeOutputs({ status });
   } else if (mode === 'report') {
-    // The Markdown goes to the summary only: the log says counts, or why there is no report.
-    const { status, markdown, lines } = headline(process.env);
-    if (status === 'ran' && process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);
-    if (status !== 'ran') for (const l of lines) console.log(`::warning title=overseer metrics::${l}`);
-    for (const l of lines) say(l);
+    reportStep(process.env);
+    process.exitCode = 0;
   } else if (mode === 'merge') {
     const { line } = merge(process.env);
     say(line);

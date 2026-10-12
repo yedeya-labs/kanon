@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { keysOf, toAttributes } from '../../infra/telemetry/function/index.mjs';
 import { LANES } from '../../infra/telemetry/function/schema.mjs';
 import { report as cliReport } from '../../cli/metrics-report.mjs';
-import { FILES, REGION, REPORT_MONTHS, STATUSES, TABLE, WINDOW_DAYS, checkStore, headline, masksOf, merge, read, readerOf, reasonOf, rowOf } from '../../scripts/overseer-telemetry.mjs';
+import { parse } from 'yaml';
+import { FILES, JOB_TIMEOUT_MINUTES, QUERY_TIMEOUT_MS, REGION, REPORT_BY_MS, REPORT_FALLBACK_MS, REPORT_MONTHS, STARTED_FILE, STATUSES, TABLE, WINDOW_DAYS, checkStore, deadlineOf, headline, masksOf, merge, read, readerOf, reasonOf, reportStep, rowOf } from '../../scripts/overseer-telemetry.mjs';
 import { UNTIL, ago, itemRow, risingRows, runRow } from '../unit/helpers/metrics-rows.js';
 import { SPAWNS } from '../unit/helpers/spawns.js';
 import { writeStub } from '../unit/helpers/stub-bin.js';
@@ -152,7 +153,7 @@ describe('the read', () => {
  * the Markdown to the job summary. The rows never leave the job: only the report's figures do.
  */
 describe('the headline report (kanon#668)', () => {
-  type Q = { pk: string, from?: string, attributes?: readonly string[], table?: string, region?: string };
+  type Q = { pk: string, from?: string, attributes?: readonly string[], table?: string, region?: string, timeout?: number };
   /** Rows as the store holds them: each attribute typed, under its partition and sort key. */
   const store = (rows: Record<string, unknown>[]) => rows.map((r) => {
     const { pk, sk } = keysOf(KEY, r);
@@ -241,6 +242,98 @@ describe('the headline report (kanon#668)', () => {
       expect(r, JSON.stringify(env)).toMatchObject({ status: 'failed', markdown: '' });
       expect(r.lines[0]).toMatch(says);
     }
+  });
+});
+
+/**
+ * kanon#682: the report step never fails the job. It holds a deadline of its own inside the job's
+ * timeout, so no slow store holds the job past it, and a throw anywhere in it is a warning.
+ */
+describe('the report step never fails the job (kanon#682)', () => {
+  const NOW_MS = UNTIL.getTime();
+  const ok = (items: unknown[] = []) => () => items as never;
+  /** A store that takes `ms` of the fake clock per query, and records each query's limit. */
+  const slow = (ms: number) => {
+    let t = NOW_MS;
+    const timeouts: number[] = [];
+    const clock = () => t;
+    const query = (q: { timeout?: number }) => {
+      timeouts.push(q.timeout!);
+      t += ms;
+      return [] as never;
+    };
+    return { clock, query, timeouts };
+  };
+
+  it('keeps its deadline inside the job\'s timeout, the workflow\'s own', () => {
+    const wf = parse(readFileSync(join(WORKFLOWS, 'agent-overseer.yml'), 'utf8')) as { jobs: { telemetry: { 'timeout-minutes': number } } };
+    expect(wf.jobs.telemetry['timeout-minutes']).toBe(JOB_TIMEOUT_MINUTES);
+    expect(REPORT_BY_MS).toBeLessThan(JOB_TIMEOUT_MINUTES * 60_000);
+    expect(REPORT_FALLBACK_MS).toBeLessThan(REPORT_BY_MS);
+  });
+
+  it('counts its deadline from the job\'s stamped start, or from its own start when the stamp is missing or stale', () => {
+    const at = NOW_MS;
+    expect(deadlineOf(`${at - 60_000}\n`, at)).toBe(at - 60_000 + REPORT_BY_MS);
+    expect(deadlineOf(String(at), at)).toBe(at + REPORT_BY_MS);
+    for (const stamp of [undefined, '', 'soon', String(at + 1), String(at - JOB_TIMEOUT_MINUTES * 60_000), String(at - 86_400_000)]) {
+      expect(deadlineOf(stamp, at), String(stamp)).toBe(at + REPORT_FALLBACK_MS);
+    }
+  });
+
+  it('starts no partition after its deadline, and withholds the report, naming the partition', () => {
+    const { clock, query, timeouts } = slow(60_000);
+    const r = headline({ ROLE, CREDENTIALS: 'success' }, { query, now: NOW_MS, clock, deadline: NOW_MS + 5 * 60_000 });
+    expect(r).toMatchObject({ status: 'failed', markdown: '' });
+    // Five queries of a minute each use the five minutes; the sixth partition is never started.
+    expect(timeouts).toHaveLength(5);
+    expect(r.lines).toEqual([`The headline report was not made: its time ran out before the \`${LANES[4]}\` partition was read (the step keeps inside the job's ${JOB_TIMEOUT_MINUTES}-minute timeout), and a report without it would be wrong.`]);
+  });
+
+  it('gives no query longer than what is left of its deadline', () => {
+    const { clock, query, timeouts } = slow(1_000);
+    const r = headline({ ROLE, CREDENTIALS: 'success' }, { query, now: NOW_MS, clock, deadline: NOW_MS + QUERY_TIMEOUT_MS + 2_500 });
+    expect(r.status).toBe('ran');
+    expect(timeouts.slice(0, 5)).toEqual([QUERY_TIMEOUT_MS, QUERY_TIMEOUT_MS, QUERY_TIMEOUT_MS, QUERY_TIMEOUT_MS - 500, QUERY_TIMEOUT_MS - 1_500]);
+    // Without a deadline, a query keeps its own limit.
+    const plain = slow(1_000);
+    headline({ ROLE, CREDENTIALS: 'success' }, { query: plain.query, now: NOW_MS, clock: plain.clock });
+    expect(new Set(plain.timeouts)).toEqual(new Set([QUERY_TIMEOUT_MS]));
+  });
+
+  it('says a query cut off by the deadline ran out of time, not that the store refused it', () => {
+    let t = NOW_MS;
+    const query = (q: { timeout?: number }) => { t += q.timeout!; throw Object.assign(new Error('spawnSync aws ETIMEDOUT'), { code: 'ETIMEDOUT' }); };
+    const r = headline({ ROLE, CREDENTIALS: 'success' }, { query, now: NOW_MS, clock: () => t, deadline: NOW_MS + 30_000 });
+    expect(r.lines).toEqual([expect.stringMatching(/^The headline report was not made: its time ran out while the `work` partition was read/)]);
+  });
+
+  it('a step out of time warns, writes no report, and returns', () => {
+    const { clock, query } = slow(60_000);
+    const log: string[] = [];
+    const summary: string[] = [];
+    reportStep({ ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: 'summary' }, { query, now: NOW_MS, clock, stamp: () => String(NOW_MS - REPORT_BY_MS + 90_000), append: (_p, t) => { summary.push(t); }, log: (l) => { log.push(l); } });
+    expect(log).toEqual([expect.stringMatching(/^::warning title=overseer metrics::The headline report was not made: its time ran out before the `\S+` partition was read/)]);
+    expect(summary.join('')).not.toContain('## Kanon metrics');
+    expect(summary.join('')).toMatch(/^The headline report was not made: its time ran out/);
+  });
+
+  it('a throw from the report warns, without the key, and returns', () => {
+    const log: string[] = [];
+    const summary: string[] = [];
+    // A row the store couldn't hold: making the report throws.
+    reportStep({ ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: 'summary' }, { query: ok([null]), now: NOW_MS, append: (_p, t) => { summary.push(t); }, log: (l) => { log.push(l); } });
+    expect(log).toEqual([expect.stringMatching(/^::warning title=overseer metrics::The headline report stopped on an error \(.+\); the job is not failed for it\.$/)]);
+    expect(summary).toEqual([expect.stringMatching(/^The headline report stopped on an error/)]);
+  });
+
+  it('a throw from the summary\'s write warns, and returns', () => {
+    const log: string[] = [];
+    const append = () => { throw Object.assign(new Error(`EISDIR: illegal operation on a directory, open '/tmp/${KEY}'`), { code: 'EISDIR' }); };
+    expect(() => reportStep({ ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: 'summary' }, { query: ok(), now: NOW_MS, append, log: (l) => { log.push(l); } })).not.toThrow();
+    expect(log).toEqual([`::warning title=overseer metrics::The headline report stopped on an error (EISDIR: illegal operation on a directory, open '/tmp/<key>'); the job is not failed for it.`]);
+    // Even a log that throws doesn't throw out of the step.
+    expect(() => reportStep({ ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: 'summary' }, { query: ok(), now: NOW_MS, append, log: () => { throw new Error('EPIPE'); } })).not.toThrow();
   });
 });
 
@@ -414,6 +507,46 @@ describe('the script, as the lane runs it', SPAWNS, () => {
     expect(r.stdout).toMatch(/::warning title=overseer metrics::The headline report was not made: the reader role could not be assumed/);
     expect(readFileSync(summary, 'utf8')).toMatch(/^The headline report was not made: the reader role could not be assumed/);
     expect(readFileSync(summary, 'utf8')).not.toContain('## Kanon metrics');
+  });
+
+  // kanon#682: the job's start, for the report's deadline; the step's outputs are unchanged.
+  it('mask: stamps the job\'s start under the runner\'s temp directory, outside the uploaded one', () => {
+    const runnerTemp = temp();
+    const outputs = join(temp(), 'outputs');
+    const before = Date.now();
+    expect(run('mask', { ROLE, GITHUB_OUTPUT: outputs, RUNNER_TEMP: runnerTemp }).status).toBe(0);
+    expect(readdirSync(runnerTemp)).toEqual([STARTED_FILE]);
+    const started = Number(readFileSync(join(runnerTemp, STARTED_FILE), 'utf8'));
+    expect(started).toBeGreaterThanOrEqual(before);
+    expect(started).toBeLessThanOrEqual(Date.now());
+    expect(readFileSync(outputs, 'utf8')).toBe('table=kanon-telemetry\nregion=eu-central-1\n');
+  });
+
+  it('report: a query past the deadline is killed, the report withheld, the outputs untouched, and it exits 0', () => {
+    const bin = temp();
+    // A store that never answers in time: the CLI must be killed, not waited for.
+    writeStub(join(bin, 'aws'), '#!/usr/bin/env bash\nexec sleep 30\n');
+    const runnerTemp = temp();
+    // The job started so long ago that half a second of the report's time is left.
+    writeFileSync(join(runnerTemp, STARTED_FILE), `${Date.now() - REPORT_BY_MS + 500}\n`);
+    const summary = join(temp(), 'summary');
+    const outputs = join(temp(), 'outputs');
+    writeFileSync(outputs, 'status=ran\n');
+    const began = Date.now();
+    const r = run('report', { PATH: `${bin}:${process.env.PATH}`, ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: summary, GITHUB_OUTPUT: outputs, RUNNER_TEMP: runnerTemp });
+    expect(Date.now() - began).toBeLessThan(10_000);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/::warning title=overseer metrics::The headline report was not made: its time ran out (while|before) the `work` partition was read/);
+    expect(readFileSync(summary, 'utf8')).not.toContain('## Kanon metrics');
+    expect(readFileSync(outputs, 'utf8')).toBe('status=ran\n');
+  });
+
+  it('report: a summary it can\'t write warns, and exits 0', () => {
+    const { bin } = fakeAws(JSON.stringify({ Items: [] }));
+    const r = run('report', { PATH: `${bin}:${process.env.PATH}`, ROLE, CREDENTIALS: 'success', GITHUB_STEP_SUMMARY: temp() });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/::warning title=overseer metrics::The headline report stopped on an error \(.+\); the job is not failed for it\./);
+    expect(r.stdout).not.toContain(KEY);
   });
 
   it('refuses an unknown mode', () => {
