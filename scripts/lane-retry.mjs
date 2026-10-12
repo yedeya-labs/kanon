@@ -17,8 +17,9 @@
 //   · CLASSIFY FROM EVIDENCE, NOT THE CONCLUSION. Only three failures are retried: the
 //     configured model was never reached (`unreachable` — a cap, an outage), the
 //     model API failed part-way through (`api_error`), and, on the review lane only, the
-//     agent exited zero and posted no verdict (`no_verdict`, kanon#622). A run that ran
-//     and failed, or stopped at its turn or dollar cap, keeps today's report-only behaviour.
+//     agent exited zero and posted no verdict (`no_verdict`, kanon#622, which `K-PRIN-13`
+//     names). A run that ran and failed, or stopped at its turn or dollar cap, keeps
+//     today's report-only behaviour.
 //   · WAIT OUT THE CAUSE: `RETRY_COOL_DOWN_HOURS` after the failure, long enough for a
 //     session cap to reset. A fixed wait rather than "some later run reached the model",
 //     which is the stronger signal but needs the RA-1485 store this tick cannot read.
