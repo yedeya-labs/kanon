@@ -111,6 +111,9 @@ describe.skipIf(!hasYq)("Kanon's lane check on a project with no package.json", 
     const r = laneCheck();
     expect(r.status, r.out).toBe(0);
     expect(r.out).toContain('4 lane caller(s) pass');
+    // No warning either: a warn-then-fail rule must show up the day it lands, not on the
+    // release that turns it into a failure (#740).
+    expect(r.out).not.toContain('::warning');
   });
 
   it('still reads it: a hook missing an input Kanon passes is red', () => {
@@ -372,6 +375,7 @@ const ALLOWED: Array<{ file: string; needle: string; why: string }> = [
   { file: 'scripts/metrics/band.mjs', needle: "'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock',", why: "JavaScript's lockfiles, one line of the list the band leaves out of a diff's size (plan 0003 §3.6) beside Python's, Go's, Rust's, Ruby's, PHP's, the JVM's, .NET's, Elixir's and Erlang's, Swift's and Dart's; the `deps` area reads the same list (§3.7). A name read from a file list, never a tool run (#520)" },
   { file: 'scripts/metrics/areas.mjs', needle: "'package.json', 'Pipfile', 'pyproject.toml',", why: "JavaScript's manifest, the first of one line of the same stacks' manifests in the `deps` area (§3.7), as above (#520)" },
   { file: 'cli/callers.mjs', needle: "new URL('../package.json', import.meta.url)", why: "Kanon's own manifest, read for the release `kanon init` pins: not the adopter's" },
+  { file: 'actions/lane-check/caller-names.mjs', needle: "join(root, 'package.json')", why: "Kanon's own manifest in lane-check's Kanon tree, read for the release that turns the caller-name warning into a failure: not the adopter's (#728)" },
   { file: 'cli/init.mjs', needle: "const pkg = read('package.json');", why: "`kanon init` suggests gates from what the repository holds, an npm project's scripts beside a Makefile's, Cargo's and Go's; the adopter accepts or edits the suggestion (plan 0005 §5.2)" },
   { file: 'cli/init.mjs', needle: "gates.push(s === 'test' ? 'npm test'", why: 'the same suggestion, only for a repository that has a package.json' },
   { file: 'rulebook/10-adoption.md', needle: 'may have no `package.json` to hold a version', why: "K-ADOPT-11's Why for the guard row: the reason a guard is not a package" },

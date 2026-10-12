@@ -1,5 +1,5 @@
 # A trigger-only caller of Kanon's implement-revise lane, as an adopter writes it.
-name: Implement — revise
+name: Implement (Implementer) — revise
 
 on:
   pull_request_review:
