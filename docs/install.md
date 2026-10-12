@@ -81,3 +81,9 @@ npx --yes --package github:yedeya-labs/kanon#v0.39.0 kanon apps --owner <owner> 
 <!-- x-release-please-end -->
 
 Every lane in [`docs/lanes.md`](lanes.md) ships at this version ([plan 0001](plans/0001-move-the-agent-lanes.md), steps 1 to 5). **Start with the review lane:** it is the first an adopter installs, because its App is what ends bootstrap (`K-ADOPT-6`), on a plan with rulesets (`K-ADOPT-3`). [`docs/lanes.md`](lanes.md#your-first-lane-the-reviewer) walks through it. The Explorer's sweep (explore), the dispatch sweep, the code audit and the optional Overseer reach their memory through the QA store contract ([`docs/qa-store.md`](qa-store.md)); the dispatch sweep reads run artifacts without a store. That completes the store-coupled lanes ([plan 0004](plans/0004-move-the-remaining-lanes.md)).
+
+## After merging
+
+The pull request that installs the review lane leaves the repository in bootstrap: the ruleset `kanon init` creates requires no approving review, because no Reviewer could give one yet (`K-ADOPT-6`). **What ends bootstrap is requiring one,** once that pull request has merged and the review lane runs on the default branch, so the Reviewer can approve there: switch on one required approving review in the default branch's ruleset, dismissed when a new commit is pushed (`K-MERGE-6`), and write the date under `## Bootstrap` in the adoption record, as `ended YYYY-MM-DD` (`K-LAYOUT-10`). On a private repository whose plan has no rulesets, it can't end (`K-ADOPT-3`).
+
+**[`kanon doctor`](doctor.md) reminds you.** Once the Judge App is installed and the review lane is on the default branch, it reports `ruleset.bootstrap-can-end` while the ruleset requires no approval, with the command that requires it. Once the adoption record says bootstrap ended, it fails a ruleset that stops requiring an approving review (`ruleset.approval-off`): bootstrap never returns.

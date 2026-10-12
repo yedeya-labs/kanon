@@ -232,7 +232,11 @@ describe('kanon doctor and the job behind a required check (#418)', () => {
     const r = await run(dir, github, ['--json']);
     expect(ids(r)).toEqual([]);
     expect(r.status).toBe(EXIT.incomplete);
-    expect(r.json.unchecked).toEqual([{ check: 'required-check', subject: 'Lane check', reason: expect.stringContaining("doesn't ask you to require it yet") }]);
+    // The review lane's caller is looked for there too, to tell whether bootstrap can end (#706).
+    expect(r.json.unchecked).toEqual([
+      { check: 'required-check', subject: 'Lane check', reason: expect.stringContaining("doesn't ask you to require it yet") },
+      { check: 'ruleset', subject: 'main', reason: expect.stringContaining('whether bootstrap can end') },
+    ]);
   });
 
   // #446: a job whose workflow filters pull_request runs on some pull requests only, and GitHub
