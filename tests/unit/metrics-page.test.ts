@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -188,6 +190,15 @@ describe('the command', () => {
   it('writes nothing and says why on a bad input, and names its usage', () => {
     expect(main([]).code).toBe(2);
     expect(main(['--page', '/nonexistent/page.json', '--health', '/nonexistent/h.json', '--commit', COMMIT, '--out', '/tmp/x.html']).code).toBe(2);
+  });
+  it('writes the page into a directory that does not exist yet, as on the first run', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metrics-page-'));
+    writeFileSync(join(dir, 'page.json'), JSON.stringify(pageOf()));
+    writeFileSync(join(dir, 'health.json'), JSON.stringify(health()));
+    const out = join(dir, 'docs', 'metrics', 'index.html');
+    const r = main(['--page', join(dir, 'page.json'), '--health', join(dir, 'health.json'), '--release', '0.39.0', '--commit', COMMIT, '--out', out]);
+    expect(r.code).toBe(0);
+    expect(readFileSync(out, 'utf8')).toBe(render());
   });
   it('reads the minimum samples it holds a page to from the report\'s own module', () => {
     expect(MINIMUM.median).toBe(10);
