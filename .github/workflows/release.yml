@@ -36,7 +36,8 @@
 # One optional pair of secrets, RELEASER_APP_ID and RELEASER_APP_PRIVATE_KEY: the Releaser App
 # (plan 0005 §3.1, decision 2; ADR 0013), mapped by name by a caller that has one. With them,
 # release-please opens the release PR as the Releaser, so CI runs on it (a PR opened with the
-# workflow token triggers no workflows, #49), and the ruleset's release bypass is the
+# workflow token triggers no workflows, #49), the major tag moves with the same token (so a tag
+# ruleset whose one bypass is the Releaser lets it through), and the ruleset's release bypass is the
 # Releaser's alone, never another App's. Without them, the workflow token, as before. No
 # lane declares these secrets, and this workflow declares no other.
 #
@@ -157,7 +158,8 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `started=${new Date().toISOString()}\n`);
 
       # THE RELEASER'S TOKEN, when the caller maps its secrets (plan 0005 §3.1). Narrowed to what
-      # release-please uses: it pushes the release branch and the tag, and opens the release PR.
+      # its two users need: release-please pushes the release branch and the tag and opens the
+      # release PR, and the major-tag step below moves `v<major>` (contents: write covers it).
       # A step `if:` can't read `secrets`, so the mint asks the job's `RELEASER_SET`.
       - name: Mint the Releaser's token
         id: releaser
@@ -222,10 +224,13 @@ jobs:
           }
           process.exit(1);
 
+      # The Releaser's token when one was minted, as release-please's step takes it: under a tag
+      # ruleset on `v*` whose one bypass is the Releaser (plan 0008), the workflow token can't move
+      # the major tag (plan 0009 S0). Else the workflow token, as before.
       - name: Move the major tag to the released commit
         if: steps.release.outputs.release_created == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.releaser.outputs.token || github.token }}
           REPO: ${{ github.repository }}
           MAJOR: ${{ steps.release.outputs.major }}
           SHA: ${{ steps.release.outputs.sha }}

@@ -201,7 +201,8 @@ describe('K-SHIP-7 the reusable release workflow', () => {
     expect(mint?.uses).toBe('actions/create-github-app-token@v3');
     expect(mint?.if).toBe("env.RELEASER_SET == 'true'");
     expect((jobs[0] as { env?: unknown } | undefined)?.env).toEqual({ RELEASER_SET: "${{ secrets.RELEASER_APP_ID != '' && 'true' || '' }}" });
-    // Narrowed to what release-please uses: the Releaser's whole grant, and no more.
+    // Narrowed to what its two users need, release-please and the major-tag step: the Releaser's
+    // whole grant, and no more. Narrowing contents below write would break the tag move.
     expect(mint?.with).toEqual({
       'client-id': '${{ secrets.RELEASER_APP_ID }}',
       'private-key': '${{ secrets.RELEASER_APP_PRIVATE_KEY }}',
@@ -258,6 +259,12 @@ describe('K-SHIP-7 the reusable release workflow', () => {
     expect(moveTag?.run).toContain('TAG="v$MAJOR"');
     expect(moveTag?.run).toContain('force=true');
     expect(moveTag?.env).toMatchObject({ TAG_NAME: '${{ steps.release.outputs.tag_name }}' });
+  });
+
+  it("moves the major tag with the Releaser's token when one was minted, as release-please's step does (plan 0009 S0)", () => {
+    const releaseStep = steps.find((s) => s.id === 'release');
+    expect(moveTag?.env?.GH_TOKEN).toBe('${{ steps.releaser.outputs.token || github.token }}');
+    expect(moveTag?.env?.GH_TOKEN).toBe(releaseStep?.with?.token);
   });
 
   // Plan 0009 S2: the major tag moves only on a plain vX.Y.Z, never on a candidate's tag or a

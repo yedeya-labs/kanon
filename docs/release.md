@@ -142,10 +142,10 @@ Made once, by an Owner:
 
 ## With the Releaser
 
-With the Releaser's secrets mapped, release-please pushes the release branch and opens the release PR with the Releaser's token instead of the workflow's. GitHub runs workflows for an App's pushes, so:
+With the Releaser's secrets mapped, release-please pushes the release branch and opens the release PR with the Releaser's token instead of the workflow's, and the step after it creates or moves the major tag (`v0`, `v1`, …) with the same token. GitHub runs workflows for an App's pushes, so:
 
 - **the release PR runs CI**, which the first limit below says it otherwise doesn't;
-- **the release tag triggers `on: push: tags` workflows**, which the last limit below says it otherwise doesn't;
+- **the release tag triggers `on: push: tags` workflows**, which the last limit below says it otherwise doesn't, **and so does the major tag** whenever a plain release moves it: a filter such as `v*` fires on both, and `v*.*.*` keeps it to the release tag;
 - **the release PR is the Releaser's, which plan 0005 makes the only release bypass actor** (`K-MERGE-8`, §3.1). Mapping the secrets doesn't move the bypass; the next section does.
 
 **The release PR passes the `dco` check.** Its commits are the Releaser's: created and signed by GitHub, with no sign-off, as `github-actions[bot]`'s are on the workflow's token. The [`dco` action](../actions/dco/README.md#exemptions) exempts them by the Releaser's App identity: the App register's `Releaser` row on your default branch, as the commit's GitHub account, with GitHub's own signature ([#337](https://github.com/yedeya-labs/kanon/issues/337)). So the Releaser needs its row in the register (`kanon apps` writes it), and your `dco` caller must pin a release that has the exemption. An earlier `dco` fails the release PR's commits on their missing sign-off.
