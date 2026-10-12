@@ -263,7 +263,8 @@ Resources:
   # The aggregate-only function (§6.1, decided by the Owner 2026-10-07, #443). It answers only
   # what may leave: cross-adopter cells with at least three non-declaring adopters, the own
   # figures of adopters that declared them publishable, and failure signals with a count of
-  # adopters affected. Its
+  # adopters affected; asked for its page view, the declaring adopters' work-item indicators
+  # (plan 0003 M7). Its
   # role may Query the table, and only with exactly the aggregate's projection: IAM refuses a
   # request that asks for any other attribute or leaves `Select` unnamed. About a cent a month.
   AggregateRole:
@@ -286,7 +287,8 @@ Resources:
                 Resource:
                   Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry
                 Condition:
-                  # The aggregate's PROJECTION (function/aggregate.mjs), and sk, the key's other half.
+                  # The aggregate's ATTRIBUTES (function/aggregate.mjs): its run PROJECTION and the
+                  # page view's WORK_PROJECTION (plan 0003 M7), and sk, the key's other half.
                   ForAllValues:StringEquals:
                     dynamodb:Attributes:
                       - pk
@@ -303,6 +305,20 @@ Resources:
                       - failed_stage
                       - kanon_error
                       - kanon_version
+                      - pr_number
+                      - issue_number
+                      - closed_at
+                      - fate
+                      - closing_issues
+                      - changed_lines
+                      - changed_files
+                      - changed_dirs
+                      - author_kind
+                      - revert_days
+                      - first_fix_days
+                      - first_verdict
+                      - human_commits
+                      - human_cr_after_approval
                   # Not IfExists: a request without `Select` would read whole items, so it is refused.
                   StringEquals:
                     dynamodb:Select: SPECIFIC_ATTRIBUTES

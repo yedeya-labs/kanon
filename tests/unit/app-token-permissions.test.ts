@@ -55,6 +55,9 @@ const DIRECT: Record<string, { step: string; perms: Perms }> = {
   // The telemetry Explorer's agent reads the tree and searches issues, to deduplicate, and
   // files nothing (plan 0004 step 14): its filing token is `MORE`'s.
   'agent-explore-telemetry.yml': { step: 'app-token', perms: { contents: 'read', issues: 'read' } },
+  // Kanon's own, not a lane: the metrics page's refresh pushes its branch and opens the pull
+  // request as the Author App, after the page is rendered (plan 0003 M7, kanon#661).
+  'metrics-page.yml': { step: 'app-token', perms: { contents: 'write', 'pull-requests': 'write' } },
 };
 /** A lane's second minting step, keyed `<lane>#<step id>`. */
 const MORE: Record<string, Perms> = {

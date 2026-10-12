@@ -22,11 +22,11 @@
 // hold", never a win.
 
 import { DELIVERY_LANES, ESCAPE_DAYS, MINIMUM, WINDOW_DAYS, cellText, cohortOf, dollars, escapedWithin, isCount, measure, mixText, notEnough, percent, pooledHeadline, prepareRows, round, yieldRatio } from './report.mjs';
+import { TREND_WINDOWS, byVersionOf, compareVersions, trendOf } from './indicators.mjs';
 import { fitPeriodEffect } from '../lib/token-trend.mjs';
 import { bootstrapDifference, newcombe } from './stats.mjs';
 
-/** The trend's windows, by default: six of 28 days, about half a year. */
-export const TREND_WINDOWS = 6;
+export { TREND_WINDOWS, compareVersions };
 
 /** Decision 11's quality margins for the A/B view, as differences new minus old (§6.1). */
 export const AB_MARGINS = Object.freeze({ yield: -0.05, escape30: 0.02 });
@@ -42,20 +42,6 @@ export const AB_VERDICTS = Object.freeze({
 const DAY_MS = 86_400_000;
 const date = (/** @type {number} */ t) => new Date(t).toISOString().slice(0, 10);
 
-/**
- * Kanon versions in release order, `dev` last.
- * @param {string} a @param {string} b
- */
-export function compareVersions(a, b) {
-  if (a === b) return 0;
-  if (a === 'dev') return 1;
-  if (b === 'dev') return -1;
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let k = 0; k < 3; k += 1) if ((pa[k] ?? 0) !== (pb[k] ?? 0)) return (pa[k] ?? 0) - (pb[k] ?? 0);
-  return 0;
-}
-
 /** @typedef {import('./report.mjs').RunRow} RunRow @typedef {import('./report.mjs').ItemRow} ItemRow */
 
 /**
@@ -68,52 +54,8 @@ export function metricsViews(rows, { until, days = WINDOW_DAYS, windows = TREND_
   const end = until.getTime();
   const width = days * DAY_MS;
   const start = end - windows * width;
-  const inSpan = (/** @type {number} */ t) => t >= start && t < end;
-  const version = (/** @type {Record<string, unknown>} */ r) => (typeof r.kanon_version === 'string' ? r.kanon_version : null);
-
-  // ── The trend ──────────────────────────────────────────────────────────────────────────────
-  // A version's boundary is the window its first item closed in; the earliest versioned item's
-  // window marks none, since nothing came before it.
-  /** @type {Map<string, number>} */
-  const firstClosed = new Map();
-  for (const item of ctx.items) {
-    const v = version(item);
-    const t = Date.parse(item.closed_at);
-    if (v !== null && !(t >= (firstClosed.get(v) ?? Infinity))) firstClosed.set(v, t);
-  }
-  const earliest = Math.min(...firstClosed.values());
-  const trend = Array.from({ length: windows }, (_, k) => {
-    const s = start + k * width;
-    const e = s + width;
-    return {
-      window: { from: date(s), until: date(e), days },
-      ...pooledHeadline(measure(ctx, { start: s, end: e })),
-      versionsIntroduced: [...firstClosed].filter(([, t]) => t >= s && t < e && earliest < s).map(([v]) => v).sort(compareVersions),
-    };
-  });
-
-  // ── By Kanon version ───────────────────────────────────────────────────────────────────────
-  // An item's version is the one its lanes pinned at its merge (§3.3); a group of runs that joins
-  // no item takes its last run's.
-  const mergedInSpan = ctx.items.filter((i) => i.fate === 'merged' && inSpan(Date.parse(i.closed_at)));
-  /** @type {Map<string, number>} */
-  const counts = new Map();
-  for (const item of mergedInSpan) {
-    const v = version(item);
-    if (v !== null) counts.set(v, (counts.get(v) ?? 0) + 1);
-  }
-  const lastRun = (/** @type {readonly RunRow[]} */ rs) => rs.reduce((a, b) => (a.recorded_at >= b.recorded_at ? a : b));
-  const ordered = [...counts.keys()].sort(compareVersions);
-  const byVersion = {
-    minimum: MINIMUM.median,
-    versions: ordered.filter((v) => /** @type {number} */ (counts.get(v)) >= MINIMUM.median).map((v) => ({
-      version: v,
-      items: /** @type {number} */ (counts.get(v)),
-      ...pooledHeadline(measure(ctx, { start, end, keepItem: (i) => version(i) === v, keepRuns: (rs) => version(lastRun(rs)) === v })),
-    })),
-    fewer: ordered.filter((v) => /** @type {number} */ (counts.get(v)) < MINIMUM.median).map((v) => ({ version: v, items: /** @type {number} */ (counts.get(v)) })),
-    unversioned: mergedInSpan.filter((i) => version(i) === null).length,
-  };
+  const trend = trendOf(ctx, { end, days, windows });
+  const byVersion = byVersionOf(ctx, { start, end });
 
   return {
     span: { from: date(start), until: date(end), windows, days },

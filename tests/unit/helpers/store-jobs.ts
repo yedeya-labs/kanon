@@ -391,7 +391,29 @@ const TEMP_PATH = /^\$\{\{\s*runner\.temp\s*\}\}(?:\/(?!\.\.?(?:\/|$))[\w.-]+)+$
  * keeps the set to this job.
  */
 export function isAggregateJob(file: string | undefined, name: string, j: Job): boolean {
-  if (file !== AGGREGATE_FILE || name !== AGGREGATE_JOB || !only(j, STORE_JOB_KEYS)) return false;
+  return file === AGGREGATE_FILE && name === AGGREGATE_JOB && isAggregateShape(j, AGGREGATE_READ_RUN);
+}
+
+/** The public metrics page's refresh (plan 0003 M7, kanon#661), the other holder that calls the aggregate function. */
+export const METRICS_PAGE_FILE = 'metrics-page.yml';
+const METRICS_PAGE_READ_RUN = 'node "$KANON/scripts/aggregate-read.mjs" page';
+
+/**
+ * The metrics page's `aggregate` job (plan 0003 M7, kanon#661): `aggregate` in
+ * `metrics-page.yml`, in the telemetry Explorer's read job's exact shape, but reading the
+ * function's page view (`aggregate-read.mjs page`). The page itself is rendered and proposed by
+ * another job of the workflow, which holds no `id-token`.
+ */
+export function isMetricsPageJob(file: string | undefined, name: string, j: Job): boolean {
+  return file === METRICS_PAGE_FILE && name === AGGREGATE_JOB && isAggregateShape(j, METRICS_PAGE_READ_RUN);
+}
+
+/**
+ * A job that reads the aggregate function and nothing else: Kanon's path, the mask, the
+ * invoker role's credentials, the read script as `readRun` runs it, and the upload of its answer.
+ */
+function isAggregateShape(j: Job, readRun: string): boolean {
+  if (!only(j, STORE_JOB_KEYS)) return false;
   if (JSON.stringify(j.permissions) !== JSON.stringify({ 'id-token': 'write' })) return false;
   const steps = (j.steps ?? []) as Array<Record<string, unknown>>;
   if (steps.length !== 5) return false;
@@ -403,7 +425,7 @@ export function isAggregateJob(file: string | undefined, name: string, j: Job): 
     && only(creds, ['uses', 'with']) && CREDENTIALS.test(String(creds.uses))
     && only(creds.with as object, ['role-to-assume', 'aws-region', 'role-session-name'])
     && (creds.with as Record<string, unknown>)['role-to-assume'] === AGGREGATE_ROLE
-    && only(read, ['name', 'id', 'env', 'run']) && String(read.run).trim() === AGGREGATE_READ_RUN
+    && only(read, ['name', 'id', 'env', 'run']) && String(read.run).trim() === readRun
     && only(read.env as object, AGGREGATE_READ_ENV)
     && only(upload, ['name', 'id', 'uses', 'with']) && UPLOAD.test(String(upload.uses))
     && only(w, ['name', 'path', 'retention-days', 'if-no-files-found'])
@@ -485,6 +507,7 @@ export const ID_TOKEN_HOLDERS: IdTokenHolder[] = [
   { is: isCollectorJob, says: 'the telemetry collector job', cited: '`collect`' },
   { is: isAggregateJob, says: 'the aggregate read job', cited: '`aggregate`' },
   { is: isOverseerTelemetryJob, says: 'the Overseer telemetry read job', cited: '`telemetry`' },
+  { is: isMetricsPageJob, says: 'the metrics page read job', cited: '`metrics-page.yml`' },
 ];
 
 /**

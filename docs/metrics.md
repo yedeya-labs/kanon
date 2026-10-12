@@ -162,3 +162,31 @@ kanon metrics report --rows runs-and-items.json --windows 12           # a trend
 | `bootstrap` | object | `resamples` and `seed`. |
 
 `cells` holds `S`, `M`, `L`, `XL` in the banded view only, `pooled` always with its `bandMix`, and, for yield, `noPr`. Each estimate is `{ "status": "ok", "n", "value", "low", "high" }`, `{ "status": "not-enough-data", "n", "minimum" }` or, for a yield with no spend, `{ "status": "no-spend", "n" }`. Dollars and shares are rounded to four decimals.
+
+## The public metrics page
+
+Plan 0003 M7 ([#661](https://github.com/yedeya-labs/kanon/issues/661)), §6 option A as the Owner amended it on 2026-10-11: a static page on GitHub Pages, served from Kanon's own repository at `docs/metrics/index.html`. It shows the headline, trend and Kanon-version views of each project that declared its figures publishable, Kanon's health as counts and distributions, and how each number is made (§6.3).
+
+**Measured on Kanon's own projects.** Until three adopters declare their figures, every project on the page is one the Owner runs: Kanon and the operator's second repository, which is published under a neutral label and never named or linked. The page's section of figures says so under the generated heading "Measured on Kanon's own projects", with how many projects that is. Each project is shown alone; no figure combines projects. Until then, set `publish_own_figures_as` only on the Owner's own projects' register entries, each with a label that names no repository, organisation or person ([The aggregate function](telemetry.md#the-aggregate-function)).
+
+**How it is refreshed.** `.github/workflows/metrics-page.yml`, weekly on Monday at 07:15 UTC or by dispatch, on the default branch:
+
+1. its `aggregate` job assumes the aggregate-invoker role and reads the function's [page view](telemetry.md#the-page-view) with `scripts/aggregate-read.mjs page`, which refuses anything but the view's keys, codes, dates, versions and numbers;
+2. its `page` job reads Kanon's health with `scripts/telemetry/kanon-health.mjs --json` and renders the page with `.github/scripts/metrics-page.mjs`;
+3. when the page changed, it commits it as the Author App, with the delegate's sign-off, to the branch `kanon/metrics-page` and opens a pull request (or updates the open one). The Owner reads the figures and merges it; nothing is published before the merge.
+
+**What the generator refuses.** It writes no page:
+- whose section of figures from fewer than three adopters lacks the generated heading, or doesn't say how many projects it is and that Kanon's Owner runs all of them (§6.3's generator test, in `tests/unit/metrics-page.test.ts`), or that has a table of figures outside such a section;
+- with an estimate from fewer items than its minimum (§2.1), or from an answer computed with other minimums than the release's;
+- that holds an `@`, a bot login, a GitHub URL, a function URL, an ARN or a twelve-digit account id;
+- from a health document of another schema, or naming a rule the rulebook doesn't have.
+
+**Turning Pages on, once.** In the repository's settings, under **Pages**, set **Source** to **Deploy from a branch**, the branch to `main` and the folder to `/docs`. The page is then at `/metrics/` under the Pages address. `docs/.nojekyll` makes Pages serve the folder as it is, without Jekyll, which would otherwise read the `${{ }}` in the docs as Liquid.
+
+**Reproduce a page.** With the invoker role's credentials:
+
+```sh
+OUT=. KANON_AGGREGATE_URL=<the function URL> node "$KANON/scripts/aggregate-read.mjs" page
+node scripts/telemetry/kanon-health.mjs --json > health.json
+node .github/scripts/metrics-page.mjs --page page.json --health health.json --release <x.y.z> --commit <sha> --out docs/metrics/index.html
+```
