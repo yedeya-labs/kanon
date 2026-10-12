@@ -1,5 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { STORE_SECRETS, STORE_SECRETS_WITH, storeLaneProblems, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 import { handedIn, mintFor, readFlattened, workflowText } from './helpers/called-workflow.js';
@@ -122,7 +125,70 @@ describe('what the agent is told', () => {
     expect(prompt).toMatch(/unless `git log` shows they changed since/);
     expect(byId('checkout').with).toEqual({ 'persist-credentials': false, 'fetch-depth': 0, filter: 'blob:none' });
     expect(prompt).toMatch(/full commit history without older file contents/);
-    expect(prompt).toMatch(/never `-p` or\n`--stat`/);
+    expect(prompt).toMatch(/Never use\s+those forms/);
+  });
+
+  describe('every `git log` form the prompt names works on a blobless clone of a private repository (#560)', () => {
+    // A blobless clone whose promisor remote can't be reached: what the checkout is on a
+    // private repository, with no persisted credential to fetch an older file's contents.
+    // The history moves a file and edits it in one commit, which rename detection can only
+    // match by comparing contents.
+    let clone = '';
+    const dirs: string[] = [];
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    beforeAll(() => {
+      const root = mkdtempSync(join(tmpdir(), 'audit-blobless-'));
+      const src = join(root, 'src');
+      mkdirSync(join(src, 'area'), { recursive: true });
+      git(src, 'init', '-q');
+      git(src, 'config', 'user.email', 't@example.com');
+      git(src, 'config', 'user.name', 't');
+      git(src, 'config', 'uploadpack.allowFilter', 'true');
+      const lines = Array.from({ length: 50 }, (_, i) => `line ${i} of the file`).join('\n');
+      writeFileSync(join(src, 'area', 'a.txt'), `${lines}\n`);
+      git(src, 'add', '.');
+      git(src, 'commit', '-qm', 'one');
+      git(src, 'mv', 'area/a.txt', 'area/b.txt');
+      writeFileSync(join(src, 'area', 'b.txt'), `${lines}\nmoved and edited\n`);
+      git(src, 'commit', '-qam', 'move and edit');
+      writeFileSync(join(src, 'area', 'b.txt'), `${lines}\nmoved and edited\nagain\n`);
+      git(src, 'commit', '-qam', 'edit');
+      clone = join(root, 'clone');
+      git(root, 'clone', '-q', '--filter=blob:none', `file://${src}`, clone);
+      git(clone, 'remote', 'set-url', 'origin', `file://${join(root, 'unreachable')}`);
+      dirs.push(root);
+    });
+    afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+    const runs = (args: string[]) => { try { git(clone, ...args); return true; } catch { return false; } };
+
+    // What the prompt says to rank with, and the forms it says never to use, read from it.
+    const safe = prompt.match(/Rank\s+with `git log ([^`]+)`, adding a path, ([^.]+)\./);
+    const never = prompt.match(/as ((?:`[^`]+`[,\s]*(?:and\s+)?)+)always\s+compare\s+contents/);
+    const flags = (s: string) => [...s.matchAll(/`([^`]+)`/g)].map((m) => m[1]!);
+    const VALUES: Record<string, string> = { '--since': '--since=10.years.ago', '--format': '--format=%h' };
+
+    it('the prompt names a base form and the flags to add to it', () => {
+      expect(safe?.[1]).toBe('--no-renames');
+      expect(flags(safe?.[2] ?? '')).toEqual(['--since', '--name-only', '--format']);
+      expect(flags(never?.[1] ?? '')).toEqual(['-p', '--stat', '--follow']);
+    });
+
+    it('each named form, alone, with a path and all together, succeeds', () => {
+      const base = safe![1]!.split(' ');
+      const added = flags(safe![2]!).map((f) => VALUES[f] ?? f);
+      for (const f of added) {
+        expect(runs(['log', ...base, f]), `git log ${base.join(' ')} ${f}`).toBe(true);
+        expect(runs(['log', ...base, f, '--', 'area']), `git log ${base.join(' ')} ${f} -- area`).toBe(true);
+      }
+      expect(runs(['log', ...base, '--', 'area'])).toBe(true);
+      expect(runs(['log', ...base, ...added, '--', 'area'])).toBe(true);
+    });
+
+    it('the fixture reproduces the failure: without `--no-renames`, and with each form the prompt forbids, git log fails', () => {
+      expect(runs(['-c', 'diff.renames=true', 'log', '--name-only', '--', 'area'])).toBe(false);
+      for (const f of flags(never![1]!)) expect(runs(['log', f, '--', 'area/b.txt']), `git log ${f}`).toBe(false);
+    });
   });
 
   it('reads its areas from the stack document, through a step that fails by name before the token is minted', () => {

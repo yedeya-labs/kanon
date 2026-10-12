@@ -57,12 +57,14 @@ jobs:
       # THE WHOLE COMMIT HISTORY, WITHOUT ITS FILE CONTENTS (#544). The prompt ranks areas by
       # `git log` (what changed since the ledger last read an area, or since no audit read it),
       # which a one-commit checkout can't answer. A blobless clone (`filter: blob:none`) brings
-      # every commit and tree, so `git log` with a path, `--name-only` or `--format` works over the
-      # full history at a fraction of a full clone's cost, and at the same depth on every trigger,
-      # so the ledger's "changed since" means one thing across runs. Only the checked-out
-      # commit's file contents are fetched; with no persisted credential a command that needs an
-      # older file's contents (`-p`, `--stat`) fails rather than fetching it, so the prompt says
-      # which forms to use.
+      # every commit and tree, so `git log --no-renames` with a path, `--name-only` or `--format`
+      # works over the full history at a fraction of a full clone's cost, and at the same depth on
+      # every trigger, so the ledger's "changed since" means one thing across runs. Only the
+      # checked-out commit's file contents are fetched. A command that needs an older file's
+      # contents (`-p`, `--stat`, `--follow`, or `--name-only` without `--no-renames`, whose
+      # rename detection compares a moved and edited file's contents, #560) fetches it from the
+      # remote: on a private repository, with no persisted credential, that fails; on a public one
+      # it fetches each file, slowly. So the prompt says which forms to use.
       - uses: actions/checkout@v7
         id: checkout
         with:
@@ -197,9 +199,13 @@ jobs:
             PREFER areas the ledger shows read least recently, or never, over re-reading
             the ones read last, unless `git log` shows they changed since. Coverage must
             widen monotonically across runs, not oscillate over the same surface.
-            The checkout holds the full commit history without older file contents: use
-            `git log` with a path, `--since`, `--name-only` or `--format`, never `-p` or
-            `--stat`, which need those contents and fail here.
+            The checkout holds the full commit history without older file contents.
+            Rank with `git log --no-renames`, adding a path, `--since`, `--name-only` or
+            `--format`. Without `--no-renames`, `git log` compares the contents of a file
+            moved and edited in one commit, as `-p`, `--stat` and `--follow` always
+            compare contents: on a private repository the checkout can't fetch them and
+            the command fails, and on a public one it fetches each file, slowly. Never use
+            those forms.
 
             GATE A: file a bug ONLY on an OBJECTIVE contradiction (never a subjective
             "this looks off" or a style nit; those are a `spec-delta` or nothing):
