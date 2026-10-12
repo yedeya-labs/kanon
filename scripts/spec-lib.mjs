@@ -366,14 +366,37 @@ export function loadRenumbered(path = REGISTRY) {
  *  adopter declares (#728) is matched as the whole rest of the specifier, so `scripts/gate.mjs`
  *  isn't `scripts/gate.mjsx`.
  *
+ *  A FILE IS MATCHED BY EVERY SPECIFIER THAT RESOLVES TO IT (kanon#745). The import read here is
+ *  an ECMAScript one, and in that module system a file is imported by its own path, by its path
+ *  without the extension (bundler resolution), and a TypeScript source by its emitted extension
+ *  (NodeNext: `gate.ts` as `gate.js`, `gate.tsx` as `gate.jsx` or `gate.js`, `gate.mts` as
+ *  `gate.mjs`, `gate.cts` as `gate.cjs`). Matching only the exact path made a test of a declared
+ *  `gate.ts` that imports `gate.js` count its fixture ids as coverage. Each form is still the whole
+ *  rest of the specifier, so no sibling file matches. Reading a non-tooling test as tooling only
+ *  leaves its ids uncounted, which reads as "unverified", never as a false "passed".
+ *
  *  @param {string[]} pipelineDirs the declared pipeline-code entries: directories ending in
  *  `/`, and single files
  *  @returns {RegExp} */
 export function qaToolingImport(pipelineDirs) {
   if (!Array.isArray(pipelineDirs)) throw new TypeError('qaToolingImport needs the declared pipeline-code directories (K-LAYOUT-8)');
   const escape = (d) => d.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-  const dirs = ['.kanon/scripts/', ...pipelineDirs].map((d) => (d.endsWith('/') ? `${escape(d)}[^'"]*` : escape(d))).join('|');
+  const dirs = ['.kanon/scripts/', ...pipelineDirs].map((d) => (d.endsWith('/') ? `${escape(d)}[^'"]*` : importedAs(d).map(escape).join('|'))).join('|');
   return new RegExp(`(?:from\\s+|import\\w*\\s*\\(\\s*)['"](?:[^'"]*/)?(?:${dirs})['"]`);
+}
+
+/** The TypeScript source extensions, each with the emitted ones a specifier names it by. */
+const EMITTED = { '.ts': ['.js'], '.tsx': ['.jsx', '.js'], '.mts': ['.mjs'], '.cts': ['.cjs'] };
+
+/** The specifiers that resolve to a declared pipeline-code file (`qaToolingImport`): the path
+ *  itself, the path without its extension, and a TypeScript source's emitted forms.
+ *  @param {string} file
+ *  @returns {string[]} */
+function importedAs(file) {
+  const m = /^(.*\/)?([^/]+?)(\.[^./]+)$/.exec(file);
+  if (!m) return [file];
+  const stem = `${m[1] ?? ''}${m[2]}`;
+  return [file, stem, ...(Object.hasOwn(EMITTED, m[3]) ? EMITTED[m[3]] : []).map((ext) => stem + ext)];
 }
 
 /** The tree an `[AREA-N]` reference outside the specs can live in beside the code areas: the

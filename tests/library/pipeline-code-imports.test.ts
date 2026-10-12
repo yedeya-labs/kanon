@@ -72,6 +72,39 @@ describe('qaToolingImport reads the declared pipeline-code directories', () => {
     expect(readsCodeComments('tests/unit/a.test.ts', text, ['scripts/pipeline/'], UNDECLARED)).toBe(true);
   });
 
+  // kanon#745: a declared file is imported by whatever specifier resolves to it. A TypeScript
+  // module is imported by its emitted extension (NodeNext) or by none (bundler resolution).
+  it('matches a declared file however its specifier resolves to it, and no sibling file', () => {
+    const tooling = (file: string, specifier: string) => qaToolingImport([file]).test(STATIC(`../scripts/${specifier}`));
+    for (const [file, specifiers] of [
+      ['scripts/gate.ts', ['gate.ts', 'gate.js', 'gate']],
+      ['scripts/gate.tsx', ['gate.tsx', 'gate.jsx', 'gate.js', 'gate']],
+      ['scripts/gate.mts', ['gate.mts', 'gate.mjs', 'gate']],
+      ['scripts/gate.cts', ['gate.cts', 'gate.cjs', 'gate']],
+      ['scripts/gate.mjs', ['gate.mjs', 'gate']],
+      ['scripts/gate.config.ts', ['gate.config.ts', 'gate.config.js', 'gate.config']],
+      ['scripts/gate', ['gate']],
+    ] as const) for (const s of specifiers) expect(tooling(file, s), `${file} by ${s}`).toBe(true);
+    for (const [file, specifiers] of [
+      ['scripts/gate.ts', ['gate.tsx', 'gate.jsx', 'gate.mjs', 'gate.json', 'gate.js.map', 'gate.d', 'gatekeeper', 'gate/index.js', 'xgate.js']],
+      ['scripts/gate.mjs', ['gate.mjsx', 'gate.mjs.bak', 'gate.js', 'gate.mts']],
+      ['scripts/gate.js', ['gate.ts', 'gate.jsx']],
+      ['scripts/gate', ['gate.js', 'gate.ts']],
+      ['scripts/gate.config.ts', ['gate.js', 'gate']],
+    ] as const) for (const s of specifiers) expect(tooling(file, s), `${file} by ${s}`).toBe(false);
+    expect(qaToolingImport(['scripts/gate.ts']).test(STATIC('../xscripts/gate.js'))).toBe(false);
+  });
+
+  it("citation-shift and the reference corpus read a test that imports a declared .ts file by its .js specifier as a tooling test", () => {
+    const text = STATIC('../../scripts/gate.js');
+    expect(readsCodeComments('tests/unit/a.test.ts', text, ['scripts/gate.ts'], UNDECLARED)).toBe(false);
+    expect(readsCodeComments('tests/unit/a.test.ts', text, ['scripts/other.ts'], UNDECLARED)).toBe(true);
+    const dir = adopter(null);
+    writeFileSync(join(dir, 'tests/tool.test.ts'), `${STATIC('../scripts/gate')}// [STORE-102] is a fixture here\n`);
+    expect(referenceCorpus(dir, ['scripts/gate.ts'])).not.toContain('tests/tool.test.ts');
+    expect(referenceCorpus(dir, ['scripts/other.ts'])).toContain('tests/tool.test.ts');
+  });
+
   it('referenceCorpus leaves out a test that imports declared pipeline code, and only that', () => {
     const dir = adopter(null);
     expect(referenceCorpus(dir, ['tools/pipeline/'])).not.toContain('tests/tool.test.ts');
