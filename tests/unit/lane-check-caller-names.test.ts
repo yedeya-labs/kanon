@@ -92,8 +92,23 @@ describe('the fixed caller names and job ids (kanon#728)', () => {
     expect(failsAt('', '0.41.0')).toBe(false);
   });
 
-  it('is a version after the one Kanon is at, so this release warns', () => {
-    expect(failsAt(kanonVersion(ROOT))).toBe(false);
+  // Independent of the checkout's own version, which release-please bumps on a release pull
+  // request that can't be edited: the docs name the switch, and the cases below run at a fixed
+  // version on each side of it.
+  it('is the version docs/lanes.md and the action\'s README name, after the warning release', () => {
+    expect(failsAt(BEFORE)).toBe(false);
+    const lanes = readFileSync(join(ROOT, 'docs/lanes.md'), 'utf8');
+    expect(lanes).toContain(`and from Kanon ${FAILS_FROM} it fails. Rename them before you move your pin to ${FAILS_FROM}.`);
+    expect(readFileSync(join(ROOT, 'actions/lane-check/README.md'), 'utf8')).toContain(`a \`::warning\` until Kanon ${FAILS_FROM}, its \`FAILS_FROM\``);
+  });
+
+  it('reads the Kanon version from the tree\'s package.json, and none from a tree without one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kanon-version-'));
+    try {
+      expect(kanonVersion(dir)).toBe('');
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ version: '9.8.7' }));
+      expect(kanonVersion(dir)).toBe('9.8.7');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
 
@@ -125,7 +140,7 @@ laneCheck(() => {
     };
 
     it('passes the three callers under their fixed names with no warning', () => {
-      const r = run(() => {});
+      const r = run(() => {}, { KANON_ROOT: kanonAt(BEFORE) });
       expect(r.status, r.out).toBe(0);
       expect(r.out).toContain('6 lane caller(s) pass');
       expect(r.out).not.toContain('::warning');
@@ -139,8 +154,8 @@ laneCheck(() => {
       ['the revise job\'s id', (t) => t.edit(IMPL, (d) => { const c = d as Caller; c.jobs = { other: c.jobs.revise! }; }), 'agent-implement-revise.yml,title=lane-check::its job must have the id `revise`, not `other`'],
       ['the reconcile job\'s id', (t) => t.edit(RECONCILE, (d) => { const c = d as Caller; c.jobs = { other: c.jobs.reconcile! }; }), 'agent-merge-reconcile.yml,title=lane-check::its job must have the id `reconcile`, not `other`'],
     ];
-    it.each(cases)('warns on %s in this release, and passes', (_what, change, message) => {
-      const r = run(change);
+    it.each(cases)('warns on %s before FAILS_FROM, and passes', (_what, change, message) => {
+      const r = run(change, { KANON_ROOT: kanonAt(BEFORE) });
       expect(r.status, r.out).toBe(0);
       expect(r.out).toContain(`::warning file=.github/workflows/${message}`);
       expect(r.out).toContain(`a warning until Kanon ${FAILS_FROM}`);
