@@ -1,0 +1,357 @@
+# Plan 0009: weekly and stable release channels, and the API key as a first-class choice
+
+- **Status:** proposed 2026-10-12. Nothing in it is built. The Owner decided both directions on 2026-10-07, in the issues it tracks; the mechanisms, and thirteen questions listed under [Decisions left open](#decisions-left-open) with a proposed default each, are the Owner's to decide on this plan.
+- **Tracks:** [#575](https://github.com/yedeya-labs/kanon/issues/575) (release weekly, with a stable channel adopters can follow) and [#579](https://github.com/yedeya-labs/kanon/issues/579) (run the lanes on an Anthropic API key as a first-class choice, with doctor checks). The two halves share nothing but `lane-check`, `kanon doctor` and the two skills, and can be decided and built apart ([§16](#16-order-of-moves)).
+- **Builds on:** [plan 0005](0005-lean-installation.md) (the Releaser App, the pins, `kanon init`, `kanon doctor` and the skills), [plan 0007](0007-guided-install.md) (the guided install: three questions, one summary, the runbook), [plan 0003](0003-metrics.md) (the cost basis, decision 1) and [plan 0008](0008-self-service-registration.md) (the telemetry token's release check, which a candidate tag must pass, [§6](#6-what-kanon-itself-follows)). **Amends, once built:** `K-ADOPT-11` (what an exact version is, and its stale "Enforced by"), `K-SHIP-7` (a declared release cadence), [ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md) (what Kanon's own callers pin, and what its lanes are billed on), the rulebook's `## Billing` section in `rulebook/08-observability-and-cost.md`, plan 0007's runbook step R5, and plan 0008's check of `job_workflow_ref`. **Governed by:** [ADR 0002](../decisions/0002-standardise-dont-parameterise.md) (no new inputs where data already says it), [ADR 0004](../decisions/0004-disputed-rules.md) §5 (how an adopter pays is not a Kanon rule), [ADR 0014](../decisions/0014-adopter-audiences.md) (the skills drive the commands through their JSON), `K-ADOPT-11`, `K-ADOPT-12`, `K-AGENT-49` (no job that runs an agent holds an App key), `K-OBS-12` (every run has a dollar ceiling), `K-OBS-16` (telemetry is metadata), and `K-SELF-7` (every guard can fail, and is mutation-checked).
+- **Measured on** Kanon's `origin/main` at `401eabb` (v0.39.0 plus 21 commits): `.github/workflows/release.yml`, `release-please.yml`, `release-please-config.json`, `.github/dependabot.yml`, `docs/release.md`, `actions/lane-check/lane-check.mjs`, `cli/doctor.mjs`, `cli/init.mjs`, `skills/upgrade/SKILL.md`, `actions/agent-run/action.yml`, `actions/agent-classify/classify-agent-result.mjs`, `actions/agent-telemetry/schema.mjs`, `requirements.json`, `docs/lanes.md`, `docs/metrics.md`, the rulebook's chapters 06, 08 and 10, and `CHANGELOG.md`. Kanon's release list was read with `gh release list` on 2026-10-12. Outside Kanon, read on 2026-10-12: `anthropics/claude-code-action`'s `action.yml` at `v1.0.244`, the release Kanon pins in `actions/agent-run`, and release-please's configuration schema on its default branch. **Not run:** Dependabot's handling of a candidate tag, release-please's handling of a changed tag form, the shape of the two Claude credentials, the CLI's precedence when both are set, and every cost figure per reviewed pull request or implemented issue. Each is marked where it is used, and each has a step that runs it first ([§16](#16-order-of-moves), S0 and A0).
+
+## The plan in one paragraph
+
+**Today.** Kanon cut 47 releases between 2026-09-30 and 2026-10-11, 15 of them on one day, and 9 of the 47 changelog entries carry a breaking change. Every adopter pins one exact release, which `lane-check` holds and `kanon doctor` reads, and Dependabot proposes each new release the day it is tagged, with Kanon exempted from its cooldown. So every release reaches every adopter at once, including the ones Kanon itself has run for an hour. Since 2026-10-07 the Owner holds the release pull request open between release days by hand. On the other side, every lane that runs a model takes exactly one Claude credential, the subscription's OAuth token, `CLAUDE_CODE_OAUTH_TOKEN`; nothing in Kanon passes an API key to the agent, although the rulebook says Kanon works on API billing, and `kanon doctor` checks only that the token's secret exists.
+
+**Where it ends.**
+- **Releases are cut weekly, as candidates.** The release pull request merges once a week, on a fixed day, and tags a **candidate**, `candidate-vX.Y.Z`, a GitHub pre-release. Kanon's own callers move to it the same day, so Kanon runs every candidate first.
+- **A candidate becomes stable when it has earned it,** and only then gets the tag adopters see, `vX.Y.Z`, on the same commit: after at least three days as Kanon's own pin, with no revert of its changes, no serious bug traced to it, and no unexplained red run of Kanon's own lanes. The promotion moves the major tag, `v0`, too.
+- **Adopters follow stable by doing what they do today.** They still pin an exact `vX.Y.Z`, and their Dependabot entry is unchanged: it sees only stable tags, so it proposes only stable releases. `K-ADOPT-11`'s exact pin survives, honestly: no adopter's build changes without a pull request its own CI tests. An adopter that wants to run ahead may pin a candidate, which `lane-check` accepts and `kanon doctor` notes.
+- **The lanes run on either credential,** chosen once at install and shown in the summary: the subscription's OAuth token or an Anthropic API key, `ANTHROPIC_API_KEY`. Each caller maps exactly one, `lane-check` holds that, and `agent-run` checks it again at run time, without printing either.
+- **`kanon doctor` checks the credential**: the one the callers map is present, the token is not near or past its year, and recent runs don't show the subscription's cap. Run rows record which credential billed them, so an API-key adopter's cost reads as what it was billed at list price.
+
+**How it gets there.** Two tracks. **Releases:** probe release-please and Dependabot on a sandbox first, because the default mechanism rests on two behaviours no document here confirms; then `lane-check` and `doctor` learn the candidate form in a stable release, before Kanon cuts its first candidate; then the promotion workflow; then the skills and the docs. **The API key:** probe the credentials' shapes; then `agent-run`; then every lane's mapping in one change, held by the existing isolation test; then `lane-check`, `doctor`, `init` and the skills; then the telemetry field and the cost docs.
+
+## Part A: releases ([#575](https://github.com/yedeya-labs/kanon/issues/575))
+
+## 1. Today, measured
+
+| What | Today | Source |
+|---|---|---|
+| Release count | 47 releases from 2026-09-30 to 2026-10-11: 4, 1, 15, 5, 6, 2, 6, 6, 1 and 1 a day; none on 2026-10-09 or 2026-10-10 | `gh release list --repo yedeya-labs/kanon`, 2026-10-12 |
+| Breaking changes | 9 of the 47 entries in `CHANGELOG.md` carry a breaking-change marker, about one in five, as #575 says | `CHANGELOG.md` |
+| Cadence since the Owner's practice | v0.38.0 on 2026-10-08, v0.39.0 on 2026-10-11; `main` is 21 commits past v0.39.0 | `gh release list`; `git log v0.39.0..origin/main` |
+| How a release happens | Every push to `main` runs release-please through Kanon's reusable workflow; merging the release pull request tags `vX.Y.Z` and publishes the GitHub Release | `release-please.yml`, `release.yml`, `docs/release.md` step 2 |
+| The major tag | After each release, `release.yml`'s step "Move the major tag to the released commit" creates or force-moves `v0` with the workflow token. `docs/release.md` step 4: "Pin the exact version anyway: the major tag is a convenience." | `release.yml`, `docs/release.md` |
+| What an adopter pins | One exact version, `vX.Y.Z`, everywhere under `.github/`, never a branch or the major tag | `K-ADOPT-11` in `rulebook/10-adoption.md` |
+| What holds the pin | `lane-check` fails any Kanon reference whose ref isn't `vX.Y.Z` (its `EXACT` pattern), more than one release, or a release other than the one `lane-check` runs at | `actions/lane-check/lane-check.mjs` |
+| `K-ADOPT-11`'s own "Enforced by" | "Prose only; a guard is planned." This is stale: `lane-check` has enforced the exact pin since it shipped. Step S1 corrects it | `rulebook/10-adoption.md` |
+| What doctor reads | The release its callers pin, by the same pattern; with no exact pin it stops ("nothing … pins Kanon to an exact release"); a mix is `pin.mixed`, blocking. It reads that release's `requirements.json` at its tag | `cli/doctor.mjs` (`kanonPins`, `pin.mixed`) |
+| How upgrades arrive | Dependabot's `github-actions` entry, daily, grouping `yedeya-labs/kanon*`, with Kanon excluded from the cooldown; `lane-check` fails an adopter's entry that lacks the exclusion | `.github/dependabot.yml`; `lane-check.mjs`, "The Dependabot entry that proposes Kanon upgrades" |
+| The plugin's pin | The `ref` of the kanon marketplace in `.claude/settings.json`, which Dependabot doesn't move; the upgrade skill and release-please (in Kanon) move it | `K-ADOPT-11`; `release-please-config.json`'s `extra-files` |
+| What the upgrade skill calls "latest" | `gh release view --repo yedeya-labs/kanon --json tagName`, GitHub's latest release | `skills/upgrade/SKILL.md`, step 2 |
+| What Kanon pins | v0.39.0, in 11 references under `.github/workflows/` and in `.claude/settings.json` | `git grep` at `401eabb` |
+| What Kanon runs its lanes at | Its last release tag, never `$/`, so a pull request is judged by the released lanes, not its own | ADR 0011, decision 2 |
+| The release rule | `K-SHIP-7`: "Every merge to the main branch produces a version and a release" | `rulebook/06-shipping.md` |
+
+**What this adds up to.** The only thing between a Kanon release and every adopter's pull request queue is Dependabot's next daily run. Kanon runs a release for at most the hours before that run, and on 2026-10-02 it ran some for minutes. The pin is exact, so nothing changes under an adopter without a pull request, but the pull requests arrive faster than an adopter can review them, and one in five asks the adopter to change a caller.
+
+## 2. What "weekly" and "stable" mean
+
+**Weekly.** The release pull request merges **at most once a week, on a fixed release day** (Monday by default, [decision 2](#decisions-left-open)), by the Owner, as today. What merges is a **candidate**. Everything merged during the week pools into it, so several breaking changes in one week ship as one candidate and one upgrade. An urgent fix may cut a candidate on another day ([§7](#7-urgent-fixes)).
+
+**Stable.** A candidate is promoted to stable when all four hold, each read from GitHub by a script, never self-reported:
+
+| Gate | Holds when | Read from |
+|---|---|---|
+| **Soak** | The candidate has been the release Kanon's own callers pin, on Kanon's default branch, for at least **72 hours** ([decision 2](#decisions-left-open)) | The merge time of the pull request that moved Kanon's pins to it ([§6](#6-what-kanon-itself-follows)) |
+| **No revert** | No pull request merged to `main` since the candidate was cut reverts one of the pull requests the candidate contains | The revert detector Kanon's metrics already run (`revertsOf` in `scripts/metrics/detectors.mjs`) |
+| **No serious bug traced to it** | No open issue labelled `bug` and `sev:critical` or `sev:high` names, in its `Introduced by` line, a pull request the candidate contains | The `Introduced by` convention the same detector reads (`introducedBy`) |
+| **No unexplained red** | Every run of Kanon's own lane callers since the pins moved to the candidate either succeeded, or failed with a cause outside Kanon's code: the `unavailable` class (the model was never reached) or a run the Owner re-ran green | Kanon's Actions runs, read with `gh run list` per caller ([decision 4](#decisions-left-open) asks whether telemetry's attribution should be a fifth gate) |
+
+The four are a floor, not a ritual: three days on Kanon is short, and Kanon's lanes don't exercise an adopter's stack. They catch what Kanon's own runs can catch, which on the record above is most of what broke.
+
+**What stable doesn't mean.** It doesn't mean "no breaking change": a breaking candidate can be stable. It means the breaking change has run on Kanon, its release notes say what to change, and the adopter meets it at most once a week, as one Dependabot pull request that `kanon doctor --to` explains first.
+
+## 3. The mechanism: candidates, and stable tags on the same commit
+
+#575 asks for "a moving ref that only advances on a release Kanon has run on itself", and names two forms: a moving `stable` tag, or the major tag. Both mean an adopter writes the moving ref in its `uses:` lines. That runs straight into `K-ADOPT-11`'s reason for the exact pin, and into one fact this plan can't get around: **one release in five changes what a caller must hold** (an input, a secret, a permission, a file). A moving ref moves the lane under the caller, and `lane-check` then fails the adopter's next pull request on a commit that touched nothing; no pull request ever proposes the caller change, because nothing in the adopter's repository moved. So the plan keeps the exact pin and moves *what a version tag means* instead. Three mechanisms were weighed:
+
+| | **(E) Candidates, then stable tags** (proposed) | **(A) A `stable` pointer, and a follower workflow** | **(C) A moving tag in `uses:`** |
+|---|---|---|---|
+| What is tagged when the release pull request merges | `candidate-vX.Y.Z`, a GitHub pre-release | `vX.Y.Z`, as today | `vX.Y.Z`, as today |
+| What promotion does | Tags `vX.Y.Z` on the candidate's commit, publishes its Release as latest, moves `v0` | Moves a `stable` tag to the release | Moves `stable` (or `v0`) |
+| What an adopter pins | `vX.Y.Z`, as today | `vX.Y.Z`, as today | `@stable` |
+| What proposes the upgrade | Dependabot, unchanged: it sees only stable tags | A new reusable workflow in the adopter, reading `stable` and opening the pin pull request; Dependabot's Kanon group switched off | Nothing: the lanes change under the adopter |
+| Breaking caller changes | Arrive as a pull request, as today | Arrive as a pull request | Break `lane-check` on an untouched commit |
+| `K-ADOPT-11`, `lane-check`, `doctor` | Exact pin kept; the pattern also admits `candidate-vX.Y.Z` | Unchanged | Rewritten: a moving reference becomes the supported form, `doctor` resolves `stable` to read `requirements.json`, and `lane-check` can no longer compare its own version with the callers' |
+| New adopter-side parts | None | A workflow, its caller, and a token that makes its pull request run CI: the workflow token's pull requests run none (the release PR's known limit, `docs/release.md`), so a Review-only adopter without the Releaser gets an upgrade PR no check runs on | None, but the guarantee above is gone |
+| What it rests on, not yet run | release-please tags a component form cleanly after `vX.Y.Z` history; Dependabot ignores a `candidate-` tag (S0) | Nothing new | Nothing new |
+
+**Proposed: (E).** Every adopter is on the stable channel without changing a line, Dependabot keeps doing the one thing it does well, and the exact pin keeps meaning what `K-ADOPT-11` says. Its cost falls on Kanon's side: a release configuration change, a promotion workflow, and its own pins moving by a workflow rather than by Dependabot. **(A) is the fallback** if step S0 shows either behaviour (E) rests on doesn't hold. **(C) is not proposed,** for the reason above; [decision 1](#decisions-left-open) puts the three to the Owner.
+
+**How (E) is configured** (release-please's schema, read 2026-10-12; **not run**, S0 runs it):
+- Kanon's `release-please-config.json` sets the tag's component and separator so the release pull request's merge tags `candidate-vX.Y.Z` (`include-component-in-tag`, `tag-separator`, and the package's component), and `prerelease: true`, so its GitHub Release is a pre-release. GitHub's "latest release", which `gh release view` and the upgrade skill read, never names a pre-release.
+- The version written into Kanon's files by `extra-files` is still `X.Y.Z`, so the docs, `plugin.json` and the skills' `npx` lines name `vX.Y.Z` at the candidate's commit. That ref exists only once the candidate is promoted; until then the docs on `main` name a tag that doesn't exist yet. [§6](#6-what-kanon-itself-follows) says what that costs Kanon.
+- Changing the tag form once is release-please's riskiest moment: it finds the previous release by its tag, and the previous one is `v0.39.0`, not `candidate-v0.39.0`. If it can't find it, the first candidate's changelog would run from the first commit. `last-release-sha` (a top-level key in the schema) bounds that; S0 checks the first candidate's changelog on a sandbox before Kanon's configuration changes.
+- Adopters' release configurations are untouched: they release their own products, and this plan changes nothing about how.
+
+**The promotion** is a Kanon workflow, `.github/workflows/promote.yml`, run daily and on dispatch, that runs a script, `scripts/promote.mjs`:
+1. finds the newest candidate tag with no `vX.Y.Z` on its commit;
+2. reads the four gates of [§2](#2-what-weekly-and-stable-mean) and writes each one's verdict and evidence to the step summary, so a held promotion says which gate held it;
+3. if all pass, and no stable release has been promoted in the last six days unless the dispatch says `urgent` ([§7](#7-urgent-fixes)), it creates the tag `vX.Y.Z` on the candidate's commit, publishes the Release `vX.Y.Z` with the candidate's notes and a line saying when and on what evidence it was promoted, marks it latest, and moves `v0` to the same commit;
+4. as the **Releaser**, through a token minted for the job: the Releaser already pushes Kanon's release tags (plan 0005 §3.1, [ADR 0013](../decisions/0013-personal-accounts-and-two-apps.md)), and a tag ruleset on `v*` (plan 0008, step J6) needs exactly one bypass actor for tag creation, which this keeps as the Releaser.
+
+**Promotion is automatic when the gates pass** ([decision 3](#decisions-left-open)). The Owner holds a candidate by disabling the workflow or by dispatching it with `hold`, and promotes by hand with `urgent` and a reason.
+
+**The major tag moves only on promotion.** Today `release.yml` moves `v<major>` on every release it creates. That step changes, for everyone, to move the major tag only when the release's tag is plain `vX.Y.Z`, so a candidate's tag, or a monorepo component's, never moves it. That is general, not Kanon's case: a component-tagged release in any adopter's monorepo shouldn't move a bare `v1` either.
+
+## 4. The pin rules, `lane-check` and `doctor`
+
+**`K-ADOPT-11`, reconciled.** The rule's reason stands, and this plan keeps it: a release changes what an adopter enforces only through a pull request the adopter's own CI tests. What changes is the definition of an exact version:
+
+> Every reference pins an exact version: a **stable release**, `vX.Y.Z`, which Kanon tags only once it has promoted the release, or, to run ahead of stable, a **candidate**, `candidate-vX.Y.Z`, the same code before promotion. Never a branch, a commit without a tag, or the moving major tag (`v0`).
+
+Its "Enforced by" becomes true: `lane-check`, which fails any other ref, and `kanon doctor`, which reads the pinned release. The table of forms in the rule gains no row.
+
+**`lane-check`** (`actions/lane-check/lane-check.mjs`):
+- `EXACT` admits `candidate-vX.Y.Z` beside `vX.Y.Z`; a bare `candidate-v1`, `candidate-v1.2`, `stable`, `v0` and anything else still fail, with a message that names both forms.
+- "One release" means one string: a caller at `candidate-v0.41.0` beside one at `v0.41.0` is two references and fails, as two versions do today. They are the same code, but `doctor` reads one `requirements.json`, and the rule is simplest stated as one ref.
+- "The version this check runs at" compares the strings as today, so a candidate-pinned repository runs `lane-check` at the candidate.
+- The Dependabot entry it requires is unchanged.
+
+**`kanon doctor`** (`cli/doctor.mjs`):
+- `kanonPins`' exact filter admits the candidate form, and reads `requirements.json` at the candidate's tag, which exists.
+- A new finding, **`pin.candidate`**, not blocking: "pins a candidate, `candidate-vX.Y.Z`; the latest stable release is `vA.B.C`". It is a note, not a fault: running ahead is allowed. It reads the latest stable release with one `gh api repos/yedeya-labs/kanon/releases/latest`; when that call fails, the finding says it couldn't tell.
+- `--to` takes either form.
+- A new field in the JSON, `releases.stable`, the latest stable tag, or null when unreadable, so the skills read it from doctor rather than calling `gh` themselves (ADR 0014). `kanon-doctor/v1` stays: the field is additive.
+
+**Neither check reads anything about the repository being Kanon.** A candidate pin is a form any repository may use, and Kanon's own repository uses it like any other ([§6](#6-what-kanon-itself-follows)).
+
+## 5. Dependabot, the upgrade skill and the adopt skill
+
+**Dependabot needs no change for adopters, if S0 confirms it ignores candidate tags.** Its `github-actions` ecosystem proposes the newest version tag it can read for each `uses:` ref; whether it reads `candidate-v0.41.0` as a version is **not run**. Three outcomes, and what each does:
+1. **It ignores the candidate form** (expected, because the ref doesn't start with a version). Nothing changes: the adopter's daily entry proposes each stable release on the day it is promoted.
+2. **It reads it as `0.41.0`** and would propose candidates to adopters. Then the candidate's tag takes a form Dependabot can't read as a version (a separator other than `-`, chosen in S0), and the probe is repeated.
+3. **No form keeps candidates from Dependabot.** Then (E) fails, and the plan falls back to (A).
+
+Kanon's own Dependabot entry stays as it is, and `lane-check` keeps requiring the same entry of Kanon as of anyone. Kanon's callers pin candidates, which Dependabot doesn't propose (outcome 1), so Kanon's pins move by the workflow in [§6](#6-what-kanon-itself-follows).
+
+**The upgrade skill** already upgrades to "the release this plugin ships in" and looks up GitHub's latest release, which (E) makes the latest stable. Its changes are small:
+- step 2 reads `releases.stable` from doctor's JSON instead of calling `gh release view`;
+- where `.releases.pinned` is a candidate, it says so, and offers the move to the latest stable as the recommended choice, or to a later candidate when the person runs ahead;
+- "Moving the plugin" names the stable tag by default.
+
+**The adopt skill** and **`kanon init`** pin the release they run from, as today. The plugin installed from the marketplace at a stable tag runs `kanon init` at that tag, so a new installation pins stable without a question. The skill's runbook says, in one line, how upgrades arrive: "Dependabot proposes each stable Kanon release, about once a week." #575 asks for the stable channel to be "the recommended pin" in both skills, per #428; plan 0007 replaced #428's question per input with three questions and one summary, so the channel is **not a question**: it is the default, and the summary shows it as `Kanon: v0.41.0 (stable)`. Running ahead is a candidate pin a person writes on purpose.
+
+**`docs/release.md`** gains a section, "Channels: candidates and stable", and step 4's sentence about the major tag changes to say it moves on promotion.
+
+## 6. What Kanon itself follows
+
+**Kanon pins each candidate, the day it is cut,** so every candidate runs on Kanon before any adopter sees it. That is ADR 0011's rule unchanged in spirit: Kanon's pull requests are judged by the last cut, never by their own code. Only the tag form differs.
+
+**How Kanon's pins move.** Today Dependabot proposes each release to Kanon's own callers. It won't propose a candidate ([§5](#5-dependabot-the-upgrade-skill-and-the-adopt-skill)), so `release.yml`'s caller in Kanon, `release-please.yml`, gains a job that runs after a candidate is created: it opens `ci(deps): run Kanon on candidate vX.Y.Z` as the Releaser, moving every Kanon reference under `.github/` and the plugin's `ref` in `.claude/settings.json`, with the same edit the upgrade skill's step 4 describes. The edit is a script, `scripts/move-pins.mjs`, so the skill and the job make the same one. The Owner merges it, as every Kanon pull request; its merge time starts the soak.
+
+**This job is Kanon's, not the reusable release workflow's.** It lives in Kanon's own caller, as `metrics-page.yml` lives in Kanon, because it moves Kanon's own pins to Kanon's own candidates. It doesn't teach any check about Kanon.
+
+**What it costs Kanon:**
+- **The plugin's `ref` names a tag that doesn't exist during the soak.** release-please writes `vX.Y.Z` into `.claude/settings.json` at the candidate's commit. The pin job sets it to `candidate-vX.Y.Z`, which does exist, in the same pull request. Between the candidate's merge and that pull request's merge (minutes to hours), a maintainer's Claude Code session on `main` fails to fetch the declared marketplace. Accepted.
+- **The docs on `main` name `vX.Y.Z` for up to a week before it exists.** An adopter copying a snippet from `main` in that window gets a ref that 404s; one copying from the stable tag's docs gets the right one. The README says to read the docs at the stable tag. Accepted, and noted in `docs/release.md`.
+- **The metrics' release-PR recogniser** (`RELEASE_TITLE` in `scripts/metrics/release.mjs`) matches `chore(…): release vX.Y.Z`. A candidate's pull-request title carries the component, so the pattern must admit it, or the candidate pull request is still recognised by release-please's label, which is checked first. Step S3 adds the title form, and its test.
+
+**Plan 0008's release check.** Plan 0008's ingest function admits a collector token only when its `job_workflow_ref` names Kanon's collector at a release tag, `refs/tags/v<version>` (its check 7, its J6). Kanon's own collector, pinned to a candidate, sends `refs/tags/candidate-v<version>`, which check 7 as written refuses. So plan 0008's check must admit the candidate form under the same tag ruleset, and the ruleset must cover `candidate-v*` too. If plan 0008 ships first, step S3 waits for that amendment; if this plan ships first, plan 0008's J1 verifier takes both forms from the start. Either way it is one pattern in one place, and its test.
+
+**Kanon follows the candidate channel; adopters, including the reference adopter, follow stable** unless they choose otherwise ([decision 5](#decisions-left-open)).
+
+## 7. Urgent fixes
+
+A security fix, or a fix for a candidate or stable release that breaks adopters, may not wait a week. The path, written into `docs/release.md`:
+1. **Merge the fix,** then **merge the release pull request on any day.** It tags a candidate, as on a release day. The Owner says why in the release pull request's body, under `## Out of band`.
+2. **Kanon's pins move to it** through the pin job, as for any candidate.
+3. **The Owner dispatches the promotion with `urgent: <reason>`.** The soak gate and the six-day spacing are skipped; the other three gates still apply, and at least one review run on Kanon at the candidate must have succeeded. The reason goes into the stable Release's notes.
+4. **The next release day goes ahead as normal.** An out-of-band candidate doesn't move the release day.
+
+**A bad stable release is not deleted.** Deleting a tag breaks every repository that pins it. A fix ships as the next candidate, promoted with `urgent`, and the bad release's notes gain a line naming its replacement.
+
+## Part B: the API key ([#579](https://github.com/yedeya-labs/kanon/issues/579))
+
+## 8. Today, measured
+
+| What | Today | Source |
+|---|---|---|
+| The credential the agent runs on | `agent-run` takes one required input, `claude-token`, and sets it as `CLAUDE_CODE_OAUTH_TOKEN` in the environment of its `claude-code-action` step | `actions/agent-run/action.yml` |
+| Which lanes take it | 16 lanes in `requirements.json` list `CLAUDE_CODE_OAUTH_TOKEN` among their secrets, and declare it required in their `on.workflow_call.secrets`; 37 workflow files hand it down as `claude-token` | `requirements.json`; `git grep claude-token .github/workflows` |
+| An API key anywhere | Not in any lane, caller, action, doc or check. Two mentions: the grant probe, `.github/scripts/reviewer-grant-probe.mjs`, accepts either variable for a local run; and `review-agent-job.yml` carries a comment, "GRADUATE to API-key billing: give the `agent-run` block an `anthropic_api_key` input" | `git grep ANTHROPIC_API_KEY` |
+| What the rulebook says | "Kanon works on a Claude subscription and on API billing." As built, no lane can be given an API key, so the second half is not yet true | `rulebook/08-observability-and-cost.md`, `## Billing` |
+| What `claude-code-action` takes, at the release Kanon pins | `anthropic_api_key`, `claude_code_oauth_token`, and workload identity federation (`anthropic_federation_rule_id` with `anthropic_organization_id`, optionally a service account and a workspace; it needs `id-token: write`), and Bedrock, Vertex and Foundry. Each credential is read from the input or, failing that, the same-named environment variable | `anthropics/claude-code-action` `action.yml` at `v1.0.244` |
+| Where that action copies an input | Its main step's environment holds `ALL_INPUTS: ${{ toJson(inputs) }}`, and its "Post buffered inline comments" step's environment holds `ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}`. A key passed as an input reaches both; one passed as an environment variable reaches neither | the same file |
+| What doctor checks | That each secret a mapped lane takes exists, by name (`secret.missing`, blocking); its fix for the token says to make it with `claude setup-token`. It never reads a secret's value: GitHub doesn't return one | `cli/doctor.mjs`; `docs/doctor.md` |
+| What `init` inspects | The repository's secret names, with `gh secret list --json name` | `cli/init.mjs` |
+| How a cap shows in a run | `agent-classify`'s `unavailable` kind, "the model was unreachable, not a failed run": the configured model never ran. Its notice names three causes the result can't tell apart: the subscription's cap, an outage, or a configuration fault such as an expired token | `actions/agent-classify/classify-agent-result.mjs` |
+| What a run costs, as recorded | `total_cost_usd`, at API list price whatever the billing: plan 0003's decision 1, "no translation to subscription usage". The run row has no field saying which credential ran it | `docs/metrics.md`; `docs/plans/0003-metrics.md`; `actions/agent-telemetry/schema.mjs` (`RUN_V2`) |
+| What Kanon's own items cost | Median $1.72 per merged item (95% interval $1.52 to $1.88), 90th percentile $4.35, over 182 items, 2026-09-14 to 2026-10-12, at API list price | `docs/metrics/index.html` |
+| The dollar ceilings | Every lane run carries `--max-budget-usd`, from 10 to 120 by lane (`K-OBS-12`) | `git grep max-budget-usd .github/workflows` |
+| Why it matters now | #579: subscription limits "assume ordinary individual use and may be enforced without notice, and weekly caps were recently cut. Several lanes sharing one weekly pool will stall." | #579 |
+
+## 9. The choice, in `init` and the skills
+
+**Two choices, equal in standing:**
+
+| Option | What it costs | What it risks |
+|---|---|---|
+| **Claude subscription** (`claude setup-token`) | Nothing beyond the subscription | The lanes share one weekly pool with the person's own Claude Code use, and stall when it runs out; the token lasts a year |
+| **Anthropic API key** (the Claude Console) | Per token, at list price, billed to the Console account | Spend is bounded only by the runs' dollar ceilings and the Console's own limits ([§13](#13-security-posture)) |
+
+**In `kanon init`, it is an inferred value, not a fourth question** ([decision 7](#decisions-left-open)). #579 asks for "a question per #428"; plan 0007 replaced #428's question per input with three questions and a summary, and the Owner's decision of 2026-10-10 keeps it there. So:
+- a new flag, **`--claude-auth subscription|api-key`**, and a new answer, **`claudeAuth`**;
+- **inferred** from the repository's secret names, which `init` already lists: `api-key` when `ANTHROPIC_API_KEY` is set and `CLAUDE_CODE_OAUTH_TOKEN` isn't; `subscription` otherwise, the default, with the reason "the default" or "from the repository's secrets";
+- shown as one summary line, **`Claude: subscription token (default)`**, with its one-line consequence, which the person can change before confirming, as every other line;
+- written as the secret each caller maps ([§10](#10-the-secret-and-each-lanes-mapping));
+- in the JSON, `answers.claudeAuth`, and each feature's `secrets` list names the chosen credential. `kanon-init/v1` stays: the field is additive.
+
+**The runbook's step R5** (plan 0007 §5) splits by the answer: "In your own terminal, run `claude setup-token`" for the subscription; for the key, "Create a key in the Claude Console, in a workspace for CI with a spend limit ([§13](#13-security-posture))", with the Console's link. The next step stores it in the person's own terminal, as for the token: the value never reaches the agent's prompt.
+
+**`/kanon:adopt`** shows the line in its summary, as it shows every inferred value. **`/kanon:upgrade`** needs nothing: an existing installation keeps the token it maps, and `init.md`'s answer table gains a row whose value is inferred, so the skill's "new questions" step asks nothing. **`/kanon:doctor`** gains the rows for the new findings ([§11](#11-doctors-checks)). **Switching** later is one `kanon init --claude-auth api-key` from the checkout, which rewrites the callers' mappings in a pull request, and doctor's fix for a missing secret names it.
+
+## 10. The secret and each lane's mapping
+
+**The secret is `ANTHROPIC_API_KEY`** ([decision 8](#decisions-left-open)): the name the CLI, `claude-code-action` and Kanon's grant probe already use.
+
+**One choice per caller, two names, one path to the agent.**
+- **Each lane** declares both secrets, `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY`, `required: false`, and marks them a pair with one comment line, `# ONE OF SECRETS: CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY`, in the form of the existing `# OPTIONAL SECRET:` marker.
+- **Each caller** maps exactly one of the two, by its fixed name, as callers map every secret today. Never both, never neither ([§11](#11-doctors-checks), `lane-check`).
+- **Each lane hands both down by name,** as two secrets of its run and agent-job workflows, `claude-token` and `anthropic-api-key`, to `agent-run`, which takes both as optional inputs. Handing them down separately, rather than as `secrets.A || secrets.B` into one input, keeps the both-or-neither check possible at run time, and needs no guess at which credential a value is.
+- **`agent-run`** gains one step before the agent, "Check the Claude credential", which:
+  - fails, by name and before the agent starts, when both inputs are set or neither is: "maps both CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY; map one" and "no Claude credential: the caller maps neither, or maps an empty secret";
+  - fails when the value's shape doesn't match its name, such as an API key stored as the token: the check compares a fixed prefix of each credential (S0 confirms both prefixes; **not run**), and its message names the secret, never the value or the prefix it found;
+  - writes one output, `auth`, `subscription` or `api-key`, for the telemetry row ([§12](#12-cost-what-was-paid)).
+- **The agent step** sets exactly one of `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` in its `env:`, each from its own input, and the other empty, as today's token is set. **Never as an input to `claude-code-action`**: an input is copied into its `ALL_INPUTS` and its inline-comment step ([§8](#8-today-measured)).
+- **The CLI's precedence when both are set** is **not run** and doesn't matter: the check above guarantees one.
+
+**Mixed modes are allowed.** A repository may run its Reviewer on the key and its Implementer on the token; each caller decides. `kanon init` writes one choice for all; doctor reports a mix as a note ([decision 9](#decisions-left-open)).
+
+**`requirements.json`** lists, for each model lane, the pair under a new key, `claude: ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]`, built from the marker like `optionalSecrets`, and its `secrets` no longer names the token alone. A `doctor` older than this reads a newer `requirements.json` only with `--to` past its own release, which the upgrade skill prevents by moving the plugin first.
+
+**The lanes that run no model** (the Merger, the reconciler, the dispatch sweep) take neither, as today.
+
+## 11. Doctor's checks
+
+`kanon doctor` reads secret names and their dates, never values. Every check below says what it can and can't see.
+
+| Finding | Blocking | When | What it can't see |
+|---|---|---|---|
+| `secret.missing` (existing, extended) | yes | A caller maps a credential the repository doesn't hold. Its fix names the credential: `claude setup-token` for the token, the Console for the key | Organisation secrets shared to the repository: doctor lists repository secrets, as today, and says so |
+| `caller.claude-both`, `caller.claude-none` | yes | A caller maps both, or neither, of a lane's pair. The same failure `lane-check` reports, so a fresh install learns it from doctor before CI | |
+| `claude.mixed` | no | Callers map different credentials. A note naming which lanes run on which | |
+| `secret.stale` (existing, extended) | no | The repository holds the credential no caller maps, such as the old token after a move to the key. Its fix is the `gh secret delete` line, offered after a week of green runs, as for an unused App's secrets | |
+| `claude.token-age` | no until a year, then yes | `CLAUDE_CODE_OAUTH_TOKEN` is mapped and its secret was last set more than 335 days ago (a note: "renew it with `claude setup-token` before day 365"), or more than 365 days ago (blocking: "a subscription token lasts a year; this one is at least that old") | The token's own creation date: the secret's `updated_at` is when it was stored, so the token is at least that old, never younger. The year's length is #579's statement, **not run** against a real token |
+| `claude.unreachable-runs` | no | On the subscription, at least two runs of the repository's lane callers in the last 14 days ended in `agent-classify`'s `unavailable` notice. The note says the cap is one of three causes, names the runs, and says what the key option is | Which of the three causes it was; doctor never says "cap", as `agent-classify` doesn't |
+
+**How doctor reads them.**
+- The secret's date: `gh secret list --json name,updatedAt`, in place of today's names-only call, the same admin-level read. Org secrets stay out of scope, as today.
+- The `unavailable` runs: for each lane caller workflow, its last runs from `gh run list --workflow <file> --limit 20 --json databaseId,conclusion,createdAt`, then, for failed ones only, the check-run annotations of that run, looking for the notice's fixed title. At most 20 runs per caller; a repository with eight callers costs at most a few dozen API calls, and doctor says when its token can't read annotations (`unchecked`, as for rulesets).
+- Never a value: a test runs doctor against stubs where the secret listing would contain a token-shaped string as a name, and asserts the output carries nothing but names and dates.
+
+**What doctor doesn't check, and why.** Whether the key or the token is *valid*: only a call to Anthropic can tell, doctor has no value to call with, and a run that fails says so in its first step ([§10](#10-the-secret-and-each-lanes-mapping)). The Console's spend limit: doctor can't read it.
+
+## 12. Cost: what was paid
+
+**The rule stays:** every cost is `total_cost_usd`, the CLI's figure at API list price, labelled "API list price" (plan 0003, decision 1). What changes is what that figure means for whom.
+
+- **On an API key, the list price is what the key is billed,** before any discount or commitment the Console account has. Kanon can't see invoices, so it never says "paid"; it says "at API list price, which is what an API key is billed unless your account has its own rates".
+- **On the subscription, it stays a measure of work, not money:** no translation to quota, as decision 1 says.
+
+**The run row gains one field, `auth`**, `subscription` or `api-key`, from `agent-run`'s output ([decision 10](#decisions-left-open)). It is an enum, not derived from the value, and carries nothing a secret holds (`K-OBS-16`). It is additive to the run row's version 2, as optional fields have been; the hosted store's function must accept it before any collector sends it, so the Owner deploys the function first (plan 0002's order). With it:
+- the metrics report can say, per window, what share of the cost ran on a key, and an adopter on a key reads its cost figures as its bill at list price;
+- the Overseer's cost trend can tell a change of billing from a change of spend.
+
+**The cost docs** (#579's last item): `docs/lanes.md` gains, per lane, what one reviewed pull request and one implemented issue cost, in two columns:
+- **API key:** dollars at list price, the median and 90th percentile per reviewed head and per implemented issue, read from Kanon's own rows in the hosted store, with their window and sample size. **Not run:** only the per-item figure exists today ($1.72 median per merged item on Kanon, [§8](#8-today-measured)); step A7 measures the per-lane figures before the doc states them.
+- **Subscription:** the same runs' token counts, and the sentence that the subscription's weekly limit isn't published as a number, so Kanon can't say how many reviews a week it allows. The existing "$15 per fed issue, measured on the reference adopter" sentence keeps its source and gains its window.
+
+## 13. Security posture
+
+| Concern | What holds it |
+|---|---|
+| **The key reaches only the agent's step** | Both credentials travel the path the token travels today: the caller's `secrets:` by name, the lane's run workflow, the agent job's `secrets:`, `agent-run`'s inputs, and the agent step's `env:`. Never the mint job, which holds the App key (`K-AGENT-49`), never a `run:` line, never a `with:` of `claude-code-action`. `tests/unit/app-key-isolation.test.ts` holds every run and agent-job pair to the spine byte for byte today; step A2 extends it to the second secret, and adds an assertion that `ANTHROPIC_API_KEY` appears in no `with:` and no `run:` |
+| **Never printed** | GitHub masks both as secrets. The credential check prints names only. Doctor reads names and dates only. The runbook stores the key in the person's own terminal, never through the agent's prompt, as for the token (plan 0007, #625) |
+| **A key spends money with no weekly ceiling** | Every run already has `--max-budget-usd` (`K-OBS-12`), which bounds one run. The docs recommend a Console workspace for CI alone, with its own spend limit and its own key, so revoking the key or exhausting the limit stops CI and nothing else. Whether the Console offers per-workspace spend limits is read from Anthropic's documentation in step A7, **not run** here |
+| **A key in a public repository's forks** | Unchanged from the token: GitHub withholds secrets from fork pull requests, and the review lane's existing head check stands |
+| **Rotation** | Re-set the secret; nothing else names the value. Doctor's `secret.stale` finds the old credential after a switch |
+| **The key outliving its use** | A key doesn't expire. Doctor can't see its age past the secret's `updated_at`; the docs say to rotate it with the Console's own audit, and doctor's `claude.token-age` applies to the token only |
+
+## 14. Federation, the third option: deferred
+
+`claude-code-action` at `v1.0.244` can authenticate by exchanging the workflow's GitHub OIDC token for an Anthropic credential, through a federation rule and a Console service account ([§8](#8-today-measured)). #579 asks for it "if `claude-code-action` supports it", and it does. It is still **not proposed here** ([decision 12](#decisions-left-open)):
+- it needs `id-token: write` on the agent's job, the job that runs the agent and, in several lanes, the pull request's own code. Kanon's id-token guard and `kanon doctor`'s id-token holders section keep that permission to the store jobs and the collector, because any process in a job holding it can mint a token naming the repository, for any audience. Plan 0008 rests on exactly that boundary;
+- the adopter's setup is a federation rule in the Console, naming the repository's OIDC subject, which neither `kanon init` nor doctor can check.
+
+It deserves its own plan, which starts from whether the agent's job can hold `id-token` at all.
+
+## 15. Rules and docs that change
+
+| Where | Change | Step |
+|---|---|---|
+| `K-ADOPT-11` | What an exact version is ([§4](#4-the-pin-rules-lane-check-and-doctor)); "Enforced by" names `lane-check` and doctor | S1 |
+| `K-SHIP-7` | A project whose releases other repositories pin may declare a release cadence, `- **Release cadence:** weekly, <day>` under `## Choices` in its adoption record; its releases then pool to that day. Kanon declares it. ([decision 6](#decisions-left-open)) | S1 |
+| ADR 0011 | Amended: Kanon pins each candidate; the pin job moves them; and, from step A8, its lanes' billing stays the subscription with the smoke on a key | S1, A8 |
+| `docs/release.md` | Channels, the promotion, urgent fixes, the major tag | S1, S6 |
+| `docs/qa/adoption.md`, Kanon's adoption record | Declares the cadence | S1 |
+| `rulebook/08-observability-and-cost.md`, `## Billing` | The two options, as built; still not a rule (ADR 0004 §5) | A7 |
+| `docs/lanes.md`, `docs/install.md`, `docs/init.md`, `docs/doctor.md` | The credential pair, the flag and answer, the findings, the costs in two columns | A2 to A7 |
+| `skills/adopt`, `skills/upgrade`, `skills/doctor` | The stable channel; the credential line and step R5; the findings' rows | S6, A5 |
+| Plan 0007 | R5 splits by credential | A5 |
+| Plan 0008 | Check 7 admits `candidate-v*` | S3 |
+
+## 16. Order of moves
+
+S is the releases track, A the API-key track. **Touches** names the files each step changes, to show which steps may run at once.
+
+| Step | Where | What | Touches | Falsifiable check |
+|---|---|---|---|---|
+| **S0** | a sandbox repository, by a maintainer | **The probes (E) rests on.** (a) release-please, with Kanon's configuration plus the component tag form and `prerelease`, on a repository whose history has `v0.1.0` and `v0.2.0`: the first candidate's tag, Release and changelog; (b) Dependabot on a second repository pinning `@v0.2.0`, with `candidate-v0.3.0` tagged: what it proposes, then what it proposes once `v0.3.0` is tagged on the same commit; (c) the Releaser creating a tag on an existing commit under a `v*` and `candidate-v*` tag ruleset. | none in Kanon; results in the step's issue | (a) the tag is `candidate-v0.3.0`, the Release is a pre-release, the changelog starts after `v0.2.0`; (b) no Dependabot pull request names the candidate, and one names `v0.3.0` within a day of its tag; (c) the tag exists, and the same call with the workflow token is refused. **Any of the three failing switches the plan to (A),** amended before S2 |
+| **S1** | Kanon | **The rules and the record:** `K-ADOPT-11` and `K-SHIP-7` as in [§15](#15-rules-and-docs-that-change), ADR 0011's amendment, Kanon's adoption record declaring the cadence, and `docs/release.md`'s Channels section | `rulebook/10-adoption.md`, `rulebook/06-shipping.md`, `docs/decisions/0011-…`, `docs/qa/adoption.md`, `docs/release.md` | `tests/unit/rulebook-why.test.ts` and the rulebook's other guards pass; a test reads the cadence choice from `## Choices` with the adoption record's parser. **Mutation:** a record whose cadence names no weekday turns the parser's test red |
+| **S2** | Kanon, **a stable release** | **`lane-check` and doctor learn the candidate form;** the major-tag mover moves only on a plain `vX.Y.Z` | `actions/lane-check/lane-check.mjs`, `cli/doctor.mjs`, `.github/workflows/release.yml`, `docs/doctor.md`, their tests | `lane-check` tests: `@candidate-v1.2.3` passes; `@candidate-v1`, `@candidate-v1.2`, `@stable` and `@v0` fail; `candidate-v1.2.3` beside `v1.2.3` fails as two releases. Doctor tests: a candidate pin reads `requirements.json` at the candidate's tag and reports `pin.candidate`, with `releases.stable` from a stubbed latest release, and null when that call fails. `release.yml`'s test: a release whose tag is `candidate-v0.41.0` moves no major tag. **Mutations:** the pattern without its end anchor (accepting `candidate-v1.2.3x`), `pin.candidate` made blocking, and the mover without its tag check each turn a named test red |
+| **S3** | Kanon, after S2's release is tagged | **Kanon's release configuration cuts candidates:** the component tag form, `prerelease`, the bound on the first candidate's history; `RELEASE_TITLE` admits the candidate title; plan 0008's check 7 (or its verifier) admits `candidate-v*` | `release-please-config.json`, `scripts/metrics/release.mjs`, plan 0008's verifier or text, their tests | `release-config.test.ts`: candidates are pre-releases with the candidate tag form. `tests/library/metrics-release.test.ts`: a candidate pull request's title is recognised. **Mutation:** dropping `prerelease` turns the configuration test red. **Live:** the next release pull request's merge creates `candidate-v<next>`, a pre-release, and GitHub's latest release is still the last stable one |
+| **S4** | Kanon | **The pin job:** `scripts/move-pins.mjs`, and the job in `release-please.yml` that opens `ci(deps): run Kanon on candidate vX.Y.Z` as the Releaser | `scripts/move-pins.mjs`, `.github/workflows/release-please.yml`, tests | `move-pins.test.ts`: on a fixture tree, every `yedeya-labs/kanon` ref under `.github/`, every `npx … kanon#` line and the plugin's `ref` move, and nothing else changes. **Mutations:** skipping `.claude/settings.json`, and moving a commented-out ref, each turn the test red. **Live:** S3's first candidate gets its pull request within the release run |
+| **S5** | Kanon | **The promotion:** `scripts/promote.mjs` and `.github/workflows/promote.yml`, daily and on dispatch with `hold` and `urgent` | `scripts/promote.mjs`, `.github/workflows/promote.yml`, tests | `promote.test.ts` on fixtures: a candidate pinned 71 hours is held by the soak; one with a merged revert of its pull request is held; one with an open `sev:high` bug naming its pull request in `Introduced by` is held; one with an unexplained red run is held; one passing all four is promoted, its tag on the candidate's commit, its Release latest, `v0` moved; a second promotion within six days is held unless `urgent`; `urgent` without a reason is refused. **Mutations:** each gate removed in turn, `<` for `<=` in the soak, and promoting a commit whose `package.json` version differs from the tag's, each turn a named test red. **Live:** the first candidate is promoted on or after its fourth day, and the step summary shows four gates |
+| **S6** | Kanon | **The skills and the docs:** the upgrade skill reads `releases.stable`, offers stable to a candidate pin; the adopt skill's line on upgrades; `docs/release.md`'s urgent path and major tag | `skills/upgrade/SKILL.md`, `skills/adopt/SKILL.md`, `docs/release.md` | `skills.test.ts` holds every doctor JSON field a skill names to `docs/doctor.md`. **Mutation:** a skill naming a field doctor's document lacks turns the test red |
+| **S7** | the reference adopter and Kanon | **The measurement.** | none | Over the four weeks after S5: at most one stable promotion a week, except `urgent`; every Dependabot pull request the reference adopter receives names a stable tag; no stable release is followed within its week by a fix for a bug it introduced, or, if one is, it is recorded with its gate's evidence |
+| **A0** | a maintainer's machine and a sandbox, with the Owner's key | **The credential probes:** the fixed prefix of a subscription token and of an API key, printing only the prefix's length and whether two values share it; a smoke run of the review lane on a sandbox with an API key through `env:` | none in Kanon; results in the step's issue | Both prefixes are recorded, and differ; the sandbox's review run is green on the key and its result's model usage is non-empty |
+| **A1** | Kanon | **`agent-run` takes either credential:** two optional inputs, the credential check, the `auth` output, the env mapping | `actions/agent-run/action.yml`, `actions/agent-run/README.md`, a new `credential-check.mjs` beside it, tests | `agent-run-credential.test.ts`: both set fails, neither fails, a key stored as the token fails, each named, and no failure message holds the value or its prefix; one set writes `auth`. A test reads the action: the agent step's `env:` sets exactly the two variables from their inputs, and its `with:` names neither. **Mutations:** the check accepting both, the shape check removed, and the key passed through `with:` each turn a named test red |
+| **A2** | Kanon, after A1 | **Every lane's mapping, in one change:** both secrets declared optional with the `# ONE OF SECRETS:` marker; the run and agent-job workflows hand down `anthropic-api-key`; `requirements.json` rebuilt with `claude`; `docs/lanes.md`'s tables | the 16 lanes, the spine and its pairs (37 files), `requirements.json`, `docs/lanes.md`, `tests/unit/app-key-isolation.test.ts`, `requirements.test.ts`, `lanes-doc.test.ts` | `requirements.test.ts` rebuilds `claude` for every model lane and none for the Merger, the reconciler or the sweep. `app-key-isolation.test.ts`: every pair hands down both secrets, byte for byte the spine's; `ANTHROPIC_API_KEY` is in no `run:`, no `with:` and no mint job. **Mutations:** one pair forwarding only `claude-token`, and the key added to a mint job's `env:`, each turn the isolation test red; one lane without the marker turns the requirements test red |
+| **A3** | Kanon, after S2 merges | **`lane-check` holds the pair:** a caller maps exactly one | `actions/lane-check/lane-check.mjs`, its README, tests | Fixtures: a caller mapping both fails, neither fails, either passes; an old lane (no marker) keeps today's rule. **Mutation:** accepting both turns the test red |
+| **A4** | Kanon, after A2 and S2 | **Doctor's checks** of [§11](#11-doctors-checks) | `cli/doctor.mjs`, `docs/doctor.md`, tests | `kanon-doctor-secrets.test.ts` with stubbed `gh`: each finding fires on its fixture and only there; `claude.token-age` is a note at 336 days and blocking at 366; `claude.unreachable-runs` needs two runs in 14 days; output carries no value, with a token-shaped name in the stub. **Mutations:** `updatedAt` read as the token's creation in the message ("created"), the thresholds swapped, and one run counted as two, each turn a named test red |
+| **A5** | Kanon, after A2 (parallel with A4) | **`init` and the skills:** `--claude-auth`, the inference, the summary line, the callers' mapping, step R5's split; the three skills' rows | `cli/init.mjs`, `cli/callers.mjs`, `docs/init.md`, `skills/adopt/SKILL.md`, `skills/upgrade/SKILL.md`, `skills/doctor/SKILL.md`, plan 0007's R5 note, tests | `kanon-init.test.ts`: with only `ANTHROPIC_API_KEY` in the stubbed secrets, the answer is inferred `api-key` and every caller maps it; with neither, `subscription` by default; `--claude-auth` overrides; the summary line names its source. **Mutations:** inference that prefers the key when both exist, and a caller mapping both, each turn the test red |
+| **A6** | Kanon, the Owner deploys | **The telemetry field `auth`:** the schema, the collector reading `agent-run`'s output, the store's function, the metrics' cost-basis wording | `actions/agent-telemetry/schema.mjs`, `actions/agent-telemetry/`, `scripts/metrics/`, `docs/metrics.md`, `docs/telemetry.md`, tests | `telemetry-schema.test.ts`: `auth` accepts its two values and refuses any other; a row without it validates. **Mutation:** a free-string `auth` turns the test red. **Live:** after the Owner's deploy and the release, a Kanon run row carries `auth: subscription` |
+| **A7** | Kanon | **The cost docs and the billing section:** per-lane figures under both columns from Kanon's rows, with windows and samples; `rulebook/08`'s `## Billing`; the Console's spend-limit guidance, read from its documentation | `docs/lanes.md`, `docs/install.md`, `rulebook/08-observability-and-cost.md`, tests | `lanes-doc.test.ts` holds each figure to a window and a sample size; the citation guard passes |
+| **A8** | Kanon, the Owner sets a secret | **Kanon dogfoods the key:** the lanes smoke runs once per candidate with `ANTHROPIC_API_KEY`, the Owner's, in a workspace with a low spend limit; Kanon's own callers stay on the subscription ([decision 11](#decisions-left-open)) | `.github/workflows/agent-lanes-smoke.yml`, ADR 0011 | The smoke's next run is green on the key, and its row says `auth: api-key` |
+
+**Why this order.**
+- **The probes first** (S0, A0): (E) rests on two behaviours no document confirms, and the credential check on two prefixes. A failing probe changes the plan before any code assumes it.
+- **`lane-check` and doctor learn the candidate form in a stable release** (S2) before Kanon cuts a candidate (S3): Kanon's own `lane-check` runs at the release Kanon pins, and would refuse a candidate pin until a release that admits it is pinned.
+- **The pin job before the promotion** (S4, S5): the soak is measured from the pin pull request's merge.
+- **`agent-run` before the lanes** (A1, A2): the lanes hand down an input `agent-run` must already take, and the isolation test holds every pair at once, so A2 is one change.
+- **The telemetry field after the lanes** (A6), and the function's deploy before the release that sends it.
+- **The cost figures last** (A7), measured on the rows A6 labels.
+
+**What may run at once.** The two tracks touch different files except `lane-check.mjs` (S2, A3), `cli/doctor.mjs` and `docs/doctor.md` (S2, A4) and the upgrade and adopt skills (S6, A5). So: S1, A0 and A1 can start together; A2 runs beside S2; A3 and A4 start once S2 has merged; S6 and A5 don't run at once. Within a track, A4 and A5 run in parallel (different files), and S4 and S5 do too, once S3 has merged.
+
+## 17. Cost
+
+- **Releases:** the promotion runs daily for under a minute with no model, and Kanon is public, so its Actions minutes are free (ADR 0011). The pin job adds one pull request a week, reviewed by the Reviewer like any other: about one review run, a few dollars at list price on Kanon's median.
+- **The API key:** the smoke on a key (A8) costs one review run per candidate, at most a few dollars a week, on the Owner's key. Nothing else in Kanon moves to a key unless the Owner decides it.
+- **For an adopter:** nothing for the channel. On a key, what its runs cost at list price, which the cost docs (A7) will state per lane.
+
+## Out of scope
+
+- **Release channels for adopters' own products.** The release workflow keeps releasing on every merge, unless an adopter declares a cadence (`K-SHIP-7`, amended). Candidates and promotion are Kanon's own operation.
+- **Federation, Bedrock, Vertex and Foundry** ([§14](#14-federation-the-third-option-deferred)): `claude-code-action` supports them; each needs `id-token` in the agent's job or cloud credentials there, and its own plan.
+- **A per-adopter cost translation for the subscription.** Plan 0003's decision 1 stands.
+- **Retiring a bad release by deleting its tag** ([§7](#7-urgent-fixes)).
+- **A guard that an adopter's Dependabot entry proposes only stable tags.** Under (E) it does by construction; under (A) it would be part of that plan.
+- **Supporting the subscription token and the key on the same caller as a fallback** (the key when the cap is reached). It would hide the cap rather than report it, and needs both secrets in one job.
+
+## Decisions left open
+
+The plan assumes each proposed default unless the Owner decides otherwise.
+
+1. **How adopters follow stable.** Default: **(E), candidates tagged `candidate-vX.Y.Z` and stable releases tagged `vX.Y.Z` on promotion**, falling back to **(A), a `stable` pointer and a follower workflow**, if S0 fails. Not proposed: **(C), a moving tag in `uses:`**, because one release in five changes what a caller must hold, and a moving ref breaks the caller without a pull request ([§3](#3-the-mechanism-candidates-and-stable-tags-on-the-same-commit)).
+2. **The release day and the soak.** Default: **candidates cut on Monday; promotion checked daily at 06:00 UTC; a 72-hour soak**, so the earliest promotion is Thursday. Alternatives: a longer soak (five days, promotion the next Saturday), or a release day later in the week so the soak ends on a working day.
+3. **Promotion: automatic or approved.** Default: **automatic when the four gates pass**, with `hold` and the workflow's switch for the Owner. Alternative: a GitHub environment, `stable`, with the Owner as required reviewer, so each promotion waits for one approval.
+4. **Telemetry as a fifth gate.** Default: **no**, the four gates read GitHub only, so promotion never depends on the hosted store's health. Alternative: no run row at the candidate with a Kanon-attributed error (`kanon_error`), read through the Overseer's path.
+5. **May adopters pin candidates?** Default: **yes**, `lane-check` accepts them and doctor notes them (`pin.candidate`), so an adopter can run a fix ahead of stable on purpose. Alternative: only Kanon's repository, which would make `lane-check` read which repository it runs in, against the rule that no check special-cases Kanon.
+6. **`K-SHIP-7`'s amendment.** Default: **a general choice**, `Release cadence` under `## Choices`, that any project whose releases others pin may declare; Kanon declares weekly. Alternative: a sentence exempting Kanon's own releases, which is simpler and Kanon-specific.
+7. **Is the credential a question?** Default: **an inferred summary line**, not a fourth question, as plan 0007's three questions and the Owner's decision of 2026-10-10 have it. Alternative: #579's wording, a question with its consequences, asked after the feature.
+8. **The secret's name.** Default: **`ANTHROPIC_API_KEY`**, the name the CLI and `claude-code-action` read. Alternative: a Kanon-scoped name, such as `KANON_ANTHROPIC_API_KEY`, so a repository's other workflows' key is never the lanes' by accident.
+9. **Mixed credentials across callers.** Default: **allowed**, with a note (`claude.mixed`). Alternative: one per repository, held by `lane-check`.
+10. **The `auth` field on run rows.** Default: **yes**, additive to version 2, deployed first. Alternative: no field, and the metrics stay unable to tell a key's cost from the subscription's.
+11. **What Kanon's own lanes are billed on.** Default: **the subscription stays; the lanes smoke runs on a key once per candidate** (A8), so the key path runs on Kanon every week. Alternative: Kanon's Reviewer moves to a key too, at Kanon's review volume, so the most-used lane never stalls on the weekly cap; its cost would be read off A7's figures first.
+12. **Federation.** Default: **deferred to its own plan** ([§14](#14-federation-the-third-option-deferred)). Alternative: offer it now for lanes whose agent job runs no pull-request code (the digests, the Overseer), where `id-token` in the agent's job reaches less.
+13. **The token's age thresholds.** Default: **a note from 335 days, blocking from 365**, measured from the secret's last update. Alternative: a note only, never blocking, since the secret's date is a lower bound on the token's age, not its expiry.
