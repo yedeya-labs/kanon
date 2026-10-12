@@ -14,11 +14,15 @@ import {
 import { sign } from '../../infra/telemetry/function/sigv4.mjs';
 import { LANES } from '../../actions/agent-telemetry/schema.mjs';
 import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
-import { nameHashesVariable } from '../../infra/telemetry/render.mjs';
+import { keysCache } from '../../infra/telemetry/function/register-store.mjs';
+import { fakeDynamo, REGISTER, type Fake } from './helpers/fake-dynamo.js';
 
 /**
  * Plan 0002 step S3: the ingest function (§4), its stamps (§10) and its signer, against fake
- * function URL events. No AWS.
+ * function URL events, on the SigV4 path (the unqualified function's IAM URL). Since plan 0008 J3
+ * that path reads its keys from the register table (§9), here `helpers/fake-dynamo.ts`, where k1
+ * and k2 are registered and active. The token path's endpoints are `telemetry-endpoints.test.ts`.
+ * No AWS.
  */
 
 type Row = Record<string, unknown>;
@@ -27,7 +31,21 @@ type Item = Record<string, unknown>;
 const ACCOUNT = '1'.repeat(6) + '2'.repeat(6);
 const NOW = Date.parse('2026-10-02T12:00:00Z');
 const DAY = 86_400_000;
-const env = { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, WRITER_KEYS: 'k1,k2', NAME_HASHES: '', IMPORTER_ROLE: '', BACKFILL_ROLE: '' };
+const env = { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, IMPORTER_ROLE: '', BACKFILL_ROLE: '' };
+
+/**
+ * A registration in the fake register: the registration item and its key item. `name_hashes`
+ * only when a repository is given, as the import writes them.
+ */
+const register = (f: Fake, key: string, id: string, over: Record<string, unknown> = {}, repository?: string) => {
+  f.seed(REGISTER, {
+    pk: `repo#${id}`, repository_id: id, repository_owner_id: '9', key, status: 'active', default_ref: 'refs/heads/main', source: 'import',
+    ...(repository ? { repository, name_hashes: [...nameContext({ repository })].sort() } : {}), ...over,
+  });
+  f.seed(REGISTER, { pk: `key#${key}`, repository_id: id });
+};
+/** k1 and k2, active, with no name hashes. */
+const plainRegister = (f: Fake) => { register(f, 'k1', '1'); register(f, 'k2', '2'); };
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 const runRow = (over: Row = {}): Row => ({
@@ -52,14 +70,18 @@ const event = (body: unknown, opts: { role?: string, account?: string, method?: 
   };
 };
 
-async function call(ev: unknown, envOver: Partial<typeof env> = {}) {
+async function call(ev: unknown, envOver: Record<string, string> = {}, setup: (f: Fake) => void = plainRegister) {
   const puts: Item[] = [];
   const logs: string[] = [];
+  const f = fakeDynamo();
+  setup(f);
   const res = await handle(ev, {
     env: { ...env, ...envOver },
     now: () => NOW,
     put: async (item: Item) => { puts.push(item); },
     log: (l: string) => logs.push(l),
+    db: f.db,
+    keys: keysCache(),
   });
   return { status: res.statusCode, body: JSON.parse(res.body), puts, logs };
 }
@@ -203,9 +225,9 @@ describe('the recorded_at window (§4): 8 days back, 10 minutes ahead', () => {
 });
 
 describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
-  // Invented repositories: k1's words are `acme`, `corp`, `widget` and `shop`; k2's are not.
-  const hashes = (repository: string) => [...nameContext({ repository })].sort().join(':');
-  const findingEnv = { NAME_HASHES: `k1=${hashes('acme-corp/widget-shop')},k2=${hashes('zorblax/quintet')}` };
+  // Invented repositories: k1's words are `acme`, `corp`, `widget` and `shop`; k2's are not. Since
+  // plan 0008 J3 the SigV4 path reads them from each key's registration, as the import writes them.
+  const named = (f: Fake) => { register(f, 'k1', '1', {}, 'acme-corp/widget-shop'); register(f, 'k2', '2', {}, 'zorblax/quintet'); };
   const findingRow = (over: Row = {}): Row => ({
     schema_version: 1, row_kind: 'finding', tag: 'test', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 2,
     finding_index: 3, reporter: 'overseer', subject: 'guard', kanon_version: '0.37.0', fix_category: 'guard', evidence_level: 'codes', ...over,
@@ -222,7 +244,7 @@ describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
   });
 
   it("a writer's valid finding, codes or evidence, gets 200 and is stored under the writer's key", async () => {
-    const r = await call(event([findingRow(), withText(CLEAN)]), findingEnv);
+    const r = await call(event([findingRow(), withText(CLEAN)]), {}, named);
     expect(r.status).toBe(200);
     expect(r.puts).toHaveLength(2);
     expect(r.puts[0]).toMatchObject({ pk: 'k1#finding', sk: '20261002T115900Z#33679229731-2-3', source: 'collector', expires_at: Math.floor((NOW - 60_000 + 30 * DAY) / 1000) });
@@ -230,7 +252,7 @@ describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
   });
 
   it('a run-tagged finding is kept 13 months, as a run row (decision 11)', async () => {
-    const r = await call(event([findingRow({ tag: 'run' })]), findingEnv);
+    const r = await call(event([findingRow({ tag: 'run' })]), {}, named);
     expect(r.puts[0]!.expires_at).toBe(Math.floor(Date.parse('2027-11-02T11:59:00Z') / 1000));
   });
 
@@ -240,7 +262,7 @@ describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
       [{ role: 'kanon-telemetry-backfill', key: 'k2' }, { BACKFILL_ROLE: 'kanon-telemetry-backfill' }],
     ] as const;
     for (const [opts, envOver] of roles) {
-      const r = await call(event([findingRow()], opts), { ...findingEnv, ...envOver });
+      const r = await call(event([findingRow()], opts), envOver, named);
       expect(r.status).toBe(422);
       expect(errorsOf(r)).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
       expect(r.puts).toEqual([]);
@@ -248,7 +270,7 @@ describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
   });
 
   it('a URL in the evidence gets 422 naming evidence (url), and the URL is never echoed or logged', async () => {
-    const r = await call(event([withText('Observed: the lane read https://example.com/SECRET-CONTENT first.')]), findingEnv);
+    const r = await call(event([withText('Observed: the lane read https://example.com/SECRET-CONTENT first.')]), {}, named);
     expect(r.status).toBe(422);
     expect(errorsOf(r)).toContainEqual({ field: 'evidence', problem: 'url' });
     expect(JSON.stringify(r.body) + r.logs.join('\n')).not.toContain('SECRET-CONTENT');
@@ -256,49 +278,53 @@ describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
 
   it("checks the text against the SENDER's name hashes: a word of its own repository's name is refused, another's is not", async () => {
     const text = 'Observed: the widget lane stopped at stage `agent`.';
-    const own = await call(event([withText(text)]), findingEnv);
+    const own = await call(event([withText(text)]), {}, named);
     expect(own.status).toBe(422);
     expect(errorsOf(own)).toEqual([{ field: 'evidence', problem: 'name' }]);
-    const other = await call(event([withText(text)], { role: 'kanon-telemetry-k2-writer' }), findingEnv);
+    const other = await call(event([withText(text)], { role: 'kanon-telemetry-k2-writer' }), {}, named);
     expect(other.status).toBe(200);
     // The same in the suggested fix.
-    const fix = await call(event([{ ...withText(CLEAN), suggested_fix: 'Rename the Shop step.' }]), findingEnv);
+    const fix = await call(event([{ ...withText(CLEAN), suggested_fix: 'Rename the Shop step.' }]), {}, named);
     expect(errorsOf(fix)).toEqual([{ field: 'suggested_fix', problem: 'name' }]);
   });
 
   // kanon#612, the case seen live: Kanon's own name in the evidence of a sender whose repository is `kanon`.
   it("Kanon's own vocabulary is never a name: \"the flags Kanon writes\" is stored from a sender whose repository is `kanon`", async () => {
-    const kanonEnv = { NAME_HASHES: nameHashesVariable([{ key: 'k1', repository: 'acme-corp/kanon' }]) };
+    const kanon = (f: Fake) => register(f, 'k1', '1', {}, 'acme-corp/kanon');
     const text = 'Observed: the flags Kanon writes. The Author App ran on GitHub Actions.';
-    const r = await call(event([{ ...withText(text), suggested_fix: 'Nothing to change in Kanon.' }]), kanonEnv);
+    const r = await call(event([{ ...withText(text), suggested_fix: 'Nothing to change in Kanon.' }]), {}, kanon);
     expect(r.status).toBe(200);
     expect(r.puts[0]).toMatchObject({ evidence: text, suggested_fix: 'Nothing to change in Kanon.' });
     // The sender's own word is still refused.
-    const own = await call(event([withText('Observed: the Acme lane stopped.')]), kanonEnv);
+    const own = await call(event([withText('Observed: the Acme lane stopped.')]), {}, kanon);
     expect(errorsOf(own)).toEqual([{ field: 'evidence', problem: 'name' }]);
   });
 
   it("stores no finding for a key without name hashes, or with malformed ones: the sender's check can't run", async () => {
-    for (const NAME_HASHES of ['', `k2=${hashes('zorblax/quintet')}`, 'k1=not-a-hash', 'k1=']) {
-      const r = await call(event([findingRow()]), { NAME_HASHES });
+    const hashes = (repository: string) => [...nameContext({ repository })].sort();
+    for (const over of [{}, { name_hashes: [] }, { name_hashes: ['not-a-hash'] }, { name_hashes: [...hashes('acme-corp/widget-shop'), 'x'] }, { name_hashes: 'abc' }]) {
+      // `render.mjs`'s NAME_HASHES no longer counts: only the registration's hashes do.
+      const r = await call(event([findingRow()]), { NAME_HASHES: `k1=${hashes('acme-corp/widget-shop').join(':')}` }, (f) => register(f, 'k1', '1', over));
       expect(r.status).toBe(422);
       expect(errorsOf(r)).toEqual([{ field: 'row_kind', problem: 'no-sender-context' }]);
     }
-    expect(nameHashesOf({ ...env, ...findingEnv }, 'k1')?.size).toBe(4);
-    expect(nameHashesOf({ ...env, ...findingEnv }, 'k3')).toBeNull();
+    // render.mjs's variable still reads back (its template test uses it) until J9 removes it.
+    const variable = { NAME_HASHES: `k1=${hashes('acme-corp/widget-shop').join(':')}` };
+    expect(nameHashesOf(variable, 'k1')?.size).toBe(4);
+    expect(nameHashesOf(variable, 'k3')).toBeNull();
   });
 
   it("refuses a registered key held in the text as a word, whoever's it is, naming the field and never the key", async () => {
     // `k2` has neither a key's hex shape nor a partition's, so only intake's key check finds it.
-    const r = await call(event([withText('Observed: the row named k2 as its partition.')]), findingEnv);
+    const r = await call(event([withText('Observed: the row named k2 as its partition.')]), {}, named);
     expect(r.status).toBe(422);
     expect(errorsOf(r)).toEqual([{ field: 'evidence', problem: 'key' }]);
     // Inside a longer run of key characters it is not the key.
-    expect((await call(event([withText('Observed: the k2x step.')]), findingEnv)).status).toBe(200);
+    expect((await call(event([withText('Observed: the k2x step.')]), {}, named)).status).toBe(200);
   });
 
   it('runs assertNoKey over every field: a vocabulary value that is a registered key is refused', async () => {
-    const r = await call(event([findingRow({ kanon_version: 'dev' })]), { ...findingEnv, WRITER_KEYS: 'k1,k2,dev' });
+    const r = await call(event([findingRow({ kanon_version: 'dev' })]), {}, (f) => { named(f); f.seed(REGISTER, { pk: 'key#dev', repository_id: '3' }); });
     expect(r.status).toBe(422);
     expect(errorsOf(r)).toEqual([{ field: 'kanon_version', problem: 'key' }]);
   });
@@ -350,6 +376,45 @@ describe('the partition comes from the caller\'s role, never the request', () =>
   });
 });
 
+describe('the SigV4 path reads its keys from the register table (plan 0008 §9)', () => {
+  const importer = { IMPORTER_ROLE: 'kanon-telemetry-importer' };
+  const backfill = { BACKFILL_ROLE: 'kanon-telemetry-backfill' };
+  const suspendedK1 = (f: Fake) => { register(f, 'k1', '1', { status: 'suspended', suspended_at: '2026-10-01T00:00:00Z', suspended_reason: 'abuse' }); register(f, 'k2', '2'); };
+
+  it('a suspended key is refused, 403 `suspended`: from its writer, and from the importer or the backfill role naming it', async () => {
+    const cases: Array<[Parameters<typeof event>[1], Record<string, string>, unknown[]]> = [
+      [{}, {}, [runRow()]],
+      [{ role: 'kanon-telemetry-importer', key: 'k1' }, importer, [runRow({ kanon_version: undefined })]],
+      [{ role: 'kanon-telemetry-backfill', key: 'k1' }, backfill, [workRow()]],
+    ];
+    for (const [opts, envOver, rows] of cases) {
+      const r = await call(event(rows, opts), envOver, suspendedK1);
+      expect(r.status, JSON.stringify(opts)).toBe(403);
+      expect(r.body).toEqual({ error: 'suspended' });
+      expect(r.puts).toEqual([]);
+    }
+    // The other key is not touched by k1's suspension.
+    expect((await call(event([runRow()], { role: 'kanon-telemetry-k2-writer' }), {}, suspendedK1)).status).toBe(200);
+  });
+
+  it('an erased key is refused, 410 `erased`, while its walk runs', async () => {
+    const r = await call(event([runRow()]), {}, (f) => register(f, 'k1', '1', { status: 'erased', erased_at: '2026-10-01T00:00:00Z' }));
+    expect(r).toMatchObject({ status: 410, body: { error: 'erased' }, puts: [] });
+  });
+
+  it('a key the table does not hold is refused, whatever the environment says: WRITER_KEYS is no longer read', async () => {
+    const r = await call(event([runRow()]), { WRITER_KEYS: 'k1,k2' }, () => {});
+    expect(r).toMatchObject({ status: 403, body: { error: 'caller' }, puts: [] });
+    const imp = await call(event([runRow({ kanon_version: undefined })], { role: 'kanon-telemetry-importer', key: 'k1' }), { ...importer, WRITER_KEYS: 'k1' }, () => {});
+    expect(imp).toMatchObject({ status: 400, body: { error: 'key' }, puts: [] });
+  });
+
+  it('a key item whose registration holds another key finds nothing', async () => {
+    const r = await call(event([runRow()]), {}, (f) => { register(f, 'k2', '1'); f.seed(REGISTER, { pk: 'key#k1', repository_id: '1' }); });
+    expect(r).toMatchObject({ status: 403, puts: [] });
+  });
+});
+
 describe('the request limits (§4)', () => {
   it('only POST', async () => expect((await call(event([runRow()], { method: 'GET' }))).status).toBe(405));
   it('at most 25 rows, at least one, as an array', async () => {
@@ -364,7 +429,9 @@ describe('the request limits (§4)', () => {
     expect((await call(event(null, { raw: `[${' '.repeat(256 * 1024)}]` }))).status).toBe(413);
   });
   it('a failed write answers 502 for that row', async () => {
-    const res = await handle(event([runRow()]), { env, now: () => NOW, put: async () => { throw new Error('throttled'); }, log: () => {} });
+    const f = fakeDynamo();
+    plainRegister(f);
+    const res = await handle(event([runRow()]), { env, now: () => NOW, put: async () => { throw new Error('throttled'); }, log: () => {}, db: f.db });
     expect(res.statusCode).toBe(502);
     expect(JSON.parse(res.body).results).toEqual([{ status: 'failed' }]);
   });
@@ -416,7 +483,10 @@ describe('the write and its signature', () => {
 
   it('a DynamoDB error throws, so the row is reported failed', async () => {
     const fakeFetch = (async () => new Response('{}', { status: 400 })) as unknown as typeof fetch;
-    await expect(putItem({ pk: 'k1#review' }, env, fakeFetch)).rejects.toThrow('PutItem 400');
+    await expect(putItem({ pk: 'k1#review' }, env, fakeFetch)).rejects.toThrow('PutItem failed: HTTP400');
+    // DynamoDB's own error names its code alone, never its message, which can quote the request.
+    const quoting = (async () => new Response(JSON.stringify({ __type: 'com.amazonaws.dynamodb.v20120810#ValidationException', message: 'k1#review is bad' }), { status: 400 })) as unknown as typeof fetch;
+    await expect(putItem({ pk: 'k1#review' }, env, quoting)).rejects.toThrow(/^PutItem failed: ValidationException$/);
   });
 
   it('the partitions erasure walks are every lane, work and finding (plan 0006 §2.3)', () => {

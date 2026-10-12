@@ -11,7 +11,7 @@ import {
 } from '../../infra/telemetry/function/oidc.mjs';
 
 /**
- * Plan 0008 step J1: the OIDC token verifier (§2.2 to §2.5), not yet wired to any endpoint.
+ * Plan 0008 step J1: the OIDC token verifier (§2.2 to §2.5), which J3's endpoints stand behind.
  * Every token here is signed in the test with a key pair generated in the test, and GitHub's
  * JWKS endpoint is a fake `fetch`, so no fixture holds a real token and nothing leaves the
  * process. Each row of §2.5's mutation table but the last four (the metrics page exception,
@@ -94,7 +94,7 @@ describe('a valid token', () => {
       ok: true,
       caller: {
         repository_id: REPO, repository_owner_id: OWNER, ref: 'refs/heads/main', event_name: 'schedule',
-        workflow: 'telemetry-collect.yml', version: '0.40.0',
+        workflow: 'telemetry-collect.yml', version: '0.40.0', repository: 'octo/widget',
       },
       registration: registrations[REPO],
       ref_moved: false,
@@ -282,6 +282,27 @@ describe('§2.5: every check fails closed, and each one can fail', () => {
 
   it('a schedule token on another branch is admitted, and says the default branch moved (§2.3: a rename heals on the next schedule)', async () => {
     expect(await verify(token(claims({ ref: 'refs/heads/trunk' })))).toMatchObject({ ok: true, caller: { ref: 'refs/heads/trunk' }, ref_moved: true });
+  });
+
+  it('a tombstone (§7: erased, no key, no default ref) holds `ref` to a branch\'s form only, so it can answer that it is erased (J3)', async () => {
+    const tombstone = async () => ({ repository_owner_id: OWNER, status: 'erased' });
+    const dispatch = token(claims({ event_name: 'workflow_dispatch', ref: 'refs/heads/other' }));
+    expect(await verify(dispatch, { registrationOf: tombstone })).toMatchObject({ ok: true, ref_moved: false });
+    // Still a branch, and still the registered owner.
+    expect(await verify(token(claims({ ref_type: 'tag' })), { registrationOf: tombstone })).toEqual(refused(403, 'ref'));
+    expect(await verify(token(claims({ repository_owner_id: '1' })), { registrationOf: tombstone })).toEqual(refused(403, 'owner'));
+    // An erasure still walking (erased, its key kept) and a registration without a default ref are not tombstones.
+    const walking = async () => ({ repository_owner_id: OWNER, status: 'erased', key: 'k_test', default_ref: 'refs/heads/main' });
+    expect(await verify(dispatch, { registrationOf: walking })).toEqual(refused(403, 'ref'));
+    const keyed = async () => ({ repository_owner_id: OWNER, status: 'erased', key: 'k_test' });
+    expect(await verify(dispatch, { registrationOf: keyed })).toEqual(refused(403, 'ref'));
+    expect(await verify(dispatch, { registrationOf: async () => ({ repository_owner_id: OWNER, status: 'active' }) })).toEqual(refused(403, 'ref'));
+  });
+
+  it('answers the token\'s `repository`, unchecked, for the name hashes (§3.4), and null without one', async () => {
+    expect(await verify(token(claims()))).toMatchObject({ ok: true, caller: { repository: 'octo/widget' } });
+    expect(await verify(token(without('repository')))).toMatchObject({ ok: true, caller: { repository: null } });
+    expect(await verify(token(claims({ repository: ['octo/widget'] })))).toMatchObject({ ok: true, caller: { repository: null } });
   });
 
   it('`ref_type` not checked: a tag ref equal in name to the default branch is refused', async () => {

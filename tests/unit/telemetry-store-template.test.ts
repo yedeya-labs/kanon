@@ -67,12 +67,14 @@ describe('the table (§5, §10, K-OBS-17)', () => {
     expect(table.Properties.SSESpecification).toBeUndefined();
     expect(table.Properties.KeySchema).toEqual([{ AttributeName: 'pk', KeyType: 'HASH' }, { AttributeName: 'sk', KeyType: 'RANGE' }]);
   });
-  it('its resource policy denies every write to all but the function and the Owner (§4)', () => {
+  it('its resource policy denies every write to all but the function, the Owner, and the self-read role the function alone assumes (§4; plan 0008 §7)', () => {
     const [deny, ...rest] = statements(table.Properties.ResourcePolicy.PolicyDocument);
     expect(rest).toEqual([]);
     expect(deny).toMatchObject({ Effect: 'Deny', Principal: '*' });
     expect([...deny.Action].sort()).toEqual(['dynamodb:BatchWriteItem', 'dynamodb:DeleteItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem']);
-    expect(deny.Condition).toEqual({ ArnNotEquals: { 'aws:PrincipalArn': [{ 'Fn::GetAtt': ['IngestRole', 'Arn'] }, { Ref: 'OwnerPrincipalArn' }] } });
+    expect(deny.Condition).toEqual({ ArnNotEquals: { 'aws:PrincipalArn': [
+      { 'Fn::GetAtt': ['IngestRole', 'Arn'] }, { Ref: 'OwnerPrincipalArn' }, { 'Fn::GetAtt': ['SelfReadRole', 'Arn'] },
+    ] } });
   });
 });
 
@@ -174,13 +176,53 @@ describe('the register table (plan 0008 §5.1, §5.3)', () => {
 
 describe('the ingest function and its URL (§4)', () => {
   const fn = R.IngestFunction!.Properties;
-  it('the URLs are IAM-authenticated, and there are two: the ingest URL and the aggregate URL', () => {
-    expect(byType('AWS::Lambda::Url').map(([name, r]) => [name, r.Properties.AuthType])).toEqual([['IngestUrl', 'AWS_IAM'], ['AggregateUrl', 'AWS_IAM']]);
+  it('the unqualified URLs are IAM-authenticated; the one public URL is the ingest function\'s `live` alias\'s (plan 0008 §9)', () => {
+    expect(byType('AWS::Lambda::Url').map(([name, r]) => [name, r.Properties.AuthType, r.Properties.Qualifier]))
+      .toEqual([['IngestUrl', 'AWS_IAM', undefined], ['IngestLiveUrl', 'NONE', 'live'], ['AggregateUrl', 'AWS_IAM', undefined]]);
+    expect(R.IngestLiveUrl!.Properties.TargetFunctionArn).toEqual({ 'Fn::GetAtt': ['IngestFunction', 'Arn'] });
   });
-  it('no permission is public, and each is held to IAM auth', () => {
+  it('the aliases are `live` and `erase`, on $LATEST, and no URL serves `erase`', () => {
+    expect(byType('AWS::Lambda::Alias').map(([name, r]) => [name, r.Properties.Name, r.Properties.FunctionVersion, r.Properties.FunctionName]))
+      .toEqual([['IngestLiveAlias', 'live', '$LATEST', { Ref: 'IngestFunction' }], ['IngestEraseAlias', 'erase', '$LATEST', { Ref: 'IngestFunction' }]]);
+  });
+  it('the only public permissions are the `live` alias\'s, through its URL; every other is held to IAM auth', () => {
+    const open = byType('AWS::Lambda::Permission').filter(([, p]) => p.Properties.Principal === '*');
+    expect(open.map(([name, p]) => [name, p.Properties])).toEqual([
+      ['IngestLiveUrlPermission', { FunctionName: { Ref: 'IngestLiveAlias' }, Action: 'lambda:InvokeFunctionUrl', Principal: '*', FunctionUrlAuthType: 'NONE' }],
+      ['IngestLiveInvokePermission', { FunctionName: { Ref: 'IngestLiveAlias' }, Action: 'lambda:InvokeFunction', Principal: '*', InvokedViaFunctionUrl: true }],
+    ]);
     for (const [, p] of byType('AWS::Lambda::Permission')) {
-      expect(p.Properties.Principal).not.toBe('*');
+      if (p.Properties.Principal === '*') continue;
       expect(p.Properties.FunctionUrlAuthType).toBe('AWS_IAM');
+    }
+  });
+  it('the token path\'s role grants: a self-read session, and the `erase` alias, nothing more', () => {
+    const doc = R.IngestRole!.Properties.Policies.find((x: J) => x.PolicyName === 'token-path').PolicyDocument;
+    expect(statements(doc)).toEqual([
+      { Sid: 'AssumeTheSelfReadRole', Effect: 'Allow', Action: 'sts:AssumeRole', Resource: { 'Fn::Sub': 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/kanon-telemetry-self-read' } },
+      { Sid: 'StartTheErasureWalk', Effect: 'Allow', Action: 'lambda:InvokeFunction', Resource: { 'Fn::Sub': 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kanon-telemetry-ingest:erase' } },
+    ]);
+  });
+  it('the self-read role trusts the ingest function\'s role alone, and may only Query and delete rows (plan 0008 §3.5)', () => {
+    const role = R.SelfReadRole!.Properties;
+    expect(role.RoleName).toBe('kanon-telemetry-self-read');
+    expect(statements(role.AssumeRolePolicyDocument)).toEqual([{ Effect: 'Allow', Principal: { AWS: { 'Fn::GetAtt': ['IngestRole', 'Arn'] } }, Action: 'sts:AssumeRole' }]);
+    expect(role.Policies).toHaveLength(1);
+    expect(statements(role.Policies[0].PolicyDocument)).toEqual([{
+      Effect: 'Allow', Action: ['dynamodb:Query', 'dynamodb:BatchWriteItem'],
+      Resource: { 'Fn::Sub': 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry' },
+    }]);
+  });
+  it('is told the token path\'s settings, and the audience is a parameter defaulting to kanon-telemetry', () => {
+    expect(fn.Environment.Variables).toMatchObject({
+      REGISTER_TABLE: REGISTER_TABLE, AUDIENCE: { Ref: 'Audience' }, MIN_TOKEN_VERSION: { Ref: 'MinTokenVersion' },
+      SELF_READ_ROLE: { 'Fn::GetAtt': ['SelfReadRole', 'Arn'] }, CURSOR_KEY: { Ref: 'CursorKey' },
+    });
+    expect(template.Parameters.Audience.Default).toBe('kanon-telemetry');
+    expect(template.Parameters.CursorKey.NoEcho).toBe(true);
+    for (const [name, ok, bad] of [['MinTokenVersion', '0.40.0', '0.40'], ['CursorKey', 'ab'.repeat(32), 'AB'.repeat(32)]] as const) {
+      const re = new RegExp(template.Parameters[name].AllowedPattern);
+      expect(re.test(ok) && re.test('') && !re.test(bad), name).toBe(true);
     }
   });
   it('its role may PutItem and write its own logs, and nothing else', () => {
@@ -211,7 +253,7 @@ describe('the ingest function and its URL (§4)', () => {
     expect(fn.Environment.Variables.NAME_HASHES).toBe(`${key}=${[...new Set(words.map(sha256))].sort().join(':')}`);
     for (const w of words) expect(fn.Environment.Variables.NAME_HASHES).not.toContain(w);
     // The function reads back exactly the scrub's context for that repository.
-    expect(nameHashesOf({ TABLE_NAME: '', ACCOUNT_ID: '', WRITER_KEYS: key, NAME_HASHES: fn.Environment.Variables.NAME_HASHES }, key))
+    expect(nameHashesOf({ NAME_HASHES: fn.Environment.Variables.NAME_HASHES }, key))
       .toEqual(nameContext({ repository: repo }));
     const two = render({ ...register, repositories: [{ key: 'k1', repository: 'o/r', readers: ['ref:refs/heads/main'] }, { key: 'k2', repository: 'o/s', readers: ['ref:refs/heads/main'] }] }, { gh });
     expect(two.template.Resources.IngestFunction.Properties.Environment.Variables.NAME_HASHES)
@@ -387,6 +429,7 @@ describe('the aggregate-only function (§6.1, decided by the Owner 2026-10-07)',
   });
   it('no writer or reader may call the aggregate URL, and no invoker the ingest URL', () => {
     for (const [, p] of byType('AWS::Lambda::Permission')) {
+      if (p.Properties.Principal === '*') continue; // the `live` alias's URL, held above
       const principal = p.Properties.Principal['Fn::GetAtt'][0] as string;
       expect(p.Properties.FunctionName.Ref).toBe(principal.startsWith('AggregateInvokerRole') ? 'AggregateFunction' : 'IngestFunction');
     }
@@ -399,7 +442,7 @@ describe('the region and the cost (§5, §9)', () => {
   });
   it('creates only resource types inside plan 0002 §9\'s estimate', () => {
     const allowed = new Set(['AWS::DynamoDB::Table', 'AWS::IAM::Role', 'AWS::IAM::OIDCProvider', 'AWS::Lambda::Function',
-      'AWS::Lambda::Url', 'AWS::Lambda::Permission', 'AWS::Logs::LogGroup']);
+      'AWS::Lambda::Url', 'AWS::Lambda::Permission', 'AWS::Logs::LogGroup', 'AWS::Lambda::Alias']);
     expect(Object.values(R).map((r) => r.Type).filter((t) => !allowed.has(t))).toEqual([]);
   });
   it('the static template parses as plain YAML, with no short-form tags', () => {

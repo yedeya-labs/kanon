@@ -5,6 +5,8 @@ import { erase, partitionsOf } from '../../infra/telemetry/erase.mjs';
 import { handle, SHORT_RETENTION_MS } from '../../infra/telemetry/function/index.mjs';
 import { validate, LANES } from '../../actions/agent-telemetry/schema.mjs';
 import { nameContext, verify } from '../../actions/agent-telemetry/scrub.mjs';
+import { keysCache } from '../../infra/telemetry/function/register-store.mjs';
+import { fakeDynamo, REGISTER } from './helpers/fake-dynamo.js';
 
 /**
  * Plan 0002 step S3: the Owner's verify script (its falsifiers) and the erase script (§10),
@@ -75,8 +77,14 @@ function fakeAws(over: {
       ...(key !== null ? { queryStringParameters: { key } } : {}),
       body,
     };
+    // The register, as plan 0008 J3's SigV4 path reads it: `kk`, active, with its name hashes.
+    const register = fakeDynamo();
+    register.seed(REGISTER, { pk: 'repo#1', repository_id: '1', key: 'kk', status: 'active', name_hashes: [...nameContext({ repository: 'acme-corp/widget-shop' })] });
+    register.seed(REGISTER, { pk: 'key#kk', repository_id: '1' });
     const res = await handle(ev, {
-      env: { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, WRITER_KEYS: 'kk', IMPORTER_ROLE: 'kanon-telemetry-importer', NAME_HASHES: `kk=${[...nameContext({ repository: 'acme-corp/widget-shop' })].join(':')}` },
+      env: { TABLE_NAME: 'kanon-telemetry', ACCOUNT_ID: ACCOUNT, IMPORTER_ROLE: 'kanon-telemetry-importer' },
+      db: register.db,
+      keys: keysCache(),
       now: () => NOW,
       put: async (item: Record<string, unknown>) => {
         const expires = over.brokenHandler ? (item.expires_at as number) + 86_400 : item.expires_at;

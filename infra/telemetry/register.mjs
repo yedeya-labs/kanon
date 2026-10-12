@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // The operator's CLI for the register table (plan 0008 §5.3), run by the Owner with the Owner's
-// profile. Nothing else reads or writes the table until the token path (plan 0008 J3).
+// profile. The ingest function reads the table on both of its paths and writes registrations,
+// erasures and quota counters on the token path (plan 0008 J3); the operator's fields are this
+// script's alone.
 //
 //   node infra/telemetry/register.mjs list [--profile kanon]
 //   node infra/telemetry/register.mjs suspend --repository <owner/name> --reason <code>
