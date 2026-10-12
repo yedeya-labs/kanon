@@ -295,3 +295,20 @@ describe("docs/lanes.md's tables say the review lane is opt-in (kanon#626)", () 
     expect(r).toMatch(/dispatch/);
   });
 });
+
+// kanon#641: with `!` at the Claude Code prompt, standard input isn't a terminal, so `gh secret
+// set` stores an empty secret without a word (#625). The sentence that stores the Claude token
+// sends it where `kanon init`'s does (`OWN_TERMINAL`): the person's own terminal, or a file.
+describe("docs/lanes.md stores the Claude token in the person's own terminal or from a file, never with `!` (kanon#641)", () => {
+  const sentence = read('docs/lanes.md').split('\n').find((l) => l.includes('gh secret set CLAUDE_CODE_OAUTH_TOKEN')) ?? '';
+
+  it('finds the sentence, so the check below is not vacuous', () => {
+    expect(sentence).not.toBe('');
+  });
+
+  it('says own terminal, never `!` at the Claude Code prompt, or `< <file>`', () => {
+    expect(sentence).toMatch(/in your own terminal/);
+    expect(sentence).toMatch(/never with `!` at the Claude Code prompt[^.]*empty/);
+    expect(sentence).toContain('< <file>');
+  });
+});
