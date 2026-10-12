@@ -820,7 +820,7 @@
         "group": "review",
         "does": "After a reviewed pull request merges, files a follow-up issue for each review suggestion it didn't apply.",
         "needs": [],
-        "cost": "A model run per merged pull request the Reviewer reviewed.",
+        "cost": "A model run per merged pull request the Reviewer reviewed, except one whose reviews are all the Reviewer's and whose latest verdict declares zero open items.",
         "recommend": [],
         "when": "When the Reviewer's suggestions that a merge left out should become issues rather than be lost."
       },
