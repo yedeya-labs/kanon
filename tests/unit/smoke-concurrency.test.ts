@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { interpolate } from './helpers/expression.js';
 import { SMOKE_SUFFIX as SUFFIX } from './helpers/smoke-group.js';
 
 /**
@@ -52,29 +53,14 @@ function groupsOf(file: string, seen = new Set<string>()): { where: string; grou
   return out;
 }
 
-/** A context in which every property GitHub would leave unset reads as '', as GitHub's do. */
-const ctx = (o: Record<string, unknown>): Doc =>
-  new Proxy(o, {
-    get: (t, k) => {
-      const v = (t as Record<string | symbol, unknown>)[k];
-      if (v === undefined || v === null) return '';
-      return typeof v === 'object' ? ctx(v as Record<string, unknown>) : v;
-    },
-  });
-
 /**
- * Evaluates a concurrency group the way GitHub does for the expressions the lanes use:
- * `&&`, `||`, `==`, `!=`, `!`, property access, single-quoted strings, `format()`.
+ * Evaluates a concurrency group the way GitHub does, with the shared evaluator, which models
+ * every construct the lanes' groups use (`&&`, `||`, `==`, `!=`, `!`, property access,
+ * single-quoted strings, `format()`, and the review lane's `contains()` over `labels.*.name`)
+ * and throws on anything else.
  */
 function evaluate(group: string, c: { github: Doc; inputs: Doc; needs: Doc }): string {
-  const format = (f: string, ...a: unknown[]) => f.replace(/\{(\d+)\}/g, (_, i: string) => String(a[Number(i)]));
-  return group.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expr: string) => {
-    const js = expr.replace(/\s!=\s/g, ' !== ').replace(/\s==\s/g, ' === ');
-    const v = new Function('github', 'inputs', 'needs', 'format', `return (${js});`)(
-      ctx(c.github), ctx(c.inputs), ctx(c.needs), format,
-    ) as unknown;
-    return v === '' || v === null || v === undefined ? '' : String(v);
-  });
+  return interpolate(group, c);
 }
 
 /** The events a lane's real caller can run on, for one PR and one issue, numbered 7. */

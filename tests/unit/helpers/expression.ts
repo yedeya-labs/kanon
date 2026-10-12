@@ -10,14 +10,15 @@
  * with `***`.
  *
  * It models the subset the store steps use: literals, context paths, `format`, `toJSON`,
- * `fromJSON` with a property read after it, `||`, `&&`, `==`, `!=` and `!`. Anything else THROWS,
+ * `fromJSON` with a property read after it, `||`, `&&`, `==`, `!=` and `!`, and the review lane's
+ * concurrency group adds `contains` and an object filter (`labels.*.name`). Anything else THROWS,
  * so a new construct fails here by name rather than being misread.
  */
 
 type Value = unknown;
 export type Contexts = Record<string, Value>;
 
-const TOKEN = /\s*(?:('(?:[^']|'')*')|(\d+(?:\.\d+)?)|(==|!=|&&|\|\||[!(),.])|([A-Za-z_][\w-]*))/y;
+const TOKEN = /\s*(?:('(?:[^']|'')*')|(\d+(?:\.\d+)?)|(==|!=|&&|\|\||[!(),.*])|([A-Za-z_][\w-]*))/y;
 
 const tokenize = (src: string): string[] => {
   const out: string[] = [];
@@ -55,11 +56,21 @@ export const evaluate = (src: string, ctx: Contexts): Value => {
     if (want !== undefined && x !== want) throw new Error(`expected ${want}, got ${String(x)} in ${src}`);
     return x!;
   };
+  // An object filter (`.*`) yields an array, and a property read after it reads that property of
+  // every element, as GitHub's does: `labels.*.name` is every label's name.
   const postfix = (v: Value): Value => {
+    let filtered = false;
     while (peek() === '.') {
       take('.');
       const k = take();
-      v = v !== null && typeof v === 'object' ? (v as Record<string, Value>)[k] : null;
+      if (k === '*') {
+        v = Array.isArray(v) ? v : v !== null && typeof v === 'object' ? Object.values(v) : [];
+        filtered = true;
+      } else if (filtered) {
+        v = (v as Value[]).map((e) => (e !== null && typeof e === 'object' ? (e as Record<string, Value>)[k] : null));
+      } else {
+        v = v !== null && typeof v === 'object' ? (v as Record<string, Value>)[k] : null;
+      }
     }
     return v;
   };
@@ -79,6 +90,7 @@ export const evaluate = (src: string, ctx: Contexts): Value => {
       let v: Value;
       if (x === 'toJSON') v = toJSON(args[0]);
       else if (x === 'fromJSON') v = JSON.parse(asString(args[0]));
+      else if (x === 'contains') v = Array.isArray(args[0]) ? args[0].some((e) => equal(e, args[1])) : asString(args[0]).toLowerCase().includes(asString(args[1]).toLowerCase());
       else if (x === 'format') v = asString(args[0]).replace(/\{\{|\}\}|\{(\d+)\}/g, (m, n) => (m === '{{' ? '{' : m === '}}' ? '}' : asString(args[Number(n) + 1])));
       else throw new Error(`the function ${x} is not modelled`);
       return postfix(v);

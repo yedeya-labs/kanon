@@ -742,7 +742,9 @@ jobs:
             open issue that already asks it. Never write that you left it with a human
             and do neither.
 
-            ALWAYS APPLY A `sev:*` (RA-729). You are the only one who can: severity is a
+            ALWAYS APPLY A `sev:*` (RA-729) TO EACH FOLLOW-UP ISSUE YOU FILE, never to the
+            pull request: the only label you put on the pull request is `agent:reviewer`.
+            You are the only one who can: severity is a
             claim about REACHABILITY AND IMPACT, which lives in the diff and its
             callers — the code you just read — not in the issue prose a later reader
             gets. Use the rubric in docs/qa/explorer-playbook.md: `sev:critical` = data
