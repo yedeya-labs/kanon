@@ -7,7 +7,9 @@ import { parse } from 'yaml';
  * K-LAYOUT-18 (kanon#207): Kanon's scripts and lanes reach an adopter's workflows by FILE NAME,
  * so every name they use must be one the rule fixes: a lane's own file name (each caller has
  * its lane's name), or a workflow a lane declares on a `# READS WORKFLOW:` line, which
- * `lane-check` then requires the adopter to have.
+ * `lane-check` then requires the adopter to have. A site that reaches a lane's runs or
+ * dispatches it goes through the lane's CALLER (`via: 'caller'`, kanon#726): the workflow on the
+ * default branch that calls the lane, which is the lane's file name only when nothing else is.
  *
  * Every site that names a workflow file is listed below, and a sweep of the library and the
  * lanes fails on one that isn't, so a new read can't arrive without a decision here.
@@ -38,14 +40,17 @@ type Site = {
    */
   reaches: string | 'declared' | 'callers' | 'self';
   constant?: string;
+  /** `caller`: the line names the file `laneCallerFile` resolved for the lane `reaches` (kanon#726). */
+  via?: 'caller';
 };
 
 const SITES: Site[] = [
-  { file: 'scripts/merge-gate.mjs', line: "gh(['workflow', 'run', 'agent-review.yml'", reaches: 'agent-review.yml' },
-  { file: 'scripts/review-run-evidence.mjs', line: '/runs?event=workflow_run', reaches: 'agent-review.yml', constant: 'REVIEW_WORKFLOW_FILE' },
-  { file: 'scripts/review-run-evidence.mjs', line: '/runs?head_sha=', reaches: 'agent-review.yml', constant: 'REVIEW_WORKFLOW_FILE' },
-  { file: 'scripts/brief-revise-recovery.mjs', line: "'--workflow', WORKFLOW,", reaches: 'agent-lead-revise.yml', constant: 'WORKFLOW' },
-  { file: 'scripts/lead-reconcile.mjs', line: "'--workflow', 'agent-implement-revise.yml'", reaches: 'agent-implement-revise.yml' },
+  { file: 'scripts/merge-gate.mjs', line: "gh(['workflow', 'run', caller,", reaches: 'agent-review.yml', constant: 'REVIEW_LANE_FILE', via: 'caller' },
+  { file: 'scripts/review-run-evidence.mjs', line: '/runs?event=workflow_run', reaches: 'agent-review.yml', constant: 'REVIEW_WORKFLOW_FILE', via: 'caller' },
+  { file: 'scripts/review-run-evidence.mjs', line: '/runs?head_sha=', reaches: 'agent-review.yml', constant: 'REVIEW_WORKFLOW_FILE', via: 'caller' },
+  { file: 'scripts/brief-revise-recovery.mjs', line: "'--workflow', laneCallerFile(WORKFLOW,", reaches: 'agent-lead-revise.yml', constant: 'WORKFLOW', via: 'caller' },
+  { file: 'scripts/lead-reconcile.mjs', line: "'--workflow', laneCallerFile(REVISE_WORKFLOW,", reaches: 'agent-implement-revise.yml', constant: 'REVISE_WORKFLOW', via: 'caller' },
+  { file: 'scripts/lib/lane-caller.mjs', line: "l.startsWith('agent-')", reaches: 'callers' },
   { file: 'scripts/lead-reconcile.mjs', line: "'--workflow', deploy.workflow,", reaches: 'declared' },
   { file: 'scripts/review-recovery.mjs', line: "'--workflow', 'ci.yml'", reaches: 'ci.yml' },
   { file: 'scripts/workflow-health.mjs', line: "f.startsWith('agent-')", reaches: 'callers' },
@@ -91,6 +96,10 @@ describe('every workflow Kanon reaches by file name is one K-LAYOUT-18 fixes', (
 
   it.each(SITES.filter((s) => s.constant))('$file reaches $reaches through $constant', (s) => {
     expect(read(s.file)).toMatch(new RegExp(`\\b${s.constant} = '${s.reaches.replace('.', '\\.')}';`));
+  });
+
+  it.each(SITES.filter((s) => s.via === 'caller'))('$file reaches $reaches through its caller (kanon#726)', (s) => {
+    expect(read(s.file)).toMatch(new RegExp(`laneCallerFile\\(${s.constant}, \\{ repo(?:: REPO)?, json \\}\\)`));
   });
 
   it.each(SITES.filter((s) => s.reaches !== 'declared' && s.reaches !== 'callers' && s.reaches !== 'self'))('$file reaches $reaches, a name the rule fixes', (s) => {

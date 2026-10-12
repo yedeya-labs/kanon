@@ -61,6 +61,7 @@ import { appLogin } from './app-register.mjs';
 import { asRole } from './lib/role-marker.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { beforeApply } from './lib/labels.mjs';
+import { laneCallerFile } from './lib/lane-caller.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -102,7 +103,8 @@ export const normaliseLogin = (login) =>
 
 function gh(args) {
   beforeApply(args, (a) => execFileSync('gh', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
-  return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  // 32 MiB, not the 1 MiB default: the lane-caller read returns every workflow's text (kanon#726).
+  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 const ghJson = (args) => JSON.parse(gh(args));
 
@@ -202,7 +204,8 @@ export function standingChangesRequest(pr) {
  */
 export function briefReviseRunsFor(sha, since, { json = ghJson, churnedAfter = /** @type {string|null} */ (null) } = {}) {
   try {
-    const runs = json(['run', 'list', '--repo', REPO, '--workflow', WORKFLOW,
+    // The lane's CALLER, under whatever name the adopter gave it (kanon#726).
+    const runs = json(['run', 'list', '--repo', REPO, '--workflow', laneCallerFile(WORKFLOW, { repo: REPO, json }),
       '--commit', sha, '--limit', '100', '--json', 'headSha,event,status,conclusion,databaseId,createdAt']);
     return reviseDeliveries(runs, { sha, since, churnedAfter });
   } catch {

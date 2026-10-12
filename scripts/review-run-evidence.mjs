@@ -118,14 +118,16 @@
 // without Actions; `runsFor` is the only part that needs a token.
 
 import { appLogin } from './app-register.mjs';
+import { laneCallerFile } from './lib/lane-caller.mjs';
 
 /** One identity, three spellings across three endpoints. Normalise, never match a list. */
 export const normaliseLogin = (login) =>
   String(login ?? '').replace(/^app\//, '').replace(/\[bot\]$/, '');
 
-/** The workflow whose runs are the evidence, keyed by FILE rather than by display
- *  name: a workflow can be renamed, and `name:` is not what identifies it. It is also
- *  what the REST endpoint below addresses, so there is nothing to keep in step. */
+/** The lane whose runs are the evidence, keyed by FILE rather than by display
+ *  name: a workflow can be renamed, and `name:` is not what identifies it. The runs are
+ *  its CALLER's, which `laneCallerFile` finds on the default branch (kanon#726); this
+ *  name is where they are looked for when no caller is found, as before. */
 export const REVIEW_WORKFLOW_FILE = 'agent-review.yml';
 
 /** The App whose label churn IS the recovery, so that its runs are the loop bound —
@@ -218,12 +220,12 @@ function titleFloor(sha, { repo, json, since }) {
  * The `workflow_run`-triggered runs of this workflow whose title names `sha` (RA-1717).
  * Throws when the window cannot be read completely.
  */
-function titledRunsFor(sha, { repo, json, since }) {
+function titledRunsFor(sha, { repo, json, since, file }) {
   const floor = titleFloor(sha, { repo, json, since });
   const found = [];
   for (let page = 1; ; page++) {
     const res = json(['api',
-      `repos/${repo}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_run`
+      `repos/${repo}/actions/workflows/${file}/runs?event=workflow_run`
       + `&created=${encodeURIComponent(`>=${floor}`)}&per_page=100&page=${page}`]);
     const runs = res?.workflow_runs;
     if (!Array.isArray(runs)) throw new Error('unreadable workflow_run listing');
@@ -282,10 +284,13 @@ function titledRunsFor(sha, { repo, json, since }) {
  */
 export function reviewRunsFor(sha, { repo, json, since = null }) {
   try {
+    // The review lane's CALLER (kanon#726): its runs are the caller's, under whatever name the
+    // adopter gave it. Unfound, the lane's own name, as before.
+    const file = laneCallerFile(REVIEW_WORKFLOW_FILE, { repo, json });
     const res = json(['api',
-      `repos/${repo}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?head_sha=${sha}&per_page=100`]);
+      `repos/${repo}/actions/workflows/${file}/runs?head_sha=${sha}&per_page=100`]);
     const bySha = (res?.workflow_runs ?? []).filter((r) => r.head_sha === sha);
-    const byTitle = titledRunsFor(sha, { repo, json, since });
+    const byTitle = titledRunsFor(sha, { repo, json, since, file });
     const seen = new Set();
     return [...bySha, ...byTitle]
       .filter((r) => !seen.has(r.id) && seen.add(r.id))

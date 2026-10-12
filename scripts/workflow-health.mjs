@@ -51,8 +51,10 @@
 // GITHUB_REPOSITORY and a `gh` token in its environment.
 
 import { execFileSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { isCliEntry } from './lib/cli-entry.mjs';
+import { laneCallersIn } from './lib/lane-caller.mjs';
 import { beforeApply } from './lib/labels.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
@@ -471,8 +473,9 @@ export function renderAuditFinding(verdict, { maxAgeDays = AUDIT_MAX_AGE_DAYS } 
  *
  *  READ FROM DISK, NOT FROM A LIST. A list of the lanes that run a model (the reference
  *  adopter's telemetry collector keeps one) is the wrong set here: it OMITS
- *  `agent-lead-reconcile.yml`, which is the workflow this check was written for. Every lane
- *  caller is named after its lane (K-LAYOUT-18), so the `agent-` prefix finds them all.
+ *  `agent-lead-reconcile.yml`, which is the workflow this check was written for. A lane
+ *  caller is named after its lane (K-LAYOUT-18), so the `agent-` prefix finds it; one that
+ *  lives elsewhere (a `caller.misplaced` waiver) is found by what it calls (kanon#726).
  *
  *  ITS OWN HOST IS IN THE SET, deliberately: the project digest's caller is
  *  `agent-project-digest.yml`, a lane caller like the rest. A detector visible only as its
@@ -481,9 +484,17 @@ export function renderAuditFinding(verdict, { maxAgeDays = AUDIT_MAX_AGE_DAYS } 
  *  detector cannot report its own total failure — and it is stated rather than glossed.
  *  (In the reference adopter the host was `project-digest.yml`, and this named it too.) */
 export function watchedWorkflows(dir = '.github/workflows') {
-  return readdirSync(dir)
-    .filter((f) => f.startsWith('agent-') && f.endsWith('.yml'))
-    .sort();
+  const names = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f));
+  /** @type {Map<string, string>} */
+  const files = new Map();
+  for (const f of names) {
+    try {
+      files.set(f, readFileSync(join(dir, f), 'utf8'));
+    } catch {
+      // Unreadable: watched only if its name says it is a caller.
+    }
+  }
+  return [...new Set([...names.filter((f) => f.startsWith('agent-') && f.endsWith('.yml')), ...laneCallersIn(files)])].sort();
 }
 
 /**
