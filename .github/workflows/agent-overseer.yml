@@ -296,6 +296,7 @@ jobs:
       # THE TABLE AND REGION ARE RESOLVED HERE, ONCE: the repository variables, or the hosted
       # store's when unset or empty, checked and handed on as this step's outputs, which the
       # credentials step and the read use. A value of the wrong shape stops the job here, by name.
+      # It also stamps the job's start under the runner's temp directory, for the report's deadline.
       - name: Mask the reader role's account id and key, and resolve the store
         id: resolve
         env:
@@ -334,7 +335,8 @@ jobs:
       # THE HEADLINE INDICATORS (kanon#668; plan 0003 §6.4, option A): `kanon metrics report` over
       # this repository's work items and runs, the store's thirteen months, written to this job's
       # summary and nowhere else. Last, so a slow or failed report never holds up the two files.
-      # It exits 0 whatever happens, and withholds the report when any partition can't be read.
+      # It exits 0 whatever happens, and withholds the report when any partition can't be read, or
+      # can't be read by its deadline: eight minutes after the stamp, inside the job's ten (kanon#682).
       - name: Report the headline indicators to the job summary
         env:
           ROLE: ${{ secrets.KANON_TELEMETRY_READER_ROLE }}
