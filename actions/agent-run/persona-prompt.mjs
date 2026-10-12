@@ -8,6 +8,12 @@
 // exported the copies as `KANON_BASELINE_PLAYBOOKS`; this names them, with the remedy. None, and
 // nothing is added.
 //
+// AND THAT THE SESSION ENDS WHEN THE AGENT STOPS (kanon#621). Every lane's agent runs headless,
+// so a command still running when it ends its turn is lost with whatever it meant to do next.
+// `action.yml` takes background tasks and `Monitor` away and raises the foreground cap; this
+// says why, so the agent waits for a long command rather than looking for another way round.
+// Appended to every lane's prompt, last.
+//
 // Written to `$GITHUB_OUTPUT` as `text`, under a delimiter the prompt can't contain, or to stdout
 // outside a job.
 //
@@ -40,9 +46,26 @@ export function withBaselines(prompt, copies) {
   ].join('\n');
 }
 
+/** What `withHeadless` appends. Exported so its sentences are asserted, not assumed. */
+export const HEADLESS_RULE = [
+  'THIS IS A HEADLESS RUN (kanon#621). Your session ends when you stop, and nothing resumes it: a',
+  'command still running when you end your turn is lost, and so is everything you meant to do',
+  'after it. Run every command in the foreground and wait for it, giving a long one (a test tier,',
+  'a gate) an explicit `timeout` up to the Bash tool\'s maximum. Never end your turn to wait for',
+  'something to finish or report back.',
+].join('\n');
+
+/**
+ * The prompt, with the headless rule appended.
+ * @param {string} prompt
+ */
+export function withHeadless(prompt) {
+  return `${prompt.trimEnd()}\n\n${HEADLESS_RULE}`;
+}
+
 if (isCliEntry(import.meta.url)) {
   const env = process.env;
-  const text = withBaselines(withPersona(env.PROMPT ?? '', env.KANON_ROLE ?? '', env.KANON_POST_HEADER ?? ''), env.KANON_BASELINE_PLAYBOOKS ?? '');
+  const text = withHeadless(withBaselines(withPersona(env.PROMPT ?? '', env.KANON_ROLE ?? '', env.KANON_POST_HEADER ?? ''), env.KANON_BASELINE_PLAYBOOKS ?? ''));
   const eof = `KANON_PROMPT_${randomBytes(16).toString('hex')}`;
   const out = `text<<${eof}\n${text}\n${eof}\n`;
   // Outside a job, to stdout: the prompt is what a run by hand wants to see.

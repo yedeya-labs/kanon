@@ -81,12 +81,15 @@ runs:
     # post with that line, whose hidden comment is the role marker. No role resolved, and that
     # instruction is left out. It also names the playbooks `agent-setup` put Kanon's
     # baseline in place of, at a path git ignores, and how to commit the project's own there
-    # (kanon#329). The script is Kanon's, beside this block in the action cache, never the
-    # workspace's.
+    # (kanon#329). Last, it says the run is headless, so a command still running when the
+    # agent stops is lost (kanon#621, below). The script is Kanon's, beside this block in the
+    # action cache, never the workspace's.
     #
     # `continue-on-error`, and the action falls back to the lane's own prompt: an instruction
     # about the header must never cost the run, and an empty prompt must never reach the agent.
-    - name: Ask the agent to open every post with its persona header, and name the baseline playbooks
+    # Without the headless rule the agent still can't background a command: the action step's
+    # switches do that, and the rule only says why.
+    - name: Ask the agent to open every post with its persona header, name the baseline playbooks, and say the run is headless
       id: prompt
       continue-on-error: true
       shell: bash -e {0}
@@ -120,6 +123,24 @@ runs:
     # while `.github/scripts/reviewer-grant-record.json` or `lead-grant-record.json` names
     # another version: a maintainer runs `.github/scripts/reviewer-grant-probe.mjs` against
     # the CLI the new version installs and commits the records it writes.
+    #
+    # NOTHING RUNS IN THE BACKGROUND (kanon#621). The agent runs headless: when it ends its
+    # turn the session ends, and nothing resumes it when a background task finishes. Six
+    # implement runs in the reference adopter ended `success` with no branch, PR or comment,
+    # each after backgrounding its own gates and ending its turn to wait for them. It
+    # backgrounded them because it first asked for a 20 and a 40 minute foreground `timeout`,
+    # and the Bash tool caps one at 10 minutes. So, for every lane, on CLI 2.1.292:
+    #   - `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` takes `run_in_background` off the Bash tool;
+    #   - `BASH_MAX_TIMEOUT_MS` raises the foreground cap to 45 minutes, so a long gate can run
+    #     to the end where the agent can wait for it. A lane's own `timeout-minutes` still
+    #     bounds the job;
+    #   - `--disallowedTools Monitor`, after the lane's flags, takes away the tool that watches a
+    #     background command, which the switch above leaves on. The action adds a repeated
+    #     `--disallowedTools` to the earlier ones (`ACCUMULATING_FLAGS` in its
+    #     `parse-sdk-options.ts`), as the Lead's flags already rely on.
+    # `persona-prompt.mjs` tells the agent why. `tests/unit/headless-run.test.ts` pins all four.
+    # `agent-finish` is handed the lane's flags without the denial: it is the same on every
+    # run, so it changes no comparison a cost row is read for.
     - uses: anthropics/claude-code-action@v1.0.244
       id: agent
       env:
@@ -127,13 +148,17 @@ runs:
         # Empty leaves the CLI default, which is what an unpinned arm wants — Actions
         # treats an empty env value as set-but-blank, and the CLI reads blank as absent.
         CLAUDE_CODE_PROMPT_CACHE_TTL: ${{ inputs.prompt-cache-ttl }}
+        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+        BASH_MAX_TIMEOUT_MS: "2700000"
       with:
         github_token: ${{ inputs.github-token }}
         # Permit bot-initiated runs (robustness — an issue may be labeled by a bot).
         # The label is the gate; the output is a PR a human must merge (the merge gate).
         allowed_bots: "*"
         prompt: ${{ steps.prompt.outputs.text || inputs.prompt }}
-        claude_args: ${{ inputs.claude_args }}
+        claude_args: |
+          ${{ inputs.claude_args }}
+          --disallowedTools Monitor
         # The string 'true'/'false' the spine's boolean arrived as — the same value the
         # action was handed when this step sat in the spine and read the boolean itself.
         show_full_output: ${{ inputs.full-transcript }}
