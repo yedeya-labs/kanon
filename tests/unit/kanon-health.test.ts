@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 import { MIN_ADOPTERS } from '../../infra/telemetry/function/aggregate.mjs';
+import { WINDOW_DAYS } from '../../infra/telemetry/function/indicators.mjs';
 import {
   DISPUTE_FIELD, DISPUTE_FORM, disputedRule, healthView, releaseList, ruleDisputes, timeToFix, upgradeLag,
 } from '../../scripts/metrics/health.mjs';
@@ -208,6 +209,28 @@ describe("upgradeLag: each adopter's newest version against the release list", (
       run('ffff6666#review', '0.30.0', { row_kind: 'work_item' }),
     ], RELEASES, { now: NOW });
     expect(r).toMatchObject({ adopters: 3 });
+  });
+
+  // The Owner, 2026-10-12 (#670): only adopters still running Kanon, by the aggregate's window.
+  it("leaves out an adopter whose newest run row is older than the aggregate's window", () => {
+    const stale = run('dddd4444#review', '0.30.0', { recorded_at: new Date(NOW.getTime() - WINDOW_DAYS * DAY - 1).toISOString() });
+    expect(upgradeLag([...rows, stale], RELEASES, { now: NOW })).toEqual(upgradeLag(rows, RELEASES, { now: NOW }));
+    // Below the minimum once the stale one is left out: it doesn't make up the third adopter.
+    const two = rows.filter((x) => !String(x.pk).startsWith('aaaa'));
+    expect(upgradeLag([...two, stale], RELEASES, { now: NOW })).toEqual({ withheld: true, min_adopters: MIN_ADOPTERS });
+  });
+
+  it('counts an adopter whose newest run row is inside the window, even when its versioned row is older', () => {
+    const active = [
+      run('dddd4444#review', '0.35.0', { recorded_at: at(WINDOW_DAYS + 30) }),
+      run('dddd4444#triage', 'dev', { recorded_at: at(WINDOW_DAYS - 1) }),
+    ];
+    expect(upgradeLag([...rows, ...active], RELEASES, { now: NOW })).toMatchObject({ adopters: 4, releases_behind: { median: 2 } });
+  });
+
+  it("counts an adopter whose newest run row is exactly at the window's edge", () => {
+    const edge = run('dddd4444#review', '0.38.0', { recorded_at: at(WINDOW_DAYS) });
+    expect(upgradeLag([...rows, edge], RELEASES, { now: NOW })).toMatchObject({ adopters: 4, on_latest: 2 });
   });
 
   it('never holds an adopter key', () => {
