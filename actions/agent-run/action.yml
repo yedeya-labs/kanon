@@ -176,7 +176,7 @@ runs:
     # `persona-prompt.mjs` tells the agent why. `tests/unit/headless-run.test.ts` pins all four.
     # `agent-finish` is handed the lane's flags without the denial: it is the same on every
     # run, so it changes no comparison a cost row is read for.
-    - uses: anthropics/claude-code-action@v1.0.244
+    - uses: anthropics/claude-code-action@v1.0.248
       id: agent
       env:
         # Exactly one is non-empty: the credential check above guarantees it. Each is read
