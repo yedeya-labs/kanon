@@ -201,12 +201,26 @@ concurrency:
   # on PR RA-1652 — "Correcting myself first. I approved this at 14:57 on what I believed
   # was the head"). No concurrency key can reach that, which is why the trailer written
   # after the agent step records the run id, and why `merge-gate.mjs` reads it.
+  # ANY OTHER LABEL ON A REVIEW-LABELLED PR TAKES A GROUP OF ITS OWN, ONE PER RUN (kanon#627).
+  # Exempting `agent:reviewer` alone left every other label in the `-open-other` group of
+  # the `review:please` run: the Reviewer applies a `sev:*` after posting its verdict, and
+  # a person can add any label mid-review. Measured on the first timed install: the Judge
+  # posted `APPROVED`, added `agent:reviewer` and `sev:low` a second later, and the
+  # `sev:low` run cancelled the review that had just succeeded, so the run read
+  # `cancelled` and so did its telemetry row. Such an event can start no review (the
+  # `filter` job's `if` declines a label that is not one of the three), so it takes the
+  # run's own id: it can neither cancel a review nor be cancelled by one, and it costs no
+  # runner. ONLY ON A PR THAT ALREADY CARRIES A REVIEW LABEL: on an unlabelled PR the
+  # event is `notify-unlabeled`'s, and it stays in `-other` so the `opened` + `labeled`
+  # pair still collapses into one comment (RA-893). A review label itself still lands in
+  # `-other`, so RA-312's collapse and a re-applied `review:please` are unchanged.
+  #
   # `workflow_run` carries NO pull_request payload, so both fallbacks are empty
   # there and the head SHA is what separates one PR's run from another's. Without
   # it every `workflow_run` in the repo collapses into ONE group and, with
   # `cancel-in-progress`, concurrent PRs cancel each other's reviews.
   # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
-  group: qa-review-${{ github.event.pull_request.number || inputs.pr_number || github.event.workflow_run.head_sha }}-${{ github.event_name }}-${{ (github.event.action == 'opened' || github.event.action == 'labeled') && 'open' || github.event.action || 'manual' }}-${{ github.event.label.name == 'agent:reviewer' && 'reviewer-label' || 'other' }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
+  group: qa-review-${{ github.event.pull_request.number || inputs.pr_number || github.event.workflow_run.head_sha }}-${{ github.event_name }}-${{ (github.event.action == 'opened' || github.event.action == 'labeled') && 'open' || github.event.action || 'manual' }}-${{ github.event.label.name == 'agent:reviewer' && 'reviewer-label' || (github.event.action == 'labeled' && github.event.label.name != 'review:please' && github.event.label.name != 'agent:triage' && github.event.label.name != 'agent:implement' && (contains(github.event.pull_request.labels.*.name, 'review:please') || contains(github.event.pull_request.labels.*.name, 'agent:triage') || contains(github.event.pull_request.labels.*.name, 'agent:implement'))) && format('label-{0}', github.run_id) || 'other' }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -246,11 +260,18 @@ jobs:
     # reads `head_repository.full_name` from the payload (RA-1133). It is a SECURITY
     # refusal, it saves nothing measurable (this repo is private and has had no fork PR),
     # and restating a boundary that holds a private App key in a YAML expression is not
-    # what a minutes change should be doing. The label-added question — whether a
-    # `labeled` event that is not one of the three review labels should start the filter
-    # at all — is likewise left alone: it is a behaviour change rather than a move, and
-    # `review-recovery.mjs` documents this gate as reading the label SET precisely so its
-    # churn label can change without changing which runs start.
+    # what a minutes change should be doing.
+    #
+    # A LABEL THAT IS NOT ONE OF THE THREE STARTS NO REVIEW (kanon#627). It used to reach
+    # `decide` whenever the PR already carried a review label, so a `sev:*` or any other
+    # label added while a review ran could start a second review of the same head. Now a
+    # `labeled` event on the review path must name `review:please`, `agent:triage` or
+    # `agent:implement`, and every other one runs in a concurrency group of its own (see
+    # the group above), so it neither starts nor cancels a review. The recovery's churn
+    # (`review-recovery.mjs`) re-applies `review:please`, which is one of the three, so it
+    # still starts its run; a churn label outside the three would now start nothing.
+    # The second arm, `notify-unlabeled`'s, is unchanged: on a PR with no review label
+    # any label still reaches that job.
     #
     # THE MEMBERSHIP GATE IS THIS JOB'S FIRST STEP (K-AGENT-45), so this job also starts on
     # the events `notify-unlabeled` acts on — the second half of this `if` is that job's —
@@ -264,6 +285,10 @@ jobs:
     if: >-
       !(github.event.action == 'labeled' && github.event.label.name == 'agent:reviewer')
       && ((github.event.action != 'opened'
+           && (github.event.action != 'labeled'
+               || github.event.label.name == 'review:please'
+               || github.event.label.name == 'agent:triage'
+               || github.event.label.name == 'agent:implement')
            && (github.event_name == 'workflow_dispatch'
            || (github.event_name == 'workflow_run'
                && github.event.workflow_run.event == 'pull_request'
@@ -433,10 +458,16 @@ jobs:
       - name: Decide whether to review
         id: decide
         # Only for the events the review acts on: the rest of the job's `if` admits the
-        # events `notify-unlabeled` acts on, which this step leaves undecided.
+        # events `notify-unlabeled` acts on, which this step leaves undecided. A `labeled`
+        # event for a label other than the three is declined here too, as in the job's `if`
+        # (kanon#627): left undecided, `review` is empty and the `review` job skips.
         if: >-
           steps.login.outputs.login != ''
           && github.event.action != 'opened'
+          && (github.event.action != 'labeled'
+              || github.event.label.name == 'review:please'
+              || github.event.label.name == 'agent:triage'
+              || github.event.label.name == 'agent:implement')
           && (github.event_name == 'workflow_dispatch'
           || github.event_name == 'workflow_run'
           || contains(github.event.pull_request.labels.*.name, 'agent:triage')

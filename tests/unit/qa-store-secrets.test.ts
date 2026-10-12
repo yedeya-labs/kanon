@@ -193,7 +193,7 @@ describe('the expression fake behaves as the runner does', () => {
     expect(mask(`a ${ARN} b "${ARN}"`, { R: ARN, E: '' })).toBe('a *** b "***"');
   });
   it('throws on a construct it does not model', () => {
-    expect(() => evaluate('contains(github.ref, 1)', { github: {} })).toThrow(/not modelled/);
+    expect(() => evaluate("startsWith(github.ref, 'refs/')", { github: {} })).toThrow(/not modelled/);
     expect(() => evaluate('vars.X', {})).toThrow(/not given/);
   });
 });
