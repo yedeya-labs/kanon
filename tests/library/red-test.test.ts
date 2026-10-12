@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { UNDECLARED, parseCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import {
-  changedFiles, classify, dirtyPaths, exitCodeFor, materialise, narrowRunnable, planOutput, readResult, runFiles,
-  tierOf, verdict, withMaterialised,
+  CHARACTERIZATION_LABEL, changedFiles, characterization, classify, commentOnlyAt, dirtyPaths, exitCodeFor, materialise,
+  narrowRunnable, noBehaviourChange, planOutput, readResult, runFiles, tierOf, verdict, withMaterialised,
 } from '../../scripts/red-test.mjs';
 import { ROOT } from './helpers/adopter.js';
 
@@ -546,6 +546,82 @@ describe('withMaterialised: the restore is guaranteed, not remembered', () => {
   });
 });
 
+/**
+ * A PR with no behaviour change has no fix to prove (`K-MERGE-13`, the Owner's decision of
+ * 2026-10-12 on #666). Its test is a characterization test: it locks behaviour that is already
+ * right, so it cannot fail on a revert by construction, and a red check there would mean nothing.
+ */
+describe('no behaviour change to revert: read from the diff', () => {
+  const yes = () => true;
+  const no = () => false;
+
+  it('no non-test source change at all, beside docs or nothing', () => {
+    expect(noBehaviourChange({ src: [], unreverted: [], commentOnly: no })).toBe('no-source');
+    expect(noBehaviourChange({ src: [], unreverted: ['docs/qa/specs/observability.md', 'README.md'], commentOnly: no })).toBe('no-source');
+  });
+
+  it('every changed source file is comments or whitespace, beside docs', () => {
+    expect(noBehaviourChange({ src: ['sst.config.ts', 'src/a.ts'], unreverted: ['docs/a.md'], commentOnly: yes })).toBe('comment-only');
+  });
+
+  it('one source file it cannot prove is comments or whitespace keeps the whole diff on the verifying path', () => {
+    const commentOnly = (f: string) => f !== 'src/b.ts';
+    expect(noBehaviourChange({ src: ['src/a.ts', 'src/b.ts'], unreverted: [], commentOnly })).toBeNull();
+  });
+
+  it('a non-doc file the job cannot revert (a config, a migration, a manifest) keeps it there too', () => {
+    for (const f of ['config/flags.json', 'migrations/0001.sql', 'package.json', 'vitest.config.ts', '.github/workflows/ci.yml', 'requirements.txt']) {
+      expect(noBehaviourChange({ src: ['src/a.ts'], unreverted: [f], commentOnly: yes }), f).toBeNull();
+      expect(noBehaviourChange({ src: [], unreverted: [f], commentOnly: yes }), f).toBeNull();
+    }
+  });
+
+  it('reads a file as comment-only only when it is the same blob kind at both ends', () => {
+    const tree = (entries: Record<string, string>) => (args: string[]) => {
+      if (args[0] === 'ls-tree') return entries[args[1] as string] ?? '';
+      if (args[0] === 'cat-file') return args[2] === 'b1' ? 'const a = 1; // old\n' : 'const a = 1; // new\n';
+      throw new Error(`unexpected git ${args.join(' ')}`);
+    };
+    expect(commentOnlyAt('src/a.ts', 'base', 'head', { run: tree({ base: '100644 blob b1\tsrc/a.ts\n', head: '100644 blob b2\tsrc/a.ts\n' }) })).toBe(true);
+    // Made executable: the content is the same, the behaviour is not.
+    expect(commentOnlyAt('src/a.ts', 'base', 'head', { run: tree({ base: '100644 blob b1\tsrc/a.ts\n', head: '100755 blob b2\tsrc/a.ts\n' }) })).toBe(false);
+    // Added by the PR: a new file's existence is a change, whatever it holds.
+    expect(commentOnlyAt('src/a.ts', 'base', 'head', { run: tree({ head: '100644 blob b2\tsrc/a.ts\n' }) })).toBe(false);
+    // A symlink's content is its target.
+    expect(commentOnlyAt('src/a.ts', 'base', 'head', { run: tree({ base: '120000 blob b1\tsrc/a.ts\n', head: '120000 blob b2\tsrc/a.ts\n' }) })).toBe(false);
+  });
+});
+
+describe('no behaviour change to revert: a person\'s `test:characterization` label', () => {
+  const pr = (labels: string[]) => ({ labels: labels.map((name) => ({ name })) });
+  const person = { login: 'yedeya', type: 'User' };
+  const labelled = (sender: unknown, labels = ['agent:implement', CHARACTERIZATION_LABEL]) =>
+    ({ action: 'labeled', label: { name: CHARACTERIZATION_LABEL }, sender, pull_request: pr(labels) });
+
+  it('is honoured when a person applied it, on the run their labelling started', () => {
+    expect(characterization(labelled(person))).toEqual({ kind: 'person', by: 'yedeya' });
+  });
+
+  it('is ignored when any App applied it, the agents\' included, by the label guard\'s test (K-MERGE-13)', () => {
+    expect(characterization(labelled({ login: 'kanon-author[bot]', type: 'Bot' }))).toEqual({ kind: 'app', by: 'kanon-author[bot]' });
+    expect(characterization(labelled({ login: 'github-actions[bot]', type: 'User' }))).toEqual({ kind: 'app', by: 'github-actions[bot]' });
+    expect(characterization(labelled({ login: 'someone', type: 'Bot' }))).toEqual({ kind: 'app', by: 'someone' });
+  });
+
+  it('is not honoured on a run that cannot say who applied it: a push, or another label\'s event', () => {
+    const labels = ['agent:implement', CHARACTERIZATION_LABEL];
+    expect(characterization({ action: 'synchronize', sender: person, pull_request: pr(labels) })).toEqual({ kind: 'unattributed' });
+    expect(characterization({ action: 'labeled', label: { name: 'review:please' }, sender: person, pull_request: pr(labels) })).toEqual({ kind: 'unattributed' });
+    expect(characterization(labelled(undefined))).toEqual({ kind: 'unattributed' });
+  });
+
+  it('is nothing at all on a PR that does not carry it, or with no event', () => {
+    expect(characterization({ action: 'opened', sender: person, pull_request: pr(['agent:implement']) })).toBeNull();
+    expect(characterization(labelled(person, ['agent:implement']))).toBeNull();
+    expect(characterization(null)).toBeNull();
+  });
+});
+
 describe('the reusable workflow', () => {
   const text = readFileSync(join(ROOT, '.github/workflows/red-test.yml'), 'utf8');
   const wf = parse(text);
@@ -668,6 +744,10 @@ describe('only a run that will verify shares the cancellable group, and a person
     { action: 'labeled', label: 'agent:reviewer', labels: [...AGENT, 'agent:reviewer'], runId: 9 },
     { action: 'labeled', label: 'needs:human', labels: [...AGENT, 'needs:human'], runId: 10 },
     { action: 'labeled', label: 'review:please', labels: ['review:please'], runId: 11 },
+    { action: 'labeled', label: 'test:characterization', labels: [...AGENT, 'test:characterization'], runId: 12 },
+    { action: 'unlabeled', label: 'test:characterization', labels: AGENT, runId: 13 },
+    { action: 'unlabeled', label: 'review:please', labels: ['agent:implement'], runId: 14 },
+    { action: 'labeled', label: 'test:characterization', labels: ['test:characterization'], runId: 15 },
   ];
 
   it('evaluates both fields for every event: the rest of this block is vacuous without it', () => {
@@ -705,6 +785,14 @@ describe('only a run that will verify shares the cancellable group, and a person
     expect(groupOf(please)).not.toBe(groupOf(implement));
   });
 
+  it('re-decides when `test:characterization` is applied or removed, and on no other label\'s removal', () => {
+    expect(jobRuns({ action: 'labeled', label: 'test:characterization', labels: [...AGENT, 'test:characterization'], runId: 30 })).toBe(true);
+    expect(jobRuns({ action: 'unlabeled', label: 'test:characterization', labels: AGENT, runId: 31 })).toBe(true);
+    expect(jobRuns({ action: 'unlabeled', label: 'review:please', labels: ['agent:implement'], runId: 32 })).toBe(false);
+    // A person's PR is still not subject, whatever label it is given.
+    expect(jobRuns({ action: 'labeled', label: 'test:characterization', labels: ['test:characterization'], runId: 33 })).toBe(false);
+  });
+
   it('still lets a newer verifying run supersede an older one: a push replaces the old head', () => {
     expect(groupOf({ action: 'synchronize', labels: AGENT, runId: 1 })).toBe(groupOf({ action: 'synchronize', labels: AGENT, runId: 2 }));
     expect(wf.concurrency['cancel-in-progress']).toBe(true);
@@ -728,7 +816,7 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
     }
   };
   type Run = { status: number | null; out: string; output: string; dirty: string; addedOnDisk: boolean };
-  const check = (base: Record<string, string>, head: Record<string, string | null>, opts: { runner?: boolean; args?: string[]; after?: Record<string, string> } = {}): Run => {
+  const check = (base: Record<string, string>, head: Record<string, string | null>, opts: { runner?: boolean; args?: string[]; after?: Record<string, string>; event?: unknown } = {}): Run => {
     const dir = mkdtempSync(join(tmpdir(), 'red-test-e2e-'));
     try {
       const g = (...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { cwd: dir, encoding: 'utf8' }).trim();
@@ -745,10 +833,13 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
       write(dir, opts.after ?? {});
       const output = join(dir, '.git', 'gh-output');
       writeFileSync(output, '');
+      // The event the run was started by, where Actions puts it.
+      const eventPath = join(dir, '.git', 'event.json');
+      if (opts.event !== undefined) writeFileSync(eventPath, JSON.stringify(opts.event));
       // A clean environment: the runner must not inherit this suite's own Vitest worker state.
       const r = spawnSync('node', [SCRIPT, '--base', baseSha, '--head', headSha, ...(opts.args ?? [])], {
         cwd: dir, encoding: 'utf8', timeout: 100_000,
-        env: { PATH: process.env.PATH ?? '', HOME: dir, GITHUB_OUTPUT: output },
+        env: { PATH: process.env.PATH ?? '', HOME: dir, GITHUB_OUTPUT: output, ...(opts.event !== undefined ? { GITHUB_EVENT_PATH: eventPath } : {}) },
       });
       return {
         status: r.status,
@@ -819,11 +910,19 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
     expect(r.out).toContain('**INCONCLUSIVE');
   });
 
-  it('--plan: tests only → verify=false, so the verification job does not run', () => {
+  it('--plan: tests only → verify=false, so the verification job does not run, and no behaviour change is named', () => {
     const r = check({}, REAL_TEST, { args: ['--plan'] });
     expect(r.status, r.out).toBe(0);
     expect(r.output).toBe('verify=false');
+    expect(r.out).toContain('**Skipped: no behaviour change to revert.** No non-test file changed, so');
+  });
+
+  it('--plan: tests beside a non-doc file it cannot revert, and no source → verify=false, saying only that nothing was reverted', () => {
+    const r = check({ 'config/flags.json': '{"a":1}\n' }, { 'config/flags.json': '{"a":2}\n', ...REAL_TEST }, { args: ['--plan'] });
+    expect(r.status, r.out).toBe(0);
+    expect(r.output).toBe('verify=false');
     expect(r.out).toContain('**Skipped:** no source file changed');
+    expect(r.out).not.toContain('no behaviour change');
   });
 
   it('--plan: tests AND source → verify=true, with the scope heading, not a verdict', () => {
@@ -846,6 +945,74 @@ describe('end to end, on a real repository and a real runner', { timeout: 120_00
     const r = check({ 'docs/qa/stack.md': '# Stack\n\n## Code areas\n\n- `src` — code: the application\n', ...BUGGY }, { ...FIXED, ...REAL_TEST }, { args: ['--plan'] });
     expect(r.status, r.out).toBe(1);
     expect(r.out).toMatch(/^red-test: docs\/qa\/stack\.md:\d+: a `code` area is a directory/m);
+  });
+
+  // The shape of the case that showed the gap: a characterization test, comment-only edits to the
+  // source it guards, and a spec whose line references those comments moved.
+  const GUARDED = { 'src/add.mjs': '// Adds.\nexport const add = (a, b) => a + b;\n', 'docs/spec.md': 'See src/add.mjs:2.\n' };
+  const RECOMMENTED = { 'src/add.mjs': '// Adds two numbers.\n// The second line moved the code down.\nexport const add = (a, b) => a + b;\n', 'docs/spec.md': 'See src/add.mjs:3.\n' };
+
+  it('comment-only source beside a doc: "no behaviour change to revert", never UNVERIFIABLE, and not red', () => {
+    const r = check(GUARDED, { ...RECOMMENTED, ...REAL_TEST });
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toContain('**Skipped: no behaviour change to revert.**');
+    expect(r.out).toContain('`src/add.mjs`');
+    expect(r.out).not.toContain('UNVERIFIABLE');
+    expect(r.dirty, 'nothing was reverted').toBe('');
+  });
+
+  it('--plan: comment-only source → verify=false, so the check concludes SKIPPED, never red', () => {
+    const r = check(GUARDED, { ...RECOMMENTED, ...REAL_TEST }, { args: ['--plan'] });
+    expect(r.status, r.out).toBe(0);
+    expect(r.output).toBe('verify=false');
+    expect(r.out).toContain('no behaviour change to revert');
+  });
+
+  it('--plan: tests and docs, no non-test source at all → verify=false, with the same message', () => {
+    const r = check({ 'docs/spec.md': 'One.\n' }, { 'docs/spec.md': 'Two.\n', ...REAL_TEST }, { args: ['--plan'] });
+    expect(r.status, r.out).toBe(0);
+    expect(r.output).toBe('verify=false');
+    expect(r.out).toContain('**Skipped: no behaviour change to revert.**');
+  });
+
+  it('a behaviour change beside the same comment edits and doc is still verified, and still red', () => {
+    const changed = { ...RECOMMENTED, 'src/add.mjs': '// Adds two numbers.\n// The second line moved the code down.\nexport const add = (a, b) => b + a;\n' };
+    const r = check(GUARDED, { ...changed, ...VACUOUS_TEST });
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).not.toContain('no behaviour change');
+    expect(r.out).toContain('**UNVERIFIABLE: 1 changed file(s) were not reverted');
+  });
+
+  it('comment-only source beside a non-doc file it cannot revert stays on the verifying path', () => {
+    const r = check({ ...GUARDED, 'config/flags.json': '{"a":1}\n' }, { ...RECOMMENTED, 'config/flags.json': '{"a":2}\n', ...REAL_TEST });
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).not.toContain('no behaviour change');
+    expect(r.out).toContain('`config/flags.json`');
+  });
+
+  const labelled = (sender: { login: string, type: string }) => ({
+    action: 'labeled', label: { name: 'test:characterization' }, sender,
+    pull_request: { labels: [{ name: 'agent:implement' }, { name: 'test:characterization' }] },
+  });
+
+  it('--plan: a person\'s `test:characterization` turns a behaviour-changing diff\'s check SKIPPED', () => {
+    const r = check(BUGGY, { ...FIXED, ...VACUOUS_TEST }, { args: ['--plan'], event: labelled({ login: 'yedeya', type: 'User' }) });
+    expect(r.status, r.out).toBe(0);
+    expect(r.output).toBe('verify=false');
+    expect(r.out).toContain('**Skipped: a person applied `test:characterization`** (@yedeya)');
+  });
+
+  it('--plan: the same label applied by an App is ignored, and says so: the check still verifies', () => {
+    const r = check(BUGGY, { ...FIXED, ...VACUOUS_TEST }, { args: ['--plan'], event: labelled({ login: 'kanon-author[bot]', type: 'Bot' }) });
+    expect(r.status, r.out).toBe(0);
+    expect(r.output).toBe('verify=true');
+    expect(r.out).toContain('applied by an App (@kanon-author[bot]), and an App cannot waive this check (K-MERGE-13): ignored.');
+  });
+
+  it('the label is read in the scope job only: the verifying run, where the PR\'s hook has run, ignores it', () => {
+    const r = check(BUGGY, { ...FIXED, ...VACUOUS_TEST }, { event: labelled({ login: 'yedeya', type: 'User' }) });
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('**BLOCKED');
   });
 
   it('only a skip declines in the plan: a refusing result still sends the real job to report it', () => {

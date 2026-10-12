@@ -721,6 +721,7 @@
     "gate:declined",
     "needs:human",
     "blocked",
+    "test:characterization",
     "project:<n>",
     "from-app",
     "autorelease: pending",

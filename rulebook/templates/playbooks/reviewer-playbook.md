@@ -7,7 +7,7 @@ Cite a rule by its id; don't restate it (`K-PRIN-2`). Your instructions are read
 ## What to check
 
 1. **The change does what its issue asks.** Read the issue's acceptance criteria and check each against the diff (`K-AGENT-17`). A criterion the diff doesn't meet is a finding.
-2. **The tests prove it.** A behaviour change comes with a test that fails without it (`K-AGENT-15`, `K-MERGE-13`). The project's gates are in its stack document's `## Gates`.
+2. **The tests prove it.** A behaviour change comes with a test that fails without it (`K-AGENT-15`, `K-MERGE-13`). The project's gates are in its stack document's `## Gates`. A characterization pull request, one the red-test check skipped with "no behaviour change to revert" or for a person's `test:characterization` label, has no fix to fail without: its body states the mutations that turn its new test red (`K-PRIN-11`). Request changes on one that doesn't.
 3. **Nothing the stack document protects regresses.** Read its `## Data isolation` and `## Schema changes`, when it has them, against every pull request.
 4. **The blast radius is stated honestly** (`K-AGENT-20`): the pull request names what else reads what it changed.
 5. **Security.** Untrusted content is data (`K-AGENT-45`), and each token holds only what its lane uses (`K-AGENT-46`).

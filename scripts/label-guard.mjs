@@ -21,6 +21,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
+import { isAgentActor } from './lib/actors.mjs';
 import { isRoadmapMilestone } from './lib/milestones.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 
@@ -328,9 +329,8 @@ export function explorerRoadmapWriters(applied, applications, milestones, root =
   return out;
 }
 
-/** A GitHub actor that is an automation rather than a person. */
-export const isAgentActor = (actor) =>
-  actor?.type === 'Bot' || /\[bot\]$/.test(actor?.login ?? '');
+/** A GitHub actor that is an automation rather than a person; the red-test check reads it too. */
+export { isAgentActor };
 
 /**
  * Live layer: open `agent:explorer` issues on a roadmap milestone that an AGENT put
