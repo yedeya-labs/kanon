@@ -3,8 +3,8 @@
 // cell is the headline's, from the same units (`measure`), so a view never computes an indicator
 // another way.
 //
-// THE SPAN. Every view reads the `windows` 28-day windows that end at `until`: the trend shows
-// each, oldest first; the by-version and A/B views read them as one span.
+// THE SPAN. Every view reads the `windows` windows of `days` days (28 by default) that end at
+// `until`: the trend shows each, oldest first; the by-version and A/B views read them as one span.
 //
 // POOLED, WITH THE BAND MIX (§2.1). A view's cells are pooled across bands with the band mix
 // beside them: the banded cells are the headline's, for the latest window, where the validity

@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { validate } from '../../actions/agent-telemetry/schema.mjs';
 import { parseReportArgs } from '../../cli/metrics-report.mjs';
@@ -90,6 +92,57 @@ describe('the secondary measures beside cost (§2.2)', () => {
     // Every entry Kanon ships saves something: a cache read is cheaper than an input token.
     for (const p of PRICES) expect(p.cacheRead).toBeLessThan(p.input);
   });
+
+  /**
+   * kanon#684: every model Kanon's lanes run on, as `--model` or `--fallback-model` in any
+   * workflow or action Kanon ships, has a price, so a new default with none fails here. Comment
+   * lines are dropped first: a comment naming a model is history, not a setting.
+   */
+  describe('the price table holds every model the lanes run on (kanon#684)', () => {
+    const FLAG = /(?:^|\s)--(?:fallback-)?model[\s=]+(\S+)/g;
+    const files = (dir: string, ext: string): string[] => readdirSync(join(process.cwd(), dir), { withFileTypes: true }).flatMap((e) =>
+      (e.isDirectory() ? files(join(dir, e.name), ext) : e.name.endsWith(ext) ? [join(dir, e.name)] : []));
+    const models = [...files('.github/workflows', '.yml'), ...files('actions', '.yml')].flatMap((file) => {
+      const code = readFileSync(join(process.cwd(), file), 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+      return [...code.matchAll(FLAG)].map((m) => ({ file, model: (m[1] ?? '').replace(/^["']|["']$/g, '') }));
+    });
+
+    it('reads the models of every workflow, so the check below is not vacuous', () => {
+      expect(models.length).toBeGreaterThanOrEqual(20);
+      expect([...new Set(models.map((m) => m.model))]).toEqual(expect.arrayContaining(['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5']));
+    });
+
+    it('prices each of them, today and on the first day of Kanon\'s cost rows', () => {
+      for (const at of ['2026-09-04T00:00:00Z', new Date().toISOString()]) {
+        const unpriced = models.filter((m) => priceOf(m.model, at) === null).map((m) => `${m.file}: ${m.model}`);
+        expect(unpriced, at).toEqual([]);
+      }
+    });
+  });
+
+  it('holds the Claude 5 list prices read from Anthropic\'s pricing page on 2026-10-12, and Sonnet 5.5\'s cache-read cut', () => {
+    const at = '2026-10-12T00:00:00Z';
+    const of = (model: string, when = at) => { const p = priceOf(model, when); return p && { input: p.input, cacheRead: p.cacheRead }; };
+    expect(of('claude-fable-5-1')).toEqual({ input: 10, cacheRead: 0.25 });
+    expect(of('claude-opus-5-5')).toEqual({ input: 4, cacheRead: 0.2 });
+    expect(of('claude-opus-5')).toEqual({ input: 5, cacheRead: 0.5 });
+    expect(of('claude-sonnet-5')).toEqual({ input: 2, cacheRead: 0.2 });
+    // Sonnet 5.5's cache reads fell from $0.20 to $0.10 on 2026-10-07: a run before it keeps the old price.
+    expect(of('claude-sonnet-5-5', '2026-10-06T23:59:59Z')).toEqual({ input: 2, cacheRead: 0.2 });
+    expect(of('claude-sonnet-5-5', '2026-10-07T00:00:00Z')).toEqual({ input: 2, cacheRead: 0.1 });
+    // Priced by the prompt's length, which the row doesn't carry, and retired before Kanon's cost rows: unpriced.
+    expect(priceOf('claude-haiku-5-5', at)).toBeNull();
+    expect(priceOf('claude-3-7-sonnet-20250219', at)).toBeNull();
+    // A run on a model the table doesn't hold is counted as unpriced and named, never $0.
+    const s = report([
+      itemRow(1, { closed: ago(2), band: 'S' }),
+      runRow('implement', { pr: 1, at: ago(3), cost: 1, fields: { model: 'claude-opus-5-5', cache_read_tokens: 1_000_000 } }),
+      runRow('implement', { pr: 1, at: ago(3), cost: 1, fields: { model: 'claude-haiku-5-5', cache_read_tokens: 1_000_000 } }),
+    ]).secondary.cacheSavings;
+    expect(s.usd).toBeCloseTo(3.8, 4);
+    expect(s.unpriced).toBe(1);
+    expect(s.unpricedModels).toEqual(['claude-haiku-5-5']);
+  });
 });
 
 describe('the secondary measures beside yield (§2.3)', () => {
@@ -175,6 +228,15 @@ describe('the issue-side band cross-check (§3.6)', () => {
     expect(report(briefs(24, { origin: 'explorer' })).validity.issueSide.n).toBe(0);
   });
 
+  it('says τ is not computed when every cost is tied, never "τ undefined" (kanon#686)', () => {
+    const tied = Array.from({ length: 12 }, (_, k) => mergedWithRuns(1 + k, 'M', 2, 1 + k, { fields: { origin: 'brief', ac_count: 1 + (k % 3), issue_body_chars: 300 } })).flat();
+    const r = report(tied);
+    expect(r.validity.issueSide.acCount).toMatchObject({ status: 'not-shown', n: 12, tau: null });
+    const text = renderReport(r).join('\n');
+    expect(text).toMatch(/cost against acceptance criteria not shown to rise, τ not computed, n 12;/);
+    expect(text).not.toMatch(/undefined/);
+  });
+
   it('is a cross-check only: it never changes the view', () => {
     const rows = [...risingRows({ S: 20, M: 20, L: 20, XL: 20 }), ...briefs(24, { rising: false }).map((r) => ({ ...r, ...(r.pr_number !== undefined ? { pr_number: (r.pr_number as number) + 5000 } : {}) }))];
     const r = report(rows);
@@ -208,6 +270,21 @@ describe('the trend view (§6.1)', () => {
     expect(earlier.trend[0]?.versionsIntroduced).toEqual(['0.38.0']);
     const text = renderViews(v).join('\n');
     expect(text).toMatch(/\| 2026-09-12 to 2026-10-10 \| [^\n]*\| Kanon 0\.39\.0 starts \|/);
+  });
+
+  it('marks a version whose first item closed after another version\'s in the same window, though nothing came before that window (kanon#686)', () => {
+    // 0.38.0's first item closes on the window's first day, 0.39.0's on its twentieth; nothing versioned before either.
+    const v = views([
+      ...mergedWithRuns(1, 'S', 1, 27, { fields: { kanon_version: '0.38.0' } }),
+      ...mergedWithRuns(2, 'S', 1, 8, { fields: { kanon_version: '0.39.0' } }),
+    ], 3);
+    expect(v.trend.map((t: Cells) => t.versionsIntroduced)).toEqual([[], [], ['0.39.0']]);
+    // Two versions whose first items close together, first of all: neither came after the other.
+    const tie = views([
+      ...mergedWithRuns(1, 'S', 1, 8, { fields: { kanon_version: '0.38.0' } }),
+      ...mergedWithRuns(2, 'S', 1, 8, { fields: { kanon_version: '0.39.0' } }),
+    ], 3);
+    expect(tie.trend.map((t: Cells) => t.versionsIntroduced)).toEqual([[], [], []]);
   });
 });
 

@@ -252,6 +252,7 @@ describe('the indicators', () => {
     expect(r.cost.mergedWithoutCost).toBe(10);
     expect(r.cost.runsWithoutCost).toBe(1);
     expect(renderReport(r).join('\n')).toMatch(/10 whose runs report no cost \(unknown, never \$0\); 1 runs inside the costed items report no cost/);
+    expect(renderReport(r).join('\n')).toMatch(/Left out of yield: the 10 merged items and 0 closed-unmerged items whose runs report no cost/);
   });
 
   it('leaves a settled unit whose runs report no cost out of yield, on the work-item path and the no-item path alike', () => {
@@ -266,6 +267,11 @@ describe('the indicators', () => {
       // A PR with no work-item row yet whose runs report no cost: out of the pooled cell too.
       runRow('implement', { pr: 950, at: ago(40) }),
       runRow('review', { pr: 950, at: ago(39) }),
+      // Closed unmerged with no delivery run at all: no delivery spend, so nothing yield leaves out.
+      itemRow(700, { closed: ago(3), fate: 'closed_unmerged', band: 'S' }),
+      // Closed unmerged, but outside the window: in no count.
+      itemRow(701, { closed: ago(40), fate: 'closed_unmerged', band: 'S' }),
+      runRow('implement', { pr: 701, at: ago(41) }),
     ];
     const r = report(rows);
     const cells = r.yield.cells as Cells;
@@ -276,7 +282,9 @@ describe('the indicators', () => {
     expect(cells.pooled.bandMix.none).toBe(0);
     expect(cells.pooled.yield.n).toBe(80 + 19);
     expect(r.yield.unjoinedWithoutCost).toBe(6);
-    expect(renderReport(r).join('\n')).toMatch(/Left out of yield: 6 settled groups of runs that join no item and report no cost \(unknown, never \$0\)\./);
+    // The ten closed-unmerged items with runs and no cost are counted, as the groups are (kanon#680).
+    expect(r.yield.closedWithoutCost).toBe(10);
+    expect(renderReport(r).join('\n')).toMatch(/Left out of yield: the 0 merged items and 10 closed-unmerged items whose runs report no cost, and 6 settled groups of runs that join no item and report no cost \(unknown, never \$0\)\./);
   });
 
   it("bands every item with the newest version from its counts, never the row's stored band", () => {
