@@ -17,10 +17,10 @@ In the reference adopter, both live in one store inside that project's staging e
 Written as rules `K-OBS-16`, `K-OBS-17` and `K-OBS-18` in [chapter 08](../../rulebook/08-observability-and-cost.md).
 
 1. **Telemetry is metadata, never content.**
-   - **Allowed:** the repository, issue and PR numbers, the agent *role*, lane, model, tokens, cost, duration, outcome, and a reason from a fixed list of codes.
+   - **Allowed:** the repository (the opaque key the store files a row under, by the amendment of 2026-10-12, below), issue and PR numbers, the agent *role*, lane, model, tokens, cost, duration, outcome, and a reason from a fixed list of codes.
    - **Never:** code, prompts, issue or PR text, file paths outside Kanon's own tree (narrowed from "file paths" by the amendment of 2026-10-07, below), error messages, other free text, or GitHub usernames.
 2. **QA data stays in the adopter's own cloud account.** Kanon's infrastructure code creates it there. Its lifecycle is independent of any application stage, so an environment teardown can never delete it.
-3. **Sending telemetry to the Kanon-hosted service is opt-in.** By default the same collector writes to the adopter's own store.
+3. **Sending telemetry to the Kanon-hosted service is opt-in.** By default the same collector writes to the adopter's own store (amended 2026-10-12, below: by default the row stays in the adopter's repository as a run artifact, and no collector sends it anywhere).
 4. **Hosted telemetry is kept in the EU, in Frankfurt (`eu-central-1`), for thirteen months**, and an adopter's data is deleted on request.
 5. **Each adopter sees only their own data.** Anything shared across adopters, including published cost figures, is aggregated and anonymised.
 
@@ -35,6 +35,10 @@ Written as rules `K-OBS-16`, `K-OBS-17` and `K-OBS-18` in [chapter 08](../../rul
 - **To whom.** The scrubbed text goes to Kanon's maintainer, who reads it in a private issue, and to one third-party decision provider, **TypeSafe**, whose model **Jev** decides which findings become public Kanon issues. It goes to no one else: a public Kanon issue holds only what `sent` sends, and counts only under rule 5.
 - **What never leaves.** At `sent`, nothing but codes, versions and Kanon paths, so no key, repository name, login, URL or non-Kanon path can, by construction. At `sent with evidence`, the scrub removes every URL, email address, credential shape, adopter-key shape and path outside Kanon's own tree, the repository's own name and its owner's, and the logins and names the lane can see. A login or a personal name the lane never saw is kept out by the template's rules alone, which is why the claim above is "rarely", not "never".
 - **Kept like telemetry:** in Frankfurt, thirteen months, and deleted on request (rule 4). Each adopter reads only its own findings (rule 5).
+
+**Amended 2026-10-12, by [#707](https://github.com/yedeya-labs/kanon/issues/707): rules 1 and 3 say what the code does.**
+- **Rule 1's "the repository" is the opaque key the store files a row under.** No row kind has a field naming the repository. The store's partition key is the adopter's key and a partition name (`<key>#<lane>` for a run row), and the ingest function takes the key from its caller, never from the row (`K-OBS-16`). The "never" list is unchanged.
+- **Rule 3's default is not an adopter-owned store, because no install makes one.** Each lane run keeps its row as one of the run's artifacts, and no collector sends it anywhere, which is what the install's answer **No** gives (`K-OBS-18`, [`docs/sharing.md`](../sharing.md)). Sending telemetry to the Kanon-hosted service is still opt-in, so nothing more leaves by default.
 
 ## Why
 
