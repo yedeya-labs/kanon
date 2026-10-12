@@ -5,6 +5,7 @@ import { parse } from 'yaml';
 import { SCHEMA as DOCTOR_SCHEMA } from '../../cli/doctor.mjs';
 import { SCHEMA as INIT_SCHEMA, UPSTREAM_EVIDENCE_QUESTION } from '../../cli/init.mjs';
 import { REVIEW_LABELS } from '../../scripts/lane-gate.mjs';
+import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL } from '../../scripts/lib/upstream-findings.mjs';
 
 /**
  * The agent skills (plan 0005 step L11, ADR 0014 audience 1; docs/skills.md) are held to the
@@ -451,6 +452,59 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(steps).toMatch(/"The answers"/);
     expect(steps).toMatch(/"The questions"/);
     expect(steps).toMatch(/never tak(e|ing) its default/);
+  });
+
+  // kanon#601: `init` never rewrites an adoption record that exists (`kept`, no content), so an
+  // answer whose only effect is a bullet there brings no `new` file. The upgrade skill writes the
+  // bullet itself, after a yes, or tells the person plainly that it didn't: never drops it.
+  it('has the upgrade skill carry a new answer whose only effect is an adoption-record bullet (#601)', () => {
+    const steps = section(skill('upgrade').body, /^## Steps$/)!;
+    expect(steps).toMatch(/\*\*An answer that lands in a file the repository already has is yours to carry, or to say you didn't\*\*.*`kept`.*`docs\/qa\/adoption\.md`/);
+    expect(steps).toMatch(/show the person the bullet as `init` writes it, and write it into the existing record on this branch after a yes/);
+    expect(steps).toMatch(/add `## Choices` before `## Data`/);
+  });
+
+  it('has the upgrade skill say plainly when it did not carry an answer, in the pull request too (#601)', () => {
+    const steps = section(skill('upgrade').body, /^## Steps$/)!;
+    expect(steps).toMatch(/\*\*Never drop an answer silently\.\*\*.*tell the person plainly that their answer is not in the repository.*`## Left to do`/);
+    expect(steps).toMatch(/\*\*Open the pull request\.\*\*.*under `## Left to do`.*each answer step 5 didn't carry, with the bullet that would carry it/);
+    expect(read('docs/skills.md')).toMatch(/the upgrade skill carries each answer a newer release added .*or tells you plainly, and in the pull request's `## Left to do`, that your answer isn't in the repository/);
+  });
+
+  // The skill's table of record-only answers names every bold bullet `adoptionFile` can write, read
+  // from its source, so a bullet a release adds for a new answer fails here until the skill carries
+  // it. The ones left out are not answers: the plan's bullets come from the inspection, and the
+  // Overseer's follows the lanes the callers run, which doctor holds the record to.
+  it('lists, in the upgrade skill, every adoption-record bullet init writes from an answer (#601)', () => {
+    const steps = section(skill('upgrade').body, /^## Steps$/)!;
+    const table = rows(steps).filter((r) => r[0] !== 'Answer' && !/^-+$/.test(r[0]!));
+    const init = read('cli/init.mjs');
+    const start = init.indexOf('export const adoptionFile = ');
+    expect(start).toBeGreaterThan(-1);
+    const source = init.slice(start, init.indexOf('\n};\n', start));
+    const written = [...source.matchAll(/- \*\*([^*]+):\*\* /g)].map((m) => m[1]!.replace('${UPSTREAM_LABEL}', UPSTREAM_LABEL));
+    const notAnswers = ['Rulesets', 'Merge queue', 'Environments', 'Overseer'];
+    for (const l of notAnswers) expect(written, l).toContain(l);
+    const labels = [...new Set(written)].filter((l) => !notAnswers.includes(l));
+    expect(labels).toContain(UPSTREAM_LABEL);
+    expect(labels.length).toBeGreaterThanOrEqual(4);
+    const documented = new Set([...section(read('docs/init.md'), /^### The answers$/)!.matchAll(/^\| `(\w+)` \|/gm)].map((m) => m[1]!));
+    for (const label of labels) {
+      const row = table.find((r) => r[2]!.includes(`**${label}:**`));
+      expect(row, label).toBeDefined();
+      const fields = [...row![1]!.matchAll(/`(\w+)`/g)].map((m) => m[1]!).filter((f) => !/^(true|false|null)$/.test(f));
+      expect(fields.length, label).toBeGreaterThan(0);
+      for (const f of fields) expect(documented, `${label}: .answers.${f}`).toContain(f);
+    }
+    expect(table.find((r) => r[2]!.includes(`**${UPSTREAM_LABEL}:**`))![3]).toBe(`\`${UPSTREAM_DEFAULT}\``);
+  });
+
+  // K-LAYOUT-10: a record without the bullet means `labelled`, so `labelled` needs no bullet until
+  // `every pull request` exists.
+  it('has the upgrade skill write no review-trigger bullet for the value a record without it means (#601)', () => {
+    const table = rows(section(skill('upgrade').body, /^## Steps$/)!);
+    expect(table.find((r) => r[2]!.includes('**Review trigger:**'))![3]).toBe('`labelled`, null');
+    expect(read('rulebook/11-repository-layout.md')).toMatch(/\*\*A record without the bullets, or no record, means `custom` and `labelled`\*\*/);
   });
 
   // An agent's shell has no terminal on standard input, where `kanon init` refuses to start
