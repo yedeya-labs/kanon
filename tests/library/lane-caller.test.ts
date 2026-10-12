@@ -87,7 +87,18 @@ describe('the helper: lane → caller', () => {
     const files = { 'review.yml': callsLocal('review-inner.yml'), 'review-inner.yml': reusable('agent-review') };
     // The reusable one has no runs of its own: they are the outer workflow's.
     expect(resolve('agent-review', files)).toEqual({ file: 'review.yml', how: 'calls', reason: null });
-    expect(resolve('agent-review', files, record('review.yml')).how).toBe('waiver');
+    // Doctor files `caller.misplaced` on the file whose job calls the lane, the INNER one, so
+    // that is what a waiver names; it is lifted to the workflow that holds the runs.
+    expect(resolve('agent-review', files, record('review-inner.yml'))).toEqual({ file: 'review.yml', how: 'waiver', reason: null });
+    // And so is a lane-named file only another workflow calls.
+    expect(resolve('agent-review', { 'agent-review.yml': reusable('agent-review'), 'outer.yml': callsLocal('agent-review.yml') }))
+      .toEqual({ file: 'outer.yml', how: 'own', reason: null });
+    // At any depth: outer → middle → the waived inner file.
+    const middle = callsLocal('review-inner.yml').replace('  pull_request_target:\n    types: [labeled]\n', '  workflow_call:\n');
+    expect(resolve('agent-review', { 'review.yml': callsLocal('middle.yml'), 'middle.yml': middle, 'review-inner.yml': reusable('agent-review') }, record('review-inner.yml')))
+      .toEqual({ file: 'review.yml', how: 'waiver', reason: null });
+    // A waived inner file nothing calls holds no runs: the next rule decides.
+    expect(resolve('agent-review', { 'review-inner.yml': reusable('agent-review') }, record('review-inner.yml')).how).toBe('fallback');
     // A cycle of local calls calls nothing.
     expect(resolve('agent-review', { 'x.yml': callsLocal('y.yml'), 'y.yml': callsLocal('x.yml') }).how).toBe('fallback');
   });

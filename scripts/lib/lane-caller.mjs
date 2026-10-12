@@ -12,6 +12,8 @@
 //   1. the file at the lane's own name, when it calls the lane;
 //   2. a file the adoption record's `caller.misplaced` waiver names, when it calls the lane;
 //   3. any workflow that calls it, the first by name, when nothing above did.
+// A file 1 or 2 finds that only another workflow calls is lifted to the workflow above it: doctor
+// waives the file whose job calls the lane, which in a nested layout is the inner one.
 // "Calls" is a job whose `uses:` is the lane at a Kanon ref, or a local reusable workflow
 // (`./.github/workflows/x.yml`) that calls it, at any depth. A file only another workflow calls
 // (`on: workflow_call` and nothing else) has no runs of its own, so step 3 skips it and finds the
@@ -98,6 +100,27 @@ const callsLane = (graph, wanted) => {
 const topCallers = (graph, calls) => [...graph.keys()].filter((f) => !graph.get(f)?.reusableOnly && calls(f)).sort();
 
 /**
+ * The workflows whose runs hold `file`'s: `file` itself, unless only another workflow calls it
+ * (`on: workflow_call` alone), which has no runs and can't be dispatched; then each top-level
+ * workflow that reaches it through local reusable workflows, by name. Doctor files
+ * `caller.misplaced` on the file whose job calls the lane, so in a nested layout a waiver names
+ * the inner file, and this lifts it to the workflow above.
+ * @param {ReturnType<typeof callGraph>} graph @param {string} file
+ * @returns {string[]}
+ */
+const runHolders = (graph, file) => {
+  if (!graph.get(file)?.reusableOnly) return [file];
+  /** @type {(from: string, seen: Set<string>) => boolean} */
+  const reaches = (from, seen) => {
+    if (seen.has(from)) return false;
+    seen.add(from);
+    const local = graph.get(from)?.local ?? new Set();
+    return local.has(file) || [...local].some((f) => reaches(f, seen));
+  };
+  return topCallers(graph, (f) => reaches(f, new Set()));
+};
+
+/**
  * Lane → caller, from a snapshot of the default branch. Pure.
  * @param {string} lane the lane, as `agent-review` or `agent-review.yml`
  * @param {Snapshot} snapshot
@@ -108,12 +131,22 @@ export function resolveCaller(lane, { files, record }) {
   const own = `${name}.yml`;
   const graph = callGraph(files);
   const calls = callsLane(graph, (l) => l === name);
-  if (calls(own)) return { file: own, how: 'own', reason: null };
+  /** A rule's candidate, lifted to the workflow that holds its runs; null when nothing does. @param {string} file @param {'own' | 'waiver'} how @returns {Caller | null} */
+  const candidate = (file, how) => {
+    if (!calls(file)) return null;
+    const [first, ...rest] = runHolders(graph, file);
+    if (!first) return null;
+    return { file: first, how, reason: rest.length ? `${[first, ...rest].join(', ')} all call ${file}, which calls the lane ${name}; using ${first}, the first by name` : null };
+  };
+  const byOwn = candidate(own, 'own');
+  if (byOwn) return byOwn;
   const waived = readWaivers(record).waivers
     .filter((w) => w.id === 'caller.misplaced' && w.subject.startsWith(WORKFLOWS))
     .map((w) => w.subject.slice(WORKFLOWS.length));
-  const byWaiver = waived.find((f) => calls(f));
-  if (byWaiver) return { file: byWaiver, how: 'waiver', reason: null };
+  for (const f of waived) {
+    const byWaiver = candidate(f, 'waiver');
+    if (byWaiver) return byWaiver;
+  }
   const found = topCallers(graph, calls);
   const first = found[0];
   if (first) {
