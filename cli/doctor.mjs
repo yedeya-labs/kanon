@@ -53,7 +53,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { URL } from 'node:url';
 import { readResult, resultMasked } from './apps-check.mjs';
-import { checkoutCheck, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
+import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
 import { appsArgs, BRIEF_TEMPLATE_PATH, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
@@ -63,6 +63,7 @@ import { parseYaml } from './workflow-yaml.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '../scripts/lib/upstream-findings.mjs';
 import { LEDGER as CAPABILITY_LEDGER, parseCapabilityWatch } from '../scripts/lib/capability-watch.mjs';
+import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
 
 // The reporter check lives in its own module, which `kanon init` shares (#444).
 export { branchPattern, branchWorkflows, checkJobs, checkReporters } from './check-reporters.mjs';
@@ -211,6 +212,7 @@ export const FINDINGS = {
   'caller.grant-missing': { category: 'caller', blocking: true },
   'caller.name': { category: 'caller', blocking: true },
   'caller.run-name': { category: 'caller', blocking: true },
+  'caller.job-id': { category: 'caller', blocking: true },
   'apps-check.secret-missing': { category: 'caller', blocking: true },
   'apps-check.secret-stale': { category: 'caller', blocking: true },
   'telemetry.unconfigured': { category: 'caller', blocking: false },
@@ -808,11 +810,13 @@ export const diagnose = async (deps, opts) => {
   /**
    * @param {string} id @param {string} subject @param {string} message
    * @param {{ text: string, commands?: string[], url?: string | null }} fix
+   * @param {boolean} [warnOnly] a finding of a blocking id that doesn't block yet: a fixed
+   *   caller's name or job id against a release before `FAILS_FROM`, which lane-check warns of
    */
-  const find = (id, subject, message, fix) => {
+  const find = (id, subject, message, fix, warnOnly = false) => {
     const kind = FINDINGS[id];
     if (!kind) throw new Error(`no finding "${id}" in FINDINGS`);
-    findings.push({ id, category: kind.category, blocking: kind.blocking, subject, message, fix: { text: fix.text, commands: fix.commands ?? [], url: fix.url ?? null } });
+    findings.push({ id, category: kind.category, blocking: kind.blocking && !warnOnly, subject, message, fix: { text: fix.text, commands: fix.commands ?? [], url: fix.url ?? null } });
   };
   /**
    * The items each finding of an `ITEMIZED` id lists, and how to write it again for some of them,
@@ -962,6 +966,18 @@ export const diagnose = async (deps, opts) => {
     }
     if (spec.callerName && c.wf.name !== spec.callerName) {
       find('caller.name', c.file, `is named "${String(c.wf.name ?? '')}"; the lane ${c.lane} tells its own checks apart by its caller's name, which must be "${spec.callerName}".`, { text: `Set the workflow's name:`, commands: [`name: ${spec.callerName}`] });
+    }
+    // The review, implement-revise and merge-reconcile callers' names, and the two racers' job
+    // ids, which the Merger tells their checks apart by (kanon#728, #743): lane-check's own table
+    // and wording, and its switch, a warning before `FAILS_FROM` and a failure from it, read here
+    // at the checked release, which is the one the callers' lane-check runs at once they pin it.
+    const fixed = FIXED_CALLERS[c.lane];
+    if (fixed && !spec.callerName) {
+      const jobs = Object.keys(isMap(c.wf.jobs) ? c.wf.jobs : {});
+      const [named] = callerNameFindings(c.lane, String(c.wf.name ?? ''), null, checked);
+      const [jobbed] = callerNameFindings(c.lane, fixed.name, jobs.length === 1 ? c.jobName : null, checked);
+      if (named) find('caller.name', c.file, `${named.message}.`, { text: `Set the workflow's name:`, commands: [`name: ${fixed.name}`] }, named.level === 'warning');
+      if (jobbed && fixed.job) find('caller.job-id', c.file, `${jobbed.message}.`, { text: `Rename the calling job from \`${c.jobName}:\` to:`, commands: [`  ${fixed.job}:`] }, jobbed.level === 'warning');
     }
     if (spec.callerRunNameEndsWith && !String(c.wf['run-name'] ?? '').endsWith(` ${spec.callerRunNameEndsWith}`)) {
       find('caller.run-name', c.file, `has a run-name that does not end with \` ${spec.callerRunNameEndsWith}\`; the lane ${c.lane}'s runs are found by it.`, { text: `End the workflow's run-name: with that text, as its last token.` });
@@ -1267,7 +1283,7 @@ export const diagnose = async (deps, opts) => {
           url: s.kind === 'Organization' ? `https://github.com/organizations/${s.owner}/settings/apps/${slug}` : `https://github.com/settings/apps/${slug}`,
         }
         : slug
-        ? { text: `Add ${repoName} to the ${id} App's installation, generate a private key on its settings page, and copy its App ID from the same page. kanon apps is your step: check the token with the first command (it creates nothing), then store the key with the second (it checks the key, stores both secrets and deletes the file):`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}@<App ID>=<downloaded>.pem`] }
+        ? { text: `Add ${repoName} to the ${id} App's installation, ${NEW_KEY}, and copy its App ID from the same page. kanon apps is your step: check the token with the first command (it creates nothing), then store the key with the second (it checks the key, stores both secrets and deletes the file):`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} --reuse ${id}:${slug}@<App ID>=<downloaded>.pem`] }
         : { text: `Create the ${id} App from this checkout. kanon apps is your step: check the token with the first command (it creates nothing), then create the App with the second, which stores its secrets:`, commands: [preflight, `kanon apps --owner ${s.owner} --repo ${repoName} ${(() => { try { return appsArgs([id], req).join(' '); } catch { return ''; } })()}`.trim()] }];
       });
     }

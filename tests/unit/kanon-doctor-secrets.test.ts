@@ -4,6 +4,7 @@ import { appSecrets, callerFile, TELEMETRY_CALLER_PATH, telemetryCallerFile } fr
 import { backlogFeedNote, doctor, EXIT, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { checkout, clone, fakeGitHub, healthyFiles, identitiesOf, ids, LANES, NEXT, PINNED, put, registerText, releaseBy, releaserFiles, releaserOn, REPO, REQ, run, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
+import { KEYS_HELP } from '../../cli/apps.mjs';
 
 /**
  * `kanon doctor` on the secrets a workflow maps (#414) and a caller maps at the checked release (#415),
@@ -173,6 +174,8 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
     // Mutation: the key gone too, or alone, still takes kanon apps, which reads the key from its file.
     const both = await l5(new Set([...all()].filter((n) => !appSecrets('judge').includes(n))), {}, (g) => { g.st.apps['widgets-judge']!.id = 4242; });
     expect(missing(both)[0].fix.commands[1]).toBe('kanon apps --owner acme --repo widgets --reuse judge:widgets-judge@<App ID>=<downloaded>.pem');
+    // #637: the fix says where on the App's page the key is made, and links GitHub's page on it.
+    expect(missing(both)[0].fix.text).toContain(`Add widgets to the judge App's installation, generate a private key on its settings page (Credentials → Key pairs → New key; GitHub's steps: ${KEYS_HELP}), and copy its App ID from the same page.`);
     const keyOnly = await l5(new Set([...all()].filter((n) => n !== key)), {}, (g) => { g.st.apps['widgets-judge']!.id = 4242; });
     expect(missing(keyOnly)[0].fix.commands[1]).toBe('kanon apps --owner acme --repo widgets --reuse judge:widgets-judge@<App ID>=<downloaded>.pem');
   });

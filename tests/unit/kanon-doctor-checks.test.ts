@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ import { rulesetBody } from '../../cli/init.mjs';
 import { branchPattern, branchWorkflows, checkJobs, checkReporters, doctor, EXIT, parseArgs, SCHEMA, startsOnMerge, WAIVER_LABEL } from '../../cli/doctor.mjs';
 import { checkout, fakeGitHub, healthyFiles, identitiesOf, ids, LANES, no, ok, PINNED, registerText, REPO, REQ, run, scratch, type Gh, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
+import { callerNameFindings, FAILS_FROM, FIXED_CALLERS } from '../../actions/lane-check/caller-names.mjs';
 
 /**
  * `kanon doctor` on what an installation lacks, and on the job behind a required check (#418, #446,
@@ -571,5 +572,81 @@ describe("kanon doctor and the Lead's brief template (#749)", () => {
     expect(lead(await run(checkout(withLead('# Our brief template\n')), fakeGitHub(), ['--json']))).toEqual([]);
     const r = await run(checkout(healthyFiles()), fakeGitHub(), ['--json']);
     expect(r.json.findings).toEqual([]);
+  });
+});
+
+// #743: doctor reports the review, implement-revise and merge-reconcile callers' names, and the two
+// racers' job ids, from lane-check's own table, at lane-check's own switch: a warning (not
+// blocking) against a release before FAILS_FROM, a failure (blocking) from it.
+describe('kanon doctor on the fixed caller names and job ids (#743)', () => {
+  const RACERS = ['agent-implement-revise', 'agent-merge-reconcile'];
+  const at = (lane: string) => `.github/workflows/${lane}.yml`;
+  const withRacers = () => {
+    const files = healthyFiles();
+    for (const lane of RACERS) files[at(lane)] = callerFile(lane, REQ.lanes[lane]!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' });
+    return files;
+  };
+  type F = { id: string; subject: string; blocking: boolean; message: string; fix: { text: string; commands: string[] } };
+  const named = (r: Result): F[] => r.json.findings.filter((f: F) => ['caller.name', 'caller.job-id'].includes(f.id));
+  /** Renames the review and merge-reconcile callers, and the implement-revise caller's job. */
+  const renamed = () => {
+    const files = withRacers();
+    files[at('agent-review')] = files[at('agent-review')]!.replace(/^name: .*$/m, 'name: Review (Thomas)');
+    files[at('agent-merge-reconcile')] = files[at('agent-merge-reconcile')]!.replace(/^name: .*$/m, 'name: Reconcile');
+    files[at('agent-implement-revise')] = files[at('agent-implement-revise')]!.replace(/^ {2}revise:$/m, '  fix-up:');
+    return files;
+  };
+  const versioned = (to: string) => fakeGitHub({ releases: { [to]: REQ } });
+
+  it('reports nothing for the callers kanon init writes', async () => {
+    const r = await run(checkout(withRacers()), fakeGitHub(), ['--json']);
+    expect(named(r)).toEqual([]);
+  });
+
+  it('reports each wrong name and job id as lane-check does, blocking from FAILS_FROM on', async () => {
+    const r = await run(checkout(renamed()), fakeGitHub(), ['--json']);
+    expect(named(r).map((f) => [f.id, f.subject, f.blocking])).toEqual([
+      ['caller.job-id', at('agent-implement-revise'), true],
+      ['caller.name', at('agent-merge-reconcile'), true],
+      ['caller.name', at('agent-review'), true],
+    ]);
+    const [revise, reconcile, review] = named(r) as [F, F, F];
+    expect(review.message).toBe(`${callerNameFindings('agent-review', 'Review (Thomas)', null, PINNED)[0]!.message}.`);
+    expect(review.message).toContain("an earlier release's spelling");
+    expect(review.fix.commands).toEqual([`name: ${FIXED_CALLERS['agent-review']!.name}`]);
+    expect(revise.message).toContain('`revise`, not `fix-up`');
+    expect(revise.fix).toMatchObject({ text: 'Rename the calling job from `fix-up:` to:', commands: ['  revise:'] });
+    expect(reconcile.fix.commands).toEqual([`name: ${FIXED_CALLERS['agent-merge-reconcile']!.name}`]);
+    for (const f of named(r)) expect(f.message, f.subject).toContain(`since Kanon ${FAILS_FROM} this fails`);
+  });
+
+  it('reports them without blocking against a release before FAILS_FROM, and blocking at it', async () => {
+    const [major, minor] = FAILS_FROM.split('.').map(Number) as [number, number];
+    const before = `v${major}.${minor - 1}.9`;
+    const early = await run(checkout(renamed()), versioned(before), ['--json', '--to', before]);
+    expect(named(early)).toHaveLength(3);
+    for (const f of named(early)) {
+      expect(f.blocking, f.subject).toBe(false);
+      expect(f.message).toContain(`this is a warning until Kanon ${FAILS_FROM}, and a failure from it`);
+    }
+    const from = await run(checkout(renamed()), versioned(`v${FAILS_FROM}`), ['--json', '--to', `v${FAILS_FROM}`]);
+    expect(named(from).map((f) => f.blocking)).toEqual([true, true, true]);
+  });
+
+  it('reads no job id from a caller with more than one job, as lane-check reads none', async () => {
+    const files = withRacers();
+    const path = at('agent-implement-revise');
+    files[path] = `${files[path]!.replace(/^ {2}revise:$/m, '  fix-up:')}  other:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n`;
+    const r = await run(checkout(files), fakeGitHub(), ['--json']);
+    expect(named(r)).toEqual([]);
+  });
+
+  it('documents the switch at the release lane-check fails from', () => {
+    const doc = readFileSync(join(process.cwd(), 'docs/doctor.md'), 'utf8');
+    for (const id of ['caller.name', 'caller.job-id']) {
+      const row = doc.split('\n').find((l) => l.startsWith(`| \`${id}\` |`))!;
+      expect(row, id).toContain(FAILS_FROM);
+      expect(row, id).toContain('#743');
+    }
   });
 });
