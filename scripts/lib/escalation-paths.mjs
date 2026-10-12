@@ -16,6 +16,7 @@
 //
 //   ## Pipeline code
 //   - `scripts/pipeline/` — the project's own pipeline scripts
+//   - `scripts/release.mjs` — the release script, which publishes what the pipeline merged
 //
 // An escalation path is a regular expression over repository-relative paths, in backticks,
 // optionally written `/…/i` to match without regard to case, then optionally its category from
@@ -23,7 +24,8 @@
 // is `other`. Then, optionally, the marker `always` in backticks: the entry stays an escalation
 // path even when the project declares its production promotion human-gated (`escalatingPaths`,
 // below, kanon#344). A pipeline-code entry is a
-// repository-relative directory ending in `/`. Each bullet is followed by an em dash and the
+// repository-relative directory ending in `/`, which covers every file under it, or a single
+// repository-relative file, which covers that file and nothing else (#728). Each bullet is followed by an em dash and the
 // reason. Prose between the bullets is allowed. A list item that isn't an entry is not: an
 // indented, `+` or numbered item, or a bullet that doesn't parse, would otherwise be read as
 // prose and its path silently dropped, which for the Merger is a PR merged with no human.
@@ -38,7 +40,7 @@
 // THE PIPELINE'S OWN PATHS ARE KANON'S, NOT THE FILE'S (`K-MERGE-4`). Every file under
 // `.github/`, every markdown file directly inside `docs/qa/`, `AGENTS.md`, `CLAUDE.md` and every
 // file under `.claude/` escalates whatever the file says, and so does every pipeline-code
-// directory it declares. An adopter whose production promotion is human-gated may declare so in
+// directory and file it declares. An adopter whose production promotion is human-gated may declare so in
 // its adoption record (kanon#158), and then only its high-risk paths stop escalating on their own
 // (`escalatingPaths`, below); none of these do, and neither does a high-risk path marked
 // `always`.
@@ -52,7 +54,7 @@
 // (`K-MERGE-4`). The Merger's verdict judges a pull request, so it reads the file from the
 // repository's default branch (`K-MERGE-17`), never from the pull request or its base.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { fencedLines } from '../spec-lib.mjs';
@@ -121,6 +123,8 @@ const FILE = { file: ESCALATION_FILE, rule: 'K-LAYOUT-8' };
  *   none, and an entry built without one counts as `other` too. `always`: the entry carries the
  *   `always` marker, so a human-gated promotion doesn't take it off the escalation paths
  * @typedef {{ dir: string, reason: string }} PipelineDir
+ *   `dir`: a directory ending in `/`, which covers every path under it, or a single file, which
+ *   covers that path only (#728); `inPipelineCode` and `pipelineCodePattern` say which
  * @typedef {{ paths: EscalationPath[], pipeline: PipelineDir[], defaults: string[] }} EscalationFile
  *   `defaults`: one line per omitted file or section, naming the default it means
  */
@@ -227,23 +231,48 @@ function category(value, line) {
 }
 
 /**
- * One pipeline-code directory: repository-relative, ending in `/`, with no glob, no `..` and
- * no leading `/` or `./`, so it means one directory and only one.
+ * One pipeline-code entry: a directory, repository-relative and ending in `/`, or a single
+ * file, repository-relative and not ending in `/` (#728). Either has no glob, no `..` or `.`
+ * segment and no leading `/` or `./`, so it means one directory or one file and only one. A
+ * file has no empty segment either (`scripts//x.mjs`), because no path git reports has one and
+ * the exact match would silently match nothing.
  * @param {string} value
  * @param {number} line
  */
-function directory(value, line) {
+function pipelineEntry(value, line) {
+  const dir = value.endsWith('/');
+  const parts = value.split('/');
   const ok =
-    value.endsWith('/') &&
     !/^\.?\//.test(value) &&
     !/[*?[\]{}\\\s]/.test(value) &&
-    !value.split('/').some((part) => part === '..' || part === '.');
+    !parts.some((part) => part === '..' || part === '.') &&
+    (dir || !parts.includes(''));
   if (!ok) {
     throw new DeclarationError(
-      `${ESCALATION_FILE}:${line}: \`${value}\` isn't a pipeline-code directory: write a repository-relative directory ending in \`/\`, with no pattern characters (K-LAYOUT-8)`,
+      `${ESCALATION_FILE}:${line}: \`${value}\` isn't a pipeline-code directory or file: write a repository-relative directory ending in \`/\`, or one repository-relative file, with no pattern characters (K-LAYOUT-8)`,
     );
   }
   return value;
+}
+
+/**
+ * Whether a repository-relative path is in one pipeline-code entry: under it when the entry is
+ * a directory (ends in `/`), exactly it when the entry is a file (#728), so `scripts/gate.mjs`
+ * covers neither `scripts/gate.mjs.bak` nor `scripts/gate.mjsx`.
+ * @param {string} entry a declared `## Pipeline code` entry, `PipelineDir`'s `dir`
+ * @param {string} path
+ */
+export function inPipelineCode(entry, path) {
+  return entry.endsWith('/') ? path.startsWith(entry) : path === entry;
+}
+
+/**
+ * One pipeline-code entry as a regular expression over repository-relative paths, matching what
+ * `inPipelineCode` does: a directory as a prefix, a file as the whole path (#728).
+ * @param {string} entry
+ */
+export function pipelineCodePattern(entry) {
+  return new RegExp(entry.endsWith('/') ? `^${escape(entry)}` : `^${escape(entry)}$`);
 }
 
 /**
@@ -278,16 +307,23 @@ export function parseEscalationFile(text) {
     // it carries no marker either.
     if (c !== undefined || always) {
       throw new DeclarationError(
-        `${ESCALATION_FILE}:${line}, under \`${PIPELINE_HEADING}\`, names ${always ? `\`${ALWAYS}\`` : 'a category'}: pipeline code is always \`${PIPELINE_CODE_CATEGORY}\` and always escalates, so write the directory, an em dash, then the reason (K-LAYOUT-8)`,
+        `${ESCALATION_FILE}:${line}, under \`${PIPELINE_HEADING}\`, names ${always ? `\`${ALWAYS}\`` : 'a category'}: pipeline code is always \`${PIPELINE_CODE_CATEGORY}\` and always escalates, so write the directory or file, an em dash, then the reason (K-LAYOUT-8)`,
       );
     }
-    return { dir: directory(value, line), reason };
+    return { dir: pipelineEntry(value, line), reason };
   });
   return { paths, pipeline, defaults };
 }
 
 /**
  * Reads and parses the escalation file from a checked-out tree. No file is Kanon's default.
+ *
+ * A FILE ENTRY THAT IS A DIRECTORY IN THE TREE FAILS BY NAME (#728). Text alone can't tell
+ * `scripts/pipeline`, a directory written without its `/`, from a file of that name, and read as
+ * a file it matches no path under the directory, so its scripts would merge with no human. The
+ * checkout can tell, so every reader of it, lane-check among them, refuses the entry on the pull
+ * request that writes it. An entry naming no file yet is accepted: it escalates the file the
+ * day it is added.
  * @param {string} [root] the repository root
  * @returns {EscalationFile}
  */
@@ -299,7 +335,24 @@ export function readEscalationFile(root = process.cwd()) {
     if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT') return defaultEscalationFile();
     throw new DeclarationError(`${ESCALATION_FILE} couldn't be read: ${/** @type {Error} */ (e).message}`);
   }
-  return parseEscalationFile(text);
+  const file = parseEscalationFile(text);
+  for (const { dir } of file.pipeline) {
+    if (dir.endsWith('/') || !isDirectory(join(root, dir))) continue;
+    const line = linesOf(text).findIndex((l) => /^[-*]\s/.test(l) && l.replace(/^[-*]\s+/, '').startsWith(`\`${dir}\``)) + 1;
+    throw new DeclarationError(
+      `${ESCALATION_FILE}:${line}: \`${dir}\`, under \`${PIPELINE_HEADING}\`, is a directory in this checkout, but an entry without a trailing \`/\` is a single file and matches nothing under it: write \`${dir}/\` (K-LAYOUT-8)`,
+    );
+  }
+  return file;
+}
+
+/** Whether a path is a directory, and not missing or a file. @param {string} path */
+function isDirectory(path) {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -322,7 +375,7 @@ export function readEscalationFileAt(defaultBranch, readFile) {
   return parseEscalationFile(text);
 }
 
-/** Escapes a directory for use inside a regular expression. @param {string} s */
+/** Escapes a path for use inside a regular expression. @param {string} s */
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 
 /**
@@ -361,7 +414,7 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 export function escalatingPaths(file, promotion = null) {
   const own = [
     ...PIPELINE_ESCALATIONS,
-    ...file.pipeline.map(({ dir, reason }) => /** @type {const} */ ([new RegExp(`^${escape(dir)}`), reason])),
+    ...file.pipeline.map(({ dir, reason }) => /** @type {const} */ ([pipelineCodePattern(dir), reason])),
   ];
   if (!promotion) return [...own, ...file.paths.map(({ pattern: re, reason }) => /** @type {const} */ ([re, reason]))];
   return [
@@ -394,7 +447,7 @@ export function escalationCategories(file, changedPaths) {
   /** @type {Array<readonly [RegExp, string]>} */
   const entries = [
     ...PIPELINE_OWN.map(({ re, category: c }) => /** @type {const} */ ([re, c])),
-    ...file.pipeline.map(({ dir }) => /** @type {const} */ ([new RegExp(`^${escape(dir)}`), PIPELINE_CODE_CATEGORY])),
+    ...file.pipeline.map(({ dir }) => /** @type {const} */ ([pipelineCodePattern(dir), PIPELINE_CODE_CATEGORY])),
     ...file.paths.map(({ pattern: re, category: c }) => /** @type {const} */ ([re, c ?? UNCATEGORISED])),
   ];
   const hit = new Set(entries.filter(([re]) => changedPaths.some((p) => re.test(p))).map(([, c]) => c));

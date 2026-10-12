@@ -362,15 +362,18 @@ export function loadRenumbered(path = REGISTRY) {
  *  THE DIRECTORIES ARE THE ADOPTER'S (kanon#54). This was a constant naming the reference
  *  adopter's `scripts/qa/`, so on any other repository a test of its own pipeline code counted
  *  its fixture ids as coverage and as references. A directory is matched as a whole path
- *  segment, after any relative prefix (`../../scripts/pipeline/x.mjs`).
+ *  segment, after any relative prefix (`../../scripts/pipeline/x.mjs`); a single file the
+ *  adopter declares (#728) is matched as the whole rest of the specifier, so `scripts/gate.mjs`
+ *  isn't `scripts/gate.mjsx`.
  *
- *  @param {string[]} pipelineDirs the declared pipeline-code directories, each ending in `/`
+ *  @param {string[]} pipelineDirs the declared pipeline-code entries: directories ending in
+ *  `/`, and single files
  *  @returns {RegExp} */
 export function qaToolingImport(pipelineDirs) {
   if (!Array.isArray(pipelineDirs)) throw new TypeError('qaToolingImport needs the declared pipeline-code directories (K-LAYOUT-8)');
   const escape = (d) => d.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-  const dirs = ['.kanon/scripts/', ...pipelineDirs].map(escape).join('|');
-  return new RegExp(`(?:from\\s+|import\\w*\\s*\\(\\s*)['"](?:[^'"]*/)?(?:${dirs})[^'"]*['"]`);
+  const dirs = ['.kanon/scripts/', ...pipelineDirs].map((d) => (d.endsWith('/') ? `${escape(d)}[^'"]*` : escape(d))).join('|');
+  return new RegExp(`(?:from\\s+|import\\w*\\s*\\(\\s*)['"](?:[^'"]*/)?(?:${dirs})['"]`);
 }
 
 /** The tree an `[AREA-N]` reference outside the specs can live in beside the code areas: the
@@ -422,7 +425,9 @@ export function referenceCorpus(root = process.cwd(), pipelineDirs) {
     .filter((f) => /\.(ts|tsx|mjs|md)$/.test(f))
     .filter((f) => scope === null || scope.some((d) => f.startsWith(d)))
     .filter((f) => !f.startsWith(`${SPEC_DIR}/`))
-    .filter((f) => !pipelineDirs.some((d) => f.startsWith(d)))
+    // A declared directory covers what is under it, a declared file only itself (#728); the
+    // escalation module's `inPipelineCode`, which can't be imported here: it imports this file.
+    .filter((f) => !pipelineDirs.some((d) => (d.endsWith('/') ? f.startsWith(d) : f === d)))
     .filter((f) => isReadableFile(join(root, f)))
     .filter((f) => !(isTestPath(f, areas) && tooling.test(readText(join(root, f)))))
     .sort();

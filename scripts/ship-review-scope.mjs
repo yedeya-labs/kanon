@@ -43,7 +43,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
+import { inPipelineCode, printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 
 /**
@@ -72,7 +72,7 @@ export function sensitiveHits(files, escalation) {
   const hits = [];
   for (const file of files) {
     const path = escalation.paths.find(({ pattern }) => pattern.test(file));
-    const code = escalation.pipeline.find(({ dir }) => file.startsWith(dir));
+    const code = escalation.pipeline.find(({ dir }) => inPipelineCode(dir, file));
     const area = path?.reason ?? code?.reason ?? (AGENT_PIPELINE_UNDER_GITHUB.test(file) ? 'the agent pipeline' : null);
     if (area) hits.push({ file, area });
   }

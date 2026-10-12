@@ -52,7 +52,7 @@ The merge is pinned to the head commit the verdict read. If the head has moved, 
 - every file under `.github/`: the workflows that run Kanon's lanes and pin its release, the project-setup hook, and the deploy workflow whose environment holds the human approval;
 - every markdown file directly inside `docs/qa/`: the adoption record that makes the declaration, the escalation file, the identity register, the sign-off delegation and the playbooks. An adopter's rules are these declarations and the Kanon release its workflows pin; it never copies the rulebook (`K-ADOPT-10`);
 - the agent instructions and agent configuration, `AGENTS.md`, `CLAUDE.md` and `.claude/`;
-- the project's own pipeline code;
+- the project's own pipeline code: each directory, or single file, it declares under `## Pipeline code`, `K-LAYOUT-8` (Owner decision 2026-10-12, #728);
 - a high-risk path the project marks `always` (`K-LAYOUT-8`): code outside `.github/` that keeps the promotion gated, such as infrastructure code that manages the environment's required reviewers, or the role trust that lets only the gated job deploy. Kanon can't tell which of a project's paths decide that, so a project that opts in marks them;
 - a high-risk path that is also a judging input on the default branch (`K-MERGE-17`), such as a document the instructions link to that the project declared so a human approves changes to it.
 
