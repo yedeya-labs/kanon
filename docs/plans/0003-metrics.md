@@ -510,7 +510,7 @@ A section of the public page, always present:
 - **What each indicator doesn't claim,** from §2's tables, word for word.
 - **The detection gap.** Escape rates are lower bounds (§3.5).
 - **The band version, the window, the sample sizes and the intervals,** for every number.
-- **How to reproduce it.** The aggregate script's command and the release it ran at (`K-PRIN-14`).
+- **How to reproduce it.** The aggregate script's command and the release it ran at (`K-PRIN-14`). *Amended 2026-10-12 by the Owner: the page states the release and commit and names `docs/metrics.md` for the commands, which only the store's operator can run, rather than printing them.*
 
 ### 6.4 Where it is hosted
 
