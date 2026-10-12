@@ -14,9 +14,12 @@
 //
 // FAILING CLOSED (§7.3). `decide` answers `promote` only when the Choice is Kanon bug with a
 // confidence of at least `THRESHOLD`, and the Noul is affirmed with at least `THRESHOLD`. Every
-// other case is `keep`, with a reason for the job's ledger: a network error, a timeout or a non-2xx
-// answer; a body that doesn't parse or lacks either answer; another Choice; a Noul not affirmed; a
-// confidence under the threshold, or none at all. `judge` never throws once the request is built.
+// other case is `keep`, and its reason tells the job which case it was. A reason in `UNANSWERED`
+// is a call Jev didn't answer: no provider key, a network error, a timeout, a non-2xx answer, or a
+// body that doesn't parse or lacks either answer. That is not Jev's call, so the job writes no
+// ledger line for it and labels the finding not judged (Owner decision A). Every other `keep` is
+// Jev's own: another Choice, a Noul not affirmed, a confidence under the threshold or none at all.
+// `judge` never throws once the request is built.
 //
 // THE WIRE, from TypeSafe's API reference (docs.typesafe.ai/api.md, read 2026-10-07):
 //   POST https://api.typesafe.ai/v1/systemone, `Authorization: Bearer <key>`, JSON
@@ -31,8 +34,6 @@
 //
 // `node:` built-ins and the runtime's global `fetch` only, like every script under scripts/ (`K-SELF-8`).
 
-import { assertNoKey } from '../../infra/telemetry/function/aggregate.mjs';
-
 export const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const MODEL = 'jev-latest';
 /** Both answers must reach this confidence before a finding is promoted (Owner decision 20). */
@@ -43,6 +44,14 @@ export const TIMEOUT_MS = 30_000;
 /** The Choice's options. Only `kanon_bug` can be promoted. */
 export const KINDS = Object.freeze(['kanon_bug', 'adopter_configuration', 'platform', 'unclear']);
 export const PROMOTABLE = 'kanon_bug';
+
+/**
+ * The reasons of a call Jev didn't answer (§7.3, Owner decision A), plus every `http_<status>`
+ * (`unanswered`). A `keep` with one of them is not Jev's call and moves no agreement count.
+ */
+export const UNANSWERED = Object.freeze(['no_provider_key', 'network_error', 'timeout', 'malformed_body', 'no_answers', 'no_choice', 'no_noul']);
+/** Whether `reason` is a call Jev didn't answer, rather than Jev's own `keep` or `promote`. */
+export const unanswered = (/** @type {string} */ reason) => UNANSWERED.includes(reason) || /^http_\d+$/.test(reason);
 
 /** The two questions, as sent. Their ids are for code; TypeSafe never shows them to the model. */
 export const QUESTIONS = Object.freeze({
@@ -92,11 +101,44 @@ const SIGNATURE = /** @type {const} */ (['lane', 'failed_stage', 'kanon_error', 
 const union = (/** @type {unknown[][]} */ lists) =>
   [...new Set(lists.flat().filter((x) => typeof x === 'string'))].sort();
 
-/** Every string inside `value`, and every word of each, so a key inside a text is found as a value. */
-function wordsOf(/** @type {unknown} */ value, /** @type {string[]} */ out = []) {
-  if (typeof value === 'string') out.push(value, ...value.split(/[^A-Za-z0-9_-]+/).filter(Boolean));
-  else if (value && typeof value === 'object') for (const v of Object.values(value)) wordsOf(v, out);
+/** Every string inside `value`. */
+function stringsOf(/** @type {unknown} */ value, /** @type {string[]} */ out = []) {
+  if (typeof value === 'string') out.push(value);
+  else if (value && typeof value === 'object') for (const v of Object.values(value)) stringsOf(v, out);
   return out;
+}
+
+/** A letter or a digit, the only characters that can continue a key. */
+const ALNUM = /[a-z0-9]/;
+
+/**
+ * Whether `text` holds `key` in any case, joined to its neighbours by anything but a letter or a
+ * digit: a space, `_`, `-`, a dot. A key may itself hold `-`, so `text` is searched for the key
+ * whole, not split into words. A key inside a longer run of letters and digits is not found, so a
+ * short key doesn't match every word it is a part of.
+ * @param {string} text
+ * @param {string} key a registered key, lowercase
+ */
+export function holdsKey(text, key) {
+  if (!key) return false;
+  const t = text.toLowerCase();
+  for (let i = t.indexOf(key); i !== -1; i = t.indexOf(key, i + 1)) {
+    if (!ALNUM.test(t[i - 1] ?? '') && !ALNUM.test(t[i + key.length] ?? '')) return true;
+  }
+  return false;
+}
+
+/**
+ * Refuse a request that holds an adopter key anywhere in its text. The message says only that one
+ * was found: never which, nor where, nor the text around it.
+ * @param {unknown} request
+ * @param {Set<string>} keys
+ */
+function refuseKey(request, keys) {
+  const keyList = [...keys].map((k) => String(k).toLowerCase());
+  for (const text of stringsOf(request)) {
+    if (keyList.some((k) => holdsKey(text, k))) throw new Error('jev: the request holds an adopter key; nothing is sent');
+  }
 }
 
 /**
@@ -105,8 +147,9 @@ function wordsOf(/** @type {unknown} */ value, /** @type {string[]} */ out = [])
  * findings' scrubbed evidence and suggested fix. Never a key, a repository, a run id or a date:
  * only the fields named here are read.
  *
- * Throws, before anything is sent, when `keys` isn't given, or when any string in the request,
- * or any word of one, is an adopter key (`assertNoKey`).
+ * Throws, before anything is sent, when `keys` isn't given, or when any string in the request
+ * holds an adopter key, whole or joined to its neighbours by any non-alphanumeric, in any case
+ * (`holdsKey`).
  * @param {Input} input
  * @param {{ keys: Set<string>, model?: string }} options every adopter key the job knows
  * @returns {JevRequest}
@@ -131,7 +174,7 @@ export function buildRequest(input, { keys, model = MODEL }) {
   state.evidence = findings.filter((f) => f.evidence_level === 'evidence' && (f.evidence || f.suggested_fix))
     .map((f) => ({ evidence: f.evidence ?? null, suggested_fix: f.suggested_fix ?? null }));
   const request = { model, state, questions: QUESTIONS };
-  assertNoKey(wordsOf(request), keys);
+  refuseKey(request, keys);
   return request;
 }
 
@@ -195,17 +238,18 @@ const unreached = (/** @type {unknown} */ e) => {
 
 /**
  * Post one request to Jev. Never throws: a missing key, a network error, a timeout or a non-2xx
- * answer is `{ ok: false }` with the reason, and no key is sent anywhere but `ENDPOINT`.
+ * answer is `{ ok: false }` with the reason. It posts only to `ENDPOINT`, which no option changes,
+ * so the provider key is sent nowhere else.
  * @param {JevRequest} request
- * @param {{ apiKey?: string, fetch?: typeof globalThis.fetch, timeoutMs?: number, endpoint?: string }} options
+ * @param {{ apiKey?: string, fetch?: typeof globalThis.fetch, timeoutMs?: number }} options
  * @returns {Promise<Parsed>}
  */
-export async function call(request, { apiKey, fetch = globalThis.fetch, timeoutMs = TIMEOUT_MS, endpoint = ENDPOINT }) {
+export async function call(request, { apiKey, fetch = globalThis.fetch, timeoutMs = TIMEOUT_MS }) {
   if (!apiKey) return { ok: false, reason: 'no_provider_key' };
   /** @type {Response} */
   let res;
   try {
-    res = await fetch(endpoint, {
+    res = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify(request),

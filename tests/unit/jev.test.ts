@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import {
-  ENDPOINT, KINDS, MODEL, THRESHOLD, TIMEOUT_MS, buildRequest, call, decide, judge, parseResponse,
+  ENDPOINT, KINDS, MODEL, THRESHOLD, TIMEOUT_MS, UNANSWERED, buildRequest, call, decide, holdsKey, judge, parseResponse, unanswered,
 } from '../../scripts/telemetry/jev.mjs';
 
 /**
@@ -100,6 +100,31 @@ describe('what the request holds (§7.2)', () => {
     expect(seen).toHaveLength(0);
   });
 
+  it('a key is refused however the text joins it: by _, by -, in any case, mid-text, or a key that holds - itself (#597)', async () => {
+    const hyphenated = 'ab-c7d9';
+    const keys = new Set([...KEYS, hyphenated]);
+    const texts = [
+      `seen under ${KEY}_review`, `${KEY}-prod failed`, KEY.toUpperCase(), `the run of K3f9A2 stopped`,
+      `stopped at step 3 under ${KEY} while reviewing`, `path/${KEY}.log was read`, `(${KEY})`,
+      `the ${hyphenated} lane`, `x-${hyphenated}-prod`, `${hyphenated.toUpperCase()}_run`,
+    ];
+    for (const text of texts) {
+      const { fetch, seen } = replying(RESPONSE);
+      const input = { ...INPUT, findings: [{ ...INPUT.findings[1]!, evidence: text }] };
+      const err = await judge(input, { keys, apiKey: API_KEY, fetch }).then(() => null, (e: unknown) => e as Error);
+      expect(err, text).toBeInstanceOf(Error);
+      // The message says only that a key was found: never which, the text around it, or the aggregate.
+      expect(err!.message).toBe('jev: the request holds an adopter key; nothing is sent');
+      for (const k of keys) expect(err!.message.toLowerCase()).not.toContain(k);
+      expect(seen).toHaveLength(0);
+    }
+  });
+
+  it('a key inside a longer run of letters and digits is not a key, so a short key does not refuse every word', () => {
+    for (const text of [`x${KEY}`, `${KEY}9`, `ab-c7d9e`, `zab-c7d9`]) expect(holdsKey(text, text.includes('ab-') ? 'ab-c7d9' : KEY), text).toBe(false);
+    expect(holdsKey('anything', '')).toBe(false);
+  });
+
   it('throws without the keys to check against, so an unchecked request is never sent', () => {
     expect(() => buildRequest(INPUT, {} as { keys: Set<string> })).toThrow(/no adopter keys/);
   });
@@ -170,6 +195,55 @@ describe('failing closed (§7.3): every case keeps the finding private', () => {
   it('call never throws, and parseResponse reads text', async () => {
     const { fetch } = replying('not json');
     await expect(call(buildRequest(INPUT, { keys: KEYS }), { apiKey: API_KEY, fetch })).resolves.toEqual({ ok: false, reason: 'malformed_body' });
+  });
+});
+
+describe('which keeps Jev answered (§7.3, Owner decision A, #616)', () => {
+  it('every call Jev did not answer has a reason in UNANSWERED, so the job writes no ledger line for it', async () => {
+    const throwing = (async () => { throw new TypeError('fetch failed'); }) as unknown as typeof globalThis.fetch;
+    const reasons = [
+      (await judge(INPUT, { keys: KEYS, fetch: throwing })).reason,
+      (await judge(INPUT, { keys: KEYS, apiKey: API_KEY, fetch: throwing })).reason,
+      (await judged(RESPONSE, 500)).reason,
+      (await judged(RESPONSE, 429)).reason,
+      (await judged('{"answers": {"kind": ')).reason,
+      (await judged({ model: 'jev-1.13.0' })).reason,
+      (await judged(answering(null, {}))).reason,
+      (await judged(answering({}, null))).reason,
+    ];
+    expect(reasons).toEqual(['no_provider_key', 'network_error', 'http_500', 'http_429', 'malformed_body', 'no_answers', 'no_choice', 'no_noul']);
+    for (const r of reasons) expect(unanswered(r), r).toBe(true);
+    expect(unanswered('timeout')).toBe(true);
+    expect([...UNANSWERED].sort()).toEqual(['malformed_body', 'network_error', 'no_answers', 'no_choice', 'no_noul', 'no_provider_key', 'timeout']);
+  });
+
+  it('every keep Jev answered is Jev\'s own call, and so is a promote', async () => {
+    const kept = [
+      answering({ choice: 'unclear' }, {}), answering({ choice: 'something_else' }, {}), answering({}, { noul: 0.04 }),
+      answering({ confidence: 0.89 }, {}), answering({}, { noul: 0.89 }),
+    ];
+    for (const body of kept) {
+      const d = await judged(body);
+      expect(d.call).toBe('keep');
+      expect(unanswered(d.reason), d.reason).toBe(false);
+    }
+    expect(unanswered((await judged(RESPONSE)).reason)).toBe(false);
+    expect(unanswered('http_')).toBe(false);
+  });
+
+  it('the module\'s header does not say every keep reaches the ledger', () => {
+    const header = readFileSync('scripts/telemetry/jev.mjs', 'utf8').split('\nexport const ENDPOINT')[0]!;
+    expect(header).not.toMatch(/reason for the job's ledger/);
+    expect(header).toMatch(/`UNANSWERED`[\s\S]*no[\s/]+ledger line/);
+  });
+});
+
+describe('the provider key goes only to ENDPOINT (#597)', () => {
+  it('call takes no endpoint: one passed anyway is ignored', async () => {
+    const { fetch, seen } = replying(RESPONSE);
+    const options = { apiKey: API_KEY, fetch, endpoint: 'https://elsewhere.invalid/' } as Parameters<typeof call>[1];
+    await call(buildRequest(INPUT, { keys: KEYS }), options);
+    expect(seen.map((x) => x.url)).toEqual([ENDPOINT]);
   });
 });
 

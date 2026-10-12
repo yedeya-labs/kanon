@@ -1,3 +1,7 @@
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -6,6 +10,7 @@ import {
 } from '../../infra/telemetry/function/aggregate.mjs';
 import { cliQuery, fromRegister, TABLE } from '../../infra/telemetry/aggregate.mjs';
 import { LANES } from '../../actions/agent-telemetry/schema.mjs';
+import { writeStub } from './helpers/stub-bin.js';
 
 /**
  * Plan 0002 §6 and §6.1 (decided by the Owner, 2026-10-07, #443): the aggregate. Cross-adopter
@@ -312,6 +317,66 @@ describe('the reader', () => {
     expect(() => fromRegister({ repositories: [{ key: 'alpha', publish_own_figures_as: true }] })).toThrow(/not a label/);
     expect(() => fromRegister({ repositories: [] })).toThrow(/no repositories/);
     expect(() => fromRegister({ repositories: [{ key: 'Bad#Key' }] })).toThrow(/valid key/);
+  });
+});
+
+describe('a malformed register or answer is refused without quoting it (#638)', () => {
+  // A made-up key, in a shape the register refuses, so it is never valid and never real.
+  const SECRET = 'k_test_SECRET123';
+  const quoted = (text: string) => [SECRET, 'SECRET', 'k_test'].filter((s) => text.includes(s));
+  const thrown = (f: () => unknown): string => {
+    try { f(); } catch (e) { return e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e); }
+    throw new Error('expected a throw');
+  };
+
+  it('names the entry by its index and field, never by its text', () => {
+    const bad = thrown(() => fromRegister({ repositories: [{ key: 'alpha' }, { key: SECRET }] }));
+    expect(bad).toMatch(/repositories\[1\] is an entry without a valid key/);
+    expect(quoted(bad)).toEqual([]);
+    const label = thrown(() => fromRegister({ repositories: [{ key: 'alpha' }, { key: 'beta', publish_own_figures_as: SECRET }] }));
+    expect(label).toMatch(/repositories\[1\]\.publish_own_figures_as is not a label/);
+    expect(quoted(label)).toEqual([]);
+  });
+
+  it('a query that answers something other than JSON is refused without quoting the answer', async () => {
+    const q = cliQuery({ aws: () => ({ code: 0, stdout: `{"Items":[{"pk":${SECRET}#review}]}` }), profile: 'kanon' });
+    const err = await q(queryRequest(TABLE, 'alpha#review')).then(() => 'resolved', (e: unknown) => (e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e)));
+    expect(err).toMatch(/a query answered something that is not JSON/);
+    expect(quoted(err)).toEqual([]);
+  });
+
+  /** Run the CLI as the Owner does, with an `aws` stub first on PATH. */
+  const cli = (register: string, awsBody = 'exit 1') => {
+    const dir = mkdtempSync(join(tmpdir(), 'telemetry-aggregate-'));
+    try {
+      writeStub(join(dir, 'aws'), `#!/usr/bin/env bash\n${awsBody}\n`);
+      const reg = join(dir, 'register.json');
+      writeFileSync(reg, register);
+      return spawnSync(process.execPath, ['infra/telemetry/aggregate.mjs', '--register', reg], {
+        encoding: 'utf8', timeout: 30_000, env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('a register that is not JSON is refused by its path, with no stack and no register text', () => {
+    // Unquoted, so JSON.parse's own message would quote the text around it: the key.
+    const r = cli(`{ "repositories": [{ "key": ${SECRET} }] }`);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^register: .*register\.json is not JSON\n$/);
+    expect(quoted(r.stdout + r.stderr)).toEqual([]);
+  });
+
+  it('a register with a bad entry, or a failed query, prints the message alone', () => {
+    const bad = cli(JSON.stringify({ repositories: [{ key: SECRET }] }));
+    expect(bad.status).toBe(1);
+    expect(bad.stderr).toBe('register: repositories[0] is an entry without a valid key\n');
+    expect(quoted(bad.stdout + bad.stderr)).toEqual([]);
+    const garbled = cli(JSON.stringify({ repositories: [{ key: 'ktestabc123' }] }), `printf '{"pk":ktestabc123#review'`);
+    expect(garbled.status).toBe(1);
+    expect(garbled.stderr).toBe('a query answered something that is not JSON\n');
+    expect(garbled.stdout + garbled.stderr).not.toContain('ktestabc');
   });
 });
 
