@@ -1,6 +1,6 @@
 # `kanon doctor`
 
-`kanon doctor` says what a Kanon installation lacks, before a lane's first red run says it for you ([plan 0005](plans/0005-lean-installation.md) §5.5). Run it from your repository's checkout, through `npx` as the [README](../README.md) runs `kanon init`:
+`kanon doctor` says what a Kanon installation lacks, before a lane's first red run says it for you ([plan 0005](plans/0005-lean-installation.md) §5.5). Run it from your repository's checkout, through `npx` as the [install page](install.md) runs `kanon init`:
 
 ```bash
 kanon doctor              # against the release your callers pin

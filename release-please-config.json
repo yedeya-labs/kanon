@@ -22,6 +22,7 @@
         "actions/lane-check/README.md",
         "actions/pr-title/README.md",
         "docs/apps.md",
+        "docs/install.md",
         "docs/lanes.md",
         "docs/qa-store.md",
         "docs/release.md",

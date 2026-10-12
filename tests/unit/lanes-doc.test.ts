@@ -17,7 +17,7 @@ import { REVIEW_LABELS } from '../../scripts/lane-gate.mjs';
  *
  *   1. docs/lanes.md's lane-contract table has one row per lane, and each row's secrets,
  *      permissions and documents are exactly what the lane declares and reads;
- *   2. the README's lane row names every shipped lane;
+ *   2. the install page's lane row (docs/install.md, moved from the README by kanon#577) names every shipped lane;
  *   3. every playbook section a lane prompt sends the agent to by name is one that
  *      `K-LAYOUT-17` tells the adopter to write;
  *   4. docs/lanes.md's catalogue table is the lane catalogue (docs/lanes.json, kanon#428), as
@@ -118,12 +118,12 @@ describe("docs/lanes.md's lane-contract table is what each lane declares", () =>
   });
 });
 
-describe('the README lists every shipped lane', () => {
+describe('the install page lists every shipped lane', () => {
   it("names each lane in its agent-lanes row, and no lane Kanon doesn't ship", () => {
-    const row = read('README.md')
+    const row = read('docs/install.md')
       .split('\n')
       .find((l) => l.startsWith('| [Agent lanes: '));
-    if (!row) throw new Error('README.md has no `| [Agent lanes: …` row');
+    if (!row) throw new Error('docs/install.md has no `| [Agent lanes: …` row');
     const names = (/\[Agent lanes: ([^\]]+)\]/.exec(row)?.[1] ?? '').split(/,\s*/).map((n) => `agent-${n.trim()}.yml`);
     expect(names.sort()).toEqual(LANES);
   });
