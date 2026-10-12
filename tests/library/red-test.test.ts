@@ -600,9 +600,12 @@ describe('the reusable workflow', () => {
     }
   });
 
-  it('fetches full history in both jobs, and persists no credential', () => {
+  it('checks out the PR\'s head in both jobs, not the merge ref, with full history and no persisted credential', () => {
     for (const job of ['scope', 'verify']) {
       const checkout = steps(job).find((s) => s.uses?.startsWith('actions/checkout')) as Step;
+      // On `pull_request` the default is `refs/pull/N/merge`, whose base-tip changes would sit
+      // beside the reverted source and could supply a false strong PASS.
+      expect(checkout.with?.ref, job).toBe('${{ github.event.pull_request.head.sha }}');
       expect(checkout.with?.['fetch-depth'], job).toBe(0);
       expect(checkout.with?.['persist-credentials'], job).toBe(false);
     }

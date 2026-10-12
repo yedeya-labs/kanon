@@ -351,7 +351,7 @@ jobs:
 
 - **It runs your tests your way.** The `verify` job calls your project-setup hook (`lane: red-test`, `install: 'true'`, the database your `docs/qa/test-database.md` declares), then runs each changed test file on its own, with the runner its [code area](#code-areas) names, or pytest or `go test` for a Python or Go test ([ADR 0012](decisions/0012-test-conventions-by-language.md)). A JavaScript test in no `tests` tree that names a runner is reported, never run, and a Playwright tree is out of its scope. It reverts every changed file in a language Kanon's test conventions read, or a shell script, except a test runner's own configuration.
 - **Its verdicts.** `PASS` when a changed test fails an assertion against the reverted source, and `PASS, weakly` when one only fails to load; `BLOCKED` when every changed test still passed; `UNVERIFIABLE` when a changed file was left unreverted (a doc, a migration, a runner config) or an unreverted test helper could explain a load failure; `INCONCLUSIVE` when the runner reported nothing. All but the passes fail the check. The `Red-test scope` job decides first, so a diff with no test or no source to revert concludes skipped, never green.
-- **The verifier is Kanon's,** at the version your caller pins: a pull request can change its tests, never the check that judges them.
+- **The verifier script is Kanon's,** at the version your caller pins, so a pull request can't change it. It tests the pull request's head commit, not GitHub's merge ref. Two of its inputs still come from the pull request: the `## Code areas` of your stack document and your project-setup hook. A pull request that changes either touches an escalation path (`K-MERGE-4`), so a person merges it.
 
 ## The Merger
 

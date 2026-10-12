@@ -18,8 +18,17 @@
 # the repository it judged, so the workflow took the BASE revision's copy: a PR's own copy could
 # widen its skip paths and turn the check green on a PR whose tests prove nothing. Here
 # `kanon-path` runs `scripts/red-test.mjs` from the runner's action cache at the version the
-# caller pins, outside the workspace, so no PR branch can change the judgement. The TESTS still
-# come from the PR: it is the judgement that is pinned, not the thing being judged.
+# caller pins, outside the workspace, so no PR branch can change the verifier script. The TESTS
+# still come from the PR, and so do two inputs the verifier reads: the stack document's `## Code
+# areas` (which files are tests, and their runners) and the project-setup hook, which installs the
+# toolchain. A PR that changes either touches an escalation path (`K-MERGE-4`), so a person
+# merges it; pinning those too is tracked as hardening.
+#
+# THE TREE IS THE PR'S HEAD, NOT GITHUB'S MERGE REF. On `pull_request`, `actions/checkout` checks
+# out `refs/pull/N/merge` unless told otherwise, and the script reverts and restores against the
+# head and its merge base. On the merge ref, the base tip's changes would sit in the tree beside
+# the reverted source, and could supply a false strong PASS: the case the merge-base diff exists
+# to prevent. So both checkouts name the head commit.
 #
 # WHAT IS A TEST, AND HOW IT RUNS, IS THE PROJECT'S (ADR 0012). The script reads the stack
 # document's `## Code areas` (`K-LAYOUT-17`): a `tests` tree's runner runs its tests, a Python or
@@ -96,6 +105,7 @@ jobs:
       # Full history: the script diffs against the merge base of the PR's base and head.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: $/actions/kanon-path
@@ -126,6 +136,7 @@ jobs:
       # Full history: the job diffs against the merge base and checks files out of it.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
