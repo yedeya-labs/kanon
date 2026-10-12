@@ -62,7 +62,7 @@ You don't install them all. `kanon init` offers three features: **Review** (the 
 - **The green zone.** The Merger merges only when all six conditions hold: the Implementer's pull request, the Reviewer's approval of that exact head, green checks, no escalation path, exactly the declared issues closed, and a clean merge. Workflows, agent instructions and the paths you mark high-risk always go to a person ([`K-MERGE-3`, `K-MERGE-4`](../rulebook/04-review-and-merge.md)).
 - **The ruleset and the merge queue.** The default branch's ruleset requires a pull request and the `Lane check` job, and the merge queue where your plan has one.
 - **The round cap.** A finding that survives two review rounds stops the revise lanes and goes to a person (`K-AGENT-18`).
-- **Bootstrap.** A new repository starts in bootstrap: people may play the agents' roles and approval isn't required yet. It ends once, when the Judge App is installed and required approval is switched on ([`K-ADOPT-6`](../rulebook/10-adoption.md)).
+- **Bootstrap.** A new repository starts in bootstrap: people may play the agents' roles and approval isn't required yet. It ends once, when the Judge App is installed and required approval is switched on ([`K-ADOPT-6`](../rulebook/10-adoption.md)). [`kanon doctor`](doctor.md) reminds the adopter once the Judge can approve and nothing requires it to (`ruleset.bootstrap-can-end`), and fails a ruleset that stops requiring approval after the adoption record says bootstrap ended (`ruleset.approval-off`).
 
 ## Where data goes
 

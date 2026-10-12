@@ -129,6 +129,8 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     // The workflows on the default branch, as GitHub has them (#418): CI with the lane check's job.
     defaultWorkflows: { 'ci.yml': ciFile(PINNED, 'main') } as Record<string, string> | null,
     ownerType: 'User' as 'User' | 'Organization',
+    /** A private repository on a plan without rulesets: its rulesets answer 403 "Upgrade to GitHub Pro". */
+    noRulesetsOnPlan: false,
     /** Slugs of private Apps: GET /apps/<slug> answers 404 to a person's token and the workflow's (#417). */
     private: new Set<string>(),
     appsCheck: { runs: [] as AppsCheckRun[], jobs: {} as Record<number, Array<{ id: number; name: string; conclusion: string }>>, logs: {} as Record<number, string>, ignoresEvent: false /* a server that ignores the event filter, so doctor's own check is what refuses */,
@@ -154,7 +156,7 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     if (a0 === 'variable' && a1 === 'list') return st.variables ? ok(st.variables instanceof Map ? [...st.variables].map(([name, value]) => ({ name, value })) : [...st.variables].map((name) => ({ name, value: '' }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 !== 'api' || args.includes('-X')) return no(`unexpected gh ${args.join(' ')}`);
     const path = args.find((x, i) => i > 0 && /^(repos|orgs|apps)\//.test(x)) ?? '';
-    if (path === `repos/${REPO}`) return ok({ private: false, default_branch: 'main', owner: { login: 'acme', type: st.ownerType }, permissions: { admin: true } });
+    if (path === `repos/${REPO}`) return ok({ private: st.noRulesetsOnPlan, default_branch: 'main', owner: { login: 'acme', type: st.ownerType }, permissions: { admin: true } });
     const runs = /^repos\/acme\/widgets\/actions\/workflows\/apps-check\.yml\/runs\?(.*)$/.exec(path);
     if (runs) {
       const q = new URLSearchParams(runs[1]);
@@ -166,7 +168,7 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     const log = /^repos\/acme\/widgets\/actions\/jobs\/(\d+)\/logs$/.exec(path);
     if (log) return st.appsCheck.logs[Number(log[1])] !== undefined ? ok(masked(st.appsCheck.logs[Number(log[1])]!, st.appsCheck.secrets)) : no('gh: Not Found (HTTP 404)');
     if (path === `repos/${REPO}/branches/main`) return ok('main');
-    if (path.startsWith(`repos/${REPO}/rulesets?`)) return ok(st.rulesets.map((r) => ({ id: r.id, name: r.name, target: r.target })));
+    if (path.startsWith(`repos/${REPO}/rulesets?`)) return st.noRulesetsOnPlan ? no('gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)') : ok(st.rulesets.map((r) => ({ id: r.id, name: r.name, target: r.target })));
     const one = /^repos\/acme\/widgets\/rulesets\/(\d+)$/.exec(path);
     if (one) return ok(st.rulesets.find((r) => r.id === Number(one[1])));
     if (path.startsWith(`repos/${REPO}/labels?`)) return ok([[...st.labels].map((name) => ({ name }))]);

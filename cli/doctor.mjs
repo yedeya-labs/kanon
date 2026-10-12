@@ -56,7 +56,7 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, inspect, LANE_CHECK, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
+import { appsArgs, inspect, LANE_CHECK, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -128,6 +128,7 @@ export const UNWAIVABLE = {
   'ruleset.missing': 'without it nothing enforces review on the default branch (K-ADOPT-1 step 8)',
   'ruleset.rule-missing': 'without it nothing enforces that rule of review on the default branch (K-ADOPT-1 step 8)',
   'ruleset.bypass-extra': 'it lets an actor other than the Releaser merge around review (K-MERGE-8)',
+  'ruleset.approval-off': 'the adoption record says bootstrap ended, and bootstrap never returns: a ruleset that stopped requiring approval is an incident to fix (K-ADOPT-6)',
   'upstream.unsent': 'it is about the adoption record itself, which says findings are sent when nothing sends them, and lane-check fails it whatever a waiver says',
 };
 
@@ -220,6 +221,8 @@ export const FINDINGS = {
   'ruleset.check-unreported': { category: 'ruleset', blocking: true },
   'ruleset.releaser-bypass-missing': { category: 'ruleset', blocking: true },
   'ruleset.bypass-extra': { category: 'ruleset', blocking: true },
+  'ruleset.bootstrap-can-end': { category: 'ruleset', blocking: true },
+  'ruleset.approval-off': { category: 'ruleset', blocking: true },
   'id-token.unaccepted': { category: 'id-token', blocking: true },
   'id-token.stale-acceptance': { category: 'id-token', blocking: false },
 };
@@ -392,6 +395,36 @@ export const kanonPins = (texts) => {
   }
   return pins;
 };
+
+/**
+ * The date the adoption record says bootstrap ended (`K-ADOPT-6`): the first `ended YYYY-MM-DD`
+ * or `in bootstrap since YYYY-MM-DD` code span under `## Bootstrap`, outside fences, when it is
+ * the former (`K-LAYOUT-10`). Null for a record still in bootstrap, or one that doesn't say.
+ * @param {string | null} text
+ * @returns {string | null}
+ */
+export const bootstrapEnded = (text) => {
+  if (!text) return null;
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const inFence = fenced(lines);
+  let section = '';
+  for (const [i, line] of lines.entries()) {
+    if (inFence.has(i)) continue;
+    if (/^#{1,2} /.test(line)) section = line.trimEnd();
+    if (section !== '## Bootstrap') continue;
+    const m = /`(in bootstrap since|ended) (\d{4}-\d{2}-\d{2})`/.exec(line);
+    if (m) return m[1] === 'ended' ? /** @type {string} */ (m[2]) : null;
+  }
+  return null;
+};
+
+/**
+ * The approving reviews the rulesets covering the default branch require: the most any of their
+ * pull request rules asks for, 0 when none does (`K-MERGE-6`).
+ * @param {any[]} covering
+ */
+export const requiredApprovals = (covering) =>
+  Math.max(0, ...covering.flatMap((s) => s.rules ?? []).filter((r) => r?.type === 'pull_request').map((r) => Number(r.parameters?.required_approving_review_count ?? 0) || 0));
 
 /**
  * The accepted id-token holders the adoption record declares under `## Choices`, one bullet
@@ -1370,6 +1403,11 @@ export const diagnose = async (deps, opts) => {
   }
 
   // ── The ruleset ─────────────────────────────────────────────────────────────────────────────
+  // The workflows on the default branch, read once: the required check's job and the review
+  // lane's caller are both looked for there.
+  /** @type {Promise<Awaited<ReturnType<typeof branchWorkflows>>> | null} */
+  let defaultRead = null;
+  const defaultWorkflows = () => (defaultRead ??= branchWorkflows(deps, repo, s.defaultBranch));
   if (s.rulesets === 'no') notes.push(`${repo} is a private repository on a plan without rulesets: nothing on the platform refuses a merge without the Reviewer's approval, and the repository stays in bootstrap (K-ADOPT-3, K-ADOPT-6).`);
   else if (s.rulesets === 'unknown') unchecked.push({ check: 'ruleset', subject: repo, reason: "the token can't read the repository's rulesets" });
   else if (!s.covering.length) {
@@ -1378,7 +1416,7 @@ export const diagnose = async (deps, opts) => {
       commands: ['kanon init'],
     });
   } else {
-    for (const gap of await checkGaps({ deps, repo, s, checked, gaps: rulesetGaps(s.covering), checkout: workflows, find, unchecked })) {
+    for (const gap of await checkGaps({ defaultWorkflows, s, checked, gaps: rulesetGaps(s.covering), checkout: workflows, find, unchecked })) {
       find('ruleset.rule-missing', s.defaultBranch, `The ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) does not ${gap} (K-ADOPT-1 step 8).`, { text: `In the repository's Settings, Rules, Rulesets: ${gap}.`, url: `https://github.com/${repo}/settings/rules` });
     }
     // THE RELEASER'S BYPASS (K-MERGE-8, plan 0005 §3.1, #49), only where the release caller maps
@@ -1431,6 +1469,58 @@ export const diagnose = async (deps, opts) => {
           }
         } else if (where.others.length) {
           notes.push(`The ruleset on ${s.defaultBranch} lets ${where.others.map((o) => actorName(o.actor)).join(', ')} bypass it beside the Releaser. Keep that while you pin ${checked}: its dco check fails the Releaser's release PR (#337), and that bypass is what merges it.`);
+        }
+      }
+    }
+  }
+
+  // ── The end of bootstrap (`K-ADOPT-6`, #706) ───────────────────────────────────────────────────
+  // Bootstrap ends when the Judge App is installed and the ruleset requires an approving review,
+  // and never returns. Two findings hold that: the reminder, once the Reviewer can approve on the
+  // default branch and nothing requires it to; and the guard, once the adoption record says
+  // bootstrap ended and nothing requires the approval it ended on. The reminder waits for the
+  // review lane's caller to merge, like the required check's job: an approval required before the
+  // Reviewer runs on the default branch is one nobody can give, so every pull request waits.
+  if (s.rulesets !== 'unknown') {
+    const approvals = s.rulesets === 'yes' ? requiredApprovals(s.covering) : 0;
+    const ended = bootstrapEnded(read(ADOPTION_RECORD));
+    const judge = slugOf.get('judge');
+    // The ruleset to switch it on in: the repository's own, the one with the pull request rule
+    // first. An organisation's ruleset is edited on its page.
+    const own = s.covering.filter((r) => (r.source_type ?? 'Repository') === 'Repository');
+    const target = own.find((r) => (r.rules ?? []).some((/** @type {any} */ x) => x?.type === 'pull_request')) ?? own[0];
+    const switchOn = () => {
+      if (s.rulesets === 'no') return { text: `A private repository on a plan without rulesets can't require it (K-ADOPT-3): make the repository public, or move to a plan with rulesets, and require one approving review there.` };
+      if (!target) {
+        return s.covering.length
+          ? { text: `Require one approving review, dismissed when a new commit is pushed (K-MERGE-6), in the organisation's ruleset "${s.covering[0].name}".`, url: rulesetUrl(repo, s.covering[0]) }
+          : { text: `Let kanon init create "${RULESET_NAME}", then require one approving review in it, dismissed when a new commit is pushed (K-MERGE-6).`, url: `https://github.com/${repo}/settings/rules` };
+      }
+      const prRule = /** @type {any} */ (rulesetBody(false).rules.find((x) => x.type === 'pull_request'));
+      const rules = /** @type {any[]} */ (target.rules ?? []).map((x) => ({ type: x.type, ...(x.parameters ? { parameters: x.parameters } : {}) }));
+      if (!rules.some((x) => x.type === 'pull_request')) rules.push(prRule);
+      const approved = rules.map((x) => (x.type === 'pull_request' ? { ...x, parameters: { ...x.parameters, required_approving_review_count: 1, dismiss_stale_reviews_on_push: true } } : x));
+      return {
+        text: `Require one approving review in the ruleset "${target.name}", dismissed when a new commit is pushed (K-MERGE-6). The command sends its rules as they are, with the pull request rule's two settings changed; it needs Administration: write:`,
+        commands: [`gh api -X PUT repos/${repo}/rulesets/${target.id} --input - <<'JSON'`, JSON.stringify({ rules: approved }), 'JSON'],
+        url: rulesetUrl(repo, target),
+      };
+    };
+    if (ended && approvals < 1) {
+      const fix = switchOn();
+      find('ruleset.approval-off', s.defaultBranch, `${ADOPTION_RECORD} says bootstrap \`ended ${ended}\`, but ${s.rulesets === 'no' ? `${repo} has no rulesets on its plan, so nothing requires an approving review` : s.covering.length ? `the ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) requires no approving review` : `no active ruleset covers ${s.defaultBranch}, so nothing requires an approving review`}. Bootstrap never returns: an approval no longer required is an incident to fix, and until it is, any merge needs no approval (K-ADOPT-6).`, fix);
+    } else if (!ended && approvals < 1 && judge && s.rulesets === 'yes' && s.covering.length) {
+      const onDefault = await defaultWorkflows();
+      if (onDefault.error !== null) {
+        unchecked.push({ check: 'ruleset', subject: s.defaultBranch, reason: `could not read the workflows on ${s.defaultBranch} (${onDefault.error}), so doctor can't tell whether the review lane runs there, and whether bootstrap can end` });
+      } else {
+        const reviewCallers = [...(onDefault.workflows ?? new Map())].filter(([, wf]) => Object.values(isMap(wf.jobs) ? wf.jobs : {}).some((j) => isMap(j) && kanonCall(j.uses)?.workflow === REVIEW_LANE)).map(([f]) => f);
+        if (reviewCallers.length) {
+          const fix = switchOn();
+          find('ruleset.bootstrap-can-end', s.defaultBranch, `The Judge App \`${judge}\` is installed, and ${reviewCallers.join(', ')} on ${s.defaultBranch} calls the review lane, so the Reviewer can approve; but the ruleset on ${s.defaultBranch} (${s.covering.map((c) => c.name).join(', ')}) requires no approving review, so any merge still needs none, and the repository is still in bootstrap. Requiring one is what ends it (K-ADOPT-6, K-ADOPT-1 step 14).`, {
+            ...fix,
+            text: `${fix.text} Then record the date in ${ADOPTION_RECORD}: under ## Bootstrap, write \`ended YYYY-MM-DD\` with the day you switched it on, in place of \`in bootstrap since\` (K-ADOPT-6, K-LAYOUT-10). From then on doctor fails a ruleset that stops requiring it (ruleset.approval-off).`,
+          });
         }
       }
     }
@@ -1692,17 +1782,17 @@ export const diagnose = async (deps, opts) => {
  * for the job first, and for the rule only once the job has merged. It asks the same of a ruleset
  * that requires the check already. A job only the checkout has is not on the default branch: it
  * is a branch's, and the rule waits for its merge. Returns the ruleset's gaps still to ask for.
- * @param {{ deps: Deps, repo: string, s: Inspection, checked: string, gaps: string[],
+ * @param {{ defaultWorkflows: () => ReturnType<typeof branchWorkflows>, s: Inspection, checked: string, gaps: string[],
  *   checkout: Map<string, Record<string, any>>,
  *   find: (id: string, subject: string, message: string, fix: { text: string, commands?: string[], url?: string | null }) => void,
  *   unchecked: Array<{ check: string, subject: string, reason: string }> }} c
  * @returns {Promise<string[]>}
  */
-const checkGaps = async ({ deps, repo, s, checked, gaps, checkout, find, unchecked }) => {
+const checkGaps = async ({ defaultWorkflows, s, checked, gaps, checkout, find, unchecked }) => {
   const gap = requiredCheckGap(LANE_CHECK);
   const required = !gaps.includes(gap);
   const rest = gaps.filter((g) => g !== gap);
-  const onDefault = await branchWorkflows(deps, repo, s.defaultBranch);
+  const onDefault = await defaultWorkflows();
   if (onDefault.error !== null) {
     unchecked.push({ check: 'required-check', subject: LANE_CHECK, reason: `could not read the workflows on ${s.defaultBranch} (${onDefault.error}), so doctor can't tell whether a job there reports the status check "${LANE_CHECK}"${required ? '' : ", and doesn't ask you to require it yet"}` });
     return rest;

@@ -109,7 +109,7 @@ Whether to pay for a plan, or make a repository public, is the project's decisio
 
 **Why.** An exception that can be re-entered is a switch, and a switch is a setting (`K-PRIN-1`). The exit is tied to the one moment the solo-Owner lockout stops being true: once a Reviewer can approve, an approving review can be required.
 
-**Enforced by.** Prose only; a guard is planned (it fails when the adoption record has an end date and the ruleset doesn't require an approving review).
+**Enforced by.** [`kanon doctor`](../cli/doctor.mjs), when it is run: it fails a repository whose adoption record says bootstrap `ended YYYY-MM-DD` while no ruleset on the default branch requires an approving review, whether the App is still there or not, and lets no waiver waive it (`ruleset.approval-off`); and it reports a repository whose App register names the Judge App, whose default branch calls the review lane, and whose ruleset requires no approving review, with the command that requires one and the end date to record (`ruleset.bootstrap-can-end`). [`tests/unit/kanon-doctor-bootstrap.test.ts`](../tests/unit/kanon-doctor-bootstrap.test.ts) holds both in each direction. Recording the date is the adopter's, and the rest is prose only.
 
 **Class.** framework
 
