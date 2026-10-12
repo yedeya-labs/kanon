@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROOT, FIXTURE, adopter, check, red, defaulted, laneCheck } from './helpers/lane-check.js';
@@ -53,6 +53,16 @@ laneCheck(() => {
       red((t) => t.write(ESC, `${ESC_OK}\n## Pipeline code\n`), /escalation-paths\.md,title=lane-check::docs\/qa\/escalation-paths\.md has the `## Pipeline code` heading 2 times/));
     it('refuses an escalation pattern that is not a regular expression', () =>
       red((t) => t.write(ESC, ESC_OK.replace('`^migrations/`', '`^migrations/(`')), /escalation-paths\.md,title=lane-check::docs\/qa\/escalation-paths\.md:5/));
+    it('accepts a single file under `## Pipeline code` beside a directory (#728)', () => {
+      const t = adopter();
+      t.write(ESC, ESC_OK.replace('- `scripts/pipeline/`', '- `scripts/release.mjs` — the release script\n- `scripts/pipeline/`'));
+      const r = check(t);
+      expect(r.status, r.out).toBe(0);
+    });
+    it('refuses a malformed single file under `## Pipeline code`, with the line (#728)', () =>
+      red((t) => t.write(ESC, ESC_OK.replace('- `scripts/pipeline/`', '- `scripts//release.mjs` — x\n- `scripts/pipeline/`')), /escalation-paths\.md,title=lane-check::docs\/qa\/escalation-paths\.md:\d+: `scripts\/\/release\.mjs` isn't a pipeline-code directory or file/));
+    it('refuses a directory written without its `/`, which as a file would match nothing under it (#728)', () =>
+      red((t) => { mkdirSync(join(t.dir, 'scripts/pipeline'), { recursive: true }); t.write(ESC, ESC_OK.replace('`scripts/pipeline/`', '`scripts/pipeline`')); }, /escalation-paths\.md,title=lane-check::docs\/qa\/escalation-paths\.md:\d+: `scripts\/pipeline`, under `## Pipeline code`, is a directory in this checkout/));
     it('reads an exemptions file without `## Path mentions` as the default for that section', () =>
       defaulted((t) => t.write(EXE, EXE_OK.replace(/## Path mentions[\s\S]*/, '')), /::notice file=docs\/qa\/exemptions\.md,title=lane-check::docs\/qa\/exemptions\.md has no `## Path mentions` heading, so Kanon's default applies: no path mention is exempt/));
     it('refuses an exemptions file with `## Path mentions` twice', () =>

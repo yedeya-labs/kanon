@@ -104,7 +104,7 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { SOURCE_EXT, anchorFound, anchorsFor, coordinatesIn, docPatternsFrom, isOracleSpec, resolvePath, selectDocs, unmatchedMessage } from './citation-guard.mjs';
 import { qaToolingImport } from './spec-lib.mjs';
-import { ESCALATION_FILE, defaultEscalationFile, parseEscalationFile, printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
+import { ESCALATION_FILE, defaultEscalationFile, inPipelineCode, parseEscalationFile, printDefaults, readEscalationFile } from './lib/escalation-paths.mjs';
 import { STACK_FILE, UNDECLARED, codeAreasDefaults, codeTrees, isCodePath, isTestPath, parseCodeAreas, readCodeAreas } from './lib/code-areas.mjs';
 import { TABLE_EXT, conventionFor } from './lib/test-conventions.mjs';
 
@@ -144,7 +144,7 @@ export const readsCodeComments = (path, text, pipelineDirs, areas) => {
   if (!areas) throw new TypeError('readsCodeComments needs the declared code areas (K-LAYOUT-17)');
   return isCodePath(path, areas) &&
   CODE_EXT.test(path) &&
-  !pipelineDirs.some((d) => path.startsWith(d)) &&
+  !pipelineDirs.some((d) => inPipelineCode(d, path)) &&
   !(isTestPath(path, areas) && qaToolingImport(pipelineDirs).test(text));
 };
 

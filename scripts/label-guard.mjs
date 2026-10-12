@@ -164,7 +164,11 @@ export function appliedLabels(dirs = undefined, root = process.cwd()) {
 
 function walk(dir, out = []) {
   let entries;
-  try { entries = readdirSync(dir); } catch { return out; }
+  try { entries = readdirSync(dir); } catch {
+    // A single file the adopter declares as pipeline code (#728) is scanned as itself.
+    try { if (statSync(dir).isFile() && /\.(ya?ml|mjs|js|md)$/.test(dir)) out.push(dir); } catch { /* absent: nothing to scan */ }
+    return out;
+  }
   for (const e of entries) {
     const p = join(dir, e);
     let st;

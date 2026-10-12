@@ -10,7 +10,9 @@ import {
   defaultEscalationFile,
   escalatingPaths,
   escalationCategories,
+  inPipelineCode,
   parseEscalationFile,
+  pipelineCodePattern,
   readEscalationFile,
   readEscalationFileAt,
 } from '../../scripts/lib/escalation-paths.mjs';
@@ -19,6 +21,9 @@ import { IMPLEMENTER_STATUS, headerLine } from '../../scripts/lib/role-marker.mj
 import { reviewScope, sensitiveHits } from '../../scripts/ship-review-scope.mjs';
 import { KANON_SCAN, appliedLabels, scanDirs } from '../../scripts/label-guard.mjs';
 import { JUDGING_INPUTS } from '../../scripts/judging-inputs.mjs';
+import { readsCodeComments } from '../../scripts/citation-shift.mjs';
+import { qaToolingImport, referenceCorpus } from '../../scripts/spec-lib.mjs';
+import { UNDECLARED } from '../../scripts/lib/code-areas.mjs';
 
 /**
  * kanon#54: the adopter's high-risk paths and its own pipeline code are declared in
@@ -126,9 +131,12 @@ describe('the escalation file parser', () => {
     fails(FILE('- ^a/ — no backticks\n', ''), /:5, under `## Escalation paths`/);
     fails(FILE('- `^a/` —\n', ''), /:5, under `## Escalation paths`/);
     fails(FILE('- `^(a/` — unbalanced\n', ''), /:5: `\^\(a\/` isn't a regular expression/);
-    fails(FILE('', '- `scripts/pipeline` — no slash\n'), /`scripts\/pipeline` isn't a pipeline-code directory/);
     for (const dir of ['/scripts/', './scripts/', 'scripts/*/', '../x/', 'a/../b/', 'a b/']) {
-      fails(FILE('', `- \`${dir}\` — x\n`), /isn't a pipeline-code directory/);
+      fails(FILE('', `- \`${dir}\` — x\n`), /isn't a pipeline-code directory or file/);
+    }
+    // A single file (#728) is held to the same shape, and has no empty segment either.
+    for (const f of ['/scripts/gate.mjs', './scripts/gate.mjs', 'scripts/*.mjs', 'scripts/gate.{mjs,js}', '../gate.mjs', 'a/../gate.mjs', 'scripts/./gate.mjs', 'scripts//gate.mjs', 'scripts/my gate.mjs', 'scripts\\gate.mjs']) {
+      fails(FILE('', `- \`${f}\` — x\n`), /:8: `.*` isn't a pipeline-code directory or file: write a repository-relative directory ending in `\/`, or one repository-relative file/);
     }
     fails(`${FILE('', '')}\`\`\`\n`, /opens a code fence that never closes/);
   });
@@ -159,6 +167,105 @@ describe('the escalation file parser', () => {
     }
     // The `/…/` and `/…/i` forms are still patterns.
     expect(parseEscalationFile(FILE('- `/^infra//` — x\n', '')).paths[0]?.pattern.test('infra/a')).toBe(true);
+  });
+});
+
+describe('a single file under `## Pipeline code` (#728)', () => {
+  const file = parseEscalationFile(FILE('', '- `scripts/merge-gate.mjs` — the merge gate\n- `scripts/pipeline/` — our pipeline\n'));
+  const NEAR_MISSES = ['scripts/merge-gate.mjs.bak', 'scripts/merge-gate.mjsx', 'scripts/merge-gate.mjs/x', 'scripts/merge-gate_mjs', 'scripts/merge-gateXmjs', 'src/scripts/merge-gate.mjs', 'xscripts/merge-gate.mjs', 'scripts/merge-gate.MJS'];
+
+  it('is read beside the directories, as written', () => {
+    expect(file.pipeline).toEqual([
+      { dir: 'scripts/merge-gate.mjs', reason: 'the merge gate' },
+      { dir: 'scripts/pipeline/', reason: 'our pipeline' },
+    ]);
+  });
+
+  it('covers exactly that file, never a path it is a prefix of; a directory still covers what is under it', () => {
+    expect(inPipelineCode('scripts/merge-gate.mjs', 'scripts/merge-gate.mjs')).toBe(true);
+    for (const f of NEAR_MISSES) expect(inPipelineCode('scripts/merge-gate.mjs', f), f).toBe(false);
+    for (const f of NEAR_MISSES) expect(pipelineCodePattern('scripts/merge-gate.mjs').test(f), f).toBe(false);
+    expect(pipelineCodePattern('scripts/merge-gate.mjs').test('scripts/merge-gate.mjs')).toBe(true);
+    expect(inPipelineCode('scripts/pipeline/', 'scripts/pipeline/a/b.mjs')).toBe(true);
+    expect(inPipelineCode('scripts/pipeline/', 'scripts/pipelines/a.mjs')).toBe(false);
+    expect(pipelineCodePattern('scripts/pipeline/').test('scripts/pipeline/a/b.mjs')).toBe(true);
+    expect(pipelineCodePattern('scripts/pipeline/').test('scripts/pipelines/a.mjs')).toBe(false);
+  });
+
+  it('escalates exactly that file, as pipeline, with or without a human-gated promotion', () => {
+    for (const promotion of [null, { judgingInputs: [] }]) {
+      const paths = escalatingPaths(file, promotion);
+      const reasonFor = (f: string) => paths.find(([re]) => re.test(f))?.[1] ?? null;
+      expect(reasonFor('scripts/merge-gate.mjs')).toBe('the merge gate');
+      expect(reasonFor('scripts/pipeline/x/y.mjs')).toBe('our pipeline');
+      for (const f of NEAR_MISSES) expect(reasonFor(f), f).toBeNull();
+    }
+    expect(escalationCategories(file, ['scripts/merge-gate.mjs'])).toEqual(['pipeline']);
+    expect(escalationCategories(file, NEAR_MISSES)).toEqual([]);
+  });
+
+  it('the Merger escalates a pull request that touches the declared file, and not one that touches a near miss', () => {
+    const escalations = escalatingPaths(file);
+    const pr = (files: string[]) => ({
+      number: 1, reviews: [], rebaseAttempted: true, closing: { mergeClosesUndeclared: [], unverifiable: false }, state: 'OPEN', isDraft: false,
+      author: IMPLEMENTER_LOGIN, body: headerLine('Implementer'),
+      headStatuses: [{ context: IMPLEMENTER_STATUS, state: 'success', creator: `${IMPLEMENTER_LOGIN}[bot]` }],
+      labels: ['agent:implement'], headSha: 'abc', workflowRuns: [], files, checks: [], mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE',
+    });
+    expect(mergeVerdict(pr(['src/a.ts', 'scripts/merge-gate.mjs']), { escalations })).toMatchObject({ action: 'escalate', rule: 'escalating-path' });
+    for (const f of NEAR_MISSES) expect(mergeVerdict(pr([f]), { escalations }).rule, f).not.toBe('escalating-path');
+  });
+
+  it("/ship's local review, citation-shift and the id tooling read it as exactly that file", () => {
+    expect(sensitiveHits(['scripts/merge-gate.mjs', 'scripts/merge-gate.mjs.bak'], file)).toEqual([{ file: 'scripts/merge-gate.mjs', area: 'the merge gate' }]);
+    expect(readsCodeComments('scripts/gate.ts', '', ['scripts/gate.ts'], UNDECLARED)).toBe(false);
+    expect(readsCodeComments('scripts/gate.tsx', '', ['scripts/gate.ts'], UNDECLARED)).toBe(true);
+    const tooling = qaToolingImport(['scripts/gate.mjs', 'scripts/pipeline/']);
+    expect(tooling.test("import { x } from '../scripts/gate.mjs';")).toBe(true);
+    expect(tooling.test("import { x } from '../scripts/gate.mjsx';")).toBe(false);
+    expect(tooling.test("import { x } from '../scripts/gate.mjs.bak';")).toBe(false);
+    expect(tooling.test("import { x } from '../scripts/pipeline/a/b.mjs';")).toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), 'pipeline-file-'));
+    try {
+      mkdirSync(join(dir, 'scripts'), { recursive: true });
+      for (const f of ['scripts/gate.mjs', 'scripts/gate.mjs.md', 'scripts/other.mjs']) writeFileSync(join(dir, f), '');
+      expect(referenceCorpus(dir, ['scripts/gate.mjs'])).toEqual(['scripts/gate.mjs.md', 'scripts/other.mjs']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the label guard scans the declared file itself', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'label-guard-file-'));
+    try {
+      mkdirSync(join(dir, 'scripts'), { recursive: true });
+      mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+      writeFileSync(join(dir, 'scripts/gate.mjs'), "run(['--add-label', 'qa:needs-severity']);\n");
+      writeFileSync(join(dir, 'scripts/gate.mjs.bak.mjs'), "run(['--add-label', 'qa:other']);\n");
+      writeFileSync(join(dir, ESCALATION_FILE), FILE('', '- `scripts/gate.mjs` — the gate\n'));
+      expect(scanDirs(dir)).toEqual([...KANON_SCAN, 'scripts/gate.mjs']);
+      const labels = appliedLabels(undefined, dir);
+      expect(labels.get('qa:needs-severity')).toEqual(new Set(['scripts/gate.mjs']));
+      expect(labels.has('qa:other')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('read from a checked-out tree, fails by name when the entry is a directory there, which it would match nothing under', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pipeline-dir-'));
+    try {
+      mkdirSync(join(dir, 'scripts/pipeline'), { recursive: true });
+      mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+      writeFileSync(join(dir, 'scripts/gate.mjs'), '');
+      writeFileSync(join(dir, ESCALATION_FILE), FILE('', '- `scripts/gate.mjs` — the gate\n- `scripts/later.mjs` — not written yet\n* `scripts/pipeline` — no slash\n'));
+      expect(() => readEscalationFile(dir)).toThrow(DeclarationError);
+      expect(() => readEscalationFile(dir)).toThrow(/escalation-paths\.md:10: `scripts\/pipeline`, under `## Pipeline code`, is a directory in this checkout.*write `scripts\/pipeline\/`/);
+      writeFileSync(join(dir, ESCALATION_FILE), FILE('', '- `scripts/gate.mjs` — the gate\n- `scripts/later.mjs` — not written yet\n- `scripts/pipeline/` — ours\n'));
+      expect(readEscalationFile(dir).pipeline.map((p) => p.dir)).toEqual(['scripts/gate.mjs', 'scripts/later.mjs', 'scripts/pipeline/']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
