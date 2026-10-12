@@ -111,6 +111,9 @@ describe.skipIf(!hasYq)("Kanon's lane check on a project with no package.json", 
     const r = laneCheck();
     expect(r.status, r.out).toBe(0);
     expect(r.out).toContain('4 lane caller(s) pass');
+    // No warning either: a warn-then-fail rule must show up the day it lands, not on the
+    // release that turns it into a failure (#740).
+    expect(r.out).not.toContain('::warning');
   });
 
   it('still reads it: a hook missing an input Kanon passes is red', () => {
