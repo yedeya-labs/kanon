@@ -272,7 +272,7 @@ describe('healthView: the health view', () => {
       computed_at: NOW.toISOString(), disputes: ruleDisputes([]), fixes: timeToFix([], RELEASES, { now: NOW }),
       lag: { withheld: false, adopters: 3, on_latest: 1, releases_behind: { median: 1, p90: 3 }, days_behind: { median: 5, p90: 20 } },
     });
-    expect(view).toContain('3 adopters, 1 on the latest release.');
+    expect(view).toContain(`3 adopters with a run in the last ${WINDOW_DAYS} days, 1 on the latest release.`);
     expect(view).toContain('| Releases behind | 1 | 3 |');
     expect(view).toContain('| Days behind | 5.0 | 20.0 |');
   });

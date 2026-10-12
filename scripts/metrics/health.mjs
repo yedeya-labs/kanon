@@ -243,7 +243,7 @@ export function healthView({ computed_at, disputes, fixes, lag }) {
   else if (lag.withheld) out.push(`Withheld: fewer than ${lag.min_adopters} adopters send rows, and a figure across adopters needs ${lag.min_adopters} (plan 0002 decision 7).`);
   else {
     out.push(
-      `${lag.adopters} adopters, ${lag.on_latest} on the latest release.`, '',
+      `${lag.adopters} adopters with a run in the last ${WINDOW_DAYS} days, ${lag.on_latest} on the latest release.`, '',
       '| | Median | 90th percentile |', '|---|---|---|',
       `| Releases behind | ${lag.releases_behind.median} | ${lag.releases_behind.p90} |`,
       `| Days behind | ${fixed1(lag.days_behind.median)} | ${fixed1(lag.days_behind.p90)} |`,
