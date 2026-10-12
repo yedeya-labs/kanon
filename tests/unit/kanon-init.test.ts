@@ -2323,3 +2323,41 @@ describe("kanon init and the QA store's secrets (#433)", () => {
     expect(JSON.stringify(d.findings)).not.toMatch(/gh variable set QA_STORE/);
   });
 });
+
+// #749: the Lead writes each brief from docs/projects/_template.md, which an adopter copies
+// unchanged from Kanon's rulebook/templates/brief.md (K-LAYOUT-11). init writes it wherever it
+// writes the Lead's caller, so the full feature, and keeps one the repository has.
+describe("kanon init and the Lead's brief template (#749)", () => {
+  const TEMPLATE = 'docs/projects/_template.md';
+  const BRIEF = read(ROOT, 'rulebook/templates/brief.md');
+  const fileOf = (d: Doc) => d.files.find((f) => f.path === TEMPLATE);
+
+  it("--feature full writes Kanon's brief template unchanged, and finds it as it wrote it on a second run", async () => {
+    const dir = checkout();
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps', '--feature', 'full']));
+    expect(read(dir, TEMPLATE)).toBe(BRIEF);
+    expect(fileOf(d)).toMatchObject({ status: 'new', content: BRIEF });
+    const again = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps', '--feature', 'full', '--dry-run']));
+    expect(fileOf(again)).toMatchObject({ status: 'same' });
+  });
+
+  it('keeps a template the repository has', async () => {
+    const mine = '# Our brief template\n';
+    const dir = checkout({ [TEMPLATE]: mine });
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps', '--feature', 'full']));
+    expect(read(dir, TEMPLATE)).toBe(mine);
+    expect(fileOf(d)).toMatchObject({ status: 'kept', content: null });
+  });
+
+  it("doesn't write it for the review or build feature, which call no Lead; a customised set with the Lead's lane gets it", async () => {
+    for (const feature of ['review', 'build']) {
+      const dir = checkout();
+      const d = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps', '--feature', feature]));
+      expect(existsSync(join(dir, TEMPLATE)), feature).toBe(false);
+      expect(fileOf(d), feature).toBeUndefined();
+    }
+    const dir = checkout();
+    await run(dir, fakeGitHub(), ['--json', '--no-apps', '--lanes', 'review,lead']);
+    expect(read(dir, TEMPLATE)).toBe(BRIEF);
+  });
+});

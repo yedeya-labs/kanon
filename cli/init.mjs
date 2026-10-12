@@ -11,9 +11,10 @@
 //    takes the defaults and confirms).
 // 3. WRITES the declarations, only the sections that differ from their documented defaults (an
 //    omitted section means its default, plan 0005 §5.2), the lane callers, the `apps-check`
-//    caller, `lane-check` in CI, the Dependabot entry, a starting project-setup hook and, when the
-//    person says yes, the kanon plugin's declaration in `.claude/settings.json` (#376), every
-//    Kanon reference pinned to the release it runs from, and prints the diff. It commits nothing.
+//    caller, `lane-check` in CI, the Dependabot entry, a starting project-setup hook, the Lead's
+//    brief template beside the Lead's caller (#749) and, when the person says yes, the kanon
+//    plugin's declaration in `.claude/settings.json` (#376), every Kanon reference pinned to the
+//    release it runs from, and prints the diff. It commits nothing.
 // 4. CREATES the taxonomy's labels (rulebook/labels.json), the bucket milestones (`kanon
 //    milestones`), the squash-only merge setting and, where the plan has rulesets and the token
 //    can administer the repository, the default branch's ruleset. The ruleset requires the
@@ -1467,6 +1468,15 @@ export const workflowName = (text, path) => {
 /** Where `init` writes `lane-check`'s own workflow. */
 const LANE_CHECK_PATH = '.github/workflows/lane-check.yml';
 
+/** The Lead's lane, the one that writes each brief from the brief template. */
+export const LEAD_LANE = 'agent-lead';
+
+/** Where the Lead reads the brief template (`K-LAYOUT-11`). */
+export const BRIEF_TEMPLATE_PATH = 'docs/projects/_template.md';
+
+/** Kanon's brief template, which an adopter copies unchanged to `BRIEF_TEMPLATE_PATH` (`K-LAYOUT-11`). */
+export const briefTemplate = () => readFileSync(new URL('../rulebook/templates/brief.md', import.meta.url), 'utf8');
+
 /** @param {unknown} v @returns {v is Record<string, any>} */
 const isMap = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -1532,6 +1542,9 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   if (a.delegation) files.set('docs/qa/sign-off-delegation.md', delegationFile(a.delegation, today));
   if (a.database === 'hook') files.set('docs/qa/test-database.md', TEST_DATABASE_HOOK);
   files.set(req.hook.path, hookFile(req.hook.inputs));
+  // The Lead writes each brief from the brief template, so it comes with the Lead's caller, and
+  // one the repository has is the project's (#749).
+  if (a.lanes.includes(LEAD_LANE)) files.set(BRIEF_TEMPLATE_PATH, briefTemplate());
 
   const ci = read('.github/workflows/ci.yml');
   const ciName = ci === null ? 'CI' : workflowName(ci, '.github/workflows/ci.yml');

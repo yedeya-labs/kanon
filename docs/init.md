@@ -71,6 +71,10 @@ A lane's caller goes at the lane's file name, `.github/workflows/<lane>.yml` (`K
 
 `kanon apps` opens a browser for each App it creates, and waits for you to click Create and Install there. A program that wants to run that step on its own, for instance to explain it first, passes `--no-apps`: the command it would have run is then the finding `app.create`.
 
+### The Lead's brief template
+
+The Lead writes each brief from `docs/projects/_template.md`, which an adopter copies unchanged from Kanon's [`rulebook/templates/brief.md`](../rulebook/templates/brief.md) (`K-LAYOUT-11`). **`init` writes it wherever it writes the Lead's caller** ([#749](https://github.com/yedeya-labs/kanon/issues/749)): with the **Full pipeline** feature, or a customised set of lanes that holds `lead`, never with Review or Review + build. It copies the template of the release it runs from, and a template the repository has is the project's, `kept` and left alone. Without one, [`kanon doctor`](doctor.md) reports `lead.template-missing`.
+
 ## The JSON output
 
 `--json` prints one JSON document on standard output, and nothing else there; the prose a person reads goes to standard error, and `kanon apps` and `kanon milestones`, when `init` runs them, print theirs there too. It asks nothing, as `--yes`, and the run and its exit code are the ones the same flags give without `--json`.
@@ -230,7 +234,7 @@ What `--lanes` chooses from, so a person, or the adopt skill asking them, can ch
 | Field | Type | Meaning |
 |---|---|---|
 | `path` | string | From the checkout's root. |
-| `status` | string | `new` (written, or in a dry run would be), `same` (already as `init` writes it), `kept` (a declaration or hook that is the project's, left alone) or `differs` (a workflow that differs from what `init` would write, left alone). |
+| `status` | string | `new` (written, or in a dry run would be), `same` (already as `init` writes it), `kept` (a declaration, the brief template or the hook, that is the project's, left alone) or `differs` (a workflow that differs from what `init` would write, left alone). |
 | `content` | string or null | What `init` writes, or would write, whatever the file's status ([#451](https://github.com/yedeya-labs/kanon/issues/451)): for a `differs` file it is the full text the diff compares with, so a program can write it at another path. Null only for a `kept` file, whose content is the project's to say. |
 | `diff` | array | Strings: for a file that `differs`, the lines that differ, `- ` for the file's and `+ ` for what `init` would write. |
 

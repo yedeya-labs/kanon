@@ -111,7 +111,7 @@ The Stakeholder places work on the roadmap and decides what is a gate candidate.
 A feature is a fixed set of lanes, listed in `.features` (`docs/lanes.md` in Kanon's repository, "The features"). Ask, in these words: "What should Kanon do in this repo?", with each feature of `.features` as an option, its title as the label and its `does` as the consequence, and **Customise** last.
 
 - **Recommended:** the dry run's `.answers.feature` when the repository already calls lanes and they make up a feature; otherwise **Review**.
-- **Options:** **Review** (`--feature review`), **Review + build** (`--feature build`) or **Full pipeline** (`--feature full`): `init` installs the feature's lanes, and each conditional lane whose condition holds here, and the lanes question below is not asked. **Customise**: Choose lane by lane (advanced): ask the lanes question below, which passes `--lanes <list>`, never beside `--feature`, which `init` refuses.
+- **Options:** **Review** (`--feature review`), **Review + build** (`--feature build`) or **Full pipeline** (`--feature full`): `init` installs the feature's lanes, and each conditional lane whose condition holds here, and the lanes question below is not asked. With the Lead's lane, which **Full pipeline** has, `init` also writes the Lead's brief template, `docs/projects/_template.md`, copied unchanged from Kanon's, unless the repository has one (`K-LAYOUT-11`). **Customise**: Choose lane by lane (advanced): ask the lanes question below, which passes `--lanes <list>`, never beside `--feature`, which `init` refuses.
 
 ### `.answers.lanes`: which lanes, a group at a time
 
