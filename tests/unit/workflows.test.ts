@@ -257,6 +257,44 @@ describe('K-SHIP-7 the reusable release workflow', () => {
     });
     expect(moveTag?.run).toContain('TAG="v$MAJOR"');
     expect(moveTag?.run).toContain('force=true');
+    expect(moveTag?.env).toMatchObject({ TAG_NAME: '${{ steps.release.outputs.tag_name }}' });
+  });
+
+  // Plan 0009 S2: the major tag moves only on a plain vX.Y.Z, never on a candidate's tag or a
+  // component's. Runs the step's own script against a stub `gh` that logs every call.
+  describe('moves the major tag only on a plain vX.Y.Z', () => {
+    const mover = (tagName: string) => {
+      const dir = mkdtempSync(join(tmpdir(), 'release-major-tag-'));
+      try {
+        const bin = join(dir, '.bin');
+        mkdirSync(bin);
+        const log = join(dir, 'calls');
+        const summary = join(dir, 'summary');
+        writeFileSync(log, '');
+        writeStub(join(bin, 'gh'), `#!/usr/bin/env bash\necho "$*" >> "${log}"\nexit 0\n`);
+        const r = spawnSync('bash', ['-c', String(moveTag?.run)], {
+          encoding: 'utf8',
+          env: { PATH: `${bin}:${process.env.PATH}`, REPO: 'acme/widgets', MAJOR: '0', SHA: 'abc123', TAG_NAME: tagName, GITHUB_STEP_SUMMARY: summary, GH_TOKEN: 't' },
+        });
+        return { status: r.status, out: `${r.stdout}${r.stderr}`, calls: readFileSync(log, 'utf8').split('\n').filter(Boolean), summary: existsSync(summary) ? readFileSync(summary, 'utf8') : '' };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    it('moves v0 on v0.41.0', () => {
+      const r = mover('v0.41.0');
+      expect(r.status, r.out).toBe(0);
+      expect(r.calls).toEqual(['api repos/acme/widgets/git/ref/tags/v0', 'api -X PATCH repos/acme/widgets/git/refs/tags/v0 -f sha=abc123 -F force=true']);
+      expect(r.summary).toContain('Moved v0 to abc123');
+    });
+    for (const tag of ['candidate-v0.41.0', 'kanon-v0.41.0', 'v0.41.0-rc.1', 'v0.41', '']) {
+      it(`moves no major tag on '${tag}'`, () => {
+        const r = mover(tag);
+        expect(r.status, r.out).toBe(0);
+        expect(r.calls).toEqual([]);
+        expect(r.summary).toContain('Left the major tag where it is');
+      });
+    }
   });
 
   it('interpolates no expression into any run line', () => {

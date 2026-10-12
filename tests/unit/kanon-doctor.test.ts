@@ -40,7 +40,7 @@ describe('kanon doctor on a healthy installation', () => {
     expect(r.json.findings).toEqual([]);
     expect(r.json.waived).toEqual([]);
     expect(r.json.status).toBe('healthy');
-    expect(r.json.releases).toEqual({ pins: [PINNED], pinned: PINNED, to: null, checked: PINNED });
+    expect(r.json.releases).toEqual({ pins: [PINNED], pinned: PINNED, to: null, checked: PINNED, stable: null });
     expect(r.json.lanes).toEqual([...LANES].sort());
     expect(r.json.idTokenHolders).toEqual([
       { workflow: '.github/workflows/agent-code-audit.yml', job: 'audit', grant: 'workflow', how: 'id-token', calls: `yedeya-labs/kanon/.github/workflows/agent-code-audit.yml@${PINNED}`, status: 'kanon-lane', reason: null },

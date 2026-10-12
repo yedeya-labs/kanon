@@ -116,7 +116,7 @@ export const ok = (v: unknown): Gh => ({ status: 0, stdout: typeof v === 'string
 export const no = (stderr: string): Gh => ({ status: 1, stdout: '', stderr });
 
 /** A fake GitHub: the repository, its Apps, and Kanon's requirements file at each release. */
-export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<string, Req | null>; variables?: Set<string> | Map<string, string> | null } = {}) => {
+export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Record<string, Req | null>; variables?: Set<string> | Map<string, string> | null; latest?: string | null } = {}) => {
   const ids = identitiesOf(LANES);
   const st = {
     labels: new Set(TAXONOMY),
@@ -124,6 +124,8 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     apps: Object.fromEntries(ids.map((id) => [`widgets-${id}`, { owner: { login: 'acme', type: 'User' }, permissions: permissionsOf(REQ, id) }])) as Record<string, { id?: number; owner: object; permissions: Record<string, string> }>,
     rulesets: [{ id: 7, ...rulesetBody(false) }] as Array<ReturnType<typeof rulesetBody> & { id: number; bypass_actors?: unknown[]; source_type?: string }>,
     releases: over.releases ?? {},
+    /** Kanon's latest release's tag, as GET releases/latest names it (plan 0009 S2); null answers 404. */
+    latest: over.latest ?? null,
     installations: null as Array<{ id: number; app_slug: string; app_id?: number; account: { login: string } }> | null,
     variables: over.variables === undefined ? new Set<string>() : over.variables,
     // The workflows on the default branch, as GitHub has them (#418): CI with the lane check's job.
@@ -175,6 +177,7 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     if (path.startsWith(`repos/${REPO}/milestones?`)) return ok([[]]);
     const app = /^apps\/([a-z0-9-]+)$/.exec(path);
     if (app) return st.apps[app[1]!] && !st.private.has(app[1]!) ? ok({ slug: app[1], ...st.apps[app[1]!] }) : no('gh: Not Found (HTTP 404)');
+    if (path === 'repos/yedeya-labs/kanon/releases/latest') return st.latest ? ok({ tag_name: st.latest, prerelease: false }) : no('gh: Not Found (HTTP 404)');
     const rel = /^repos\/yedeya-labs\/kanon\/contents\/requirements\.json\?ref=(.+)$/.exec(path);
     if (rel) {
       const r = st.releases[decodeURIComponent(rel[1]!)];

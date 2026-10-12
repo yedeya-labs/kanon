@@ -108,6 +108,66 @@ describe('kanon doctor on what an installation lacks', () => {
     expect(r.json.releases.pinned).toBe(PINNED);
   });
 
+  // Plan 0009 S2: a candidate, `candidate-vX.Y.Z`, is an exact release (K-ADOPT-11). Doctor reads
+  // its requirements at the candidate's tag and notes it, with the latest stable release beside it.
+  describe('a candidate pin (plan 0009 S2)', () => {
+    const CANDIDATE = `candidate-${PINNED}`;
+    const candidateFiles = () => {
+      const files = healthyFiles();
+      for (const f of Object.keys(files).filter((x) => x.startsWith('.github/'))) files[f] = files[f]!.split(`@${PINNED}`).join(`@${CANDIDATE}`);
+      return files;
+    };
+
+    it("reads the requirements at the candidate's tag, and notes the pin without blocking", async () => {
+      const github = fakeGitHub({ releases: { [CANDIDATE]: REQ }, latest: 'v0.9.0' });
+      const r = await run(checkout(candidateFiles()), github, ['--json']);
+      expect(github.calls.map((c) => c.join(' '))).toContain(`api -H Accept: application/vnd.github.raw+json repos/yedeya-labs/kanon/contents/requirements.json?ref=${CANDIDATE}`);
+      expect(ids(r)).toEqual(['pin.candidate .github']);
+      expect(r.json.findings[0]).toMatchObject({ category: 'pin', blocking: false });
+      expect(r.json.findings[0].message).toContain(`pin a candidate, ${CANDIDATE}; the latest stable release is v0.9.0`);
+      expect(r.status).toBe(EXIT.healthy);
+      expect(r.json.releases).toMatchObject({ pins: [CANDIDATE], pinned: CANDIDATE, checked: CANDIDATE, stable: 'v0.9.0' });
+    });
+
+    it("says it couldn't tell the latest stable release, and gives null, when that call fails", async () => {
+      const r = await run(checkout(candidateFiles()), fakeGitHub({ releases: { [CANDIDATE]: REQ } }), ['--json']);
+      expect(ids(r)).toEqual(['pin.candidate .github']);
+      expect(r.json.findings[0].message).toContain("doctor couldn't tell the latest stable release");
+      expect(r.json.releases.stable).toBeNull();
+      expect(r.status).toBe(EXIT.healthy);
+    });
+
+    it('offers the stable release once it is at or past the candidate', async () => {
+      const r = await run(checkout(candidateFiles()), fakeGitHub({ releases: { [CANDIDATE]: REQ }, latest: PINNED }), ['--json']);
+      expect(r.json.findings[0].fix.text).toContain(`to ${PINNED}; the upgrade skill does it`);
+    });
+
+    it('reports a candidate beside its own stable release as two releases', async () => {
+      const files = candidateFiles();
+      files['.github/workflows/ci.yml'] = files['.github/workflows/ci.yml']!.split(`@${CANDIDATE}`).join(`@${PINNED}`);
+      const r = await run(checkout(files), fakeGitHub({ releases: { [CANDIDATE]: REQ } }), ['--json']);
+      expect(ids(r)).toContain('pin.mixed .github');
+      expect(r.json.releases.pins).toEqual(expect.arrayContaining([CANDIDATE, PINNED]));
+      expect(r.status).toBe(EXIT.findings);
+    });
+
+    it('gives the latest stable release to a stable pin too, and notes nothing', async () => {
+      const r = await run(checkout(healthyFiles()), fakeGitHub({ latest: 'v1.1.0' }), ['--json']);
+      expect(ids(r)).toEqual([]);
+      expect(r.json.releases.stable).toBe('v1.1.0');
+    });
+
+    it('reads no pre-release as the latest stable', async () => {
+      const r = await run(checkout(healthyFiles()), fakeGitHub({ latest: 'candidate-v1.1.0' }), ['--json']);
+      expect(r.json.releases.stable).toBeNull();
+    });
+
+    it('takes a candidate with --to, and nothing shorter', () => {
+      expect(parseArgs(['--to', CANDIDATE]).to).toBe(CANDIDATE);
+      for (const bad of ['candidate-v1', 'candidate-v1.2', 'stable', 'v0', `${CANDIDATE}x`]) expect(() => parseArgs(['--to', bad]), bad).toThrow(/vX\.Y\.Z or candidate-vX\.Y\.Z/);
+    });
+  });
+
   it('says it is incomplete, exit 4, when the token cannot list the secrets', async () => {
     const dir = checkout(healthyFiles());
     const r = await run(dir, fakeGitHub({ secrets: null }), ['--json']);
