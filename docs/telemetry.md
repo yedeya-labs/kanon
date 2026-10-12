@@ -471,6 +471,8 @@ node infra/telemetry/backfill.mjs --repo <owner/name> --since 2026-09-04 --key <
 
 The dry run prints M5's check, counts only. For each month, it shows the pull requests closed, from GitHub's own listing with release PRs left out, beside the rows derived. Earlier items whose rows the span rewrites are counted apart. It exits non-zero when a month differs or the step failed, and `--apply` sends nothing when the step failed. A re-sent row overwrites itself, so a span that overlaps the collector's is harmless.
 
+When `--apply` can't reach the store, either script prints one `send failed:` line to stdout and exits non-zero. The line names the `aws` call that failed and why: an expired or missing session, with its `aws sso login --profile <profile>`, or a stack or role that isn't deployed. It never names the key, the account id or a role's ARN.
+
 ## Cost and paging
 
 Plan 0002 §9 estimates about $0.05 a month, under a $1 ceiling watched by the account's budget alert. The template creates nothing outside that estimate:

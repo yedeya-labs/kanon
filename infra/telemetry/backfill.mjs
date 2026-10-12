@@ -32,7 +32,7 @@ import { declarations } from '../../cli/metrics.mjs';
 import { isReleasePr } from '../../scripts/metrics/release.mjs';
 import { ghAsync, workItemStep } from '../../scripts/telemetry-work-items.mjs';
 import { isCliEntry } from '../../scripts/lib/cli-entry.mjs';
-import { send } from './import.mjs';
+import { send, sendFailure } from './import.mjs';
 import { aws, post } from './verify.mjs';
 
 const REPOSITORY = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
@@ -143,7 +143,14 @@ if (isCliEntry(import.meta.url)) {
     console.error('not sent: the step failed, so its rows are not the whole span');
     process.exit(1);
   }
-  const { stored, refused } = await send(rows, /** @type {string} */ (values.key), { aws, post, profile: values.profile, role: 'backfill' });
+  let sent;
+  try {
+    sent = await send(rows, /** @type {string} */ (values.key), { aws, post, profile: values.profile, role: 'backfill' });
+  } catch (e) {
+    console.log(sendFailure(e, /** @type {string} */ (values.key)));
+    process.exit(1);
+  }
+  const { stored, refused } = sent;
   console.log(`stored ${stored}; refused ${Object.entries(refused).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}`);
   process.exit(stored === rows.length ? 0 : 1);
 }
