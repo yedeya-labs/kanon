@@ -261,10 +261,16 @@ export function measure(ctx, { start, end, keepItem = () => true, keepRuns = () 
     .map((c) => ({ ...c, cost: costOf(c.runs) }));
   /** @type {{ band: BandKey | 'noPr', cost: number, merged: boolean }[]} */
   const yieldUnits = [];
+  // A closed-unmerged item with delivery runs none of which reports a cost is unknown, never $0:
+  // left out of yield and counted (§3.1), as a merged one is in cost's `mergedWithoutCost`. One
+  // with no delivery run carries no delivery spend, so leaving it out changes no yield, and it is
+  // not counted.
+  let closedWithoutCost = 0;
   for (const item of items) {
     if (!inWindow(Date.parse(item.closed_at))) continue;
     const rs = runsOfItem(item);
     if (rs.some(hasCost)) yieldUnits.push({ band: bandKey(item), cost: costOf(rs), merged: item.fate === 'merged' });
+    else if (item.fate !== 'merged' && rs.length > 0) closedWithoutCost += 1;
   }
   // A settled group whose runs report no cost is unknown, never $0, so it is left out like an
   // item and counted (§3.1).
@@ -276,7 +282,7 @@ export function measure(ctx, { start, end, keepItem = () => true, keepRuns = () 
   }
   /** @type {Record<number, ItemRow[]>} */
   const matured = Object.fromEntries(ESCAPE_DAYS.map((d) => [d, items.filter((i) => i.fate === 'merged' && inWindow(Date.parse(i.closed_at), d * DAY_MS))]));
-  return { start, end, merged, costed, yieldUnits, unjoinedWithoutCost, matured };
+  return { start, end, merged, costed, yieldUnits, closedWithoutCost, unjoinedWithoutCost, matured };
 }
 
 /** @typedef {ReturnType<typeof measure>} Measured */
@@ -434,8 +440,9 @@ const versionOf = (r) => (typeof r.kanon_version === 'string' ? r.kanon_version 
 /**
  * The trend (§6.1): the headline of each of `windows` windows of `days` days that end at `end`,
  * oldest first, pooled with the band mix, each marking the Kanon versions whose first item closed
- * in it. A version's boundary is the window its first item closed in; the earliest versioned
- * item's window marks none, since nothing came before it.
+ * in it. A version's boundary is the window its first item closed in, marked when some versioned
+ * item closed before that first item, in an earlier window or the same one; the earliest
+ * versioned item's version is never marked, since nothing came before it.
  * @param {Prepared} ctx @param {{ end: number, days: number, windows: number }} opts
  */
 export function trendOf(ctx, { end, days, windows }) {
@@ -455,7 +462,7 @@ export function trendOf(ctx, { end, days, windows }) {
     return {
       window: { from: date(s), until: date(e), days },
       ...pooledHeadline(measure(ctx, { start: s, end: e })),
-      versionsIntroduced: [...firstClosed].filter(([, t]) => t >= s && t < e && earliest < s).map(([v]) => v).sort(compareVersions),
+      versionsIntroduced: [...firstClosed].filter(([, t]) => t >= s && t < e && earliest < t).map(([v]) => v).sort(compareVersions),
     };
   });
 }
