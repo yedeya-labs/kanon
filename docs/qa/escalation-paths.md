@@ -6,7 +6,7 @@ Three tiers decide who merges a pull request here:
 
 - **Always the Owner, fixed by `K-MERGE-4`, so not declared here:** every file under `.github/`, every markdown file directly inside `docs/qa/`, `AGENTS.md`, `CLAUDE.md` and `.claude/`.
 - **The Owner, by Kanon's choice:** the paths below, each marked `always`, so they stay with the Owner although the adoption record declares Kanon's production promotion human-gated (`K-MERGE-4`, `K-LAYOUT-10`). Every entry Kanon declares is marked, so that declaration widens nothing here: it records where the human gate on what reaches adopters is, the weekly release pull request.
-- **Green, everything else:** the Merger may merge it, notably `docs/` outside `docs/qa/`, `docs/decisions/` and `docs/plans/`, `README.md`, `tests/`, `cli/`, `scripts/metrics/` and the rest of `scripts/`.
+- **Green, everything else:** the Merger may merge it, notably `docs/` outside `docs/qa/`, `docs/decisions/`, `docs/plans/` and `docs/metrics/`, `README.md`, `tests/`, and `cli/`, `scripts/metrics/` and the rest of `scripts/` except the files below.
 
 ## Escalation paths
 
@@ -59,6 +59,28 @@ The library scripts that decide a verdict, gate a lane, mint or narrow what a to
 - `^scripts/telemetry-collect\.mjs$` `pipeline` `always` — the collector, which holds the telemetry writer's credentials and decides which rows, and which findings at which level, leave a repository
 - `^scripts/telemetry/jev\.mjs$` `pipeline` `always` — the decision whether a private upstream finding becomes a public issue
 
+Code Kanon's own workflows run from this tree, on the branch they run on, with a credential. Kanon's lanes run the library at the release their callers pin, but three workflows don't, so each entry file and every local file it imports, directly or through another, is the Owner's; the scripts above already cover the rest of their imports (`lane-gate.mjs`, `caller-pin.mjs`, `app-register.mjs`, `declarations.mjs`, `spec-lib.mjs`, `aggregate-mask.mjs`), and `actions/`, `infra/telemetry/function/` and `.github/` cover theirs:
+
+`apps-check.yml`, dispatched, runs `cli/apps-check.mjs` with each App's private key. `metrics-page.yml`'s `aggregate` job runs `scripts/aggregate-read.mjs` under the aggregate invoker role, and its `page` job runs `scripts/telemetry/kanon-health.mjs` and `.github/scripts/metrics-page.mjs`, then `actions/agent-setup/agent-commits.sh` with the Author's token. `agent-lanes-smoke.yml`, on the push to `main`, runs its lanes' admission jobs (`scripts/lane-gate.mjs`, through `actions/kanon-path`) and their store-cleanup jobs (`actions/qa-store/qa-store.mjs`) with the workflow token's write grants. Every other run of this tree's code holds no secret, no role and no write grant (`ci.yml`, `citation-shift.yml`, `public-text.yml` and the other smoke runs), or runs a pull request's own code before anything merges, which no escalation path can guard; every lane caller runs the pinned release.
+
+- `^cli/apps-check\.mjs$` `auth` `always` — the App check `apps-check.yml` runs with each App's private key
+- `^cli/apps\.mjs$` `auth` `always` — imported by the App check: each App's permissions, read from the rulebook
+- `^cli/app-register\.mjs$` `auth` `always` — imported by the App check: the register rows it holds the Apps to
+- `^cli/gh-token\.mjs$` `auth` `always` — imported by the App check: the token it calls GitHub with
+- `^cli/ruleset-bypass\.mjs$` `auth` `always` — imported by the App check: the ruleset bypass it reads
+- `^scripts/lib/cli-entry\.mjs$` `pipeline` `always` — imported by every entry here: whether a module runs as a command
+- `^scripts/lib/code-areas\.mjs$` `pipeline` `always` — imported by the membership gate
+- `^scripts/lib/test-conventions\.mjs$` `pipeline` `always` — imported by the membership gate, through the code areas
+- `^scripts/aggregate-read\.mjs$` `infra` `always` — the metrics page's aggregate read, under the aggregate invoker role
+- `^scripts/telemetry/kanon-health\.mjs$` `pipeline` `always` — the metrics page's health figures, which its job publishes with the Author's token
+- `^scripts/telemetry/kanon-bugs\.mjs$` `pipeline` `always` — imported by the health figures
+- `^scripts/telemetry/kanon-findings\.mjs$` `pipeline` `always` — imported by the health figures
+- `^scripts/metrics/(band|health|indicators|join|stats)\.mjs$` `pipeline` `always` — imported by the metrics page and its health figures; all but `health.mjs` are also linked into the telemetry functions under `infra/telemetry/function/`, so a change to them changes deployed function code
+
+The published metrics page:
+
+- `^docs/metrics/` `other` `always` — the public metrics page, whose figures are published in Kanon's name (plan 0003 M7)
+
 ## Pipeline code
 
-None. Kanon's own pipeline scripts are `.github/scripts/`, under `.github/`, which escalates whatever this file says. `scripts/` is Kanon's library, the product: Kanon's lanes run the copy at the release their callers pin, never this tree's ([ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md)), and a change here reaches them only through the release pull request and Dependabot's bump of the pins, both of which go to the Owner. So `scripts/` is not declared as pipeline code, which would send all of it to the Owner; its scripts that decide a verdict, gate a lane, touch a token or scrub what leaves are declared one by one above.
+None. Kanon's own pipeline scripts are `.github/scripts/`, under `.github/`, which escalates whatever this file says. `scripts/` is Kanon's library, the product: Kanon's lanes run the copy at the release their callers pin ([ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md)), and a change there reaches them only through the release pull request and Dependabot's bump of the pins, both of which go to the Owner. Three of Kanon's own workflows do run this tree's code with a credential, `apps-check.yml`, `metrics-page.yml` and `agent-lanes-smoke.yml` (above); their entry files and every local file those import are marked `always` above. So `scripts/` is not declared as pipeline code, which would send all of it to the Owner; its scripts that decide a verdict, gate a lane, touch a token, scrub what leaves, or run from this tree with a credential are declared one by one above.
