@@ -23,7 +23,8 @@
 // NOTHING PRIVATE. The page holds labels, numbers, dates, versions and rule ids, all checked
 // against their patterns before they are written, and `assertNothingPrivate` refuses the
 // written page if it holds an address, a login, a repository URL, a role ARN or an account id.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { RULE_IDS } from '../../actions/agent-telemetry/schema.mjs';
@@ -421,6 +422,8 @@ export function main(argv) {
     // the caller gave.
     return { code: 2, message: `metrics-page: ${/** @type {Error} */ (e).message}` };
   }
+  // The first run has no docs/metrics/ yet.
+  mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, html);
   return { code: 0, message: `metrics-page: wrote ${out}` };
 }
