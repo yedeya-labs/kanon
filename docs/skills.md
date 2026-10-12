@@ -79,7 +79,7 @@ Each skill states these rules in its own instructions:
 - each skill's table of findings lists exactly the finding ids of [`docs/init.md`](init.md#the-findings) or [`docs/doctor.md`](doctor.md#the-finding-ids), so a new finding can't go unhandled;
 - every field a skill reads, such as `.findings[].fix.commands`, is a field those pages document, and each skill's table of statuses and exit codes is theirs;
 - the plugin ships `skills/` and nothing else: the repository's root is the plugin's root, so a `hooks/`, `.mcp.json` or other plugin component added there would reach every adopter's agent, and fails the test instead;
-- each skill names the contract (`kanon-init/v1`, `kanon-doctor/v1`) its command prints, and runs `kanon` from the release it ships in.
+- each skill names the contract (`kanon-init/v1`, `kanon-doctor/v1`) its command prints, and runs `kanon` from the release it ships in;
 - the upgrade skill carries each answer a newer release added whose only effect is a bullet in the adoption record that `init` keeps as it is, writing the bullet after a yes, or tells you plainly, and in the pull request's `## Left to do`, that your answer isn't in the repository ([#601](https://github.com/yedeya-labs/kanon/issues/601)): its table names every bullet `init` writes from an answer, so a new one can't be dropped silently.
 
 A skill step that a person still had to do by hand, when the skills ran Kanon's own migration (plan 0005 L5) or an adopter's (L6), is a gap in the skills, filed against L11 and fixed there.

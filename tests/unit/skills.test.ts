@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { SCHEMA as DOCTOR_SCHEMA } from '../../cli/doctor.mjs';
-import { SCHEMA as INIT_SCHEMA, UPSTREAM_EVIDENCE_QUESTION, adoptionFile } from '../../cli/init.mjs';
+import { SCHEMA as INIT_SCHEMA, UPSTREAM_EVIDENCE_QUESTION } from '../../cli/init.mjs';
 import { REVIEW_LABELS } from '../../scripts/lane-gate.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL } from '../../scripts/lib/upstream-findings.mjs';
 
@@ -471,20 +471,21 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(read('docs/skills.md')).toMatch(/the upgrade skill carries each answer a newer release added .*or tells you plainly, and in the pull request's `## Left to do`, that your answer isn't in the repository/);
   });
 
-  // The skill's table of record-only answers names every bullet `init` writes from an answer, as
-  // `adoptionFile` writes it, so a bullet a release adds can't go uncarried. The Overseer's bullet
-  // follows the lanes the callers run, and doctor reports a record that contradicts them.
+  // The skill's table of record-only answers names every bold bullet `adoptionFile` can write, read
+  // from its source, so a bullet a release adds for a new answer fails here until the skill carries
+  // it. The ones left out are not answers: the plan's bullets come from the inspection, and the
+  // Overseer's follows the lanes the callers run, which doctor holds the record to.
   it('lists, in the upgrade skill, every adoption-record bullet init writes from an answer (#601)', () => {
     const steps = section(skill('upgrade').body, /^## Steps$/)!;
     const table = rows(steps).filter((r) => r[0] !== 'Answer' && !/^-+$/.test(r[0]!));
-    const record: string = adoptionFile(
-      { kind: 'Organization', isPrivate: false, rulesets: 'yes', mergeQueue: 'yes' } as never,
-      { owner: 'o', maintainer: 'o', stakeholder: 'o', lanes: [], feature: 'full', reviewTrigger: 'labelled', upstreamFindings: 'filed here', sensitiveData: true } as never,
-      'o/r',
-      '2026-01-01',
-    );
-    const bullets = `${section(record, /^## Choices$/)}\n${section(record, /^## Data$/)}`;
-    const labels = [...bullets.matchAll(/^- \*\*([^*]+):\*\* /gm)].map((m) => m[1]!);
+    const init = read('cli/init.mjs');
+    const start = init.indexOf('export const adoptionFile = ');
+    expect(start).toBeGreaterThan(-1);
+    const source = init.slice(start, init.indexOf('\n};\n', start));
+    const written = [...source.matchAll(/- \*\*([^*]+):\*\* /g)].map((m) => m[1]!.replace('${UPSTREAM_LABEL}', UPSTREAM_LABEL));
+    const notAnswers = ['Rulesets', 'Merge queue', 'Environments', 'Overseer'];
+    for (const l of notAnswers) expect(written, l).toContain(l);
+    const labels = [...new Set(written)].filter((l) => !notAnswers.includes(l));
     expect(labels).toContain(UPSTREAM_LABEL);
     expect(labels.length).toBeGreaterThanOrEqual(4);
     const documented = new Set([...section(read('docs/init.md'), /^### The answers$/)!.matchAll(/^\| `(\w+)` \|/gm)].map((m) => m[1]!));
@@ -496,6 +497,14 @@ describe('each skill is held to the kanon command it drives', () => {
       for (const f of fields) expect(documented, `${label}: .answers.${f}`).toContain(f);
     }
     expect(table.find((r) => r[2]!.includes(`**${UPSTREAM_LABEL}:**`))![3]).toBe(`\`${UPSTREAM_DEFAULT}\``);
+  });
+
+  // K-LAYOUT-10: a record without the bullet means `labelled`, so `labelled` needs no bullet until
+  // `every pull request` exists.
+  it('has the upgrade skill write no review-trigger bullet for the value a record without it means (#601)', () => {
+    const table = rows(section(skill('upgrade').body, /^## Steps$/)!);
+    expect(table.find((r) => r[2]!.includes('**Review trigger:**'))![3]).toBe('`labelled`, null');
+    expect(read('rulebook/11-repository-layout.md')).toMatch(/\*\*A record without the bullets, or no record, means `custom` and `labelled`\*\*/);
   });
 
   // An agent's shell has no terminal on standard input, where `kanon init` refuses to start

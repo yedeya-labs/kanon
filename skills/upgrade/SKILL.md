@@ -58,7 +58,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
    |---|---|---|---|
    | Where upstream findings go, and whether their evidence is sent | `upstreamFindings`; `upstreamEvidence` has no bullet of its own, `true` is the value `sent with evidence` | ``- **Upstream findings:** `<value>` `` under `## Choices`, the value as `answers` writes it: `filed here`, `sent` or `sent with evidence` | `drafted` |
    | What Kanon does in this repo | `feature` | ``- **Feature:** `<value>` `` under `## Choices` | `custom` |
-   | Which pull requests the Reviewer reviews | `reviewTrigger` | ``- **Review trigger:** `labelled` `` under `## Choices` | null |
+   | Which pull requests the Reviewer reviews | `reviewTrigger` | ``- **Review trigger:** `labelled` `` under `## Choices` | `labelled`, null |
    | Whether the repo holds private or sensitive material | `sensitiveData` | ``- **Private or sensitive material:** `yes` `` for `true`, `` `no` `` for `false`, under `## Data`, the section `init` writes after `## Choices`, with its sentence | null, `not declared` |
 
    **Never drop an answer silently.** When the person says no to the bullet, or a new answer isn't in this table and `docs/init.md` at the target says `init` writes it into a declaration whose status is `kept`, tell the person plainly that their answer is not in the repository, that the lanes go on as the record says until it is, and the bullet or line that would carry it. List it in the pull request's `## Left to do` (step 7).
