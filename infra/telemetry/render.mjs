@@ -3,6 +3,7 @@
 // (plan 0002 §3, §5).
 //
 //   node infra/telemetry/render.mjs --register <register.json> --out <dir> [--verify] [--importer] [--backfill]
+//       [--operator-job-roles <role ARN>,<role ARN>]
 //
 // Writes <dir>/template.json, which `aws cloudformation package` takes, and <dir>/parameters.json,
 // which `aws cloudformation deploy --parameter-overrides file://...` takes. Both hold the
@@ -55,7 +56,8 @@ export const FUNCTION_DIR = join(HERE, 'function');
 const OIDC_HOST = 'token.actions.githubusercontent.com';
 
 const OWNER = /^arn:aws:iam::\d{12}:role\/.+$/;
-const KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
+/** A key, and a label for own figures, which shares its pattern. */
+export const KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const READER = /^ref:refs\/heads\/[A-Za-z0-9._/-]+$/;
 
@@ -323,15 +325,22 @@ export function invokerResources(entry, invokePolicy, subjects) {
   };
 }
 
+/** A comma-separated list of role ARNs, each as `owner_principal_arn` must be. @param {string} v */
+export const operatorJobRolesOk = (v) => v.split(',').every((a) => OWNER.test(a));
+
 /**
  * The deployable template and its parameter overrides.
  * @param {Register} register
- * @param {{ verify?: boolean, importer?: boolean, backfill?: boolean, templateText?: string, functionDir?: string, gh?: (args: string[]) => string, now?: number }} [opts]
- *   `gh` runs `gh` for GitHub's API; the default is the real one
+ * @param {{ verify?: boolean, importer?: boolean, backfill?: boolean, operatorJobRoles?: string, templateText?: string, functionDir?: string, gh?: (args: string[]) => string, now?: number }} [opts]
+ *   `gh` runs `gh` for GitHub's API; the default is the real one. `operatorJobRoles`, the operator's
+ *   private jobs' roles, comma-separated, which the register table's resource policy lets in (plan
+ *   0008 §5.3), sets `OperatorJobRoleArns`; left out, the parameter is not written, so a deploy of
+ *   an existing stack keeps its previous value.
  * @returns {{ template: any, parameters: string[], subjects: Record<string, Subjects> }} `subjects` by key
  */
 export function render(register, opts = {}) {
   const problems = registerProblems(register, opts.now);
+  if (opts.operatorJobRoles !== undefined && !operatorJobRolesOk(opts.operatorJobRoles)) problems.push('--operator-job-roles must list role ARNs, comma-separated');
   if (problems.length) throw new Error(`register: ${problems.join('; ')}`);
   /** @type {Record<string, Subjects>} */
   const subjects = {};
@@ -376,6 +385,7 @@ export function render(register, opts = {}) {
     `EnableVerify=${opts.verify ? 'true' : 'false'}`,
     `EnableImporter=${opts.importer ? 'true' : 'false'}`,
     `EnableBackfill=${opts.backfill ? 'true' : 'false'}`,
+    ...(opts.operatorJobRoles !== undefined ? [`OperatorJobRoleArns=${opts.operatorJobRoles}`] : []),
   ];
   return { template, parameters, subjects };
 }
@@ -388,10 +398,11 @@ if (isCliEntry(import.meta.url)) {
       verify: { type: 'boolean', default: false },
       importer: { type: 'boolean', default: false },
       backfill: { type: 'boolean', default: false },
+      'operator-job-roles': { type: 'string' },
     },
   });
   if (!values.register || !values.out) {
-    console.error('usage: render.mjs --register <register.json> --out <dir> [--verify] [--importer] [--backfill]');
+    console.error('usage: render.mjs --register <register.json> --out <dir> [--verify] [--importer] [--backfill] [--operator-job-roles <role ARN>,<role ARN>]');
     process.exit(2);
   }
   try {
@@ -400,7 +411,7 @@ if (isCliEntry(import.meta.url)) {
     let register;
     // JSON.parse's message quotes the text around the fault, which may be a key.
     try { register = JSON.parse(text); } catch { throw new Error(`register: ${values.register} is not JSON`); }
-    const { template, parameters, subjects } = render(register, values);
+    const { template, parameters, subjects } = render(register, { ...values, operatorJobRoles: values['operator-job-roles'] });
     // The Owner checks these before deploying: each is what that repository's tokens carry. By
     // repository, never by key.
     for (const e of register.repositories) {

@@ -1,6 +1,7 @@
 # The hosted telemetry store (plan 0002 §3 to §5, §6.1, §7, §9, §10): one DynamoDB table, written
 # only by a validating function behind an IAM-authenticated URL, with a writer and a reader role
-# per registered repository, and an aggregate-only function behind a second such URL.
+# per registered repository, and an aggregate-only function behind a second such URL. Beside them,
+# the register table of plan 0008 §5, which nothing uses until the token path (J3).
 #
 # THIS FILE IS NOT DEPLOYED AS IT IS. The register (who is opted in) is private (§5), so
 # `render.mjs` reads it and adds each repository's roles to this template. `docs/telemetry.md`
@@ -40,6 +41,10 @@ Parameters:
     Description: Let the Owner assume the writer and reader roles, and create the write probe, for verify.mjs only.
     AllowedValues: ['true', 'false']
     Default: 'false'
+  OperatorJobRoleArns:
+    Type: CommaDelimitedList
+    Description: The operator's private jobs' roles (plan 0008, section 5.3), comma-separated, which the register table's resource policy lets in. Empty names none.
+    Default: ''
   ReservedConcurrency:
     Type: Number
     Description: The function's reserved concurrency (plan 0002, section 4). 0 sets none, for an account whose concurrency quota can't spare it.
@@ -59,6 +64,7 @@ Conditions:
   ImporterOn: { 'Fn::Equals': [{ Ref: EnableImporter }, 'true'] }
   BackfillOn: { 'Fn::Equals': [{ Ref: EnableBackfill }, 'true'] }
   VerifyOn: { 'Fn::Equals': [{ Ref: EnableVerify }, 'true'] }
+  HasOperatorJobRoles: { 'Fn::Not': [{ 'Fn::Equals': [{ 'Fn::Join': ['', { Ref: OperatorJobRoleArns }] }, ''] }] }
   HasReservedConcurrency: { 'Fn::Not': [{ 'Fn::Equals': [{ Ref: ReservedConcurrency }, 0] }] }
 
 Resources:
@@ -106,6 +112,65 @@ Resources:
                     - { 'Fn::GetAtt': [IngestRole, Arn] }
                     - { Ref: OwnerPrincipalArn }
 
+  # The register (plan 0008 §5): who is registered, under which key, and the operator's fields,
+  # outside any repository. Nothing reads or writes it until the token path (plan 0008 J3); the
+  # operator's `register.mjs` is its only user before then. Its lifecycle is the rows table's
+  # (K-OBS-17): retained, deletion-protected, point-in-time recovery. Encrypted with the
+  # AWS-managed key `aws/dynamodb` (Owner decision 4 of 2026-10-12): no key fee, and every use of
+  # the key is in CloudTrail, but its key policy can't be narrowed, so it is not an access
+  # control. Access is held by the resource policy below and the roles' conditions.
+  RegisterTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: kanon-telemetry-register
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+      DeletionProtectionEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      # For the quota counters (§6); a registration, a key item and a tombstone have no expiry.
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      # No KMSMasterKeyId: the AWS-managed key, not a customer-managed one.
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      # §5.3: every action, by every principal but four, is denied: the ingest function's role,
+      # the aggregate function's role, the Owner's role, and the operator's private jobs' roles
+      # (OperatorJobRoleArns). What each may do inside that is its own policy's to narrow.
+      ResourcePolicy:
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Sid: OnlyTheNamedPrincipals
+              Effect: Deny
+              Principal: '*'
+              Action: dynamodb:*
+              Resource:
+                Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry-register
+              Condition:
+                ArnNotEquals:
+                  aws:PrincipalArn:
+                    Fn::If:
+                      - HasOperatorJobRoles
+                      - Fn::Split:
+                          - ','
+                          - Fn::Join:
+                              - ','
+                              - - { 'Fn::GetAtt': [IngestRole, Arn] }
+                                - { 'Fn::GetAtt': [AggregateRole, Arn] }
+                                - { Ref: OwnerPrincipalArn }
+                                - { 'Fn::Join': [',', { Ref: OperatorJobRoleArns }] }
+                      - - { 'Fn::GetAtt': [IngestRole, Arn] }
+                        - { 'Fn::GetAtt': [AggregateRole, Arn] }
+                        - { Ref: OwnerPrincipalArn }
+
   IngestRole:
     Type: AWS::IAM::Role
     Properties:
@@ -128,6 +193,69 @@ Resources:
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: { 'Fn::GetAtt': [IngestLogGroup, Arn] }
+        # The register (plan 0008 §5.3). Unused until the token path (J3).
+        - PolicyName: read-and-write-the-register
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadRegistrations
+                Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:Query]
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry-register
+              # assertNoKey's keys (§3.4): a Scan of `pk` alone, which for a key item is `key#<key>`.
+              - Sid: ScanThePartitionKeys
+                Effect: Allow
+                Action: dynamodb:Scan
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry-register
+                Condition:
+                  ForAllValues:StringEquals:
+                    dynamodb:Attributes: [pk]
+                  StringEquals:
+                    dynamodb:Select: SPECIFIC_ATTRIBUTES
+              # Every field but the operator's (function/register-fields.mjs, FUNCTION_FIELDS):
+              # aggregate_invoker, publish_own_figures_as, page_reader, quota_*, suspended_* and
+              # first_review are not listed, so IAM refuses the function a write that SETS one.
+              # It does not keep them: a whole-item PutItem of these fields alone replaces an item
+              # and drops its operator fields without naming them. Keeping them across the
+              # function's writes is J3's conditional writes to hold. A TransactWriteItems is
+              # authorized per item, as these actions.
+              - Sid: WriteNoOperatorField
+                Effect: Allow
+                Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry-register
+                Condition:
+                  ForAllValues:StringEquals:
+                    dynamodb:Attributes:
+                      - pk
+                      - repository_id
+                      - repository_owner_id
+                      - repository
+                      - key
+                      - status
+                      - default_ref
+                      - name_hashes
+                      - registered_at
+                      - registered_by_version
+                      - last_seen_at
+                      - erased_at
+                      - rows_erased_at
+                      - source
+                      - n
+                      - expires_at
+              # A DeleteItem names no attribute, so dynamodb:Attributes can't hold it. It is held
+              # to the key items instead (`key#<key>`), the one delete §5.3 grants, on erasure (§7):
+              # a registration becomes its tombstone by a PutItem, and counters expire by TTL.
+              - Sid: DeleteKeyItemsOnly
+                Effect: Allow
+                Action: dynamodb:DeleteItem
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry-register
+                Condition:
+                  ForAllValues:StringLike:
+                    dynamodb:LeadingKeys: ['key#*']
 
   # Keys and field names only (the function never logs a value), kept 30 days (§10).
   IngestLogGroup:
@@ -325,6 +453,39 @@ Resources:
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: { 'Fn::GetAtt': [AggregateLogGroup, Arn] }
+        # The register (plan 0008 §3.6, §5.3), each read held to exactly its projection. Unused
+        # until the aggregate function reads its keys from the table (J4).
+        - PolicyName: read-the-register-projections
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Every registration's key, status and label: no name and no owner id, since the
+              # three-adopter rule counts keys (Owner decision 7 of 2026-10-12).
+              - Sid: ScanTheRegistrations
+                Effect: Allow
+                Action: dynamodb:Scan
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry-register
+                Condition:
+                  ForAllValues:StringEquals:
+                    dynamodb:Attributes: [pk, key, status, publish_own_figures_as]
+                  StringEquals:
+                    dynamodb:Select: SPECIFIC_ATTRIBUTES
+              # The caller's registration, for checks 8 and 9 and its two operator flags. GetItem
+              # takes no Select parameter, so dynamodb:Select is held only where present; the
+              # projection is held by dynamodb:Attributes. verify.mjs shows this role's GetItem
+              # with no projection, and with `repository` projected, denied (plan 0008 §13's
+              # added checks, which J6 runs) before the aggregate relies on it (J4).
+              - Sid: GetTheCallersRegistration
+                Effect: Allow
+                Action: dynamodb:GetItem
+                Resource:
+                  Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kanon-telemetry-register
+                Condition:
+                  ForAllValues:StringEquals:
+                    dynamodb:Attributes: [pk, key, status, repository_owner_id, default_ref, aggregate_invoker, page_reader]
+                  StringEqualsIfExists:
+                    dynamodb:Select: SPECIFIC_ATTRIBUTES
 
   # Counts only (the function never logs a row, a key or a figure), kept 30 days.
   AggregateLogGroup:
@@ -373,6 +534,8 @@ Resources:
 Outputs:
   TableName:
     Value: { Ref: Table }
+  RegisterTableName:
+    Value: { Ref: RegisterTable }
   IngestUrl:
     Value: { 'Fn::GetAtt': [IngestUrl, FunctionUrl] }
   AggregateUrl:
