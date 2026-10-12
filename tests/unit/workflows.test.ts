@@ -260,6 +260,12 @@ describe('K-SHIP-7 the reusable release workflow', () => {
     expect(moveTag?.env).toMatchObject({ TAG_NAME: '${{ steps.release.outputs.tag_name }}' });
   });
 
+  it("moves the major tag with the Releaser's token when one was minted, as release-please's step does (plan 0009 S0)", () => {
+    const releaseStep = steps.find((s) => s.id === 'release');
+    expect(moveTag?.env?.GH_TOKEN).toBe('${{ steps.releaser.outputs.token || github.token }}');
+    expect(moveTag?.env?.GH_TOKEN).toBe(releaseStep?.with?.token);
+  });
+
   // Plan 0009 S2: the major tag moves only on a plain vX.Y.Z, never on a candidate's tag or a
   // component's. Runs the step's own script against a stub `gh` that logs every call.
   describe('moves the major tag only on a plain vX.Y.Z', () => {
