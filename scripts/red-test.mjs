@@ -62,6 +62,22 @@
 //              toolchain the project-setup hook installed: never through a package runner that
 //              fetches what it cannot find (ADR 0012 decision 4).
 //
+// ── NO BEHAVIOUR CHANGE, NO FIX TO PROVE (the Owner's decision of 2026-10-12, #666) ──
+// A characterization test locks behaviour that is already right, so it cannot fail on a revert by
+// construction, and a red check on its PR would mean nothing: every such PR would teach people to
+// ignore this check. Such a PR is recognised two ways, and either one ends the check SKIPPED,
+// never red, never green:
+//   the diff   the non-test, non-doc change is comments or whitespace in a file present at both
+//              ends, or there is none at all (`noBehaviourChange`). Decided conservatively: a file
+//              the reader can't prove comment-only, or a non-doc file this job can't revert,
+//              keeps the diff on the verifying path. An agent can't fake it, because a diff that
+//              changes behaviour isn't comment-only.
+//   a person   `test:characterization`, on the run a PERSON's applying it started
+//              (`characterization`). An App's, the agents' included, is ignored: the agent cannot
+//              waive the check. Read in the scope job only, where no code from the PR has run.
+// Either way the PR states the mutations that turn its test red (`K-PRIN-11`), and the Reviewer
+// asks for them: the test's sensitivity comes from those, since it can't come from here.
+//
 // Usage: node "$KANON/scripts/red-test.mjs" --base <sha> --head <sha>
 //        (add --dry-run to classify and print without touching the tree)
 //        (add --plan to classify only and write `verify=true|false` to $GITHUB_OUTPUT: the
@@ -72,8 +88,10 @@ import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFil
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
+import { isAgentActor } from './lib/actors.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { UNDECLARED, codeAreasDefaults, isTestPath, readCodeAreas } from './lib/code-areas.mjs';
+import { commentOnly } from './lib/comment-only.mjs';
 import { RUNNERS, TABLE_EXT, interpretGoJson, isTestFile, runnerFor } from './lib/test-conventions.mjs';
 
 /** @typedef {import('./lib/code-areas.mjs').CodeAreas} CodeAreas */
@@ -167,6 +185,70 @@ export function narrowRunnable(runnable, existsAtHead) {
     runnable: runnable.filter((f) => existsAtHead(f)),
     deletedTests: runnable.filter((f) => !existsAtHead(f)),
   };
+}
+
+/** A documentation file: the diff's non-test change may hold these and still be no behaviour
+ *  change. Only prose formats; a `.txt` may be a manifest (`requirements.txt`), and `.mdx` holds
+ *  code. */
+const DOC_RE = /\.(?:md|markdown|rst|adoc)$/;
+
+/**
+ * Is the non-test, non-doc part of the diff no behaviour change at all? `'no-source'` when there
+ * is none, `'comment-only'` when every source file changed only in comments or whitespace, and
+ * null otherwise: one source file `commentOnly` can't prove, or one non-doc file this job doesn't
+ * revert (a config, a migration, a manifest), whose change may be the behaviour change.
+ * @param {{ src: string[], unreverted: string[], commentOnly: (file: string) => boolean }} input
+ * @returns {'no-source' | 'comment-only' | null}
+ */
+export function noBehaviourChange({ src, unreverted, commentOnly: isCommentOnly }) {
+  if (unreverted.some((f) => !DOC_RE.test(f))) return null;
+  if (!src.length) return 'no-source';
+  return src.every((f) => isCommentOnly(f)) ? 'comment-only' : null;
+}
+
+/**
+ * Did `file` change between `base` and `head` in comments or whitespace only? Only for a regular
+ * file at both ends with the same mode: a file the PR added or deleted, made executable, or turned
+ * into a symlink changed whatever its text says.
+ * @param {string} file @param {string} base @param {string} head @param {{ run?: Git }} [io]
+ */
+export function commentOnlyAt(file, base, head, { run = git } = {}) {
+  try {
+    const entry = (/** @type {string} */ ref) => /^(100644|100755) blob ([0-9a-f]+)\t/.exec(run(['ls-tree', ref, '--', file], { stdio: 'pipe' }));
+    const a = entry(base), b = entry(head);
+    if (!a || !b || a[1] !== b[1]) return false;
+    return commentOnly(file, run(['cat-file', 'blob', a[2] ?? ''], { stdio: 'pipe' }), run(['cat-file', 'blob', b[2] ?? ''], { stdio: 'pipe' }));
+  } catch {
+    return false;
+  }
+}
+
+/** The label a person applies to say a PR's tests lock behaviour that is already correct. */
+export const CHARACTERIZATION_LABEL = 'test:characterization';
+
+/**
+ * Who applied `test:characterization`, as far as the event that started this run can say. `person`
+ * only on the `labeled` event for that label, sent by a person; `app` on that event sent by any
+ * App, by the label guard's test (`isAgentActor`); `unattributed` on every other event of a PR
+ * that carries it, since only the labelling's own event names who applied it; null when the PR
+ * doesn't carry it.
+ * @param {unknown} event the event payload
+ * @returns {{ kind: 'person' | 'app', by: string } | { kind: 'unattributed' } | null}
+ */
+export function characterization(event) {
+  const e = /** @type {{ action?: unknown, label?: { name?: unknown }, sender?: { login?: unknown, type?: unknown }, pull_request?: { labels?: Array<{ name?: unknown }> } } | null} */ (event);
+  const labels = Array.isArray(e?.pull_request?.labels) ? e.pull_request.labels : [];
+  if (!labels.some((l) => l?.name === CHARACTERIZATION_LABEL)) return null;
+  const login = e?.sender?.login;
+  if (e?.action !== 'labeled' || e.label?.name !== CHARACTERIZATION_LABEL || typeof login !== 'string' || !login) return { kind: 'unattributed' };
+  return { kind: isAgentActor(e.sender) ? 'app' : 'person', by: login };
+}
+
+/** The event that started this run, from where Actions writes it, or null outside Actions. */
+function readEvent() {
+  const path = process.env.GITHUB_EVENT_PATH;
+  if (!path) return null;
+  try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
 }
 
 /**
@@ -538,12 +620,34 @@ function main(areas) {
     say('**Skipped:** no runnable test file changed, so there is no "confirmed it fails" claim to verify. The check concludes SKIPPED, not green.');
     return { skipped: true };
   }
+  // NO BEHAVIOUR CHANGE TO REVERT, read from the diff. Before the no-source skip, which says
+  // less, and before UNVERIFIABLE, which would blame a doc for what is really the absence of a
+  // fix: reverting the doc as well would still leave every test green.
+  const unchanged = noBehaviourChange({ src, unreverted, commentOnly: (f) => commentOnlyAt(f, diffBase, head) });
+  if (unchanged) {
+    const what = unchanged === 'no-source'
+      ? `No non-test file changed${unreverted.length ? ' but documentation' : ''}`
+      : `Every change to ${src.map((f) => `\`${f}\``).join(', ')} is to comments or whitespace${unreverted.length ? ', and the rest is documentation' : ''}`;
+    say(`**Skipped: no behaviour change to revert.** ${what}, so the changed tests lock behaviour that was already there: they are characterization tests, which cannot fail on a revert by construction. The check concludes SKIPPED, not green: nothing was verified, and the tests' sensitivity must come from the mutations their pull request states (K-MERGE-13, K-PRIN-11).`);
+    return { skipped: true, noBehaviourChange: unchanged };
+  }
   if (!src.length) {
     say('**Skipped:** no source file changed, so there is nothing to revert. The check concludes SKIPPED, not green: nothing was verified.');
     return { skipped: true };
   }
 
-  if (PLAN) return { plan: true };
+  if (PLAN) {
+    // A PERSON'S LABEL, read here only. The scope job runs nothing from the PR before this
+    // script; the verify job has run the project-setup hook, which could rewrite the event file.
+    const label = characterization(readEvent());
+    if (label?.kind === 'person') {
+      say(`**Skipped: a person applied \`${CHARACTERIZATION_LABEL}\`** (@${label.by}), saying the changed tests lock behaviour that was already correct, so there is no fix to revert. The check concludes SKIPPED, not green: nothing was verified, and the tests' sensitivity must come from the mutations their pull request states (K-MERGE-13, K-PRIN-11).`);
+      return { skipped: true, characterization: label.by };
+    }
+    if (label?.kind === 'app') say(`**\`${CHARACTERIZATION_LABEL}\` was applied by an App (@${label.by}), and an App cannot waive this check (K-MERGE-13): ignored.** Only a person's label makes it skip.\n`);
+    if (label?.kind === 'unattributed') say(`**\`${CHARACTERIZATION_LABEL}\` is on this PR, but not honoured on this run:** only the run that applying it starts can tell whether a person applied it. To have it honoured on this head, a person removes it and applies it again.\n`);
+    return { plan: true };
+  }
 
   if (DRY) {
     say(`Would revert (from merge base ${diffBase.slice(0, 7)}): ${src.join(', ')}`);

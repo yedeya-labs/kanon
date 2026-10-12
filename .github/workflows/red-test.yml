@@ -14,6 +14,13 @@
 # people's PRs the check was measured blocking about half of them wrongly. A PR without either
 # label concludes SKIPPED.
 #
+# A PR WITH NO BEHAVIOUR CHANGE HAS NO FIX TO PROVE (the Owner's decision of 2026-10-12, #666). A
+# characterization test locks behaviour already correct, so it cannot fail on a revert. The
+# `scope` job's plan concludes SKIPPED for one, never red: when the diff's non-test, non-doc change
+# is comments or whitespace, or nothing, and on the run a PERSON's `test:characterization` label
+# starts. An App's label is ignored. The label is read from this run's event in `scope` alone,
+# where nothing from the PR has run; `verify` runs the project-setup hook first.
+#
 # THE VERIFIER IS KANON'S, AT THE CALLER'S PIN, NEVER THE PR'S. In the adopter the script lived in
 # the repository it judged, so the workflow took the BASE revision's copy: a PR's own copy could
 # widen its skip paths and turn the check green on a PR whose tests prove nothing. Here
@@ -61,9 +68,10 @@ on:
 concurrency:
   group: >-
     red-test-${{ github.event.pull_request.number }}-${{
-    ((github.event.action != 'labeled'
+    (((github.event.action != 'labeled' && github.event.action != 'unlabeled')
         || github.event.label.name == 'agent:implement'
-        || github.event.label.name == 'agent:triage')
+        || github.event.label.name == 'agent:triage'
+        || github.event.label.name == 'test:characterization')
       && (contains(github.event.pull_request.labels.*.name, 'agent:implement')
         || contains(github.event.pull_request.labels.*.name, 'agent:triage')))
     && 'verify' || format('noop-{0}', github.run_id) }}
@@ -86,15 +94,17 @@ jobs:
   # behind it: fail closed, visibly.
   scope:
     name: Red-test scope
-    # Only where "confirmed it fails" was asserted, and, on a `labeled` event, only for a label
-    # that CHANGES the answer. `labeled` is load-bearing (an agent opens its PR before labelling
-    # it, so the `opened` run always evaluates this as false), but it fires on EVERY label, from
-    # any actor: a review label used to re-run the whole verification minutes later, and two
-    # labels a second apart guaranteed one run cancelled the other.
+    # Only where "confirmed it fails" was asserted, and, on a `labeled` or `unlabeled` event,
+    # only for a label that CHANGES the answer: an agent's, or `test:characterization`. `labeled`
+    # is load-bearing (an agent opens its PR before labelling it, so the `opened` run always
+    # evaluates this as false), but it fires on EVERY label, from any actor: a review label used
+    # to re-run the whole verification minutes later, and two labels a second apart guaranteed one
+    # run cancelled the other. `unlabeled` lets removing `test:characterization` verify again.
     if: >-
-      (github.event.action != 'labeled'
+      ((github.event.action != 'labeled' && github.event.action != 'unlabeled')
         || github.event.label.name == 'agent:implement'
-        || github.event.label.name == 'agent:triage')
+        || github.event.label.name == 'agent:triage'
+        || github.event.label.name == 'test:characterization')
       && (contains(github.event.pull_request.labels.*.name, 'agent:implement')
         || contains(github.event.pull_request.labels.*.name, 'agent:triage'))
     runs-on: ubuntu-latest
