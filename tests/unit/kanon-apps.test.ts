@@ -303,6 +303,18 @@ describe('rotationSteps: the key steps it prints at the end of every run (#624)'
     expect(steps).toContain(`gh secret set JUDGE_APP_PRIVATE_KEY -R ${ORG}/${REPO} < <downloaded>.pem`);
     expect(steps).toContain('rm <downloaded>.pem');
   });
+
+  // Plan 0007 step G0's check, run as the plan writes it (#651). The plan quotes the old words
+  // itself, so a check whose scope takes in docs/plans/ can never print nothing.
+  it("plan 0007 step G0's own check prints nothing", () => {
+    const g0 = readFileSync('docs/plans/0007-guided-install.md', 'utf8').split('\n').find((l) => l.startsWith('| **G0** |'));
+    const command = g0?.match(/`(grep [^`]+)` prints nothing/)?.[1];
+    expect(command, "G0's row has no `grep …` prints nothing check").toBeDefined();
+    const args = [...command!.slice('grep '.length).matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2] ?? '');
+    const r = spawnSync('grep', args, { cwd: ROOT, encoding: 'utf8' });
+    expect(r.stdout).toBe('');
+    expect(r.status, r.stderr).toBe(1);
+  });
 });
 
 describe('kanon apps, end to end with GitHub mocked', () => {
