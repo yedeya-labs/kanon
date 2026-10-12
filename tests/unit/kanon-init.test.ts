@@ -1344,6 +1344,26 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(numbered[0]).toBe('Create the labels the token could not (it needs Issues: write):');
   });
 
+  // GitHub leaves the merge settings out of its answer to a token without Administration: read,
+  // such as a fine-grained token of a person who administers the repository. Absent is unknown,
+  // not different: init said it would set settings that were already K-SHIP-3's.
+  it("doesn't claim to set the merge settings when the token can't read them", async () => {
+    const known = (n: string) => n.startsWith('Merge settings not known');
+    const dry = parse(await run(checkout(), fakeGitHub({ settings: {} }), ['--json', '--dry-run']));
+    expect(dry.changes.filter((c) => c.kind === 'merge-settings')).toEqual([]);
+    expect(dry.notes.some(known)).toBe(true);
+    const github = fakeGitHub({ settings: {} });
+    const d = parse(await run(checkout(), github, ['--json']));
+    expect(d.changes.filter((c) => c.kind === 'merge-settings')).toEqual([]);
+    expect(d.findings.map((f) => f.id)).not.toContain('merge.settings');
+    expect(writes(github.calls).filter((a) => a.includes('PATCH'))).toEqual([]);
+    expect(d.notes.some(known)).toBe(true);
+    // Readable, they are checked and set as before, and no note says otherwise.
+    const readable = parse(await run(checkout(), fakeGitHub(), ['--json', '--dry-run']));
+    expect(readable.changes.filter((c) => c.kind === 'merge-settings')).toHaveLength(1);
+    expect(readable.notes.some(known)).toBe(false);
+  });
+
   it('says what a dry run would do, and does nothing', async () => {
     const dir = checkout();
     const github = fakeGitHub();
