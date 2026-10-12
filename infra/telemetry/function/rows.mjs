@@ -185,7 +185,12 @@ export function stamp(row, { caller, key, now, finding }) {
   };
 }
 
-/** A plain item as DynamoDB attribute values. The schema has no nesting. */
+/**
+ * A plain item as DynamoDB attribute values. The schema has no nesting: a list is a
+ * comma-separated string (`closing_issues: '12,34'`), so `validate` refuses an array before it
+ * gets here. Any other value throws, naming the field only, so the row is reported failed rather
+ * than stored without it (kanon#754). An undefined field is an absent one.
+ */
 export function toAttributes(/** @type {Record<string, unknown>} */ item) {
   /** @type {Record<string, object>} */
   const out = {};
@@ -193,6 +198,7 @@ export function toAttributes(/** @type {Record<string, unknown>} */ item) {
     if (typeof v === 'string') out[k] = { S: v };
     else if (typeof v === 'number') out[k] = { N: String(v) };
     else if (typeof v === 'boolean') out[k] = { BOOL: v };
+    else if (v !== undefined) throw new Error(`toAttributes: ${k} is not a string, number or boolean`);
   }
   return out;
 }
