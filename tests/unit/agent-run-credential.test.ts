@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -175,5 +175,40 @@ describe('agent-run hands the credential to the agent through env only', () => {
     expect(check['continue-on-error']).toBeUndefined();
     expect(check.run).toBe('node "$GITHUB_ACTION_PATH/credential-check.mjs"');
     expect(action.outputs.auth?.value).toBe('${{ steps.credential.outputs.auth }}');
+  });
+});
+
+/**
+ * kanon#747 — a comment that tells a reader how to run a lane on the API key names the input
+ * `agent-run` declares. A composite action only warns about an input it doesn't declare, so a key
+ * passed as `anthropic_api_key` never reaches the agent and the check fails the run with "No Claude
+ * credential". And since step A2 every lane hands both credentials down, so no comment may still
+ * send a reader to a note on "graduating" to API-key billing: the caller maps one, as
+ * `actions/agent-run/README.md` says.
+ */
+describe('no workflow or action comment points at a credential input agent-run does not take', () => {
+  const files = [
+    ...readdirSync('.github/workflows').filter((f) => /\.ya?ml$/.test(f)).map((f) => join('.github/workflows', f)),
+    ...readdirSync('actions').map((d) => join('actions', d, 'action.yml')).filter((f) => existsSync(f)),
+  ];
+  const comments = files.flatMap((file) =>
+    readFileSync(file, 'utf8')
+      .split('\n')
+      .map((line, i) => ({ where: `${file}:${i + 1}`, text: line.replace(/^.*?(?:^|\s)#/, '#') }))
+      .filter(({ text }) => text.trimStart().startsWith('#')),
+  );
+
+  it('reads every workflow and action comment, so the checks below are not vacuous', () => {
+    expect(files).toContain('.github/workflows/review-agent-job.yml');
+    expect(files).toContain('actions/agent-run/action.yml');
+    expect(comments.some(({ where }) => where.startsWith('.github/workflows/review-agent-job.yml'))).toBe(true);
+  });
+
+  it('names the API-key input `anthropic-api-key`, never `anthropic_api_key`', () => {
+    for (const { where, text } of comments) expect(text, where).not.toContain('anthropic_api_key');
+  });
+
+  it('sends no reader to a "graduate to API-key billing" note: the caller maps either credential', () => {
+    for (const { where, text } of comments) expect(text, where).not.toMatch(/graduate/i);
   });
 });

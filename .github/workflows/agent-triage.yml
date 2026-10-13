@@ -20,8 +20,6 @@
 # (2) the GitHub Apps exist + are installed, and (3) these secrets are set (plan 0001 §8):
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY   (the Author App, which holds the Implementer)
 #   CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY (one Claude credential: the ONE OF line below)
-# Auth starts on the Claude subscription; graduate to API-key billing later — see the
-# note at the claude-code-action step.
 # KANON ROLE: Implementer
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
 # role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
