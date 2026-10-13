@@ -396,8 +396,8 @@ for (const f of WORKFLOWS) {
   // caller may leave out one the lane marks `# OPTIONAL SECRET:` and declares `required: false`
   // (kanon#433): the QA store's, which only a repository with a store hook has. GitHub passes an
   // unmapped one empty. Any other optional secret is still mapped, as before. The Claude
-  // credential pair, `# ONE OF SECRETS:` (plan 0009 §10, step A2), may be left out the same way:
-  // a caller maps the one it uses, and `agent-run` refuses both or neither at run time.
+  // credential pair, `# ONE OF SECRETS:` (plan 0009 §10, step A2), may be left out the same way,
+  // and is then held below to exactly one (step A3).
   const secrets = isObject(job) ? job.secrets : null;
   if (!isObject(secrets)) {
     fail(f, "maps no secrets explicitly (`secrets: inherit` would hand every secret to Kanon's code; plan 0001 decision 7)");
@@ -411,6 +411,18 @@ for (const f of WORKFLOWS) {
     if (want !== got.join(',')) {
       const may = optional.length ? `, and may leave out [${optional.join(',')}]` : '';
       fail(f, `maps secrets [${got.join(',')}]; the Kanon lane ${lane} takes exactly [${declaredKeys.join(',')}]${may}`);
+    }
+    // THE PAIR IS ONE CHOICE (plan 0009 §10, step A3): of the names a lane's `# ONE OF SECRETS:`
+    // line gives, and declares, a caller maps exactly one, the credential it runs on. Both or
+    // neither, `agent-run` refuses at run time; this rule refuses them in CI, before a run. Only names, never a
+    // value, reach the message. A lane without the line (a release before A2) keeps the rule above.
+    for (const line of marked(laneFile, '# ONE OF SECRETS: ')) {
+      const pair = words([line]).filter((k) => declaredKeys.includes(k));
+      if (pair.length < 2) continue;
+      const mapped = pair.filter((k) => got.includes(k));
+      if (mapped.length === 1) continue;
+      const names = pair.map((k) => `\`${k}\``).join(' or ');
+      fail(f, `maps ${mapped.length ? `${mapped.length === 2 ? 'both ' : ''}${mapped.map((k) => `\`${k}\``).join(' and ')}` : 'neither of the pair'}; the Kanon lane ${lane} takes exactly one of ${names}, its \`# ONE OF SECRETS:\` pair: map the one this repository has as a secret, and leave out the other (plan 0009 §10)`);
     }
     // THE ROLE-NAMED SECRETS ARE GONE (plan 0005 §3.5, step L4): the lanes mint as the Author or
     // the Judge, by fixed names. Named on its own, so an adopter moving the pin reads the rename
