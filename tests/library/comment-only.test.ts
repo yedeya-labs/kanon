@@ -36,6 +36,12 @@ describe('a change to comments or whitespace alone is provably no behaviour chan
   it('a quote in a regex literal opens no string, so the comment after it is still read as one', () => {
     expect(same('src/a.ts', "const r = /'/; // a\n", "const r = /'/; // b\n")).toBe(true);
   });
+
+  it('a slash after a ")" is read by what the parenthesis closed: a division after an expression, a regex after a condition', () => {
+    expect(same('src/a.ts', 'const m = (a + b) / 2; // a\n', 'const m = (a + b) / 2; // b\n')).toBe(true);
+    expect(same('src/a.ts', 'const m = f(x) / g(y) / 2; // a\n', 'const m = f(x) / g(y) / 2; // b\n')).toBe(true);
+    expect(same('src/a.ts', "if (x) /'/.test(s); // a\n", "if (x) /'/.test(s); // b\n")).toBe(true);
+  });
 });
 
 describe('anything it cannot prove is comments or whitespace is a behaviour change', () => {
@@ -101,9 +107,50 @@ describe('anything it cannot prove is comments or whitespace is a behaviour chan
     expect(skeleton('src/a.ts', 'if (a) {}\n/x/.test(s);\n')).toBeNull();
   });
 
-  it('an unterminated string or comment is not read', () => {
+  it('a regex after the ")" of an if, while or for is a regex, so a "//" or "/*" in its class hides no code', () => {
+    expect(same('src/a.ts', 'if (x) /[//]/.test(s); run(1);\n', 'if (x) /[//]/.test(s); run(2);\n')).toBe(false);
+    // `/*` would open a block comment that the next JSDoc's `*/` closes, hiding every line between.
+    expect(same('src/a.ts', 'if (x) /[/*]/.test(s);\nrun(1);\n/** Doc. */\nexport const a = 1;\n',
+      'if (x) /[/*]/.test(s);\nrun(2);\n/** Doc. */\nexport const a = 1;\n')).toBe(false);
+    expect(same('src/a.ts', 'while (x) /[//]/.test(s); run(1);\n', 'while (x) /[//]/.test(s); run(2);\n')).toBe(false);
+    expect(same('src/a.ts', 'for (;;) /[//]/.test(s); run(1);\n', 'for (;;) /[//]/.test(s); run(2);\n')).toBe(false);
+    expect(same('src/a.mjs', 'for await (const a of b) /[//]/.test(a); run(1);\n', 'for await (const a of b) /[//]/.test(a); run(2);\n')).toBe(false);
+    // A quote in the regex, read as division, would open a string that ends inside a later template.
+    expect(same('src/a.ts', 'if (x) /`/.test(s);\nconst t = `\n// run(1)\n`;\n// `\n', 'if (x) /`/.test(s);\nconst t = `\n// run(2)\n`;\n// `\n')).toBe(false);
+  });
+
+  it('JSX after the ")" of an if, whose text may hold a "//", is not read', () => {
+    expect(skeleton('src/a.jsx', 'if (x) <p>http://a</p>; run(1);\n')).toBeNull();
+    expect(same('src/a.jsx', 'if (x) <p>http://a</p>; run(1);\n', 'if (x) <p>http://a</p>; run(2);\n')).toBe(false);
+  });
+
+  it('a regex after "export default" or "extends" is a regex', () => {
+    expect(same('src/a.mjs', 'export default /[//]/; run(1);\n', 'export default /[//]/; run(2);\n')).toBe(false);
+    expect(same('src/a.mjs', 'class A extends /[//]/.constructor {} run(1);\n', 'class A extends /[//]/.constructor {} run(2);\n')).toBe(false);
+  });
+
+  it('a slash that starts a line is not guessed at, since a line break may have ended the statement before it', () => {
+    // `var x` then `/…/` on the next line: automatic semicolon insertion makes the `/` a regex.
+    expect(skeleton('src/a.mjs', 'var x\n/[/*]/.test(s); run(1);\n/** Doc. */\n')).toBeNull();
+    expect(skeleton('src/a.ts', 'let x: number\n/[//]/.test(s); run(1);\n')).toBeNull();
+    expect(skeleton('src/a.mjs', 'l: for (;;) { break l\n/[//]/.test(s); run(1) }\n')).toBeNull();
+    expect(skeleton('src/a.ts', 'declare function f()\n/[//]/.test(s); run(1);\n')).toBeNull();
+    expect(skeleton('src/a.ts', 'let x: string[]\n/[//]/.test(s); run(1);\n')).toBeNull();
+    // A block comment that spans a line break is a line break to automatic semicolon insertion.
+    expect(skeleton('src/a.mjs', 'var x /*\n*/ /[//]/.test(s); run(1);\n')).toBeNull();
+  });
+
+  it('"of", "await" and "yield" may name a variable, so a slash after one is not guessed at', () => {
+    // `of / 2` divides: read as a regex up to the `/` in '/', it would flip which quotes open strings.
+    expect(skeleton('src/a.mjs', "const of = 4, x = of / 2, s = '/', u = 'a // b';\n")).toBeNull();
+    expect(skeleton('src/a.cjs', 'const await = 4, x = await / 2;\n')).toBeNull();
+    expect(skeleton('src/a.cjs', 'var yield = 4, x = yield / 2;\n')).toBeNull();
+  });
+
+  it('an unterminated string or comment, or a ")" that closes nothing, is not read', () => {
     expect(skeleton('src/a.ts', 'const a = "x;\nrun();\n')).toBeNull();
     expect(skeleton('src/a.ts', '/* open\nrun();\n')).toBeNull();
+    expect(skeleton('src/a.ts', 'a) / 2;\n')).toBeNull();
     expect(skeleton('main.go', 'package main\nvar a = `x\n')).toBeNull();
   });
 
