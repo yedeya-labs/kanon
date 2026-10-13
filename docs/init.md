@@ -6,7 +6,7 @@ It is **scriptable** ([ADR 0014](decisions/0014-adopter-audiences.md), decision 
 
 ## Answering without a terminal
 
-**At a terminal, `init` asks three questions** ([plan 0007](plans/0007-guided-install.md) §3), each unless its flag answers it: what Kanon should do in this repository (a **feature**, or **Customise**, which asks for the lanes one by one), whether the repository holds private or sensitive material, and one consent question for sharing with Kanon. Every other value is **inferred** from the repository or **defaulted**, as the table below says. `init` then shows **one summary**, a line per value with where it came from (`flag`, `asked`, `inferred` or `default`, and why), and asks **Install Kanon with these settings?**: **Install**; **Change something**, which asks which of the summary's groups to change (People; Lanes and Apps; Gates, database and delegation; Labels, plugin and pin; Data and sharing), asks each chosen group's questions, and shows the summary again; or **Stop**, which writes and changes nothing. A fourth question, which pull requests the Reviewer reviews, waits for the review lane's trigger without a label (plan 0007 step G7): until then the trigger is the summary's `labelled` line.
+**At a terminal, `init` asks three questions** ([plan 0007](plans/0007-guided-install.md) §3), each unless its flag answers it: what Kanon should do in this repository (a **feature**, or **Customise**, which asks for the lanes one by one), whether the repository holds private or sensitive material, and one consent question for sharing with Kanon. Every other value is **inferred** from the repository or **defaulted**, as the table below says. `init` then shows **one summary**, a line per value with where it came from (`flag`, `asked`, `inferred` or `default`, and why), and asks **Install Kanon with these settings?**: **Install**; **Change something**, which asks which of the summary's groups to change (People; Lanes and Apps; Gates, database and delegation; Labels, plugin and pin; Data and sharing; Claude credential), asks each chosen group's questions, and shows the summary again; or **Stop**, which writes and changes nothing. A fourth question, which pull requests the Reviewer reviews, waits for the review lane's trigger without a label (plan 0007 step G7): until then the trigger is the summary's `labelled` line.
 
 Each question has a flag, and so does each value the summary shows. A flag answers its question or sets its value; `--yes` takes the default of every question no flag answers, and confirms the summary without asking; without `--yes`, the questions no flag answers are asked, and the summary is confirmed. At the terminal, Enter takes the answer each question shows in brackets: its recommended answer, except at the first question for a repository whose called lanes make up no feature, where Enter keeps those lanes (**Customise**, `custom`) while **Review** is marked recommended, so that pressing Enter never narrows an installation to fewer lanes than it calls. An answer `init` doesn't recognise takes the safe side: No at the consent question, and **Stop** at the confirmation. **Recommended is not a default:** under `--yes`, where nothing is shown, sharing is No, and the Data section says "not declared". On a standard input that isn't a terminal, `init` refuses to start without `--yes` (or `--json`, which implies it), and changes nothing.
 
@@ -19,6 +19,7 @@ Each question has a flag, and so does each value the summary shows. A flag answe
 | Who is the Owner? | `--project-owner <who>` | the one user `CODEOWNERS` names for `*` (`inspection.codeowners`), else the token's login |
 | Who is the Maintainer? | `--maintainer <who>` | the Owner |
 | Who is the Stakeholder? | `--stakeholder <who>` | the Owner |
+| Which Claude credential do the lanes run on? (inferred, never asked: [below](#the-claude-credential)) | `--claude-auth subscription\|api-key` | `api-key` when the repository holds `ANTHROPIC_API_KEY` and not `CLAUDE_CODE_OAUTH_TOKEN`; else `subscription` |
 | The stack's gates | `--gates <list>`, or `--gates none` | suggested from `package.json`, a `Makefile`, Cargo or Go |
 | Does a lane need a test database? | `--test-database none\|hook` | `hook` when a compose file has a database service, an example environment file (`.env.example` and the like) sets `DATABASE_URL`, or a migrations directory exists; else `none` |
 | Record a sign-off delegation? | `--delegation`, `--no-delegation` | yes when a chosen lane runs as the Author and a workflow runs Kanon's DCO check (`yedeya-labs/kanon/actions/dco`), and `git config` names the delegate; else no |
@@ -64,6 +65,14 @@ An upstream finding is one about Kanon itself, a lane's behaviour, a guard, a ru
 - **`filed-here`**: filed as issues in this repository, for a repository that maintains Kanon itself or a fork of it.
 
 **How they travel.** The lanes build the rows (plan 0006's F3) and upload them as `kanon-finding-*` artifacts, and the collector sends them (F4). A lane drafts each finding of a record that says `sent` or `sent with evidence`, writes its row, and the collector sends the row at the level the record declares.
+
+### The Claude credential
+
+The lanes' agents run on one of two Claude credentials ([plan 0009](plans/0009-release-channels-and-api-key.md) §9, §10): a **Claude subscription**'s token, `CLAUDE_CODE_OAUTH_TOKEN`, made with `claude setup-token`, which costs nothing beyond the subscription but shares its weekly limit with the person's own Claude use; or an **Anthropic API key**, `ANTHROPIC_API_KEY`, made in the [Claude Console](https://console.anthropic.com/settings/keys), billed per token and bounded by each run's dollar ceiling. Every model lane declares both under its `# ONE OF SECRETS:` marker, and **each caller `init` writes maps exactly one of them**, never both; the Merger, the reconciler and the dispatch sweep run no model and map neither.
+
+**It is inferred, not asked** (plan 0009, Owner decision 7), from the secret names `init` already lists: `api-key` when the repository holds `ANTHROPIC_API_KEY` and not `CLAUDE_CODE_OAUTH_TOKEN`; `subscription` when it holds the token, both included, so an installation on the token keeps it; and `subscription` by default when it holds neither, or when the token can't list the secrets. The summary shows it as one line, `Claude`, with its consequence and where it came from: `flag`, `inferred` (`from the repository's secrets`) or `default`. `--claude-auth subscription|api-key` sets it, and so does **Change something**'s sixth group at the terminal. `answers.claudeAuth` carries it, and the features' and the catalogue's `secrets` name the chosen credential. The step left to a person is `secret.claude-code-oauth-token` for the token, and `secret.anthropic-api-key` for the key, which says to make it in a Console workspace for CI alone with its own spend limit; both are stored in the person's own terminal, never through an agent's prompt.
+
+**Switching later** is `kanon init --claude-auth api-key` (or `subscription`) from the checkout. `init` never rewrites a workflow, so each existing caller is reported as `differs`, its diff the one `secrets:` line, and its `content` the caller as it maps the new credential: write those on a branch and open a pull request, then store the new secret before it merges. Mixed credentials, the Reviewer on the key and the Implementer on the token, are allowed; `init` writes one choice for all.
 
 ### Where a lane's caller goes
 
@@ -169,6 +178,7 @@ The Lead writes each brief from `docs/projects/_template.md`, which an adopter c
 | `reviewTrigger` | string or null | Which pull requests the Reviewer reviews: `labelled`, only those labelled `review:please`, or `every-pr` once step G7 builds it; null without the review lane. The record's `Review trigger:` bullet. |
 | `sensitiveData` | boolean or null | Whether the repository holds private or sensitive material, the record's `## Data` section; null when nobody declared it. |
 | `consent` | string or null | The consent level ([above](#sharing)): `yes`, `codes` or `no`, from `--consent`, the question, or the level `telemetry` and `upstreamFindings` make; null for a combination no level names. |
+| `claudeAuth` | string | The Claude credential every caller maps ([above](#the-claude-credential)): `subscription`, `CLAUDE_CODE_OAUTH_TOKEN`, or `api-key`, `ANTHROPIC_API_KEY`; from `--claude-auth`, or inferred from the repository's secret names. It lands in the callers' `secrets:`, never in a declaration. |
 
 ### A feature
 
@@ -183,7 +193,7 @@ A fixed set of lanes `--feature` installs ([plan 0007](plans/0007-guided-install
 | `conditional` | array | Its lanes installed only where their condition holds: each `lane`, its `condition` in words, and `met`, whether it holds here (the hook it calls exists, or the repository holds the secret it takes), or the repository calls the lane already. |
 | `leftOut` | array | The lanes it leaves out at install, each `lane` and `reason`. |
 | `apps` | array | The Apps its lanes run as. |
-| `secrets` | array | The secrets its lanes', and its conditional lanes', callers map, those a caller may leave unset aside. |
+| `secrets` | array | The secrets its lanes', and its conditional lanes', callers map, those a caller may leave unset aside; of the Claude pair, the one `answers.claudeAuth` names. |
 | `steps` | array | Strings: what is left to a person, in words. |
 
 ### A summary line
@@ -217,7 +227,7 @@ What `--lanes` chooses from, so a person, or the adopt skill asking them, can ch
 | `name` | string | Its name in docs/lanes.md. |
 | `does` | string | What it does, in one sentence. |
 | `app` | string or null | The App it runs as, `author` or `judge`, or null for none. |
-| `secrets` | array | The secrets its caller maps. |
+| `secrets` | array | The secrets its caller maps; of the Claude pair, the one `answers.claudeAuth` names. |
 | `qaStore` | boolean | Whether it reaches the QA store, through a hook you write, and runs without memory when there is none. |
 | `hooks` | array | The hooks it calls besides the project-setup hook, by path. |
 | `reads` | array | The project documents it reads (`K-LAYOUT-17`). |
@@ -276,7 +286,8 @@ Every finding is non-blocking, except `app.failed`: `blocking` means it makes th
 | `app.create` | `app` | The Apps the lanes need were not created: `--no-apps`, or the person said no. When the token can't list the owner's installations, its fix also says how to reuse such an App instead, generating its key under Credentials → Key pairs → New key on its settings page. |
 | `app.failed` | `app` | `kanon apps` did not finish. |
 | `app.reuse` | `app` | The register lists an App, but the repository lacks its secrets; or the owner already has an App the register lacks, and the person chose to reuse it. Its fix says where the key is made, Credentials → Key pairs → New key on the App's settings page, with GitHub's page on it ([#637](https://github.com/yedeya-labs/kanon/issues/637)), and names each other App of the owner's with the same permissions once, as `<slug> (App ID <id>)` when its ID is known ([#653](https://github.com/yedeya-labs/kanon/issues/653)). |
-| `secret.claude-code-oauth-token` | `secret` | The repository lacks `CLAUDE_CODE_OAUTH_TOKEN`. |
+| `secret.claude-code-oauth-token` | `secret` | The callers map the subscription's token, and the repository lacks `CLAUDE_CODE_OAUTH_TOKEN`. |
+| `secret.anthropic-api-key` | `secret` | The callers map the API key (`answers.claudeAuth` is `api-key`), and the repository lacks `ANTHROPIC_API_KEY`. The fix makes it in the Claude Console, in a workspace for CI alone with its own spend limit (its `url`), and stores it in the person's own terminal. |
 | `secret.digest-webhook` | `secret` | The repository lacks `DIGEST_WEBHOOK`. |
 | `secret.qa-store` | `secret` | The repository has a QA store hook (`.github/actions/qa-store/action.yml`), and lacks `QA_STORE_ROLE_ARN` or `QA_STORE_BUCKET`, the store's coordinates, which the store-coupled lanes take as secrets ([#433](https://github.com/yedeya-labs/kanon/issues/433)). The fix stores each, copying it from a repository variable of the same name where one holds it. A repository without a hook is asked for neither. |
 | `secret.unreadable` | `secret` | The token can't list the repository's secret names. Its fix names each secret the chosen lanes map, the QA store's two only where the store hook exists, as for `secret.qa-store` ([#480](https://github.com/yedeya-labs/kanon/issues/480)). |

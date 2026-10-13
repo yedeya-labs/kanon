@@ -19,7 +19,7 @@ import { URL } from 'node:url';
  * @typedef {{ type: string, description: string }} LaneInput
  * @typedef {{ identities: string[], secrets: string[], inputs: Record<string, LaneInput>, grant: Record<string, string>,
  *   reads: string[], readsWorkflows: string[], hooks: string[], qaStore?: boolean, callerName?: string, callerRunNameEndsWith?: string,
- *   optionalSecrets?: string[], optionalVariables?: string[] }} Lane
+ *   optionalSecrets?: string[], optionalVariables?: string[], claude?: string[] }} Lane
  * @typedef {{ name: string, permissions: Record<string, string> }} RoleIdentity
  * @typedef {{ name: string, roles: string[], permissions: Record<string, string> }} AppIdentity
  * @typedef {{ lanes: Record<string, Lane>, hook: { path: string, inputs: string[] },
@@ -78,18 +78,45 @@ export const TRIGGERS = {
   'agent-overseer': { name: 'Overseer (Overseer)', job: 'oversee', schedule: '0 6 * * 1', dispatch: {}, pinMoved: true },
 };
 
+/**
+ * The Claude credential each answer of `kanon init --claude-auth` maps (plan 0009 §9, §10): the
+ * subscription's token, made with `claude setup-token`, or an API key from the Claude Console.
+ * A model lane declares both under its `# ONE OF SECRETS:` marker, `requirements.json`'s `claude`,
+ * and its caller maps exactly one.
+ * @type {Record<'subscription' | 'api-key', string>}
+ */
+export const CLAUDE_SECRETS = { subscription: 'CLAUDE_CODE_OAUTH_TOKEN', 'api-key': 'ANTHROPIC_API_KEY' };
+
+/**
+ * The secrets a lane's caller maps: the lane's `secrets`, with its Claude pair (`claude`) as the
+ * one credential `claudeAuth` names, in the place the pair's first name held, and never both. A
+ * lane that runs no model has no pair, and maps its secrets as they are.
+ * @param {Lane} spec @param {'subscription' | 'api-key'} [claudeAuth]
+ */
+export const callerSecrets = (spec, claudeAuth = 'subscription') => {
+  const pair = spec.claude ?? [];
+  if (!pair.length) return spec.secrets;
+  const chosen = CLAUDE_SECRETS[claudeAuth];
+  if (!chosen || !pair.includes(chosen)) throw new Error(`the lane's Claude pair (${pair.join(', ')}) has no ${chosen ?? claudeAuth}`);
+  const at = spec.secrets.findIndex((n) => pair.includes(n));
+  const rest = spec.secrets.filter((n) => !pair.includes(n));
+  rest.splice(at < 0 ? 0 : at, 0, chosen);
+  return rest;
+};
+
 /** A YAML scalar, double-quoted when plain would be read as something else. @param {string} s */
 const y = (s) => (/^[A-Za-z0-9_][A-Za-z0-9_ ./()—-]*$/.test(s) && !/[ ]$/.test(s) ? s : JSON.stringify(s));
 
 /**
  * One lane's caller, as `lane-check` holds it: `name` (and `run-name` when the lane asks), `on`,
  * `permissions` and one job that passes its inputs through, maps exactly the lane's secrets and
- * names the lane at `release`.
+ * names the lane at `release`. Of a model lane's Claude pair it maps the one `claudeAuth` names
+ * (plan 0009 §10), the subscription's token unless it says the API key.
  * @param {string} lane the lane's file name without `.yml` @param {Lane} spec
- * @param {{ release: string, ciName: string, defaultBranch: string, path?: string }} o `path`: where
+ * @param {{ release: string, ciName: string, defaultBranch: string, path?: string, claudeAuth?: 'subscription' | 'api-key' }} o `path`: where
  *   the caller lives, when not at its lane's file name (#451); a trigger on the file itself names it
  */
-export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = `.github/workflows/${lane}.yml` }) => {
+export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = `.github/workflows/${lane}.yml`, claudeAuth = 'subscription' }) => {
   const t = TRIGGERS[lane];
   if (!t) throw new Error(`no caller template for the lane ${lane}: add its triggers to TRIGGERS in cli/callers.mjs`);
   if ((t.prTarget || t.pinMoved) && t.merged) throw new Error(`the caller template of ${lane} writes \`pull_request_target\` twice`);
@@ -137,7 +164,8 @@ export const callerFile = (lane, spec, { release, ciName, defaultBranch, path = 
   }
   out.push('    secrets:');
   // App secrets first, then the others, as docs/lanes.md writes them.
-  const secrets = [...spec.secrets.filter((s) => /_APP_(ID|PRIVATE_KEY)$/.test(s)), ...spec.secrets.filter((s) => !/_APP_(ID|PRIVATE_KEY)$/.test(s))];
+  const mapped = callerSecrets(spec, claudeAuth);
+  const secrets = [...mapped.filter((s) => /_APP_(ID|PRIVATE_KEY)$/.test(s)), ...mapped.filter((s) => !/_APP_(ID|PRIVATE_KEY)$/.test(s))];
   for (const s of secrets) out.push(`      ${s}: \${{ secrets.${s} }}`);
   return `${out.join('\n')}\n`;
 };

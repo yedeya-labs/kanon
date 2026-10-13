@@ -58,6 +58,8 @@ import {
   appSecrets,
   appsCheckFile,
   callerFile,
+  callerSecrets,
+  CLAUDE_SECRETS,
   ciFile,
   dependabotFile,
   DEPENDABOT_ENTRY,
@@ -97,6 +99,8 @@ export const GITHUB_DEFAULT_LABELS = ['bug', 'documentation', 'duplicate', 'enha
 export const OWN_TERMINAL = 'in your own terminal, pasting the value when gh asks for it: never with `!` at the Claude Code prompt, where gh reads no value and stores an empty secret without a word. Or read it from a file, with `< <file>` at the end of the line';
 /** The note on a line that reads a real secret on standard input (#625). */
 export const OWN_TERMINAL_NOTE = '# in your own terminal, never with ! at the Claude Code prompt';
+/** Where an Anthropic API key is made: the Claude Console's keys page (plan 0009 §9, step R5). */
+export const CLAUDE_CONSOLE_KEYS = 'https://console.anthropic.com/settings/keys';
 
 export const USAGE = `Usage: kanon init [options]
 
@@ -144,6 +148,11 @@ The other values, each inferred or defaulted, as the summary shows:
                          login); --owner is kanon apps' account
   --maintainer <who>     the Maintainer (default: the Owner)
   --stakeholder <who>    the Stakeholder (default: the Owner)
+  --claude-auth <which>  the Claude credential every caller maps (docs/init.md): subscription,
+                         the subscription's token CLAUDE_CODE_OAUTH_TOKEN, or api-key, an
+                         Anthropic API key ANTHROPIC_API_KEY (default: api-key when the
+                         repository holds ANTHROPIC_API_KEY and not CLAUDE_CODE_OAUTH_TOKEN,
+                         else subscription)
   --lanes <list>         comma-separated lanes to install, e.g. review,implement, the
                          Customise choice (default: the feature's lanes; the lanes are
                          listed below)
@@ -200,10 +209,11 @@ which one it uses and whose it is.`;
  * the lane itself (its App, its secrets, the QA store, its hooks, the documents it reads) comes
  * from them, never from the catalogue. A lane is recommended when the repository already calls
  * it, when the catalogue recommends it always (the review lane), or when it recommends it with a
- * lane that is itself recommended.
- * @param {Requirements} req @param {string[]} installed
+ * lane that is itself recommended. A lane's secrets are those its caller maps, the Claude
+ * credential `claudeAuth` names among them (plan 0009 §9).
+ * @param {Requirements} req @param {string[]} installed @param {ClaudeAuth} [claudeAuth]
  */
-export const laneCatalogue = (req, installed) => {
+export const laneCatalogue = (req, installed, claudeAuth = 'subscription') => {
   const cat = req.catalogue;
   if (!cat) return [];
   const entries = Object.entries(cat.lanes).filter(([lane]) => req.lanes[lane]);
@@ -231,7 +241,7 @@ export const laneCatalogue = (req, installed) => {
           does: e.does,
           app: spec.identities[0] ?? null,
           // The QA store's secrets are the lane's optional ones (kanon#433), under `qaStore`.
-          secrets: spec.secrets.filter((n) => !(spec.optionalSecrets ?? []).includes(n)),
+          secrets: callerSecrets(spec, claudeAuth).filter((n) => !(spec.optionalSecrets ?? []).includes(n)),
           // From the lane (kanon#471); a requirements file from before it says so by the grant alone.
           qaStore: spec.qaStore ?? spec.grant['id-token'] === 'write',
           hooks: spec.hooks,
@@ -334,11 +344,12 @@ export const realDeps = {
  *   releaser?: boolean, reuseApps?: boolean, plugin?: boolean, telemetry?: boolean, createApps?: boolean,
  *   upstreamFindings?: import('../scripts/lib/upstream-findings.mjs').Value,
  *   feature?: 'review' | 'build' | 'full', reviewTrigger?: 'labelled', sensitiveData?: boolean, consent?: Consent,
+ *   claudeAuth?: ClaudeAuth,
  * }} Given
  */
 
 /** The flags that take a value. */
-const VALUE_FLAGS = ['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email', '--upstream-findings', '--feature', '--review-trigger', '--consent'];
+const VALUE_FLAGS = ['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email', '--upstream-findings', '--feature', '--review-trigger', '--consent', '--claude-auth'];
 
 /** Pairs of flags that contradict each other, refused by name when both are given. */
 /** @type {Array<[string, string]>} */
@@ -436,6 +447,11 @@ export const parseArgs = (argv, req) => {
       const v = value();
       if (v !== 'yes' && v !== 'codes' && v !== 'no') throw new Error(`--consent takes yes, codes or no, not "${v}"`);
       g.consent = v;
+    }
+    else if (flag === '--claude-auth') {
+      const v = value();
+      if (v !== 'subscription' && v !== 'api-key') throw new Error(`--claude-auth takes subscription or api-key, not "${v}"`);
+      g.claudeAuth = v;
     }
     else if (flag === '--reuse-apps') g.reuseApps = true;
     else if (flag === '--no-reuse-apps') g.reuseApps = false;
@@ -946,7 +962,7 @@ export const CONFIRM_OPTIONS = [
   { value: 'stop', label: 'Stop', does: 'Nothing is written.', names: ['s', 'n', 'no'] },
 ];
 /** The groups of the summary's lines that **Change something** offers, each asked in today's shape. */
-export const CHANGE_GROUPS = ['People', 'Lanes and Apps', 'Gates, database and delegation', 'Labels, plugin and pin', 'Data and sharing'];
+export const CHANGE_GROUPS = ['People', 'Lanes and Apps', 'Gates, database and delegation', 'Labels, plugin and pin', 'Data and sharing', 'Claude credential'];
 
 /** How to ask for a review (plan 0007 §3), said in the summary when the review lane is chosen. */
 export const REVIEW_HOW = 'To get a review, add the label `review:please` to the pull request; the Reviewer posts its verdict once CI has finished. After a verdict, push a new commit, or remove and add the label again, to ask for another look.';
@@ -993,10 +1009,10 @@ export const featureOf = (lanes, features) =>
  * The features as `init`'s JSON gives them (plan 0007 §6), from the requirements file: each one's
  * lanes, its conditional lanes with their conditions and whether each holds here, the lanes it
  * leaves out, its Apps, the secrets its lanes map (a caller's optional ones aside) and the steps
- * left to a person.
- * @param {Requirements} req @param {(lane: string) => boolean} met
+ * left to a person. The secrets name the Claude credential `claudeAuth` names (plan 0009 §9).
+ * @param {Requirements} req @param {(lane: string) => boolean} met @param {ClaudeAuth} [claudeAuth]
  */
-export const featureCatalogue = (req, met) =>
+export const featureCatalogue = (req, met, claudeAuth = 'subscription') =>
   (req.features ?? []).map((f) => {
     const all = [...f.lanes, ...Object.keys(f.conditional ?? {})];
     return {
@@ -1007,7 +1023,7 @@ export const featureCatalogue = (req, met) =>
       conditional: Object.entries(f.conditional ?? {}).map(([lane, c]) => ({ lane, condition: c.condition, met: met(lane) })),
       leftOut: Object.entries(f.leftOut ?? {}).map(([lane, reason]) => ({ lane, reason })),
       apps: f.apps,
-      secrets: [...new Set(all.flatMap((l) => (req.lanes[l]?.secrets ?? []).filter((n) => !(req.lanes[l]?.optionalSecrets ?? []).includes(n))))],
+      secrets: [...new Set(all.flatMap((l) => (req.lanes[l] ? callerSecrets(req.lanes[l], claudeAuth) : []).filter((n) => !(req.lanes[l]?.optionalSecrets ?? []).includes(n))))],
       steps: f.steps,
     };
   });
@@ -1028,11 +1044,12 @@ const RELEASER_QUESTION = 'Create the optional Releaser App, so the release PR r
  * owner's Apps it could reuse, the user owners of `*` in CODEOWNERS, why a test database is
  * inferred (or null), whether a workflow runs Kanon's DCO check, whether the default branch has a
  * commit, whether the repository is private, whether a feature's conditional lane's condition
- * holds here, and the release init runs from.
+ * holds here, the release init runs from, and the repository's secret names (null when the token
+ * can't list them).
  * @typedef {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements,
  *   installed?: string[], releases?: boolean, reusable?: (identities: string[]) => Array<{ app: string, slug: string, from?: string }>,
  *   codeowners?: string[] | null, database?: string | null, runsDco?: boolean, hasCommits?: boolean, isPrivate?: boolean,
- *   met?: (lane: string) => boolean, release?: string }} AskContext
+ *   met?: (lane: string) => boolean, release?: string, secrets?: Set<string> | null }} AskContext
  */
 
 /**
@@ -1110,6 +1127,39 @@ export const derive = (a, ctx, g = {}) => {
   a.consent = consentOf(a.telemetry, a.upstreamFindings);
   return a;
 };
+
+/** @typedef {'subscription' | 'api-key'} ClaudeAuth */
+
+/**
+ * The Claude credential, inferred from the repository's secret names (plan 0009 §9): the API key
+ * when the repository holds `ANTHROPIC_API_KEY` and not `CLAUDE_CODE_OAUTH_TOKEN`; the
+ * subscription's token otherwise. Holding both never prefers the key: an installation on the
+ * token keeps it. Not a question (plan 0009, Owner decision 7): the summary shows it with where
+ * it came from, and `--claude-auth` or **Change something** changes it.
+ * @param {Set<string> | null | undefined} secrets the names, or null when the token can't list them
+ * @returns {{ value: ClaudeAuth, why: Why }}
+ */
+export const claudeAuthOf = (secrets) => {
+  const key = Boolean(secrets?.has(CLAUDE_SECRETS['api-key']));
+  const token = Boolean(secrets?.has(CLAUDE_SECRETS.subscription));
+  if (key && !token) return { value: 'api-key', why: { source: 'inferred', reason: "from the repository's secrets" } };
+  if (token) return { value: 'subscription', why: { source: 'inferred', reason: "from the repository's secrets" } };
+  return { value: 'subscription', why: { source: 'default', reason: secrets ? '' : "the token can't list the repository's secrets" } };
+};
+
+/** The summary's `Claude` line for each credential, with its one-line consequence (plan 0009 §9). @type {Record<ClaudeAuth, string>} */
+export const CLAUDE_AUTH_LINES = {
+  subscription: "subscription token (CLAUDE_CODE_OAUTH_TOKEN): the lanes share your plan's weekly limit",
+  'api-key': 'API key (ANTHROPIC_API_KEY): billed per token to your Claude Console account',
+};
+
+/** The credential's question, asked only through **Change something**. */
+export const CLAUDE_AUTH_QUESTION = 'Which Claude credential should the lanes run on?';
+/** @type {Array<Option<ClaudeAuth>>} */
+export const CLAUDE_AUTH_OPTIONS = [
+  { value: 'subscription', label: 'Claude subscription', does: "Each caller maps CLAUDE_CODE_OAUTH_TOKEN, made with `claude setup-token`; the lanes share your plan's weekly limit with your own Claude use.", names: ['subscription', 'token'] },
+  { value: 'api-key', label: 'Anthropic API key', does: 'Each caller maps ANTHROPIC_API_KEY, a key from the Claude Console, billed per token; each run is bounded by its dollar ceiling.', names: ['api-key', 'key'] },
+];
 
 /**
  * The answers (plan 0007 §3, §4). Without `--yes`, three questions are asked, each unless its flag
@@ -1189,11 +1239,15 @@ export const askAll = async (deps, opts, ctx) => {
   const plugin = g.plugin ?? true;
   why.plugin = g.plugin !== undefined ? flag : { source: 'default', reason: '' };
   if (g.reuseApps !== undefined) why.reuseApps = flag;
+  // THE CLAUDE CREDENTIAL (plan 0009 §9): inferred from the secret names, never asked.
+  const inferredAuth = claudeAuthOf(ctx.secrets);
+  const claudeAuth = g.claudeAuth ?? inferredAuth.value;
+  why.claudeAuth = g.claudeAuth !== undefined ? flag : inferredAuth.why;
 
   /** @type {Answers} */
   const a = {
     feature: 'custom', owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser,
-    reuseApps: g.reuseApps ?? null, plugin, ...sharing, reviewTrigger: null, sensitiveData, consent: null, why, notes: [],
+    reuseApps: g.reuseApps ?? null, plugin, ...sharing, reviewTrigger: null, sensitiveData, consent: null, claudeAuth, why, notes: [],
   };
   return derive(a, ctx, g);
 };
@@ -1263,6 +1317,10 @@ export const changeSomething = async (deps, a, ctx, g = {}) => {
     }
     asked('sensitiveData', 'consent');
   }
+  if (picked.has(6)) {
+    a.claudeAuth = await choose(deps, CLAUDE_AUTH_QUESTION, CLAUDE_AUTH_OPTIONS, a.claudeAuth, a.claudeAuth);
+    asked('claudeAuth');
+  }
   return derive(a, ctx, g);
 };
 
@@ -1324,7 +1382,7 @@ export const TELEMETRY_QUESTION =
  *   database: 'none' | 'hook', delegation: { name: string, email: string } | null, deleteDefaults: boolean, releaser: boolean,
  *   reuseApps: boolean | null, plugin: boolean, telemetry: boolean, upstreamFindings: import('../scripts/lib/upstream-findings.mjs').Value,
  *   upstreamEvidence: boolean | null, reviewTrigger: 'labelled' | null, sensitiveData: boolean | null, consent: Consent | null,
- *   why: Record<string, Why>, notes: string[] }} Answers
+ *   claudeAuth: ClaudeAuth, why: Record<string, Why>, notes: string[] }} Answers
  */
 
 /** The repository variables the telemetry collector's caller passes (docs/telemetry.md). */
@@ -1550,7 +1608,7 @@ export const plannedFiles = ({ s, a, req, release, repo, today, read, workflows,
   const ciName = ci === null ? 'CI' : workflowName(ci, '.github/workflows/ci.yml');
   for (const lane of a.lanes) {
     const path = callers.get(lane) ?? `.github/workflows/${lane}.yml`;
-    files.set(path, callerFile(lane, /** @type {import('./callers.mjs').Lane} */ (req.lanes[lane]), { release, ciName, defaultBranch: s.defaultBranch, path }));
+    files.set(path, callerFile(lane, /** @type {import('./callers.mjs').Lane} */ (req.lanes[lane]), { release, ciName, defaultBranch: s.defaultBranch, path, claudeAuth: a.claudeAuth }));
   }
   const identities = appIdentities(a, req);
   if (identities.length) files.set('.github/workflows/apps-check.yml', appsCheckFile(identities, release));
@@ -1623,6 +1681,13 @@ export const runsDco = (read, workflows) => workflows.some((p) => /^\s*-?\s*uses
 export const fileStatus = (rel, text, have, req) => (have === text ? 'same' : have !== null && (rel.startsWith('docs/') || rel === req.hook.path) ? 'kept' : have !== null ? 'differs' : 'new');
 
 /**
+ * Every secret the chosen lanes' callers map, each once: a model lane's Claude pair as the one
+ * credential the answer names (plan 0009 §10).
+ * @param {Pick<Answers, 'lanes' | 'claudeAuth'>} a @param {Requirements} req
+ */
+export const mappedSecrets = (a, req) => [...new Set(a.lanes.flatMap((l) => (req.lanes[l] ? callerSecrets(req.lanes[l], a.claudeAuth) : [])))];
+
+/**
  * A line of the summary (plan 0007 §4): its name, the `.answers` fields it shows (none for a line
  * that is what `init` does rather than an answer), its value, where the value came from, and why.
  * @typedef {{ answer: string, fields: string[], value: string, source: Source, reason: string }} SummaryLine
@@ -1659,6 +1724,8 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
     no: 'no: nothing leaves this repo, findings drafted',
   };
   line('Sharing', ['consent', 'telemetry', 'upstreamFindings', 'upstreamEvidence'], a.consent ? sharing[a.consent] : `custom: telemetry ${a.telemetry ? 'on' : 'off'}, findings ${a.upstreamFindings}`, why('consent'));
+  // Only where a chosen lane runs a model: the Merger, the reconciler and the sweep map neither.
+  if (a.lanes.some((l) => req.lanes[l]?.claude?.length)) line('Claude', ['claudeAuth'], CLAUDE_AUTH_LINES[a.claudeAuth], why('claudeAuth'));
   const identities = appIdentities(a, req);
   const appName = (/** @type {string} */ i) => req.identities.apps[i]?.name ?? i;
   const apps = identities.map((i) => {
@@ -1696,7 +1763,8 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
   const steps = [
     ...apps.filter((x) => / create$/.test(x)).map((x) => `create the ${x.split(':')[0]} App`),
     ...apps.filter((x) => /: reuse /.test(x)).map((x) => `1 key for the ${x.split(':')[0]}`),
-    ...([...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))].filter((n) => n === 'CLAUDE_CODE_OAUTH_TOKEN' || n === 'DIGEST_WEBHOOK').filter((n) => !s.secrets?.has(n)).map((n) => (n === 'DIGEST_WEBHOOK' ? 'the chat webhook' : 'the Claude token'))),
+    ...mappedSecrets(a, req).filter((n) => n === CLAUDE_SECRETS.subscription || n === CLAUDE_SECRETS['api-key'] || n === 'DIGEST_WEBHOOK').filter((n) => !s.secrets?.has(n))
+      .map((n) => (n === 'DIGEST_WEBHOOK' ? 'the chat webhook' : n === CLAUDE_SECRETS['api-key'] ? 'the Claude API key' : 'the Claude token')),
     'merge the PR',
     ...(a.lanes.includes(REVIEW_LANE) ? ['1 test PR'] : []),
   ];
@@ -2000,6 +2068,7 @@ const run = async (deps, opts, req, rep) => {
     isPrivate: s.isPrivate,
     met,
     release,
+    secrets: s.secrets,
   };
   const a = await askAll(deps, opts, ctx);
   // THE SUMMARY (plan 0007 §4): every value, and where it came from, before anything is written.
@@ -2052,7 +2121,11 @@ const run = async (deps, opts, req, rep) => {
     reviewTrigger: a.reviewTrigger,
     sensitiveData: a.sensitiveData,
     consent: a.consent,
+    claudeAuth: a.claudeAuth,
   };
+  // The catalogue and the features name the credential the callers map (plan 0009 §9).
+  rep.catalogue = laneCatalogue(req, installed, a.claudeAuth);
+  rep.features = featureCatalogue(req, met, a.claudeAuth);
 
   /** @type {string[]} what changed (or, in a dry run, would) */
   const changed = [];
@@ -2513,11 +2586,17 @@ const run = async (deps, opts, req, rep) => {
         });
       }
     }
-    const others = [...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))].filter((n) => !/_APP_(ID|PRIVATE_KEY)$/.test(n) && !s.secrets?.has(n));
+    const others = mappedSecrets(a, req).filter((n) => !/_APP_(ID|PRIVATE_KEY)$/.test(n) && !s.secrets?.has(n));
     const secretsUrl = `https://github.com/${repo}/settings/secrets/actions`;
     if (others.includes('CLAUDE_CODE_OAUTH_TOKEN')) {
       const prose = `Store the token of the Claude subscription the agents run on, made with \`claude setup-token\` (docs/lanes.md), ${OWN_TERMINAL}:`;
       step({ id: 'secret.claude-code-oauth-token', category: 'secret', subject: 'CLAUDE_CODE_OAUTH_TOKEN', prose, message: 'The repository lacks CLAUDE_CODE_OAUTH_TOKEN, which the chosen lanes map.', text: prose.replace(/:$/, '.'), commands: [`gh secret set CLAUDE_CODE_OAUTH_TOKEN -R ${repo}   ${OWN_TERMINAL_NOTE}`], url: secretsUrl });
+    }
+    if (others.includes('ANTHROPIC_API_KEY')) {
+      // Plan 0009 §9, step R5's split: the key is made in the Console, in a workspace for CI alone
+      // with its own spend limit, and stored as the token is, in the person's own terminal.
+      const prose = `Create an Anthropic API key in the Claude Console, in a workspace for CI alone with its own spend limit (${CLAUDE_CONSOLE_KEYS}), and store it ${OWN_TERMINAL}:`;
+      step({ id: 'secret.anthropic-api-key', category: 'secret', subject: 'ANTHROPIC_API_KEY', prose, message: 'The repository lacks ANTHROPIC_API_KEY, which the chosen lanes map.', text: prose.replace(/:$/, '.'), commands: [`gh secret set ANTHROPIC_API_KEY -R ${repo}   ${OWN_TERMINAL_NOTE}`], url: CLAUDE_CONSOLE_KEYS });
     }
     if (others.includes('DIGEST_WEBHOOK')) {
       const prose = `Store the chat webhook the digests post to, ${OWN_TERMINAL}:`;
@@ -2548,7 +2627,7 @@ const run = async (deps, opts, req, rep) => {
     }
   } else {
     // The store's secrets only where the store hook exists, as secret.qa-store asks (#480).
-    const all = [...new Set(a.lanes.flatMap((l) => req.lanes[l]?.secrets ?? []))]
+    const all = mappedSecrets(a, req)
       .filter((n) => !req.qaStore?.secrets.includes(n) || read(req.qaStore.hook) !== null);
     step({
       id: 'secret.unreadable',
