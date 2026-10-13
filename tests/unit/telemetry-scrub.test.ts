@@ -47,9 +47,9 @@ const FIXTURES: Record<string, string[]> = {
 };
 
 describe('the rules (§4.2)', () => {
-  it('are the plan\'s eight, in its order, at scrub_version 1', () => {
+  it('are the plan\'s eight, in its order, at scrub_version 2', () => {
     expect(RULE_NAMES).toEqual(['marker', 'url', 'email', 'mention', 'key', 'token', 'path', 'name']);
-    expect(SCRUB_VERSION).toBe(1);
+    expect(SCRUB_VERSION).toBe(2);
     expect(Object.keys(FIXTURES)).toEqual([...RULE_NAMES]);
   });
 

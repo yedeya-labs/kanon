@@ -14,7 +14,7 @@
       "reporter": "overseer", "subject": "lane",
       "lane": "review", "failed_stage": "hook", "kanon_error": "hook_missing", "reason": "did_not_finish", "kanon_version": "0.37.0",
       "rules": ["K-SELF-8", "K-LAYOUT-10"], "kanon_paths": ["actions/agent-run/action.yml", "docs/init.md"], "fix_category": "documentation",
-      "evidence_level": "evidence", "scrub_version": 1,
+      "evidence_level": "evidence", "scrub_version": 2,
       "evidence": "Expected: the review lane finds the setup hook the install wrote.\nObserved: the lane stops at the hook stage with hook_missing.\nWhere: actions/agent-run/action.yml.\nReproduce: install with the default answers, then open a pull request.",
       "suggested_fix": "Look for the hook where kanon init writes it, or have init write it where the lane looks."
     }

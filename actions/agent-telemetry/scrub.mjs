@@ -34,8 +34,11 @@
 
 import { namesForbiddenWord, sha256 } from './public-words.mjs';
 
-/** The rules' version, carried in a finding row's `scrub_version`. A new or changed rule is a new version. */
-export const SCRUB_VERSION = 1;
+/**
+ * The rules' version, carried in a finding row's `scrub_version`. A new or changed rule is a new
+ * version. 2 (kanon#724): the `name` rule leaves a word wholly inside a kept Kanon path (kanon#603).
+ */
+export const SCRUB_VERSION = 2;
 
 /**
  * A path in Kanon's tree, by its top-level directory (plan 0006 §2.1): the finding row's
@@ -164,7 +167,7 @@ const keptKanonSpans = (text, ctx) => [...text.matchAll(PATH_TOKEN)].flatMap((m)
 });
 
 /**
- * THE RULES, IN ORDER (`scrub_version` 1). Each replaces what it finds with its placeholder, and
+ * THE RULES, IN ORDER (`scrub_version` 2). Each replaces what it finds with its placeholder, and
  * `redact` runs them in this order, each on what the ones before left.
  * @type {readonly Rule[]}
  */

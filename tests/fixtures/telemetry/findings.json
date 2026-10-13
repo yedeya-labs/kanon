@@ -15,7 +15,7 @@
     "fix_category": "lane-behaviour", "evidence_level": "evidence",
     "evidence": "Expected: the review lane finishes within its turn cap (K-AGENT-12).\nObserved: the lane stopped at stage `agent` with reason `did_not_finish`, after the reviewer re-read [path] twice.\nWhere: scripts/merge-gate.mjs:120 at this release.\nReproduce: the review lane, triggered by a pull_request event, on the PR of an adopter workflow, with the declaration `Upstream findings: sent with evidence`.",
     "suggested_fix": "Cap the re-reads in the review prompt, or raise the lane's default turn cap.",
-    "scrub_version": 1
+    "scrub_version": 2
   },
   {
     "schema_version": 1, "row_kind": "finding", "tag": "test", "recorded_at": "2026-10-07T10:00:00Z",
@@ -32,7 +32,7 @@
     "rules": "K-OBS-16", "kanon_paths": "rulebook/08-observability-and-cost.md",
     "fix_category": "rule-text", "evidence_level": "evidence",
     "suggested_fix": "Say in the rule's Enforced by which test holds the finding row to the schema.",
-    "scrub_version": 1
+    "scrub_version": 2
   },
   {
     "schema_version": 1, "row_kind": "finding", "tag": "run", "recorded_at": "2026-10-07T11:00:00Z",

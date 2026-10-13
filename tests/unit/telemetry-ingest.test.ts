@@ -254,6 +254,21 @@ describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
     expect(r.puts[1]).toMatchObject({ pk: 'k1#finding', evidence: CLEAN, scrub_version: 1 });
   });
 
+  it('scrub_version 2 is stored, and 1 still is, for the overlap until every lane sends 2 (kanon#724)', async () => {
+    const r = await call(event([withText(CLEAN), { ...withText(CLEAN), finding_index: 4, scrub_version: 2 }]), {}, named);
+    expect(r.status).toBe(200);
+    expect(r.puts.map((p) => p.scrub_version)).toEqual([1, 2]);
+  });
+
+  it('an unknown scrub_version gets 422 naming scrub_version (range), and nothing is stored', async () => {
+    for (const v of [0, 3]) {
+      const r = await call(event([{ ...withText(CLEAN), scrub_version: v }]), {}, named);
+      expect(r.status).toBe(422);
+      expect(errorsOf(r)).toEqual([{ field: 'scrub_version', problem: 'range' }]);
+      expect(r.puts).toEqual([]);
+    }
+  });
+
   it('a run-tagged finding is kept 13 months, as a run row (decision 11)', async () => {
     const r = await call(event([findingRow({ tag: 'run' })]), {}, named);
     expect(r.puts[0]!.expires_at).toBe(Math.floor(Date.parse('2027-11-02T11:59:00Z') / 1000));

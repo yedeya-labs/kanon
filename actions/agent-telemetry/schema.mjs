@@ -425,6 +425,8 @@ const FINDING_V1 = Object.freeze({
   // Evidence (§2.2), level 2 only
   evidence: text(2000),
   suggested_fix: text(1000),
+  // Every version since 1: intake is deployed before the lanes' release, and a lane on an older
+  // pin still sends its own (plan 0006 §4.2).
   scrub_version: /** @type {Field} */ ({ type: 'int', min: 1, max: SCRUB_VERSION }),
 });
 
