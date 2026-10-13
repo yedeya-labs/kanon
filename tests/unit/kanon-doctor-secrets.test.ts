@@ -5,6 +5,7 @@ import { backlogFeedNote, doctor, EXIT, WAIVER_LABEL } from '../../cli/doctor.mj
 import { checkout, clone, fakeGitHub, healthyFiles, identitiesOf, ids, LANES, NEXT, PINNED, put, registerText, releaseBy, releaserFiles, releaserOn, REPO, REQ, run, type Result } from './helpers/doctor.js';
 import { SPAWNS } from './helpers/spawns.js';
 import { KEYS_HELP } from '../../cli/apps.mjs';
+import { renderNotice } from '../../actions/agent-classify/classify-agent-result.mjs';
 
 /**
  * `kanon doctor` on the secrets a workflow maps (#414) and a caller maps at the checked release (#415),
@@ -541,6 +542,20 @@ describe('kanon doctor and the Claude credential (plan 0009 §11)', () => {
   });
 
   describe('claude.unreachable-runs', () => {
+    /**
+     * The annotation title GitHub stores for agent-classify's notice, built from the line it emits
+     * (`::error title=<title>::<body>`) by the runner's rule: the properties split on every `,`,
+     * and only `key=value` segments kept. Never doctor's own constant, so the two can disagree.
+     */
+    const notice = renderNotice('unavailable', 'no model');
+    const emitted = `::${notice.level} title=${notice.title}::${notice.body}`;
+    const properties = emitted.slice(emitted.indexOf(' ') + 1, emitted.indexOf('::', 2));
+    const STORED = properties.split(',').filter((p) => p.includes('=')).map((p) => p.slice(p.indexOf('=') + 1))[0]!;
+
+    it("looks for the notice's title as GitHub stores it, cut at its comma", () => {
+      expect(notice.title).toContain(',');
+      expect(STORED).toBe('the model was unreachable');
+    });
     let next = 7000;
     /** A run of the caller, whose `notices` failed jobs (one at least) each carry the given notice. */
     const addRun = (github: ReturnType<typeof fakeGitHub>, file: string, o: { days?: number; notices?: number; conclusion?: string; title?: string } = {}) => {
@@ -548,7 +563,7 @@ describe('kanon doctor and the Claude credential (plan 0009 §11)', () => {
       const notices = o.notices ?? 1;
       (github.st.runs[file] ??= []).push({ databaseId: id, conclusion: o.conclusion ?? 'failure', createdAt: at(o.days ?? 1) });
       github.st.runJobs[id] = Array.from({ length: Math.max(notices, 1) }, (_, i) => ({ id: id * 10 + i, name: `job ${i}`, conclusion: 'failure' }));
-      for (let i = 0; i < notices; i++) github.st.annotations[id * 10 + i] = [{ title: o.title ?? 'the model was unreachable, not a failed run', annotation_level: 'failure', message: '…' }];
+      for (let i = 0; i < notices; i++) github.st.annotations[id * 10 + i] = [{ title: o.title ?? STORED, annotation_level: 'failure', message: '…' }];
       return id;
     };
 

@@ -86,8 +86,24 @@ export const CLAUDE_KEY = 'ANTHROPIC_API_KEY';
 export const TOKEN_AGE = /** @type {const} */ ({ note: 335, year: 365 });
 /** `claude.unreachable-runs`: at least `runs` runs on the subscription within `days` days. */
 export const UNREACHABLE = /** @type {const} */ ({ runs: 2, days: 14, perCaller: 20 });
-/** The title of `agent-classify`'s notice for a model it never reached, which doctor looks for. */
-export const UNREACHABLE_TITLE = renderNotice('unavailable', '').title;
+/**
+ * The title GitHub stores for an annotation a workflow command (`::error title=<title>::…`) gives:
+ * the runner splits the command's properties on every `,`, unescaped, and keeps only `key=value`
+ * segments, so a title with a comma keeps its first segment's value alone.
+ * @param {string} title @returns {string}
+ */
+export const storedTitle = (title) => {
+  for (const part of `title=${title}`.split(',')) {
+    const at = part.indexOf('=');
+    if (at > 0) return part.slice(at + 1);
+  }
+  return '';
+};
+/**
+ * The title of `agent-classify`'s notice for a model it never reached, as GitHub stores it, which
+ * doctor looks for: "the model was unreachable", since the notice's own title holds a comma.
+ */
+export const UNREACHABLE_TITLE = storedTitle(renderNotice('unavailable', '').title);
 /** Where an Anthropic API key is made. */
 export const CONSOLE_KEYS = 'https://console.anthropic.com/settings/keys';
 const DAY = 86_400_000;
@@ -1014,7 +1030,7 @@ export const diagnose = async (deps, opts) => {
       const maps = pair.filter((n) => got.includes(n));
       if (pair.length && maps.length > 1) {
         find('caller.claude-both', c.file, `maps both ${maps.join(' and ')}; the lane ${c.lane} runs on one Claude credential at ${checked}, so its run fails before the agent starts. Map one (plan 0009 §10).`, {
-          text: `Keep the line of the credential this lane runs on, and remove the other's from the job's secrets: (the subscription's token, or an Anthropic API key):`,
+          text: `Keep the line of the credential this lane runs on, and remove the other's from the job's secrets (the subscription's token, or an Anthropic API key):`,
           commands: maps.map((n) => `      ${n}: \${{ secrets.${n} }}`),
         });
       } else if (pair.length && !maps.length) {
@@ -1413,7 +1429,7 @@ export const diagnose = async (deps, opts) => {
       // Doctor lists the repository's own secrets, so one an organisation shares with it isn't seen.
       const orgNote = pairs.has(n) ? ` Doctor lists the repository's own secrets: an organisation secret shared with ${repo} isn't counted.` : '';
       findItems('secret.missing', repo, [n], () => [`lacks ${n}${by.length ? `, which ${by.join(', ')} ${by.length > 1 ? 'take' : 'takes'}` : ''}${who ? `: ${who}` : ''}.${orgNote}`, {
-        text: n === CLAUDE_TOKEN ? `Store the token of the Claude subscription the agents run on, made with \`claude setup-token\` (docs/lanes.md), ${OWN_TERMINAL}.${pairs.has(n) ? ' To run the lanes on an Anthropic API key instead, kanon init --claude-auth api-key maps it in every caller; store it as ANTHROPIC_API_KEY.' : ''}`
+        text: n === CLAUDE_TOKEN ? `Store the token of the Claude subscription the agents run on, made with \`claude setup-token\` (docs/lanes.md), ${OWN_TERMINAL}${pairs.has(n) ? '. To run the lanes on an Anthropic API key instead, kanon init --claude-auth api-key maps it in every caller; store it as ANTHROPIC_API_KEY.' : ':'}`
           : n === CLAUDE_KEY ? `Store an Anthropic API key, made in the Claude Console in a workspace for CI with a spend limit (docs/lanes.md), ${OWN_TERMINAL}:`
           : storeVariables.includes(n) ? `${req.qaStore?.hook} exists, and Kanon ${checked} hands it the store's coordinates as secrets alone, never the variable ${n} that holds this one (kanon#479): copy the variable into the secret, through a pipe, so the value is never printed (docs/qa-store.md, "Move the coordinates to secrets"):`
           : storeSecrets.includes(n) ? `${req.qaStore?.hook} exists, so the store-coupled lanes need the store's coordinates: store the stack's ${output(n)} output, putting it in for the line's <${output(n)}>. It isn't secret, so it goes on the line with --body, which works at the Claude Code prompt with \`!\` as well (docs/qa-store.md, "Provision a store"):`
