@@ -10,6 +10,7 @@ import { ROOT } from './helpers/adopter.js';
  * the variable acted there; in Kanon a default would name somebody else's repository.
  */
 const CLIS: Array<[string, string[]]> = [
+  ['actions-minutes', []],
   ['brief-revise-recovery', []],
   ['capability-interlock', []],
   ['digest-audience', []],

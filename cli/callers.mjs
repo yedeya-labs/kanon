@@ -27,7 +27,7 @@ import { URL } from 'node:url';
  *   declarations?: Record<string, { baseline: boolean, requiredSections: string[] }>,
  *   release?: { dcoExemptsReleaser?: boolean }, catalogue?: Catalogue, features?: Feature[],
  *   telemetry?: { collector: string, variables: string[], grant?: Record<string, string> }, qaStore?: { hook: string, secrets: string[], secretsOnly?: boolean } }} Requirements
- * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, recommend: 'always' | string[], when: string, mergeQueue?: string, requires?: string[] }} CatalogueEntry
+ * @typedef {{ name: string, group: string, does: string, needs: string[], cost: string, minutes: string, recommend: 'always' | string[], when: string, mergeQueue?: string, requires?: string[] }} CatalogueEntry
  * @typedef {{ groups: Array<{ id: string, title: string, header: string }>, lanes: Record<string, CatalogueEntry> }} Catalogue
  * @typedef {{ feature: string, title: string, does: string, lanes: string[],
  *   conditional: Record<string, { hook?: string, secret?: string, condition: string }>, leftOut?: Record<string, string>,

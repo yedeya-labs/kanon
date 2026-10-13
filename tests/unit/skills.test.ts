@@ -399,7 +399,7 @@ describe('each skill is held to the kanon command it drives', () => {
     const steps = section(skill('adopt').body, /^## Steps$/)!;
     expect(steps).toMatch(/none is taken from its default unasked/);
     const lanes = asked.get('lanes')!;
-    for (const p of ['.catalogue', '.catalogue[].lanes[].does', '.catalogue[].lanes[].cost', '.catalogue[].lanes[].when', '.catalogue[].lanes[].recommended', '.catalogue[].lanes[].recommendedWith']) {
+    for (const p of ['.catalogue', '.catalogue[].lanes[].does', '.catalogue[].lanes[].cost', '.catalogue[].lanes[].minutes', '.catalogue[].lanes[].when', '.catalogue[].lanes[].recommended', '.catalogue[].lanes[].recommendedWith']) {
       expect(lanes, p).toContain(`\`${p}\``);
     }
     expect(lanes).toMatch(/multi-select/);

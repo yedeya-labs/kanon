@@ -1,0 +1,251 @@
+#!/usr/bin/env node
+// What each lane costs in GitHub Actions runner-minutes, measured from a repository's own runs
+// (kanon#581).
+//
+// WHY. Kanon ran about 11,000 Actions runs in one week, about 800 runner-minutes a day. On a
+// public repository those minutes are free; on a private one they are billed, and an adopter
+// choosing lanes had no figure to estimate them by. docs/actions-minutes.md gives the figures,
+// and the catalogue's `minutes` (docs/lanes.json) puts each lane's in front of the person the
+// adopt skill asks. This script is where they come from, so they can be refreshed rather than
+// remembered.
+//
+// HOW IT MEASURES, read-only, through `gh api`:
+//   1. each lane's caller on the default branch, as the library finds it (scripts/lib/lane-caller.mjs);
+//      a lane nothing calls is "not measured", never a zero;
+//   2. every completed run of that caller created in the window, which ends when it measures,
+//      splitting a range GitHub would cut at 1,000 runs. A caller younger than the window is
+//      measured from when GitHub registered it, so a lane added mid-week isn't diluted over days
+//      it didn't exist; the report says how many days each lane's figures rest on;
+//   3. the jobs of up to `--sample` of those runs, spread evenly over the window, every attempt
+//      included. A run's minutes are its jobs' minutes, each rounded up to a whole minute, which is
+//      how GitHub bills a job; a skipped job, or one that never started, bills nothing. A reusable
+//      workflow's jobs are listed under the run that called it, so a lane's nested jobs count.
+//   4. the mean minutes of a sampled run times the runs a day is the lane's minutes a day.
+// A run is SHORT when no job of it ran past one minute: a run the lane's gate or filter turned
+// away, a skipped run, or a no-model lane with nothing to do. It costs a minute or two whatever
+// it was.
+//
+// WHAT IT DOESN'T: it doesn't know the runner's multiplier (Kanon's jobs ask for `ubuntu-latest`,
+// billed at 1x), and it reads only the lanes' callers, not your CI or other workflows.
+//
+// Usage: GITHUB_REPOSITORY=owner/repo node "$KANON/scripts/actions-minutes.mjs" [--days 7] [--sample 40] [--json]
+// with a `gh` token that can read the repository's Actions. It prints the report
+// docs/actions-minutes.md holds between its markers.
+
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { isCliEntry } from './lib/cli-entry.mjs';
+import { readSnapshot, resolveCaller } from './lib/lane-caller.mjs';
+
+/** GitHub returns at most this many runs for one filtered listing, whatever its total_count says. */
+const LISTING_CAP = 1000;
+const PAGE = 100;
+const DAY = 86_400_000;
+
+/** The table's header, which docs/actions-minutes.md holds and `readTable` finds the table by. */
+export const TABLE_HEADER = '| Lane | Caller | Days measured | Runs a day | Short runs | Minutes a short run | Minutes another run (median) | Minutes a day |';
+
+/**
+ * @typedef {{ conclusion: string | null, started_at: string | null, completed_at: string | null }} Job
+ * @typedef {{ lane: string, caller: string | null, days: number, runs: number, sampled: number, short: number,
+ *   shortMinutes: number | null, otherMinutes: number | null, perDay: number, minutesPerDay: number }} Row
+ * @typedef {{ repo: string, since: string, until: string, days: number, sample: number,
+ *   activity: { pullRequests: number, merged: number, issues: number }, rows: Row[] }} Measurement
+ */
+
+/** Each job that ran, in whole billed minutes: rounded up, as GitHub bills a job. @param {Job} j */
+const jobMinutes = (j) => {
+  if (j.conclusion === 'skipped' || !j.started_at || !j.completed_at) return 0;
+  const ms = Date.parse(j.completed_at) - Date.parse(j.started_at);
+  return ms > 0 ? Math.ceil(ms / 60_000) : 0;
+};
+
+/** What a run bills: its jobs' minutes, each rounded up on its own. @param {Job[]} jobs */
+export const billedMinutes = (jobs) => jobs.reduce((n, j) => n + jobMinutes(j), 0);
+
+/** A short run: no job of it ran past one minute. @param {Job[]} jobs */
+export const isShort = (jobs) => jobs.every((j) => jobMinutes(j) <= 1);
+
+/**
+ * `n` of `items`, spread evenly from the first to the last, the same ones on every read.
+ * @template T @param {T[]} items @param {number} n @returns {T[]}
+ */
+export const sampleEvenly = (items, n) => {
+  if (n >= items.length) return [...items];
+  if (n <= 1) return items.slice(0, Math.max(n, 0));
+  return [...Array(n).keys()].map((i) => /** @type {T} */ (items[Math.round((i * (items.length - 1)) / (n - 1))]));
+};
+
+/** A figure as the report gives it: one decimal under ten, whole above. @param {number} x */
+const figure = (x) => (x < 10 ? Math.round(x * 10) / 10 : Math.round(x));
+
+/** @param {number[]} xs */
+const median = (xs) => {
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? /** @type {number} */ (s[mid]) : (/** @type {number} */ (s[mid - 1]) + /** @type {number} */ (s[mid])) / 2;
+};
+
+/** ISO without milliseconds, as the `created` filter takes it. @param {number} ms */
+const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+/** `2026-10-08 00:00`, as the report gives a time. @param {string} t */
+const minute = (t) => t.slice(0, 16).replace('T', ' ');
+
+/**
+ * Every completed run of `file` created between `from` and `to` (inclusive, ms), splitting a range
+ * whose runs GitHub would cut at 1,000.
+ * @param {(args: string[]) => any} gh @param {string} repo @param {string} file @param {number} from @param {number} to
+ * @returns {Array<{ id: number, created_at: string }>}
+ */
+const listRuns = (gh, repo, file, from, to) => {
+  const url = (/** @type {number} */ page) => `repos/${repo}/actions/workflows/${file}/runs?created=${iso(from)}..${iso(to)}&exclude_pull_requests=true&per_page=${PAGE}&page=${page}`;
+  const first = gh(['api', url(1)]);
+  const total = Number(first?.total_count ?? 0);
+  if (total > LISTING_CAP && to - from > 1000) {
+    const mid = from + Math.floor((to - from) / 2 / 1000) * 1000;
+    return [...listRuns(gh, repo, file, from, mid), ...listRuns(gh, repo, file, mid + 1000, to)];
+  }
+  const runs = [...(first?.workflow_runs ?? [])];
+  for (let page = 2; (page - 1) * PAGE < Math.min(total, LISTING_CAP); page++) runs.push(...(gh(['api', url(page)])?.workflow_runs ?? []));
+  return runs.filter((r) => r.status === 'completed');
+};
+
+/** Every job of a run, every attempt's. @param {(args: string[]) => any} gh @param {string} repo @param {number} id @returns {Job[]} */
+const listJobs = (gh, repo, id) => {
+  /** @type {Job[]} */
+  const jobs = [];
+  for (let page = 1; ; page++) {
+    const res = gh(['api', `repos/${repo}/actions/runs/${id}/jobs?filter=all&per_page=${PAGE}&page=${page}`]);
+    const got = res?.jobs ?? [];
+    jobs.push(...got);
+    if (!got.length || jobs.length >= Number(res?.total_count ?? 0)) return jobs;
+  }
+};
+
+/** How many issues or pull requests a search finds. @param {(args: string[]) => any} gh @param {string} q */
+const count = (gh, q) => Number(gh(['api', '-X', 'GET', 'search/issues', '-f', `q=${q}`, '-f', 'per_page=1'])?.total_count ?? 0);
+
+/**
+ * Measure each lane's runner-minutes over the `days` before `now`.
+ * @param {{ repo: string, gh: (args: string[]) => any, now: string, days: number, sample: number, lanes: string[], log?: (msg: string) => void }} io
+ * @returns {Measurement}
+ */
+export function measure({ repo, gh, now, days, sample, lanes, log = (m) => console.error(m) }) {
+  const to = Math.floor(Date.parse(now) / 1000) * 1000;
+  const from = to - days * DAY;
+  const snapshot = readSnapshot({ repo, json: gh });
+  /** @type {Row[]} */
+  const rows = [];
+  for (const lane of lanes) {
+    const caller = resolveCaller(lane, snapshot);
+    if (caller.how === 'fallback') {
+      log(`actions-minutes: ${lane}: ${caller.reason}; not measured`);
+      rows.push({ lane, caller: null, days: 0, runs: 0, sampled: 0, short: 0, shortMinutes: null, otherMinutes: null, perDay: 0, minutesPerDay: 0 });
+      continue;
+    }
+    const registered = Date.parse(gh(['api', `repos/${repo}/actions/workflows/${caller.file}`])?.created_at ?? '');
+    const start = Number.isNaN(registered) ? from : Math.max(from, Math.ceil(registered / 1000) * 1000);
+    const span = (to - start) / DAY;
+    const runs = listRuns(gh, repo, caller.file, start, to).sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id - b.id);
+    const picked = sampleEvenly(runs, sample).map((r) => listJobs(gh, repo, r.id));
+    const minutes = picked.map(billedMinutes);
+    const shortOnes = picked.map(isShort);
+    const short = minutes.filter((_, i) => shortOnes[i]);
+    const other = minutes.filter((_, i) => !shortOnes[i]);
+    const mean = minutes.length ? minutes.reduce((a, b) => a + b, 0) / minutes.length : 0;
+    log(`actions-minutes: ${lane}: ${runs.length} runs of ${caller.file} in ${figure(span)} days, ${picked.length} sampled`);
+    rows.push({
+      lane,
+      caller: caller.file,
+      days: figure(span),
+      runs: runs.length,
+      sampled: picked.length,
+      short: short.length,
+      shortMinutes: short.length ? figure(short.reduce((a, b) => a + b, 0) / short.length) : null,
+      otherMinutes: other.length ? figure(median(other)) : null,
+      perDay: span > 0 ? figure(runs.length / span) : 0,
+      minutesPerDay: span > 0 ? figure((mean * runs.length) / span) : 0,
+    });
+  }
+  const since = iso(from);
+  const until = iso(to);
+  const span = `${since}..${until}`;
+  const activity = {
+    pullRequests: count(gh, `repo:${repo} is:pr created:${span}`),
+    merged: count(gh, `repo:${repo} is:pr is:merged merged:${span}`),
+    issues: count(gh, `repo:${repo} is:issue created:${span}`),
+  };
+  return { repo, since, until, days, sample, activity, rows };
+}
+
+/** @param {number | null} x */
+const cell = (x) => (x === null ? '—' : String(x));
+
+/**
+ * The report docs/actions-minutes.md holds between its markers: what was measured, and the table.
+ * @param {Measurement} m
+ */
+export function renderReport(m) {
+  const { activity: a, days } = m;
+  const measured = m.rows.filter((r) => r.caller);
+  const total = figure(measured.reduce((n, r) => n + r.minutesPerDay, 0));
+  const lines = [
+    `Measured on \`${m.repo}\` over the ${days} days from ${minute(m.since)} to ${minute(m.until)} UTC, in which ${a.pullRequests} pull requests were opened (${figure(a.pullRequests / days)} a day), ${a.merged} merged (${figure(a.merged / days)} a day) and ${a.issues} issues opened (${figure(a.issues / days)} a day). Each lane's minutes come from the jobs of up to ${m.sample} of its runs, spread evenly over the window; a lane whose caller is younger than the window is measured over the days it has existed.`,
+    '',
+    TABLE_HEADER,
+    '|---|---|---|---|---|---|---|---|',
+    ...m.rows.map((r) => r.caller
+      ? `| \`${r.lane}\` | \`${r.caller}\` | ${r.days} | ${r.perDay} | ${r.sampled ? `${Math.round((100 * r.short) / r.sampled)}%` : '—'} | ${cell(r.shortMinutes)} | ${cell(r.otherMinutes)} | ${r.minutesPerDay} |`
+      : `| \`${r.lane}\` | none | — | — | — | — | — | not measured |`),
+    '',
+    `Together, the ${measured.length} lanes measured used about ${total} runner-minutes a day.`,
+  ];
+  return lines.join('\n');
+}
+
+/**
+ * The table of a report, a row per lane, its cells as written.
+ * @param {string} text a report, or a document that holds one
+ */
+export function readTable(text) {
+  const lines = text.split('\n');
+  const start = lines.indexOf(TABLE_HEADER);
+  if (start < 0) return [];
+  /** @type {Array<{ lane: string, caller: string, days: string, perDay: string, short: string, shortMinutes: string, otherMinutes: string, minutesPerDay: string }>} */
+  const rows = [];
+  for (const line of lines.slice(start + 2)) {
+    if (!line.startsWith('|')) break;
+    const [lane = '', caller = '', days = '', perDay = '', short = '', shortMinutes = '', otherMinutes = '', minutesPerDay = ''] = line.split('|').slice(1, -1).map((c) => c.trim().replace(/^`|`$/g, ''));
+    rows.push({ lane, caller, days, perDay, short, shortMinutes, otherMinutes, minutesPerDay });
+  }
+  return rows;
+}
+
+/** @param {string[]} argv @param {string} flag @param {number} fallback */
+const intFlag = (argv, flag, fallback) => {
+  const i = argv.indexOf(flag);
+  if (i < 0) return fallback;
+  const v = argv[i + 1] ?? '';
+  return /^[1-9]\d*$/.test(v) ? Number(v) : NaN;
+};
+
+if (isCliEntry(import.meta.url)) {
+  const repo = process.env.GITHUB_REPOSITORY;
+  if (!repo) {
+    console.error('actions-minutes: GITHUB_REPOSITORY must be set');
+    process.exit(2);
+  }
+  const argv = process.argv.slice(2);
+  const days = intFlag(argv, '--days', 7);
+  const sample = intFlag(argv, '--sample', 40);
+  if (!Number.isInteger(days) || !Number.isInteger(sample)) {
+    console.error('actions-minutes: --days and --sample take a whole number above 0');
+    process.exit(2);
+  }
+  const catalogue = JSON.parse(readFileSync(new URL('../docs/lanes.json', import.meta.url), 'utf8'));
+  /** @param {string[]} args */
+  const gh = (args) => JSON.parse(execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }));
+  const m = measure({ repo, gh, now: new Date().toISOString(), days, sample, lanes: Object.keys(catalogue.lanes) });
+  console.log(argv.includes('--json') ? JSON.stringify(m, null, 2) : renderReport(m));
+}

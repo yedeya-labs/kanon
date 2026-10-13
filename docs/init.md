@@ -224,6 +224,7 @@ What `--lanes` chooses from, so a person, or the adopt skill asking them, can ch
 | `schedule` | string or null | The cron its caller is written with, or null when it runs on events alone. |
 | `needs` | array | Strings: what else it needs, such as project briefs. |
 | `cost` | string | What it costs to run, in one sentence: whether it runs a model, and how often. |
+| `minutes` | string | The GitHub Actions runner-minutes it used a day on Kanon's own repository, in one sentence, or that it wasn't measured ([`docs/actions-minutes.md`](actions-minutes.md), [#581](https://github.com/yedeya-labs/kanon/issues/581)). |
 | `when` | string | When it is recommended, in one sentence. |
 | `mergeQueue` | string or null | What a merge queue on the default branch changes for it, in one sentence, or null when nothing ([#452](https://github.com/yedeya-labs/kanon/issues/452)): a merge through the queue doesn't start a lane that runs on CI finishing on the default branch, unless its caller also runs on the merged pull request, as the rebase lane's does ([#484](https://github.com/yedeya-labs/kanon/issues/484)). |
 | `recommendedWith` | array | The lanes whose choice makes it recommended; empty for none. |
