@@ -1961,7 +1961,7 @@ describe('a transient UNSTABLE waits; a settled one still escalates (RA-1773, RA
           { __typename: 'CheckRun', name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS',
             completedAt: ago(3), detailsUrl: 'https://github.com/o/r/actions/runs/111/job/222' },
           { __typename: 'CheckRun', name: 'merge / merge', workflowName: 'Merge (Merger)', status: 'IN_PROGRESS', conclusion: null,
-            startedAt: ago(0), detailsUrl: `https://github.com/o/r/actions/runs/${OWN}/job/115134774613` },
+            startedAt: ago(0), detailsUrl: `https://github.com/o/r/actions/runs/${OWN}/job/333` },
           { __typename: 'StatusContext', context: 'ci/external', state: 'SUCCESS', createdAt: ago(5), targetUrl: 'https://ci.example/1' },
         ],
         mergeStateStatus: 'UNSTABLE', mergeable: 'MERGEABLE', title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`,
