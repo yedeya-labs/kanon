@@ -138,6 +138,15 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     appsCheck: { runs: [] as AppsCheckRun[], jobs: {} as Record<number, Array<{ id: number; name: string; conclusion: string }>>, logs: {} as Record<number, string>, ignoresEvent: false /* a server that ignores the event filter, so doctor's own check is what refuses */,
       /** The values of the run's secrets, each App's <APP>_APP_ID among them, which the runner masks in every log as `***`. */
       secrets: new Set<string>() },
+    /** Each secret's `updatedAt`, as `gh secret list --json name,updatedAt` gives it; a secret not here was stored just now (plan 0009 §11). */
+    secretDates: {} as Record<string, string>,
+    /** Each workflow file's runs, as `gh run list --workflow <file>` gives them, newest first; a file not here has none. */
+    runs: {} as Record<string, Array<{ databaseId: number; conclusion: string; createdAt: string }>>,
+    /** `gh run list`'s answer when it fails, such as a token without Actions: read. */
+    runsRefused: null as string | null,
+    /** Each run's jobs, by run id (`GET actions/runs/<id>/jobs`), and each job's annotations, by its check run id. */
+    runJobs: {} as Record<number, Array<{ id: number; name: string; conclusion: string }>>,
+    annotations: {} as Record<number, Array<{ title: string; annotation_level: string; message: string }>>,
   };
   const calls: string[][] = [];
   const inputs: string[] = [];
@@ -153,7 +162,12 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
     }
     if (a0 === 'api' && a1 === 'user') return ok('octo\n');
     if (a0 === 'api' && (a1 === 'user/installations?per_page=100' || a1 === 'orgs/acme/installations?per_page=100')) return st.installations ? ok({ total_count: st.installations.length, installations: st.installations }) : no('gh: Resource not accessible by personal access token (HTTP 403)');
-    if (a0 === 'secret' && a1 === 'list') return st.secrets ? ok([...st.secrets].map((name) => ({ name }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
+    if (a0 === 'secret' && a1 === 'list') return st.secrets ? ok([...st.secrets].map((name) => ({ name, updatedAt: st.secretDates[name] ?? new Date().toISOString() }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
+    if (a0 === 'run' && a1 === 'list') {
+      if (st.runsRefused) return no(st.runsRefused);
+      const file = args[args.indexOf('--workflow') + 1]!;
+      return ok((st.runs[file] ?? []).slice(0, Number(args[args.indexOf('--limit') + 1])));
+    }
     // A Set names variables only; a Map gives their values too (#609).
     if (a0 === 'variable' && a1 === 'list') return st.variables ? ok(st.variables instanceof Map ? [...st.variables].map(([name, value]) => ({ name, value })) : [...st.variables].map((name) => ({ name, value: '' }))) : no('gh: Resource not accessible by personal access token (HTTP 403)');
     if (a0 !== 'api' || args.includes('-X')) return no(`unexpected gh ${args.join(' ')}`);
@@ -166,7 +180,9 @@ export const fakeGitHub = (over: { secrets?: Set<string> | null; releases?: Reco
       return ok({ total_count: list.length, workflow_runs: list.slice(0, Number(q.get('per_page') ?? 30)) });
     }
     const jobs = /^repos\/acme\/widgets\/actions\/runs\/(\d+)\/jobs(\?.*)?$/.exec(path);
-    if (jobs) return ok({ jobs: st.appsCheck.jobs[Number(jobs[1])] ?? [] });
+    if (jobs) return ok({ jobs: st.runJobs[Number(jobs[1])] ?? st.appsCheck.jobs[Number(jobs[1])] ?? [] });
+    const notes = /^repos\/acme\/widgets\/check-runs\/(\d+)\/annotations(\?.*)?$/.exec(path);
+    if (notes) return st.annotations[Number(notes[1])] ? ok(st.annotations[Number(notes[1])]) : ok([]);
     const log = /^repos\/acme\/widgets\/actions\/jobs\/(\d+)\/logs$/.exec(path);
     if (log) return st.appsCheck.logs[Number(log[1])] !== undefined ? ok(masked(st.appsCheck.logs[Number(log[1])]!, st.appsCheck.secrets)) : no('gh: Not Found (HTTP 404)');
     if (path === `repos/${REPO}/branches/main`) return ok('main');
@@ -228,7 +244,7 @@ export const appsCheckRun = (
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the JSON document, read field by field
 export type Result = { status: number; out: string; err: string; json: any };
 
-export const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: string[] = []): Promise<Result> => {
+export const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, argv: string[] = [], now?: number): Promise<Result> => {
   const out: string[] = [];
   const err: string[] = [];
   const status = await doctor(['--dir', dir, ...argv], {
@@ -238,6 +254,7 @@ export const run = async (dir: string, github: ReturnType<typeof fakeGitHub>, ar
     err: (l: string) => err.push(l),
     requirements: () => REQ,
     release: () => PINNED,
+    ...(now === undefined ? {} : { now: () => now }),
   });
   const text = out.join('\n');
   return { status, out: text, err: err.join('\n'), json: argv.includes('--json') ? JSON.parse(text) : null };

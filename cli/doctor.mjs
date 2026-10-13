@@ -64,6 +64,7 @@ import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './chec
 import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '../scripts/lib/upstream-findings.mjs';
 import { LEDGER as CAPABILITY_LEDGER, parseCapabilityWatch } from '../scripts/lib/capability-watch.mjs';
 import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
+import { renderNotice } from '../actions/agent-classify/classify-agent-result.mjs';
 
 // The reporter check lives in its own module, which `kanon init` shares (#444).
 export { branchPattern, branchWorkflows, checkJobs, checkReporters } from './check-reporters.mjs';
@@ -71,6 +72,25 @@ export { branchPattern, branchWorkflows, checkJobs, checkReporters } from './che
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
 /** @typedef {import('./init.mjs').Inspection} Inspection */
 /** @typedef {{ status: number | null, stdout: string, stderr: string }} GhResult */
+
+// ── The Claude credential (plan 0009 §10, §11) ─────────────────────────────────────────────
+
+/** The subscription's token, and the API key a caller may map in its place. */
+export const CLAUDE_TOKEN = 'CLAUDE_CODE_OAUTH_TOKEN';
+export const CLAUDE_KEY = 'ANTHROPIC_API_KEY';
+/**
+ * `claude.token-age`: a note once the token's secret was last updated more than NOTE days ago,
+ * blocking once more than YEAR days ago. A subscription token lasts a year (#579, not run against
+ * a real token); the secret's `updatedAt` is when it was stored, so the token is at least that old.
+ */
+export const TOKEN_AGE = /** @type {const} */ ({ note: 335, year: 365 });
+/** `claude.unreachable-runs`: at least `runs` runs on the subscription within `days` days. */
+export const UNREACHABLE = /** @type {const} */ ({ runs: 2, days: 14, perCaller: 20 });
+/** The title of `agent-classify`'s notice for a model it never reached, which doctor looks for. */
+export const UNREACHABLE_TITLE = renderNotice('unavailable', '').title;
+/** Where an Anthropic API key is made. */
+export const CONSOLE_KEYS = 'https://console.anthropic.com/settings/keys';
+const DAY = 86_400_000;
 
 /** The JSON output's contract (docs/doctor.md). A breaking change to it changes this. */
 export const SCHEMA = 'kanon-doctor/v1';
@@ -178,7 +198,7 @@ export const ITEMIZED = {
  * `unchecked[].check` it is listed under: a waiver of such a finding can't be called stale.
  * @type {Record<string, string>}
  */
-const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset' };
+const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset' };
 
 /**
  * The finding categories, in the order a finding is listed and fixed: the pin decides which
@@ -205,6 +225,8 @@ export const FINDINGS = {
   'app.unused': { category: 'app', blocking: false },
   'secret.missing': { category: 'secret', blocking: true },
   'secret.stale': { category: 'secret', blocking: false },
+  'claude.token-age': { category: 'secret', blocking: true },
+  'claude.unreachable-runs': { category: 'secret', blocking: false },
   'declaration.missing': { category: 'declaration', blocking: true },
   'declaration.section-missing': { category: 'declaration', blocking: true },
   'declaration.malformed': { category: 'declaration', blocking: true },
@@ -224,6 +246,9 @@ export const FINDINGS = {
   'caller.name': { category: 'caller', blocking: true },
   'caller.run-name': { category: 'caller', blocking: true },
   'caller.job-id': { category: 'caller', blocking: true },
+  'caller.claude-both': { category: 'caller', blocking: true },
+  'caller.claude-none': { category: 'caller', blocking: true },
+  'claude.mixed': { category: 'caller', blocking: false },
   'apps-check.secret-missing': { category: 'caller', blocking: true },
   'apps-check.secret-stale': { category: 'caller', blocking: true },
   'telemetry.unconfigured': { category: 'caller', blocking: false },
@@ -276,6 +301,7 @@ login; the command says which one it used and whose it is.`;
  *   requirements: () => Requirements,
  *   release: () => string,
  *   labels: () => Array<{ name: string, color: string, description: string }>,
+ *   now: () => number,
  * }} Deps
  */
 
@@ -321,6 +347,7 @@ export const realDeps = {
   requirements: loadRequirements,
   release: kanonRelease,
   labels: () => JSON.parse(readFileSync(new URL('../rulebook/labels.json', import.meta.url), 'utf8')).labels,
+  now: () => Date.now(),
 };
 
 /**
@@ -946,6 +973,18 @@ export const diagnose = async (deps, opts) => {
   // a store secret is then needed even where a variable still holds its value. A release whose
   // requirements file doesn't say so (v0.34.x) still passed the variables, as a fallback.
   const secretsOnly = req.qaStore?.secretsOnly === true;
+  /**
+   * The pair of Claude credentials a lane takes, of which its caller maps exactly one (plan 0009
+   * §10): requirements.json's `claude`. None for a lane that runs no model, or against a release
+   * whose requirements file has no `claude`, where the token is one of the lane's `secrets`.
+   * @param {string} lane @returns {string[]}
+   */
+  const pairOf = (lane) => {
+    const pair = /** @type {{ claude?: unknown }} */ (/** @type {unknown} */ (req.lanes[lane] ?? {})).claude;
+    return Array.isArray(pair) ? pair.map(String) : [];
+  };
+  /** Each caller of a lane with a pair that maps exactly one of it, and which (`claude.mixed`). @type {Array<{ file: string, lane: string, maps: string }>} */
+  const onCredential = [];
 
   for (const c of callers) {
     const spec = req.lanes[c.lane];
@@ -968,8 +1007,22 @@ export const diagnose = async (deps, opts) => {
     } else {
       const got = Object.keys(c.job.secrets);
       const optional = spec.optionalSecrets ?? [];
-      const missing = want.filter((n) => !got.includes(n) && !optional.includes(n));
-      const stale = got.filter((n) => !want.includes(n));
+      // The Claude credential is one of a pair, which the two findings below hold instead.
+      const pair = pairOf(c.lane);
+      const missing = want.filter((n) => !got.includes(n) && !optional.includes(n) && !pair.includes(n));
+      const stale = got.filter((n) => !want.includes(n) && !pair.includes(n));
+      const maps = pair.filter((n) => got.includes(n));
+      if (pair.length && maps.length > 1) {
+        find('caller.claude-both', c.file, `maps both ${maps.join(' and ')}; the lane ${c.lane} runs on one Claude credential at ${checked}, so its run fails before the agent starts. Map one (plan 0009 §10).`, {
+          text: `Keep the line of the credential this lane runs on, and remove the other's from the job's secrets: (the subscription's token, or an Anthropic API key):`,
+          commands: maps.map((n) => `      ${n}: \${{ secrets.${n} }}`),
+        });
+      } else if (pair.length && !maps.length) {
+        find('caller.claude-none', c.file, `maps neither ${pair.join(' nor ')}; the lane ${c.lane} runs on one Claude credential at ${checked}, so its run fails before the agent starts, with no Claude credential. Map one (plan 0009 §10).`, {
+          text: `Add one of these under the job's secrets: the first for a Claude subscription's token, the second for an Anthropic API key:`,
+          commands: pair.map((n) => `      ${n}: \${{ secrets.${n} }}`),
+        });
+      } else if (maps.length === 1) onCredential.push({ file: c.file, lane: c.lane, maps: /** @type {string} */ (maps[0]) });
       const unmapped = optional.filter((n) => !got.includes(n) && storeSecrets.includes(n));
       if (missing.length) {
         findItems('caller.secret-missing', c.file, missing, (xs) => [`does not map ${xs.join(', ')}, which the lane ${c.lane} takes at ${checked}.`, {
@@ -1027,6 +1080,15 @@ export const diagnose = async (deps, opts) => {
     if (spec.callerRunNameEndsWith && !String(c.wf['run-name'] ?? '').endsWith(` ${spec.callerRunNameEndsWith}`)) {
       find('caller.run-name', c.file, `has a run-name that does not end with \` ${spec.callerRunNameEndsWith}\`; the lane ${c.lane}'s runs are found by it.`, { text: `End the workflow's run-name: with that text, as its last token.` });
     }
+  }
+  // ── Callers on different Claude credentials (plan 0009 §10, Owner decision 9) ───────────
+  // Allowed: each caller decides. A note naming which lanes run on which, never a fault.
+  const credentials = [...new Set(onCredential.map((x) => x.maps))].sort();
+  if (credentials.length > 1) {
+    const on = (/** @type {string} */ n) => [...new Set(onCredential.filter((x) => x.maps === n).map((x) => x.lane))].sort();
+    find('claude.mixed', '.github/workflows', `The callers map different Claude credentials: ${credentials.map((n) => `${on(n).join(', ')} on ${n}`).join('; ')}. Each caller may choose (plan 0009 §10); the repository must hold each one mapped, and the lanes on the token share the subscription's weekly usage.`, {
+      text: `Nothing to do if the mix is meant. To run every lane on one, map that one in each caller, as kanon init --claude-auth subscription or --claude-auth api-key writes them.`,
+    });
   }
 
   // ── The Apps the lanes run as ─────────────────────────────────────────────────────────────
@@ -1247,11 +1309,16 @@ export const diagnose = async (deps, opts) => {
   const mapping = [...workflows].map(([file, wf]) => ({ file, ...secretReads(wf), takes: callTakes(wf) }));
   /** @param {string} n */
   const mappedBy = (n) => mapping.filter((m) => m.names.has(n) && !m.takes.has(n)).map((m) => m.file);
-  const laneSecrets = new Set(Object.values(req.lanes).flatMap((l) => l?.secrets ?? []));
+  // The Claude credentials of every lane's pair: a caller maps one, so only one a workflow maps
+  // is needed (plan 0009 §11). A caller of a lane with a pair that maps no secrets by name
+  // (`caller.secrets-inherited`) still needs the token its lane names among its `secrets`.
+  const pairs = new Set(Object.keys(req.lanes).flatMap(pairOf));
+  const laneSecrets = new Set([...Object.values(req.lanes).flatMap((l) => l?.secrets ?? []), ...pairs]);
+  const unnamed = callers.filter((c) => !isMap(c.job.secrets) && req.lanes[c.lane]).flatMap((c) => pairOf(c.lane).filter((n) => req.lanes[c.lane]?.secrets.includes(n)));
   const secretApps = [...new Set([...identities, ...Object.keys(req.identities.apps).filter((a) => appSecrets(a).some((n) => mappedBy(n).length))])].sort();
   // The QA store's two secrets are optional (kanon#433): a caller maps them, empty, whether or not
   // the repository has a store, so they are needed only once its store hook exists.
-  const needSecrets = [...new Set([...installed.flatMap((l) => req.lanes[l]?.secrets ?? []), ...secretApps.flatMap(appSecrets), ...[...laneSecrets].filter((n) => mappedBy(n).length)])]
+  const needSecrets = [...new Set([...installed.flatMap((l) => (req.lanes[l]?.secrets ?? []).filter((n) => !pairOf(l).includes(n))), ...unnamed, ...secretApps.flatMap(appSecrets), ...[...laneSecrets].filter((n) => mappedBy(n).length)])]
     .filter((n) => hasStore || !storeSecrets.includes(n))
     .sort();
   /**
@@ -1261,7 +1328,7 @@ export const diagnose = async (deps, opts) => {
    */
   const whoNeeds = (names) => {
     const maps = [...new Set(names.flatMap(mappedBy))].sort();
-    const must = [...new Set(callers.filter((c) => names.some((n) => req.lanes[c.lane]?.secrets.includes(n))).map((c) => c.file))].filter((f) => !maps.includes(f)).sort();
+    const must = [...new Set(callers.filter((c) => names.some((n) => req.lanes[c.lane]?.secrets.includes(n) && !pairOf(c.lane).includes(n))).map((c) => c.file))].filter((f) => !maps.includes(f)).sort();
     const them = names.length > 1 ? 'them' : 'it';
     return [
       ...(maps.length ? [`${maps.join(', ')} map${maps.length > 1 ? '' : 's'} ${them}`] : []),
@@ -1337,19 +1404,29 @@ export const diagnose = async (deps, opts) => {
     // the secret is missing, and the fix copies it from the variable.
     const output = (/** @type {string} */ n) => (n === 'QA_STORE_ROLE_ARN' ? 'RoleArn' : 'BucketName');
     for (const n of needSecrets.filter((x) => !/_APP_(ID|PRIVATE_KEY)$/.test(x) && !s.secrets?.has(x) && (secretsOnly || !storeVariables.includes(x)))) {
-      const by = installed.filter((l) => req.lanes[l]?.secrets.includes(n));
+      // A Claude credential is needed by the lanes whose callers map it, not by every lane whose
+      // pair names it (plan 0009 §11).
+      const by = installed.filter((l) => pairs.has(n)
+        ? callers.some((c) => c.lane === l && (isMap(c.job.secrets) ? n in c.job.secrets : req.lanes[l]?.secrets.includes(n)))
+        : req.lanes[l]?.secrets.includes(n));
       const who = whoNeeds([n]);
-      findItems('secret.missing', repo, [n], () => [`lacks ${n}${by.length ? `, which ${by.join(', ')} ${by.length > 1 ? 'take' : 'takes'}` : ''}${who ? `: ${who}` : ''}.`, {
-        text: n === 'CLAUDE_CODE_OAUTH_TOKEN' ? `Store the token of the Claude subscription the agents run on, made with \`claude setup-token\` (docs/lanes.md), ${OWN_TERMINAL}:`
+      // Doctor lists the repository's own secrets, so one an organisation shares with it isn't seen.
+      const orgNote = pairs.has(n) ? ` Doctor lists the repository's own secrets: an organisation secret shared with ${repo} isn't counted.` : '';
+      findItems('secret.missing', repo, [n], () => [`lacks ${n}${by.length ? `, which ${by.join(', ')} ${by.length > 1 ? 'take' : 'takes'}` : ''}${who ? `: ${who}` : ''}.${orgNote}`, {
+        text: n === CLAUDE_TOKEN ? `Store the token of the Claude subscription the agents run on, made with \`claude setup-token\` (docs/lanes.md), ${OWN_TERMINAL}.${pairs.has(n) ? ' To run the lanes on an Anthropic API key instead, kanon init --claude-auth api-key maps it in every caller; store it as ANTHROPIC_API_KEY.' : ''}`
+          : n === CLAUDE_KEY ? `Store an Anthropic API key, made in the Claude Console in a workspace for CI with a spend limit (docs/lanes.md), ${OWN_TERMINAL}:`
           : storeVariables.includes(n) ? `${req.qaStore?.hook} exists, and Kanon ${checked} hands it the store's coordinates as secrets alone, never the variable ${n} that holds this one (kanon#479): copy the variable into the secret, through a pipe, so the value is never printed (docs/qa-store.md, "Move the coordinates to secrets"):`
           : storeSecrets.includes(n) ? `${req.qaStore?.hook} exists, so the store-coupled lanes need the store's coordinates: store the stack's ${output(n)} output, putting it in for the line's <${output(n)}>. It isn't secret, so it goes on the line with --body, which works at the Claude Code prompt with \`!\` as well (docs/qa-store.md, "Provision a store"):`
           : `Store it ${OWN_TERMINAL}:`,
         commands: [storeVariables.includes(n) ? `gh variable get ${n} -R ${repo} | gh secret set ${n} -R ${repo}` : storeSecrets.includes(n) ? `gh secret set ${n} -R ${repo} --body '<${output(n)}>'` : `gh secret set ${n} -R ${repo}`],
+        url: n === CLAUDE_KEY ? CONSOLE_KEYS : null,
       }]);
     }
     // An App secret no App in use reads and no workflow maps: left from the per-role Apps, or from
     // an App dropped. A secret any job maps counts as read, whatever the job calls (#414).
-    const known = new Set([...Object.keys(req.identities.roles), ...Object.keys(req.identities.apps)].flatMap(appSecrets));
+    // And a Claude credential no workflow maps, such as the token after a move to the key (plan
+    // 0009 §11): against a release whose lanes take the pair.
+    const known = new Set([...[...Object.keys(req.identities.roles), ...Object.keys(req.identities.apps)].flatMap(appSecrets), ...pairs]);
     const used = new Set(identities.flatMap(appSecrets));
     for (const m of mapping) for (const n of m.names) used.add(n);
     const stale = [...s.secrets].filter((n) => known.has(n) && !used.has(n.toUpperCase())).sort();
@@ -1361,9 +1438,98 @@ export const diagnose = async (deps, opts) => {
     else if (stale.length && unread.length) notes.push(`doctor lists none of ${stale.join(', ')} as stale: it could not read ${unread.join(', ')}, which may map them.`);
     else if (stale.length) {
       findItems('secret.stale', repo, stale, (xs) => [`holds ${xs.join(', ')}, which no App the lanes of ${checked} run as here reads, and no job of a workflow under .github/workflows/ on ${onCheckout} names: doctor reads every \`secrets.<NAME>\` in each workflow outside its on:, in a job's secrets:, env:, with: or steps alike, whatever the job calls.`, {
-        text: `Delete them${branchName === s.defaultBranch ? '' : `, once ${s.defaultBranch}'s workflows map none of them either`}, and uninstall the Apps they belong to if no repository uses them:`,
+        text: `Delete them${branchName === s.defaultBranch ? '' : `, once ${s.defaultBranch}'s workflows map none of them either`}${xs.some((n) => pairs.has(n)) ? `; a Claude credential no caller maps any more, once the lanes have run green for a week on the one they map` : ''}${xs.some((n) => !pairs.has(n)) ? ', and uninstall the Apps they belong to if no repository uses them' : ''}:`,
         commands: xs.map((n) => `gh secret delete ${n} -R ${repo}`),
       }]);
+    }
+  }
+
+  // ── The Claude credential: the token's age, and runs that never reached the model ─────────
+  // (plan 0009 §11). Doctor reads secret names and dates, never a value.
+  if (s.secrets?.has(CLAUDE_TOKEN) && mappedBy(CLAUDE_TOKEN).length) {
+    // The secret's `updatedAt` is when it was last stored, so the token is at least that old,
+    // never younger; its own creation date is not on GitHub.
+    const dated = await deps.gh(['secret', 'list', '-R', repo, '--json', 'name,updatedAt']);
+    /** @type {number | null} */
+    let updated = null;
+    try {
+      if (dated.status === 0) {
+        const row = JSON.parse(dated.stdout).find((/** @type {any} */ x) => String(x?.name) === CLAUDE_TOKEN);
+        const at = Date.parse(String(row?.updatedAt ?? ''));
+        if (Number.isFinite(at)) updated = at;
+      }
+    } catch {
+      updated = null;
+    }
+    if (updated === null) unchecked.push({ check: 'token-age', subject: repo, reason: `doctor couldn't read when ${CLAUDE_TOKEN} was last updated (${dated.status === 0 ? 'the listing gave no date' : dated.stderr.trim() || `exit ${dated.status}`}); the listing needs the token that lists the secrets' names` });
+    else {
+      const days = Math.floor((deps.now() - updated) / DAY);
+      if (days > TOKEN_AGE.note) {
+        const year = days > TOKEN_AGE.year;
+        find('claude.token-age', repo, `${CLAUDE_TOKEN} was last updated ${days} days ago, on ${new Date(updated).toISOString().slice(0, 10)}, so the subscription token it holds is at least that old: GitHub keeps the day a secret was last stored, not the day its token was made. ${year ? 'A subscription token lasts a year; this one is at least that old, so the lanes on it may no longer reach the model.' : `A subscription token lasts a year: renew it before day ${TOKEN_AGE.year}.`}`, {
+          text: `Make a new token with claude setup-token, signed in to the subscription the agents run on, and store it ${OWN_TERMINAL}:`,
+          commands: ['claude setup-token', `gh secret set ${CLAUDE_TOKEN} -R ${repo}`],
+        }, !year);
+      }
+    }
+  }
+  // The callers on the subscription's token whose runs ended in agent-classify's notice for a
+  // model never reached: the last runs of each, its failed ones in the window, and those runs'
+  // failed jobs' annotations. Each run counts once, however many of its jobs carry the notice.
+  const tokenCallers = [...new Set(callers.filter((c) => isMap(c.job.secrets) && CLAUDE_TOKEN in c.job.secrets).map((c) => c.file))].sort();
+  if (tokenCallers.length) {
+    const since = deps.now() - UNREACHABLE.days * DAY;
+    /**
+     * Whether a run's failed jobs carry the notice; null when the token can't read them.
+     * @param {number} id @returns {Promise<boolean | null>}
+     */
+    const reachedNoModel = async (id) => {
+      const jobs = await deps.gh(['api', `repos/${repo}/actions/runs/${id}/jobs?per_page=100`]);
+      try {
+        if (jobs.status !== 0) return null;
+        for (const job of JSON.parse(jobs.stdout).jobs ?? []) {
+          if (job?.conclusion !== 'failure') continue;
+          const notes = await deps.gh(['api', `repos/${repo}/check-runs/${Number(job.id)}/annotations?per_page=100`]);
+          if (notes.status !== 0) return null;
+          if (JSON.parse(notes.stdout).some((/** @type {any} */ a) => a?.title === UNREACHABLE_TITLE)) return true;
+        }
+        return false;
+      } catch {
+        return null;
+      }
+    };
+    /** @type {Array<{ file: string, id: number }>} */
+    const unreachable = [];
+    for (const file of tokenCallers) {
+      const listed = await deps.gh(['run', 'list', '-R', repo, '--workflow', basename(file), '--limit', String(UNREACHABLE.perCaller), '--json', 'databaseId,conclusion,createdAt']);
+      // A caller not yet on the default branch has no runs: GitHub knows no such workflow.
+      if (listed.status !== 0 && /could not find any workflows|HTTP 404/i.test(listed.stderr)) continue;
+      /** @type {any[] | null} */
+      let runs = null;
+      try {
+        if (listed.status === 0) runs = JSON.parse(listed.stdout);
+      } catch {
+        runs = null;
+      }
+      if (!Array.isArray(runs)) {
+        unchecked.push({ check: 'unreachable-runs', subject: file, reason: `the token can't list its runs (${listed.stderr.trim() || `exit ${listed.status}`}); it needs Actions: read` });
+        continue;
+      }
+      for (const r of runs.filter((x) => x?.conclusion === 'failure' && Date.parse(String(x?.createdAt)) >= since)) {
+        const id = Number(r.databaseId);
+        const hit = await reachedNoModel(id);
+        if (hit === null) {
+          unchecked.push({ check: 'unreachable-runs', subject: file, reason: `the token can't read the jobs or annotations of its run ${id}; it needs Actions: read and Checks: read` });
+          break;
+        }
+        if (hit) unreachable.push({ file, id });
+      }
+    }
+    if (unreachable.length >= UNREACHABLE.runs) {
+      find('claude.unreachable-runs', repo, `${unreachable.length} runs of the callers on ${CLAUDE_TOKEN} in the last ${UNREACHABLE.days} days ended without reaching the model, with agent-classify's notice "${UNREACHABLE_TITLE}": ${unreachable.map((u) => `${u.file} run ${u.id}`).join(', ')}. A run can't tell three causes apart: the Claude subscription's usage limit, an Anthropic outage, or a configuration fault such as an expired token, so doctor can't either.`, {
+        text: `Read the runs' notices. If the lanes keep waiting on the subscription's usage limit, they can run on an Anthropic API key instead, billed per token at API list price: store it as ${CLAUDE_KEY} and map it in place of the token, as kanon init --claude-auth api-key writes the callers. If the token has expired, make a new one with claude setup-token.`,
+        commands: unreachable.map((u) => `gh run view ${u.id} -R ${repo}`),
+      });
     }
   }
 
