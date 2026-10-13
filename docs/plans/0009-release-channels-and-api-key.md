@@ -285,7 +285,7 @@ It deserves its own plan, which starts from whether the agent's job can hold `id
 | `docs/qa/adoption.md`, Kanon's adoption record | Declares the cadence | S1 |
 | `rulebook/08-observability-and-cost.md`, `## Billing` | The two options, as built; still not a rule (ADR 0004 §5) | A7 |
 | `docs/lanes.md`, `docs/install.md`, `docs/init.md`, `docs/doctor.md` | The credential pair, the flag and answer, the findings, the costs in two columns | A2 to A7 |
-| `skills/adopt`, `skills/upgrade`, `skills/doctor` | The stable channel; the credential line and step R5; the findings' rows | S6, A5 |
+| `skills/adopt`, `skills/upgrade`, `skills/doctor` | The stable channel; the credential line and step R5; the findings' rows | S6, A4 (`skills/doctor`'s rows), A5 |
 | Plan 0007 | R5 splits by credential | A5 |
 | Plan 0008 | Check 7 admits `candidate-v*` | S3 |
 
