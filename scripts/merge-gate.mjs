@@ -1017,7 +1017,13 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
     if (unsettled.length) {
       return wait('merge-state-unsettled', `GitHub reports \`UNSTABLE\` while ${unsettled.map((c) => c.name).join(', ')} ${unsettled.length > 1 ? 'are' : 'is'} still running — a non-required check that has not settled is not a verdict about this PR (RA-1773)`);
     }
-    unstableIsUs = pr.checks.some((c) => ours(c) && c.status !== 'COMPLETED');
+    // ONLY OUR OWN JOBS ARE EXPLAINED AWAY, NOTHING ELSE. A check from another run that
+    // concluded badly, the never-waited-on `SELF_CHECKS` and review-event jobs included, may
+    // be what GitHub's `UNSTABLE` is about, so with one on the head this arm behaves exactly
+    // as before kanon#812: the settle window, then escalate. `CANCELLED` is not a failure
+    // here: a superseded run is routine, and a relevant one was already refused above.
+    const failedElsewhere = others.some((c) => c.conclusion && !['SUCCESS', 'SKIPPED', 'NEUTRAL', 'CANCELLED'].includes(c.conclusion));
+    unstableIsUs = !failedElsewhere && pr.checks.some((c) => ours(c) && c.status !== 'COMPLETED');
     const stamps = others.map((c) => Date.parse(c.completedAt ?? c.startedAt ?? '')).filter(Number.isFinite);
     const last = stamps.length ? Math.max(...stamps) : null;
     if (!unstableIsUs && last !== null && now - last < UNSTABLE_SETTLE_MS) {

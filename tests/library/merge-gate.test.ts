@@ -1984,6 +1984,24 @@ esac
       expect(mergeVerdict(read, { now: NOW, ownRunId: '999' }).action).toBe('wait');
     });
 
+    it('explains away only our own jobs: a failed check elsewhere keeps the old UNSTABLE path', () => {
+      // A Reviewer-own check that FAILED is excluded from the check partitions, so only this
+      // arm sees it, and it may be what GitHub's `UNSTABLE` is about.
+      const failedReview = (min: number) => ({ name: 'review / notify-unlabeled', workflowName: 'Review (Reviewer)', runId: '38348300000',
+        status: 'COMPLETED', conclusion: 'FAILURE', ...at(ago(min)) });
+      const inside = mergeVerdict(pr({ mergeStateStatus: 'UNSTABLE', checks: [
+        green(3), failedReview(2), own('merge / merge'),
+      ] }), { now: NOW, ownRunId: OWN });
+      expect(inside.action).toBe('wait');
+      expect(inside.rule).toBe('merge-state-unsettled');
+      const past = UNSTABLE_SETTLE_MS / 60000 + 1;
+      const outside = mergeVerdict(pr({ mergeStateStatus: 'UNSTABLE', checks: [
+        green(past), failedReview(past), own('merge / merge'),
+      ] }), { now: NOW, ownRunId: OWN });
+      expect(outside.action).toBe('escalate');
+      expect(outside.rule).toBe('merge-state');
+    });
+
     it('excludes nothing when no run id is injected', () => {
       const v = mergeVerdict(pr({ mergeStateStatus: 'UNSTABLE', checks: [green(3), own('merge / merge')] }), { now: NOW });
       expect(v.action).toBe('wait');
