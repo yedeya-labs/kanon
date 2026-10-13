@@ -58,7 +58,10 @@ import { FINDING_SUBJECTS, FIX_CATEGORIES, KANON_ERRORS, LANES, REASONS, REPORTE
 import { KANON_PATH, nameContext, verify } from '../../actions/agent-telemetry/scrub.mjs';
 import { assertNoKey, keyOf } from '../../infra/telemetry/function/aggregate.mjs';
 import { isCliEntry } from '../lib/cli-entry.mjs';
+import { holdsKey } from './holds-key.mjs';
 import { MARKER, detect, parseRows, signature, summary as signalSummary } from './kanon-bugs.mjs';
+
+export { holdsKey };
 
 /** The label every issue the job files carries, and the class labels a finding's issue adds. */
 export const LABELS = Object.freeze({ bug: 'kanon-bug', finding: 'finding', gateFailed: 'gate-failed' });
@@ -96,9 +99,6 @@ const VERSION = (() => {
 const codeIn = (/** @type {unknown} */ v, /** @type {readonly string[]} */ list) => (typeof v === 'string' && list.includes(v) ? v : null);
 /** A list field's items, as the schema stores it (comma-separated) or as an array. */
 const items = (/** @type {unknown} */ v) => (Array.isArray(v) ? v.map(String) : typeof v === 'string' && v !== '' ? v.split(',') : []);
-/** Whether a text holds a key as a word, not inside a longer run of key characters (as intake reads it). */
-export const holdsKey = (/** @type {string} */ text, /** @type {string} */ key) =>
-  key !== '' && new RegExp(`(?<![a-z0-9-])${key.replace(/[-]/g, '\\-')}(?![a-z0-9-])`).test(text.toLowerCase());
 
 /**
  * Refuse a value that holds an adopter key: as a whole value (`assertNoKey`), or as a word inside

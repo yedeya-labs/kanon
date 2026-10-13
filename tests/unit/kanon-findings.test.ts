@@ -197,12 +197,20 @@ describe('nothing identifying leaves into the output', () => {
     expect(() => plan([row] as never, CTX)).toThrow(/adopter key/);
   });
 
-  it('assertNoKeyIn finds a key as a whole value and as a word, not inside a longer run', () => {
+  it('assertNoKeyIn finds a key as a whole value and as a word, not inside a longer run of letters and digits', () => {
     const keys = new Set(['kfixture3']);
     expect(() => assertNoKeyIn({ a: ['kfixture3'] }, keys)).toThrow();
     expect(() => assertNoKeyIn({ a: { b: 'saw kfixture3 stop' } }, keys)).toThrow();
-    expect(() => assertNoKeyIn({ a: 'xkfixture3 kfixture3x kfixture3-a' }, keys)).not.toThrow();
+    expect(() => assertNoKeyIn({ a: 'xkfixture3 kfixture3x' }, keys)).not.toThrow();
     expect(holdsKey('KFIXTURE3.', 'kfixture3')).toBe(true);
+  });
+
+  it('assertNoKeyIn finds a key joined to its neighbours by -, and a key that itself holds - (#737)', () => {
+    const keys = new Set(['kfixture3', 'ab-c7d9']);
+    for (const text of ['kfixture3-prod failed', 'the pre-kfixture3 step', 'the ab-c7d9 lane', 'x-ab-c7d9-prod failed', 'AB-C7D9_run']) {
+      expect(() => assertNoKeyIn({ a: { b: text } }, keys), text).toThrow('the output holds an adopter key; nothing is returned');
+    }
+    for (const text of ['ab-c7d9e', 'zab-c7d9']) expect(() => assertNoKeyIn({ a: text }, keys), text).not.toThrow();
   });
 
   it('keeps an issue body inside GitHub’s limit: past the budget, a finding is listed without its text', () => {

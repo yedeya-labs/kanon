@@ -75,6 +75,7 @@ Code Kanon's own workflows run from this tree, on the branch they run on, with a
 - `^scripts/telemetry/kanon-health\.mjs$` `pipeline` `always` — the metrics page's health figures, which its job publishes with the Author's token
 - `^scripts/telemetry/kanon-bugs\.mjs$` `pipeline` `always` — imported by the health figures
 - `^scripts/telemetry/kanon-findings\.mjs$` `pipeline` `always` — imported by the health figures
+- `^scripts/telemetry/holds-key\.mjs$` `pipeline` `always` — imported by the health figures, through `kanon-findings.mjs`, and by Jev's decision; also linked into the ingest function under `infra/telemetry/function/`, so a change to it changes deployed function code
 - `^scripts/metrics/(band|health|indicators|join|stats)\.mjs$` `pipeline` `always` — imported by the metrics page and its health figures; all but `health.mjs` are also linked into the telemetry functions under `infra/telemetry/function/`, so a change to them changes deployed function code
 
 The published metrics page:

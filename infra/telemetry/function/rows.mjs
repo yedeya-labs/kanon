@@ -15,12 +15,14 @@
 //   - `verify` again on its text, with THE SENDER'S CONTEXT: the SHA-256 of each word of its
 //     repository's owner and name, never the words. Without hashes no finding is stored;
 //   - `assertNoKey` (the aggregate's) over every field with every registered key, and each text
-//     searched for a registered key as a word, since a key need not have the shape the scrub's
-//     `key` rule refuses.
+//     searched for a registered key joined to its neighbours by anything but a letter or a digit
+//     (`holds-key.mjs`, the #41 job's and Jev's check too), since a key need not have the shape the
+//     scrub's `key` rule refuses.
 // Each failure is a rejected field, named with the rule or `key`, never the value.
 
 import { Buffer } from 'node:buffer';
 import { assertNoKey } from './aggregate.mjs';
+import { holdsKey } from './holds-key.mjs';
 import { FINDING_PARTITION, LANES, RESERVED_PARTITION, SCHEMAS, validate } from './schema.mjs';
 import { verify } from './scrub.mjs';
 
@@ -75,14 +77,6 @@ export function hashSet(hashes) {
 /** A finding row's free-text fields (plan 0006 §2.2), read from the schema: the `text` type. */
 export const TEXT_FIELDS = Object.freeze(Object.entries(/** @type {Record<string, { type: string }>} */ (SCHEMAS.finding?.[1] ?? {}))
   .filter(([, f]) => f.type === 'text').map(([name]) => name));
-
-/**
- * Whether a text holds a key as a word: not inside a longer run of key characters.
- * @param {string} text
- * @param {string} key
- */
-const holdsKey = (text, key) =>
-  new RegExp(`(?<![a-z0-9-])${key.replace(/-/g, '\\-')}(?![a-z0-9-])`).test(text.toLowerCase());
 
 /**
  * Intake's own checks of a VALID finding row (plan 0006 §5, step 4), past `validate`: who sent it,

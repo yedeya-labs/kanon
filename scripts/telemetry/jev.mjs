@@ -32,7 +32,13 @@
 // `max(noul, 1 - noul)`. Promotion therefore needs `noul >= THRESHOLD`. Both shapes are pinned by
 // the fixtures under tests/fixtures/jev/, so a change in either fails a test, not a promotion.
 //
-// `node:` built-ins and the runtime's global `fetch` only, like every script under scripts/ (`K-SELF-8`).
+// `node:` built-ins, the runtime's global `fetch` and the import-free key check beside it
+// (`holds-key.mjs`, which intake and the #41 job read too) only, like every script under scripts/
+// (`K-SELF-8`).
+
+import { holdsKey } from './holds-key.mjs';
+
+export { holdsKey };
 
 export const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const MODEL = 'jev-latest';
@@ -106,26 +112,6 @@ function stringsOf(/** @type {unknown} */ value, /** @type {string[]} */ out = [
   if (typeof value === 'string') out.push(value);
   else if (value && typeof value === 'object') for (const v of Object.values(value)) stringsOf(v, out);
   return out;
-}
-
-/** A letter or a digit, the only characters that can continue a key. */
-const ALNUM = /[a-z0-9]/;
-
-/**
- * Whether `text` holds `key` in any case, joined to its neighbours by anything but a letter or a
- * digit: a space, `_`, `-`, a dot. A key may itself hold `-`, so `text` is searched for the key
- * whole, not split into words. A key inside a longer run of letters and digits is not found, so a
- * short key doesn't match every word it is a part of.
- * @param {string} text
- * @param {string} key a registered key, lowercase
- */
-export function holdsKey(text, key) {
-  if (!key) return false;
-  const t = text.toLowerCase();
-  for (let i = t.indexOf(key); i !== -1; i = t.indexOf(key, i + 1)) {
-    if (!ALNUM.test(t[i - 1] ?? '') && !ALNUM.test(t[i + key.length] ?? '')) return true;
-  }
-  return false;
 }
 
 /**

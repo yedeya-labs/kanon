@@ -322,8 +322,24 @@ describe('a finding row at intake (plan 0006 §5 step 4, F4)', () => {
     const r = await call(event([withText('Observed: the row named k2 as its partition.')]), {}, named);
     expect(r.status).toBe(422);
     expect(errorsOf(r)).toEqual([{ field: 'evidence', problem: 'key' }]);
-    // Inside a longer run of key characters it is not the key.
+    // Inside a longer run of letters and digits it is not the key.
     expect((await call(event([withText('Observed: the k2x step.')]), {}, named)).status).toBe(200);
+  });
+
+  it('refuses a key joined to its neighbours by -, and a key that itself holds - (#737)', async () => {
+    const hyphenated = (f: Fake) => { named(f); register(f, 'ab-c7d9', '3', {}, 'zorblax/sextet'); };
+    for (const text of ['Observed: k2-prod failed.', 'Observed: the pre-k2 step.', 'Observed: the ab-c7d9 lane.', 'Observed: x-ab-c7d9-prod failed.']) {
+      const r = await call(event([withText(text)]), {}, hyphenated);
+      expect(r.status, text).toBe(422);
+      expect(errorsOf(r), text).toEqual([{ field: 'evidence', problem: 'key' }]);
+    }
+    // The same in the suggested fix.
+    const fix = await call(event([{ ...withText(CLEAN), suggested_fix: 'Retry k2-prod.' }]), {}, hyphenated);
+    expect(errorsOf(fix)).toEqual([{ field: 'suggested_fix', problem: 'key' }]);
+    // Inside a longer run of letters and digits a key that holds - is not the key either.
+    for (const text of ['Observed: the ab-c7d9e step.', 'Observed: the zab-c7d9 step.']) {
+      expect((await call(event([withText(text)]), {}, hyphenated)).status, text).toBe(200);
+    }
   });
 
   it('runs assertNoKey over every field: a vocabulary value that is a registered key is refused', async () => {
