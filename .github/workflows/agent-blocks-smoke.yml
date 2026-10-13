@@ -190,5 +190,8 @@ jobs:
           test "$KIND" = ok
           jq -e '.agent == "smoke" and .outcome == "ok" and .num_turns == 20' qa-agent-telemetry.json
           # The version-2 row beside it, validated before it was written (plan 0002 §8, S1).
+          # Run row version 2, not 3: the agent step never runs, so it says no TTL and the row
+          # records none (#546). A collector or ingest function from an older release, which
+          # knows no version 3, still accepts this row.
           jq -c '{kanon_version, tag, lane, reason}' kanon-telemetry.json
-          jq -e '.schema_version == 2 and .row_kind == "run" and .tag == "smoke" and .lane == "review" and .reason == "none" and .num_turns == 20 and (has("failed_stage") | not)' kanon-telemetry.json
+          jq -e '.schema_version == 2 and .row_kind == "run" and .tag == "smoke" and .lane == "review" and .reason == "none" and .num_turns == 20 and (has("failed_stage") | not) and (has("prompt_cache_ttl") | not)' kanon-telemetry.json

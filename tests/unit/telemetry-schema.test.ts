@@ -706,7 +706,7 @@ describe('the script writes the version-2 row only when it validates', () => {
   it('a valid row is written', () => {
     const r = runScript({});
     expect(r.v1).toBe(true);
-    expect(r.v2).toMatchObject({ schema_version: 3, lane: 'review', kanon_version: '0.12.0' });
+    expect(r.v2).toMatchObject({ schema_version: 2, lane: 'review', kanon_version: '0.12.0' });
   });
 
   it('an invalid row is not written, and the warning names the field, not its value', () => {
@@ -747,10 +747,13 @@ describe('run row version 3: the TTL the run was pinned at (#546)', () => {
       expect(errors, ttl).toEqual([]);
       expect(v2, ttl).toMatchObject({ schema_version: 3, prompt_cache_ttl: ttl });
     }
-    // Not handed in, by a lane that doesn't pass it: unknown, never `default`.
+    // Not handed in, by a lane that doesn't pass it: unknown, never `default`. Without its one
+    // field the row is version 2, which a collector or ingest function from an older release
+    // still accepts: the blocks smoke's row is one.
     for (const ttl of ['', '10m', '5m\nlane=x']) {
       const { v2, errors } = both('tests/fixtures/agent-blocks/finished.json', { TELEMETRY_PROMPT_CACHE_TTL: ttl });
       expect(errors, ttl).toEqual([]);
+      expect(v2, ttl).toMatchObject({ schema_version: 2 });
       expect(v2, ttl).not.toHaveProperty('prompt_cache_ttl');
     }
   });
