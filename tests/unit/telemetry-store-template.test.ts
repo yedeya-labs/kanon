@@ -680,3 +680,40 @@ describe('what render.mjs prints names each entry by its repository, never by it
     expect(r.stdout + r.stderr).not.toContain(secret.slice(0, 8));
   });
 });
+
+describe('the register and what is rendered from it never live in a repository where Kanon\'s lanes run (docs/telemetry.md, kanon#629)', () => {
+  // A private repository that adopts Kanon is no safer than a public one: the Reviewer's model
+  // reads a pull request's diff, and the lanes' agents read any file in their checkout.
+  const doc = readFileSync('docs/telemetry.md', 'utf8');
+  const section = (heading: string) => (doc.split(`\n${heading}\n`)[1] ?? '').split('\n## ')[0]!;
+
+  it('says where the register belongs, public or private, and why', () => {
+    const where = section('## Where the register lives');
+    expect(where).toMatch(/never lives in a repository where Kanon's lanes run, public or private/);
+    expect(where).toMatch(/Reviewer's model/);
+    expect(where).toMatch(/any file in their checkout/);
+  });
+
+  it('names the safe places: an untracked file, a repository with no Kanon lanes, a secrets store', () => {
+    const where = section('## Where the register lives');
+    expect(where).toMatch(/\*\*An untracked file\*\*/);
+    expect(where).toMatch(/\*\*A repository with no Kanon lanes\*\*/);
+    expect(where).toMatch(/\*\*A secrets store\*\*/);
+  });
+
+  it('says what to do with a register already tracked in an adopting repository', () => {
+    expect(section('## Where the register lives')).toMatch(/\*\*If a register is already tracked in a repository where Kanon's lanes run,\*\*/);
+  });
+
+  it('holds the rendered template.json and parameters.json to the same rule', () => {
+    expect(section('## Where the register lives')).toMatch(/`template\.json` and `parameters\.json`/);
+    expect(section('## Deploy')).toMatch(/\[Where the register lives\]\(#where-the-register-lives\)/);
+    // The header comment wraps, so a line break and its `//` may fall between any two words.
+    expect(readFileSync('infra/telemetry/render.mjs', 'utf8').replace(/\n\/\/ ?/g, ' ')).toMatch(/never in a repository where Kanon's lanes run, public or private/);
+  });
+
+  it('points the first-deploy and add-a-repository steps at it', () => {
+    expect(section('## Before the first deploy')).toMatch(/^1\. \*\*Keep the register out of every repository where Kanon's lanes run\*\* \(\[Where the register lives\]\(#where-the-register-lives\)\)/m);
+    expect(section('## Add a repository')).toMatch(/^1\. Add an entry to the register, where \[it lives\]\(#where-the-register-lives\):/m);
+  });
+});
