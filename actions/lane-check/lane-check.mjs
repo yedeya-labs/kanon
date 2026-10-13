@@ -413,8 +413,8 @@ for (const f of WORKFLOWS) {
       fail(f, `maps secrets [${got.join(',')}]; the Kanon lane ${lane} takes exactly [${declaredKeys.join(',')}]${may}`);
     }
     // THE PAIR IS ONE CHOICE (plan 0009 §10, step A3): of the names a lane's `# ONE OF SECRETS:`
-    // line gives, and declares, a caller maps exactly one, the credential it runs on. Both would
-    // leave which one the agent used to `agent-run`; neither leaves it none. Only names, never a
+    // line gives, and declares, a caller maps exactly one, the credential it runs on. Both or
+    // neither, `agent-run` refuses at run time; this rule refuses them in CI, before a run. Only names, never a
     // value, reach the message. A lane without the line (a release before A2) keeps the rule above.
     for (const line of marked(laneFile, '# ONE OF SECRETS: ')) {
       const pair = words([line]).filter((k) => declaredKeys.includes(k));
