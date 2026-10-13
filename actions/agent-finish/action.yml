@@ -132,6 +132,12 @@ inputs:
     description: The lane job's `timeout-minutes`, for the row's `timed_out`.
     required: false
     default: ""
+  prompt-cache-ttl:
+    description: >-
+      `agent-run`'s `prompt-cache-ttl` output, the TTL the run was pinned at, for the row's
+      `prompt_cache_ttl` (#546). Empty records nothing, which is not `default`.
+    required: false
+    default: ""
 
 outputs:
   kind:
@@ -229,3 +235,4 @@ runs:
         job_status: ${{ inputs.job-status }}
         job_started_at: ${{ inputs.job-started-at }}
         timeout_minutes: ${{ inputs.timeout-minutes }}
+        prompt_cache_ttl: ${{ inputs.prompt-cache-ttl }}

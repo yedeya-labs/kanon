@@ -140,7 +140,8 @@ for (const lane of LANES) {
       // make one in, and then the agent must not start on the runner's own settings. The
       // credential check (plan 0009 §10, step A1) is the third: it fails only when the caller
       // maps both Claude credentials, neither, or one in the other's shape, and then the agent
-      // must not start at all.
+      // must not start at all. The TTL record (#546) is the fourth: like the start stamp, it runs
+      // only `case` and `echo`, so it cannot fail on its own.
       const agent = (spine.jobs.run.steps ?? []).find((s) => s.id === 'agent');
       const block = laneBlockOf(agent);
       expect(block, 'the step with id `agent` must call a lane block').toBe('agent-run');
@@ -150,7 +151,10 @@ for (const lane of LANES) {
       expect(inner.filter((s) => /claude-code-action/.test(String(s.uses))), 'exactly one agent step').toHaveLength(1);
       expect(action, 'a step after the action could red a green agent run').toBe(inner.length - 1);
       const fallible = inner.slice(0, action).filter((s) => s['continue-on-error'] !== true).map((s) => s.name);
-      expect(fallible).toEqual(['Record when the agent started', 'Check the Claude credential', 'Give the agent a user scope this job made, if its flags load no project settings']);
+      expect(fallible).toEqual([
+        'Record when the agent started', 'Record the prompt-cache TTL the agent is pinned at', 'Check the Claude credential',
+        'Give the agent a user scope this job made, if its flags load no project settings',
+      ]);
     });
 
     it('posts the marker when the run PUSHED and left none — the RA-1981 cycle', () => {

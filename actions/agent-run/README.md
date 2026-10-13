@@ -45,11 +45,12 @@ On an API key, pass `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}` in pla
 | `claude-token` | one of two | The Claude subscription token, `CLAUDE_CODE_OAUTH_TOKEN`. A composite action can't read secrets, so the lane passes it in. |
 | `anthropic-api-key` | one of two | An Anthropic API key, `ANTHROPIC_API_KEY`, in place of the token. Pass exactly one of the two. |
 | `github-token` | yes | The minted App token. The agent acts as the App, never as the default token. |
-| `prompt-cache-ttl` | no | `CLAUDE_CODE_PROMPT_CACHE_TTL` for this lane. Empty keeps the CLI default. |
+| `prompt-cache-ttl` | no | `CLAUDE_CODE_PROMPT_CACHE_TTL` for this lane. Empty keeps the CLI default. The run's telemetry row records it, through the `prompt-cache-ttl` output. |
 | `full-transcript` | no | `"true"` prints the whole transcript into the job log. It changes nothing the model sees. |
 
 | Output | Meaning |
 |---|---|
 | `execution_file` | The action's result file, for `agent-finish`. |
 | `started-at` | When the agent started (UTC, ISO 8601). |
+| `prompt-cache-ttl` | The TTL the run was pinned at, for `agent-finish`: the input, `default` when it is empty, and empty for anything but a plain word ([#546](https://github.com/yedeya-labs/kanon/issues/546)). |
 | `auth` | The credential the agent ran on: `subscription` or `api-key`. A name, never anything the secret holds. |

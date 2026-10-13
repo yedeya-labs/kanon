@@ -8,10 +8,13 @@
 //     release the Overseer runs (`pinnedLanes`), since the pin is Kanon's (`prompt-cache-ttl: 5m`);
 //   - only `tag: run` rows count, and only the query's window, not the whole partition.
 //
-// AND ONE THING LEFT BEHIND, said in the output: the pinned arms' health check (whether each pin
-// took effect, and whether its arm idles past 300s), which dated each pin from the reference
-// adopter's cutover ledger, a file of its own that Kanon has no counterpart for. A 5m write on a
-// pinned arm is still counted as expected, and said so.
+// THE PINNED ARMS' HEALTH, FROM THE ROW, NOT A DATE (#546). The reference adopter checked whether
+// each pin took effect, and whether its arm idles past 300s, against a cutover ledger that dated
+// each pin, a file of its own that Kanon has no counterpart for. Here a run row records the TTL its
+// run was pinned at (`prompt_cache_ttl`, run row version 3, from `agent-run`'s own input), so the
+// rows that ran under a pin are exactly the ones that say so, and no date is needed. A row that
+// doesn't record it, written before version 3, falls back to Kanon's lane definitions as before:
+// a 5m write on a pinned arm is counted as expected, said so, and not checked.
 //
 // WHY A DETECTOR AND NOT A SETTING. Claude Code requests the one-hour TTL for the main
 // conversation only on a Claude subscription WITHIN the plan's included usage. Once it draws on
@@ -31,12 +34,18 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { N, isRun } from './token-trend.mjs';
+import { N, S, isRun } from './token-trend.mjs';
 
 /** @typedef {import('./token-trend.mjs').Item} Item */
 
 /** The store attributes this check reads, plus the tag: the query projects only these. */
-export const TTL_ATTRIBUTES = /** @type {const} */ (['sk', 'tag', 'outcome', 'cache_write_tokens', 'cache_write_1h_tokens', 'cache_write_5m_tokens']);
+export const TTL_ATTRIBUTES = /** @type {const} */ ([
+  'sk', 'tag', 'outcome', 'cache_write_tokens', 'cache_write_1h_tokens', 'cache_write_5m_tokens', 'prompt_cache_ttl',
+  'duration_ms', 'duration_api_ms',
+]);
+
+/** The five-minute TTL, in ms: a run idle longer than this in one gap writes its cache again. */
+export const IDLE_LIMIT_MS = 300_000;
 
 /**
  * Does this workflow's text pin the five-minute TTL? Line-anchored and comment-excluding: the
@@ -92,6 +101,27 @@ export const ttlSplit = (item) => {
 };
 
 /**
+ * The TTL a row ran at, and whether the row said so. A row that records `prompt_cache_ttl` is
+ * judged by it; an older row falls back to Kanon's lane definitions, `5m` on a pinned lane and the
+ * CLI default elsewhere, as every row was before the field existed.
+ * @param {Item} item
+ * @param {string} lane
+ * @param {Set<string>} pinned
+ * @returns {{ ttl: string, recorded: boolean }}
+ */
+const pinOf = (item, lane, pinned) => {
+  const recorded = S(item, 'prompt_cache_ttl');
+  return recorded ? { ttl: recorded, recorded: true } : { ttl: pinned.has(lane) ? '5m' : 'default', recorded: false };
+};
+
+/**
+ * @typedef {{ lane: string, ttl: string, rows: number, judged: number, missed: number,
+ *   idleKnown: number, idleOver: number, maxIdleMs: number }} PinHealth
+ *   one lane's rows that record one pin: `missed` of the `judged` wrote at the other TTL, and
+ *   `idleOver` of the `idleKnown` idled past `IDLE_LIMIT_MS` in total
+ */
+
+/**
  * @param {Array<{ lane: string, items: Item[] }>} partitions the partitions that were read
  * @param {Set<string>} pinned the lanes that pin 5m deliberately
  * @param {string[]} [unreadable] the lanes whose partition could not be read
@@ -104,11 +134,35 @@ export const summarize = (partitions, pinned, unreadable = []) => {
   // alert nobody reads.
   /** @type {Array<{ lane: string, share: number }>} */
   const expected = [];
+  /** @type {Map<string, PinHealth>} */
+  const pins = new Map();
   let examined = 0;
   let skipped = 0;
   let unbroken = 0;
+  let unrecorded = 0;
   for (const { lane, items } of partitions) {
     for (const item of items.filter(isRun)) {
+      const pin = pinOf(item, lane, pinned);
+      if (!pin.recorded && pinned.has(lane)) unrecorded += 1;
+      /** @type {PinHealth | undefined} */
+      let health;
+      if (pin.recorded && pin.ttl !== 'default') {
+        const key = `${lane} ${pin.ttl}`;
+        health = pins.get(key) ?? { lane, ttl: pin.ttl, rows: 0, judged: 0, missed: 0, idleKnown: 0, idleOver: 0, maxIdleMs: 0 };
+        pins.set(key, health);
+        health.rows += 1;
+        // TOTAL IDLE IS AN UPPER BOUND ON THE LONGEST GAP: under 300s, no gap can have let a 5m
+        // cache go cold; over it, one may have. A run with no API time has no idle measured, and
+        // absence is not zero.
+        const total = N(item, 'duration_ms');
+        const api = N(item, 'duration_api_ms');
+        if (total !== null && api !== null) {
+          const idle = Math.max(0, total - api);
+          health.idleKnown += 1;
+          if (idle > IDLE_LIMIT_MS) health.idleOver += 1;
+          health.maxIdleMs = Math.max(health.maxIdleMs, idle);
+        }
+      }
       const split = ttlSplit(item);
       // A row with NO cache write at all can't answer the question either way; counting it as
       // clean would inflate the denominator with rows that were never evidence.
@@ -117,10 +171,57 @@ export const summarize = (partitions, pinned, unreadable = []) => {
       // 100% offender, and if the model ever stops reporting the breakdown, EVERY row would fire.
       if (split.kind === 'unbroken') { unbroken += 1; continue; }
       examined += 1;
-      if (split.share > 0) (pinned.has(lane) ? expected : offenders).push({ lane, share: split.share });
+      if (health) {
+        health.judged += 1;
+        // ANY WRITE AT THE OTHER TTL IS THE PIN NOT TAKING EFFECT: the CLI ignores a value it
+        // doesn't know, and below v2.1.242 the variable itself, and writes at its default.
+        if (pin.ttl === '5m' ? split.share < 1 : split.share > 0) health.missed += 1;
+      }
+      if (!(split.share > 0)) continue;
+      if (pin.ttl === '5m') expected.push({ lane, share: split.share });
+      // A 5m write under a 1h pin is that pin not taking effect, counted above: never the
+      // unpinned fallback, whose remedy is to set the pin it already has.
+      else if (pin.ttl === 'default') offenders.push({ lane, share: split.share });
     }
   }
-  return { examined, lanes: partitions.length, offenders, expected, skipped, unbroken, unreadable: [...unreadable].sort(), pinned: [...pinned].sort() };
+  return {
+    examined, lanes: partitions.length, offenders, expected, skipped, unbroken, unrecorded,
+    pins: [...pins.values()].sort((a, b) => a.lane.localeCompare(b.lane) || a.ttl.localeCompare(b.ttl)),
+    unreadable: [...unreadable].sort(), pinned: [...pinned].sort(),
+  };
+};
+
+/**
+ * The pinned lanes' health lines: what each pin's rows say, then a named finding for a pin that
+ * didn't take effect and for a 5m pin whose runs idled past it.
+ * @param {PinHealth[]} pins
+ * @param {number} unrecorded
+ */
+const renderPins = (pins, unrecorded) => {
+  const older = unrecorded
+    ? ` ${unrecorded} row(s) on the lane(s) Kanon pins don't record their pin (written before run row version 3), so they are counted by design and not checked.`
+    : '';
+  if (!pins.length) {
+    return [`cache-ttl: the pinned lanes' own health (whether each pin took effect, and whether its runs idle past 300s) is NOT checked: no row in the window records a pin, the TTL it ran at, which a run row carries from version 3 as \`prompt_cache_ttl\`.${older}`];
+  }
+  const secs = (/** @type {number} */ ms) => `${Math.round(ms / 1000)}s`;
+  const each = pins.map((p) => {
+    const idle = p.ttl === '5m'
+      ? `; ${p.idleOver} of ${p.idleKnown} with a known idle time idled over 300s in total${p.idleKnown ? ` (the longest, ${secs(p.maxIdleMs)})` : ''}`
+      : '';
+    return `${p.lane} (${p.ttl}) ${p.rows} row(s): the pin took effect on ${p.judged - p.missed} of ${p.judged} judged${idle}`;
+  });
+  const rows = pins.reduce((n, p) => n + p.rows, 0);
+  const lines = [`cache-ttl: pin health, from the ${rows} row(s) that record the TTL they ran at: ${each.join('; ')}.${older}`];
+  const missed = pins.filter((p) => p.missed).map((p) => `${p.lane} (${p.ttl})`);
+  if (missed.length) {
+    lines.push(`PIN NOT TAKING EFFECT on ${missed.join(', ')}: a run that records the pin still wrote cache at the other TTL, so the CLI ran at its default. Below Claude Code v2.1.242 \`CLAUDE_CODE_PROMPT_CACHE_TTL\` is IGNORED RATHER THAN REJECTED: check the version first.`);
+  }
+  const idle = pins.filter((p) => p.ttl === '5m' && p.idleOver).map((p) => p.lane);
+  if (idle.length) {
+    lines.push(`IDLE PAST THE 5-MINUTE TTL on ${idle.join(', ')}: a run's total idle (\`duration_ms - duration_api_ms\`) is an upper bound on its longest gap, so over 300s its cache MAY have gone cold and been written again. Re-measure the lane's gaps before keeping the pin.`);
+  }
+  return lines;
 };
 
 /**
@@ -128,7 +229,7 @@ export const summarize = (partitions, pinned, unreadable = []) => {
  * @param {ReturnType<typeof summarize>} summary
  * @param {number} days the window the rows were read over
  */
-export const render = ({ examined, lanes, offenders, expected, skipped, unbroken, unreadable, pinned }, days) => {
+export const render = ({ examined, lanes, offenders, expected, skipped, unbroken, unrecorded, pins: health, unreadable }, days) => {
   // AN UNREAD PARTITION IS NAMED ON THE LINE, NOT ONLY IN THE LOG: one throttled query must not
   // read as a healthy, smaller fleet.
   const missing = unreadable.length
@@ -142,17 +243,17 @@ export const render = ({ examined, lanes, offenders, expected, skipped, unbroken
   const note = notes.length ? ` (${notes.join('; ')})` : '';
   // "OF THOSE N": the by-design rows are a SUBSET of the denominator, said so in both branches.
   const byDesign = expected.length
-    ? ` Of those ${examined} row(s), ${expected.length} were written at 5m BY DESIGN on the lane(s) Kanon pins to it, ${pinned.join(', ')}, and are not a finding.`
+    ? ` Of those ${examined} row(s), ${expected.length} were written at 5m BY DESIGN on the lane(s) that pin it, ${[...new Set(expected.map((e) => e.lane))].sort().join(', ')}, and are not a finding.`
     : '';
-  const pins = 'cache-ttl: the pinned lanes\' own health (whether each pin took effect, and whether its runs idle past 300s) is NOT checked here: it needs each pin\'s date, which nothing records.';
+  const pins = renderPins(health, unrecorded);
   if (!examined) {
-    return [`cache-ttl: NO ROWS CARRIED A JUDGEABLE CACHE WRITE across ${lanes} lane partition(s) over the last ${days} days${note}: this check looked and learned nothing; treat it as UNAVAILABLE, not as clean.${missing}`, pins].join('\n');
+    return [`cache-ttl: NO ROWS CARRIED A JUDGEABLE CACHE WRITE across ${lanes} lane partition(s) over the last ${days} days${note}: this check looked and learned nothing; treat it as UNAVAILABLE, not as clean.${missing}`, ...pins].join('\n');
   }
   if (!offenders.length) {
     const verdict = unreadable.length
       ? 'No lane that was READ has fallen back; the unreadable ones were not examined.'
       : 'No unpinned lane has fallen back; no pin needed.';
-    return [`cache-ttl: 0 of ${scope} were written at the 5-minute TTL UNEXPECTEDLY${note}.${missing}${byDesign} ${verdict}`, pins].join('\n');
+    return [`cache-ttl: 0 of ${scope} were written at the 5-minute TTL UNEXPECTEDLY${note}.${missing}${byDesign} ${verdict}`, ...pins].join('\n');
   }
   // THE AFFECTED ARMS, NOT THE FIRST FIVE ROWS: the remedy below says "the lanes named".
   /** @type {Map<string, { rows: number, max: number }>} */
@@ -170,7 +271,7 @@ export const render = ({ examined, lanes, offenders, expected, skipped, unbroken
     'REMEDY: the lanes named above do NOT pin the TTL, so this is the unintended fallback: the plan\'s included usage ran out and Claude Code dropped to the cheaper TTL, leaving them re-processing prefixes they could have read.',
     'Pin `CLAUDE_CODE_PROMPT_CACHE_TTL=1h` on the affected lanes: in Kanon\'s lanes that is the `prompt-cache-ttl` input of `actions/agent-run`, so the pin is Kanon\'s to set (a finding with subject `lane`); on your side, check the subscription\'s included usage.',
     'IT NEEDS CLAUDE CODE >= v2.1.242: below it the variable is IGNORED RATHER THAN REJECTED, which looks exactly like the pin working. Check the version first.',
-    pins,
+    ...pins,
   ].join('\n');
 };
 

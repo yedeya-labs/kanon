@@ -12,6 +12,7 @@ import {
   GUARDS,
   KANON_ERRORS,
   LANES,
+  PROMPT_CACHE_TTLS,
   LANE_ROLES,
   REASON_OUTCOME,
   RESERVED_PARTITION,
@@ -294,7 +295,7 @@ describe('the mutations plan 0002 §8 lists each fail validate', () => {
   });
   it('a version the kind does not have', () => {
     fails({ ...finished(), schema_version: 1 }, 'schema_version');
-    fails({ ...finished(), schema_version: 3 }, 'schema_version');
+    fails({ ...finished(), schema_version: 4 }, 'schema_version');
     const item = { schema_version: 2, row_kind: 'work_item', tag: 'run', recorded_at: '2026-10-02T10:00:00Z', pr_number: 7, closed_at: '2026-10-01T09:00:00Z', fate: 'merged' };
     fails(item, 'schema_version');
   });
@@ -720,3 +721,99 @@ describe('the script writes the version-2 row only when it validates', () => {
     expect(runScript({ TELEMETRY_LANE: '' }).v2).toBeNull();
   });
 });
+
+describe('run row version 3: the TTL the run was pinned at (#546)', () => {
+  const V3 = SCHEMAS.run![3]!;
+
+  it('is version 2 and `prompt_cache_ttl`, nothing else', () => {
+    expect(Object.keys(V3).sort()).toEqual([...Object.keys(RUN), 'prompt_cache_ttl'].sort());
+    for (const [name, field] of Object.entries(RUN)) if (name !== 'schema_version') expect(V3[name], name).toEqual(field);
+    expect(V3.prompt_cache_ttl).toEqual({ type: 'enum', values: [...PROMPT_CACHE_TTLS] });
+    expect([...PROMPT_CACHE_TTLS]).toEqual(['5m', '1h', 'default']);
+  });
+
+  it('still accepts a version-2 row, which an older release writes, and refuses the field on one', () => {
+    const old: Row = { ...finished(), schema_version: 2 };
+    delete old.prompt_cache_ttl;
+    expect(validate(old)).toEqual({ ok: true });
+    const v = validate({ ...old, prompt_cache_ttl: '5m' });
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.errors).toEqual([{ field: 'prompt_cache_ttl', problem: 'unknown' }]);
+  });
+
+  it('writes the TTL the lane handed in, and leaves out one it does not know', () => {
+    for (const ttl of ['5m', '1h', 'default']) {
+      const { v2, errors } = both('tests/fixtures/agent-blocks/finished.json', { TELEMETRY_PROMPT_CACHE_TTL: ttl });
+      expect(errors, ttl).toEqual([]);
+      expect(v2, ttl).toMatchObject({ schema_version: 3, prompt_cache_ttl: ttl });
+    }
+    // Not handed in, by a lane that doesn't pass it: unknown, never `default`. Without its one
+    // field the row is version 2, which a collector or ingest function from an older release
+    // still accepts: the blocks smoke's row is one.
+    for (const ttl of ['', '10m', '5m\nlane=x']) {
+      const { v2, errors } = both('tests/fixtures/agent-blocks/finished.json', { TELEMETRY_PROMPT_CACHE_TTL: ttl });
+      expect(errors, ttl).toEqual([]);
+      expect(v2, ttl).toMatchObject({ schema_version: 2 });
+      expect(v2, ttl).not.toHaveProperty('prompt_cache_ttl');
+    }
+  });
+
+  type Step = { id?: string; uses?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown> };
+  const action = (name: string) => parse(readFileSync(join('actions', name, 'action.yml'), 'utf8')) as {
+    inputs: Record<string, unknown>; outputs?: Record<string, { value: string }>; runs: { steps: Step[] };
+  };
+
+  it("agent-run says the TTL it set, `default` when the lane left it unset, and nothing for a value it can't vouch for", () => {
+    const run = action('agent-run');
+    expect(run.outputs?.['prompt-cache-ttl']?.value).toBe('${{ steps.ttl.outputs.value }}');
+    const step = run.runs.steps.find((s) => s.id === 'ttl')!;
+    expect(step.env).toEqual({ TTL: '${{ inputs.prompt-cache-ttl }}' });
+    // Before the agent step, which stays last.
+    expect(run.runs.steps.findIndex((s) => s.id === 'ttl')).toBeLessThan(run.runs.steps.findIndex((s) => s.id === 'agent'));
+    const out = (ttl: string) => {
+      const d = mkdtempSync(join(tmpdir(), 'agent-run-ttl-'));
+      const f = join(d, 'out');
+      writeFileSync(f, '');
+      execFileSync('bash', ['-e', '-c', step.run!], { env: { PATH: process.env.PATH ?? '', TTL: ttl, GITHUB_OUTPUT: f } });
+      return readFileSync(f, 'utf8');
+    };
+    expect(out('5m')).toBe('value=5m\n');
+    expect(out('1h')).toBe('value=1h\n');
+    expect(out('')).toBe('value=default\n');
+    expect(out('5m\nat=x')).toBe('value=\n');
+    expect(out('5 m')).toBe('value=\n');
+  });
+
+  it('agent-finish hands it to the telemetry action, which hands it to the normaliser', () => {
+    const finish = action('agent-finish');
+    expect(finish.inputs['prompt-cache-ttl']).toMatchObject({ required: false, default: '' });
+    const t = finish.runs.steps.find((s) => s.uses === '$/actions/agent-telemetry')!.with!;
+    expect(t.prompt_cache_ttl).toBe('${{ inputs.prompt-cache-ttl }}');
+    const telemetry = action('agent-telemetry');
+    expect(telemetry.inputs.prompt_cache_ttl).toMatchObject({ required: false, default: '' });
+    expect(telemetry.runs.steps.find((s) => s.id === 'row')?.env?.TELEMETRY_PROMPT_CACHE_TTL).toBe('${{ inputs.prompt_cache_ttl }}');
+  });
+
+  it("every lane hands the finish block its own agent step's TTL", () => {
+    type Workflow = { jobs: Record<string, { steps?: Step[] }> };
+    const files = [
+      ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => join('.github/workflows', f)),
+      'tests/fixtures/agent-direct-lane.yml',
+    ];
+    let calls = 0;
+    for (const path of files) {
+      const doc = parse(readFileSync(path, 'utf8')) as Workflow;
+      for (const job of Object.values(doc.jobs ?? {})) {
+        const steps = job.steps ?? [];
+        const finish = steps.find((s) => s.uses === '$/actions/agent-finish');
+        if (!finish) continue;
+        calls += 1;
+        expect(steps.find((s) => s.uses === '$/actions/agent-run')?.id, path).toBe('agent');
+        expect(finish.with?.['prompt-cache-ttl'], path).toBe('${{ steps.agent.outputs.prompt-cache-ttl }}');
+      }
+    }
+    // The twelve lane jobs, the blocks smoke, and the direct-lane fixture.
+    expect(calls).toBe(14);
+  });
+});
+

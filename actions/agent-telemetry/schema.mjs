@@ -101,6 +101,12 @@ export const TERMINAL_REASONS = Object.freeze(['completed', 'max_turns', 'budget
 export const VERDICTS = Object.freeze(['approved', 'changes_requested']);
 export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 export const JOB_STATUSES = Object.freeze(['success', 'failure', 'cancelled']);
+/**
+ * The prompt-cache TTL a run was pinned at (run row version 3, #546): the value of
+ * `CLAUDE_CODE_PROMPT_CACHE_TTL`, as `agent-run` reports it, and `default` for a lane that left it
+ * unset. Absent when the lane didn't say, which is not `default`.
+ */
+export const PROMPT_CACHE_TTLS = Object.freeze(['5m', '1h', 'default']);
 
 /**
  * The lane stages' names (plan 0002 §2.6). `failed_stage` is the first stage that ended the
@@ -303,6 +309,17 @@ const RUN_V2 = Object.freeze({
 const ACTOR = oneOf(ACTOR_CLASSES);
 const CHECK = oneOf(['pass', 'fail', 'absent']);
 
+/**
+ * The run row, version 3: version 2's fifty-nine fields and `prompt_cache_ttl`, the TTL the run
+ * was pinned at, so the cache-TTL detector can judge a pin on the rows that ran under it rather
+ * than on a date nothing records (#546).
+ */
+const RUN_V3 = Object.freeze({
+  ...RUN_V2,
+  schema_version: req(oneOf([3])),
+  prompt_cache_ttl: oneOf(PROMPT_CACHE_TTLS),
+});
+
 /** The work-item row, version 1: eighty-four fields (plan 0003 §3.3). */
 const WORK_ITEM_V1 = Object.freeze({
   // Row and join
@@ -436,7 +453,7 @@ const FINDING_V1 = Object.freeze({
  * @type {Readonly<Record<string, Readonly<Record<number, Readonly<Record<string, Field>>>>>>}
  */
 export const SCHEMAS = Object.freeze({
-  run: Object.freeze({ 2: RUN_V2 }),
+  run: Object.freeze({ 2: RUN_V2, 3: RUN_V3 }),
   work_item: Object.freeze({ 1: WORK_ITEM_V1 }),
   finding: Object.freeze({ 1: FINDING_V1 }),
 });

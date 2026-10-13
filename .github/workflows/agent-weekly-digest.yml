@@ -229,6 +229,7 @@ jobs:
           job-started-at: ${{ steps.job.outputs.started-at }}
           timeout-minutes: "20"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
           kanon-error: ${{ steps.setup.outputs.kanon-error }}
+          prompt-cache-ttl: ${{ steps.agent.outputs.prompt-cache-ttl }}
 
       # FAILS THE JOB on error, deliberately. A swallowed failure means the digest quietly
       # stops and its reader simply stops hearing from the project, which nobody notices for

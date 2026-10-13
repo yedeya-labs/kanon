@@ -136,3 +136,4 @@ jobs:
           issue-number: ${{ inputs.issue_number }}
           started-at: ${{ steps.agent.outputs.started-at }}
           github-token: ${{ steps.app-token.outputs.token }}
+          prompt-cache-ttl: ${{ steps.agent.outputs.prompt-cache-ttl }}

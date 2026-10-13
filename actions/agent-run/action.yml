@@ -4,7 +4,7 @@
 # CALL IT WITH `id: agent`. The block's outputs mirror the action's own names, so the
 # lane reads `steps.agent.outputs.execution_file` exactly as it did when the action was
 # a step of its own — and `steps.agent.outcome` means what it meant then: the action is the
-# last step, and the start stamp before it cannot fail. The user-scope step can, only when the
+# last step, and the start stamp and the TTL record before it cannot fail. The user-scope step can, only when the
 # runner gives it no usable temp directory, and then the agent must not start (kanon#283).
 #
 # NOTHING TO TAKE BACK OUT OF THE TREE (RA-2697). Lanes call this block as
@@ -61,7 +61,9 @@ inputs:
   prompt-cache-ttl:
     description: >-
       `CLAUDE_CODE_PROMPT_CACHE_TTL` for this lane, or empty to leave the CLI default.
-      The value is decided by the lane, where `cache-ttl-check.mjs` can join it to the arm.
+      The value is decided by the lane, and its run's telemetry row records it (the
+      `prompt-cache-ttl` output), so the cache-TTL detector judges a pin by the rows that ran
+      under it.
     required: false
     default: ""
   full-transcript:
@@ -84,6 +86,12 @@ outputs:
       Which credential the agent ran on, `subscription` or `api-key`: a name, never anything the
       secret holds. No Kanon lane reads it yet; the run's telemetry row will (plan 0009 §12).
     value: ${{ steps.credential.outputs.auth }}
+  prompt-cache-ttl:
+    description: >-
+      The prompt-cache TTL this run was pinned at, for `agent-finish`'s telemetry row (#546): the
+      `prompt-cache-ttl` input, `default` when the lane left it empty, and empty for a value that
+      isn't a plain word, which the row then leaves out.
+    value: ${{ steps.ttl.outputs.value }}
 
 runs:
   using: composite
@@ -98,6 +106,23 @@ runs:
       id: started
       shell: bash -e {0}
       run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+    # THE TTL THIS RUN IS PINNED AT, FOR ITS TELEMETRY ROW (#546). The cache-TTL detector judges a
+    # pin (did it take effect, do its runs idle past it) on the rows that ran under it, so the row
+    # carries the value the agent step below sets, read from the same input, never from that
+    # step's environment. Empty is `default`, the CLI's own choice. Anything but a plain word is
+    # left empty, so it can't write another output, and the row leaves it out. It cannot fail.
+    - name: Record the prompt-cache TTL the agent is pinned at
+      id: ttl
+      shell: bash -e {0}
+      env:
+        TTL: ${{ inputs.prompt-cache-ttl }}
+      run: |
+        case "$TTL" in
+          '') echo "value=default" ;;
+          *[!0-9a-z]*) echo "value=" ;;
+          *) echo "value=$TTL" ;;
+        esac >> "$GITHUB_OUTPUT"
 
     # THE CLAUDE CREDENTIAL, CHECKED BEFORE ANYTHING ELSE THE AGENT NEEDS (plan 0009 §10).
     # Both or neither set, or a value whose shape doesn't match its name, fails here, by the
