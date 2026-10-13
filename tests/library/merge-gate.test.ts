@@ -1895,6 +1895,101 @@ describe('a transient UNSTABLE waits; a settled one still escalates (RA-1773, RA
     expect(v.action).toBe('escalate');
   });
 
+  describe('a review-triggered run does not wait on its own job (kanon#812)', () => {
+    // The shape of run 38348323741 on #787: approved, every other check settled green,
+    // GitHub reporting `UNSTABLE` because this very run's `merge / merge` is in progress.
+    const OWN = '38348323741';
+    const own = (name: string, over: Record<string, unknown> = {}) =>
+      ({ name, workflowName: 'Merge (Merger)', runId: OWN, status: 'IN_PROGRESS', conclusion: null, startedAt: ago(0), ...over });
+
+    it('merges when the only check still running is this run\'s own job', () => {
+      const v = mergeVerdict(pr({ mergeStateStatus: 'UNSTABLE', checks: [
+        green(3),
+        own('merge / logins', { status: 'COMPLETED', conclusion: 'SUCCESS', completedAt: ago(0) }),
+        own('merge / merge'),
+      ] }), { now: NOW, ownRunId: OWN });
+      expect(v.action).toBe('merge');
+      expect(v.rule).toBe('green-zone');
+      expect(v.why).toContain('UNSTABLE');
+    });
+
+    it('still waits when anything else is running beside it (RA-1773)', () => {
+      // An ordinary check still running waits before the `UNSTABLE` arm is reached.
+      expect(mergeVerdict(pr({ mergeStateStatus: 'UNSTABLE', checks: [
+        green(3), own('merge / merge'),
+        { name: 'Advisory scan', workflowName: 'Advisory', runId: '1', status: 'IN_PROGRESS', conclusion: null, startedAt: ago(1) },
+      ] }), { now: NOW, ownRunId: OWN }).action).toBe('wait');
+      const v = mergeVerdict(pr({ mergeStateStatus: 'UNSTABLE', checks: [
+        green(3),
+        own('merge / merge'),
+        // The review that woke this run, still finishing: excluded from the check partitions
+        // (`SELF_CHECKS`), so only the `UNSTABLE` arm can wait on it, and it must.
+        { name: 'review / review', workflowName: 'Review (Reviewer)', runId: '38348300000', status: 'IN_PROGRESS', conclusion: null, startedAt: ago(1) },
+      ] }), { now: NOW, ownRunId: OWN });
+      expect(v.action).toBe('wait');
+      expect(v.rule).toBe('merge-state-unsettled');
+      expect(v.why).toContain('review / review');
+      expect(v.why).not.toContain('merge / merge');
+    });
+
+    it('counts another Merger run on the head, which is not this one', () => {
+      const v = mergeVerdict(pr({ mergeStateStatus: 'UNSTABLE', checks: [
+        green(3), own('merge / merge', { runId: '38348000000' }),
+      ] }), { now: NOW, ownRunId: OWN });
+      expect(v.action).toBe('wait');
+    });
+
+    it('keeps the settle window when this run\'s jobs have all completed', () => {
+      const v = mergeVerdict(pr({ mergeStateStatus: 'UNSTABLE', checks: [
+        green(2), own('merge / logins', { status: 'COMPLETED', conclusion: 'SUCCESS', completedAt: ago(0) }),
+      ] }), { now: NOW, ownRunId: OWN });
+      expect(v.action).toBe('wait');
+      const past = UNSTABLE_SETTLE_MS / 60000 + 1;
+      // This run's just-completed job does not restart the window.
+      const late = mergeVerdict(pr({ mergeStateStatus: 'UNSTABLE', checks: [
+        green(past), own('merge / logins', { status: 'COMPLETED', conclusion: 'SUCCESS', completedAt: ago(0) }),
+      ] }), { now: NOW, ownRunId: OWN });
+      expect(late.action).toBe('escalate');
+    });
+
+    it('readPr takes the run id from the check\'s detailsUrl, the key the gate compares', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'merge-gate-own-run-'));
+      const meta = {
+        number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,
+        labels: [{ name: 'agent:implement' }], headRefOid: HEAD,
+        statusCheckRollup: [
+          { __typename: 'CheckRun', name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS',
+            completedAt: ago(3), detailsUrl: 'https://github.com/o/r/actions/runs/111/job/222' },
+          { __typename: 'CheckRun', name: 'merge / merge', workflowName: 'Merge (Merger)', status: 'IN_PROGRESS', conclusion: null,
+            startedAt: ago(0), detailsUrl: `https://github.com/o/r/actions/runs/${OWN}/job/115134774613` },
+          { __typename: 'StatusContext', context: 'ci/external', state: 'SUCCESS', createdAt: ago(5), targetUrl: 'https://ci.example/1' },
+        ],
+        mergeStateStatus: 'UNSTABLE', mergeable: 'MERGEABLE', title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`,
+        closingIssuesReferences: [{ number: 1 }], commits: [{ messageHeadline: 'x', messageBody: '' }],
+      };
+      const reviews = [{ id: 1, user: { login: 'example-reviewer[bot]' }, state: 'APPROVED', commit_id: HEAD, body: REVIEWER_HEADER }];
+      writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
+case "$*" in
+  "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"/statuses"*)        printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
+  *"/files"*)           printf '%s\\n' 'src/a.ts' ;;
+  *"/reviews"*)         printf '%s' '${JSON.stringify(reviews)}' ;;
+  *"issues?per_page"*)  printf '%s' '0' ;;
+  "run list"*)          printf '%s' '[]' ;;
+esac
+`);
+      const read = readPr(1234, 'o/r', { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+      expect(read.checks.map((c: LibraryValue) => c.runId)).toEqual(['111', OWN, undefined]);
+      expect(mergeVerdict(read, { now: NOW, ownRunId: OWN }).action).toBe('merge');
+      expect(mergeVerdict(read, { now: NOW, ownRunId: '999' }).action).toBe('wait');
+    });
+
+    it('excludes nothing when no run id is injected', () => {
+      const v = mergeVerdict(pr({ mergeStateStatus: 'UNSTABLE', checks: [green(3), own('merge / merge')] }), { now: NOW });
+      expect(v.action).toBe('wait');
+    });
+  });
+
   it('leaves BLOCKED and BEHIND alone — neither is a check yet to settle', () => {
     for (const s of ['BLOCKED', 'BEHIND']) {
       const v = mergeVerdict(pr({ mergeStateStatus: s, checks: [green(1),
