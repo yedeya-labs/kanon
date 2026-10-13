@@ -55,7 +55,9 @@ export const FUNCTION_DIR = join(HERE, 'function');
 
 const OIDC_HOST = 'token.actions.githubusercontent.com';
 
-const OWNER = /^arn:aws:iam::\d{12}:role\/.+$/;
+// One role: its path's and name's characters only, so no `*` or `?`, which `ArnNotEquals` reads as
+// wildcards, and no `,`, which the register table's `Fn::Split` reads as a second principal.
+const OWNER = /^arn:aws:iam::\d{12}:role\/(?:[\w+=.@-]+\/)*[\w+=.@-]+$/;
 /** A key, and a label for own figures, which shares its pattern. */
 export const KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;

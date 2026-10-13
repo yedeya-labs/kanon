@@ -489,7 +489,11 @@ describe('the register (§5)', () => {
     const b = `arn:aws:iam::${'1'.repeat(12)}:role/ops-job-b`;
     expect(parameters.some((p: string) => p.startsWith('OperatorJobRoleArns='))).toBe(false);
     expect(render(register, { operatorJobRoles: `${a},${b}`, gh }).parameters.at(-1)).toBe(`OperatorJobRoleArns=${a},${b}`);
-    for (const bad of ['', `${a},`, 'arn:aws:iam::*:role/x', `${a},arn:aws:sts::${'1'.repeat(12)}:assumed-role/x/y`]) {
+    // A `*` or `?` in the role name is a wildcard to IAM's `ArnNotEquals`, so it would exempt
+    // every matching role from the register table's deny (#729).
+    const acct = `arn:aws:iam::${'1'.repeat(12)}`;
+    for (const bad of ['', `${a},`, 'arn:aws:iam::*:role/x', `${a},arn:aws:sts::${'1'.repeat(12)}:assumed-role/x/y`,
+      `${acct}:role/*`, `${acct}:role/a?`, `${a},${acct}:role/ops-*`, `${acct}:role/*/x`]) {
       expect(() => render(register, { operatorJobRoles: bad, gh }), bad).toThrow(/--operator-job-roles must list role ARNs/);
     }
   });
@@ -517,6 +521,14 @@ describe('the register (§5)', () => {
     expect(registerProblems({ ...register, repositories: [dup, { ...dup, key: 'k2' }] })).not.toEqual([]);
     expect(registerProblems({ ...register, repositories: [{ ...dup, key: 'k-1' }, { ...dup, key: 'k1', repository: 'o/s' }] })).not.toEqual([]);
     expect(registerProblems({ ...register, owner_principal_arn: 'arn:aws:iam::*:role/x' })).not.toEqual([]);
+    // #729: the owner names exactly one role. A `*` or `?` is a wildcard to `ArnNotEquals`, and a
+    // `,` would split into a second principal in the register table's `Fn::Split`.
+    const owner = (arn: string) => registerProblems({ ...register, owner_principal_arn: arn });
+    const acct = `arn:aws:iam::${'1'.repeat(12)}`;
+    for (const bad of [`${acct}:role/*`, `${acct}:role/a?`, `${acct}:role/a,b`, `${acct}:role/a,${acct}:role/b`,`${acct}:role/aws-reserved/*/x`, `${acct}:role/`, `${acct}:role/x/`]) {
+      expect(owner(bad), bad).toEqual(['owner_principal_arn is not a role ARN']);
+    }
+    expect(owner(`${acct}:role/a+b=c.d@e_f-g`)).toEqual([]);
     // §6.1: a label for an adopter's own figures is a label, never a key, and unique; the
     // invoker flag is a boolean.
     expect(one({ publish_own_figures_as: 'kanon' })).toEqual([]);
