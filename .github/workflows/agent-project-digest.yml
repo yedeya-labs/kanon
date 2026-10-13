@@ -282,8 +282,9 @@ jobs:
   # The reconciler failed on EVERY run for weeks in the reference adopter, and nothing
   # escalated it: GitHub's own failure notification goes to a run's actor, which on a
   # scheduled workflow is nobody who reads it. `scripts/workflow-health.mjs` files one issue
-  # naming every lane caller red on every recent run, and one when the weekly Overseer audit
-  # stops landing (where an Overseer is installed).
+  # naming every lane caller red on every recent run, one when the weekly Overseer audit
+  # stops landing (where an Overseer is installed), and one naming every lane caller whose
+  # `schedule` has gone far longer than its cron without a scheduled run (kanon#813).
   #
   # A SEPARATE JOB, NOT A STEP IN `digest`. Permissions are per job, so `actions: read` here
   # leaves the digest job's refusal of that scope as it is.
@@ -297,7 +298,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      # `gh run list`.
+      # `gh run list`, and each scheduled workflow's state and newest scheduled run.
       actions: read
       # The escalation is an ISSUE, because that is the surface that persists. A red run here
       # would reproduce exactly the bug being fixed.
@@ -306,7 +307,7 @@ jobs:
       # The lane callers it watches are the files under `.github/workflows/`.
       - uses: actions/checkout@v7
       - uses: $/actions/kanon-path
-      - name: Escalate a workflow red on every recent run, or a weekly audit that never landed
+      - name: Escalate a workflow red on every recent run, a weekly audit that never landed, or a silent schedule
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}

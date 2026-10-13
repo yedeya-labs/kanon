@@ -47,6 +47,10 @@
 // job declares `actions: read`; the digest job's deliberate refusal of that scope is
 // untouched, because permissions are per JOB.
 //
+// A THIRD CHECK, THE SCHEDULE HEARTBEAT (kanon#813): a lane caller whose `schedule` has gone far
+// longer than its cron without a scheduled run. A schedule that stops leaves no run, so the red
+// check above can't see it. The rule and its bound are in `scripts/lib/schedule-silence.mjs`.
+//
 // Usage: node "$KANON/scripts/workflow-health.mjs" [--apply], in the adopter's checkout, with
 // GITHUB_REPOSITORY and a `gh` token in its environment.
 
@@ -56,6 +60,16 @@ import { join } from 'node:path';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { laneCallersIn } from './lib/lane-caller.mjs';
 import { beforeApply } from './lib/labels.mjs';
+import {
+  classifySchedule,
+  ESCALATED as SCHEDULE_ESCALATED,
+  nextSilentSet,
+  renderScheduleFinding,
+  SCHEDULE_MARKER,
+  SCHEDULE_TITLE,
+  scheduleCrons,
+  silentSetIn,
+} from './lib/schedule-silence.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const APPLY = process.argv.includes('--apply') || process.env.APPLY === '1';
@@ -98,6 +112,10 @@ export const positiveInt = (raw, fallback) => {
   const n = positiveNumber(raw, fallback);
   return Number.isInteger(n) ? n : fallback;
 };
+
+/** Hours past twice a cron's longest gap before its schedule is silent (kanon#813,
+ *  `scripts/lib/schedule-silence.mjs`). */
+export const SCHEDULE_SLACK_HOURS = positiveNumber(process.env.QA_SCHEDULE_SLACK_HOURS, 12);
 
 /** How many recent runs to read per workflow. */
 export const WINDOW = positiveInt(process.env.QA_HEALTH_WINDOW, 12);
@@ -742,12 +760,134 @@ function redCheck() {
   console.log(`refreshed #${existing.number}`);
 }
 
+/** The scheduled workflows among the watched ones: `[file, crons]`, read from disk. */
+function scheduledWorkflows(dir = '.github/workflows') {
+  /** @type {[string, string[]][]} */
+  const out = [];
+  for (const f of watchedWorkflows(dir)) {
+    try {
+      const crons = scheduleCrons(readFileSync(join(dir, f), 'utf8'));
+      if (crons.length) out.push([f, crons]);
+    } catch (err) {
+      warn(`could not read ${f}'s schedule: ${err.message.split('\n')[0]}`);
+    }
+  }
+  return out;
+}
+
+/** The workflow's state and registration, and its newest scheduled run: `null` / `undefined`
+ *  where a read failed, which `classifySchedule` reports as unreadable. */
+function scheduleFacts(file) {
+  let workflow = null;
+  let lastRunAt;
+  let lastRunUrl = null;
+  const path = `repos/${REPO}/actions/workflows/${encodeURIComponent(file)}`;
+  try {
+    workflow = ghJson(['api', path]);
+  } catch (err) {
+    warn(`could not read workflow ${file}: ${err.message.split('\n')[0]}`);
+  }
+  try {
+    const runs = ghJson(['api', `${path}/runs?event=schedule&per_page=1`]).workflow_runs;
+    lastRunAt = Array.isArray(runs) ? (runs[0]?.created_at ?? null) : undefined;
+    lastRunUrl = runs?.[0]?.html_url ?? null;
+  } catch (err) {
+    warn(`could not read ${file}'s scheduled runs: ${err.message.split('\n')[0]}`);
+  }
+  return { workflow, lastRunAt, lastRunUrl };
+}
+
+/** The open schedule escalation, or null. Narrowed by title, decided by marker. */
+function openScheduleFinding() {
+  const hits = ghJson(['issue', 'list', '--repo', REPO, '--state', 'open',
+    '--label', 'pipeline-improvement', '--search', 'in:title "silent far longer than their cron"',
+    '--limit', '50', '--json', 'number,body']);
+  return hits.find((i) => (i.body ?? '').includes(SCHEDULE_MARKER)) ?? null;
+}
+
+/**
+ * The schedule heartbeat (kanon#813): a scheduled workflow that has gone far longer than its
+ * cron without a scheduled run. Returns an exit code contribution.
+ */
+function scheduleHeartbeat() {
+  const now = new Date();
+  const rows = scheduledWorkflows().map(([file, crons]) =>
+    classifySchedule({ file, crons, ...scheduleFacts(file) }, now, { slackHours: SCHEDULE_SLACK_HOURS }));
+  const hrs = (h) => (h === null ? '—' : `${h.toFixed(1)}h`);
+  const summary = [
+    `## Schedules — ${rows.length} scheduled workflow(s)\n`,
+    '| workflow | cron | verdict | since last scheduled run | allowed |',
+    '|---|---|---|---|---|',
+    ...rows.map((r) => `| \`${r.file}\` | \`${r.cron}\` | ${r.status} | ${hrs(r.ageHours)}${r.since === 'registered' ? ' (none yet)' : ''} | ${hrs(r.limitHours)} |`),
+    '',
+  ].join('\n');
+  console.log(summary);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    execFileSync('bash', ['-c', 'cat >> "$GITHUB_STEP_SUMMARY"'], { input: `${summary}\n` });
+  }
+  for (const r of rows.filter((x) => x.status === 'unknown')) warn(`${r.file}'s cron \`${r.cron}\` could not be read, so its schedule is not checked.`);
+  if (!rows.length) return 0;
+  // A check that read nothing must not report healthy schedules (`fleetGate`'s rule).
+  if (rows.every((r) => r.status === 'unreadable')) {
+    console.log('::error title=schedule-heartbeat::could not read ANY scheduled workflow. This job needs `actions: read`; without it the check reports schedules it never looked at.');
+    return 1;
+  }
+  const silent = rows.filter((r) => SCHEDULE_ESCALATED.has(r.status));
+  if (!APPLY) {
+    console.log(silent.length ? `${silent.length} schedule(s) would be escalated (dry run).` : 'Schedules healthy (dry run).');
+    return 0;
+  }
+  let existing;
+  try {
+    existing = openScheduleFinding();
+  } catch (err) {
+    console.log(`::error title=schedule-heartbeat::could not search for an existing schedule escalation (${err.message.split('\n')[0]}) — refusing to file a possible duplicate.`);
+    return 1;
+  }
+  const previous = existing ? silentSetIn(existing.body) : null;
+  const next = nextSilentSet(rows, previous);
+  if (!next.named.length) {
+    if (existing) {
+      gh(['issue', 'close', String(existing.number), '--repo', REPO, '--comment',
+        'Every schedule this issue named has fired inside its bound again. Closing; the next daily check re-files if one goes silent again.']);
+      console.log(`closed #${existing.number} — the schedules recovered`);
+    }
+    return 0;
+  }
+  const body = renderScheduleFinding(rows, { carried: next.carried });
+  if (!existing) {
+    // ONE CALL, `--label` AND `--milestone` together (K-WORK-2).
+    const url = gh(['issue', 'create', '--repo', REPO, '--title', SCHEDULE_TITLE,
+      '--body', body, '--label', 'pipeline-improvement',
+      '--milestone', 'Development Automation']).trim();
+    console.log(`filed: ${url}`);
+    return 0;
+  }
+  if (previous && previous.join(',') === next.named.join(',')) {
+    console.log(`#${existing.number} already names exactly ${next.named.join(', ')} — saying nothing.`);
+    return 0;
+  }
+  gh(['issue', 'comment', String(existing.number), '--repo', REPO, '--body',
+    `The set of silent schedules changed.\n\n${body}`]);
+  gh(['issue', 'edit', String(existing.number), '--repo', REPO, '--body', body]);
+  console.log(`refreshed #${existing.number}`);
+  return 0;
+}
+
 function main() {
   if (!REPO) {
     console.error('workflow-health: GITHUB_REPOSITORY must be set');
     process.exit(2);
   }
-  const code = runBoth(redCheck, auditHeartbeat);
+  // The schedule heartbeat first, caught, so a throw in it can't stop the other two (`runBoth`).
+  let scheduleCode = 0;
+  try {
+    scheduleCode = scheduleHeartbeat();
+  } catch (err) {
+    console.log(`::error title=schedule-heartbeat::the schedule check threw (${String(err?.message ?? err).split('\n')[0]}). The other checks below still ran.`);
+    scheduleCode = 1;
+  }
+  const code = runBoth(redCheck, auditHeartbeat) || scheduleCode;
   if (code) process.exitCode = code;
 }
 
