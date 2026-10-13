@@ -11,12 +11,12 @@
 //
 // ── WHY "A RUN EXISTS" WAS THE WRONG QUESTION (RA-1594) ───────────────────────
 // `agent-review.yml` subscribes to `pull_request_target: [labeled]` (`pull_request`
-// until RA-2299; `head_sha` is the PR's head on both), and its job-level `if`
-// admits any label event on a PR that CARRIES a review label. So on an
-// `agent:implement` PR every label event manufactures a run for the head — the
-// `agent:implement` and `review:please` adds at open, `needs:human` from the Merger,
-// `agent:reviewer` from the Reviewer — and each concludes `skipped` or `success` having
-// reviewed nothing.
+// until RA-2299; `head_sha` is the PR's head on both), so on an `agent:implement` PR
+// every label event manufactures a run for the head — the `agent:implement` and
+// `review:please` adds at open, `needs:human` from the Merger, `agent:reviewer` from the
+// Reviewer — and each concludes `skipped` or `success` having reviewed nothing. (Its
+// job-level `if` admitted any label event on a PR that CARRIED a review label until
+// kanon#627; it now admits only the three review labels by name, so the others skip.)
 //
 // Measured on PR RA-1591, an implement PR with `"reviews": []`, head `b972df20`: FIVE
 // `agent-review.yml` runs, zero reviews. Actors: the Implementer x3 (the open and its two
@@ -28,9 +28,10 @@
 //
 // Dropping `skipped` — the shape RA-1592 used for the revise lane — is NOT enough here,
 // and that is the difference between the two lanes. There the workflow's `if` admits
-// one label and every other event concludes `skipped`; here the `if` reads the label
-// SET, so a `needs:human` add on an implement PR runs the filter, concludes `success`
-// and looks identical to a real review that posted nothing.
+// one label and every other event concludes `skipped`; here a review label's run that
+// the filter declines — `review:please` added while CI is still running, say — concludes
+// `success` and looks identical to a real review that posted nothing. (Until kanon#627
+// the `if` read the label SET, so a `needs:human` add on an implement PR did the same.)
 //
 // ── WHAT COUNTS AS AN ATTEMPT, AND WHY EACH RULE IS SAFE ────────────────────
 // The classification below is entirely readable from the Actions listing, which is
@@ -147,8 +148,8 @@ export const BROKEN = ['failure', 'timed_out', 'startup_failure'];
  * comparison lives here once rather than being written a third time.
  *
  * This module's header argues the two lanes differ, and they do: dropping `skipped` is
- * not enough for EITHER, but for different reasons. There the workflow's `if` reads the
- * label SET, so foreign label events conclude `success`. In the revise lanes the `if`
+ * not enough for EITHER, but for different reasons. There a review label's run that the
+ * filter declines concludes `success`. In the revise lanes the `if`
  * admits one marker and everything else concludes `skipped` — except the runs the
  * workflow's own `concurrency` group CANCELS, which is what parked PR RA-1660 for two
  * days on a run that started ten minutes before the review it was counted as

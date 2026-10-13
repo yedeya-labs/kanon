@@ -2235,10 +2235,10 @@ describe('reviewRecovery', () => {
   /**
    * RA-1594 — the bound counted runs that never tried to review the head.
    *
-   * `agent-review.yml` subscribes to `pull_request: [labeled]` and its job-level `if`
-   * admits any label event on a PR that CARRIES a review label. So on an
-   * `agent:implement` PR every label event manufactures a run: the two labels applied
-   * at open, the Merger's `needs:human`, the Reviewer's own `agent:reviewer`.
+   * `agent-review.yml` subscribes to `pull_request_target: [labeled]`, so on an
+   * `agent:implement` PR every label event manufactures a run, whether its job-level `if`
+   * admits the label or skips it: the two labels applied at open, the Merger's
+   * `needs:human`, the Reviewer's own `agent:reviewer`.
    *
    * MEASURED on PR RA-1591, `"reviews": []`, head `b972df20` — the exact listing below.
    * Five runs, zero reviews. Had that head sat past the stall gate, the recovery would

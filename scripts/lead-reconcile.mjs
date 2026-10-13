@@ -2158,9 +2158,9 @@ export function reviseRecovery(world, { runsFor = reviseRunsFor, now = Date.now(
  * died of its cause is re-churned once (RA-2519) — the retry is an attempt too.
  *
  * "A RUN EXISTS" WAS THE WRONG QUESTION (RA-1594). `agent-review.yml` subscribes to
- * `pull_request: [labeled]` and admits any label event on a PR carrying a review label,
- * so on an implement PR every label — the two applied at open, the Merger's `needs:human`,
- * the Reviewer's `agent:reviewer` — manufactures a run for the head that reviews nothing.
+ * `pull_request_target: [labeled]`, so on an implement PR every label — the two applied
+ * at open, the Merger's `needs:human`, the Reviewer's `agent:reviewer` — manufactures a
+ * run for the head that reviews nothing, whether its `if` admits the label or skips it.
  * Measured on PR RA-1591 head `b972df20`: five runs, zero reviews, `"reviews": []`. Had
  * it sat past the stall gate this would have taken the note branch and reported a
  * SUPERSEDED cancelled run as a crash to read a classify annotation from — about a head
