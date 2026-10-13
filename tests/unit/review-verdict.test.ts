@@ -1047,6 +1047,16 @@ describe("the Reviewer's shell is an allow-list that runs no PR code (kanon#248)
     expect(prompt).toContain('Filter `gh` output with its own `--jq`, not a pipe.');
     expect(prompt).toContain('No loops, no `$(…)`, no backticks and no variables');
   });
+
+  // kanon#404, the audit of 352 runs: the shapes the first steer didn't name. One run tried to
+  // re-read a saved tool result with `jq` instead of the Read tool.
+  it('steers a re-read of a tool result to the Read tool, and names the shapes the audit found refused (kanon#404)', () => {
+    const prompt = String(agent.with!.prompt).replace(/\s+/g, ' ');
+    expect(prompt).toContain('Re-read an earlier tool result with the Read tool, at the path the result names, never through the shell');
+    expect(prompt).toContain('No process substitution (`diff <(…)`)');
+    expect(prompt).toContain('No pipe into `sort` or another command');
+    expect(prompt).toContain('`grep -f` and `git diff --color-moved` were refused');
+  });
 });
 
 /**

@@ -703,7 +703,16 @@ jobs:
               tool for any pattern holding `$`, a backtick or `\|`, and read part of a
               file with the Read tool's offset and limit, never a `sed` address range
               such as `sed -n '/a/,/b/p'`. Read the playbook with the Read tool.
+            - Re-read an earlier tool result with the Read tool, at the path the result
+              names, never through the shell: a `jq` or `cat` over a saved
+              `tool-results/` file is refused.
             - Filter `gh` output with its own `--jq`, not a pipe.
+            - No pipe into `sort` or another command: read the whole output, or narrow
+              it with the command's own flags.
+            - No process substitution (`diff <(…)`): compare two versions of a file
+              with `git diff <a> <b> -- <path>`.
+            - Use a command's plain flags. In measured runs, `grep -f` and `git diff
+              --color-moved` were refused.
             - No loops, no `$(…)`, no backticks and no variables: write each value out.
 
             When the PR changes a behavior / message / error string, grep the OLD string
