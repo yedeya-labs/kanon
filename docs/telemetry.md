@@ -51,11 +51,25 @@ Every AWS command here is the Owner's to run. Agents run none (§5).
 
   `CreateOidcProvider` creates GitHub's OIDC provider, so set it to false if the account already has one.
 
+## Where the register lives
+
+The register, `register.json`, pairs each adopter's opaque key with its repository, which is the one pairing the key exists to hide (plan 0002 §5). **It never lives in a repository where Kanon's lanes run, public or private.** A private repository is no safer than a public one. If the register is tracked there, a pull request that touches it sends the keys and the pairing to the Reviewer's model, and the lanes' agents can read any file in their checkout. Watch for this if you're an operator who is also an adopter: your private operations repository is the natural home for the register, and it's also where you install Kanon.
+
+Keep it in one of these, and render from there:
+
+- **An untracked file** on your own machine, outside every checkout, such as `~/kanon-private/telemetry/register.json`.
+- **A repository with no Kanon lanes**, private, which none of Kanon's workflows run in.
+- **A secrets store**, copied to an untracked file outside every checkout when you render, and deleted afterwards.
+
+The same holds for what is made from it: `render.mjs`'s output, `template.json` and `parameters.json` ([Deploy](#deploy)), and the history export of the reference adopter's import ([The importer and the backfill role](#the-importer-and-the-backfill-role)). Each holds the register's contents or its keys. [The register table](#the-register-table) is in the `kanon` account, out of every repository; this section is about the file `render.mjs` and `register.mjs import` read.
+
+**If a register is already tracked in a repository where Kanon's lanes run,** move it to one of the places above first. Then delete it from that repository in a pull request with no review label (`review:please`, `agent:triage` or `agent:implement`), so the Reviewer doesn't read it: the deletion's diff is the register, line by line. Add its path to that repository's `.gitignore` in the same pull request. Its history still holds every version, so treat each key there as paired with its repository for anyone who can read that history.
+
 ## Before the first deploy
 
 Run these once, from a Kanon checkout at the release tag being deployed, after `npm ci`. `render.mjs` calls `gh api` for each registered repository (`repos/<owner>/<repo>` and `repos/<owner>/<repo>/actions/oidc/customization/sub`), so `gh` must be signed in as someone who can read those repositories' Actions settings. These are GitHub calls only; no AWS command runs before the deploy.
 
-1. **Keep the register outside the public tree** (§5). For example, in `~/kanon-private/telemetry/register.json`, copied from `register.example.json`. Generate each key with `openssl rand -hex 4`. The key is opaque: it is what every row and role carries, so it must say nothing about the repository.
+1. **Keep the register out of every repository where Kanon's lanes run** ([Where the register lives](#where-the-register-lives)), public or private. For example, in `~/kanon-private/telemetry/register.json`, an untracked file outside every checkout, copied from `register.example.json`. Generate each key with `openssl rand -hex 4`. The key is opaque: it is what every row and role carries, so it must say nothing about the repository.
 2. **Fill in `owner_principal_arn`:** your SSO role's ARN **with its path**. That is the role, not the `assumed-role` session that `sts get-caller-identity` prints:
 
    ```sh
@@ -85,7 +99,7 @@ Run these once, from a Kanon checkout at the release tag being deployed, after `
 
 ## Deploy
 
-`$REG` is the register, and `$OUT` is a directory beside it. The rendered files hold the register's contents, so they stay outside the public tree too.
+`$REG` is the register, and `$OUT` is a directory beside it. The rendered files, `template.json` and `parameters.json`, hold the register's contents, so they stay out of every repository where Kanon's lanes run too ([Where the register lives](#where-the-register-lives)).
 
 ```sh
 REG=$HOME/kanon-private/telemetry/register.json
@@ -147,7 +161,7 @@ It exits 1 on any FAIL, and never prints a credential, a row or a response body.
 
 An adopter opts in when it installs Kanon: `kanon init --telemetry`, or a yes to its question, writes the caller below and asks for registration with an issue from Kanon's [telemetry registration template](https://github.com/yedeya-labs/kanon/issues/new?template=telemetry-registration.yml), which names the repository, its default branch and its reader refs ([`docs/init.md`](init.md#telemetry), #428). Telemetry is off without that yes. Until the two variables are set, `kanon init` reports `telemetry.register` and `kanon doctor` reports `telemetry.unconfigured`, neither blocking. Then:
 
-1. Add an entry to the register:
+1. Add an entry to the register, where [it lives](#where-the-register-lives):
 
    ```json
    { "key": "<openssl rand -hex 4>", "repository": "<owner>/<repo>", "readers": ["ref:refs/heads/<default branch>"] }
@@ -543,7 +557,7 @@ node infra/telemetry/import.mjs --export "$OUT/cost-rows.json"
 node infra/telemetry/import.mjs --export "$OUT/cost-rows.json" --key <key> --apply --profile kanon
 ```
 
-The export holds the adopter's rows, so it stays beside the register, outside the public tree. The dry run prints counts, field names and enum values only, and exits non-zero while any row stops; plan 0002 §7 lists what stops a row.
+The export holds the adopter's rows, so it stays beside the register, out of every repository where Kanon's lanes run ([Where the register lives](#where-the-register-lives)). The dry run prints counts, field names and enum values only, and exits non-zero while any row stops; plan 0002 §7 lists what stops a row.
 
 **The work-item backfill (S7a, [plan 0003](plans/0003-metrics.md) M5)** derives a repository's work-item rows with the collector's own step, over one span from `--since` to now, read with the Owner's `gh` token. It sends them as the backfill role:
 

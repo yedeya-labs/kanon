@@ -7,7 +7,9 @@
 //
 // Writes <dir>/template.json, which `aws cloudformation package` takes, and <dir>/parameters.json,
 // which `aws cloudformation deploy --parameter-overrides file://...` takes. Both hold the
-// register's contents, so <dir> belongs outside the public tree, beside the register.
+// register's contents, so <dir> belongs beside the register: never in a repository where Kanon's
+// lanes run, public or private, whose diffs and files their model reads (docs/telemetry.md,
+// "Where the register lives").
 //
 // Per repository it adds a writer role, a reader role and the function URL permission. The
 // repository appears only in the two trust policies' `sub` conditions, never with a wildcard.
