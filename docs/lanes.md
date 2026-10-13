@@ -366,6 +366,8 @@ The merge lane merges a pull request with no person in the loop only inside the 
 - **Keeps four triggers.** A review is what it acts on. CI completing on your default branch is its sweep, because a merge there changes every other open pull request's mergeability. The hourly `schedule` is a floor for the day nothing merges. A dispatch with `pr_number` and `apply` is the only dry run: without `apply`, it reports each verdict and changes nothing.
 - **Grants `contents: read`.** Every write is made with the Judge App's token, minted for the Merger.
 
+**What the gate doesn't wait on.** It never counts its own run's jobs (the checks whose run is `GITHUB_RUN_ID`) as unsettled, so the run an approval triggers merges a green-zone pull request even though GitHub reports it `UNSTABLE` because of that same run ([#812](https://github.com/yedeya-labs/kanon/issues/812)). The review that woke it and the jobs that start on the same review event aren't checks it requires, but while one of them is still running GitHub reports `UNSTABLE`, and the gate waits on it like any other running check, another Merger run included.
+
 **If your production promotion is human-gated, you may let the Merger merge your high-risk paths** ([#158](https://github.com/yedeya-labs/kanon/issues/158), `K-MERGE-4`). Where every production deploy already waits for a person's approval, say so under `## Choices` in your adoption record, and name what holds the approval:
 
 ```markdown

@@ -290,7 +290,7 @@ export const UNSTABLE_SETTLE_MS = 20 * 60 * 1000;
  * passed" (RA-1147), and that judgement is the caller's.
  *
  * @typedef {{name: string, workflowName?: string, status: string, conclusion: string|null,
- *            startedAt?: string, completedAt?: string, databaseId?: number}} Check
+ *            startedAt?: string, completedAt?: string, databaseId?: number, runId?: string}} Check
  * @param {Check[]} checks
  * @returns {{relevant: Check[], live: Check[], pending: Check[], cancelled: Check[], failed: Check[]}}
  */
@@ -470,14 +470,16 @@ export function checkPartition(checks) {
  * projects both via `CONFLICT_JSON`; this typedef is the only place a future caller
  * learns it must too.
  *
- * @param {{escalations: Array<readonly [RegExp, string]>, implementer?: string, reviewer?: string, now?: number}} who
+ * @param {{escalations: Array<readonly [RegExp, string]>, implementer?: string, reviewer?: string, now?: number, ownRunId?: string|number|null}} who
  * `now` is injected for the `UNSTABLE` settle window, so the decision stays a function of
- * its arguments. `escalations` is REQUIRED: `escalatingPaths` of the escalation file as the
- * default branch has it (kanon#54). There is no default, because a default would be a list
+ * its arguments. `ownRunId` is injected the same way: the Actions run this decision runs in
+ * (`GITHUB_RUN_ID`), whose jobs are never an unsettled check about the PR (kanon#812).
+ * `escalations` is REQUIRED: `escalatingPaths` of the escalation file as the default branch
+ * has it (kanon#54). There is no default, because a default would be a list
  * of paths the adopter never declared, and a missing list is a caller's bug that must throw
  * rather than merge a PR no path rule was applied to.
  */
-export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN, reviewer = REVIEWER_LOGIN, now = Date.now() } = /** @type {any} */ ({})) {
+export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN, reviewer = REVIEWER_LOGIN, now = Date.now(), ownRunId = null } = /** @type {any} */ ({})) {
   if (!Array.isArray(escalations) || escalations.length === 0) {
     throw new Error('mergeVerdict needs the escalating paths (`escalatingPaths` of docs/qa/escalation-paths.md), and was given none');
   }
@@ -993,26 +995,46 @@ export function mergeVerdict(pr, { escalations, implementer = IMPLEMENTER_LOGIN,
   // applies verbatim, so the same answer — but BOUNDED, because `UNSTABLE` also covers a
   // non-required check that has genuinely failed, and a wait with no end is the silent
   // shape this file refuses:
-  //   · anything on the head still running, this pipeline's own checks included → wait
+  //   · anything ELSE on the head still running, this pipeline's own checks included → wait
+  //   · only THIS run's jobs still running → settled; they are the `UNSTABLE` (kanon#812)
   //   · all settled, the last one inside `UNSTABLE_SETTLE_MS` → wait; the sweep re-asks
   //   · all settled for longer than that, or no timestamp to judge by → escalate as before
   // `BLOCKED` and `BEHIND` are untouched: neither is a check that has yet to settle.
+  //
+  // THIS RUN IS NOT A CHECK ON THE PR (kanon#812). A review-triggered Merger run shows on
+  // the PR as `merge / merge`, a non-required check still running while it reads the
+  // rollup — so GitHub reports `UNSTABLE` because of the very run asking, and the first
+  // bullet used to make every review-triggered run wait on itself, leaving each approved
+  // green-zone PR to the sweep. Keyed on the RUN ID (from the check's `detailsUrl`), not
+  // the workflow name: every job of this run, and only this run, carries it, so an earlier
+  // or concurrent Merger run on the head still counts. This run's jobs are also left out of
+  // the settle window's timestamps: `merge / logins` completed seconds ago by definition.
+  const ours = (c) => ownRunId != null && c.runId != null && String(c.runId) === String(ownRunId);
+  let unstableIsUs = false;
   if (pr.mergeStateStatus === 'UNSTABLE') {
-    const unsettled = pr.checks.filter((c) => c.status !== 'COMPLETED');
+    const others = pr.checks.filter((c) => !ours(c));
+    const unsettled = others.filter((c) => c.status !== 'COMPLETED');
     if (unsettled.length) {
       return wait('merge-state-unsettled', `GitHub reports \`UNSTABLE\` while ${unsettled.map((c) => c.name).join(', ')} ${unsettled.length > 1 ? 'are' : 'is'} still running — a non-required check that has not settled is not a verdict about this PR (RA-1773)`);
     }
-    const stamps = pr.checks.map((c) => Date.parse(c.completedAt ?? c.startedAt ?? '')).filter(Number.isFinite);
+    // ONLY OUR OWN JOBS ARE EXPLAINED AWAY, NOTHING ELSE. A check from another run that
+    // concluded badly, the never-waited-on `SELF_CHECKS` and review-event jobs included, may
+    // be what GitHub's `UNSTABLE` is about, so with one on the head this arm behaves exactly
+    // as before kanon#812: the settle window, then escalate. `CANCELLED` is not a failure
+    // here: a superseded run is routine, and a relevant one was already refused above.
+    const failedElsewhere = others.some((c) => c.conclusion && !['SUCCESS', 'SKIPPED', 'NEUTRAL', 'CANCELLED'].includes(c.conclusion));
+    unstableIsUs = !failedElsewhere && pr.checks.some((c) => ours(c) && c.status !== 'COMPLETED');
+    const stamps = others.map((c) => Date.parse(c.completedAt ?? c.startedAt ?? '')).filter(Number.isFinite);
     const last = stamps.length ? Math.max(...stamps) : null;
-    if (last !== null && now - last < UNSTABLE_SETTLE_MS) {
+    if (!unstableIsUs && last !== null && now - last < UNSTABLE_SETTLE_MS) {
       return wait('merge-state-unsettled', `GitHub reports \`UNSTABLE\`, but every check on this head has settled green here — the last ${Math.max(0, Math.round((now - last) / 60000))} min ago, inside the ${UNSTABLE_SETTLE_MS / 60000}-min settle window — so asking again next sweep rather than escalating a rollup that has not caught up (RA-1319). Past the window it escalates`);
     }
   }
-  if (pr.mergeStateStatus !== 'CLEAN') {
+  if (pr.mergeStateStatus !== 'CLEAN' && !unstableIsUs) {
     return stop('merge-state', `GitHub reports \`${pr.mergeStateStatus}\`, not CLEAN — the ruleset is not satisfied`);
   }
 
-  return { action: 'merge', rule: 'green-zone', quiet: false, why: `approved by ${reviewer} on \`${pr.headSha.slice(0, 7)}\`, all checks green, no escalating path or label` };
+  return { action: 'merge', rule: 'green-zone', quiet: false, why: `approved by ${reviewer} on \`${pr.headSha.slice(0, 7)}\`, all checks green, no escalating path or label${unstableIsUs ? '; GitHub\'s `UNSTABLE` is this Merger run\'s own job, still running' : ''}` };
 }
 
 // ── THE CALLER ──────────────────────────────────────────────────────────────
@@ -1164,6 +1186,11 @@ export function readPr(number, repo, opts = {}) {
       startedAt: c.startedAt ?? c.createdAt,
       completedAt: c.completedAt,
       databaseId: c.databaseId,
+      // The Actions run a CheckRun's job belongs to, so the Merger can tell its own run's
+      // jobs from the rest (kanon#812). gh's projection carries `detailsUrl`
+      // (`…/actions/runs/<run>/job/<job>`); a StatusContext, or a check from another App,
+      // has no such URL and is never ours.
+      runId: /\/actions\/runs\/(\d+)(?:\/|$)/.exec(c.detailsUrl ?? '')?.[1],
       // A StatusContext has `state` and no `status`; a CheckRun has both. Flattening
       // them here keeps the decision from having to know which kind it is looking at.
       status: c.status ?? 'COMPLETED',
@@ -1652,7 +1679,7 @@ async function main() {
   const { merged, escalated, waiting, released, skips, failed } = sweep(numbers, {
     consider: (n) => {
       const pr = readPr(n, repo);
-      const verdict = mergeVerdict(pr, { escalations });
+      const verdict = mergeVerdict(pr, { escalations, ownRunId: process.env.GITHUB_RUN_ID || null });
       // Skips are the majority and are not findings. Printed at one line so a run is
       // still auditable, but never summarised as if something happened.
       console.log(`#${n} → ${verdict.action} (${verdict.rule}): ${verdict.why}`);
