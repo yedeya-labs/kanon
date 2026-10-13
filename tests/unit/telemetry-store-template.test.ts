@@ -290,6 +290,15 @@ describe('the code that is packaged (§5)', () => {
       expect(realpathSync(join(FUNCTION_DIR, f)), f).toBe(realpathSync(real));
     }
   });
+  it('its key-in-text check IS the #41 job\'s and Jev\'s, linked like the schema (#737)', () => {
+    expect(lstatSync(join(FUNCTION_DIR, 'holds-key.mjs')).isSymbolicLink()).toBe(true);
+    expect(realpathSync(join(FUNCTION_DIR, 'holds-key.mjs'))).toBe(realpathSync('scripts/telemetry/holds-key.mjs'));
+    for (const f of [join(FUNCTION_DIR, 'rows.mjs'), 'scripts/telemetry/kanon-findings.mjs', 'scripts/telemetry/jev.mjs']) {
+      const src = readFileSync(f, 'utf8');
+      expect(src, f).toMatch(/^import \{ holdsKey \} from '\.\/holds-key\.mjs';$/m);
+      expect(src, `${f} defines a key check of its own`).not.toMatch(/(?:function|const) holdsKey\b/);
+    }
+  });
   it('imports nothing but node: built-ins and its own files, each of which is in the package', () => {
     for (const f of readdirSync(FUNCTION_DIR)) {
       const specs = [...readFileSync(join(FUNCTION_DIR, f), 'utf8').matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]!);
