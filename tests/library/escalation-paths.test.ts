@@ -267,6 +267,22 @@ describe('a single file under `## Pipeline code` (#728)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("names the line of the refused entry's own bullet under `## Pipeline code`, not an earlier bullet or a fenced example with the same span (#750)", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pipeline-dir-line-'));
+    try {
+      mkdirSync(join(dir, 'scripts/pipeline'), { recursive: true });
+      mkdirSync(join(dir, 'docs/qa'), { recursive: true });
+      // Line 5 is an `## Escalation paths` bullet with the same code span; the entry is line 9.
+      writeFileSync(join(dir, ESCALATION_FILE), FILE('- `scripts/pipeline` — a pattern\n', '- `scripts/pipeline` — no slash\n'));
+      expect(() => readEscalationFile(dir)).toThrow(/escalation-paths\.md:9: `scripts\/pipeline`, under `## Pipeline code`, is a directory in this checkout/);
+      // Lines 3 to 5 are a fenced example holding the same bullet; the entry is line 12.
+      writeFileSync(join(dir, ESCALATION_FILE), FILE('', '- `scripts/pipeline` — no slash\n').replace('\n\n## Escalation paths', '\n\n```\n- `scripts/pipeline` — an example\n```\n\n## Escalation paths'));
+      expect(() => readEscalationFile(dir)).toThrow(/escalation-paths\.md:12: `scripts\/pipeline`, under `## Pipeline code`, is a directory in this checkout/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('reading the escalation file', () => {

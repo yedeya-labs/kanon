@@ -282,6 +282,20 @@ export function pipelineCodePattern(entry) {
  * @returns {EscalationFile}
  */
 export function parseEscalationFile(text) {
+  return withoutLines(parse(text));
+}
+
+/**
+ * @typedef {Omit<EscalationFile, 'pipeline'> & { pipeline: Array<PipelineDir & { line: number }> }} ParsedEscalationFile
+ */
+
+/**
+ * `parseEscalationFile`, keeping each pipeline-code entry's line, so a reader that refuses an
+ * entry later names the line the parser read it from rather than searching the file again (#750).
+ * @param {string} text
+ * @returns {ParsedEscalationFile}
+ */
+function parse(text) {
   const lines = linesOf(text);
   const fenced = fencedLines(lines);
   if (fenced.unclosed !== -1) {
@@ -310,10 +324,13 @@ export function parseEscalationFile(text) {
         `${ESCALATION_FILE}:${line}, under \`${PIPELINE_HEADING}\`, names ${always ? `\`${ALWAYS}\`` : 'a category'}: pipeline code is always \`${PIPELINE_CODE_CATEGORY}\` and always escalates, so write the directory or file, an em dash, then the reason (K-LAYOUT-8)`,
       );
     }
-    return { dir: pipelineEntry(value, line), reason };
+    return { dir: pipelineEntry(value, line), reason, line };
   });
   return { paths, pipeline, defaults };
 }
+
+/** The file as every reader returns it, without the lines `parse` kept. @param {ParsedEscalationFile} file @returns {EscalationFile} */
+const withoutLines = ({ pipeline, ...rest }) => ({ ...rest, pipeline: pipeline.map(({ dir, reason }) => ({ dir, reason })) });
 
 /**
  * Reads and parses the escalation file from a checked-out tree. No file is Kanon's default.
@@ -335,15 +352,14 @@ export function readEscalationFile(root = process.cwd()) {
     if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT') return defaultEscalationFile();
     throw new DeclarationError(`${ESCALATION_FILE} couldn't be read: ${/** @type {Error} */ (e).message}`);
   }
-  const file = parseEscalationFile(text);
-  for (const { dir } of file.pipeline) {
+  const file = parse(text);
+  for (const { dir, line } of file.pipeline) {
     if (dir.endsWith('/') || !isDirectory(join(root, dir))) continue;
-    const line = linesOf(text).findIndex((l) => /^[-*]\s/.test(l) && l.replace(/^[-*]\s+/, '').startsWith(`\`${dir}\``)) + 1;
     throw new DeclarationError(
       `${ESCALATION_FILE}:${line}: \`${dir}\`, under \`${PIPELINE_HEADING}\`, is a directory in this checkout, but an entry without a trailing \`/\` is a single file and matches nothing under it: write \`${dir}/\` (K-LAYOUT-8)`,
     );
   }
-  return file;
+  return withoutLines(file);
 }
 
 /** Whether a path is a directory, and not missing or a file. @param {string} path */
