@@ -239,6 +239,7 @@ export const laneCatalogue = (req, installed) => {
           schedule: TRIGGERS[lane]?.schedule ?? null,
           needs: e.needs,
           cost: e.cost,
+          minutes: e.minutes,
           when: e.when,
           mergeQueue: e.mergeQueue ?? null,
           recommendedWith: e.recommend === 'always' ? [] : e.recommend,

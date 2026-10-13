@@ -1735,7 +1735,7 @@ describe('kanon init and the kanon plugin (#376)', () => {
 // kanon#428: the lane catalogue (docs/lanes.json) is what a person chooses lanes from, in
 // --help and in the JSON's `catalogue`, which the adopt skill asks a question per group from.
 describe('kanon init and the lane catalogue (#428)', () => {
-  const CATALOGUE = JSON.parse(readFileSync(join(ROOT, 'docs/lanes.json'), 'utf8')) as { groups: Array<{ id: string; title: string; header: string }>; lanes: Record<string, { group: string; does: string; when: string; cost: string }> };
+  const CATALOGUE = JSON.parse(readFileSync(join(ROOT, 'docs/lanes.json'), 'utf8')) as { groups: Array<{ id: string; title: string; header: string }>; lanes: Record<string, { group: string; does: string; when: string; cost: string; minutes: string }> };
 
   it('prints every group and every lane of the catalogue in its JSON, with the fields docs/init.md lists', async () => {
     const r = await run(checkout(), fakeGitHub(), ['--yes', '--json', '--dry-run']);
@@ -1746,7 +1746,7 @@ describe('kanon init and the lane catalogue (#428)', () => {
       for (const l of g.lanes) {
         expect(keys(l)).toEqual(fields('### A catalogue lane').sort());
         const e = CATALOGUE.lanes[l.lane]!;
-        expect(l, l.lane).toMatchObject({ does: e.does, when: e.when, cost: e.cost });
+        expect(l, l.lane).toMatchObject({ does: e.does, when: e.when, cost: e.cost, minutes: e.minutes });
         expect(e.group).toBe(g.group);
       }
     }

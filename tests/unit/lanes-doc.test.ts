@@ -210,7 +210,7 @@ const catalogueTable = (): string => {
         ...(l.schedule ? [`a schedule (\`${l.schedule}\`)`] : []),
         ...l.needs,
       ];
-      out.push(`| ${g.title} | \`${l.lane}.yml\` | ${l.does} | ${needs.join('; ')} | ${l.cost} | ${l.when} |`);
+      out.push(`| ${g.title} | \`${l.lane}.yml\` | ${l.does} | ${needs.join('; ')} | ${l.cost} ${l.minutes} | ${l.when} |`);
     }
   }
   return `\n\n${out.join('\n')}\n\n`;

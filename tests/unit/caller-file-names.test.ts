@@ -57,6 +57,9 @@ const SITES: Site[] = [
   { file: 'scripts/workflow-health.mjs', line: "'--workflow', file,", reaches: 'callers' },
   { file: '.github/workflows/agent-lead-reconcile.yml', line: 'set -- --workflow "$workflow"', reaches: 'declared' },
   { file: '.github/workflows/agent-review.yml', line: '--workflow ci.yml --commit', reaches: 'ci.yml' },
+  // Each lane's caller, as `resolveCaller` finds it, to measure its runner-minutes (kanon#581).
+  { file: 'scripts/actions-minutes.mjs', line: '/actions/workflows/${file}/runs?created=', reaches: 'callers' },
+  { file: 'scripts/actions-minutes.mjs', line: '/actions/workflows/${caller.file}`]', reaches: 'callers' },
   { file: 'scripts/telemetry-collect.mjs', line: '/actions/workflows/${encodeURIComponent(file)}/runs', reaches: 'self' },
 ];
 

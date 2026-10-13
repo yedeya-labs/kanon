@@ -124,7 +124,7 @@ describe('requirements.json', () => {
   // built from it, so a lane without an entry would be installed without anyone being told what
   // it does.
   describe('the lane catalogue (docs/lanes.json)', () => {
-    type Entry = { name: string; group: string; does: string; needs: string[]; cost: string; recommend: 'always' | string[]; when: string; mergeQueue?: string; requires?: string[] };
+    type Entry = { name: string; group: string; does: string; needs: string[]; cost: string; minutes: string; recommend: 'always' | string[]; when: string; mergeQueue?: string; requires?: string[] };
     const cat = built.catalogue as { groups: Array<{ id: string; title: string; header: string }>; lanes: Record<string, Entry> };
     const lanes = built.lanes as Record<string, { secrets: string[] }>;
     const groupOf = (lane: string) => cat.groups.findIndex((g) => g.id === cat.lanes[lane]!.group);
@@ -137,11 +137,11 @@ describe('requirements.json', () => {
       for (const [lane, e] of Object.entries(cat.lanes)) {
         // `mergeQueue` only on a lane a merge queue changes (#452), `requires` only on a lane that
         // depends on another (plan 0007 §2.6).
-        expect(Object.keys(e).filter((k) => k !== 'mergeQueue' && k !== 'requires').sort(), lane).toEqual(['cost', 'does', 'group', 'name', 'needs', 'recommend', 'when']);
+        expect(Object.keys(e).filter((k) => k !== 'mergeQueue' && k !== 'requires').sort(), lane).toEqual(['cost', 'does', 'group', 'minutes', 'name', 'needs', 'recommend', 'when']);
         if ('requires' in e) expect(e.requires!.length, `${lane} requires`).toBeGreaterThan(0);
-        for (const k of ['name', 'does', 'cost', 'when'] as const) expect(e[k].trim().length, `${lane} ${k}`).toBeGreaterThan(3);
+        for (const k of ['name', 'does', 'cost', 'minutes', 'when'] as const) expect(e[k].trim().length, `${lane} ${k}`).toBeGreaterThan(3);
         // One line each: --help prints it on one, and a question's option shows it as one.
-        for (const k of ['does', 'cost', 'when'] as const) expect(e[k], `${lane} ${k}`).toMatch(/^[A-Z][^\n]*\.$/);
+        for (const k of ['does', 'cost', 'minutes', 'when'] as const) expect(e[k], `${lane} ${k}`).toMatch(/^[A-Z][^\n]*\.$/);
         if ('mergeQueue' in e) expect(e.mergeQueue, `${lane} mergeQueue`).toMatch(/^[A-Z][^\n]*\.$/);
         expect(Array.isArray(e.needs), lane).toBe(true);
       }
