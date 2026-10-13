@@ -474,7 +474,7 @@ describe('each skill is held to the kanon command it drives', () => {
   // The skill's table of record-only answers names every bold bullet `adoptionFile` can write, read
   // from its source, so a bullet a release adds for a new answer fails here until the skill carries
   // it. The ones left out are not answers: the plan's bullets come from the inspection, and the
-  // Overseer's follows the lanes the callers run, which doctor holds the record to.
+  // Overseer's follows the lanes the callers run, which lane-check holds the record to.
   it('lists, in the upgrade skill, every adoption-record bullet init writes from an answer (#601)', () => {
     const steps = section(skill('upgrade').body, /^## Steps$/)!;
     const table = rows(steps).filter((r) => r[0] !== 'Answer' && !/^-+$/.test(r[0]!));

@@ -256,7 +256,7 @@ The dispatch sweep keeps its three-field projection.
 
 **Built 2026-10-07 (#443):** [`infra/telemetry/aggregate.mjs`](../../infra/telemetry/aggregate.mjs) computes the lane-and-model cells, enforces the three-adopter rule in code, and refuses output that holds an adopter key. A run with no model or no cost is in no cell; the median is the middle value or the mean of the two middles, and the 90th percentile is the nearest rank. Its runbook is [The aggregate function](../telemetry.md#the-aggregate-function). Plan 0003's band indicators are not in it yet. **Amended the same day by the Owner** (§6.1): an aggregate-only function serves the same figures to the Explorer's lane, so the aggregate is no longer only Owner-run, and an adopter that declares so has its own figures published.
 
-**The Owner, as operator, can read every row.** That is how the cross-adopter improvement work reads them. It is stated here so that rule 5 of ADR 0007 is read as being about adopters, which is what it says. Since 2026-10-07 one machine reader sits beside the Owner: the aggregate function's role reads every key's run rows, held by IAM to the aggregate's projection (§6.1).
+**The Owner, as operator, can read every row.** That is how the cross-adopter improvement work reads them. It is stated here so that rule 5 of ADR 0007 is read as being about adopters, which is what it says. Since 2026-10-07 one machine reader sits beside the Owner: the aggregate function's role reads every key's run rows, held by IAM to the aggregate's projection (§6.1). S10's job, which files Kanon's own bugs, is a third reader across keys, private and the Owner's own (the status note's amendment of 2026-10-07).
 
 ### 6.1 Decided by the Owner, 2026-10-07: the aggregate function, and an adopter's own figures
 
@@ -283,7 +283,7 @@ The dispatch sweep keeps its three-field projection.
 - **No dominance rule.** Three distinct adopters are enough for a cross-adopter cell, even when one of them sends most of its runs.
 - **The signals are accepted as built:** the reason code is included beside the lane, stage, Kanon error and version, and the window is 7 days.
 
-**In ADR 0007's terms.** Rule 5 is unchanged: anything shared across adopters is aggregated and anonymised, and a cell that combines adopters needs three of them. An adopter's own figures are its own data, published because it declared so (ADR 0007's note of 2026-10-07). §6's "only the Owner, as operator, can read every row" now has one machine reader beside the Owner, the aggregate function, held by IAM to the projection.
+**In ADR 0007's terms.** Rule 5 is unchanged: anything shared across adopters is aggregated and anonymised, and a cell that combines adopters needs three of them. An adopter's own figures are its own data, published because it declared so (ADR 0007's note of 2026-10-07). §6's "only the Owner, as operator, can read every row" now has one machine reader beside the Owner, the aggregate function, held by IAM to the projection, and S10's private job is a third (the status note).
 
 ## 7. Migrating the reference adopter's history (decision 8)
 
