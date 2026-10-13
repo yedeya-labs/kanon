@@ -52,7 +52,14 @@ function jsDirective(body, kind) {
 }
 
 /** Keywords after which a `/` starts a regex, not a division. */
-const BEFORE_EXPRESSION = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
+const BEFORE_EXPRESSION = new Set(['return', 'typeof', 'instanceof', 'in', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'default', 'extends']);
+
+/** Keywords that may also name a variable (`of` anywhere, `await` outside a module, `yield`
+ *  outside strict code), so a `/` after one may start a regex or divide. */
+const MAYBE_EXPRESSION = new Set(['of', 'await', 'yield']);
+
+/** Keywords whose `(…)` is a statement's head, so a `/` after its `)` starts a regex. */
+const STATEMENT_HEAD = new Set(['if', 'while', 'for', 'with']);
 
 /** Unicode spaces JavaScript reads as whitespace: read as neither, they could hide where a token
  *  ends, so a file with one outside a string is not read. */
@@ -60,15 +67,19 @@ const JS_ODD_SPACE = /[\u00A0\uFEFF\u1680\u2000-\u200A\u202F\u205F\u3000]/;
 
 /**
  * May a `/` (or, in a file that may hold JSX, a `<`) start an expression after the token `prev`
- * (and `before` it)? `null` when the language leaves it ambiguous without parsing: after `}` (a
- * block, or an object literal), `++`/`--`, a `.`, or a TypeScript non-null `x!`.
- * @param {string} prev @param {string} before
+ * (and `before` it)? `)` is an expression's, and `)if` the `)` of a statement's head. `null` when
+ * the language leaves it ambiguous without parsing: after `}` (a block, or an object literal),
+ * `++`/`--`, a `.`, a TypeScript non-null `x!`, a keyword that may name a variable, or, where
+ * the answer would be "no", across a line break, after which automatic semicolon insertion may
+ * have ended the statement (`let x` then `/re/` on the next line).
+ * @param {string} prev @param {string} before @param {boolean} lineBreak
  * @returns {boolean | null}
  */
-function expressionStarts(prev, before) {
-  if (prev === '') return true;
-  if (/^[A-Za-z_$\\\u0080-\uFFFF]/.test(prev)) return BEFORE_EXPRESSION.has(prev);
-  if (prev === 'num' || prev === 'str' || prev === ')' || prev === ']') return false;
+function expressionStarts(prev, before, lineBreak) {
+  if (prev === '' || prev === ')if') return true;
+  if (MAYBE_EXPRESSION.has(prev)) return null;
+  if (/^[A-Za-z_$\\\u0080-\uFFFF]/.test(prev)) return BEFORE_EXPRESSION.has(prev) || (lineBreak ? null : false);
+  if (prev === 'num' || prev === 'str' || prev === ')' || prev === ']') return lineBreak ? null : false;
   if (prev === '}' || prev === '++' || prev === '--' || prev === '.') return null;
   if (prev === '!' && (/^[A-Za-z_$\\\u0080-\uFFFF]/.test(before) ? !BEFORE_EXPRESSION.has(before) : ['num', 'str', ')', ']'].includes(before))) return null;
   return true;
@@ -127,8 +138,10 @@ function jsRegex(text, i) {
  * @returns {number | null}
  */
 function jsCode(text, start, segs, inTemplate, jsx) {
-  let prev = '', before = '', depth = 0;
-  const tok = (/** @type {string} */ t) => { before = prev; prev = t; };
+  let prev = '', before = '', depth = 0, lineBreak = false;
+  const tok = (/** @type {string} */ t) => { before = prev; prev = t; lineBreak = false; };
+  /** What each open `(` closes as: `)if` for a statement's head, `)` for an expression. @type {string[]} */
+  const parens = [];
   let i = start;
   while (i < text.length) {
     const c = text[i] ?? '';
@@ -146,11 +159,12 @@ function jsCode(text, start, segs, inTemplate, jsx) {
       const body = text.slice(i + 2, close);
       if (jsDirective(body, 'block')) segs.push({ t: 'code', v: text.slice(i, close + 2) });
       else segs.push({ t: /[\n\r\u2028\u2029]/.test(body) ? 'nl' : 'ws', v: ' ' });
+      if (/[\n\r\u2028\u2029]/.test(body)) lineBreak = true;
       i = close + 2;
       continue;
     }
     if (c === '/' || (c === '<' && jsx)) {
-      const starts = expressionStarts(prev, before);
+      const starts = expressionStarts(prev, before, lineBreak);
       if (starts === null) return null;
       // JSX: its text may hold a `//` or a quote that is no comment or string.
       if (c === '<' && starts) return null;
@@ -171,9 +185,9 @@ function jsCode(text, start, segs, inTemplate, jsx) {
       i = end;
       continue;
     }
-    if (c === '\n' || (c === '\r' && next !== '\n')) { segs.push({ t: 'nl', v: '\n' }); i++; continue; }
+    if (c === '\n' || (c === '\r' && next !== '\n')) { segs.push({ t: 'nl', v: '\n' }); lineBreak = true; i++; continue; }
     if (c === ' ' || c === '\t' || c === '\r' || c === '\v' || c === '\f') { segs.push({ t: 'ws', v: c }); i++; continue; }
-    if (c === '\u2028' || c === '\u2029') { segs.push({ t: 'nl', v: '\n' }); i++; continue; }
+    if (c === '\u2028' || c === '\u2029') { segs.push({ t: 'nl', v: '\n' }); lineBreak = true; i++; continue; }
     if (JS_ODD_SPACE.test(c)) return null;
     if (/[A-Za-z_$\\\u0080-\uFFFF]/.test(c)) {
       let end = i + 1;
@@ -193,6 +207,15 @@ function jsCode(text, start, segs, inTemplate, jsx) {
       continue;
     }
     if ((c === '+' || c === '-') && next === c) { segs.push({ t: 'code', v: c + c }); tok(c + c); i += 2; continue; }
+    if (c === '(') parens.push(STATEMENT_HEAD.has(prev) || (prev === 'await' && before === 'for') ? ')if' : ')');
+    if (c === ')') {
+      const close = parens.pop();
+      if (close === undefined) return null;
+      segs.push({ t: 'code', v: c });
+      tok(close);
+      i++;
+      continue;
+    }
     if (c === '{') depth++;
     if (c === '}') {
       if (depth === 0) return inTemplate ? i + 1 : null;
