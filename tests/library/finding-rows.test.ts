@@ -162,7 +162,7 @@ describe('buildRows', () => {
     });
     expect(rows[0]!.evidence).toBe('**Observed:** the [name] review, see [url] and scripts/overseer-file.mjs');
     expect(rows[0]!.suggested_fix).toBe('Ask [login].');
-    expect(rows[0]!.scrub_version).toBe(1);
+    expect(rows[0]!.scrub_version).toBe(2);
     expect(rows[0]!.evidence_level).toBe('evidence');
     expect(validate(rows[0])).toEqual({ ok: true });
     expect(outcomes[0]!.fired).toEqual(['url', 'mention', 'name']);

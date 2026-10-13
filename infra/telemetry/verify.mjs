@@ -24,6 +24,7 @@ import { randomInt } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { aggregate, readAll } from './function/aggregate.mjs';
 import { keysOf, SHORT_RETENTION_MS } from './function/index.mjs';
+import { SCRUB_VERSION } from './function/scrub.mjs';
 import { sign } from './function/sigv4.mjs';
 import { cliQuery } from './aggregate.mjs';
 import { erase } from './erase.mjs';
@@ -89,7 +90,7 @@ export function testFinding(now, runId, over = {}) {
     evidence_level: 'evidence',
     evidence: 'Expected: the verify check stores this finding.\nObserved: nothing, it is a test.',
     suggested_fix: 'None: a test row, which expires in 30 days.',
-    scrub_version: 1,
+    scrub_version: SCRUB_VERSION,
     ...over,
   };
 }

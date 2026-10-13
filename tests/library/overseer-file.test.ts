@@ -445,7 +445,7 @@ describe('upstream findings sent to Kanon (plan 0006 §5, F3)', () => {
     const [g, l] = r.rows;
     expect(validate(g)).toEqual({ ok: true });
     expect(g!.evidence_level).toBe('evidence');
-    expect(g!.scrub_version).toBe(1);
+    expect(g!.scrub_version).toBe(2);
     expect(g!.evidence).toBe('**Expected:** K-SELF-11 holds.\n**Observed:** see [url] raised by [login] in [path].');
     expect(drafted(r.upstream, guard.title, 'evidence')).toBe(g!.evidence);
     expect(g!.suggested_fix).toBe('Re-read the range in scripts/overseer-file.mjs before judging.');

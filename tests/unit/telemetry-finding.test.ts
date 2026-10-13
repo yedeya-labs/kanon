@@ -138,8 +138,11 @@ describe('the other checks of a finding row (§2.1, §2.2)', () => {
     const row = withEvidence();
     delete row.scrub_version;
     fails(row, 'scrub_version', 'required');
-    fails({ ...withEvidence(), scrub_version: 2 }, 'scrub_version', 'range');
+    fails({ ...withEvidence(), scrub_version: 3 }, 'scrub_version', 'range');
     fails({ ...withEvidence(), scrub_version: 0 }, 'scrub_version', 'range');
+  });
+  it('scrub_version 1 and 2 both pass, for the overlap while a lane at 1 still sends (kanon#724)', () => {
+    for (const v of [1, 2]) expect(validate({ ...withEvidence(), scrub_version: v })).toEqual({ ok: true });
   });
   it('a telemetry-Explorer finding is about a lane, which it names', () => {
     const row = { ...FIXTURES[2]! };
