@@ -372,8 +372,17 @@ export function loadRenumbered(path = REGISTRY) {
  *  (NodeNext: `gate.ts` as `gate.js`, `gate.tsx` as `gate.jsx` or `gate.js`, `gate.mts` as
  *  `gate.mjs`, `gate.cts` as `gate.cjs`). Matching only the exact path made a test of a declared
  *  `gate.ts` that imports `gate.js` count its fixture ids as coverage. Each form is still the whole
- *  rest of the specifier, so no sibling file matches. Reading a non-tooling test as tooling only
- *  leaves its ids uncounted, which reads as "unverified", never as a false "passed".
+ *  rest of the specifier, so `gate.mjsx` doesn't match `gate.mjs`.
+ *
+ *  THE STEM FORM CAN OVER-MATCH (kanon#757). A specifier without an extension can resolve to a
+ *  sibling that shares the declared file's stem in the same directory: `'../scripts/gate'` can
+ *  name `scripts/gate.json` or `scripts/gate/index.ts` as well as a declared `scripts/gate.mjs`.
+ *  A test that imports only that sibling is then read as tooling, and every consumer drops it.
+ *  For `spec-coverage`'s mentioned-not-cited list, its ids go uncounted, which reads as
+ *  "unverified". The reference corpus and `citation-shift` don't read it either. The renumber
+ *  check and the existence sweep then miss a stale or nonexistent `[AREA-N]` in it, and
+ *  `citation-shift` misses a stale coordinate in its comments. Those checks pass when they
+ *  shouldn't. So widening this matcher is never automatically safe.
  *
  *  @param {string[]} pipelineDirs the declared pipeline-code entries: directories ending in
  *  `/`, and single files
