@@ -85,13 +85,12 @@ export const BRIEF_PATH = 'docs/projects/';
  *  own run and the noise indistinguishable, and the only thing bounding this loop is
  *  telling those apart.
  *
- *  WHAT IT DOES NOT BUY, stated because the first version of this comment claimed it:
- *  a distinct label does NOT keep `agent-review.yml` out of it. That workflow's gate
- *  reads the PR's label SET rather than the label added, and a brief PR carries
- *  `review:please` from open — so ANY label event on one starts its `filter` job. The
- *  cost is a few seconds and no second review: RA-1351 keys a re-review on a HUMAN
- *  sender, and RA-1376's `github.actor` in the concurrency key puts a bot's churn in its
- *  own group, so it cannot cancel an in-flight review either. Measured on PR RA-1659.
+ *  WHAT IT ALSO BUYS, SINCE kanon#627: it keeps `agent-review.yml` out of it. That
+ *  workflow once read the PR's label SET, and a brief PR carries `review:please` from
+ *  open, so any label event on one started its `filter` job (measured on PR RA-1659).
+ *  Now its gate admits a `labeled` event only for the label ADDED being one of its
+ *  three, so this churn starts no review there. And the run takes a concurrency group
+ *  of its own, one per run, so it cannot cancel an in-flight review either.
  *
  *  Nor `agent:revise`, which is the implementer's and would start
  *  `agent-implement-revise.yml` on a brief PR it can only decline. */

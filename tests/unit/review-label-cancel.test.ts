@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { evaluate, interpolate, type Contexts } from './helpers/expression.js';
+const { CHURN_LABEL } = await import('../../scripts/review-recovery.mjs');
+const { REVISE_LABEL } = await import('../../scripts/brief-revise-recovery.mjs');
 
 /**
  * kanon#627: a label the Reviewer adds after its verdict cancelled its own review run.
@@ -160,5 +162,39 @@ describe('every other event keeps the group it had', () => {
   ];
   it.each(unchanged.map((c, i) => [i, c] as const))('event %i', (_, c) => {
     expect(interpolate(GROUP, c)).toBe(interpolate(OLD_GROUP, c));
+  });
+});
+
+describe('what the two recoveries\' churns do in this lane, as their comments say (kanon#764)', () => {
+  // The comments in `review-recovery.mjs` and `brief-revise-recovery.mjs` explain each label
+  // choice by what this lane's gate and group do with the churn. These hold the constants to
+  // that, so a renamed churn label goes red here rather than leaving the reasoning false.
+
+  it('the review recovery churns a label the gate admits by name, so its churn starts a review', () => {
+    for (const labels of [[CHURN_LABEL], ['agent:implement'], ['agent:triage']]) {
+      const churn: Ev = { action: 'labeled', label: CHURN_LABEL, labels: [...new Set([...labels, CHURN_LABEL])], runId: 110 };
+      expect(filterRuns(churn), labels.join()).toBe(true);
+      expect(decides(churn), labels.join()).toBe(true);
+    }
+  });
+
+  it('two of its churns share the `-open-other` group, so the second supersedes the first', () => {
+    const first: Ev = { action: 'labeled', label: CHURN_LABEL, labels: [CHURN_LABEL], runId: 111 };
+    const second: Ev = { action: 'labeled', label: CHURN_LABEL, labels: [CHURN_LABEL], runId: 112 };
+    expect(group(first)).toBe('qa-review-7-pull_request_target-open-other');
+    expect(group(second)).toBe(group(first));
+  });
+
+  it('a churn label of its own, outside the three, would start no review', () => {
+    const own: Ev = { action: 'labeled', label: 'agent:review-churn', labels: [CHURN_LABEL, 'agent:review-churn'], runId: 113 };
+    expect(filterRuns(own)).toBe(false);
+  });
+
+  it('the brief recovery\'s churn on a brief PR starts no review and cancels none', () => {
+    // A brief PR carries `review:please` from open.
+    const churn: Ev = { action: 'labeled', label: REVISE_LABEL, labels: ['review:please', REVISE_LABEL], runId: 114 };
+    expect(filterRuns(churn)).toBe(false);
+    expect(group(churn)).toBe('qa-review-7-pull_request_target-open-label-114');
+    expect(group(churn)).not.toBe(group(RUNNING));
   });
 });

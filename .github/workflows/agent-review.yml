@@ -1045,8 +1045,8 @@ jobs:
     # release-please and dependabot in one condition — their skips are by design and
     # must stay silent.
     #
-    # `labeled` is here for RA-893, not to double up: `opened` and `labeled` share ONE
-    # concurrency group for the same actor (:56) with `cancel-in-progress`, so a
+    # `labeled` is here for RA-893, not to double up: on an unlabelled PR `opened` and
+    # `labeled` share ONE concurrency group, `-open-other`, with `cancel-in-progress`, so a
     # NON-qualifying label (`documentation`, `sev:*`, …) landing within the 60s window
     # cancelled the `opened` run mid-sleep and nothing replaced it — no comment, run
     # `skipped`, straight back to the RA-679 shape this job exists to prevent. Running on

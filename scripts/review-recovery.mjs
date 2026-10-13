@@ -34,10 +34,11 @@
 // uncovered, and adding this lane over the old bound would inherit the defect.
 //
 // The two lanes CAN both fire on one PR in the same tick, and the cost of that is
-// nil rather than merely acceptable: both churn `review:please` as the same App, so
-// both `labeled` events land in `agent-review.yml`'s
-// `qa-review-<pr>-pull_request_target-open-<actor>` concurrency group with
-// `cancel-in-progress`, and the second supersedes the first. One review either way.
+// nil rather than merely acceptable: both churn `review:please`, one of the three
+// labels whose `labeled` event lands in `agent-review.yml`'s
+// `qa-review-<pr>-pull_request_target-open-other` concurrency group (it has had no
+// actor since RA-1334), which has `cancel-in-progress`, so the second supersedes the
+// first. One review either way.
 //
 // ── THE BOUND IS EVIDENCE, NOT A COUNTER ────────────────────────────────────
 // Churn only when no `agent-review.yml` run for that head is evidence a review was
@@ -87,9 +88,10 @@ export const REVIEWER_LOGIN = appLogin('Reviewer');
  *  `review:please` is churned rather than a fresh label of this lane's own, unlike
  *  RA-1595's `agent:lead-revise`. There the distinct name was load-bearing: it let the
  *  workflow's job-level `if` decline every OTHER label event, which is what separated
- *  the churn's own run from the noise. Here the gate reads the label SET rather than
- *  the label added, so a new name would change nothing about which runs start — and
- *  the separation comes from the run's ACTOR instead (`review-run-evidence.mjs`).
+ *  the churn's own run from the noise. Here a new name would start nothing: the review
+ *  lane's gate admits a `labeled` event only when the label ADDED is one of these three
+ *  (kanon#627), and `review:please` is one of them. So the churn's own run is told from
+ *  the noise by the run's ACTOR instead (`review-run-evidence.mjs`).
  *  Churning a label the PR already carries also keeps the label set unchanged, so
  *  nothing downstream that reads labels sees a state this recovery invented. */
 export const REVIEW_LABELS = ['review:please', 'agent:implement', 'agent:triage'];
