@@ -1326,7 +1326,7 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(d.inspection).toMatchObject({ owner: 'acme', ownerKind: 'user', private: false, defaultBranch: 'main', rulesets: 'yes', installedLanes: [], callsRelease: false });
     expect(d.answers).toEqual({
       projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false,
-      reuseApps: null, plugin: true, telemetry: false, upstreamFindings: 'drafted', upstreamEvidence: null, feature: 'review', reviewTrigger: 'labelled', sensitiveData: null, consent: 'no',
+      reuseApps: null, plugin: true, telemetry: false, upstreamFindings: 'drafted', upstreamEvidence: null, feature: 'review', reviewTrigger: 'labelled', sensitiveData: null, consent: 'no', claudeAuth: 'subscription',
     });
     expect(d.inspection.codeowners).toBeNull();
     expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], reuse: [], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
@@ -2383,5 +2383,158 @@ describe("kanon init and the Lead's brief template (#749)", () => {
     const dir = checkout();
     await run(dir, fakeGitHub(), ['--json', '--no-apps', '--lanes', 'review,lead']);
     expect(read(dir, TEMPLATE)).toBe(BRIEF);
+  });
+});
+
+// Plan 0009 A5: the Claude credential, inferred from the repository's secret names and never
+// asked, written as the one secret of the pair each caller maps, and shown on the summary's
+// `Claude` line with where it came from.
+describe('kanon init and the Claude credential (plan 0009 A5)', () => {
+  const TOKEN = 'CLAUDE_CODE_OAUTH_TOKEN';
+  const KEY = 'ANTHROPIC_API_KEY';
+  const ALL = Object.keys(REQ.lanes).map((l) => l.slice('agent-'.length)).join(',');
+  const MODEL_LANES = Object.keys(REQ.lanes).filter((l) => REQ.lanes[l]!.claude?.length);
+  /** The Claude secrets a caller's job maps, by name. */
+  const mapped = (text: string) => {
+    const jobs = (parseYaml(text) as { jobs: Record<string, { secrets?: Record<string, string> }> }).jobs;
+    return Object.values(jobs).flatMap((j) => Object.keys(j.secrets ?? {})).filter((n) => n === TOKEN || n === KEY);
+  };
+  const laneOf = (path: string) => path.replace(/^\.github\/workflows\/|\.yml$/g, '');
+  const callers = (d: Doc) => d.files.filter((f) => /^\.github\/workflows\/agent-[a-z-]+\.yml$/.test(f.path as string));
+  const claudeLine = (d: Doc) => d.summary.find((l) => l.answer === 'Claude');
+  const catalogueSecrets = (d: Doc) => (d as Doc & { catalogue: Array<{ lanes: Array<{ secrets: string[] }> }> }).catalogue.flatMap((g) => g.lanes).flatMap((l) => l.secrets);
+
+  it('has a Claude pair for every model lane, and none for a lane that runs no model', () => {
+    expect(MODEL_LANES.length).toBeGreaterThan(10);
+    for (const l of ['agent-merge', 'agent-lead-reconcile', 'agent-dispatch-sweep']) expect(REQ.lanes[l]!.claude, l).toBeUndefined();
+    for (const l of MODEL_LANES) expect(REQ.lanes[l]!.claude, l).toEqual([TOKEN, KEY]);
+  });
+
+  it('infers api-key when the repository holds only ANTHROPIC_API_KEY, and every caller maps it alone', async () => {
+    const dir = checkout({
+      // What init leaves to the project, so lane-check passes every caller: the Explorer's sweep hook and the Overseer's ledger.
+      '.github/actions/explore-sweep/action.yml': 'name: Sweep\ndescription: x\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: "true"\n',
+      'docs/qa/capability-ledger.md': '# Capability ledger\n',
+    });
+    // `kanon apps`, stubbed, writes the App register that lane-check reads.
+    const d = parse(await run(dir, fakeGitHub({ secrets: new Set([KEY]) }), ['--json', '--lanes', ALL]));
+    expect(d.answers.claudeAuth).toBe('api-key');
+    expect(claudeLine(d)).toMatchObject({ fields: ['claudeAuth'], source: 'inferred', reason: "from the repository's secrets" });
+    expect(claudeLine(d)!.value).toMatch(/^API key \(ANTHROPIC_API_KEY\)/);
+    expect(callers(d)).toHaveLength(Object.keys(REQ.lanes).length);
+    for (const f of callers(d)) {
+      const lane = laneOf(f.path as string);
+      expect(mapped(read(dir, f.path as string)), lane).toEqual(MODEL_LANES.includes(lane) ? [KEY] : []);
+    }
+    // Nothing asks for the token, and the key is held, so no credential step is left.
+    expect(d.findings.map((f) => f.id)).not.toContain('secret.claude-code-oauth-token');
+    expect(d.findings.map((f) => f.id)).not.toContain('secret.anthropic-api-key');
+    for (const f of d.features) {
+      expect(f.secrets as string[], f.feature).toContain(KEY);
+      expect(f.secrets as string[], f.feature).not.toContain(TOKEN);
+    }
+    expect(catalogueSecrets(d)).toContain(KEY);
+    expect(catalogueSecrets(d)).not.toContain(TOKEN);
+    if (hasYq) {
+      const lc = laneCheck(dir);
+      expect(lc.status, lc.out).toBe(0);
+    }
+  });
+
+  it('defaults to subscription when the repository holds neither, and every caller maps the token alone', async () => {
+    const dir = checkout();
+    const d = parse(await run(dir, fakeGitHub({ secrets: new Set() }), ['--json', '--no-apps', '--lanes', ALL]));
+    expect(d.answers.claudeAuth).toBe('subscription');
+    expect(claudeLine(d)).toMatchObject({ source: 'default', reason: '' });
+    expect(claudeLine(d)!.value).toMatch(/^subscription token \(CLAUDE_CODE_OAUTH_TOKEN\)/);
+    for (const f of callers(d)) {
+      const lane = laneOf(f.path as string);
+      expect(mapped(read(dir, f.path as string)), lane).toEqual(MODEL_LANES.includes(lane) ? [TOKEN] : []);
+    }
+    expect(d.findings.map((f) => f.id)).toContain('secret.claude-code-oauth-token');
+    expect(d.findings.map((f) => f.id)).not.toContain('secret.anthropic-api-key');
+    // Secrets the token can't list say nothing, so the default stands, and says why.
+    const blind = parse(await run(checkout(), fakeGitHub({ secrets: null }), ['--json', '--no-apps']));
+    expect(blind.answers.claudeAuth).toBe('subscription');
+    expect(claudeLine(blind)).toMatchObject({ source: 'default', reason: "the token can't list the repository's secrets" });
+    const unreadable = blind.findings.find((f) => f.id === 'secret.unreadable')!;
+    expect(unreadable.fix.text).toContain(TOKEN);
+    expect(unreadable.fix.text).not.toContain(KEY);
+  });
+
+  it('keeps the subscription when the repository holds both, never preferring the key', async () => {
+    const dir = checkout();
+    const d = parse(await run(dir, fakeGitHub({ secrets: new Set([TOKEN, KEY]) }), ['--json', '--no-apps', '--lanes', ALL]));
+    expect(d.answers.claudeAuth).toBe('subscription');
+    expect(claudeLine(d)).toMatchObject({ source: 'inferred', reason: "from the repository's secrets" });
+    for (const f of callers(d)) {
+      const lane = laneOf(f.path as string);
+      expect(mapped(read(dir, f.path as string)), lane).toEqual(MODEL_LANES.includes(lane) ? [TOKEN] : []);
+    }
+  });
+
+  it('--claude-auth overrides the inference, and the summary line says it came from the flag', async () => {
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub({ secrets: new Set([TOKEN]) }), ['--json', '--no-apps', '--claude-auth', 'api-key']);
+    const d = parse(r);
+    expect(d.answers.claudeAuth).toBe('api-key');
+    expect(claudeLine(d)).toMatchObject({ source: 'flag', reason: '' });
+    expect(mapped(read(dir, '.github/workflows/agent-review.yml'))).toEqual([KEY]);
+    // Step R5's split (plan 0009 §9): the key is made in the Console and stored in the person's own terminal.
+    const step = d.findings.find((f) => f.id === 'secret.anthropic-api-key')!;
+    expect(step).toMatchObject({ category: 'secret', subject: KEY, blocking: false });
+    expect(step.fix.url).toBe('https://console.anthropic.com/settings/keys');
+    expect(step.fix.text).toMatch(/Claude Console, in a workspace for CI alone with its own spend limit/);
+    expect(step.fix.text).toMatch(/in your own terminal/);
+    expect(step.fix.commands).toEqual([`gh secret set ${KEY} -R ${REPO}   # in your own terminal, never with ! at the Claude Code prompt`]);
+    expect(d.findings.map((f) => f.id)).not.toContain('secret.claude-code-oauth-token');
+    // The prose summary names the line and its source too.
+    expect(r.err).toMatch(/^Claude {9}API key \(ANTHROPIC_API_KEY\).* flag$/m);
+    const sub = parse(await run(checkout(), fakeGitHub({ secrets: new Set([KEY]) }), ['--json', '--no-apps', '--claude-auth', 'subscription']));
+    expect(sub.answers.claudeAuth).toBe('subscription');
+    expect(claudeLine(sub)).toMatchObject({ source: 'flag' });
+  });
+
+  it('refuses a --claude-auth it does not know, by name, before anything changes', () => {
+    expect(() => parseArgs(['--claude-auth', 'oauth'], REQ)).toThrow('--claude-auth takes subscription or api-key, not "oauth"');
+    expect(() => parseArgs(['--claude-auth', 'api-key', '--claude-auth', 'api-key'], REQ)).toThrow('--claude-auth is given twice');
+    expect(parseArgs(['--claude-auth=api-key'], REQ).given.claudeAuth).toBe('api-key');
+  });
+
+  it('never asks it, and Change something can change it at the terminal', async () => {
+    const asked: string[] = [];
+    await run(checkout(), fakeGitHub(), [], undefined, REQ, { ask: person({}, asked) });
+    expect(asked.some((q) => q.includes('Claude credential'))).toBe(false);
+    const changed: string[] = [];
+    const dir = checkout();
+    const r = await run(dir, fakeGitHub(), [], undefined, REQ, { ask: changing('6', { 'Which Claude credential': 'Anthropic API key' }, changed) });
+    expect(r.status, r.err).toBe(0);
+    expect(changed.find((q) => q.startsWith('Which lines to change'))).toContain('6. Claude credential');
+    expect(mapped(read(dir, '.github/workflows/agent-review.yml'))).toEqual([KEY]);
+    expect(r.out).toMatch(/^Claude {9}API key .* asked$/m);
+  });
+
+  it('switches an installation by its callers alone: each differs only in its credential line', async () => {
+    const dir = checkout();
+    const github = fakeGitHub({ secrets: new Set([TOKEN]) });
+    await run(dir, github, ['--json', '--no-apps', '--feature', 'build']);
+    const d = parse(await run(dir, github, ['--json', '--no-apps', '--feature', 'build', '--claude-auth', 'api-key', '--dry-run']));
+    const differs = d.files.filter((f) => f.status === 'differs');
+    // The dispatch sweep runs no model, so its caller maps neither and stays as it was.
+    expect(differs.map((f) => f.path).sort()).toEqual(callers(d).map((f) => f.path as string).filter((p) => MODEL_LANES.includes(laneOf(p))).sort());
+    expect(d.files.find((f) => f.path === '.github/workflows/agent-dispatch-sweep.yml')).toMatchObject({ status: 'same' });
+    for (const f of differs) {
+      expect(f.diff, f.path as string).toEqual([`-       ${TOKEN}: \${{ secrets.${TOKEN} }}`, `+       ${KEY}: \${{ secrets.${KEY} }}`]);
+      expect(mapped(f.content as string), f.path as string).toEqual([KEY]);
+    }
+  });
+
+  it('maps exactly one of the pair in every caller, for either answer', () => {
+    for (const auth of ['subscription', 'api-key'] as const) {
+      for (const lane of Object.keys(REQ.lanes)) {
+        const names = mapped(callerFile(lane, REQ.lanes[lane]!, { release: 'v1.2.3', ciName: 'CI', defaultBranch: 'main', claudeAuth: auth }));
+        expect(names, `${lane} on ${auth}`).toEqual(MODEL_LANES.includes(lane) ? [auth === 'api-key' ? KEY : TOKEN] : []);
+      }
+    }
   });
 });
