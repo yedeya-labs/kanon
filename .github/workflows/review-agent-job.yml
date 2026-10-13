@@ -1436,6 +1436,7 @@ jobs:
           timeout-minutes: "45"  # the job's own, held to it by tests/unit/telemetry-schema.test.ts
           # This lane calls no project-setup hook (kanon#185), so no hook check code reaches it.
           kanon-error: ${{ steps.setup.outputs.kanon-error }}
+          prompt-cache-ttl: ${{ steps.agent.outputs.prompt-cache-ttl }}
       - name: Upload reviewer transcript
         if: always() && steps.claim.outputs.proceed == 'true'
         uses: actions/upload-artifact@v7

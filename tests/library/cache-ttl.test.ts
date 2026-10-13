@@ -11,7 +11,9 @@ import { TTL_ATTRIBUTES, declaresPin, pinnedLanes, render, summarize, ttlSplit }
  * (`cache-ttl.md`), moved from the reference adopter (RA-1899) with its tests, and plan 0002 §6's
  * changes for the hosted store (kanon#470): an arm is a lane, the lanes Kanon pins to 5m are read
  * from Kanon's own lane definitions, and only `tag: run` rows count. The pinned arms' health
- * check stayed behind with the cutover ledger that dated each pin; the output says so.
+ * check stayed behind with the cutover ledger that dated each pin, and came back with
+ * `prompt_cache_ttl` (#546): a run row records the TTL its run was pinned at, so a pin is
+ * judged on the rows that say they ran under it, and needs no date.
  *
  * The ONE thing that makes this check non-obvious is an absence: older rows lack
  * `cache_write_5m_tokens`, so for those the five-minute share is a SUBTRACTION
@@ -58,7 +60,10 @@ describe('spotting a five-minute cache write', () => {
   });
 
   it('projects the store to the fields it reads, and the tag', () => {
-    expect([...TTL_ATTRIBUTES].sort()).toEqual(['cache_write_1h_tokens', 'cache_write_5m_tokens', 'cache_write_tokens', 'outcome', 'sk', 'tag']);
+    expect([...TTL_ATTRIBUTES].sort()).toEqual([
+      'cache_write_1h_tokens', 'cache_write_5m_tokens', 'cache_write_tokens', 'duration_api_ms', 'duration_ms', 'outcome',
+      'prompt_cache_ttl', 'sk', 'tag',
+    ]);
   });
 });
 
@@ -99,7 +104,7 @@ describe('the lines the Overseer pastes into its audit', () => {
     for (const items of [[row('a', 10, 10)], [row('a', 100, 0)], [row('a')]]) {
       const lines = render(summarize([{ lane: 'review', items }], NO_PINS), DAYS).split('\n');
       expect(lines[0]).toMatch(/^cache-ttl: /);
-      expect(lines.at(-1)).toMatch(/^cache-ttl: the pinned lanes' own health .* is NOT checked here/);
+      expect(lines.at(-1)).toMatch(/^cache-ttl: the pinned lanes' own health .* is NOT checked: no row .* records a pin/);
     }
   });
 });
@@ -180,6 +185,90 @@ describe('a deliberate pin is the setting working, not a finding', () => {
   it("says the fallback's cause applies to the lanes that do NOT pin, so the remedy is not 'revert the pin'", () => {
     const line = render(summarize([{ lane: 'implement', items: [row('a', 100, 0)] }], new Set(['review'])), DAYS);
     expect(line).toMatch(/do NOT pin the TTL/);
+  });
+});
+
+describe("a pinned lane's own health, from the rows that record their pin (#546)", () => {
+  /** A row that records the TTL it ran at, with its 1h and 5m writes and its two durations. */
+  const pinned = (ttl: string, oneHour: number, fiveMin: number, durationMs?: number, apiMs?: number) => ({
+    ...row('p', oneHour + fiveMin, oneHour),
+    cache_write_5m_tokens: { N: String(fiveMin) },
+    prompt_cache_ttl: { S: ttl },
+    ...(durationMs === undefined ? {} : { duration_ms: { N: String(durationMs) } }),
+    ...(apiMs === undefined ? {} : { duration_api_ms: { N: String(apiMs) } }),
+  });
+
+  it('says a pin took effect when every row that records it wrote at its TTL, and what the runs idled', () => {
+    const s = summarize([{ lane: 'review', items: [pinned('5m', 0, 100, 200_000, 150_000), pinned('5m', 0, 50, 90_000, 80_000)] }], new Set(['review']));
+    expect(s.pins).toEqual([{ lane: 'review', ttl: '5m', rows: 2, judged: 2, missed: 0, idleKnown: 2, idleOver: 0, maxIdleMs: 50_000 }]);
+    const line = render(s, DAYS);
+    expect(line).toMatch(/^cache-ttl: pin health, from the 2 row\(s\) that record the TTL they ran at: review \(5m\) 2 row\(s\): the pin took effect on 2 of 2 judged; 0 of 2 with a known idle time idled over 300s in total \(the longest, 50s\)\.$/m);
+    expect(line).not.toMatch(/NOT checked/);
+    expect(line).not.toMatch(/PIN NOT TAKING EFFECT|IDLE PAST/);
+  });
+
+  it('names a pin that did NOT take effect: a row that records 5m and still wrote at 1h', () => {
+    const s = summarize([{ lane: 'review', items: [pinned('5m', 100, 0), pinned('5m', 0, 100)] }], new Set(['review']));
+    expect(s.pins[0]).toMatchObject({ rows: 2, judged: 2, missed: 1 });
+    // Still no offender: the lane pinned 5m, so its 5m write is the setting working.
+    expect(s.offenders).toEqual([]);
+    const line = render(s, DAYS);
+    expect(line).toMatch(/the pin took effect on 1 of 2 judged/);
+    expect(line).toMatch(/PIN NOT TAKING EFFECT on review \(5m\)/);
+    expect(line).toMatch(/v2\.1\.242/);
+  });
+
+  it('names a 5m pin whose runs idled past 300s in total, and says that is an upper bound, not a gap', () => {
+    const s = summarize([{ lane: 'explore', items: [pinned('5m', 0, 100, 900_000, 400_000), pinned('5m', 0, 100, 60_000, 50_000)] }], new Set(['explore']));
+    expect(s.pins[0]).toMatchObject({ idleKnown: 2, idleOver: 1, maxIdleMs: 500_000 });
+    const line = render(s, DAYS);
+    expect(line).toMatch(/1 of 2 with a known idle time idled over 300s in total \(the longest, 500s\)/);
+    expect(line).toMatch(/IDLE PAST THE 5-MINUTE TTL on explore/);
+    expect(line).toMatch(/upper bound/);
+  });
+
+  it('never counts a run with no API time as idle: an unknown idle is not a measured one', () => {
+    const s = summarize([{ lane: 'review', items: [pinned('5m', 0, 100, 900_000)] }], new Set(['review']));
+    expect(s.pins[0]).toMatchObject({ rows: 1, idleKnown: 0, idleOver: 0 });
+    expect(render(s, DAYS)).toMatch(/0 of 0 with a known idle time/);
+  });
+
+  it("trusts the row's own pin over Kanon's lane definitions, both ways", () => {
+    // Recorded `default` on a lane the definitions pin: its 5m write is the unintended fallback.
+    const unpinned = { ...pinned('default', 0, 100) };
+    expect(summarize([{ lane: 'review', items: [unpinned] }], new Set(['review'])).offenders).toEqual([{ lane: 'review', share: 1 }]);
+    // Recorded `5m` on a lane they don't: its 5m write is the setting working.
+    const s = summarize([{ lane: 'implement', items: [pinned('5m', 0, 100)] }], NO_PINS);
+    expect(s.offenders).toEqual([]);
+    expect(s.expected).toEqual([{ lane: 'implement', share: 1 }]);
+    expect(render(s, DAYS)).toMatch(/BY DESIGN on the lane\(s\) that pin it, implement/);
+  });
+
+  it('calls a 1h pin that wrote at 5m a pin not taking effect, never the unpinned fallback', () => {
+    const s = summarize([{ lane: 'implement', items: [pinned('1h', 0, 100)] }], NO_PINS);
+    expect(s.offenders).toEqual([]);
+    expect(s.pins).toEqual([expect.objectContaining({ lane: 'implement', ttl: '1h', judged: 1, missed: 1 })]);
+    const line = render(s, DAYS);
+    expect(line).toMatch(/PIN NOT TAKING EFFECT on implement \(1h\)/);
+    // The idle check is a 5-minute pin's question only.
+    expect(line).not.toMatch(/idle/);
+  });
+
+  it('judges no pin on a row with no TTL breakdown, and still reads its idle time', () => {
+    const s = summarize([{ lane: 'review', items: [pinned('5m', 0, 0, 400_000, 0)] }], new Set(['review']));
+    expect(s.pins[0]).toMatchObject({ rows: 1, judged: 0, missed: 0, idleKnown: 1, idleOver: 1 });
+  });
+
+  it('says how many rows on a pinned lane predate the field, which are counted by design and unchecked', () => {
+    const s = summarize([{ lane: 'review', items: [row('a', 100, 0), pinned('5m', 0, 100)] }], new Set(['review']));
+    expect(s.unrecorded).toBe(1);
+    expect(render(s, DAYS)).toMatch(/1 row\(s\) on the lane\(s\) Kanon pins don't record their pin \(written before run row version 3\), so they are counted by design and not checked\./);
+  });
+
+  it('says no pin was checked when the only rows that record their TTL record none', () => {
+    const s = summarize([{ lane: 'implement', items: [pinned('default', 100, 0)] }], NO_PINS);
+    expect(s.pins).toEqual([]);
+    expect(render(s, DAYS).split('\n').at(-1)).toMatch(/is NOT checked: no row .* records a pin/);
   });
 });
 

@@ -55,7 +55,7 @@ import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 // The classifier lives in the `agent-classify` block's directory (RA-2691), so the block can
 // run it from its own path; this imports the same file.
 import { classifyResult, parseObjects, readConfiguredModel, readResult } from "../agent-classify/classify-agent-result.mjs";
-import { LANE_ROLES, STAGES, TERMINAL_REASONS, describeErrors, validate } from "./schema.mjs";
+import { LANE_ROLES, PROMPT_CACHE_TTLS, STAGES, TERMINAL_REASONS, describeErrors, validate } from "./schema.mjs";
 import { isCliEntry } from "../../scripts/lib/cli-entry.mjs";
 
 const SCHEMA = 1;
@@ -809,7 +809,7 @@ export function buildRowV2(row, classification, extra) {
     ? undefined
     : (TERMINAL_REASONS.includes(row.terminal_reason) ? row.terminal_reason : "other");
   const v2 = {
-    schema_version: 2,
+    schema_version: 3,
     row_kind: "run",
     tag: extra.tag || "run",
     recorded_at: row.recorded_at,
@@ -836,6 +836,9 @@ export function buildRowV2(row, classification, extra) {
     max_turns: row.max_turns ?? undefined,
     autocompact: row.autocompact ?? undefined,
     config_fingerprint: row.config_fingerprint ?? undefined,
+    // THE TTL THE RUN WAS PINNED AT (#546), as `agent-run` said it. A value outside the list is
+    // left out, never written as `default`: a lane that didn't say is not a lane that didn't pin.
+    prompt_cache_ttl: PROMPT_CACHE_TTLS.includes(extra.prompt_cache_ttl) ? extra.prompt_cache_ttl : undefined,
     total_cost_usd: row.total_cost_usd ?? undefined,
     num_turns: row.num_turns ?? undefined,
     duration_ms: row.duration_ms ?? undefined,
@@ -883,6 +886,7 @@ function readExtra(args, env, path) {
     job_status: args.job_status ?? env.TELEMETRY_JOB_STATUS ?? "",
     job_started_at: args.job_started_at ?? env.TELEMETRY_JOB_STARTED_AT ?? "",
     timeout_minutes: args.timeout_minutes ?? env.TELEMETRY_TIMEOUT_MINUTES ?? "",
+    prompt_cache_ttl: args.prompt_cache_ttl ?? env.TELEMETRY_PROMPT_CACHE_TTL ?? "",
     transcript: transcriptCounts(objects),
   };
 }

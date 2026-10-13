@@ -178,6 +178,7 @@ jobs:
           # `smoke` lane (plan 0002 §2.4), and every read filters on `tag = run`.
           lane: review
           tag: smoke
+          prompt-cache-ttl: ${{ steps.agent.outputs.prompt-cache-ttl }}
 
       - name: Check the finish block classified the run and wrote its telemetry row
         env:

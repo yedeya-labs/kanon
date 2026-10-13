@@ -132,7 +132,7 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
     expect(ACTIONS.map((b) => `${b}: ${[...readOutputsOf(b)].sort().join(' ') || 'nothing'}`)).toEqual([
       'agent-classify: kind retry',
       'agent-finish: kind retry',
-      'agent-run: execution_file started-at',
+      'agent-run: execution_file prompt-cache-ttl started-at',
       'agent-setup: kanon-error',
       'agent-telemetry: nothing',
       'dco: nothing',

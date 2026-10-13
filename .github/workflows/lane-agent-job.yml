@@ -506,6 +506,7 @@ jobs:
           kanon-error: ${{ steps.hook.outputs.kanon-error || steps.setup.outputs.kanon-error }}
           job-started-at: ${{ steps.job.outputs.started-at }}
           timeout-minutes: ${{ inputs.timeout-minutes }}
+          prompt-cache-ttl: ${{ steps.agent.outputs.prompt-cache-ttl }}
 
       # THE RA-2519 BREADCRUMBS. A PR lane's recovery (`reviseRecovery` in the pipeline
       # library's `lead-reconcile.mjs` for the implementer, `brief-revise-recovery.mjs` for

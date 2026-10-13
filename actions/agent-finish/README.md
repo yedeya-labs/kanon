@@ -42,6 +42,7 @@ Call it with `id: finish`, `if: always()` and `continue-on-error: true`, and han
 | `stages` | no | The lane's stages in the order it runs them, as `stage=conclusion` pairs: `token`, `checkout`, `hook`, `setup`, `agent`. The block adds `finish`. The row's `failed_stage` is the first that ended the run. Pass conclusions, so a stage the lane runs on past is never blamed, and pass nothing else: a hook failure is recorded as `hook`, never by the hook's own step names. |
 | `kanon-error` | no | The `kanon-error` output of an earlier Kanon step that failed (the spine's hook check, `agent-setup`'s push probe). |
 | `job-started-at`, `timeout-minutes` | no | When the job started and its timeout, for the row's `timed_out`. |
+| `prompt-cache-ttl` | no | `agent-run`'s `prompt-cache-ttl` output, the TTL the run was pinned at, for the row's `prompt_cache_ttl`. Empty records nothing, which is not `default`. |
 
 | Output | Meaning |
 |---|---|
