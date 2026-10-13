@@ -244,6 +244,20 @@ jobs:
         ratchet names it otherwise), and if a spec quotes its own coverage,
         re-measure that sentence from the tool.
 
+        LINE CITES MOVE WITH THE CODE THAT MOVED THEM (`K-SELF-3`). Before your
+        final push, re-point each `file:line` coordinate in a doc or a code
+        comment that your diff moved, and commit the edits in that same push:
+
+          node "$KANON/scripts/citation-shift.mjs" --base "$(git merge-base origin/BASE HEAD)" --fix
+
+        BASE is the branch your pull request merges into. Add every `--path` the
+        project's own CI passes the same script (search .github/workflows/ for
+        `citation-shift.mjs`; with none there, pass none). Then run it again
+        without `--fix`: it must exit zero. Pass `--base` as written: once you
+        have merged the base branch in, HEAD is a merge commit, which the script
+        would otherwise take for CI's and diff against the wrong parent. A cite
+        left behind turns CI red after you have finished, and no finding names it.
+
         SCOPE-FIRST BAIL — still post a plan-comment, keep the label, and STOP for: a
         DATA migration (backfilling / transforming existing rows), any AUTH /
         credential / security change, or DESTRUCTIVE schema (dropping / renaming /

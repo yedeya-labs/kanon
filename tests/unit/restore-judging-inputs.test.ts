@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type WorkflowStep } from './helpers/workflow-step.js';
 import { effectiveSteps, laneBlockOf, stepsAsRun } from './helpers/spine.js';
 import { readFlattened } from './helpers/called-workflow.js';
+import { NO_VERDICT_STEP } from '../../scripts/lane-retry.mjs';
 
 /**
  * RA-848, moved at step 4 of plan 0001 with the reference adopter's `restore-agent-docs.sh`:
@@ -424,10 +425,25 @@ describe('RA-2697 — the agent-lane blocks come from the action cache, never th
       'agent-classify',
       'Retryable once the cause clears: the model was unreachable',
       'Retryable once the cause clears: the model API failed mid-run',
+      NO_VERDICT_STEP,
     ]);
     expect(job.slice(pin + 1, finish).filter((s) => !laneBlockOf(s)).every((s) => /^echo /.test(String(s.run))),
       'nothing between the check and the blocks but echo steps').toBe(true);
     expect(String(job[pin]!.run), 'and the result check runs no script').not.toMatch(/\bnode\b|\bgit\b/);
+  });
+
+  it('leaves the no-verdict breadcrumb only for an agent that exited zero and posted nothing (kanon#622)', () => {
+    const job = reviewSteps();
+    const crumb = job.find((s) => s.name === NO_VERDICT_STEP);
+    expect(crumb, `the review job lacks "${NO_VERDICT_STEP}"`).toBeDefined();
+    // Read from two facts fixed before any of the PR's code runs after the agent: the runner's
+    // outcome of the agent step, and the reconcile step's own output. Never from the result
+    // file, which the quality step's script could rewrite (RA-2691).
+    expect(crumb!.if).toBe("failure() && steps.claim.outputs.proceed == 'true' && steps.reconcile.outputs.verdict == 'none' && steps.agent.outcome == 'success'");
+    const reconcile = job.find((s) => s.id === 'reconcile');
+    expect(String(reconcile?.run)).toMatch(/echo "verdict=none" >> "\$GITHUB_OUTPUT"/);
+    expect(String(reconcile?.env?.AGENT)).toBe('${{ steps.agent.outcome }}');
+    expect(job.findIndex((s) => s.id === 'agent')).toBeLessThan(job.indexOf(crumb!));
   });
 
   it('hands the reviewer App token to no block that runs after the agent', () => {

@@ -693,6 +693,20 @@ jobs:
         as `(set -o pipefail; <command> 2>&1 | tail -n 40)` so its exit code
         survives the pipe, and follow what the section says about its output.
 
+        LINE CITES MOVE WITH THE CODE THAT MOVED THEM (`K-SELF-3`). Before your
+        final push, re-point each `file:line` coordinate in a doc or a code
+        comment that your diff moved, and commit the edits in that same push:
+
+          node "$KANON/scripts/citation-shift.mjs" --base "$(git merge-base origin/BASE HEAD)" --fix
+
+        BASE is the branch your pull request merges into. Add every `--path` the
+        project's own CI passes the same script (search .github/workflows/ for
+        `citation-shift.mjs`; with none there, pass none). Then run it again
+        without `--fix`: it must exit zero. Pass `--base` as written: once you
+        have merged the base branch in, HEAD is a merge commit, which the script
+        would otherwise take for CI's and diff against the wrong parent. A cite
+        left behind turns CI red after you have finished, and no finding names it.
+
         WHEN YOU ARE DONE, comment on the PR with what you changed, what you
         verified, and anything you DISAGREED with and why. The comment must
         contain the marker <!-- qa:implement-revise --> on its own line — it is

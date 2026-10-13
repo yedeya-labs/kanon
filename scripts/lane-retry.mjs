@@ -14,10 +14,12 @@
 // only attempt never reached the model, and each lane then deferred to the other.
 //
 // ── THE RULE ────────────────────────────────────────────────────────────────
-//   · CLASSIFY FROM EVIDENCE, NOT THE CONCLUSION. Only two failures are retried: the
-//     configured model was never reached (`unreachable` — a cap, an outage) and the
-//     model API failed part-way through (`api_error`). A run that ran and failed, or
-//     stopped at its turn or dollar cap, keeps today's report-only behaviour.
+//   · CLASSIFY FROM EVIDENCE, NOT THE CONCLUSION. Only three failures are retried: the
+//     configured model was never reached (`unreachable` — a cap, an outage), the
+//     model API failed part-way through (`api_error`), and, on the review lane only, the
+//     agent exited zero and posted no verdict (`no_verdict`, kanon#622, which `K-PRIN-13`
+//     names). A run that ran and failed, or stopped at its turn or dollar cap, keeps
+//     today's report-only behaviour.
 //   · WAIT OUT THE CAUSE: `RETRY_COOL_DOWN_HOURS` after the failure, long enough for a
 //     session cap to reset. A fixed wait rather than "some later run reached the model",
 //     which is the stronger signal but needs the RA-1485 store this tick cannot read.
@@ -34,7 +36,10 @@
 // the token every one of these readers already holds (`Actions: read`) — no new App
 // permission, no store read, no annotation parsing (annotations need `Checks: read`,
 // which the lead App does not have). `workflow-retry-breadcrumbs` in the unit tier holds
-// the four workflows and these names together.
+// the four workflows and these names together. The review lane's `no_verdict` comes from
+// neither: its job leaves `NO_VERDICT_STEP` (below) itself, from the agent step's outcome
+// and the reconcile step's `verdict=none`, because the classifier has no class for a run
+// that succeeded.
 //
 // NODE BUILTINS ONLY: `agent-lead-reconcile.yml` and `agent-rebase.yml`'s filter job run
 // with no `npm ci` (RA-1957).
@@ -53,6 +58,21 @@ const REPO = process.env.GITHUB_REPOSITORY;
  * before the rename is still retried.
  */
 export { RETRY_STEPS, RETRY_STEP_NAMES };
+
+/**
+ * THE REVIEW LANE'S OWN BREADCRUMB (kanon#622): its agent exited ZERO and posted no verdict,
+ * which the reconcile step reds as the RA-356 shape. The classifier has nothing to say about
+ * a run that succeeded, so this is not one of `RETRY_STEPS`, which every lane carries and
+ * its classify step writes. The review job leaves it from the runner's own outcome of the
+ * agent step and the reconcile step's `verdict=none`.
+ *
+ * Measured on an adopter's implement PR: its revise push went red on one mechanical check,
+ * the review run on that head exited zero with nothing posted, and with one failed attempt
+ * and no breadcrumb the head was report-only. It sat red, with no verdict and no owner,
+ * until a person pushed. The cause of a silent exit is unknown, so it gets the same
+ * cool-down and the same bound as the other two: once per head, never a second time.
+ */
+export const NO_VERDICT_STEP = 'Retryable once: the review agent exited zero and posted no verdict';
 
 /** Hours after a retryable failure before its head may be retried. The subscription's
  *  session window is five hours; anything shorter risks spending the one retry inside
@@ -74,10 +94,11 @@ export const RETRY_COOL_DOWN_HOURS = retryCoolDownHours(process.env.QA_RETRY_COO
  *
  * @param {{jobs?: {name?: string, steps?: {name?: string, conclusion?: string|null, completed_at?: string|null}[]}[]}|null|undefined} payload
  * @param {{job?: (name: string) => boolean}} [opts]
- * @returns {{classification: 'unreachable'|'api_error', at: string|null}|null}
+ * @returns {{classification: 'unreachable'|'api_error'|'no_verdict', at: string|null}|null}
  */
 export function retryEvidenceIn(payload, { job = () => true } = {}) {
   const byName = new Map(Object.entries(RETRY_STEP_NAMES).flatMap(([k, names]) => names.map((v) => [v, k])));
+  byName.set(NO_VERDICT_STEP, 'no_verdict');
   for (const j of payload?.jobs ?? []) {
     if (!job(String(j?.name ?? ''))) continue;
     for (const s of j?.steps ?? []) {
@@ -85,7 +106,7 @@ export function retryEvidenceIn(payload, { job = () => true } = {}) {
       // `success` only: `skipped` is the step saying "not this class", and anything
       // else (a cancelled job mid-step) proves nothing.
       if (classification && s.conclusion === 'success') {
-        return { classification: /** @type {'unreachable'|'api_error'} */ (classification), at: s.completed_at ?? null };
+        return { classification: /** @type {'unreachable'|'api_error'|'no_verdict'} */ (classification), at: s.completed_at ?? null };
       }
     }
   }

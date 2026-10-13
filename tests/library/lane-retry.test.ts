@@ -8,7 +8,7 @@ import { retryClass } from '../../actions/agent-classify/classify-agent-result.m
 import { ROOT } from './helpers/adopter.js';
 
 import {
-  RETRY_STEPS, RETRY_STEP_NAMES, describeRetry, makeRetryEvidenceReader, retryCoolDownHours, retryDecision, retryEvidenceIn,
+  NO_VERDICT_STEP, RETRY_STEPS, RETRY_STEP_NAMES, describeRetry, makeRetryEvidenceReader, retryCoolDownHours, retryDecision, retryEvidenceIn,
 } from '../../scripts/lane-retry.mjs';
 import { attemptComment, attemptsIn, rebaseDecision, report as rebaseReport } from '../../scripts/rebase-lane.mjs';
 import { briefReviseRecovery, report as briefReport, BRIEF_PATH } from '../../scripts/brief-revise-recovery.mjs';
@@ -273,5 +273,48 @@ describe('the brief and standalone review lanes (RA-2519)', () => {
     });
     expect(out.churn).toEqual([{ number: 1659, sha: HEAD, retry: { runId: 51, classification: 'unreachable', at: ago(6) } }]);
     expect(reviewReport(out, { apply: true })).toContain('run 51');
+  });
+});
+
+/**
+ * kanon#622 — a review run that exited ZERO and posted no verdict is a retryable death too.
+ *
+ * The measured case: an adopter's implement PR whose revise push went red on one mechanical
+ * check. Its review run exited zero, posted nothing, and its reconcile step failed the job.
+ * `review-recovery` then saw a head with one FAILED attempt and no breadcrumb, which is
+ * report-only, so the red head sat with no verdict and no owner until a person pushed.
+ */
+describe('a review that exited zero with no verdict is retried once (kanon#622)', () => {
+  const HEAD = '2fc7a2c70000000000000000000000000000000b';
+  const pr = {
+    number: 2836, state: 'OPEN', isDraft: false, labels: [{ name: 'agent:implement' }, { name: 'review:please' }],
+    headRefOid: HEAD, reviews: [], mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE',
+    commits: [{ oid: HEAD, committedDate: ago(9) }],
+  };
+  const run = (id: number) => ({ id, actor: 'example-implementer', event: 'workflow_run', status: 'completed', conclusion: 'failure', createdAt: ago(8) });
+  const crumb = (name: string, conclusion = 'success') =>
+    ({ jobs: [{ name: 'review / review', steps: [{ name, conclusion, completed_at: ago(6) }] }] });
+
+  it('reads the review job\'s own breadcrumb as `no_verdict`, and only when it ran', () => {
+    expect(NO_VERDICT_STEP).not.toMatch(/\(/);
+    expect(Object.values(RETRY_STEPS)).not.toContain(NO_VERDICT_STEP);
+    expect(retryEvidenceIn(crumb(NO_VERDICT_STEP))).toEqual({ classification: 'no_verdict', at: ago(6) });
+    expect(retryEvidenceIn(crumb(NO_VERDICT_STEP, 'skipped'))).toBeNull();
+  });
+
+  it('re-churns the head once the cool-down has passed, and says why', () => {
+    const out = standaloneReviewRecovery([pr], {
+      runsFor: () => [run(38032817618)], ciSettled: () => true, now: NOW, hours: 4, evidenceOf: evidence('no_verdict'), retryHours: HOURS,
+    });
+    expect(out.churn).toEqual([{ number: 2836, sha: HEAD, retry: { runId: 38032817618, classification: 'no_verdict', at: ago(6) } }]);
+    expect(reviewReport(out, { apply: true })).toMatch(/run 38032817618, which died retryably \(`no_verdict`\)/);
+  });
+
+  it('retries it once: a second silent run on the same head is reported, never retried', () => {
+    const out = standaloneReviewRecovery([pr], {
+      runsFor: () => [run(2), run(1)], ciSettled: () => true, now: NOW, hours: 4, evidenceOf: evidence('no_verdict'), retryHours: HOURS,
+    });
+    expect(out.churn).toEqual([]);
+    expect(out.noted).toHaveLength(1);
   });
 });
