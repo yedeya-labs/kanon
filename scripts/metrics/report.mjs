@@ -125,8 +125,12 @@ export function metricsReport(rows, { until, days = WINDOW_DAYS }) {
   /** @type {string[]} */
   const warnings = [];
   if (!banded) {
+    // With two bands or more, τ goes uncomputed only when every cost is tied (kanon#719).
+    const failed = validity.tau === null
+      ? "Kendall's τ between band and cost is not computed, because every merged item's cost is the same, so cost is not shown to rise with the band in this window"
+      : `Kendall's τ between band and cost is ${validity.tau}, and its 95% interval (${validity.low ?? '?'} to ${validity.high ?? '?'}) does not sit entirely above zero, so cost does not rise with the band in this window`;
     warnings.push(validity.status === 'invalid'
-      ? `The band validity check failed: Kendall's τ between band and cost is ${validity.tau ?? 'undefined'}, and its 95% interval (${validity.low ?? '?'} to ${validity.high ?? '?'}) does not sit entirely above zero, so cost does not rise with the band in this window. The pooled view is shown instead of the banded one.`
+      ? `The band validity check failed: ${failed}. The pooled view is shown instead of the banded one.`
       : `The band validity check could not run: it needs ${MINIMUM.validity} merged items with a cost and a band, in at least two bands, and has ${validity.n} in ${bandsSeen}. The pooled view is shown instead of the banded one.`);
   }
 
