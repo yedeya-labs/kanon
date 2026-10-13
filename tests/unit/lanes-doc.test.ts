@@ -316,3 +316,21 @@ describe("docs/lanes.md stores the Claude token in the person's own terminal or 
     expect(sentence).toContain('< <file>');
   });
 });
+
+// kanon#766: the review lane waits for CI itself (a label added while CI runs is deferred, and
+// `workflow_run` on CI's completion reviews the labelled head), so "Your first lane: the Reviewer"
+// says what the adopt skill's steps 9 and 11 and docs/install.md's "How review starts" say: add
+// `review:please` when the pull request opens, without waiting for its CI.
+describe("docs/lanes.md's first-review sentence says to label a pull request when it opens (kanon#766)", () => {
+  const sentence = read('docs/lanes.md').split('\n').find((l) => l.startsWith('Then merge. **The first review comes on the next pull request')) ?? '';
+
+  it('finds the sentence, so the check below is not vacuous', () => {
+    expect(sentence).not.toBe('');
+  });
+
+  it('says to add `review:please` when the pull request opens, without waiting for its CI, or to dispatch', () => {
+    expect(sentence).toMatch(/`review:please`[^.]*to a pull request when it opens, without waiting for its CI \(the review lane waits for CI itself/);
+    expect(sentence).not.toMatch(/whose CI has finished/);
+    expect(sentence).toMatch(/-f pr_number=/);
+  });
+});
