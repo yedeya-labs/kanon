@@ -28,11 +28,15 @@
 # INERT until: (1) the caller + the docs/qa playbooks are on the default branch,
 # (2) the GitHub Apps exist + are installed, and (3) these secrets are set (plan 0001 §8):
 #   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY   (the Author App, which holds the Implementer)
-#   CLAUDE_CODE_OAUTH_TOKEN                 (Claude subscription; `claude setup-token`)
+#   CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY (one Claude credential: the ONE OF line below)
 # KANON ROLE: Implementer
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
 # role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
 # in the App register must exist, and this lane's tokens fit inside that role's row.
+# ONE OF SECRETS: CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY
+# The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
+# credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
+# `agent-run` refuses both or neither, by name, before the agent starts.
 name: Implement (Implementer)
 
 on:
@@ -56,7 +60,9 @@ on:
       AUTHOR_APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
-        required: true
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
 
 concurrency:
   # Scope by the just-added label (see agent-triage.yml for why issue-only would let
@@ -278,6 +284,7 @@ jobs:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
   # THE IMPLEMENTER STATUS (plan 0005 §3.3, question 6; step L3). A fixed job after the agent's,
   # never the agent: it sets `kanon/role: implementer` on the one pull request this run opened,

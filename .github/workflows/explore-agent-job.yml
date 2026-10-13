@@ -43,7 +43,9 @@ on:
           value is dropped). Arrives masked, as every secret does.
         required: true
       claude-token:
-        required: true
+        required: false
+      anthropic-api-key:
+        required: false
 
 jobs:
   explore:
@@ -197,6 +199,7 @@ jobs:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
           claude-token: ${{ secrets.claude-token }}
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
           github-token: ${{ steps.app-token.outputs.token }}
           prompt: |
             You are the Explorer (Agent 1) of the QA pipeline, in SWEEP mode. First read

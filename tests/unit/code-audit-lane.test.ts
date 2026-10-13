@@ -267,7 +267,7 @@ describe('the workflow around it (moved from the reference adopter)', () => {
       'permission-contents': 'read',
       'permission-issues': 'write',
     });
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', ...STORE_SECRETS]);
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['ANTHROPIC_API_KEY', 'AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', ...STORE_SECRETS]);
   });
 
   it('keeps the schedule every three days at 07:30, and a dispatch with no inputs', () => {

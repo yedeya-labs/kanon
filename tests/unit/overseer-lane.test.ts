@@ -427,8 +427,8 @@ describe('the capability anchor query, run as composed (RA-899)', () => {
 });
 
 describe('the workflow around it', () => {
-  it('maps the Overseer\'s App secrets and the Claude token, by name', () => {
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'KANON_TELEMETRY_READER_ROLE', ...STORE_SECRETS]);
+  it('maps the Overseer\'s App secrets and the Claude credentials, by name', () => {
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['ANTHROPIC_API_KEY', 'AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'KANON_TELEMETRY_READER_ROLE', ...STORE_SECRETS]);
     // Optional, and marked so for lane-check: a caller maps it once its repository has a reader role.
     expect(wf.on.workflow_call.secrets.KANON_TELEMETRY_READER_ROLE).toEqual({ required: false });
     expect(LANE_TEXT).toMatch(/^# OPTIONAL SECRET: KANON_TELEMETRY_READER_ROLE$/m);

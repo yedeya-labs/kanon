@@ -29,6 +29,10 @@
       "optionalSecrets": [
         "QA_STORE_BUCKET",
         "QA_STORE_ROLE_ARN"
+      ],
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
       ]
     },
     "agent-dispatch-sweep": {
@@ -86,7 +90,11 @@
       ],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     },
     "agent-explore": {
       "identities": [
@@ -122,6 +130,10 @@
       "optionalSecrets": [
         "QA_STORE_BUCKET",
         "QA_STORE_ROLE_ARN"
+      ],
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
       ]
     },
     "agent-implement-revise": {
@@ -155,7 +167,11 @@
       ],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     },
     "agent-implement": {
       "identities": [
@@ -184,7 +200,11 @@
       ],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     },
     "agent-lead-reconcile": {
       "identities": [
@@ -246,7 +266,11 @@
       "reads": [],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     },
     "agent-lead-split": {
       "identities": [
@@ -273,7 +297,11 @@
       ],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     },
     "agent-lead": {
       "identities": [
@@ -302,7 +330,11 @@
       ],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     },
     "agent-merge-reconcile": {
       "identities": [
@@ -329,7 +361,11 @@
       ],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     },
     "agent-merge": {
       "identities": [
@@ -388,6 +424,10 @@
         "KANON_TELEMETRY_READER_ROLE",
         "QA_STORE_BUCKET",
         "QA_STORE_ROLE_ARN"
+      ],
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
       ]
     },
     "agent-project-digest": {
@@ -411,7 +451,11 @@
       "reads": [],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     },
     "agent-rebase": {
       "identities": [
@@ -440,7 +484,11 @@
       ],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     },
     "agent-review": {
       "identities": [
@@ -473,6 +521,10 @@
       ],
       "hooks": [],
       "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ],
       "callerRunNameEndsWith": "${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.pr_number }}"
     },
     "agent-triage": {
@@ -499,7 +551,11 @@
       ],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     },
     "agent-verify-acs": {
       "identities": [
@@ -529,7 +585,11 @@
       ],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     },
     "agent-weekly-digest": {
       "identities": [],
@@ -555,7 +615,11 @@
       "reads": [],
       "readsWorkflows": [],
       "hooks": [],
-      "qaStore": false
+      "qaStore": false,
+      "claude": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ]
     }
   },
   "hook": {

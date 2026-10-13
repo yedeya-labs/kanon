@@ -52,8 +52,9 @@ describe('a Kanon lane, called by a trigger-only caller', () => {
     const inputs = callerInputs(wf.on.workflow_call.inputs)!;
     expect(Object.keys(inputs).sort()).toEqual(['project', 'ref']);
     for (const i of Object.values(inputs)) expect(i).toMatchObject({ required: false, type: 'string' });
-    expect(Object.keys(secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
-    for (const s of Object.values(secrets)) expect(s.required).toBe(true);
+    expect(Object.keys(secrets).sort()).toEqual(['ANTHROPIC_API_KEY', 'AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
+    // The App's two are required; the Claude credentials are a pair, one of which the caller maps (plan 0009 §10).
+    for (const [k, s] of Object.entries(secrets)) expect(s.required, k).toBe(k.endsWith('_APP_ID') || k.endsWith('_APP_PRIVATE_KEY'));
     expect(raw).not.toMatch(/QA_EXPLORER/);
   });
 

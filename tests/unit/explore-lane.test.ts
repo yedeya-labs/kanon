@@ -59,7 +59,7 @@ describe('the store contract (plan 0004 §3.2, P9\'s check)', () => {
     expect(realGroup(wf.concurrency.group)).toBe('agent-explore');
     expect(Object.keys(callerInputs(wf.on.workflow_call.inputs)!)).toEqual(['tier']);
     expect(wf.on.workflow_call.inputs.tier).toMatchObject({ type: 'string', default: '', required: false });
-    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', ...STORE_SECRETS]);
+    expect(Object.keys(wf.on.workflow_call.secrets).sort()).toEqual(['ANTHROPIC_API_KEY', 'AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', ...STORE_SECRETS]);
   });
 });
 

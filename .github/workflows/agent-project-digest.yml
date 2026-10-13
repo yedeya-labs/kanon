@@ -22,7 +22,11 @@
 # check.
 #
 # INERT until: the caller is on the default branch + these secrets (plan 0001 §8):
-#   CLAUDE_CODE_OAUTH_TOKEN, and DIGEST_WEBHOOK to post
+#   CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, and DIGEST_WEBHOOK to post
+# ONE OF SECRETS: CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY
+# The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
+# credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
+# `agent-run` refuses both or neither, by name, before the agent starts.
 name: Daily project digest
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -48,7 +52,9 @@ on:
         default: ""
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
-        required: true
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
       # Not required: without it the digest posts nothing (above).
       DIGEST_WEBHOOK:
         required: false
@@ -147,6 +153,7 @@ jobs:
           KANON: ${{ steps.kanon.outputs.path }}
         with:
           claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ github.token }}
           # 5-MINUTE PROMPT CACHE, DELIBERATELY (RA-2058). Unset, this auth path takes the
           # 1-HOUR TTL automatically, and a 1h cache WRITE bills at 2x base input against

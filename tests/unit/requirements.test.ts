@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TRIGGERS } from '../../cli/callers.mjs';
-import { buildRequirements, laneFiles } from './helpers/requirements.js';
+import { buildRequirements, laneFiles, laneTree } from './helpers/requirements.js';
 
 /**
  * The requirements file each release ships (plan 0005 §5.4, §5.5, step L9): `requirements.json`
@@ -64,6 +64,24 @@ describe('requirements.json', () => {
       const extra = name === 'agent-overseer' ? ['KANON_TELEMETRY_READER_ROLE'] : [];
       expect(l.optionalSecrets, name).toEqual(coupled.includes(name) ? [...extra, 'QA_STORE_BUCKET', 'QA_STORE_ROLE_ARN'] : undefined);
       for (const n of l.optionalSecrets ?? []) expect(l.secrets, name).toContain(n);
+    }
+  });
+
+  it('names the Claude credential pair for every lane that runs a model, and for no other (plan 0009 §10, step A2)', () => {
+    // A lane runs a model when any file it runs calls the `agent-run` block: read from the files
+    // themselves, not from the marker, so a model lane that loses its `# ONE OF SECRETS:` line is red.
+    const runsModel = (file: string) => laneTree(ROOT, file).some((f) => /^\s*(?:-\s*)?uses: \$\/actions\/agent-run\s*$/m.test(readFileSync(join(ROOT, '.github/workflows', f), 'utf8')));
+    const lanes = built.lanes as Record<string, { secrets: string[], claude?: string[], optionalSecrets?: string[] }>;
+    const model = laneFiles(ROOT).filter(runsModel).map((f) => f.replace(/\.yml$/, ''));
+    expect(model).toHaveLength(16);
+    expect(Object.keys(lanes).filter((l) => !model.includes(l))).toEqual(['agent-dispatch-sweep', 'agent-lead-reconcile', 'agent-merge']);
+    for (const [name, l] of Object.entries(lanes)) {
+      expect(l.claude, name).toEqual(model.includes(name) ? ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'] : undefined);
+      // `secrets` keeps the token, the default `kanon init` maps, and never the key, which a
+      // caller maps only in its place; neither is an optional secret of the QA store's kind.
+      expect(l.secrets.includes('CLAUDE_CODE_OAUTH_TOKEN'), name).toBe(model.includes(name));
+      expect(l.secrets, name).not.toContain('ANTHROPIC_API_KEY');
+      expect(l.optionalSecrets ?? [], name).not.toContain('ANTHROPIC_API_KEY');
     }
   });
 

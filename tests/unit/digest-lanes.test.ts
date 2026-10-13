@@ -71,10 +71,12 @@ describe('each digest is a called lane, with its caller’s two triggers', () =>
     expect(lane(file).jobs.gate?.outputs?.member).toBe('${{ steps.gate.outputs.member }}');
   });
 
-  it.each(DIGESTS)('%s: takes the Claude token, and the webhook optionally, and no App', (file) => {
+  it.each(DIGESTS)('%s: takes one Claude credential, and the webhook optionally, and no App', (file) => {
     const secrets = lane(file).on.workflow_call.secrets;
-    expect(Object.keys(secrets).sort()).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'DIGEST_WEBHOOK']);
-    expect(secrets.CLAUDE_CODE_OAUTH_TOKEN?.required).toBe(true);
+    expect(Object.keys(secrets).sort()).toEqual(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'DIGEST_WEBHOOK']);
+    // The token or an API key, its caller maps one (plan 0009 §10): `agent-run` refuses both or neither.
+    expect(secrets.CLAUDE_CODE_OAUTH_TOKEN?.required).toBe(false);
+    expect(secrets.ANTHROPIC_API_KEY?.required).toBe(false);
     // Without the webhook the digest posts nothing and stays green (plan 0004 §6).
     expect(secrets.DIGEST_WEBHOOK?.required).toBe(false);
     expect(text(`.github/workflows/${file}`)).not.toMatch(/create-github-app-token|_APP_ID/);

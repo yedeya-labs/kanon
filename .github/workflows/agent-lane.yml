@@ -305,7 +305,9 @@ on:
       app-private-key:
         required: true
       claude-token:
-        required: true
+        required: false
+      anthropic-api-key:
+        required: false
 
 # NO `permissions:` BLOCK, DELIBERATELY (RA-2592). A called workflow's block can only
 # NARROW its caller's grant, and without one the job gets exactly what the calling job
@@ -392,3 +394,4 @@ jobs:
     secrets:
       app-token: ${{ needs.mint.outputs.sealed }}
       claude-token: ${{ secrets.claude-token }}
+      anthropic-api-key: ${{ secrets.anthropic-api-key }}

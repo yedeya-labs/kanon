@@ -6,7 +6,7 @@ The README's [quickstart](../README.md#quickstart) is the short path: install th
 
 - **Node 24 or later**, **Claude Code**, and **`gh`** signed in as an admin of the repository, with a token that can write Actions secrets ([apps.md](apps.md#what-you-need)).
 - **A browser on the same machine,** to click **Create** and **Install** for the GitHub Apps.
-- **A CI workflow** at `.github/workflows/ci.yml`, which the review lane waits for, and a `CLAUDE_CODE_OAUTH_TOKEN` secret from `claude setup-token` ([lanes.md](lanes.md)).
+- **A CI workflow** at `.github/workflows/ci.yml`, which the review lane waits for, and one Claude credential: a `CLAUDE_CODE_OAUTH_TOKEN` secret from `claude setup-token`, or an Anthropic API key as `ANTHROPIC_API_KEY`, which a caller maps in the token's place ([lanes.md](lanes.md)).
 - **A GitHub plan with rulesets** to leave bootstrap. A private repository on the Free plan has none, so it can never leave bootstrap ([`K-ADOPT-3`](../rulebook/10-adoption.md)).
 
 Read [who Kanon is for](../rulebook/00-principles.md) first, and the [adoption checklist](../rulebook/10-adoption.md) for the order of the steps.

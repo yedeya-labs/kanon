@@ -60,7 +60,9 @@ on:
           value is dropped). Arrives masked, as every secret does.
         required: true
       claude-token:
-        required: true
+        required: false
+      anthropic-api-key:
+        required: false
 
 jobs:
   review:
@@ -872,13 +874,11 @@ jobs:
             --allowedTools "Bash(gh run view:*)" "Bash(gh run list:*)" "Bash(gh search:*)" "Bash(gh api:*)"
             --setting-sources user
             --exclude-dynamic-system-prompt-sections
-          # Auth = Claude subscription (Max/Pro) via an OAuth token (`claude setup-token`).
-          # GRADUATE to API-key billing: give the `agent-run` block an `anthropic_api_key`
-          # input beside `claude-token`, pass it here as
-          #   anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # (set that secret too). API key isolates CI from your interactive quota;
-          # the subscription shares the 5h/weekly pool with your hands-on use.
+          # Auth = the one credential the caller maps (plan 0009 §10): the subscription's OAuth
+          # token (`claude setup-token`), which shares the 5h/weekly pool with hands-on use, or
+          # an Anthropic API key, billed per token. `agent-run` puts it in the agent's `env:`.
           claude-token: ${{ secrets.claude-token }}
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
           # `allowed_bots: "*"` is set inside the block, as it was here. Bot-initiated
           # reviews must run — the Implementer (a Bot) opens the fix/implement PRs the Reviewer must
           # review, and dependabot opens dep PRs. Without it, claude-code-action refuses

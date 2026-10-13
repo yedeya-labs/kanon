@@ -64,6 +64,7 @@ describe('trigger surface', () => {
       'app-id': '${{ secrets.AUTHOR_APP_ID }}',
       'app-private-key': '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}',
       'claude-token': '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
+      'anthropic-api-key': '${{ secrets.ANTHROPIC_API_KEY }}',
     });
   });
 });

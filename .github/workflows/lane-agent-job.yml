@@ -218,7 +218,9 @@ on:
           output holding a masked value is dropped). Arrives masked, as every secret does.
         required: true
       claude-token:
-        required: true
+        required: false
+      anthropic-api-key:
+        required: false
 
 # NO `permissions:` BLOCK, for the reason `agent-lane.yml` gives: without one this job gets
 # exactly what the lane's calling job was given.
@@ -424,6 +426,7 @@ jobs:
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ inputs.claude_args }}
           claude-token: ${{ secrets.claude-token }}
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
           github-token: ${{ steps.app-token.outputs.token }}
           prompt-cache-ttl: ${{ inputs.prompt-cache-ttl }}
           full-transcript: ${{ inputs.full-transcript }}

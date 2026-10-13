@@ -72,11 +72,15 @@
 #
 # INERT until: the caller is on the default branch, the Author App installed with the Explorer's
 # row in the App register, `KANON_AGGREGATE_URL` set, and these secrets (plan 0001 §8):
-#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN, KANON_AGGREGATE_ROLE
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, KANON_AGGREGATE_ROLE
 # KANON ROLE: Explorer
 # The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
 # role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
 # in the App register must exist, and this lane's tokens fit inside that role's row.
+# ONE OF SECRETS: CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY
+# The line above is read by `lane-check` and the requirements file (plan 0009 §10): the Claude
+# credential, the subscription token or an Anthropic API key. A caller maps exactly one, and
+# `agent-run` refuses both or neither, by name, before the agent starts.
 name: Explore the telemetry (Explorer)
 
 # THE CALLER'S TRIGGERS — this lane's contract with it:
@@ -96,7 +100,9 @@ on:
       AUTHOR_APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
-        required: true
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
       # The aggregate invoker role's ARN (the stack's `AggregateInvokerRole<id>` output). Not
       # required: a repository without a role maps it to a secret it doesn't have, and the lane
       # says so and stops after its gate.
@@ -260,6 +266,7 @@ jobs:
       app-id: ${{ secrets.AUTHOR_APP_ID }}
       app-private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
       claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
   file:
     needs: [gate, aggregate, explore]

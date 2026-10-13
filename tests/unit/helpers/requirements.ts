@@ -53,7 +53,14 @@ export const buildRequirements = (root: string) => {
       if (k === 'smoke') continue;
       inputs[k] = { type: v.type ?? 'string', description: String(v.description ?? '').trim() };
     }
-    const secrets = Object.keys(call.secrets ?? {}).sort();
+    const declared = Object.keys(call.secrets ?? {}).sort();
+    // THE CLAUDE CREDENTIAL PAIR (plan 0009 §10, step A2): the names on the lane's
+    // `# ONE OF SECRETS:` line, each declared `required: false`, in the line's order. A caller maps
+    // exactly one, so `claude` lists both and `secrets` keeps only the first, the subscription
+    // token: `kanon init` maps `secrets` and `kanon doctor` asks for it until steps A4 and A5
+    // teach them the pair, so an installation on the token reads exactly as before.
+    const claude = comment(text, 'ONE OF SECRETS').flatMap((l) => l.split(/\s+/)).filter((n) => declared.includes(n) && call.secrets[n]?.required === false);
+    const secrets = declared.filter((n) => !claude.slice(1).includes(n));
     const grant: Record<string, string> = {};
     for (const p of [doc.permissions, ...Object.values((doc.jobs ?? {}) as Record<string, Doc>).map((j) => j.permissions)]) {
       if (!p || typeof p !== 'object') continue;
@@ -83,6 +90,7 @@ export const buildRequirements = (root: string) => {
     // declares `required: false`, as `lane-check` reads them.
     const optional = comment(text, 'OPTIONAL SECRET').filter((n) => secrets.includes(n) && call.secrets[n]?.required === false).sort();
     if (optional.length) lane.optionalSecrets = optional;
+    if (claude.length) lane.claude = claude;
     // The repository variables a lane reads by name and a repository may leave unset (kanon#609),
     // as the lane marks them, and only those it really reads.
     const variables = comment(text, 'OPTIONAL VARIABLE').filter((n) => text.includes(`vars.${n} `)).sort();
