@@ -1984,6 +1984,46 @@ esac
       expect(mergeVerdict(read, { now: NOW, ownRunId: '999' }).action).toBe('wait');
     });
 
+    it('readPr reads a commit status that has not reported as pending, not failed (#821)', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'merge-gate-pending-status-'));
+      const meta = {
+        number: 1234, author: { login: 'example-implementer[bot]' }, state: 'OPEN', isDraft: false,
+        labels: [{ name: 'agent:implement' }], headRefOid: HEAD,
+        statusCheckRollup: [
+          { __typename: 'CheckRun', name: 'E2E (Playwright)', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS',
+            completedAt: ago(3), detailsUrl: 'https://github.com/o/r/actions/runs/111/job/222' },
+          { __typename: 'StatusContext', context: 'ci/external', state: 'PENDING', createdAt: ago(1), targetUrl: 'https://ci.example/1' },
+          { __typename: 'StatusContext', context: 'ci/required', state: 'EXPECTED' },
+          { __typename: 'StatusContext', context: 'ci/broken', state: 'ERROR', createdAt: ago(2) },
+        ],
+        mergeStateStatus: 'BLOCKED', mergeable: 'MERGEABLE', title: 't', body: `${IMPLEMENTER_HEADER}\n\nCloses #1`,
+        closingIssuesReferences: [{ number: 1 }], commits: [{ messageHeadline: 'x', messageBody: '' }],
+      };
+      const reviews = [{ id: 1, user: { login: 'example-reviewer[bot]' }, state: 'APPROVED', commit_id: HEAD, body: REVIEWER_HEADER }];
+      writeStub(join(dir, 'gh'), `#!/usr/bin/env bash
+case "$*" in
+  "pr view"*)           printf '%s' '${JSON.stringify(meta)}' ;;
+  *"/statuses"*)        printf '%s' '${JSON.stringify(STATUSES_API)}' ;;
+  *"/files"*)           printf '%s\\n' 'src/a.ts' ;;
+  *"/reviews"*)         printf '%s' '${JSON.stringify(reviews)}' ;;
+  *"issues?per_page"*)  printf '%s' '0' ;;
+  "run list"*)          printf '%s' '[]' ;;
+esac
+`);
+      const read = readPr(1234, 'o/r', { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+      const { pending, failed } = checkPartition(read.checks);
+      expect(pending.map((c: LibraryValue) => c.name)).toEqual(['ci/external', 'ci/required']);
+      // A status that reported a failure is still a failure.
+      expect(failed.map((c: LibraryValue) => `${c.name}:${c.conclusion}`)).toEqual(['ci/broken:ERROR']);
+      // Without the failed one, the PR waits for the two that have not reported.
+      const waiting = { ...read, checks: read.checks.filter((c: LibraryValue) => c.name !== 'ci/broken') };
+      const v = mergeVerdict(waiting, { now: NOW });
+      expect(v.action).toBe('wait');
+      expect(v.rule).toBe('checks-pending');
+      expect(v.why).toContain('ci/external');
+      expect(v.why).toContain('ci/required');
+    });
+
     it('explains away only our own jobs: a failed check elsewhere keeps the old UNSTABLE path', () => {
       // A Reviewer-own check that FAILED is excluded from the check partitions, so only this
       // arm sees it, and it may be what GitHub's `UNSTABLE` is about.

@@ -1077,6 +1077,9 @@ export const REVIEW_LANE_FILE = 'agent-review.yml';
  */
 const sleepSync = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
+// The `StatusContext` states that mean the status has not reported yet (#821).
+const UNREPORTED_STATES = new Set(['PENDING', 'EXPECTED']);
+
 /**
  * Gather one PR into the shape `mergeVerdict` expects.
  *
@@ -1193,8 +1196,15 @@ export function readPr(number, repo, opts = {}) {
       runId: /\/actions\/runs\/(\d+)(?:\/|$)/.exec(c.detailsUrl ?? '')?.[1],
       // A StatusContext has `state` and no `status`; a CheckRun has both. Flattening
       // them here keeps the decision from having to know which kind it is looking at.
-      status: c.status ?? 'COMPLETED',
-      conclusion: c.conclusion ?? (c.state === 'SUCCESS' ? 'SUCCESS' : c.state ?? null),
+      // A status whose `state` is PENDING, or EXPECTED (a required context that has not
+      // reported), has not finished: it keeps that state as its status and has no
+      // conclusion, so `checkPartition` waits on it rather than counting it failed (#821).
+      ...(c.status === undefined && UNREPORTED_STATES.has(c.state)
+        ? { status: c.state, conclusion: null }
+        : {
+          status: c.status ?? 'COMPLETED',
+          conclusion: c.conclusion ?? (c.state === 'SUCCESS' ? 'SUCCESS' : c.state ?? null),
+        }),
     })),
     mergeStateStatus: meta.mergeStateStatus,
     // CARRIED ALONGSIDE, NOT INSTEAD (RA-2154). The `DIRTY` arm below is a question about
