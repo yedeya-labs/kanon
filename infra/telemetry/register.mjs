@@ -296,7 +296,8 @@ function labelCheck(deps, repository, label) {
  * registration's `status` becomes `erased` at once; every partition of the key is walked and
  * deleted (`erase.mjs`); and when nothing is left, the key item goes and the registration is
  * replaced by its tombstone, `TOMBSTONE_FIELDS` and nothing else. A rerun finishes an unfinished
- * erasure, and says so of a finished one.
+ * erasure. A finished one leaves a tombstone with no name, so a rerun answers `no registration`, and
+ * `list` shows it by id; only a registration that kept its name but lost its key is `already erased`.
  * @param {Deps} deps @param {string} repository @param {boolean} apply
  */
 export function eraseRegistration(deps, repository, apply) {

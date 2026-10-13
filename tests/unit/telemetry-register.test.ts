@@ -285,7 +285,7 @@ describe('erase', () => {
     const [t] = f.of('transact-write-items');
     expect(JSON.parse(arg(t!.args, '--transact-items'))[0].Put.ConditionExpression).toBe('#k = :k');
   });
-  it('a finished erasure says so; a walk that fails names the lane, never the key', () => {
+  it('a rerun of a finished erasure answers no registration; a walk that fails names the lane, never the key', () => {
     const f = fake();
     expect(f.cli('erase', '--repository', 'o/r', '--apply').code).toBe(0);
     // The tombstone has no name, so it is found by nothing: the operator sees it in list by id.
@@ -295,6 +295,16 @@ describe('erase', () => {
     expect(r.code).toBe(1);
     expect(r.err[0]).toMatch(/^o\/s: query failed on [a-z-]+$/);
     noKey(r);
+  });
+  it('only a registration that kept its name but lost its key is already erased, and only once its rows are', () => {
+    const f = fake();
+    const named = { pk: 'repo#105', repository_id: '105', repository_owner_id: '13', repository: 'q/u', status: 'erased', erased_at: '2026-09-01T00:00:00.000Z' };
+    f.reg.set('repo#105', item({ ...named, rows_erased_at: '2026-09-01T00:05:00.000Z' }));
+    expect(f.cli('erase', '--repository', 'q/u', '--apply')).toMatchObject({ code: 0, out: ['q/u: already erased, rows erased 2026-09-01T00:05:00.000Z'] });
+    f.reg.set('repo#105', item(named));
+    expect(f.cli('erase', '--repository', 'q/u', '--apply')).toMatchObject({ code: 1, err: ['q/u: the registration holds no key'] });
+    expect(f.of('update-item')).toHaveLength(0);
+    expect(f.of('transact-write-items')).toHaveLength(0);
   });
   it('a tombstone that fails to write says so, and prints no key', () => {
     const f = fake({ fail: { 'transact-write-items': 'ValidationException' } });
