@@ -135,6 +135,19 @@ describe('the band validity check (§3.6)', () => {
     expect(text).not.toMatch(/\| S \|/);
   });
 
+  it('says τ is not computed when every cost is tied, never "τ … is undefined" (kanon#719)', () => {
+    const rows = (['S', 'M', 'L'] as const).flatMap((band, b) =>
+      Array.from({ length: 4 }, (_, k) => mergedWithRuns(1 + b * 100 + k, band, 2, 1 + k)).flat());
+    const r = report(rows);
+    expect(r.validity).toMatchObject({ status: 'invalid', n: 12, tau: null, low: null, high: null });
+    expect(r.view).toBe('pooled');
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toMatch(/^The band validity check failed: Kendall's τ between band and cost is not computed, because every merged item's cost is the same, so cost is not shown to rise with the band in this window\. The pooled view is shown instead of the banded one\.$/);
+    const text = renderReport(r).join('\n');
+    expect(text).toMatch(/> \*\*Warning:\*\* The band validity check failed: Kendall's τ between band and cost is not computed/);
+    expect(text).not.toMatch(/undefined|\(\? to \?\)/);
+  });
+
   it('shows the pooled view, with a warning, when there is too little to check', () => {
     const r = report(risingRows({ S: 3, M: 3, L: 0, XL: 0 }));
     expect(r.validity.status).toBe('not-enough-data');
