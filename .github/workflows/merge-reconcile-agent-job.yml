@@ -149,7 +149,8 @@ jobs:
           KANON: ${{ steps.kanon.outputs.path }}
         run: node "$KANON/scripts/ensure-labels.mjs" agent:reviewer qa:needs-severity sev:critical sev:high sev:medium sev:low follow-up gate-candidate
 
-      # Auth = Claude subscription (see agent-triage.yml for the graduate-to-API note).
+      # Auth = the one credential the caller maps (plan 0009 §10): the subscription token or an
+      # Anthropic API key. `agent-run` puts it in the agent's `env:`; its README says which to map.
       - uses: $/actions/agent-run
         id: agent
         env:
