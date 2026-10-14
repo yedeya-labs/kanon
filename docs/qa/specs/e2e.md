@@ -23,8 +23,9 @@ Kanon's end-to-end tier: scenarios run in throwaway repositories of a test organ
 
 ## Workflows
 
-- `[ETE-12]` `[seed]` Only the `mint` and `provision` jobs of `e2e.yml`, and the janitor's `mint` job, name the `e2e` environment; no other workflow of Kanon names it.
-- `[ETE-13]` `[seed]` `e2e.yml`'s `run` job names no private key and receives the driver token through a called workflow's `secrets:`, and its `provision` job runs no checkout, no `npx` and no script of Kanon's.
+- `[ETE-12]` `[seed]` Only `e2e.yml`'s `provision` job and the `mint` jobs of `e2e-scenario-run.yml`, `e2e-janitor-run.yml` and `e2e-model-key-run.yml` name the `e2e` environment; no other workflow of Kanon names it.
+- `[ETE-13]` `[seed]` The one job of `e2e-scenario-job.yml` and of `e2e-janitor-job.yml` names no private key and receives the driver token as its `app-token` secret from its pair's `mint`, and `e2e.yml`'s `provision` job holds no Claude credential and runs no checkout, no `npx` and no script of Kanon's.
+- `[ETE-35]` `[seed]` The one job of `e2e-model-key-job.yml` is the only job of Kanon whose steps' `env:` holds a Claude credential: it holds no private key, its steps are exactly the receive, one `gh secret set ANTHROPIC_API_KEY` and the revoke, with no checkout and no other `uses:`, and it is called only through `e2e.yml`'s `model-key` job, which runs only for a scenario with `claude: api-key`.
 - `[ETE-14]` `[seed]` `e2e.yml` has no `pull_request`, `pull_request_target` or `merge_group` trigger, and runs nightly and on a dispatch naming a scenario or a family and a release.
 - `[ETE-15]` `[seed]` The nightly run tests the latest candidate, or the latest stable release when no candidate is newer, and also runs the install and doctor families with the CLI from `main`'s checkout.
 
