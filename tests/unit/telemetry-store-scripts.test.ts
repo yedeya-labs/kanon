@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DENIED_WRITES, OTHER_KEY, PROBE_PK, runChecks, testFinding, testRow } from '../../infra/telemetry/verify.mjs';
 import { erase, partitionsOf } from '../../infra/telemetry/erase.mjs';
-import { handle, SHORT_RETENTION_MS } from '../../infra/telemetry/function/index.mjs';
+import { handle, SHORT_RETENTION_MS, stamp } from '../../infra/telemetry/function/index.mjs';
 import { validate, LANES } from '../../actions/agent-telemetry/schema.mjs';
 import { nameContext, verify } from '../../actions/agent-telemetry/scrub.mjs';
 import { keysCache } from '../../infra/telemetry/function/register-store.mjs';
@@ -319,8 +319,32 @@ describe('erase.mjs deletes every partition of a key (§10)', () => {
     return { aws, calls };
   };
 
-  it('walks every lane\'s partition, the work partition and the finding partition (plan 0006 §2.3)', () => {
-    expect(partitionsOf('kk')).toEqual([...LANES.map((l) => `kk#${l}`), 'kk#work', 'kk#finding']);
+  it('walks every lane\'s partition, the work partition, the finding partition and the deploy partition (plan 0006 §2.3, plan 0010 D9)', () => {
+    expect(partitionsOf('kk')).toEqual([...LANES.map((l) => `kk#${l}`), 'kk#work', 'kk#finding', 'kk#deploy']);
+  });
+
+  it('erasing a key with a stored deploy row leaves <key>#deploy empty (plan 0010 D9)', () => {
+    // The item is the one the ingest function stamps, keyed by its own keysOf.
+    const s = stamp({
+      schema_version: 1, row_kind: 'deploy', tag: 'run', recorded_at: '2026-10-02T11:59:00Z', run_id: 33679229731, run_attempt: 1,
+      kanon_version: '0.50.0', role: 'production', position: 1, outcome: 'ok',
+    }, { caller: { kind: 'writer', key: 'kk' }, key: 'kk', now: Date.parse('2026-10-02T12:00:00Z') });
+    if (!s.ok) throw new Error('the deploy row did not validate');
+    const table = new Map<string, { pk: string, sk: string }>([[`${s.item.pk}|${s.item.sk}`, { pk: s.item.pk, sk: s.item.sk }]]);
+    const aws = (args: string[]) => {
+      if (args[1] === 'query') {
+        const pk = JSON.parse(args[args.indexOf('--expression-attribute-values') + 1]!)[':p'].S as string;
+        const items = [...table.values()].filter((i) => i.pk === pk).map((i) => ({ pk: { S: i.pk }, sk: { S: i.sk } }));
+        return { code: 0, stdout: JSON.stringify({ Items: items }) };
+      }
+      const req = JSON.parse(args[args.indexOf('--request-items') + 1]!) as Record<string, Array<{ DeleteRequest: { Key: { pk: { S: string }, sk: { S: string } } } }>>;
+      for (const d of req['kanon-telemetry'] ?? []) table.delete(`${d.DeleteRequest.Key.pk.S}|${d.DeleteRequest.Key.sk.S}`);
+      return { code: 0, stdout: JSON.stringify({ UnprocessedItems: {} }) };
+    };
+    expect(s.item.pk).toBe('kk#deploy');
+    const counts = erase('kk', { aws, profile: 'kanon', apply: true });
+    expect(counts.find((c) => c.partition === 'kk#deploy')).toEqual({ partition: 'kk#deploy', rows: 1 });
+    expect(table.size).toBe(0);
   });
 
   it('erasing a key with a stored finding leaves <key>#finding empty (plan 0006 F4)', async () => {

@@ -12,10 +12,10 @@ import {
   TEXT_FIELDS,
   toAttributes,
 } from '../../infra/telemetry/function/index.mjs';
-import { rowOf, WORK_PROJECTION } from '../../infra/telemetry/function/aggregate.mjs';
+import { ATTRIBUTES, readPage, rowOf, WORK_PROJECTION } from '../../infra/telemetry/function/aggregate.mjs';
 import { closingIssues } from '../../scripts/metrics/join.mjs';
 import { sign } from '../../infra/telemetry/function/sigv4.mjs';
-import { LANES } from '../../actions/agent-telemetry/schema.mjs';
+import { DEPLOY_REFUSALS, LANES, SCHEMAS } from '../../actions/agent-telemetry/schema.mjs';
 import { nameContext } from '../../actions/agent-telemetry/scrub.mjs';
 import { keysCache } from '../../infra/telemetry/function/register-store.mjs';
 import { fakeDynamo, REGISTER, type Fake } from './helpers/fake-dynamo.js';
@@ -227,27 +227,62 @@ describe('the recorded_at window (§4): 8 days back, 10 minutes ahead', () => {
   });
 });
 
-describe('a deploy row is refused until its intake is built (plan 0010 D3, D9)', () => {
+describe('a deploy row is stored under <key>#deploy (plan 0010 §10, D9)', () => {
   const deployRow = (over: Row = {}): Row => ({
     schema_version: 1, row_kind: 'deploy', tag: 'run', recorded_at: iso(NOW - 60_000), run_id: 33679229731, run_attempt: 1,
     kanon_version: '0.12.0', role: 'production', position: 2, outcome: 'ok', ...over,
   });
 
-  it('a valid deploy row gets 422 naming row_kind, from the writer and the importer, and nothing is stored', async () => {
-    const writer = await call(event([deployRow()]));
-    expect(writer.status).toBe(422);
-    expect(writer.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
-    expect(writer.puts).toEqual([]);
-    const importer = await call(event([deployRow()], { role: 'kanon-telemetry-importer', key: 'k2' }), { IMPORTER_ROLE: 'kanon-telemetry-importer' });
-    expect(importer.status).toBe(422);
-    expect(importer.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
-    expect(importer.puts).toEqual([]);
+  it('is keyed <key>#deploy, by time, run, attempt and the environment\'s position', () => {
+    expect(keysOf('k1', deployRow())).toEqual({ pk: 'k1#deploy', sk: '20261002T115900Z#33679229731-1-2' });
   });
 
-  it('the rows beside it are still stored', async () => {
+  it('a valid deploy row is stored, from the writer and the importer, each under its own key', async () => {
+    const writer = await call(event([deployRow()]));
+    expect(writer.status).toBe(200);
+    expect(writer.puts).toEqual([expect.objectContaining({
+      pk: 'k1#deploy', sk: '20261002T115900Z#33679229731-1-2', row_kind: 'deploy', source: 'collector',
+      expires_at: Math.floor(addMonths(NOW - 60_000, 13) / 1000),
+    })]);
+    const importer = await call(event([deployRow()], { role: 'kanon-telemetry-importer', key: 'k2' }), { IMPORTER_ROLE: 'kanon-telemetry-importer' });
+    expect(importer.status).toBe(200);
+    expect(importer.puts).toEqual([expect.objectContaining({ pk: 'k2#deploy', source: 'import' })]);
+  });
+
+  it('a smoke or test deploy row keeps 30 days; the backfill role may not send one', async () => {
+    const smoke = await call(event([deployRow({ tag: 'smoke' })]));
+    expect(smoke.puts[0]).toMatchObject({ pk: 'k1#deploy', expires_at: Math.floor((NOW - 60_000 + 30 * DAY) / 1000) });
+    const backfill = await call(event([deployRow()], { role: 'kanon-telemetry-backfill', key: 'k2' }), { BACKFILL_ROLE: 'kanon-telemetry-backfill' });
+    expect(backfill.body.results[0].errors).toEqual([{ field: 'row_kind', problem: 'not-allowed' }]);
+    expect(backfill.puts).toEqual([]);
+  });
+
+  it('every refusal code the schema admits is stored (the intake reads the schema\'s list, not its own)', async () => {
+    const rows = DEPLOY_REFUSALS.map((refusal) => deployRow({ outcome: 'refused', failed_stage: 'gate', refusal }));
+    const r = await call(event(rows.slice(0, MAX_ROWS)));
+    expect(r.status).toBe(200);
+    expect(r.puts.every((p) => p.pk === 'k1#deploy')).toBe(true);
+  });
+
+  it('beside a run row, each lands in its own partition', async () => {
     const r = await call(event([runRow(), deployRow()]));
-    expect(r.body.results.map((x: { status: string }) => x.status)).toEqual(['stored', 'rejected']);
-    expect(r.puts.map((p) => p.pk)).toEqual(['k1#review']);
+    expect(r.body.results.map((x: { status: string }) => x.status)).toEqual(['stored', 'stored']);
+    expect(r.puts.map((p) => p.pk)).toEqual(['k1#review', 'k1#deploy']);
+  });
+
+  it("the aggregate never reads it: no Query names <key>#deploy, and no projection names a deploy field (decision 11)", async () => {
+    const fieldsOf = (kind: string) => new Set(Object.values(SCHEMAS[kind as keyof typeof SCHEMAS] as Record<string, Record<string, unknown>>).flatMap((v) => Object.keys(v)));
+    const deployOnly = [...fieldsOf('deploy')].filter((f) => !fieldsOf('run').has(f) && !fieldsOf('work_item').has(f));
+    expect(deployOnly).toEqual(expect.arrayContaining(['position', 'since_release_ms', 'redeploy', 'rollback']));
+    const requests: Array<{ ExpressionAttributeValues: Record<string, { S: string }>, ExpressionAttributeNames: Record<string, string> }> = [];
+    await readPage({ k1: 'acme' }, async (req) => { requests.push(req as (typeof requests)[number]); return { Items: [] }; }, 'kanon-telemetry');
+    expect(requests.length).toBeGreaterThan(0);
+    for (const req of requests) {
+      expect(req.ExpressionAttributeValues[':p']?.S).not.toMatch(/#deploy$/);
+      const projected = Object.values(req.ExpressionAttributeNames as Record<string, string>);
+      expect(projected.filter((f) => deployOnly.includes(f))).toEqual([]);
+    }
+    expect(ATTRIBUTES.filter((f) => deployOnly.includes(f))).toEqual([]);
   });
 });
 
@@ -547,8 +582,8 @@ describe('the write and its signature', () => {
     await expect(putItem({ pk: 'k1#review' }, env, quoting)).rejects.toThrow(/^PutItem failed: ValidationException$/);
   });
 
-  it('the partitions erasure walks are every lane, work and finding (plan 0006 §2.3)', () => {
-    expect(PARTITIONS).toEqual([...LANES, 'work', 'finding']);
+  it('the partitions erasure walks are every lane, work, finding and deploy (plan 0006 §2.3, plan 0010 D9)', () => {
+    expect(PARTITIONS).toEqual([...LANES, 'work', 'finding', 'deploy']);
   });
 });
 

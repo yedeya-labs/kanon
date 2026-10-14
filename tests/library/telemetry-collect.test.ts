@@ -23,7 +23,7 @@ import {
   underLevel,
   workflowFileOf,
 } from '../../scripts/telemetry-collect.mjs';
-import { ARTIFACT_FILE, FINDING_ARTIFACT_FILE, findingArtifactName } from '../../scripts/lib/telemetry-artifacts.mjs';
+import { ARTIFACT_FILE, DEPLOY_ARTIFACT_FILE, FINDING_ARTIFACT_FILE, findingArtifactName } from '../../scripts/lib/telemetry-artifacts.mjs';
 import { HOSTED_AUDIENCE, HOSTED_INGEST_URL, mintToken, storeOf, storeRequest } from '../../scripts/lib/telemetry-token.mjs';
 import { zipOf } from './helpers/zip.js';
 
@@ -490,6 +490,69 @@ describe('finding rows (plan 0006 §5 step 3, F4): sent under the level the reco
     expect(underLevel(coded, 'drafted')).toBeNull();
     expect(underLevel(coded, 'filed here')).toBeNull();
     expect(codesOnly(texted)).toEqual(coded);
+  });
+});
+
+describe('deploy rows (plan 0010 §8, §10, D9): sent from the deploy lane\'s `kanon-deploy-row-*` artifacts', () => {
+  /** A valid deploy row of the current run, for the environment at `position`. */
+  const deployRow = (position: number, over: Record<string, unknown> = {}) => ({
+    schema_version: 1, row_kind: 'deploy', tag: 'run', recorded_at: iso(NOW - 10 * MIN), run_id: nextRun, run_attempt: 1,
+    kanon_version: '0.50.0', role: position === 2 ? 'production' : 'pre-production', position, outcome: 'ok', ...over,
+  });
+  const deployArtifact = (r: Record<string, unknown>, opts: { fork?: boolean; name?: string; content?: string } = {}): Fake => {
+    nextId += 1;
+    const created = Date.parse(String(r.recorded_at)) + 5_000;
+    return {
+      id: nextId,
+      name: opts.name ?? `kanon-deploy-row-${r.run_id}-${r.run_attempt}-${r.position}`,
+      created_at: iso(created),
+      expires_at: iso(created + 90 * DAY),
+      workflow_run: { id: Number(r.run_id), repository_id: OWN, head_repository_id: opts.fork ? FORK : OWN },
+      zip: zipOf(DEPLOY_ARTIFACT_FILE, opts.content ?? JSON.stringify(r)),
+    };
+  };
+
+  it("sends each environment's row beside the run rows", async () => {
+    const runRow = row(5 * MIN);
+    nextRun += 1;
+    const s = store();
+    const res = await run(github([artifact(runRow), deployArtifact(deployRow(1)), deployArtifact(deployRow(2))]), s);
+    expect(res).toMatchObject({ listed: 3, sent: 3, stored: 3, failures: [] });
+    const sent = s.posts.flat();
+    expect(sent.filter((r) => r.row_kind === 'deploy').map((r) => r.position).sort()).toEqual([1, 2]);
+    expect(sent.filter((r) => r.row_kind === 'run')).toHaveLength(1);
+  });
+
+  it("refuses a row whose run, attempt or position isn't its artifact's, or that is not a deploy row", async () => {
+    nextRun += 1;
+    const s = store();
+    const res = await run(github([
+      deployArtifact(deployRow(1), { name: `kanon-deploy-row-${nextRun}-1-2` }),
+      deployArtifact({ ...row(5 * MIN, { run_id: nextRun }), position: 3 }),
+    ]), s);
+    expect(res.sent).toBe(0);
+    expect(res.failures.sort()).toEqual([
+      expect.stringMatching(/^deploy run \d+ attempt 1 position 2 .*: the row's row_kind, run_id, run_attempt or position is not its artifact's$/),
+      expect.stringMatching(/^deploy run \d+ attempt 1 position 3 .*: (the row's row_kind, run_id, run_attempt or position is not its artifact's|fails the schema)/),
+    ]);
+  });
+
+  it('a row that fails the schema names the field, never the value; an unreadable artifact is a failure', async () => {
+    nextRun += 1;
+    const res = await run(github([
+      deployArtifact(deployRow(1, { environment: 'prod-eu' })),
+      deployArtifact(deployRow(2), { content: 'not json' }),
+    ]), store());
+    expect(res.sent).toBe(0);
+    expect(res.failures).toContainEqual(expect.stringMatching(/position 1 .*fails the schema \(.*environment/));
+    expect(res.failures.join('\n')).not.toContain('prod-eu');
+    expect(res.failures).toContainEqual(expect.stringMatching(/position 2 .*: unreadable/));
+  });
+
+  it("ignores a fork's deploy artifact", async () => {
+    nextRun += 1;
+    const res = await run(github([deployArtifact(deployRow(1), { fork: true })]), store());
+    expect(res).toMatchObject({ listed: 0, sent: 0, foreign: 1, failures: [] });
   });
 });
 

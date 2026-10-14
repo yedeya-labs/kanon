@@ -69,6 +69,17 @@ export const FINDING_ARTIFACT = new RegExp(`^${FINDING_ARTIFACT_PREFIX}(${REPORT
  * @param {number | string} attempt
  */
 export const findingArtifactName = (reporter, runId, attempt) => `${FINDING_ARTIFACT_PREFIX}${reporter}-${runId}-${attempt}`;
+/**
+ * A deploy row's artifact (plan 0010 §8, D4): one per environment of a deploy run,
+ * `kanon-deploy-row-<run id>-<attempt>-<position>`, holding one row in `kanon-deploy-row.json`.
+ * Not under `kanon-telemetry-`, which only a lane's run row may carry (kanon#826). The collector
+ * sends these since plan 0010 D9.
+ */
+export const DEPLOY_ARTIFACT_PREFIX = 'kanon-deploy-row-';
+/** The file inside a deploy artifact: one deploy row. */
+export const DEPLOY_ARTIFACT_FILE = 'kanon-deploy-row.json';
+/** A deploy artifact's name: the run id, the attempt and the environment's position. */
+export const DEPLOY_ARTIFACT = new RegExp(`^${DEPLOY_ARTIFACT_PREFIX}(\\d+)-(\\d+)-(\\d+)$`);
 /** The sweep's window, in days, as `dispatch-sweep.mjs`'s `UNREACHED_WINDOW_DAYS` defaults it. */
 export const WINDOW_DAYS = 14;
 /** Pages of 100 the listing may read before it gives up and fails the read. */
@@ -146,6 +157,7 @@ export function readZipEntry(buf, name) {
  * @typedef {(path: string) => any} Api           a `gh api` GET of one path, parsed
  * @typedef {(id: number) => Buffer} Download     one artifact's zip, by id
  * @typedef {{ id: number, name: string, runId: number, attempt: number, createdAt: number, expiresAt: number }} LaneArtifact
+ * @typedef {LaneArtifact & { lane: string, kind: 'run' | 'finding' | 'deploy', position?: number }} AnyArtifact
  */
 
 /** @param {unknown} err */
@@ -191,7 +203,7 @@ export const ghDownload = (repo) => (id) =>
 export function listLaneArtifacts(lane, opts) {
   const pattern = laneArtifactPattern(lane);
   const { artifacts, foreign, retentionDays } = listArtifacts((name) => pattern.exec(name), opts);
-  return { artifacts: artifacts.map(({ lane: _lane, kind: _kind, ...a }) => a), foreign, retentionDays };
+  return { artifacts: artifacts.map(({ lane: _lane, kind: _kind, position: _position, ...a }) => a), foreign, retentionDays };
 }
 
 /** Any lane's version-2 artifact name: the lane, then the run id and the attempt. */
@@ -206,29 +218,35 @@ export const ANY_LANE_ARTIFACT = new RegExp(`^${ARTIFACT_PREFIX}([a-z][a-z0-9-]*
  * step 3), `kind: 'finding'`, with the reporter in `lane`. A fork's is foreign, as a run row's
  * is. The retention is still measured from the run artifacts alone: a finding artifact may ask for
  * its own, and the sweep's cap is about the run rows.
- * @param {{ repo: string, from: number, api: Api, maxPages?: number, findings?: boolean }} opts
- * @returns {{ artifacts: (LaneArtifact & { lane: string, kind: 'run' | 'finding' })[], foreign: number, retentionDays: number | null }}
+ *
+ * With `deploys`, it also takes the deploy lane's row artifacts (plan 0010 D9), `kind: 'deploy'`,
+ * with `lane: 'deploy'` and the environment's `position`, under the same own-run rule.
+ * @param {{ repo: string, from: number, api: Api, maxPages?: number, findings?: boolean, deploys?: boolean }} opts
+ * @returns {{ artifacts: AnyArtifact[], foreign: number, retentionDays: number | null }}
  */
-export function listTelemetryArtifacts({ findings = false, ...opts }) {
+export function listTelemetryArtifacts({ findings = false, deploys = false, ...opts }) {
   return listArtifacts((name) => {
     const m = ANY_LANE_ARTIFACT.exec(name);
     if (m) return [m[0], m[2], m[3], m[1], 'run'];
+    const d = deploys ? DEPLOY_ARTIFACT.exec(name) : null;
+    if (d) return [d[0], d[1], d[2], 'deploy', 'deploy', d[3]];
     const f = findings ? FINDING_ARTIFACT.exec(name) : null;
     return f ? [f[0], f[2], f[3], f[1], 'finding'] : null;
-  }, opts, findings ? [ARTIFACT_PREFIX, FINDING_ARTIFACT_PREFIX] : [ARTIFACT_PREFIX]);
+  }, opts, [ARTIFACT_PREFIX, ...(findings ? [FINDING_ARTIFACT_PREFIX] : []), ...(deploys ? [DEPLOY_ARTIFACT_PREFIX] : [])]);
 }
 
 /**
  * The listing both readers share. `match` returns, for a name it takes, `[name, run id, attempt]`
- * and, for the any-lane listing, the lane (or the reporter) fourth and the kind fifth. Only names
+ * and, for the any-lane listing, the lane (or the reporter) fourth, the kind fifth and a deploy
+ * artifact's position sixth. Only names
  * under `prefixes` are looked at; the retention is measured from the run artifacts alone.
  * @param {(name: string) => (string | undefined)[] | null} match
  * @param {{ repo: string, from: number, api: Api, maxPages?: number }} opts
  * @param {string[]} [prefixes]
- * @returns {{ artifacts: (LaneArtifact & { lane: string, kind: 'run' | 'finding' })[], foreign: number, retentionDays: number | null }}
+ * @returns {{ artifacts: AnyArtifact[], foreign: number, retentionDays: number | null }}
  */
 function listArtifacts(match, { repo, from, api, maxPages = MAX_PAGES }, prefixes = [ARTIFACT_PREFIX]) {
-  /** @type {(LaneArtifact & { lane: string, kind: 'run' | 'finding' })[]} */
+  /** @type {AnyArtifact[]} */
   const artifacts = [];
   const seen = new Set();
   let foreign = 0;
@@ -252,7 +270,11 @@ function listArtifacts(match, { repo, from, api, maxPages = MAX_PAGES }, prefixe
       if (Number.isFinite(expiresAt) && name.startsWith(ARTIFACT_PREFIX)) retention = Math.min(retention, expiresAt - createdAt);
       if (!m || a.expired || createdAt < from || seen.has(a.id)) continue;
       seen.add(a.id);
-      artifacts.push({ id: a.id, name, runId: Number(m[1]), attempt: Number(m[2]), createdAt, expiresAt, lane: String(m[3] ?? ''), kind: m[4] === 'finding' ? 'finding' : 'run' });
+      const kind = m[4] === 'finding' || m[4] === 'deploy' ? m[4] : 'run';
+      artifacts.push({
+        id: a.id, name, runId: Number(m[1]), attempt: Number(m[2]), createdAt, expiresAt, lane: String(m[3] ?? ''), kind,
+        ...(kind === 'deploy' ? { position: Number(m[5]) } : {}),
+      });
     }
     if (list.length < 100 || newest < from - LISTING_SLACK) break;
   }

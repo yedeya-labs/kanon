@@ -19,11 +19,16 @@
 //     (`holds-key.mjs`, the #41 job's and Jev's check too), since a key need not have the shape the
 //     scrub's `key` rule refuses.
 // Each failure is a rejected field, named with the rule or `key`, never the value.
+//
+// A DEPLOY ROW (plan 0010 §10, step D9) is stored under `<key>#deploy`, from the collector on
+// either path and from the importer, like a run row; never from the backfill role. Its fields are
+// numbers, times, booleans and closed words only, so `validate` is all its intake needs. The
+// aggregate never reads it: no cross-adopter deploy figure is published (decision 11).
 
 import { Buffer } from 'node:buffer';
 import { assertNoKey } from './aggregate.mjs';
 import { holdsKey } from './holds-key.mjs';
-import { FINDING_PARTITION, LANES, RESERVED_PARTITION, SCHEMAS, validate } from './schema.mjs';
+import { DEPLOY_PARTITION, FINDING_PARTITION, LANES, RESERVED_PARTITION, SCHEMAS, validate } from './schema.mjs';
 import { verify } from './scrub.mjs';
 
 export const MAX_BODY_BYTES = 256 * 1024;
@@ -39,11 +44,10 @@ export const RETENTION_MONTHS = 13;
 export const SHORT_RETENTION_MS = 30 * DAY;
 /**
  * The row kinds this function stores, each in a partition `PARTITIONS` names, so erasure walks it.
- * A kind the schema knows but this list doesn't, the deploy row (plan 0010 D3), is refused with
- * `row_kind (not-allowed)` until its intake is built (D9): stored now, it would land outside every
- * partition erasure walks.
+ * A kind the schema knows but this list doesn't is refused with `row_kind (not-allowed)`: stored,
+ * it would land outside every partition erasure walks. The deploy row joined at plan 0010 D9.
  */
-export const STORED_KINDS = Object.freeze(['run', 'work_item', 'finding']);
+export const STORED_KINDS = Object.freeze(['run', 'work_item', 'finding', 'deploy']);
 
 /**
  * `writer` is the collector, on either path; `importer` and `backfill` are the Owner's roles.
@@ -121,7 +125,8 @@ export const compact = (/** @type {string} */ iso) => `${iso.slice(0, 19).replac
  * The row's key (§4, plan 0003 §4). A run row: `<key>#<lane>`, sorted by time, then run,
  * attempt and PR or issue number. A work item: `<key>#work`, one row per PR. A finding:
  * `<key>#finding`, sorted by time, then run, attempt and its place in the run's report
- * (plan 0006 §2.3).
+ * (plan 0006 §2.3). A deploy row: `<key>#deploy`, sorted by time, then run, attempt and the
+ * environment's position, so each environment of one run is its own item (plan 0010 §10).
  * @param {string} key
  * @param {Record<string, any>} row a VALID row
  */
@@ -131,6 +136,9 @@ export function keysOf(key, row) {
   }
   if (row.row_kind === 'finding') {
     return { pk: `${key}#${FINDING_PARTITION}`, sk: `${compact(row.recorded_at)}#${row.run_id}-${row.run_attempt}-${row.finding_index}` };
+  }
+  if (row.row_kind === 'deploy') {
+    return { pk: `${key}#${DEPLOY_PARTITION}`, sk: `${compact(row.recorded_at)}#${row.run_id}-${row.run_attempt}-${row.position}` };
   }
   const n = row.pr_number ?? row.issue_number ?? 0;
   return { pk: `${key}#${row.lane}`, sk: `${compact(row.recorded_at)}#${row.run_id}-${row.run_attempt}-${n}` };
@@ -263,5 +271,5 @@ export async function storeRows(rows, { caller, key, now, finding, put, admit })
 }
 
 // Kept so the lane list the erase script walks is the one this function writes (§10), and the
-// finding partition, which erasure must reach too (plan 0006 §2.3).
-export const PARTITIONS = Object.freeze([...LANES, RESERVED_PARTITION, FINDING_PARTITION]);
+// finding and deploy partitions, which erasure must reach too (plan 0006 §2.3, plan 0010 D9).
+export const PARTITIONS = Object.freeze([...LANES, RESERVED_PARTITION, FINDING_PARTITION, DEPLOY_PARTITION]);
