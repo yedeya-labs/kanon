@@ -36,8 +36,9 @@
 // `supersede`, in `deploy.yml`'s `deploy` job, once it holds its concurrency slot and its
 // approval: for a `release` trigger, a commit older than the environment's last successful
 // deploy is refused `superseded`; a dispatch may go back, and says so (`rollback`). It reads
-// the commit of the deployment GitHub created for an earlier run's environment job, which is
-// that run's commit, and check 1 holds every run's commit to the one it deploys (#911).
+// the commit of the deployment GitHub created for an earlier run's environment job, assumed to
+// be that run's commit (unmeasured, plan 0010 §14.2), and check 1 holds every run's commit to
+// the one it deploys (#911).
 //
 // ENV  GITHUB_REPOSITORY, GITHUB_SHA, GITHUB_REF, GITHUB_EVENT_NAME, GH_TOKEN (for `gh`)
 //      RELEASE_TAG      the `release` event's tag (`github.event.release.tag_name`)
@@ -168,9 +169,10 @@ export function resolveRelease({ repo, event, releaseTag = '', releaseDraft = ''
     throw e;
   }
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Refusal('no-release', `the tag \`${tag}\` names no commit`);
-  // The run's commit is the one GitHub puts on the deployment it creates for each environment
-  // job, which the supersede check reads as what the environment runs. So a run deploys only its
-  // own commit, on a dispatch as on a release (#911).
+  // The run's commit is, by the plan's assumption (unmeasured, plan 0010 §14.2), the one GitHub
+  // puts on the deployment it creates for each environment job, which the supersede check reads
+  // as what the environment runs. So a run deploys only its own commit, on a dispatch as on a
+  // release (#911).
   if (sha !== githubSha) {
     throw new Refusal('no-release', event === 'release'
       ? `the tag \`${tag}\` names \`${sha.slice(0, 12)}\`, not the release's commit \`${githubSha.slice(0, 12)}\`: it moved after the release was published`
