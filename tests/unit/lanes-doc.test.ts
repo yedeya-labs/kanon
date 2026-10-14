@@ -237,7 +237,7 @@ describe("docs/lanes.md's catalogue table is the lane catalogue (kanon#428)", ()
  * The features table (plan 0007 §2, step G2), built from `requirements.json`'s `features`, which
  * is docs/lanes.json's: a row per feature, its lanes and person steps as what it adds to the one
  * before it, its Apps by name, and its secrets from its lanes, the ones a caller may leave out
- * aside (the QA store's, and the Overseer's telemetry reader role), and then those its
+ * aside (the QA store's, and the Overseer's deprecated `KANON_TELEMETRY_READER_ROLE`), and then those its
  * conditional lanes add.
  */
 const featuresTable = (): string => {
@@ -279,6 +279,17 @@ describe("docs/lanes.md's features table is the features of docs/lanes.json (pla
     const rows = between(read('docs/lanes.md'), OPEN, CLOSE).split('\n').filter((l) => /^\| [^-|]/.test(l) && !l.startsWith('| Feature |'));
     expect(rows.map((r) => r.split(' | ')[0]!.slice(2))).toEqual(['Review', 'Review + build', 'Full pipeline']);
     expect(rows[0]).toContain('`agent-review`');
+  });
+
+  it("says the Overseer's left-out secret is the deprecated reader role, not its cost read's route (kanon#917)", () => {
+    // Since kanon#884 the Overseer reads its rows through the store's `GET /v1/rows/self`, as
+    // docs/metrics.md's "Where the rows come from" says; the reader role is read by no job.
+    const doc = read('docs/lanes.md');
+    const omitted = doc.slice(0, doc.indexOf(OPEN)).split('\n').find((l) => l.includes('The secrets listed leave out'))!;
+    expect(omitted).not.toMatch(/telemetry reader role/);
+    expect(omitted).toContain('`KANON_TELEMETRY_READER_ROLE`');
+    expect(omitted).toContain('`GET /v1/rows/self`');
+    expect(read('docs/metrics.md')).toContain("The Overseer's `telemetry` job reads them through the store's `GET /v1/rows/self`");
   });
 });
 
