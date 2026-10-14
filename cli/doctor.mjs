@@ -56,7 +56,7 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
+import { appsArgs, BRIEF_TEMPLATE_PATH, briefTemplate, HOLDER_LABEL, holderBullet, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
@@ -131,8 +131,9 @@ const STABLE_RELEASE = /^v\d+\.\d+\.\d+$/;
 /** The adoption record (`K-LAYOUT-10`), where an id-token holder is accepted. */
 export const ADOPTION_RECORD = 'docs/qa/adoption.md';
 
-/** The bullet's bold label that accepts an id-token holder, under `## Choices`. */
-export const HOLDER_LABEL = 'Accepted id-token holder';
+// The bullet that accepts an id-token holder, under `## Choices`: `kanon init` writes it from the
+// person's answer (#631), and doctor reads it, so its label and shape live with init's writer.
+export { HOLDER_LABEL, holderBullet };
 
 /** The bullet's bold label that waives one finding, under `## Choices`. */
 export const WAIVER_LABEL = 'Waived doctor finding';
@@ -595,6 +596,59 @@ export const kanonCall = (uses) => {
   const m = typeof uses === 'string' ? /^yedeya-labs\/kanon\/\.github\/workflows\/([A-Za-z0-9_.-]+)\.ya?ml@(\S+)$/.exec(uses.trim()) : null;
   return m ? { workflow: /** @type {string} */ (m[1]), ref: /** @type {string} */ (m[2]) } : null;
 };
+
+/**
+ * Every job of `workflows` that holds `id-token: write` (`idTokenGrant`), with its status: a
+ * caller of a store-coupled lane, or of Kanon's telemetry collector (#428), at a ref `pinned`
+ * takes is `kanon-lane`, held by Kanon's id-token guard; any other is `accepted` when `accepted`
+ * names it, else `unaccepted`. Doctor and `kanon init` share it (#631), so init's dry run names
+ * the holders doctor would block on, at the telemetry question rather than after the pull request.
+ * @param {{ workflows: Map<string, Record<string, any>>, accepted: Map<string, string>, pinned: (ref: string) => boolean, req: Requirements }} c
+ *   `accepted`: `<file>#<job>` → reason, as `readHolderAcceptances` reads them
+ * @returns {Holder[]}
+ */
+export const idTokenHolders = ({ workflows, accepted, pinned, req }) => {
+  /** @type {Holder[]} */
+  const holders = [];
+  for (const [file, wf] of workflows) {
+    for (const [job, j] of Object.entries(isMap(wf.jobs) ? wf.jobs : {})) {
+      if (!isMap(j)) continue;
+      const g = idTokenGrant(wf, j);
+      if (!g) continue;
+      const calls = typeof j.uses === 'string' ? j.uses.trim() : null;
+      const call = kanonCall(calls);
+      const reason = accepted.get(`${file.slice('.github/workflows/'.length)}#${job}`) ?? null;
+      /** @type {Holder['status']} */
+      let status = reason !== null ? 'accepted' : 'unaccepted';
+      if (call && pinned(call.ref) && req.lanes[call.workflow]?.grant['id-token'] === 'write') status = 'kanon-lane';
+      // Kanon's telemetry collector (#428): its one job that holds the grant is held by Kanon's
+      // id-token guard, as a store-coupled lane's store jobs are.
+      if (call && pinned(call.ref) && req.telemetry && call.workflow === req.telemetry.collector) status = 'kanon-lane';
+      holders.push({ workflow: file, job, grant: g.from, how: g.how, calls, status, reason: status === 'kanon-lane' ? null : reason });
+    }
+  }
+  return holders;
+};
+
+/**
+ * What `id-token.unaccepted` says of a holder, and its fix, in doctor and in `kanon init` alike
+ * (#631): what the job could assume, and the acceptance bullet to write, with `reason` in it when
+ * the person has given one.
+ * @param {Holder} h @param {string} defaultBranch @param {string} [reason]
+ */
+export const unacceptedHolder = (h, defaultBranch, reason = '<why it holds the grant>') => {
+  const base = h.workflow.slice('.github/workflows/'.length);
+  const source = `${h.how === 'write-all' ? 'permissions: write-all' : 'id-token: write'} ${h.grant === 'job' ? 'in its own permissions' : "inherited from the workflow's permissions"}`;
+  return {
+    subject: `${h.workflow}#${h.job}`,
+    message: `The job ${h.job} of ${h.workflow} holds ${source}${h.calls ? `, and passes it to ${h.calls}` : ''}. On ${defaultBranch} it can assume the QA store's role and the telemetry writer, which trust the default branch's ref.`,
+    fix: {
+      text: `Narrow its grant${h.grant === 'workflow' ? ' (give the job a permissions: of its own without id-token)' : ''}, or accept it under ## Choices in ${ADOPTION_RECORD}, with the reason it holds the grant:`,
+      commands: [holderBullet(base, h.job, reason)],
+    },
+  };
+};
+
 
 /**
  * The triggers a workflow runs on, read from its `on:` as a name, a list or a map. Null when `on:`
@@ -1964,35 +2018,12 @@ export const diagnose = async (deps, opts) => {
   // ── The id-token holders ────────────────────────────────────────────────────────────────────
   const record = readHolderAcceptances(read(ADOPTION_RECORD));
   for (const e of record.errors) find('declaration.malformed', ADOPTION_RECORD, e, { text: `Write each acceptance under ## Choices as \`- **${HOLDER_LABEL}:** \`<workflow>.yml\` job \`<job>\` (<why it holds the grant>)\` (K-LAYOUT-10).` });
-  /** @type {Holder[]} */
-  const holders = [];
-  const used = new Set();
-  for (const [file, wf] of workflows) {
-    for (const [job, j] of Object.entries(isMap(wf.jobs) ? wf.jobs : {})) {
-      if (!isMap(j)) continue;
-      const g = idTokenGrant(wf, j);
-      if (!g) continue;
-      const calls = typeof j.uses === 'string' ? j.uses.trim() : null;
-      const call = kanonCall(calls);
-      const base = file.slice('.github/workflows/'.length);
-      const key = `${base}#${job}`;
-      const reason = record.accepted.get(key) ?? null;
-      if (reason !== null) used.add(key);
-      /** @type {Holder['status']} */
-      let status = reason !== null ? 'accepted' : 'unaccepted';
-      if (call && call.ref === pinned && req.lanes[call.workflow]?.grant['id-token'] === 'write') status = 'kanon-lane';
-      // Kanon's telemetry collector (#428): its one job that holds the grant is held by Kanon's
-      // id-token guard, as a store-coupled lane's store jobs are.
-      if (call && call.ref === pinned && req.telemetry && call.workflow === req.telemetry.collector) status = 'kanon-lane';
-      holders.push({ workflow: file, job, grant: g.from, how: g.how, calls, status, reason: status === 'kanon-lane' ? null : reason });
-      if (status === 'unaccepted') {
-        const source = `${g.how === 'write-all' ? 'permissions: write-all' : 'id-token: write'} ${g.from === 'job' ? 'in its own permissions' : "inherited from the workflow's permissions"}`;
-        find('id-token.unaccepted', `${file}#${job}`, `The job ${job} of ${file} holds ${source}${calls ? `, and passes it to ${calls}` : ''}. On ${s.defaultBranch} it can assume the QA store's role and the telemetry writer, which trust the default branch's ref.`, {
-          text: `Narrow its grant${g.from === 'workflow' ? ' (give the job a permissions: of its own without id-token)' : ''}, or accept it under ## Choices in ${ADOPTION_RECORD}, with the reason it holds the grant:`,
-          commands: [`- **${HOLDER_LABEL}:** \`${base}\` job \`${job}\` (<why it holds the grant>)`],
-        });
-      }
-    }
+  const holders = idTokenHolders({ workflows, accepted: record.accepted, pinned: (ref) => ref === pinned, req });
+  // An acceptance is used when its job still holds the grant, a Kanon lane's caller among them.
+  const used = new Set(holders.map((h) => `${h.workflow.slice('.github/workflows/'.length)}#${h.job}`).filter((key) => record.accepted.has(key)));
+  for (const h of holders.filter((x) => x.status === 'unaccepted')) {
+    const u = unacceptedHolder(h, s.defaultBranch);
+    find('id-token.unaccepted', u.subject, u.message, u.fix);
   }
   for (const key of record.accepted.keys()) {
     if (used.has(key) || unchecked.some((u) => u.check === 'workflow' && u.subject === `.github/workflows/${key.split('#')[0]}`)) continue;

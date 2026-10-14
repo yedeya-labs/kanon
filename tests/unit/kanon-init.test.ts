@@ -1326,7 +1326,7 @@ describe('kanon init --json, the contract (docs/init.md)', () => {
     expect(d.inspection).toMatchObject({ owner: 'acme', ownerKind: 'user', private: false, defaultBranch: 'main', rulesets: 'yes', installedLanes: [], callsRelease: false });
     expect(d.answers).toEqual({
       projectOwner: 'octo', maintainer: 'octo', stakeholder: 'octo', lanes: ['agent-review'], gates: [], testDatabase: 'none', delegation: null, deleteDefaultLabels: false, releaser: false,
-      reuseApps: null, plugin: true, telemetry: false, upstreamFindings: 'drafted', upstreamEvidence: null, feature: 'review', reviewTrigger: 'labelled', sensitiveData: null, consent: 'no', claudeAuth: 'subscription',
+      reuseApps: null, plugin: true, telemetry: false, upstreamFindings: 'drafted', upstreamEvidence: null, feature: 'review', reviewTrigger: 'labelled', sensitiveData: null, consent: 'no', claudeAuth: 'subscription', acceptedIdTokenHolders: [],
     });
     expect(d.inspection.codeowners).toBeNull();
     expect(d.apps).toEqual({ identities: ['judge'], missing: ['judge'], reuse: [], command: expect.stringMatching(/^kanon apps --owner acme --repo widgets --apps judge --dir /), outcome: 'ran', exitCode: 0 });
@@ -2582,5 +2582,114 @@ describe('kanon init and the Claude credential (plan 0009 A5)', () => {
         expect(names, `${lane} on ${auth}`).toEqual(MODEL_LANES.includes(lane) ? [auth === 'api-key' ? KEY : TOKEN] : []);
       }
     }
+  });
+});
+
+// #631: opting in to telemetry makes every job on the default branch that holds `id-token: write`
+// a possible writer to the store, and doctor blocks on each one it doesn't see accepted. Init
+// names the same holders, with doctor's own check, before anything is written, says so in the
+// telemetry questions, and writes the person's acceptance into the adoption record, so the
+// install's pull request doesn't learn of it from doctor at the end.
+describe('kanon init and the existing id-token holders (#631)', () => {
+  const DEPLOY = '.github/workflows/deploy.yml';
+  const deploy = 'name: Deploy\non: push\npermissions:\n  contents: read\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n      contents: read\n    steps:\n      - run: ./deploy.sh\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make lint\n';
+  const WHY = 'assumes the deploy role in our cloud account';
+  type HolderRow = { workflow: string; job: string; grant: string; how: string; calls: string | null; status: string; reason: string | null };
+  const holdersOf = (d: Doc) => d.inspection.idTokenHolders as HolderRow[];
+  const unaccepted = (d: Doc) => d.findings.filter((f) => f.id === 'id-token.unaccepted');
+
+  it("names each holder in its dry run with doctor's own finding, and changes nothing", async () => {
+    const { idTokenHolders, unacceptedHolder } = await import('../../cli/doctor.mjs');
+    const dir = checkout({ [DEPLOY]: deploy });
+    const github = fakeGitHub();
+    const d = parse(await run(dir, github, ['--json', '--dry-run']));
+    expect(d.status).toBe('steps-left');
+    expect(holdersOf(d)).toEqual([{ workflow: DEPLOY, job: 'deploy', grant: 'job', how: 'id-token', calls: null, status: 'unaccepted', reason: null }]);
+    // The same finding doctor gives, word for word: its subject, message and fix.
+    const [holder] = idTokenHolders({ workflows: new Map([[DEPLOY, parseYaml(deploy)]]), accepted: new Map(), pinned: () => true, req: REQ });
+    const same = unacceptedHolder(holder!, 'main');
+    expect(unaccepted(d)).toEqual([{ id: 'id-token.unaccepted', category: 'id-token', blocking: false, subject: same.subject, message: same.message, fix: { ...same.fix, url: null } }]);
+    expect(unaccepted(d)[0]!.message).toMatch(/can assume the QA store's role and the telemetry writer/);
+    expect(writes(github.calls)).toEqual([]);
+    expect(existsSync(join(dir, 'docs/qa/adoption.md'))).toBe(false);
+    // The summary names it too, before anything is written.
+    expect(d.summary.find((l) => l.fields.includes('acceptedIdTokenHolders'))).toMatchObject({ answer: 'id-token', value: expect.stringContaining('deploy.yml job deploy: narrow or accept') });
+  });
+
+  it('lists none, and finds nothing, where no job holds the grant', async () => {
+    const d = parse(await run(checkout(), fakeGitHub(), ['--json', '--dry-run']));
+    expect(holdersOf(d)).toEqual([]);
+    expect(unaccepted(d)).toEqual([]);
+    expect(d.answers.acceptedIdTokenHolders).toEqual([]);
+  });
+
+  it('writes the acceptance the person gave into the adoption record, which doctor then reads as accepted', async () => {
+    const { ADOPTION_RECORD, idTokenHolders, readHolderAcceptances } = await import('../../cli/doctor.mjs');
+    const dir = checkout({ [DEPLOY]: deploy });
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps', '--consent', 'yes', '--accept-id-token-holder', `deploy.yml#deploy=${WHY}`]));
+    expect(d.status, JSON.stringify(d.findings)).not.toBe('failed');
+    expect(d.answers.acceptedIdTokenHolders).toEqual([{ workflow: 'deploy.yml', job: 'deploy', reason: WHY }]);
+    expect(unaccepted(d)).toEqual([]);
+    expect(holdersOf(d)).toEqual([expect.objectContaining({ job: 'deploy', status: 'accepted', reason: WHY })]);
+    const record = read(dir, ADOPTION_RECORD);
+    expect(record.split('## Choices\n\n')[1]!.split('\n\n')[0]).toContain(`- **Accepted id-token holder:** \`deploy.yml\` job \`deploy\` (${WHY})`);
+    const acceptances = readHolderAcceptances(record);
+    expect(acceptances.errors).toEqual([]);
+    expect(idTokenHolders({ workflows: new Map([[DEPLOY, parseYaml(deploy)]]), accepted: acceptances.accepted, pinned: () => true, req: REQ }).map((h) => h.status)).toEqual(['accepted']);
+    // Run again, it finds the record's acceptance, and asks for nothing more.
+    const again = parse(await run(dir, fakeGitHub(), ['--json', '--dry-run', '--no-apps']));
+    expect(unaccepted(again)).toEqual([]);
+    expect(holdersOf(again)[0]).toMatchObject({ status: 'accepted', reason: WHY });
+  });
+
+  it("leaves an adoption record the project already has alone, and its finding's bullet carries the reason given", async () => {
+    const dir = checkout({ [DEPLOY]: deploy, 'docs/qa/adoption.md': '# Adoption record\n\n## Choices\n\n- **Feature:** `review`\n' });
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--no-apps', '--accept-id-token-holder', `deploy.yml#deploy=${WHY}`]));
+    expect(d.files.find((f) => f.path === 'docs/qa/adoption.md')).toMatchObject({ status: 'kept' });
+    expect(read(dir, 'docs/qa/adoption.md')).not.toContain('Accepted id-token holder');
+    expect(unaccepted(d).map((f) => f.fix.commands)).toEqual([[`- **Accepted id-token holder:** \`deploy.yml\` job \`deploy\` (${WHY})`]]);
+  });
+
+  it("doesn't count a caller of Kanon's store-coupled lane or of its telemetry collector", async () => {
+    const dir = checkout({ '.github/workflows/telemetry.yml': telemetryCallerFile(PINNED), '.github/workflows/agent-overseer.yml': callerFile('agent-overseer', REQ.lanes['agent-overseer']!, { release: 'v0.30.0', ciName: 'CI', defaultBranch: 'main' }) });
+    const d = parse(await run(dir, fakeGitHub(), ['--json', '--dry-run']));
+    expect(holdersOf(d).map((h) => `${h.workflow} ${h.status}`).sort()).toEqual(['.github/workflows/agent-overseer.yml kanon-lane', '.github/workflows/telemetry.yml kanon-lane']);
+    expect(unaccepted(d)).toEqual([]);
+  });
+
+  it('refuses an acceptance that names no holder, or is malformed or given twice, and changes nothing', async () => {
+    const dir = checkout({ [DEPLOY]: deploy });
+    const github = fakeGitHub();
+    const none = await run(dir, github, ['--json', '--no-apps', '--accept-id-token-holder', `deploy.yml#lint=${WHY}`]);
+    expect(none.status).toBe(2);
+    expect(JSON.parse(none.out).error).toMatch(/deploy\.yml's job lint holds no id-token: write/);
+    expect(writes(github.calls)).toEqual([]);
+    expect(existsSync(join(dir, 'docs/qa/adoption.md'))).toBe(false);
+    for (const v of ['deploy.yml#deploy', 'deploy#deploy=why', 'deploy.yml=why', '.github/workflows/deploy.yml#deploy=why', 'deploy.yml#deploy=  ']) {
+      expect(() => parseArgs(['--accept-id-token-holder', v], REQ), v).toThrow(/--accept-id-token-holder takes <workflow>\.yml#<job>=<why it holds the grant>/);
+    }
+    expect(() => parseArgs(['--accept-id-token-holder', 'deploy.yml#deploy=a', '--accept-id-token-holder=deploy.yml#deploy=b'], REQ)).toThrow(/accepts deploy\.yml's job deploy twice/);
+    // Two jobs, two flags: it is the one value flag that can be given more than once.
+    expect(parseArgs(['--accept-id-token-holder', 'a.yml#x=one', '--accept-id-token-holder=b.yml#y=two = three'], REQ).given.acceptHolders).toEqual([
+      { workflow: 'a.yml', job: 'x', reason: 'one' },
+      { workflow: 'b.yml', job: 'y', reason: 'two = three' },
+    ]);
+  });
+
+  it('says in both telemetry questions that the existing OIDC jobs on the default branch could then write to the store, naming them', async () => {
+    // TELEMETRY_QUESTION, for every repository: a holder can write to the store once it is on.
+    expect(TELEMETRY_QUESTION).toMatch(/every job on the default branch that holds id-token: write, an existing OIDC job of yours included, can write to the store/i);
+    const asked: string[] = [];
+    const dir = checkout({ [DEPLOY]: deploy });
+    const r = await run(dir, fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: async (q: string, d: string) => (asked.push(q), q.startsWith(consentQuestion(PINNED)) ? 'no' : d) });
+    expect(r.status, r.err).toBe(0);
+    const consent = asked.find((q) => q.startsWith(consentQuestion(PINNED)))!;
+    // The consent question's own words, then a line naming the holder, then its options.
+    expect(consent.split('\n')[1]).toBe('On main, a job that already holds id-token: write could then write to Kanon\'s telemetry store: deploy.yml job deploy. Narrow its grant, or accept it in docs/qa/adoption.md (kanon init lists it).');
+    expect(consent.split('\n')[2]).toMatch(/^ {2}1\. Yes \(Recommended\)/);
+    // Without a holder, the question is its own words alone.
+    const plain: string[] = [];
+    await run(checkout(), fakeGitHub(), ['--no-apps'], undefined, REQ, { ask: async (q: string, d: string) => (plain.push(q), d) });
+    expect(plain.find((q) => q.startsWith(consentQuestion(PINNED)))!.split('\n')[1]).toMatch(/^ {2}1\. Yes/);
   });
 });

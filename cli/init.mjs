@@ -185,6 +185,11 @@ The other values, each inferred or defaulted, as the summary shows:
   --upstream-findings <where>  where findings only Kanon can act on go: drafted (the
                          default), filed-here, or, with --telemetry, sent or
                          sent-with-evidence (docs/init.md)
+  --accept-id-token-holder <workflow>.yml#<job>=<why>
+                         accept a job of your workflows that holds id-token: write, which
+                         could assume the QA store's role and the telemetry writer: a bullet
+                         in the adoption record, with why (docs/doctor.md); once per job, and
+                         only for a job that holds it (default: none, each one a finding)
   --reuse-apps           where the owner already has an App the lanes lack (an installation
                          with exactly its permissions), reuse it with kanon apps --reuse
                          rather than create a second one (the default)
@@ -345,12 +350,15 @@ export const realDeps = {
  *   releaser?: boolean, reuseApps?: boolean, plugin?: boolean, telemetry?: boolean, createApps?: boolean,
  *   upstreamFindings?: import('../scripts/lib/upstream-findings.mjs').Value,
  *   feature?: 'review' | 'build' | 'full', reviewTrigger?: 'labelled', sensitiveData?: boolean, consent?: Consent,
- *   claudeAuth?: ClaudeAuth,
+ *   claudeAuth?: ClaudeAuth, acceptHolders?: AcceptedHolder[],
  * }} Given
  */
 
+/** The one value flag given once per value (#631): each accepts one id-token holder. */
+const ACCEPT_FLAG = '--accept-id-token-holder';
+
 /** The flags that take a value. */
-const VALUE_FLAGS = ['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email', '--upstream-findings', '--feature', '--review-trigger', '--consent', '--claude-auth'];
+const VALUE_FLAGS = ['--repo', '--dir', '--lanes', '--project-owner', '--maintainer', '--stakeholder', '--gates', '--test-database', '--delegate-name', '--delegate-email', '--upstream-findings', '--feature', '--review-trigger', '--consent', '--claude-auth', ACCEPT_FLAG];
 
 /** Pairs of flags that contradict each other, refused by name when both are given. */
 /** @type {Array<[string, string]>} */
@@ -394,8 +402,8 @@ export const parseArgs = (argv, req) => {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
     const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
-    const value = () => {
-      if (seen.has(flag)) throw new Error(`${flag} is given twice`);
+    const value = (once = true) => {
+      if (once && seen.has(flag)) throw new Error(`${flag} is given twice`);
       const v = inline ?? argv[++i];
       if (v === undefined || v === '') throw new Error(`${flag} needs a value`);
       // The next argument is a flag, not this one's value: an unset, unquoted variable leaves
@@ -454,7 +462,12 @@ export const parseArgs = (argv, req) => {
       if (v !== 'subscription' && v !== 'api-key') throw new Error(`--claude-auth takes subscription or api-key, not "${v}"`);
       g.claudeAuth = v;
     }
-    else if (flag === '--reuse-apps') g.reuseApps = true;
+    else if (flag === '--accept-id-token-holder') {
+      const h = parseHolder(value(false));
+      const holders = (g.acceptHolders ??= []);
+      if (holders.some((x) => x.workflow === h.workflow && x.job === h.job)) throw new Error(`${flag} accepts ${h.workflow}'s job ${h.job} twice; give one reason`);
+      holders.push(h);
+    } else if (flag === '--reuse-apps') g.reuseApps = true;
     else if (flag === '--no-reuse-apps') g.reuseApps = false;
     else if (flag === '--plugin') g.plugin = true;
     else if (flag === '--no-plugin') g.plugin = false;
@@ -489,6 +502,29 @@ export const parseArgs = (argv, req) => {
   // `--json` asks nothing (docs/cli-json.md): each question takes its flag or its default.
   if (opts.json) opts.yes = true;
   return opts;
+};
+
+/**
+ * A job accepted as an id-token holder (#631): its workflow's file name, its key, and why it
+ * holds the grant, the person's own words.
+ * @typedef {{ workflow: string, job: string, reason: string }} AcceptedHolder
+ */
+
+/** The bullet's bold label that accepts an id-token holder, under the adoption record's `## Choices` (`K-LAYOUT-10`). */
+export const HOLDER_LABEL = 'Accepted id-token holder';
+
+/** The adoption record's bullet that accepts a holder, as `kanon doctor` reads it. @param {string} file the workflow's file name @param {string} job @param {string} reason */
+export const holderBullet = (file, job, reason) => `- **${HOLDER_LABEL}:** \`${file}\` job \`${job}\` (${reason})`;
+
+/**
+ * `--accept-id-token-holder`'s value, `<workflow>.yml#<job>=<why>`: the file name alone, as the
+ * bullet names it, and a reason on one line, which the bullet's parentheses hold.
+ * @param {string} v @returns {AcceptedHolder}
+ */
+export const parseHolder = (v) => {
+  const m = /^([^\s/#=`]+\.ya?ml)#([A-Za-z0-9_-]+)=([^\n]*\S[^\n]*)$/.exec(v);
+  if (!m) throw new Error(`${ACCEPT_FLAG} takes <workflow>.yml#<job>=<why it holds the grant>, the workflow's file name in .github/workflows/, not "${v}"`);
+  return { workflow: /** @type {string} */ (m[1]), job: /** @type {string} */ (m[2]), reason: /** @type {string} */ (m[3]).trim() };
 };
 
 /**
@@ -929,6 +965,21 @@ export const DATA_OPTIONS = [
 export const CONSENT_QUESTION = 'Help improve Kanon by sharing anonymous run data and the Kanon bugs your lanes find? Evidence text may rarely hold personal data; details: <link>.';
 /** The consent question with its link. @param {string} release */
 export const consentQuestion = (release) => CONSENT_QUESTION.replace('<link>', sharingUrl(release));
+
+/**
+ * The line the consent question carries after its own words when jobs of the repository already
+ * hold `id-token: write` and the adoption record doesn't accept them (#631): a yes makes each a
+ * possible writer to the telemetry store, so the person hears it before answering, not from
+ * doctor after the pull request. Empty when there is none.
+ * @param {Array<{ workflow: string, job: string }>} holders @param {string} defaultBranch
+ */
+export const holdersNote = (holders, defaultBranch) => {
+  if (!holders.length) return '';
+  const named = holders.map((h) => `${h.workflow.replace(/^\.github\/workflows\//, '')} job ${h.job}`).join(', ');
+  return holders.length === 1
+    ? `On ${defaultBranch}, a job that already holds id-token: write could then write to Kanon's telemetry store: ${named}. Narrow its grant, or accept it in docs/qa/adoption.md (kanon init lists it).`
+    : `On ${defaultBranch}, ${holders.length} jobs that already hold id-token: write could then write to Kanon's telemetry store: ${named}. Narrow their grants, or accept each in docs/qa/adoption.md (kanon init lists them).`;
+};
 /** @type {Array<Option<Consent>>} */
 export const CONSENT_OPTIONS = [
   { value: 'yes', label: 'Yes', does: "Run data, and scrubbed bug evidence read by Kanon's maintainer and a third-party decision provider.", names: ['y'] },
@@ -1046,12 +1097,13 @@ const RELEASER_QUESTION = 'Create the optional Releaser App, so the release PR r
  * inferred (or null), whether a workflow runs Kanon's DCO check, whether the default branch has a
  * commit, whether the repository is private, whether a feature's conditional lane's condition
  * holds here, the release init runs from, the repository's secret names (null when the token
- * can't list them), and the Claude credential each installed model lane's caller maps.
+ * can't list them), the Claude credential each installed model lane's caller maps, and the jobs
+ * that hold `id-token: write` that nothing accepts yet, with the default branch they run on.
  * @typedef {{ login: string, gates: string[], gitName: string, gitEmail: string, req: Requirements,
  *   installed?: string[], releases?: boolean, reusable?: (identities: string[]) => Array<{ app: string, slug: string, from?: string }>,
  *   codeowners?: string[] | null, database?: string | null, runsDco?: boolean, hasCommits?: boolean, isPrivate?: boolean,
  *   met?: (lane: string) => boolean, release?: string, secrets?: Set<string> | null,
- *   claudeMapped?: ClaudeAuth[] }} AskContext
+ *   claudeMapped?: ClaudeAuth[], holders?: Array<{ workflow: string, job: string }>, defaultBranch?: string }} AskContext
  */
 
 /**
@@ -1235,7 +1287,10 @@ export const askAll = async (deps, opts, ctx) => {
     sharing = { telemetry: g.telemetry ?? false, upstreamFindings: up, upstreamEvidence: sends(up) ? up === 'sent with evidence' : null };
     why.consent = flag;
   } else if (opts.yes) [sharing, why.consent] = [CONSENT_LEVELS.no, { source: 'default', reason: 'only an explicit answer sends anything (K-OBS-18)' }];
-  else [sharing, why.consent] = [CONSENT_LEVELS[await choose(deps, consentQuestion(ctx.release ?? 'main'), CONSENT_OPTIONS, 'yes', 'yes', 'no')], asked];
+  else {
+    const note = holdersNote(ctx.holders ?? [], ctx.defaultBranch ?? 'main');
+    [sharing, why.consent] = [CONSENT_LEVELS[await choose(deps, `${consentQuestion(ctx.release ?? 'main')}${note ? `\n${note}` : ''}`, CONSENT_OPTIONS, 'yes', 'yes', 'no')], asked];
+  }
 
   // The rest, inferred or defaulted (plan 0007 §4), each unless its flag gives it.
   const single = ctx.codeowners?.length === 1 ? ctx.codeowners[0] : undefined;
@@ -1272,11 +1327,14 @@ export const askAll = async (deps, opts, ctx) => {
   const inferredAuth = claudeAuthOf(ctx.secrets, ctx.claudeMapped);
   const claudeAuth = g.claudeAuth ?? inferredAuth.value;
   why.claudeAuth = g.claudeAuth !== undefined ? flag : inferredAuth.why;
+  // THE ID-TOKEN HOLDERS ACCEPTED (#631): only the person's own, each with its reason; none by default.
+  const acceptedHolders = g.acceptHolders ?? [];
+  why.acceptedIdTokenHolders = g.acceptHolders ? flag : { source: 'default', reason: 'only the person accepts one' };
 
   /** @type {Answers} */
   const a = {
     feature: 'custom', owner, maintainer, stakeholder, lanes, gates, database, delegation, deleteDefaults, releaser,
-    reuseApps: g.reuseApps ?? null, plugin, ...sharing, reviewTrigger: null, sensitiveData, consent: null, claudeAuth, why, notes: [],
+    reuseApps: g.reuseApps ?? null, plugin, ...sharing, reviewTrigger: null, sensitiveData, consent: null, claudeAuth, acceptedHolders, why, notes: [],
   };
   return derive(a, ctx, g);
 };
@@ -1402,7 +1460,7 @@ export const reuseQuestion = (found, req) => {
  * erase it, from plan 0002 and docs/telemetry.md.
  */
 export const TELEMETRY_QUESTION =
-  "Send this repository's agent-run and work-item rows to Kanon's hosted telemetry store? One row per lane run: plan 0002's fixed fields (lane, outcome, model, cost, tokens, durations, counts, the run, pull request and issue numbers, the Kanon release). One row per closed pull request: plan 0003's fields (sizes, times, outcome, actor classes, pull request and issue numbers). The rows hold no code, no text, no titles, no logins or file paths. They go to one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, and are kept 13 months. Kanon's operator reads them to improve Kanon: Kanon notices failures it caused in your runs, often fixing them before you would report one, and you get cross-adopter cost and reliability baselines. The operator publishes only aggregates of at least three adopters; your repository reads only its own rows. Nothing else is asked: the collector registers this repository on its first run, without an issue or a variable. Stop by deleting .github/workflows/telemetry.yml; to erase what was sent, first dispatch it with erase: yes (docs/sharing.md, \"Stop and erase\").";
+  "Send this repository's agent-run and work-item rows to Kanon's hosted telemetry store? One row per lane run: plan 0002's fixed fields (lane, outcome, model, cost, tokens, durations, counts, the run, pull request and issue numbers, the Kanon release). One row per closed pull request: plan 0003's fields (sizes, times, outcome, actor classes, pull request and issue numbers). The rows hold no code, no text, no titles, no logins or file paths. They go to one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, and are kept 13 months. Kanon's operator reads them to improve Kanon: Kanon notices failures it caused in your runs, often fixing them before you would report one, and you get cross-adopter cost and reliability baselines. The operator publishes only aggregates of at least three adopters; your repository reads only its own rows. Nothing else is asked: the collector registers this repository on its first run, without an issue or a variable. Once it is on, every job on the default branch that holds id-token: write, an existing OIDC job of yours included, can write to the store, since its writer role trusts the default branch's ref: kanon init names each, for you to narrow its grant or accept it in docs/qa/adoption.md. Stop by deleting .github/workflows/telemetry.yml; to erase what was sent, first dispatch it with erase: yes (docs/sharing.md, \"Stop and erase\").";
 
 /**
  * The answers `askAll` gives, with where each came from (`why`, by its `.answers` field) and the
@@ -1411,7 +1469,7 @@ export const TELEMETRY_QUESTION =
  *   database: 'none' | 'hook', delegation: { name: string, email: string } | null, deleteDefaults: boolean, releaser: boolean,
  *   reuseApps: boolean | null, plugin: boolean, telemetry: boolean, upstreamFindings: import('../scripts/lib/upstream-findings.mjs').Value,
  *   upstreamEvidence: boolean | null, reviewTrigger: 'labelled' | null, sensitiveData: boolean | null, consent: Consent | null,
- *   claudeAuth: ClaudeAuth, why: Record<string, Why>, notes: string[] }} Answers
+ *   claudeAuth: ClaudeAuth, acceptedHolders: AcceptedHolder[], why: Record<string, Why>, notes: string[] }} Answers
  */
 
 /** @param {string} who */
@@ -1461,6 +1519,8 @@ export const adoptionFile = (s, a, repo, today) => {
   if (a.reviewTrigger === 'labelled') choices.push('- **Review trigger:** `labelled`');
   if (a.lanes.includes('agent-overseer')) choices.push('- **Overseer:** `installed`');
   if (a.upstreamFindings && a.upstreamFindings !== UPSTREAM_DEFAULT) choices.push(`- **${UPSTREAM_LABEL}:** \`${a.upstreamFindings}\``);
+  // The id-token holders the person accepted (#631), in doctor's shape, so doctor finds them accepted.
+  for (const h of a.acceptedHolders ?? []) choices.push(holderBullet(h.workflow, h.job, h.reason));
   if (choices.length) lines.push('## Choices', '', ...choices, '');
   // Q3's answer (plan 0007 §3, K-LAYOUT-10), after `## Choices`: `not declared` when nobody answered.
   const data = a.sensitiveData === true ? 'yes' : a.sensitiveData === false ? 'no' : 'not declared';
@@ -1700,10 +1760,11 @@ export const mappedSecrets = (a, req) => [...new Set(a.lanes.flatMap((l) => (req
  * anything is written. Every answer is on a line, so nothing is silent.
  * @param {{ s: Inspection, a: Answers, req: Requirements, repo: string, release: string, read: (rel: string) => string | null,
  *   files: Map<string, string>, rows: Map<string, string>, ownerApps: Array<{ app: string, slug: string, from: string }> | null,
- *   met: (lane: string) => boolean }} c
+ *   met: (lane: string) => boolean, holders?: Array<{ workflow: string, job: string, status: string }> }} c
+ *   `holders`: the jobs of the checkout's workflows that hold `id-token: write`, as doctor counts them
  * @returns {SummaryLine[]}
  */
-export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerApps, met }) => {
+export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerApps, met, holders = [] }) => {
   /** @type {SummaryLine[]} */
   const lines = [];
   const why = (/** @type {string} */ f) => a.why[f] ?? { source: /** @type {Source} */ ('default'), reason: '' };
@@ -1726,6 +1787,14 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
     no: 'no: nothing leaves this repo, findings drafted',
   };
   line('Sharing', ['consent', 'telemetry', 'upstreamFindings', 'upstreamEvidence'], a.consent ? sharing[a.consent] : `custom: telemetry ${a.telemetry ? "on (registers on the collector's first run)" : 'off'}, findings ${a.upstreamFindings}`, why('consent'));
+  // Beside sharing (#631): each of the repository's own jobs that could assume the telemetry
+  // writer and the QA store's role, and what becomes of it.
+  const own = holders.filter((h) => h.status !== 'kanon-lane').map((h) => {
+    const file = h.workflow.replace(/^\.github\/workflows\//, '');
+    const given = a.acceptedHolders.find((x) => x.workflow === file && x.job === h.job);
+    return `${file} job ${h.job}: ${h.status === 'accepted' ? 'accepted' : given ? `accept (${given.reason})` : 'narrow or accept'}`;
+  });
+  line('id-token', ['acceptedIdTokenHolders'], own.length ? own.join('; ') : 'no job of your workflows holds id-token: write', why('acceptedIdTokenHolders'));
   // Only where a chosen lane runs a model: the Merger, the reconciler and the sweep map neither.
   if (a.lanes.some((l) => req.lanes[l]?.claude?.length)) line('Claude', ['claudeAuth'], CLAUDE_AUTH_LINES[a.claudeAuth], why('claudeAuth'));
   const identities = appIdentities(a, req);
@@ -1979,7 +2048,7 @@ const run = async (deps, opts, req, rep) => {
   // repository that hosts the lanes that path holds the lane itself, and its caller lives where
   // the adoption record's caller.misplaced waiver says (#451). Doctor reads the waivers, and init
   // reads them as doctor does; doctor imports init, so init loads it only once both are loaded.
-  const { ADOPTION_RECORD, readWaivers } = await import('./doctor.mjs');
+  const { ADOPTION_RECORD, EXACT_RELEASE, idTokenHolders, readHolderAcceptances, readWaivers, unacceptedHolder } = await import('./doctor.mjs');
   const waived = readWaivers(read(ADOPTION_RECORD)).waivers.filter((w) => w.id === 'caller.misplaced').map((w) => w.subject);
   const callers = callerPaths(Object.keys(req.lanes), read, waived);
   const installed = Object.keys(req.lanes).filter((l) => (read(/** @type {string} */ (callers.get(l))) ?? '').includes(callsLane(l)));
@@ -2053,6 +2122,18 @@ const run = async (deps, opts, req, rep) => {
   rep.inspection.appsNotLookedFor = unlisted === null ? [] : lacking.filter((i) => !(ownerApps ?? []).some((f) => f.app === i));
   out('');
   const workflows = checkoutWorkflows(deps, root);
+  // THE ID-TOKEN HOLDERS (#631), counted with doctor's own check, so that what doctor would block
+  // on after the pull request is named here, before the consent question. A caller of a Kanon lane
+  // pinned at any exact release is Kanon's here: doctor holds it to the release the callers pin,
+  // and the person has nothing to decide about it.
+  const holders = idTokenHolders({ workflows, accepted: readHolderAcceptances(read(ADOPTION_RECORD)).accepted, pinned: (ref) => EXACT_RELEASE.test(ref), req });
+  rep.inspection.idTokenHolders = holders;
+  for (const h of opts.given.acceptHolders ?? []) {
+    if (!holders.some((x) => x.workflow === `.github/workflows/${h.workflow}` && x.job === h.job)) {
+      return stop(2, [`${h.workflow}'s job ${h.job} holds no id-token: write in this checkout, so ${ACCEPT_FLAG} has nothing to accept there, and the acceptance would be stale (doctor's id-token.stale-acceptance). Nothing was changed.`]);
+    }
+  }
+  const given = (/** @type {{ workflow: string, job: string }} */ h) => (opts.given.acceptHolders ?? []).find((x) => `.github/workflows/${x.workflow}` === h.workflow && x.job === h.job);
   /** @type {AskContext} */
   const ctx = {
     login: who.login ?? ownerName,
@@ -2072,13 +2153,15 @@ const run = async (deps, opts, req, rep) => {
     release,
     secrets: s.secrets,
     claudeMapped: callersClaudeAuth(installed, req, workflows, callers),
+    holders: holders.filter((h) => h.status === 'unaccepted' && !given(h)),
+    defaultBranch: s.defaultBranch,
   };
   const a = await askAll(deps, opts, ctx);
   // THE SUMMARY (plan 0007 §4): every value, and where it came from, before anything is written.
   // Without --yes it is confirmed in one question, or changed, a group at a time, and shown again.
   const plan = () => plannedFiles({ s, a, req, release, repo, today: deps.today(), read, workflows, callers });
   for (;;) {
-    rep.summary = summaryOf({ s, a, req, repo, release, read, files: plan(), rows, ownerApps, met });
+    rep.summary = summaryOf({ s, a, req, repo, release, read, files: plan(), rows, ownerApps, met, holders });
     out('');
     for (const l of summaryText(rep.summary, { s, repo, release })) out(l);
     if (a.lanes.includes(REVIEW_LANE)) {
@@ -2125,6 +2208,7 @@ const run = async (deps, opts, req, rep) => {
     sensitiveData: a.sensitiveData,
     consent: a.consent,
     claudeAuth: a.claudeAuth,
+    acceptedIdTokenHolders: a.acceptedHolders,
   };
   // The catalogue and the features name the credential the callers map (plan 0009 §9).
   rep.catalogue = laneCatalogue(req, installed, a.claudeAuth);
@@ -2194,6 +2278,19 @@ const run = async (deps, opts, req, rep) => {
     rep.files.push({ path: rel, status: 'new', content: text, diff: [] });
     out(`${dry ? 'would write' : 'wrote'} ${rel}:`);
     for (const l of text.replace(/\n$/, '').split('\n')) out(`    + ${l}`);
+  }
+  // Each holder nothing accepts (#631): doctor's own finding, which doctor blocks on. One the person
+  // accepted is accepted once the record holds init's text; a record the project already has is
+  // the project's, so the finding stays, its bullet carrying their reason, for them to add.
+  const record = rep.files.find((f) => f.path === ADOPTION_RECORD)?.status;
+  const recorded = record === 'new' || record === 'same';
+  rep.inspection.idTokenHolders = holders.map((h) => {
+    const g = given(h);
+    return h.status === 'unaccepted' && g && recorded ? { ...h, status: 'accepted', reason: g.reason } : h;
+  });
+  for (const h of /** @type {typeof holders} */ (rep.inspection.idTokenHolders).filter((x) => x.status === 'unaccepted')) {
+    const u = unacceptedHolder(h, s.defaultBranch, given(h)?.reason);
+    step({ id: 'id-token.unaccepted', category: 'id-token', subject: u.subject, prose: `${u.message} ${u.fix.text}`, message: u.message, text: u.fix.text, commands: u.fix.commands });
   }
   const dep = read('.github/dependabot.yml');
   if (dep && !/yedeya-labs\/kanon\*/.test(dep)) {
