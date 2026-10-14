@@ -508,6 +508,13 @@ export function byVersionOf(ctx, { start, end }) {
 // the last position is 1 on a chain of one and 3 on a chain of three. A pre-production row counts
 // in none of the four; it is only tallied, beside them, as left out.
 //
+// A CHANGE COUNTS ONCE. A rollback row and a `redeploy` row aren't changes: a redeploy puts a
+// commit that already succeeded in production there again, as a two-release flow's promotion does
+// (§4) on the commit its pre-release deployed. Neither counts in the frequency, the change-failure
+// share or lead time, so a change counts at its first production deploy, the pre-release's under
+// that flow; both still count in time to restore, an `ok` as the restore and a failure as one to
+// restore (the Owner's decision on kanon#895).
+//
 // WHAT THEY CAN'T SEE: a production fault found days later and fixed forward, with no rollback and
 // no failed smoke. The row carries no commit (§10), so it can't be joined to plan 0003's reverts
 // and linked fixes.
@@ -519,13 +526,15 @@ const WEEK_MS = 7 * DAY_MS;
 
 /**
  * @typedef {Record<string, unknown> & { recorded_at: string, role: 'production' | 'pre-production', outcome: string,
- *   failed_stage?: string, rollback?: boolean, since_release_ms?: number, run_id?: number, run_attempt?: number }} DeployRow
+ *   failed_stage?: string, redeploy?: boolean, rollback?: boolean, since_release_ms?: number, run_id?: number, run_attempt?: number }} DeployRow
  */
 
 /** A rollback row: a dispatch to a commit older than the environment's last success (§10). @param {DeployRow} r */
 const isRollback = (r) => r.rollback === true;
-/** A forward `ok`: deployed, and not a rollback. @param {DeployRow} r */
-const isForwardOk = (r) => r.outcome === 'ok' && !isRollback(r);
+/** A change: neither a rollback nor a redeploy of a commit that already succeeded there (§10). @param {DeployRow} r */
+const isChange = (r) => !isRollback(r) && r.redeploy !== true;
+/** A forward `ok`: deployed, and a change. @param {DeployRow} r */
+const isForwardOk = (r) => r.outcome === 'ok' && isChange(r);
 /** Failed at the deploy stage itself, or its smoke check failed. @param {DeployRow} r */
 const isDeployFailure = (r) => (r.outcome === 'failed' && r.failed_stage === 'deploy') || r.outcome === 'smoke_failed';
 
@@ -559,14 +568,16 @@ export function productionDeploys(rows) {
 /**
  * The four deploy metrics (plan 0010 §11) over the `weeks` weeks that end at `end`, on production
  * rows only. A row's time is its `recorded_at`, the end of its environment's job.
- * - **Deployment frequency:** forward `ok` rows (`ok`, `rollback` not true) per week, the median
- *   over the weeks, a week with none counting as 0.
- * - **Change-failure rate:** of the forward rows in the span that reached the deploy stage (`ok`,
+ * - **Deployment frequency:** forward `ok` rows (`ok`, neither `rollback` nor `redeploy` true) per
+ *   week, the median over the weeks, a week with none counting as 0.
+ * - **Change-failure rate:** of the changes in the span that reached the deploy stage (`ok`,
  *   `failed` at `deploy`, `smoke_failed`), the share that failed there, or are `ok` and followed by
- *   a rollback row before the next forward `ok`. A rollback row is a restore, not a change, so it
- *   isn't in the share itself. The look ahead reads past the span's end.
- * - **Time to restore:** from each failed row in the span to the next `ok` row, a rollback's
- *   included, the median. A failure with no `ok` after it is counted as not restored.
+ *   a rollback row before the next forward `ok`. A rollback or redeploy row isn't a change, so it
+ *   isn't in the share itself, and a redeploy doesn't end the look ahead. The look ahead reads
+ *   past the span's end.
+ * - **Time to restore:** from each failed row in the span, a rollback's or redeploy's included, to
+ *   the next `ok` row, a rollback's or redeploy's included, the median. A failure with no `ok`
+ *   after it is counted as not restored.
  * - **Release lead time:** `since_release_ms` of the forward `ok` rows in the span, the median.
  * @param {readonly unknown[]} rows one adopter's stored rows, of any kind
  * @param {{ end: number, weeks?: number }} opts
@@ -597,7 +608,7 @@ export function deployMetricsOf(rows, { end, weeks = DEPLOY_WEEKS }) {
       if (isCount(r.since_release_ms)) lead.push(/** @type {number} */ (r.since_release_ms));
       else withoutLeadTime += 1;
     }
-    if (!isRollback(r) && (r.outcome === 'ok' || isDeployFailure(r))) {
+    if (isChange(r) && (r.outcome === 'ok' || isDeployFailure(r))) {
       reached += 1;
       if (isDeployFailure(r)) failed += 1;
       else {
