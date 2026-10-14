@@ -27,7 +27,9 @@
 #
 # A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
 # triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:` this
-# file at an exact Kanon tag and maps the four secrets by name (never `secrets: inherit`).
+# file at an exact Kanon tag and maps three secrets by name, the Author App's two and one Claude
+# credential (never `secrets: inherit`); `KANON_AGGREGATE_ROLE`, declared below and read by no job,
+# may be mapped until the caller's pin moves past it.
 #
 # ── WHO HOLDS WHAT ───────────────────────────────────────────────────────────────────────
 #
