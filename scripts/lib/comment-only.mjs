@@ -71,12 +71,16 @@ const JS_ODD_SPACE = /[\u00A0\uFEFF\u1680\u2000-\u200A\u202F\u205F\u3000]/;
  * the language leaves it ambiguous without parsing: after `}` (a block, or an object literal),
  * `++`/`--`, a `.`, a TypeScript non-null `x!`, a keyword that may name a variable, or, where
  * the answer would be "no", across a line break, after which automatic semicolon insertion may
- * have ended the statement (`let x` then `/re/` on the next line).
- * @param {string} prev @param {string} before @param {boolean} lineBreak
+ * have ended the statement (`let x` then `/re/` on the next line). In TypeScript, also after a
+ * `>` that is not an arrow's `=>`: it may close type arguments (an instantiation expression,
+ * `f<T> / 2`, TS 4.7), after which a `/` divides.
+ * @param {string} prev @param {string} before @param {boolean} lineBreak @param {boolean} ts
  * @returns {boolean | null}
  */
-function expressionStarts(prev, before, lineBreak) {
+function expressionStarts(prev, before, lineBreak, ts) {
   if (prev === '' || prev === ')if') return true;
+  // The tokenizer reads `=>` as `=` then `>`; `= >` with a gap is no TypeScript either.
+  if (ts && prev === '>' && before !== '=') return null;
   if (MAYBE_EXPRESSION.has(prev)) return null;
   if (/^[A-Za-z_$\\\u0080-\uFFFF]/.test(prev)) return BEFORE_EXPRESSION.has(prev) || (lineBreak ? null : false);
   if (prev === 'num' || prev === 'str' || prev === ')' || prev === ']') return lineBreak ? null : false;
@@ -97,14 +101,14 @@ function jsString(text, i) {
   return null;
 }
 
-/** The end of the template literal at `i`, its `${…}` read as code, or null. @param {string} text @param {number} i @param {boolean} jsx */
-function jsTemplate(text, i, jsx) {
+/** The end of the template literal at `i`, its `${…}` read as code, or null. @param {string} text @param {number} i @param {boolean} jsx @param {boolean} ts */
+function jsTemplate(text, i, jsx, ts) {
   for (let j = i + 1; j < text.length; j++) {
     const c = text[j];
     if (c === '\\') { j++; continue; }
     if (c === '`') return j + 1;
     if (c === '$' && text[j + 1] === '{') {
-      const end = jsCode(text, j + 2, [], true, jsx);
+      const end = jsCode(text, j + 2, [], true, jsx, ts);
       if (end === null) return null;
       j = end - 1;
     }
@@ -135,9 +139,10 @@ function jsRegex(text, i) {
  * that closes a template's `${` when `inTemplate`, else the end of the text; null when it can't
  * read the text for certain.
  * @param {string} text @param {number} start @param {Seg[]} segs @param {boolean} inTemplate @param {boolean} jsx
+ * @param {boolean} ts TypeScript, whose `>` may close type arguments
  * @returns {number | null}
  */
-function jsCode(text, start, segs, inTemplate, jsx) {
+function jsCode(text, start, segs, inTemplate, jsx, ts) {
   let prev = '', before = '', depth = 0, lineBreak = false;
   const tok = (/** @type {string} */ t) => { before = prev; prev = t; lineBreak = false; };
   /** What each open `(` closes as: `)if` for a statement's head, `)` for an expression. @type {string[]} */
@@ -164,7 +169,7 @@ function jsCode(text, start, segs, inTemplate, jsx) {
       continue;
     }
     if (c === '/' || (c === '<' && jsx)) {
-      const starts = expressionStarts(prev, before, lineBreak);
+      const starts = expressionStarts(prev, before, lineBreak, ts);
       if (starts === null) return null;
       // JSX: its text may hold a `//` or a quote that is no comment or string.
       if (c === '<' && starts) return null;
@@ -178,7 +183,7 @@ function jsCode(text, start, segs, inTemplate, jsx) {
       }
     }
     if (c === '"' || c === "'" || c === '`') {
-      const end = c === '`' ? jsTemplate(text, i, jsx) : jsString(text, i);
+      const end = c === '`' ? jsTemplate(text, i, jsx, ts) : jsString(text, i);
       if (end === null) return null;
       segs.push({ t: 'str', v: text.slice(i, end) });
       tok('str');
@@ -228,8 +233,8 @@ function jsCode(text, start, segs, inTemplate, jsx) {
   return inTemplate ? null : i;
 }
 
-/** @param {string} text @param {boolean} jsx @returns {Seg[] | null} */
-function scanJs(text, jsx) {
+/** @param {string} text @param {boolean} jsx @param {boolean} ts @returns {Seg[] | null} */
+function scanJs(text, jsx, ts) {
   /** @type {Seg[]} */
   const segs = [];
   let i = 0;
@@ -238,7 +243,7 @@ function scanJs(text, jsx) {
     i = nl < 0 ? text.length : nl;
     segs.push({ t: 'code', v: text.slice(0, i) });
   }
-  return jsCode(text, i, segs, false, jsx) === null ? null : segs;
+  return jsCode(text, i, segs, false, jsx, ts) === null ? null : segs;
 }
 
 /** Python's string prefixes; `f` and `t` hold replacement fields. */
@@ -416,11 +421,11 @@ function render(segs, indentation) {
 export function skeleton(path, text) {
   const ext = /\.([^./]+)$/.exec(path)?.[1] ?? '';
   if (['ts', 'mts', 'cts'].includes(ext)) {
-    const segs = scanJs(text, false);
+    const segs = scanJs(text, false, true);
     return segs && render(segs, false);
   }
   if (['js', 'mjs', 'cjs', 'jsx', 'tsx'].includes(ext)) {
-    const segs = scanJs(text, true);
+    const segs = scanJs(text, true, ext === 'tsx');
     return segs && render(segs, false);
   }
   if (ext === 'py') {
