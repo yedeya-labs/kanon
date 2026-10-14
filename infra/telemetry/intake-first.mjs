@@ -17,7 +17,8 @@
 // raises (plan 0006 §4.2). A narrowing is not named: deploying intake first doesn't help an older
 // lane that still writes what the release refuses.
 //
-// It exits 1 when it names one, 0 when it names none, and 2 when it can't read a ref.
+// It exits 1 when it names one, 0 when it names none, and 2 when `--deployed` is missing or it
+// can't read a ref.
 
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
