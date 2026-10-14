@@ -140,20 +140,29 @@ export const silenceLimitHours = (gapMinutes, slackHours) => (2 * gapMinutes) / 
  * - `disabled`: GitHub disabled it (60 days without activity in a public repository) or it
  *   isn't active for another reason no person chose.
  * - `unknown`: its cron can't be read, so there is no bound to hold it to.
- * - `silent`: its newest scheduled run, or, with none, the workflow's own registration, is older
- *   than the bound.
+ * - `silent`: the newer of its newest scheduled run and the last change to its file on the
+ *   default branch, or, with neither, the workflow's own registration, is older than the bound.
  * - `ok` otherwise.
  *
+ * WHY THE FILE'S LAST CHANGE (kanon#818). GitHub's `created_at` is when the file was first
+ * registered, not when a `schedule` was added to it, and its `updated_at` does not move on a push
+ * to the file. So a weekly cron added to a caller registered months ago would be named silent on
+ * the next tick, and stay named until its first tick: a false alarm that clears itself. A push to
+ * the file re-registers its schedule, so the silence starts there. When the change can't be read,
+ * the schedule is measured as before, which can only name it, never hide it.
+ *
  * @param {{ file: string, crons: string[], workflow: { state?: string, created_at?: string } | null,
- *   lastRunAt: string | null | undefined, lastRunUrl?: string | null }} input
+ *   lastRunAt: string | null | undefined, lastRunUrl?: string | null, changedAt?: string | null }} input
  *   `workflow` null and `lastRunAt` undefined mean the read failed; `lastRunAt` null means no
- *   scheduled run exists.
+ *   scheduled run exists. `changedAt` is the newest commit to the file on the default branch,
+ *   null or undefined when there is none or it couldn't be read.
  * @param {Date|string|number} now
  * @param {{ slackHours: number }} opts
  * @returns {{ file: string, status: 'ok'|'silent'|'disabled'|'off'|'unknown'|'unreadable',
- *   cron: string, ageHours: number|null, limitHours: number|null, since: 'run'|'registered'|null, url: string|null }}
+ *   cron: string, ageHours: number|null, limitHours: number|null, since: 'run'|'changed'|'registered'|null,
+ *   url: string|null }}
  */
-export function classifySchedule({ file, crons, workflow, lastRunAt, lastRunUrl = null }, now, { slackHours }) {
+export function classifySchedule({ file, crons, workflow, lastRunAt, lastRunUrl = null, changedAt = null }, now, { slackHours }) {
   const cron = crons.join(', ');
   const base = { file, cron, ageHours: null, limitHours: null, since: null, url: null };
   if (workflow === null || lastRunAt === undefined) return { ...base, status: 'unreadable' };
@@ -162,8 +171,12 @@ export function classifySchedule({ file, crons, workflow, lastRunAt, lastRunUrl 
   const gap = cronGapMinutes(crons);
   if (gap === null) return { ...base, status: 'unknown' };
   const limitHours = silenceLimitHours(gap, slackHours);
-  const from = lastRunAt ?? workflow.created_at ?? null;
-  const at = from ? new Date(from).getTime() : NaN;
+  const time = (/** @type {string|null|undefined} */ t) => (t ? new Date(t).getTime() : NaN);
+  /** @type {['run'|'registered', number]} */
+  const first = lastRunAt ? ['run', time(lastRunAt)] : ['registered', time(workflow.created_at)];
+  const changed = time(changedAt);
+  /** @type {['run'|'changed'|'registered', number]} */
+  const [since, at] = Number.isFinite(changed) && !(first[1] >= changed) ? ['changed', changed] : first;
   if (!Number.isFinite(at)) return { ...base, status: 'unreadable', limitHours };
   const ageHours = (new Date(now).getTime() - at) / 3_600_000;
   return {
@@ -171,8 +184,8 @@ export function classifySchedule({ file, crons, workflow, lastRunAt, lastRunUrl 
     status: ageHours > limitHours ? 'silent' : 'ok',
     ageHours,
     limitHours,
-    since: lastRunAt ? 'run' : 'registered',
-    url: lastRunAt ? lastRunUrl : null,
+    since,
+    url: since === 'run' ? lastRunUrl : null,
   };
 }
 
@@ -219,7 +232,9 @@ export function renderScheduleFinding(rows, { carried = [] } = {}) {
       ? 'GitHub has disabled the workflow, so its schedule never fires: re-enable it in the Actions tab'
       : r.since === 'run'
         ? `newest scheduled run ${hours(r.ageHours)} ago${r.url ? ` ([run](${r.url}))` : ''}`
-        : `no scheduled run since the workflow was registered ${hours(r.ageHours)} ago`;
+        : r.since === 'changed'
+          ? `no scheduled run since its file last changed on the default branch ${hours(r.ageHours)} ago`
+          : `no scheduled run since the workflow was registered ${hours(r.ageHours)} ago`;
   return [
     `These workflows have a \`schedule\` that has not fired for far longer than its cron allows. GitHub runs a schedule late or drops it under load, so this check allows twice the cron's longest gap plus a slack before it names one; a schedule past that has most likely stopped.`,
     '',

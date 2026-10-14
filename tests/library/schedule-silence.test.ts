@@ -108,6 +108,30 @@ describe('classifySchedule', () => {
     expect(row({ lastRunAt: null, workflow: { state: 'active', created_at: hoursBefore(15) } })).toMatchObject({ status: 'silent', since: 'registered', url: null });
   });
 
+  // kanon#818 — GitHub's `created_at` is when the file was first registered, and its `updated_at`
+  // does not move on a push to it, so a `schedule` added to an old file needs the file's last change.
+  it('measures a schedule added to an old workflow file from the file\'s last change, not its registration', () => {
+    const weekly = { crons: ['0 7 * * 1'], lastRunAt: null, workflow: { state: 'active', created_at: hoursBefore(24 * 120) } };
+    expect(row({ ...weekly, changedAt: hoursBefore(30) })).toMatchObject({ status: 'ok', since: 'changed', url: null });
+    expect(row({ ...weekly, changedAt: hoursBefore(30) }).ageHours).toBeCloseTo(30);
+    expect(row({ ...weekly, changedAt: hoursBefore(349) })).toMatchObject({ status: 'silent', since: 'changed' });
+  });
+
+  it('measures a schedule re-added after an old scheduled run from the file\'s last change', () => {
+    expect(row({ lastRunAt: hoursBefore(24 * 90), changedAt: hoursBefore(2) })).toMatchObject({ status: 'ok', since: 'changed', url: null });
+  });
+
+  it('still measures from a scheduled run newer than the file\'s last change', () => {
+    const r = row({ lastRunAt: hoursBefore(15), lastRunUrl: 'https://run/1', changedAt: hoursBefore(400) });
+    expect(r).toMatchObject({ status: 'silent', since: 'run', url: 'https://run/1' });
+  });
+
+  it('measures as before when the file\'s last change could not be read or was not found', () => {
+    const old = { lastRunAt: null, workflow: { state: 'active', created_at: hoursBefore(15) } };
+    expect(row({ ...old, changedAt: undefined })).toMatchObject({ status: 'silent', since: 'registered' });
+    expect(row({ ...old, changedAt: null })).toMatchObject({ status: 'silent', since: 'registered' });
+  });
+
   it('reads an unreadable answer as unreadable, never as health', () => {
     expect(row({ workflow: null }).status).toBe('unreadable');
     expect(row({ lastRunAt: undefined }).status).toBe('unreadable');
@@ -145,5 +169,10 @@ describe('the escalation', () => {
     expect(body).toContain('| `a.yml` | `37 * * * *` | 20.0 hours | 14.0 hours |');
     expect(body).not.toContain('`b.yml`');
     expect(body).toContain('unreadable this tick');
+  });
+
+  it('says a schedule is measured from its file\'s last change when that is what it was measured from', () => {
+    const changed = row({ file: 'e.yml', lastRunAt: null, changedAt: hoursBefore(20) });
+    expect(renderScheduleFinding([changed])).toContain('no scheduled run since its file last changed on the default branch 20.0 hours ago');
   });
 });

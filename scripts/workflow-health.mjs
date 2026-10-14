@@ -775,12 +775,14 @@ function scheduledWorkflows(dir = '.github/workflows') {
   return out;
 }
 
-/** The workflow's state and registration, and its newest scheduled run: `null` / `undefined`
- *  where a read failed, which `classifySchedule` reports as unreadable. */
+/** The workflow's state and registration, its newest scheduled run, and the newest commit to its
+ *  file on the default branch: `null` / `undefined` where a read failed, which `classifySchedule`
+ *  reports as unreadable, except the commit, without which it measures as it did before kanon#818. */
 function scheduleFacts(file) {
   let workflow = null;
   let lastRunAt;
   let lastRunUrl = null;
+  let changedAt = null;
   const path = `repos/${REPO}/actions/workflows/${encodeURIComponent(file)}`;
   try {
     workflow = ghJson(['api', path]);
@@ -794,7 +796,15 @@ function scheduleFacts(file) {
   } catch (err) {
     warn(`could not read ${file}'s scheduled runs: ${err.message.split('\n')[0]}`);
   }
-  return { workflow, lastRunAt, lastRunUrl };
+  // GitHub's `updated_at` does not move on a push to the file, so the commits are what say when
+  // its schedule was last registered. `contents: read`, which the health job has.
+  try {
+    const commits = ghJson(['api', `repos/${REPO}/commits?path=${encodeURIComponent(`.github/workflows/${file}`)}&per_page=1`]);
+    changedAt = Array.isArray(commits) ? (commits[0]?.commit?.committer?.date ?? null) : null;
+  } catch (err) {
+    warn(`could not read ${file}'s last change, so it is measured from its newest scheduled run or registration: ${err.message.split('\n')[0]}`);
+  }
+  return { workflow, lastRunAt, lastRunUrl, changedAt };
 }
 
 /** The open schedule escalation, or null. Narrowed by title, decided by marker. */
@@ -818,7 +828,7 @@ function scheduleHeartbeat() {
     `## Schedules — ${rows.length} scheduled workflow(s)\n`,
     '| workflow | cron | verdict | since last scheduled run | allowed |',
     '|---|---|---|---|---|',
-    ...rows.map((r) => `| \`${r.file}\` | \`${r.cron}\` | ${r.status} | ${hrs(r.ageHours)}${r.since === 'registered' ? ' (none yet)' : ''} | ${hrs(r.limitHours)} |`),
+    ...rows.map((r) => `| \`${r.file}\` | \`${r.cron}\` | ${r.status} | ${hrs(r.ageHours)}${r.since === 'registered' ? ' (none yet)' : r.since === 'changed' ? ' (since its file changed)' : ''} | ${hrs(r.limitHours)} |`),
     '',
   ].join('\n');
   console.log(summary);
