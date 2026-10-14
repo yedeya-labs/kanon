@@ -143,6 +143,7 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
       'kanon-path: path',
       'lane-check: nothing',
       'notify/slack: nothing',
+      'notify/webhook: nothing',
       'pr-title: nothing',
       'qa-store: artifact-id artifact-name attempt commit present rows state',
       'test-database: database kind',
