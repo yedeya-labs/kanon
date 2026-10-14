@@ -5,9 +5,8 @@
 # A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER (docs/telemetry.md, "Collect
 # the rows"). The caller holds the triggers listed above `on:` below, a `permissions:` ceiling of
 # `actions: read`, `contents: read`, `id-token: write`, `issues: read` and `pull-requests: read`,
-# and one job that `uses:` this file at
-# an exact Kanon tag, passing the store's function URL and the repository's writer role, which are repository
-# variables and not secrets: neither is a credential.
+# and one job that `uses:` this file at an exact Kanon tag. It passes no variable and no secret:
+# the hosted store's URL is the collector's own constant (plan 0008 §2.1, step J5).
 #
 # THE WORK-ITEM ROWS (plan 0003 M4) ride on the same sweep: the script derives one row per pull
 # request closed in the span, and again for an earlier item whose story the span changed, and
@@ -20,36 +19,54 @@
 # lanes do. It touches no database and wakes nothing that scales to zero: the store is
 # on-demand DynamoDB behind a function (§9).
 #
-# ITS CREDENTIALS ARE THE WRITER ROLE ALONE (§3). The role trusts the default branch's ref
-# subject, so the collect job runs only on a schedule or on a dispatch of the default branch,
-# and DECLARES NO ENVIRONMENT, which would replace the ref in its token's subject. It is the
-# only job here holding `id-token: write`, and its steps are exactly Kanon's path, the mask, the
-# credentials and the collector script: the id-token guard (tests/unit/helpers/store-jobs.ts)
-# allows it by that shape, and nothing else of this file.
+# ITS CREDENTIAL IS GITHUB'S OIDC TOKEN, A FRESH ONE PER REQUEST (plan 0008 §2.1). The store checks
+# it claim by claim: this file at a Kanon release (`job_workflow_ref`), the caller's repository,
+# its default branch, and the caller's two triggers. So the collect job runs only on a schedule or
+# on a dispatch of the default branch: its `if:` is a security check, since the store learns that
+# a dispatch token is on the default branch from it (plan 0008 §2.3), and a guard test holds it
+# (tests/unit/telemetry-collect-lane.test.ts). It DECLARES NO ENVIRONMENT. It is the only job
+# here holding `id-token: write`, and its steps are exactly Kanon's path, the inputs' check and
+# the collector script: the id-token guard (tests/unit/helpers/store-jobs.ts) allows it by that
+# shape, and nothing else of this file.
+#
+# REGISTRATION IS ITS FIRST RUN (plan 0008 §3.3, §8): the store answers the first rows of an
+# unknown repository 404 `not-registered`, and the script registers it, once, and sends again.
+# `erase: yes` on a dispatch erases the repository's rows and registration and sends nothing;
+# `register: yes` comes back after an erasure, under a new key (docs/sharing.md).
 #
 # A RED RUN IS THE PAGE (§9). A row the store rejects, a row that fails the schema, an artifact
-# that can't be read, or a listing that fails turns the run red, and the next sweep re-covers
-# the same span through its watermark, so failing loses nothing. A collector that stops running
-# is not paged, by the decision §9 records.
+# that can't be read, a listing that fails, a suspension or a quota turns the run red, and the
+# next sweep re-covers the same span through its watermark, so failing loses nothing. A collector
+# that stops running is not paged, by the decision §9 records. An erased registration is green,
+# with a warning: the adopter asked for it.
 #
-# INERT until the caller passes both values: then the collect job is skipped and the `unset`
-# job says so with a warning. Set them as the repository variables docs/telemetry.md names.
+# INERT while the hosted store's URL is unpublished in this release and the caller names no store
+# of its own: the script says so in the job's summary and sends nothing.
 name: Telemetry — collect
 
 # THE CALLER'S TRIGGERS, this lane's contract with it:
 #   schedule: "40 * * * *"   hourly at minute 40 (plan 0002 §1.2): no database is touched, so
 #                            the minute matters only to keep clear of the adopter's own crons
-#   workflow_dispatch        input `window_minutes` (string, no default), passed through
+#   workflow_dispatch        inputs `window_minutes` (string, no default), `erase` and
+#                            `register` (`no` or `yes`, default `no`), passed through
 on:
   workflow_call:
     inputs:
+      # A SELF-HOSTED STORE (`K-OBS-18`) is named by `url` and `audience` TOGETHER, never one alone,
+      # so a token minted for Kanon's store can't be pointed at another host by an input (plan
+      # 0008 §2.1). Neither is passed for Kanon's hosted store, whose URL is the collector's own.
       url:
-        description: The store's ingest function URL (its stack's `IngestUrl` output).
+        description: A self-hosted store's token URL (its stack's `IngestTokenUrl` output), with `audience`. Leave both empty for Kanon's hosted store. Passed without `audience`, as callers before this release did, it is refused before any token is minted (#842).
+        required: false
+        type: string
+        default: ""
+      audience:
+        description: A self-hosted store's audience (its stack's `Audience` parameter), with `url`. Never the hosted store's `kanon-telemetry`.
         required: false
         type: string
         default: ""
       writer-role:
-        description: The ARN of this repository's writer role (its stack's `WriterRole<key>` output).
+        description: The SigV4 path's writer role, which this release no longer takes. Without `audience` it is refused before any token is minted (#842); beside a self-hosted `url` and `audience` it is ignored.
         required: false
         type: string
         default: ""
@@ -61,6 +78,16 @@ on:
         required: false
         type: string
         default: ""
+      erase:
+        description: "`yes` on a dispatch erases this repository's rows and registration from the store, and sends nothing (plan 0008 §7)."
+        required: false
+        type: string
+        default: "no"
+      register:
+        description: "`yes` on a dispatch registers this repository again after an erasure, under a new key (plan 0008 §3.3)."
+        required: false
+        type: string
+        default: "no"
 
 concurrency:
   # Never two sweeps at once: they would download the same artifacts and send the same rows.
@@ -73,32 +100,21 @@ concurrency:
 permissions: {}
 
 jobs:
-  unset:
-    # ONLY THE CALLER'S TWO TRIGGERS, as for every lane: a called workflow runs on whatever its
-    # caller is called on.
-    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (inputs.url == '' || inputs.writer-role == '')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
-    steps:
-      - name: Say the store isn't configured
-        run: |
-          echo "::warning title=telemetry-collect::The store's URL or the writer role is not passed, so no row is collected. See docs/telemetry.md (Collect the rows)."
-          echo "Telemetry collector **skipped**: the store's URL or the writer role is not set." >> "$GITHUB_STEP_SUMMARY"
-
   collect:
     # The name is what the watermark looks for: a run counts as a sweep only when this job succeeded
     # under exactly this name. A `window_minutes` override renames it, because an override's span
     # is the operator's, not "back to the last sweep": anchoring the next sweep on it would drop
-    # the rows before its span when it was shorter than the gap (kanon#315). The runs API carries
-    # no dispatch inputs, so the job's name is where the watermark can read it without logs.
-    name: ${{ inputs.window_minutes == '' && 'Collect telemetry rows' || 'Collect telemetry rows (window override)' }}
-    # The default branch only: the writer role refuses any other ref, so a dispatch elsewhere is
-    # skipped rather than turned red at the credentials step. A schedule always runs there.
+    # the rows before its span when it was shorter than the gap (kanon#315). An erasure renames it
+    # too, since it sweeps nothing. The runs API carries no dispatch inputs, so the job's name is
+    # where the watermark can read it without logs.
+    name: ${{ inputs.erase == 'yes' && 'Erase telemetry' || inputs.window_minutes == '' && 'Collect telemetry rows' || 'Collect telemetry rows (window override)' }}
+    # THE DEFAULT BRANCH ONLY, AND ONLY THE CALLER'S TWO TRIGGERS: a security check, not a
+    # convenience (plan 0008 §2.3). The store admits a `workflow_dispatch` token without a
+    # registration's `default_ref` to compare on the first run only because this job can't start
+    # on another branch; a schedule always runs on the default branch.
     if: >-
-      (github.event_name == 'schedule'
-        || (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch))
-      && inputs.url != '' && inputs.writer-role != ''
+      github.event_name == 'schedule'
+        || (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)
     runs-on: ubuntu-latest
     # The reference adopter's: a week's recovery is a few hundred downloads.
     timeout-minutes: 15
@@ -106,7 +122,8 @@ jobs:
     # level decides which finding rows leave (plan 0006 §3.1, F4), and the declarations and the
     # caller's pin the work-item rows are derived with; nothing is checked out. `issues: read` and
     # `pull-requests: read` read the pull requests closed in the span, and the issues and
-    # follow-ups that change an item's story (plan 0003 §3.1, M4).
+    # follow-ups that change an item's story (plan 0003 §3.1, M4). `id-token: write` mints the
+    # token each request carries.
     permissions:
       actions: read
       contents: read
@@ -115,27 +132,24 @@ jobs:
       pull-requests: read
     steps:
       - uses: $/actions/kanon-path
-      # MASKED FIRST, BEFORE ANY AWS CALL (kanon#514): the role's ARN is a variable, which the
-      # runner never masks, and an AWS error names its account in other ARNs besides. Every later
-      # line of the job then prints `***` for the ARN and the account id; this step's own `env:`
-      # is printed before it runs, so the ARN appears here, once.
-      - name: Mask the writer role's account id
+      # THE INPUTS FIRST, BEFORE ANY TOKEN IS MINTED: `url` without `audience`, or the reverse, or
+      # the hosted audience with a URL of its own, stops the job here. `LEGACY` says only whether
+      # a `writer-role` is passed, never its value, which held an account id.
+      - name: Check the store's inputs
         env:
-          ROLE: ${{ inputs.writer-role }}
-        run: node "$KANON/scripts/telemetry-collect.mjs" mask
-      # The STS call goes to Frankfurt, where the hosted store lives: the account's region policy
-      # denies every other region.
-      - uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ inputs.writer-role }}
-          aws-region: eu-central-1
-          role-session-name: kanon-telemetry-collect
-          # The account id, and the assumed role's ARN, as secrets for the rest of the job
-          # (kanon#514, as the QA store's AWS actions since kanon#488).
-          mask-aws-account-id: true
+          KANON_TELEMETRY_URL: ${{ inputs.url }}
+          KANON_TELEMETRY_AUDIENCE: ${{ inputs.audience }}
+          LEGACY: ${{ inputs.writer-role != '' }}
+          ERASE: ${{ inputs.erase }}
+          REGISTER: ${{ inputs.register }}
+        run: node "$KANON/scripts/telemetry-collect.mjs" check
       - name: Sweep the span and send every row in it
         env:
           GH_TOKEN: ${{ github.token }}
           KANON_TELEMETRY_URL: ${{ inputs.url }}
+          KANON_TELEMETRY_AUDIENCE: ${{ inputs.audience }}
+          LEGACY: ${{ inputs.writer-role != '' }}
           WINDOW: ${{ inputs.window_minutes }}
+          ERASE: ${{ inputs.erase }}
+          REGISTER: ${{ inputs.register }}
         run: node "$KANON/scripts/telemetry-collect.mjs"

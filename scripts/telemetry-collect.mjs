@@ -5,18 +5,35 @@
 // MOVED, NOT REWRITTEN (ADR 0009). This is the reference adopter's hourly collector, with the
 // parts S7 changes and nothing else:
 //   - it sends only version 2, the `kanon-telemetry-*` artifacts, to the function, 25 rows to a
-//     signed `POST` (§4), where it used to push the version-1 row to the adopter's own table and
+//     `POST` (§4), where it used to push the version-1 row to the adopter's own table and
 //     bucket; there is one store and one step (ADR 0009 §2: no second live copy);
-//   - its credentials are the adopter's writer role, which can invoke the function and nothing
-//     else (§3), not the adopter's QA role;
 //   - a row is checked with `validate` before it is sent, so a bad row fails the collector with
 //     the field's NAME (§2.5), and a row whose lane, run or attempt isn't its artifact's is
 //     refused, because the artifact listing is the only thing vouching for it;
 //   - only this repository's own runs count (`listTelemetryArtifacts`): a fork's run can upload
-//     any row under any name, and this job holds the writer.
+//     any row under any name, and this job holds the store's credential.
 // What is kept as it was: the watermark, the floor and the override, the one paginated artifact
 // scan, the download by id, and the red run as the page. One thing changed since (kanon#315): an
 // override's run is no longer a watermark, so a short override can't hide the rows before it.
+//
+// GITHUB'S OIDC TOKEN, NOT A ROLE (plan 0008 §2.1, §3, step J5). Each request carries a fresh
+// token for the store's audience (`scripts/lib/telemetry-token.mjs`), which the store checks claim
+// by claim: this repository, its default branch, and Kanon's collector at a release. The hosted
+// store's URL is a constant, and a self-hosted store is named by the `url` and `audience` inputs
+// together, never one alone (`check`, the step before any token is minted). A caller that still
+// passes the SigV4 path's `url` and `writer-role` without an `audience` is refused there, red,
+// before any token: it sends nothing and registers nothing, and its URL is never swapped for the
+// hosted store's (Owner decision of 2026-10-14, #842). `writer-role` beside a self-hosted `url`
+// and `audience` is ignored, with a warning.
+//
+// REGISTRATION IS THE FIRST RUN (§3.2, §3.3, §8). `POST /v1/rows`; on 404 `not-registered`,
+// `POST /v1/registrations` once, then the rows again. A run with no row to send asks
+// `GET /v1/registrations/self`, and registers on a 404, so a quiet repository registers too. A
+// refusal stops the sweep and is said with its own title, `telemetry-refused`, which `kanon doctor`
+// reads (`telemetry.refused`): 403 `suspended` and 429 `quota` turn the run red; 410 `erased` (and
+// 409 `erased` on registering) keeps it green with a warning, since the adopter asked for it.
+// A dispatch with `erase: yes` calls `DELETE /v1/registrations/self` and sends nothing (§7); one
+// with `register: yes` sends `{ "reregister": true }` first, after an erasure (§3.3).
 //
 // AN ANCHOR, NOT A PERSISTED CURSOR. The function keys a row from its own fields (`recorded_at`,
 // run, attempt, number), so re-sending an artifact overwrites its row identically. Over-sweeping
@@ -51,21 +68,20 @@
 // again overwrites the one before. A read that fails turns the run red, and the next sweep covers
 // the same span again.
 //
-// LOGS HOLD COUNTS, IDS, LANES AND FIELD NAMES, NEVER A ROW'S VALUE (ADR 0007).
+// LOGS HOLD COUNTS, IDS, LANES, FIELD NAMES AND THE STORE'S CODES, NEVER A ROW'S VALUE OR A TOKEN
+// (ADR 0007).
 //
-// `mask` FIRST (kanon#514). The writer role's ARN is a repository variable, which the runner
-// never masks, and an AWS error names its account in other ARNs besides. So the job's step before
-// the credentials runs this script as `mask`, with the ARN as ROLE, to register the ARN and its
-// account id with `::add-mask::`, as the telemetry Explorer's read job does (`aggregate-mask.mjs`).
+//   node "$KANON/scripts/telemetry-collect.mjs" check   the collect job's step before the sweep:
+//                                                       the inputs, before any token is minted
+//   node "$KANON/scripts/telemetry-collect.mjs"         the sweep, or the erasure on `erase: yes`
 
 import { appendFileSync } from 'node:fs';
 
 import { describeErrors, MAX_FINDINGS, SCHEMAS, validate } from '../actions/agent-telemetry/schema.mjs';
 import { nameContext, verify } from '../actions/agent-telemetry/scrub.mjs';
-import { sign } from '../infra/telemetry/function/sigv4.mjs';
-import { masksOf } from './aggregate-mask.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { ARTIFACT_FILE, FINDING_ARTIFACT_FILE, ghApi, ghDownload, listTelemetryArtifacts, readZipEntry } from './lib/telemetry-artifacts.mjs';
+import { codeOf, HOSTED_INGEST_URL, REFUSED_TITLE, storeOf, storeRequest, TokenError } from './lib/telemetry-token.mjs';
 import { readUpstreamFindingsFrom, SENT_VALUES } from './lib/upstream-findings.mjs';
 import { ghAsync, workItemStep } from './telemetry-work-items.mjs';
 
@@ -88,6 +104,8 @@ export const COLLECT_JOB = 'Collect telemetry rows';
  * rows in between without a warning (kanon#315).
  */
 export const COLLECT_JOB_OVERRIDE = `${COLLECT_JOB} (window override)`;
+/** The same job's name on an `erase: yes` dispatch, which sweeps nothing, so is never a watermark. */
+export const ERASE_JOB = 'Erase telemetry';
 
 /** A finding row's free-text fields (plan 0006 §2.2), read from the schema: the `text` type. */
 export const TEXT_FIELDS = Object.freeze(Object.entries(/** @type {Record<string, { type: string }>} */ (SCHEMAS.finding?.[1] ?? {}))
@@ -136,7 +154,7 @@ export function textFailures(row, nameHashes) {
 /**
  * @typedef {import('./lib/telemetry-artifacts.mjs').Api} Api
  * @typedef {import('./lib/telemetry-artifacts.mjs').Download} Download
- * @typedef {{ status: number, json: any }} PostResult
+ * @typedef {{ status: number, json: any, retryAfter?: string | null }} PostResult
  * @typedef {(rows: object[]) => Promise<PostResult>} Post
  * @typedef {(since: number) => Promise<import('./telemetry-work-items.mjs').StepResult>} WorkItems
  */
@@ -197,37 +215,165 @@ export function lastSuccessfulSweep({ api, repo, file, branch, selfRunId, limit 
   return null;
 }
 
-/** The function URL's region: `https://<id>.lambda-url.<region>.on.aws/`. */
-export function regionOf(/** @type {string} */ url) {
-  try {
-    return /\.lambda-url\.([a-z0-9-]+)\.on\.aws$/.exec(new URL(url).host)?.[1] ?? null;
-  } catch {
-    return null;
+export { REFUSED_TITLE };
+/** The limits a 429 names (plan 0008 §6), a closed list. */
+const LIMITS = ['rows_per_day', 'requests_per_hour', 'registrations'];
+
+/**
+ * @typedef {{ status: number, code: string, red: boolean, words: string }} Refusal
+ */
+
+/**
+ * A store's answer that stops the sweep (plan 0008 §3.2, §6, §7), or null: 403 `suspended` and
+ * 429 `quota`, red; 410 `erased`, and 409 `erased` or `erasing` on registering, green, since the
+ * adopter asked for it. Any other 403, a check on the token's workflow, event, owner or branch, is
+ * red too: every later batch would be refused the same. Said in the store's codes, never a value.
+ * @param {number} status @param {any} json @param {string | null} [retryAfter]
+ * @returns {Refusal | null}
+ */
+export function refusalOf(status, json, retryAfter = null) {
+  const code = codeOf(json) ?? 'none';
+  const said = `the store answered ${status} ${code}`;
+  if ((status === 410 && code === 'erased') || (status === 409 && (code === 'erased' || code === 'erasing'))) {
+    return { status, code, red: false, words: `${said}: this repository's telemetry was erased at its request, so nothing is sent. To send again, dispatch the caller with register: yes; to stop for good, delete the caller (docs/sharing.md).` };
   }
+  if (status === 403 && code === 'suspended') {
+    return { status, code, red: true, words: `${said}: Kanon's operator suspended this repository's registration, so nothing is stored until the operator resumes it (docs/telemetry.md, "The register table").` };
+  }
+  if (status === 429) {
+    const limit = LIMITS.includes(json?.limit) ? json.limit : 'a limit';
+    const resets = typeof json?.resets_at === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(json.resets_at) ? json.resets_at : (retryAfter && /^\d{1,6}$/.test(retryAfter) ? `in ${retryAfter} s` : 'later');
+    return { status, code, red: true, words: `${said}: past ${limit}, which resets at ${resets}. Nothing from the request was stored, and the next sweep after the reset sends the same span again (docs/telemetry.md, "Quotas").` };
+  }
+  if (status === 403) {
+    return { status, code, red: true, words: `${said}: the store refused this job's token (plan 0008 §2.2, check \`${code}\`). The collector sends only from its caller's schedule or a dispatch on the default branch, at a Kanon release (docs/telemetry.md, "Who can write").` };
+  }
+  return null;
 }
 
 /**
- * The default `put(rows)`: one signed `POST` to the function URL with the writer role's
- * credentials, which `configure-aws-credentials` put in the environment.
- * @param {string} url
- * @param {string} region
- * @param {NodeJS.ProcessEnv} env
+ * @typedef {import('./lib/telemetry-token.mjs').Store} Store
+ * @typedef {{ env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (secret: string) => void }} TokenIo
+ */
+
+/**
+ * The default `post(rows)`: `POST /v1/rows` with a fresh token. On 404 `not-registered`, the
+ * first default-branch run registers, once, with `POST /v1/registrations`, and sends the rows
+ * again (plan 0008 §3.2); a registration that isn't answered 200 or 201 is the answer.
+ * @param {Store} store @param {TokenIo} io
  * @returns {Post}
  */
-export const signedPost = (url, region, env) => async (rows) => {
-  const body = JSON.stringify(rows);
-  const headers = { 'content-type': 'application/json' };
-  const credentials = { accessKeyId: env.AWS_ACCESS_KEY_ID ?? '', secretAccessKey: env.AWS_SECRET_ACCESS_KEY ?? '', sessionToken: env.AWS_SESSION_TOKEN };
-  const res = await fetch(url, { method: 'POST', headers: { ...headers, ...sign({ method: 'POST', url, headers, body, region, service: 'lambda', credentials }) }, body });
-  const text = await res.text();
-  let json = null;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    // An answer that isn't JSON is judged by its status alone; its body is never printed.
-  }
-  return { status: res.status, json };
+export const tokenPost = (store, io) => {
+  let registered = false;
+  return async (rows) => {
+    let res = await storeRequest(store, { method: 'POST', path: 'v1/rows', body: rows }, io);
+    if (res.status === 404 && codeOf(res.json) === 'not-registered' && !registered) {
+      registered = true;
+      const reg = await storeRequest(store, { method: 'POST', path: 'v1/registrations', body: {} }, io);
+      if (reg.status !== 200 && reg.status !== 201) return reg;
+      res = await storeRequest(store, { method: 'POST', path: 'v1/rows', body: rows }, io);
+    }
+    return res;
+  };
 };
+
+/**
+ * The registration's status, for a run that sent no row: `GET /v1/registrations/self`, and on
+ * 404 `not-registered`, `POST /v1/registrations`, so the first default-branch run registers
+ * whether or not it has rows (plan 0008 §8). A refusal is returned as one.
+ * @param {Store} store @param {TokenIo} io
+ * @returns {Promise<{ status: string } | { refusal: Refusal } | { failure: string }>}
+ */
+export async function ensureRegistered(store, io) {
+  const got = await storeRequest(store, { method: 'GET', path: 'v1/registrations/self' }, io);
+  if (got.status === 200 && typeof got.json?.status === 'string') {
+    if (got.json.status === 'erased') return { refusal: /** @type {Refusal} */ (refusalOf(410, { error: 'erased' })) };
+    if (got.json.status === 'suspended') return { refusal: /** @type {Refusal} */ (refusalOf(403, { error: 'suspended' })) };
+    return { status: String(got.json.status) };
+  }
+  if (got.status === 404 && codeOf(got.json) === 'not-registered') {
+    const reg = await storeRequest(store, { method: 'POST', path: 'v1/registrations', body: {} }, io);
+    if (reg.status === 200 || reg.status === 201) return { status: 'active' };
+    const refusal = refusalOf(reg.status, reg.json, reg.retryAfter);
+    return refusal ? { refusal } : { failure: `registering: the store answered ${reg.status}${codeOf(reg.json) ? ` (${codeOf(reg.json)})` : ''}` };
+  }
+  const refusal = refusalOf(got.status, got.json, got.retryAfter);
+  return refusal ? { refusal } : { failure: `reading the registration: the store answered ${got.status}${codeOf(got.json) ? ` (${codeOf(got.json)})` : ''}` };
+}
+
+/**
+ * The erasure (plan 0008 §7): `DELETE /v1/registrations/self`, then the status, said in two
+ * lines. Sends no row.
+ * @param {Store} store @param {TokenIo} io
+ * @returns {Promise<{ lines: string[], failure?: string, refusal?: Refusal }>}
+ */
+export async function eraseSelf(store, io) {
+  const del = await storeRequest(store, { method: 'DELETE', path: 'v1/registrations/self' }, io);
+  if (del.status === 404 && codeOf(del.json) === 'not-registered') return { lines: ["Telemetry erasure: this repository is not registered with the store, so there is nothing to erase."] };
+  if (del.status !== 200 && del.status !== 202) {
+    const refusal = refusalOf(del.status, del.json, del.retryAfter);
+    if (refusal && refusal.red) return { lines: [], refusal };
+    return { lines: [], failure: `the erasure was refused: the store answered ${del.status}${codeOf(del.json) ? ` (${codeOf(del.json)})` : ''}` };
+  }
+  const at = typeof del.json?.erased_at === 'string' ? del.json.erased_at : 'now';
+  const done = del.json?.rows_erased === true;
+  return {
+    lines: [
+      `Telemetry erasure: this repository's registration is erased as of ${at}; nothing more is sent or read for it.`,
+      done
+        ? "Its rows are deleted from the store's table; backups drop them within 35 days (docs/sharing.md, \"Stop and erase\")."
+        : "Its rows are being deleted from the store's table, within minutes; dispatch again with erase: yes to see them gone. Backups drop them within 35 days (docs/sharing.md, \"Stop and erase\").",
+    ],
+  };
+}
+
+/** A `yes`/`no` dispatch input; empty, on a schedule, is `no`. Null for anything else. @param {string | undefined} v */
+const yesNo = (v) => {
+  const t = String(v ?? '').trim().toLowerCase();
+  return t === '' || t === 'no' || t === 'false' ? false : t === 'yes' || t === 'true' ? true : null;
+};
+
+/** Why a caller with the SigV4 path's inputs is refused, and what to do (Owner decision of 2026-10-14, #842). */
+export const LEGACY_REFUSAL = "the caller passes `url` or `writer-role` without `audience`, the inputs of the SigV4 path this release no longer takes, so nothing is sent and nothing is registered: no token is minted, and the URL is never swapped for another store's. Run `kanon init` again to write the new caller, which passes neither and sends to Kanon's hosted store; or, for a store of your own, add `audience:` beside `url:` and remove `writer-role:` (docs/telemetry.md, \"Collect the rows\")";
+
+/**
+ * The collect job's inputs, read before any token is minted: the store, the `erase` and `register`
+ * dispatch inputs, and what to warn of. `LEGACY` is `true` when the caller still passes
+ * `writer-role`. A caller written before the token path passes `url` and `writer-role`, and no
+ * `audience`: that is REFUSED HERE, before any token is minted, so nothing is sent and nothing is
+ * registered (Owner decision of 2026-10-14, #842). The `url` is never cleared to fall back to the
+ * hosted store: a caller that named a store of its own must not start sending to Kanon's.
+ * `writer-role` beside a `url` and an `audience` that name a self-hosted store is ignored, with a
+ * warning.
+ * @param {Record<string, string | undefined>} env
+ * @returns {{ store: ReturnType<typeof storeOf>, erase: boolean, register: boolean, problems: string[], warnings: string[] }}
+ */
+export function inputsOf(env) {
+  /** @type {string[]} */
+  const problems = [];
+  /** @type {string[]} */
+  const warnings = [];
+  const legacy = String(env.LEGACY ?? '').trim() === 'true';
+  const audience = String(env.KANON_TELEMETRY_AUDIENCE ?? '');
+  const url = String(env.KANON_TELEMETRY_URL ?? '');
+  /** @type {ReturnType<typeof storeOf>} */
+  let store;
+  if (!audience.trim() && (legacy || url.trim())) {
+    // The caller's inputs are the SigV4 path's, or a URL alone: refused, never redirected (#842).
+    store = { ok: false, why: LEGACY_REFUSAL };
+    problems.push(LEGACY_REFUSAL);
+  } else {
+    if (legacy) warnings.push('the caller passes `writer-role`, which this release of the collector ignores: `url` and `audience` name the store, and GitHub\'s OIDC token is the credential. Remove the line from the caller (docs/telemetry.md, "Collect the rows"); the next release refuses it.');
+    store = storeOf({ url, audience, hostedUrl: HOSTED_INGEST_URL });
+    if (!store.ok && !store.unpublished) problems.push(store.why);
+  }
+  const erase = yesNo(env.ERASE);
+  const register = yesNo(env.REGISTER);
+  if (erase === null) problems.push('`erase` is neither yes nor no');
+  if (register === null) problems.push('`register` is neither yes nor no');
+  if (erase && register) problems.push('`erase` and `register` are both yes: dispatch one at a time');
+  return { store, erase: erase === true, register: register === true, problems, warnings };
+}
 
 /**
  * One sweep. Pure apart from what it is given.
@@ -244,7 +390,10 @@ export const signedPost = (url, region, env) => async (rows) => {
  *   api: Api, download: Download, post: Post, log?: (line: string) => void, level?: () => string,
  *   workItems?: WorkItems,
  * }} opts
- * @returns {Promise<{ since: number, listed: number, sent: number, stored: number, foreign: number, withheld: number, workItems: number, failures: string[], warnings: string[] }>}
+ * A refusal (`refusalOf`) stops the sending, and is returned as `refusal` rather than a failure:
+ * the caller says it with its own title, red or green as it says.
+ *
+ * @returns {Promise<{ since: number, listed: number, sent: number, stored: number, foreign: number, withheld: number, workItems: number, failures: string[], warnings: string[], refusal?: Refusal | null }>}
  */
 export async function collect({ repo, now, lastSuccess, window = '', api, download, post, log = () => {}, level = () => readUpstreamFindingsFrom(repo), workItems }) {
   const overridden = window.trim() !== '';
@@ -377,6 +526,8 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
   }
 
   let stored = 0;
+  /** @type {Refusal | null} */
+  let refusal = null;
   for (let i = 0; i < rows.length; i += MAX_ROWS) {
     const batch = rows.slice(i, i + MAX_ROWS);
     let res;
@@ -388,7 +539,13 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
     }
     const results = Array.isArray(res.json?.results) ? res.json.results : null;
     if (!results || results.length !== batch.length) {
-      failures.push(`rows ${i + 1}-${i + batch.length}: the store answered ${res.status}${res.json?.error ? ` (${String(res.json.error)})` : ''}`);
+      // A refusal stops the sweep: every later batch would be refused the same (plan 0008 §3.2).
+      const stop = refusalOf(res.status, res.json, /** @type {any} */ (res).retryAfter ?? null);
+      if (stop) {
+        refusal = stop;
+        break;
+      }
+      failures.push(`rows ${i + 1}-${i + batch.length}: the store answered ${res.status}${codeOf(res.json) ? ` (${codeOf(res.json)})` : ''}`);
       continue;
     }
     results.forEach((/** @type {any} */ r, /** @type {number} */ n) => {
@@ -399,7 +556,25 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
     });
   }
   if (withheld) log(`withheld ${withheld} finding row(s): the adoption record's Upstream findings level is \`${String(declared)}\`, which sends none`);
-  return { since, listed: artifacts.length, sent: rows.length, stored, foreign: listing.foreign, withheld, workItems: items, failures, warnings };
+  return { since, listed: artifacts.length, sent: rows.length, stored, foreign: listing.foreign, withheld, workItems: items, failures, warnings, refusal };
+}
+
+/**
+ * The `check` step: the inputs, before any token is minted. Exits 1 on a problem, naming it;
+ * says the deprecated inputs and an unpublished hosted URL as warnings.
+ * @param {Record<string, string | undefined>} env @param {(line: string) => void} [out]
+ * @returns {number} the exit code
+ */
+export function checkStep(env, out = (line) => console.log(line)) {
+  const { store, problems, warnings } = inputsOf(env);
+  for (const w of warnings) out(`::warning title=telemetry-collect::${w}`);
+  if (problems.length) {
+    for (const p of problems) out(`::error title=telemetry-collect::${p}. Nothing was sent, and no token was minted.`);
+    return 1;
+  }
+  if (!store.ok) out(`::warning title=telemetry-collect::${store.why}`);
+  else out(`Sending to ${store.hosted ? "Kanon's hosted telemetry store" : 'a self-hosted telemetry store'}, with GitHub's OIDC token for its audience.`);
+  return 0;
 }
 
 async function main() {
@@ -409,15 +584,55 @@ async function main() {
     console.error('telemetry-collect: GITHUB_REPOSITORY must be set; the runner sets it, and the collector never guesses a repository');
     process.exit(2);
   }
-  const url = env.KANON_TELEMETRY_URL ?? '';
-  const file = workflowFileOf(env.GITHUB_WORKFLOW_REF);
-  const region = regionOf(url);
+  /** @param {string} line */
+  const summary = (line) => {
+    console.log(line);
+    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${line}\n`);
+  };
   const fail = (/** @type {string} */ why) => {
     console.log(`::error title=telemetry-collect::${why}`);
     process.exit(1);
   };
+  /** A refusal, with the title doctor reads, red or green as it says. @param {Refusal} r */
+  const refused = (r) => {
+    console.log(`::${r.red ? 'error' : 'warning'} title=${REFUSED_TITLE}::${r.words}`);
+    summary(`Telemetry collector **${r.code === 'erased' || r.code === 'erasing' ? 'erased' : 'refused'}**: ${r.words}`);
+    if (r.red) process.exit(1);
+  };
+  const { store, erase, register, problems } = inputsOf(env);
+  if (problems.length) fail(`${problems.join('; ')}. Nothing was sent, and no token was minted.`);
+  if (!store.ok) {
+    // The hosted URL isn't published in this release: the collector skips, green, as it did
+    // before its variables were set.
+    summary(`Telemetry collector **skipped**: ${store.why}.`);
+    return;
+  }
+  const file = workflowFileOf(env.GITHUB_WORKFLOW_REF);
   if (!file) fail('GITHUB_WORKFLOW_REF names no workflow file, so the last successful sweep cannot be found');
-  if (!region) fail("KANON_TELEMETRY_URL is not a Lambda function URL (https://<id>.lambda-url.<region>.on.aws/): set it to the store's IngestUrl output");
+  const io = { env };
+
+  try {
+    // ERASURE (plan 0008 §7): sends nothing, and says when the rows are gone.
+    if (erase) {
+      const r = await eraseSelf(store, io);
+      if (r.refusal) refused(r.refusal);
+      if (r.failure) fail(r.failure);
+      for (const l of r.lines) summary(l);
+      return;
+    }
+    // RE-REGISTRATION after an erasure (§3.3): a new key, then the sweep as usual.
+    if (register) {
+      const reg = await storeRequest(store, { method: 'POST', path: 'v1/registrations', body: { reregister: true } }, io);
+      if (reg.status !== 200 && reg.status !== 201) {
+        const r = refusalOf(reg.status, reg.json, reg.retryAfter);
+        if (r && r.red) refused(r);
+        fail(`registering again: the store answered ${reg.status}${codeOf(reg.json) ? ` (${codeOf(reg.json)})` : ''}${codeOf(reg.json) === 'erasing' ? ': the earlier erasure is still deleting rows; dispatch again in a few minutes' : ''}`);
+      }
+      summary(`Telemetry registration: ${reg.status === 201 ? 'registered again, under a new key' : 'already active'}.`);
+    }
+  } catch (err) {
+    fail(err instanceof TokenError ? err.message : `the store could not be reached (${err instanceof Error ? err.name : 'error'})`);
+  }
 
   const api = ghApi();
   const overridden = (env.WINDOW ?? '').trim() !== '';
@@ -430,26 +645,45 @@ async function main() {
     }
   }
   const now = Date.now();
+  const post = tokenPost(store, io);
   const result = await collect({
     repo, now, lastSuccess, window: env.WINDOW ?? '',
-    api, download: ghDownload(repo), post: signedPost(url, /** @type {string} */ (region), env),
+    api, download: ghDownload(repo),
+    post: async (rows) => {
+      try {
+        return await post(rows);
+      } catch (err) {
+        // A token the runner wouldn't mint is said by its reason; anything else by its name only.
+        throw new Error(err instanceof TokenError ? err.message : `the store could not be reached (${err instanceof Error ? err.name : 'error'})`);
+      }
+    },
     log: (line) => console.log(line),
     workItems: (since) => workItemStep({ repo, since, now, gh: ghAsync, log: (line) => console.log(line), callerFile: file }),
   });
   for (const w of result.warnings) console.log(`::warning title=telemetry-collect::${w}`);
   const line = `Telemetry collector: ${result.stored} of ${result.sent} row(s) stored from ${result.listed} artifact(s) and ${result.workItems} work item(s) since ${new Date(result.since).toISOString()}; ${result.withheld ? `${result.withheld} finding row(s) withheld by the adoption record; ` : ''}${result.failures.length} failure(s).`;
-  console.log(line);
-  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${line}\n`);
+  summary(line);
+  // The registration's status, from the rows' answer, or asked for when no row was sent: a quiet
+  // repository's first run registers too (plan 0008 §8).
+  let refusal = result.refusal ?? null;
+  if (!refusal && result.sent === 0) {
+    try {
+      const r = await ensureRegistered(store, io);
+      if ('refusal' in r) refusal = r.refusal;
+      else if ('failure' in r) result.failures.push(r.failure);
+      else summary(`Telemetry registration: ${r.status}.`);
+    } catch (err) {
+      result.failures.push(err instanceof TokenError ? err.message : `reading the registration: the store could not be reached (${err instanceof Error ? err.name : 'error'})`);
+    }
+  } else if (!refusal && result.stored > 0) summary('Telemetry registration: active.');
   // A red run is the page (§9): the next sweep re-covers the same span through the watermark, so
   // failing loses no row.
-  if (result.failures.length) {
-    for (const f of result.failures) console.log(`::error title=telemetry-collect::${f}`);
-    process.exit(1);
-  }
+  for (const f of result.failures) console.log(`::error title=telemetry-collect::${f}`);
+  if (refusal) refused(refusal);
+  if (result.failures.length) process.exit(1);
 }
 
 if (isCliEntry(import.meta.url)) {
-  if (process.argv[2] === 'mask') {
-    for (const m of masksOf({ ROLE: process.env.ROLE })) process.stdout.write(`::add-mask::${m}\n`);
-  } else await main();
+  if (process.argv[2] === 'check') process.exitCode = checkStep(process.env);
+  else await main();
 }

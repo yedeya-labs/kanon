@@ -56,13 +56,14 @@ import { readResult, resultMasked } from './apps-check.mjs';
 import { checkoutCheck, NEW_KEY, ownerInstallations as listInstallations, REGISTER_PATH, remoteRepo } from './apps.mjs';
 import { appSecrets, kanonRelease, loadRequirements, TRIGGERS } from './callers.mjs';
 import { whoami } from './gh-token.mjs';
-import { appsArgs, BRIEF_TEMPLATE_PATH, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME, telemetryStep } from './init.mjs';
+import { appsArgs, BRIEF_TEMPLATE_PATH, inspect, LANE_CHECK, LEAD_LANE, OWN_TERMINAL, registerRolesOf, registerRows, requiredCheckGap, REVIEW_LANE, rulesetBody, rulesetGaps, RULESET_NAME } from './init.mjs';
 import { actorName, bypassCommand, releaserActor, releaserBypass, rulesetUrl } from './ruleset-bypass.mjs';
 import { readPluginDeclaration, SETTINGS_PATH } from './plugin.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './check-reporters.mjs';
 import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '../scripts/lib/upstream-findings.mjs';
 import { LEDGER as CAPABILITY_LEDGER, parseCapabilityWatch } from '../scripts/lib/capability-watch.mjs';
+import { REFUSED_TITLE } from '../scripts/lib/telemetry-token.mjs';
 import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
 import { renderNotice } from '../actions/agent-classify/classify-agent-result.mjs';
 
@@ -204,7 +205,6 @@ export const ITEMIZED = {
   'apps-check.secret-missing': 'a secret',
   'apps-check.secret-stale': 'a secret',
   'label.missing': 'a label',
-  'telemetry.unconfigured': 'a variable',
   'qa-store.unmapped': 'a secret',
   'qa-store.variables': 'a variable',
 };
@@ -214,7 +214,7 @@ export const ITEMIZED = {
  * `unchecked[].check` it is listed under: a waiver of such a finding can't be called stale.
  * @type {Record<string, string>}
  */
-const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset' };
+const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset' };
 
 /**
  * The finding categories, in the order a finding is listed and fixed: the pin decides which
@@ -267,7 +267,9 @@ export const FINDINGS = {
   'claude.mixed': { category: 'caller', blocking: false },
   'apps-check.secret-missing': { category: 'caller', blocking: true },
   'apps-check.secret-stale': { category: 'caller', blocking: true },
-  'telemetry.unconfigured': { category: 'caller', blocking: false },
+  'telemetry.refused': { category: 'caller', blocking: false },
+  'telemetry.not-run': { category: 'caller', blocking: false },
+  'telemetry.legacy-inputs': { category: 'caller', blocking: true },
   'qa-store.unmapped': { category: 'caller', blocking: false },
   'qa-store.variables': { category: 'secret', blocking: false },
   'label.missing': { category: 'label', blocking: false },
@@ -1802,11 +1804,12 @@ export const diagnose = async (deps, opts) => {
     }
   }
 
-  // ── The telemetry collector (#428) ──────────────────────────────────────────────────────────
-  // A caller of Kanon's collector sends nothing until the repository has the two variables the
-  // Kanon operator gives it (docs/telemetry.md): the collector skips with a warning and stays
-  // green, so nothing else would say so. Not blocking: no lane needs it. Variables the token
-  // can't list are a note, not an unchecked check, for the same reason.
+  // ── The telemetry collector (#428; plan 0008 §8, step J5) ─────────────────────────────────
+  // A caller of Kanon's collector registers the repository on its first default-branch run, and
+  // sends with GitHub's OIDC token: nothing is set beside it. So what doctor reads is the caller's
+  // last run on the default branch: `telemetry.not-run` while there is none, and
+  // `telemetry.refused` when the store refused it (a 403, 410 or 429, which the collector says
+  // with its own annotation title), with the run's own words. Neither blocks: no lane needs it.
   const collector = req.telemetry?.collector;
   const collectorCallers = collector
     ? [...workflows].filter(([, wf]) => Object.values(isMap(wf.jobs) ? wf.jobs : {}).some((j) => isMap(j) && kanonCall(j.uses)?.workflow === collector)).map(([f]) => f)
@@ -1833,26 +1836,70 @@ export const diagnose = async (deps, opts) => {
       });
     }
   }
-  if (collectorCallers.length) {
-    const wanted = req.telemetry?.variables ?? [];
-    const listed = await deps.gh(['variable', 'list', '-R', repo, '--json', 'name']);
-    /** @type {Set<string> | null} */
-    let have = null;
-    try {
-      if (listed.status === 0) have = new Set(JSON.parse(listed.stdout).map((/** @type {any} */ v) => String(v.name)));
-    } catch {
-      have = null;
-    }
-    if (!have) notes.push(`${collectorCallers.join(', ')} ${collectorCallers.length > 1 ? 'call' : 'calls'} Kanon's telemetry collector, and the token can't list ${repo}'s variables, so doctor can't tell whether ${wanted.join(' and ')} are set; until both are, it sends nothing (docs/telemetry.md).`);
-    else {
-      const unset = wanted.filter((v) => !have?.has(v));
-      if (unset.length) {
-        for (const file of collectorCallers) {
-          findItems('telemetry.unconfigured', file, unset, (xs) => {
-            const fix = telemetryStep(repo, xs, true);
-            return [`calls Kanon's telemetry collector, and ${repo} doesn't set ${xs.join(' or ')}, so it sends nothing: the collector skips with a warning and stays green.`, { text: fix.text, commands: fix.commands, url: fix.url }];
-          });
+  // Only against a release on the token path: before it, the collector waited on two variables the
+  // operator gave, which this release of doctor no longer asks for.
+  if (collectorCallers.length && req.telemetry?.token) {
+    for (const file of collectorCallers) {
+      // The SigV4 path's inputs without `audience` (Owner decision of 2026-10-14, #842): the
+      // collector refuses them before any token, so the caller sends nothing and registers nothing.
+      const wf = /** @type {Record<string, any>} */ (workflows.get(file));
+      const legacy = [...new Set(Object.values(isMap(wf.jobs) ? wf.jobs : {}).filter((j) => isMap(j) && kanonCall(j.uses)?.workflow === collector && isMap(j.with) && !('audience' in j.with))
+        .flatMap((j) => ['url', 'writer-role'].filter((k) => k in j.with)))];
+      if (legacy.length) {
+        find('telemetry.legacy-inputs', file, `passes ${legacy.map((k) => `\`${k}:\``).join(' and ')} to Kanon's telemetry collector without \`audience:\`, the inputs of the SigV4 path ${checked} no longer takes. The collector refuses them before it mints a token, so every run is red, and nothing is sent or registered.`, {
+          text: "Run kanon init again to write the new caller, which passes neither and sends to Kanon's hosted store: init never overwrites a workflow, so it lists this one as differing, with the new caller's content to write in its place. Then delete the repository variables the old lines read. Or, for a store of your own, add `audience:` beside `url:` and remove `writer-role:` (docs/telemetry.md, \"Collect the rows\").",
+          commands: ['kanon init --telemetry'],
+        });
+      }
+      const listed = await deps.gh(['run', 'list', '-R', repo, '--workflow', basename(file), '--branch', s.defaultBranch, '--status', 'completed', '--limit', '1', '--json', 'databaseId,conclusion,createdAt']);
+      // A caller not yet on the default branch has no runs: GitHub knows no such workflow.
+      const unknown = listed.status !== 0 && /could not find any workflows|HTTP 404/i.test(listed.stderr);
+      /** @type {any[] | null} */
+      let runs = unknown ? [] : null;
+      try {
+        if (listed.status === 0) runs = JSON.parse(listed.stdout);
+      } catch {
+        runs = null;
+      }
+      if (!Array.isArray(runs)) {
+        unchecked.push({ check: 'telemetry-runs', subject: file, reason: `the token can't list its runs (${listed.stderr.trim() || `exit ${listed.status}`}); it needs Actions: read` });
+        continue;
+      }
+      const last = runs[0];
+      if (!last) {
+        find('telemetry.not-run', file, `calls Kanon's telemetry collector, and has no finished run on ${s.defaultBranch} yet. Its first run registers ${repo} with the store and sends its rows: the next hourly schedule after it merges, or a dispatch.`, {
+          text: 'Wait for the next hourly run, or dispatch it now on the default branch:',
+          commands: [`gh workflow run ${basename(file)} -R ${repo} --ref ${s.defaultBranch}`],
+        });
+        continue;
+      }
+      const id = Number(last.databaseId);
+      /** @type {string | null} */
+      let words = null;
+      let readable = true;
+      try {
+        const jobs = await deps.gh(['api', `repos/${repo}/actions/runs/${id}/jobs?per_page=100`]);
+        if (jobs.status !== 0) readable = false;
+        else {
+          for (const job of JSON.parse(jobs.stdout).jobs ?? []) {
+            const got = await deps.gh(['api', `repos/${repo}/check-runs/${Number(job.id)}/annotations?per_page=100`]);
+            if (got.status !== 0) { readable = false; break; }
+            const hit = JSON.parse(got.stdout).find((/** @type {any} */ a) => a?.title === REFUSED_TITLE && typeof a?.message === 'string');
+            if (hit) { words = String(hit.message).split('\n', 1).join('').slice(0, 600); break; }
+          }
         }
+      } catch {
+        readable = false;
+      }
+      if (!readable) {
+        unchecked.push({ check: 'telemetry-runs', subject: file, reason: `the token can't read the jobs or annotations of its run ${id}; it needs Actions: read and Checks: read` });
+        continue;
+      }
+      if (words !== null) {
+        find('telemetry.refused', file, `calls Kanon's telemetry collector, and its last run on ${s.defaultBranch}, ${id}, ended with the store's refusal: ${words}`, {
+          text: 'Read the run, and do what its words say: wait for a quota to reset, dispatch with register: yes after an erasure, ask Kanon\'s operator about a suspension, or delete the caller to stop (docs/telemetry.md, "Collect the rows").',
+          commands: [`gh run view ${id} -R ${repo}`],
+        });
       }
     }
   }

@@ -1226,17 +1226,15 @@
   },
   "telemetry": {
     "collector": "telemetry-collect",
-    "variables": [
-      "KANON_TELEMETRY_URL",
-      "KANON_TELEMETRY_WRITER_ROLE"
-    ],
+    "variables": [],
     "grant": {
       "actions": "read",
       "contents": "read",
       "id-token": "write",
       "issues": "read",
       "pull-requests": "read"
-    }
+    },
+    "token": true
   },
   "qaStore": {
     "hook": ".github/actions/qa-store/action.yml",

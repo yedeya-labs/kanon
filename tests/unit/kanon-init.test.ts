@@ -9,7 +9,7 @@ import { callerFile, ciFile, DEPENDABOT_ENTRY, loadRequirements, TRIGGERS } from
 import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, laneCatalogue, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, usage, USAGE, workflowName } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
-import { TELEMETRY_QUESTION, TELEMETRY_REGISTRATION_URL, UPSTREAM_EVIDENCE_QUESTION, upstreamFindingsQuestion } from '../../cli/init.mjs';
+import { TELEMETRY_QUESTION, UPSTREAM_EVIDENCE_QUESTION, upstreamFindingsQuestion } from '../../cli/init.mjs';
 import { codeownersOf, CONSENT_LEVELS, CONSENT_OPTIONS, CONSENT_QUESTION, consentOf, consentQuestion, DATA_QUESTION, FEATURE_QUESTION, featureOf, REVIEW_HOW, sharingUrl, testDatabaseSignal } from '../../cli/init.mjs';
 import { parseUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
 import { SPAWNS } from './helpers/spawns.js';
@@ -1888,7 +1888,9 @@ describe('kanon init and telemetry (#428)', () => {
   });
 
   it('says what is sent, where, who reads it, and how to stop and erase, in its question', () => {
-    for (const s of ['no code', 'no titles', 'no logins', 'One row per lane run', 'One row per closed pull request', 'actor classes', 'Frankfurt', '13 months', "Kanon's operator", 'at least three adopters', 'deleting .github/workflows/telemetry.yml', 'Erase an adopter']) expect(TELEMETRY_QUESTION).toContain(s);
+    for (const s of ['no code', 'no titles', 'no logins', 'One row per lane run', 'One row per closed pull request', 'actor classes', 'Frankfurt', '13 months', "Kanon's operator", 'at least three adopters', 'deleting .github/workflows/telemetry.yml', 'erase: yes', 'Stop and erase', 'registers this repository on its first run']) expect(TELEMETRY_QUESTION).toContain(s);
+    // No issue and no variable is asked of the adopter any more (plan 0008 §8).
+    for (const s of ['registration issue', 'variable set', 'reader role']) expect(TELEMETRY_QUESTION).not.toContain(s);
   });
 
   it('says what the adopter gets for it, here, in the adopt skill and in the docs (#41 §2)', () => {
@@ -1898,33 +1900,31 @@ describe('kanon init and telemetry (#428)', () => {
     expect(read(ROOT, 'docs/telemetry.md')).toMatch(/erasure, which completes within 35 days/);
   });
 
-  it('on a yes, writes the caller and leaves the registration as a step until both variables are set', async () => {
+  it('on a yes, writes the caller and nothing else: no step, no variable, no issue (plan 0008 §8, J5)', async () => {
     const dir = checkout();
-    const d = parse(await run(dir, withVariables([]), ['--yes', '--json', '--no-apps', '--telemetry']));
+    const github = withVariables([]);
+    const d = parse(await run(dir, github, ['--yes', '--json', '--no-apps', '--telemetry']));
     expect(d.answers.telemetry).toBe(true);
     expect(read(dir, TELEMETRY_CALLER_PATH)).toBe(telemetryCallerFile(RELEASE));
     expect(d.files.find((f) => f.path === TELEMETRY_CALLER_PATH)).toMatchObject({ status: 'new', content: telemetryCallerFile(RELEASE) });
-    const f = d.findings.find((x) => x.id === 'telemetry.register')!;
-    expect(f).toMatchObject({ category: 'telemetry', blocking: false, subject: REPO });
-    expect(f.message).toContain('KANON_TELEMETRY_URL and KANON_TELEMETRY_WRITER_ROLE are not set');
-    expect(f.fix.url).toBe(TELEMETRY_REGISTRATION_URL);
-    expect(f.fix.commands).toEqual([
-      `gh variable set KANON_TELEMETRY_URL -R ${REPO} --body '<the URL the operator gives you>'`,
-      `gh variable set KANON_TELEMETRY_WRITER_ROLE -R ${REPO} --body '<the role ARN the operator gives you>'`,
-    ]);
-    expect(existsSync(join(ROOT, '.github/ISSUE_TEMPLATE/telemetry-registration.yml'))).toBe(true);
-    expect(TELEMETRY_REGISTRATION_URL).toMatch(/template=telemetry-registration\.yml$/);
+    expect(d.findings.filter((x) => x.category === 'telemetry')).toEqual([]);
+    expect(github.calls.some((c) => c.args[0] === 'variable')).toBe(false);
+    // The registration issue template is gone with the step that linked it.
+    expect(existsSync(join(ROOT, '.github/ISSUE_TEMPLATE/telemetry-registration.yml'))).toBe(false);
+    expect(d.summary.find((l) => l.answer === 'Sharing')!.value).toContain("registers on the collector's first run");
+    // A second run leaves the caller as written.
+    const again = parse(await run(dir, github, ['--yes', '--json', '--no-apps', '--telemetry']));
+    expect(again.files.find((x) => x.path === TELEMETRY_CALLER_PATH)).toMatchObject({ status: 'same' });
+  });
 
-    // One variable set: still a step, naming the other.
-    const one = parse(await run(checkout(), withVariables(['KANON_TELEMETRY_URL']), ['--yes', '--json', '--no-apps', '--telemetry']));
-    expect(one.findings.find((x) => x.id === 'telemetry.register')!.message).toContain('KANON_TELEMETRY_WRITER_ROLE is not set');
-    // Variables it can't list: still a step, saying so.
-    const blind = parse(await run(checkout(), withVariables(null), ['--yes', '--json', '--no-apps', '--telemetry']));
-    expect(blind.findings.find((x) => x.id === 'telemetry.register')!.message).toContain("the token can't list its variables");
-    // Both set: no step, and a second run leaves the caller as written.
-    const both = parse(await run(dir, withVariables(['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE']), ['--yes', '--json', '--no-apps', '--telemetry']));
-    expect(both.findings.map((x) => x.id)).not.toContain('telemetry.register');
-    expect(both.files.find((x) => x.path === TELEMETRY_CALLER_PATH)).toMatchObject({ status: 'same' });
+  it('writes a caller with no `vars.`, no secret, and the erase and register dispatch inputs (plan 0008 §8, J5)', () => {
+    const text = telemetryCallerFile(RELEASE);
+    expect(text).not.toContain('vars.');
+    expect(text).not.toContain('secrets.');
+    expect(text).not.toMatch(/^\s+(url|writer-role|audience):/m);
+    const caller = parseYaml(text) as { on: { workflow_dispatch: { inputs: Record<string, { type?: string; options?: string[]; default: string }> } }; jobs: { collect: { with: Record<string, string> } } };
+    for (const k of ['erase', 'register']) expect(caller.on.workflow_dispatch.inputs[k]).toMatchObject({ type: 'choice', options: ['no', 'yes'], default: 'no' });
+    expect(caller.jobs.collect.with).toEqual({ window_minutes: '${{ inputs.window_minutes }}', erase: '${{ inputs.erase }}', register: '${{ inputs.register }}' });
   });
 
   it('takes a yes to the consent question without --yes, and to its own question through Change something', async () => {

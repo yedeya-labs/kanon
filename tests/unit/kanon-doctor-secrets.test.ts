@@ -250,57 +250,118 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
 });
 
 // #428: a caller of Kanon's telemetry collector, as `kanon init --telemetry` writes it, is Kanon's
-// id-token holder, and sends nothing until the repository sets the two variables the operator
-// gives it, which doctor lists without blocking.
-describe("kanon doctor and the telemetry collector's caller (#428)", () => {
+// id-token holder. From the token path (plan 0008 §8, J5) nothing is set beside it: its first
+// default-branch run registers the repository, so doctor reads that run, `telemetry.not-run` while
+// there is none and `telemetry.refused` when the store refused it, neither blocking.
+describe("kanon doctor and the telemetry collector's caller (#428, plan 0008 J5)", () => {
   const VARS = ['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE'];
+  const FILE = 'telemetry.yml';
   const withCollector = (release = PINNED) => ({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: telemetryCallerFile(release) });
   const holderOf = (r: Result) => r.json.idTokenHolders.find((h: { workflow: string }) => h.workflow === TELEMETRY_CALLER_PATH);
+  /** A GitHub whose caller has run on the default branch, its run's one job carrying `notes`. */
+  const ran = (conclusion: string, notes: Array<{ title: string; annotation_level: string; message: string }> = []) => {
+    const github = fakeGitHub();
+    github.st.runs[FILE] = [{ databaseId: 4242, conclusion, createdAt: '2026-10-14T07:40:00Z' }];
+    github.st.runJobs[4242] = [{ id: 99, name: 'collect / Collect telemetry rows', conclusion }];
+    github.st.annotations[99] = notes;
+    return github;
+  };
 
-  it('lists the caller init writes as Kanon\'s holder, and is healthy once both variables are set', async () => {
-    const dir = checkout(withCollector());
-    const r = await run(dir, fakeGitHub({ variables: new Set(VARS) }), ['--json']);
+  it("lists the caller init writes as Kanon's holder, asks for no variable, and is healthy once it has run", async () => {
+    const github = ran('success');
+    const r = await run(checkout(withCollector()), github, ['--json']);
     expect(r.status, r.out).toBe(EXIT.healthy);
     expect(r.json.findings).toEqual([]);
     expect(holderOf(r)).toMatchObject({ job: 'collect', status: 'kanon-lane', reason: null });
+    expect(github.calls.some((c) => c[0] === 'variable')).toBe(false);
   });
 
-  it('reports each unset variable without blocking, with the operator step as its fix, and lets it be waived', async () => {
-    const dir = checkout(withCollector());
-    const r = await run(dir, fakeGitHub({ variables: new Set(['KANON_TELEMETRY_URL']) }), ['--json']);
+  it('reports telemetry.not-run, without blocking, while the caller has no finished run on the default branch', async () => {
+    const r = await run(checkout(withCollector()), fakeGitHub(), ['--json']);
     expect(r.status, r.out).toBe(EXIT.healthy);
-    expect(ids(r)).toEqual([`telemetry.unconfigured ${TELEMETRY_CALLER_PATH}`]);
+    expect(ids(r)).toEqual([`telemetry.not-run ${TELEMETRY_CALLER_PATH}`]);
     const f = r.json.findings[0];
     expect(f).toMatchObject({ category: 'caller', blocking: false });
-    expect(f.message).toContain("doesn't set KANON_TELEMETRY_WRITER_ROLE,");
-    expect(f.fix.url).toMatch(/template=telemetry-registration\.yml$/);
-    expect(f.fix.commands).toHaveLength(2);
-    const none = await run(dir, fakeGitHub(), ['--json']);
-    expect(none.json.findings[0].message).toContain("doesn't set KANON_TELEMETRY_URL or KANON_TELEMETRY_WRITER_ROLE");
-    put(dir, { 'docs/qa/adoption.md': healthyFiles()['docs/qa/adoption.md'] + `- **${WAIVER_LABEL}:** \`telemetry.unconfigured\` on \`${TELEMETRY_CALLER_PATH}\` for \`KANON_TELEMETRY_URL\`, \`KANON_TELEMETRY_WRITER_ROLE\` (registration requested)\n` });
-    const waived = await run(dir, fakeGitHub(), ['--json']);
-    expect(waived.json.findings).toEqual([]);
-    expect(waived.json.waived.map((w: { id: string }) => w.id)).toEqual(['telemetry.unconfigured']);
+    expect(f.message).toContain('Its first run registers acme/widgets');
+    expect(f.fix.commands).toEqual([`gh workflow run ${FILE} -R ${REPO} --ref main`]);
   });
 
-  it("says in a note, not as unchecked, when the token can't list the variables", async () => {
-    const r = await run(checkout(withCollector()), fakeGitHub({ variables: null }), ['--json']);
+  it("reports telemetry.refused with the run's own words when it ended on the store's refusal, and lets it be waived", async () => {
+    const words = "the store answered 403 suspended: Kanon's operator suspended this repository's registration, so nothing is stored until the operator resumes it.";
+    const dir = checkout(withCollector());
+    const r = await run(dir, ran('failure', [{ title: 'telemetry-refused', annotation_level: 'failure', message: words }]), ['--json']);
     expect(r.status, r.out).toBe(EXIT.healthy);
-    expect(r.json.unchecked).toEqual([]);
-    expect(r.json.notes.some((n: string) => n.includes("the token can't list acme/widgets's variables"))).toBe(true);
+    expect(ids(r)).toEqual([`telemetry.refused ${TELEMETRY_CALLER_PATH}`]);
+    const f = r.json.findings[0];
+    expect(f).toMatchObject({ category: 'caller', blocking: false });
+    expect(f.message).toContain(`its last run on main, 4242, ended with the store's refusal: ${words}`);
+    expect(f.fix.commands).toEqual([`gh run view 4242 -R ${REPO}`]);
+    // An erasure's warning, on a green run, is a refusal too.
+    const erased = await run(dir, ran('success', [{ title: 'telemetry-refused', annotation_level: 'warning', message: 'the store answered 410 erased: …' }]), ['--json']);
+    expect(ids(erased)).toEqual([`telemetry.refused ${TELEMETRY_CALLER_PATH}`]);
+    put(dir, { 'docs/qa/adoption.md': healthyFiles()['docs/qa/adoption.md'] + `- **${WAIVER_LABEL}:** \`telemetry.refused\` on \`${TELEMETRY_CALLER_PATH}\` (erased on purpose)\n` });
+    const waived = await run(dir, ran('success', [{ title: 'telemetry-refused', annotation_level: 'warning', message: 'the store answered 410 erased: …' }]), ['--json']);
+    expect(waived.json.findings).toEqual([]);
+    expect(waived.json.waived.map((w: { id: string }) => w.id)).toEqual(['telemetry.refused']);
+  });
+
+  it('reports nothing for a red run that is not a refusal, which the run itself pages', async () => {
+    const r = await run(checkout(withCollector()), ran('failure', [{ title: 'telemetry-collect', annotation_level: 'failure', message: 'rows 1-1: the store answered 401 (aud)' }]), ['--json']);
+    expect(r.json.findings).toEqual([]);
+  });
+
+  it("lists the check as unchecked when the token can't read the runs", async () => {
+    const github = fakeGitHub();
+    github.st.runsRefused = 'gh: Resource not accessible by personal access token (HTTP 403)';
+    const r = await run(checkout(withCollector()), github, ['--json']);
+    expect(r.status, r.out).toBe(EXIT.incomplete);
+    expect(r.json.unchecked).toEqual(expect.arrayContaining([expect.objectContaining({ check: 'telemetry-runs', subject: TELEMETRY_CALLER_PATH })]));
+  });
+
+  // Owner decision of 2026-10-14 (#842): the collector refuses these inputs, so doctor blocks on them.
+  it("blocks a caller that still passes the SigV4 path's url or writer-role without audience, with init's caller as the fix", async () => {
+    const legacy = telemetryCallerFile(PINNED).replace('    with:\n', "    with:\n      url: ${{ vars.KANON_TELEMETRY_URL }}\n      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}\n");
+    const r = await run(checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: legacy }), ran('success'), ['--json']);
+    expect(r.status, r.out).toBe(EXIT.findings);
+    expect(ids(r)).toEqual([`telemetry.legacy-inputs ${TELEMETRY_CALLER_PATH}`]);
+    const f = r.json.findings[0];
+    expect(f).toMatchObject({ category: 'caller', blocking: true });
+    expect(f.message).toContain('passes `url:` and `writer-role:` to Kanon\'s telemetry collector without `audience:`');
+    expect(f.message).toContain('nothing is sent or registered');
+    expect(f.message).not.toContain('hosted store unless');
+    expect(f.fix.text).toContain('Run kanon init again');
+    expect(f.fix.text).toContain('add `audience:` beside `url:`');
+    expect(f.fix.commands).toEqual(['kanon init --telemetry']);
+    // writer-role alone is the same finding.
+    const role = telemetryCallerFile(PINNED).replace('    with:\n', "    with:\n      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}\n");
+    expect(ids(await run(checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: role }), ran('success'), ['--json']))).toEqual([`telemetry.legacy-inputs ${TELEMETRY_CALLER_PATH}`]);
+    // A self-hosted url with its audience is not.
+    const self = telemetryCallerFile(PINNED).replace('    with:\n', '    with:\n      url: https://abc.lambda-url.eu-central-1.on.aws/\n      audience: acme-telemetry\n');
+    expect(ids(await run(checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: self }), ran('success'), ['--json']))).toEqual([]);
   });
 
   it("asks nothing of a repository without the collector's caller", async () => {
     const github = fakeGitHub({ variables: null });
     const r = await run(checkout(healthyFiles()), github, ['--json']);
     expect(r.status).toBe(EXIT.healthy);
-    expect(github.calls.some((c) => c[0] === 'variable')).toBe(false);
+    expect(github.calls.some((c) => c[0] === 'variable' || (c[0] === 'run' && c.includes(FILE)))).toBe(false);
+  });
+
+  it('reads no run against a release before the token path, and asks for no variable there either (telemetry.unconfigured is retired)', async () => {
+    const old = clone(REQ);
+    (old as { telemetry?: { token?: boolean; variables?: string[] } }).telemetry!.variables = VARS;
+    delete (old as { telemetry?: { token?: boolean } }).telemetry!.token;
+    const github = fakeGitHub({ variables: new Set() });
+    const out: string[] = [];
+    await doctor(['--dir', checkout(withCollector()), '--json'], { gh: github.gh, env: {}, out: (l: string) => out.push(l), err: () => {}, requirements: () => old, release: () => PINNED });
+    expect(JSON.parse(out.join('\n')).findings).toEqual([]);
+    expect(github.calls.some((c) => (c[0] === 'run' && c.includes(FILE)) || c[0] === 'variable')).toBe(false);
   });
 
   it("blocks a caller whose permissions: lack what the collector's job asks for: GitHub would refuse every sweep (plan 0006 F4)", async () => {
     // The caller as releases before F4 wrote it, with no `contents: read`.
     const before = telemetryCallerFile(PINNED).replace('  contents: read\n', '');
-    const r = await run(checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: before }), fakeGitHub({ variables: new Set(VARS) }), ['--json']);
+    const r = await run(checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: before }), ran('success'), ['--json']);
     expect(r.status, r.out).toBe(EXIT.findings);
     expect(ids(r)).toEqual([`caller.grant-missing ${TELEMETRY_CALLER_PATH}`]);
     const f = r.json.findings[0];
@@ -311,14 +372,14 @@ describe("kanon doctor and the telemetry collector's caller (#428)", () => {
     const old = clone(REQ);
     delete (old as { telemetry?: { grant?: unknown } }).telemetry!.grant;
     const out: string[] = [];
-    await doctor(['--dir', checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: before }), '--json'], { gh: fakeGitHub({ variables: new Set(VARS) }).gh, env: {}, out: (l: string) => out.push(l), err: () => {}, requirements: () => old, release: () => PINNED });
+    await doctor(['--dir', checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: before }), '--json'], { gh: ran('success').gh, env: {}, out: (l: string) => out.push(l), err: () => {}, requirements: () => old, release: () => PINNED });
     expect(JSON.parse(out.join('\n')).findings).toEqual([]);
   });
 
   it('accepts the collector only from a release whose requirements name it', async () => {
     const old = clone(REQ);
     delete (old as { telemetry?: unknown }).telemetry;
-    const github = fakeGitHub({ variables: new Set(VARS) });
+    const github = ran('success');
     const r = await run(checkout({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: telemetryCallerFile(PINNED) }), github, ['--json']);
     expect(holderOf(r).status).toBe('kanon-lane');
     // Against a release whose requirements file doesn't name the collector, it is unaccepted.
@@ -326,7 +387,7 @@ describe("kanon doctor and the telemetry collector's caller (#428)", () => {
     await doctor(['--dir', checkout(withCollector()), '--json'], { gh: github.gh, env: {}, out: (l: string) => out.push(l), err: () => {}, requirements: () => old, release: () => PINNED });
     const doc = JSON.parse(out.join('\n'));
     expect(doc.idTokenHolders.find((h: { workflow: string }) => h.workflow === TELEMETRY_CALLER_PATH).status).toBe('unaccepted');
-    expect(doc.findings.map((f: { id: string }) => f.id)).not.toContain('telemetry.unconfigured');
+    expect(doc.findings.map((f: { id: string }) => f.id)).not.toContain('telemetry.not-run');
   });
 });
 
@@ -353,6 +414,8 @@ describe('kanon doctor and upstream findings sent without the telemetry collecto
 
   it('reports nothing once a workflow calls the collector, nor for `drafted` or `filed here` without one', async () => {
     const github = fakeGitHub({ variables: new Set(VARS) });
+    // The caller has run, so it is registered (plan 0008 J5): no `telemetry.not-run` beside it.
+    github.st.runs['telemetry.yml'] = [{ databaseId: 4242, conclusion: 'success', createdAt: '2026-10-14T07:40:00Z' }];
     const sent = await run(checkout({ ...healthyFiles(), ...record('sent with evidence'), [TELEMETRY_CALLER_PATH]: telemetryCallerFile(PINNED) }), github, ['--json']);
     expect(sent.status, sent.out).toBe(EXIT.healthy);
     expect(sent.json.findings).toEqual([]);
