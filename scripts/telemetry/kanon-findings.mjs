@@ -29,7 +29,8 @@
 //        none) keeps the signal's counts its issue last had, under a line saying they are from an
 //        earlier run, and keeps the issue's title;
 //      - an issue that held findings, none of which is left in the store (expired after 13 months,
-//        or erased), says so in place of the entries, on this run and every later one.
+//        30 days at `test` or `smoke`, or erased), says so in place of the entries, on this run and
+//        every later one.
 //
 // THE TREE. A release's file list is not something this module can read without git, so the job
 // gives it as a file (`--trees`): `{ "<kanon_version>": ["<path>", ...] }`, one list per release
@@ -53,7 +54,9 @@
 //     [--trees <file>] [--register <file>] [--issues <file>] [--json]
 //   --rows: run rows and finding rows together, a JSON array or one row per line
 //   --known, --tag: as `kanon-bugs.mjs`
-//   --issues: the open issues, as `gh issue list --label kanon-bug --json title,body` prints them
+//   --issues: the open issues, as `gh issue list --label kanon-bug --state open --limit 1000
+//     --json title,body` prints them. `gh` stops at 30 without `--limit`, and at the limit without
+//     a word, so the job fails when it gets exactly 1000: an issue left out loses what it held.
 //   prints: with --json, `kanon-bugs.mjs`'s `{ signals, rises, skipped }` and `findings`:
 //     `{ issues, skipped, total, gate_failed }`, each issue a private one (`signature`, `labels`,
 //     `earlier_counts`, `expired`, `issue: { signature, title, body }`); without, a summary of counts
