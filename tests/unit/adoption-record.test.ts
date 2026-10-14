@@ -321,3 +321,46 @@ describe("the record's choices: feature, review trigger, data and release cadenc
     expect(() => installChoices(text)).toThrow(message);
   });
 });
+
+/**
+ * The mechanism row on `lane-check`'s caller file names lists Kanon's callers, and says the
+ * lookup finds them through their `caller.misplaced` waivers. So the list and the waivers name
+ * the same files (#864): a caller waived but not listed, or listed but not waived, is a row one
+ * short of what its own sentence relies on.
+ */
+const CALLERS_LIST = /Kanon's callers are (.*?), because /;
+const CALLER_WAIVER = /^- \*\*Waived doctor finding:\*\* `caller\.misplaced` on `\.github\/workflows\/([^`]+)`/;
+
+/** The caller files the row lists, and the ones a `caller.misplaced` waiver names. */
+const callerLists = (text: string): { listed: string[]; waived: string[] } => {
+  const rows = text.split('\n').filter((l) => l.startsWith('|') && CALLERS_LIST.test(l));
+  if (rows.length !== 1) throw new Error(`${RECORD_PATH} has ${rows.length} rows saying "Kanon's callers are …", not 1`);
+  const list = CALLERS_LIST.exec(rows[0] ?? '')?.[1] ?? '';
+  const listed = [...list.matchAll(/`([^`]+\.yml)`/g)].map((m) => m[1] ?? '');
+  const waived = text.split('\n').flatMap((l) => CALLER_WAIVER.exec(l)?.[1] ?? []);
+  return { listed: listed.sort(), waived: waived.sort() };
+};
+
+describe("the record's list of Kanon's callers", () => {
+  it('names every caller a `caller.misplaced` waiver names, and no other', () => {
+    const { listed, waived } = callerLists(readFileSync(RECORD, 'utf8'));
+    expect(waived.length).toBeGreaterThan(10);
+    expect(listed).toEqual(waived);
+  });
+
+  it('fails a waiver the list leaves out', () => {
+    const text = [
+      "| `lane-check`'s caller file names. Kanon's callers are `review.yml` and `merge.yml`, because x | `K-X-1` | installed 2026-10-04 |",
+      '- **Waived doctor finding:** `caller.misplaced` on `.github/workflows/review.yml` (why)',
+      '- **Waived doctor finding:** `caller.misplaced` on `.github/workflows/merge.yml` (why)',
+      '- **Waived doctor finding:** `caller.misplaced` on `.github/workflows/project-digest.yml` (why)',
+    ].join('\n');
+    const { listed, waived } = callerLists(text);
+    expect(listed).toEqual(['merge.yml', 'review.yml']);
+    expect(listed).not.toEqual(waived);
+  });
+
+  it('throws when the row moves, rather than going blind', () => {
+    expect(() => callerLists('- **Waived doctor finding:** `caller.misplaced` on `.github/workflows/review.yml`')).toThrow(/0 rows/);
+  });
+});
