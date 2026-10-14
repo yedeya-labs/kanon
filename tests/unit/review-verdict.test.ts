@@ -43,10 +43,19 @@ const REVIEWER = `${LOGIN}[bot]`;
 
 type Review = { user: { login: string }; commit_id: string; state: string; body?: string };
 
+/**
+ * The run's top-level workflow, as the runner sets it: an adopter's review caller, at the lane's
+ * own file name. Set on every run, so the suite's own `GITHUB_WORKFLOW_REF`, when it runs in CI,
+ * can't decide which caller a recovery command names (kanon#738).
+ */
+const ADOPTER_CALLER = 'example-org/example-repo/.github/workflows/agent-review.yml@refs/heads/main';
+
 const run = ({
   agent = 'success',
   reviews = [] as Review[],
   readFails = false,
+  /** `null`: the runner set none. */
+  workflowRef = ADOPTER_CALLER as string | null,
 }) => {
   const dir = mkdtempSync(join(tmpdir(), 'review-verdict-'));
   // THE STUB RUNS THE REAL `--jq` FILTER. Returning a pre-computed count would test a
@@ -72,9 +81,10 @@ printf '%s' ${JSON.stringify(JSON.stringify(reviews))} | jq -r "$filter"`
       PR_NUMBER: '1376',
       HEAD_SHA: HEAD,
       AGENT: agent,
+      GITHUB_WORKFLOW_REF: workflowRef ?? undefined,
     },
   });
-  return { status: r.status, stdout: r.stdout, summary: r.summary };
+  return { status: r.status, stdout: r.stdout, summary: r.summary, outputs: r.outputs };
 };
 
 /** The header and role marker every reader requires on a verdict since plan 0005's L4 (kanon#336). */
@@ -801,7 +811,7 @@ printf '%s' ${JSON.stringify(JSON.stringify(reviews))} | jq -r "$filter"`
       dir,
       env: {
         PATH: `${dir}:${process.env.PATH}`, GH_TOKEN: 't', REVIEWER_LOGIN: LOGIN, REPO: 'r', PR_NUMBER: '1',
-        HEAD_SHA: HEAD, AGENT: agent, RUNNER_TEMP: temp,
+        HEAD_SHA: HEAD, AGENT: agent, RUNNER_TEMP: temp, GITHUB_WORKFLOW_REF: ADOPTER_CALLER,
       },
     });
     let ran = false;
@@ -1138,5 +1148,43 @@ describe('the reconcile step names a verdict no reader counts (kanon#336)', () =
     const r = run({ agent: 'success', reviews: [verdict('APPROVED', HEAD, REVIEWER, 'Approve.'), verdict('APPROVED')] });
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/Verdicts by the Reviewer on aaaaaaa: 2, 1 with its role marker/);
+  });
+});
+
+/**
+ * kanon#738: the recovery command dispatches the run's own caller. A lane is a reusable workflow,
+ * so `gh workflow run agent-review.yml` dispatches the caller only where the caller sits at the
+ * lane's file name. Where it doesn't (a `caller.misplaced` waiver, or Kanon's own `review.yml`,
+ * beside the lane itself), that command dispatches the lane, which runs only on `workflow_call`.
+ * In a called workflow `GITHUB_WORKFLOW_REF` names the top-level workflow, the one to dispatch.
+ */
+describe('the recovery command dispatches the caller that ran the lane (kanon#738)', () => {
+  const ELSEWHERE = 'example-org/example-repo/.github/workflows/review.yml@refs/pull/1376/merge';
+  const LANE = /gh workflow run agent-review\.yml/;
+
+  it.each([
+    ['a verdict no reader counts', { agent: 'success', reviews: [verdict('APPROVED', HEAD, REVIEWER, 'Approve.')] }],
+    ['a crashed run with no verdict', { agent: 'failure', reviews: [] }],
+    ['a run that exited zero with no verdict', { agent: 'success', reviews: [] }],
+  ])('names the caller on %s', (_, world) => {
+    const r = run({ ...world, workflowRef: ELSEWHERE });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toMatch(/gh workflow run review\.yml -f pr_number=1376/);
+    expect(r.stdout, 'never the lane itself').not.toMatch(LANE);
+  });
+
+  it('hands the classifier the same command, through the reconcile step', () => {
+    expect(run({ agent: 'failure', workflowRef: ELSEWHERE }).outputs.recover).toBe('gh workflow run review.yml -f pr_number=1376');
+    expect(run({ agent: 'success' }).outputs.recover, 'a caller at the lane\'s name').toBe('gh workflow run agent-review.yml -f pr_number=1376');
+    const classify = wf.jobs.review.steps.find((s: { id?: string }) => s.id === 'classify');
+    expect(classify.with.recover).toBe('${{ steps.reconcile.outputs.recover }}');
+  });
+
+  it('names the lane\'s own file name when the runner names no workflow', () => {
+    for (const workflowRef of ['', null]) {
+      const r = run({ agent: 'success', workflowRef });
+      expect(r.stdout, String(workflowRef)).toMatch(/gh workflow run agent-review\.yml -f pr_number=1376/);
+      expect(r.outputs.recover).toBe('gh workflow run agent-review.yml -f pr_number=1376');
+    }
   });
 });

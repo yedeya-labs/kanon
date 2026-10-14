@@ -806,8 +806,8 @@ jobs:
           # already-reviewed SHA defers here, and CI's completion then hits the
           # already-reviewed skip — so that request is dropped. It needs a manual CI
           # re-run on an unchanged, already-reviewed commit, and the escape is the one
-          # the error annotation prints: `gh workflow run agent-review.yml -f
-          # pr_number=N`. The case RA-1351 is actually about — a PR-BODY edit — cannot
+          # the error annotation prints, a dispatch of this run's caller: `gh workflow
+          # run <caller> -f pr_number=N` (kanon#738). The case RA-1351 is actually about — a PR-BODY edit — cannot
           # reach it, because a body edit starts no CI run.
           # A HUMAN RE-APPLYING THE REVIEW LABEL IS A REQUEST, NOT AN ECHO (RA-1351).
           #
