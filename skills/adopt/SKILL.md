@@ -289,7 +289,7 @@ Asked right after the sharing answers, at the telemetry step, for each job `.ins
 
 ## Who fixes each finding of `kanon init`
 
-*agent*: you, from the checkout, after showing the diff. *person*: only a person can; you give the exact step and wait.
+*agent*: you, from the checkout, after showing the diff. *person*: only a person can; you give the exact step and wait. *decision*: the person decides, and you write what they decided.
 
 | Id | Who | What you do |
 |---|---|---|
