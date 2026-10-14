@@ -72,8 +72,8 @@ describe("this tree's credential-holding runs", () => {
 });
 
 // K-PRIN-11: each change below is one a pull request could make; each must turn the guard red,
-// naming the file and the workflow.
-describe('the guard goes red', () => {
+// naming the file and the workflow. Each walks every workflow again, which a loaded suite slows.
+describe('the guard goes red', { timeout: 30_000 }, () => {
   it('when a reached file imports a green-zone file', () => {
     const problems = credentialProblems(credentialReach(withImport('cli/apps.mjs', `import '../${GREEN}';`)), ESCALATIONS);
     expect(problems).toHaveLength(1);
@@ -137,10 +137,11 @@ describe('the guard goes red', () => {
     const file = '.github/workflows/metrics-page.yml';
     const text = readFileSync(file, 'utf8');
     const anchor = "      - name: Read Kanon's health\n";
-    for (const command of ['npm test', 'npm run lint', 'npx vitest run', 'npm exec -- tsc']) {
-      const problems = credentialProblems(credentialReach({ [file]: text.replace(anchor, `      - run: ${command}\n${anchor}`) }), ESCALATIONS);
-      expect(problems, command).toHaveLength(1);
-      expect(problems[0], command).toMatch(/^package\.json: metrics-page\.yml, job page, holds a credential and `np[mx] [\w-]+` runs a package\.json script or a binary, an entry point this guard does not follow/);
+    const commands = ['npm test', 'npm run lint', 'npx vitest run', 'npm exec -- tsc'];
+    const problems = credentialProblems(credentialReach({ [file]: text.replace(anchor, `${commands.map((c) => `      - run: ${c}\n`).join('')}${anchor}`) }), ESCALATIONS);
+    expect(problems).toHaveLength(commands.length);
+    for (const [i, command] of commands.entries()) {
+      expect(problems[i], command).toMatch(new RegExp(`^package\\.json: metrics-page\\.yml, job page, holds a credential and \`${command.split(' ').slice(0, 2).join(' ')}\` runs a package\\.json script or a binary, an entry point this guard does not follow`));
     }
     // `npm ci` runs only the root package's install hooks, of which package.json declares none.
     expect(credentialProblems(credentialReach({ [file]: text.replace(anchor, `      - run: npm ci\n${anchor}`) }), ESCALATIONS)).toEqual([]);

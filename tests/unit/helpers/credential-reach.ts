@@ -407,6 +407,13 @@ export function credentialReach(overrides: Readonly<Record<string, string>> = {}
     parsed[f] = { ...w, on: w.on ?? w.true };
   }
   const reaches = new Map<string, Reach>();
+  // Each file is read once per call: many jobs reach the same files.
+  const entryCache = new Map<string, string[]>();
+  const entriesOf = (abs: string) => {
+    let hit = entryCache.get(abs);
+    if (!hit) entryCache.set(abs, (hit = fileEntries(abs, tree)));
+    return hit;
+  };
   const record = (file: string, w: Walk, via: string[], unmodelled?: string) => {
     const key = `${file}\0${w.workflow}\0${w.job}${unmodelled ? `\0${unmodelled}` : ''}`;
     if (!reaches.has(key)) reaches.set(key, { file, workflow: w.workflow, job: w.job, via, ...(unmodelled ? { unmodelled } : {}) });
@@ -422,7 +429,7 @@ export function credentialReach(overrides: Readonly<Record<string, string>> = {}
       record(rel(abs), w, via);
       // A shell script's package-manager commands, like a step's.
       if (/\.sh$/.test(abs)) for (const p of packageEntries(tree.text(abs), tree)) record(p.file, w, [...via, rel(abs)], p.unmodelled);
-      for (const next of fileEntries(abs, tree)) queue.push({ abs: next, via: [...via, rel(abs)] });
+      for (const next of entriesOf(abs)) queue.push({ abs: next, via: [...via, rel(abs)] });
     }
   };
   const actionDir = (uses: string): string | null => {
