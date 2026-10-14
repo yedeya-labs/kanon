@@ -1809,6 +1809,27 @@ export const deployPathTaken = (read, req) => {
  */
 export const unwritableEnvironment = (names) => names.find((n) => !ENVIRONMENT_NAME.test(n));
 
+/**
+ * The 1-based line of the `Environments` bullet the declaration parser read the list from (#956):
+ * the one inside `## Deploy`, in either bullet form the parser takes (`- ` or `* `), never
+ * `## Plan`'s prose bullet of the same label, outside fenced blocks; 0 when there is none.
+ * @param {string} text the adoption record
+ */
+export const deployListLine = (text) => {
+  const lines = text.split('\n');
+  const bullet = new RegExp(`^[-*] \\*\\*${CHAIN_LABELS.environments}:\\*\\*`);
+  let fence = false;
+  let inDeploy = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const l = /** @type {string} */ (lines[i]);
+    if (/^\s*(```|~~~)/.test(l)) fence = !fence;
+    if (fence) continue;
+    if (/^#{1,2} /.test(l)) inDeploy = l.trimEnd() === DEPLOY_HEADING;
+    else if (inDeploy && bullet.test(l)) return i + 1;
+  }
+  return 0;
+};
+
 /** Whether a workflow's text is a caller of the deploy lane, which `init` rewrites from the list. @param {string | null} text @param {Requirements} req */
 export const callsDeployLane = (text, req) => {
   const d = deployOf(req);
@@ -2316,7 +2337,7 @@ const run = async (deps, opts, req, rep) => {
   const declaredEnvironments = declaration.environments;
   const odd = unwritableEnvironment(declaredEnvironments);
   if (odd !== undefined) {
-    const line = (read(DEPLOY_RECORD) ?? '').split('\n').findIndex((l) => l.startsWith(`- **${CHAIN_LABELS.environments}:**`)) + 1;
+    const line = deployListLine(read(DEPLOY_RECORD) ?? '');
     return stop(1, [`${DEPLOY_RECORD}:${line} declares the environment \`${odd}\`, which init can't write into the deploy caller: use letters, digits, ".", "_" and "-". Nothing was changed.`]);
   }
   if (opts.given.deployEnvironments?.length && !deployOf(req)) {
@@ -2619,7 +2640,7 @@ const run = async (deps, opts, req, rep) => {
   const pathTaken = a.deployEnvironments.length > 0 && deployPathTaken(read, req);
   if (pathTaken) {
     const message = `${DEPLOY_CALLER_PATH} is a deploy workflow of your own, which calls no Kanon deploy lane, so init wrote nothing for the deploy lane: no caller, no hook and no ${DEPLOY_HEADING} section. The deploy environments ${listed(a.deployEnvironments)} are not installed.`;
-    const text = `Move your workflow to another file name, and any reference deploy bullet that names it, with git mv, then run kanon init again with the same flags: it writes the caller at ${DEPLOY_CALLER_PATH}, the file name its reference deploy names. Or keep your workflow, and answer none.`;
+    const text = `Move your workflow to another file name with git mv, and update any reference deploy bullet that names it, then run kanon init again with the same flags: it writes the caller at ${DEPLOY_CALLER_PATH}, the file name its reference deploy names. Or keep your workflow, and answer none.`;
     step({ id: 'deploy.caller-taken', category: 'deploy', subject: DEPLOY_CALLER_PATH, prose: `${message} ${text}`, message, text, commands: [] });
   }
   if (!pathTaken && record === 'kept' && listed(declaredEnvironments) !== listed(a.deployEnvironments)) {

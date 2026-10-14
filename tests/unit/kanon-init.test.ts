@@ -2843,6 +2843,20 @@ describe('kanon init and the deploy lane (plan 0010 D6)', () => {
     }
   });
 
+  it("names the Environments bullet inside ## Deploy, not ## Plan's prose bullet, in either bullet form (#956)", async () => {
+    // A record init wrote, then edited: ## Plan's prose bullet of the same label comes first.
+    const { dir } = await declare('staging,production');
+    const written = read(dir, RECORD).replace('- **Environments:** `staging`, `production`', '* **Environments:** `staging`, `prod eu`');
+    writeFileSync(join(dir, RECORD), written);
+    const at = written.split('\n').findIndex((l) => l.startsWith('* **Environments:**')) + 1;
+    expect(written.split('\n').findIndex((l) => l.startsWith('- **Environments:**')) + 1).toBeLessThan(at);
+    const github = fakeGitHub();
+    const r = await run(dir, github, ['--yes', '--json', '--no-apps']);
+    expect(r.status).toBe(1);
+    expect(JSON.parse(r.out).error).toContain(`${RECORD}:${at} declares the environment \`prod eu\``);
+    expect(github.calls).toEqual([]);
+  });
+
   it('takes none in any case, as the adopt skill labels it None (#956)', async () => {
     const { parseDeployEnvironments } = await import('../../cli/init.mjs');
     for (const v of ['none', 'None', 'NONE', ' none ']) expect(parseDeployEnvironments(v), v).toEqual([]);
