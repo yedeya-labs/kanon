@@ -861,7 +861,7 @@ describe('the deploy row (plan 0010 §10, step D3)', () => {
     expect([...DEPLOY_STAGES]).toEqual(['gate', 'probe', 'build', 'approval', 'deploy', 'smoke']);
     expect([...DEPLOY_REFUSALS]).toEqual([
       'draft', 'no-release', 'not-default-branch', 'declaration-mismatch', 'ci-red', 'ci-timeout',
-      'superseded', 'trust-unbound', 'probe-unconfigured',
+      'superseded', 'trust-unbound', 'probe-unconfigured', 'not-maintainer',
     ]);
   });
 
@@ -900,6 +900,12 @@ describe('the deploy row (plan 0010 §10, step D3)', () => {
     fails({ ...deployed(), outcome: 'failed', failed_stage: 'deploy', refusal: 'ci-red' }, 'refusal');
     fails({ ...deployed(), outcome: 'refused', failed_stage: 'gate' }, 'refusal');
     fails({ ...deployed(), outcome: 'refused', failed_stage: 'gate', refusal: 'looked-wrong' }, 'refusal');
+  });
+
+  it('a production dispatch by anyone but the Maintainer is refused `not-maintainer` at stage `deploy` (§13)', () => {
+    const dispatch = { ...deployed(), trigger: 'workflow_dispatch', outcome: 'refused', failed_stage: 'deploy' };
+    expect(validate({ ...dispatch, refusal: 'not-maintainer' })).toEqual({ ok: true });
+    fails({ ...dispatch, refusal: 'not-the-maintainer' }, 'refusal');
   });
 
   it('`failed_stage` never with `ok`, and always with any other outcome', () => {
