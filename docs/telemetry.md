@@ -163,7 +163,21 @@ It exits 1 on any FAIL, and never prints a credential, a row or a response body.
 
 **From vM, an adopter adds itself** ([plan 0008](plans/0008-self-service-registration.md) §8). `kanon init --telemetry`, or a yes to its consent question, writes the collector's caller ([Collect the rows](#collect-the-rows), [`docs/init.md`](init.md#telemetry), #428), and that is the whole registration: the caller's first run on the default branch, the first hourly schedule after the install's pull request merges or a dispatch, registers the repository, active at once, under the default quotas. Nothing names the repository in public, no variable is set, and you do nothing. Telemetry is off without that yes. `kanon doctor` reports `telemetry.not-run` until the caller has a finished run on the default branch, and `telemetry.refused` when its last run ended on the store's refusal, neither blocking ([`docs/doctor.md`](doctor.md)). What stays yours is in [The register table](#the-register-table): suspending a key, the operator fields (`aggregate_invoker`, `publish_own_figures_as`, `page_reader`, a quota), and an erasure asked for another way.
 
-**Publish the hosted URLs** once, before the release that is vM is tagged: [`scripts/lib/telemetry-token.mjs`](../scripts/lib/telemetry-token.mjs)'s `HOSTED_INGEST_URL` and `HOSTED_AGGREGATE_URL` are empty in the tree until you set them to the stack's `IngestTokenUrl` and `AggregateTokenUrl` outputs, in a Kanon pull request, **after reserved concurrency is in place on both functions** (Owner decision 10 of 2026-10-12, plan 0008 §12): the URLs are public, and the reservation bounds what a flood can cost. A release with them empty sends nothing: its collector says in its summary that the hosted URL is not published, and stays green.
+### Publish the hosted URLs
+
+The Owner's step, once, before the release that is vM is tagged ([plan 0008](plans/0008-self-service-registration.md) §9, §12). [`scripts/lib/telemetry-token.mjs`](../scripts/lib/telemetry-token.mjs)'s `HOSTED_INGEST_URL` and `HOSTED_AGGREGATE_URL` are empty in the tree until then. A release with them empty sends nothing: its collector says in its summary that the hosted store's URL is not published, and stays green.
+
+1. **Reserved concurrency 2 on both functions first** (Owner decision 10 of 2026-10-12). The token URLs are public (`AuthType: NONE`), and the reservation bounds what a flood of refused requests can cost. The account's concurrency quota must have been raised first ([Before the first deploy](#before-the-first-deploy), step 4).
+2. **Deploy vM's template** with `MinTokenVersion` and a fresh `CursorKey`, and run `verify.mjs` ([Verify](#verify)).
+3. **Read the two outputs,** `IngestTokenUrl` and `AggregateTokenUrl`:
+
+   ```sh
+   aws cloudformation describe-stacks --stack-name kanon-telemetry --profile kanon --region eu-central-1 \
+     --query "Stacks[0].Outputs[?OutputKey=='IngestTokenUrl' || OutputKey=='AggregateTokenUrl']"
+   ```
+
+4. **Set the two constants** to them in a Kanon pull request. The URLs are not credentials: the token is the gate. The first release after that pull request, and after J5's second half, is the one adopters' pins move to.
+
 
 ### The SigV4 path's register entry (below vM; removed at J9)
 
@@ -321,6 +335,21 @@ Shared by all: 401 for checks 1 to 5 with `WWW-Authenticate: Bearer error="inval
 - **Suspension** is yours (`register.mjs suspend`). Every endpoint but the status read answers 403 `suspended`, and the SigV4 path does too. The function's writes never undo it: none sets `status` over `suspended`.
 
 **Before the deploy that admits tokens** (plan 0008 §9 step 3a, J6), `render.mjs` doesn't yet write `MinTokenVersion` or `CursorKey` into `parameters.json`, so the template's defaults keep the token path closed. Admitting it takes both, given with the parameters file; J5 or J6 adds them to `render.mjs`.
+
+## Quotas
+
+Each repository's registration has limits ([plan 0008](plans/0008-self-service-registration.md) §6, Owner decision 6 of 2026-10-12), counted per key on the token path:
+
+| Limit | Default | What it means for an adopter |
+|---|---|---|
+| Rows stored per UTC day | 5,000 | about 100 times the busiest adopter's day; a 7-day recovery sweep is a few hundred rows |
+| Requests per hour, every endpoint | 120 | an hourly collector makes 1 to 13 |
+| Erasures per UTC day | 5 | an erasure is idempotent; more is a loop |
+| Rows per `GET /v1/rows/self` page | 1,000 | the Overseer's reads take a few pages |
+| New registrations per owner per UTC day | 20 | an organisation installing Kanon across its repositories in a day |
+| New registrations, store-wide, per UTC day | 100 | bounds a mass registration |
+
+**Past a limit,** the store answers 429 with `Retry-After` and `{ "error": "quota", "limit", "resets_at" }`, and **nothing from that request is stored**: a batch is admitted whole or not at all. The collector stops its sweep and turns red, naming the limit and when it resets, under the annotation title `telemetry-refused`, which `kanon doctor` reports as `telemetry.refused`. Its watermark doesn't move, so the next sweep after the reset sends the same span again, and nothing is lost while the artifacts live (the 7-day cap). The refused rows are counted (`refused#<key>#<day>`), so the operator sees a key that keeps hitting a limit. The operator can raise one repository's limits with `register.mjs set --rows-per-day` or `--requests-per-hour` ([The register table](#the-register-table)). The Owner's importer and backfill role are not counted.
 
 ## Erase an adopter
 
