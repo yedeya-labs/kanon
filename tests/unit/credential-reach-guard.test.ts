@@ -60,6 +60,17 @@ describe("this tree's credential-holding runs", () => {
     expect(escalates(GREEN), `${GREEN} must be green for the mutations below to mean anything`).toBe(false);
   });
 
+  it("ADR 0011 says what the smoke run holds as the guard reads it: the store-cleanup jobs write, the admission jobs read (kanon#815)", () => {
+    const adr = readFileSync('docs/decisions/0011-kanon-runs-its-own-lanes.md', 'utf8');
+    const smoke = /`agent-lanes-smoke\.yml` \((.*?)\)\. Their entry files/.exec(adr)?.[1] ?? '';
+    expect(smoke, 'the green-zone paragraph names what the smoke run holds').not.toBe('');
+    const entries = new Set(REACH.filter((r) => r.workflow === 'agent-lanes-smoke.yml').map((r) => r.file));
+    expect(entries).toContain('actions/qa-store/qa-store.mjs');
+    expect(smoke).toMatch(/store-cleanup jobs \(`actions\/qa-store\/qa-store\.mjs`\)[^;]*write grants/);
+    expect(smoke).toMatch(/admission jobs \(`scripts\/lane-gate\.mjs`\)[^;]*read grant alone/);
+    expect(smoke).not.toMatch(/admission jobs[^;]*write grants/);
+  });
+
   it('only the workflows that run this tree reach its code: every pinned lane caller runs its release', () => {
     expect([...new Set(REACH.filter((r) => r.file !== 'package.json').map((r) => r.workflow))].sort()).toEqual(['agent-lanes-smoke.yml', 'apps-check.yml', 'metrics-page.yml']);
   });
