@@ -106,7 +106,8 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
   it('checks every action under actions/, the five lane blocks and the nested ones among them', () => {
     // kanon#927: a nested action (plan 0011's hooks) is held to the rule as a top-level one is.
     expect(ACTIONS).toEqual(expect.arrayContaining([...PIPELINE, 'qa-store', 'kanon-path', 'test-database', 'notify/slack']));
-    expect(ACTIONS.map((a) => join('actions', a, 'action.yml')).sort()).toEqual(actionFiles().filter((f) => f.endsWith('.yml')).sort());
+    // readBlock reads only `action.yml`, so an action spelled `action.yaml` would go unchecked.
+    expect(ACTIONS.map((a) => join('actions', a, 'action.yml')).sort()).toEqual(actionFiles().sort());
   });
 
   it.each([...ACTIONS])('%s declares no output that nothing reads, but those it keeps for other callers', (name) => {
