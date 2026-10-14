@@ -33,7 +33,7 @@ claude plugin install kanon@kanon
 
 <!-- x-release-please-end -->
 
-Type `/kanon:adopt` next; asking the agent to install Kanon won't start it. It asks three questions, shows one summary to confirm, writes the files on a branch, walks you through the steps only you can take (creating the two Apps, adding a secret), and opens the pull request. Start with **Review**: the Reviewer on your pull requests, nothing else. [docs/install.md](docs/install.md) has every other way to install.
+Type `/kanon:adopt` next; asking the agent to install Kanon won't start it. It asks three questions, and which environments your releases deploy to, if any, shows one summary to confirm, writes the files on a branch, walks you through the steps only you can take (creating the two Apps, adding a secret), and opens the pull request. Start with **Review**: the Reviewer on your pull requests, nothing else. [docs/install.md](docs/install.md) has every other way to install.
 
 ## What is enforced, honestly
 

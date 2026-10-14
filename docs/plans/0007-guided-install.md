@@ -151,6 +151,8 @@ Recommended, and listed first: **Yes** on a private repository, **No** on a publ
 
 **Yes is `sent with evidence` whatever the feature.** Review and Review + build run no lane that finds upstream findings (only the Overseer and the telemetry Explorer do), so nothing more leaves the repository for it. The record holds what the person consented to, not what today's lanes produce, so a later move to Full needs no second question, and *Codes only* stays a level of its own (Owner decision 7).
 
+**The install questions gained one** ([plan 0010](0010-deployment-lane.md), open-question decision 2, decided 2026-10-14): the adopt skill also asks the deploy environments, "Which environments should Kanon deploy your releases to, in order?", with a list it recommends from the repository's GitHub environments and the workflows that deploy to them, or **None**, answered as `kanon init --deploy-environments a,b` (or `none`). It amends the Owner's install-questions decision of 2026-10-10 by that one question. `init`'s own terminal still asks Q1, Q3 and Q4: there the list is the adoption record's, or the flag's, and **Change something** changes it.
+
 **Q5, the confirmation: "Install Kanon with these settings?"** asked after the summary (§4).
 
 | Option | Consequence |
