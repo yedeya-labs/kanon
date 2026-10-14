@@ -73,13 +73,16 @@ export const findingArtifactName = (reporter, runId, attempt) => `${FINDING_ARTI
  * A deploy row's artifact (plan 0010 §8, D4): one per environment of a deploy run,
  * `kanon-deploy-row-<run id>-<attempt>-<position>`, holding one row in `kanon-deploy-row.json`.
  * Not under `kanon-telemetry-`, which only a lane's run row may carry (kanon#826). The collector
- * sends these since plan 0010 D9.
+ * sends these since plan 0010 D9. The lane's `record` step (`scripts/deploy-row.mjs`) and the
+ * collector both take the name and the file from here, so they can't disagree (kanon#919).
  */
 export const DEPLOY_ARTIFACT_PREFIX = 'kanon-deploy-row-';
 /** The file inside a deploy artifact: one deploy row. */
 export const DEPLOY_ARTIFACT_FILE = 'kanon-deploy-row.json';
 /** A deploy artifact's name: the run id, the attempt and the environment's position. */
 export const DEPLOY_ARTIFACT = new RegExp(`^${DEPLOY_ARTIFACT_PREFIX}(\\d+)-(\\d+)-(\\d+)$`);
+/** @param {number | string} runId @param {number | string} attempt @param {number | string} position */
+export const deployArtifactName = (runId, attempt, position) => `${DEPLOY_ARTIFACT_PREFIX}${runId}-${attempt}-${position}`;
 /** The sweep's window, in days, as `dispatch-sweep.mjs`'s `UNREACHED_WINDOW_DAYS` defaults it. */
 export const WINDOW_DAYS = 14;
 /** Pages of 100 the listing may read before it gives up and fails the read. */

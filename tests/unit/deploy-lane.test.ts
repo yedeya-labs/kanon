@@ -9,6 +9,7 @@ import {
   classifyEnvironment, classifyRelease, DEPLOY_ARTIFACT_FILE, deployArtifactName, environmentRow, heldOrUnrecorded, releaseRow,
 } from '../../scripts/deploy-row.mjs';
 import { issueTitle, report, reportFrom } from '../../scripts/deploy-report.mjs';
+import * as collected from '../../scripts/lib/telemetry-artifacts.mjs';
 
 /**
  * Plan 0010 step D4: the deploy lane's two reusable workflows, `deploy-release.yml` (gate, probe,
@@ -364,6 +365,22 @@ describe("deploy-row.mjs: the release's row, only when the run stopped before an
       for (const [file, pos] of [[RELEASE, '1'], [ENV, '${{ inputs.position }}']] as const) {
         const up = job(PARSED, file, 'record').steps!.find((s) => String(s.uses).startsWith('actions/upload-artifact@'))!;
         expect(up.with).toMatchObject({ name: deployArtifactName('${{ github.run_id }}', '${{ github.run_attempt }}', pos), path: `\${{ runner.temp }}/kanon-deploy-row/${DEPLOY_ARTIFACT_FILE}` });
+      }
+    });
+
+    // kanon#919: an upload the collector's listing doesn't match is skipped, not counted, so a
+    // rename on either side would stop the deploy rows reaching the store with nothing red.
+    it('names the artifact and its file from the collector\'s own definition, so the two cannot disagree', () => {
+      expect(deployArtifactName).toBe(collected.deployArtifactName);
+      expect(DEPLOY_ARTIFACT_FILE).toBe(collected.DEPLOY_ARTIFACT_FILE);
+      expect(collected.DEPLOY_ARTIFACT.test(deployArtifactName(123, 1, 2))).toBe(true);
+      // Each upload, its expressions stood in for by numbers, is a name the collector lists.
+      const run = { '${{ github.run_id }}': '123', '${{ github.run_attempt }}': '1', '${{ inputs.position }}': '2' };
+      for (const file of LANE) {
+        const up = job(PARSED, file, 'record').steps!.find((s) => String(s.uses).startsWith('actions/upload-artifact@'))!;
+        const name = Object.entries(run).reduce((n, [expr, v]) => n.replaceAll(expr, v), String(up.with?.name));
+        expect(name, file).toMatch(collected.DEPLOY_ARTIFACT);
+        expect(String(up.with?.path).split('/').at(-1), file).toBe(collected.DEPLOY_ARTIFACT_FILE);
       }
     });
   });

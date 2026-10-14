@@ -27,8 +27,8 @@
 //
 // THE ARTIFACT. The row is uploaded as `kanon-deploy-row-<run id>-<attempt>-<position>`
 // (`deployArtifactName`), holding `kanon-deploy-row.json`. Not under `kanon-telemetry-`, which
-// only a lane's run row may carry (kanon#826): the collector sends the deploy rows once plan 0010
-// D9 teaches it this prefix, as it learned the finding rows'.
+// only a lane's run row may carry (kanon#826). The name and the file are the collector's, from
+// `lib/telemetry-artifacts.mjs`, so the upload can't drift from what it lists (kanon#919).
 //
 // ENV  NEEDS          `toJSON(needs)` of the record job
 //      ENVIRONMENTS   the caller's list (`release`)
@@ -45,13 +45,9 @@ import { describeErrors, validate } from '../actions/agent-telemetry/schema.mjs'
 import { ghApi, splitEnvironments } from './deploy-gate.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { ROLES } from './lib/deploy-declaration.mjs';
+import { DEPLOY_ARTIFACT_FILE, DEPLOY_ARTIFACT_PREFIX, deployArtifactName } from './lib/telemetry-artifacts.mjs';
 
-/** The deploy row's artifact name starts with this. */
-export const DEPLOY_ARTIFACT_PREFIX = 'kanon-deploy-row-';
-/** The file inside it: one row. */
-export const DEPLOY_ARTIFACT_FILE = 'kanon-deploy-row.json';
-/** @param {number | string} runId @param {number | string} attempt @param {number | string} position */
-export const deployArtifactName = (runId, attempt, position) => `${DEPLOY_ARTIFACT_PREFIX}${runId}-${attempt}-${position}`;
+export { DEPLOY_ARTIFACT_FILE, DEPLOY_ARTIFACT_PREFIX, deployArtifactName };
 
 /**
  * @typedef {{ result?: string, outputs?: Record<string, string | undefined> }} JobResult
