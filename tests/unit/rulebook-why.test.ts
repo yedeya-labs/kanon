@@ -204,6 +204,7 @@ describe('#578 the guard fails a rule that carries its own history', () => {
     '**Enforced by.** The spine turns symlinks off (kanon#327).',
     '**Rule.** It admits the opener (#768).',
     '**Premise changed.** The scripts now look the caller up.',
+    '**Rule.** It admits the opener.\n\nPremise changed: the scripts now look the caller up.',
   ];
   it.each(MUST_FAIL)('%s', (rule) => {
     expect(historyNotes(rule)).not.toEqual([]);
