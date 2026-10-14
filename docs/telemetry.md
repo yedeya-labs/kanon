@@ -168,10 +168,10 @@ It exits 1 on any FAIL, and never prints a credential, a row or a response body.
 
 ### Publish the hosted URLs
 
-The Owner's step, once, before the release that is vM is tagged ([plan 0008](plans/0008-self-service-registration.md) §9, §12). [`scripts/lib/telemetry-token.mjs`](../scripts/lib/telemetry-token.mjs)'s `HOSTED_INGEST_URL` and `HOSTED_AGGREGATE_URL` are empty in the tree until then. A release with them empty sends nothing: its collector says in its summary that the hosted store's URL is not published, and stays green.
+The Owner's step, once, before the release that is vM is tagged ([plan 0008](plans/0008-self-service-registration.md) §9 step 3b, §12). [`scripts/lib/telemetry-token.mjs`](../scripts/lib/telemetry-token.mjs)'s `HOSTED_INGEST_URL` and `HOSTED_AGGREGATE_URL` are empty in the tree until then. A release with them empty sends nothing: its collector says in its summary that the hosted store's URL is not published, and stays green.
 
 1. **Reserved concurrency 2 on both functions first** (Owner decision 10 of 2026-10-12). The token URLs are public (`AuthType: NONE`), and the reservation bounds what a flood of refused requests can cost. The account's concurrency quota must have been raised first ([Before the first deploy](#before-the-first-deploy), step 4).
-2. **Deploy vM's template** with `MinTokenVersion` and a fresh `CursorKey`: `render.mjs --min-token-version <vM, as X.Y.Z>` writes the first, and every render writes a fresh second ([Before the deploy that admits tokens](#the-token-paths-endpoints-plan-0008-j3)). Then run `verify.mjs` ([Verify](#verify)).
+2. **Deploy vM's template** with `MinTokenVersion` and a fresh `CursorKey`: `render.mjs --min-token-version <vM, as X.Y.Z>` writes the first, and every render writes a fresh second ([Before the deploy that admits tokens](#the-token-paths-endpoints-plan-0008-j3)). Then run `verify.mjs` ([Verify](#verify)). vM has no tag yet, so deploy it from what carries the template then: Kanon's `main`, or a release before vM through the deployment lane. A later deploy, vM's own among them, keeps both URLs, since CloudFormation replaces a function URL only when its function or alias changes.
 3. **Read the two outputs,** `IngestTokenUrl` and `AggregateTokenUrl`:
 
    ```sh
