@@ -147,6 +147,22 @@ describe('anything it cannot prove is comments or whitespace is a behaviour chan
     expect(skeleton('src/a.cjs', 'var yield = 4, x = yield / 2;\n')).toBeNull();
   });
 
+  it("in TypeScript, a slash after a '>' that may close type arguments is not guessed at (kanon#786)", () => {
+    // `f<T> / 2` divides an instantiation expression (TS 4.7): read as a regex up to the `/` in
+    // '/', it would pair the quotes wrongly and read the `//` in the last string as a comment.
+    const code = "const x = f<T> / 2, s = '/', u = 'a // run(1)';\n";
+    for (const file of ['src/a.ts', 'src/a.mts', 'src/a.cts', 'src/a.tsx']) {
+      expect(skeleton(file, code), file).toBeNull();
+      expect(same(file, code, code.replace('run(1)', 'run(2)')), file).toBe(false);
+      expect(skeleton(file, "const x = f<T>\n/ 2, s = '/', u = 'a // run(1)';\n"), file).toBeNull();
+    }
+    // An arrow's `=>` still starts an expression, so a regex after it is still read.
+    expect(same('src/a.ts', 'const r = () => /[//]/; run(1);\n', 'const r = () => /[//]/; run(2);\n')).toBe(false);
+    expect(skeleton('src/a.ts', 'const r = () => /[//]/; // note\n')).toBe('const r = () => /[//]/;');
+    // In JavaScript a `>` closes no type arguments: a slash after it starts a regex, as before.
+    expect(skeleton('src/a.mjs', 'const b = a > /x/.exec(s).length;\n')).not.toBeNull();
+  });
+
   it('an unterminated string or comment, or a ")" that closes nothing, is not read', () => {
     expect(skeleton('src/a.ts', 'const a = "x;\nrun();\n')).toBeNull();
     expect(skeleton('src/a.ts', '/* open\nrun();\n')).toBeNull();
