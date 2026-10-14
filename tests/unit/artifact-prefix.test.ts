@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { actionFiles } from './helpers/actions.js';
 import { ARTIFACT_PREFIX } from '../../scripts/lib/telemetry-artifacts.mjs';
 
 /**
@@ -13,9 +14,8 @@ const ROW_UPLOADER = 'actions/agent-telemetry/action.yml';
 
 const files = (): string[] => [
   ...readdirSync('.github/workflows').filter((f) => /\.ya?ml$/.test(f)).map((f) => join('.github/workflows', f)),
-  ...readdirSync('actions', { withFileTypes: true }).filter((d) => d.isDirectory())
-    .flatMap((d) => ['action.yml', 'action.yaml'].map((f) => join('actions', d.name, f)))
-    .filter((f) => { try { readFileSync(f); return true; } catch { return false; } }),
+  // Every action, nested ones too (kanon#927).
+  ...actionFiles(),
 ];
 
 /** The `name:` of each `upload-artifact` step, read from the text so a template stays as written. */
@@ -37,6 +37,8 @@ const uploadNames = (text: string): string[] => {
 
 describe('only a lane\'s run row carries the collector\'s artifact prefix (kanon#826)', () => {
   it('finds the uploads it guards', () => {
+    // Every action, nested ones too (kanon#927): plan 0011's hook actions sit one level down.
+    expect(files()).toContain('actions/notify/slack/action.yml');
     expect(uploadNames(readFileSync(ROW_UPLOADER, 'utf8'))).toContain(`${ARTIFACT_PREFIX}\${{ inputs.lane }}-\${{ github.run_id }}-\${{ github.run_attempt }}`);
     expect(uploadNames(readFileSync('.github/workflows/agent-explore-telemetry.yml', 'utf8')).length).toBeGreaterThan(0);
   });
