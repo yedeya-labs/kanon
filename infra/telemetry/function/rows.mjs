@@ -37,6 +37,13 @@ export const RECORDED_AHEAD_MS = 10 * MINUTE;
 /** Retention: 13 calendar months for `run` rows, 30 days for `smoke` and `test` (§10). */
 export const RETENTION_MONTHS = 13;
 export const SHORT_RETENTION_MS = 30 * DAY;
+/**
+ * The row kinds this function stores, each in a partition `PARTITIONS` names, so erasure walks it.
+ * A kind the schema knows but this list doesn't, the deploy row (plan 0010 D3), is refused with
+ * `row_kind (not-allowed)` until its intake is built (D9): stored now, it would land outside every
+ * partition erasure walks.
+ */
+export const STORED_KINDS = Object.freeze(['run', 'work_item', 'finding']);
 
 /**
  * `writer` is the collector, on either path; `importer` and `backfill` are the Owner's roles.
@@ -153,6 +160,7 @@ export function stamp(row, { caller, key, now, finding }) {
   const v = validate(row, { imported: caller.kind === 'importer' });
   if (!v.ok) return v;
   const r = /** @type {Record<string, any>} */ (row);
+  if (!STORED_KINDS.includes(r.row_kind)) return { ok: false, errors: [{ field: 'row_kind', problem: 'not-allowed' }] };
   /** @type {{ field: string, problem: string }[]} */
   const errors = [];
   // A finding row: the collector only, its text against the sender's context, and no registered key.
