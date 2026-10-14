@@ -335,6 +335,22 @@ describe('`fit`', () => {
     expect(m.sections[0].fields).toHaveLength(LIMITS.fields);
     expect(m.sections[0].fields[9]).toEqual({ label: '…', value: '5 more fields' });
   });
+
+  it('repairs nothing its precondition excludes: a missing or empty required string, or a link not `https://`, reaches `validate`', () => {
+    const cases: [Msg, string, string][] = [
+      [(() => { const d = base(); delete d.title; return d; })(), 'title', 'range'],
+      [{ ...base(), summary: '' }, 'summary', 'range'],
+      [{ ...base(), sections: [{ body: '' }] }, 'sections[0].body', 'range'],
+      [{ ...base(), sections: [{ body: 'b', fields: [{ label: '', value: 'v' }] }] }, 'sections[0].fields[0].label', 'range'],
+      [{ ...base(), sections: [{ body: 'b', fields: [{ label: 'l' }] }] }, 'sections[0].fields[0].value', 'range'],
+      [{ ...base(), links: [{ url: 'https://e.example/' }] }, 'links[0].label', 'range'],
+      [{ ...base(), links: [{ label: 'l', url: 'http://e.example/' }] }, 'links[0].url', 'pattern'],
+    ];
+    for (const [draft, field, problem] of cases) {
+      delete draft.schema_version;
+      expect(errorsOf(fit(draft))).toEqual([{ field, problem }]);
+    }
+  });
 });
 
 describe('`renderText`', () => {
@@ -453,6 +469,24 @@ describe('the published JSON Schema (decision 15)', () => {
     for (const m of all) expect([JSON.stringify(m)?.slice(0, 120), schemaAccepts(schema, m)]).toEqual([JSON.stringify(m)?.slice(0, 120), validate(m).ok]);
   });
 
+  it('refuses in a URL exactly what it refused with `\\s`, naming each character rather than using a class escape', () => {
+    // `\s` and the other class escapes mean different sets in different engines (#921).
+    const pattern: string = schema.properties.source.properties.run_url.pattern;
+    expect(pattern).not.toMatch(/\\[sSdDwWbB]/);
+    const re = new RegExp(pattern, 'u');
+    const at = (c: string) => ({ ...base(), source: { ...SOURCE, run_url: `https://e.example/a${c}b` } });
+    const differ: number[] = [];
+    for (let cp = 0; cp <= 0xffff; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const c = String.fromCodePoint(cp);
+      const was = /\s/.test(c) || cp <= 0x1f || cp === 0x7f;
+      if (re.test(`https://e.example/a${c}b`) === was) differ.push(cp);
+    }
+    expect(differ.map((cp) => cp.toString(16))).toEqual([]);
+    for (const c of [' ', '　', '﻿', '\t']) expect(errorsOf(at(c))).toEqual([{ field: 'source.run_url', problem: 'pattern' }]);
+    for (const c of ['\u0085', '​', '😀']) expect(errorsOf(at(c))).toEqual([]);
+  });
+
   it('agrees on a `fit` output cut from far past the limits', () => {
     const m = fit({ ...base(), sections: Array.from({ length: 30 }, () => ({ body: 'x'.repeat(3000) })) });
     expect(schemaAccepts(schema, m)).toBe(true);
@@ -479,6 +513,36 @@ describe('the topic doc', () => {
     expect(paragraphs.join('').length).toBeGreaterThan(2000);
     const security = words(doc, /^## Security$/m, /^## /m);
     for (const p of paragraphs) expect(security).toContain(p);
+  });
+
+  it("states every field's limit in its table as the JSON Schema does", () => {
+    // Each field's path as the table writes it, and the limit the schema publishes for it.
+    const limits = new Map<string, string>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a JSON Schema, walked property by property
+    const walk = (s: Record<string, any>, path: string) => {
+      if (s.type === 'string' && s.maxLength !== undefined) limits.set(path, `${s.minLength} to ${s.maxLength.toLocaleString('en-US')}`);
+      if (s.type === 'array') { limits.set(path, `0 to ${s.maxItems}`); walk(s.items, `${path}[]`); }
+      for (const [k, sub] of Object.entries(s.properties ?? {})) walk(sub as Msg, path ? `${path}.${k}` : k);
+    };
+    walk(jsonSchema(1), '');
+    const rows = new Map(doc.split('\n').flatMap((l) => {
+      const m = /^\| `([^`]+)` \| [^|]+ \| [^|]+ \| ([^|]+) \|/.exec(l);
+      return m ? [[m[1]!, m[2]!.trim()] as const] : [];
+    }));
+    expect(limits.size).toBeGreaterThan(10);
+    for (const [path, limit] of limits) expect([path, rows.get(path)]).toEqual([path, limit]);
+  });
+
+  it("states `fit`'s precondition, and that the library imports nothing", () => {
+    const row = doc.split('\n').find((l) => l.startsWith('| `fit(draft)` |'))!;
+    expect(row).toMatch(/non-empty/);
+    expect(row).toMatch(/`https:\/\/`/);
+    const lib = readFileSync(join(ROOT, 'scripts', 'lib', 'notify-contract.mjs'), 'utf8');
+    expect(lib).not.toMatch(/^\s*import\b|\bimport\(|\brequire\(/m);
+    const library = words(doc, /^## The library$/m, /^## /m);
+    expect(library).toMatch(/^\S+ is the contract in code\. It imports nothing/);
+    // The telemetry schema imports `./scrub.mjs`, so it is no example of a library that imports nothing.
+    expect(library).not.toMatch(/as the telemetry schema/);
   });
 
   it('names each kind and its secret, and the published JSON Schema', () => {

@@ -44,9 +44,9 @@ Lengths are in characters, counted as Unicode code points, as JSON Schema counts
 | `sections[].fields[].value` | yes | plain text | 1 to 1,800 | May hold line breaks |
 | `links` | no | array of `{label, url}` | 0 to 9 | Slack's context block takes 10 elements: one per link, and the tenth is the run's |
 | `links[].label` | yes | plain text, one line | 1 to 75 | |
-| `links[].url` | yes | `https://` URL | 1 to 2,000 | Nothing but `https://`, with no space or control character |
+| `links[].url` | yes | `https://` URL | 1 to 2,000 | Nothing but `https://`, with no whitespace, C0 control character or DEL ([The JSON Schema](#the-json-schema)) |
 | `source` | yes | object | — | Where it came from: a hook may show it, route by it, or ignore it |
-| `source.repository` | yes | `owner/name` | — | |
+| `source.repository` | yes | `owner/name` | 1 to 140 | As GitHub spells them: an owner of 1 to 39 letters, digits and `-`, not starting with `-`; a name of 1 to 100 letters, digits, `.`, `_` and `-` |
 | `source.lane` | yes | closed list | — | The lane that produced it: `project-digest`, `weekly-digest` or `deploy` |
 | `source.run_url` | yes | `https://` URL | 1 to 2,000 | The producing run |
 | **The whole message** | | | 12,000 characters, 64 KiB | Every string in the message together, and the message as UTF-8 JSON. Well under the 40,000 characters past which Slack truncates a message's text |
@@ -76,7 +76,7 @@ An issue's title, a pull request's title, a label, a release note's line: a prod
 
 A model's narrative is Kanon text by intent (it may bold a word), so it goes through **`prose(s)`**, which keeps the subset's markup and nothing else: every construct the subset defines stays, and every markup character that forms none is escaped, so a hook reading the result never has to guess. Every other character is already literal.
 
-**So no text a producer interpolates can make a message invalid,** and `fit` only has limits to enforce.
+**So no character a producer interpolates can make a message invalid,** and `fit` only has limits to enforce, given [its precondition](#the-library).
 
 ## Kinds and secrets
 
@@ -94,12 +94,12 @@ A model's narrative is Kanon text by intent (it may bold a word), so it goes thr
 
 ## The library
 
-[`scripts/lib/notify-contract.mjs`](../scripts/lib/notify-contract.mjs) is the contract in code. It imports nothing, as the telemetry schema doesn't, and it is used four times: by the producers, through `fit`; by the `notify` job before any hook runs, through `validate`; by [Kanon's Slack hook](#kanons-slack-hook), through `parseInline` and `linesOf`, to render Kanon text; and by the tests.
+[`scripts/lib/notify-contract.mjs`](../scripts/lib/notify-contract.mjs) is the contract in code. It imports nothing, and it is used four times: by the producers, through `fit`; by the `notify` job before any hook runs, through `validate`; by [Kanon's Slack hook](#kanons-slack-hook), through `parseInline` and `linesOf`, to render Kanon text; and by the tests.
 
 | Export | What |
 |---|---|
 | `validate(message)` | `{ ok: true }`, or `{ ok: false, errors }`, each error a field path (`sections[3].body`) and a problem word: `required`, `type`, `enum`, `range`, `line-break`, `pattern`, `unknown`, and `too-long` or `too-large` for the whole message. **It never echoes a value,** because a message can hold a model's prose and a rejection reaches a log. A key that isn't shaped like a field name is reported as `(unnamed)`. It never repairs |
-| `fit(draft)` | What producers call. Cuts a draft to the limits at line boundaries, with a visible `… truncated` line, or a last `… N more` field or section; folds a line break in a one-line field into a space; sets `schema_version`. Sections past the room (or the twentieth) fold into a last section that names how many sections and links were left out. A draft whose kind, severity and source are right always fits into a valid message |
+| `fit(draft)` | What producers call. Cuts a draft to the limits at line boundaries, with a visible `… truncated` line, or a last `… N more` field or section; folds a line break in a one-line field into a space; sets `schema_version`. Sections past the room (or the twentieth) fold into a last section that names how many sections and links were left out. **Its precondition:** kind, severity and source right; every required string (`title`, `summary`, each section's `body`, each field's `label` and `value`, each link's `label`) present and non-empty; and each link's `url` an `https://` URL that `links[].url` accepts. A draft that meets it always fits into a valid message. One that doesn't is a producer's bug, which `fit` doesn't repair and `validate` reports |
 | `literal(s)`, `prose(s)` | Text nobody controls, made safe for Kanon text ([above](#text-nobody-controls)) |
 | `renderText(message)` | The message as **plain text**, at most 12,000 characters, for a hook that posts one string: the markup removed, the escapes resolved, a link written `label (url)`, the run's link last. Plain text, not Kanon text, so a system that renders Markdown can't turn a literal `#` into a heading |
 | `SCHEMAS`, `KINDS`, `SEVERITIES`, `LIMITS`, `KIND_SECRETS` | The spec of each version, version 1's lists and limits, and each kind's secret's name |
@@ -109,6 +109,8 @@ A model's narrative is Kanon text by intent (it may bold a word), so it goes thr
 ## The JSON Schema
 
 [`docs/notify/message-v1.schema.json`](notify/message-v1.schema.json) is version 1 as a JSON Schema (draft 2020-12), so you can write a hook in any language and test it against the contract offline, and a generic-webhook receiver can validate what it gets. It is generated from `SCHEMAS`, and a test holds the file equal to it and holds it to accept and refuse the same messages as `validate`.
+
+**Its patterns are ECMA-262's,** as JSON Schema defines them. They name each character they refuse rather than using `\s`, whose set differs between engines: a URL refuses U+0000 to U+0020, U+007F, and every other character ECMA-262's `\s` matches. One difference no pattern removes: some engines' `$`, Python's for one, also matches before a final `\n`, so a validator there accepts a one-line field or a URL that ends in a line break, which `validate` refuses.
 
 One difference, stated in the schema itself: a JSON Schema can't sum lengths, so the two whole-message limits (12,000 characters of text across every field, 64 KiB as JSON) are in its `x-kanon-whole-message` keyword rather than in its rules. A message Kanon sends always meets them.
 
