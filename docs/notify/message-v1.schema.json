@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yedeya-labs/kanon/blob/main/docs/notify/message-v1.schema.json",
+  "title": "kanon-notify message, version 1",
+  "description": "A Kanon notification, version 1 (plan 0011 §3.1). Generated from scripts/lib/notify-contract.mjs; do not edit. Lengths count Unicode code points. It states every rule of the validator but the two whole-message limits in x-kanon-whole-message, which a JSON Schema cannot sum: every string in the message together, and the message as UTF-8 JSON.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "description": "The contract's version.",
+      "type": "integer",
+      "const": 1
+    },
+    "kind": {
+      "description": "What the message is; its kind chose the secret it is posted with.",
+      "type": "string",
+      "enum": [
+        "project-digest",
+        "weekly-digest",
+        "deploy"
+      ]
+    },
+    "severity": {
+      "description": "How much it matters.",
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "critical"
+      ]
+    },
+    "title": {
+      "description": "Plain text, one line.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[^\\r\\n\\u2028\\u2029]*$"
+    },
+    "summary": {
+      "description": "Kanon text: what a person must know if they read nothing else; the notification preview.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "sections": {
+      "description": "The body, in order.",
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "description": "One section.",
+        "type": "object",
+        "properties": {
+          "heading": {
+            "description": "Plain text, one line; optional.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 150,
+            "pattern": "^[^\\r\\n\\u2028\\u2029]*$"
+          },
+          "body": {
+            "description": "Kanon text.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2500
+          },
+          "fields": {
+            "description": "Short label and value pairs.",
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "description": "One label and its value.",
+              "type": "object",
+              "properties": {
+                "label": {
+                  "description": "Plain text, one line.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100,
+                  "pattern": "^[^\\r\\n\\u2028\\u2029]*$"
+                },
+                "value": {
+                  "description": "Plain text; may hold line breaks.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1800
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "links": {
+      "description": "Links shown after the body.",
+      "type": "array",
+      "maxItems": 9,
+      "items": {
+        "description": "One link.",
+        "type": "object",
+        "properties": {
+          "label": {
+            "description": "Plain text, one line.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 75,
+            "pattern": "^[^\\r\\n\\u2028\\u2029]*$"
+          },
+          "url": {
+            "description": "An https:// URL.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "pattern": "^https:\\/\\/[^\\s\\u0000-\\u001f\\u007f]+$"
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "source": {
+      "description": "Where it came from: a hook may show it, route by it, or ignore it.",
+      "type": "object",
+      "properties": {
+        "repository": {
+          "description": "owner/name.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}\\/[A-Za-z0-9._-]{1,100}$"
+        },
+        "lane": {
+          "description": "The Kanon lane that produced it.",
+          "type": "string",
+          "enum": [
+            "project-digest",
+            "weekly-digest",
+            "deploy"
+          ]
+        },
+        "run_url": {
+          "description": "The producing run's https:// URL.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "pattern": "^https:\\/\\/[^\\s\\u0000-\\u001f\\u007f]+$"
+        }
+      },
+      "required": [
+        "repository",
+        "lane",
+        "run_url"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "severity",
+    "title",
+    "summary",
+    "source"
+  ],
+  "additionalProperties": false,
+  "x-kanon-whole-message": {
+    "maxChars": 12000,
+    "maxJsonBytes": 65536
+  }
+}
