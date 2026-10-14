@@ -343,6 +343,34 @@ export function maintainersOf(text) {
 }
 
 /**
+ * Who started this attempt of the run: the person who clicked "Re-run" (`GITHUB_TRIGGERING_ACTOR`),
+ * else the run's actor. On a re-run `GITHUB_ACTOR` stays whoever started the first attempt, so a
+ * re-run of the Maintainer's dispatch would otherwise read as the Maintainer's (as
+ * `scripts/lane-gate.mjs` reads it, `K-AGENT-45`).
+ * @param {Record<string, string | undefined>} env
+ */
+export const attemptActor = (env) => String(env.GITHUB_TRIGGERING_ACTOR || env.GITHUB_ACTOR || '');
+
+/**
+ * Under a fallback marker, production is deployed only by the Maintainer the adoption record's
+ * `## People` names (plan 0010 §13): `null` when this attempt's actor is one, else the refusal.
+ * Its code, `not-maintainer`, reaches `DEPLOY_REFUSALS` only with PR #901 (kanon#899), not merged
+ * yet: until it does, the job refuses, the report announces it, and no row is written.
+ * @param {{ repo: string, sha: string, fallback: string | null, env: Record<string, string | undefined>, api: Api }} o
+ * @returns {{ code: 'not-maintainer', message: string } | null}
+ */
+export function maintainerCheck({ repo, sha, fallback, env, api }) {
+  const record = String(api(`repos/${repo}/contents/${ADOPTION_RECORD}?ref=${sha}`, { raw: true }));
+  const maintainers = maintainersOf(record);
+  const actor = attemptActor(env);
+  if (maintainers.some((m) => m.toLowerCase() === actor.toLowerCase())) return null;
+  return {
+    code: 'not-maintainer',
+    message: `under the \`${fallback}\` fallback only the Maintainer (${maintainers.length ? maintainers.map((m) => `@${m}`).join(', ') : 'none named in the adoption record\'s `## People`'}) may deploy production, by dispatch; this attempt was started by @${actor || 'unknown'}`,
+  };
+}
+
+/**
  * The environment job's declaration check: the release, then this environment at this position.
  * @param {Record<string, string | undefined>} env
  * @param {{ api?: Api }} [deps]
@@ -382,14 +410,12 @@ export function environmentCheck(env, { api = ghApi } = {}) {
         outputs.held = 'true';
         return { ok: true, outputs, line: `\`${environment}\` is production under the \`${declared.fallback}\` fallback: held. It waits for the Maintainer's dispatch of this release (\`gh workflow run <caller> --ref ${release.tag} -f release=${release.tag}\`).` };
       }
-      const record = String(api(`repos/${repo}/contents/${ADOPTION_RECORD}?ref=${release.sha}`, { raw: true }));
-      const maintainers = maintainersOf(record);
-      const actor = String(env.GITHUB_ACTOR ?? '');
-      if (!maintainers.some((m) => m.toLowerCase() === actor.toLowerCase())) {
-        // The row's refusal code for this is `not-maintainer`, added to `DEPLOY_REFUSALS` by PR #901 (kanon#899), not merged yet: the
-        // job refuses, the report announces it, and no row is written until the code exists.
-        outputs.unauthorized = 'not-maintainer';
-        return { ok: false, refusal: '', message: `under the \`${declared.fallback}\` fallback only the Maintainer (${maintainers.length ? maintainers.map((m) => `@${m}`).join(', ') : 'none named in the adoption record\'s `## People`'}) may deploy production, by dispatch; this run's actor is @${actor || 'unknown'}`, outputs };
+      // Refused here, before any approval wait, and again in the `deploy` job itself, which is
+      // what a "Re-run failed jobs" re-runs with `declare`'s outputs reused (`maintainerCheck`).
+      const m = maintainerCheck({ repo, sha: release.sha, fallback: declared.fallback, env, api });
+      if (m) {
+        outputs.unauthorized = m.code;
+        return { ok: false, refusal: '', message: m.message, outputs };
       }
     }
     return { ok: true, outputs, line: `\`${environment}\` is environment ${position} of ${count}, ${outputs.role}${outputs.environment ? '' : ', deployed with no GitHub environment (the `no-environments` fallback)'}.` };
@@ -426,6 +452,29 @@ export function supersede({ repo, environment, sha, trigger, api = ghApi }) {
   return {
     ok: false, refusal: 'superseded', redeploy, rollback: false,
     message: `\`${sha.slice(0, 12)}\` is older than \`${environment}\`'s last successful deploy, \`${String(last.sha).slice(0, 12)}\`: a release never rolls an environment back unasked; dispatch the lane with this release to roll back`,
+  };
+}
+
+/**
+ * The `deploy` job's own checks, once it holds its slot and its approval: under a fallback marker,
+ * production's Maintainer check, for whoever started THIS attempt, so a "Re-run failed jobs" that
+ * reuses `declare`'s outputs still meets it; then the supersede check.
+ * @param {Record<string, string | undefined>} env  ENVIRONMENT, SHA, FALLBACK, ROLE, and the runner's
+ * @param {{ api?: Api }} [deps]
+ * @returns {{ ok: boolean, outputs: Record<string, string>, message: string, title: string, code: string }}
+ */
+export function deployCheck(env, { api = ghApi } = {}) {
+  const repo = String(env.GITHUB_REPOSITORY);
+  const sha = env.SHA ?? '';
+  if (env.FALLBACK && env.ROLE === ROLES.production) {
+    const m = maintainerCheck({ repo, sha, fallback: env.FALLBACK, env, api });
+    if (m) return { ok: false, outputs: { unauthorized: m.code }, message: m.message, title: 'Deploy production', code: m.code };
+  }
+  const r = supersede({ repo, environment: env.ENVIRONMENT ?? '', sha, trigger: env.GITHUB_EVENT_NAME ?? '', api });
+  return {
+    ok: r.ok,
+    outputs: { redeploy: String(r.redeploy), rollback: String(r.rollback), ...(r.refusal ? { refusal: r.refusal } : {}) },
+    message: r.message, title: 'Deploy superseded', code: r.refusal ?? '',
   };
 }
 
@@ -479,12 +528,12 @@ if (isCliEntry(import.meta.url)) {
     else if (r.refusal) refuse('Deploy declaration', r.refusal, r.message);
     else refuse('Deploy production', 'not-maintainer', r.message);
   } else if (command === 'supersede') {
-    const r = supersede({ repo: String(env.GITHUB_REPOSITORY), environment: env.ENVIRONMENT ?? '', sha: env.SHA ?? '', trigger: env.GITHUB_EVENT_NAME ?? '' });
-    writeOutputs({ redeploy: String(r.redeploy), rollback: String(r.rollback), ...(r.refusal ? { refusal: r.refusal } : {}) });
+    const r = deployCheck(env);
+    writeOutputs(r.outputs);
     if (r.ok) summary(r.message);
-    else refuse('Deploy superseded', /** @type {string} */ (r.refusal), r.message);
+    else refuse(r.title, r.code, r.message);
   } else {
-    console.error('usage: deploy-gate.mjs gate | probe | declaration | supersede');
+    console.error('usage: deploy-gate.mjs gate | probe | declare | supersede');
     process.exitCode = 2;
   }
 }

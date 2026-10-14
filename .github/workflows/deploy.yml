@@ -14,8 +14,9 @@
 # job serves both). And THE HOLD (kanon#894): under either fallback marker, on a `release` run,
 # the last environment is `held`, its deploy job skipped, no row written and no issue touched;
 # the run's summary says production waits for the Maintainer's dispatch, which `declare` admits
-# only from the Maintainer the record's `## People` names. The hold lives here, not in the
-# caller, so the caller `kanon init` writes is the same with or without a fallback.
+# only when the Maintainer the record's `## People` names started the attempt; `deploy` checks it
+# again, for a re-run of the failed jobs. The hold lives here, not in the caller, so the caller
+# `kanon init` writes is the same with or without a fallback.
 #
 # THE DEPLOY JOB sets `environment:`, so GitHub runs it only after the environment's protection
 # rules pass, and its OIDC token's subject is `…:environment:<name>`, which each environment's
@@ -81,7 +82,8 @@ jobs:
           DISPATCH_RELEASE: ${{ github.event.inputs.release }}
           ENVIRONMENT: ${{ inputs.environment }}
           POSITION: ${{ inputs.position }}
-        # The dispatch's actor is the runner's own `GITHUB_ACTOR`, which a workflow can't override.
+        # The actor checked is whoever started this attempt: the runner's own
+        # `GITHUB_TRIGGERING_ACTOR`, else `GITHUB_ACTOR`. The `deploy` job checks it again.
         run: node "$KANON/scripts/deploy-gate.mjs" declare
 
   deploy:
@@ -102,6 +104,7 @@ jobs:
     outputs:
       started-at: ${{ steps.start.outputs.at }}
       refusal: ${{ steps.supersede.outputs.refusal }}
+      unauthorized: ${{ steps.supersede.outputs.unauthorized }}
       redeploy: ${{ steps.supersede.outputs.redeploy }}
       rollback: ${{ steps.supersede.outputs.rollback }}
       deploy-started-at: ${{ steps.before-deploy.outputs.at }}
@@ -114,12 +117,17 @@ jobs:
         id: start
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - uses: $/actions/kanon-path
-      - name: Refuse an older commit than the last successful deploy
+      # Under a fallback marker, production's Maintainer check, again, for whoever started THIS
+      # attempt: a "Re-run failed jobs" re-runs this job with `declare`'s outputs reused. Then the
+      # supersede check.
+      - name: Refuse a non-Maintainer's production attempt, and an older commit than the last deploy
         id: supersede
         env:
           GH_TOKEN: ${{ github.token }}
           ENVIRONMENT: ${{ inputs.environment }}
           SHA: ${{ needs.declare.outputs.sha }}
+          FALLBACK: ${{ needs.declare.outputs.fallback }}
+          ROLE: ${{ needs.declare.outputs.role }}
         run: node "$KANON/scripts/deploy-gate.mjs" supersede
       - uses: actions/checkout@v7
         with:

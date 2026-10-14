@@ -575,7 +575,7 @@ export function isDeployEnvJob(file: string | undefined, name: string, j: Job): 
   return steps.length === 9
     && runs(steps[0]) === MARK
     && runs(steps[1]) === '$/actions/kanon-path'
-    && runs(steps[2]) === 'node "$KANON/scripts/deploy-gate.mjs" supersede' && only(steps[2]!.env, ['GH_TOKEN', 'ENVIRONMENT', 'SHA'])
+    && runs(steps[2]) === 'node "$KANON/scripts/deploy-gate.mjs" supersede' && only(steps[2]!.env, ['GH_TOKEN', 'ENVIRONMENT', 'SHA', 'FALLBACK', 'ROLE'])
     && checkoutOf(steps[3], '${{ needs.declare.outputs.sha }}')
     && runs(steps[4]) === MARK
     && hook?.uses === './.github/actions/deploy' && hook.with?.probe === 'false' && JSON.stringify(hook.env) === JSON.stringify(DEPLOY_SECRET)

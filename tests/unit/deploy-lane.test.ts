@@ -28,7 +28,7 @@ const LANE = [RELEASE, ENV];
 type Step = { id?: string; name?: string; uses?: string; run?: string; if?: string; with?: Record<string, unknown>; env?: Record<string, unknown> };
 type Job = {
   name?: string; needs?: string | string[]; if?: string; uses?: string; environment?: unknown; permissions?: Record<string, string> | string;
-  concurrency?: { group?: string; 'cancel-in-progress'?: boolean; queue?: string } | string; steps?: Step[]; secrets?: unknown; with?: Record<string, unknown>;
+  concurrency?: { group?: string; 'cancel-in-progress'?: boolean; queue?: string } | string; steps?: Step[]; secrets?: unknown; with?: Record<string, unknown>; outputs?: Record<string, string>;
 };
 type Workflow = { on?: { workflow_call?: { inputs?: Record<string, unknown>; secrets?: Record<string, unknown> } }; permissions?: unknown; jobs: Record<string, Job> };
 
@@ -105,6 +105,12 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
     if (hook?.with?.role !== '${{ needs.declare.outputs.role }}') out.push(`${ENV}:deploy: the role is not the one the declaration derives`);
     if (hook?.with?.probe !== 'false') out.push(`${ENV}:deploy: the deploy hook is not told it deploys`);
     if (dep.if !== "needs.declare.outputs.held == 'false'") out.push(`${ENV}:deploy: runs when declare holds production (kanon#894)`);
+    // The deploy job's own Maintainer check, which a "Re-run failed jobs" re-runs (#906's review).
+    const check = (dep.steps ?? []).find((s) => s.id === 'supersede');
+    if (check?.env?.FALLBACK !== '${{ needs.declare.outputs.fallback }}' || check?.env?.ROLE !== '${{ needs.declare.outputs.role }}') {
+      out.push(`${ENV}:deploy: the deploy job's own check isn't handed the fallback and the role, so a re-run skips the Maintainer check`);
+    }
+    if (!dep.outputs || !('unauthorized' in (dep.outputs as object))) out.push(`${ENV}:deploy: doesn't output its Maintainer refusal for record and report`);
   }
   const declare = w[ENV]?.jobs.declare;
   if (declare && JSON.stringify(declare.permissions) !== '{"contents":"read"}') out.push(`${ENV}:declare: holds more than contents: read`);
@@ -190,6 +196,11 @@ describe('the deploy lane holds its shape', () => {
       red((w) => { (job(w, ENV, 'deploy') as Record<string, unknown>).env = { KANON_DEPLOY_SECRET: ALLOWED_SECRET }; }, /references a secret outside a step/);
     });
     it('the probe run under the `no-environments` marker', () => red((w) => { delete job(w, RELEASE, 'probe').if; }, /runs under the no-environments marker/));
+    it("the deploy job's own Maintainer check not handed the fallback or the role, or its refusal not output", () => {
+      red((w) => { delete step(job(w, ENV, 'deploy'), 'supersede').env!.FALLBACK; }, /a re-run skips the Maintainer check/);
+      red((w) => { delete step(job(w, ENV, 'deploy'), 'supersede').env!.ROLE; }, /a re-run skips the Maintainer check/);
+      red((w) => { delete (job(w, ENV, 'deploy') as { outputs: Record<string, string> }).outputs.unauthorized; }, /doesn't output its Maintainer refusal/);
+    });
     it('the deploy job run whatever `declare` holds', () => red((w) => { delete job(w, ENV, 'deploy').if; }, /runs when declare holds production/));
     it("the hold moved into the caller: a fallback input on deploy.yml", () => red((w) => { w[ENV]!.on!.workflow_call!.inputs!.fallback = { type: 'string' }; }, /not the environment and its position alone/));
     it("a workflow calling `deploy.yml` added to Kanon's `.github/workflows/`", () => {
@@ -428,7 +439,12 @@ describe("deploy-report.mjs: one issue per environment (plan 0010 §8, decision 
     expect(reportFrom({ NEEDS: JSON.stringify(held), ENVIRONMENT: 'production', POSITION: '2' }, 'environment')).toBeNull();
     const refused = { declare: { result: 'failure', outputs: { role: 'production', unauthorized: 'not-maintainer' } }, deploy: { result: 'skipped' }, record: { result: 'success', outputs: { written: 'false' } } };
     expect(reportFrom({ NEEDS: JSON.stringify(refused), ENVIRONMENT: 'production', POSITION: '2' }, 'environment'))
-      .toMatchObject({ outcome: 'refused', refusal: 'not-maintainer', role: 'production' });
+      .toMatchObject({ outcome: 'refused', refusal: 'not-maintainer', role: 'production', failed_stage: 'deploy' });
+    // A "Re-run failed jobs" by a non-Maintainer: `declare`'s outputs are reused and `deploy`'s own check refuses.
+    const rerun = { declare: { result: 'success', outputs: { role: 'production', held: 'false', fallback: 'no-reviewers' } }, deploy: { result: 'failure', outputs: { 'started-at': T(1), unauthorized: 'not-maintainer' } }, record: { result: 'success', outputs: { written: 'false' } } };
+    expect(reportFrom({ NEEDS: JSON.stringify(rerun), ENVIRONMENT: 'production', POSITION: '2' }, 'environment'))
+      .toMatchObject({ outcome: 'refused', refusal: 'not-maintainer', failed_stage: 'deploy' });
+    expect(environmentRow({ ...RUN, NEEDS: JSON.stringify(rerun), ENVIRONMENT: 'production', POSITION: '2' }, { api: () => [] })).toBeNull();
   });
 
   it("an environment's report reads the record's outcome, which saw the approvals, and the declaration's role", () => {

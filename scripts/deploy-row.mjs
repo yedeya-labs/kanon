@@ -177,12 +177,14 @@ export function releaseRow(env, { now = new Date() } = {}) {
  *   • HELD (kanon#894): production on a `release` run under a fallback marker waits for the
  *     Maintainer's dispatch. It is neither a deploy nor a failure, so a row would only distort
  *     the production metrics; the dispatch writes production's one row.
- *   • A production dispatch by anyone but the Maintainer under a marker, refused by `declare`:
+ *   • A production attempt by anyone but the Maintainer under a marker, refused by `declare` or,
+ *     on a re-run of the failed jobs, by the `deploy` job's own check:
  *     its refusal code, `not-maintainer`, reaches `DEPLOY_REFUSALS` only with PR #901 (kanon#899), so no row until that merges. The
  *     report still announces it.
- * @param {JobResult | undefined} declare
+ * @param {JobResult | undefined} declare @param {JobResult | undefined} [deploy]
  */
-export const heldOrUnrecorded = (declare) => declare?.outputs?.held === 'true' || Boolean(declare?.outputs?.unauthorized);
+export const heldOrUnrecorded = (declare, deploy) => declare?.outputs?.held === 'true'
+  || Boolean(declare?.outputs?.unauthorized) || Boolean(deploy?.outputs?.unauthorized);
 
 /**
  * An environment record's row: one, or `null` when it is held or awaits its refusal code.
@@ -193,7 +195,7 @@ export function environmentRow(env, { now = new Date(), api = ghApi } = {}) {
   const needs = /** @type {{ declare?: JobResult, deploy?: JobResult }} */ (JSON.parse(env.NEEDS || '{}'));
   const repo = String(env.GITHUB_REPOSITORY);
   const environment = String(env.ENVIRONMENT ?? '');
-  if (heldOrUnrecorded(needs.declare)) return null;
+  if (heldOrUnrecorded(needs.declare, needs.deploy)) return null;
   const ending = classifyEnvironment({
     ...needs,
     environment,

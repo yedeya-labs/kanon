@@ -125,8 +125,11 @@ export function reportFrom(env, kind) {
   const declared = needs.declare?.outputs ?? {};
   // A held production neither files, comments nor closes (kanon#894).
   if (declared.held === 'true') return null;
-  if (declared.unauthorized) {
-    return { ...base, environment, position: Number(env.POSITION), role: ROLES.production, outcome: 'refused', failed_stage: 'gate', refusal: declared.unauthorized };
+  // A non-Maintainer's production attempt, refused by `declare` or by the `deploy` job's own check
+  // on a re-run: filed at `deploy`, the stage #899 gives `not-maintainer` (pending PR #901).
+  const unauthorized = declared.unauthorized || needs.deploy?.outputs?.unauthorized;
+  if (unauthorized) {
+    return { ...base, environment, position: Number(env.POSITION), role: ROLES.production, outcome: 'refused', failed_stage: 'deploy', refusal: unauthorized };
   }
   const ending = rec.outcome ? { outcome: rec.outcome, failed_stage: rec.stage || undefined, refusal: rec.refusal || undefined } : classifyEnvironment({ ...needs, environment });
   const role = needs.declare?.outputs?.role === ROLES.preProduction ? ROLES.preProduction : ROLES.production;

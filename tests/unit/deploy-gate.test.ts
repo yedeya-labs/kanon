@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { ApiError, environmentCheck, gate, judgeProbe, maintainersOf, PROBE_FILE, PROBE_LINE, supersede } from '../../scripts/deploy-gate.mjs';
+import { ApiError, deployCheck, environmentCheck, gate, judgeProbe, maintainersOf, PROBE_FILE, PROBE_LINE, supersede } from '../../scripts/deploy-gate.mjs';
 
 /**
  * Plan 0010 §3, §5, step D4: the deploy lane's checks, on fixtures of GitHub's answers. The gate
@@ -247,6 +247,41 @@ describe('the hold under a fallback marker (plan 0010 §13, kanon#894)', () => {
     expect(r.ok ? '' : r.message).toMatch(/only the Maintainer \(@maint\)/);
     // Without a marker the platform's reviewers gate production: no Maintainer check.
     expect(check({ ...DISPATCH, ENVIRONMENT: 'production', POSITION: '2', GITHUB_ACTOR: 'owner' }, null).ok).toBe(true);
+  });
+
+  it('refuses a non-Maintainer under `no-reviewers` too (#904)', () => {
+    const r = check({ ...DISPATCH, ENVIRONMENT: 'production', POSITION: '2', GITHUB_ACTOR: 'owner' }, 'no-reviewers');
+    expect(r.ok).toBe(false);
+    expect(r.outputs.unauthorized).toBe('not-maintainer');
+  });
+
+  it("judges whoever started this attempt: a re-run of the Maintainer's dispatch by anyone else is refused (MUTATION: reading GITHUB_ACTOR only turns this red)", () => {
+    for (const marker of ['no-environments', 'no-reviewers']) {
+      const rerun = check({ ...DISPATCH, ENVIRONMENT: 'production', POSITION: '2', GITHUB_ACTOR: 'maint', GITHUB_TRIGGERING_ACTOR: 'owner' }, marker);
+      expect(rerun.ok, marker).toBe(false);
+      expect(rerun.outputs.unauthorized, marker).toBe('not-maintainer');
+      expect(rerun.ok ? '' : rerun.message).toMatch(/started by @owner/);
+      // The Maintainer re-running their own dispatch, or one someone else started, is admitted.
+      expect(check({ ...DISPATCH, ENVIRONMENT: 'production', POSITION: '2', GITHUB_ACTOR: 'owner', GITHUB_TRIGGERING_ACTOR: 'maint' }, marker).ok, marker).toBe(true);
+    }
+  });
+
+  describe("the deploy job's own check, which a \"Re-run failed jobs\" re-runs with declare's outputs reused", () => {
+    const sup = { [`repos/${REPO}/deployments?environment=production&per_page=100`]: [] };
+    const deploy = (env: Record<string, string>) => deployCheck({ GITHUB_REPOSITORY: REPO, GITHUB_EVENT_NAME: 'workflow_dispatch', ENVIRONMENT: 'production', SHA, ...env }, { api: github({ ...marked('no-reviewers'), ...sup }).api });
+
+    it('refuses production under a marker when a non-Maintainer started this attempt, before the supersede check', () => {
+      for (const FALLBACK of ['no-environments', 'no-reviewers']) {
+        const r = deploy({ FALLBACK, ROLE: 'production', GITHUB_ACTOR: 'maint', GITHUB_TRIGGERING_ACTOR: 'owner' });
+        expect(r, FALLBACK).toMatchObject({ ok: false, outputs: { unauthorized: 'not-maintainer' }, code: 'not-maintainer' });
+      }
+    });
+
+    it("admits the Maintainer's attempt, and checks no actor without a marker or for pre-production", () => {
+      expect(deploy({ FALLBACK: 'no-reviewers', ROLE: 'production', GITHUB_ACTOR: 'owner', GITHUB_TRIGGERING_ACTOR: 'maint' })).toMatchObject({ ok: true, outputs: { redeploy: 'false', rollback: 'false' } });
+      expect(deploy({ FALLBACK: '', ROLE: 'production', GITHUB_ACTOR: 'owner' }).ok).toBe(true);
+      expect(deploy({ FALLBACK: 'no-reviewers', ROLE: 'pre-production', GITHUB_ACTOR: 'owner' }).ok).toBe(true);
+    });
   });
 
   it("reads the Maintainer's logins from the record's People table", () => {
