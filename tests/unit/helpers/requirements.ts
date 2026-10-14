@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { KIND_SECRETS, KINDS, VERSIONS } from '../../../scripts/lib/notify-contract.mjs';
 
 /**
  * Builds `requirements.json`, the requirements file each release ships (plan 0005 §5.4 and §5.5),
@@ -35,6 +36,31 @@ export const laneTree = (root: string, file: string, seen = new Set<string>()): 
   const text = readFileSync(join(root, '.github/workflows', file), 'utf8');
   const called = [...text.matchAll(/^ *uses: \$\/\.github\/workflows\/([A-Za-z0-9_.-]+\.ya?ml) *$/gm)].map((m) => m[1]!);
   return [file, ...[...new Set(called)].sort().filter((c) => !seen.has(c)).flatMap((c) => laneTree(root, c, seen))];
+};
+
+/**
+ * THE NOTIFYING LANES (plan 0011 §5.1, §9): each kind's lanes, read from the lanes' own `notify`
+ * jobs, a step `uses: $/actions/notify` whose `with: kind:` names the kind, in any file the lane
+ * runs. So a lane notifies, for doctor, from the release whose lane has the job, and not before:
+ * before plan 0011's N7 no lane has one, and every kind's list is empty.
+ * @param docs each lane's name, and the parsed workflows it runs (`laneTree`)
+ */
+export const notifyKinds = (docs: Record<string, Doc[]>) => {
+  const kinds: Record<string, { secret: string; lanes: string[] }> = Object.fromEntries(KINDS.map((k) => [k, { secret: KIND_SECRETS[k]!, lanes: [] as string[] }]));
+  for (const [lane, files] of Object.entries(docs)) {
+    for (const doc of files) {
+      for (const job of Object.values((doc.jobs ?? {}) as Record<string, Doc>)) {
+        for (const step of (job.steps ?? []) as Doc[]) {
+          if (String(step.uses ?? '').trim() !== '$/actions/notify') continue;
+          const kind = String(step.with?.kind ?? '');
+          if (!kinds[kind]) throw new Error(`${lane} calls $/actions/notify with the kind "${kind}", which is no kind of the notification contract (${KINDS.join(', ')})`);
+          if (!kinds[kind]!.lanes.includes(lane)) kinds[kind]!.lanes.push(lane);
+        }
+      }
+    }
+  }
+  for (const k of Object.values(kinds)) k.lanes.sort();
+  return kinds;
 };
 
 const comment = (text: string, key: string): string[] =>
@@ -202,6 +228,33 @@ export const buildRequirements = (root: string) => {
     declaration: { path: 'docs/qa/adoption.md', section: '## Deploy' },
     catalogue: lanesJson.deploy,
   };
+  // CHAT NOTIFICATIONS (plan 0011 §9, step N10): the hook's fixed path and the inputs the
+  // `notify` block passes it (§6.1), as Kanon's two prebuilt hooks declare them, which must agree;
+  // the contract versions this release writes; each kind's secret (`KIND_SECRETS`) and the lanes
+  // that notify it, read from their `notify` jobs; the one secret the kind secrets replace
+  // (decision 17); and the prebuilt hooks, each its Kanon action and the file `kanon init` copies.
+  // `kanon doctor` reads the release's own copy, so it checks a hook against what that release
+  // passes, and only the callers of lanes that notify at that release.
+  const prebuiltDir = join(root, 'actions/notify/hooks');
+  const prebuilt: Record<string, { action: string; hook: string }> = {};
+  const hookInputSets: string[][] = [];
+  for (const f of readdirSync(prebuiltDir).filter((x) => x.endsWith('.yml')).sort()) {
+    const doc = parse(readFileSync(join(prebuiltDir, f), 'utf8')) as Doc;
+    const steps = (doc.runs?.steps ?? []) as Doc[];
+    const action = /^yedeya-labs\/kanon\/(actions\/notify\/[a-z-]+)@/.exec(String(steps[0]?.uses ?? ''))?.[1];
+    if (steps.length !== 1 || !action) throw new Error(`actions/notify/hooks/${f} is not one step calling Kanon's own notify action`);
+    prebuilt[f.replace(/\.yml$/, '')] = { action, hook: `actions/notify/hooks/${f}` };
+    hookInputSets.push(Object.keys(doc.inputs ?? {}).sort());
+  }
+  const hookInputs0 = hookInputSets[0] ?? [];
+  if (hookInputSets.some((x) => x.join() !== hookInputs0.join())) throw new Error("Kanon's prebuilt notify hooks declare different inputs");
+  const notify = {
+    hook: { path: '.github/actions/notify/action.yml', inputs: hookInputs0 },
+    versions: [...VERSIONS],
+    kinds: notifyKinds(Object.fromEntries(laneFiles(root).map((f) => [f.replace(/\.yml$/, ''), laneTree(root, f).map((t) => parse(readFileSync(join(root, '.github/workflows', t), 'utf8')) as Doc)]))),
+    legacySecret: 'DIGEST_WEBHOOK',
+    prebuilt,
+  };
   return {
     $comment:
       "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. `catalogue` is the lane catalogue, and `features` the fixed sets of lanes offered in place of a choice per lane (plan 0007 §2), both copied from docs/lanes.json.",
@@ -230,5 +283,6 @@ export const buildRequirements = (root: string) => {
     telemetry,
     qaStore,
     deploy,
+    notify,
   };
 };

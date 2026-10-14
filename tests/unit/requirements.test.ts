@@ -2,7 +2,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TRIGGERS } from '../../cli/callers.mjs';
-import { buildRequirements, laneFiles, laneTree } from './helpers/requirements.js';
+import { buildRequirements, laneFiles, laneTree, notifyKinds } from './helpers/requirements.js';
+import { KIND_SECRETS, VERSIONS } from '../../scripts/lib/notify-contract.mjs';
 
 /**
  * The requirements file each release ships (plan 0005 §5.4, §5.5, step L9): `requirements.json`
@@ -67,6 +68,24 @@ describe('requirements.json', () => {
     // Not an agent lane: no catalogue lane, no feature.
     expect(Object.keys(built.lanes as object)).not.toContain('deploy');
     expect(Object.keys(built.catalogue as object)).not.toContain('deploy');
+  });
+
+  it("names the notify hook, its inputs, the versions, each kind's secret and its lanes, the secret they replace and the prebuilt hooks (plan 0011 §9, N10)", () => {
+    // `kanon doctor` checks the hook and the notifying callers from this entry, at the checked release.
+    const notify = built.notify as { hook: object; versions: number[]; kinds: Record<string, { secret: string; lanes: string[] }>; legacySecret: string; prebuilt: object };
+    expect(notify.hook).toEqual({ path: '.github/actions/notify/action.yml', inputs: ['kind', 'message-v1', 'secret', 'text'] });
+    expect(notify.versions).toEqual([...VERSIONS]);
+    expect(Object.fromEntries(Object.entries(notify.kinds).map(([k, v]) => [k, v.secret]))).toEqual(KIND_SECRETS);
+    expect(notify.legacySecret).toBe('DIGEST_WEBHOOK');
+    expect(notify.prebuilt).toEqual({
+      slack: { action: 'actions/notify/slack', hook: 'actions/notify/hooks/slack.yml' },
+      webhook: { action: 'actions/notify/webhook', hook: 'actions/notify/hooks/webhook.yml' },
+    });
+    // A lane notifies from the release whose lane has a `notify` job, read from that job alone.
+    const job = (kind: string) => ({ jobs: { digest: { steps: [{ run: 'x' }] }, notify: { steps: [{ uses: '$/actions/notify', with: { kind } }] } } });
+    const kinds = notifyKinds({ 'agent-project-digest': [job('project-digest')], 'agent-weekly-digest': [{ jobs: {} }, job('weekly-digest')], 'agent-review': [{ jobs: { a: { steps: [{ uses: '$/actions/other', with: { kind: 'deploy' } }] } } }] });
+    expect(Object.fromEntries(Object.entries(kinds).map(([k, v]) => [k, v.lanes]))).toEqual({ 'project-digest': ['agent-project-digest'], 'weekly-digest': ['agent-weekly-digest'], deploy: [] });
+    expect(() => notifyKinds({ 'agent-x': [job('health')] })).toThrow(/no kind of the notification contract/);
   });
 
   it('names the repository variables a lane reads and a repository may leave unset: the backlog feeder\'s (#609)', () => {

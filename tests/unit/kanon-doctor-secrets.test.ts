@@ -185,8 +185,8 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
   // #625: a real secret's line reads standard input, so the fix sends it to the person's own
   // terminal, never `!` at the Claude Code prompt, or to a file.
   it("sends a real secret's gh secret set to the person's own terminal or a file, never `!` (#625)", async () => {
-    const r = await l5(new Set([...all()].filter((n) => !['CLAUDE_CODE_OAUTH_TOKEN', 'DIGEST_WEBHOOK'].includes(n))), { '.github/workflows/digest.yml': ['name: Digest', 'on: push', 'jobs:', '  post:', '    runs-on: ubuntu-latest', '    env:', '      HOOK: ${{ secrets.DIGEST_WEBHOOK }}', '    steps:', '      - run: "true"', ''].join('\n') });
-    const real = missing(r).filter((f: { message: string }) => /^lacks (CLAUDE_CODE_OAUTH_TOKEN|DIGEST_WEBHOOK)\b/.test(f.message));
+    const r = await l5(new Set([...all()].filter((n) => !['CLAUDE_CODE_OAUTH_TOKEN', 'KANON_AGGREGATE_ROLE'].includes(n))), { '.github/workflows/digest.yml': ['name: Digest', 'on: push', 'jobs:', '  post:', '    runs-on: ubuntu-latest', '    env:', '      HOOK: ${{ secrets.KANON_AGGREGATE_ROLE }}', '    steps:', '      - run: "true"', ''].join('\n') });
+    const real = missing(r).filter((f: { message: string }) => /^lacks (CLAUDE_CODE_OAUTH_TOKEN|KANON_AGGREGATE_ROLE)\b/.test(f.message));
     expect(real.length).toBe(2);
     for (const f of real) {
       expect(f.fix.text, f.message).toMatch(/in your own terminal/);
@@ -214,9 +214,9 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
   it('counts a lane reached by `$/`, which doctor does not read as a caller, and its lane secret too', async () => {
     const files = healthyFiles();
     delete files['.github/workflows/agent-review.yml'];
-    const local = callerFile('agent-review', REQ.lanes['agent-review']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }).replace(`yedeya-labs/kanon/.github/workflows/agent-review.yml@${PINNED}`, '$/.github/workflows/agent-review.yml').replace(/^( {4}secrets:\n)/m, '$1      DIGEST_WEBHOOK: ${{ secrets.DIGEST_WEBHOOK }}\n');
+    const local = callerFile('agent-review', REQ.lanes['agent-review']!, { release: PINNED, ciName: 'CI', defaultBranch: 'main' }).replace(`yedeya-labs/kanon/.github/workflows/agent-review.yml@${PINNED}`, '$/.github/workflows/agent-review.yml').replace(/^( {4}secrets:\n)/m, '$1      KANON_AGGREGATE_ROLE: ${{ secrets.KANON_AGGREGATE_ROLE }}\n');
     const dir = checkout({ ...files, '.github/workflows/local-review.yml': local });
-    const secrets = new Set([...all()].filter((n) => ![...appSecrets('judge'), ...appSecrets('releaser'), 'DIGEST_WEBHOOK'].includes(n)));
+    const secrets = new Set([...all()].filter((n) => ![...appSecrets('judge'), ...appSecrets('releaser'), 'KANON_AGGREGATE_ROLE'].includes(n)));
     const r = await run(dir, fakeGitHub({ secrets }), ['--json']);
     expect(r.json.lanes).toEqual(['agent-code-audit']);
     expect(ids(r).filter((x: string) => x.startsWith('secret.'))).toEqual([`secret.missing ${REPO}`, `secret.missing ${REPO}`]);
@@ -225,20 +225,20 @@ describe('kanon doctor and the secrets a caller maps at the checked release (#41
     // No lane doctor reads runs as the Judge, so its slug is the register's own row.
     expect(r.json.apps.map((a: { identity: string }) => a.identity)).toEqual(['author']);
     expect(judgeFinding.fix.commands).toEqual([preflight, 'kanon apps --owner acme --repo widgets --reuse judge:widgets-judge@<App ID>=<downloaded>.pem']);
-    expect(digest.message).toBe('lacks DIGEST_WEBHOOK: .github/workflows/local-review.yml maps it.');
-    expect(digest.fix.commands).toEqual([`gh secret set DIGEST_WEBHOOK -R ${REPO}`]);
+    expect(digest.message).toBe('lacks KANON_AGGREGATE_ROLE: .github/workflows/local-review.yml maps it.');
+    expect(digest.fix.commands).toEqual([`gh secret set KANON_AGGREGATE_ROLE -R ${REPO}`]);
   });
 
-  it("doesn't ask for a secret a reusable workflow only takes from its caller, as a lane's own definition does (Kanon's DIGEST_WEBHOOK)", async () => {
-    const definition = (declares: boolean) => ['name: Digest', 'on:', '  workflow_call:', ...(declares ? ['    secrets:', '      digest_webhook: # GitHub reads a secret name in any case', '        required: true'] : []), '  schedule:', '    - cron: "0 9 * * 1"',
-      'jobs:', '  post:', '    runs-on: ubuntu-latest', '    env:', '      HOOK: ${{ secrets.DIGEST_WEBHOOK }}', '    steps:', '      - run: "true"', ''].join('\n');
+  it("doesn't ask for a secret a reusable workflow only takes from its caller, as a lane's own definition does (a lane secret)", async () => {
+    const definition = (declares: boolean) => ['name: Digest', 'on:', '  workflow_call:', ...(declares ? ['    secrets:', '      kanon_aggregate_role: # GitHub reads a secret name in any case', '        required: true'] : []), '  schedule:', '    - cron: "0 9 * * 1"',
+      'jobs:', '  post:', '    runs-on: ubuntu-latest', '    env:', '      HOOK: ${{ secrets.KANON_AGGREGATE_ROLE }}', '    steps:', '      - run: "true"', ''].join('\n');
     expect(ids(await l5(all(), { '.github/workflows/digest.yml': definition(true) }))).toEqual([]);
-    const secrets = new Set([...all()].filter((n) => n !== 'DIGEST_WEBHOOK'));
+    const secrets = new Set([...all()].filter((n) => n !== 'KANON_AGGREGATE_ROLE'));
     expect(ids(await l5(secrets, { '.github/workflows/digest.yml': definition(true) }))).toEqual([]);
     // Mutation: the same job, in a workflow that doesn't declare it takes the secret, reads the repository's.
     const r = await l5(secrets, { '.github/workflows/digest.yml': definition(false) });
     expect(ids(r)).toEqual([`secret.missing ${REPO}`]);
-    expect(r.json.findings[0].message).toBe('lacks DIGEST_WEBHOOK: .github/workflows/digest.yml maps it.');
+    expect(r.json.findings[0].message).toBe('lacks KANON_AGGREGATE_ROLE: .github/workflows/digest.yml maps it.');
   });
 
   it("reports no secret that is not Kanon's, nor one of a per-role App the checked release has no more", async () => {

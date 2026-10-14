@@ -1388,5 +1388,44 @@
       "minutes": "Not measured: Kanon's own repository deploys nothing and calls no deploy lane.",
       "when": "When the repository deploys a system from its releases. It is not one of the features: an adopter that declares no environment has no deploy lane."
     }
+  },
+  "notify": {
+    "hook": {
+      "path": ".github/actions/notify/action.yml",
+      "inputs": [
+        "kind",
+        "message-v1",
+        "secret",
+        "text"
+      ]
+    },
+    "versions": [
+      1
+    ],
+    "kinds": {
+      "project-digest": {
+        "secret": "KANON_CHAT_PROJECT_DIGEST",
+        "lanes": []
+      },
+      "weekly-digest": {
+        "secret": "KANON_CHAT_WEEKLY_DIGEST",
+        "lanes": []
+      },
+      "deploy": {
+        "secret": "KANON_CHAT_DEPLOY",
+        "lanes": []
+      }
+    },
+    "legacySecret": "DIGEST_WEBHOOK",
+    "prebuilt": {
+      "slack": {
+        "action": "actions/notify/slack",
+        "hook": "actions/notify/hooks/slack.yml"
+      },
+      "webhook": {
+        "action": "actions/notify/webhook",
+        "hook": "actions/notify/hooks/webhook.yml"
+      }
+    }
   }
 }
