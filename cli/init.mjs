@@ -1374,7 +1374,7 @@ export const reuseQuestion = (found, req) => {
  * erase it, from plan 0002 and docs/telemetry.md.
  */
 export const TELEMETRY_QUESTION =
-  "Send this repository's agent-run and work-item rows to Kanon's hosted telemetry store? One row per lane run: plan 0002's fixed fields (lane, outcome, model, cost, tokens, durations, counts, the run, pull request and issue numbers, the Kanon release). One row per closed pull request: plan 0003's fields (sizes, times, outcome, actor classes, pull request and issue numbers). The rows hold no code, no text, no titles, no logins or file paths. They go to one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, and are kept 13 months. Kanon's operator reads them to improve Kanon: Kanon notices failures it caused in your runs, often fixing them before you would report one, and you get cross-adopter cost and reliability baselines. The operator publishes only aggregates of at least three adopters; your repository's own reader role reads only its rows. Stop by deleting .github/workflows/telemetry.yml; the operator erases what was sent on request (docs/telemetry.md, \"Erase an adopter\").";
+  "Send this repository's agent-run and work-item rows to Kanon's hosted telemetry store? One row per lane run: plan 0002's fixed fields (lane, outcome, model, cost, tokens, durations, counts, the run, pull request and issue numbers, the Kanon release). One row per closed pull request: plan 0003's fields (sizes, times, outcome, actor classes, pull request and issue numbers). The rows hold no code, no text, no titles, no logins or file paths. They go to one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, and are kept 13 months. Kanon's operator reads them to improve Kanon: Kanon notices failures it caused in your runs, often fixing them before you would report one, and you get cross-adopter cost and reliability baselines. The operator publishes only aggregates of at least three adopters; your repository reads only its own rows. Nothing else is asked: the collector registers this repository on its first run, without an issue or a variable. Stop by deleting .github/workflows/telemetry.yml; to erase what was sent, first dispatch it with erase: yes (docs/sharing.md, \"Stop and erase\").";
 
 /**
  * The answers `askAll` gives, with where each came from (`why`, by its `.answers` field) and the
@@ -1385,33 +1385,6 @@ export const TELEMETRY_QUESTION =
  *   upstreamEvidence: boolean | null, reviewTrigger: 'labelled' | null, sensitiveData: boolean | null, consent: Consent | null,
  *   claudeAuth: ClaudeAuth, why: Record<string, Why>, notes: string[] }} Answers
  */
-
-/** The repository variables the telemetry collector's caller passes (docs/telemetry.md). */
-export const TELEMETRY_VARIABLES = ['KANON_TELEMETRY_URL', 'KANON_TELEMETRY_WRITER_ROLE'];
-
-/** Where an adopter asks Kanon's operator to register a repository with the telemetry store. */
-export const TELEMETRY_REGISTRATION_URL = 'https://github.com/yedeya-labs/kanon/issues/new?template=telemetry-registration.yml';
-
-/**
- * The step left to a person once the collector's caller is written: the operator registers the
- * repository and gives the two variables' values. `init` and `doctor` print the same one.
- * @param {string} repo @param {string[]} unset the variables not set @param {boolean} readable whether the token could list them
- */
-export const telemetryStep = (repo, unset, readable) => ({
-  id: 'telemetry.register',
-  category: 'telemetry',
-  subject: repo,
-  prose: `Ask Kanon's operator to register ${repo} with the telemetry store (an issue from the template below; it names the repository publicly), then set the two variables the operator gives you:`,
-  message: readable
-    ? `${repo} calls Kanon's telemetry collector, and ${unset.join(' and ')} ${unset.length > 1 ? 'are' : 'is'} not set, so it sends nothing yet: the collector skips with a warning.`
-    : `${repo} calls Kanon's telemetry collector, and the token can't list its variables, so whether ${TELEMETRY_VARIABLES.join(' and ')} are set is not known; until both are, it sends nothing.`,
-  text: "The store's register entry and the two variables' values are Kanon's operator's to give (docs/telemetry.md, \"Add a repository\"): ask for them with the telemetry registration issue, then set both variables.",
-  commands: [
-    `gh variable set KANON_TELEMETRY_URL -R ${repo} --body '<the URL the operator gives you>'`,
-    `gh variable set KANON_TELEMETRY_WRITER_ROLE -R ${repo} --body '<the role ARN the operator gives you>'`,
-  ],
-  url: TELEMETRY_REGISTRATION_URL,
-});
 
 /** @param {string} who */
 const person = (who) => (/^[A-Za-z0-9-]+$/.test(who) ? `\`@${who}\`` : who);
@@ -1720,11 +1693,11 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
   line('Review', ['reviewTrigger'], a.reviewTrigger === 'labelled' ? 'labelled: add `review:please` to a PR to get a verdict' : 'none: no review lane', why('reviewTrigger'));
   line('Data', ['sensitiveData'], a.sensitiveData === true ? 'holds private material (## Data)' : a.sensitiveData === false ? 'holds none (## Data)' : 'not declared (## Data)', why('sensitiveData'));
   const sharing = {
-    yes: 'yes: telemetry on, findings sent with evidence',
-    codes: 'codes only: telemetry on, findings sent as codes',
+    yes: "yes: telemetry on (registers on the collector's first run), findings sent with evidence",
+    codes: "codes only: telemetry on (registers on the collector's first run), findings sent as codes",
     no: 'no: nothing leaves this repo, findings drafted',
   };
-  line('Sharing', ['consent', 'telemetry', 'upstreamFindings', 'upstreamEvidence'], a.consent ? sharing[a.consent] : `custom: telemetry ${a.telemetry ? 'on' : 'off'}, findings ${a.upstreamFindings}`, why('consent'));
+  line('Sharing', ['consent', 'telemetry', 'upstreamFindings', 'upstreamEvidence'], a.consent ? sharing[a.consent] : `custom: telemetry ${a.telemetry ? "on (registers on the collector's first run)" : 'off'}, findings ${a.upstreamFindings}`, why('consent'));
   // Only where a chosen lane runs a model: the Merger, the reconciler and the sweep map neither.
   if (a.lanes.some((l) => req.lanes[l]?.claude?.length)) line('Claude', ['claudeAuth'], CLAUDE_AUTH_LINES[a.claudeAuth], why('claudeAuth'));
   const identities = appIdentities(a, req);
@@ -2222,15 +2195,9 @@ const run = async (deps, opts, req, rep) => {
     });
   }
 
-  // The telemetry store's side (#428): the register entry and the two repository variables are
-  // the Kanon operator's to give (docs/telemetry.md, "Add a repository"), so a yes leaves them as
-  // a step, until both variables are set. Until then the collector skips with a warning.
-  if (a.telemetry === true) {
-    const vars = await ghJson(deps, ['variable', 'list', '-R', repo, '--json', 'name']);
-    const have = new Set(vars.ok ? vars.json.map((/** @type {any} */ v) => String(v.name)) : []);
-    const unset = TELEMETRY_VARIABLES.filter((v) => !have.has(v));
-    if (unset.length) step(telemetryStep(repo, unset, vars.ok));
-  }
+  // The telemetry store's side (#428; plan 0008 §8, step J5): nothing. The collector's caller is
+  // the whole registration: its first default-branch run registers the repository, and `kanon
+  // doctor` reads that run afterwards (`telemetry.not-run`, `telemetry.refused`).
 
   // 4. Labels, milestones, the merge setting and the ruleset.
   out('');

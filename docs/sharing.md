@@ -20,11 +20,11 @@ A repository that maintains Kanon or a fork of it may file Kanon bugs as issues 
 
 **Where it is kept:** one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, kept 13 months ([the hosted telemetry store](telemetry.md)).
 
-**Who reads it:** Kanon's operator, to improve Kanon, who publishes only aggregates that at least three adopters contribute to. This repository's own reader role reads only its own rows. No one else reads it.
+**Who reads it:** Kanon's operator, to improve Kanon, who publishes only aggregates that at least three adopters contribute to. This repository reads only its own rows, through the store's function, which holds each repository to its own. No one else reads it.
 
 **What you get:** Kanon notices failures it caused in your runs, often fixing them before you would report one, and you get cross-adopter cost and reliability baselines ([what an adopter gets](telemetry.md)).
 
-**After a yes:** Kanon's operator registers the repository and gives the values of two repository variables. You ask by filing a registration issue, which is public and names the repository; for a name that must stay private, the issue's form says what to do instead. Until the variables are set, the collector skips, green. On a private repository each hourly run costs about an Actions minute.
+**After a yes:** nothing more. The collector's caller is the whole registration: its first run on the default branch registers this repository with the store, using the token GitHub gives the run, which proves it is Kanon's collector at a Kanon release on this repository's default branch ([plan 0008](plans/0008-self-service-registration.md) §8). No issue, no variable, no wait for Kanon's operator, and nothing names this repository in public. On a private repository each hourly run costs about an Actions minute.
 
 ## Kanon's bugs: upstream findings
 
@@ -44,4 +44,5 @@ An upstream finding is one about Kanon itself, a lane's behaviour, a guard, a ru
 
 - **Stop sending run data and findings:** delete `.github/workflows/telemetry.yml`. Nothing is sent without it.
 - **Stop sending findings, or their text, only:** change the adoption record's `Upstream findings:` bullet to `drafted`, or from `sent with evidence` to `sent`.
-- **Erase what was sent:** ask Kanon's operator, who erases it on request, run data and findings alike. It is gone from the table at once and from backups within 35 days ([erase an adopter](telemetry.md#erase-an-adopter)).
+- **Erase what was sent:** run the caller once by hand with `erase: yes` (Actions → Telemetry → Run workflow, or `gh workflow run telemetry.yml -f erase=yes`), then delete it. Run data and findings alike are refused at once and gone from the table within minutes, and from backups within 35 days; the run's summary says when they are gone ([erase an adopter](telemetry.md#erase-an-adopter)). Kanon's operator erases on request too, if you ask another way.
+- **Come back after erasing:** run the caller with `register: yes`. It registers this repository again, under a new key, and sends from then on.

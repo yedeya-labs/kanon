@@ -40,6 +40,11 @@ Written as rules `K-OBS-16`, `K-OBS-17` and `K-OBS-18` in [chapter 08](../../rul
 - **Rule 1's "the repository" is the opaque key the store files a row under.** No row kind has a field naming the repository. The store's partition key is the adopter's key and a partition name (`<key>#<lane>` for a run row), and the ingest function takes the key from its caller, never from the row (`K-OBS-16`). The "never" list is unchanged.
 - **Rule 3's default is not an adopter-owned store, because no install makes one.** Each lane run keeps its row as one of the run's artifacts, and no collector sends it anywhere, which is what the install's answer **No** gives (`K-OBS-18`, [`docs/sharing.md`](../sharing.md)). Sending telemetry to the Kanon-hosted service is still opt-in, so nothing more leaves by default.
 
+**Amended 2026-10-14, by [plan 0008](../plans/0008-self-service-registration.md) §11, from vM (the release that ships its token path): how the hosted store holds rule 5, and who erases.** No rule changes.
+- **Rule 5 is unchanged; its enforcement for the hosted store moves from IAM roles to the ingest function's token checks.** The function admits a row only from Kanon's collector at a release, on the repository's default branch, with GitHub's OIDC token, and reads each adopter's own rows under a session held to its key. Which repository is calling, and so which key, is decided by Kanon's code, not by IAM; the per-adopter writer, reader and invoker roles go at vM+1.
+- **The register leaves git** for a KMS-encrypted table in the store's account, so no pull request carries a key.
+- **Erasure is self-service.** Rule 4's "deleted on request" holds, and the request no longer needs a person: the adopter dispatches its collector's caller with `erase: yes`, or asks the operator.
+
 ## Why
 
 - **Telemetry must be safe to leave a project by construction, not by review.** Free text is how content leaks: a bail reason or an error message can quote code, and a file path reveals a project's structure. A fixed schema with reason codes closes that route.

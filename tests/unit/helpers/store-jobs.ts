@@ -334,33 +334,38 @@ export function isMaintenanceJob(j: Job): boolean {
 export const COLLECTOR_FILE = 'telemetry-collect.yml';
 export const COLLECTOR_JOB = 'collect';
 /** What the collector's script step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
-export const COLLECTOR_ENV = ['GH_TOKEN', 'KANON_TELEMETRY_URL', 'WINDOW'];
+export const COLLECTOR_ENV = ['GH_TOKEN', 'KANON_TELEMETRY_URL', 'KANON_TELEMETRY_AUDIENCE', 'LEGACY', 'WINDOW', 'ERASE', 'REGISTER'];
 const COLLECTOR_RUN = 'node "$KANON/scripts/telemetry-collect.mjs"';
-const COLLECTOR_MASK_RUN = 'node "$KANON/scripts/telemetry-collect.mjs" mask';
-/** What the masking step reads: the writer role's ARN, and nothing else (kanon#514). */
-const COLLECTOR_MASK_ENV = { ROLE: '${{ inputs.writer-role }}' };
+const COLLECTOR_CHECK_RUN = 'node "$KANON/scripts/telemetry-collect.mjs" check';
+/** What the inputs' check reads, by name: the store's inputs, whether a writer role is passed (never
+ *  its value), and the two dispatch inputs (plan 0008 J5). */
+export const COLLECTOR_CHECK_ENV = {
+  KANON_TELEMETRY_URL: '${{ inputs.url }}',
+  KANON_TELEMETRY_AUDIENCE: '${{ inputs.audience }}',
+  LEGACY: "${{ inputs.writer-role != '' }}",
+  ERASE: '${{ inputs.erase }}',
+  REGISTER: '${{ inputs.register }}',
+};
 const CREDENTIALS = /^aws-actions\/configure-aws-credentials@v\d+(\.\d+){0,2}$/;
 const only = (o: object | undefined, keys: string[]) => Object.keys(o ?? {}).every((k) => keys.includes(k));
 
 /**
- * The telemetry collector's job (plan 0002 S7): `collect` in `telemetry-collect.yml`, and only
- * when its steps are exactly Kanon's path, the step that masks the writer role's account id
- * (kanon#514), reading the role alone, the AWS credentials for the writer role, and the
- * collector script, with nothing beside them that could run other code: no job `env:`,
- * `container:`, `services:` or `defaults:` (`STORE_JOB_KEYS`), and only the script's own
- * variables on its step. The writer trusts every default-branch job that holds `id-token`
- * (docs/telemetry.md, "Who can write"), so the shape is what keeps the set to this job.
+ * The telemetry collector's job (plan 0002 S7, plan 0008 J5): `collect` in `telemetry-collect.yml`,
+ * and only when its steps are exactly Kanon's path, the check of the store's inputs before any
+ * token is minted, reading them by name, and the collector script, with nothing beside them that
+ * could run other code: no job `env:`, `container:`, `services:` or `defaults:` (`STORE_JOB_KEYS`),
+ * and only the script's own variables on its step. The store admits a token from this workflow
+ * file at a release whichever of its jobs minted it (plan 0008 §2.2), so the shape is what keeps
+ * the set to this job, and a step added to it turns the guard red.
  */
 export function isCollectorJob(file: string | undefined, name: string, j: Job): boolean {
   if (file !== COLLECTOR_FILE || name !== COLLECTOR_JOB || !only(j, STORE_JOB_KEYS)) return false;
   const steps = (j.steps ?? []) as Array<Record<string, unknown>>;
-  if (steps.length !== 4) return false;
-  const [path, mask, creds, run] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
+  if (steps.length !== 3) return false;
+  const [path, check, run] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
   return only(path, ['uses']) && path.uses === '$/actions/kanon-path'
-    && only(mask, ['name', 'env', 'run']) && String(mask.run).trim() === COLLECTOR_MASK_RUN
-    && JSON.stringify(mask.env) === JSON.stringify(COLLECTOR_MASK_ENV)
-    && only(creds, ['uses', 'with']) && CREDENTIALS.test(String(creds.uses))
-    && only(creds.with as object, ['role-to-assume', 'aws-region', 'role-session-name', 'mask-aws-account-id'])
+    && only(check, ['name', 'env', 'run']) && String(check.run).trim() === COLLECTOR_CHECK_RUN
+    && JSON.stringify(check.env) === JSON.stringify(COLLECTOR_CHECK_ENV)
     && only(run, ['name', 'env', 'run']) && String(run.run).trim() === COLLECTOR_RUN
     && only(run.env as object, COLLECTOR_ENV);
 }
