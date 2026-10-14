@@ -209,10 +209,16 @@ describe("the deploy lane's two exceptions hold only what plan 0010 §7 lets the
     expect(handed.map((s) => [s.uses, s.env])).toEqual([['./.github/actions/deploy', { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' }]]);
   });
 
-  it('no other job of the deploy lane runs the code under test', () => {
+  it('no other job of the deploy lane runs the code under test but the build, which holds nothing (step D5)', () => {
     const running = DEPLOY.flatMap((f) => Object.entries(read(join(WF, f)).jobs ?? {})
       .filter(([, j]) => (j.steps ?? []).some(runsCodeUnderTest)).map(([n]) => `${f}:${n}`));
-    expect(running).toEqual(['deploy-release.yml:probe', 'deploy.yml:deploy']);
+    expect(running).toEqual(['deploy-release.yml:probe', 'deploy-release.yml:build', 'deploy.yml:deploy']);
+    // The build runs the adopter's build hook and its dependencies with no credential at all, so
+    // it is no exception: the rule holds for it as written (plan 0010 decision 8).
+    const { wf, j } = job('deploy-release.yml', 'build');
+    expect(credentials(wf, j)).toEqual([]);
+    expect(j.permissions).toEqual({ contents: 'read' });
+    expect(Object.keys(violations(PATHS))).not.toContain('deploy-release.yml:build');
   });
 });
 

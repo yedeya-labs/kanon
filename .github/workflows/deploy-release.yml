@@ -38,16 +38,25 @@
 # record's `no-environments` marker the probe is SKIPPED (the probe decision): every role then
 # trusts the release tags' subject, which the probe's own job carries.
 #
-# THE BUILD (plan 0010 decision 8, step D5) comes next, in this file: a `build` job after the
-# gate and the probe (or the gate alone, under the marker), with no credential, running the
-# adopter's `.github/actions/build` once and uploading the artifact every environment deploys.
-# `record` and `report` then read its result too. It is not here yet: D4 and D5 ship in one
-# release, and until D5 the deploy hook's `artifact` input is empty.
+# THE BUILD (plan 0010 §4, decision 8, step D5). One build, one artifact: the `build` job runs
+# after the gate and the probe, when the gate succeeded and the probe either succeeded or was
+# skipped under the `no-environments` marker, never after a failed or cancelled probe (its `if:`
+# says so: GitHub skips a job whose need was skipped unless its `if:` lets it run). It holds
+# `contents: read` alone: no `id-token`, no secret, no environment, so the build's tools and
+# dependencies never meet a credential. It checks out the release's commit (the gate's, which on
+# a dispatch is the commit the release's tag resolves to), runs the adopter's
+# `.github/actions/build` once into `$RUNNER_TEMP/kanon-deploy-artifact/`, and uploads that
+# directory as `kanon-deploy-build-<run id>-<attempt>`, kept 35 days, the longest a production
+# job may wait for its reviewer. Its `build` output, which this workflow publishes as its own
+# `build` output for the caller to hand each `deploy.yml` call, names the artifact and carries
+# the SHA-256 of its contents (`scripts/deploy-build.mjs`); every environment checks the
+# download against it before its deploy hook runs.
 #
-# AFTER (plan 0010 §8). A run that stops before any environment never starts the environment
-# calls, so `record` writes one `deploy` row for the first environment (open-question decision
-# 4), and `report` files on, or comments on, the first environment's issue. A run that goes on
-# writes nothing here: each environment's call records and reports its own.
+# AFTER (plan 0010 §8). A run that stops before any environment (the gate, the probe or the
+# build) never starts the environment calls, so `record` writes one `deploy` row for the first
+# environment (open-question decision 4), and `report` files on, or comments on, the first
+# environment's issue. A probe skipped under the `no-environments` marker is not a stop. A run
+# that goes on writes nothing here: each environment's call records and reports its own.
 #
 # NO MODEL IN THE DEPLOY PATH (plan 0010 §9): no agent, no Claude credential, no App key or App
 # token, in either deploy workflow (`tests/unit/deploy-lane.test.ts`).
@@ -60,6 +69,10 @@ on:
         description: The declared environments, in deploy order, separated by spaces, exactly as the adoption record's `## Deploy` list names them. The gate refuses any other list.
         required: true
         type: string
+    outputs:
+      build:
+        description: "The build every environment deploys: a JSON object naming its artifact, `kanon-deploy-build-<run id>-<attempt>`, with the SHA-256 of its contents and the build's duration. The caller hands it to each `deploy.yml` call as its `build` input."
+        value: ${{ jobs.build.outputs.build }}
 
 # Each job declares its own, and none is granted more than it uses.
 permissions: {}
@@ -131,9 +144,63 @@ jobs:
           ENVIRONMENTS: ${{ needs.gate.outputs.environments }}
         run: node "$KANON_PATH/scripts/deploy-gate.mjs" probe
 
+  # THE BUILD: no credential, no id-token, no secret, no environment. After the gate and the
+  # probe, or the gate alone when the probe was skipped under the `no-environments` marker.
+  build:
+    needs: [gate, probe]
+    if: >-
+      ${{ !cancelled() && needs.gate.result == 'success'
+      && (needs.probe.result == 'success'
+      || (needs.probe.result == 'skipped' && needs.gate.outputs.fallback == 'no-environments')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.digest.outputs.build }}
+      started-at: ${{ steps.start.outputs.at }}
+      ended-at: ${{ steps.end.outputs.at }}
+    steps:
+      - name: Mark the job's start
+        id: start
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - id: kanon
+        uses: $/actions/kanon-path
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+      - name: Clear the build's directory
+        run: rm -rf "$RUNNER_TEMP/kanon-deploy-artifact" && mkdir -p "$RUNNER_TEMP/kanon-deploy-artifact"
+      - name: Build what every environment deploys
+        uses: ./.github/actions/build
+        with:
+          release: ${{ needs.gate.outputs.tag }}
+          sha: ${{ needs.gate.outputs.sha }}
+          output: ${{ runner.temp }}/kanon-deploy-artifact
+      # Kanon's path from the step's output, not `KANON`: the hook could rewrite `$GITHUB_ENV`.
+      - name: Digest the build
+        id: digest
+        env:
+          KANON_PATH: ${{ steps.kanon.outputs.path }}
+          STARTED_AT: ${{ steps.start.outputs.at }}
+        run: node "$KANON_PATH/scripts/deploy-build.mjs" digest
+      - name: Upload the build
+        uses: actions/upload-artifact@v7
+        with:
+          name: kanon-deploy-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kanon-deploy-artifact
+          retention-days: 35
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Mark the job's end
+        id: end
+        if: always()
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
   # One row for the first environment, only when the run stopped here.
   record:
-    needs: [gate, probe]
+    needs: [gate, probe, build]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -165,7 +232,7 @@ jobs:
 
   # The first environment's issue, only when the run stopped here. No checkout.
   report:
-    needs: [gate, probe, record]
+    needs: [gate, probe, build, record]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

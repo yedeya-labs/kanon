@@ -348,7 +348,7 @@ The deploy lane deploys your published releases to the environments your adoptio
 
 | Lane | What it does | Needs | Cost |
 |---|---|---|---|
-| `deploy-release.yml` and `deploy.yml` | Deploys each published release of a green default-branch commit to the environments the adoption record's `## Deploy` section declares, in order, the last being production: a gate, a trust probe of each environment's cloud role, and one job per environment that runs your deploy and smoke hooks with that environment's OIDC credential. Records a `deploy` row per environment and keeps one issue per environment for its failures. | a `## Deploy` section in `docs/qa/adoption.md` listing your environments; a GitHub environment per declared environment, production with required reviewers, or the record's fallback marker; a cloud role per environment that trusts only that environment's OIDC subject, readable from outside the environment (a repository variable); the Releaser, so a release starts the lane; `.github/actions/deploy/action.yml`; `.github/actions/smoke/action.yml`; the environment secret `KANON_DEPLOY_SECRET`, if your deploy needs one | No model. The gate waits for the release commit's CI, up to the declared CI wait (90 minutes by default); each environment costs what your deploy command costs. |
+| `deploy-release.yml` and `deploy.yml` | Deploys each published release of a green default-branch commit to the environments the adoption record's `## Deploy` section declares, in order, the last being production: a gate, a trust probe of each environment's cloud role, one build with no credential, and one job per environment that deploys that build with your deploy and smoke hooks and that environment's OIDC credential. Records a `deploy` row per environment and keeps one issue per environment for its failures. | a `## Deploy` section in `docs/qa/adoption.md` listing your environments; a GitHub environment per declared environment, production with required reviewers, or the record's fallback marker; a cloud role per environment that trusts only that environment's OIDC subject, readable from outside the environment (a repository variable); the Releaser, so a release starts the lane; `.github/actions/build/action.yml`; `.github/actions/deploy/action.yml`; `.github/actions/smoke/action.yml`; the environment secret `KANON_DEPLOY_SECRET`, if your deploy needs one | No model. The gate waits for the release commit's CI, up to the declared CI wait (90 minutes by default); each environment costs what your deploy command costs. |
 
 <!-- /deploy-lane:table -->
 
@@ -362,7 +362,7 @@ The deploy lane deploys your published releases to the environments your adoptio
 
 The CI wait is how long the gate waits for the release commit's CI, in minutes from 1 to 360; without it, 90. The lane reads the section **at the release's commit**, through [`scripts/lib/deploy-declaration.mjs`](../scripts/lib/deploy-declaration.mjs), so the declaration that deploys a release is the one reviewed with it.
 
-**The two workflows, and the caller.** [`deploy-release.yml`](../.github/workflows/deploy-release.yml) runs once per release: the gate, the trust probe, and, when the run stops there, one row and one issue for the first environment. [`deploy.yml`](../.github/workflows/deploy.yml) runs once per environment: `declare`, then `deploy`, `record` and `report`. Your caller, `.github/workflows/deploy.yml`, calls the first, then the second once per environment, each `needs:` the one before. `kanon init` writes it from the declaration ([plan 0010](plans/0010-deployment-lane.md) step D6); for the declaration above it reads:
+**The two workflows, and the caller.** [`deploy-release.yml`](../.github/workflows/deploy-release.yml) runs once per release: the gate, the trust probe, the build, and, when the run stops there, one row and one issue for the first environment. [`deploy.yml`](../.github/workflows/deploy.yml) runs once per environment: `declare`, then `deploy`, `record` and `report`. Your caller, `.github/workflows/deploy.yml`, calls the first, then the second once per environment, each `needs:` the one before and the `release` job, whose `build` output it hands on. `kanon init` writes it from the declaration ([plan 0010](plans/0010-deployment-lane.md) step D6); for the declaration above it reads:
 
 <!-- x-release-please-start-version -->
 ```yaml
@@ -381,12 +381,12 @@ jobs:
     name: staging
     needs: release
     uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.39.0
-    with: { environment: staging, position: 1 }
+    with: { environment: staging, position: 1, build: '${{ needs.release.outputs.build }}' }
   deploy-2:
     name: production
-    needs: deploy-1
+    needs: [release, deploy-1]
     uses: yedeya-labs/kanon/.github/workflows/deploy.yml@v0.39.0
-    with: { environment: production, position: 2 }
+    with: { environment: production, position: 2, build: '${{ needs.release.outputs.build }}' }
 ```
 <!-- x-release-please-end -->
 
@@ -396,18 +396,21 @@ Grant each job the permissions its workflow asks for (`requirements.json`'s `dep
 
 **The gate** refuses, by name, before anything deploys: `draft` or `no-release` (the release is a draft or missing, its tag moved, or a dispatch ran at another ref than the release's tag), `not-default-branch` (the commit is not on the default branch), `declaration-mismatch` (the caller's list is not the record's at that commit, in order), and `ci-red` or `ci-timeout` (`ci.yml`'s push run on that commit is not green, or still runs after the CI wait; `K-SHIP-8`).
 
-**The hooks.** Two composite actions you write, as you write the project-setup hook:
+**The hooks.** Three composite actions you write, as you write the project-setup hook:
 
 | Hook | Inputs | Must |
 |---|---|---|
+| `.github/actions/build/action.yml` | `release`, `sha`, `output` (the directory to fill) | Build what every environment will deploy, from the checked-out commit, into `output`, and fail otherwise. It runs with no credential and no secret, and may run the project-setup hook first |
 | `.github/actions/deploy/action.yml` | `environment`, `role` (`production` or `pre-production`), `release`, `sha`, `artifact`, `probe` (`'true'` or `'false'`), `environments` | Obtain the environment's cloud credential and deploy. With `probe: 'true'`, only try to obtain each listed environment's credential, and write the answer, one of `refused`, `obtained` or `unconfigured` per environment, as a JSON object to `$RUNNER_TEMP/kanon-deploy-probe.json` |
 | `.github/actions/smoke/action.yml` | `environment`, `role`, `release` | Check the deployed system answers as the release expects, and fail otherwise |
 
-The lane judges each hook by whether it succeeded. The deploy hook's step alone receives `KANON_DEPLOY_SECRET` in its environment: an environment secret of the environment it deploys, empty when the environment holds none. GitHub masks it in the log; write it nowhere but `$RUNNER_TEMP`. `artifact` is empty until the build job, plan 0010's next step, fills it with the one build every environment deploys.
+The lane judges each hook by whether it succeeded. The deploy hook's step alone receives `KANON_DEPLOY_SECRET` in its environment: an environment secret of the environment it deploys, empty when the environment holds none. GitHub masks it in the log; write it nowhere but `$RUNNER_TEMP`. `artifact` is the directory your build hook filled, downloaded and checked: deploy what it holds.
 
 **The trust probe.** Before anything deploys, a job outside every environment, with `id-token: write`, runs your deploy hook with `probe: 'true'`. Each environment's cloud role must trust only that environment's OIDC subject, `…:environment:<name>`, so every attempt must be refused. The lane prints `kanon-deploy-probe/v1 {"staging":"refused","production":"refused"}` for doctor and goes on only when every declared environment answered `refused`: an `obtained` fails `trust-unbound`, and anything else, a missing answer included, `probe-unconfigured`. Keep each environment's role identifier where a job outside the environment can read it, such as a repository variable: an environment's own variables don't resolve in the probe. The lane reads no role itself; where your hook finds each is yours.
 
-**Each environment.** `declare` checks the environment is at its position in the record and derives its role from it. `deploy` sets the environment, so GitHub runs it only after the environment's protection rules pass, and holds one concurrency group per environment, queued and never cancelled mid-run. Once it runs, it refuses `superseded` for a release older than the environment's last successful deploy; a dispatch of an earlier release rolls back, and its row says so. Then your two hooks run on the release's commit.
+**One build, one artifact.** After the gate and the probe (or the gate alone, when the probe is skipped under the `no-environments` marker), the `build` job runs your build hook once, on the release's commit, and uploads the directory it filled as the artifact `kanon-deploy-build-<run id>-<attempt>`, kept 35 days, with the SHA-256 of its contents as the job's output. It holds `contents: read` and nothing else: no `id-token`, no secret, no environment, so your build's tools and dependencies never run beside a cloud credential. It never runs after a failed or cancelled probe. Every environment's job downloads that artifact by name, checks it against the build's digest before your deploy hook runs, and hands the hook its path: nothing is rebuilt per environment. An artifact that differs, or that expired because a production approval waited longer than your repository keeps artifacts, fails the environment at the `build` stage, before any hook runs. A build that fails stops the run there, with one row and the first environment's issue, as the gate and the probe do. Keep your repository's artifact retention at 35 days or more if a production approval may wait that long.
+
+**Each environment.** `declare` checks the environment is at its position in the record and derives its role from it. `deploy` sets the environment, so GitHub runs it only after the environment's protection rules pass, and holds one concurrency group per environment, queued and never cancelled mid-run. Once it runs, it refuses `superseded` for a release older than the environment's last successful deploy; a dispatch of an earlier release rolls back, and its row says so. Then it downloads and checks the build, and your deploy and smoke hooks run on the release's commit.
 
 **After each environment.** `record` writes a `deploy` row (its role and position, never its name) as the artifact `kanon-deploy-row-<run id>-<attempt>-<position>`. A rejected approval concludes the job as a plain failure, so `record` reads the run's approvals to tell a rejection from a failure. `report` keeps one issue per environment, titled `Deploy to <environment> failed`: a failure or a refusal files it, labelled `bug` and `sev:high` for production or `sev:medium` otherwise, or comments on the open one; the next success closes it. A rejection or a cancellation files nothing.
 

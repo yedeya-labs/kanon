@@ -1315,6 +1315,10 @@
         "position": {
           "type": "number",
           "description": "The environment's place in the declared list, from 1. The lane refuses a call whose environment isn't at this position."
+        },
+        "build": {
+          "type": "string",
+          "description": "The build to deploy: `deploy-release.yml`'s `build` output, as the caller's `needs.release.outputs.build`. The lane downloads the artifact it names, which must be this run's, and checks it against its digest."
         }
       }
     },
@@ -1335,6 +1339,14 @@
       }
     },
     "hooks": [
+      {
+        "path": ".github/actions/build/action.yml",
+        "inputs": [
+          "output",
+          "release",
+          "sha"
+        ]
+      },
       {
         "path": ".github/actions/deploy/action.yml",
         "inputs": [
@@ -1365,7 +1377,7 @@
     },
     "catalogue": {
       "name": "Deploy",
-      "does": "Deploys each published release of a green default-branch commit to the environments the adoption record's `## Deploy` section declares, in order, the last being production: a gate, a trust probe of each environment's cloud role, and one job per environment that runs your deploy and smoke hooks with that environment's OIDC credential. Records a `deploy` row per environment and keeps one issue per environment for its failures.",
+      "does": "Deploys each published release of a green default-branch commit to the environments the adoption record's `## Deploy` section declares, in order, the last being production: a gate, a trust probe of each environment's cloud role, one build with no credential, and one job per environment that deploys that build with your deploy and smoke hooks and that environment's OIDC credential. Records a `deploy` row per environment and keeps one issue per environment for its failures.",
       "needs": [
         "a `## Deploy` section in `docs/qa/adoption.md` listing your environments",
         "a GitHub environment per declared environment, production with required reviewers, or the record's fallback marker",

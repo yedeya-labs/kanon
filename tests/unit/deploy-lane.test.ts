@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { validate } from '../../actions/agent-telemetry/schema.mjs';
@@ -10,11 +10,13 @@ import {
 } from '../../scripts/deploy-row.mjs';
 import { issueTitle, report, reportFrom } from '../../scripts/deploy-report.mjs';
 import * as collected from '../../scripts/lib/telemetry-artifacts.mjs';
+import { BUILD_DIR, buildArtifactName, checkBuild, listFiles, readBuild, treeDigest } from '../../scripts/deploy-build.mjs';
 
 /**
- * Plan 0010 step D4: the deploy lane's two reusable workflows, `deploy-release.yml` (gate, probe,
- * record, report) and `deploy.yml` (declare, deploy, record, report, for one environment),
- * held to their shape, and the scripts that write the lane's rows and issues, on fixtures.
+ * Plan 0010 steps D4 and D5: the deploy lane's two reusable workflows, `deploy-release.yml`
+ * (gate, probe, build, record, report) and `deploy.yml` (declare, deploy, record, report, for one
+ * environment), held to their shape, and the scripts that check the build's artifact and write
+ * the lane's rows and issues, on fixtures.
  *
  * `laneProblems` is the shape, as a list of what is wrong, so each mutation the plan names is a
  * case below that changes a copy of the parsed workflows and must name its problem: a guard that
@@ -116,7 +118,8 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
   const declare = w[ENV]?.jobs.declare;
   if (declare && JSON.stringify(declare.permissions) !== '{"contents":"read"}') out.push(`${ENV}:declare: holds more than contents: read`);
   const inputs = Object.keys(w[ENV]?.on?.workflow_call?.inputs ?? {}).sort();
-  if (JSON.stringify(inputs) !== '["environment","position"]') out.push(`${ENV}: takes ${inputs.join(', ')}, not the environment and its position alone`);
+  if (JSON.stringify(inputs) !== '["build","environment","position"]') out.push(`${ENV}: takes ${inputs.join(', ')}, not the environment, its position and the build alone`);
+  out.push(...buildProblems(w));
   if (/inputs\.role\b/.test(JSON.stringify(w[ENV] ?? {}))) out.push(`${ENV}: reads a role from its caller`);
   const probe = w[RELEASE]?.jobs.probe;
   if (probe) {
@@ -139,6 +142,131 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
   return out;
 }
 
+// ── The build (plan 0010 decision 8, step D5) ─────────────────────────────────────────────
+
+type Needed = Record<string, { result: string; outputs?: Record<string, string> }>;
+
+/**
+ * Whether a job whose `if:` is `expression` runs, given its needed jobs' results and outputs, as
+ * GitHub decides it: an `if:` that calls no status function has `success()` ANDed in, and
+ * `success()` holds only when every needed job succeeded. It reads `needs.<job>.result`,
+ * `needs.<job>.outputs.<name>`, strings, `==`, `!=`, `!`, `&&`, `||` and the four status
+ * functions; anything else throws, so a new `if:` can't pass for a reason this doesn't read.
+ */
+export function jobRuns(expression: string | undefined, needs: Needed, runCancelled = false): boolean {
+  let text = String(expression ?? '').trim().replace(/^\$\{\{([\s\S]*)\}\}$/, '$1').trim();
+  if (!/\b(?:always|success|failure|cancelled)\s*\(/.test(text)) text = text ? `success() && (${text})` : 'success()';
+  const tokens = [...text.matchAll(/\s*('(?:[^']|'')*'|==|!=|&&|\|\||[!()]|[A-Za-z_][\w.-]*)/g)].map((m) => m[1]!);
+  if (tokens.join('').replace(/\s/g, '') !== text.replace(/\s/g, '')) throw new Error(`can't read ${text}`);
+  let i = 0;
+  const results = Object.values(needs).map((n) => n.result);
+  const value = (t: string): string | boolean => {
+    if (t.startsWith("'")) return t.slice(1, -1).replace(/''/g, "'");
+    const m = /^needs\.([\w-]+)\.(result|outputs\.([\w-]+))$/.exec(t);
+    if (!m) throw new Error(`can't read ${t}`);
+    const n = needs[m[1]!];
+    if (!n) throw new Error(`${m[1]} isn't needed`);
+    return m[2] === 'result' ? n.result : n.outputs?.[m[3]!] ?? '';
+  };
+  const primary = (): string | boolean => {
+    const t = tokens[i++]!;
+    if (t === '(') { const v = or(); if (tokens[i++] !== ')') throw new Error('expected )'); return v; }
+    if (t === '!') return !truthy(primary());
+    if (tokens[i] === '(') {
+      i += 2;
+      if (t === 'always') return true;
+      if (t === 'cancelled') return runCancelled;
+      if (t === 'success') return !runCancelled && results.every((r) => r === 'success');
+      if (t === 'failure') return results.some((r) => r === 'failure');
+      throw new Error(`can't call ${t}`);
+    }
+    const left = value(t);
+    const op = tokens[i];
+    if (op !== '==' && op !== '!=') return left;
+    i += 1;
+    const right = value(tokens[i++]!);
+    return (String(left).toLowerCase() === String(right).toLowerCase()) === (op === '==');
+  };
+  const truthy = (v: string | boolean) => v !== '' && v !== false;
+  const and = (): boolean => { let v = truthy(primary()); while (tokens[i] === '&&') { i += 1; v = truthy(primary()) && v; } return v; };
+  const or = (): boolean => { let v = and(); while (tokens[i] === '||') { i += 1; v = and() || v; } return v; };
+  const result = or();
+  if (i !== tokens.length) throw new Error(`trailing ${tokens.slice(i).join(' ')}`);
+  return result;
+}
+
+const BUILD_HOOK = './.github/actions/build';
+const BUILD_NAME = 'kanon-deploy-build-${{ github.run_id }}-${{ github.run_attempt }}';
+/** The gate's and the probe's results, as the build job's `if:` reads them. */
+const gateProbe = (gate: string, probe: string, fallback = '') => ({ gate: { result: gate, outputs: { fallback } }, probe: { result: probe, outputs: {} } });
+
+/** Everything wrong with the build job and the environments' use of its artifact. */
+function buildProblems(w: Record<string, Workflow>): string[] {
+  const out: string[] = [];
+  const rel = w[RELEASE];
+  const b = rel?.jobs.build;
+  if (!b) return [`${RELEASE}: has no build job`];
+  const at = `${RELEASE}:build`;
+  if (JSON.stringify(b.permissions) !== '{"contents":"read"}') out.push(`${at}: holds more than contents: read`);
+  if (JSON.stringify(b.needs) !== '["gate","probe"]') out.push(`${at}: doesn't need the gate and the probe`);
+  // Its `if:`, on each way the gate and the probe can end.
+  const runsOn = (needs: Needed, cancelled = false) => { try { return jobRuns(b.if, needs, cancelled); } catch { return undefined; } };
+  if (runsOn(gateProbe('success', 'success')) !== true) out.push(`${at}: doesn't run after a gate and a probe that passed`);
+  if (runsOn(gateProbe('success', 'skipped', 'no-environments')) !== true) out.push(`${at}: skipped under the no-environments marker, so no environment deploys`);
+  for (const probe of ['failure', 'cancelled']) if (runsOn(gateProbe('success', probe)) !== false || runsOn(gateProbe('success', probe, 'no-environments')) !== false) out.push(`${at}: runs after a ${probe === 'failure' ? 'failed' : 'cancelled'} probe`);
+  if (runsOn(gateProbe('success', 'skipped', 'no-reviewers')) !== false || runsOn(gateProbe('success', 'skipped')) !== false) out.push(`${at}: runs after a probe skipped without the no-environments marker`);
+  for (const gate of ['failure', 'cancelled', 'skipped']) if (runsOn(gateProbe(gate, 'skipped', 'no-environments')) !== false) out.push(`${at}: runs after a ${gate} gate`);
+  if (runsOn(gateProbe('success', 'success'), true) !== false) out.push(`${at}: runs in a cancelled run`);
+  // Its steps: the release's commit, the hook, the digest, then the one upload.
+  const steps = b.steps ?? [];
+  const hookAt = steps.findIndex((s) => s.uses === BUILD_HOOK);
+  const hook = steps[hookAt];
+  if (!hook) out.push(`${at}: doesn't run the build hook`);
+  else if (JSON.stringify(Object.keys(hook.with ?? {})) !== '["release","sha","output"]' || hook.with?.sha !== '${{ needs.gate.outputs.sha }}' || hook.with?.output !== '${{ runner.temp }}/kanon-deploy-artifact') out.push(`${at}: the build hook isn't given the release, its commit and the directory to fill`);
+  const checkout = steps.find(isCheckout);
+  if (checkout?.with?.ref !== '${{ needs.gate.outputs.sha }}') out.push(`${at}: doesn't build the release's commit, the gate's`);
+  const digestAt = steps.findIndex((s) => s.id === 'digest');
+  const uploads = steps.filter((s) => String(s.uses ?? '').startsWith('actions/upload-artifact@'));
+  const uploadAt = steps.indexOf(uploads[0]!);
+  if (digestAt < 0 || !/deploy-build\.mjs" digest$/.test(String(steps[digestAt]!.run)) || digestAt < hookAt || uploadAt < digestAt) out.push(`${at}: doesn't digest the build after the hook and before the upload`);
+  if (uploads.length !== 1) out.push(`${at}: uploads ${uploads.length} artifacts, not one`);
+  const up = uploads[0]?.with ?? {};
+  if (up.name !== BUILD_NAME || up.path !== '${{ runner.temp }}/kanon-deploy-artifact') out.push(`${at}: the artifact isn't the run-scoped ${BUILD_NAME}`);
+  if (up['retention-days'] !== 35) out.push(`${at}: the artifact isn't kept 35 days, so a production approval can outlive it`);
+  if (up['include-hidden-files'] !== true) out.push(`${at}: the upload drops hidden files the digest counts`);
+  if (b.outputs?.build !== '${{ steps.digest.outputs.build }}') out.push(`${at}: doesn't output the build with its digest`);
+  const callOut = (rel?.on?.workflow_call as { outputs?: Record<string, { value?: string }> } | undefined)?.outputs?.build?.value;
+  if (callOut !== '${{ jobs.build.outputs.build }}') out.push(`${RELEASE}: doesn't publish the build's output to its caller`);
+  for (const name of ['record', 'report']) {
+    if (!([] as string[]).concat(rel?.jobs[name]?.needs ?? []).includes('build')) out.push(`${RELEASE}:${name}: doesn't read the build's result, so a failed build is never recorded`);
+  }
+  // The environment's job: this run's artifact, by name, checked before the deploy hook. Never built there.
+  for (const [file, wf] of Object.entries(w)) {
+    if (!LANE.includes(file)) continue;
+    for (const [name, j] of Object.entries(wf.jobs)) {
+      if (!(file === RELEASE && name === 'build') && (j.steps ?? []).some((s) => s.uses === BUILD_HOOK)) out.push(`${file}:${name}: runs the build hook`);
+    }
+  }
+  const dep = w[ENV]?.jobs.deploy;
+  const ds = dep?.steps ?? [];
+  const idx = (id: string) => ds.findIndex((s) => s.id === id);
+  const input = ds[idx('build-input')];
+  const download = ds[idx('download')];
+  const check = ds[idx('build-check')];
+  const deployAt = idx('deploy');
+  if (input?.env?.BUILD !== '${{ inputs.build }}' || !/deploy-build\.mjs" input$/.test(String(input?.run))) out.push(`${ENV}:deploy: doesn't read the build from its input`);
+  if (!String(download?.uses ?? '').startsWith('actions/download-artifact@') || download?.with?.name !== '${{ steps.build-input.outputs.artifact }}' || download?.with?.path !== '${{ runner.temp }}/kanon-deploy-artifact') out.push(`${ENV}:deploy: doesn't download the build's artifact by its run-scoped name`);
+  // A "Re-run failed jobs" reuses attempt 1's build output and its artifact, `…-1` (measured on
+  // #940): a name rebuilt from the attempt would look for one that was never uploaded.
+  if (/run_attempt/.test(JSON.stringify(w[ENV] ?? {}).replace(/kanon-deploy-row-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/g, ''))) out.push(`${ENV}: rebuilds the build's artifact name from the run attempt, so a re-run of the failed jobs misses attempt 1's artifact`);
+  if (!/deploy-build\.mjs" check$/.test(String(check?.run)) || check?.env?.DIGEST !== '${{ steps.build-input.outputs.digest }}') out.push(`${ENV}:deploy: doesn't check the build's digest`);
+  if (!(idx('build-input') < idx('download') && idx('download') < idx('build-check') && idx('build-check') < deployAt) || idx('build-input') < 0) out.push(`${ENV}:deploy: the deploy hook can run before the build is checked`);
+  if (ds[deployAt]?.with?.artifact !== '${{ steps.build-check.outputs.path }}') out.push(`${ENV}:deploy: the deploy hook isn't given the checked build`);
+  const failed = String(dep?.outputs?.['build-failed'] ?? '');
+  if (!['build-input', 'download', 'build-check'].every((id) => failed.includes(`steps.${id}.outcome == 'failure'`))) out.push(`${ENV}:deploy: a failed download or check isn't output for the record's \`build\` stage`);
+  return out;
+}
+
 const mutate = (change: (w: Record<string, Workflow>) => void) => {
   const w = load();
   change(w);
@@ -151,7 +279,7 @@ describe('the deploy lane holds its shape', () => {
   });
 
   it('reads the jobs it is about, so the checks are not vacuous', () => {
-    expect(Object.keys(PARSED[RELEASE]!.jobs)).toEqual(['gate', 'probe', 'record', 'report']);
+    expect(Object.keys(PARSED[RELEASE]!.jobs)).toEqual(['gate', 'probe', 'build', 'record', 'report']);
     expect(Object.keys(PARSED[ENV]!.jobs)).toEqual(['declare', 'deploy', 'record', 'report']);
     // The run lists the environment's job as `<caller job> / deploy` (kanon#890), which the reference deploy names.
     expect(PARSED[ENV]!.jobs.deploy!.name).toBe('deploy');
@@ -160,8 +288,9 @@ describe('the deploy lane holds its shape', () => {
 
   it('every checkout of the two workflows persists no credential, and checks out the release commit the gate or the declaration resolved', () => {
     const checkouts = LANE.flatMap((f) => Object.values(PARSED[f]!.jobs).flatMap((j) => (j.steps ?? []).filter(isCheckout)));
-    expect(checkouts).toHaveLength(2);
-    expect(checkouts.map((s) => s.with?.ref)).toEqual(['${{ needs.gate.outputs.sha }}', '${{ needs.declare.outputs.sha }}']);
+    expect(checkouts).toHaveLength(3);
+    // The probe's and the build's: the gate's commit, which on a dispatch is the one the release's tag resolves to.
+    expect(checkouts.map((s) => s.with?.ref)).toEqual(['${{ needs.gate.outputs.sha }}', '${{ needs.gate.outputs.sha }}', '${{ needs.declare.outputs.sha }}']);
   });
 
   it('the hooks get the inputs plan 0010 §7 lists, and the smoke hook never the secret', () => {
@@ -172,6 +301,27 @@ describe('the deploy lane holds its shape', () => {
       ['./.github/actions/smoke', ['environment', 'role', 'release']],
     ]);
     expect(hooks[1]!.env).toBeUndefined();
+    const build = (PARSED[RELEASE]!.jobs.build!.steps ?? []).filter((s) => String(s.uses ?? '').startsWith('./'));
+    expect(build.map((s) => [s.uses, Object.keys(s.with ?? {})])).toEqual([[BUILD_HOOK, ['release', 'sha', 'output']]]);
+    expect(build[0]!.env).toBeUndefined();
+  });
+
+  it('the build runs after the gate and the probe, or after the gate alone when the probe is skipped under the `no-environments` marker, and never after a failed or cancelled probe', () => {
+    const b = PARSED[RELEASE]!.jobs.build!;
+    expect(jobRuns(b.if, gateProbe('success', 'success'))).toBe(true);
+    // The no-environments fixture: the probe skipped under the marker, the build runs, the
+    // workflow call succeeds, so the caller's environment calls run, and `record` writes no row.
+    expect(jobRuns(b.if, gateProbe('success', 'skipped', 'no-environments'))).toBe(true);
+    expect(releaseRow({ ...RUN, NEEDS: JSON.stringify({ ...gateProbe('success', 'skipped', 'no-environments'), build: { result: 'success', outputs: {} } }), ENVIRONMENTS: 'production' })).toBeNull();
+    for (const probe of ['failure', 'cancelled']) expect(jobRuns(b.if, gateProbe('success', probe, 'no-environments')), probe).toBe(false);
+    expect(jobRuns(b.if, gateProbe('failure', 'skipped', 'no-environments'))).toBe(false);
+    expect(jobRuns(b.if, gateProbe('success', 'skipped', 'no-reviewers'))).toBe(false);
+    // GitHub's own rule, which the `if:` exists to override: without one, a skipped need skips the job.
+    expect(jobRuns(undefined, gateProbe('success', 'skipped', 'no-environments'))).toBe(false);
+    // It holds no credential, no secret, no environment.
+    expect(b.permissions).toEqual({ contents: 'read' });
+    expect(b.environment).toBeUndefined();
+    expect(JSON.stringify(b)).not.toMatch(/secrets|id-token/);
   });
 
   describe('the mutations plan 0010 D4 names each turn it red', () => {
@@ -210,7 +360,7 @@ describe('the deploy lane holds its shape', () => {
       red((w) => { delete job(w, RELEASE, 'probe').needs; }, /can run after a refused gate/);
     });
     it('the deploy job run whatever `declare` holds', () => red((w) => { delete job(w, ENV, 'deploy').if; }, /runs when declare holds production/));
-    it("the hold moved into the caller: a fallback input on deploy.yml", () => red((w) => { w[ENV]!.on!.workflow_call!.inputs!.fallback = { type: 'string' }; }, /not the environment and its position alone/));
+    it("the hold moved into the caller: a fallback input on deploy.yml", () => red((w) => { w[ENV]!.on!.workflow_call!.inputs!.fallback = { type: 'string' }; }, /not the environment, its position and the build alone/));
     it("a workflow calling `deploy.yml` added to Kanon's `.github/workflows/`", () => {
       red((w) => { w['ship.yml'] = { jobs: { prod: { uses: '$/.github/workflows/deploy.yml', with: { environment: 'production', position: 1 } } } }; }, /ship\.yml:prod: calls the deploy lane/);
       red((w) => { w['ship.yml'] = { jobs: { prod: { environment: 'production', steps: [] } } }; }, /ship\.yml:prod: sets an environment/);
@@ -222,6 +372,55 @@ describe('the deploy lane holds its shape', () => {
       red((w) => { step(job(w, ENV, 'deploy'), 'deploy').with!.role = '${{ vars.DEPLOY_ROLE }}'; }, /reads a repository variable/);
       red((w) => { job(w, ENV, 'declare').environment = 'production'; }, /declare: sets an environment/);
     });
+  });
+
+  describe('the mutations plan 0010 D5 names each turn it red', () => {
+    const red = (change: (w: Record<string, Workflow>) => void, problem: RegExp) => {
+      const found = mutate(change);
+      expect(found.some((p) => problem.test(p)), `expected a problem matching ${problem}, got ${JSON.stringify(found)}`).toBe(true);
+    };
+    const bsteps = (w: Record<string, Workflow>) => job(w, RELEASE, 'build').steps!;
+    const dsteps = (w: Record<string, Workflow>) => job(w, ENV, 'deploy').steps!;
+
+    it('`id-token: write` on build', () => red((w) => { (job(w, RELEASE, 'build').permissions as Record<string, string>)['id-token'] = 'write'; }, /build: holds id-token/));
+    it("`KANON_DEPLOY_SECRET` in build's `env:`", () => {
+      red((w) => { (bsteps(w).find((s) => s.uses === BUILD_HOOK)!).env = { KANON_DEPLOY_SECRET: ALLOWED_SECRET }; }, /deploy-release\.yml:build:.*references a secret/);
+      red((w) => { (job(w, RELEASE, 'build') as Record<string, unknown>).env = { KANON_DEPLOY_SECRET: ALLOWED_SECRET }; }, /build: references a secret outside a step/);
+    });
+    it('the digest check removed', () => {
+      red((w) => { dsteps(w).splice(dsteps(w).findIndex((s) => s.id === 'build-check'), 1); }, /doesn't check the build's digest/);
+      red((w) => { delete step(job(w, ENV, 'deploy'), 'build-check').env!.DIGEST; }, /doesn't check the build's digest/);
+    });
+    it('the build hook called in the environment job', () => red((w) => {
+      dsteps(w).splice(dsteps(w).findIndex((s) => s.id === 'download'), 0, { uses: BUILD_HOOK, with: { release: 'x', sha: 'y', output: 'z' } });
+    }, /deploy\.yml:deploy: runs the build hook/));
+    it("the build's `if:` dropped (the no-environments fixture skips the build and every deploy)", () => red((w) => { delete job(w, RELEASE, 'build').if; }, /skipped under the no-environments marker/));
+    it('a build that runs after a failed probe', () => {
+      red((w) => { job(w, RELEASE, 'build').if = "${{ !cancelled() && needs.gate.result == 'success' }}"; }, /runs after a failed probe/);
+      red((w) => { job(w, RELEASE, 'build').if = 'always()'; }, /runs after a failed probe/);
+    });
+    it("`record` writing a `probe` row for a probe skipped under the marker", () => {
+      // The D4 classifier, which read any skipped probe as a stop: the no-environments fixture then records a stop at `probe`.
+      const d4 = (n: { probe: { result: string } }) => (n.probe.result === 'success' ? null : { outcome: 'failed', failed_stage: 'probe' });
+      const fixture = { ...gateProbe('success', 'skipped', 'no-environments'), build: { result: 'success', outputs: {} } };
+      expect(d4(fixture)).toEqual({ outcome: 'failed', failed_stage: 'probe' });
+      expect(classifyRelease(fixture)).toBeNull();
+    });
+    it('the upload kept less than 35 days, renamed off the run, or the build not published to the caller', () => {
+      red((w) => { bsteps(w).find((s) => String(s.uses).startsWith('actions/upload-artifact@'))!.with!['retention-days'] = 7; }, /kept 35 days/);
+      red((w) => { bsteps(w).find((s) => String(s.uses).startsWith('actions/upload-artifact@'))!.with!.name = 'kanon-deploy-build'; }, /run-scoped/);
+      red((w) => { delete (w[RELEASE]!.on!.workflow_call as { outputs?: unknown }).outputs; }, /doesn't publish the build's output/);
+      red((w) => { step(job(w, ENV, 'deploy'), 'download').with!.name = 'kanon-deploy-build'; }, /by its run-scoped name/);
+    });
+    it('the deploy hook run before the check, or not given the checked build', () => {
+      red((w) => { const s = dsteps(w); const at = s.findIndex((x) => x.id === 'build-check'); const [c] = s.splice(at, 1); s.push(c!); }, /can run before the build is checked/);
+      red((w) => { step(job(w, ENV, 'deploy'), 'deploy').with!.artifact = ''; }, /isn't given the checked build/);
+    });
+    it("the build's name rebuilt from `github.run_attempt` in the environment's job (a re-run of the failed jobs, #940)", () => {
+      red((w) => { step(job(w, ENV, 'deploy'), 'download').with!.name = BUILD_NAME; }, /rebuilds the build's artifact name from the run attempt/);
+      red((w) => { step(job(w, ENV, 'deploy'), 'build-input').env!.GITHUB_RUN_ATTEMPT = '${{ github.run_attempt }}'; }, /rebuilds the build's artifact name from the run attempt/);
+    });
+    it("`record` not reading the build's result", () => red((w) => { job(w, RELEASE, 'record').needs = ['gate', 'probe']; }, /record: doesn't read the build's result/));
   });
 });
 
@@ -254,6 +453,20 @@ describe("deploy-row.mjs: one environment's row (plan 0010 §8, §10)", () => {
       expect(validate(r)).toEqual({ ok: true });
       expect(JSON.stringify(r)).not.toMatch(/staging|v1\.2\.0|a{40}|acme/);
     }
+  });
+
+  it("fails at `build` when the job's download or digest check failed, before any hook, and carries the build's time (plan 0010 D5)", () => {
+    const failed = row({ result: 'failure', outputs: { 'started-at': T(10), 'build-failed': 'true', 'deploy-outcome': '', 'smoke-outcome': '' } });
+    expect(failed).toMatchObject({ outcome: 'failed', failed_stage: 'build' });
+    expect(validate(failed)).toEqual({ ok: true });
+    // A deploy hook that failed after a good build is still `deploy`.
+    expect(row({ result: 'failure', outputs: { 'started-at': T(10), 'build-failed': 'false', 'deploy-outcome': 'failure' } })).toMatchObject({ failed_stage: 'deploy' });
+    const timed = environmentRow(
+      { ...RUN, NEEDS: JSON.stringify({ declare: declared(), deploy: ok }), ENVIRONMENT: 'staging', POSITION: '1', BUILD: JSON.stringify({ artifact: 'kanon-deploy-build-123456-1', digest: 'f'.repeat(64), build_ms: 95_000 }) },
+      { api: () => ({}) },
+    );
+    expect(timed).toMatchObject({ outcome: 'ok', build_ms: 95_000 });
+    expect(JSON.stringify(timed)).not.toMatch(/kanon-deploy-build|f{64}/);
   });
 
   it('times the deploy: the wait, the hooks, the job and the release lead time', () => {
@@ -327,9 +540,27 @@ describe("deploy-row.mjs: the release's row, only when the run stopped before an
   const rel = (needs: object, environments = 'staging production') => releaseRow({ ...RUN, NEEDS: JSON.stringify(needs), ENVIRONMENTS: environments }, { now: new Date('2026-10-14T12:00:00Z') });
   const gateOk = (fallback = '') => ({ result: 'success', outputs: { fallback, environments: 'staging production', prerelease: 'true' } });
 
-  it('writes nothing when the run went on: the probe passed, or was skipped under the `no-environments` marker', () => {
-    expect(rel({ gate: gateOk(), probe: ok })).toBeNull();
-    expect(rel({ gate: gateOk('no-environments'), probe: { result: 'skipped', outputs: {} } })).toBeNull();
+  it('writes nothing when the run went on: the probe passed, or was skipped under the `no-environments` marker, and the build passed', () => {
+    expect(rel({ gate: gateOk(), probe: ok, build: ok })).toBeNull();
+    expect(rel({ gate: gateOk('no-environments'), probe: { result: 'skipped', outputs: {} }, build: ok })).toBeNull();
+  });
+
+  it('writes one row at `build` when the build failed or was cancelled, timed, and never at `probe` for a probe skipped under the marker (plan 0010 D5)', () => {
+    const built = { 'started-at': T(1), 'ended-at': T(4) };
+    for (const fallback of ['', 'no-environments']) {
+      const probe = fallback ? { result: 'skipped', outputs: {} } : ok;
+      const failed = rel({ gate: gateOk(fallback), probe, build: { result: 'failure', outputs: built } });
+      expect(failed, fallback).toMatchObject({ outcome: 'failed', failed_stage: 'build', build_ms: 180_000, position: 1, role: 'pre-production' });
+      expect(validate(failed)).toEqual({ ok: true });
+      expect(rel({ gate: gateOk(fallback), probe, build: { result: 'cancelled', outputs: {} } })).toMatchObject({ outcome: 'cancelled', failed_stage: 'build' });
+    }
+    // A run cancelled before the build started skips it: cancelled at `build`, not failed.
+    expect(rel({ gate: gateOk(), probe: ok, build: { result: 'skipped', outputs: {} } })).toMatchObject({ outcome: 'cancelled', failed_stage: 'build' });
+    // A failed probe stops the run at `probe`, the build skipped after it.
+    expect(rel({ gate: gateOk('no-reviewers'), probe: { result: 'failure', outputs: { refusal: 'probe-unconfigured' } }, build: { result: 'skipped' } })).toMatchObject({ failed_stage: 'probe', refusal: 'probe-unconfigured' });
+    // The report files a failed build on the first environment's issue, at `build`.
+    const needs = { gate: gateOk(), probe: ok, build: { result: 'failure', outputs: {} }, record: { result: 'success', outputs: { written: 'true', outcome: 'failed', stage: 'build', refusal: '' } } };
+    expect(reportFrom({ NEEDS: JSON.stringify(needs), ENVIRONMENTS: 'staging production', RELEASE: 'v1', RUN_URL: 'u' }, 'release')).toMatchObject({ environment: 'staging', outcome: 'failed', failed_stage: 'build' });
   });
 
   it('writes one row, for the first environment, when the gate or the probe stopped it', () => {
@@ -454,7 +685,7 @@ describe("deploy-report.mjs: one issue per environment (plan 0010 §8, decision 
     expect(reportFrom({ NEEDS: JSON.stringify(stopped), ENVIRONMENTS: 'staging production', RELEASE: 'v1', RUN_URL: 'u' }, 'release'))
       .toMatchObject({ environment: 'staging', role: 'pre-production', position: 1, outcome: 'refused', failed_stage: 'gate', refusal: 'ci-red' });
     expect(reportFrom({ NEEDS: JSON.stringify(stopped), ENVIRONMENTS: 'production', RELEASE: 'v1', RUN_URL: 'u' }, 'release')).toMatchObject({ environment: 'production', role: 'production' });
-    const went = { gate: { result: 'success', outputs: {} }, probe: ok, record: { result: 'success', outputs: { written: 'false' } } };
+    const went = { gate: { result: 'success', outputs: {} }, probe: ok, build: ok, record: { result: 'success', outputs: { written: 'false' } } };
     expect(reportFrom({ NEEDS: JSON.stringify(went), ENVIRONMENTS: 'staging production' }, 'release')).toBeNull();
   });
 
@@ -474,5 +705,104 @@ describe("deploy-report.mjs: one issue per environment (plan 0010 §8, decision 
   it("an environment's report reads the record's outcome, which saw the approvals, and the declaration's role", () => {
     const needs = { declare: declared('pre-production'), deploy: { result: 'failure', outputs: {} }, record: { result: 'success', outputs: { outcome: 'rejected', stage: 'approval', refusal: '' } } };
     expect(reportFrom({ NEEDS: JSON.stringify(needs), ENVIRONMENT: 'staging', POSITION: '1' }, 'environment')).toMatchObject({ outcome: 'rejected', role: 'pre-production', position: 1 });
+  });
+});
+
+// ── The build's artifact (plan 0010 decision 8, step D5) ──────────────────────────────────
+
+describe('deploy-build.mjs: one build, digested once and checked in every environment', () => {
+  const root = mkdtempSync(join(tmpdir(), 'deploy-build-'));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+  let n = 0;
+  /** A runner's temp directory whose build directory holds `files`. */
+  const temp = (files: Record<string, string> = {}) => {
+    const dir = join(root, `t${n += 1}`);
+    for (const [path, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(dir, BUILD_DIR, path)), { recursive: true });
+      writeFileSync(join(dir, BUILD_DIR, path), text);
+    }
+    return dir;
+  };
+  const cli = (command: string, runnerTemp: string, env: Record<string, string> = {}) => {
+    const out = join(runnerTemp, 'github-output');
+    mkdirSync(runnerTemp, { recursive: true });
+    writeFileSync(out, '');
+    const r = spawnSync('node', ['scripts/deploy-build.mjs', command], {
+      encoding: 'utf8',
+      env: { ...process.env, GITHUB_RUN_ID: '123456', GITHUB_RUN_ATTEMPT: '2', RUNNER_TEMP: runnerTemp, GITHUB_OUTPUT: out, ...env },
+    });
+    return { status: r.status, stderr: r.stderr, outputs: Object.fromEntries(readFileSync(out, 'utf8').split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)])) };
+  };
+  const SITE = { 'index.html': '<h1>v1.2.0</h1>', 'assets/app.js': 'go()', '.well-known/security.txt': 'Contact: x' };
+
+  it('the build job names the run-scoped artifact and outputs its digest, which the workflow uploads under that name', () => {
+    const r = cli('digest', temp(SITE), { STARTED_AT: '2026-10-14T11:00:00Z' });
+    expect(r.status, r.stderr).toBe(0);
+    const build = JSON.parse(r.outputs.build!);
+    expect(build).toMatchObject({ artifact: 'kanon-deploy-build-123456-2', digest: expect.stringMatching(/^[0-9a-f]{64}$/), build_ms: expect.any(Number) });
+    expect(buildArtifactName('${{ github.run_id }}', '${{ github.run_attempt }}')).toBe(BUILD_NAME);
+  });
+
+  it('the build job fails, by name, when the hook built nothing', () => {
+    const r = cli('digest', temp());
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('wrote nothing');
+    expect(r.outputs.build).toBeUndefined();
+  });
+
+  it("the digest is the contents': the same files give the same digest, hidden files count, and any change differs", () => {
+    const a = temp(SITE);
+    const digest = treeDigest(join(a, BUILD_DIR));
+    expect(treeDigest(join(temp(SITE), BUILD_DIR))).toBe(digest);
+    expect(treeDigest(join(temp({ ...SITE, 'index.html': '<h1>v1.2.1</h1>' }), BUILD_DIR))).not.toBe(digest);
+    expect(treeDigest(join(temp({ 'index.html': SITE['index.html'], 'assets/app.js': SITE['assets/app.js'] }), BUILD_DIR))).not.toBe(digest);
+    // The same bytes at another path.
+    expect(treeDigest(join(temp({ 'index.html': SITE['index.html'], 'app.js': 'go()', '.well-known/security.txt': 'Contact: x' }), BUILD_DIR))).not.toBe(digest);
+    expect(listFiles(join(a, BUILD_DIR))).toEqual(['.well-known/security.txt', 'assets/app.js', 'index.html']);
+  });
+
+  it('every environment reads the build from its input, held to this run', () => {
+    const digest = 'a'.repeat(64);
+    const good = cli('input', temp(), { BUILD: JSON.stringify({ artifact: 'kanon-deploy-build-123456-1', digest, build_ms: 5 }) });
+    expect(good.status, good.stderr).toBe(0);
+    // Attempt 2 (`GITHUB_RUN_ATTEMPT` 2, a "Re-run failed jobs") downloads attempt 1's artifact,
+    // the name the reused build output gives, never one rebuilt from the attempt (#940).
+    expect(good.outputs).toEqual({ artifact: 'kanon-deploy-build-123456-1', digest });
+    expect(readBuild(JSON.stringify({ artifact: 'kanon-deploy-build-123456-3', digest }), '123456')).toEqual({ artifact: 'kanon-deploy-build-123456-3', digest });
+    for (const bad of ['', 'not json', JSON.stringify({ artifact: 'kanon-deploy-build-999-1', digest }), JSON.stringify({ artifact: 'kanon-deploy-build-123456-1', digest: 'abc' }), JSON.stringify({ artifact: 'kanon-deploy-row-123456-1-1', digest })]) {
+      const r = cli('input', temp(), { BUILD: bad });
+      expect(r.status, bad).toBe(1);
+      expect(r.outputs.artifact, bad).toBeUndefined();
+    }
+  });
+
+  it('the downloaded build passes its check when its digest is the build job\'s, and the hook gets its path', () => {
+    const built = temp(SITE);
+    const { outputs } = cli('digest', built);
+    const { digest, artifact } = JSON.parse(outputs.build!);
+    const downloaded = temp(SITE);
+    const r = cli('check', downloaded, { ARTIFACT: artifact, DIGEST: digest });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.outputs.path).toBe(join(downloaded, BUILD_DIR));
+  });
+
+  it('a fixture run whose artifact digest differs fails at the `build` stage, before the deploy hook', () => {
+    const { outputs } = cli('digest', temp(SITE));
+    const { digest, artifact } = JSON.parse(outputs.build!);
+    const swapped = cli('check', temp({ ...SITE, 'assets/app.js': 'steal()' }), { ARTIFACT: artifact, DIGEST: digest });
+    expect(swapped.status).toBe(1);
+    expect(swapped.stderr).toContain("isn't what the build job uploaded");
+    expect(swapped.outputs.path).toBeUndefined();
+    // The job's outputs then say so, and the record writes `failed` at `build`.
+    expect(classifyEnvironment({ declare: ok, deploy: { result: 'failure', outputs: { 'started-at': T(1), 'build-failed': 'true' } }, environment: 'staging' })).toEqual({ outcome: 'failed', failed_stage: 'build' });
+    // MUTATION: the digest check removed. The swapped artifact would reach the deploy hook.
+    expect(() => checkBuild({ dir: join(temp({ ...SITE, 'assets/app.js': 'steal()' }), BUILD_DIR), artifact, digest })).toThrow(/isn't what the build job uploaded/);
+  });
+
+  it('an expired artifact fails by name: nothing was downloaded', () => {
+    const r = cli('check', temp(), { ARTIFACT: 'kanon-deploy-build-123456-1', DIGEST: 'a'.repeat(64) });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("wasn't downloaded: it expired");
+    expect(r.stderr).toContain('kanon-deploy-build-123456-1');
   });
 });

@@ -15,9 +15,9 @@
 // nor a failure: nothing is filed, commented on or closed. A production dispatch refused because
 // its actor isn't the Maintainer files as a refusal, `not-maintainer`.
 //
-// A RUN THAT STOPPED BEFORE ANY ENVIRONMENT (the gate or the probe) files on the FIRST
-// environment's issue (open-question decision 4), `sev:medium`, or `sev:high` when the first is
-// the only one: `deploy-release.yml`'s `report` job.
+// A RUN THAT STOPPED BEFORE ANY ENVIRONMENT (the gate, the probe or the build) files on the
+// FIRST environment's issue (open-question decision 4), `sev:medium`, or `sev:high` when the
+// first is the only one: `deploy-release.yml`'s `report` job.
 //
 // ENV  NEEDS          `toJSON(needs)` of the report job: the jobs it judges, and the `record` job,
 //                     whose `outcome` (read from the run's approvals) it prefers

@@ -563,26 +563,30 @@ export function isDeployProbeJob(file: string | undefined, name: string, j: Job)
  * The deploy lane's environment job (plan 0010 §4, §5): `deploy` in `deploy.yml`, setting the
  * environment the declaration names, with `contents: read`, `deployments: read` and
  * `id-token: write` alone; Kanon's supersede check, a checkout of the release's commit that
- * persists no credential, the adopter's deploy and smoke hooks, and the marks that time them; and
- * one secret, `KANON_DEPLOY_SECRET`, in the deploy hook step's `env:` alone.
+ * persists no credential, the build's download and Kanon's check of its digest (plan 0010 D5),
+ * the adopter's deploy and smoke hooks, and the marks that time them; and one secret,
+ * `KANON_DEPLOY_SECRET`, in the deploy hook step's `env:` alone. It never runs the build hook.
  */
 export function isDeployEnvJob(file: string | undefined, name: string, j: Job): boolean {
   if (file !== 'deploy.yml' || name !== 'deploy' || !only(j, DEPLOY_JOB_KEYS)) return false;
   if (j.environment !== '${{ needs.declare.outputs.environment }}') return false;
   if (JSON.stringify(j.permissions) !== JSON.stringify({ contents: 'read', deployments: 'read', 'id-token': 'write' })) return false;
   const steps = j.steps ?? [];
-  const hook = steps[5];
-  return steps.length === 9
+  const hook = steps[8];
+  return steps.length === 12
     && runs(steps[0]) === MARK
     && runs(steps[1]) === '$/actions/kanon-path'
     && runs(steps[2]) === 'node "$KANON/scripts/deploy-gate.mjs" supersede' && only(steps[2]!.env, ['GH_TOKEN', 'ENVIRONMENT', 'SHA', 'FALLBACK', 'ROLE'])
     && checkoutOf(steps[3], '${{ needs.declare.outputs.sha }}')
-    && runs(steps[4]) === MARK
+    && runs(steps[4]) === 'node "$KANON/scripts/deploy-build.mjs" input' && only(steps[4]!.env, ['BUILD'])
+    && /^actions\/download-artifact@v\d+$/.test(String(steps[5]!.uses)) && only(steps[5]!.with, ['name', 'path']) && steps[5]!.env === undefined
+    && runs(steps[6]) === 'node "$KANON/scripts/deploy-build.mjs" check' && only(steps[6]!.env, ['ARTIFACT', 'DIGEST'])
+    && runs(steps[7]) === MARK
     && hook?.uses === './.github/actions/deploy' && hook.with?.probe === 'false' && JSON.stringify(hook.env) === JSON.stringify(DEPLOY_SECRET)
-    && runs(steps[6]) === MARK
-    && steps[7]!.uses === './.github/actions/smoke'
-    && runs(steps[8]) === MARK
-    && steps.every((s, i) => i === 5 || noSecret(s)) && noSecret({ ...j, steps: [] });
+    && runs(steps[9]) === MARK
+    && steps[10]!.uses === './.github/actions/smoke'
+    && runs(steps[11]) === MARK
+    && steps.every((s, i) => i === 8 || noSecret(s)) && noSecret({ ...j, steps: [] });
 }
 
 /**
