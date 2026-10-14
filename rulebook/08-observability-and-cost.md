@@ -237,6 +237,24 @@ The lanes reach the QA store only through Kanon's **store contract**: a hook the
 
 **Class.** framework
 
+## Notifications
+
+What the lanes tell people in chat, and where the code that posts it may run ([plan 0011](../docs/plans/0011-notifications.md)).
+
+### `K-OBS-19` A lane notifies only through Kanon's notification contract, and a hook runs only in a `notify` job
+
+**Rule.**
+- **One contract.** Everything a lane sends to people in chat (the daily project digest, the weekly digest and a deploy's announcement) is one message in Kanon's notification contract, `kanon-notify`: a kind, a severity, a title, a summary, sections and links, in plain text and Kanon text, within fixed limits. One library builds and checks it, [`scripts/lib/notify-contract.mjs`](../scripts/lib/notify-contract.mjs), and [`docs/notifications.md`](../docs/notifications.md) describes it with its published JSON Schema. A lane never formats for a chat system. Its one producing job builds the message with the library's `fit` and uploads it as an artifact; it never reads a chat secret and makes no request to anything but GitHub.
+- **One place a hook runs.** Only the adopter's hook posts: the composite action at `.github/actions/notify/action.yml` (`K-LAYOUT-1`), which is Kanon's Slack hook, Kanon's generic JSON webhook hook or the adopter's own. The hook runs only in the lane's `notify` job. That job validates the message before any hook runs; it holds its kind's chat secret and no other (`KANON_CHAT_PROJECT_DIGEST`, `KANON_CHAT_WEEKLY_DIGEST` or `KANON_CHAT_DEPLOY`), a token that reads contents and nothing more, and no App key, Claude credential or OIDC grant; and it is in no workflow a pull request can start. A kind's secret appears nowhere else, except as one presence check in its lane's gate.
+- **No hook, nothing posts.** There is no built-in fallback. Without a hook, or without the kind's secret, the kind is not posted, and no model runs to write it.
+- **The run's own hook.** The `notify` job runs the hook at the run's commit, whatever branch it is on. Anyone who can push a branch and dispatch a notifying lane can therefore read that lane's chat secret. That exposure is accepted, and it is the chat secrets alone: the `notify` job never holds anything else.
+
+**Why.** Where a message goes is now the adopter's choice, so the code that posts it is the adopter's code, and adopter code must never run in a job that holds an App key or a Claude credential (`K-AGENT-49`, `K-AGENT-50`). Posting from the job that runs the model was harmless only while the poster was Kanon's own script; a job of its own, holding one chat secret, is what lets any hook run. One contract lets a hook work with every lane and every release: the limits are checked once, text nobody controls (an issue title, a model's narrative) is made safe in one tested place rather than in each lane, and a message that breaks the contract fails before anything posts. Keeping the post in a job of its own also keeps a failed post apart from the work it reports on (`K-SHIP-10`). Running the run's own hook, not the default branch's, was the Owner's choice with the risk stated: a leaked chat secret lets its holder post to one channel, and nothing more ([plan 0011](../docs/plans/0011-notifications.md) §5.3).
+
+**Enforced by.** The contract itself: `scripts/lib/notify-contract.mjs`'s `validate` and `fit`, held by `tests/library/notify-contract.test.ts`, which also holds the published schema equal to the library. The jobs, by guards [plan 0011](../docs/plans/0011-notifications.md) builds in later steps: `tests/unit/helpers/notify-jobs.ts` and `tests/unit/notify-guard.test.ts` (step N6), which fail a `notify` job that holds more than its shape allows, a `KANON_CHAT_*` secret anywhere but its own lane's `notify` job and that lane's gate, a `notify` job in a workflow with a `pull_request` or `pull_request_target` trigger, a script under `scripts/` that calls `fetch` on a host other than GitHub's or reads a chat secret, and a producer that writes Slack's syntax; `tests/library/notify-block.test.ts` (step N6), which fails a hook called before the message validates; `K-AGENT-50`'s guard, which admits the `notify` job only in that shape (step N6); `tests/unit/digest-lanes.test.ts` (steps N7 and N8), which fails a digest job that maps a chat secret; and `kanon doctor`'s `notify.hook-*` findings (step N10), which check an adopter's hook. Until steps N7 and N8 move them, the two digests still post from their own job, outside the contract.
+
+**Class.** split. The contract, the `notify` job and its guards are framework. **The project supplies:** its hook, and each kind's secret.
+
 ## Billing
 
 How an adopter pays for its agents is not a Kanon rule ([ADR 0004 §5](../docs/decisions/0004-disputed-rules.md)). Kanon works on a Claude subscription and on API billing. The trade-off, for documentation only:

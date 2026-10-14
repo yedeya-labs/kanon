@@ -124,9 +124,9 @@ A `!` after the type, or a `BREAKING CHANGE` footer, marks a breaking change. `c
 
 **Why.** In the reference adopter a timeout from the chat service raised a deploy-failure alert for a deploy that had succeeded, which is the kind of false alarm that teaches people to ignore real ones.
 
-**Enforced by.** Prose only. Kanon's deploy lane, `deploy-release.yml` and `deploy.yml`, announces nothing ([plan 0010](../docs/plans/0010-deployment-lane.md) leaves announcement out of scope), so a failure it reports is always a deploy's; the announcement is the project's own step, run separately from the deploy, reporting its own failures.
+**Enforced by.** The `notify` job of `K-OBS-19`, which [plan 0011](../docs/plans/0011-notifications.md) builds: an announcement is a `deploy` message, which `scripts/announce-deploy.mjs` produces (step N9), posted by the lane's `notify` job, a job of its own after the deploy (step N6). A failed post turns `notify` red and leaves the deploy's jobs green, and the announced version moves only after `notify` posted, so a deploy is announced once (`announce-deploy.mjs --advance`, step N9). Wiring that job into Kanon's deploy lane, `deploy-release.yml` and `deploy.yml`, is a later step of [plan 0010](../docs/plans/0010-deployment-lane.md); until then the lane announces nothing, so a failure it reports is always a deploy's, and an announcement is the project's own step, run separately from the deploy and reporting its own failures.
 
-**Class.** split. The mechanism is framework. **The project supplies:** its announcement channel (which service, and how it is wired, is the project's decision, recorded in the adoption record) and its stages.
+**Class.** split. The mechanism is framework. **The project supplies:** its announcement channel (which service, and how it is wired, is the project's decision: its notify hook and the `deploy` kind's secret, recorded in the adoption record, `K-ADOPT-1` step 10) and its stages.
 
 ### `K-SHIP-11` The stakeholder digest leads with burndown, not activity
 

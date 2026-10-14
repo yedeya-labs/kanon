@@ -107,6 +107,7 @@ Every mechanism a rule's "Enforced by" line names (`K-ADOPT-9`), each with the r
 | The digest job | `K-PROJ-13`, `K-SHIP-11` | not yet installed |
 | The observability document's guards: paging parity, signal disposition, hand-created resources | `K-PRIN-2`, `K-OBS-2`, `K-OBS-3`, `K-OBS-8`, `K-LAYOUT-5` | not yet installed |
 | The workflow-health check | `K-OBS-6` | not yet installed |
+| The notification contract and the `notify` job's guards (plan 0011): the contract's library, `scripts/lib/notify-contract.mjs`, is built, but Kanon has no notify hook and no lane posts through the contract yet | `K-OBS-19` | not yet installed |
 | The hosted telemetry store: the collector (`telemetry.yml`) and the row schema (plan 0002 S7) | `K-OBS-13`, `K-OBS-16` | installed 2026-10-06 |
 | The hosted telemetry store's quality columns, the cost-trend report and the cache-TTL detector (plan 0002) | `K-OBS-14`, `K-OBS-15` | not yet installed |
 | The fallback-model test and the fallback lists | `K-AGENT-38`, `K-OBS-15` | not yet installed |
