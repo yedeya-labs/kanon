@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { actionFiles } from './helpers/actions.js';
 import { ACTIONS, LANE_BLOCKS, PIPELINE, kanonActionOf, readBlock, selfRefOf } from './helpers/blocks.js';
 import { type WorkflowStep } from './helpers/workflow-step.js';
 
@@ -102,9 +103,11 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
     return read;
   };
 
-  it('checks every action under actions/, the five lane blocks among them', () => {
-    expect(ACTIONS).toEqual(expect.arrayContaining([...PIPELINE, 'qa-store', 'kanon-path', 'test-database']));
-    expect(ACTIONS.length).toBe(readdirSync('actions').filter((d) => existsSync(join('actions', d, 'action.yml'))).length);
+  it('checks every action under actions/, the five lane blocks and the nested ones among them', () => {
+    // kanon#927: a nested action (plan 0011's hooks) is held to the rule as a top-level one is.
+    expect(ACTIONS).toEqual(expect.arrayContaining([...PIPELINE, 'qa-store', 'kanon-path', 'test-database', 'notify/slack']));
+    // readBlock reads only `action.yml`, so an action spelled `action.yaml` would go unchecked.
+    expect(ACTIONS.map((a) => join('actions', a, 'action.yml')).sort()).toEqual(actionFiles().sort());
   });
 
   it.each([...ACTIONS])('%s declares no output that nothing reads, but those it keeps for other callers', (name) => {
@@ -139,6 +142,8 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
       'implementer-status: nothing',
       'kanon-path: path',
       'lane-check: nothing',
+      'notify/slack: nothing',
+      'notify/webhook: nothing',
       'pr-title: nothing',
       'qa-store: artifact-id artifact-name attempt commit present rows state',
       'test-database: database kind',
@@ -151,6 +156,10 @@ describe('every output an action declares is read by a caller (#314, #342)', () 
     expect(kanonActionOf('./.github/actions/qa-store')).toBeUndefined();
     expect(kanonActionOf('other/kanon/actions/dco@v0.33.0')).toBeUndefined();
     expect(kanonActionOf('yedeya-labs/kanon/infra/qa-store/aws@v0.33.0')).toBeUndefined();
+    // A nested action (plan 0011), by the name `ACTIONS` keys it by (kanon#927).
+    expect(kanonActionOf('$/actions/notify/slack')).toBe('notify/slack');
+    expect(kanonActionOf('yedeya-labs/kanon/actions/notify/slack@v0.39.0')).toBe('notify/slack');
+    expect(kanonActionOf('yedeya-labs/kanon/actions/notify/@v0.39.0')).toBeUndefined();
   });
 });
 

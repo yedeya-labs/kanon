@@ -2,9 +2,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { auditAreas, readCodeAreas } from '../../scripts/lib/code-areas.mjs';
+import { actionFiles } from './helpers/actions.js';
 import { writeStub } from './helpers/stub-bin.js';
 
 type Step = {
@@ -898,8 +900,7 @@ const ANY_PER_ROLE_APP = new RegExp(`\\b(?:${ROLES})\\b\`?(?:'s)? (?:GitHub )?Ap
 const ROOT_URL = new URL('../../', import.meta.url);
 const laneFiles = (): string[] => [
   ...readdirSync(new URL('.github/workflows/', ROOT_URL)).filter((f) => f.endsWith('.yml')).map((f) => `.github/workflows/${f}`),
-  ...readdirSync(new URL('actions/', ROOT_URL)).map((d) => `actions/${d}/action.yml`)
-    .filter((f) => existsSync(new URL(f, ROOT_URL))),
+  ...actionFiles(fileURLToPath(ROOT_URL)),
 ];
 
 describe('#474 adopter-facing lane text names the Author or Judge App, never an App per role', () => {
@@ -927,6 +928,11 @@ describe('#474 adopter-facing lane text names the Author or Judge App, never an 
     const printed = (text: string) => text.split('\n').filter((l) =>
       /^\s*-?\s*name:|\b(?:echo|printf)\b|::(?:error|warning|notice)\b|GITHUB_STEP_SUMMARY/.test(l));
     expect(offenders(printed, PER_ROLE_APP)).toEqual([]);
+  });
+
+  it('reads every lane and every action, the nested hook actions among them', () => {
+    // kanon#927: `kanon init --chat` writes a hook action's caller into an adopter's repository.
+    expect(laneFiles()).toEqual(expect.arrayContaining(['.github/workflows/implement.yml', 'actions/agent-run/action.yml', 'actions/notify/slack/action.yml']));
   });
 
   it('the guards match the per-role wording they hold, and not the two Apps or the Releaser', () => {

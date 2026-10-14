@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { actionFiles } from './helpers/actions.js';
 import { SPAWNS } from './helpers/spawns.js';
 
 const { CREDENTIALS, checkCredential } = await import('../../actions/agent-run/credential-check.mjs');
@@ -189,7 +190,8 @@ describe('agent-run hands the credential to the agent through env only', () => {
 describe('no workflow or action comment points at a credential input agent-run does not take', () => {
   const files = [
     ...readdirSync('.github/workflows').filter((f) => /\.ya?ml$/.test(f)).map((f) => join('.github/workflows', f)),
-    ...readdirSync('actions').map((d) => join('actions', d, 'action.yml')).filter((f) => existsSync(f)),
+    // Every action, nested ones too (kanon#927).
+    ...actionFiles(),
   ];
   const comments = files.flatMap((file) =>
     readFileSync(file, 'utf8')
@@ -201,6 +203,8 @@ describe('no workflow or action comment points at a credential input agent-run d
   it('reads every workflow and action comment, so the checks below are not vacuous', () => {
     expect(files).toContain('.github/workflows/review-agent-job.yml');
     expect(files).toContain('actions/agent-run/action.yml');
+    // Nested actions too (kanon#927): plan 0011's hook actions sit one level down.
+    expect(files).toContain('actions/notify/slack/action.yml');
     expect(comments.some(({ where }) => where.startsWith('.github/workflows/review-agent-job.yml'))).toBe(true);
   });
 

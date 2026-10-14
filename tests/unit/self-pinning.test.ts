@@ -1,7 +1,8 @@
 import { readFileSync, readdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { actionFiles } from './helpers/actions.js';
 
 // Plan 0001 §4 (decision 3): every reference from one Kanon file to another is `$/`, GitHub's
 // self-reference, which resolves to Kanon at the commit the caller pinned. A `./` reference
@@ -13,10 +14,7 @@ import { parse } from 'yaml';
 // files `kanon init` writes (`actions/notify/hooks/*.yml`) are the adopter's, not Kanon's, so they
 // pin Kanon by release on purpose (plan 0011 §7.1) and are not read here.
 const files = [
-  ...readdirSync('actions', { recursive: true, encoding: 'utf8' })
-    .filter((f) => basename(f) === 'action.yml')
-    .map((f) => join('actions', f))
-    .sort(),
+  ...actionFiles(),
   ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => join('.github/workflows', f)),
 ];
 
