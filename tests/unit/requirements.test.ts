@@ -45,16 +45,19 @@ describe('requirements.json', () => {
     });
   });
 
-  it("names the deploy lane's workflows, the grant each caller job makes, its hooks with their inputs, its one environment secret and its declaration (plan 0010 §12, D4)", () => {
+  it("names the deploy lane's workflows, the grant each caller job makes, its three hooks with their inputs, its one environment secret and its declaration (plan 0010 §12, D4, D5)", () => {
     // `kanon init` writes the deploy caller (D6) and `kanon doctor` checks it (D7) from this entry.
     const deploy = built.deploy as Record<string, unknown>;
     expect(deploy.workflows).toEqual({ release: 'deploy-release', environment: 'deploy' });
     expect(Object.keys((deploy.inputs as Record<string, object>)['deploy-release']!)).toEqual(['environments']);
-    // The role is never an input: the lane reads it from the declaration.
-    expect(Object.keys((deploy.inputs as Record<string, object>).deploy!)).toEqual(['environment', 'position']);
+    // The role is never an input: the lane reads it from the declaration. The build is: the
+    // caller hands each environment `deploy-release.yml`'s `build` output (plan 0010 D5).
+    expect(Object.keys((deploy.inputs as Record<string, object>).deploy!)).toEqual(['environment', 'position', 'build']);
     const g = { actions: 'read', contents: 'read', deployments: 'read', 'id-token': 'write', issues: 'write' };
     expect(deploy.grants).toEqual({ 'deploy-release': g, deploy: g });
+    // Three hooks (plan 0010 §7): the build, which runs in the build job alone, the deploy and the smoke check.
     expect(deploy.hooks).toEqual([
+      { path: '.github/actions/build/action.yml', inputs: ['output', 'release', 'sha'] },
       { path: '.github/actions/deploy/action.yml', inputs: ['artifact', 'environment', 'environments', 'probe', 'release', 'role', 'sha'] },
       { path: '.github/actions/smoke/action.yml', inputs: ['environment', 'release', 'role'] },
     ]);

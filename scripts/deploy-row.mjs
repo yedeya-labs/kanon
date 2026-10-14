@@ -6,12 +6,17 @@
 //     `declare` and `deploy` jobs' results and outputs (`toJSON(needs)`), and, when the deploy
 //     job failed without running a step, the run's approvals.
 //   • `release`, in `deploy-release.yml`'s `record` job: a run that stops before any environment
-//     (the gate or the probe) never starts the environment calls, so this writes ONE row, for the
-//     first environment, with that outcome and stage (open-question decision 4). When the run
-//     went on to the environments it writes nothing: each environment writes its own, and one
-//     stopped release is never counted as N failures. A probe skipped under the `no-environments`
-//     marker went on (the probe decision). Plan 0010's D5 adds the build job between the probe
-//     and the environments; it joins `classifyRelease` there.
+//     (the gate, the probe or the build) never starts the environment calls, so this writes ONE
+//     row, for the first environment, with that outcome and stage (open-question decision 4).
+//     When the run went on to the environments it writes nothing: each environment writes its
+//     own, and one stopped release is never counted as N failures. A probe skipped under the
+//     `no-environments` marker is skipped, not a stop (the probe decision): the build runs after
+//     the gate alone, and its own result decides.
+//
+// THE BUILD (plan 0010 decision 8, D5). A build that failed, or was cancelled, stops the run at
+// `build`. In an environment's job, an artifact that expired, isn't this run's, or differs from
+// the build job's digest fails it at `build` too (the job's `build-failed` output). Every row of a
+// run that went on carries the build's `build_ms`, from the call's `build` input.
 //
 // A REJECTION IS READ FROM THE APPROVALS, NOT THE CONCLUSION (kanon#890, D0's probe 7). A job a
 // reviewer rejected concludes `failure` with no step and no log, exactly as a job that failed
@@ -33,6 +38,7 @@
 // ENV  NEEDS          `toJSON(needs)` of the record job
 //      ENVIRONMENTS   the caller's list (`release`)
 //      ENVIRONMENT, POSITION  the call's own (`environment`)
+//      BUILD          the call's `build` input, for `build_ms` (`environment`)
 //      GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_EVENT_NAME, RUNNER_TEMP
 //      KANON_WORKFLOW_REF, KANON_WORKFLOW_SHA  `job.workflow_ref` and `job.workflow_sha`: Kanon's release
 //      GH_TOKEN       the job's `actions: read` token, for the approvals and the run's start
@@ -69,15 +75,18 @@ const stopped = (job, stage) => {
 /**
  * How a run that may have stopped before any environment ended, or `null` when it went on to
  * the environments, which then write their own rows.
- * @param {{ gate?: JobResult, probe?: JobResult }} needs
+ * @param {{ gate?: JobResult, probe?: JobResult, build?: JobResult }} needs
  * @returns {Ending | null}
  */
-export function classifyRelease({ gate, probe }) {
+export function classifyRelease({ gate, probe, build }) {
   if (gate?.result !== 'success') return stopped(gate, 'gate');
-  if (probe?.result === 'success') return null;
   // The probe decision: under the `no-environments` marker the probe is skipped, and the run goes on.
-  if (probe?.result === 'skipped' && gate.outputs?.fallback === 'no-environments') return null;
-  return stopped(probe, 'probe');
+  const probed = probe?.result === 'success' || (probe?.result === 'skipped' && gate.outputs?.fallback === 'no-environments');
+  if (!probed) return stopped(probe, 'probe');
+  if (build?.result === 'success') return null;
+  // A build skipped after a gate and a probe that let it run: the run was cancelled before it.
+  if (build?.result === 'skipped') return { outcome: 'cancelled', failed_stage: 'build' };
+  return stopped(build, 'build');
 }
 
 /**
@@ -110,6 +119,7 @@ export function classifyEnvironment({ declare, deploy, approvals = () => [], env
     case 'failure':
       if (o.refusal) return stopped(deploy, 'deploy');
       if (!started) return rejectedIn(approvals(), environment) ? { outcome: 'rejected', failed_stage: 'approval' } : { outcome: 'failed', failed_stage: 'approval' };
+      if (o['build-failed'] === 'true') return { outcome: 'failed', failed_stage: 'build' };
       if (o['smoke-outcome'] === 'failure') return { outcome: 'smoke_failed', failed_stage: 'smoke' };
       return { outcome: 'failed', failed_stage: 'deploy' };
     case 'cancelled':
@@ -155,7 +165,7 @@ const bool = (/** @type {string | undefined} */ v) => (v === 'true' ? true : v =
  * @param {{ now?: Date }} [deps]
  */
 export function releaseRow(env, { now = new Date() } = {}) {
-  const needs = /** @type {{ gate?: JobResult, probe?: JobResult }} */ (JSON.parse(env.NEEDS || '{}'));
+  const needs = /** @type {{ gate?: JobResult, probe?: JobResult, build?: JobResult }} */ (JSON.parse(env.NEEDS || '{}'));
   const ending = classifyRelease(needs);
   if (!ending) return null;
   const count = splitEnvironments(needs.gate?.outputs?.environments || env.ENVIRONMENTS).length;
@@ -165,8 +175,19 @@ export function releaseRow(env, { now = new Date() } = {}) {
     position: 1,
     ...ending,
     prerelease: bool(needs.gate?.outputs?.prerelease),
+    build_ms: between(needs.build?.outputs?.['started-at'], needs.build?.outputs?.['ended-at']),
   });
 }
+
+/** The build's duration from the call's `build` input, when it carries one. @param {string | undefined} text */
+const buildMs = (text) => {
+  try {
+    const ms = JSON.parse(String(text ?? ''))?.build_ms;
+    return Number.isInteger(ms) && ms >= 0 ? ms : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * Whether this environment's call writes no row:
@@ -217,6 +238,7 @@ export function environmentRow(env, { now = new Date(), api = ghApi } = {}) {
     // Only a dispatch's supersede check says `true` (§3); the schema refuses it on a release.
     rollback: bool(o.rollback),
     wait_ms: between(runStarted, o['started-at']),
+    build_ms: buildMs(env.BUILD),
     deploy_ms: between(o['deploy-started-at'], o['deploy-ended-at']),
     smoke_ms: between(o['deploy-ended-at'], o['ended-at']),
     duration_ms: between(o['started-at'], o['ended-at']),

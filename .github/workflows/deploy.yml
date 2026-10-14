@@ -1,8 +1,9 @@
 # The deploy lane, once per environment (plan 0010 §4 to §8, step D4). The adopter's deploy
 # caller calls it once per declared environment, in order, each call `needs:` the one before, so
 # an environment deploys only after the one before it succeeded on the same release. Called with
-# the environment and its position only: the role (`production` for the last, `pre-production`
-# for the others) is read from the adoption record at the release's commit, never passed in.
+# the environment, its position and the build the release's run made (`deploy-release.yml`'s
+# `build` output, step D5): the role (`production` for the last, `pre-production` for the
+# others) is read from the adoption record at the release's commit, never passed in.
 #
 #   declare → deploy (environment, concurrency, approval) → record → report
 #
@@ -24,12 +25,15 @@
 # cancelled mid-run (§6): `cancel-in-progress: false`, `queue: max`. Once it holds its slot and
 # its approval, the supersede check refuses, on a release, a commit older than the environment's
 # last successful deploy (`superseded`); a dispatch may roll back, and its row says so. Then it
-# checks out the release's commit, with no credential persisted, and runs the adopter's hooks:
-# `.github/actions/deploy`, which obtains the environment's credential and deploys, then
-# `.github/actions/smoke`. The deploy hook's step alone receives `KANON_DEPLOY_SECRET`, an
-# environment secret, empty when the environment holds none (plan 0010 §7, `K-AGENT-47`). From
-# plan 0010's D5 the job also downloads the build's artifact and checks its digest before the
-# deploy hook, which then receives its path as `artifact`.
+# checks out the release's commit, with no credential persisted, downloads the build's artifact
+# by the run-scoped name the `build` input gives (`kanon-deploy-build-<run id>-<attempt>`), and
+# checks its contents against the build job's SHA-256 (`scripts/deploy-build.mjs`): an expired,
+# missing or different artifact fails the job at the `build` stage, before any hook runs, and
+# nothing is rebuilt here (plan 0010 decision 8). Then it runs the adopter's hooks:
+# `.github/actions/deploy`, which obtains the environment's credential and deploys the checked
+# directory, its `artifact` input, then `.github/actions/smoke`. The deploy hook's step alone
+# receives `KANON_DEPLOY_SECRET`, an environment secret, empty when the environment holds none
+# (plan 0010 §7, `K-AGENT-47`). No environment's job runs the build hook.
 #
 # AFTER (plan 0010 §8): `record` writes this environment's `deploy` row (`scripts/deploy-row.mjs`),
 # reading the run's approvals to tell a rejection from a failure (kanon#890), and `report` files,
@@ -50,6 +54,10 @@ on:
         description: The environment's place in the declared list, from 1. The lane refuses a call whose environment isn't at this position.
         required: true
         type: number
+      build:
+        description: "The build to deploy: `deploy-release.yml`'s `build` output, as the caller's `needs.release.outputs.build`. The lane downloads the artifact it names, which must be this run's, and checks it against its digest."
+        required: true
+        type: string
 
 # Each job declares its own, and none is granted more than it uses.
 permissions: {}
@@ -107,6 +115,7 @@ jobs:
       unauthorized: ${{ steps.supersede.outputs.unauthorized }}
       redeploy: ${{ steps.supersede.outputs.redeploy }}
       rollback: ${{ steps.supersede.outputs.rollback }}
+      build-failed: ${{ steps.build-input.outcome == 'failure' || steps.download.outcome == 'failure' || steps.build-check.outcome == 'failure' }}
       deploy-started-at: ${{ steps.before-deploy.outputs.at }}
       deploy-ended-at: ${{ steps.after-deploy.outputs.at }}
       deploy-outcome: ${{ steps.deploy.outcome }}
@@ -133,6 +142,27 @@ jobs:
         with:
           ref: ${{ needs.declare.outputs.sha }}
           persist-credentials: false
+      # The build every environment deploys, never rebuilt here: this run's artifact, by the name
+      # the build job gave it, checked against the build job's digest before any hook runs.
+      - name: Read the build
+        id: build-input
+        env:
+          BUILD: ${{ inputs.build }}
+        run: node "$KANON/scripts/deploy-build.mjs" input
+      - name: Download the build
+        id: download
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ steps.build-input.outputs.artifact }}
+          path: ${{ runner.temp }}/kanon-deploy-artifact
+      # Runs after a failed download too, so an expired artifact fails by name.
+      - name: Check the build against its digest
+        id: build-check
+        if: ${{ !cancelled() && steps.build-input.outcome == 'success' }}
+        env:
+          ARTIFACT: ${{ steps.build-input.outputs.artifact }}
+          DIGEST: ${{ steps.build-input.outputs.digest }}
+        run: node "$KANON/scripts/deploy-build.mjs" check
       - name: Mark the deploy's start
         id: before-deploy
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
@@ -146,7 +176,7 @@ jobs:
           role: ${{ needs.declare.outputs.role }}
           release: ${{ needs.declare.outputs.tag }}
           sha: ${{ needs.declare.outputs.sha }}
-          artifact: ""
+          artifact: ${{ steps.build-check.outputs.path }}
           probe: "false"
           environments: ""
       - name: Mark the deploy's end
@@ -186,6 +216,7 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           ENVIRONMENT: ${{ inputs.environment }}
           POSITION: ${{ inputs.position }}
+          BUILD: ${{ inputs.build }}
           KANON_WORKFLOW_REF: ${{ job.workflow_ref }}
           KANON_WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: node "$KANON/scripts/deploy-row.mjs" environment

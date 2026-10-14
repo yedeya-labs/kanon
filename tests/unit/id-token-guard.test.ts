@@ -335,8 +335,10 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
       expect(DEPLOY_ID_TOKEN_HOLDERS.map((h) => h.is('deploy-release.yml', 'probe', job(w, 'deploy-release.yml', 'probe')) || h.is('deploy.yml', 'deploy', job(w, 'deploy.yml', 'deploy')))).toEqual([true, true]);
     });
 
-    it('id-token: write on any other job of the lane: the record, the report, the gate, the declaration', () => {
-      for (const [file, name] of [['deploy.yml', 'record'], ['deploy-release.yml', 'record'], ['deploy.yml', 'report'], ['deploy-release.yml', 'gate'], ['deploy.yml', 'declare']] as const) {
+    it('id-token: write on any other job of the lane: the build, the record, the report, the gate, the declaration', () => {
+      // The build (plan 0010 D5) runs the adopter's build hook and its dependencies: it holds no
+      // credential, so the deploy's credential never meets the build's tools.
+      for (const [file, name] of [['deploy-release.yml', 'build'], ['deploy.yml', 'record'], ['deploy-release.yml', 'record'], ['deploy.yml', 'report'], ['deploy-release.yml', 'gate'], ['deploy.yml', 'declare']] as const) {
         expect(mutate((w) => grant(job(w, file, name)))).toEqual([`${file}: job ${name} holds id-token: write ${own}; ${DEPLOY}`]);
       }
     });
@@ -351,11 +353,15 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
       expect(mutate((w) => { steps(w, 'deploy-release.yml', 'probe')[3]!.with!.probe = 'false'; })).toEqual(red);
     });
 
-    it('the environment job loses its exemption with a fixed environment, the secret anywhere but the deploy hook, a write, or a step beside its nine', () => {
+    it('the environment job loses its exemption with a fixed environment, the secret anywhere but the deploy hook, a write, or a step beside its twelve', () => {
       const red = [`deploy.yml: job deploy holds id-token: write ${own}; ${DEPLOY}`];
       expect(mutate((w) => { job(w, 'deploy.yml', 'deploy').environment = 'production'; })).toEqual(red);
-      expect(mutate((w) => { steps(w, 'deploy.yml', 'deploy')[7]!.env = { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' }; })).toEqual(red);
-      expect(mutate((w) => { steps(w, 'deploy.yml', 'deploy')[5]!.env = { OTHER: '${{ secrets.OTHER }}' }; })).toEqual(red);
+      expect(mutate((w) => { steps(w, 'deploy.yml', 'deploy')[10]!.env = { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' }; })).toEqual(red);
+      expect(mutate((w) => { steps(w, 'deploy.yml', 'deploy')[8]!.env = { OTHER: '${{ secrets.OTHER }}' }; })).toEqual(red);
+      // Plan 0010 D5: the build hook run in the environment's job, with its credential, in place
+      // of the download, or the digest check dropped.
+      expect(mutate((w) => { steps(w, 'deploy.yml', 'deploy').splice(5, 1, { uses: './.github/actions/build', with: { release: 'x', sha: 'y', output: 'z' } }); })).toEqual(red);
+      expect(mutate((w) => { steps(w, 'deploy.yml', 'deploy').splice(6, 1); })).toEqual(red);
       expect(mutate((w) => { (job(w, 'deploy.yml', 'deploy').permissions as Record<string, string>)['pull-requests'] = 'write'; })).toEqual(red);
       expect(mutate((w) => { steps(w, 'deploy.yml', 'deploy').splice(3, 0, { run: 'npm ci' }); })).toEqual(red);
       expect(mutate((w) => { (job(w, 'deploy.yml', 'deploy') as Record<string, unknown>).env = { NODE_OPTIONS: '-r x' }; })).toEqual(red);

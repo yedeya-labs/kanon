@@ -114,7 +114,9 @@ const EXEMPT = new Set([
   '.github/workflows/test-database-smoke.yml: ./.github/actions/project-setup',
   // The deploy lane calls the ADOPTER's deploy and smoke hooks (plan 0010 §7, step D4), the first
   // exception's reason again: the adopter's code at the release's commit, in the checkout the
-  // job makes. The probe calls the deploy hook too, in probe mode.
+  // job makes. The probe calls the deploy hook too, in probe mode, and the build job (step D5)
+  // the adopter's build hook, with no credential.
+  '.github/workflows/deploy-release.yml: ./.github/actions/build',
   '.github/workflows/deploy-release.yml: ./.github/actions/deploy',
   '.github/workflows/deploy.yml: ./.github/actions/deploy',
   '.github/workflows/deploy.yml: ./.github/actions/smoke',
