@@ -23,6 +23,13 @@
 //      with a signal's signature goes on that signal's issue: the issue's body becomes the signal's
 //      counts followed by every finding with the signature, so the job updates the one issue and
 //      files no second. A second finding with the same signature is one more entry on the same issue.
+//   4. Reads the open issues the job already filed (`--issues`), found by their signature marker, so
+//      that a body it updates keeps what this run's rows can't give again (#611):
+//      - a finding whose signal isn't in this run's rows (its run rows expired, or this run read
+//        none) keeps the signal's counts its issue last had, under a line saying they are from an
+//        earlier run, and keeps the issue's title;
+//      - an issue that held findings, none of which is left in the store (expired after 13 months,
+//        or erased), says so in place of the entries, on this run and every later one.
 //
 // THE TREE. A release's file list is not something this module can read without git, so the job
 // gives it as a file (`--trees`): `{ "<kanon_version>": ["<path>", ...] }`, one list per release
@@ -43,12 +50,14 @@
 // one appears.
 //
 //   node scripts/telemetry/kanon-findings.mjs --rows <file> [--known <file>] [--tag run|smoke|test]
-//     [--trees <file>] [--register <file>] [--json]
+//     [--trees <file>] [--register <file>] [--issues <file>] [--json]
 //   --rows: run rows and finding rows together, a JSON array or one row per line
 //   --known, --tag: as `kanon-bugs.mjs`
+//   --issues: the open issues, as `gh issue list --label kanon-bug --json title,body` prints them
 //   prints: with --json, `kanon-bugs.mjs`'s `{ signals, rises, skipped }` and `findings`:
 //     `{ issues, skipped, total, gate_failed }`, each issue a private one (`signature`, `labels`,
-//     `issue: { signature, title, body }`); without, a summary of counts
+//     `earlier_counts`, `expired`, `issue: { signature, title, body }`); without, a summary of counts
+//   exits: 0 printed; 2 bad arguments or input, or refused for a key; 1 any other error, by its name
 //
 // `node:` built-ins only, like every script under scripts/ (`K-SELF-8`).
 
@@ -56,7 +65,7 @@ import { readFileSync } from 'node:fs';
 
 import { FINDING_SUBJECTS, FIX_CATEGORIES, KANON_ERRORS, LANES, REASONS, REPORTERS, RULE_IDS, SCHEMAS, STAGES, validate } from '../../actions/agent-telemetry/schema.mjs';
 import { KANON_PATH, nameContext, verify } from '../../actions/agent-telemetry/scrub.mjs';
-import { assertNoKey, keyOf } from '../../infra/telemetry/function/aggregate.mjs';
+import { keyOf } from '../../infra/telemetry/function/aggregate.mjs';
 import { isCliEntry } from '../lib/cli-entry.mjs';
 import { holdsKey } from './holds-key.mjs';
 import { MARKER, detect, parseRows, signature, summary as signalSummary } from './kanon-bugs.mjs';
@@ -71,6 +80,20 @@ const SIGNAL_CLASS_LABELS = Object.freeze(['platform', 'adopter']);
 export const TEXT_FIELDS = Object.freeze(['evidence', 'suggested_fix']);
 /** What a row holds that the store set, not the lane: read for the key, never checked as the row. */
 const STORE_ONLY = Object.freeze(['pk', 'sk', 'adopter', 'source', 'received_at', 'expires_at']);
+/** The heading that opens a body's findings, whatever follows it: what marks an issue as having held one. */
+const SECTION = '## Upstream findings:';
+/** The line over a signal's counts that this run's rows no longer give. */
+export const EARLIER = "**Counts from an earlier run.** This run's rows hold no run of this signal: its run rows have expired, or this run read none. The counts below are the ones this issue last had.";
+/** What the findings section says once none of its findings is left in the store. */
+export const EXPIRED_HEAD = 'none left in the store';
+/** The opening of a body with no signal's counts in it. */
+const FINDING_ONLY = [
+  `Upstream findings sent by adopters' lanes (plan 0006), with no matching signal in the run rows. Codes, Kanon's paths and counts only, except for the evidence text below. No adopter, repository or run is named.`,
+  '',
+  'A human triages this issue; the job that filed it does nothing else (`K-PRIN-6`).',
+];
+/** A body's last line, the marker the job finds an issue by. */
+const TAIL = new RegExp(`\\n*<!-- ${MARKER}=([0-9a-f]+) -->\\s*$`);
 /** A GitHub issue body holds 65,536 characters; past this, a finding's text is left out and counted. */
 export const BODY_BUDGET = 60_000;
 /** The schema's `kanon_version` pattern, read from the finding row's field list rather than copied. */
@@ -80,6 +103,14 @@ const VERSION = (() => {
   return f.re;
 })();
 
+/** The output would hold an adopter key: the one refusal the CLI reports as one. */
+export class KeyRefusal extends Error {
+  constructor() {
+    super('the output holds an adopter key; nothing is returned');
+    this.name = 'KeyRefusal';
+  }
+}
+
 /**
  * @typedef {import('./kanon-bugs.mjs').Row} Row
  * @typedef {import('./kanon-bugs.mjs').Signal} Signal
@@ -88,11 +119,12 @@ const VERSION = (() => {
  *   kanon_error: string | null, reason: string | null, kanon_version: string, rules: string[], paths: string[],
  *   withheld_paths: number, fix_category: string, evidence_level: string, evidence: string | null,
  *   suggested_fix: string | null, recorded_at: string, order: string, problems: Problem[], signature: string }} Finding
- * @typedef {{ kind: 'finding', signature: string, signal: boolean, labels: string[], findings: number,
- *   adopters: number, gate_failed: number, issue: { signature: string, title: string, body: string } }} FindingIssue
+ * @typedef {{ kind: 'finding', signature: string, signal: boolean, earlier_counts: boolean, expired: boolean, labels: string[],
+ *   findings: number, adopters: number, gate_failed: number, issue: { signature: string, title: string, body: string } }} FindingIssue
+ * @typedef {{ title: string, counts: string | null, classification: string | null, findings: boolean }} Prior
  * @typedef {{ not_finding: number, no_version: number, no_adopter: number }} FindingSkipped
  * @typedef {{ trees?: Record<string, readonly string[]>, names?: Record<string, Iterable<string>>, keys?: Iterable<string>,
- *   known?: Iterable<string>, tag?: string }} Options
+ *   known?: Iterable<string>, tag?: string, issues?: readonly { title: string, body: string }[] }} Options
  */
 
 /** A code read only when it is in Kanon's list; absent or anything else is `null`. */
@@ -101,18 +133,45 @@ const codeIn = (/** @type {unknown} */ v, /** @type {readonly string[]} */ list)
 const items = (/** @type {unknown} */ v) => (Array.isArray(v) ? v.map(String) : typeof v === 'string' && v !== '' ? v.split(',') : []);
 
 /**
- * Refuse a value that holds an adopter key: as a whole value (`assertNoKey`), or as a word inside
- * any string, which an issue body would carry where `assertNoKey` can't see it.
+ * Refuse a value that holds an adopter key: as a whole value (as the aggregate's `assertNoKey`), or
+ * as a word inside any string, which an issue body would carry. Throws a `KeyRefusal`, and only for a key.
  * @param {unknown} value
  * @param {Set<string>} keys
  */
 export function assertNoKeyIn(value, keys) {
-  assertNoKey(value, keys);
   const walk = (/** @type {unknown} */ v) => {
-    if (typeof v === 'string') { for (const k of keys) if (holdsKey(v, k)) throw new Error('the output holds an adopter key; nothing is returned'); return; }
+    if (typeof v === 'string') { if (keys.has(v) || [...keys].some((k) => holdsKey(v, k))) throw new KeyRefusal(); return; }
     if (v && typeof v === 'object') for (const x of Object.values(v)) walk(x);
   };
   walk(value);
+}
+
+/**
+ * The open issues the job filed, by the signature in their marker: each one's title, the signal's
+ * counts its body last held (without the earlier-run line, so it is never added twice), and whether
+ * it held findings. An issue with no marker, or a body that isn't a string, is not one of them.
+ * @param {readonly unknown[]} issues
+ * @returns {Map<string, Prior>}
+ */
+export function readIssues(issues) {
+  /** @type {Map<string, Prior>} */
+  const out = new Map();
+  for (const i of issues) {
+    const { title, body: raw } = /** @type {{ title?: unknown, body?: unknown }} */ (i ?? {});
+    if (typeof title !== 'string' || typeof raw !== 'string') continue;
+    // A body edited on GitHub's page comes back with CRLF line ends.
+    const body = raw.replaceAll('\r\n', '\n');
+    const m = TAIL.exec(body);
+    if (!m) continue;
+    const rest = body.slice(0, m.index);
+    const at = rest.startsWith(SECTION) ? 0 : rest.indexOf(`\n${SECTION}`);
+    let head = (at === -1 ? rest : rest.slice(0, at)).replace(/\s+$/, '');
+    if (head.startsWith(`${EARLIER}\n`)) head = head.slice(EARLIER.length).replace(/^\s+/, '');
+    const counts = head === '' || head.startsWith(/** @type {string} */ (FINDING_ONLY[0])) ? null : head;
+    const classification = counts ? (/\*\*Classification: `([a-z]+)`\.\*\*/.exec(counts)?.[1] ?? null) : null;
+    out.set(/** @type {string} */ (m[1]), { title, counts, classification, findings: at !== -1 });
+  }
+  return out;
 }
 
 /**
@@ -241,30 +300,34 @@ function findingTitle(f) {
 }
 
 /**
- * The private issue of one signature: the signal's body, if there is one, then every finding.
+ * The private issue of one signature: the signal's body, if there is one (this run's, or else the
+ * counts its open issue last had), then every finding, or, with none left, a line saying so.
  * @param {string} sig
- * @param {Finding[]} findings sorted
+ * @param {Finding[]} findings sorted; empty when the open issue's findings have all expired
  * @param {Signal | undefined} signal
+ * @param {Prior} [prior] the open issue of this signature, if there is one
  * @returns {FindingIssue}
  */
-export function renderFindingIssue(sig, findings, signal) {
-  const first = /** @type {Finding} */ (findings[0]);
+export function renderFindingIssue(sig, findings, signal, prior) {
+  const first = findings[0];
   const adopters = new Set(findings.map((f) => f.key)).size;
   const failed = findings.filter((f) => f.problems.length).length;
   const tail = `\n\n<!-- ${MARKER}=${sig} -->`;
+  const earlier = !signal && Boolean(prior?.counts);
   const head = signal
     ? [signal.issue.body.endsWith(tail) ? signal.issue.body.slice(0, -tail.length) : signal.issue.body, '']
+    : earlier ? [EARLIER, '', /** @type {string} */ (prior?.counts), ''] : [...FINDING_ONLY, ''];
+  const intro = first
+    ? [
+      `${SECTION} ${findings.length}, from ${adopters} adopter(s)${failed ? `, ${failed} failing the gate` : ''}`,
+      '',
+      "**Private.** The evidence and suggested fix below are for Kanon's maintainer only, and never go into a public issue (plan 0006 §7.6).",
+    ]
     : [
-      `Upstream findings sent by adopters' lanes (plan 0006), with no matching signal in the run rows. Codes, Kanon's paths and counts only, except for the evidence text below. No adopter, repository or run is named.`,
+      `${SECTION} ${EXPIRED_HEAD}`,
       '',
-      'A human triages this issue; the job that filed it does nothing else (`K-PRIN-6`).',
-      '',
+      "This issue held upstream findings, and none of them is in the store any more: a finding row is kept 13 months (30 days at tag `test` or `smoke`), and an adopter's erasure removes its rows sooner (plan 0006 §2.3). So their entries, and their evidence, are no longer shown.",
     ];
-  const intro = [
-    `## Upstream findings: ${findings.length}, from ${adopters} adopter(s)${failed ? `, ${failed} failing the gate` : ''}`,
-    '',
-    "**Private.** The evidence and suggested fix below are for Kanon's maintainer only, and never go into a public issue (plan 0006 §7.6).",
-  ];
   /** @type {string[]} */
   const blocks = [];
   let size = [...head, ...intro].join('\n').length + tail.length;
@@ -285,20 +348,23 @@ export function renderFindingIssue(sig, findings, signal) {
     unlisted ? `${unlisted} more finding(s) with this signature not listed: the issue body is full.` : '',
   ].filter(Boolean);
   const body = [...head, ...intro, '', blocks.join('\n\n'), ...(full.length ? ['', ...full] : [])].join('\n').replace(/\n+$/, '') + tail;
-  const labels = [LABELS.bug, ...(signal && SIGNAL_CLASS_LABELS.includes(signal.classification) ? [signal.classification] : []), LABELS.finding, ...(failed ? [LABELS.gateFailed] : [])];
+  const classification = signal ? signal.classification : earlier ? prior?.classification : null;
+  const labels = [LABELS.bug, ...(classification && SIGNAL_CLASS_LABELS.includes(classification) ? [classification] : []), LABELS.finding, ...(failed ? [LABELS.gateFailed] : [])];
+  // A title from the finding's codes only for a new issue: an open one keeps its own.
+  const title = signal ? signal.issue.title : prior ? prior.title : findingTitle(/** @type {Finding} */ (first));
   return {
-    kind: 'finding', signature: sig, signal: Boolean(signal), labels, findings: findings.length, adopters, gate_failed: failed,
-    issue: { signature: sig, title: signal ? signal.issue.title : findingTitle(first), body },
+    kind: 'finding', signature: sig, signal: Boolean(signal), earlier_counts: earlier, expired: !first,
+    labels, findings: findings.length, adopters, gate_failed: failed, issue: { signature: sig, title, body },
   };
 }
 
 /**
  * The plan: `detect`'s signals and rises, unchanged, and one private issue per signature that has
- * a finding (the file's head says what each holds).
+ * a finding, or whose open issue held findings that have all expired (the file's head says what each holds).
  * @param {Row[]} rows run rows and finding rows together
  * @param {Options} [opts]
  */
-export function plan(rows, { trees = {}, names = {}, keys = [], known = [], tag = 'run' } = {}) {
+export function plan(rows, { trees = {}, names = {}, keys = [], known = [], tag = 'run', issues = [] } = {}) {
   const runRows = rows.filter((r) => r?.row_kind !== 'finding');
   const findingRows = rows.filter((r) => r?.row_kind === 'finding');
   const bugs = detect(runRows, { known, tag });
@@ -320,10 +386,12 @@ export function plan(rows, { trees = {}, names = {}, keys = [], known = [], tag 
     groups.set(r.finding.signature, g);
   }
   const signals = new Map(bugs.signals.map((s) => [s.signature, s]));
-  const issues = [...groups].map(([sig, fs]) => renderFindingIssue(sig, fs.sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0)), signals.get(sig)))
+  const priors = readIssues(issues);
+  for (const [sig, p] of priors) if (p.findings && !groups.has(sig)) groups.set(sig, []);
+  const planned = [...groups].map(([sig, fs]) => renderFindingIssue(sig, fs.sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0)), signals.get(sig), priors.get(sig)))
     .sort((a, b) => a.signature.localeCompare(b.signature));
-  const total = issues.reduce((n, i) => n + i.findings, 0);
-  const result = { ...bugs, findings: { issues, skipped, total, gate_failed: issues.reduce((n, i) => n + i.gate_failed, 0) } };
+  const total = planned.reduce((n, i) => n + i.findings, 0);
+  const result = { ...bugs, findings: { issues: planned, skipped, total, gate_failed: planned.reduce((n, i) => n + i.gate_failed, 0) } };
   assertNoKeyIn(result, allKeys);
   return result;
 }
@@ -332,8 +400,10 @@ export function plan(rows, { trees = {}, names = {}, keys = [], known = [], tag 
 export function summary(r) {
   const f = r.findings;
   const skipped = Object.entries(f.skipped).filter(([, n]) => n).map(([k, n]) => `${n} ${k.replaceAll('_', ' ')}`).join(', ');
+  const expired = f.issues.filter((i) => i.expired).length;
   return `${signalSummary(r)} ${f.total} finding(s) on ${f.issues.length} private issue(s), `
-    + `${f.issues.filter((i) => i.signal).length} of them a signal's; ${f.gate_failed} failed the gate.${skipped ? ` Finding rows skipped: ${skipped}.` : ''}`;
+    + `${f.issues.filter((i) => i.signal).length} of them a signal's${expired ? `, ${expired} of them with every finding expired` : ''}; `
+    + `${f.gate_failed} failed the gate.${skipped ? ` Finding rows skipped: ${skipped}.` : ''}`;
 }
 
 /**
@@ -342,14 +412,14 @@ export function summary(r) {
  * @returns {{ code: number, out: string }}
  */
 export function main(argv) {
-  const usage = 'usage: kanon-findings.mjs --rows <file> [--known <file>] [--tag run|smoke|test] [--trees <file>] [--register <file>] [--json]';
+  const usage = 'usage: kanon-findings.mjs --rows <file> [--known <file>] [--tag run|smoke|test] [--trees <file>] [--register <file>] [--issues <file>] [--json]';
   /** @type {Record<string, string>} */
   const opts = {};
   let json = false;
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--json') { json = true; continue; }
-    if (['--rows', '--known', '--tag', '--trees', '--register'].includes(String(a)) && argv[i + 1] !== undefined) { opts[String(a).slice(2)] = /** @type {string} */ (argv[i + 1]); i += 1; continue; }
+    if (['--rows', '--known', '--tag', '--trees', '--register', '--issues'].includes(String(a)) && argv[i + 1] !== undefined) { opts[String(a).slice(2)] = /** @type {string} */ (argv[i + 1]); i += 1; continue; }
     return { code: 2, out: usage };
   }
   if (!opts.rows) return { code: 2, out: usage };
@@ -372,6 +442,13 @@ export function main(argv) {
       o.trees = t;
     }
     if (opts.register) Object.assign(o, registerContext(JSON.parse(readFileSync(opts.register, 'utf8'))));
+    if (opts.issues) {
+      const l = JSON.parse(readFileSync(opts.issues, 'utf8'));
+      if (!Array.isArray(l) || !l.every((i) => i && typeof i === 'object' && typeof i.title === 'string' && typeof i.body === 'string')) {
+        return { code: 2, out: '--issues is not a JSON array of issues, each with a title and a body' };
+      }
+      o.issues = l;
+    }
   } catch (e) {
     // The error's name only: a message could quote a row or the register.
     return { code: 2, out: `could not read the input (${e instanceof Error ? e.name : 'error'})` };
@@ -379,8 +456,11 @@ export function main(argv) {
   let r;
   try {
     r = plan(rows, o);
-  } catch {
-    return { code: 2, out: 'refused: the output would hold an adopter key, so nothing is printed' };
+  } catch (e) {
+    if (e instanceof KeyRefusal) return { code: 2, out: 'refused: the output would hold an adopter key, so nothing is printed' };
+    // Anything else is no key: a bug, or a row of a shape the plan didn't expect. Its name only,
+    // since its message could quote a row.
+    return { code: 1, out: `could not plan the issues (${e instanceof Error ? e.name : 'error'})` };
   }
   return { code: 0, out: json ? JSON.stringify(r, null, 2) : summary(r) };
 }
