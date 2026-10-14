@@ -486,18 +486,19 @@ describe('the region and the cost (§5, §9)', () => {
 
 describe('the register (§5)', () => {
   it('renders the parameters the deploy takes', () => {
-    expect(parameters).toEqual([
+    expect(parameters.slice(0, -1)).toEqual([
       `OwnerPrincipalArn=${register.owner_principal_arn}`, 'CreateOidcProvider=true', 'ReservedConcurrency=0',
       'EnableVerify=false', 'EnableImporter=false', 'EnableBackfill=false',
     ]);
-    expect(render(register, { verify: true, importer: true, backfill: true, gh }).parameters.slice(3))
+    expect(parameters.at(-1)).toMatch(/^CursorKey=[0-9a-f]{64}$/);
+    expect(render(register, { verify: true, importer: true, backfill: true, gh }).parameters.slice(3, 6))
       .toEqual(['EnableVerify=true', 'EnableImporter=true', 'EnableBackfill=true']);
   });
   it("writes OperatorJobRoleArns only when given, as role ARNs, so a later deploy without it keeps the stack's value (plan 0008 §5.3)", () => {
     const a = `arn:aws:iam::${'1'.repeat(12)}:role/ops-job-a`;
     const b = `arn:aws:iam::${'1'.repeat(12)}:role/ops-job-b`;
     expect(parameters.some((p: string) => p.startsWith('OperatorJobRoleArns='))).toBe(false);
-    expect(render(register, { operatorJobRoles: `${a},${b}`, gh }).parameters.at(-1)).toBe(`OperatorJobRoleArns=${a},${b}`);
+    expect(render(register, { operatorJobRoles: `${a},${b}`, gh }).parameters.at(-2)).toBe(`OperatorJobRoleArns=${a},${b}`);
     // A `*` or `?` in the role name is a wildcard to IAM's `ArnNotEquals`, so it would exempt
     // every matching role from the register table's deny (#729).
     const acct = `arn:aws:iam::${'1'.repeat(12)}`;
@@ -505,6 +506,28 @@ describe('the register (§5)', () => {
       `${acct}:role/*`, `${acct}:role/a?`, `${a},${acct}:role/ops-*`, `${acct}:role/*/x`]) {
       expect(() => render(register, { operatorJobRoles: bad, gh }), bad).toThrow(/--operator-job-roles must list role ARNs/);
     }
+  });
+  // Plan 0008 §9 step 3a (step J5): vM's deploy sets the token path's floor and a fresh cursor key.
+  it('writes MinTokenVersion only when given, as X.Y.Z, so a later deploy without it keeps the stack\'s value', () => {
+    expect(parameters.some((p: string) => p.startsWith('MinTokenVersion='))).toBe(false);
+    const p = render(register, { minTokenVersion: '0.41.0', operatorJobRoles: `arn:aws:iam::${'1'.repeat(12)}:role/ops`, gh }).parameters;
+    expect(p.slice(-3, -1)).toEqual([`OperatorJobRoleArns=arn:aws:iam::${'1'.repeat(12)}:role/ops`, 'MinTokenVersion=0.41.0']);
+    // The template's own pattern, so a value it would refuse is refused before a deploy.
+    expect(template.Parameters.MinTokenVersion.AllowedPattern).toBe('^$|^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$');
+    for (const bad of ['', 'v0.41.0', '0.41', '0.41.0-rc.1', '00.41.0', '0.41.0 ', '1.2.3.4']) {
+      expect(() => render(register, { minTokenVersion: bad, gh }), bad).toThrow(/--min-token-version must be a release as X\.Y\.Z/);
+    }
+  });
+  it('writes a fresh CursorKey on every render, as the template asks of every deploy, and only to the parameters', () => {
+    const one = render(register, { gh });
+    const two = render(register, { gh });
+    const key = (r: { parameters: string[] }) => r.parameters.find((p) => p.startsWith('CursorKey='))!.slice('CursorKey='.length);
+    expect(key(one)).toMatch(/^[0-9a-f]{64}$/);
+    expect(key(one)).not.toBe(key(two));
+    expect(JSON.stringify(one.template)).not.toContain(key(one));
+    expect(template.Parameters.CursorKey).toMatchObject({ NoEcho: true, AllowedPattern: '^$|^[0-9a-f]{64}$' });
+    expect(key(render(register, { cursorKey: () => 'ab'.repeat(32), gh }))).toBe('ab'.repeat(32));
+    expect(() => render(register, { cursorKey: () => 'not hex', gh })).toThrow(/CursorKey made is not 64 hex/);
   });
   it('the example names only Kanon', () => {
     expect(example.repositories.map((r: { repository: string }) => r.repository)).toEqual(['yedeya-labs/kanon']);

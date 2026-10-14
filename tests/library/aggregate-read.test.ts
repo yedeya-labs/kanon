@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { AggregateError, MIN_ADOPTERS, checkAggregate, isEmpty, readAggregate, regionOfAggregateUrl, summaryLine } from '../../scripts/aggregate-read.mjs';
+import { AggregateError, MIN_ADOPTERS, aggregateStore, checkAggregate, isEmpty, readAggregate, readAggregateToken, regionOfAggregateUrl, summaryLine, tokenRefusal } from '../../scripts/aggregate-read.mjs';
 import { masksOf } from '../../scripts/aggregate-mask.mjs';
+import { HOSTED_AGGREGATE_URL } from '../../scripts/lib/telemetry-token.mjs';
+import { HOSTED_URL, RUNNER_ENV, SELF_AUDIENCE, SELF_URL, TOKEN, tokenNet } from '../unit/helpers/token-net.js';
 
 /**
  * Plan 0004 step 14, plan 0002 §6.1: the telemetry Explorer's read of the aggregate. One signed
@@ -129,5 +131,79 @@ describe('masksOf (kanon#433): the two variables and the account id inside the r
   it('masks nothing empty, and no account id it cannot read', () => {
     expect(masksOf({ URL: '', ROLE: '' })).toEqual([]);
     expect(masksOf({ ROLE: 'not-an-arn' })).toEqual(['not-an-arn']);
+  });
+});
+
+// ── The token way (plan 0008 §3.6, step J5) ───────────────────────────────────────────────────────
+describe('readAggregateToken: one GET on the token URL, with a fresh OIDC token', () => {
+  const SELF_ENV = { ...RUNNER_ENV, KANON_AGGREGATE_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE };
+
+  it('asks the runner for the store\'s audience, sends the token as a bearer to the hosted URL, and checks the answer', async () => {
+    const net = tokenNet(() => ({ status: 200, json: answer() }));
+    const masked: string[] = [];
+    const a = await readAggregateToken({ env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: (x) => masked.push(x), hostedUrl: HOSTED_URL });
+    expect(a).toEqual(answer());
+    expect(net.calls).toEqual([expect.objectContaining({ url: HOSTED_URL, method: 'GET', query: {}, auth: `Bearer ${TOKEN}1` })]);
+    // The token is masked before it is sent, and the hosted URL, public, is not.
+    expect(masked).toEqual([`${TOKEN}1`]);
+  });
+
+  it('reads a self-hosted store only with its URL and audience together, masking the URL first', async () => {
+    const net = tokenNet(() => ({ status: 200, json: answer() }));
+    const masked: string[] = [];
+    await readAggregateToken({ env: SELF_ENV, fetchImpl: net.fetchImpl, mask: (x) => masked.push(x), hostedUrl: HOSTED_URL });
+    expect(net.calls.map((c) => c.url)).toEqual([SELF_URL]);
+    expect(masked).toEqual([SELF_URL, `${TOKEN}1`]);
+    for (const env of [{ KANON_AGGREGATE_TOKEN_URL: SELF_URL }, { KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE }]) {
+      const none = tokenNet(() => ({ status: 200, json: answer() }));
+      await expect(readAggregateToken({ env: { ...RUNNER_ENV, ...env }, fetchImpl: none.fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL }))
+        .rejects.toThrow(/name a self-hosted store together/);
+      // Refused before any token is minted.
+      expect(none.minted).toEqual([]);
+    }
+    // The hosted audience never goes to another URL (§2.1).
+    await expect(readAggregateToken({ env: { ...SELF_ENV, KANON_TELEMETRY_AUDIENCE: 'kanon-telemetry' }, fetchImpl: tokenNet(() => ({ status: 200 })).fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL }))
+      .rejects.toThrow(/only ever sent to the hosted store's URL/);
+  });
+
+  it('says the hosted URL is not published, before minting, while the constant is empty', async () => {
+    const net = tokenNet(() => ({ status: 200, json: answer() }));
+    await expect(readAggregateToken({ env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: () => {}, hostedUrl: '' })).rejects.toThrow(/not published/);
+    expect(net.minted).toEqual([]);
+    expect(aggregateStore({}, '')).toMatchObject({ ok: false, unpublished: true });
+    if (!HOSTED_AGGREGATE_URL) expect(aggregateStore({})).toMatchObject({ ok: false, unpublished: true });
+  });
+
+  it('asks for the page view by name when told to', async () => {
+    const net = tokenNet(() => ({ status: 403, json: { error: 'workflow' } }));
+    await expect(readAggregateToken({ env: RUNNER_ENV, fetchImpl: net.fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL, view: 'page' })).rejects.toThrow(AggregateError);
+    expect(net.calls[0]!.query).toEqual({ view: 'page' });
+  });
+
+  it('names each refusal by the store\'s code, never with the URL or the token, and refuses an answer that fails the check', async () => {
+    const cases: Array<[number, unknown, RegExp]> = [
+      [403, { error: 'invoker' }, /answered 403 \(invoker\): this repository's registration doesn't set `aggregate_invoker`/],
+      [404, { error: 'not-registered' }, /answered 404 \(not-registered\): this repository is not registered/],
+      [403, { error: 'suspended' }, /\(suspended\): Kanon's operator has suspended/],
+      [410, { error: 'erased' }, /\(erased\): this repository's telemetry was erased/],
+      [403, { error: 'ref' }, /default branch only/],
+      [429, { error: 'quota' }, /quota is spent/],
+      [401, { error: 'aud' }, /answered 401 \(aud\)$/],
+      [502, { error: 'Some Value With Words' }, /answered 502$/],
+    ];
+    for (const [status, json, want] of cases) {
+      const net = tokenNet(() => ({ status, json }));
+      const e = await readAggregateToken({ env: SELF_ENV, fetchImpl: net.fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL }).catch((x: Error) => x);
+      expect(e, String(status)).toBeInstanceOf(AggregateError);
+      expect((e as Error).message).toMatch(want);
+      expect((e as Error).message).not.toContain('abc123def');
+      expect((e as Error).message).not.toContain(TOKEN);
+    }
+    expect(tokenRefusal(500, null)).toBe('the aggregate function answered 500');
+    await expect(readAggregateToken({ env: SELF_ENV, fetchImpl: tokenNet(() => ({ status: 200, text: '<html>' })).fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL })).rejects.toThrow(/not JSON/);
+    await expect(readAggregateToken({ env: SELF_ENV, fetchImpl: tokenNet(() => ({ status: 200, json: answer({ min_adopters: 2 }) })).fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL })).rejects.toThrow(/below 3/);
+    // No token from the runner: the job lacks `id-token: write`.
+    await expect(readAggregateToken({ env: { KANON_AGGREGATE_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE }, fetchImpl: tokenNet(() => ({ status: 200 })).fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL }))
+      .rejects.toThrow(/holds no OIDC token/);
   });
 });

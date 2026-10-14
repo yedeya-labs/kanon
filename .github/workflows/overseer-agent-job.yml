@@ -33,8 +33,8 @@ on:
       telemetry-status:
         description: >-
           The telemetry read's status (kanon#470): `ran` when the lane's `telemetry` job read this
-          repository's own rows into `token-trend.md` and `cache-ttl.md`, `not configured` without
-          a reader role, `not run on this trigger` on the runtime-version trigger, `failed`
+          repository's own rows into `token-trend.md` and `cache-ttl.md`, `not configured` when the
+          repository doesn't send telemetry or isn't registered yet, `not run on this trigger` on the runtime-version trigger, `failed`
           otherwise. Written into the export's manifest as `telemetry`.
         required: false
         type: string
@@ -309,9 +309,10 @@ jobs:
               classes".
             - THE TELEMETRY READ, which wrote the two cost files below. `manifest.json`'s
               `telemetry` says how it went: `ran` (both files are computed from this
-              repository's own telemetry rows), `not configured` (no telemetry reader role is
-              mapped, so it wasn't read), `not run on this trigger` (the runtime-version trigger,
-              whose token the reader role refuses, so the read wasn't tried) or `failed` (the
+              repository's own telemetry rows), `not configured` (this repository doesn't
+              send telemetry, or isn't registered with the store yet, so it wasn't read), `not run
+              on this trigger` (the runtime-version trigger, whose token the store refuses, so the
+              read wasn't tried) or `failed` (the
               read was tried and didn't work). A file can also come from this project's own
               store hook. When a file is missing,
               REPORT THAT STATUS, in those words, and nothing more: a missing file NEVER means

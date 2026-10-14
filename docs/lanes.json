@@ -77,11 +77,11 @@
       "name": "Explore the telemetry",
       "group": "explore",
       "does": "Reads Kanon's hosted telemetry aggregate weekly, never a row, and files or drafts the anomalies it finds in Kanon's lanes: failures by lane, stage, error and Kanon version, and costs per lane and model.",
-      "needs": ["an aggregate invoker role from Kanon's telemetry register (`aggregate_invoker`), whose ARN is the secret `KANON_AGGREGATE_ROLE`, and the repository variable `KANON_AGGREGATE_URL` (docs/telemetry.md)"],
+      "needs": ["a registration with Kanon's telemetry store that sets `aggregate_invoker`, which Kanon's operator sets; the lane reads the aggregate with GitHub's OIDC token, so no role, secret or variable (docs/telemetry.md)"],
       "cost": "A model run weekly, skipped when the aggregate holds no cell and no signal.",
       "minutes": "At Kanon's pace, about 1 runner-minute a day: about 6 per weekly run.",
       "recommend": [],
-      "when": "When your telemetry register entry has an aggregate invoker role, so you can read the aggregate."
+      "when": "When your telemetry registration sets `aggregate_invoker`, so you can read the aggregate."
     },
     "agent-triage": {
       "name": "Triage and fix",
@@ -160,7 +160,7 @@
     "agent-overseer": {
       "name": "Overseer (optional)",
       "group": "oversight",
-      "does": "Audits the pipeline weekly from its aggregate, including its cost trend where you map a telemetry reader role, and files what you can act on as `pipeline-improvement` issues. Where your adoption record turns the capability watch on, it also audits when a Kanon upgrade moves the agent runtime past its capability ledger's watermark.",
+      "does": "Audits the pipeline weekly from its aggregate, including its cost trend where your repository sends telemetry, and files what you can act on as `pipeline-improvement` issues. Where your adoption record turns the capability watch on, it also audits when a Kanon upgrade moves the agent runtime past its capability ledger's watermark.",
       "needs": [],
       "cost": "A model run weekly, plus, where the capability watch is on, one when a Kanon upgrade moves the agent runtime forward. Every other merged Kanon upgrade runs only a short gate job.",
       "minutes": "At Kanon's pace, about 17 runner-minutes a day: about 21 per audit, while a run its gate turns away takes a few minutes.",
@@ -263,7 +263,7 @@
         "agent-project-digest": { "secret": "DIGEST_WEBHOOK", "condition": "when the repository holds the chat channel's webhook, `DIGEST_WEBHOOK`" }
       },
       "leftOut": {
-        "agent-explore-telemetry": "It needs an aggregate invoker role that Kanon's operator issues after registration (docs/telemetry.md), so nothing done at install makes it work."
+        "agent-explore-telemetry": "It needs a registration that sets `aggregate_invoker`, which only Kanon's operator sets after the collector's first run registers the repository (docs/telemetry.md), so nothing done at install makes it work."
       },
       "apps": ["author", "judge"],
       "steps": [

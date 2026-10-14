@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { AGGREGATE_FILE, AGGREGATE_JOB, agentJobProblems, idTokenProblems, isAggregateJob, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
+import { AGGREGATE_FILE, AGGREGATE_JOB, AGGREGATE_TOKEN_ENV, agentJobProblems, idTokenProblems, isAggregateJob, telemetryReads, type Job, type Workflow } from './helpers/store-jobs.js';
 import { handedIn, mintFor, readFlattened, workflowText } from './helpers/called-workflow.js';
 import { LANES, LANE_ROLES } from '../../actions/agent-telemetry/schema.mjs';
 import { TRIGGERS } from '../../cli/callers.mjs';
@@ -10,9 +10,9 @@ import { FINDING_ARTIFACT_FILE, findingArtifactName } from '../../scripts/lib/te
 
 /**
  * Plan 0004 step 14 (decision 13), plan 0002 §6.1: the Explorer's telemetry mode, a lane of its
- * own (`agent-explore-telemetry.yml`). One job, `aggregate`, holds `id-token: write`: it assumes
- * the repository's aggregate invoker role, calls the aggregate-only function with a signed `GET`,
- * and hands the checked answer on as an artifact. The agent's job holds no cloud credentials and
+ * own (`agent-explore-telemetry.yml`). One job, `aggregate`, holds `id-token: write`: it sends a
+ * fresh GitHub OIDC token to the aggregate-only function's token URL with a `GET` (plan 0008 §3.6,
+ * step J5), and hands the checked answer on as an artifact. The agent's job holds no cloud credentials and
  * a token that reads only. A `file` job with no agent checks the agent's findings against the
  * aggregate and files them (`scripts/telemetry-file.mjs`, held by
  * `tests/library/telemetry-file.test.ts`).
@@ -43,17 +43,22 @@ describe('where the mode lives: a lane of its own, any repository can install', 
     expect(byId('finish').with).toMatchObject({ lane: 'explore-telemetry', agent: 'telemetry-explorer' });
   });
 
-  it('names no repository, no account and no key: the URL is a variable, the role a secret its caller maps', () => {
+  it('names no repository, no account and no key, and takes no role: a self-hosted store is two variables, the hosted one a constant (plan 0008 J5)', () => {
     const text = workflowText(LANE_FILE);
     expect(text).not.toMatch(/arn:aws|\d{12}|lambda-url\.[a-z0-9-]+\.on\.aws\//);
     expect(text).not.toMatch(/yedeya-labs\/kanon[^/]|github\.repository == /);
     const vars = [...new Set([...text.matchAll(/vars\.([A-Z_]+)/g)].map((m) => m[1]))].sort();
-    expect(vars).toEqual(['KANON_AGGREGATE_URL']);
+    expect(vars).toEqual(['KANON_AGGREGATE_TOKEN_URL', 'KANON_TELEMETRY_AUDIENCE']);
+    // No AWS credential anywhere in the lane: the token is the only way in.
+    expect(JSON.stringify(wf.jobs)).not.toMatch(/configure-aws-credentials|KANON_AGGREGATE_ROLE|KANON_AGGREGATE_URL\b/);
+    // The invoker role's secret stays declared, optional and read by no job, so a caller that
+    // still maps it isn't refused when its pin moves (plan 0008 §9 step 4).
     expect(wf.on.workflow_call.secrets).toEqual({
       AUTHOR_APP_ID: { required: true }, AUTHOR_APP_PRIVATE_KEY: { required: true }, CLAUDE_CODE_OAUTH_TOKEN: { required: false },
       ANTHROPIC_API_KEY: { required: false },
       KANON_AGGREGATE_ROLE: { required: false },
     });
+    expect(text).toMatch(/^# OPTIONAL SECRET: KANON_AGGREGATE_ROLE$/m);
   });
 });
 
@@ -66,26 +71,26 @@ describe('the aggregate job: the only one with id-token (K-OBS-17\'s shape)', ()
     expect(AGGREGATE_FILE).toBe('agent-explore-telemetry.yml');
   });
 
-  it('masks the URL and the account id first, reads the role from its secret, and never passes toJSON(vars) (kanon#433, kanon#471)', () => {
+  it('reads on the token URL in three steps, the two variables by name, and never passes toJSON(vars) (plan 0008 J5, kanon#433)', () => {
     const s = wf.jobs.aggregate!.steps as Step[];
-    expect(s.map((x) => x.uses ?? x.name)).toEqual(['$/actions/kanon-path', 'Mask the aggregate function\'s URL and the account id',
-      'aws-actions/configure-aws-credentials@v6', 'Read the aggregate', 'actions/upload-artifact@v7']);
-    expect(s[1]!.env).toEqual({ URL: '${{ vars.KANON_AGGREGATE_URL }}', ROLE: '${{ secrets.KANON_AGGREGATE_ROLE }}' });
-    expect(s[2]!.with).toEqual({ 'role-to-assume': '${{ secrets.KANON_AGGREGATE_ROLE }}', 'aws-region': 'eu-central-1', 'role-session-name': 'kanon-explore-telemetry' });
-    expect(s[3]!.env).toEqual({ KANON_AGGREGATE_URL: '${{ vars.KANON_AGGREGATE_URL }}', OUT: '${{ runner.temp }}/aggregate' });
+    expect(s.map((x) => x.uses ?? x.name)).toEqual(['$/actions/kanon-path', 'Read the aggregate', 'actions/upload-artifact@v7']);
+    expect(s[1]!.run).toBe('node "$KANON/scripts/aggregate-read.mjs" token');
+    expect(s[1]!.env).toEqual(AGGREGATE_TOKEN_ENV);
+    expect(AGGREGATE_TOKEN_ENV).toEqual({ KANON_AGGREGATE_TOKEN_URL: '${{ vars.KANON_AGGREGATE_TOKEN_URL }}', KANON_TELEMETRY_AUDIENCE: '${{ vars.KANON_TELEMETRY_AUDIENCE }}', OUT: '${{ runner.temp }}/aggregate' });
     expect(workflowText(LANE_FILE)).not.toMatch(/\$\{\{\s*toJSON\(vars\)/);
-    expect(s[4]!.with).toMatchObject({ path: '${{ runner.temp }}/aggregate/aggregate.json', 'retention-days': 1, 'if-no-files-found': 'error' });
+    expect(s[2]!.with).toMatchObject({ path: '${{ runner.temp }}/aggregate/aggregate.json', 'retention-days': 1, 'if-no-files-found': 'error' });
   });
 
-  it('runs only for a member, with the URL and the role set, on the default branch\'s ref, which the role trusts', () => {
+  it('runs only for a member, with a store to call, on the default branch\'s ref, which the store admits', () => {
     const cond = String(wf.jobs.aggregate!.if).replace(/\s+/g, ' ');
     expect(cond).toBe("needs.gate.outputs.member == 'true' && needs.gate.outputs.configured == 'true' && (github.event_name == 'schedule' || github.ref_name == github.event.repository.default_branch)");
-    // A job's if: can't read a secret, so the gate job's step says whether both are set.
+    // The gate's step asks the read script whether there is a store, before any token is minted.
     const gate = wf.jobs.gate!.steps as Step[];
     const configured = gate.find((x) => x.id === 'configured')!;
     expect(configured.if).toBe("steps.gate.outputs.member == 'true'");
-    expect(configured.env).toEqual({ URL: '${{ vars.KANON_AGGREGATE_URL }}', ROLE: '${{ secrets.KANON_AGGREGATE_ROLE }}' });
-    expect(configured.run).not.toMatch(/echo "\$(URL|ROLE)"|printf[^\n]*\$(URL|ROLE)/);
+    expect(configured.env).toEqual({ GH_TOKEN: '${{ github.token }}', KANON_AGGREGATE_TOKEN_URL: '${{ vars.KANON_AGGREGATE_TOKEN_URL }}', KANON_TELEMETRY_AUDIENCE: '${{ vars.KANON_TELEMETRY_AUDIENCE }}' });
+    expect(configured.run).toContain('configured="$(node "$KANON/scripts/explore-telemetry-check.mjs")"');
+    expect(wf.jobs.gate!.permissions).toEqual({ contents: 'read' });
     // And when it doesn't run, a job says why, green.
     expect(String(wf.jobs.unconfigured!.if).replace(/\s+/g, ' ')).toContain("needs.gate.outputs.configured != 'true'");
     expect(wf.jobs.unconfigured!.permissions).toEqual({});
@@ -106,12 +111,14 @@ describe('the aggregate job: the only one with id-token (K-OBS-17\'s shape)', ()
     ];
     it('the guard is green as shipped', () => expect(idTokenProblems(all())).toEqual([]));
     it('a step added', () => expect(red((j) => { j.steps!.push({ run: 'echo hi' }); })).toEqual(named));
-    it('the read step handed NODE_OPTIONS', () => expect(red((j) => { j.steps![3]!.env = { ...j.steps![3]!.env, NODE_OPTIONS: '-r x' }; })).toEqual(named));
-    it('the masking step handed every variable', () => expect(red((j) => { j.steps![1]!.env = { VARS: '${{ toJSON(vars) }}' }; })).toEqual(named));
-    it('another script in the read step', () => expect(red((j) => { j.steps![3]!.run = 'node "$KANON/scripts/telemetry-collect.mjs"'; })).toEqual(named));
-    it('the role from anywhere but the lane\'s secret', () => expect(red((j) => { (j.steps![2]!.with as Record<string, unknown>)['role-to-assume'] = '${{ vars.KANON_AGGREGATE_ROLE }}'; })).toEqual(named));
+    it('the read step handed NODE_OPTIONS', () => expect(red((j) => { j.steps![1]!.env = { ...j.steps![1]!.env, NODE_OPTIONS: '-r x' }; })).toEqual(named));
+    it('the read step handed every variable', () => expect(red((j) => { j.steps![1]!.env = { ...j.steps![1]!.env, VARS: '${{ toJSON(vars) }}' }; })).toEqual(named));
+    it('another script in the read step', () => expect(red((j) => { j.steps![1]!.run = 'node "$KANON/scripts/telemetry-collect.mjs"'; })).toEqual(named));
+    it('the SigV4 read back in the job', () => expect(red((j) => { j.steps![1]!.run = 'node "$KANON/scripts/aggregate-read.mjs"'; })).toEqual(named));
+    it('an AWS credentials step back in the job', () => expect(red((j) => { j.steps!.splice(1, 0, { uses: 'aws-actions/configure-aws-credentials@v6', with: { 'role-to-assume': '${{ secrets.KANON_AGGREGATE_ROLE }}' } }); })).toEqual(named));
+    it('the read dropped, so the job only uploads', () => expect(red((j) => { j.steps!.splice(1, 1); })).toEqual(named));
     it('a wider grant', () => expect(red((j) => { j.permissions = { 'id-token': 'write', contents: 'read' }; })).toEqual(named));
-    it('the upload from the workspace', () => expect(red((j) => { (j.steps![4]!.with as Record<string, unknown>).path = 'qa-telemetry'; })).toEqual(named));
+    it('the upload from the workspace', () => expect(red((j) => { (j.steps![2]!.with as Record<string, unknown>).path = 'qa-telemetry'; })).toEqual(named));
     it('a job env', () => expect(red((j) => { (j as Record<string, unknown>).env = { NODE_OPTIONS: '-r x' }; })).toEqual(named));
     it('the same job in another workflow is not allowed by this shape', () => {
       const w = all();

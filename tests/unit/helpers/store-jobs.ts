@@ -374,7 +374,14 @@ export function isCollectorJob(file: string | undefined, name: string, j: Job): 
 export const AGGREGATE_FILE = 'agent-explore-telemetry.yml';
 export const AGGREGATE_JOB = 'aggregate';
 const AGGREGATE_MASK_RUN = 'node "$KANON/scripts/aggregate-mask.mjs"';
-const AGGREGATE_READ_RUN = 'node "$KANON/scripts/aggregate-read.mjs"';
+/** The Explorer's read on the token URL (plan 0008 §3.6, step J5). */
+const AGGREGATE_TOKEN_RUN = 'node "$KANON/scripts/aggregate-read.mjs" token';
+/** What the token read is handed, exactly: a self-hosted store's two variables by name, and its output directory. */
+export const AGGREGATE_TOKEN_ENV = {
+  KANON_AGGREGATE_TOKEN_URL: '${{ vars.KANON_AGGREGATE_TOKEN_URL }}',
+  KANON_TELEMETRY_AUDIENCE: '${{ vars.KANON_TELEMETRY_AUDIENCE }}',
+  OUT: '${{ runner.temp }}/aggregate',
+};
 /** What the masking step reads: the URL variable and the role secret, by name (kanon#433: never `toJSON(vars)`). */
 const AGGREGATE_MASK_ENV = { URL: '${{ vars.KANON_AGGREGATE_URL }}', ROLE: '${{ secrets.KANON_AGGREGATE_ROLE }}' };
 /** The role the credentials step assumes: the lane's secret, mapped by name in its caller (kanon#471). */
@@ -385,18 +392,33 @@ const UPLOAD = /^actions\/upload-artifact@v\d+$/;
 const TEMP_PATH = /^\$\{\{\s*runner\.temp\s*\}\}(?:\/(?!\.\.?(?:\/|$))[\w.-]+)+$/;
 
 /**
- * The telemetry Explorer's `aggregate` job (plan 0004 step 14, plan 0002 §6.1): `aggregate` in
- * `agent-explore-telemetry.yml`, and only in exactly this shape: Kanon's path; the step that
- * masks the URL variable and the account id, reading them by name; the AWS credentials for the
- * invoker role, from the lane's secret; the
- * read script, handed only the URL and its output directory; and the upload of the answer from
- * the runner's temp directory. Its grant is `id-token: write` and nothing else, and it carries
- * no job `env:`, `container:`, `services:` or `defaults:` (`STORE_JOB_KEYS`). The invoker role
- * trusts every default-branch job that holds `id-token`, like the writer, so the shape is what
- * keeps the set to this job.
+ * The telemetry Explorer's `aggregate` job (plan 0004 step 14, plan 0002 §6.1; plan 0008 §3.6,
+ * step J5): `aggregate` in `agent-explore-telemetry.yml`, and only in exactly this shape: Kanon's
+ * path; the read on the token URL (`aggregate-read.mjs token`), handed exactly
+ * `AGGREGATE_TOKEN_ENV`; and the upload of the answer from the runner's temp directory. No AWS
+ * credentials step and no mask step: the token is minted and masked inside the read. Its grant
+ * is `id-token: write` and nothing else, and it carries no job `env:`, `container:`, `services:`
+ * or `defaults:` (`STORE_JOB_KEYS`). The aggregate function admits a token minted by any job of
+ * this workflow file at a release (plan 0008 §2.2), so the shape is what keeps the set to this job.
  */
 export function isAggregateJob(file: string | undefined, name: string, j: Job): boolean {
-  return file === AGGREGATE_FILE && name === AGGREGATE_JOB && isAggregateShape(j, AGGREGATE_READ_RUN);
+  if (file !== AGGREGATE_FILE || name !== AGGREGATE_JOB || !only(j, STORE_JOB_KEYS)) return false;
+  if (JSON.stringify(j.permissions) !== JSON.stringify({ 'id-token': 'write' })) return false;
+  const steps = (j.steps ?? []) as Array<Record<string, unknown>>;
+  if (steps.length !== 3) return false;
+  const [path, read, upload] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
+  return only(path, ['uses']) && path.uses === '$/actions/kanon-path'
+    && only(read, ['name', 'id', 'env', 'run']) && String(read.run).trim() === AGGREGATE_TOKEN_RUN
+    && JSON.stringify(read.env) === JSON.stringify(AGGREGATE_TOKEN_ENV)
+    && isTempUpload(upload);
+}
+
+/** An upload of a file under the runner's temp directory, and nothing else. */
+function isTempUpload(upload: Record<string, unknown>): boolean {
+  const w = (upload.with ?? {}) as Record<string, unknown>;
+  return only(upload, ['name', 'id', 'uses', 'with']) && UPLOAD.test(String(upload.uses))
+    && only(w, ['name', 'path', 'retention-days', 'if-no-files-found'])
+    && typeof w.path === 'string' && TEMP_PATH.test(w.path.trim());
 }
 
 /** The public metrics page's refresh (plan 0003 M7, kanon#661), the other holder that calls the aggregate function. */
@@ -405,17 +427,19 @@ const METRICS_PAGE_READ_RUN = 'node "$KANON/scripts/aggregate-read.mjs" page';
 
 /**
  * The metrics page's `aggregate` job (plan 0003 M7, kanon#661): `aggregate` in
- * `metrics-page.yml`, in the telemetry Explorer's read job's exact shape, but reading the
- * function's page view (`aggregate-read.mjs page`). The page itself is rendered and proposed by
- * another job of the workflow, which holds no `id-token`.
+ * `metrics-page.yml`, in the SigV4 shape the telemetry Explorer's read job had before plan 0008
+ * J5, but reading the function's page view (`aggregate-read.mjs page`): Kanon's path, the mask,
+ * the invoker role's credentials, the read and the upload. It keeps that shape until it moves to
+ * the token in a pull request of its own after vM's deploy (plan 0008 §9 step 4a, J7). The page
+ * itself is rendered and proposed by another job of the workflow, which holds no `id-token`.
  */
 export function isMetricsPageJob(file: string | undefined, name: string, j: Job): boolean {
   return file === METRICS_PAGE_FILE && name === AGGREGATE_JOB && isAggregateShape(j, METRICS_PAGE_READ_RUN);
 }
 
 /**
- * A job that reads the aggregate function and nothing else: Kanon's path, the mask, the
- * invoker role's credentials, the read script as `readRun` runs it, and the upload of its answer.
+ * A job that reads the aggregate function through SigV4 and nothing else: Kanon's path, the mask,
+ * the invoker role's credentials, the read script as `readRun` runs it, and the upload of its answer.
  */
 function isAggregateShape(j: Job, readRun: string): boolean {
   if (!only(j, STORE_JOB_KEYS)) return false;
@@ -437,51 +461,39 @@ function isAggregateShape(j: Job, readRun: string): boolean {
     && typeof w.path === 'string' && TEMP_PATH.test(w.path.trim());
 }
 
-/** The Overseer's telemetry read job (kanon#470), the one holder that assumes a telemetry reader role. */
+/** The Overseer's telemetry read job (kanon#470; plan 0008 §3.5, step J5), the one holder that reads its own rows from the telemetry store. */
 export const OVERSEER_TELEMETRY_FILE = 'agent-overseer.yml';
 export const OVERSEER_TELEMETRY_JOB = 'telemetry';
-const OT_MASK_RUN = 'node "$KANON/scripts/overseer-telemetry.mjs" mask';
 const OT_READ_RUN = 'node "$KANON/scripts/overseer-telemetry.mjs" read';
 const OT_REPORT_RUN = 'node "$KANON/scripts/overseer-telemetry.mjs" report';
-/** The role the job assumes, and the masking step reads: the lane's secret, mapped by name in its caller. */
-const OT_ROLE = '${{ secrets.KANON_TELEMETRY_READER_ROLE }}';
-/** The mask step reads the store's table and region from the repository variables, by name, and
- *  resolves them once (the Owner's decision on kanon#499): every later step takes its outputs. */
-export const OT_MASK_ENV = { ROLE: OT_ROLE, TABLE: '${{ vars.KANON_TELEMETRY_TABLE }}', REGION: '${{ vars.KANON_TELEMETRY_REGION }}' };
-const OT_RESOLVED = { TABLE: '${{ steps.resolve.outputs.table }}', REGION: '${{ steps.resolve.outputs.region }}' };
-/** What the read step may be handed: nothing that runs code, such as `NODE_OPTIONS`. */
-export const OT_READ_ENV = { ROLE: OT_ROLE, CREDENTIALS: '${{ steps.creds.outcome }}', OUT: '${{ runner.temp }}/overseer-telemetry', ...OT_RESOLVED };
-/** What the report step may be handed (kanon#668): the read's, but no directory, since it writes
+/** A self-hosted store's two variables, by name (plan 0008 §2.1): never `toJSON(vars)`. */
+const OT_STORE = { KANON_TELEMETRY_TOKEN_URL: '${{ vars.KANON_TELEMETRY_TOKEN_URL }}', KANON_TELEMETRY_AUDIENCE: '${{ vars.KANON_TELEMETRY_AUDIENCE }}' };
+/** What the read step is handed, exactly: the store's two variables and its output directory. */
+export const OT_READ_ENV = { ...OT_STORE, OUT: '${{ runner.temp }}/overseer-telemetry' };
+/** What the report step is handed (kanon#668): the read's, but no directory, since it writes
  *  only to its job summary, and the artifact's directory would let its rows be uploaded. */
-export const OT_REPORT_ENV = { ROLE: OT_ROLE, CREDENTIALS: '${{ steps.creds.outcome }}', ...OT_RESOLVED };
+export const OT_REPORT_ENV = { ...OT_STORE };
 
 /**
- * The Overseer's `telemetry` job (kanon#470; plan 0002 §6): `telemetry` in `agent-overseer.yml`,
- * and only in exactly this shape: Kanon's path; the step that masks the role's account id and key;
- * the AWS credentials for the reader role, from the lane's secret, in the region the mask step
- * resolved, continuing on error so a refusal is a `failed` read; the read script, handed only the
- * role, the credentials' outcome, its output directory and the resolved table and region; the upload of the two reports from the runner's temp directory; and, last,
- * the headline report (kanon#668), handed what the read is but its output directory. Its
- * grant is `id-token: write` and nothing else, and it carries no job `env:`, `container:`,
- * `services:` or `defaults:` (`STORE_JOB_KEYS`). The reader role trusts every default-branch job
- * that holds `id-token`, so the shape is what keeps the set to this job.
+ * The Overseer's `telemetry` job (kanon#470; plan 0002 §6; plan 0008 §3.5, step J5): `telemetry`
+ * in `agent-overseer.yml`, and only in exactly this shape: Kanon's path; the read script, `read`,
+ * with the id `read`, handed exactly `OT_READ_ENV`; the upload of the two reports from the
+ * runner's temp directory, only when the read ran; and, last, the headline report (kanon#668),
+ * handed exactly `OT_REPORT_ENV`. No AWS credentials step and no mask step: each request's token
+ * is minted and masked inside the script, and the store never returns the key. Its grant is
+ * `id-token: write` and nothing else, and it carries no job `env:`, `container:`, `services:` or
+ * `defaults:` (`STORE_JOB_KEYS`). The store admits a token minted by any job of this workflow file
+ * at a release (plan 0008 §2.2), so the shape is what keeps the set to this job and the `export`.
  */
 export function isOverseerTelemetryJob(file: string | undefined, name: string, j: Job): boolean {
   if (file !== OVERSEER_TELEMETRY_FILE || name !== OVERSEER_TELEMETRY_JOB || !only(j, STORE_JOB_KEYS)) return false;
   if (JSON.stringify(j.permissions) !== JSON.stringify({ 'id-token': 'write' })) return false;
   const steps = (j.steps ?? []) as Array<Record<string, unknown>>;
-  if (steps.length !== 6) return false;
-  const [path, mask, creds, read, upload, report] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
+  if (steps.length !== 4) return false;
+  const [path, read, upload, report] = steps as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
   const w = (upload.with ?? {}) as Record<string, unknown>;
   return only(path, ['uses']) && path.uses === '$/actions/kanon-path'
-    && only(mask, ['name', 'id', 'env', 'run']) && mask.id === 'resolve' && String(mask.run).trim() === OT_MASK_RUN
-    && JSON.stringify(mask.env) === JSON.stringify(OT_MASK_ENV)
-    && only(creds, ['uses', 'id', 'continue-on-error', 'with']) && CREDENTIALS.test(String(creds.uses))
-    && creds.id === 'creds'
-    && only(creds.with as object, ['role-to-assume', 'aws-region', 'role-session-name'])
-    && (creds.with as Record<string, unknown>)['role-to-assume'] === OT_ROLE
-    && (creds.with as Record<string, unknown>)['aws-region'] === OT_RESOLVED.REGION
-    && only(read, ['name', 'id', 'env', 'run']) && String(read.run).trim() === OT_READ_RUN
+    && only(read, ['name', 'id', 'env', 'run']) && read.id === 'read' && String(read.run).trim() === OT_READ_RUN
     && JSON.stringify(read.env) === JSON.stringify(OT_READ_ENV)
     && only(upload, ['name', 'id', 'if', 'uses', 'with']) && UPLOAD.test(String(upload.uses))
     && only(w, ['name', 'path', 'retention-days', 'if-no-files-found'])
