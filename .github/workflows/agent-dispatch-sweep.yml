@@ -46,8 +46,8 @@
 # the step summary are the signal, and the stalled issues the sweep is not reconciling are the
 # backstop.
 #
-# SAFE BY DEFAULT: a dispatch is a DRY RUN unless `apply` is ticked; the scheduled run applies,
-# which is the point of it existing.
+# SAFE BY DEFAULT: a dispatch is a DRY RUN unless `apply` is ticked; the scheduled run and a
+# re-asked one apply, which is the point of it existing.
 #
 # NO MODEL. Every step runs a library script, `gh` or the store block, so this lane takes no
 # Claude token and writes no telemetry row.
@@ -68,6 +68,15 @@ name: Lead (Lead) — dispatch sweep
 #                              because the cost that matters is the subscription quota each
 #                              re-dispatch spends on a full Implementer run.
 #   workflow_dispatch        — input `apply` (boolean, default false: a dry run)
+#   workflow_run             — OPTIONAL, THE RE-ASK (kanon#813): `types: [completed]` of your
+#                              implement and triage callers, by their `name:`. GitHub's schedule
+#                              is best effort (a daily cron runs hours late, and drops ticks), so
+#                              the next real run of a lane this sweep covers asks for it too.
+#                              The gate admits only a run that did not skip, and never one of
+#                              this caller itself; the gate's due check then sweeps only when no
+#                              run of this caller swept in the last 20 hours, so the sweep stays
+#                              daily (its cooldown assumes that) and a sweep's own re-dispatch
+#                              cannot re-ask it. The schedule stays the floor.
 # OPTIONAL SECRET: QA_STORE_BUCKET
 # OPTIONAL SECRET: QA_STORE_ROLE_ARN
 # The lines above are read by `lane-check` and the requirements file (kanon#433): the QA store's
@@ -113,6 +122,13 @@ concurrency:
   # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
   group: agent-dispatch-sweep${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
+  # EVERY PENDING RUN IS KEPT (kanon#552, as the rebase lane since kanon#537). A run joins
+  # this group before any job-level `if:` can skip it, and under the default `queue: single`
+  # an arrival cancels the group's one pending run. Here the runs that only skip are the
+  # re-asks the gate turns away: a run that skipped, or a run of this caller. `queue: max` keeps
+  # up to 100 pending, in order, and a skip-only run drains in seconds. GitHub refuses it with
+  # `cancel-in-progress: true`, which this lane never sets.
+  queue: max
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). Each job below declares its
 # own, so only the store job ever holds `id-token: write`, which the caller grants for it.
@@ -121,9 +137,17 @@ permissions:
 
 jobs:
   gate:
-    # ONLY THE CALLER'S TWO TRIGGERS. As a called workflow this lane runs on whatever its
-    # caller is called on (Kanon's smoke calls it on pull requests).
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # ONLY THE CALLER'S TRIGGERS. As a called workflow this lane runs on whatever its caller is
+    # called on (Kanon's smoke calls it on pull requests).
+    #
+    # THE RE-ASK (kanon#813): a `workflow_run` of a lane this sweep covers, admitted only when
+    # that run did not skip (an implement caller hears every label event, and a run whose jobs
+    # all skipped concludes `skipped`), and NEVER a run of this caller itself, which would make
+    # the sweep re-ask itself. `github.workflow_ref` is the caller's file in a called workflow.
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'skipped'
+      && !contains(github.workflow_ref, format('/{0}@', github.event.workflow_run.path)))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -131,10 +155,13 @@ jobs:
     outputs:
       member: ${{ steps.gate.outputs.member }}
       ready: ${{ steps.app.outputs.ready }}
+      # 'true' on the schedule and a dispatch; on a re-ask, only when the due check says so.
+      due: ${{ github.event_name != 'workflow_run' || steps.reask.outputs.due == 'true' }}
     steps:
       # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted: on
-      # the schedule the actor is whoever last changed it, on a dispatch whoever ran it. A
-      # refusal leaves `member=false`, and the store and sweep jobs skip.
+      # the schedule the actor is whoever last changed it, on a dispatch whoever ran it, on a
+      # re-ask whoever started the run that completed. A refusal leaves `member=false`, and the
+      # store and sweep jobs skip.
       - uses: $/actions/kanon-path
       - name: Is the actor a member?
         id: gate
@@ -158,6 +185,31 @@ jobs:
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # IS A RE-ASKED SWEEP DUE? (kanon#813). Only on a re-ask, after the membership gate and
+      # the soft skip. The implement and triage lanes complete far more often than daily, and
+      # the sweep's re-dispatch cooldown assumes a daily cadence, so a re-ask sweeps only when
+      # no run of this caller swept in the last 20 hours (`scripts/reask-due.mjs`). That is also
+      # what stops the loop through a re-dispatch: the implement run the sweep starts finds the
+      # sweep's own run inside the window. Reading this caller's runs needs `actions: read`,
+      # which the caller does not grant, so it mints the Lead's App token narrowed to it.
+      - name: Mint lead App token to read this caller's runs
+        id: reask-token
+        if: github.event_name == 'workflow_run' && steps.app.outputs.ready == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+          permission-actions: read
+      - name: Is a re-asked sweep due?
+        id: reask
+        if: steps.gate.outputs.member == 'true' && steps.reask-token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.reask-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REASK_JOB: sweep
+          REASK_HOURS: "20"
+        run: node "$KANON/scripts/reask-due.mjs"
+
   # THE STORE JOB (plan 0004 §3.2): the two lanes' cost rows through the adopter's store hook,
   # and nothing else. It holds the store's credentials, so it runs the `qa-store` block alone
   # (`tests/unit/helpers/store-jobs.ts`). Without a hook each step says the store is absent and
@@ -169,7 +221,7 @@ jobs:
   # is the sweep's, 14 days (`UNREACHED_WINDOW_DAYS`).
   store:
     needs: gate
-    if: needs.gate.outputs.member == 'true' && needs.gate.outputs.ready == 'true'
+    if: needs.gate.outputs.member == 'true' && needs.gate.outputs.ready == 'true' && needs.gate.outputs.due == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -200,7 +252,7 @@ jobs:
     # `!cancelled()`, so a store job that FAILED still sweeps, charging every dispatch and
     # saying so, as a failed store read always has. The gate's verdict and the soft skip are
     # still required: a refused or skipped gate skips the sweep.
-    if: ${{ !cancelled() && needs.gate.outputs.member == 'true' && needs.gate.outputs.ready == 'true' }}
+    if: ${{ !cancelled() && needs.gate.outputs.member == 'true' && needs.gate.outputs.ready == 'true' && needs.gate.outputs.due == 'true' }}
     runs-on: ubuntu-latest
     # Bounds a hang (RA-1336). Sized at ~3x the longest real run measured on the reference
     # adopter, so it never truncates work.
@@ -253,8 +305,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          # The schedule is the automation and applies; a dispatch is a dry run unless ticked.
-          APPLY: ${{ (github.event_name == 'schedule' || inputs.apply == 'true') && '1' || '' }}
+          # The schedule and a re-ask are the automation and apply; a dispatch is a dry run unless
+          # ticked.
+          APPLY: ${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}
           # Where the cost rows come from (`costRowsSource`): the store job's result and whether
           # the repository has a hook, then each telemetry agent's rows from the hook.
           QA_STORE_RESULT: ${{ needs.store.result }}
@@ -276,7 +329,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          APPLY: ${{ (github.event_name == 'schedule' || inputs.apply == 'true') && '1' || '' }}
+          APPLY: ${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}
           QA_BACKLOG_FEED: ${{ vars.QA_BACKLOG_FEED }}
           QA_BACKLOG_MILESTONES: ${{ vars.QA_BACKLOG_MILESTONES }}
         run: node "$KANON/scripts/backlog-feed.mjs"
@@ -292,5 +345,5 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          APPLY: ${{ (github.event_name == 'schedule' || inputs.apply == 'true') && '1' || '' }}
+          APPLY: ${{ (github.event_name != 'workflow_dispatch' || inputs.apply == 'true') && '1' || '' }}
         run: node "$KANON/scripts/gate-candidate-exit.mjs"

@@ -1063,8 +1063,8 @@
         "group": "oversight",
         "does": "Posts each open project's progress to a chat channel daily, and files an issue for a lane caller that keeps failing.",
         "needs": [],
-        "cost": "A model run daily.",
-        "minutes": "Not measured: Kanon holds no digest webhook, so it doesn't call the lane; it runs once a day.",
+        "cost": "A model run daily, only where the digest is posted: without `DIGEST_WEBHOOK` it runs the health job alone, with no model.",
+        "minutes": "Not measured: Kanon's caller is new and had not run yet; it runs once a day.",
         "recommend": [
           "agent-lead-reconcile"
         ],
