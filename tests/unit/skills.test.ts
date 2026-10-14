@@ -580,6 +580,32 @@ describe('each skill is held to the kanon command it drives', () => {
     expect(steps).toMatch(/\*\*Do it now\*\* \(Recommended\) or \*\*Skip it for now\*\*: for `ruleset\.require-check`/);
   });
 
+  // #631: a yes to telemetry makes every job on the default branch that holds id-token: write a
+  // possible writer to the store, and doctor blocks on each one nothing accepts. The adopt skill
+  // says so in the telemetry questions, before the person answers, and asks about each holder
+  // right after, narrow or accept with a reason that init writes, instead of leaving it to doctor.
+  it('has the adopt skill raise the existing id-token holders at the telemetry step, not after the pull request', async () => {
+    const { holdersNote } = await import('../../cli/init.mjs');
+    const questions = section(skill('adopt').body, /^## The questions$/)!;
+    const block = (answer: string) => questions.split(/^(?=### )/m).find((b) => b.startsWith(`### \`.answers.${answer}\``))!;
+    // The consent question names the holders with init's own line, before the answer.
+    const note = holdersNote([{ workflow: '.github/workflows/<workflow>.yml', job: '<job>' }], '<`.inspection.defaultBranch`>');
+    expect(block('consent')).toContain(`"${note}"`);
+    expect(block('consent')).toMatch(/When `\.findings` holds `id-token\.unaccepted`, say it in the question, before the person answers/);
+    expect(block('telemetry')).toMatch(/every job on the default branch that holds `id-token: write`, an existing OIDC job of theirs included, can write to the store/);
+    // Then each holder is asked about, at that step: narrow its grant, or accept it with a reason init writes.
+    const asked = block('acceptedIdTokenHolders');
+    expect(asked).toMatch(/^Asked right after the sharing answers, at the telemetry step/m);
+    expect(asked).toMatch(/\*\*Accept it\*\* \(`--accept-id-token-holder <workflow>\.yml#<job>=<why>`\)/);
+    expect(asked).toMatch(/never invent the reason/);
+    expect(asked).toMatch(/\*\*Narrow its grant\*\*/);
+    // The questions come in their order: the holders after every sharing answer.
+    const order = [...questions.matchAll(/^### `\.answers\.(\w+)`/gm)].map((m) => m[1]);
+    expect(order.indexOf('acceptedIdTokenHolders')).toBe(order.indexOf('upstreamEvidence') + 1);
+    const table = rows(section(skill('adopt').body, /^## Who fixes each finding of `kanon init`$/)!);
+    expect(table.find((c) => c[0] === '`id-token.unaccepted`')![2]).toMatch(/Asked at the telemetry step/);
+  });
+
   // #626: the review lane reviews a pull request only once it carries one of its labels, and
   // the agent told a person installing it that no label was needed. The adopt skill's pull
   // request body and its hand-over say how review starts, with the labels the lane gates on.

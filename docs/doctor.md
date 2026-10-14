@@ -98,6 +98,8 @@ The QA store's role and the telemetry writer trust the default branch's ref, not
 
   An acceptance in another shape, outside `## Choices` or written twice is malformed and blocks. One whose job no longer holds the grant is listed as stale, without blocking.
 
+`kanon init` names the same jobs, with this check, before an install writes anything, and writes the acceptance the person gives with `--accept-id-token-holder` ([`docs/init.md`](init.md#existing-id-token-holders), [#631](https://github.com/yedeya-labs/kanon/issues/631)), so the adopt skill asks about each at its telemetry question, and doctor finds it already accepted.
+
 Doctor counts the workflows of the checkout it runs from. Run it on your default branch for the count the roles see; it says so when you don't.
 
 ## Waiving a finding
