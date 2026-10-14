@@ -91,7 +91,7 @@ describe('the field list (§2.1)', () => {
   });
 
   it('holds RULE_IDS to the rulebook\'s headings, both ways', () => {
-    const headings = readdirSync('rulebook').filter((f) => f.endsWith('.md')).flatMap((f) =>
+    const headings = readdirSync('rulebook').filter((f) => /^\d\d-.*\.md$/.test(f)).flatMap((f) =>
       [...readFileSync(join('rulebook', f), 'utf8').matchAll(/^#+ `(K-[A-Z]+-\d+)`/gm)].map((m) => m[1]!));
     expect(headings.length).toBeGreaterThan(200);
     expect([...RULE_IDS].sort()).toEqual([...new Set(headings)].sort());

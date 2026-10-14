@@ -1,0 +1,80 @@
+# How the rules changed
+
+A rule says what holds now, and why. How it came to say that is recorded here, not in the rule: each change that a decision, an issue or a pull request made to a rule, under the rule's id, with its date, what changed and a link. A rule keeps the links that say where it came from, such as an ADR or a plan, and nothing else about its history. `tests/unit/rulebook-why.test.ts` fails a rule that carries a dated decision note, an issue link or a "Premise changed" paragraph, and an entry here that names a rule the chapters don't have.
+
+Rules are listed in chapter order, and each rule's changes oldest first. A rule with no entry has not changed since it was written, or changed only in ways its own ADR or plan records.
+
+## `K-PRIN-13`
+
+- **2026-10-12.** The Owner decided that a run which exits silently, with no verdict, is retried once like a run that died of its cause, and that the retry counts as an attempt, so a second silent exit is reported. [#759](https://github.com/yedeya-labs/kanon/pull/759)
+
+## `K-AGENT-24`
+
+- **2026-10-12.** The Reviewer's token mint asks for Checks, Commit statuses and Actions read again, after a narrowing of its permissions dropped the reads this rule depends on; a test now fails a mint that drops any of the three. [#691](https://github.com/yedeya-labs/kanon/issues/691)
+
+## `K-AGENT-45`
+
+- **2026-10-14.** The Owner decided that the issue backstop admits whoever opens an issue, on `issues: opened` alone, with no permission check, since it runs no model, reads no issue text and writes only a bucket and labels. [#768](https://github.com/yedeya-labs/kanon/issues/768), [#840](https://github.com/yedeya-labs/kanon/pull/840)
+
+## `K-AGENT-47`
+
+- **2026-10-07.** `lane-check` holds every job that calls a Kanon workflow, the spine `agent-lane.yml` included, to mapping each secret by name or passing none, and fails `secrets: inherit`. Releases before this one let it through on a call to the spine. [#500](https://github.com/yedeya-labs/kanon/issues/500)
+
+## `K-AGENT-50`
+
+- **2026-10-06.** The shared lane job turns git's `core.symlinks` off for a lane with project setup off, so the Lead's `Edit(/docs/**)` has no symlink in the tree to write through. [#327](https://github.com/yedeya-labs/kanon/issues/327)
+- **2026-10-07.** The grant probe battery covers both Lead lanes' flags, and the Owner decided the deny list that refuses a program handed to `git push` or `git fetch` for the far end. [#405](https://github.com/yedeya-labs/kanon/issues/405)
+
+## `K-MERGE-4`
+
+- **2026-10-12.** The Owner decided that the project's own pipeline code may be declared as single files as well as directories. [#728](https://github.com/yedeya-labs/kanon/issues/728)
+
+## `K-MERGE-7`
+
+- **2026-10-07.** `kanon init` doesn't require `Lane check` under a merge queue until its workflow runs on `merge_group`, and `kanon doctor` reports the check unreported (`ruleset.check-unreported`). [#459](https://github.com/yedeya-labs/kanon/issues/459)
+
+## `K-MERGE-8`
+
+- **2026-10-06.** `kanon apps` adds the optional Releaser App to the default branch's ruleset's bypass list, and `kanon doctor` reports a ruleset that lacks it or lets another actor bypass. [#49](https://github.com/yedeya-labs/kanon/issues/49)
+
+## `K-MERGE-13`
+
+- **2026-10-12.** The Owner decided that a pull request with no behaviour change proves itself with a characterization test: the red-test check concludes skipped, never failed, and the pull request states the mutations that turn its test red. [#666](https://github.com/yedeya-labs/kanon/issues/666)
+
+## `K-MERGE-17`
+
+- **2026-10-02.** Kanon's own DCO and PR-title checks run the last release, and the pull request's copy runs beside them as a test that isn't required. [#47](https://github.com/yedeya-labs/kanon/issues/47)
+
+## `K-SHIP-7`
+
+- **2026-10-12.** The Owner decided that a project whose releases other repositories pin may declare a release cadence, and that a project which declares none releases on every merge. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
+
+## `K-PROJ-16`
+
+- **2026-10-02.** A test runs the brief guard on the brief template, whose example measurement item it must accept. [#55](https://github.com/yedeya-labs/kanon/issues/55)
+
+## `K-OBS-16`
+
+- **2026-10-07.** [ADR 0007](../docs/decisions/0007-data-boundary.md) was amended so that an upstream-finding row sent with evidence may carry the finding's evidence and suggested fix as scrubbed text. [#573](https://github.com/yedeya-labs/kanon/pull/573)
+
+## `K-ADOPT-11`
+
+- **2026-10-06.** The Skill's pin, declared in the repository's `.claude/settings.json`, moves with the other pins, and `kanon doctor` reports one that differs from the release the callers pin. [#376](https://github.com/yedeya-labs/kanon/issues/376)
+- **2026-10-12.** The Owner decided that a reference may pin a candidate, `candidate-vX.Y.Z`, as well as a stable release, and that a candidate beside its own stable release counts as two versions. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
+
+## `K-LAYOUT-8`
+
+- **2026-10-12.** The Owner decided that `## Pipeline code` may name a single file, which covers exactly that file, as well as a directory. [#728](https://github.com/yedeya-labs/kanon/issues/728)
+
+## `K-LAYOUT-10`
+
+- **2026-10-07.** The Owner decided that, under `drafted`, the telemetry Explorer writes each upstream finding into its run's step summary, rendered as it would be filed. [#471](https://github.com/yedeya-labs/kanon/pull/471)
+- **2026-10-12.** The Owner decided the release cadence choice: `every merge`, or `weekly, ` and a weekday. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
+
+## `K-LAYOUT-16`
+
+- **2026-10-03.** The Owner chose the contract, a project-declared database the lanes find in `DATABASE_URL`, over a Kanon-maintained standard database. [#139](https://github.com/yedeya-labs/kanon/pull/139)
+
+## `K-LAYOUT-18`
+
+- **2026-10-12.** The rule's premise changed: Kanon's scripts look a lane's caller up on the default branch and list and dispatch that, so a caller under another name is found where the default branch can be read. They fall back to the lane's file name only when it can't be read or no caller is found. The rule stands. [#726](https://github.com/yedeya-labs/kanon/issues/726)

@@ -19,6 +19,8 @@ Every rule has the same shape:
 > - **split**: the mechanism is framework and the content is the project's. For example, "some paths need a human to merge" is framework; *which* paths is the project's. The rule names both halves.
 > - **project policy**: an example from the reference adopter, kept because it shows a framework rule in action. Not binding on anyone else.
 
+A rule says what holds now. It keeps the links that say where it came from, such as "([ADR 0004 §1](../docs/decisions/0004-disputed-rules.md))" or a plan, and nothing about how it changed since: no dated decision note, no issue or pull-request link, no "Premise changed" paragraph. When a decision changes a rule, the rule is rewritten to read true in the present tense, and the change goes in [`CHANGES.md`](CHANGES.md), under the rule's id, with its date, the decision and a link.
+
 Rule ids are permanent. A retired rule keeps its id and is marked **retired**, with the reason and a pointer to what replaces it. A new rule takes the next number in its chapter.
 
 ## Chapters
@@ -37,6 +39,8 @@ Rule ids are permanent. A retired rule keeps its id and is marked **retired**, w
 | 09 | [Self-maintenance](09-self-maintenance.md) | The pipeline auditing itself: the Overseer, telemetry, guards on the guards |
 | 10 | [Adoption](10-adoption.md) | The installation checklist, the GitHub account and plan, bootstrap, credentials, how Kanon reaches an adopter's agents |
 | 11 | [Repository layout](11-repository-layout.md) | Every fixed path and machine-read format: specs, registries, governance documents, the brief's syntax |
+
+How each rule changed, and why, is in [`CHANGES.md`](CHANGES.md).
 
 The brief template ships at [`templates/brief.md`](templates/brief.md).
 
