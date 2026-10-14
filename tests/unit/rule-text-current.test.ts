@@ -79,6 +79,20 @@ describe("K-OBS-16 lists what a row carries, and a row names no repository (kano
   });
 });
 
+describe("K-OBS-16's Enforced by describes the deploy row's guard as the schema holds it (kanon#896)", () => {
+  const enforced = paragraph(ruleOf('rulebook/08-observability-and-cost.md', 'K-OBS-16'), 'Enforced by');
+  const deploy = /The deploy row is held the same way[^.]*\./.exec(enforced)?.[0] ?? '';
+  const { role, position } = (SCHEMAS.deploy?.[1] ?? {}) as Record<string, { type: string; min?: number } | undefined>;
+
+  it('says its role is from a closed list and its position an integer from 1, not an enum', () => {
+    expect(role?.type).toBe('enum');
+    expect(position).toMatchObject({ type: 'int', min: 1 });
+    expect(deploy).not.toMatch(/position from closed lists/);
+    expect(deploy).toMatch(/its role from a closed list/);
+    expect(deploy).toMatch(/its position an integer from 1/);
+  });
+});
+
 describe('K-ADOPT-1 names the installer that runs its steps today (kanon#707)', () => {
   const enforced = paragraph(ruleOf('rulebook/10-adoption.md', 'K-ADOPT-1'), 'Enforced by');
 
