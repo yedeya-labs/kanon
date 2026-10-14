@@ -2,7 +2,7 @@
 
 Kanon's lanes tell people things in chat: the daily project digest, the weekly digest, and a deploy's announcement. **Kanon owns what a notification is; you own where it goes.** Every notification is one message in Kanon's contract, `kanon-notify` version 1, and the lanes hand it to a hook you choose: Kanon's Slack hook, Kanon's generic JSON webhook hook, or your own, for any other system ([plan 0011](plans/0011-notifications.md)).
 
-**What is built so far.** The contract: the message, its kinds and secrets, its limits, Kanon text, the library that builds and checks it, and the published JSON Schema ([plan 0011, step N2](plans/0011-notifications.md#12-order-of-moves)). And [Kanon's Slack hook](#kanons-slack-hook) (step N3), which nothing calls yet. The generic webhook hook, the `notify` job that calls a hook, and `kanon init`'s question come in the plan's later steps, and the digests still post as they do today until their release moves them. The security section below holds for the whole design, and is worth reading before you choose a hook.
+**What is built so far.** The contract: the message, its kinds and secrets, its limits, Kanon text, the library that builds and checks it, and the published JSON Schema ([plan 0011, step N2](plans/0011-notifications.md#12-order-of-moves)). And Kanon's two prebuilt hooks, [Slack](#kanons-slack-hook) (step N3) and the [generic webhook](#kanons-generic-webhook-hook) (step N4), which nothing calls yet. The `notify` job that calls a hook, and `kanon init`'s question come in the plan's later steps, and the digests still post as they do today until their release moves them. The security section below holds for the whole design, and is worth reading before you choose a hook.
 
 ## The message
 
@@ -146,6 +146,20 @@ At most 50 blocks, Slack's limit: past it, the fiftieth block is a `context` say
 **Errors.** A non-2xx answer fails the step with its status and Slack's error string (`invalid_payload`, `no_text`, `channel_is_archived`, `invalid_token`, `action_prohibited`), never the URL; any other answer body is not printed. A `429` is retried once, after its `Retry-After`, when that is at most 60 seconds (one second when Slack sends none); a second `429` fails.
 
 **What isn't confirmed yet:** how a header with an emoji renders on Slack's mobile client, and whether the zero-width spaces keep Slack from formatting on desktop and mobile alike. Plan 0011's live step checks both in a test workspace.
+
+## Kanon's generic webhook hook
+
+Kanon ships a second hook, for any system that can take a JSON body at a URL: a receiver of your own, a workflow tool, or a relay to another chat system ([plan 0011 §7.3](plans/0011-notifications.md#73-the-generic-webhook-hook)). Like the Slack hook, it is an ordinary hook, and choosing it means having it at the hook's path.
+
+**Two files.** The action, [`actions/notify/webhook/action.yml`](../actions/notify/webhook/action.yml) with [`webhook.mjs`](../actions/notify/webhook/webhook.mjs), reads the hook's four inputs and nothing else. The hook file, [`actions/notify/hooks/webhook.yml`](../actions/notify/hooks/webhook.yml), is what `kanon init` will write to `.github/actions/notify/action.yml`: a composite action whose one step is `yedeya-labs/kanon/actions/notify/webhook` at the release `init` ran from, with the four inputs passed through. Its pin moves as the Slack hook's does, and changing the step makes it your own hook.
+
+**What the receiver gets.** One `POST` to the URL in the kind's secret. **The body is the message itself,** byte for byte the validated `message-v1` file: the kind, the severity, the title, the summary, the sections in Kanon text, the links and the source, as [the message](#the-message) describes them. Validate it against [`docs/notify/message-v1.schema.json`](notify/message-v1.schema.json) if you like. Nothing is rendered or escaped: Kanon text arrives as Kanon text, and the plain-text rendering is not sent, since the receiver can compute what it needs. The headers are `Content-Type: application/json` and `User-Agent: kanon-notify/1`, and nothing else identifies your repository beyond the message's own `source`. A kind the hook doesn't know, or a field it doesn't know, is posted as it is.
+
+**One URL, the one it is given.** `secret` must be one `https://` URL of at most 2,000 characters. Anything else (`http://`, another scheme, a JSON map of URLs, two URLs) is refused, naming the input and never echoing its value. Routing is by the kind's secret, as with Slack: store one URL in each kind's secret, the same URL in all three if one receiver takes everything.
+
+**No signature.** The body is not signed in this version: the URL is the secret, as a Slack webhook's is, so keep it unguessable and treat it as a credential (plan 0011, decision 20). Signing may come later as an optional input.
+
+**Errors.** A non-2xx answer fails the step with its HTTP status alone: never the URL, and never the response body, which a receiver Kanon knows nothing about could fill with anything. **A redirect is not followed,** and fails, so the URL and the message are never re-sent to a host the secret doesn't name. A `429` is retried once, after its `Retry-After`, when that is at most 60 seconds (one second when there is none); a second `429` fails.
 
 ## Security
 

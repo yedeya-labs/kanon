@@ -21,6 +21,7 @@
         "actions/kanon-path/README.md",
         "actions/lane-check/README.md",
         "actions/notify/hooks/slack.yml",
+        "actions/notify/hooks/webhook.yml",
         "actions/pr-title/README.md",
         "docs/apps.md",
         "docs/install.md",
