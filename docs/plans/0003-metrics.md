@@ -417,6 +417,8 @@ Three places, and nothing crosses the adopter boundary except validated rows:
 | 8. Cost composition | `total_cost_usd`, `role`, `lane` | | cost by role and lane; waste = cost of runs not joined to a merged item; cost per AC; cache savings = cache-read tokens × (input price − cache-read price), from Kanon's dated list-price table |
 | 9. Kanon's own health | `kanon_version` | `guard_failures` | see below |
 
+**Deploys, added by plan 0010.** This plan defines no deploy metric. [Plan 0010](0010-deployment-lane.md) §11 (decision 12) adds four, read from its own row kind, the deploy row (§10, stored under `<key>#deploy`), not from the run or work-item row: deployment frequency, change-failure rate, time to restore and release lead time. They are computed in the reader, beside this plan's views (`scripts/metrics/indicators.mjs`'s `deployMetricsOf`, printed by `views.mjs`), on the rows with `role: production` alone, the last environment of each adopter's chain, whatever its length; pre-production rows count in none of them. They can't see a production fault fixed forward with no rollback and no failed smoke check, and they can't be joined to group 3's reverts and linked fixes, since the deploy row carries no commit. The hosted aggregate stores deploy rows and publishes no cross-adopter deploy figure (plan 0010 decision 11). [`docs/metrics.md`](../metrics.md#the-deploy-views) has each formula.
+
 **Group 9, field by field.**
 
 | Measure | Where | How |

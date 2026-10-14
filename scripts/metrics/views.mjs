@@ -20,13 +20,17 @@
 // old: yield's lower bound above −5 points, the 30-day escape rate's upper bound below +2 points.
 // A cheaper configuration whose quality isn't shown to hold is "cheaper, quality not shown to
 // hold", never a win.
+//
+// THE DEPLOY VIEWS (plan 0010 §11, decision 12): deployment frequency, change-failure rate, time
+// to restore and release lead time, on production's deploy rows alone (`deployMetricsOf`), over
+// the 13 weeks that end at `until`. They are shown only for an adopter with deploy rows.
 
 import { DELIVERY_LANES, ESCAPE_DAYS, MINIMUM, WINDOW_DAYS, cellText, cohortOf, dollars, escapedWithin, isCount, measure, mixText, notEnough, percent, pooledHeadline, prepareRows, round, yieldRatio } from './report.mjs';
-import { TREND_WINDOWS, byVersionOf, compareVersions, trendOf } from './indicators.mjs';
+import { DEPLOY_WEEKS, TREND_WINDOWS, byVersionOf, compareVersions, deployMetricsOf, trendOf } from './indicators.mjs';
 import { fitPeriodEffect } from '../lib/token-trend.mjs';
 import { bootstrapDifference, newcombe } from './stats.mjs';
 
-export { TREND_WINDOWS, compareVersions };
+export { DEPLOY_WEEKS, TREND_WINDOWS, compareVersions };
 
 /** Decision 11's quality margins for the A/B view, as differences new minus old (§6.1). */
 export const AB_MARGINS = Object.freeze({ yield: -0.05, escape30: 0.02 });
@@ -62,10 +66,14 @@ export function metricsViews(rows, { until, days = WINDOW_DAYS, windows = TREND_
     trend,
     byVersion,
     ab: { margins: AB_MARGINS, lanes: abLanes(ctx, start, end) },
+    deploy: hasDeployRows(rows) ? deployMetricsOf(rows, { end }) : null,
   };
 }
 
 /** @typedef {ReturnType<typeof metricsViews>} Views */
+
+/** Whether any row is a deploy row: an adopter without the deploy lane gets no deploy view. @param {readonly unknown[]} rows */
+const hasDeployRows = (rows) => rows.some((r) => r !== null && typeof r === 'object' && /** @type {Record<string, unknown>} */ (r).row_kind === 'deploy');
 
 /**
  * The configuration A/B, per delivery lane that ran on two or more `config_fingerprint`s in the
@@ -190,6 +198,33 @@ function escapeDiff(older, newer) {
 const signedPct = (v) => `${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(1)}%`;
 /** A difference of shares in percentage points. @param {number} v */
 const points = (v) => `${v < 0 ? '−' : '+'}${Math.abs(v * 100).toFixed(1)} points`;
+/** Milliseconds as hours. @param {number} v */
+const hours = (v) => `${(v / 3_600_000).toFixed(1)} h`;
+/** A count per week. @param {number} v */
+const perWeek = (v) => `${v % 1 === 0 ? v : v.toFixed(1)} a week`;
+
+/**
+ * The deploy views as Markdown lines (plan 0010 §11), or none for an adopter without deploy rows.
+ * @param {NonNullable<Views['deploy']>} d
+ * @returns {string[]}
+ */
+function renderDeploy(d) {
+  return [
+    '',
+    `### Deploys to production, ${d.window.from} to ${d.window.until}`,
+    '',
+    `Measured on production, the last environment of the declared chain (\`role: production\`), over ${d.window.weeks} weeks; ${d.rows.production} production rows in the span. Pre-production rows count in none of these: ${d.rows.preProduction} in the span, left out. Deploy rows not \`tag: run\`: ${d.rows.notRun}; unreadable: ${d.rows.unreadable}.`,
+    '',
+    '| Metric | Value | What it counts |',
+    '|---|---|---|',
+    `| Deployment frequency | ${cellText(d.frequency.median, perWeek)} | Forward \`ok\` deploys (not rollbacks) per week, the median over ${d.window.weeks} weeks: ${d.frequency.perWeek.join(', ')}, oldest first |`,
+    `| Change-failure rate | ${cellText(d.changeFailure.rate, percent)} | ${d.changeFailure.failed} of ${d.changeFailure.reached} forward deploys that reached the deploy stage failed there, failed their smoke check, or were rolled back (${d.changeFailure.rolledBack}) |`,
+    `| Time to restore | ${cellText(d.restore.median, hours)} | From a deploy that failed at the deploy stage or its smoke check to the next \`ok\`, the median; ${d.restore.unrestored} not restored yet |`,
+    `| Release lead time | ${cellText(d.leadTime.median, hours)} | From the release's publication to its \`ok\` deploy to production, the median, including the time in pre-production and waiting for approval; ${d.leadTime.withoutLeadTime} without the time |`,
+    '',
+    'What they can\'t see: a production fault found days later and fixed forward, with no rollback and no failed smoke check. A deploy row carries no commit, so it can\'t be joined to the reverts and linked fixes the escape rate counts.',
+  ];
+}
 
 /**
  * The views as Markdown lines, after the headline's.
@@ -242,5 +277,6 @@ export function renderViews(v) {
         ...v.ab.lanes.flatMap((l) => [l.old, l.new].map((a) => `| ${l.lane} | ${a.fingerprint} | ${a.firstRun.slice(0, 10)} | ${a.lastRun.slice(0, 10)} | ${a.items}${l.mixed ? ` (${l.mixed} on both, left out)` : ''} | ${cellText(a.cost.median, dollars)} | ${cellText(a.yield, percent)} | ${cellText(a.escape.rate, percent)} |`)),
       ]
       : ['No delivery lane ran on two configurations (`config_fingerprint`) in the span.']),
+    ...(v.deploy ? renderDeploy(v.deploy) : []),
   ];
 }
