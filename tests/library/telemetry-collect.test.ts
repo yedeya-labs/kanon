@@ -23,7 +23,10 @@ import {
   underLevel,
   workflowFileOf,
 } from '../../scripts/telemetry-collect.mjs';
-import { ARTIFACT_FILE, DEPLOY_ARTIFACT_FILE, FINDING_ARTIFACT_FILE, findingArtifactName } from '../../scripts/lib/telemetry-artifacts.mjs';
+import {
+  ARTIFACT_FILE, ARTIFACT_PREFIX, DELIVERY_ARTIFACT_FILE, DELIVERY_ARTIFACT_PREFIX, deliveryArtifactName, DEPLOY_ARTIFACT_FILE, FINDING_ARTIFACT_FILE,
+  findingArtifactName,
+} from '../../scripts/lib/telemetry-artifacts.mjs';
 import { HOSTED_AUDIENCE, HOSTED_INGEST_URL, mintToken, storeOf, storeRequest } from '../../scripts/lib/telemetry-token.mjs';
 import { zipOf } from './helpers/zip.js';
 
@@ -552,6 +555,96 @@ describe('deploy rows (plan 0010 §8, §10, D9): sent from the deploy lane\'s `k
   it("ignores a fork's deploy artifact", async () => {
     nextRun += 1;
     const res = await run(github([deployArtifact(deployRow(1), { fork: true })]), store());
+    expect(res).toMatchObject({ listed: 0, sent: 0, foreign: 1, failures: [] });
+  });
+});
+
+describe('notify rows (plan 0011 §11, N5): sent from each lane\'s `kanon-delivery-*` artifacts', () => {
+  /** A valid notify row of a fresh run of the project digest's `notify` job. */
+  const notifyRow = (over: Record<string, unknown> = {}) => {
+    nextRun += 1;
+    return {
+      schema_version: 1, row_kind: 'notify', tag: 'run', recorded_at: iso(NOW - 10 * MIN), run_id: nextRun, run_attempt: 1,
+      producer_attempt: 1, lane: 'project-digest', kanon_version: '0.50.0', kind: 'project-digest', contract_version: 1,
+      hook: 'slack', outcome: 'posted', duration_ms: 800, ...over,
+    };
+  };
+  const deliveryArtifact = (r: Record<string, unknown>, opts: { fork?: boolean; name?: string; content?: string } = {}): Fake => {
+    nextId += 1;
+    const created = Date.parse(String(r.recorded_at)) + 5_000;
+    return {
+      id: nextId,
+      name: opts.name ?? deliveryArtifactName(String(r.lane), Number(r.run_id), Number(r.run_attempt)),
+      created_at: iso(created),
+      expires_at: iso(created + 90 * DAY),
+      workflow_run: { id: Number(r.run_id), repository_id: OWN, head_repository_id: opts.fork ? FORK : OWN },
+      zip: zipOf(DELIVERY_ARTIFACT_FILE, opts.content ?? JSON.stringify(r)),
+    };
+  };
+
+  it('names the family as the plan does, outside the run rows\' reserved prefix (kanon#826)', () => {
+    expect(DELIVERY_ARTIFACT_PREFIX).toBe('kanon-delivery-');
+    expect(DELIVERY_ARTIFACT_FILE).toBe('kanon-delivery.json');
+    expect(deliveryArtifactName('weekly-digest', 12, 3)).toBe('kanon-delivery-weekly-digest-12-3');
+    expect(DELIVERY_ARTIFACT_PREFIX.startsWith(ARTIFACT_PREFIX)).toBe(false);
+  });
+
+  it('sends a row of each outcome beside the run rows', async () => {
+    const runRow = row(5 * MIN);
+    const s = store();
+    const res = await run(github([
+      artifact(runRow),
+      deliveryArtifact(notifyRow()),
+      deliveryArtifact(notifyRow({ outcome: 'failed', failure: 'hook-step-failed', lane: 'weekly-digest', kind: 'weekly-digest' })),
+      deliveryArtifact(notifyRow({ outcome: 'skipped', skip_reason: 'no-message', producer_attempt: undefined, contract_version: undefined })),
+    ]), s);
+    expect(res).toMatchObject({ listed: 4, sent: 4, stored: 4, failures: [] });
+    const sent = s.posts.flat();
+    expect(sent.filter((r) => r.row_kind === 'notify').map((r) => r.outcome).sort()).toEqual(['failed', 'posted', 'skipped']);
+    expect(sent.filter((r) => r.row_kind === 'run')).toHaveLength(1);
+  });
+
+  it('sends a re-run of notify alone: its own attempt in the name, the producer\'s in the row', async () => {
+    const s = store();
+    const res = await run(github([deliveryArtifact(notifyRow({ run_attempt: 2, producer_attempt: 1 }))]), s);
+    expect(res).toMatchObject({ sent: 1, failures: [] });
+    expect(s.posts.flat()[0]).toMatchObject({ run_attempt: 2, producer_attempt: 1 });
+  });
+
+  it("refuses a row whose lane, run or attempt isn't its artifact's, or that is not a notify row", async () => {
+    const wrongLane = notifyRow();
+    const wrongRun = notifyRow();
+    const wrongAttempt = notifyRow();
+    const runInside = notifyRow();
+    const res = await run(github([
+      deliveryArtifact(wrongLane, { name: deliveryArtifactName('weekly-digest', Number(wrongLane.run_id), 1) }),
+      deliveryArtifact(wrongRun, { name: deliveryArtifactName('project-digest', Number(wrongRun.run_id) + 1, 1) }),
+      deliveryArtifact(wrongAttempt, { name: deliveryArtifactName('project-digest', Number(wrongAttempt.run_id), 2) }),
+      deliveryArtifact(runInside, { content: JSON.stringify(row(5 * MIN, { run_id: runInside.run_id, lane: 'project-digest', role: 'overseer' })) }),
+    ].map((a, i) => (i === 1 ? { ...a, workflow_run: { ...a.workflow_run, id: Number(wrongRun.run_id) + 1 } } : a))), store());
+    expect(res.sent).toBe(0);
+    expect(res.failures).toHaveLength(4);
+    for (const f of res.failures) expect(f).toMatch(/notify run \d+ attempt \d+ .*: the row's row_kind, lane, run_id or run_attempt is not its artifact's$/);
+    expect(res.failures.filter((f) => f.startsWith('weekly-digest notify'))).toHaveLength(1);
+  });
+
+  it('a row that fails the schema names the field, never the value; an unreadable artifact is a failure', async () => {
+    const res = await run(github([
+      deliveryArtifact(notifyRow({ url: 'https://hooks.slack.com/services/T0/B0/xyz', channel: '#general' })),
+      deliveryArtifact(notifyRow(), { content: 'not json' }),
+    ]), store());
+    expect(res.sent).toBe(0);
+    expect(res.failures).toContainEqual(expect.stringMatching(/notify run .*fails the schema \(url \(unknown\), channel \(unknown\)\)/));
+    expect(res.failures.join('\n')).not.toMatch(/hooks\.slack\.com|#general/);
+    expect(res.failures).toContainEqual(expect.stringMatching(/notify run .*: unreadable/));
+  });
+
+  it("ignores a fork's delivery artifact, and a name outside the lanes", async () => {
+    const r = notifyRow();
+    const res = await run(github([
+      deliveryArtifact(r, { fork: true }),
+      deliveryArtifact(notifyRow(), { name: `kanon-delivery-not-a-lane-${nextRun}-1` }),
+    ]), store());
     expect(res).toMatchObject({ listed: 0, sent: 0, foreign: 1, failures: [] });
   });
 });

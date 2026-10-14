@@ -19,6 +19,11 @@ import {
   LANES,
   PROMPT_CACHE_TTLS,
   LANE_ROLES,
+  NOTIFY_FAILURES,
+  NOTIFY_HOOKS,
+  NOTIFY_KINDS,
+  NOTIFY_OUTCOMES,
+  NOTIFY_SKIP_REASONS,
   REASON_OUTCOME,
   RESERVED_PARTITION,
   ROLES,
@@ -39,6 +44,7 @@ import {
 } from '../../actions/agent-telemetry/agent-telemetry.mjs';
 import { classifyResult, parseObjects } from '../../actions/agent-classify/classify-agent-result.mjs';
 import { ESCALATION_CATEGORIES as FILE_CATEGORIES } from '../../scripts/lib/escalation-paths.mjs';
+import { KINDS as MESSAGE_KINDS } from '../../scripts/lib/notify-contract.mjs';
 
 /**
  * Plan 0002 step S1 and plan 0003 step M1: the schema module, the reason codes, the
@@ -925,5 +931,98 @@ describe('the deploy row (plan 0010 §10, step D3)', () => {
   it('no lane may be named `deploy`: a run row with that lane is rejected', () => {
     expect(LANES).not.toContain('deploy');
     fails({ ...finished(), lane: 'deploy' }, 'lane');
+  });
+});
+
+describe('the notify row (plan 0011 §11, step N5)', () => {
+  const NOTIFY = SCHEMAS.notify![1]!;
+  /** The project digest, posted through Kanon's Slack hook. */
+  const posted = (): Row => ({
+    schema_version: 1, row_kind: 'notify', tag: 'run', recorded_at: '2026-10-14T10:00:00Z',
+    run_id: 33679229731, run_attempt: 1, producer_attempt: 1, lane: 'project-digest', kanon_version: '0.40.0',
+    kind: 'project-digest', contract_version: 1, hook: 'slack', outcome: 'posted', duration_ms: 1_200,
+  });
+  /** Skipped before the hook was read: no artifact, so no producer attempt and no contract version. */
+  const skipped = (skip_reason = 'no-secret'): Row => {
+    const row: Row = { ...posted(), outcome: 'skipped', skip_reason };
+    delete row.producer_attempt;
+    delete row.contract_version;
+    return row;
+  };
+  const fails = (row: Row, field: string) => {
+    const v = validate(row);
+    expect(v.ok, field).toBe(false);
+    if (!v.ok) expect(v.errors.map((e) => e.field)).toContain(field);
+  };
+
+  it('has the sixteen fields §11 lists, and requires the row, the run, the lane, the kind, the hook and the outcome', () => {
+    expect(Object.keys(NOTIFY).sort()).toEqual([
+      'contract_version', 'duration_ms', 'failure', 'hook', 'kanon_version', 'kind', 'lane', 'outcome', 'producer_attempt',
+      'recorded_at', 'row_kind', 'run_attempt', 'run_id', 'schema_version', 'skip_reason', 'tag',
+    ]);
+    const required = Object.entries(NOTIFY).filter(([, f]) => f.required).map(([k]) => k).sort();
+    expect(required).toEqual([
+      'hook', 'kanon_version', 'kind', 'lane', 'outcome', 'recorded_at', 'row_kind', 'run_attempt', 'run_id', 'schema_version', 'tag',
+    ]);
+  });
+
+  it('holds the closed lists to §11, and the message kinds to the contract library\'s', () => {
+    expect([...NOTIFY_KINDS]).toEqual([...MESSAGE_KINDS]);
+    expect([...NOTIFY_HOOKS]).toEqual(['slack', 'webhook', 'custom']);
+    expect([...NOTIFY_OUTCOMES]).toEqual(['posted', 'failed', 'skipped']);
+    expect([...NOTIFY_SKIP_REASONS]).toEqual(['no-message', 'no-secret']);
+    expect([...NOTIFY_FAILURES]).toEqual(['invalid-message', 'hook-step-failed']);
+  });
+
+  it('a row of each outcome validates, for each hook kind and each tag', () => {
+    expect(validate(posted())).toEqual({ ok: true });
+    for (const skip of NOTIFY_SKIP_REASONS) expect(validate(skipped(skip)), skip).toEqual({ ok: true });
+    for (const failure of NOTIFY_FAILURES) expect(validate({ ...posted(), outcome: 'failed', failure }), failure).toEqual({ ok: true });
+    for (const hook of NOTIFY_HOOKS) expect(validate({ ...posted(), hook }), hook).toEqual({ ok: true });
+    for (const kind of ['weekly-digest', 'deploy']) expect(validate({ ...posted(), kind }), kind).toEqual({ ok: true });
+    for (const tag of ['smoke', 'test']) expect(validate({ ...posted(), tag }), tag).toEqual({ ok: true });
+  });
+
+  it('a re-run of `notify` alone validates: its own attempt 2, the producer\'s attempt 1', () => {
+    expect(validate({ ...posted(), run_attempt: 2, producer_attempt: 1 })).toEqual({ ok: true });
+    fails({ ...posted(), producer_attempt: 0 }, 'producer_attempt');
+    fails({ ...posted(), contract_version: 0 }, 'contract_version');
+  });
+
+  it('a row with a `url`, `channel` or `text` is refused whole, naming the field and never the value (decision 14)', () => {
+    for (const field of ['url', 'channel', 'text', 'host', 'webhook_url', 'status_body', 'secret', 'title']) {
+      const value = 'https://hooks.slack.com/services/T0/B0/xyz';
+      const v = validate({ ...posted(), [field]: value });
+      expect(v, field).toEqual({ ok: false, errors: [{ field, problem: 'unknown' }] });
+      expect(JSON.stringify(v)).not.toContain('hooks.slack.com');
+    }
+  });
+
+  it('a value outside each closed list is refused', () => {
+    fails({ ...posted(), outcome: 'ok' }, 'outcome');
+    fails({ ...posted(), hook: 'discord' }, 'hook');
+    fails({ ...posted(), kind: 'health' }, 'kind');
+    fails({ ...posted(), lane: 'notify' }, 'lane');
+    fails({ ...skipped(), skip_reason: 'no-hook' }, 'skip_reason');
+    fails({ ...posted(), outcome: 'failed', failure: 'http-500' }, 'failure');
+  });
+
+  it('`skip_reason` only with `skipped`, and a skip names its reason', () => {
+    fails({ ...posted(), skip_reason: 'no-message' }, 'skip_reason');
+    fails({ ...posted(), outcome: 'failed', failure: 'hook-step-failed', skip_reason: 'no-secret' }, 'skip_reason');
+    const row = skipped();
+    delete row.skip_reason;
+    fails(row, 'skip_reason');
+  });
+
+  it('`failure` only with `failed`, and a failure names its cause', () => {
+    fails({ ...skipped(), failure: 'invalid-message' }, 'failure');
+    fails({ ...posted(), failure: 'hook-step-failed' }, 'failure');
+    fails({ ...posted(), outcome: 'failed' }, 'failure');
+  });
+
+  it('no lane is named `notify`: the row lives in its lane\'s partition, not one of its own', () => {
+    expect(LANES).not.toContain('notify');
+    fails({ ...finished(), lane: 'notify' }, 'lane');
   });
 });

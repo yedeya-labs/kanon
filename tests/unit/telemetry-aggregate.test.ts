@@ -5,13 +5,14 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  aggregate, assertNoKey, bearerOf, callerAllowed, configOf, handle, keyOf, median, MIN_ADOPTERS, pathOf, percentile, PROJECTION,
+  aggregate, assertNoKey, bearerOf, callerAllowed, configOf, handle, keyOf, median, MIN_ADOPTERS, pageView, pathOf, percentile, PROJECTION,
   publicView, queryRequest, readAll, REGISTER_TTL_MS, registerCache, registrationsFrom, scanRegister, scanRequest, SIGNAL_DAYS,
 } from '../../infra/telemetry/function/aggregate.mjs';
 import { AGGREGATE_GET, AGGREGATE_SCAN } from '../../infra/telemetry/function/register-fields.mjs';
 import { AwsError } from '../../infra/telemetry/function/aws.mjs';
 import { cliQuery, fromRegister, TABLE } from '../../infra/telemetry/aggregate.mjs';
 import { LANES } from '../../actions/agent-telemetry/schema.mjs';
+import { prepareRows } from '../../scripts/metrics/indicators.mjs';
 import { writeStub } from './helpers/stub-bin.js';
 import {
   ALIAS_ARN, EXPLORE, fakeRegister, keys, type Registration, token, tokenEnv, tokenEvent, UNQUALIFIED_ARN,
@@ -187,6 +188,39 @@ describe('which rows are read', () => {
 
   it('a zero-cost run, in its cell', () => {
     expect(run(three().map((r) => ({ ...r, total_cost_usd: 0 }))).cross_adopter[0]).toMatchObject({ runs: 3, median_cost_usd: 0, p90_cost_usd: 0 });
+  });
+});
+
+describe('a notify row is never counted (plan 0011 §11, N5)', () => {
+  /** A notify row as the store holds it: in its lane's partition, beside the run rows, with the fields a projection takes. */
+  const notify = (key: string, over: Record<string, unknown> = {}) => ({
+    pk: `${key}#review`, row_kind: 'notify', tag: 'run', recorded_at: RECENT, lane: 'review', expires_at: LIVE,
+    outcome: 'failed', failure: 'hook-step-failed', kind: 'project-digest', hook: 'slack', kanon_version: '0.32.0', ...over,
+  });
+  const notifies = ['alpha', 'beta', 'gamma'].flatMap((k) => [notify(k), notify(k, { outcome: 'posted', failure: undefined }), notify(k, { outcome: 'skipped', skip_reason: 'no-secret' })]);
+
+  it('the aggregate counts no notify row in a cell, a signal or the excluded notes', () => {
+    expect(run(three())).toEqual(run([...three(), ...notifies] as Row[]));
+    const alone = run(notifies as Row[]);
+    expect(alone.cross_adopter).toEqual([]);
+    expect(alone.signals).toEqual([]);
+    expect(alone.notes.excluded).toEqual({ no_model: 0, no_cost: 0 });
+  });
+
+  it('the page view\'s rows pass through prepareRows, which counts a notify row as another kind, never as a run', () => {
+    const runRow = { row_kind: 'run', tag: 'run', recorded_at: RECENT, lane: 'review', total_cost_usd: 1, outcome: 'ok' };
+    const notifyRow = { row_kind: 'notify', tag: 'run', recorded_at: RECENT, lane: 'review', outcome: 'posted', kind: 'project-digest', hook: 'slack' };
+    const ctx = prepareRows([runRow, notifyRow, { ...notifyRow, outcome: 'failed' }], ['review']);
+    expect(ctx.runs).toEqual([runRow]);
+    expect(ctx.ignored).toEqual({ notRun: 0, otherKind: 2, unreadable: 0 });
+    expect(ctx.loose.flatMap((g) => g.runs)).toEqual([runRow]);
+  });
+
+  it('the page view is the same with and without an adopter\'s notify rows in a delivery lane\'s partition', () => {
+    const own = { alpha: 'kanon' };
+    const runs = ['alpha', 'beta'].map((k) => row(k, 2, { lane: 'implement', pk: `${k}#implement` }));
+    const delivered = Array.from({ length: 12 }, (_, i) => notify('alpha', { lane: 'implement', pk: 'alpha#implement', total_cost_usd: i + 1, recorded_at: new Date(NOW - (40 + i) * 86_400_000).toISOString() }));
+    expect(pageView([...runs, ...delivered], { now: NOW, own })).toEqual(pageView(runs, { now: NOW, own }));
   });
 });
 

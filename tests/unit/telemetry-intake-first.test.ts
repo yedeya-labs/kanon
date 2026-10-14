@@ -358,6 +358,37 @@ describe('intake-first.mjs, against a repository', SPAWNS, () => {
   });
 });
 
+describe('the notify row kind is a widening (plan 0011 §11, N5)', () => {
+  /** The release before N5: the same schema without the notify row kind. */
+  const before = (): Schemas => {
+    const s = copy();
+    delete s.notify;
+    return s;
+  };
+
+  it('names the notify row kind, and only it, between the release before and this one', () => {
+    expect(widenings(before(), copy())).toEqual(['notify: a row kind the deployed intake does not know']);
+    expect(narrowings(before(), copy())).toEqual([]);
+  });
+
+  it('exits 1 on a release that adds it, telling the Owner to deploy intake from it first', SPAWNS, () => {
+    const { dir, git } = scratch();
+    const schema = join(dir, 'actions/agent-telemetry/schema.mjs');
+    const full = readFileSync(schema, 'utf8');
+    const entry = '  notify: Object.freeze({ 1: NOTIFY_V1 }),\n';
+    expect(full).toContain(entry);
+    writeFileSync(schema, full.replace(entry, ''));
+    git('commit', '-q', '-am', 'the release before N5');
+    git('tag', 'before-n5');
+    writeFileSync(schema, full);
+    git('commit', '-q', '-am', 'N5');
+    const r = run(dir, '--deployed', 'before-n5');
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stdout).toContain('notify: a row kind the deployed intake does not know');
+    expect(r.stdout).toMatch(/deploy intake from this release.*before/i);
+  });
+});
+
 describe("docs/release.md's Intake first, the steps the Owner follows on the check's exit", () => {
   /** The section's numbered steps, each with the paragraphs indented under it. */
   function steps(): string[] {

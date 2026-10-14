@@ -109,6 +109,9 @@ export function sortRows(rows) {
   for (const row of rows) {
     if (row === null || typeof row !== 'object' || Array.isArray(row)) { ignored.unreadable += 1; continue; }
     const r = /** @type {Record<string, unknown>} */ (row);
+    // A row's own `row_kind` decides, and only a row without one is inferred a run from its lane.
+    // A notify row (plan 0011 §11) carries a lane and shares its lane's partition, but it names its
+    // kind, so it is counted here as another kind, never read as a run.
     const kind = r.row_kind ?? (typeof r.lane === 'string' ? 'run' : undefined);
     if (kind !== 'run' && kind !== 'work_item') { ignored.otherKind += 1; continue; }
     if (r.tag !== 'run') { ignored.notRun += 1; continue; }

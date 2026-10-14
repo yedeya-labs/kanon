@@ -45,7 +45,7 @@
 import { execFileSync } from 'node:child_process';
 import { inflateRawSync } from 'node:zlib';
 
-import { describeErrors, REPORTERS, validate } from '../../actions/agent-telemetry/schema.mjs';
+import { describeErrors, LANES, REPORTERS, validate } from '../../actions/agent-telemetry/schema.mjs';
 
 /** Every version-2 artifact's name starts with this (`actions/agent-telemetry/action.yml`). */
 export const ARTIFACT_PREFIX = 'kanon-telemetry-';
@@ -83,6 +83,25 @@ export const DEPLOY_ARTIFACT_FILE = 'kanon-deploy-row.json';
 export const DEPLOY_ARTIFACT = new RegExp(`^${DEPLOY_ARTIFACT_PREFIX}(\\d+)-(\\d+)-(\\d+)$`);
 /** @param {number | string} runId @param {number | string} attempt @param {number | string} position */
 export const deployArtifactName = (runId, attempt, position) => `${DEPLOY_ARTIFACT_PREFIX}${runId}-${attempt}-${position}`;
+/**
+ * A `notify` row's artifact (plan 0011 §11, N5): one per run of a lane's `notify` job,
+ * `kanon-delivery-<lane>-<run id>-<attempt>`, the `notify` job's run and attempt, holding one row
+ * in `kanon-delivery.json`. Not under `kanon-telemetry-`, which only a lane's run row may carry
+ * (kanon#826). The collector sends these since N5; the `notify` block (N6) writes them, taking the
+ * name and the file from here.
+ */
+export const DELIVERY_ARTIFACT_PREFIX = 'kanon-delivery-';
+/** The file inside a delivery artifact: one notify row. */
+export const DELIVERY_ARTIFACT_FILE = 'kanon-delivery.json';
+/** A delivery artifact's name: a lane from the schema's list, then the run id and the attempt. */
+export const DELIVERY_ARTIFACT = new RegExp(`^${DELIVERY_ARTIFACT_PREFIX}(${LANES.join('|')})-(\\d+)-(\\d+)$`);
+/**
+ * The name a lane's `notify` job uploads its row under.
+ * @param {string} lane one of the schema's `LANES`
+ * @param {number | string} runId
+ * @param {number | string} attempt
+ */
+export const deliveryArtifactName = (lane, runId, attempt) => `${DELIVERY_ARTIFACT_PREFIX}${lane}-${runId}-${attempt}`;
 /** The sweep's window, in days, as `dispatch-sweep.mjs`'s `UNREACHED_WINDOW_DAYS` defaults it. */
 export const WINDOW_DAYS = 14;
 /** Pages of 100 the listing may read before it gives up and fails the read. */
@@ -160,7 +179,7 @@ export function readZipEntry(buf, name) {
  * @typedef {(path: string) => any} Api           a `gh api` GET of one path, parsed
  * @typedef {(id: number) => Buffer} Download     one artifact's zip, by id
  * @typedef {{ id: number, name: string, runId: number, attempt: number, createdAt: number, expiresAt: number }} LaneArtifact
- * @typedef {LaneArtifact & { lane: string, kind: 'run' | 'finding' | 'deploy', position?: number }} AnyArtifact
+ * @typedef {LaneArtifact & { lane: string, kind: 'run' | 'finding' | 'deploy' | 'notify', position?: number }} AnyArtifact
  */
 
 /** @param {unknown} err */
@@ -224,18 +243,26 @@ export const ANY_LANE_ARTIFACT = new RegExp(`^${ARTIFACT_PREFIX}([a-z][a-z0-9-]*
  *
  * With `deploys`, it also takes the deploy lane's row artifacts (plan 0010 D9), `kind: 'deploy'`,
  * with `lane: 'deploy'` and the environment's `position`, under the same own-run rule.
- * @param {{ repo: string, from: number, api: Api, maxPages?: number, findings?: boolean, deploys?: boolean }} opts
+ *
+ * With `deliveries`, it also takes each lane's `notify` row artifacts (plan 0011 §11, N5),
+ * `kind: 'notify'`, with the lane its name carries, under the same own-run rule.
+ * @param {{ repo: string, from: number, api: Api, maxPages?: number, findings?: boolean, deploys?: boolean, deliveries?: boolean }} opts
  * @returns {{ artifacts: AnyArtifact[], foreign: number, retentionDays: number | null }}
  */
-export function listTelemetryArtifacts({ findings = false, deploys = false, ...opts }) {
+export function listTelemetryArtifacts({ findings = false, deploys = false, deliveries = false, ...opts }) {
   return listArtifacts((name) => {
     const m = ANY_LANE_ARTIFACT.exec(name);
     if (m) return [m[0], m[2], m[3], m[1], 'run'];
     const d = deploys ? DEPLOY_ARTIFACT.exec(name) : null;
     if (d) return [d[0], d[1], d[2], 'deploy', 'deploy', d[3]];
+    const n = deliveries ? DELIVERY_ARTIFACT.exec(name) : null;
+    if (n) return [n[0], n[2], n[3], n[1], 'notify'];
     const f = findings ? FINDING_ARTIFACT.exec(name) : null;
     return f ? [f[0], f[2], f[3], f[1], 'finding'] : null;
-  }, opts, [ARTIFACT_PREFIX, ...(findings ? [FINDING_ARTIFACT_PREFIX] : []), ...(deploys ? [DEPLOY_ARTIFACT_PREFIX] : [])]);
+  }, opts, [
+    ARTIFACT_PREFIX, ...(findings ? [FINDING_ARTIFACT_PREFIX] : []), ...(deploys ? [DEPLOY_ARTIFACT_PREFIX] : []),
+    ...(deliveries ? [DELIVERY_ARTIFACT_PREFIX] : []),
+  ]);
 }
 
 /**
@@ -273,7 +300,7 @@ function listArtifacts(match, { repo, from, api, maxPages = MAX_PAGES }, prefixe
       if (Number.isFinite(expiresAt) && name.startsWith(ARTIFACT_PREFIX)) retention = Math.min(retention, expiresAt - createdAt);
       if (!m || a.expired || createdAt < from || seen.has(a.id)) continue;
       seen.add(a.id);
-      const kind = m[4] === 'finding' || m[4] === 'deploy' ? m[4] : 'run';
+      const kind = m[4] === 'finding' || m[4] === 'deploy' || m[4] === 'notify' ? m[4] : 'run';
       artifacts.push({
         id: a.id, name, runId: Number(m[1]), attempt: Number(m[2]), createdAt, expiresAt, lane: String(m[3] ?? ''), kind,
         ...(kind === 'deploy' ? { position: Number(m[5]) } : {}),
