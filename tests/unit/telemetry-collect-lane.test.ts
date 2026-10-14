@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { COLLECT_JOB, COLLECT_JOB_OVERRIDE, ERASE_JOB } from '../../scripts/telemetry-collect.mjs';
+import { COLLECT_JOB, COLLECT_JOB_OVERRIDE, ERASE_JOB, inputsOf, UNPUBLISHED_JOB } from '../../scripts/telemetry-collect.mjs';
+import { HOSTED_INGEST_URL } from '../../scripts/lib/telemetry-token.mjs';
 import { evaluate } from './helpers/expression.js';
 import { COLLECTOR_CHECK_ENV, isCollectorJob } from './helpers/store-jobs.js';
 
@@ -45,12 +46,39 @@ describe('telemetry-collect.yml, the lane', () => {
     expect(Object.keys(lane.jobs)).toEqual(['collect']);
   });
 
-  it('names the collect job as the watermark looks for it, an override run otherwise (kanon#315), and an erasure as neither', () => {
-    expect(collect.name).toBe(`\${{ inputs.erase == 'yes' && '${ERASE_JOB}' || inputs.window_minutes == '' && '${COLLECT_JOB}' || '${COLLECT_JOB_OVERRIDE}' }}`);
-    const name = (inputs: Record<string, string>) => evaluate(String(collect.name).slice(3, -2), { inputs });
-    expect(name({ erase: '', window_minutes: '' })).toBe(COLLECT_JOB);
-    expect(name({ erase: 'no', window_minutes: '30' })).toBe(COLLECT_JOB_OVERRIDE);
-    expect(name({ erase: 'yes', window_minutes: '' })).toBe(ERASE_JOB);
+  // While the hosted store's URL is unpublished, a run that names no store of its own skips, green.
+  // Its job must not be named as a sweep, or the watermark would anchor on it and the first real
+  // sweep after the URL is published would reach back 90 minutes instead of to the last sweep (#843).
+  const UNPUBLISHED = HOSTED_INGEST_URL === '' ? ` || inputs.url == '' && inputs.audience == '' && inputs.writer-role == '' && '${UNPUBLISHED_JOB}'` : '';
+  const name = (inputs: Record<string, string>) => evaluate(String(collect.name).slice(3, -2), { inputs });
+
+  it('names the collect job as the watermark looks for it, an override run otherwise (kanon#315), and an erasure or an unpublished skip as neither (#843)', () => {
+    expect(collect.name).toBe(`\${{ inputs.erase == 'yes' && '${ERASE_JOB}'${UNPUBLISHED} || inputs.window_minutes == '' && '${COLLECT_JOB}' || '${COLLECT_JOB_OVERRIDE}' }}`);
+    const store = { url: 'https://abc.lambda-url.eu-central-1.on.aws/', audience: 'acme-telemetry', 'writer-role': '' };
+    expect(name({ ...store, erase: '', window_minutes: '' })).toBe(COLLECT_JOB);
+    expect(name({ ...store, erase: 'no', window_minutes: '30' })).toBe(COLLECT_JOB_OVERRIDE);
+    expect(name({ ...store, erase: 'yes', window_minutes: '' })).toBe(ERASE_JOB);
+    expect(name({ url: '', audience: '', 'writer-role': '', erase: 'yes', window_minutes: '' })).toBe(ERASE_JOB);
+  });
+
+  // The job's name is evaluated before the script runs, so the workflow holds its own literal for
+  // the unpublished case: this holds it to the script's own judgement, on every input it reads.
+  it('names the job a sweep exactly when the collector sends, and the unpublished skip exactly when the hosted URL is empty and no store is named (#843)', () => {
+    const SELF = 'https://abc.lambda-url.eu-central-1.on.aws/';
+    for (const url of ['', SELF]) {
+      for (const audience of ['', 'acme-telemetry']) {
+        for (const role of ['', 'a-writer-role']) {
+          for (const window of ['', '30']) {
+            const { store, problems } = inputsOf({ KANON_TELEMETRY_URL: url, KANON_TELEMETRY_AUDIENCE: audience, LEGACY: String(role !== ''), ERASE: 'no', REGISTER: 'no' });
+            const got = name({ url, audience, 'writer-role': role, erase: 'no', window_minutes: window });
+            const where = JSON.stringify({ url, audience, role, window });
+            if (problems.length) continue; // refused in the check step: red, so never a watermark
+            if (store.ok) expect(got, where).toBe(window === '' ? COLLECT_JOB : COLLECT_JOB_OVERRIDE);
+            else expect(store.unpublished && got, where).toBe(UNPUBLISHED_JOB);
+          }
+        }
+      }
+    }
   });
 
   it('holds GitHub\'s OIDC token with no environment, no AWS credentials and only the reads the sweep needs', () => {

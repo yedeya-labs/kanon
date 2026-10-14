@@ -78,6 +78,7 @@ import { coveringRulesets } from './ruleset-bypass.mjs';
 import { BUCKETS, milestones as runMilestones } from './milestones.mjs';
 import { parseYaml } from './workflow-yaml.mjs';
 import { DEFAULT_VALUE as UPSTREAM_DEFAULT, LABEL as UPSTREAM_LABEL, sends } from '../scripts/lib/upstream-findings.mjs';
+import { HOSTED_INGEST_URL } from '../scripts/lib/telemetry-token.mjs';
 
 /** @typedef {import('./callers.mjs').Requirements} Requirements */
 /** @typedef {{ status: number | null, stdout: string, stderr: string }} GhResult */
@@ -1457,10 +1458,20 @@ export const reuseQuestion = (found, req) => {
 
 /**
  * The telemetry question (#428), saying what is sent, where, who reads it, and how to stop and
- * erase it, from plan 0002 and docs/telemetry.md.
+ * erase it, from plan 0002 and docs/telemetry.md. `published` is whether this release of Kanon,
+ * which init pins the caller to, publishes the hosted store's URL: until it does, the collector
+ * sends nothing and registers nothing, and the question says so (#843).
+ * @param {boolean} published
  */
-export const TELEMETRY_QUESTION =
-  "Send this repository's agent-run and work-item rows to Kanon's hosted telemetry store? One row per lane run: plan 0002's fixed fields (lane, outcome, model, cost, tokens, durations, counts, the run, pull request and issue numbers, the Kanon release). One row per closed pull request: plan 0003's fields (sizes, times, outcome, actor classes, pull request and issue numbers). The rows hold no code, no text, no titles, no logins or file paths. They go to one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, and are kept 13 months. Kanon's operator reads them to improve Kanon: Kanon notices failures it caused in your runs, often fixing them before you would report one, and you get cross-adopter cost and reliability baselines. The operator publishes only aggregates of at least three adopters; your repository reads only its own rows. Nothing else is asked: the collector registers this repository on its first run, without an issue or a variable. Once it is on, every job on the default branch that holds id-token: write, an existing OIDC job of yours included, can write to the store, since its writer role trusts the default branch's ref: kanon init names each, for you to narrow its grant or accept it in docs/qa/adoption.md. Stop by deleting .github/workflows/telemetry.yml; to erase what was sent, first dispatch it with erase: yes (docs/sharing.md, \"Stop and erase\").";
+export const telemetryQuestion = (published) =>
+  "Send this repository's agent-run and work-item rows to Kanon's hosted telemetry store? One row per lane run: plan 0002's fixed fields (lane, outcome, model, cost, tokens, durations, counts, the run, pull request and issue numbers, the Kanon release). One row per closed pull request: plan 0003's fields (sizes, times, outcome, actor classes, pull request and issue numbers). The rows hold no code, no text, no titles, no logins or file paths. They go to one table in Kanon's AWS account in Frankfurt (eu-central-1), under an opaque key, and are kept 13 months. Kanon's operator reads them to improve Kanon: Kanon notices failures it caused in your runs, often fixing them before you would report one, and you get cross-adopter cost and reliability baselines. The operator publishes only aggregates of at least three adopters; your repository reads only its own rows. " + `Nothing else is asked: the collector registers this repository on its first run, without an issue or a variable${published ? '.' : ", once a Kanon release publishes the hosted store's URL: this release of Kanon doesn't publish the hosted store's URL yet, so until your pin moves to one that does, the collector sends nothing and registers nothing."} ` + "Once it is on, every job on the default branch that holds id-token: write, an existing OIDC job of yours included, can write to the store, since its writer role trusts the default branch's ref: kanon init names each, for you to narrow its grant or accept it in docs/qa/adoption.md. Stop by deleting .github/workflows/telemetry.yml; to erase what was sent, first dispatch it with erase: yes (docs/sharing.md, \"Stop and erase\").";
+export const TELEMETRY_QUESTION = telemetryQuestion(HOSTED_INGEST_URL !== '');
+
+/**
+ * What the summary's Sharing line says of the collector once telemetry is on (#843).
+ * @param {boolean} published as `telemetryQuestion` takes it
+ */
+export const telemetryRegisters = (published) => (published ? "registers on the collector's first run" : "sends nothing yet: this release of Kanon doesn't publish the hosted store's URL");
 
 /**
  * The answers `askAll` gives, with where each came from (`why`, by its `.answers` field) and the
@@ -1782,11 +1793,11 @@ export const summaryOf = ({ s, a, req, repo, release, read, files, rows, ownerAp
   line('Review', ['reviewTrigger'], a.reviewTrigger === 'labelled' ? 'labelled: add `review:please` to a PR to get a verdict' : 'none: no review lane', why('reviewTrigger'));
   line('Data', ['sensitiveData'], a.sensitiveData === true ? 'holds private material (## Data)' : a.sensitiveData === false ? 'holds none (## Data)' : 'not declared (## Data)', why('sensitiveData'));
   const sharing = {
-    yes: "yes: telemetry on (registers on the collector's first run), findings sent with evidence",
-    codes: "codes only: telemetry on (registers on the collector's first run), findings sent as codes",
+    yes: `yes: telemetry on (${telemetryRegisters(HOSTED_INGEST_URL !== '')}), findings sent with evidence`,
+    codes: `codes only: telemetry on (${telemetryRegisters(HOSTED_INGEST_URL !== '')}), findings sent as codes`,
     no: 'no: nothing leaves this repo, findings drafted',
   };
-  line('Sharing', ['consent', 'telemetry', 'upstreamFindings', 'upstreamEvidence'], a.consent ? sharing[a.consent] : `custom: telemetry ${a.telemetry ? "on (registers on the collector's first run)" : 'off'}, findings ${a.upstreamFindings}`, why('consent'));
+  line('Sharing', ['consent', 'telemetry', 'upstreamFindings', 'upstreamEvidence'], a.consent ? sharing[a.consent] : `custom: telemetry ${a.telemetry ? `on (${telemetryRegisters(HOSTED_INGEST_URL !== '')})` : 'off'}, findings ${a.upstreamFindings}`, why('consent'));
   // Beside sharing (#631): each of the repository's own jobs that could assume the telemetry
   // writer and the QA store's role, and what becomes of it.
   const own = holders.filter((h) => h.status !== 'kanon-lane').map((h) => {
@@ -2323,7 +2334,7 @@ const run = async (deps, opts, req, rep) => {
 
   // The telemetry store's side (#428; plan 0008 §8, step J5): nothing. The collector's caller is
   // the whole registration: its first default-branch run registers the repository, and `kanon
-  // doctor` reads that run afterwards (`telemetry.not-run`, `telemetry.refused`).
+  // doctor` reads that run afterwards (`telemetry.not-run`, `telemetry.unpublished`, `telemetry.refused`).
 
   // 4. Labels, milestones, the merge setting and the ruleset.
   out('');

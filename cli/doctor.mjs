@@ -64,7 +64,7 @@ import { branchWorkflows, checkJobs, checkReporters, mergeQueueOn } from './chec
 import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '../scripts/lib/upstream-findings.mjs';
 import { LEDGER as CAPABILITY_LEDGER, parseCapabilityWatch } from '../scripts/lib/capability-watch.mjs';
 import { DEPLOY_HEADING, movedReferenceBullets } from '../scripts/lib/deploy-declaration.mjs';
-import { REFUSED_TITLE } from '../scripts/lib/telemetry-token.mjs';
+import { REFUSED_TITLE, UNPUBLISHED_JOB } from '../scripts/lib/telemetry-token.mjs';
 import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
 import { renderNotice } from '../actions/agent-classify/classify-agent-result.mjs';
 
@@ -274,6 +274,7 @@ export const FINDINGS = {
   'apps-check.secret-stale': { category: 'caller', blocking: true },
   'telemetry.refused': { category: 'caller', blocking: false },
   'telemetry.not-run': { category: 'caller', blocking: false },
+  'telemetry.unpublished': { category: 'caller', blocking: false },
   'telemetry.legacy-inputs': { category: 'caller', blocking: true },
   'qa-store.unmapped': { category: 'caller', blocking: false },
   'qa-store.variables': { category: 'secret', blocking: false },
@@ -1905,9 +1906,11 @@ export const diagnose = async (deps, opts) => {
   // ── The telemetry collector (#428; plan 0008 §8, step J5) ─────────────────────────────────
   // A caller of Kanon's collector registers the repository on its first default-branch run, and
   // sends with GitHub's OIDC token: nothing is set beside it. So what doctor reads is the caller's
-  // last run on the default branch: `telemetry.not-run` while there is none, and
-  // `telemetry.refused` when the store refused it (a 403, 410 or 429, which the collector says
-  // with its own annotation title), with the run's own words. Neither blocks: no lane needs it.
+  // last run on the default branch: `telemetry.not-run` while there is none,
+  // `telemetry.unpublished` when it skipped because its release doesn't publish the hosted store's
+  // URL (#843), and `telemetry.refused` when the store refused it (a 403, 410 or 429, which the
+  // collector says with its own annotation title), with the run's own words. None blocks: no lane
+  // needs it.
   const collector = req.telemetry?.collector;
   const collectorCallers = collector
     ? [...workflows].filter(([, wf]) => Object.values(isMap(wf.jobs) ? wf.jobs : {}).some((j) => isMap(j) && kanonCall(j.uses)?.workflow === collector)).map(([f]) => f)
@@ -1975,11 +1978,15 @@ export const diagnose = async (deps, opts) => {
       /** @type {string | null} */
       let words = null;
       let readable = true;
+      let unpublished = false;
       try {
         const jobs = await deps.gh(['api', `repos/${repo}/actions/runs/${id}/jobs?per_page=100`]);
         if (jobs.status !== 0) readable = false;
         else {
-          for (const job of JSON.parse(jobs.stdout).jobs ?? []) {
+          const listedJobs = JSON.parse(jobs.stdout).jobs ?? [];
+          // The skip's own job name (#843): green, and nothing sent or registered.
+          unpublished = listedJobs.some((/** @type {any} */ j) => (j?.name === UNPUBLISHED_JOB || String(j?.name).endsWith(` / ${UNPUBLISHED_JOB}`)) && j?.conclusion === 'success');
+          for (const job of listedJobs) {
             const got = await deps.gh(['api', `repos/${repo}/check-runs/${Number(job.id)}/annotations?per_page=100`]);
             if (got.status !== 0) { readable = false; break; }
             const hit = JSON.parse(got.stdout).find((/** @type {any} */ a) => a?.title === REFUSED_TITLE && typeof a?.message === 'string');
@@ -1992,6 +1999,12 @@ export const diagnose = async (deps, opts) => {
       if (!readable) {
         unchecked.push({ check: 'telemetry-runs', subject: file, reason: `the token can't read the jobs or annotations of its run ${id}; it needs Actions: read and Checks: read, which a classic token's repo scope holds: a fine-grained personal access token has no Checks permission, so on a private repository it can't read them` });
         continue;
+      }
+      if (unpublished) {
+        find('telemetry.unpublished', file, `calls Kanon's telemetry collector, and its last run on ${s.defaultBranch}, ${id}, sent nothing: Kanon's hosted telemetry store's URL is not published in the release of Kanon it calls, so the collector skipped, and registers nothing until it is. The skips are not sweeps: the first sweep at a release that publishes it reaches back to the last sweep before them, up to 7 days.`, {
+          text: 'Move the caller\'s pin to a Kanon release that publishes the hosted store\'s URL (docs/telemetry.md, "Publish the hosted URLs"), or name a store of your own with `url:` and `audience:` together. Read the run\'s summary:',
+          commands: [`gh run view ${id} -R ${repo}`],
+        });
       }
       if (words !== null) {
         find('telemetry.refused', file, `calls Kanon's telemetry collector, and its last run on ${s.defaultBranch}, ${id}, ended with the store's refusal: ${words}`, {
