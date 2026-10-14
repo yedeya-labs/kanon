@@ -1,0 +1,374 @@
+# Plan 0012: end-to-end tests in throwaway repositories, and a release gate on them
+
+- **Status:** proposed 2026-10-14. Nothing in this plan is built. It starts right after the deploy lane ([plan 0010](0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)) is delivered. On 2026-10-14 the Owner took four decisions before the draft: a test organisation with a driver App of its own, test copies of Kanon's Apps installed only there, the end-to-end tier as a hard release gate, and a hard cap of $2 on the real-model tier per run ([Owner decisions (2026-10-14)](#owner-decisions-2026-10-14)). The draft leaves fifteen questions to the Owner, each with a recommendation ([Decisions for the Owner](#decisions-for-the-owner)).
+- **Tracks:** no issue yet; one is filed when the Owner accepts the plan. **Builds on:** [plan 0009](0009-release-channels-and-api-key.md) (candidates, `candidate-vX.Y.Z`, the promotion and its four gates, the pin job and `scripts/move-pins.mjs`, all in its steps S3 to S5, not built yet), [plan 0010](0010-deployment-lane.md) (its D0 probes, recorded in [#890](https://github.com/yedeya-labs/kanon/issues/890), and its D12 rehearsal, which becomes this plan's first scenario), [plan 0005](0005-lean-installation.md) (the Releaser, `kanon init`, `kanon doctor`), [plan 0007](0007-guided-install.md) (the install's flags, which a script answers) and [plan 0002](0002-hosted-telemetry-store.md) (the row's `tag`). **Amends, once built:** plan 0009 §2 (a fifth promotion gate) and §6 (the pin job waits for the gate), plan 0010's D12 (rehearsed again on every candidate), [ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md) (Kanon's pins move only to a candidate the gate passed), and [`docs/release.md`](../release.md) ("Channels: candidates and stable"). **Governed by:** [ADR 0002](../decisions/0002-standardise-dont-parameterise.md), [ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md), [ADR 0012](../decisions/0012-test-conventions-by-language.md), [ADR 0013](../decisions/0013-personal-accounts-and-two-apps.md), [ADR 0014](../decisions/0014-adopter-audiences.md) (the scenarios read `init` and `doctor` through their JSON), `K-ADOPT-11`, `K-SHIP-7`, `K-SHIP-9`, `K-MERGE-8`, `K-AGENT-47`, `K-AGENT-49`, `K-OBS-12`, `K-OBS-16`, `K-LAYOUT-10`, `K-SELF-7` and `K-PRIN-11` (every guard can fail, and is mutation-checked).
+- **Measured on** Kanon's `origin/main` at `d9b7f2d` (v0.39.0 plus 117 commits): `.github/workflows/release.yml`, `release-please.yml`, `release-please-config.json`, `.release-please-manifest.json`, `docs/release.md`, plan 0009 §2, §3, §6 and §16, `.github/workflows/agent-lanes-smoke.yml`, `agent-blocks-smoke.yml`, `test-database-smoke.yml`, `judging-actions-smoke.yml`, `tests/fixtures/adopter/`, `tests/fixtures/lane-check/adopter/`, `tests/fixtures/python-adopter/`, `vitest.config.ts`, `cli/init.mjs`, `cli/callers.mjs`, `cli/doctor.mjs`, `cli/apps.mjs`, `docs/init.md`, `docs/doctor.md`, `requirements.json` (`features`), `skills/upgrade/SKILL.md`, `actions/agent-run/action.yml`, `actions/agent-finish/action.yml`, `actions/agent-telemetry/action.yml` and `schema.mjs`, each model lane's `--max-budget-usd`, `actions/lane-check/lane-check.mjs`, and the rulebook's `K-AGENT-49`. Plan 0010's D0 results were read from [#890](https://github.com/yedeya-labs/kanon/issues/890) on 2026-10-14. Kanon's release list was read with `gh release list` on 2026-10-14. **GitHub's documentation was not read for this draft,** and no probe has run: every platform behaviour the plan rests on is listed in [§12](#12-what-is-not-confirmed-and-how-each-is-handled), and E0 reads or probes each before the step that needs it.
+
+## The plan in one paragraph
+
+**Today.** Kanon's tests run inside Kanon's own repository. The unit and library suites stub `gh` and refuse the network (`vitest.config.ts`'s `stub-bin` and `offline` setup). The smoke workflows call every lane through `$/` with events each lane turns away and with secrets mapped to one that doesn't exist, so they prove that the workflows resolve and their permissions fit, and stop before any token is minted or any model is called. `lane-check` runs once on a fixture adopter laid over the workspace. Nothing in Kanon installs Kanon into a second repository, runs `kanon doctor` against a real one, upgrades a real installation, or runs a lane end to end. The smoke workflows' own comments say what stands in for that: "the reference adopter's live run after each upgrade". Plan 0010's deploy lane will be rehearsed once, by hand, in a sandbox (its D12). Every probe Kanon has run on the platform, plan 0009's S0 and plan 0010's D0, was run by hand, and D0 could not run the Releaser's path because no App was installed there.
+
+**Where it ends.**
+- **A test organisation,** the Owner's, holding only throwaway repositories, a **driver App** that creates and deletes them, and **test copies of the Author, the Judge and the Releaser**, installed only there (Owner decisions 1 and 2).
+- **A scenario is data:** a directory `tests/e2e/<scenario>/` holding a starting tree, the steps to take, from a fixed vocabulary, and what must then be true, read through `kanon doctor --json`, `kanon init --json` and the GitHub API.
+- **A Node runner,** `scripts/e2e/`, creates `e2e-<scenario>-<run id>-<attempt>` in the test organisation, lays the starting tree, runs the steps, polls each expectation against a deadline, records the result, and deletes the repository. **A janitor** deletes any leftover older than a few hours.
+- **Every scenario repository pins the release under test,** as an adopter does, so the scenario runs the candidate's released code, not a branch's.
+- **Three tiers:** no model (the bulk: install per feature, doctor clean and broken per finding family, upgrade from the last two stable releases, `lane-check`, the deploy lane end to end, the gates' refusals), a **stubbed** model (a lane whose agent step replays a recorded result, to prove the wiring), and a **real** model (a few runs, under $2 a run of the tier, Owner decision 4).
+- **Triggers:** every candidate (every no-model and stubbed scenario, and the real-model tier under its cap), nightly (the same, against the latest candidate, plus the CLI from `main`), and a dispatch per scenario. Never per pull request.
+- **A hard release gate** (Owner decision 3): a candidate is promoted to stable, and Kanon's own pins move to it, only once the tier is green on it ([§8](#8-the-release-gate)).
+
+**How it gets there.** The Owner creates the organisation and the Apps, and a maintainer probes the platform there first (E0), because the plan rests on behaviours nobody has measured: an App creating and deleting repositories, the Releaser's release approved by the Owner, the free plan's job and rate limits. Then the scenario format, the runner and the workflows, and the first scenario: plan 0010's D12 rehearsal, so the harness pays for itself on its first run. Then install per feature, upgrade from the previous releases, and one stubbed lane run; then the gate, which needs plan 0009's candidates and promotion (S3 to S5) to exist. The doctor-broken families and the real-model tier follow, each joining the gate after a burn-in.
+
+## 1. Today, measured
+
+| What | Where | What it means for this plan |
+|---|---|---|
+| A Kanon release is cut when the release pull request merges: release-please tags `vX.Y.Z` and publishes the Release; with the Releaser's secrets mapped, the release PR runs CI and the tag triggers tag-driven workflows | `release.yml` (its header and steps), `release-please.yml`, [`docs/release.md`](../release.md) | Nothing in the release path runs anything outside Kanon's repository. Only a Releaser-made release fires `release: published` in another workflow, which the gate's trigger needs |
+| Candidates are decided but not built: plan 0009 S3 makes the release PR's merge tag `candidate-vX.Y.Z` as a GitHub pre-release, S4's pin job moves Kanon's own pins to it, S5's daily `promote.yml` tags `vX.Y.Z` on the same commit when four gates pass (soak, no revert, no serious bug, no unexplained red) | plan 0009 §2, §3, §6, §16; `docs/release.md`, "Channels" ("Partly built") | The gate hooks into S4 and S5 ([§8](#8-the-release-gate)). None of the four gates reads anything run outside Kanon |
+| No Kanon release since v0.39.0 (2026-10-11); `main` is 117 commits past it | `gh release list`, `git rev-list` | The first gated release is not the next one: S3 to S5 come first |
+| `agent-lanes-smoke.yml` calls the 20 lanes with events each turns away, and maps every secret to `KANON_SMOKE_UNSET`; it then runs the membership gate on one label event, and `lane-check` on a fixture laid over the workspace | `.github/workflows/agent-lanes-smoke.yml` | It proves resolution, inputs and permission ceilings, on every pull request. It can't prove a mint, a model call, a posted verdict or a merge, and says so: "The model call is proven by the reference adopter's live run after each upgrade" |
+| The other smoke workflows run the blocks, the test-database hook and the judging actions inside Kanon's own runner, on fixtures | `agent-blocks-smoke.yml`, `test-database-smoke.yml`, `judging-actions-smoke.yml` | Same boundary: one repository, no second installation |
+| The fixture adopters are trees, not repositories: `tests/fixtures/adopter/` (an adoption record and its declarations, one script), `tests/fixtures/lane-check/adopter/` (callers), `tests/fixtures/python-adopter/` (a Python project) | `tests/fixtures/` | They are the natural starting trees for the first scenarios |
+| The unit and library suites stub `gh` and refuse the network | `vitest.config.ts` (`stub-bin`, `offline`) | The end-to-end tier can't live in `vitest run`: it is a workflow, not a test project, and `npm test` never reaches GitHub |
+| `kanon init --json` prints `kanon-init/v1`; `--yes`, `--feature review\|build\|full`, `--no-apps` and `--dry-run` let a script drive it; `status` is `complete`, `steps-left`, `failed` or `error` | `cli/init.mjs`, [`docs/init.md`](../init.md) | A scenario can install without a person, and read the outcome from one document |
+| `kanon doctor --json` prints `kanon-doctor/v1`, with `status`, `exitCode` (0 healthy, 1 findings, 3 error, 4 incomplete), `findings[].id` from a fixed table, `unchecked` and `releases` | `cli/doctor.mjs`, [`docs/doctor.md`](../doctor.md) | Doctor is the oracle for every install, doctor and upgrade scenario: an expectation names finding ids, never prose |
+| `init` pins `v` plus `package.json`'s version (`kanonRelease` in `cli/callers.mjs`); at a candidate's commit that is `vX.Y.Z`, a tag that exists only after promotion (plan 0009 §6 says the docs carry the same gap) | `cli/callers.mjs`, plan 0009 §6 | **An install run from a candidate writes callers pinned to a tag that doesn't exist yet,** so every install scenario on a candidate would fail on its first lane run. [§9](#9-the-first-scenarios) and decision 5 |
+| Doctor counts only the repository's own secrets: "an organisation secret shared with the repository isn't counted" | `cli/doctor.mjs`, `docs/doctor.md` | The test Apps' keys can't be organisation secrets if a scenario expects doctor clean; each scenario repository gets them as its own (decision 10) |
+| `kanon apps --reuse <app>:<slug>@<id>=<key file>` adds an existing App to a repository, reading its key from a file | `cli/apps.mjs` | Reusing the test Apps needs the key in the job that runs it, which `K-AGENT-49` keeps apart from any job that runs code ([§5.2](#52-the-jobs-and-which-secret-each-holds)) |
+| `agent-run` always runs `claude-code-action`; it has no stub, dry run or replay | `actions/agent-run/action.yml` | The stubbed tier needs a new mechanism (decision 6) |
+| Every model lane fixes its own `--max-budget-usd`: $10 for the digests, $15 for the merge reconcile, $25 for the Explorer, $30 for the Reviewer, $35 to $50 for the Overseer, the Lead, the rebase and the code audit, $120 for the Implementer; no lane takes a lower ceiling from its caller | each lane's agent job | **A single lane run may cost more than the tier's whole $2 cap** (Owner decision 4), so the cap needs a mechanism of its own (decision 7) |
+| A row's `tag` is `run`, `smoke` or `test`; every read and aggregate filters on `run`; lanes write `run`, and only `agent-blocks-smoke.yml` passes `smoke` | `actions/agent-telemetry/schema.mjs` (`TAGS`), `actions/agent-telemetry/action.yml`, `actions/agent-finish/action.yml` | A test row already has a home; a lane in an adopter's repository has no way to say it is one (decision 8) |
+| The upgrade skill runs a model; its mechanical edit (every `yedeya-labs/kanon` ref under `.github/` and the plugin's `ref`) becomes `scripts/move-pins.mjs` in plan 0009 S4 | `skills/upgrade/SKILL.md` step 4; plan 0009 §6 | An upgrade scenario runs `doctor --to`, the script's edit and doctor again; it never runs the skill |
+| Plan 0009 S0 and plan 0010 D0 were run by hand in sandboxes. D0 ([#890](https://github.com/yedeya-labs/kanon/issues/890)) found required reviewers offered only once the sandbox was public, a rejection concluding as a plain `failure` (read the run's approvals to tell it apart), and a release published by a maintainer unapprovable by that maintainer; **the Releaser's case was not measured: the Apps are uninstalled there** | #890; plan 0009 §16, S0 | The test organisation's repositories are public (Owner decision 1), and the test Releaser makes the unmeasured path a scenario (Owner decision 2) |
+| Plan 0010's D12 rehearses the released lane once, by a maintainer, in the D0 sandbox, with trivial hooks, two environments and no AWS, before the operator's repository adopts it | plan 0010 §18, D12 | Its checks are the first scenario's expectations, word for word ([§9](#9-the-first-scenarios)) |
+| Kanon's repository has two environments, `github-pages` and `kanon-qa-store`; no secret Kanon holds can create a repository anywhere | plan 0010 §1 | The driver App's key needs a new, protected environment on Kanon (Owner decision 1) |
+
+**What this adds up to.** Every behaviour that only shows when Kanon is installed in a second repository is first seen by an adopter: an `init` that writes a caller pinned to a tag that doesn't exist, a doctor finding that fires on a healthy repository, an upgrade whose caller changes nobody listed, a lane whose mint works on Kanon and not on a fresh install. The plan moves that first sighting into repositories Kanon owns, on every candidate, before any adopter's Dependabot proposes it.
+
+## 2. What the tier is, and what it is not
+
+**It is** a test of Kanon as an adopter meets it: a fresh repository, the release's own callers, the release's own CLI, real Apps with real permissions, GitHub's real events, and doctor's verdict at the end. It tests what the unit suites can't: the platform's answers (eventual consistency, permissions, rulesets, environments, events fired by an App and not by the workflow token), and the joins between Kanon's parts (`init` writes what `lane-check` accepts and doctor calls healthy; a lane's mint, setup, run, finish and telemetry, in one run).
+
+**It is not:**
+- **a replacement for the unit and library suites,** which stay the place for every branch of every script, with their mutations. A scenario covers a path, not its edge cases;
+- **a per-pull-request check.** A pull request's code is not a release, a scenario repository can only pin a release, and a run takes minutes to an hour ([§7](#7-triggers));
+- **a test of the model's judgement.** The real-model tier checks that a lane ran, posted and recorded under its ceiling, not that its verdict was right ([§6.3](#63-a-real-model-under-2));
+- **a test of an adopter's stack.** A scenario's hooks are trivial on purpose, as D12's are.
+
+## 3. The test organisation and its Apps
+
+As the Owner decided (decisions 1 and 2):
+- **The organisation** is the Owner's, created for this and nothing else. Its repositories are **public**: GitHub's free plan offers rulesets and environment reviewers only there, as D0 measured for reviewers, and public repositories' Actions minutes are free. "The test organisation" in this plan is its name until it exists.
+- **The driver App** is created by the Owner, owned by the test organisation and **installed only there,** on all its repositories. It is the only identity the runner uses. Its permissions, per Owner decision 1: create and delete repositories, Administration, Contents, Actions, Environments, Workflows, Issues and Pull requests, each read and write. [§12](#12-what-is-not-confirmed-and-how-each-is-handled) lists two more the scenarios need, Secrets (write) and the organisation's Administration (read), which decision 14 asks for.
+- **Its key lives in a protected environment on Kanon,** named `e2e` here, whose deployment policy admits only Kanon's default branch and the `candidate-v*` tags (under plan 0008's tag ruleset). No other job in Kanon names the environment, and a test holds that ([§5.2](#52-the-jobs-and-which-secret-each-holds)).
+- **Test copies of the Author, the Judge and the Releaser,** created by the Owner with the manifests `kanon apps` uses, owned by the test organisation and installed only there, on all its repositories. A scenario therefore exercises the persona permissions an adopter's Apps hold, including the path D0 could not measure: **the Releaser publishes a release, and the Owner approves its environment** ([§9](#9-the-first-scenarios)). Their ids and keys live in the same `e2e` environment.
+- **Nothing in the test organisation is ever an adopter's.** Kanon's real Apps are never installed there, and the test Apps never anywhere else, so a test App's key can reach only throwaway repositories.
+
+**What the organisation costs the Owner:** one-time setup (the organisation, four Apps, one environment and its secrets, plan 0009 A8's spend-limited API key or a new one), and being a member of the organisation, so the Owner can be the required reviewer a deploy scenario waits for (decision 9).
+
+## 4. A scenario is data
+
+### 4.1 The directory
+
+```
+tests/e2e/<scenario>/
+  scenario.json     what the scenario is, below
+  start/            the tree laid down as the repository's first commit
+  steps.json        the steps, in order, each a verb of §4.2 and its arguments
+```
+
+`scenario.json`:
+
+| Field | Meaning |
+|---|---|
+| `id` | The directory's name: lowercase, digits and hyphens, at most 40 characters, so the repository's name fits. |
+| `family` | `lane`, `install`, `doctor`, `upgrade` or `deploy`. |
+| `tier` | `none`, `stub` or `model` ([§6](#6-three-tiers)). |
+| `gate` | Whether it counts toward the release gate. A new scenario starts `false`, and turns `true` in a pull request once it has passed ten consecutive scheduled runs ([§10](#10-flakiness)). |
+| `apps` | The test Apps the scenario repository gets: any of `author`, `judge`, `releaser`. |
+| `claude` | `none`, `replay` or `api-key`: which Claude credential, if any, the provision job writes ([§6](#6-three-tiers)). |
+| `ceilingUsd` | For `tier: model` only: the dollar ceiling of each lane run the scenario starts ([§6.3](#63-a-real-model-under-2)). |
+| `deadlineMinutes` | The whole scenario's deadline, at most 120. |
+| `quarantine` | Null, or `{ issue, until }` ([§10](#10-flakiness)). |
+
+`start/` is copied as it is, with two substitutions and no others: `{{release}}`, the release under test (`candidate-vX.Y.Z` or `vX.Y.Z`), and `{{repository}}`, the scenario repository's `<owner>/<name>`. Nothing in `start/` runs on Kanon's runner: it is data that becomes the scenario repository's tree, and its hooks run only in the scenario repository's own Actions.
+
+### 4.2 The step vocabulary
+
+A closed set, each verb implemented once under `scripts/e2e/steps/`, with its own unit test against a stubbed `gh`. A scenario that needs another verb adds it in a pull request, with its test. Every verb that waits takes a `deadline` in minutes, and polls ([§10](#10-flakiness)).
+
+| Verb | What it does |
+|---|---|
+| `kanon.init` | Runs the release under test's `kanon init --json --yes --no-apps` with the given flags (`--feature`, `--review-trigger`, `--sensitive-data`, …) against a clone of the scenario repository, on the driver's token, commits and pushes what it wrote, and keeps the document for `expect.init`. |
+| `kanon.doctor` | Runs the release's `kanon doctor --json`, optionally `--to <release>`, from a clone of the default branch, on the driver's token, and keeps the document. |
+| `kanon.at` | Runs `init` or `doctor` at another release (`previous`, `previous-1`, or a tag): the upgrade scenarios' starting point. |
+| `register.write` | Writes the App register's rows for the scenario's test Apps, through the library `kanon apps` writes them with, without a key ([§5.2](#52-the-jobs-and-which-secret-each-holds)). |
+| `pins.move` | Runs `scripts/move-pins.mjs` (plan 0009 S4) to the release under test: the upgrade skill's edit, without the skill. |
+| `files.commit` | Commits files from the scenario's directory, or deletes paths, on a branch or the default branch. |
+| `pr.open`, `pr.label`, `pr.merge` | Opens a pull request from a branch, adds or removes a label, merges it (through the front door, or as the driver where the ruleset lets a bypass actor through, which the scenario says). |
+| `issue.open`, `issue.label` | Opens an issue, adds a label. |
+| `workflow.dispatch` | Dispatches a workflow, such as `apps-check` before doctor. |
+| `release.cut` | Merges the scenario repository's release pull request, and waits for the Release the test Releaser publishes. |
+| `deployment.await-approval` | Waits until an environment's job is `waiting`, then either cancels the run (nightly) or files the Owner's approval request and waits for the Owner's decision (a candidate's run, decision 9). |
+| `run.await` | Waits for a workflow's run on a given event and commit to complete. |
+| `expect.init`, `expect.doctor` | Holds the kept document to a status, an exit code, finding ids present and absent, and `unchecked` checks allowed. |
+| `expect.run` | Holds a run to its conclusion and its jobs' names and conclusions. |
+| `expect.check` | Holds a commit's check run or status to a name and a conclusion. |
+| `expect.issue`, `expect.pr` | Holds an issue or a pull request to its state, labels, author's App slug, and a marker in a comment. |
+| `expect.api` | Holds one GET of the scenario repository's own API (a path under `repos/<the scenario repository>/`) to a JSON value at a pointer. Any other path is refused by the validator. |
+
+### 4.3 What a scenario may expect
+
+**Through doctor's and `init`'s JSON first** (ADR 0014): a finding id, a status, an exit code, an `unchecked` check. **Through the GitHub API second,** and only for what doctor doesn't report: a run's jobs, a check's conclusion, an issue's labels, a pull request's author. **Never through prose:** no expectation reads a message, a log line or a comment's wording, only a marker Kanon already writes (such as the release-PR guard's `<!-- kanon-release-pr-guard … -->`) or a field. A scenario's expectations are therefore as stable as the contracts they read, and a contract change shows up as a failing scenario in the release that makes it.
+
+**Doctor's `unchecked` is explicit.** A check the driver's token can't run (E0 measures which) is listed in the scenario's `expect.doctor` as allowed; anything else unchecked fails the expectation, so "incomplete" can never pass for "healthy" by accident.
+
+## 5. The runner and the janitor
+
+### 5.1 One scenario's life
+
+1. **Name.** `e2e-<scenario>-<run id>-<attempt>`, at most 100 characters. The run id makes it unique across concurrent runs; the attempt across a re-run.
+2. **Create** a public repository in the test organisation with the driver's token, with the topic `kanon-e2e` and a description naming the Kanon run that made it.
+3. **Provision** the scenario's App secrets and Claude credential (§5.2), and set the organisation member who reviews its environments.
+4. **Lay** `start/` as the first commit of the default branch.
+5. **Run** `steps.json` in order. A step that fails stops the scenario.
+6. **Classify** the result: `pass`; `fail` (an expectation was false, or a deadline passed); or `infra` (an infrastructure error the runner classified and retried, still failing, [§10](#10-flakiness)).
+7. **Delete** the repository, always on `pass` and `infra`. On `fail`, mark it with the topic `kanon-e2e-failed`, archive it, and leave it for 24 hours so its runs can be read (decision 13).
+8. **Report** one JSON result, `kanon-e2e-result/v1`: the scenario, the release, the result, each step's duration and outcome, the first false expectation, and the repository's name, uploaded as an artifact and written to the step summary.
+
+### 5.2 The jobs, and which secret each holds
+
+The workflow, `.github/workflows/e2e.yml`, runs in Kanon. Its jobs follow `K-AGENT-49`'s shape: no job that runs code holds a private key.
+
+| Job | Holds | Runs |
+|---|---|---|
+| `plan` | nothing | Reads `tests/e2e/` at the release under test, picks the scenarios for the trigger and tier, writes the matrix. |
+| `mint` (per scenario) | the driver App's key, in the `e2e` environment | `actions/create-github-app-token` for the test organisation, and nothing else; hands the token on through a called workflow's `secrets:`, as the lanes' mint does. |
+| `provision` (per scenario) | the test Apps' keys and the Claude credential the scenario names, in the `e2e` environment, and the minted driver token | Creates the repository, and writes each secret with `gh secret set`. **No checkout, no `npx`, no script of Kanon's:** `gh` alone. |
+| `run` (per scenario) | the minted driver token only | Checks out Kanon at the release under test, runs `scripts/e2e/run.mjs` for one scenario. It never holds a key. |
+| `verdict` | nothing beyond `issues: write` on Kanon | Reads every scenario's result artifact, writes the summary table, decides the gate's answer ([§8.2](#82-what-the-gate-reads)), and files or closes the red issue ([§8.3](#83-a-red-gate-how-it-is-reported-and-the-only-ways-past-it)). |
+
+**Why `register.write` and not `kanon apps --reuse`.** `--reuse` reads the App's key from a file, so the job that runs it would hold a key and run Kanon's CLI from a checkout, which `K-AGENT-49`'s guard (`tests/unit/app-key-isolation.test.ts`) refuses and has no exceptions for. The register's rows are written through the same library function without a key, and the secrets by the `provision` job's `gh`. What this leaves untested end to end is `--reuse`'s key check, which its unit tests keep.
+
+**An installation token lasts an hour** (not confirmed, [§12](#12-what-is-not-confirmed-and-how-each-is-handled)). A scenario whose deadline is longer is split into phases, each a `run` job with its own `mint`, and the runner carries its state between them in an artifact.
+
+### 5.3 The janitor
+
+`.github/workflows/e2e-janitor.yml`, hourly and on dispatch, with its own `mint`. It lists the test organisation's repositories and deletes each one that:
+- carries the topic `kanon-e2e`, **and**
+- was created more than 3 hours ago (the longest deadline plus an hour), or, with the topic `kanon-e2e-failed`, more than 27 hours ago.
+
+It never deletes a repository without the topic, and it writes each deletion, and each repository it left, to its summary. A repository older than a day that it couldn't delete fails its run, so a leak is red within the hour rather than found later.
+
+## 6. Three tiers
+
+### 6.1 No model
+
+The bulk, and every scenario of the gate's first version. Each is a repository, a few `kanon` commands, a few events, and doctor's verdict. The catalogue's first scenarios are [§9](#9-the-first-scenarios)'s; the families grow to:
+- **install,** one scenario per feature in `requirements.json`'s `features` (`review`, `build`, `full`), and one with the Python fixture as the starting tree: `kanon.init`, `register.write`, `workflow.dispatch apps-check`, `kanon.doctor`, then `expect.doctor` healthy;
+- **doctor broken,** one scenario per finding category of `docs/doctor.md` (`pin`, `app`, `secret`, `declaration`, `caller`, `label`, `ruleset`, `id-token`, and `deploy` once plan 0010 ships it), each starting from a clean install, breaking one thing (a secret deleted, a caller's grant narrowed, a label removed, a ruleset rule switched off), and expecting **exactly** that finding id and no other blocking one;
+- **upgrade,** from each of the last two stable releases: `kanon.at previous` installs, `kanon.doctor --to` lists, `pins.move` moves, the steps the findings name are committed, and `expect.doctor` is healthy at the release under test;
+- **`lane-check`,** a pull request that changes a caller wrongly (an inexact pin, `secrets: inherit`) gets `Lane check` red, and a correct one green;
+- **gate refusals,** the lanes' own admission rules on real events: a label applied by an identity outside the register starts nothing; the Merger refuses a pull request with no verdict; plan 0010's deploy gate refuses a release whose CI is red, and its row says `refused`;
+- **deploy,** the rehearsal ([§9](#9-the-first-scenarios)).
+
+### 6.2 A stubbed model
+
+**What it proves:** a lane's wiring, end to end, on a real event: the gate admits it, the mint runs as the test App, `agent-setup` runs, the agent step returns a result, `agent-finish` and `agent-classify` read it, the lane's effects land (a verdict, a pull request, a label), the Merger acts on them, and the telemetry artifact is written. **What it doesn't:** anything the model decides.
+
+**The mechanism** is decision 6. The recommended one: a choice in the adoption record, `` - **Agent replay:** `on` `` under `## Choices` (`K-LAYOUT-10`). With it, `agent-run` doesn't call the model: it reads a recorded result for its lane from the scenario's tree (`.github/kanon-replay/<lane>.json`), writes the `execution_file` the recording holds, and applies the recording's effects (a review posted, a branch pushed, a pull request opened) with the minted App token, as the agent would have. The recording names the release it was recorded against, and is refused at another. It is a general choice, not a test organisation special case: any adopter can use it to rehearse its own installation, and doctor reports it as a blocking finding, `replay.on`, unless the adoption record waives it, so it can't sit unnoticed in a repository that is meant to run a model. Every comment a replayed run posts carries a marker saying so, and its telemetry row is `tag: test` whatever else the record says.
+
+**Recordings** are made from one real-model run of the same lane in a scenario repository, dispatched by a maintainer, with a script that strips the run's text down to what the lane's parsers read; they live beside the scenario, and a release that changes what a lane parses must re-record, which its own scenario failing makes plain.
+
+### 6.3 A real model, under $2
+
+**The cap is the Owner's** (decision 4): $2 for a run of the tier, nightly or on a candidate. Three things hold it:
+1. **A ceiling per lane run that the scenario declares** (`ceilingUsd`), applied by the lane. Every lane fixes its own ceiling today, $10 to $120 ([§1](#1-today-measured)), so the recommended mechanism (decision 7) is a second adoption-record choice, `` - **Run ceiling:** `$0.80` ``, which the lanes' agent jobs apply as the lower of their own and the declared one. It is general: an adopter may lower every lane's ceiling the same way.
+2. **The runner's ledger.** Before it starts a real-model scenario, the runner adds its `ceilingUsd` to what the tier's scenarios already started have declared, plus the largest one-turn overshoot E0 measures (the CLI checks its budget between turns, so a run can end a turn past it, not confirmed, [§12](#12-what-is-not-confirmed-and-how-each-is-handled)); a scenario that would take the sum past $2 is skipped and reported `skipped: budget`. So the tier can't reach $2 even when every run hits its ceiling.
+3. **The credential:** an Anthropic API key in a Console workspace with a monthly spend limit (plan 0009 A8's, or one of the test organisation's own), set a little above 31 nights and five candidates at $2, about $75. It is a backstop, not the cap.
+
+**What the tier runs:** at most two scenarios a night, starting with the review lane on a one-line documentation pull request in a fresh install (decision 15). Expectations are model-independent: the run completed, a verdict of either kind was posted by the test Judge with its marker, its row was written with `tag: test` and a cost under the ceiling. A run classified `unavailable` (the model was never reached, plan 0009 §2) is `infra`, not `fail`.
+
+**Its rows are test rows** (decision 8): the scenario repositories share telemetry, so the collector's path is exercised too, and the recommended choice, `` - **Telemetry tag:** `test` ``, makes every row they send `tag: test`, which every read and aggregate already filters out ([§1](#1-today-measured)).
+
+## 7. Triggers
+
+| Trigger | Runs | Against |
+|---|---|---|
+| **A candidate is published** (`release: published`, a pre-release whose tag is `candidate-vX.Y.Z`, published by the Releaser, so the event fires) | every `none` and `stub` scenario, and the `model` tier under its cap | the candidate: the workflow file, the runner and the scenarios are read at the candidate's tag, and every scenario repository pins it |
+| **Nightly** on Kanon's default branch | the same, against the latest candidate (or the latest stable release when no candidate is newer); plus the install and doctor families with the CLI from `main`'s checkout, pinning the release its `package.json` names | decision 4 |
+| **Dispatch,** with a scenario id or a family, and a release | the named scenarios | the given release |
+| A pull request, the merge queue, a push | **never** | — |
+
+**Why not `main` nightly for the whole tier.** A scenario repository can only pin a release: `lane-check` and doctor admit `vX.Y.Z` and `candidate-vX.Y.Z` and nothing else, and doctor stops with "nothing pins Kanon to an exact release" on any other ref. So `main`'s lanes can't run in a scenario repository until they are in a candidate. `main`'s CLI can, which is why the nightly runs it against the last release's requirements: it catches an `init` or doctor regression before the release pull request merges. The alternative, a third tag form for nightly builds, is decision 4's (b).
+
+## 8. The release gate
+
+**Owner decision 3:** no Kanon release ships unless the tier is green on its candidate. Under plan 0009, a release reaches adopters only by promotion, when `vX.Y.Z` is tagged on the candidate's commit and Dependabot proposes it; the candidate itself reaches only Kanon's own pins and anyone who chooses to run ahead. So the gate sits where a candidate becomes a release anyone follows.
+
+### 8.1 Where it hooks in
+
+| | **(G1) A fifth promotion gate, and the pin job waits for green** (recommended) | **(G2) A required check on the release pull request** | **(G3) Draft releases, published only when green** |
+|---|---|---|---|
+| What the end-to-end run tests | the candidate's tag, as published | the release PR's head | a tag release-please creates for a draft release |
+| Can scenario repositories pin it? | yes: `candidate-vX.Y.Z` exists | **no:** no tag exists before the merge, and `lane-check` and doctor refuse a commit pin | only if release-please creates the tag with the draft (not confirmed) |
+| When it runs | once per candidate, on `release: published` | on every push to `main`, since every merge regenerates the release PR | once per release |
+| What a red run blocks | promotion to stable, and Kanon's own pins moving to the candidate | the release PR's merge | the release's publication |
+| Who sees a red candidate | anyone who pins candidates on purpose; no adopter on stable, no Dependabot pull request | nobody | nobody |
+| What it changes | `scripts/promote.mjs` (S5) reads a fifth gate; the pin job (S4) runs after the gate's `verdict`, not after release-please; `docs/release.md` | `release.yml`'s caller, the ruleset's required checks, and a third tag form for the scenarios | release-please's configuration (`draft`), a publishing job, and every place that reads a candidate's Release |
+
+**Recommended: (G1).** It is the only one whose scenarios run what an adopter would pin, it runs once per candidate rather than once per merge, and it needs no new tag form, so `K-ADOPT-11`, `lane-check` and doctor stay as they are. A red candidate stays a pre-release that the gate never promotes, and Kanon itself doesn't soak a candidate the gate has already refused. (G2) can't test a release that doesn't exist yet. (G3) is the stricter version of (G1), hiding even the pre-release, and rests on release-please behaviour nobody has measured; it is the fallback if adopters start pinning candidates.
+
+**Before candidates exist.** (G1) needs plan 0009's S3 to S5. Today a release PR's merge tags `vX.Y.Z` at once, so there is nothing to test before an adopter can be offered it. Recommended (decision 3): S3 to S5 are built before E11, the step that switches the gate on; until then the tier runs nightly and by dispatch against the latest release, and gates nothing.
+
+### 8.2 What the gate reads
+
+`promote.mjs`'s fifth row, read from GitHub, never self-reported:
+
+| Gate | Holds when | Read from |
+|---|---|---|
+| **End to end** | The latest completed run of `.github/workflows/e2e.yml` in Kanon whose head is the candidate's commit, started by `release` or by a dispatch on the candidate's tag ref, concluded `success` with its `verdict` job `success`; and, for the candidate, every earlier run whose `verdict` failed with a `fail` (not `infra`) result has its red issue closed by a person with a cause ([§8.3](#83-a-red-gate-how-it-is-reported-and-the-only-ways-past-it)) | `GET repos/yedeya-labs/kanon/actions/workflows/e2e.yml/runs?head_sha=…`, its jobs, and the red issue's state and closer |
+
+`verdict` passes when every scenario with `gate: true` and no live quarantine is `pass`. A scenario `skipped: budget` counts as missing, so the model tier's scenarios are gating only once decision 11 says so. The pin job reads the same run before it opens `ci(deps): run Kanon on candidate vX.Y.Z`, so the soak's 72 hours start on a candidate the gate passed.
+
+**The urgent path** (plan 0009 §7) skips the soak and the six-day spacing. **It doesn't skip this gate** (decision 12): an urgent fix is a candidate like any other, and the no-model and stubbed tiers run in about an hour (not measured; E12 measures it).
+
+### 8.3 A red gate: how it is reported, and the only ways past it
+
+- **One issue per candidate,** filed by `verdict` on the workflow token, titled `e2e: candidate-vX.Y.Z is red`, labelled `bug` and `sev:high`, listing each failing scenario, its first false expectation, its kept repository's link (alive 24 hours) and the run. A later run of the same candidate edits it, rather than filing another. A green run closes it only when every failure in it was `infra`; a `fail` needs a person to close it, with the cause, which is what [§8.2](#82-what-the-gate-reads) reads. That is plan 0009's fourth gate's rule ("a run the Owner re-ran green") made explicit for this tier: a scenario that failed once and passed on a re-run is not silently green.
+- **`promote.yml`'s summary** names the gate, its run and its issue whenever it holds a candidate.
+- **The ways past a red gate are a fix or a quarantine,** never a switch. A fix ships as the next candidate. A quarantine is a reviewed pull request that sets a scenario's `quarantine` ([§10](#10-flakiness)). There is no `override` input, and the Owner's `urgent` doesn't skip the gate (decision 12): an override used once under pressure becomes the gate's normal state, and the quarantine already gives a reviewed, expiring, visible way to set a broken scenario aside.
+
+## 9. The first scenarios
+
+In this order, each a step of [§14](#14-order-of-moves), so the harness proves itself on the scenario that needs it most:
+1. **`deploy-rehearsal`: plan 0010's D12, automated.** Two declared environments, trivial hooks (a build that writes one file, a deploy and a smoke that check it), no AWS. `release.cut` has the test Releaser publish the scenario repository's release, so the lane's trigger fires as it does for an adopter. Expected, as D12 states it: the run executes the gate, the probe, the build, both environments in order and every `record` and `report` job; the second environment waits for its reviewer; the run lists the job names the reference deploy declares; a failing smoke (a second release with the smoke hook made to fail) files that environment's issue, and a third release that succeeds closes it; doctor reports no `deploy.*` finding. **The approval** is the Owner's on a candidate's run, on a release the test Releaser published: the path D0 could not measure (decision 9). Nightly, the scenario waits until the second environment is `waiting`, then cancels the run, and expects the job `cancelled`, as D0 measured.
+2. **`install-review`, `install-build`, `install-full`:** `init` then doctor healthy, per feature. Each needs decision 5 first: on a candidate, `init` writes `vX.Y.Z` pins, which don't exist yet.
+3. **`upgrade-previous`:** install at the last stable release, upgrade to the release under test, doctor healthy.
+4. **`review-replay`:** a fresh `review` install with replay on; a pull request labelled `review:please` gets the test Judge's recorded verdict, its check, its row, and the Merger merges it.
+
+**D12 itself** stays plan 0010's, run by hand once, before the operator's repository adopts the lane, because this plan starts after the deploy lane is delivered and its harness can't be ready in time (decision 15 asks the Owner to confirm). Scenario 1 then re-runs it on every candidate, which D12 alone never would.
+
+## 10. Flakiness
+
+- **Every read after a write polls,** never sleeps. A step polls its predicate with a backoff from 2 to 30 seconds until it holds or its deadline passes. GitHub's answers are eventually consistent (a new repository's installation, a ruleset's effect, a pull request's head, the release PR guard's own #86): a fixed sleep is either too short on a slow day or wasted on a fast one.
+- **Retries only on infrastructure errors,** classified by the runner, never on an expectation: an HTTP 5xx; a 403 or 429 with GitHub's rate-limit headers, after the wait they name; a network error; a repository name GitHub says exists (a re-run's leftover, renamed with the next attempt). Up to three times per call, with backoff. A false expectation is never retried: it is the finding.
+- **An `infra` scenario is re-run once,** whole, in a fresh repository. Still `infra`, the gate can't claim green: it holds the candidate and says why, and a dispatch re-runs it later. It never counts as `pass`.
+- **A deadline that passes is `fail`, not `infra`.** A lane that takes too long is a finding; the deadline is set from E12's measured durations, at three times the slowest observed run.
+- **Burn-in:** a new scenario joins the gate (`gate: true`) only after ten consecutive scheduled runs passed, in the pull request that turns it on, which links them.
+- **Quarantine** (decision 11): a scenario's `quarantine` is set only in a reviewed pull request, naming an open issue and a date at most 14 days on; it still runs and reports, but doesn't count. On the date it counts again, and the `plan` job fails a run when an expired quarantine is still in the tree, so it is removed or renewed by a pull request. At most two scenarios are quarantined at once, and never `deploy-rehearsal` or an install scenario.
+- **Measured, not assumed:** E12 records every scenario's pass rate, `infra` rate and duration over four weeks. A scenario under 98% non-`infra` pass rate on unchanged code is a finding against the scenario.
+
+## 11. Secrets hygiene, stated plainly
+
+- **No personal token anywhere.** The runner acts as the driver App; the lanes in a scenario repository act as the test Apps; the real-model tier's credential is an API key in a spend-limited workspace. No step uses the Owner's or a maintainer's token, and the Owner's only act in a run is a click to approve a deployment (decision 9).
+- **The driver's key** is in the `e2e` environment, read only by `mint`. **Its token** reaches `provision` and `run` through a called workflow's `secrets:`, masked, and never a scenario repository: it is never written as a secret there, never passed to a workflow there, and no code from a scenario repository runs in a job that holds it. `start/` is data, and its hooks run only in the scenario repository's own Actions, with that repository's tokens.
+- **The driver can reach only the test organisation,** because it is installed only there, so a leaked driver token can create and delete throwaway repositories and nothing of Kanon's or an adopter's.
+- **The test Apps' keys** are in the `e2e` environment, read only by `provision`, which runs `gh` and nothing else, and written as the scenario repository's own secrets, where the lanes' mint jobs read them as an adopter's do (`K-AGENT-49` holds there exactly as anywhere). They are deleted with the repository. The test Apps are installed only in the test organisation, so their keys reach only throwaway repositories.
+- **Public repositories:** a scenario repository's logs are public, as Kanon's are, and its secrets are not. A fork's pull request gets no secret (`K-AGENT-47`), and the lanes refuse a non-member's event, which the gate-refusal scenarios check.
+- **The `e2e` environment** admits Kanon's default branch and `candidate-v*` tags only, so a branch's workflow can't read it. `tests/unit/e2e-workflow.test.ts` holds that no other workflow names the environment, that `run` names no private key, and that `e2e.yml` has no `pull_request`, `pull_request_target` or `merge_group` trigger.
+
+## 12. What is not confirmed, and how each is handled
+
+GitHub's documentation was not read for this draft. Each item is read, or probed in the test organisation, at E0, and the step that rests on it is amended before it is built if the answer differs.
+
+| # | Assumed | Rests on it | If it doesn't hold |
+|---|---|---|---|
+| 1 | A GitHub App's installation token, with the organisation's and the repository's Administration (write), creates a public repository in the organisation and deletes it | the whole runner | The Owner grants what the probe shows is needed (decision 14); if no App can, the plan stops before E1 |
+| 2 | A new repository in an organisation whose Apps are installed on all repositories has them at once, and a token minted after creation reaches it | `provision`, every lane | `provision` polls the installation's repositories before it writes |
+| 3 | Installation tokens expire after an hour | §5.2's phases | the phase length changes |
+| 4 | Repository creation is held by a secondary rate limit well above a candidate run's count (about 20 to 40 repositories in an hour) | the catalogue's size | the matrix's `max-parallel` falls, and the run grows longer |
+| 5 | The free plan runs 20 jobs at once across the organisation's public repositories | `max-parallel` | as 4 |
+| 6 | Public repositories' Actions minutes are free on the free plan | [§15](#15-cost) | the Owner decides a budget |
+| 7 | The Owner, as required reviewer, can approve an environment job of a run whose release the test Releaser published, with "Prevent self-review" on | `deploy-rehearsal` on a candidate | D0's finding 9, unrun half: if not, the scenario's reviewer is another member, which the Owner names |
+| 8 | `--max-budget-usd` stops a run within one turn of its ceiling, and E0 can measure the largest turn's cost on the review lane | §6.3's ledger | the ledger's margin grows, and the tier runs one scenario a night |
+| 9 | Doctor's checks with the driver's installation token: which are `unchecked` (`unused-apps` needs the organisation's Administration (read); `token-age` and the annotations reads need what doctor's token table lists) | §4.3's explicit `unchecked` | the scenarios list what E0 found |
+| 10 | A deleted repository's name can be reused at once, and deleted repositories don't count against anything | the janitor, re-runs | names carry the attempt (already so) |
+
+## 13. Rules and docs that change
+
+- **No new rule for adopters.** The gate is Kanon's own operation, as candidates and promotion are (plan 0009, "Out of scope").
+- **`K-LAYOUT-10`** gains the three `## Choices` bullets, if decided: `Agent replay`, `Run ceiling` and `Telemetry tag`, each with its shape and default. **`K-OBS-12`** says a declared ceiling lowers every lane's.
+- **[ADR 0011](../decisions/0011-kanon-runs-its-own-lanes.md),** amended: Kanon's pins move only to a candidate the gate passed.
+- **[`docs/release.md`](../release.md),** "Channels": the fifth gate, the red issue, and that `urgent` doesn't skip it.
+- **Plan 0009:** §2's table gains the fifth row; §6's pin job runs after the gate. **Plan 0010:** D12 notes that scenario 1 repeats it on every candidate.
+- **`docs/e2e.md`, new:** the tier, the test organisation (without its secrets), the scenario format and vocabulary, how to run one by dispatch, the flake and quarantine policy, and how to read a red run. **`docs/architecture.md`** gains a line pointing at it.
+- **[`docs/init.md`](../init.md),** if decision 5 is taken: which tag `init` pins when run from a candidate. **[`docs/doctor.md`](../doctor.md):** `replay.on`. **[`docs/lanes.md`](../lanes.md):** the run ceiling and replay choices. **[`docs/telemetry.md`](../telemetry.md):** the telemetry tag choice.
+
+## 14. Order of moves
+
+**Touches** names each step's files, to show which steps may run at once. E1 to E3 are the harness, E4 to E8 the first scenarios, E9 and E10 the verdict and the burn-in, E11 the gate.
+
+| Step | Where | What | Touches | What must be true | Mutation |
+|---|---|---|---|---|---|
+| **E0** | the test organisation: the Owner, then a maintainer | **The setup and the probes.** The Owner creates the organisation, the driver App with decision 14's permissions, the test Author, Judge and Releaser, the `e2e` environment on Kanon with their ids and keys and the API key, and joins the organisation as the reviewer. A maintainer probes [§12](#12-what-is-not-confirmed-and-how-each-is-handled)'s ten items with throwaway workflows, printing no token | none in Kanon; results in E0's issue | Each of the ten answers is recorded, with the run's link. If 1 fails, the plan stops; if 7 fails, decision 9 is revisited before E4 | — (a measurement) |
+| **E1** | Kanon | **The scenario format and the vocabulary** ([§4](#4-a-scenario-is-data)): the validator, every verb with a stubbed-`gh` test, `docs/e2e.md` | `scripts/e2e/scenario.mjs`, `scripts/e2e/steps/`, `tests/unit/e2e-scenarios.test.ts`, `tests/unit/e2e-steps.test.ts`, `docs/e2e.md`, `docs/architecture.md` | Every directory under `tests/e2e/` validates; an unknown verb, a waiting verb with no deadline, an `expect.api` path outside the scenario repository, a substitution other than the two, and an expectation that reads a message are each refused | the validator accepting an unknown verb, and `expect.api` admitting `repos/yedeya-labs/…`, each turn a named test red |
+| **E2** | Kanon | **The runner and the janitor** ([§5](#5-the-runner-and-the-janitor)) | `scripts/e2e/run.mjs`, `scripts/e2e/janitor.mjs`, `scripts/e2e/github.mjs`, `tests/unit/e2e-runner.test.ts`, `tests/unit/e2e-janitor.test.ts` | On a stubbed `gh`: a passing scenario deletes its repository; a failing one keeps it 24 hours with the failed topic; a 502 is retried and a false expectation is not; an `infra` result never reads as `pass`; the name fits 100 characters; the janitor deletes only topic-marked repositories past their age, and fails its run on one older than a day it couldn't delete | retrying a false expectation, skipping the deletion on `pass`, and the janitor without its topic check each turn a named test red |
+| **E3** | Kanon, the Owner creates the environment | **The workflows** ([§5.2](#52-the-jobs-and-which-secret-each-holds), [§7](#7-triggers)) | `.github/workflows/e2e.yml`, `.github/workflows/e2e-janitor.yml`, `tests/unit/e2e-workflow.test.ts`, `tests/unit/app-key-isolation.test.ts` | Only `mint` and `provision` name the `e2e` environment; `run` names no private key and receives the token through `secrets:`; `provision` runs no checkout and no `npx`; no `pull_request`, `pull_request_target` or `merge_group` trigger | a private key added to `run`, and a `pull_request` trigger, each turn the tests red |
+| **E4** | Kanon, then a dispatch in the test organisation | **Scenario 1, `deploy-rehearsal`** ([§9](#9-the-first-scenarios)) | `tests/e2e/deploy-rehearsal/` | Plan 0010's D4 to D8 are released. A dispatch against that release passes, nightly-style (cancelled at the wait), and the step's issue links it | a copy whose failing-smoke release expects no issue is reported `fail`, run once by dispatch and linked in the issue |
+| **E5** | Kanon | **`init` pins the release it runs from** (decision 5) | `cli/callers.mjs`, `cli/init.mjs`, `docs/init.md`, `tests/unit/kanon-init.test.ts` | With `vX.Y.Z` absent and `candidate-vX.Y.Z` present on Kanon (stubbed), every reference `init` writes is the candidate; with both present, `vX.Y.Z`; with neither, `init` refuses and says why | preferring the candidate when the stable tag exists turns the test red |
+| **E6** | Kanon | **Install scenarios** per feature, and the Python tree | `tests/e2e/install-review/`, `install-build/`, `install-full/`, `install-python/` | after E5's release: each passes by dispatch | as E4: a copy expecting a finding doctor doesn't report is `fail` |
+| **E7** | Kanon, after plan 0009 S4 | **Upgrade scenarios** from the last two stable releases | `tests/e2e/upgrade-previous/`, `upgrade-previous-1/` | each passes by dispatch; `kanon.at` installs the older release's own `init` | as E4 |
+| **E8** | Kanon | **Replay** ([§6.2](#62-a-stubbed-model)), if decided as recommended: the choice, `agent-run`'s replay, doctor's `replay.on`, the recording script; then `review-replay` | `actions/agent-run/`, `cli/doctor.mjs`, `docs/doctor.md`, `docs/lanes.md`, `rulebook/11-repository-layout.md`, `scripts/e2e/record.mjs`, their tests, `tests/e2e/review-replay/` | `agent-run` with the choice runs no `claude-code-action` step and needs no Claude credential; a recording for another release is refused; every replayed comment carries the marker; the row is `tag: test`; doctor reports `replay.on` unless waived | replay without the marker, and a replayed row tagged `run`, each turn a named test red |
+| **E9** | Kanon | **The verdict and the red issue** ([§8.3](#83-a-red-gate-how-it-is-reported-and-the-only-ways-past-it)) | `scripts/e2e/verdict.mjs`, `tests/unit/e2e-verdict.test.ts` | On fixtures: a quarantined scenario doesn't count, an expired one fails `plan`; `skipped: budget` counts as missing; an `infra`-only red closes on green; a `fail` red doesn't | closing a `fail` issue on green, and counting an expired quarantine, each turn the test red |
+| **E10** | Kanon | **Burn-in:** E4, E6, E7 and E8's scenarios run nightly against the latest release, and each turns `gate: true` after ten passes | each scenario's `scenario.json` | ten consecutive scheduled passes, linked in each pull request | — |
+| **E11** | Kanon, after plan 0009 S5 | **The gate** ([§8](#8-the-release-gate)): `e2e.yml` on `release: published` for candidates; `promote.mjs`'s fifth gate; the pin job after `verdict` | `scripts/promote.mjs`, `.github/workflows/promote.yml`, `.github/workflows/release-please.yml` (the pin job), `.github/workflows/e2e.yml`, `docs/release.md`, ADR 0011, plans 0009 and 0010's notes, their tests | `promote.test.ts`: a candidate whose latest e2e run is red is held, one whose run is green but whose earlier `fail` issue is open is held, `urgent` doesn't skip the gate, one with a green run and closed issues passes; the pin job opens nothing while `verdict` is red. **Live:** the next candidate's run starts on its publication, and `promote.yml`'s summary shows five gates | each condition removed in turn, and `urgent` skipping the gate, each turn a named test red |
+| **E12** | Kanon | **The doctor-broken, `lane-check` and refusal families** ([§6.1](#61-no-model)), each through E10's burn-in | `tests/e2e/doctor-*/`, `tests/e2e/lane-check-*/`, `tests/e2e/refuse-*/` | each passes by dispatch and joins the gate after ten passes | as E4, per scenario |
+| **E13** | Kanon, the Owner's API key | **The real-model tier** ([§6.3](#63-a-real-model-under-2)): the run-ceiling and telemetry-tag choices, the ledger, `review-real` | `.github/workflows/lane-agent-job.yml` and the agent jobs that set `--max-budget-usd`, `actions/agent-telemetry/`, `scripts/e2e/run.mjs`, `rulebook/11-repository-layout.md`, `rulebook/08-observability-and-cost.md`, `docs/lanes.md`, `docs/telemetry.md`, tests, `tests/e2e/review-real/` | the agent jobs pass the lower ceiling; a declared ceiling above the lane's changes nothing; the ledger skips a scenario that would pass $2 with the measured margin; the row is `tag: test`. **Live:** a week of nightly runs, every one under $2 by the rows' cost | the ceiling taken as the higher of the two, and the ledger without its margin, each turn a named test red |
+| **E14** | Kanon and the test organisation | **The measurement** | none | Over four weeks after E11: every candidate has a run; each scenario's pass rate, `infra` rate and duration are recorded; deadlines are set to three times the slowest; no real-model run passed $2; no repository outlived the janitor by more than an hour | — |
+
+**Why this order.**
+- **Probes first** (E0): the runner rests on an App creating and deleting repositories, which nobody has measured, and the first scenario on an approval D0 couldn't run.
+- **The harness before any scenario** (E1 to E3), and **the deploy rehearsal first** (E4), because it is the scenario a human would otherwise run by hand on every candidate.
+- **`init`'s pin before the install scenarios** (E5, E6): on a candidate, they can't pass without it.
+- **The gate after plan 0009's S5** (E11): it is a fifth row in a script S5 writes, and it needs candidates to exist.
+- **The gate starts with the first scenarios,** not the whole catalogue: the families added later (E12, E13) join it one by one, after their burn-in, so the gate is never made of untried scenarios.
+
+**What may run at once.** E1 and E2 touch different files and can run together once the format is agreed; E5 and E8 can run beside E4; E12's families can be written at once, each in its own directory.
+
+## 15. Cost
+
+- **Actions minutes:** the scenario repositories are public, so their runs are free on the free plan; Kanon is public, so `e2e.yml`'s are free too (not confirmed for the free plan's organisation, [§12](#12-what-is-not-confirmed-and-how-each-is-handled) item 6). Wall time is the real cost: a candidate's run is bounded by its longest scenario, the deploy rehearsal, which waits for CI, a reviewer and three releases. Not measured; E14 measures it.
+- **The model:** at most $2 a night and $2 a candidate, by Owner decision 4, so at most about $70 a month with weekly candidates, and less when the ledger skips. The stubbed tier costs nothing. The recordings cost one real-model run each when they are made.
+- **The Owner's time:** one approval per candidate (decision 9), and the first setup (E0).
+- **Kanon's maintainers:** a release that changes a contract a scenario reads changes the scenario in the same pull request, as it changes the unit tests.
+
+## Out of scope
+
+- **Per-pull-request end-to-end runs** ([§7](#7-triggers)).
+- **Driving the adopt, doctor and upgrade skills through a model.** The scenarios drive their commands and the upgrade's edit; the skills' own conversations need a person or a harness for Claude Code sessions, which is a plan of its own.
+- **Private repositories and personal accounts.** The test organisation is an organisation with public repositories (Owner decision 1), so the fallbacks for a plan without rulesets or reviewers (`K-ADOPT-3`), and an adopter on a personal account (ADR 0013), stay with the unit tests.
+- **Cloud credentials in the test organisation:** no QA store, no AWS, no deploy to a real cloud. The deploy rehearsal's hooks are trivial, as D12's.
+- **Creating Apps through the manifest flow** (`kanon apps --apps`): it needs a person's click.
+- **Load and scale testing** of the lanes.
+
+## Decisions for the Owner
+
+1. **Where the gate hooks into the release flow.** (G1) a fifth promotion gate, with the pin job waiting for green; (G2) a required check on the release pull request; (G3) draft releases published only when green. **Recommended: (G1).** It tests exactly what an adopter would pin, once per candidate, with no new tag form; (G2) can't pin a release that doesn't exist; (G3) is stricter and rests on unmeasured release-please behaviour, kept as the fallback. [§8.1](#81-where-it-hooks-in).
+2. **Kanon's own pins wait for the gate.** **Recommended: yes:** the pin job opens its pull request only after a green `verdict`, so the soak never runs on a candidate the gate refused, at the cost of the run's duration before the soak starts. [§8.2](#82-what-the-gate-reads).
+3. **Before candidates exist.** (a) Build plan 0009's S3 to S5 before the gate (E11), and run the tier ungated until then; (b) hold every release until they are built. **Recommended: (a),** with S3 to S5 scheduled right after this plan's E4 so the gate is live within weeks. Under (a) a release cut before S5 is not gated, which the Owner accepts by choosing it; (b) is the strict reading of Owner decision 3. [§8.1](#81-where-it-hooks-in).
+4. **What the nightly run tests.** (a) The latest candidate, plus `main`'s CLI against the last release's requirements; (b) a nightly tag on `main` in a third form, which `lane-check`, doctor and `K-ADOPT-11` would have to admit. **Recommended: (a).** It changes no rule; `main`'s lanes are tested when they become a candidate, a week at most. [§7](#7-triggers).
+5. **`init` pins the release it runs from,** read from Kanon's tags: `vX.Y.Z` when it exists, else `candidate-vX.Y.Z` when that exists, else it refuses. Today it writes `vX.Y.Z` from `package.json`, a tag that doesn't exist at a candidate. **Recommended: yes.** It is a bug for anyone running ahead, not only for the tests, and it is data-driven, with no new flag (ADR 0002). [§1](#1-today-measured), E5.
+6. **The stubbed model's mechanism.** (a) An adoption-record choice, `Agent replay`, read by `agent-run`, reported by doctor as `replay.on` unless waived, with a marker on every replayed comment and `tag: test` rows; (b) a lane input, which every lane and caller would carry (ADR 0002 refuses it); (c) a fake Messages API behind `ANTHROPIC_BASE_URL`, which no caller can set for a reusable workflow, and whose recordings would break on every CLI bump. **Recommended: (a).** [§6.2](#62-a-stubbed-model).
+7. **How the $2 cap holds.** (a) An adoption-record choice, `Run ceiling`, which every agent job applies as the lower of its own and the declared one, plus the runner's ledger, plus a spend-limited API key; (b) the ledger and the workspace limit alone, which can't stop one run from passing $2, since every lane's own ceiling is $10 or more. **Recommended: (a).** It is the only one that makes the cap hard per run, and the choice is useful to any adopter that wants a lower ceiling. [§6.3](#63-a-real-model-under-2).
+8. **The scenario repositories' telemetry.** (a) They share it, with an adoption-record choice, `Telemetry tag`, making every row `tag: test`, so the collector's path is tested and every read filters them out; (b) they don't share it, and the collector stays untested end to end. **Recommended: (a).** [§6.3](#63-a-real-model-under-2).
+9. **The deploy scenario's approval.** (a) On a candidate, the Owner approves the scenario's second environment, on a release the test Releaser published, which is the path D0 couldn't measure; nightly, the scenario cancels at the wait; (b) a GitHub App as a custom deployment protection rule approves it, so no person is in the loop, but the scenario then tests a protection rule rather than the required reviewer `K-SHIP-9` asks for, and doctor's deploy checks would not be clean; (c) a machine user, which Owner decision 1 rules out. **Recommended: (a).** It is one click a week, on the day the Owner merges the release pull request anyway, and it exercises the human gate an adopter's production has. [§9](#9-the-first-scenarios).
+10. **Where the test Apps' keys go.** (a) Each scenario repository's own secrets, written by the `provision` job with `gh`, deleted with it; (b) the test organisation's secrets, shared with every repository, which doctor doesn't count, so no scenario could expect doctor healthy. **Recommended: (a).** [§5.2](#52-the-jobs-and-which-secret-each-holds).
+11. **Quarantine.** A reviewed pull request, naming an open issue, for at most 14 days, at most two scenarios at once, never the deploy rehearsal or an install scenario; and whether the real-model scenarios gate at all. **Recommended: as stated, and the real-model scenarios gate only on model-independent facts** (the run completed, posted, recorded, under its ceiling), with `unavailable` counted as `infra`. [§10](#10-flakiness), [§6.3](#63-a-real-model-under-2).
+12. **Overriding a red gate.** (a) No override: a fix and a new candidate, or a quarantine; `urgent` doesn't skip the gate; (b) an Owner override with a reason, written into the stable Release's notes. **Recommended: (a).** An override used once under pressure becomes the normal path, and the quarantine is already a reviewed, visible, expiring way past a broken scenario. [§8.3](#83-a-red-gate-how-it-is-reported-and-the-only-ways-past-it).
+13. **A failed scenario's repository is kept 24 hours,** archived and marked, so its runs can be read, then the janitor deletes it. **Recommended: yes.** Deleted at once, a failure's evidence goes with it. [§5.1](#51-one-scenarios-life).
+14. **The driver App's permissions beyond Owner decision 1's list:** Secrets (write), for `provision`; and the organisation's Administration (read), so doctor's `unused-apps` and private-Releaser checks can run rather than be listed as `unchecked`. **Recommended: Secrets (write), yes; the organisation's Administration (read), only if E0 shows doctor needs it for a check the scenarios assert.** [§3](#3-the-test-organisation-and-its-apps), [§12](#12-what-is-not-confirmed-and-how-each-is-handled).
+15. **The real-model tier's first scenario, and D12.** The review lane on a one-line documentation pull request, at most two scenarios a night; and plan 0010's D12 run by hand as plan 0010 says, with scenario 1 repeating it on every candidate. **Recommended: both,** because this plan starts after the deploy lane is delivered, and the operator's repository's adoption shouldn't wait for the harness. [§6.3](#63-a-real-model-under-2), [§9](#9-the-first-scenarios).
+
+## Owner decisions (2026-10-14)
+
+Taken by the Owner on 2026-10-14, before the draft. None is reopened here; the sections above state them.
+
+1. **A dedicated test organisation, and a driver App.** The Owner creates the organisation (its name to be filled in once it exists) and a GitHub App for driving the tests, with permission to create and delete repositories, and Administration, Contents, Actions, Environments, Workflows, Issues and Pull requests, installed only there. Its key lives in a protected environment on Kanon. The organisation's repositories are public, which gives rulesets and environment reviewers on the free plan and free Actions minutes, as D0 measured. [§3](#3-the-test-organisation-and-its-apps).
+2. **Test copies of Kanon's Apps** (the Author, the Judge, the Releaser and any other persona) are installed only in the test organisation, so the scenarios exercise real persona permissions, including the Releaser-publishes, Owner-approves path D0 could not measure. [§3](#3-the-test-organisation-and-its-apps), [§9](#9-the-first-scenarios).
+3. **The end-to-end tier is a hard release gate:** no Kanon release ships unless it is green on the release candidate. How it hooks into the release flow is decisions 1 to 3 above. [§8](#8-the-release-gate).
+4. **The real-model tier's budget is a hard cap of $2 per nightly run,** and the same cap for a release candidate's run. [§6.3](#63-a-real-model-under-2).
+
+## Open questions
+
+The fifteen [decisions for the Owner](#decisions-for-the-owner) above. Nothing else is open.
