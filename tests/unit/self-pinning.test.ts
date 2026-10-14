@@ -108,6 +108,12 @@ const EXEMPT = new Set([
   // holds the store's writer credentials, so the code that runs with them is a released one.
   '.github/workflows/telemetry.yml: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@vX.Y.Z',
   '.github/workflows/test-database-smoke.yml: ./.github/actions/project-setup',
+  // The deploy lane calls the ADOPTER's deploy and smoke hooks (plan 0010 §7, step D4), the first
+  // exception's reason again: the adopter's code at the release's commit, in the checkout the
+  // job makes. The probe calls the deploy hook too, in probe mode.
+  '.github/workflows/deploy-release.yml: ./.github/actions/deploy',
+  '.github/workflows/deploy.yml: ./.github/actions/deploy',
+  '.github/workflows/deploy.yml: ./.github/actions/smoke',
 ]);
 /** An exact release, written as the form, so the exemption survives each Dependabot bump. */
 const form = (entry: string): string => entry.replace(/^(.*: yedeya-labs\/kanon\/[^@]+)@v\d+\.\d+\.\d+$/, '$1@vX.Y.Z');

@@ -167,6 +167,41 @@ export const buildRequirements = (root: string) => {
     ...('variables' in ((parse(block) as Doc).inputs ?? {}) ? {} : { secretsOnly: true }),
   };
   const lanesJson = JSON.parse(readFileSync(join(root, 'docs/lanes.json'), 'utf8')) as Doc;
+  // THE DEPLOY LANE (plan 0010 §12, step D4): its two workflows, what each takes from the caller
+  // and the grant the caller's job must make for it, the adopter's hooks with the inputs the lane
+  // passes them, the one secret it reads (an environment secret the caller never maps), and the
+  // declaration it reads. Read from the two workflows, so `kanon init` (D6) and `kanon doctor`
+  // (D7) read the release's own copy; the description is docs/lanes.json's `deploy`.
+  const deployFiles = { release: 'deploy-release', environment: 'deploy' } as const;
+  const deployDocs = Object.fromEntries(Object.values(deployFiles).map((f) => [f, parse(readFileSync(join(root, '.github/workflows', `${f}.yml`), 'utf8')) as Doc]));
+  const deployGrant = (doc: Doc) => {
+    const g: Record<string, string> = {};
+    for (const j of Object.values((doc.jobs ?? {}) as Record<string, Doc>)) {
+      for (const [k, v] of Object.entries((j.permissions ?? {}) as Record<string, string>)) if (level(v) > level(g[k])) g[k] = v;
+    }
+    return Object.fromEntries(Object.entries(g).sort(([a], [b]) => a.localeCompare(b)));
+  };
+  const deployHooks: Record<string, Set<string>> = {};
+  for (const doc of Object.values(deployDocs)) {
+    for (const j of Object.values((doc.jobs ?? {}) as Record<string, Doc>)) {
+      for (const s of (j.steps ?? []) as Doc[]) {
+        const m = /^\.\/(\.github\/actions\/[a-z-]+)$/.exec(String(s.uses ?? ''));
+        if (!m) continue;
+        const set = (deployHooks[`${m[1]}/action.yml`] ??= new Set());
+        for (const k of Object.keys(s.with ?? {})) set.add(k);
+      }
+    }
+  }
+  const deploy = {
+    workflows: deployFiles,
+    inputs: Object.fromEntries(Object.values(deployFiles).map((f) => [f, Object.fromEntries(Object.entries(((deployDocs[f]!.on.workflow_call ?? {}).inputs ?? {}) as Record<string, Doc>)
+      .map(([k, v]) => [k, { type: v.type ?? 'string', description: String(v.description ?? '').trim() }]))])),
+    grants: Object.fromEntries(Object.values(deployFiles).map((f) => [f, deployGrant(deployDocs[f]!)])),
+    hooks: Object.entries(deployHooks).sort(([a], [b]) => a.localeCompare(b)).map(([path, inputs]) => ({ path, inputs: [...inputs].sort() })),
+    environmentSecrets: [...new Set(Object.values(deployFiles).flatMap((f) => [...readFileSync(join(root, '.github/workflows', `${f}.yml`), 'utf8').matchAll(/\$\{\{ secrets\.([A-Z0-9_]+) \}\}/g)].map((m) => m[1]!)))].sort(),
+    declaration: { path: 'docs/qa/adoption.md', section: '## Deploy' },
+    catalogue: lanesJson.deploy,
+  };
   return {
     $comment:
       "What this release of Kanon needs of an adopter (plan 0005 §5.4, §5.5), read at the release's tag. Built from the lanes by tests/unit/requirements.test.ts, which fails when this file and the lanes disagree; rebuild it with KANON_WRITE_REQUIREMENTS=1 npx vitest run tests/unit/requirements.test.ts. `kanon init` writes callers, the hook and the App identities from it; `kanon doctor` checks an installation against a release's copy. `identities` are the names a lane's `<NAME>_APP_ID` secret carries: a role of rulebook/agent-permissions.json today, an App of it once the lanes take the Apps' secrets. `catalogue` is the lane catalogue, and `features` the fixed sets of lanes offered in place of a choice per lane (plan 0007 §2), both copied from docs/lanes.json.",
@@ -182,7 +217,7 @@ export const buildRequirements = (root: string) => {
     // the lanes declare, its cost and when it is recommended. Hand-written in docs/lanes.json,
     // the one source `kanon init`, the adopt skill and docs/lanes.md read, and copied here so a
     // release's copy carries it; the test fails when a lane has no entry or an entry no lane.
-    catalogue: Object.fromEntries(Object.entries(lanesJson).filter(([k]) => k !== '$comment' && k !== 'features')),
+    catalogue: Object.fromEntries(Object.entries(lanesJson).filter(([k]) => k !== '$comment' && k !== 'features' && k !== 'deploy')),
     // The features (plan 0007 §2, step G2): the fixed sets of lanes `kanon init` and the adopt
     // skill offer in place of a choice per lane, hand-written in docs/lanes.json beside the
     // catalogue and copied here; the test holds them to the lanes (§2.6).
@@ -194,5 +229,6 @@ export const buildRequirements = (root: string) => {
     release: { dcoExemptsReleaser: /^export const RELEASER_ROLE = 'Releaser';$/m.test(readFileSync(join(root, 'actions/dco/dco.mjs'), 'utf8')) },
     telemetry,
     qaStore,
+    deploy,
   };
 };

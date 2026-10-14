@@ -305,6 +305,41 @@ describe('the spine\'s own handoff (kanon#274)', () => {
   });
 });
 
+/**
+ * Plan 0010 §9, step D4: no model in the deploy path. The deploy lane's two workflows run the
+ * adopter's deploy hook with a cloud credential, so none of their jobs runs an agent, holds an
+ * App key, mints an App token or reads a Claude credential: an instruction hidden in a release
+ * note or a log would otherwise meet that credential.
+ */
+const DEPLOY_LANE = ['deploy-release.yml', 'deploy.yml'];
+const modelInDeploy = (all: Record<string, Workflow>): string[] => DEPLOY_LANE.flatMap((f) => Object.entries(all[f]?.jobs ?? {}).flatMap(([name, job]) => {
+  const why = [
+    ...(holdsKey(job) ? ['holds an App key'] : []),
+    ...((job.steps ?? []).some(isAgent) ? ['runs the agent'] : []),
+    ...((job.steps ?? []).some((s) => String(s.uses ?? '').startsWith('actions/create-github-app-token')) ? ['mints an App token'] : []),
+    ...(CREDENTIAL.test(JSON.stringify(job)) ? ['reads a Claude credential'] : []),
+  ];
+  return why.map((w) => `${f}:${name}: ${w}`);
+}));
+
+describe('no model in the deploy path (plan 0010 §9, step D4)', () => {
+  it('reads both workflows, and finds nothing in any job', () => {
+    for (const f of DEPLOY_LANE) expect(Object.keys(docs[f]?.jobs ?? {}).length, f).toBeGreaterThanOrEqual(4);
+    expect(modelInDeploy(docs)).toEqual([]);
+  });
+
+  it('MUTATION: an `agent-run` step in report, a mint, or a Claude credential turns it red', () => {
+    const bad = structuredClone(docs);
+    bad['deploy.yml']!.jobs!.report!.steps!.push({ uses: '$/actions/agent-run' });
+    bad['deploy-release.yml']!.jobs!.gate!.steps!.push({ uses: 'actions/create-github-app-token@v3', with: { 'private-key': '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}' } });
+    bad['deploy.yml']!.jobs!.record!.steps!.push({ run: 'x', env: { T: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}' } });
+    expect(modelInDeploy(bad)).toEqual([
+      'deploy-release.yml:gate: holds an App key', 'deploy-release.yml:gate: mints an App token',
+      'deploy.yml:record: reads a Claude credential', 'deploy.yml:report: runs the agent',
+    ]);
+  });
+});
+
 describe('the check catches what it is for', () => {
   const agent: Step = { uses: '$/actions/agent-run' };
   const mint: Step = { uses: 'actions/create-github-app-token@v3', with: { 'private-key': '${{ secrets.AUTHOR_APP_PRIVATE_KEY }}' } };

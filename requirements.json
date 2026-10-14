@@ -1294,5 +1294,87 @@
       "QA_STORE_ROLE_ARN"
     ],
     "secretsOnly": true
+  },
+  "deploy": {
+    "workflows": {
+      "release": "deploy-release",
+      "environment": "deploy"
+    },
+    "inputs": {
+      "deploy-release": {
+        "environments": {
+          "type": "string",
+          "description": "The declared environments, in deploy order, separated by spaces, exactly as the adoption record's `## Deploy` list names them. The gate refuses any other list."
+        }
+      },
+      "deploy": {
+        "environment": {
+          "type": "string",
+          "description": "The environment to deploy, as the adoption record's `## Deploy` list names it."
+        },
+        "position": {
+          "type": "number",
+          "description": "The environment's place in the declared list, from 1. The lane refuses a call whose environment isn't at this position."
+        }
+      }
+    },
+    "grants": {
+      "deploy-release": {
+        "actions": "read",
+        "contents": "read",
+        "deployments": "read",
+        "id-token": "write",
+        "issues": "write"
+      },
+      "deploy": {
+        "actions": "read",
+        "contents": "read",
+        "deployments": "read",
+        "id-token": "write",
+        "issues": "write"
+      }
+    },
+    "hooks": [
+      {
+        "path": ".github/actions/deploy/action.yml",
+        "inputs": [
+          "artifact",
+          "environment",
+          "environments",
+          "probe",
+          "release",
+          "role",
+          "sha"
+        ]
+      },
+      {
+        "path": ".github/actions/smoke/action.yml",
+        "inputs": [
+          "environment",
+          "release",
+          "role"
+        ]
+      }
+    ],
+    "environmentSecrets": [
+      "KANON_DEPLOY_SECRET"
+    ],
+    "declaration": {
+      "path": "docs/qa/adoption.md",
+      "section": "## Deploy"
+    },
+    "catalogue": {
+      "name": "Deploy",
+      "does": "Deploys each published release of a green default-branch commit to the environments the adoption record's `## Deploy` section declares, in order, the last being production: a gate, a trust probe of each environment's cloud role, and one job per environment that runs your deploy and smoke hooks with that environment's OIDC credential. Records a `deploy` row per environment and keeps one issue per environment for its failures.",
+      "needs": [
+        "a `## Deploy` section in `docs/qa/adoption.md` listing your environments",
+        "a GitHub environment per declared environment, production with required reviewers, or the record's fallback marker",
+        "a cloud role per environment that trusts only that environment's OIDC subject, readable from outside the environment (a repository variable)",
+        "the Releaser, so a release starts the lane"
+      ],
+      "cost": "No model. The gate waits for the release commit's CI, up to the declared CI wait (90 minutes by default); each environment costs what your deploy command costs.",
+      "minutes": "Not measured: Kanon's own repository deploys nothing and calls no deploy lane.",
+      "when": "When the repository deploys a system from its releases. It is not one of the features: an adopter that declares no environment has no deploy lane."
+    }
   }
 }

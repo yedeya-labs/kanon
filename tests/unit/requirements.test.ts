@@ -45,6 +45,27 @@ describe('requirements.json', () => {
     });
   });
 
+  it("names the deploy lane's workflows, the grant each caller job makes, its hooks with their inputs, its one environment secret and its declaration (plan 0010 §12, D4)", () => {
+    // `kanon init` writes the deploy caller (D6) and `kanon doctor` checks it (D7) from this entry.
+    const deploy = built.deploy as Record<string, unknown>;
+    expect(deploy.workflows).toEqual({ release: 'deploy-release', environment: 'deploy' });
+    expect(Object.keys((deploy.inputs as Record<string, object>)['deploy-release']!)).toEqual(['environments']);
+    // The role is never an input: the lane reads it from the declaration.
+    expect(Object.keys((deploy.inputs as Record<string, object>).deploy!)).toEqual(['environment', 'position']);
+    const g = { actions: 'read', contents: 'read', deployments: 'read', 'id-token': 'write', issues: 'write' };
+    expect(deploy.grants).toEqual({ 'deploy-release': g, deploy: g });
+    expect(deploy.hooks).toEqual([
+      { path: '.github/actions/deploy/action.yml', inputs: ['artifact', 'environment', 'environments', 'probe', 'release', 'role', 'sha'] },
+      { path: '.github/actions/smoke/action.yml', inputs: ['environment', 'release', 'role'] },
+    ]);
+    expect(deploy.environmentSecrets).toEqual(['KANON_DEPLOY_SECRET']);
+    expect(deploy.declaration).toEqual({ path: 'docs/qa/adoption.md', section: '## Deploy' });
+    expect((deploy.catalogue as { name: string }).name).toBe('Deploy');
+    // Not an agent lane: no catalogue lane, no feature.
+    expect(Object.keys(built.lanes as object)).not.toContain('deploy');
+    expect(Object.keys(built.catalogue as object)).not.toContain('deploy');
+  });
+
   it('names the repository variables a lane reads and a repository may leave unset: the backlog feeder\'s (#609)', () => {
     // `kanon doctor` reports QA_BACKLOG_FEED's state only against a release whose sweep reads it.
     const lanes = built.lanes as Record<string, { optionalVariables?: string[] }>;

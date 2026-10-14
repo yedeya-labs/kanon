@@ -128,6 +128,7 @@ export const violations = (paths: string[]): Record<string, string> => {
  */
 const ACCEPTED = 'accepted by the Owner on kanon#243 (2026-10-05): the same App wrote the code it runs, with the same grant; recorded on K-AGENT-50 with its residual risk';
 const DEFAULT = 'checks out the triggering commit, the default branch\'s reviewed code, which this rule does not cover';
+const RELEASED = 'checks out the release\'s commit, which the gate holds to the default branch and a green CI: reviewed code, which this rule does not cover';
 const EXCEPTIONS: Record<string, string> = {
   'agent-implement-revise.yml:revise': ACCEPTED,
   'rebase-agent-job.yml:resolve': ACCEPTED,
@@ -135,9 +136,18 @@ const EXCEPTIONS: Record<string, string> = {
   'agent-triage.yml:triage-fix': DEFAULT,
   'lead-split-agent-job.yml:split': DEFAULT,
   'explore-agent-job.yml:explore': DEFAULT,
+  // The deploy lane (plan 0010 §7, step D4): its probe and its environment job run the adopter's
+  // deploy hook with `id-token: write`, and the environment job hands that hook
+  // `KANON_DEPLOY_SECRET`. That is the one place a credential must meet code, and the code is the
+  // release's commit, on the default branch, reviewed and green (the gate's checks 2 and 4). Held
+  // to its shape below, and by `tests/unit/deploy-lane.test.ts` and the id-token guard.
+  'deploy-release.yml:probe': RELEASED,
+  'deploy.yml:deploy': RELEASED,
 };
 
-const PATHS = files(LANES);
+/** The deploy lane's two workflows: not lanes (no `agent-` name), called by an adopter's deploy caller. */
+const DEPLOY = ['deploy-release.yml', 'deploy.yml'];
+const PATHS = [...files(LANES), ...DEPLOY.map((f) => join(WF, f))].sort();
 
 describe('K-AGENT-50: no job that runs the code under test holds a write credential', () => {
   it('reads every lane and every workflow a lane calls, so the check is not vacuous', () => {
@@ -179,6 +189,30 @@ describe('K-AGENT-50: no job that runs the code under test holds a write credent
         expect(s.with?.['persist-credentials']).toBe(false);
       }
     }
+  });
+});
+
+describe("the deploy lane's two exceptions hold only what plan 0010 §7 lets them (step D4)", () => {
+  const job = (file: string, name: string) => ({ wf: read(join(WF, file)), j: read(join(WF, file)).jobs![name]! });
+
+  it('the probe: its one write is id-token, no secret, no App token, and a checkout that persists nothing', () => {
+    const { wf, j } = job('deploy-release.yml', 'probe');
+    expect(credentials(wf, j)).toEqual(['is granted a `write` permission']);
+    expect(j.permissions).toEqual({ contents: 'read', 'id-token': 'write' });
+  });
+
+  it('the environment job: id-token its one write, and KANON_DEPLOY_SECRET, handed to the deploy hook alone', () => {
+    const { wf, j } = job('deploy.yml', 'deploy');
+    expect(credentials(wf, j)).toEqual(['references a secret', 'is granted a `write` permission', 'hands `Deploy` a token']);
+    expect(j.permissions).toEqual({ contents: 'read', deployments: 'read', 'id-token': 'write' });
+    const handed = (j.steps ?? []).filter((s) => /secrets\s*[.[]/.test(JSON.stringify(s)));
+    expect(handed.map((s) => [s.uses, s.env])).toEqual([['./.github/actions/deploy', { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' }]]);
+  });
+
+  it('no other job of the deploy lane runs the code under test', () => {
+    const running = DEPLOY.flatMap((f) => Object.entries(read(join(WF, f)).jobs ?? {})
+      .filter(([, j]) => (j.steps ?? []).some(runsCodeUnderTest)).map(([n]) => `${f}:${n}`));
+    expect(running).toEqual(['deploy-release.yml:probe', 'deploy.yml:deploy']);
   });
 });
 

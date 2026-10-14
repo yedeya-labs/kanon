@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { ID_TOKEN_HOLDERS, idTokenProblems, idTokenSource, isStoreJob, type Job, type Workflow } from './helpers/store-jobs.js';
+import { DEPLOY_FILES, DEPLOY_ID_TOKEN_HOLDERS, ID_TOKEN_HOLDERS, idTokenProblems, idTokenSource, isStoreJob, type Job, type Workflow } from './helpers/store-jobs.js';
 
 /**
  * The widened id-token guard (`K-OBS-17`; decision 9, as the Owner changed it on 2026-10-05).
@@ -60,6 +60,8 @@ describe('every Kanon workflow', () => {
       // Kanon's own caller of the code-audit lane (plan 0004 step 11a): it calls a lane with
       // store jobs, so it grants their id-token, and no job of its own runs anything.
       'code-audit.yml:audit',
+      // The deploy lane's trust probe and environment job (plan 0010 D4), in their shapes.
+      'deploy-release.yml:probe', 'deploy.yml:deploy',
       // And of the dispatch sweep (ADR 0011, amended 2026-10-12): its one holder is the lane's store job.
       'dispatch-sweep.yml:sweep',
       // And of the telemetry Explorer's lane (kanon#443): its one holder is the lane's aggregate job.
@@ -74,11 +76,14 @@ describe('every Kanon workflow', () => {
     ]);
   });
 
-  it('no job of any of them declares an environment', () => {
+  it("no job of any of them declares an environment but the deploy lane's environment job, which sets the one its declaration names", () => {
+    // Kanon's repository declares no environment (plan 0010, the placement decision): the deploy
+    // lane's `deploy` job sets the environment the adopter's declaration names, in the adopter's
+    // run, and nothing in Kanon calls it (`tests/unit/deploy-lane.test.ts`).
     const w = load();
     const declared = Object.entries(w).flatMap(([f, wf]) => Object.entries(wf.jobs ?? {})
-      .filter(([, j]) => j.environment !== undefined).map(([n]) => `${f}:${n}`));
-    expect(declared).toEqual([]);
+      .filter(([, j]) => j.environment !== undefined).map(([n, j]) => `${f}:${n} ${String(j.environment)}`));
+    expect(declared).toEqual(['deploy.yml:deploy ${{ needs.declare.outputs.environment }}']);
   });
 
   it("and docs/telemetry.md's writers list doesn't say the store jobs declare one (kanon#549)", () => {
@@ -108,7 +113,7 @@ describe('every Kanon workflow', () => {
     // leave them stale: it fails here instead, by name.
     const w = load();
     const others = Object.entries(w).flatMap(([f, wf]) => Object.entries(wf.jobs ?? {})
-      .filter(([, j]) => idTokenSource(wf, j) && j.uses === undefined && !isStoreJob(j)).map(([n, j]) => ({ f, n, j })));
+      .filter(([, j]) => idTokenSource(wf, j) && j.uses === undefined && !isStoreJob(j) && !DEPLOY_FILES.includes(f)).map(([n, j]) => ({ f, n, j })));
     expect(others.map(({ f, n, j }) => `${f}:${n} is ${ID_TOKEN_HOLDERS.filter((h) => h.is(f, n, j)).map((h) => h.says).join(' and ') || 'no listed holder'}`).sort()).toEqual([
       'agent-explore-telemetry.yml:aggregate is the aggregate read job',
       'agent-overseer.yml:telemetry is the Overseer telemetry read job',
@@ -316,6 +321,45 @@ describe('the mutations: any other job holding id-token turns the guard red, by 
       "telemetry-collect.yml: job collect holds id-token: write (its own permissions grant); only a job that runs the qa-store block alone, the store maintenance job, the telemetry collector job, the aggregate read job, the Overseer telemetry read job or the metrics page read job, may",
       "telemetry.yml: job collect holds id-token: write (it declares no permissions, so it inherits the workflow's) and calls telemetry-collect.yml, which has no store job to pass it to",
     ]);
+  });
+
+  // Plan 0010 D4: the deploy lane's two holders, each only in its shape, and no other job of its files.
+  describe("the deploy lane's probe and environment job (plan 0010 D4)", () => {
+    const DEPLOY = "in the deploy lane only deploy-release.yml's probe and deploy.yml's deploy may, each in its shape (plan 0010 D4)";
+    const own = "(its own permissions grant)";
+    type Steps = Array<{ run?: string; uses?: string; env?: Record<string, string>; with?: Record<string, unknown> }>;
+    const steps = (w: Record<string, Workflow>, file: string, name: string) => job(w, file, name).steps as Steps;
+
+    it('admits each, and names both holders', () => {
+      const w = load();
+      expect(DEPLOY_ID_TOKEN_HOLDERS.map((h) => h.is('deploy-release.yml', 'probe', job(w, 'deploy-release.yml', 'probe')) || h.is('deploy.yml', 'deploy', job(w, 'deploy.yml', 'deploy')))).toEqual([true, true]);
+    });
+
+    it('id-token: write on any other job of the lane: the record, the report, the gate, the declaration', () => {
+      for (const [file, name] of [['deploy.yml', 'record'], ['deploy-release.yml', 'record'], ['deploy.yml', 'report'], ['deploy-release.yml', 'gate'], ['deploy.yml', 'declare']] as const) {
+        expect(mutate((w) => grant(job(w, file, name)))).toEqual([`${file}: job ${name} holds id-token: write ${own}; ${DEPLOY}`]);
+      }
+    });
+
+    it('the probe loses its exemption with an environment, a secret, a write, a persisted checkout or a step beside its five', () => {
+      const red = [`deploy-release.yml: job probe holds id-token: write ${own}; ${DEPLOY}`];
+      expect(mutate((w) => { job(w, 'deploy-release.yml', 'probe').environment = 'production'; })).toEqual(red);
+      expect(mutate((w) => { steps(w, 'deploy-release.yml', 'probe')[3]!.env = { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' }; })).toEqual(red);
+      expect(mutate((w) => { (job(w, 'deploy-release.yml', 'probe').permissions as Record<string, string>).contents = 'write'; })).toEqual(red);
+      expect(mutate((w) => { steps(w, 'deploy-release.yml', 'probe')[1]!.with!['persist-credentials'] = true; })).toEqual(red);
+      expect(mutate((w) => { steps(w, 'deploy-release.yml', 'probe').push({ run: 'echo hi' }); })).toEqual(red);
+      expect(mutate((w) => { steps(w, 'deploy-release.yml', 'probe')[3]!.with!.probe = 'false'; })).toEqual(red);
+    });
+
+    it('the environment job loses its exemption with a fixed environment, the secret anywhere but the deploy hook, a write, or a step beside its nine', () => {
+      const red = [`deploy.yml: job deploy holds id-token: write ${own}; ${DEPLOY}`];
+      expect(mutate((w) => { job(w, 'deploy.yml', 'deploy').environment = 'production'; })).toEqual(red);
+      expect(mutate((w) => { steps(w, 'deploy.yml', 'deploy')[7]!.env = { KANON_DEPLOY_SECRET: '${{ secrets.KANON_DEPLOY_SECRET }}' }; })).toEqual(red);
+      expect(mutate((w) => { steps(w, 'deploy.yml', 'deploy')[5]!.env = { OTHER: '${{ secrets.OTHER }}' }; })).toEqual(red);
+      expect(mutate((w) => { (job(w, 'deploy.yml', 'deploy').permissions as Record<string, string>)['pull-requests'] = 'write'; })).toEqual(red);
+      expect(mutate((w) => { steps(w, 'deploy.yml', 'deploy').splice(3, 0, { run: 'npm ci' }); })).toEqual(red);
+      expect(mutate((w) => { (job(w, 'deploy.yml', 'deploy') as Record<string, unknown>).env = { NODE_OPTIONS: '-r x' }; })).toEqual(red);
+    });
   });
 
   it('id-token: none is no grant', () => {
