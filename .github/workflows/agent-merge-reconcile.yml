@@ -70,6 +70,13 @@ concurrency:
   # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
   group: qa-merge-reconcile-${{ github.event.pull_request.number || inputs.pr_number }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
+  # EVERY PENDING RUN IS KEPT (kanon#552, as the rebase lane since kanon#537). A run joins
+  # this group before any job-level `if:` can skip it, and under the default `queue: single`
+  # an arrival cancels the group's one pending run. Here the runs that only skip come from every
+  # review submitted on a pull request that is still open, and a pull request closed unmerged.
+  # `queue: max` keeps up to 100 pending, in order, and a skip-only run drains in seconds. GitHub
+  # refuses it with `cancel-in-progress: true`, which this lane never sets.
+  queue: max
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
 # ceiling and must grant at least this, or the run fails to start; `lane-check` fails a

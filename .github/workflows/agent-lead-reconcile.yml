@@ -64,6 +64,16 @@ name: Lead (Lead) — reconcile
 #   pull_request: [closed]
 #   issues: [closed]
 #   schedule: "25 * * * *" — the hourly heartbeat; clear of the other agent crons
+#   workflow_run           — OPTIONAL, THE RE-ASK (kanon#813): `types: [completed]` of the
+#                            callers whose runs this tick re-delivers or retries (review,
+#                            implement-revise, lead-revise, implement), by their `name:`.
+#                            GitHub's schedule is best effort (an hourly cron fires a few times
+#                            a day), and a crashed run's retry waits out a cool-down that no
+#                            close event marks, so the next real run of one of those lanes asks
+#                            for a tick too. The tick admits only a run that did not skip and
+#                            never one of this caller, and its due check ticks only when no
+#                            tick ran in the last 45 minutes, so the heartbeat stays hourly.
+#                            The schedule stays the floor.
 on:
   workflow_call:
     # The caller's `workflow_dispatch` inputs, passed through. Empty on the other three
@@ -96,6 +106,13 @@ concurrency:
   # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
   group: agent-lead-reconcile${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
   cancel-in-progress: false
+  # EVERY PENDING RUN IS KEPT (kanon#552, as the rebase lane since kanon#537). A run joins
+  # this group before any job-level `if:` can skip it, and under the default `queue: single`
+  # an arrival cancels the group's one pending run. Here the runs that only skip are the
+  # re-asks the tick turns away: a run that skipped, or a run of this caller. `queue: max` keeps
+  # up to 100 pending, in order, and a skip-only run drains in seconds. GitHub refuses it with
+  # `cancel-in-progress: true`, which this lane never sets.
+  queue: max
 
 # IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The caller's job holds the
 # ceiling and must grant at least this, or the run fails to start; `lane-check` fails a
@@ -122,14 +139,21 @@ permissions:
 
 jobs:
   tick:
-    # ONLY THE CALLER'S FOUR TRIGGERS. When this file held its triggers, no other event could
+    # ONLY THE CALLER'S TRIGGERS. When this file held its triggers, no other event could
     # reach it; as a called workflow it runs on whatever its caller is called on (Kanon's smoke
     # calls it on pull requests, whose `opened` the membership gate would admit).
+    #
+    # THE RE-ASK (kanon#813): a `workflow_run` of a lane whose runs this tick re-delivers or
+    # retries, admitted only when that run did not skip (a run whose jobs all skipped concludes
+    # `skipped`), and NEVER a run of this caller itself, which would make the tick re-ask
+    # itself. `github.workflow_ref` is the caller's file in a called workflow.
     if: >-
       github.event_name == 'workflow_dispatch'
       || github.event_name == 'schedule'
       || (github.event_name == 'pull_request' && github.event.action == 'closed')
       || (github.event_name == 'issues' && github.event.action == 'closed')
+      || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'skipped'
+      && !contains(github.workflow_ref, format('/{0}@', github.event.workflow_run.path)))
     runs-on: ubuntu-latest
     # Bounds a hang (RA-1336). Actions' default cap is 360m. Sized at ~3x the longest real run
     # measured on the reference adopter, so it never truncates work.
@@ -139,9 +163,9 @@ jobs:
       # this lane acts only when the event's actor is a member or a registered agent App.
       # `scripts/lane-gate.mjs` says who the actor is for each event — on a closed pull
       # request, whoever merged it; on a closed issue, whoever closed it; on the schedule,
-      # whoever last changed it — and a refusal leaves `member=false`, a notice and a
-      # step-summary line, and every later step skips. `kanon-path` first, which also gives
-      # every step below Kanon's scripts and Node.
+      # whoever last changed it; on a re-ask, whoever started the run that completed — and a
+      # refusal leaves `member=false`, a notice and a step-summary line, and every later step
+      # skips. `kanon-path` first, which also gives every step below Kanon's scripts and Node.
       - uses: $/actions/kanon-path
       - name: Is the actor a member?
         id: gate
@@ -149,10 +173,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node "$KANON/scripts/lane-gate.mjs"
 
+      # IS A RE-ASKED TICK DUE? (kanon#813). Only on a re-ask. The lanes that re-ask complete far
+      # more often than hourly, so a re-ask ticks only when no run of this caller, besides this
+      # one, ran the `scope` step below in the last 45 minutes (`scripts/reask-due.mjs`). A
+      # re-ask that declines leaves `scope` skipped, so it does not count. That also bounds the
+      # loop through a churn: the review or revise run a tick re-delivers finds the tick's own
+      # run inside the window. `due=false` skips every step below, as a refusal does; on every
+      # other trigger this step is skipped and its `due` is empty, which ticks. It reads this
+      # caller's runs on the workflow token, which the caller grants `actions: read`.
+      - name: Is a re-asked tick due?
+        id: reask
+        if: steps.gate.outputs.member == 'true' && github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REASK_JOB: tick
+          REASK_STEP: Is there a project to reconcile?
+          REASK_HOURS: "0.75"
+        run: node "$KANON/scripts/reask-due.mjs"
+
       # The brief is read from the checkout (`docs/projects/<n>.md`, `K-PROJ-2`). Nothing in it
       # runs: this lane installs nothing and never calls the project-setup hook.
       - uses: actions/checkout@v7
-        if: steps.gate.outputs.member == 'true'
+        if: steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'
 
       # THE LEAD'S LOGIN COMES FROM THE APP REGISTER (plan 0004 P5), not from this file:
       # Kanon cannot write an adopter's logins. Read from the default branch over the API, as
@@ -163,7 +206,7 @@ jobs:
       # `brief-revise-recovery.mjs` reads the same row (`LEAD_LOGIN`).
       - name: Read the Lead's login from the App register
         id: lead
-        if: steps.gate.outputs.member == 'true'
+        if: steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -183,7 +226,7 @@ jobs:
       # not tokens.
       - name: Is there a project to reconcile?
         id: scope
-        if: steps.gate.outputs.member == 'true'
+        if: steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_PROJECT: ${{ inputs.project }}
@@ -268,7 +311,7 @@ jobs:
       # brief PR at all.
       - name: Is a brief PR parked on an unanswered review?
         id: briefs
-        if: steps.gate.outputs.member == 'true'
+        if: steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -310,7 +353,7 @@ jobs:
       # if it finds something does the App token get minted for it.
       - name: Is any PR parked with no review?
         id: unreviewed
-        if: steps.gate.outputs.member == 'true'
+        if: steps.gate.outputs.member == 'true' && steps.reask.outputs.due != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

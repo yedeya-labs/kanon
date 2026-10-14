@@ -62,6 +62,8 @@ const SITES: Site[] = [
   { file: 'scripts/actions-minutes.mjs', line: '/actions/workflows/${file}/runs?created=', reaches: 'callers' },
   { file: 'scripts/actions-minutes.mjs', line: '/actions/workflows/${caller.file}`]', reaches: 'callers' },
   { file: 'scripts/telemetry-collect.mjs', line: '/actions/workflows/${encodeURIComponent(file)}/runs', reaches: 'self' },
+  // A re-ask's due check lists its own caller's runs, by the file `GITHUB_WORKFLOW_REF` names (kanon#813).
+  { file: 'scripts/reask-due.mjs', line: '/actions/workflows/${file}/runs', reaches: 'self' },
 ];
 
 /** Code lines only: a comment that names a workflow reaches nothing. */

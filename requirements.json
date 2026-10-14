@@ -1064,7 +1064,7 @@
         "does": "Posts each open project's progress to a chat channel daily, and files an issue for a lane caller that keeps failing.",
         "needs": [],
         "cost": "A model run daily.",
-        "minutes": "Not measured: Kanon holds no digest webhook, so it doesn't call the lane; it runs once a day.",
+        "minutes": "Not measured: Kanon's caller is new and had not run yet; it runs once a day.",
         "recommend": [
           "agent-lead-reconcile"
         ],

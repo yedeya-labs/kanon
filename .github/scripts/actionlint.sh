@@ -136,9 +136,11 @@ find "$WORK/.github" -type f \( -name '*.yml' -o -name '*.yaml' \) -exec \
   perl -pi -e 's{^(\s*(?:-\s+)?uses:\s*["\x27]?)\$/}{$1./}' {} +
 # `concurrency.queue`, which actionlint does not know yet (see the header). Only directly
 # inside a `concurrency:` block and only its two documented values, so an input that happens
-# to be named `queue`, or a misspelled value, is still linted.
+# to be named `queue`, or a misspelled value, is still linted. A comment after the value is
+# allowed. It covers every lane that keeps its pending runs (kanon#552): `actionlint.test.ts`
+# runs this rewrite over the tree and finds no `queue:` left in any `concurrency:` block.
 find "$WORK/.github" -type f \( -name '*.yml' -o -name '*.yaml' \) -exec \
-  perl -pi -e 'if (/^(\s*)concurrency:\s*$/) { $c = length $1 } elsif (defined $c && /^(\s*)\S/ && length $1 <= $c) { undef $c } elsif (defined $c) { s{^(\s+)queue:\s*(?:single|max)\s*$}{$1# queue (kanon#537)\n} } $c = undef if eof' {} +
+  perl -pi -e 'if (/^(\s*)concurrency:\s*$/) { $c = length $1 } elsif (defined $c && /^(\s*)\S/ && length $1 <= $c) { undef $c } elsif (defined $c) { s{^(\s+)queue:\s*(?:single|max)(?:\s+#.*)?\s*$}{$1# queue (kanon#537)\n} } $c = undef if eof' {} +
 
 trap - ERR
 set +e
