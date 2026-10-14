@@ -94,7 +94,7 @@ A model's narrative is Kanon text by intent (it may bold a word), so it goes thr
 
 ## The library
 
-[`scripts/lib/notify-contract.mjs`](../scripts/lib/notify-contract.mjs) is the contract in code. It imports nothing, as the telemetry schema doesn't, and it is used three times: by the producers, through `fit`; by the `notify` job before any hook runs, through `validate`; and by the tests.
+[`scripts/lib/notify-contract.mjs`](../scripts/lib/notify-contract.mjs) is the contract in code. It imports nothing, as the telemetry schema doesn't, and it is used four times: by the producers, through `fit`; by the `notify` job before any hook runs, through `validate`; by [Kanon's Slack hook](#kanons-slack-hook), through `parseInline` and `linesOf`, to render Kanon text; and by the tests.
 
 | Export | What |
 |---|---|
