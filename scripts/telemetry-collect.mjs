@@ -68,6 +68,13 @@
 // again overwrites the one before. A read that fails turns the run red, and the next sweep covers
 // the same span again.
 //
+// DEPLOY ROWS (plan 0010 §8, §10, step D9). The deploy lane's `record` jobs upload one `deploy`
+// row per environment as `kanon-deploy-row-<run id>-<attempt>-<position>`, outside the
+// `kanon-telemetry-` prefix (kanon#826). The same sweep lists them, checks each row against its
+// artifact (run, attempt, position) and with `validate`, and sends it beside the run rows. The
+// store keys it `<key>#deploy` by time, run, attempt and position, so a re-sent row overwrites
+// itself.
+//
 // LOGS HOLD COUNTS, IDS, LANES, FIELD NAMES AND THE STORE'S CODES, NEVER A ROW'S VALUE OR A TOKEN
 // (ADR 0007).
 //
@@ -80,7 +87,7 @@ import { appendFileSync } from 'node:fs';
 import { describeErrors, MAX_FINDINGS, SCHEMAS, validate } from '../actions/agent-telemetry/schema.mjs';
 import { nameContext, verify } from '../actions/agent-telemetry/scrub.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
-import { ARTIFACT_FILE, FINDING_ARTIFACT_FILE, ghApi, ghDownload, listTelemetryArtifacts, readZipEntry } from './lib/telemetry-artifacts.mjs';
+import { ARTIFACT_FILE, DEPLOY_ARTIFACT_FILE, FINDING_ARTIFACT_FILE, ghApi, ghDownload, listTelemetryArtifacts, readZipEntry } from './lib/telemetry-artifacts.mjs';
 import { codeOf, HOSTED_INGEST_URL, REFUSED_TITLE, storeOf, storeRequest, TokenError, UNPUBLISHED_JOB } from './lib/telemetry-token.mjs';
 import { readUpstreamFindingsFrom, SENT_VALUES } from './lib/upstream-findings.mjs';
 import { ghAsync, workItemStep } from './telemetry-work-items.mjs';
@@ -421,7 +428,7 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
   // which must not read as "there was nothing".
   let listing;
   try {
-    listing = listTelemetryArtifacts({ repo, from: now - SWEEP_CAP_DAYS * DAY, api, findings: true });
+    listing = listTelemetryArtifacts({ repo, from: now - SWEEP_CAP_DAYS * DAY, api, findings: true, deploys: true });
   } catch (err) {
     failures.push(`could not list artifacts (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
     return { since: now, listed: 0, sent: 0, stored: 0, foreign: 0, withheld: 0, workItems: 0, failures, warnings };
@@ -501,6 +508,29 @@ export async function collect({ repo, now, lastSuccess, window = '', api, downlo
         }
         rows.push({ row: out, where: at });
       }
+      continue;
+    }
+    if (a.kind === 'deploy') {
+      const where = `deploy run ${a.runId} attempt ${a.attempt} position ${a.position} (artifact ${a.id})`;
+      let row;
+      try {
+        const file = readZipEntry(download(a.id), DEPLOY_ARTIFACT_FILE);
+        if (!file) throw new Error(`no ${DEPLOY_ARTIFACT_FILE}`);
+        row = JSON.parse(file.toString('utf8'));
+      } catch (err) {
+        failures.push(`${where}: unreadable (${String(/** @type {Error} */ (err)?.message ?? err).split('\n')[0]})`);
+        continue;
+      }
+      const v = validate(row);
+      if (!v.ok) {
+        failures.push(`${where}: fails the schema (${describeErrors(v.errors)})`);
+        continue;
+      }
+      if (row.row_kind !== 'deploy' || row.run_id !== a.runId || row.run_attempt !== a.attempt || row.position !== a.position) {
+        failures.push(`${where}: the row's row_kind, run_id, run_attempt or position is not its artifact's`);
+        continue;
+      }
+      rows.push({ row, where });
       continue;
     }
     const where = `${a.lane} run ${a.runId} attempt ${a.attempt} (artifact ${a.id})`;
