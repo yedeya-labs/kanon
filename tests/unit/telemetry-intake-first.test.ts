@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeF
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { schemasAt, widenings } from '../../infra/telemetry/intake-first.mjs';
+import { narrowings, schemasAt, widenings } from '../../infra/telemetry/intake-first.mjs';
 import { SCHEMAS } from '../../actions/agent-telemetry/schema.mjs';
 import { SCRUB_VERSION } from '../../actions/agent-telemetry/scrub.mjs';
 import { SPAWNS } from './helpers/spawns.js';
@@ -93,7 +93,7 @@ describe('widenings: what the release accepts that the deployed intake refuses',
     expect(found).toHaveLength(5);
   });
 
-  it('names nothing for a narrowing, which deploying first does not help', () => {
+  it('names nothing for a narrowing, which narrowings names', () => {
     const before = copy();
     const after = copy();
     const lane = after.run![2]!.lane!;
@@ -101,6 +101,70 @@ describe('widenings: what the release accepts that the deployed intake refuses',
     after.finding![1]!.evidence = { ...after.finding![1]!.evidence!, max: 10 };
     after.run![2]!.trigger = { ...after.run![2]!.trigger!, required: true };
     expect(widenings(before, after)).toEqual([]);
+  });
+});
+
+describe('narrowings: what the deployed intake accepts, and so an older pin can write, that the release refuses (kanon#828)', () => {
+  it('names nothing when the schemas are the same, or the release only widens', () => {
+    expect(narrowings(copy(), copy())).toEqual([]);
+    const before = copy();
+    before.finding![1]!.scrub_version!.max = SCRUB_VERSION - 1;
+    delete before.run![3];
+    expect(narrowings(before, copy())).toEqual([]);
+  });
+
+  it('names an enum value the release drops, as a retired Merger stop rule or Kanon error code would', () => {
+    const after = copy();
+    const lane = after.run![2]!.lane!;
+    const dropped = (lane.values as string[])[0];
+    lane.values = (lane.values as string[]).slice(1);
+    const reasons = after.work_item![1]!.escalation_reasons!;
+    const reason = (reasons.values as string[])[0];
+    reasons.values = (reasons.values as string[]).slice(1);
+    expect(narrowings(copy(), after)).toEqual([
+      `run v2 lane: accepts ${dropped}, which the release does not`,
+      `work_item v1 escalation_reasons: accepts ${reason}, which the release does not`,
+    ]);
+  });
+
+  it('names a row kind, a version and a field the release drops', () => {
+    const after = copy();
+    delete after.finding;
+    delete after.run![2];
+    delete after.run![3]!.reason;
+    expect(narrowings(copy(), after)).toEqual([
+      'run v2: a version the release does not know',
+      'run v3 reason: a field the release does not know',
+      'finding: a row kind the release does not know',
+    ]);
+  });
+
+  it('names a field the release requires, whether it was optional or unknown to the deployed intake', () => {
+    const after = copy();
+    after.run![2]!.trigger = { ...after.run![2]!.trigger!, required: true };
+    after.run![2]!.extra = { type: 'bool', required: true };
+    expect(narrowings(copy(), after)).toEqual([
+      'run v2 trigger: optional, where the release requires it',
+      'run v2 extra: absent from every row the deployed intake accepts, where the release requires it',
+    ]);
+  });
+
+  it('names a tightened bound, a shorter text, and a changed pattern or type', () => {
+    const after = copy();
+    after.run![2]!.run_attempt = { ...after.run![2]!.run_attempt!, max: 9 };
+    after.finding![1]!.evidence = { ...after.finding![1]!.evidence!, max: 100 };
+    after.finding![1]!.scrub_version = { ...after.finding![1]!.scrub_version!, min: 2 };
+    after.run![2]!.kanon_version = { type: 'pattern', re: /^\d+\.\d+\.\d+$/ };
+    after.run![2]!.recorded_at = { type: 'bool', required: true };
+    const found = narrowings(copy(), after);
+    expect(found).toEqual(expect.arrayContaining([
+      'run v2 recorded_at: a time, where the release has a bool',
+      'run v2 run_attempt: accepts up to 2147483647, the release up to 9',
+      'run v2 kanon_version: its pattern differs from the release\'s',
+      'finding v1 evidence: accepts up to 2000 characters, the release up to 100',
+      'finding v1 scrub_version: accepts from 1, the release from 2',
+    ]));
+    expect(found).toHaveLength(5);
   });
 });
 
@@ -156,6 +220,33 @@ describe('intake-first.mjs, against a repository', SPAWNS, () => {
     const r = run(dir, '--deployed', 'v1.0.0', '--release', 'HEAD');
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/intake deployed from v1\.0\.0 accepts every row/i);
+  });
+
+  it('exits 3 naming an enum value the release drops, and tells the Owner to hold the deploy (kanon#828)', () => {
+    const { dir, git } = scratch();
+    const schema = join(dir, 'actions/agent-telemetry/schema.mjs');
+    writeFileSync(schema, readFileSync(schema, 'utf8').replace("'gollum', ", ''));
+    git('commit', '-q', '-am', 'narrow');
+    const r = run(dir, '--deployed', 'v1.0.0');
+    expect(r.status, r.stderr).toBe(3);
+    expect(r.stdout).toMatch(/intake deployed from v1\.0\.0 accepts every row HEAD can write/i);
+    expect(r.stdout).toContain('run v2 trigger: accepts gollum, which the release does not');
+    expect(r.stdout).toMatch(/intake deployed from HEAD would refuse rows/i);
+    expect(r.stdout).toMatch(/hold.*deploy/i);
+  });
+
+  it('exits 3 when the release both widens and narrows, naming each', () => {
+    const { dir, git } = scratch();
+    const schema = join(dir, 'actions/agent-telemetry/schema.mjs');
+    writeFileSync(schema, readFileSync(schema, 'utf8').replace("'gollum', ", ''));
+    const scrub = join(dir, 'actions/agent-telemetry/scrub.mjs');
+    writeFileSync(scrub, readFileSync(scrub, 'utf8').replace(/export const SCRUB_VERSION = \d+;/, `export const SCRUB_VERSION = ${SCRUB_VERSION + 1};`));
+    git('commit', '-q', '-am', 'widen and narrow');
+    const r = run(dir, '--deployed', 'v1.0.0');
+    expect(r.status, r.stderr).toBe(3);
+    expect(r.stdout).toContain(`finding v1 scrub_version: accepts up to ${SCRUB_VERSION + 1}, the deployed intake up to ${SCRUB_VERSION}`);
+    expect(r.stdout).toContain('run v2 trigger: accepts gollum, which the release does not');
+    expect(r.stdout).toMatch(/either way, a repository's collector turns red/i);
   });
 
   it('exits 2 on an unknown ref or a missing --deployed, rather than passing', () => {

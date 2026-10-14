@@ -8,7 +8,7 @@ The store that [plan 0002](plans/0002-hosted-telemetry-store.md) designs: one Dy
 | `render.mjs` | Adds each registered repository's writer and reader roles to the template, from the private register and GitHub's API. |
 | `function/` | The ingest function (`index.mjs`) and the aggregate function (`aggregate.mjs`), one package with two handlers. `schema.mjs` there is a link to [`actions/agent-telemetry/schema.mjs`](../actions/agent-telemetry/schema.mjs), so the function validates with the same file the lanes use; `scrub.mjs` and `public-words.mjs` are links too, the scrub that schema runs on a finding's text (plan 0006 §4.2). `oidc.mjs` is plan 0008's token verifier, which nothing calls yet ([The token verifier](#the-token-verifier-plan-0008-j1)). |
 | `verify.mjs` | Step S3's checks, run against the deployed store. |
-| `intake-first.mjs` | Whether a release's lanes can write a row the deployed ingest function refuses, so intake must be deployed from it first ([`docs/release.md`](release.md#intake-first)). |
+| `intake-first.mjs` | Whether a release's lanes can write a row the deployed ingest function refuses, so intake must be deployed from it first, and whether intake deployed from it would refuse a row an older pin writes ([`docs/release.md`](release.md#intake-first)). |
 | `erase.mjs` | Deletes one adopter's rows (§10). |
 | `aggregate.mjs` | The aggregate (§6, §6.1), run by you: what the aggregate function answers, plus the totals only you see. |
 | `import.mjs` | The reference adopter's history import (§7, S5): its transform, dry run and send. |

@@ -12,13 +12,18 @@
 // deployed intake doesn't know, a value or bound it refuses, a field the release makes optional or
 // drops where the deployed intake requires it, and a pattern or type that differs.
 //
+// It names every narrowing too, the same comparison the other way round: a row the deployed
+// intake accepts that the release's schema refuses (kanon#828). A repository on an older pin
+// writes only what the deployed intake accepts, or its collector is red already, so intake
+// deployed from such a release can refuse that repository's rows. Deploying first doesn't help
+// it: the deploy itself turns it red, until its pin moves past the narrowing.
+//
 // It reads `SCHEMAS` alone. The cross-field rules in `validate` are code, not data, so a change to
 // them is not seen here; the scrub's rules are, through `scrub_version`, which a change to them
-// raises (plan 0006 §4.2). A narrowing is not named: deploying intake first doesn't help an older
-// lane that still writes what the release refuses.
+// raises (plan 0006 §4.2).
 //
-// It exits 1 when it names one, 0 when it names none, and 2 when `--deployed` is missing or it
-// can't read a ref.
+// It exits 0 when it names nothing, 1 when it names widenings alone, 3 when it names a narrowing,
+// with or without widenings, and 2 when `--deployed` is missing or it can't read a ref.
 
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -45,30 +50,60 @@ const maxOf = (/** @type {Field} */ f) => /** @type {number} */ (f.max ?? INT_MA
 const reOf = (/** @type {Field} */ f) => (f.re instanceof RegExp ? `${f.re.source}/${f.re.flags}` : undefined);
 
 /**
- * What a field accepts in the release that it refused in the deployed intake.
+ * What a field accepts as `is` that it refused as `was`, the schema named `other`.
  * @param {Field} was
  * @param {Field} is
+ * @param {string} other
  * @returns {string[]}
  */
-function fieldWidenings(was, is) {
-  if (was.type !== is.type) return [`${article(is.type)}, where the deployed intake has ${article(was.type)}`];
+function fieldWidenings(was, is, other) {
+  if (was.type !== is.type) return [`${article(is.type)}, where ${other} has ${article(was.type)}`];
   const out = [];
-  if (was.required && !is.required) out.push('optional, where the deployed intake requires it');
+  if (was.required && !is.required) out.push(`optional, where ${other} requires it`);
   if (is.type === 'enum' || is.type === 'list') {
     const known = /** @type {readonly unknown[] | undefined} */ (was.values);
     const values = /** @type {readonly unknown[] | undefined} */ (is.values);
-    if (known && !values) out.push('accepts any value, where the deployed intake holds a list');
-    for (const v of known && values ? values.filter((x) => !known.includes(x)) : []) out.push(`accepts ${v}, which the deployed intake does not`);
+    if (known && !values) out.push(`accepts any value, where ${other} holds a list`);
+    for (const v of known && values ? values.filter((x) => !known.includes(x)) : []) out.push(`accepts ${v}, which ${other} does not`);
   }
   if (is.type === 'int' || is.type === 'number') {
-    if (minOf(is) < minOf(was)) out.push(`accepts from ${minOf(is)}, the deployed intake from ${minOf(was)}`);
-    if (maxOf(is) > maxOf(was)) out.push(`accepts up to ${maxOf(is)}, the deployed intake up to ${maxOf(was)}`);
+    if (minOf(is) < minOf(was)) out.push(`accepts from ${minOf(is)}, ${other} from ${minOf(was)}`);
+    if (maxOf(is) > maxOf(was)) out.push(`accepts up to ${maxOf(is)}, ${other} up to ${maxOf(was)}`);
   }
-  if (is.type === 'text' && maxOf(is) > maxOf(was)) out.push(`accepts up to ${maxOf(is)} characters, the deployed intake up to ${maxOf(was)}`);
-  if (is.type === 'list' && maxOf(is) > maxOf(was)) out.push(`accepts up to ${maxOf(is)} items, the deployed intake up to ${maxOf(was)}`);
-  if (is.pair !== was.pair) out.push('its pairing differs from the deployed intake\'s');
+  if (is.type === 'text' && maxOf(is) > maxOf(was)) out.push(`accepts up to ${maxOf(is)} characters, ${other} up to ${maxOf(was)}`);
+  if (is.type === 'list' && maxOf(is) > maxOf(was)) out.push(`accepts up to ${maxOf(is)} items, ${other} up to ${maxOf(was)}`);
+  if (is.pair !== was.pair) out.push(`its pairing differs from ${other}'s`);
   // A regular expression's language can't be compared, so any change is named.
-  if (reOf(is) !== reOf(was)) out.push('its pattern differs from the deployed intake\'s');
+  if (reOf(is) !== reOf(was)) out.push(`its pattern differs from ${other}'s`);
+  return out;
+}
+
+/**
+ * Every row `to` accepts that `from`, named `other`, refuses, one line each, in `to`'s order: by
+ * row kind, version and field. `absent` says what a field `from` requires and `to` lacks is.
+ * @param {Schemas} from
+ * @param {Schemas} to
+ * @param {{ other: string, absent: string }} words
+ * @returns {string[]}
+ */
+function accepted(from, to, { other, absent }) {
+  const out = [];
+  for (const [kind, versions] of Object.entries(to)) {
+    if (!Object.hasOwn(from, kind)) { out.push(`${kind}: a row kind ${other} does not know`); continue; }
+    for (const [version, fields] of Object.entries(versions)) {
+      const was = from[kind]?.[version];
+      const at = `${kind} v${version}`;
+      if (!was) { out.push(`${at}: a version ${other} does not know`); continue; }
+      for (const [name, f] of Object.entries(fields)) {
+        const old = was[name];
+        if (!old) { out.push(`${at} ${name}: a field ${other} does not know`); continue; }
+        for (const w of fieldWidenings(old, f, other)) out.push(`${at} ${name}: ${w}`);
+      }
+      for (const [name, old] of Object.entries(was)) {
+        if (old.required && !Object.hasOwn(fields, name)) out.push(`${at} ${name}: ${absent}, where ${other} requires it`);
+      }
+    }
+  }
   return out;
 }
 
@@ -79,26 +114,18 @@ function fieldWidenings(was, is) {
  * @param {Schemas} release
  * @returns {string[]}
  */
-export function widenings(deployed, release) {
-  const out = [];
-  for (const [kind, versions] of Object.entries(release)) {
-    if (!Object.hasOwn(deployed, kind)) { out.push(`${kind}: a row kind the deployed intake does not know`); continue; }
-    for (const [version, fields] of Object.entries(versions)) {
-      const was = deployed[kind]?.[version];
-      const at = `${kind} v${version}`;
-      if (!was) { out.push(`${at}: a version the deployed intake does not know`); continue; }
-      for (const [name, f] of Object.entries(fields)) {
-        const old = was[name];
-        if (!old) { out.push(`${at} ${name}: a field the deployed intake does not know`); continue; }
-        for (const w of fieldWidenings(old, f)) out.push(`${at} ${name}: ${w}`);
-      }
-      for (const [name, old] of Object.entries(was)) {
-        if (old.required && !Object.hasOwn(fields, name)) out.push(`${at} ${name}: no longer in the schema, where the deployed intake requires it`);
-      }
-    }
-  }
-  return out;
-}
+export const widenings = (deployed, release) =>
+  accepted(deployed, release, { other: 'the deployed intake', absent: 'no longer in the schema' });
+
+/**
+ * Every row the deployed intake's schema accepts that the release's refuses, one line each, in
+ * the deployed intake's order (kanon#828). Each line says what the deployed intake accepts.
+ * @param {Schemas} deployed
+ * @param {Schemas} release
+ * @returns {string[]}
+ */
+export const narrowings = (deployed, release) =>
+  accepted(release, deployed, { other: 'the release', absent: 'absent from every row the deployed intake accepts' });
 
 /**
  * The `SCHEMAS` a ref holds: its `actions/agent-telemetry/` modules copied out of git into a
@@ -133,21 +160,31 @@ async function main() {
     console.error('usage: intake-first.mjs --deployed <release intake was deployed from> [--release <ref>]');
     return 2;
   }
-  let found;
+  let wide, narrow;
   try {
-    found = widenings(await schemasAt(values.deployed), await schemasAt(values.release));
+    const deployed = await schemasAt(values.deployed);
+    const release = await schemasAt(values.release);
+    wide = widenings(deployed, release);
+    narrow = narrowings(deployed, release);
   } catch (e) {
     console.error(`intake-first: ${/** @type {Error} */ (e).message}`);
     return 2;
   }
-  if (found.length === 0) {
+  if (wide.length === 0) {
     console.log(`Intake deployed from ${values.deployed} accepts every row ${values.release} can write, as far as the schema says.`);
-    return 0;
+  } else {
+    console.log(`Intake deployed from ${values.deployed} refuses rows ${values.release} can write:`);
+    for (const line of wide) console.log(`  - ${line}`);
+    console.log('So deploy intake from this release, and run verify.mjs, before it reaches adopters (docs/release.md, Intake first).');
   }
-  console.log(`Intake deployed from ${values.deployed} refuses rows ${values.release} can write:`);
-  for (const line of found) console.log(`  - ${line}`);
-  console.log('So deploy intake from this release, and run verify.mjs, before it reaches adopters (docs/release.md, Intake first).');
-  return 1;
+  if (narrow.length === 0) return wide.length === 0 ? 0 : 1;
+  console.log('');
+  console.log(`Intake deployed from ${values.release} would refuse rows intake deployed from ${values.deployed} accepts, which a repository on an older pin can write:`);
+  for (const line of narrow) console.log(`  - ${line}`);
+  console.log(wide.length === 0
+    ? 'So hold the deploy of intake from this release until no repository\'s pin writes them (docs/release.md, Intake first).'
+    : 'Either way, a repository\'s collector turns red: this release\'s without the deploy, an older pin\'s with it. Decide before merging (docs/release.md, Intake first).');
+  return 3;
 }
 
 if (isCliEntry(import.meta.url)) process.exitCode = await main();
