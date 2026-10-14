@@ -185,7 +185,7 @@ export const GUARDS = Object.freeze([
  */
 export const RULE_IDS = Object.freeze([
   ...range('PRIN', 20), ...range('WORK', 23), ...range('SPEC', 11), ...range('AGENT', 50),
-  ...range('MERGE', 17), ...range('WS', 8), ...range('SHIP', 11), ...range('PROJ', 18),
+  ...range('MERGE', 17), ...range('WS', 8), ...range('SHIP', 12), ...range('PROJ', 18),
   ...range('OBS', 18), ...range('SELF', 18), ...range('ADOPT', 12), ...range('LAYOUT', 18),
 ]);
 
