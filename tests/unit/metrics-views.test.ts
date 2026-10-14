@@ -588,4 +588,21 @@ describe('kanon metrics report prints the views', () => {
     expect(doc).toHaveProperty('secondary.leadTime.cells.pooled');
     expect(doc.span).toEqual({ from: new Date(UNTIL.getTime() - 56 * DAY).toISOString().slice(0, 10), until: '2026-10-10', windows: 2, days: 28 });
   });
+
+  it('names every view it prints in docs/metrics.md\'s summary sentence (kanon#898)', () => {
+    // How the section's opening paragraph names each view heading renderViews prints.
+    const named: Record<string, string> = {
+      'Trend': 'trend',
+      'By Kanon version': 'by-version',
+      'Configuration A/B': 'A/B',
+      'Deploys to production': '[the deploy views](#the-deploy-views)',
+    };
+    const text = renderViews(views([...risingRows({ S: 12, M: 12, L: 12, XL: 12 }), ...history(1)])).join('\n');
+    const headings = [...text.matchAll(/^### ([^,\n]+)/gm)].map((m) => m[1]!);
+    expect(headings).toEqual(Object.keys(named));
+    const doc = readFileSync('docs/metrics.md', 'utf8');
+    const summary = doc.slice(doc.indexOf('## `kanon metrics report`')).split('\n\n')[1];
+    expect(summary).toMatch(/^`kanon metrics report` reports/);
+    for (const heading of headings) expect(summary, heading).toContain(named[heading]);
+  });
 });
