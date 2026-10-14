@@ -41,6 +41,15 @@ The person decides every choice, as a question in their agent client ([#428](htt
 - **Infer the recommended option** from `.inspection`, the answers already given and the checkout, as each question below says, and say in one line why it is recommended.
 - **Keep a list of the answers and of what the person skipped,** for the pull request (step 9) and for the doctor skill.
 
+## Confirming the token
+
+`gh` uses `GH_TOKEN`, then `GITHUB_TOKEN`, then its stored login (`docs/apps.md` in Kanon's repository), so a `GH_TOKEN` left in this session's environment is the token every call runs as, whoever `gh auth status` says is signed in ([#630](https://github.com/yedeya-labs/kanon/issues/630)). So **before your first question, and before anything is written,** say which token `gh` will use and whose it is, from the document's `.token.source` and `.token.login`: for example, "`gh` is using the token in `GH_TOKEN`, which belongs to octocat" (`gh` is its stored login). When `.token.login` is null, say that GitHub didn't say whose it is. Then ask whether it is the one they mean: **Use it** (Recommended): go on with it; or **Not this one**: change nothing, and they change the token first.
+
+- On **Not this one**, it is a step only a person can do: they set `GH_TOKEN` to the token they mean in their own terminal, or `unset GH_TOKEN` (and `GITHUB_TOKEN`) to fall back to `gh`'s stored login, and start this session again from that terminal, since a variable set anywhere else never reaches it. Write nothing until they have.
+- Never set `GH_TOKEN` yourself, and never ask for a token's value.
+- Say what the token needs: for a fine-grained token, the permissions `docs/doctor.md` in Kanon's repository lists under "A person's fine-grained token", with the reads such a token can't do at all.
+- Ask once a session. Ask again only when a later document's `.token` names another source or login.
+
 ## Steps only a person can do
 
 Some steps are the person's alone (**Only a person can**, above): creating and installing the Apps, giving their token a permission it lacks, a ruleset step the token can't take, typing a secret's value. Walk each through **when it comes up,** never as a list for later:
@@ -237,8 +246,8 @@ Asked only after **Sent to Kanon**. Otherwise there is nothing to choose: say so
 
 1. **Check where you are.** A git checkout of the repository to install in (`git rev-parse --show-toplevel`), `gh` signed in, and Node 24 or later. If the working tree has changes, ask the person to commit or stash them first; never do either yourself.
 
-2. **Inspect, changing nothing.** `kanon init --dry-run --json`. Read `.status` and `.exitCode` (the table below). Then tell the person, in plain words:
-   - the repository (`.repository`), whose token is used, and whether it can administer the repository (`.inspection.admin`);
+2. **Inspect, changing nothing.** `kanon init --dry-run --json`. Read `.status` and `.exitCode` (the table below). Before anything else, confirm the token it used, as "Confirming the token" says. Then tell the person, in plain words:
+   - the repository (`.repository`), and whether the token can administer the repository (`.inspection.admin`);
    - the account (`.inspection.owner`, `.inspection.ownerKind`), and what its plan allows: `.inspection.rulesets` of `no` means nothing on the platform enforces review, so the Owner's discipline does (say this one clearly); `.inspection.mergeQueue`, and whether the default branch merges through a merge queue (`.inspection.defaultBranchMergeQueue`); and every line of `.notes`;
    - what is already there: the lanes it already calls (`.inspection.installedLanes`), its rulesets (`.inspection.defaultBranchRulesets`, `.inspection.inactiveRulesets`), whether it has a commit yet (`.inspection.hasCommits`).
 

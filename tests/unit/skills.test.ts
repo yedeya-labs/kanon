@@ -755,3 +755,113 @@ describe('each skill is held to the kanon command it drives', () => {
     }
   });
 });
+
+/**
+ * #630, the first timed install: the session's `GH_TOKEN` was another organisation's, and `gh`
+ * prefers it to its stored login, so every call ran as the wrong token until the person noticed;
+ * and `gh pr checks` failed on the person's fine-grained token, which can't read check runs. So
+ * the skills name the token and ask before anything is written, the person's steps read runs
+ * through Actions, and one place lists what a person's fine-grained token needs and can't do.
+ */
+describe("the person's token (#630)", () => {
+  const PERSONS_TOKEN = /^### A person's fine-grained token$/;
+
+  it('has the adopt and doctor skills name the token gh uses, and ask, before their first question', () => {
+    for (const dir of ['adopt', 'doctor']) {
+      const body = skill(dir).body;
+      const confirm = section(body, /^## Confirming the token$/);
+      expect(confirm, dir).not.toBeNull();
+      // Which token, and whose, from the document: never the token itself.
+      expect(confirm, dir).toContain('`.token.source`');
+      expect(confirm, dir).toContain('`.token.login`');
+      expect(confirm, dir).toMatch(/`GH_TOKEN`, then `GITHUB_TOKEN`, then its stored login/);
+      // Asked before the first question and before anything is written, as a question.
+      expect(confirm, dir).toMatch(/\*\*before your first question, and before anything is written,\*\*/);
+      expect(confirm, dir).toMatch(/\*\*Use it\*\* \(Recommended\)[^\n]*\*\*Not this one\*\*/);
+      // A wrong token is the person's to change, in their own terminal, then start again.
+      expect(confirm, dir).toMatch(/a step only a person can do/);
+      expect(confirm, dir).toMatch(/set `GH_TOKEN`[^\n]*in their own terminal[^\n]*`unset GH_TOKEN`[^\n]*start this session again/);
+      expect(confirm, dir).toMatch(/Never set `GH_TOKEN` yourself/);
+      // And what the token needs, in the one place that lists it.
+      expect(confirm, dir).toContain('"A person\'s fine-grained token"');
+      // The first run's steps send the agent there before going on.
+      const steps = section(body, /^## Steps$/)!;
+      expect(steps, dir).toContain('"Confirming the token"');
+    }
+    // Adopt asks it in step 2, after the read-only dry run and before the questions of step 3,
+    // and before the admin question in the same step.
+    const steps = section(skill('adopt').body, /^## Steps$/)!;
+    const at = steps.indexOf('"Confirming the token"');
+    expect(at).toBeGreaterThan(steps.indexOf('2. **Inspect, changing nothing.**'));
+    expect(at).toBeLessThan(steps.indexOf('If `.inspection.admin` is false'));
+    expect(at).toBeLessThan(steps.indexOf('3. **Ask the questions**'));
+    // Doctor asks it on its first run, before it explains or changes anything.
+    const doctor = section(skill('doctor').body, /^## Steps$/)!;
+    expect(doctor.indexOf('"Confirming the token"')).toBeLessThan(doctor.indexOf('2. **Say what it checked.**'));
+    // The upgrade, which runs doctor first, confirms it before it writes the branch.
+    const upgrade = section(skill('upgrade').body, /^## Steps$/)!;
+    expect(upgrade.indexOf('"Confirming the token"')).toBeGreaterThan(-1);
+    expect(upgrade.indexOf('"Confirming the token"')).toBeLessThan(upgrade.indexOf('4. **Bump every pin.**'));
+  });
+
+  it("keeps the person's steps off gh pr checks and statusCheckRollup, which a fine-grained token can't read", () => {
+    const docs = readdirSync(join(ROOT, 'docs')).filter((f) => f.endsWith('.md')).map((f) => `docs/${f}`);
+    const files = [...SKILLS.map((s) => `skills/${s.dir}/SKILL.md`), ...docs];
+    const problems: string[] = [];
+    for (const f of files) {
+      for (const para of read(f).split(/\n\s*\n/)) {
+        if (!/gh pr checks|statusCheckRollup/.test(para)) continue;
+        // Named only where it says plainly that it needs a classic token, or a fine-grained one can't.
+        if (/classic token|fine-grained (?:personal access )?token can't/.test(para)) continue;
+        problems.push(`${f}: ${para.slice(0, 80)}`);
+      }
+    }
+    expect(problems).toEqual([]);
+    // The upgrade's live checks read the runs through Actions, and the verdict through the reviews.
+    const live = rows(section(skill('upgrade').body, /^## After the merge$/)!).find((r) => r[0] === 'The live checks')!;
+    expect(live[3]).toContain('`gh run list --commit <sha> -R <owner>/<repo>`');
+    expect(live[3]).toContain('`gh run view <id> -R <owner>/<repo>`');
+    expect(live[3]).not.toMatch(/with `gh pr checks/);
+    expect(live[3]).toMatch(/Not `gh pr checks`/);
+  });
+
+  it("lists in one place what a person's fine-grained token needs for adopt, doctor and upgrade, and what it can't read", () => {
+    const doctor = read('docs/doctor.md');
+    const token = section(doctor, /^## The token it needs$/)!;
+    const one = section(doctor, PERSONS_TOKEN);
+    expect(one).not.toBeNull();
+    expect(token, 'under "The token it needs"').toContain(one!);
+    // One row per skill, each naming repository permissions by GitHub's names.
+    const table = rows(one!).filter((r) => r.length >= 2 && !/^-+$/.test(r[0]!) && r[0] !== 'Skill');
+    for (const s of ['adopt', 'doctor', 'upgrade']) {
+      const row = table.find((r) => r[0]!.includes(`\`${s}\``));
+      expect(row, s).toBeDefined();
+      expect(row![1], s).toMatch(/Metadata: read/);
+    }
+    expect(table.find((r) => r[0]!.includes('`adopt`'))![1]).toMatch(/Secrets: read and write[\s\S]*Administration: read and write[\s\S]*Workflows: read and write/);
+    expect(table.find((r) => r[0]!.includes('`upgrade`'))![1]).toMatch(/Actions: read and write/);
+    // The reads it can't do: check runs, so `gh pr checks` and doctor's two annotation checks.
+    const cant = section(doctor, /^#### What it can't read$/);
+    expect(cant).not.toBeNull();
+    expect(one).toContain(cant!);
+    for (const t of ['`gh pr checks`', '`gh pr view --json statusCheckRollup`', '`unreachable-runs`', '`telemetry-runs`', '`gh run list --commit <sha>`']) expect(cant, t).toContain(t);
+    // The permissions table no longer asks a fine-grained token for a permission it can't hold.
+    for (const check of ['unreachable-runs', 'telemetry-runs']) {
+      const row = rows(token).find((r) => r[0] === `\`${check}\``)!;
+      expect(row[2], check).toMatch(/classic token/);
+    }
+    // docs/init.md lists init's own needs and points to the one place, rather than a second list.
+    const init = section(read('docs/init.md'), /^## The token it needs$/);
+    expect(init).not.toBeNull();
+    expect(init).toContain('(doctor.md#a-persons-fine-grained-token)');
+    expect(init).toMatch(/`GH_TOKEN`, `GITHUB_TOKEN` or `gh`'s own login/);
+    for (const p of ['Issues: write', 'Administration: write', 'Secrets: read']) expect(init, p).toContain(p);
+  });
+
+  it("names the classic token in doctor's reason for a run's annotations it couldn't read", () => {
+    const src = read('cli/doctor.mjs');
+    const reasons = [...src.matchAll(/reason: `the token can't read the jobs or annotations of its run \$\{id\}; ([^`]+)`/g)].map((m) => m[1]!);
+    expect(reasons).toHaveLength(2);
+    for (const r of reasons) expect(r).toMatch(/fine-grained personal access token has no Checks permission/);
+  });
+});
