@@ -51,6 +51,8 @@ const KEYED_OUT: Record<string, RegExp> = {
   'agent-review.yml': /format\('label-\{0\}', github\.run_id\)/,
   // A label event that verifies nothing takes a group of its run's own.
   'red-test.yml': /format\('noop-\{0\}', github\.run_id\)/,
+  // The issue is in the key: a run for one issue never waits behind, or displaces, another's (kanon#768).
+  'agent-issue-backstop.yml': /github\.event\.issue\.number \|\| inputs\.issue_number/,
 };
 /** Each, with why every event its caller sends runs. */
 const ONLY_RUNS: Record<string, string> = {

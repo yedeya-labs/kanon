@@ -239,7 +239,18 @@ describe('who the actor is', () => {
       .toEqual({ actor: { login: 'labeller', source: 'user who applied the label' } });
     expect(triggeringActor('pull_request_target', { action: 'opened', sender: { login: 'opener' } }, env))
       .toEqual({ actor: { login: 'opener', source: 'user who opened it' } });
+  });
+  it('an opened issue: refused, unless the lane declares the issue backstop\'s exception (kanon#768)', () => {
     expect(triggeringActor('issues', { action: 'opened', sender: { login: 'opener' } }, env)).toHaveProperty('refuse');
+    expect(triggeringActor('issues', { action: 'opened', sender: { login: 'opener' } }, { ...env, LANE_GATE_ISSUE_OPENED: 'yes' })).toHaveProperty('refuse');
+    const admitted = triggeringActor('issues', { action: 'opened', sender: { login: 'opener' } }, { ...env, LANE_GATE_ISSUE_OPENED: 'anyone' });
+    expect(admitted).toMatchObject({ actor: { login: 'opener', source: 'user who opened the issue' } });
+    expect((admitted as { actor: { admitted?: string } }).actor.admitted).toContain('Owner decision 2026-10-14');
+    // The exception is the opened issue's alone: a label on the same lane is still judged.
+    expect(triggeringActor('issues', { action: 'labeled', sender: { login: 'x' } }, { ...env, LANE_GATE_ISSUE_OPENED: 'anyone' }))
+      .toEqual({ actor: { login: 'x', source: 'user who applied the label' } });
+    expect(triggeringActor('pull_request_target', { action: 'opened', sender: { login: 'x' } }, { ...env, LANE_GATE_ISSUE_OPENED: 'anyone' }))
+      .toEqual({ actor: { login: 'x', source: 'user who opened it' } });
   });
   it('a finished workflow: whoever pushed the commit it ran on, never the sender', () => {
     expect(triggeringActor('workflow_run', { workflow_run: { triggering_actor: { login: 'pusher' }, actor: { login: 'a' } }, sender: { login: 's' } }, env))

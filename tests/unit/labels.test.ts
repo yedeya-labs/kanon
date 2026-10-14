@@ -269,7 +269,7 @@ describe('every script that applies a label creates it first, from its gh wrappe
 
   it('finds the labelling scripts, so the check below is not vacuous', () => {
     expect(scripts.filter(applies).sort()).toEqual([
-      'scripts/brief-revise-recovery.mjs', 'scripts/dispatch-sweep.mjs', 'scripts/implement-crash.mjs', 'scripts/lead-reconcile.mjs',
+      'scripts/brief-revise-recovery.mjs', 'scripts/dispatch-sweep.mjs', 'scripts/implement-crash.mjs', 'scripts/issue-backstop.mjs', 'scripts/lead-reconcile.mjs',
       'scripts/merge-gate.mjs', 'scripts/overseer-file.mjs', 'scripts/review-recovery.mjs', 'scripts/split-lineage.mjs', 'scripts/telemetry-file.mjs',
       'scripts/workflow-health.mjs',
     ]);

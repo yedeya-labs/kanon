@@ -49,6 +49,9 @@ const DIRECT: Record<string, { step: string; perms: Perms }> = {
   // The dispatch sweep comments on, labels and re-labels issues, lists the pull requests that
   // close them, and reads the run behind each cost row, and the run artifacts without a store.
   'agent-dispatch-sweep.yml': { step: 'app-token', perms: { issues: 'write', 'pull-requests': 'read', actions: 'read' } },
+  // The issue backstop reads the opened issue, sets its bucket, adds a label (creating it first)
+  // and comments on it (kanon#768).
+  'agent-issue-backstop.yml': { step: 'app-token', perms: { issues: 'write' } },
   // The code audit reads the tree, and searches, files and comments on issues.
   'agent-code-audit.yml': { step: 'app-token', perms: { contents: 'read', issues: 'write' } },
   // The Overseer's agent reads the tree, issues, pull requests and the workflow history, and

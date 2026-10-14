@@ -267,6 +267,18 @@ jobs:
       AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
       AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
 
+  issue-backstop:
+    # No model, and no store (kanon#768): its one job mints the Lead's token, narrowed to
+    # Issues write, on an opened issue or a dispatch, so a pull request skips it.
+    permissions:
+      contents: read
+    uses: $/.github/workflows/agent-issue-backstop.yml
+    with:
+      smoke: agent-lanes-smoke
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.KANON_SMOKE_UNSET }}
+      AUTHOR_APP_PRIVATE_KEY: ${{ secrets.KANON_SMOKE_UNSET }}
+
   code-audit:
     # A store-coupled lane (plan 0004 step 11). `id-token: write` is for its store jobs alone,
     # and `actions: write` for the export's delete job alone: GitHub refuses to start a called
@@ -321,7 +333,7 @@ jobs:
 
   smoke:
     name: Agent lanes smoke
-    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs, lead, lead-split, rebase, merge, lead-reconcile, project-digest, weekly-digest, explore, dispatch-sweep, code-audit, overseer, explore-telemetry]
+    needs: [triage, implement, implement-revise, lead-revise, merge-reconcile, review, verify-acs, lead, lead-split, rebase, merge, lead-reconcile, project-digest, weekly-digest, explore, dispatch-sweep, issue-backstop, code-audit, overseer, explore-telemetry]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -331,7 +343,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"'
-          echo "$RESULTS" | jq -e 'to_entries | length == 19 and all(.value.result == "success" or .value.result == "skipped")'
+          echo "$RESULTS" | jq -e 'to_entries | length == 20 and all(.value.result == "success" or .value.result == "skipped")'
 
       # For the fixture adopter only. lane-check itself comes from `$/`.
       - uses: actions/checkout@v7

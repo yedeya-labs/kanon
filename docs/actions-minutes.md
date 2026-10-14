@@ -9,7 +9,7 @@ This page gives, per lane, what starts it, what its runs cost in runner-minutes 
 A caller's triggers are GitHub events, and GitHub can't filter most of them by label or by author. So a lane starts on far more events than it acts on: the implement lane on every label put on any issue, the review lane on every CI run of every pull request. Its first job, or a job's `if:`, then decides. That gives three kinds of run:
 
 - **A skipped run** bills nothing. Every job's `if:` was false, so no runner started. The implement, triage, split and verify lanes' runs for any other label are these, and so are merge reconcile's for a review on a pull request still open. They still count as runs in the Actions tab, which is most of the 11,000 a week Kanon saw.
-- **A short run** bills a minute or two. A gate or filter job ran, found nothing to do, and the lane's other jobs were skipped: the review lane on a head with no review label or one already reviewed, the revise lanes on a pull request that isn't their role's, merge reconcile on a merged pull request whose latest verdict declares nothing open ([#177](https://github.com/yedeya-labs/kanon/issues/177)). The lanes that run no model, the Merger, the reconciler and the dispatch sweep, do their whole job in a short run.
+- **A short run** bills a minute or two. A gate or filter job ran, found nothing to do, and the lane's other jobs were skipped: the review lane on a head with no review label or one already reviewed, the revise lanes on a pull request that isn't their role's, merge reconcile on a merged pull request whose latest verdict declares nothing open ([#177](https://github.com/yedeya-labs/kanon/issues/177)). The lanes that run no model, the Merger, the reconciler, the dispatch sweep and the issue backstop, do their whole job in a short run.
 - **A model run** bills for as long as the agent works, plus a few minutes of setup: checking out, minting the token, running your project-setup hook.
 
 The report below counts a run as short when no job in it ran for more than a minute, which covers the first two kinds.
@@ -28,6 +28,7 @@ The "What starts it" column is each lane's caller triggers, `TRIGGERS` in [`cli/
 | `agent-code-audit` | A schedule every three days; a dispatch | None to speak of | Days, and the size of the code areas it reads |
 | `agent-explore-telemetry` | A weekly schedule; a dispatch | An aggregate with no cell and no signal | Weeks |
 | `agent-triage` | An issue labelled; a dispatch | Every label other than `qa:needs-triage` (skipped, nothing billed) | Bugs filed for triage |
+| `agent-issue-backstop` | An issue opened; a dispatch | None: it runs no model, so every run is short | Issues opened |
 | `agent-lead` | A dispatch | None: it runs only when you dispatch it | Mandates you dispatch |
 | `agent-lead-revise` | A review submitted; a pull request labelled; a dispatch | A review or label on a pull request that isn't the Lead's brief | Change requests on briefs |
 | `agent-lead-split` | An issue labelled; a dispatch | Every label other than its own (skipped, nothing billed) | Issues labelled for a split |
@@ -58,6 +59,7 @@ Measured on `yedeya-labs/kanon` over the 7 days from 2026-10-06 06:25 to 2026-10
 | `agent-code-audit` | `code-audit.yml` | 7 | 0.4 | 67% | 2 | 10 | 2 |
 | `agent-explore-telemetry` | `explore-telemetry.yml` | 5.8 | 0.2 | 0% | — | 6 | 1 |
 | `agent-triage` | `triage.yml` | 0.6 | 120 | 100% | 0 | — | 0 |
+| `agent-issue-backstop` | none | — | — | — | — | — | not measured |
 | `agent-lead` | `lead.yml` | 0.6 | 0 | — | — | — | 0 |
 | `agent-lead-revise` | `lead-revise.yml` | 0.7 | 324 | 100% | 0.1 | — | 26 |
 | `agent-lead-split` | `lead-split.yml` | 0.6 | 120 | 100% | 0 | — | 0 |

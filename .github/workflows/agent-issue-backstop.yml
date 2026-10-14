@@ -1,0 +1,158 @@
+# QA pipeline — the issue-opened backstop (RA-601, RA-729, RA-1616). A Kanon lane (kanon#768).
+#
+# A REUSABLE WORKFLOW, CALLED BY THE ADOPTER'S TRIGGER-ONLY CALLER. The caller holds the
+# triggers listed above `on:` below, the `permissions:` ceiling, and one job that `uses:` this
+# file at an exact Kanon tag, passes `issue_number` and `apply` through, and maps the Lead's two
+# secrets by name (never `secrets: inherit`). The `github` context in a called workflow is the
+# caller's, so the lane reads the opened issue exactly as it would in the caller itself.
+#
+# `K-WORK-1`: every issue has a milestone from the moment it is filed, and a backstop assigns a
+# bucket to any issue that arrives without one. Some filing paths can't set a milestone at all
+# (an issue form, a hand-filed issue in the web UI), and an issue with no milestone drops out
+# of every progress report. This lane is that backstop. On each opened issue it runs
+# `scripts/issue-backstop.mjs`, which asks `decide()` in `scripts/issue-triage-defaults.mjs`, the
+# one copy of the routing table, and writes what it answers:
+#   - a BUCKET milestone (`K-WORK-4`), only on an issue still bare when re-read: an issue labelled
+#     `pipeline-improvement` goes to Development Automation, every other one to Product Backlog.
+#     It never writes a roadmap milestone (`K-WORK-5`), and never changes one an issue has;
+#   - `gate-candidate` on a `sev:critical` or `sev:high` reviewer follow-up that lacks it
+#     (`K-WORK-10`), which stays on its bucket;
+#   - `qa:needs-severity` and the rubric comment on a reviewer follow-up with no `sev:*`
+#     (`K-WORK-9`), unless it already carries the label.
+# Each write is made only when missing, so a re-run or a dispatch on the same issue writes
+# nothing new. It fires only at opening: a milestone cleared later is not restored (`K-WORK-1`).
+#
+# IT READS THE ISSUE LIVE, never the payload, and never its title or body: only its labels and
+# milestone, which only someone with triage access (or the repository's own issue form) sets.
+#
+# IDENTITY: THE AUTHOR APP, MINTED FOR THE LEAD, narrowed to Issues write (`K-AGENT-46`), as the
+# dispatch sweep's issue hygiene is. Not the workflow token: a `gate-candidate` or
+# `qa:needs-severity` it adds should read as the Lead's, the role that keeps the issue queue,
+# and the timeline shows the App, not `github-actions`.
+#
+# EVERY OPENED ISSUE, AN OUTSIDER'S INCLUDED (K-AGENT-45's exception, Owner decision 2026-10-14).
+# The gate still runs first, but this lane's gate step sets `LANE_GATE_ISSUE_OPENED=anyone`, so on
+# `issues: opened` it admits whoever opened the issue, with no permission lookup. That is safe
+# here and nowhere else: the lane runs no model, reads no issue text, and writes only a bucket and
+# labels, so an outsider can't steer it, and an outsider's issue (an issue form on a public
+# repository) is exactly the one that arrives bare. A dispatch is still judged as a member's, and
+# the Kanon pin is still checked. No other lane sets the variable (tests/unit/lane-gate-run.test.ts).
+#
+# SAFE BY DEFAULT: the opened event applies; a dispatch is a DRY RUN unless `apply` is ticked.
+#
+# NO MODEL. The only step after the gate that runs anything runs a library script and `gh`, so
+# this lane takes no Claude token, writes no telemetry row, and never calls the project-setup
+# hook. It checks out the App register alone, for the Lead's persona.
+#
+# INERT until: the caller is on the default branch + the Author App installed, with the
+# Lead's row in the App register + these secrets (plan 0001 §8):
+#   AUTHOR_APP_ID, AUTHOR_APP_PRIVATE_KEY
+# The Author App (the Lead's) needs `Issues: write`. The buckets must exist (`kanon milestones`).
+# KANON ROLE: Lead
+# The line above is read by `lane-check` and the token-permission test (plan 0005 §3.5): the
+# role this lane mints for, as the Author App's `AUTHOR_APP_*` secrets no longer say. Its row
+# in the App register must exist, and this lane's tokens fit inside that role's row.
+name: Lead (Lead) — issue backstop
+
+# THE CALLER'S TRIGGERS — this lane's contract with it:
+#   issues: [opened]
+#   workflow_dispatch      — inputs `issue_number` (required) and `apply` (boolean, default
+#                            false: a dry run)
+on:
+  workflow_call:
+    # The caller's `workflow_dispatch` inputs, passed through. Empty on `issues: opened`, so
+    # neither is required here, and `apply` is a STRING: a caller passes `${{ inputs.apply }}`,
+    # which a boolean input refuses as `''` on that trigger.
+    inputs:
+      issue_number:
+        description: Issue to apply the backstop to
+        required: false
+        type: string
+        default: ""
+      apply:
+        description: "'true' to actually write on a dispatch (anything else = dry run)"
+        required: false
+        type: string
+        default: ""
+      smoke:
+        description: Set by a smoke run only, never by a lane caller. Any value puts the run in a concurrency group of its own, so it neither waits behind nor cancels a real run or another smoke run.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      AUTHOR_APP_ID:
+        required: true
+      AUTHOR_APP_PRIVATE_KEY:
+        required: true
+
+concurrency:
+  # One run per issue at a time: an opened event and a dispatch for the same issue would read
+  # the same bare state and write twice. The issue is in the key, so a run for one issue never
+  # waits behind, or displaces, another issue's.
+  # A smoke run (`inputs.smoke`) takes a group of its own: agent-lanes-smoke.yml says why.
+  group: agent-issue-backstop-${{ github.event.issue.number || inputs.issue_number }}${{ inputs.smoke && format('-smoke-{0}', github.run_id) || '' }}
+  cancel-in-progress: false
+
+# IN A CALLED WORKFLOW THIS BLOCK CAN ONLY NARROW (plan 0001 §3). The gate reads with the
+# workflow token, which needs nothing beyond Metadata; every write is the App token's.
+permissions:
+  contents: read
+
+jobs:
+  backstop:
+    # ONLY THE CALLER'S TWO TRIGGERS. As a called workflow this lane runs on whatever its caller
+    # is called on (Kanon's smoke calls it on pull requests).
+    if: >-
+      (github.event_name == 'issues' && github.event.action == 'opened')
+      || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # A read and at most four writes; it takes seconds.
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # THE MEMBERSHIP GATE COMES FIRST (K-AGENT-45, kanon#46), before any token is minted. On
+      # an opened issue it admits whoever opened it (`LANE_GATE_ISSUE_OPENED`, the exception the
+      # header explains); on a dispatch it judges whoever ran it. A refusal leaves `member=false`,
+      # a notice and a step-summary line, and every later step skips. `kanon-path` first, which
+      # also gives the steps below Kanon's scripts and Node.
+      - uses: $/actions/kanon-path
+      - name: Is the actor a member?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LANE_GATE_ISSUE_OPENED: anyone
+        run: node "$KANON/scripts/lane-gate.mjs"
+
+      # THE APP REGISTER, AND NOTHING ELSE (`K-LAYOUT-6`): the rubric comment opens with the
+      # Lead's header line, whose persona is read from `docs/qa/agent-identities.md`. The default
+      # branch's copy, the commit the event names; nothing in the checkout runs.
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.member == 'true'
+        with:
+          persist-credentials: false
+          sparse-checkout: docs/qa/agent-identities.md
+          sparse-checkout-cone-mode: false
+
+      - name: Mint lead App token
+        id: app-token
+        if: steps.gate.outputs.member == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_APP_PRIVATE_KEY }}
+          # Narrowed to what the backstop uses (`K-AGENT-46`): it reads the issue, sets its
+          # milestone, adds a label (creating it first when the repository lacks it) and
+          # comments, all of which `issues: write` allows.
+          permission-issues: write
+
+      # No `npm ci`: the script uses only Node's built-in modules and `gh`.
+      - name: Assign a bucket, and flag a reviewer follow-up's severity
+        if: steps.gate.outputs.member == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          # The opened event is the automation and applies; a dispatch is a dry run unless ticked.
+          APPLY: ${{ (github.event_name == 'issues' || inputs.apply == 'true') && '1' || '' }}
+        run: node "$KANON/scripts/issue-backstop.mjs"

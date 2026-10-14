@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LEAD_LOGIN } from './helpers/register.js';
-import { PERMS, runGate, MEMBER, STRANGER, CASES } from './helpers/lane-gate.js';
+import { PERMS, runGate, MEMBER, STRANGER, CASES, LANES, read, gateOf } from './helpers/lane-gate.js';
 import { SPAWNS } from './helpers/spawns.js';
 
 // Each case runs a lane's gate step in `bash` against a stub `gh`, so every case takes the spawn
@@ -13,7 +13,10 @@ vi.setConfig({ testTimeout: SPAWNS.timeout });
 // tests/unit/lane-gate.test.ts says what the gate is; the helpers they share are in
 // tests/unit/helpers/lane-gate.ts.
 
-describe.each(CASES)('%s on a %s', (file, trigger) => {
+// The issue backstop's opened issue is the one trigger that admits anyone (below), so it is held
+// to its own cases rather than these.
+const BACKSTOP = 'agent-issue-backstop.yml';
+describe.each(CASES.filter(([file, trigger]) => !(file === BACKSTOP && trigger === 'issue-opened')))('%s on a %s', (file, trigger) => {
   it('refuses a non-member, visibly', () => {
     const r = runGate(file, trigger, STRANGER);
     expect(r.status, r.output).toBe(0);
@@ -54,5 +57,40 @@ describe.each(CASES.filter(([, trigger]) => trigger === 'schedule'))('%s on a sc
     expect(r.status, r.output).toBe(0);
     expect(r.outputs.member).toBe('true');
     expect(r.summary).toContain('github-merge-queue[bot]');
+  });
+});
+
+// kanon#768, Owner decision 2026-10-14: the issue backstop buckets an outsider's issue too. It runs
+// no model, reads no issue text and writes only a bucket and labels, so its gate admits whoever
+// opens an issue, with no permission lookup. No other lane does.
+describe('the issue backstop admits whoever opens an issue (K-AGENT-45\'s exception)', () => {
+  it.each([
+    ['an outsider', STRANGER],
+    ['a member', MEMBER],
+    ['a bot outside the App register', { login: 'some-bot[bot]', association: 'NONE' }],
+  ])('admits %s, without a permission lookup', (_who, actor) => {
+    const r = runGate(BACKSTOP, 'issue-opened', actor, { STUB_PERMISSION_FAILS: '1' });
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('true');
+    expect(r.summary).toContain('Owner decision 2026-10-14');
+  });
+
+  it('still judges a dispatch as a member\'s', () => {
+    expect(runGate(BACKSTOP, 'dispatch', STRANGER).outputs.member).toBe('false');
+  });
+
+  it('is the only lane whose gate declares the exception', () => {
+    const declaring = LANES.filter((file) => {
+      const wf = read(file);
+      const g = gateOf(wf)!;
+      return (wf.jobs[g.jobId]!.steps![g.index]!.env ?? {}).LANE_GATE_ISSUE_OPENED !== undefined;
+    });
+    expect(declaring).toEqual([BACKSTOP]);
+  });
+
+  it.each(LANES.filter((f) => f !== BACKSTOP))('%s refuses an outsider\'s opened issue', (file) => {
+    const r = runGate(file, 'issue-opened', STRANGER);
+    expect(r.status, r.output).toBe(0);
+    expect(r.outputs.member).toBe('false');
   });
 });
