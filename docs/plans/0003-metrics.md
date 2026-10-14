@@ -371,7 +371,7 @@ SZZ stays possible later as a **diagnostic,** never a headline: the dry run (§7
 - the headline indicators are shown together (§0, decision 5), so a padded diff that raises the band also shows in yield and review rounds;
 - the **validity check** below.
 
-**The validity check, every window.** A band is only a control if cost actually rises with it, the same test the reference adopter applies before adopting a size regressor. The report computes the median cost per band and Kendall's τ between band and cost, with its interval. When the interval doesn't sit entirely above zero, the banded view is replaced by the pooled view and a warning, never shown as if it meant something. The issue-side band (`ac_count` and `issue_body_chars`, the same scheme) is printed beside it as a cross-check, once enough brief-driven items have criteria.
+**The validity check, every window.** A band is only a control if cost actually rises with it, the same test the reference adopter applies before adopting a size regressor. The report computes the median cost per band and Kendall's τ between band and cost, with its interval. When the interval doesn't sit entirely above zero, the banded view is replaced by the pooled view and a warning, never shown as if it meant something. The issue-side cross-check is printed beside it, once enough brief-driven items have criteria: Kendall's τ-b between cost and each raw issue-side measure, `ac_count` and `issue_body_chars`, with its interval. Neither measure is banded. **Amended 2026-10-14 (#685), the Owner's decision:** this said "the issue-side band (`ac_count` and `issue_body_chars`, the same scheme)", but gave no issue-side thresholds; the check runs on the raw measures, as built in #683.
 
 **Versioning.** `band_version` is stored on each row as written. A new version is a Kanon release with its own thresholds and a changelog entry. Reports always recompute with **one** version, the newest, and say which. A version is never mixed within a view.
 
@@ -485,15 +485,17 @@ The rule's "never" list is unchanged, and ADR 0007 gets a note pointing to the a
 | **Headline** | cost, yield and escape rate side by side, with first-review approval and human-correction rate beneath | per band, plus pooled with the band mix; the latest 28-day window |
 | **Trend** | the same, over time | 28-day windows, each with its interval |
 | **By Kanon version** | the same, per `kanon_version` | only versions with enough items; a version boundary is marked on the trend |
-| **Configuration A/B** | cost, yield and escape rate per `config_fingerprint` (model, effort, turn cap), per lane | two fingerprints, same lane, overlapping windows |
+| **Configuration A/B** | cost, yield and escape rate per `config_fingerprint` (model, effort, turn cap), per lane | the lane's newest fingerprint against the one before it, over the whole span, with each arm's first and last run |
 | **Breakdowns** | lead time by stage; cost by role and lane; overhead; waste; reliability per lane; reviewer precision; autonomy | per band where it has one |
 | **Kanon's health** | group 9 | public: distributions only |
 
 **How the A/B view decides.** A configuration change is called a win only if:
-- its cost difference, **size-controlled** with the band and the reference adopter's log-linear fit, has an interval entirely below zero (`K-OBS-14`); and
+- its cost difference, **size-controlled** by the reference adopter's log-linear fit alone (log cost on log(1 + `changed_lines`) and the configuration, with no band term), has an interval entirely below zero (`K-OBS-14`); and
 - its quality holds within a margin, with differences taken as new minus old: **yield's lower bound is above −5 percentage points**, and **the 30-day escape rate's upper bound is below +2 percentage points** (decision 11).
 
 A cheaper configuration that might be worse is shown as **"cheaper, quality not shown to hold"**, never as a win.
+
+**The arms need not overlap in time.** Configuration changes are usually sequential, so the view compares the lane's newest `config_fingerprint` (by first run) with the one before it over the whole span, and prints each arm's first and last run so a reader can see how far they overlap. The fit removes diff size only: a trend that isn't size, such as a Kanon release or a change in the work mix, can still be read as the configuration's. **Amended 2026-10-14 (#685), the Owner's decision:** the Cells column said "overlapping windows", and the win rule said "size-controlled with the band and the reference adopter's log-linear fit"; both are read as built in #683.
 
 ### 6.2 Public and per-adopter
 
@@ -700,3 +702,4 @@ This count includes release PRs, which have no row: the metrics leave them out (
 18. **Accepted by the Owner, 2026-10-02.** **Dashboard hosting:** option A, a static public page on GitHub Pages and a per-adopter report in the adopter's own CI, at $0 (§6.4).
 19. **Accepted by the Owner, 2026-10-02.** **Cross-adopter figures,** once a cell has three adopters: items pooled, intervals by a bootstrap over adopters, and the largest adopter's share of the cell printed beside it. With three adopters of very different sizes, an equal-weight mean of adopters would let the smallest swing the figure.
 20. **Accepted by the Owner, 2026-10-02.** **Cost** (§8): about $0.03 a month more on the store, inside plan 0002's $1 ceiling, which stays; at worst about $6 a month more on the reference adopter's Actions bill, measured in M4. This was the gate for M4 and M5, and it is met.
+21. **Owner decision 2026-10-14 (#685).** **Three readings of §6.1 and §3.6 stand as #683 built them.** The configuration A/B compares the lane's newest `config_fingerprint` with the one before it over the whole span, and prints each arm's first and last run; the arms need not have run at the same time. Its size control is the log-linear fit alone, with no band term. The issue-side cross-check is Kendall's τ-b between cost and each raw measure, `ac_count` and `issue_body_chars`, with no issue-side band (§3.6, §6.1).
