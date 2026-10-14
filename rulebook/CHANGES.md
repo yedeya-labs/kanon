@@ -33,6 +33,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-MERGE-4`
 
 - **2026-10-12.** The Owner decided that the project's own pipeline code may be declared as single files as well as directories. [#728](https://github.com/yedeya-labs/kanon/issues/728)
+- **2026-10-14.** The Owner decided that a library the project's own lanes run only at a pinned release is product, not pipeline code, since it reaches those lanes only through the release and the pin bump, which both escalate. [#728](https://github.com/yedeya-labs/kanon/issues/728)
 
 ## `K-MERGE-7`
 

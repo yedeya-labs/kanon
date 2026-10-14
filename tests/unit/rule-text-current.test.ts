@@ -8,7 +8,8 @@ import { SCHEMAS, STORE_FIELDS } from '../../actions/agent-telemetry/schema.mjs'
  * Each passage here is held to what the code does now: the consent question `kanon init` asks
  * (`CONSENT_QUESTION` in `cli/init.mjs`, and `docs/sharing.md`'s three answers), the fields a
  * telemetry row carries (`actions/agent-telemetry/schema.mjs`), and the installer that runs
- * `K-ADOPT-1`'s steps (`kanon init`, `kanon doctor` and the adopt skill).
+ * `K-ADOPT-1`'s steps (`kanon init`, `kanon doctor` and the adopt skill). And a rule the Owner
+ * changed, held to the decision and to the docs that restate it: `K-MERGE-4`'s pinned library (kanon#728).
  */
 const ROOT = process.cwd();
 const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
@@ -107,5 +108,36 @@ describe("the architecture page's consent wording matches docs/sharing.md's thre
     const sharing = read('docs/sharing.md');
     expect(sharing).toMatch(/^\| \*\*Codes only\*\* \| telemetry on/m);
     expect(sharing).toMatch(/^\| \*\*No\*\* \| no telemetry[^\n]*\| nothing/m);
+  });
+});
+
+describe("K-MERGE-4 says a library the project's own lanes run only at a pinned release is product (kanon#728, kanon#897)", () => {
+  const rule = ruleOf('rulebook/04-review-and-merge.md', 'K-MERGE-4');
+  const LIBRARY = /library that the project's own lanes run only at a pinned release is product, not pipeline code/;
+
+  it('says so in the rule, and its Why states the premise: the release and the pin bump both escalate', () => {
+    expect(paragraph(rule, 'Rule')).toMatch(LIBRARY);
+    const why = paragraph(rule, 'Why');
+    expect(why).toMatch(/reaches the lanes only through the release[^.]*and the[^.]*pin/);
+    expect(why).toMatch(/both escalate/);
+    // Each half of "both": the Merger never merges a release, and the bump changes `.github/`.
+    expect(why).toMatch(/never merges a release[^.]*`K-MERGE-3`/);
+    expect(why).toMatch(/bump changes the pins under `\.github\/`/);
+  });
+
+  it('records the change in CHANGES.md under K-MERGE-4, dated 2026-10-14, linking #728', () => {
+    const section = /^## `K-MERGE-4`\n([\s\S]*?)(?=^## )/m.exec(read('rulebook/CHANGES.md'))?.[1] ?? '';
+    expect(section).toMatch(/^- \*\*2026-10-14\.\*\* [^\n]*pinned release[^\n]*\[#728\]\(https:\/\/github\.com\/yedeya-labs\/kanon\/issues\/728\)/m);
+  });
+
+  it("Kanon's escalation file says why it declares no scripts/ as pipeline code, citing the sentence", () => {
+    const pipelineCode = /^## Pipeline code\n([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(read('docs/qa/escalation-paths.md'))?.[1] ?? '';
+    expect(pipelineCode).toMatch(/^None\./m);
+    expect(pipelineCode).toMatch(/run only at a pinned release is product, not pipeline code \(`K-MERGE-4`\)/);
+  });
+
+  it("the lanes page's list of what still escalates says it too", () => {
+    const merger = /^## The Merger\n([\s\S]*?)(?=^## )/m.exec(read('docs/lanes.md'))?.[1] ?? '';
+    expect(merger).toMatch(/run only at a pinned release is product, not pipeline code \(`K-MERGE-4`\)/);
   });
 });
