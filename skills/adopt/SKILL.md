@@ -47,7 +47,7 @@ The person decides every choice, as a question in their agent client ([#428](htt
 
 - On **Not this one**, it is a step only a person can do: they set `GH_TOKEN` to the token they mean in their own terminal, or `unset GH_TOKEN` (and `GITHUB_TOKEN`) to fall back to `gh`'s stored login, and start this session again from that terminal, since a variable set anywhere else never reaches it. Write nothing until they have.
 - Never set `GH_TOKEN` yourself, and never ask for a token's value.
-- Say what the token needs: for a fine-grained token, the permissions `docs/doctor.md` in Kanon's repository lists under "A person's fine-grained token", with the reads such a token can't do at all.
+- Say what the token needs: for a fine-grained token, the permissions `docs/doctor.md` in Kanon's repository lists under "A person's fine-grained token", with the reads such a token can't do on a private repository.
 - Ask once a session. Ask again only when a later document's `.token` names another source or login.
 
 ## Steps only a person can do

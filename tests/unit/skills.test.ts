@@ -840,6 +840,9 @@ describe("the person's token (#630)", () => {
     }
     expect(table.find((r) => r[0]!.includes('`adopt`'))![1]).toMatch(/Secrets: read and write[\s\S]*Administration: read and write[\s\S]*Workflows: read and write/);
     expect(table.find((r) => r[0]!.includes('`upgrade`'))![1]).toMatch(/Actions: read and write/);
+    // Doctor lists the variables (`gh variable list`), and the upgrade deletes them after the merge.
+    expect(table.find((r) => r[0]!.includes('`doctor`'))![1]).toMatch(/Variables: read/);
+    expect(table.find((r) => r[0]!.includes('`upgrade`'))![1]).toMatch(/Variables: read and write[^;|]*`qa-store\.variables`/);
     // The reads it can't do: check runs, so `gh pr checks` and doctor's two annotation checks.
     const cant = section(doctor, /^#### What it can't read$/);
     expect(cant).not.toBeNull();
@@ -849,7 +852,16 @@ describe("the person's token (#630)", () => {
     for (const check of ['unreachable-runs', 'telemetry-runs']) {
       const row = rows(token).find((r) => r[0] === `\`${check}\``)!;
       expect(row[2], check).toMatch(/classic token/);
+      expect(row[2], check).toMatch(/on a private repository/);
     }
+    // telemetry-runs reads every job's annotations of the last finished run, not a failed one's.
+    expect(rows(token).find((r) => r[0] === '`telemetry-runs`')![2]).toMatch(/every job's annotations, whatever the run's conclusion/);
+    // A public repository's check runs answer any token, which is how Kanon's own reaches 0.
+    expect(cant).toMatch(/On a public repository[^\n]*any token[^\n]*on a private one such a token can't read them/);
+    expect(cant).not.toMatch(/when a run failed/);
+    const healthy = token.split(/\n\s*\n/).find((p) => p.startsWith('**A healthy Kanon reaches 0**'))!;
+    expect(healthy).toMatch(/Kanon's repository is public/);
+    expect(healthy).toMatch(/On a private repository with a telemetry caller[^\n]*`telemetry-runs` stays `unchecked`/);
     // docs/init.md lists init's own needs and points to the one place, rather than a second list.
     const init = section(read('docs/init.md'), /^## The token it needs$/);
     expect(init).not.toBeNull();
@@ -862,6 +874,6 @@ describe("the person's token (#630)", () => {
     const src = read('cli/doctor.mjs');
     const reasons = [...src.matchAll(/reason: `the token can't read the jobs or annotations of its run \$\{id\}; ([^`]+)`/g)].map((m) => m[1]!);
     expect(reasons).toHaveLength(2);
-    for (const r of reasons) expect(r).toMatch(/fine-grained personal access token has no Checks permission/);
+    for (const r of reasons) expect(r).toMatch(/fine-grained personal access token has no Checks permission, so on a private repository/);
   });
 });

@@ -36,7 +36,7 @@ Below, `kanon …` means that `npx` line with the rest of the command in place o
 
 - On **Not this one**, it is a step only a person can do: they set `GH_TOKEN` to the token they mean in their own terminal, or `unset GH_TOKEN` (and `GITHUB_TOKEN`) to fall back to `gh`'s stored login, and start this session again from that terminal, since a variable set anywhere else never reaches it. Write nothing until they have.
 - Never set `GH_TOKEN` yourself, and never ask for a token's value.
-- Say what the token needs: for a fine-grained token, the permissions `docs/doctor.md` in Kanon's repository lists under "A person's fine-grained token", with the reads such a token can't do at all. A check it can't run is `.unchecked` ("When a check couldn't run").
+- Say what the token needs: for a fine-grained token, the permissions `docs/doctor.md` in Kanon's repository lists under "A person's fine-grained token", with the reads such a token can't do on a private repository. A check it can't run is `.unchecked` ("When a check couldn't run").
 - Ask once a session: when the adopt or upgrade skill hands over, the person has confirmed it already. Ask again only when a later document's `.token` names another source or login.
 
 ## Steps
@@ -110,7 +110,7 @@ Each check's token is in `docs/doctor.md`, "The token it needs". Never ask for a
 | `ruleset-bypass` | When the reason says the Releaser could not be read, as `app-permissions` above. When it says the Releaser is private, its id is in the owner's App installations: in an organisation, an owner who can edit the ruleset runs doctor once with a fine-grained token that also holds the organisation's Administration permission (read); on a personal account, the person checks the ruleset's bypass list on its page for the Releaser, through pull requests only. Otherwise someone who can edit the ruleset runs doctor once. |
 | `unused-apps` | In an organisation, an owner runs doctor once in their own terminal, with a fine-grained token that holds the organisation's Administration permission (read), and nothing more. Don't widen `gh`'s own login for it: `admin:org` is organisation admin (write), and it stays on that login after the run; if the person uses it anyway, they remove it straight after, `gh auth refresh -r admin:org`. On a personal account, the person looks on https://github.com/settings/installations for the Apps the reason names. |
 | `secrets` | Someone with admin access runs doctor once, or a fine-grained token with Secrets: read. |
-| `unreachable-runs`, `telemetry-runs` | A run's annotations are check runs, which a fine-grained personal access token can't read whatever it holds: GitHub gives such a token no Checks permission. Someone runs doctor once in their own terminal with a classic token (its `repo` scope), or reads the failed run's annotations on its page, `gh run view <id> -R <owner>/<repo> --web`. |
+| `unreachable-runs`, `telemetry-runs` | A run's annotations are check runs, which on a private repository a fine-grained personal access token can't read whatever it holds: GitHub gives such a token no Checks permission. `telemetry-runs` reads them on every finished run, so with such a token it stays `unchecked`. Someone runs doctor once in their own terminal with a classic token (its `repo` scope), or reads the run's annotations on its page, `gh run view <id> -R <owner>/<repo> --web`. |
 | any other | Read them the reason. |
 
 ## Waiving a finding
