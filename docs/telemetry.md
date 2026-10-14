@@ -514,7 +514,7 @@ A signal is **new** when its signature is not in the `--known` list. The signatu
 
 ```sh
 node scripts/telemetry/kanon-findings.mjs --rows <run and finding rows> [--known <signatures.json>] [--tag test] \
-  --trees <trees.json> --register <register.json> --json
+  --trees <trees.json> --register <register.json> [--issues <open-issues.json>] --json
 ```
 
 - **One issue per signature.** It runs `detect` over the run rows, unchanged, and groups the findings by the signals' own `signature()` (§2.4). A finding with a signal's signature goes on that signal's issue, below its counts, so the job updates the one issue and files no second. Every later finding with the signature is one more entry on it. A finding with no signal gets an issue of its own, with a title built from its codes. Each issue is labelled `kanon-bug` and `finding`, plus the signal's class label (`platform` or `adopter`) when it has one.
@@ -525,6 +525,12 @@ node scripts/telemetry/kanon-findings.mjs --rows <run and finding rows> [--known
   - each `kanon_paths` entry against the file list of its `kanon_version`.
 
   A finding that fails is still filed privately, marked `gate: failed` with the field and rule, and labelled `gate-failed`. Its text, and any path outside the tree, are left out of the issue.
+- **What the open issues already say** ([#611](https://github.com/yedeya-labs/kanon/issues/611)). `--issues` is the open issues, as `gh issue list --label kanon-bug --state open --limit 1000 --json title,body` prints them, each found by its `kanon:bug-signature` marker. `gh` returns 30 issues without `--limit`, and stops at the limit without saying so, so the job fails when it gets exactly 1000: an issue left out of `--issues` loses its earlier counts and its expired-findings note. The job replaces a body it updates, so a body is built to keep what this run's rows can't give again:
+  - a finding whose signal isn't in this run's rows, because its run rows have expired or this run read none, keeps the counts its issue last had, under a line saying they are from an earlier run, and keeps the issue's title and class label;
+  - an issue that held findings, none of which is in the store any more (expired after 13 months, 30 days at `test` or `smoke`, or erased), says so in place of the entries, on that run and every later one. Their evidence is no longer shown.
+
+  Without `--issues`, a finding with no signal in the run rows gets a finding-only body, and an issue whose findings expired is left to the signal's own body.
+- **Errors.** A refusal for a key prints `refused: the output would hold an adopter key, so nothing is printed`, exit 2. Any other error while planning prints `could not plan the issues (<its name>)`, exit 1: its name only, since its message could quote a row.
 - **The tree.** `--trees` maps each release to its file list, as `git ls-tree -r --name-only v<version>` prints it from a Kanon clone. A release with no list, `dev` included, fails any finding of it that carries a path or a text.
 - **What leaves.** Signals and rises come out exactly as `kanon-bugs.mjs` returns them, so a public issue never holds a finding. The evidence and suggested fix appear only in the private issue, and only for a finding that passed the gate. The whole output is checked for every key in the rows and the register, as a value and as a word, and refused whole if one appears. `tests/unit/kanon-findings.test.ts` proves each check.
 

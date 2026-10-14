@@ -1,12 +1,12 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { nameHashesVariable } from '../../infra/telemetry/render.mjs';
 import { detect, parseRows, signature } from '../../scripts/telemetry/kanon-bugs.mjs';
 import {
-  BODY_BUDGET, LABELS, assertNoKeyIn, holdsKey, main, plan, readFinding, registerContext,
+  BODY_BUDGET, EARLIER, EXPIRED_HEAD, KeyRefusal, LABELS, assertNoKeyIn, holdsKey, main, plan, readFinding, registerContext, summary,
 } from '../../scripts/telemetry/kanon-findings.mjs';
 
 /**
@@ -112,6 +112,92 @@ describe("F5's check: one private issue per signature, beside the signal (plan 0
     const r = plan([a, b] as never, CTX);
     expect(r.findings.issues).toHaveLength(2);
     expect(r.findings.issues.map((i) => i.issue.title).sort()).toEqual(['Kanon finding: guard, K-MERGE-10, on 0.37.0', 'Kanon finding: rule, K-OBS-16, on 0.37.0']);
+  });
+
+  it("a finding whose signal isn't in this run's rows keeps the counts its issue last had, said to be from an earlier run (#611)", () => {
+    const before = only(plan([failedRun('a1b2c3d4'), failedRun('e5f6a7b8'), finding('a1b2c3d4')] as never, CTX), SIGNAL);
+    const open = [{ title: before.issue.title, body: before.issue.body }];
+    // The run rows have expired, or this run read none: the finding alone.
+    const r = plan([finding('a1b2c3d4'), finding('e5f6a7b8', { recorded_at: '2026-10-08T09:00:00Z' })] as never, { ...CTX, issues: open });
+    expect(r.signals).toEqual([]);
+    const i = only(r, SIGNAL);
+    expect(i).toMatchObject({ signal: false, earlier_counts: true, expired: false, findings: 2, adopters: 2 });
+    expect(i.issue.title).toBe(before.issue.title);
+    expect(i.issue.body.startsWith(`${EARLIER}\n\nDetected in adopters' telemetry`)).toBe(true);
+    expect(i.issue.body).toContain('| Runs | 2 |');
+    expect(i.issue.body).not.toContain('with no matching signal in the run rows');
+    expect(i.issue.body).toContain('## Upstream findings: 2, from 2 adopter(s)');
+    expect(i.issue.body.match(/<!-- kanon:bug-signature=/g)).toHaveLength(1);
+    expect(i.issue.body.endsWith(`<!-- kanon:bug-signature=${SIGNAL} -->`)).toBe(true);
+    // A second run without the signal reads its own body back: the counts stay, the note once.
+    const again = only(plan([finding('a1b2c3d4')] as never, { ...CTX, issues: [{ title: i.issue.title, body: i.issue.body }] }), SIGNAL);
+    expect(again.issue.body.split(EARLIER)).toHaveLength(2);
+    expect(again.issue.body).toContain('| Runs | 2 |');
+    // When the signal is back, its counts are this run's, and the note goes.
+    const back = only(plan([failedRun('a1b2c3d4'), finding('a1b2c3d4')] as never, { ...CTX, issues: [{ title: i.issue.title, body: i.issue.body }] }), SIGNAL);
+    expect(back).toMatchObject({ signal: true, earlier_counts: false });
+    expect(back.issue.body).not.toContain(EARLIER);
+    expect(back.issue.body).toContain('| Runs | 1 |');
+  });
+
+  it("keeps a plain signal issue's counts and class label when its first finding arrives after its runs expired (#611)", () => {
+    const s = plan([failedRun('a1b2c3d4')] as never, CTX).signals[0]!;
+    expect(s.classification).toBe('adopter');
+    const i = only(plan([finding('a1b2c3d4')] as never, { ...CTX, issues: [s.issue] }), SIGNAL);
+    expect(i).toMatchObject({ signal: false, earlier_counts: true });
+    expect(i.issue.title).toBe(s.issue.title);
+    expect(i.issue.body).toContain('| Runs | 1 |');
+    expect(i.labels).toEqual(['kanon-bug', 'adopter', 'finding']);
+    // The same body as GitHub returns it once edited on its page, with CRLF line ends.
+    const crlf = only(plan([finding('a1b2c3d4')] as never, { ...CTX, issues: [{ ...s.issue, body: s.issue.body.replaceAll('\n', '\r\n') }] }), SIGNAL);
+    expect(crlf.issue.body).toBe(i.issue.body);
+  });
+
+  it("a finding-only issue had no counts to keep, so it stays a finding-only body under its own title (#611)", () => {
+    const sig = signature({ lane: 'review', failed_stage: 'agent', reason: 'did_not_finish', kanon_version: '0.36.0' });
+    const first = only(plan([finding('a1b2c3d4', { kanon_version: '0.36.0' })] as never, CTX), sig);
+    const same = only(plan([finding('e5f6a7b8', { kanon_version: '0.36.0' })] as never, { ...CTX, issues: [first.issue] }), sig);
+    expect(same).toMatchObject({ signal: false, earlier_counts: false });
+    expect(same.issue.title).toBe(first.issue.title);
+    expect(same.issue.body).toContain('with no matching signal in the run rows');
+    expect(same.issue.body).not.toContain(EARLIER);
+  });
+
+  it('an issue whose findings have expired says so, and drops their entries and text (#611)', () => {
+    const before = only(plan([failedRun('a1b2c3d4'), withEvidence('a1b2c3d4', CLEAN)] as never, CTX), SIGNAL);
+    expect(before.issue.body).toContain('Expected: the review lane finishes');
+    const open = [{ title: before.issue.title, body: before.issue.body }];
+    // The signal is still in the run rows; its finding rows are gone.
+    const r = plan([failedRun('a1b2c3d4'), failedRun('a1b2c3d4')] as never, { ...CTX, issues: open });
+    const i = only(r, SIGNAL);
+    expect(i).toMatchObject({ signal: true, expired: true, findings: 0, adopters: 0, gate_failed: 0 });
+    expect(i.issue.title).toBe(r.signals[0]!.issue.title);
+    expect(i.issue.body).toContain('| Runs | 2 |');
+    expect(i.issue.body).toContain(`## Upstream findings: ${EXPIRED_HEAD}`);
+    expect(i.issue.body).not.toContain('### Finding');
+    expect(i.issue.body).not.toContain('Expected: the review lane finishes');
+    expect(i.issue.body.endsWith(`<!-- kanon:bug-signature=${SIGNAL} -->`)).toBe(true);
+    expect(i.labels).toEqual(['kanon-bug', 'adopter', 'finding']);
+    expect(r.findings.total).toBe(0);
+    expect(summary(r)).toContain('1 of them with every finding expired');
+    // It keeps saying so on every later run, with or without the signal.
+    const later = only(plan([] as never, { ...CTX, issues: [{ title: i.issue.title, body: i.issue.body }] }), SIGNAL);
+    expect(later).toMatchObject({ signal: false, earlier_counts: true, expired: true });
+    expect(later.issue.title).toBe(before.issue.title);
+    expect(later.issue.body).toContain(`## Upstream findings: ${EXPIRED_HEAD}`);
+    expect(later.issue.body).toContain('| Runs | 2 |');
+  });
+
+  it('an open issue that never held a finding, or names no signature, adds no finding issue (#611)', () => {
+    const s = plan([failedRun('a1b2c3d4')] as never, CTX).signals[0]!;
+    const r = plan([failedRun('a1b2c3d4')] as never, { ...CTX, issues: [s.issue, { title: 'Something else', body: 'No marker here.' }] });
+    expect(r.findings.issues).toEqual([]);
+  });
+
+  it("an open issue's body is checked for keys like the rest of the output (#611)", () => {
+    const before = only(plan([failedRun('a1b2c3d4'), finding('a1b2c3d4')] as never, CTX), SIGNAL);
+    const edited = before.issue.body.replace('| Runs |', '| Runs (kfixture3) |');
+    expect(() => plan([finding('a1b2c3d4')] as never, { ...CTX, issues: [{ title: before.issue.title, body: edited }] })).toThrow(KeyRefusal);
   });
 
   it('reads only finding rows of the asked tag, with a version and a key, and counts the rest', () => {
@@ -286,5 +372,49 @@ describe('the CLI', () => {
     writeFileSync(rows, JSON.stringify({ ...finding('guard', { subject: 'guard', fix_category: 'guard' }), lane: undefined }));
     const r = main(['--rows', rows, '--tag', 'test']);
     expect(r).toEqual({ code: 2, out: 'refused: the output would hold an adopter key, so nothing is printed' });
+  });
+
+  it("reads the open issues from --issues, as `gh issue list --json title,body` prints them, and refuses another shape (#611)", () => {
+    const before = only(plan(ROWS as never, CTX), SIGNAL);
+    const issues = join(dir, 'issues.json');
+    writeFileSync(issues, JSON.stringify([{ title: before.issue.title, body: before.issue.body, number: 7 }]));
+    const findingsOnly = join(dir, 'findings-only.jsonl');
+    writeFileSync(findingsOnly, ROWS.filter((x) => x.row_kind === 'finding').map((x) => JSON.stringify(x)).join('\n'));
+    const r = JSON.parse(main(['--rows', findingsOnly, ...args.slice(2), '--issues', issues, '--json']).out);
+    expect(r.findings.issues.find((i: { signature: string }) => i.signature === SIGNAL)).toMatchObject({ earlier_counts: true });
+    for (const bad of ['{}', '[{"title":"t"}]', '[{"title":1,"body":"b"}]']) {
+      writeFileSync(issues, bad);
+      expect(main([...args, '--issues', issues])).toEqual({ code: 2, out: '--issues is not a JSON array of issues, each with a title and a body' });
+    }
+  });
+});
+
+describe('an error is reported as what it is (#611)', () => {
+  it('assertNoKeyIn refuses with a KeyRefusal, a class of its own', () => {
+    const keys = new Set(['kfixture3']);
+    // A key not in lowercase, which only the whole-value check finds, as the aggregate's assertNoKey does.
+    for (const [v, ks] of [[{ a: ['kfixture3'] }, keys], [{ a: 'saw kfixture3 stop' }, keys], [{ a: { b: 'K_Fixture3' } }, new Set(['K_Fixture3'])]] as const) {
+      let caught: unknown;
+      try { assertNoKeyIn(v, ks); } catch (e) { caught = e; }
+      expect(caught).toBeInstanceOf(KeyRefusal);
+      expect((caught as Error).name).toBe('KeyRefusal');
+    }
+  });
+
+  it("an exception that isn't a key refusal is not reported as one, and prints its name, never its message", async () => {
+    vi.resetModules();
+    vi.doMock('../../scripts/telemetry/kanon-bugs.mjs', async (importOriginal) => ({
+      ...(await importOriginal<object>()),
+      detect: () => { throw new TypeError('cannot read the row {"pk":"a1b2c3d4#review"}'); },
+    }));
+    try {
+      const fresh = await import('../../scripts/telemetry/kanon-findings.mjs');
+      const r = fresh.main(['--rows', join(DIR, 'rows.jsonl'), '--tag', 'test']);
+      expect(r).toEqual({ code: 1, out: 'could not plan the issues (TypeError)' });
+      expect(r.out).not.toContain('adopter key');
+    } finally {
+      vi.doUnmock('../../scripts/telemetry/kanon-bugs.mjs');
+      vi.resetModules();
+    }
   });
 });
