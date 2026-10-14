@@ -30,7 +30,10 @@
 // ONLY WITH CONSENT (ADR 0007). The gate job reads whether the repository sends telemetry: a
 // workflow on its default branch that calls Kanon's collector, whose caller is the consent (plan
 // 0008 §3.3). Without one, no token is ever minted for the store, so a repository that didn't
-// opt in never names itself to it.
+// opt in never names itself to it. A caller that names a store of its own (`url:`, `audience:` or
+// `writer-role:`) is consent to that store, not to Kanon's hosted one: until the two variables
+// name it, the gate refuses the read, naming them, and never sends the token to the hosted store
+// (`K-OBS-18`; the Owner's decision on #842; `scripts/lib/telemetry-consent.mjs`).
 //
 // THE STATUS IS ALWAYS SAID. The agent's job adds the files to the QA store's export, and writes
 // the read's status into the export's manifest as `telemetry`: `ran` (the read worked, and the two
@@ -65,7 +68,8 @@ import { join } from 'node:path';
 import { RETENTION_MONTHS, addMonths } from '../infra/telemetry/function/index.mjs';
 import { LANES, RESERVED_PARTITION } from '../infra/telemetry/function/schema.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
-import { readSnapshot, resolveCaller } from './lib/lane-caller.mjs';
+import { readSnapshot } from './lib/lane-caller.mjs';
+import { COLLECTOR_LANE, collectorConsent, hostedRefusal } from './lib/telemetry-consent.mjs';
 import { HOSTED_INGEST_URL, TokenError, codeOf, runnerMask, storeOf, storeRequest } from './lib/telemetry-token.mjs';
 import { metricsReport, renderReport } from './metrics/report.mjs';
 import { metricsViews, renderViews } from './metrics/views.mjs';
@@ -95,7 +99,7 @@ export const STARTED_FILE = 'kanon-overseer-telemetry-started';
 /** The variables that name a self-hosted store, together or not at all (plan 0008 §2.1). */
 export const TOKEN_VARIABLES = /** @type {const} */ ({ url: 'KANON_TELEMETRY_TOKEN_URL', audience: 'KANON_TELEMETRY_AUDIENCE' });
 /** Kanon's collector, whose caller on the default branch is the repository's consent (plan 0008 §3.3). */
-export const COLLECTOR_LANE = 'telemetry-collect';
+export { COLLECTOR_LANE };
 
 /**
  * When the report must have read every partition: `REPORT_BY_MS` after the job's start, as the read
@@ -396,8 +400,11 @@ export async function reportStep(env, io = {}) {
  * The gate's question (plan 0008 §3.3; ADR 0007): does this repository send telemetry, so that
  * the lane may ask the store for its rows? `true` when a workflow on its default branch calls
  * Kanon's collector and there is a store to read; `false` when none does, or this release
- * doesn't publish the hosted store's URL; `unknown` when the default branch can't be read or the
- * store's two variables are wrong, which the lane reports as a `failed` read.
+ * doesn't publish the hosted store's URL; `unknown` when the default branch can't be read, the
+ * store's two variables are wrong, or the collector's caller names a store of its own while the
+ * two variables are unset (`K-OBS-18`; the Owner's decision on #842): that repository never opted
+ * in to the hosted store, so it is refused, naming the variables to set, never sent there. The
+ * lane reports `unknown` as a `failed` read.
  * @param {Record<string, string | undefined>} env
  * @param {{ json: (args: string[]) => any, hostedUrl?: string }} io
  * @returns {{ reader: 'true' | 'false' | 'unknown', line: string }}
@@ -415,9 +422,12 @@ export function consentOf(env, { json, hostedUrl = HOSTED_INGEST_URL }) {
   } catch (e) {
     return { reader: 'unknown', line: `The telemetry read can't run: whether this repository sends telemetry could not be read (${String(e instanceof Error ? e.message : e).split('\n')[0]?.slice(0, 200)}).` };
   }
-  const caller = resolveCaller(COLLECTOR_LANE, snapshot);
-  if (caller.how === 'fallback') return { reader: 'false', line: "The telemetry read is not configured: no workflow on the default branch calls Kanon's telemetry collector, so this repository doesn't send telemetry, and no token is minted for the store." };
-  return { reader: 'true', line: `This repository sends telemetry (${caller.file} calls Kanon's collector), so the lane reads its own rows.` };
+  const consent = collectorConsent(snapshot);
+  if (!consent.calls) return { reader: 'false', line: "The telemetry read is not configured: no workflow on the default branch calls Kanon's telemetry collector, so this repository doesn't send telemetry, and no token is minted for the store." };
+  // A self-hosted collector is no consent to the hosted store: refused, never redirected there.
+  const refused = store.hosted ? hostedRefusal(consent, TOKEN_VARIABLES) : null;
+  if (refused) return { reader: 'unknown', line: `The telemetry read can't run: ${refused}.` };
+  return { reader: 'true', line: `This repository sends telemetry (${consent.caller} calls Kanon's collector), so the lane reads its own rows.` };
 }
 
 /**

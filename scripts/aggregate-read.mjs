@@ -25,11 +25,8 @@
 // LOGS HOLD COUNTS, STATUSES AND THE STORE'S CODES, NEVER A TOKEN OR A FIGURE. A self-hosted
 // store's URL is masked before the first request; the hosted one is in the public tree.
 //
-//   node "$KANON/scripts/aggregate-read.mjs" check   the lane's gate: is there a store to call?
-//   env: KANON_AGGREGATE_TOKEN_URL, KANON_TELEMETRY_AUDIENCE (a self-hosted store's `AggregateTokenUrl`
-//        output and `Audience` parameter, together, or neither for Kanon's hosted store)
-//   prints: `true`, or `false` while the hosted URL is not published, and nothing else on stdout;
-//        exits 1 naming a variable given alone or of the wrong shape, on stderr
+//   The lane's gate asks `scripts/explore-telemetry-check.mjs` first whether there is a store
+//   to call, and whether the repository consented to the hosted one.
 //
 //   node "$KANON/scripts/aggregate-read.mjs" token   the Explorer's `aggregate` job
 //   env: the two above, OUT (a directory, outside the workspace), ACTIONS_ID_TOKEN_REQUEST_URL and
@@ -373,21 +370,6 @@ export const summaryLine = (a) => {
 /* c8 ignore start */
 if (isCliEntry(import.meta.url)) {
   const env = process.env;
-  if (process.argv[2] === 'check') {
-    // THE GATE'S QUESTION, before any token is minted: a store to call, or not yet.
-    const store = aggregateStore(env);
-    if (store.ok) process.stdout.write('true\n');
-    else if (store.unpublished) {
-      process.stderr.write(`explore-telemetry: ${store.why}\n`);
-      process.stdout.write('false\n');
-    } else {
-      // On stderr, never stdout: the gate runs this inside `$(…)`, which would swallow the
-      // workflow command, and the step would fail without naming the variable.
-      process.stderr.write(`::error title=explore-telemetry::${store.why}.\n`);
-      process.exit(1);
-    }
-    process.exit(0);
-  }
   const out = env.OUT ?? '';
   if (!out) {
     console.log('::error title=aggregate::OUT must name the directory the aggregate is written to');

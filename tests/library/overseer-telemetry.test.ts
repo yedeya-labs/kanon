@@ -385,6 +385,25 @@ describe('the gate: does this repository send telemetry?', () => {
     expect(consentOf(ENV, { json: snapshot({ 'send-rows.yml': caller(), 'overseer.yml': lane }), hostedUrl: HOSTED_URL }).reader).toBe('true');
   });
 
+  // #852's review (`K-OBS-18`; the Owner's decision on #842): a collector that names a store of its
+  // own is no consent to the hosted store, so the lane refuses, naming the variables, and never
+  // mints a token for the hosted audience on its behalf.
+  it('reads unknown, never true, when the collector\'s caller names a store of its own and the two variables are unset', () => {
+    const own = (w: string) => caller().replace('@v0.41.0\n', `@v0.41.0\n    with:\n${w}`);
+    for (const w of ['      url: https://x\n      audience: acme\n', '      url: ${{ vars.KANON_TELEMETRY_URL }}\n      writer-role: ${{ vars.KANON_TELEMETRY_WRITER_ROLE }}\n']) {
+      expect(consentOf(ENV, { json: snapshot({ 'telemetry.yml': own(w), 'overseer.yml': lane }), hostedUrl: HOSTED_URL }), w)
+        .toEqual({ reader: 'unknown', line: expect.stringMatching(/^The telemetry read can't run: telemetry\.yml sends this repository's rows to a store of its own .* set the repository variables KANON_TELEMETRY_TOKEN_URL and KANON_TELEMETRY_AUDIENCE/) });
+    }
+    // Nested in a local reusable workflow, the call's `with:` is still read.
+    const outer = 'name: T\non:\n  schedule:\n    - cron: "1 * * * *"\njobs:\n  t:\n    uses: ./.github/workflows/inner.yml\n';
+    const inner = 'name: Inner\non: workflow_call\njobs:\n  collect:\n    uses: yedeya-labs/kanon/.github/workflows/telemetry-collect.yml@v0.41.0\n    with:\n      audience: acme\n';
+    expect(consentOf(ENV, { json: snapshot({ 't.yml': outer, 'inner.yml': inner }), hostedUrl: HOSTED_URL }).reader).toBe('unknown');
+    // Its own two variables set, the same repository reads its own store.
+    expect(consentOf({ ...ENV, KANON_TELEMETRY_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE }, { json: snapshot({ 'telemetry.yml': own('      url: https://x\n      audience: acme\n') }), hostedUrl: HOSTED_URL }).reader).toBe('true');
+    // The two dispatch inputs name no store.
+    expect(consentOf(ENV, { json: snapshot({ 'telemetry.yml': own('      erase: no\n      register: no\n') }), hostedUrl: HOSTED_URL }).reader).toBe('true');
+  });
+
   it('reads false when none does: the repository didn\'t opt in', () => {
     const r = consentOf(ENV, { json: snapshot({ 'overseer.yml': lane }), hostedUrl: HOSTED_URL });
     expect(r).toEqual({ reader: 'false', line: expect.stringMatching(/no workflow on the default branch calls Kanon's telemetry collector/) });

@@ -88,8 +88,8 @@ describe('the aggregate job: the only one with id-token (K-OBS-17\'s shape)', ()
     const gate = wf.jobs.gate!.steps as Step[];
     const configured = gate.find((x) => x.id === 'configured')!;
     expect(configured.if).toBe("steps.gate.outputs.member == 'true'");
-    expect(configured.env).toEqual({ KANON_AGGREGATE_TOKEN_URL: '${{ vars.KANON_AGGREGATE_TOKEN_URL }}', KANON_TELEMETRY_AUDIENCE: '${{ vars.KANON_TELEMETRY_AUDIENCE }}' });
-    expect(configured.run).toContain('node "$KANON/scripts/aggregate-read.mjs" check');
+    expect(configured.env).toEqual({ GH_TOKEN: '${{ github.token }}', KANON_AGGREGATE_TOKEN_URL: '${{ vars.KANON_AGGREGATE_TOKEN_URL }}', KANON_TELEMETRY_AUDIENCE: '${{ vars.KANON_TELEMETRY_AUDIENCE }}' });
+    expect(configured.run).toContain('configured="$(node "$KANON/scripts/explore-telemetry-check.mjs")"');
     expect(wf.jobs.gate!.permissions).toEqual({ contents: 'read' });
     // And when it doesn't run, a job says why, green.
     expect(String(wf.jobs.unconfigured!.if).replace(/\s+/g, ' ')).toContain("needs.gate.outputs.configured != 'true'");

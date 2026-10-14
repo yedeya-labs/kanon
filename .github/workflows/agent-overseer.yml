@@ -53,7 +53,9 @@
 # writes the two files itself keeps them whenever the read didn't run. A repository reading a
 # self-hosted store sets two repository variables together, KANON_TELEMETRY_TOKEN_URL (its
 # `IngestTokenUrl` output) and KANON_TELEMETRY_AUDIENCE, which the gate checks before any token is
-# minted.
+# minted. A repository whose collector's caller names a store of its own (`url:`, `audience:` or
+# `writer-role:`) must set them: until it does, the gate refuses it, by name, and never sends it to
+# Kanon's hosted store, to which it never consented (`K-OBS-18`; the Owner's decision on #842).
 #
 # ── WHO FILES WHAT (decision 12) ─────────────────────────────────────────────────────────
 #
@@ -226,8 +228,10 @@ jobs:
       # caller on the default branch is the repository's consent, so `reader` is `true` only when
       # a workflow there calls Kanon's collector and there is a store to read: Kanon's hosted one,
       # once this release publishes its URL, or the self-hosted one the two variables name
-      # together. `false` is the read `not configured`; `unknown` (the branch unreadable, or one
-      # variable without the other) is a `failed` read. No token is minted here.
+      # together. `false` is the read `not configured`; `unknown` (the branch unreadable, one
+      # variable without the other, or a collector's caller that names a store of its own while the
+      # two are unset, which is never sent to the hosted store) is a `failed` read. No token is
+      # minted here.
       - name: Does this repository send telemetry?
         id: reader
         if: steps.runtime.outputs.due == 'true'

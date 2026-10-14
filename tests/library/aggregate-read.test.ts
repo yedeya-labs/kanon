@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { AggregateError, MIN_ADOPTERS, aggregateStore, checkAggregate, isEmpty, readAggregate, readAggregateToken, regionOfAggregateUrl, summaryLine, tokenRefusal } from '../../scripts/aggregate-read.mjs';
 import { masksOf } from '../../scripts/aggregate-mask.mjs';
 import { HOSTED_AGGREGATE_URL } from '../../scripts/lib/telemetry-token.mjs';
 import { HOSTED_URL, RUNNER_ENV, SELF_AUDIENCE, SELF_URL, TOKEN, tokenNet } from '../unit/helpers/token-net.js';
-import { SPAWNS } from '../unit/helpers/spawns.js';
 
 /**
  * Plan 0004 step 14, plan 0002 §6.1: the telemetry Explorer's read of the aggregate. One signed
@@ -139,7 +136,6 @@ describe('masksOf (kanon#433): the two variables and the account id inside the r
 
 // ── The token way (plan 0008 §3.6, step J5) ───────────────────────────────────────────────────────
 describe('readAggregateToken: one GET on the token URL, with a fresh OIDC token', () => {
-  const SCRIPT = fileURLToPath(new URL('../../scripts/aggregate-read.mjs', import.meta.url));
   const SELF_ENV = { ...RUNNER_ENV, KANON_AGGREGATE_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE };
 
   it('asks the runner for the store\'s audience, sends the token as a bearer to the hosted URL, and checks the answer', async () => {
@@ -209,28 +205,5 @@ describe('readAggregateToken: one GET on the token URL, with a fresh OIDC token'
     // No token from the runner: the job lacks `id-token: write`.
     await expect(readAggregateToken({ env: { KANON_AGGREGATE_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE }, fetchImpl: tokenNet(() => ({ status: 200 })).fetchImpl, mask: () => {}, hostedUrl: HOSTED_URL }))
       .rejects.toThrow(/holds no OIDC token/);
-  });
-
-  it('check: answers the gate with true, false while unpublished, or a red naming the variable', SPAWNS, () => {
-    const run = (env: Record<string, string>) => spawnSync(process.execPath, [SCRIPT, 'check'], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } });
-    const self = run({ KANON_AGGREGATE_TOKEN_URL: SELF_URL, KANON_TELEMETRY_AUDIENCE: SELF_AUDIENCE });
-    expect([self.status, self.stdout]).toEqual([0, 'true\n']);
-    const alone = run({ KANON_AGGREGATE_TOKEN_URL: SELF_URL });
-    expect(alone.status).toBe(1);
-    // On stderr: the gate runs `check` inside `$(…)`, which would swallow a workflow command on
-    // stdout, and the step would fail without naming the variable (#852's review).
-    expect(alone.stdout).toBe('');
-    expect(alone.stderr).toMatch(/^::error title=explore-telemetry::`the KANON_AGGREGATE_TOKEN_URL variable` and `the KANON_TELEMETRY_AUDIENCE variable` name a self-hosted store together/);
-    // And through the gate step's own assignment, under `bash -e`: the step fails, and the name reaches the log.
-    const step = spawnSync('bash', ['-e', '-c', `configured="$(${JSON.stringify(process.execPath)} ${JSON.stringify(SCRIPT)} check)"; echo reached`], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', KANON_AGGREGATE_TOKEN_URL: SELF_URL } });
-    expect(step.status).toBe(1);
-    expect(step.stdout).not.toContain('reached');
-    expect(step.stderr).toMatch(/::error title=explore-telemetry::.*name a self-hosted store together/);
-    const hosted = run({});
-    if (HOSTED_AGGREGATE_URL) expect([hosted.status, hosted.stdout]).toEqual([0, 'true\n']);
-    else {
-      expect([hosted.status, hosted.stdout]).toEqual([0, 'false\n']);
-      expect(hosted.stderr).toContain('not published');
-    }
   });
 });
