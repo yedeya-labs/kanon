@@ -8,7 +8,7 @@ import {
   readDigestAudience,
   readDigestAudienceFrom,
 } from '../../scripts/lib/digest-audience.mjs';
-import { parseReferenceDeploy } from '../../scripts/lib/reference-deploy.mjs';
+import { parseReferenceDeploy } from '../../scripts/lib/deploy-declaration.mjs';
 
 /**
  * kanon#218, `K-LAYOUT-10`: the weekly digest's audience, declared by the adopter under

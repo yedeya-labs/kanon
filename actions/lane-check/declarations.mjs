@@ -1,7 +1,7 @@
 // lane-check's reader for the declaration files the guards, the Merger and the reconciler read
 // (kanon#153): `docs/qa/escalation-paths.md` (`K-LAYOUT-8`), `docs/qa/exemptions.md`
-// (`K-LAYOUT-15`), and the reference environment's deploy in the adoption record,
-// `docs/qa/adoption.md` (`K-LAYOUT-10`, plan 0004 P6), with the weekly digest's audience beside
+// (`K-LAYOUT-15`), and the deploy declaration in the adoption record, `docs/qa/adoption.md`'s
+// `## Deploy` (`K-LAYOUT-10`, plan 0004 P6, plan 0010 D2), with the weekly digest's audience beside
 // it (kanon#218) and whether the production promotion is human-gated (`K-MERGE-4`, kanon#158),
 // whether the Overseer is installed, held to the callers (plan 0004 step 13), and where its
 // upstream findings go (kanon#423), and that a record sending them has the telemetry collector's
@@ -35,7 +35,7 @@ import { readEscalationFile } from '../../scripts/lib/escalation-paths.mjs';
 import { readExemptions } from '../../scripts/lib/exemptions.mjs';
 import { readDigestAudience } from '../../scripts/lib/digest-audience.mjs';
 import { readProductionPromotion } from '../../scripts/lib/production-promotion.mjs';
-import { readReferenceDeploy } from '../../scripts/lib/reference-deploy.mjs';
+import { readDeployDeclaration } from '../../scripts/lib/deploy-declaration.mjs';
 import { codeAreasDefaults, readCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { checkOverseerInstall } from '../../scripts/lib/overseer-install.mjs';
 import { checkUpstreamSent, readUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
@@ -60,7 +60,7 @@ export const declarationFindings = (overseer, register, root, telemetry = false)
     // The record's declarations, so a malformed one of any fails by name. The production
     // promotion's default (not declared) is named by the Merger, which acts on it.
     ['docs/qa/adoption.md', (root) => {
-      readReferenceDeploy(root);
+      readDeployDeclaration(root);
       readDigestAudience(root);
       readProductionPromotion(root);
       readUpstreamFindings(root);
