@@ -255,3 +255,27 @@ describe('intake-first.mjs, against a repository', SPAWNS, () => {
     expect(run(dir).status).toBe(2);
   });
 });
+
+describe("docs/release.md's Intake first, the steps the Owner follows on the check's exit", () => {
+  /** The section's numbered steps, each with the paragraphs indented under it. */
+  function steps(): string[] {
+    const doc = readFileSync(join(ROOT, 'docs/release.md'), 'utf8');
+    const section = doc.split(/^## Intake first$/m)[1]?.split(/^## /m)[0] ?? '';
+    return section.split(/^(?=\d+\. )/m).slice(1);
+  }
+
+  it('has its three steps', () => {
+    expect(steps()).toHaveLength(3);
+  });
+
+  // An exit of 3 means deploying intake would refuse an older pin's rows (kanon#828), so no step
+  // may tell the Owner to deploy without deferring to the exit that decides it (kanon#866).
+  it.each(steps().map((s) => [s.slice(0, s.indexOf('**', 4) + 2), s]))(
+    'step %s tells the Owner to deploy only as the check\'s exit says',
+    (_, step) => {
+      if (!/\bdeploy\b/i.test(step)) return;
+      expect(step).toMatch(/\bexit\b/);
+      expect(step).not.toMatch(/run the check on [^.]*\band deploy\b/i);
+    },
+  );
+});
