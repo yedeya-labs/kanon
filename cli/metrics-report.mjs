@@ -1,8 +1,10 @@
 // `kanon metrics report` (plan 0003 §7, M6, kanon#659 and kanon#669): the three headline
 // indicators by band, their secondary measures, and the trend, by-version and A/B views, from one
-// adopter's stored rows. It reads the rows from local files, which the caller exported
-// from the telemetry store with its reader role (plan 0002 §6), and prints Markdown, or one JSON
-// document with `--json` (docs/cli-json.md). It calls nothing: no GitHub, no store.
+// adopter's stored rows. It reads the rows from local files, and prints Markdown, or one JSON
+// document with `--json` (docs/cli-json.md). It calls nothing: no GitHub, no store. The Overseer's
+// `telemetry` job reads the rows through the store's `GET /v1/rows/self` and runs it; a caller by
+// hand exports them with the adopter's reader role until plan 0008 J9 removes the roles at vM+1
+// (docs/metrics.md, "Where the rows come from").
 //
 // The rows are counts, times, enums and numbers (ADR 0007), so the report is too. A file that
 // can't be read stops the run, and the message names the file the caller gave, never its content.

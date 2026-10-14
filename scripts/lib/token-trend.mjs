@@ -3,7 +3,8 @@
 // reference adopter's `token-trend.mjs` (RA-2081) with plan 0002 §6's changes for the hosted
 // store (kanon#470):
 //
-//   - the partition is `<key>#<lane>`, read with the adopter's reader role, instead of
+//   - the partition is `<key>#<lane>`, the adopter's own, which the Overseer's `telemetry` job
+//     reads through the store's `GET /v1/rows/self` (`scripts/overseer-telemetry.mjs`), instead of
 //     `COST#<agent>` in its own table; an arm is a lane;
 //   - the sort key's first 16 characters are the old whole sort key, the run's timestamp;
 //   - the lane list is Kanon's lane enum (`infra/telemetry/function/schema.mjs`), not a scan of

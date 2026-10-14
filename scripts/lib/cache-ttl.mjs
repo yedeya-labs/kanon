@@ -2,7 +2,9 @@
 // The Overseer's cache-TTL facts (`cache-ttl.md`), moved from the reference adopter's
 // `cache-ttl-check.mjs` (RA-1899) with plan 0002 §6's changes for the hosted store (kanon#470):
 //
-//   - the partition is `<key>#<lane>`, read with the adopter's reader role; an arm is a lane;
+//   - the partition is `<key>#<lane>`, the adopter's own, which the Overseer's `telemetry` job
+//     reads through the store's `GET /v1/rows/self` (`scripts/overseer-telemetry.mjs`); an arm is
+//     a lane;
 //   - the lane list is Kanon's lane enum, not a scan of the workflows for `agent:`;
 //   - the lanes that pin the five-minute TTL are read from Kanon's own lane definitions, the
 //     release the Overseer runs (`pinnedLanes`), since the pin is Kanon's (`prompt-cache-ttl: 5m`);
