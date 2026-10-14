@@ -65,6 +65,7 @@ import { LABEL as UPSTREAM_LABEL, parseUpstreamFindings, unsentMessage } from '.
 import { LEDGER as CAPABILITY_LEDGER, parseCapabilityWatch } from '../scripts/lib/capability-watch.mjs';
 import { DEPLOY_HEADING, movedReferenceBullets } from '../scripts/lib/deploy-declaration.mjs';
 import { REFUSED_TITLE, UNPUBLISHED_JOB } from '../scripts/lib/telemetry-token.mjs';
+import { defaultEscalationFile, ESCALATION_FILE, inPipelineCode, parseEscalationFile } from '../scripts/lib/escalation-paths.mjs';
 import { callerNameFindings, FIXED_CALLERS } from '../actions/lane-check/caller-names.mjs';
 import { renderNotice } from '../actions/agent-classify/classify-agent-result.mjs';
 
@@ -109,6 +110,71 @@ export const UNREACHABLE_TITLE = storedTitle(renderNotice('unavailable', '').tit
 /** Where an Anthropic API key is made. */
 export const CONSOLE_KEYS = 'https://console.anthropic.com/settings/keys';
 const DAY = 86_400_000;
+
+// ── Chat notifications (plan 0011 §9) ──────────────────────────────────────────────────────
+
+/** The notify hook's fixed path (plan 0011 §6.1, `K-LAYOUT-1`): the one thing a `notify` job calls. */
+export const NOTIFY_HOOK = '.github/actions/notify/action.yml';
+/** A reference to one of Kanon's prebuilt hooks' actions, whose pin follows the callers' (decision 18). */
+const PREBUILT_REF = /yedeya-labs\/kanon\/actions\/notify\/[a-z-]+@/;
+/** The line the `notify` block prints for doctor (plan 0011 §5.1, step 6), before its JSON. */
+export const NOTIFY_LINE = 'kanon-notify/v1';
+/** The `notify` job's id in each notifying lane (plan 0011 §5.1), which names it in a caller's run. */
+export const NOTIFY_JOB = 'notify';
+/** How many of a caller's latest completed default-branch runs doctor looks through for a `notify` job that ran. */
+export const NOTIFY_RUNS = 10;
+
+/**
+ * @typedef {{ hook: { path: string, inputs: string[] }, versions: number[],
+ *   kinds: Record<string, { secret: string, lanes: string[] }>, legacySecret: string,
+ *   prebuilt: Record<string, { action: string, hook: string }> }} NotifyRequirements
+ */
+
+/**
+ * Whether a `uses:` of a hook's step is pinned as `K-ADOPT-12` asks (plan 0011 §6.2, item 3): an
+ * action by a version tag or a full commit SHA, never a branch; a `docker://` image by a digest,
+ * never a tag alone. A local action (`./…`) is the repository's own, held by
+ * `notify.hook-unreviewed` instead, so it counts as pinned here.
+ * @param {string} uses
+ */
+export const pinnedUses = (uses) => {
+  const u = uses.trim();
+  if (u.startsWith('./')) return true;
+  if (u.startsWith('docker://')) return /@sha256:[0-9a-f]{64}$/.test(u);
+  const ref = /^[^@\s]+@([^@\s]+)$/.exec(u)?.[1];
+  return ref !== undefined && (/^[0-9a-f]{40}$/.test(ref) || /^v?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?$/.test(ref));
+};
+
+/**
+ * Whether a `run:` installs packages (plan 0011 §6.2, item 2): a lockfile outside `.github/` would
+ * bring in code nobody reviewed. Each package manager's install, and the like.
+ */
+export const PACKAGE_INSTALL = /(?<![\w-])(?:(?:npm|pnpm)\s+(?:ci|install|i|add)|yarn\s+(?:install|add)|yarn(?=[ \t]*(?:$|[;&|]))|(?:pip3?|pipx|pipenv|poetry|bundle|gem|composer)\s+install|uv\s+(?:sync|pip\s+install|add)|python3?\s+-m\s+pip\s+install|go\s+(?:mod\s+download|get|install)|cargo\s+(?:install|fetch))(?![\w-])/m;
+
+/**
+ * The repository paths a `run:` names, as doctor can see them (plan 0011 §6.2, item 2): each word
+ * that reads as a relative path, with a `/` or a file's extension, after `./`, the workspace's
+ * variables and the hook's own directory (`$GITHUB_ACTION_PATH`, under `.github/`) are resolved,
+ * that `exists` in the checkout. A path built at run time, or one the checkout lacks, is not seen.
+ * @param {string} run @param {(path: string) => boolean} exists
+ * @returns {string[]}
+ */
+export const runPaths = (run, exists) => {
+  const hookDir = `${dirname(NOTIFY_HOOK)}/`;
+  const text = run
+    .replace(/\$\{\{\s*github\.workspace\s*\}\}\/|\$\{?GITHUB_WORKSPACE\}?\//g, '')
+    .replace(/\$\{\{\s*github\.action_path\s*\}\}\/|\$\{?GITHUB_ACTION_PATH\}?\//g, hookDir);
+  /** @type {string[]} */
+  const out = [];
+  for (const raw of text.split(/[\s"'`;|&()<>=,]+/)) {
+    const dir = raw.replace(/^\.\//, '');
+    const w = dir.replace(/\/+$/, '');
+    if (!w || w.startsWith('-') || w.startsWith('/') || w.includes('$') || w.includes('://') || w.includes('..')) continue;
+    if (!/^[\w.@+-]+(?:\/[\w.@+-]+)*$/.test(w) || !(dir.includes('/') || /\.[A-Za-z0-9]+$/.test(w))) continue;
+    if (exists(w) && !out.includes(w)) out.push(w);
+  }
+  return out;
+};
 
 /** The JSON output's contract (docs/doctor.md). A breaking change to it changes this. */
 export const SCHEMA = 'kanon-doctor/v1';
@@ -217,7 +283,7 @@ export const ITEMIZED = {
  * `unchecked[].check` it is listed under: a waiver of such a finding can't be called stale.
  * @type {Record<string, string>}
  */
-const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset' };
+const UNCHECKED_CATEGORY = { 'app-permissions': 'app', 'unused-apps': 'app', secrets: 'secret', 'token-age': 'secret', 'unreachable-runs': 'secret', 'telemetry-runs': 'caller', hook: 'declaration', ruleset: 'ruleset', 'ruleset-bypass': 'ruleset', 'required-check': 'ruleset', 'notify-secrets': 'secret', 'notify-hook': 'declaration', 'notify-runs': 'caller' };
 
 /**
  * The finding categories, in the order a finding is listed and fixed: the pin decides which
@@ -236,6 +302,7 @@ export const FINDINGS = {
   'pin.mixed': { category: 'pin', blocking: true },
   'pin.candidate': { category: 'pin', blocking: false },
   'plugin.version-mismatch': { category: 'pin', blocking: false },
+  'notify.hook-pin-behind': { category: 'pin', blocking: false },
   'register.missing-row': { category: 'app', blocking: true },
   'register.split-slug': { category: 'app', blocking: true },
   'register.shared-slug': { category: 'app', blocking: true },
@@ -278,6 +345,14 @@ export const FINDINGS = {
   'telemetry.legacy-inputs': { category: 'caller', blocking: true },
   'qa-store.unmapped': { category: 'caller', blocking: false },
   'qa-store.variables': { category: 'secret', blocking: false },
+  'notify.kind-unset': { category: 'secret', blocking: false },
+  'notify.none': { category: 'declaration', blocking: false },
+  'notify.hook-malformed': { category: 'declaration', blocking: true },
+  'notify.hook-version-old': { category: 'declaration', blocking: false },
+  'notify.hook-unpinned': { category: 'declaration', blocking: true },
+  'notify.hook-unreviewed': { category: 'declaration', blocking: true },
+  'notify.legacy-secret': { category: 'caller', blocking: true },
+  'notify.failing': { category: 'caller', blocking: false },
   'label.missing': { category: 'label', blocking: false },
   'ruleset.missing': { category: 'ruleset', blocking: true },
   'ruleset.rule-missing': { category: 'ruleset', blocking: true },
@@ -929,7 +1004,9 @@ export const diagnose = async (deps, opts) => {
   }
 
   // The release the callers pin, and the one to check against.
-  const pins = kanonPins(texts);
+  // A prebuilt notify hook's pin of Kanon's own notify action is not the callers' pin: it follows
+  // theirs, and `notify.hook-pin-behind` notes a mismatch without blocking (plan 0011 decision 18).
+  const pins = kanonPins(new Map([...texts].map(([p, t]) => [p, p === NOTIFY_HOOK ? t.split('\n').filter((l) => !PREBUILT_REF.test(l)).join('\n') : t])));
   const exact = [...pins.keys()].filter((r) => EXACT_RELEASE.test(r));
   if (!exact.length) return { error: `nothing in ${repo}'s .github/ pins Kanon to an exact release (yedeya-labs/kanon/...@vX.Y.Z, or @candidate-vX.Y.Z). Install it with kanon init first.` };
   const laneCallers = [...workflows].flatMap(([, wf]) => Object.values(isMap(wf.jobs) ? wf.jobs : {}).map((j) => kanonCall(j?.uses)).filter((c) => c && c.workflow.startsWith('agent-')).map((c) => /** @type {{ ref: string }} */ (c).ref));
@@ -1078,6 +1155,21 @@ export const diagnose = async (deps, opts) => {
   };
   /** Each caller of a lane with a pair that maps exactly one of it, and which (`claude.mixed`). @type {Array<{ file: string, lane: string, maps: string }>} */
   const onCredential = [];
+  // CHAT NOTIFICATIONS (plan 0011 §9): the checked release's `notify` entry, none before it.
+  const notify = /** @type {NotifyRequirements | undefined} */ (/** @type {any} */ (req).notify);
+  /** The kind a lane notifies at the checked release, or null. @param {string} lane */
+  const kindOf = (lane) => (notify ? Object.entries(notify.kinds).find(([, k]) => k.lanes.includes(lane))?.[0] ?? null : null);
+  /** @param {string} kind */
+  const kindSecret = (kind) => /** @type {NotifyRequirements} */ (notify).kinds[kind]?.secret ?? '';
+  /** `notify.legacy-secret` on one caller. @param {string} file @param {string} lane @param {string} kind */
+  const legacyFinding = (file, lane, kind) => {
+    const old = /** @type {NotifyRequirements} */ (notify).legacySecret;
+    const name = kindSecret(kind);
+    find('notify.legacy-secret', file, `maps ${old}, which the lane ${lane} no longer takes at ${checked}: it posts through the hook at ${NOTIFY_HOOK} with one secret per message kind, ${name} for ${kind}, and no lane accepts ${old} (plan 0011 decision 17). GitHub refuses a call that passes a secret the called workflow doesn't declare, so the lane doesn't start at all until the line goes, health job included.`, {
+      text: `Remove the first line from the job's secrets: and add the second in its place. Then store the kind's secret ${OWN_TERMINAL} (GitHub never shows ${old}'s value, so fetch the webhook's URL from your chat system again), and add a hook at ${NOTIFY_HOOK} (doctor's notify.none says how). Without both, ${kind} is not posted, and the rest of the lane runs:`,
+      commands: [`      ${old}: \${{ secrets.${old} }}`, `      ${name}: \${{ secrets.${name} }}`, `gh secret set ${name} -R ${repo}`],
+    });
+  };
 
   for (const c of callers) {
     const spec = req.lanes[c.lane];
@@ -1103,7 +1195,14 @@ export const diagnose = async (deps, opts) => {
       // The Claude credential is one of a pair, which the two findings below hold instead.
       const pair = pairOf(c.lane);
       const missing = want.filter((n) => !got.includes(n) && !optional.includes(n) && !pair.includes(n));
-      const stale = got.filter((n) => !want.includes(n) && !pair.includes(n));
+      const staleAll = got.filter((n) => !want.includes(n) && !pair.includes(n));
+      // The chat secret the kind secrets replace (plan 0011 decision 17): a notifying caller that
+      // still maps it is `notify.legacy-secret`, in place of `caller.secret-stale`, with the
+      // notify fix.
+      const kind = kindOf(c.lane);
+      const legacy = notify && kind && staleAll.includes(notify.legacySecret) ? notify.legacySecret : null;
+      const stale = staleAll.filter((n) => n !== legacy);
+      if (legacy && kind) legacyFinding(c.file, c.lane, kind);
       const maps = pair.filter((n) => got.includes(n));
       if (pair.length && maps.length > 1) {
         find('caller.claude-both', c.file, `maps both ${maps.join(' and ')}; the lane ${c.lane} runs on one Claude credential at ${checked}, so its run fails before the agent starts. Map one (plan 0009 §10).`, {
@@ -1409,12 +1508,16 @@ export const diagnose = async (deps, opts) => {
   // (`caller.secrets-inherited`) still needs the token its lane names among its `secrets`.
   const pairs = new Set(Object.keys(req.lanes).flatMap(pairOf));
   const laneSecrets = new Set([...Object.values(req.lanes).flatMap((l) => l?.secrets ?? []), ...pairs]);
+  const chatSecrets = new Set(notify ? [notify.legacySecret, ...Object.values(notify.kinds).map((k) => k.secret)] : []);
   const unnamed = callers.filter((c) => !isMap(c.job.secrets) && req.lanes[c.lane]).flatMap((c) => pairOf(c.lane).filter((n) => req.lanes[c.lane]?.secrets.includes(n)));
   const secretApps = [...new Set([...identities, ...Object.keys(req.identities.apps).filter((a) => appSecrets(a).some((n) => mappedBy(n).length))])].sort();
   // The QA store's two secrets are optional (kanon#433): a caller maps them, empty, whether or not
   // the repository has a store, so they are needed only once its store hook exists.
   const needSecrets = [...new Set([...installed.flatMap((l) => (req.lanes[l]?.secrets ?? []).filter((n) => !pairOf(l).includes(n))), ...unnamed, ...secretApps.flatMap(appSecrets), ...[...laneSecrets].filter((n) => mappedBy(n).length)])]
     .filter((n) => hasStore || !storeSecrets.includes(n))
+    // A chat secret is never `secret.missing` (plan 0011 §9): a kind not posted is a choice, which
+    // `notify.kind-unset` notes, and the secret the kind secrets replace is `notify.legacy-secret`.
+    .filter((n) => !chatSecrets.has(n))
     .sort();
   /**
    * The workflows that map these secrets, and the callers of a lane that takes them and doesn't
@@ -2012,6 +2115,205 @@ export const diagnose = async (deps, opts) => {
           commands: [`gh run view ${id} -R ${repo}`],
         });
       }
+    }
+  }
+
+  // ── Chat notifications (plan 0011 §9, step N10) ─────────────────────────────────────────────
+  // Only where a workflow calls a lane that notifies at the checked release, read from its
+  // requirements file's `notify` entry: none before the release that ships one, and no lane
+  // before the release whose lane has a `notify` job. Doctor says nothing of the branch exposure
+  // (decision 22): the weakness is stated in the plan and docs/notifications.md alone.
+  const notifyCallers = notify ? callers.filter((c) => req.lanes[c.lane] && kindOf(c.lane)) : [];
+  if (notify && notifyCallers.length) {
+    const hookPath = notify.hook.path;
+    const hookText = read(hookPath);
+    const files = [...new Set(notifyCallers.map((c) => c.file))].sort();
+    const posting = `${files.join(', ')} call${files.length > 1 ? '' : 's'} ${[...new Set(notifyCallers.map((c) => c.lane))].sort().join(', ')}`;
+    const prebuiltNames = Object.keys(notify.prebuilt).sort();
+    if (hookText === null) {
+      // ── `notify.none`: no hook, nothing posts, and no model runs for a post (decision 2, §8).
+      find('notify.none', hookPath, `is missing, so nothing posts: ${posting}, whose chat messages, and the model runs that write their narratives, are skipped. The rest of each lane still runs: the project digest's health job files its issues. That is a choice; to post, add a hook (plan 0011 §8).`, {
+        text: `Write one of Kanon's prebuilt hooks there, from the release you check (${checked}): the first command, then the line of ${prebuiltNames.map((n) => `Kanon's ${n} hook`).join(' or ')}. Or write your own composite action at ${hookPath}, taking the inputs ${notify.hook.inputs.join(', ')} (docs/notifications.md). Then store each kind's secret.`,
+        commands: [
+          `mkdir -p ${dirname(hookPath)}`,
+          ...prebuiltNames.map((n) => `gh api -H 'Accept: application/vnd.github.raw+json' 'repos/${KANON_REPO}/contents/${notify.prebuilt[n]?.hook}?ref=${checked}' > ${hookPath}`),
+        ],
+        url: `https://github.com/${KANON_REPO}/blob/${checked}/docs/notifications.md`,
+      });
+    } else {
+      /** @type {unknown} */
+      let doc = null;
+      /** @type {string | null} */
+      let unreadable = null;
+      try {
+        doc = parseYaml(hookText);
+      } catch (e) {
+        unreadable = /** @type {Error} */ (e).message;
+      }
+      const inputs = isMap(doc) && isMap(doc.inputs) ? Object.keys(doc.inputs) : [];
+      const runs = isMap(doc) && isMap(doc.runs) ? doc.runs : {};
+      const steps = Array.isArray(runs.steps) ? runs.steps.filter(isMap) : [];
+      const declared = inputs.map((k) => /^message-v(\d+)$/.exec(k)?.[1]).filter((v) => v !== undefined).map(Number).sort((a, b) => a - b);
+      const written = declared.filter((v) => notify.versions.includes(v));
+      const newest = Math.max(...notify.versions);
+      // ── `notify.hook-malformed`: a composite action that declares `secret` and a version this
+      // release writes (§6.2, item 1). The block reads it to choose what to pass.
+      const problems = [
+        ...(unreadable !== null ? [`doctor can't read it as YAML (${unreadable})`] : []),
+        ...(unreadable === null && runs.using !== 'composite' ? [`its runs.using is ${runs.using === undefined ? 'missing' : `\`${String(runs.using)}\``}, not \`composite\``] : []),
+        ...(unreadable === null && !written.length ? [`it declares no input \`message-v<N>\` for a version ${checked} writes (${notify.versions.map((v) => `message-v${v}`).join(', ')})${declared.length ? `: it declares ${declared.map((v) => `message-v${v}`).join(', ')}` : ''}`] : []),
+        ...(unreadable === null && !inputs.includes('secret') ? ['it declares no input `secret`, which carries the kind\'s secret'] : []),
+      ];
+      if (problems.length) {
+        find('notify.hook-malformed', hookPath, `is not a hook the lanes can call at ${checked}: ${problems.join('; ')}. The notify job fails before it posts (plan 0011 §6.2).`, {
+          text: `Make it a composite action (runs: using: composite) that declares these inputs, as Kanon's prebuilt hooks do (docs/notifications.md):`,
+          commands: ['inputs:', ...notify.hook.inputs.flatMap((k) => [`  ${k}:`, '    required: true'])],
+          url: `https://github.com/${KANON_REPO}/blob/${checked}/${notify.prebuilt[prebuiltNames[0] ?? '']?.hook ?? 'docs/notifications.md'}`,
+        });
+      } else if (!written.includes(newest)) {
+        // ── `notify.hook-version-old`: on a version this release still writes, not its newest (§3.4).
+        find('notify.hook-version-old', hookPath, `declares ${written.map((v) => `message-v${v}`).join(', ')}, and ${checked} writes message-v${newest} too: it still hands this hook the version it declares, until a later release stops writing it (plan 0011 §3.4).`, {
+          text: `Read message-v${newest} in the hook, and declare the input, before a release stops writing message-v${Math.max(...written)}. A prebuilt hook moves when its pin does (notify.hook-pin-behind).`,
+          commands: [`  message-v${newest}:`, '    required: true'],
+        });
+      }
+      // ── `notify.hook-unpinned` (`K-ADOPT-12`, §6.2 item 3) and `notify.hook-pin-behind` (decision 18).
+      const uses = steps.map((st) => (typeof st.uses === 'string' ? st.uses.trim() : null)).filter((u) => u !== null);
+      const unpinned = uses.filter((u) => !pinnedUses(u));
+      if (unpinned.length) {
+        find('notify.hook-unpinned', hookPath, `calls ${unpinned.map((u) => `\`${u}\``).join(', ')}, not pinned: a hook's action names a version tag or a full commit SHA, never a branch, and a docker:// image names a digest (@sha256:…), never a tag alone (K-ADOPT-12, plan 0011 §6.2). Whatever the ref points at runs with this kind's chat secret.`, {
+          text: `Pin each to a release tag or a full commit SHA, and each image to its digest.`,
+        });
+      }
+      const prebuiltActions = new Map(Object.entries(notify.prebuilt).map(([n, p]) => [`${KANON_REPO}/${p.action}`, n]));
+      for (const u of uses) {
+        const m = /^([^@\s]+)@(\S+)$/.exec(u);
+        const name = m ? prebuiltActions.get(/** @type {string} */ (m[1])) : undefined;
+        if (!m || name === undefined || m[2] === pinned) continue;
+        const behind = EXACT_RELEASE.test(/** @type {string} */ (m[2])) && newer(/** @type {string} */ (m[2]), pinned) < 0;
+        find('notify.hook-pin-behind', hookPath, `is Kanon's ${name} hook at ${m[2]}, and the callers pin ${pinned}: ${behind ? 'it is behind them' : 'they differ'}. It works while it declares a contract version the callers' release still writes; kanon upgrade moves it with the callers (plan 0011 decision 18).`, {
+          text: `Move its pin to the callers', as the upgrade skill does:`,
+          commands: [`    - uses: ${m[1]}@${pinned}`],
+        });
+      }
+      // ── `notify.hook-unreviewed` (§6.2, item 2): every repository path the hook runs escalates.
+      /** @type {import('../scripts/lib/escalation-paths.mjs').EscalationFile | null} */
+      let escalation = null;
+      const escalationText = read(ESCALATION_FILE);
+      try {
+        escalation = escalationText === null ? defaultEscalationFile() : parseEscalationFile(escalationText);
+      } catch (e) {
+        unchecked.push({ check: 'notify-hook', subject: hookPath, reason: `could not read ${ESCALATION_FILE} (${/** @type {Error} */ (e).message}), so doctor can't tell whether every repository path the hook runs escalates` });
+      }
+      const exists = (/** @type {string} */ p) => read(p) !== null || deps.listFiles(join(root, p)).length > 0;
+      const reviewed = (/** @type {string} */ p) => p.startsWith('.github/') || (escalation?.pipeline ?? []).some((e) => inPipelineCode(e.dir, p) || inPipelineCode(e.dir, `${p}/`));
+      const local = uses.filter((u) => u.startsWith('./')).map((u) => u.slice(2).replace(/\/+$/, ''));
+      const runTexts = steps.map((st) => (typeof st.run === 'string' ? st.run : '')).filter(Boolean);
+      const named = [...new Set([...local, ...runTexts.flatMap((r) => runPaths(r, exists))])];
+      const outside = escalation ? named.filter((p) => !reviewed(p)) : [];
+      const installs = runTexts.map((r) => PACKAGE_INSTALL.exec(r)?.[0]).filter((x) => x !== undefined);
+      if (outside.length || installs.length) {
+        find('notify.hook-unreviewed', hookPath, [
+          ...(outside.length ? [`runs ${outside.map((p) => `\`${p}\``).join(', ')}, which ${outside.length > 1 ? 'are' : 'is'} neither under .github/ nor a ## Pipeline code entry of ${ESCALATION_FILE}, so a change to ${outside.length > 1 ? 'them' : 'it'} can merge without a person and then run with the kind's chat secret (K-MERGE-4).`] : []),
+          ...(installs.length ? [`installs packages (\`${installs.join('`, `')}\`): a lockfile outside .github/ brings in code nobody reviewed.`] : []),
+        ].join(' ') + ' Every repository file the hook runs must escalate (plan 0011 §6.2).', {
+          text: [
+            ...(outside.length ? [`Move ${outside.length > 1 ? 'them' : 'it'} under .github/ (beside the hook is simplest), or declare ${outside.length > 1 ? 'them' : 'it'} under ## Pipeline code in ${ESCALATION_FILE} (K-LAYOUT-8):`] : []),
+            ...(installs.length ? ['Run no package install in the hook: vendor what it needs under .github/, or call a pinned action or an image by digest instead.'] : []),
+          ].join(' '),
+          commands: outside.map((p) => `- \`${p}${exists(p) && read(p) === null ? '/' : ''}\` — the notify hook runs it`),
+        });
+      }
+      // ── `notify.kind-unset`: each notifying caller's kind secret is held (decision 3), else a
+      // note. An organisation's secret shared with the repository counts, where the token can
+      // list them; where it can't, the check is unchecked, never a finding.
+      /** @type {Promise<Set<string> | null> | null} */
+      let orgListed = null;
+      const orgSecrets = () =>
+        (orgListed ??= (async () => {
+          const r = await deps.gh(['api', `repos/${repo}/actions/organization-secrets?per_page=100`]);
+          const list = ghJsonOf(r)?.secrets;
+          return Array.isArray(list) ? new Set(list.map((/** @type {any} */ x) => String(x?.name ?? '').toUpperCase())) : null;
+        })());
+      const seen = new Set();
+      for (const c of notifyCallers) {
+        const kind = /** @type {string} */ (kindOf(c.lane));
+        const name = kindSecret(kind);
+        if (seen.has(`${c.file} ${kind}`)) continue;
+        seen.add(`${c.file} ${kind}`);
+        if (!s.secrets) {
+          unchecked.push({ check: 'notify-secrets', subject: c.file, reason: `the token can't list ${repo}'s secret names (it needs admin access), so doctor can't tell whether ${name}, ${kind}'s secret, is held` });
+          continue;
+        }
+        if (s.secrets.has(name)) continue;
+        if (s.kind === 'Organization') {
+          const org = await orgSecrets();
+          if (org === null) {
+            unchecked.push({ check: 'notify-secrets', subject: c.file, reason: `${repo} doesn't hold ${name}, ${kind}'s secret, and an organisation secret of ${s.owner} shared with it could, which the token can't list` });
+            continue;
+          }
+          if (org.has(name)) continue;
+        }
+        find('notify.kind-unset', c.file, `calls ${c.lane}, whose ${kind} messages are posted only with ${name}, which ${repo} doesn't hold: so ${kind} is not posted, and the model run that writes it is skipped. That is a choice (plan 0011 decision 3).`, {
+          text: `To post ${kind}, store what your hook needs for it (for Kanon's Slack hook, the URL of a Slack incoming webhook for that channel; for its generic webhook hook, an https URL) ${OWN_TERMINAL}:`,
+          commands: [`gh secret set ${name} -R ${repo}`],
+        });
+      }
+    }
+    // ── `notify.failing`: the latest notify job that ran, on a completed run of the caller on the
+    // default branch, printed `outcome: posted` or `skipped` (§5.1, step 6), as apps-check's line
+    // is read. A run from another branch or repository is never read, whatever the server filtered.
+    for (const file of files) {
+      const name = basename(file);
+      const listed = await deps.gh(['api', `repos/${repo}/actions/workflows/${name}/runs?branch=${encodeURIComponent(s.defaultBranch)}&status=completed&per_page=${NOTIFY_RUNS}`]);
+      const list = ghJsonOf(listed)?.workflow_runs;
+      if (!Array.isArray(list)) {
+        if (!/HTTP 404|Not Found/i.test(listed.stderr)) unchecked.push({ check: 'notify-runs', subject: file, reason: `the token can't list its runs (${listed.stderr.trim() || `exit ${listed.status}`}); it needs Actions: read` });
+        continue;
+      }
+      /** @type {{ run: any, job: any } | null} */
+      let latest = null;
+      let blind = false;
+      for (const run of list) {
+        const from = isMap(run?.head_repository) ? String(run.head_repository.full_name ?? '') : '';
+        if (!isMap(run) || run.status !== 'completed' || run.head_branch !== s.defaultBranch || from.toLowerCase() !== repo.toLowerCase()) continue;
+        const jobs = ghJsonOf(await deps.gh(['api', `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`]))?.jobs;
+        if (!Array.isArray(jobs)) { blind = true; break; }
+        const job = jobs.find((j) => isMap(j) && (j.name === NOTIFY_JOB || String(j.name).endsWith(` / ${NOTIFY_JOB}`)) && (j.conclusion === 'success' || j.conclusion === 'failure'));
+        if (job) { latest = { run, job }; break; }
+      }
+      if (blind) {
+        unchecked.push({ check: 'notify-runs', subject: file, reason: `the token can't list the jobs of its runs; it needs Actions: read` });
+        continue;
+      }
+      if (!latest) continue;
+      const path = `repos/${repo}/actions/jobs/${latest.job.id}/logs`;
+      let log = await deps.gh(['api', '--allow-escape-sequences', path]);
+      if (log.status !== 0 && /unknown flag/.test(log.stderr)) log = await deps.gh(['api', path]);
+      if (log.status !== 0) {
+        unchecked.push({ check: 'notify-runs', subject: file, reason: `the token can't read the log of the notify job of ${latest.run.html_url}, which needs Actions: read (${log.stderr.trim() || `exit ${log.status}`})` });
+        continue;
+      }
+      /** @type {any} */
+      let said = null;
+      for (const line of log.stdout.split('\n')) {
+        const at = line.indexOf(`${NOTIFY_LINE} {`);
+        if (at === -1) continue;
+        try {
+          said = JSON.parse(line.slice(at + NOTIFY_LINE.length + 1).trim());
+        } catch {
+          said = null;
+        }
+      }
+      if (!isMap(said) || typeof said.outcome !== 'string') {
+        unchecked.push({ check: 'notify-runs', subject: file, reason: `the notify job of ${latest.run.html_url} printed no ${NOTIFY_LINE} line doctor can read` });
+        continue;
+      }
+      if (said.outcome === 'posted' || said.outcome === 'skipped') continue;
+      find('notify.failing', file, `The latest notify job on ${s.defaultBranch}, in ${latest.run.html_url} of ${String(latest.run.created_at ?? '').slice(0, 10)}, says ${said.kind ? `${String(said.kind)} was` : 'its message was'} ${String(said.outcome)}${said.hook ? `, through the ${String(said.hook)} hook` : ''}: the hook's step failed, or Kanon refused the message, so nothing was posted. The producing job stays green (K-SHIP-10).`, {
+        text: `Read the job's log for the hook's error, fix the hook or the kind's secret, then re-run the failed job, which posts the same message again (plan 0011 §5.4):`,
+        commands: [`gh run view ${latest.run.id} -R ${repo} --log-failed`, `gh run rerun ${latest.run.id} -R ${repo} --failed`],
+      });
     }
   }
 

@@ -108,7 +108,7 @@ describe('kanon doctor --to, before the pin moves (plan 0005 L10)', () => {
     const dir = checkout(healthyFiles());
     const next = clone(REQ);
     const lane = next.lanes['agent-review']!;
-    lane.secrets = [...lane.secrets, 'DIGEST_WEBHOOK'].sort();
+    lane.secrets = [...lane.secrets, 'KANON_AGGREGATE_ROLE'].sort();
     lane.grant = { ...lane.grant, checks: 'read' };
     delete lane.inputs.pr_number;
     const r = await run(dir, fakeGitHub({ releases: { [NEXT]: next } }), ['--to', NEXT, '--json']);
@@ -121,9 +121,9 @@ describe('kanon doctor --to, before the pin moves (plan 0005 L10)', () => {
     ]);
     const grant = r.json.findings.find((f: { id: string }) => f.id === 'caller.grant-missing');
     expect(grant.fix.commands).toEqual(['  checks: read']);
-    expect(r.json.findings[0].fix.commands).toEqual([`gh secret set DIGEST_WEBHOOK -R ${REPO}`]);
+    expect(r.json.findings[0].fix.commands).toEqual([`gh secret set KANON_AGGREGATE_ROLE -R ${REPO}`]);
     // The lane that takes it, and its caller, which doesn't map it yet (#415).
-    expect(r.json.findings[0].message).toBe(`lacks DIGEST_WEBHOOK, which agent-review takes: .github/workflows/agent-review.yml calls a lane that takes it at ${NEXT}.`);
+    expect(r.json.findings[0].message).toBe(`lacks KANON_AGGREGATE_ROLE, which agent-review takes: .github/workflows/agent-review.yml calls a lane that takes it at ${NEXT}.`);
   });
 
   it('refuses, exit 3, a release that ships no requirements file', async () => {
