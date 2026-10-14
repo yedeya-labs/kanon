@@ -53,7 +53,7 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 ## `K-SHIP-7`
 
 - **2026-10-12.** The Owner decided that a project whose releases other repositories pin may declare a release cadence, and that a project which declares none releases on every merge. [Plan 0009](../docs/plans/0009-release-channels-and-api-key.md), [#760](https://github.com/yedeya-labs/kanon/pull/760)
-- **2026-10-14.** The deploy that release tags drive is Kanon's deploy lane: a published release runs `deploy-release.yml`, then `deploy.yml` for each environment the adoption record declares, in order. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
+- **2026-10-14.** Release tags drive the deploy through the stages the project declares, not to a pre-production stage alone, and that deploy is Kanon's deploy lane: a published release runs `deploy-release.yml`, then `deploy.yml` for each environment the adoption record declares, in order. [Plan 0010](../docs/plans/0010-deployment-lane.md), [#610](https://github.com/yedeya-labs/kanon/issues/610)
 
 ## `K-SHIP-8`
 
