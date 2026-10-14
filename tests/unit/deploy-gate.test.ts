@@ -80,9 +80,18 @@ describe('the gate (plan 0010 §3)', () => {
   });
 
   it("check 1 on a dispatch at the release's tag: the input's tag names the commit", () => {
-    const r = run({ GITHUB_EVENT_NAME: 'workflow_dispatch', DISPATCH_RELEASE: 'v1.2.0', GITHUB_REF: 'refs/tags/v1.2.0', GITHUB_SHA: OLDER, RELEASE_TAG: '' });
+    const r = run({ GITHUB_EVENT_NAME: 'workflow_dispatch', DISPATCH_RELEASE: 'v1.2.0', GITHUB_REF: 'refs/tags/v1.2.0', RELEASE_TAG: '' });
     expect(r.ok).toBe(true);
     expect(r.outputs.sha).toBe(SHA);
+  });
+
+  it("check 1 refuses a dispatch whose run's commit isn't the release's: the tag moved after the dispatch (#911; MUTATION: the commit check kept to `release` runs turns this red)", () => {
+    // The deployment GitHub creates for the environment job carries the run's commit, and the
+    // supersede check reads that commit as what the environment runs. So a run deploys only the
+    // commit it records, on a dispatch as on a release.
+    const r = run({ GITHUB_EVENT_NAME: 'workflow_dispatch', DISPATCH_RELEASE: 'v1.2.0', GITHUB_REF: 'refs/tags/v1.2.0', GITHUB_SHA: OLDER, RELEASE_TAG: '' });
+    expect(refusal(r)).toBe('no-release');
+    expect(r.ok ? '' : r.message).toMatch(/not the dispatch's commit `bbbbbbbbbbbb`: it moved after the dispatch/);
   });
 
   it("check 1 refuses a dispatch at the default branch, or at another release's tag, before anything else is read (#914; MUTATION: the ref check removed turns this red)", () => {
@@ -224,6 +233,14 @@ describe("the environment job's declaration check (plan 0010 §4)", () => {
       const r = check({ ENVIRONMENT: ENVIRONMENT!, POSITION: POSITION! });
       expect(r.ok ? 'admitted' : r.refusal, `${ENVIRONMENT} at ${POSITION}`).toBe('declaration-mismatch');
     }
+  });
+
+  it("refuses a dispatch whose run's commit isn't the release's, as the gate does (#911)", () => {
+    const dispatch = { GITHUB_EVENT_NAME: 'workflow_dispatch', DISPATCH_RELEASE: 'v1.2.0', GITHUB_REF: 'refs/tags/v1.2.0', RELEASE_TAG: '', ENVIRONMENT: 'staging', POSITION: '1' };
+    expect(check(dispatch).ok).toBe(true);
+    const r = check({ ...dispatch, GITHUB_SHA: OLDER });
+    expect(r.ok ? 'admitted' : r.refusal).toBe('no-release');
+    expect(r.outputs.sha).toBeUndefined();
   });
 
   it("sets no environment under the record's `no-environments` marker, and keeps it under `no-reviewers`", () => {

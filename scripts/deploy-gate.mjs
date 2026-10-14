@@ -6,9 +6,9 @@
 // THE GATE (`gate`), in `deploy-release.yml`'s `gate` job, before the probe and anything that
 // builds or deploys. It refuses, by code, unless all four hold, in this order:
 //   1. the release exists and is not a draft, and its tag resolves to the run's commit (for a
-//      dispatch, to the commit the `release` input's tag names, and the dispatch ran AT that tag,
-//      `GITHUB_REF` `refs/tags/<tag>`, so no job carries the default branch's subject, #914):
-//      `draft`, `no-release`;
+//      dispatch, the `release` input's tag, and the dispatch ran AT that tag, `GITHUB_REF`
+//      `refs/tags/<tag>`, so no job carries the default branch's subject, #914, and no
+//      deployment records a commit other than the one deployed, #911): `draft`, `no-release`;
 //   2. that commit is reachable from the default branch: `not-default-branch`;
 //   3. the environments the caller passes are exactly the adoption record's `## Deploy` list
 //      AT THAT COMMIT, in order (`scripts/lib/deploy-declaration.mjs`): `declaration-mismatch`;
@@ -35,7 +35,9 @@
 // anyone else is refused (`unauthorized=not-maintainer`; its row waits for PR #901 to add the code to `DEPLOY_REFUSALS`, kanon#899).
 // `supersede`, in `deploy.yml`'s `deploy` job, once it holds its concurrency slot and its
 // approval: for a `release` trigger, a commit older than the environment's last successful
-// deploy is refused `superseded`; a dispatch may go back, and says so (`rollback`).
+// deploy is refused `superseded`; a dispatch may go back, and says so (`rollback`). It reads
+// the commit of the deployment GitHub created for an earlier run's environment job, which is
+// that run's commit, and check 1 holds every run's commit to the one it deploys (#911).
 //
 // ENV  GITHUB_REPOSITORY, GITHUB_SHA, GITHUB_REF, GITHUB_EVENT_NAME, GH_TOKEN (for `gh`)
 //      RELEASE_TAG      the `release` event's tag (`github.event.release.tag_name`)
@@ -166,8 +168,13 @@ export function resolveRelease({ repo, event, releaseTag = '', releaseDraft = ''
     throw e;
   }
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Refusal('no-release', `the tag \`${tag}\` names no commit`);
-  if (event === 'release' && sha !== githubSha) {
-    throw new Refusal('no-release', `the tag \`${tag}\` names \`${sha.slice(0, 12)}\`, not the release's commit \`${githubSha.slice(0, 12)}\`: it moved after the release was published`);
+  // The run's commit is the one GitHub puts on the deployment it creates for each environment
+  // job, which the supersede check reads as what the environment runs. So a run deploys only its
+  // own commit, on a dispatch as on a release (#911).
+  if (sha !== githubSha) {
+    throw new Refusal('no-release', event === 'release'
+      ? `the tag \`${tag}\` names \`${sha.slice(0, 12)}\`, not the release's commit \`${githubSha.slice(0, 12)}\`: it moved after the release was published`
+      : `the tag \`${tag}\` names \`${sha.slice(0, 12)}\`, not the dispatch's commit \`${githubSha.slice(0, 12)}\`: it moved after the dispatch; dispatch it again with \`--ref ${tag} -f release=${tag}\``);
   }
   return { tag, sha, prerelease: release?.prerelease === true, publishedAt: String(release?.published_at ?? '') };
 }
