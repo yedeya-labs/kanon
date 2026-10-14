@@ -1554,7 +1554,7 @@ export const diagnose = async (deps, opts) => {
         const id = Number(r.databaseId);
         const hit = await reachedNoModel(id);
         if (hit === null) {
-          unchecked.push({ check: 'unreachable-runs', subject: file, reason: `the token can't read the jobs or annotations of its run ${id}; it needs Actions: read and Checks: read` });
+          unchecked.push({ check: 'unreachable-runs', subject: file, reason: `the token can't read the jobs or annotations of its run ${id}; it needs Actions: read and Checks: read, which a classic token's repo scope holds: a fine-grained personal access token has no Checks permission, so on a private repository it can't read them` });
           break;
         }
         if (hit) unreachable.push({ file, id });
@@ -1931,7 +1931,7 @@ export const diagnose = async (deps, opts) => {
         readable = false;
       }
       if (!readable) {
-        unchecked.push({ check: 'telemetry-runs', subject: file, reason: `the token can't read the jobs or annotations of its run ${id}; it needs Actions: read and Checks: read` });
+        unchecked.push({ check: 'telemetry-runs', subject: file, reason: `the token can't read the jobs or annotations of its run ${id}; it needs Actions: read and Checks: read, which a classic token's repo scope holds: a fine-grained personal access token has no Checks permission, so on a private repository it can't read them` });
         continue;
       }
       if (words !== null) {
