@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { commentCoordinates, lineMapper, parseDiff, readsCodeComments as readsWith, retarget, rewrittenLines, shiftedCoordinates } from '../../scripts/citation-shift.mjs';
+import { commentCoordinates, lineMapper, parseDiff, readsCodeComments as readsWith, rebasedCoordinates, rebasedLines, retarget, rewrittenLines, shiftedCoordinates } from '../../scripts/citation-shift.mjs';
 import { UNDECLARED, parseCodeAreas } from '../../scripts/lib/code-areas.mjs';
 import { ROOT } from './helpers/adopter.js';
 import { SPAWNS } from '../unit/helpers/spawns.js';
@@ -563,5 +563,161 @@ describe('the docs it maps are the guard\'s `--path` list, `docs/**/*.md` by def
     const r = setup()('--path', 'rulbook/**/*.md');
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('citation-shift: `--path rulbook/**/*.md` selected no tracked Markdown file it reads');
+  });
+});
+
+/**
+ * kanon#166 — after a rebase, a clause both sides re-pointed is a per-coordinate mix, which no
+ * "take one side" answer gets right and the ordinary check can't see (every value on the line
+ * looks re-derived). `--rebase <old-head>` re-derives each from the side its value came from.
+ *
+ * The seven-coordinate case, as the reference adopter met it. `src/svc.ts` has 40 lines on the old
+ * base. The branch inserts 2 lines after line 5; the default branch, meanwhile, inserts 3 after
+ * line 15. Seven coordinates into the old base's lines 8, 12, 18, 25, 30, 33 and 35 read
+ *   on the branch (old head)  10, 14, 20, 27, 32, 35, 37
+ *   on the new base           8, 12, 21, 28, 33, 36, 38
+ *   right on the new head     10, 14, 23, 30, 35, 38, 40
+ * and the conflict was resolved by taking three from the branch (10, 20, 32), three from the new
+ * base (12, 28, 36), and one from neither (39).
+ */
+describe('--rebase re-derives each coordinate from the side it came from (kanon#166)', () => {
+  const clause = (ns: number[], lead = 'The flow') => `${lead}: ${ns.map((n) => `\`src/svc.ts:${n}\``).join(', ')}.`;
+  const OLD_HEAD = clause([10, 14, 20, 27, 32, 35, 37], 'The branch flow');
+  const NEW_BASE = clause([8, 12, 21, 28, 33, 36, 38], 'The main flow');
+  const MIXED = clause([10, 12, 20, 28, 32, 36, 39], 'The merged flow');
+  const docDiff = (from: string, to: string) => `+++ b/docs/spec.md\n@@ -3 +3 @@\n-${from}\n+${to}\n`;
+  // old head -> new head: the default branch's 3 lines, after old-head line 17 (old base 15).
+  const FROM_OLD_HEAD_SRC = '+++ b/src/svc.ts\n@@ -17,0 +18,3 @@\n+m1\n+m2\n+m3\n';
+  // new base -> new head: the branch's 2 lines, after line 5.
+  const FROM_NEW_BASE_SRC = '+++ b/src/svc.ts\n@@ -5,0 +6,2 @@\n+b1\n+b2\n';
+  const tracked = ['src/svc.ts', 'docs/spec.md'];
+  const rebase = (head: string, fromOldHead: string, fromNewBase: string) =>
+    rebasedCoordinates({
+      docs: ['docs/spec.md'],
+      readHead: () => head,
+      trackedHead: tracked,
+      trackedOldHead: tracked,
+      trackedNewBase: tracked,
+      fromOldHead: parseDiff(fromOldHead),
+      fromNewBase: parseDiff(fromNewBase),
+    });
+  const head = `# Spec\n\n${MIXED}\n`;
+
+  it('the seven-coordinate mixed case: each value pushed through its own side\'s map, and the one from neither reported', () => {
+    const r = rebase(head, docDiff(OLD_HEAD, MIXED) + FROM_OLD_HEAD_SRC, docDiff(NEW_BASE, MIXED) + FROM_NEW_BASE_SRC);
+    expect(r.read).toBe(7);
+    expect(r.proposed.map((p) => [p.from[0], p.to[0], p.side])).toEqual([
+      [12, 14, 'main'], [20, 23, 'branch'], [28, 30, 'main'], [32, 35, 'branch'], [36, 38, 'main'],
+    ]);
+    expect(r.proposed[0]!.replacement).toBe('`src/svc.ts:14`');
+    // `:10` came from the branch and is already right on the new head: nothing to say.
+    expect(r.neither.map((x) => x.citation)).toEqual(['`src/svc.ts:39`']);
+    expect(r.ambiguous).toEqual([]);
+    expect(r.edited).toEqual([]);
+  });
+
+  it('the ordinary check sees only the new base\'s half: the branch\'s values read as re-derived', () => {
+    const r = shiftedCoordinates({
+      docs: ['docs/spec.md'], readHead: () => head, trackedHead: tracked, trackedBase: tracked,
+      diff: parseDiff(docDiff(NEW_BASE, MIXED) + FROM_NEW_BASE_SRC),
+    });
+    expect(r.moved.map((m) => [m.from[0], m.to[0]])).toEqual([[12, 14], [28, 30], [36, 38]]);
+  });
+
+  it('reads only lines the branch wrote: a line the new base has as it is is the ordinary check\'s', () => {
+    const untouched = `# Spec\n\n${NEW_BASE}\n`;
+    const r = rebase(untouched, docDiff(OLD_HEAD, NEW_BASE) + FROM_OLD_HEAD_SRC, FROM_NEW_BASE_SRC);
+    expect(r.read).toBe(0);
+    expect(r.proposed).toEqual([]);
+  });
+
+  it('takes the branch\'s line itself when the rebase left it as the branch wrote it', () => {
+    const branchSide = `# Spec\n\n${OLD_HEAD}\n`;
+    const r = rebase(branchSide, FROM_OLD_HEAD_SRC, docDiff(NEW_BASE, OLD_HEAD) + FROM_NEW_BASE_SRC);
+    expect(r.proposed.map((p) => [p.from[0], p.to[0], p.side])).toEqual([[20, 23, 'branch'], [27, 30, 'branch'], [32, 35, 'branch'], [35, 38, 'branch'], [37, 40, 'branch']]);
+    expect(r.neither).toEqual([]);
+  });
+
+  it('a value on both sides whose maps agree is placed; one whose maps disagree is reported, not chosen', () => {
+    const one = (n: number) => `# Spec\n\nThe step (\`src/svc.ts:${n}\`), now worded anew.\n`;
+    const side = (n: number, w: string) => `The step (\`src/svc.ts:${n}\`), ${w}.`;
+    // `:3` is above both insertions: both maps leave it.
+    const agree = rebase(one(3), docDiff(side(3, 'b'), 'x') + FROM_OLD_HEAD_SRC, docDiff(side(3, 'm'), 'x') + FROM_NEW_BASE_SRC);
+    expect([agree.proposed, agree.ambiguous, agree.neither]).toEqual([[], [], []]);
+    // `:20` on both: the branch's map gives 23, the new base's 22.
+    const clash = rebase(one(20), docDiff(side(20, 'b'), 'x') + FROM_OLD_HEAD_SRC, docDiff(side(20, 'm'), 'x') + FROM_NEW_BASE_SRC);
+    expect(clash.proposed).toEqual([]);
+    expect(clash.ambiguous.map((a) => a.options)).toEqual([{ branch: [23, 23], main: [22, 22] }]);
+  });
+
+  it('a value whose cited lines the other side rewrote is listed as edited', () => {
+    const h = `# Spec\n\n${clause([10])}\n`;
+    const rewrite = '+++ b/src/svc.ts\n@@ -10 +10 @@\n-line8\n+changed\n';
+    const r = rebase(h, docDiff(clause([10], 'b'), 'x') + rewrite, docDiff(clause([8], 'm'), 'x') + FROM_NEW_BASE_SRC);
+    expect(r.edited.map((e) => [e.citation, e.sides])).toEqual([['`src/svc.ts:10`', ['branch']]]);
+  });
+
+  it('prints its proposals, what to re-derive, and a count — advice only', () => {
+    const r = rebase(head, docDiff(OLD_HEAD, MIXED) + FROM_OLD_HEAD_SRC, docDiff(NEW_BASE, MIXED) + FROM_NEW_BASE_SRC);
+    const out = rebasedLines(r, { oldHead: 'abc123', base: '--base' }).join('\n');
+    expect(out).toContain('docs/spec.md:3  `src/svc.ts:20`  ->  `src/svc.ts:23`  (from the branch before the rebase)');
+    expect(out).toContain('docs/spec.md:3  `src/svc.ts:12`  ->  `src/svc.ts:14`  (from the new base)');
+    expect(out).toContain('1 coordinate(s) match neither side');
+    expect(out).toContain('read 7 coordinate(s) on lines the branch wrote, against `abc123` and the new base (--base); 5 to re-point, 1 to re-derive, 0 on edited lines. Run again with --fix');
+  });
+});
+
+describe('--rebase end to end over a real rebase (kanon#166)', SPAWNS, () => {
+  it('proposes the mixed clause\'s values, exits 0, and --fix writes them', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cshift-rebase-'));
+    const sh = (...a: string[]) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+    const w = (f: string, t: string) => { mkdirSync(join(dir, f, '..'), { recursive: true }); writeFileSync(join(dir, f), t); };
+    const src = (after5: string[], after15: string[]) => {
+      const l = Array.from({ length: 40 }, (_, i) => `line${i + 1}`);
+      return [...l.slice(0, 5), ...after5, ...l.slice(5, 15), ...after15, ...l.slice(15)].join('\n') + '\n';
+    };
+    const clause = (ns: number[], lead: string) => `# Spec\n\n${lead}: ${ns.map((n) => `\`src/svc.ts:${n}\``).join(', ')}.\n`;
+    sh('init', '-q', '-b', 'main');
+    sh('config', 'user.email', 't@t');
+    sh('config', 'user.name', 't');
+    w('docs/qa/escalation-paths.md', '## Escalation paths\n\n## Pipeline code\n');
+    w('src/svc.ts', src([], []));
+    w('docs/spec.md', clause([8, 12, 18, 25, 30, 33, 35], 'The flow'));
+    sh('add', '.');
+    sh('commit', '-qm', 'old base');
+    sh('checkout', '-qb', 'branch');
+    w('src/svc.ts', src(['b1', 'b2'], []));
+    w('docs/spec.md', clause([10, 14, 20, 27, 32, 35, 37], 'The branch flow'));
+    sh('commit', '-qam', 'branch');
+    const oldHead = sh('rev-parse', 'HEAD').stdout.trim();
+    sh('checkout', '-q', 'main');
+    w('src/svc.ts', src([], ['m1', 'm2', 'm3']));
+    w('docs/spec.md', clause([8, 12, 21, 28, 33, 36, 38], 'The main flow'));
+    sh('commit', '-qam', 'main');
+    const newBase = sh('rev-parse', 'HEAD').stdout.trim();
+    // The rebase: the source merges cleanly, the clause conflicts and is resolved by hand.
+    sh('checkout', '-q', 'branch');
+    sh('rebase', '-q', 'main');
+    w('src/svc.ts', src(['b1', 'b2'], ['m1', 'm2', 'm3']));
+    w('docs/spec.md', clause([10, 12, 20, 28, 32, 36, 39], 'The merged flow'));
+    sh('add', '.');
+    sh('-c', 'core.editor=true', 'rebase', '--continue');
+    expect(sh('rev-parse', 'HEAD^').stdout.trim()).toBe(newBase);
+    const cli = join(ROOT, 'scripts/citation-shift.mjs');
+    const run = (...args: string[]) => spawnSync(process.execPath, [cli, '--base', newBase, ...args], { cwd: dir, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: '' } });
+    // The ordinary check catches the new base's three and is blind to the branch's.
+    const plain = run('--head', 'HEAD');
+    expect(plain.status, plain.stdout + plain.stderr).toBe(1);
+    expect(plain.stderr).toContain('3 coordinate(s) point at lines this diff MOVED');
+    expect(plain.stderr).not.toContain('svc.ts:20');
+    const advice = run('--rebase', oldHead, '--head', 'HEAD');
+    expect(advice.status, advice.stdout + advice.stderr).toBe(0);
+    expect(advice.stdout).toContain('5 to re-point, 1 to re-derive');
+    const fixed = run('--rebase', oldHead, '--fix');
+    expect(fixed.status, fixed.stdout + fixed.stderr).toBe(0);
+    expect(readFileSync(join(dir, 'docs/spec.md'), 'utf8')).toBe(clause([10, 14, 23, 30, 35, 38, 39], 'The merged flow'));
+    const missing = run('--rebase', 'no-such-rev');
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain('--rebase needs the branch\'s head from before the rebase');
   });
 });

@@ -36,6 +36,7 @@
 // WHAT IT DELIBERATELY DOES NOT FLAG, each for a reason:
 //   • A coordinate the diff CHANGED. Its author re-derived it — or took one side of a
 //     conflict, which this cannot tell from a deliberate correction (the rest of RA-1992).
+//     After a rebase, `--rebase <old-head>` (below) reads that case from both sides (kanon#166).
 //     In a doc, `citation-guard` still judges it against the tree. In a CODE COMMENT nothing
 //     else does — `citation-guard` reads Markdown only — so it is read here as ADVICE
 //     (kanon#175, `rewritten`): a re-point the diff's own map disagrees with, a line past
@@ -97,7 +98,14 @@
 // `--head <rev>` compares two commits instead of the working tree — how the history
 // cases (RA-811, RA-873, RA-2208) are replayed.
 //
-// Usage: node scripts/citation-shift.mjs [--base <rev>] [--head <rev>] [--path <glob>]... [--fix]
+// `--rebase <old-head>` (kanon#166) is for a branch just rebased with a conflicted clause: it
+// re-derives each coordinate on a line the branch wrote from the side its value came from —
+// see `rebasedCoordinates`. Its new base is `--base`, or the merge-base with `origin/main`. It is
+// local tooling and advice only (exit 0 whatever it finds); `--fix` writes its proposals. The old
+// head is the branch's head before the rebase: `ORIG_HEAD` right after a rebase, or a PR's
+// force-push event's `beforeCommit`, which GitHub still serves by SHA (the measurement on kanon#166).
+//
+// Usage: node scripts/citation-shift.mjs [--base <rev>] [--head <rev>] [--rebase <old-head>] [--path <glob>]... [--fix]
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -436,6 +444,119 @@ export const shiftedCoordinates = ({ docs, readHead, trackedHead, trackedBase, d
 };
 
 /**
+ * AFTER A REBASE (kanon#166): re-derive each coordinate on a line the branch wrote, from the side
+ * of the rebase its value came from — the data half of `--rebase <old-head>`, exported so the unit
+ * tier drives it over fixtures.
+ *
+ * Two open PRs that both move code a spec cites each re-point the same clause for their own tree.
+ * A conflicted clause resolved by hand is then a per-coordinate mix of both sides. Against the new
+ * base, the ordinary check (`shiftedCoordinates`) sees only the half carried from the new base's
+ * line; a value taken from the branch, or written in the conflict, looks re-derived and is skipped.
+ * This reads three trees instead: the branch's head before the rebase (OLD HEAD), the default
+ * branch it was rebased onto (NEW BASE) and the head after it (NEW HEAD). The old base is never
+ * needed: the branch's own movement is folded into `old head -> new head`, and the default
+ * branch's into `new base -> new head`.
+ *
+ * Only a doc line the new base does not have as it is — one the branch wrote or rewrote — is read;
+ * a line it left as the default branch had it is the ordinary check's. For each coordinate on such
+ * a line, its value is looked for among the coordinates into the same file on the matching line of
+ * each side (the line itself when that side has it unchanged; else the hunk's removed line paired
+ * with it, or the whole hunk's removed lines when the hunk is uneven, as `shiftedCoordinates` pairs
+ * them). Then:
+ *   • found on the old head only (`branch`): pushed through `old head -> new head`;
+ *   • found on the new base only (`main`): pushed through `new base -> new head`;
+ *   • found on both, and both maps agree (`both`): that value;
+ *   • found on both, and the maps disagree (`ambiguous`): both are reported, none chosen;
+ *   • found on neither (`neither`): written by hand in the conflict, so only the code can say —
+ *     reported for re-deriving, never proposed.
+ * A value whose map is `null` (the cited lines were edited) is `edited`, as in the ordinary check.
+ * It proposes and never judges: the CLI prints it as advice, and `--fix` writes the proposals.
+ *
+ * @param {object} p
+ * @param {string[]} p.docs
+ * @param {string[]} [p.code]
+ * @param {(path: string) => string} p.readHead       the new head
+ * @param {string[]} p.trackedHead
+ * @param {string[]} p.trackedOldHead
+ * @param {string[]} p.trackedNewBase
+ * @param {Map<string, Hunk[]>} p.fromOldHead         `git diff -U0 <old head> <new head>`
+ * @param {Map<string, Hunk[]>} p.fromNewBase         `git diff -U0 <new base> <new head>`
+ */
+export const rebasedCoordinates = ({ docs, code = [], readHead, trackedHead, trackedOldHead, trackedNewBase, fromOldHead, fromNewBase }) => {
+  const sides = {
+    branch: { diff: fromOldHead, tracked: trackedOldHead, set: new Set(trackedOldHead), maps: new Map() },
+    main: { diff: fromNewBase, tracked: trackedNewBase, set: new Set(trackedNewBase), maps: new Map() },
+  };
+  // The side's map into the new head for one file; `undefined` when the file is not at that path there.
+  const mapOf = (side, path) => {
+    const s = sides[side];
+    if (!s.set.has(path)) return undefined;
+    if (!s.maps.has(path)) s.maps.set(path, lineMapper(s.diff.get(path) ?? []));
+    return s.maps.get(path);
+  };
+  const resolvedIn = (c, tracked) => {
+    if (!c.file) return null;
+    const r = resolvePath(c.file, tracked, null);
+    return r.error ? null : r.path;
+  };
+  const hunkOf = (hunks, n) => hunks.find((h) => h.nc > 0 && n >= h.ns && n < h.ns + h.nc);
+  // The side's lines a head line may have come from.
+  const candidates = (hunks, n, line) => {
+    const h = hunkOf(hunks, n);
+    if (!h) return [line];
+    return h.removed.length === h.nc ? [h.removed[n - h.ns]] : h.removed;
+  };
+
+  const proposed = [];
+  const edited = [];
+  const neither = [];
+  const ambiguous = [];
+  let read = 0;
+  for (const doc of [...docs, ...code]) {
+    const kind = doc.endsWith('.md') ? 'doc' : 'code';
+    const oracle = isOracleSpec(doc);
+    const extract = kind === 'doc'
+      ? (l) => coordinatesIn(l, oracle).filter((c) => !c.lineZero)
+      : (l) => commentCoordinates(l, conventionFor(doc)?.comment ?? 'slash');
+    const baseHunks = fromNewBase.get(doc) ?? [];
+    const headHunks = fromOldHead.get(doc) ?? [];
+    readHead(doc).split('\n').forEach((line, i) => {
+      const n = i + 1;
+      if (!hunkOf(baseHunks, n)) return;
+      const pools = {
+        branch: candidates(headHunks, n, line),
+        main: candidates(baseHunks, n, line),
+      };
+      for (const c of extract(line)) {
+        const path = resolvedIn(c, trackedHead);
+        if (!path) continue;
+        read += 1;
+        const at = `${doc}:${n}`;
+        const base = { at, doc, line: n, index: c.i, citation: c.text, path, from: [c.a, c.b], kind };
+        const found = {};
+        for (const side of ['branch', 'main']) {
+          const map = mapOf(side, path);
+          if (!map) continue;
+          const has = pools[side].some((l) => extract(l).some((r) => resolvedIn(r, sides[side].tracked) === path && r.a === c.a && r.b === c.b));
+          if (has) found[side] = [map(c.a), map(c.b)];
+        }
+        const names = Object.keys(found);
+        if (!names.length) { neither.push(base); continue; }
+        // A side whose map edited the cited lines has no value to give; the other side's, if live, stands.
+        const live = names.filter((s) => found[s][0] !== null && found[s][1] !== null);
+        if (!live.length) { edited.push({ ...base, sides: names }); continue; }
+        const distinct = [...new Set(live.map((s) => found[s].join('-')))];
+        if (distinct.length > 1) { ambiguous.push({ ...base, options: Object.fromEntries(live.map((s) => [s, found[s]])) }); continue; }
+        const to = found[live[0]];
+        const side = live.length === 2 ? 'both' : live[0];
+        if (to[0] !== c.a || to[1] !== c.b) proposed.push({ ...base, side, to, replacement: retarget(c.text, to[0], to[1]) });
+      }
+    });
+  }
+  return { proposed, edited, neither, ambiguous, read };
+};
+
+/**
  * The advisory lines for `shiftedCoordinates`'s `rewritten` (kanon#175): one per coordinate,
  * as a GitHub annotation in CI so it reaches the checks page. Never a failure.
  *
@@ -456,6 +577,41 @@ export const rewrittenLines = (list, ci) =>
         'unless the old coordinate was already wrong and this is the correction';
     return `${ci ? '::warning::' : ''}citation-shift (advisory): ${x.at}  ${x.citation} — this diff wrote this code-comment coordinate, and it ${why}.`;
   });
+
+/**
+ * What `--rebase` prints (kanon#166): one line per proposal and per coordinate it could not place,
+ * then a count. Advice only: the run never fails on what it finds.
+ *
+ * @param {ReturnType<typeof rebasedCoordinates>} r
+ * @param {{oldHead: string, base: string, fixed?: boolean}} o
+ */
+export const rebasedLines = (r, { oldHead, base, fixed = false }) => {
+  const span = (ab) => (ab[0] === ab[1] ? `${ab[0]}` : `${ab[0]}-${ab[1]}`);
+  const WHENCE = { branch: 'the branch before the rebase', main: 'the new base', both: 'both sides' };
+  const out = [];
+  if (r.proposed.length) {
+    out.push(`citation-shift --rebase: ${r.proposed.length} coordinate(s) on lines the branch wrote ${fixed ? 'were re-pointed' : 'should move'}, each through the map of the side its value came from:`);
+    for (const p of r.proposed) out.push(`  ${p.at}  ${p.citation}  ->  ${p.replacement}  (from ${WHENCE[p.side]})`);
+  }
+  if (r.ambiguous.length) {
+    out.push(`citation-shift --rebase: ${r.ambiguous.length} coordinate(s) are on both sides, whose maps disagree — re-derive each from the code:`);
+    for (const a of r.ambiguous) out.push(`  ${a.at}  ${a.citation}  (the branch's map gives :${span(a.options.branch)}, the new base's :${span(a.options.main)})`);
+  }
+  if (r.neither.length) {
+    out.push(`citation-shift --rebase: ${r.neither.length} coordinate(s) match neither side, so they were written in the conflict — re-derive each from the code:`);
+    for (const x of r.neither) out.push(`  ${x.at}  ${x.citation} -> ${x.path}`);
+  }
+  if (r.edited.length) {
+    out.push(`citation-shift --rebase: ${r.edited.length} coordinate(s) cite lines the rebase EDITED — re-read each against the new code:`);
+    for (const e of r.edited) out.push(`  ${e.at}  ${e.citation} -> ${e.path}`);
+  }
+  out.push(
+    `citation-shift --rebase: read ${r.read} coordinate(s) on lines the branch wrote, against \`${oldHead}\` and the new base (${base}); ` +
+      `${r.proposed.length} to re-point, ${r.ambiguous.length + r.neither.length} to re-derive, ${r.edited.length} on edited lines.` +
+      `${r.proposed.length && !fixed ? ' Run again with --fix to write the proposals.' : ''}`,
+  );
+  return out;
+};
 
 const git = (args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 1e9, stdio: ['ignore', 'pipe', 'pipe'] });
 const tryGit = (args) => { try { return git(args).trim(); } catch { return null; } };
@@ -478,6 +634,31 @@ const resolveBase = () => {
   return mb ? { base: mb, how: 'merge-base with origin/main' } : { base: null, how: 'no origin/main to diff against' };
 };
 
+/** Rewrite each coordinate to its `replacement`, in the working tree. */
+const applyFix = (list) => {
+  const byDoc = new Map();
+  for (const m of list) byDoc.set(m.doc, [...(byDoc.get(m.doc) ?? []), m]);
+  for (const [doc, ms] of byDoc) {
+    const lines = readFileSync(doc, 'utf8').split('\n');
+    // Right to left within a line, so an earlier rewrite cannot shift a later index.
+    for (const m of ms.sort((x, y) => y.line - x.line || y.index - x.index)) {
+      const l = lines[m.line - 1];
+      lines[m.line - 1] = l.slice(0, m.index) + m.replacement + l.slice(m.index + m.citation.length);
+    }
+    writeFileSync(doc, lines.join('\n'));
+  }
+};
+
+// `--rebase`'s new base: `--base`, or where the head now meets `origin/main`. Never a merge
+// commit's first parent: the mode is local tooling, run on a rebased branch, not on CI's merge ref.
+const resolveNewBase = () => {
+  const i = process.argv.indexOf('--base');
+  if (i !== -1) return { base: process.argv[i + 1], how: '--base' };
+  const hi = process.argv.indexOf('--head');
+  const mb = tryGit(['merge-base', 'origin/main', hi === -1 ? 'HEAD' : process.argv[hi + 1]]);
+  return mb ? { base: mb, how: 'merge-base with origin/main' } : { base: null, how: 'no origin/main to diff against' };
+};
+
 const main = () => {
   const FIX = process.argv.includes('--fix');
   let selection;
@@ -488,7 +669,19 @@ const main = () => {
     process.exitCode = 1;
     return;
   }
-  const { base, how } = resolveBase();
+  const ri = process.argv.indexOf('--rebase');
+  const oldHead = ri === -1 ? null : process.argv[ri + 1];
+  if (ri !== -1 && (!oldHead || oldHead.startsWith('--') || !tryGit(['rev-parse', '--verify', '--quiet', `${oldHead}^{commit}`]))) {
+    console.error(`citation-shift: --rebase needs the branch's head from before the rebase, as a commit this clone has${oldHead && !oldHead.startsWith('--') ? ` (\`${oldHead}\` is not one)` : ''}.`);
+    process.exitCode = 1;
+    return;
+  }
+  const { base, how } = oldHead ? resolveNewBase() : resolveBase();
+  if (oldHead && !base) {
+    console.error(`citation-shift: --rebase needs the new base, and there is ${how}; pass --base <rev>.`);
+    process.exitCode = 1;
+    return;
+  }
   if (!base || !tryGit(['rev-parse', '--verify', '--quiet', `${base}^{commit}`])) {
     // Reported, not fatal — the same rule `locked-merge-check.mjs` states for a base it
     // cannot fetch: a guard that fails closed on what it cannot judge blocks every PR.
@@ -550,23 +743,21 @@ const main = () => {
   const grep = tryGit(['grep', '-l', '-E', `\\.${SOURCE_EXT.replace('(?:', '(')}:[0-9]`, ...(head ? [head] : []), '--', ...(codeTrees(areas) ?? [])]) ?? '';
   const code = grep.split('\n').filter(Boolean).map((l) => (head ? l.slice(head.length + 1) : l))
     .filter((f) => readsCodeComments(f, readHead(f), pipelineDirs, areas));
+  if (oldHead) {
+    const fromOldHead = parseDiff(git(['diff', '-U0', '--no-renames', '--no-color', oldHead, ...(head ? [head] : [])]));
+    const trackedOldHead = git(['ls-tree', '-r', '-z', '--name-only', oldHead]).split('\0').filter(Boolean);
+    const rr = rebasedCoordinates({ docs, code, readHead, trackedHead, trackedOldHead, trackedNewBase: trackedBase, fromOldHead, fromNewBase: diff });
+    if (FIX) applyFix(rr.proposed);
+    for (const l of rebasedLines(rr, { oldHead, base: how, fixed: FIX })) console.log(l);
+    return;
+  }
   const r = shiftedCoordinates({ docs, code, readHead, trackedHead, trackedBase, diff });
   // ADVISORY, and printed on every path — a red run, a `--fix` and the all-clear alike. It
   // never sets the exit code (kanon#175; the measurement is in the PR that added it).
   for (const l of rewrittenLines(r.rewritten, Boolean(process.env.GITHUB_ACTIONS))) console.log(l);
 
   if (FIX && r.moved.length) {
-    const byDoc = new Map();
-    for (const m of r.moved) byDoc.set(m.doc, [...(byDoc.get(m.doc) ?? []), m]);
-    for (const [doc, ms] of byDoc) {
-      const lines = readFileSync(doc, 'utf8').split('\n');
-      // Right to left within a line, so an earlier rewrite cannot shift a later index.
-      for (const m of ms.sort((x, y) => y.line - x.line || y.index - x.index)) {
-        const l = lines[m.line - 1];
-        lines[m.line - 1] = l.slice(0, m.index) + m.replacement + l.slice(m.index + m.citation.length);
-      }
-      writeFileSync(doc, lines.join('\n'));
-    }
+    applyFix(r.moved);
     console.log(`citation-shift: re-pointed ${r.moved.length} coordinate(s) this diff moved. Review the doc diff, then re-run.`);
     return;
   }
