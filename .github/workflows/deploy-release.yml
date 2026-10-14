@@ -14,7 +14,9 @@
 #     types: [published]        — a stable release and a pre-release alike (decision 4)
 #   workflow_dispatch:
 #     inputs:
-#       release: { type: string, required: true }   — an existing release's tag, to deploy again
+#       release: { type: string, required: true }   — an existing release's tag, to deploy again;
+#                                                     dispatched AT that tag (`--ref <tag>`), which
+#                                                     the gate requires (#914)
 # A release made with the workflow token starts no run, so the deploy lane needs the Releaser
 # (plan 0010 §3, decision 3).
 #

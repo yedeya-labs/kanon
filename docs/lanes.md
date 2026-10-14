@@ -392,7 +392,9 @@ jobs:
 
 Grant each job the permissions its workflow asks for (`requirements.json`'s `deploy` entry lists them), and map no secret. A run lists each environment's job as `staging / deploy`, the caller's job name then the lane's, which is what a reference deploy declaration names. Publish releases with the Releaser: a release the workflow token creates starts no run.
 
-**The gate** refuses, by name, before anything deploys: `draft` or `no-release` (the release is a draft, missing, or its tag moved), `not-default-branch` (the commit is not on the default branch), `declaration-mismatch` (the caller's list is not the record's at that commit, in order), and `ci-red` or `ci-timeout` (`ci.yml`'s push run on that commit is not green, or still runs after the CI wait; `K-SHIP-8`).
+**Dispatch at the release's tag, always.** To deploy a release again, or to roll back to an earlier one, dispatch the caller at that release's tag, naming it as the input too: `gh workflow run deploy.yml --ref <tag> -f release=<tag>`. The gate refuses a dispatch run at any other ref, the default branch included, as `no-release`, before the probe or any environment runs. That way no job of the lane carries the default branch's OIDC subject, which your QA store's role, and any other role that trusts the default branch, would accept: every job carries the tag's subject or its environment's ([#914](https://github.com/yedeya-labs/kanon/issues/914)).
+
+**The gate** refuses, by name, before anything deploys: `draft` or `no-release` (the release is a draft or missing, its tag moved, or a dispatch ran at another ref than the release's tag), `not-default-branch` (the commit is not on the default branch), `declaration-mismatch` (the caller's list is not the record's at that commit, in order), and `ci-red` or `ci-timeout` (`ci.yml`'s push run on that commit is not green, or still runs after the CI wait; `K-SHIP-8`).
 
 **The hooks.** Two composite actions you write, as you write the project-setup hook:
 

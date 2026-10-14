@@ -6,7 +6,9 @@
 // THE GATE (`gate`), in `deploy-release.yml`'s `gate` job, before the probe and anything that
 // builds or deploys. It refuses, by code, unless all four hold, in this order:
 //   1. the release exists and is not a draft, and its tag resolves to the run's commit (for a
-//      dispatch, to the commit the `release` input's tag names): `draft`, `no-release`;
+//      dispatch, to the commit the `release` input's tag names, and the dispatch ran AT that tag,
+//      `GITHUB_REF` `refs/tags/<tag>`, so no job carries the default branch's subject, #914):
+//      `draft`, `no-release`;
 //   2. that commit is reachable from the default branch: `not-default-branch`;
 //   3. the environments the caller passes are exactly the adoption record's `## Deploy` list
 //      AT THAT COMMIT, in order (`scripts/lib/deploy-declaration.mjs`): `declaration-mismatch`;
@@ -35,7 +37,7 @@
 // approval: for a `release` trigger, a commit older than the environment's last successful
 // deploy is refused `superseded`; a dispatch may go back, and says so (`rollback`).
 //
-// ENV  GITHUB_REPOSITORY, GITHUB_SHA, GITHUB_EVENT_NAME, GH_TOKEN (for `gh`)
+// ENV  GITHUB_REPOSITORY, GITHUB_SHA, GITHUB_REF, GITHUB_EVENT_NAME, GH_TOKEN (for `gh`)
 //      RELEASE_TAG      the `release` event's tag (`github.event.release.tag_name`)
 //      RELEASE_DRAFT    the `release` event's `draft` flag
 //      DISPATCH_RELEASE a dispatch's `release` input (`github.event.inputs.release`)
@@ -127,10 +129,10 @@ export const splitEnvironments = (/** @type {string | undefined} */ text) => Str
 
 /**
  * Check 1: the release, and the commit its tag names.
- * @param {{ repo: string, event: string, releaseTag?: string, releaseDraft?: string, dispatchRelease?: string, githubSha?: string, api: Api }} o
+ * @param {{ repo: string, event: string, releaseTag?: string, releaseDraft?: string, dispatchRelease?: string, githubSha?: string, githubRef?: string, api: Api }} o
  * @returns {Release}
  */
-export function resolveRelease({ repo, event, releaseTag = '', releaseDraft = '', dispatchRelease = '', githubSha = '', api }) {
+export function resolveRelease({ repo, event, releaseTag = '', releaseDraft = '', dispatchRelease = '', githubSha = '', githubRef = '', api }) {
   let tag;
   if (event === 'release') {
     tag = releaseTag.trim();
@@ -139,6 +141,12 @@ export function resolveRelease({ repo, event, releaseTag = '', releaseDraft = ''
   } else if (event === 'workflow_dispatch') {
     tag = dispatchRelease.trim();
     if (!tag) throw new Refusal('no-release', 'the dispatch names no release: pass an existing release\'s tag as the `release` input');
+    // A dispatch runs AT its release's tag, never at a branch (the Owner's decision on #914): every
+    // job then carries the tag's subject or its environment's, never the default branch's, which
+    // the adopter's QA store and other roles trust.
+    if (githubRef !== `refs/tags/${tag}`) {
+      throw new Refusal('no-release', `a dispatch deploys only from its release's tag: this one ran at \`${githubRef || 'an unknown ref'}\`; dispatch it with \`--ref ${tag} -f release=${tag}\``);
+    }
   } else {
     throw new Refusal('no-release', `the deploy lane runs on a published release or a dispatch naming one, not on \`${event || 'an unknown event'}\``);
   }
@@ -276,7 +284,7 @@ export function gate(env, { api = ghApi, now, sleep, log } = {}) {
   try {
     const release = resolveRelease({
       repo, event: env.GITHUB_EVENT_NAME ?? '', releaseTag: env.RELEASE_TAG, releaseDraft: env.RELEASE_DRAFT,
-      dispatchRelease: env.DISPATCH_RELEASE, githubSha: env.GITHUB_SHA, api,
+      dispatchRelease: env.DISPATCH_RELEASE, githubSha: env.GITHUB_SHA, githubRef: env.GITHUB_REF, api,
     });
     Object.assign(outputs, { sha: release.sha, tag: release.tag, prerelease: String(release.prerelease), 'published-at': release.publishedAt });
     const branch = defaultBranch(api, repo, env.DEFAULT_BRANCH);
@@ -387,7 +395,7 @@ export function environmentCheck(env, { api = ghApi } = {}) {
   try {
     const release = resolveRelease({
       repo, event: env.GITHUB_EVENT_NAME ?? '', releaseTag: env.RELEASE_TAG, releaseDraft: env.RELEASE_DRAFT,
-      dispatchRelease: env.DISPATCH_RELEASE, githubSha: env.GITHUB_SHA, api,
+      dispatchRelease: env.DISPATCH_RELEASE, githubSha: env.GITHUB_SHA, githubRef: env.GITHUB_REF, api,
     });
     Object.assign(outputs, { sha: release.sha, tag: release.tag, prerelease: String(release.prerelease), 'published-at': release.publishedAt });
     const declared = declarationAt({ repo, sha: release.sha, api });

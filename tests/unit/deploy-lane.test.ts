@@ -120,6 +120,9 @@ export function laneProblems(w: Record<string, Workflow>): string[] {
   const probe = w[RELEASE]?.jobs.probe;
   if (probe) {
     if (probe.if !== "needs.gate.outputs.fallback != 'no-environments'") out.push(`${RELEASE}:probe: runs under the no-environments marker`);
+    // A refused gate (a dispatch away from its release's tag among its refusals, #914) stops the
+    // probe: it needs the gate and its `if:` has no status function that would run it anyway.
+    if (JSON.stringify(probe.needs) !== '"gate"' || /always\(\)|failure\(\)|cancelled\(\)/.test(String(probe.if))) out.push(`${RELEASE}:probe: can run after a refused gate`);
     const hook = (probe.steps ?? []).find((s) => s.uses === './.github/actions/deploy');
     if (hook?.with?.probe !== 'true' || hook?.with?.environments !== '${{ needs.gate.outputs.environments }}') out.push(`${RELEASE}:probe: doesn't run the deploy hook as a probe of the declared list`);
     if ((probe.steps ?? []).findIndex((s) => s.id === 'judge') < (probe.steps ?? []).indexOf(hook!)) out.push(`${RELEASE}:probe: judges before the hook answers`);
@@ -200,6 +203,10 @@ describe('the deploy lane holds its shape', () => {
       red((w) => { delete step(job(w, ENV, 'deploy'), 'supersede').env!.FALLBACK; }, /a re-run skips the Maintainer check/);
       red((w) => { delete step(job(w, ENV, 'deploy'), 'supersede').env!.ROLE; }, /a re-run skips the Maintainer check/);
       red((w) => { delete (job(w, ENV, 'deploy') as { outputs: Record<string, string> }).outputs.unauthorized; }, /doesn't output its Maintainer refusal/);
+    });
+    it('the probe run after a refused gate', () => {
+      red((w) => { job(w, RELEASE, 'probe').if = "always() && needs.gate.outputs.fallback != 'no-environments'"; }, /can run after a refused gate|runs under the no-environments marker/);
+      red((w) => { delete job(w, RELEASE, 'probe').needs; }, /can run after a refused gate/);
     });
     it('the deploy job run whatever `declare` holds', () => red((w) => { delete job(w, ENV, 'deploy').if; }, /runs when declare holds production/));
     it("the hold moved into the caller: a fallback input on deploy.yml", () => red((w) => { w[ENV]!.on!.workflow_call!.inputs!.fallback = { type: 'string' }; }, /not the environment and its position alone/));

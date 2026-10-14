@@ -79,10 +79,27 @@ describe('the gate (plan 0010 §3)', () => {
     expect(run({ RELEASE_DRAFT: 'true' }).outputs.refusal).toBe('draft');
   });
 
-  it("check 1 on a dispatch: the input's tag names the commit, whatever ref the dispatch ran at", () => {
-    const r = run({ GITHUB_EVENT_NAME: 'workflow_dispatch', DISPATCH_RELEASE: 'v1.2.0', GITHUB_SHA: OLDER, RELEASE_TAG: '' });
+  it("check 1 on a dispatch at the release's tag: the input's tag names the commit", () => {
+    const r = run({ GITHUB_EVENT_NAME: 'workflow_dispatch', DISPATCH_RELEASE: 'v1.2.0', GITHUB_REF: 'refs/tags/v1.2.0', GITHUB_SHA: OLDER, RELEASE_TAG: '' });
     expect(r.ok).toBe(true);
     expect(r.outputs.sha).toBe(SHA);
+  });
+
+  it("check 1 refuses a dispatch at the default branch, or at another release's tag, before anything else is read (#914; MUTATION: the ref check removed turns this red)", () => {
+    // The Owner's decision on #914: a dispatch runs at its release's tag, so no job carries the
+    // default branch's subject, which the adopter's QA store and other roles trust.
+    for (const GITHUB_REF of ['refs/heads/main', 'refs/tags/v1.1.0', '']) {
+      const { api, calls } = github();
+      const r = gate({ ...ENV, GITHUB_EVENT_NAME: 'workflow_dispatch', DISPATCH_RELEASE: 'v1.2.0', GITHUB_REF, RELEASE_TAG: '' }, { api, now: () => 0, sleep: () => {} });
+      expect(r.ok ? 'admitted' : r.refusal, GITHUB_REF).toBe('no-release');
+      expect(r.ok ? '' : r.message, GITHUB_REF).toMatch(/--ref v1\.2\.0 -f release=v1\.2\.0/);
+      expect(calls, GITHUB_REF).toEqual([]);
+    }
+  });
+
+  it("a release run is unaffected by the ref check: its own ref is never compared", () => {
+    expect(run({ GITHUB_REF: 'refs/heads/main' }).ok).toBe(true);
+    expect(run({ GITHUB_REF: '' }).ok).toBe(true);
   });
 
   it('check 2: refuses a commit off the default branch', () => {
@@ -222,7 +239,7 @@ describe('the hold under a fallback marker (plan 0010 §13, kanon#894)', () => {
     [`repos/${REPO}/contents/docs/qa/adoption.md?ref=${SHA}`]: `# Adoption record\n\n${PEOPLE}## Deploy\n\n- **Environments:** \`staging\`, \`production\`\n${marker ? `- **Fallback:** \`${marker}\`\n` : ''}`,
   });
   const check = (env: Record<string, string>, marker: string | null) => environmentCheck({ ...ENV, ...env }, { api: github(marked(marker)).api });
-  const DISPATCH = { GITHUB_EVENT_NAME: 'workflow_dispatch', DISPATCH_RELEASE: 'v1.2.0', RELEASE_TAG: '' };
+  const DISPATCH = { GITHUB_EVENT_NAME: 'workflow_dispatch', DISPATCH_RELEASE: 'v1.2.0', GITHUB_REF: 'refs/tags/v1.2.0', RELEASE_TAG: '' };
 
   it('holds the last environment on a `release` run under either marker', () => {
     for (const marker of ['no-environments', 'no-reviewers']) {
