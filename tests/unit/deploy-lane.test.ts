@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { validate } from '../../actions/agent-telemetry/schema.mjs';
 import {
-  classifyEnvironment, classifyRelease, DEPLOY_ARTIFACT_FILE, deployArtifactName, environmentRow, heldOrUnrecorded, releaseRow,
+  classifyEnvironment, classifyRelease, DEPLOY_ARTIFACT_FILE, deployArtifactName, environmentRow, isHeld, releaseRow, stageOfRefusal,
 } from '../../scripts/deploy-row.mjs';
 import { issueTitle, report, reportFrom } from '../../scripts/deploy-report.mjs';
 import * as collected from '../../scripts/lib/telemetry-artifacts.mjs';
@@ -485,13 +485,29 @@ describe("deploy-row.mjs: one environment's row (plan 0010 §8, §10)", () => {
       .toMatchObject({ trigger: 'workflow_dispatch', rollback: true });
   });
 
-  it('writes no row for a held production, nor for a production dispatch refused to a non-Maintainer (kanon#894)', () => {
+  it('writes no row for a held production (kanon#894)', () => {
     const held = { result: 'success', outputs: { ...declared().outputs, held: 'true' } };
     expect(environmentRow({ ...RUN, NEEDS: JSON.stringify({ declare: held, deploy: { result: 'skipped' } }), ENVIRONMENT: 'production', POSITION: '2' }, { api: () => [] })).toBeNull();
-    const refused = { result: 'failure', outputs: { role: 'production', unauthorized: 'not-maintainer' } };
-    expect(environmentRow({ ...RUN, NEEDS: JSON.stringify({ declare: refused, deploy: { result: 'skipped' } }), ENVIRONMENT: 'production', POSITION: '2' }, { api: () => [] })).toBeNull();
     // MUTATION: a record that ignores the hold writes a cancelled production row here.
     expect(classifyEnvironment({ declare: held, deploy: { result: 'skipped' }, environment: 'production' })).toEqual({ outcome: 'cancelled', failed_stage: 'approval' });
+  });
+
+  it('records a production attempt refused to a non-Maintainer as `refused` at `deploy`, `not-maintainer` (§10, §13, kanon#913)', () => {
+    const want = { outcome: 'refused', failed_stage: 'deploy', refusal: 'not-maintainer', role: 'production', position: 2 };
+    // Refused by `declare`, before any approval wait: `deploy` is skipped.
+    const refused = { declare: { result: 'failure', outputs: { role: 'production', unauthorized: 'not-maintainer' } }, deploy: { result: 'skipped' } };
+    const r = environmentRow({ ...RUN, GITHUB_EVENT_NAME: 'workflow_dispatch', NEEDS: JSON.stringify(refused), ENVIRONMENT: 'production', POSITION: '2' }, { api: () => [] });
+    expect(r).toMatchObject(want);
+    expect(validate(r)).toEqual({ ok: true });
+    // A "Re-run failed jobs" by a non-Maintainer: `declare`'s outputs are reused and `deploy`'s own check refuses.
+    const rerun = { declare: { result: 'success', outputs: { ...declared().outputs, held: 'false', fallback: 'no-reviewers' } }, deploy: { result: 'failure', outputs: { 'started-at': T(1), unauthorized: 'not-maintainer', 'ended-at': T(2) } } };
+    const again = environmentRow({ ...RUN, GITHUB_EVENT_NAME: 'workflow_dispatch', NEEDS: JSON.stringify(rerun), ENVIRONMENT: 'production', POSITION: '2' }, { api: () => ({}) });
+    expect(again).toMatchObject(want);
+    expect(validate(again)).toEqual({ ok: true });
+    expect(isHeld(refused.declare)).toBe(false);
+    expect(isHeld(rerun.declare)).toBe(false);
+    // MUTATION: `stageOfRefusal` without `not-maintainer` files both at `gate`, its default.
+    expect(stageOfRefusal('not-maintainer')).toBe('deploy');
   });
 
   it('a failed `declare` is never a hold: a non-ok row, and the report files (the #892 review)', () => {
@@ -504,9 +520,9 @@ describe("deploy-row.mjs: one environment's row (plan 0010 §8, §10)", () => {
     const filed = reportFrom({ NEEDS: JSON.stringify({ ...needs, record: { result: 'success', outputs: { written: 'true', outcome: 'failed', stage: 'gate', refusal: '' } } }), ENVIRONMENT: 'production', POSITION: '2' }, 'environment');
     expect(filed).toMatchObject({ outcome: 'failed', failed_stage: 'gate' });
     // MUTATION: a record that treats deploy's `skipped` as the hold writes no row for this fixture.
-    const skippedAsHeld = (n: typeof needs) => n.deploy.result === 'skipped' || heldOrUnrecorded(n.declare);
+    const skippedAsHeld = (n: typeof needs) => n.deploy.result === 'skipped' || isHeld(n.declare);
     expect(skippedAsHeld(needs)).toBe(true);
-    expect(heldOrUnrecorded(needs.declare)).toBe(false);
+    expect(isHeld(needs.declare)).toBe(false);
   });
 
   describe('a rejection is read from the approvals, never from the conclusion alone (kanon#890)', () => {
@@ -689,17 +705,23 @@ describe("deploy-report.mjs: one issue per environment (plan 0010 §8, decision 
     expect(reportFrom({ NEEDS: JSON.stringify(went), ENVIRONMENTS: 'staging production' }, 'release')).toBeNull();
   });
 
-  it('a held production neither files, comments nor closes; a refused non-Maintainer dispatch files as a refusal (kanon#894)', () => {
+  it('a held production neither files, comments nor closes; a refused non-Maintainer dispatch files as a refusal at `deploy` (kanon#894, kanon#913)', () => {
     const held = { declare: { result: 'success', outputs: { role: 'production', held: 'true' } }, deploy: { result: 'skipped' }, record: { result: 'success', outputs: { written: 'false' } } };
     expect(reportFrom({ NEEDS: JSON.stringify(held), ENVIRONMENT: 'production', POSITION: '2' }, 'environment')).toBeNull();
-    const refused = { declare: { result: 'failure', outputs: { role: 'production', unauthorized: 'not-maintainer' } }, deploy: { result: 'skipped' }, record: { result: 'success', outputs: { written: 'false' } } };
+    // A record that failed before writing its row: the report reads the jobs' own outputs.
+    const refused = { declare: { result: 'failure', outputs: { role: 'production', unauthorized: 'not-maintainer' } }, deploy: { result: 'skipped' }, record: { result: 'failure', outputs: {} } };
     expect(reportFrom({ NEEDS: JSON.stringify(refused), ENVIRONMENT: 'production', POSITION: '2' }, 'environment'))
       .toMatchObject({ outcome: 'refused', refusal: 'not-maintainer', role: 'production', failed_stage: 'deploy' });
     // A "Re-run failed jobs" by a non-Maintainer: `declare`'s outputs are reused and `deploy`'s own check refuses.
-    const rerun = { declare: { result: 'success', outputs: { role: 'production', held: 'false', fallback: 'no-reviewers' } }, deploy: { result: 'failure', outputs: { 'started-at': T(1), unauthorized: 'not-maintainer' } }, record: { result: 'success', outputs: { written: 'false' } } };
+    const rerun = { declare: { result: 'success', outputs: { role: 'production', held: 'false', fallback: 'no-reviewers' } }, deploy: { result: 'failure', outputs: { 'started-at': T(1), unauthorized: 'not-maintainer' } }, record: { result: 'failure', outputs: {} } };
     expect(reportFrom({ NEEDS: JSON.stringify(rerun), ENVIRONMENT: 'production', POSITION: '2' }, 'environment'))
       .toMatchObject({ outcome: 'refused', refusal: 'not-maintainer', failed_stage: 'deploy' });
-    expect(environmentRow({ ...RUN, NEEDS: JSON.stringify(rerun), ENVIRONMENT: 'production', POSITION: '2' }, { api: () => [] })).toBeNull();
+    // The record wrote the row (kanon#913): the report files what it recorded, at the same stage.
+    for (const needs of [refused, rerun]) {
+      const recorded = { ...needs, record: { result: 'success', outputs: { written: 'true', outcome: 'refused', stage: 'deploy', refusal: 'not-maintainer' } } };
+      expect(reportFrom({ NEEDS: JSON.stringify(recorded), ENVIRONMENT: 'production', POSITION: '2' }, 'environment'))
+        .toMatchObject({ outcome: 'refused', refusal: 'not-maintainer', role: 'production', failed_stage: 'deploy' });
+    }
   });
 
   it("an environment's report reads the record's outcome, which saw the approvals, and the declaration's role", () => {

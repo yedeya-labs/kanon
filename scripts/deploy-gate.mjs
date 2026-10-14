@@ -32,7 +32,7 @@
 // under the `no-environments` marker the job is told to set no environment (§13). Under either
 // fallback marker the last environment is HELD on a `release` run (`held=true`, kanon#894): only
 // the Maintainer named in the record's `## People` deploys it, by dispatch, and a dispatch by
-// anyone else is refused (`unauthorized=not-maintainer`; its row waits for PR #901 to add the code to `DEPLOY_REFUSALS`, kanon#899).
+// anyone else is refused (`unauthorized=not-maintainer`, recorded at stage `deploy`, kanon#899).
 // `supersede`, in `deploy.yml`'s `deploy` job, once it holds its concurrency slot and its
 // approval: for a `release` trigger, a commit older than the environment's last successful
 // deploy is refused `superseded`; a dispatch may go back, and says so (`rollback`).
@@ -362,8 +362,8 @@ export const attemptActor = (env) => String(env.GITHUB_TRIGGERING_ACTOR || env.G
 /**
  * Under a fallback marker, production is deployed only by the Maintainer the adoption record's
  * `## People` names (plan 0010 §13): `null` when this attempt's actor is one, else the refusal.
- * Its code, `not-maintainer`, reaches `DEPLOY_REFUSALS` only with PR #901 (kanon#899), not merged
- * yet: until it does, the job refuses, the report announces it, and no row is written.
+ * Its code, `not-maintainer`, is one of `DEPLOY_REFUSALS`: the job refuses, the row records it at
+ * stage `deploy` and the report files it (kanon#899).
  * @param {{ repo: string, sha: string, fallback: string | null, env: Record<string, string | undefined>, api: Api }} o
  * @returns {{ code: 'not-maintainer', message: string } | null}
  */

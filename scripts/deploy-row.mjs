@@ -60,13 +60,24 @@ export { DEPLOY_ARTIFACT_FILE, DEPLOY_ARTIFACT_PREFIX, deployArtifactName };
  * @typedef {{ outcome: string, failed_stage?: string, refusal?: string }} Ending
  */
 
-/** The stage a refusal stopped at (§10): the probe's two at `probe`, `superseded` at `deploy`, the gate's codes at `gate`. */
+/**
+ * The stage a refusal stopped at (§10): the probe's two at `probe`; `superseded` and
+ * `not-maintainer`, which the environment's job checks before the deploy hook, at `deploy`; the
+ * gate's codes at `gate`.
+ */
 export const stageOfRefusal = (/** @type {string} */ code) =>
-  (code === 'trust-unbound' || code === 'probe-unconfigured' ? 'probe' : code === 'superseded' ? 'deploy' : 'gate');
+  (code === 'trust-unbound' || code === 'probe-unconfigured' ? 'probe' : code === 'superseded' || code === 'not-maintainer' ? 'deploy' : 'gate');
+
+/**
+ * A job's refusal code: its `refusal` output, or the Maintainer check's `unauthorized`, which
+ * `declare` and the `deploy` job output apart from it (§13).
+ * @param {JobResult | undefined} job
+ */
+const refusalOf = (job) => job?.outputs?.refusal || job?.outputs?.unauthorized;
 
 /** @param {JobResult | undefined} job @param {string} stage @returns {Ending} */
 const stopped = (job, stage) => {
-  const refusal = job?.outputs?.refusal;
+  const refusal = refusalOf(job);
   if (refusal) return { outcome: 'refused', failed_stage: stageOfRefusal(refusal), refusal };
   if (job?.result === 'cancelled') return { outcome: 'cancelled', failed_stage: stage };
   return { outcome: 'failed', failed_stage: stage };
@@ -107,9 +118,10 @@ export function rejectedIn(approvals, environment) {
  */
 export function classifyEnvironment({ declare, deploy, approvals = () => [], environment }) {
   // A failed `declare` is never a hold: the hold is read from its `held` output alone
-  // (`heldOrUnrecorded`), which a failed job leaves empty, never inferred from `deploy` being
-  // skipped. Its stage is `gate`, the closest existing one, PENDING #886, which decides the stage
-  // of a failure before the environment's job.
+  // (`isHeld`), which a failed job leaves empty, never inferred from `deploy` being skipped. Its
+  // refusal keeps its own stage (`not-maintainer` at `deploy`); any other failure's stage is
+  // `gate`, the closest existing one, PENDING #886, which decides the stage of a failure before
+  // the environment's job.
   if (declare?.result !== 'success') return stopped(declare, 'gate');
   const o = deploy?.outputs ?? {};
   const started = Boolean(o['started-at']);
@@ -117,7 +129,7 @@ export function classifyEnvironment({ declare, deploy, approvals = () => [], env
     case 'success':
       return { outcome: 'ok' };
     case 'failure':
-      if (o.refusal) return stopped(deploy, 'deploy');
+      if (refusalOf(deploy)) return stopped(deploy, 'deploy');
       if (!started) return rejectedIn(approvals(), environment) ? { outcome: 'rejected', failed_stage: 'approval' } : { outcome: 'failed', failed_stage: 'approval' };
       if (o['build-failed'] === 'true') return { outcome: 'failed', failed_stage: 'build' };
       if (o['smoke-outcome'] === 'failure') return { outcome: 'smoke_failed', failed_stage: 'smoke' };
@@ -190,21 +202,18 @@ const buildMs = (text) => {
 };
 
 /**
- * Whether this environment's call writes no row:
- *   • HELD (kanon#894): production on a `release` run under a fallback marker waits for the
- *     Maintainer's dispatch. It is neither a deploy nor a failure, so a row would only distort
- *     the production metrics; the dispatch writes production's one row.
- *   • A production attempt by anyone but the Maintainer under a marker, refused by `declare` or,
- *     on a re-run of the failed jobs, by the `deploy` job's own check:
- *     its refusal code, `not-maintainer`, reaches `DEPLOY_REFUSALS` only with PR #901 (kanon#899), so no row until that merges. The
- *     report still announces it.
- * @param {JobResult | undefined} declare @param {JobResult | undefined} [deploy]
+ * Whether this environment's call writes no row because it is HELD (kanon#894): production on a
+ * `release` run under a fallback marker waits for the Maintainer's dispatch. It is neither a
+ * deploy nor a failure, so a row would only distort the production metrics; the dispatch writes
+ * production's one row. A production attempt by anyone but the Maintainer is no hold: refused by
+ * `declare` or, on a re-run of the failed jobs, by the `deploy` job's own check, it writes its
+ * row, `refused` at `deploy` with `not-maintainer` (§10, §13).
+ * @param {JobResult | undefined} declare
  */
-export const heldOrUnrecorded = (declare, deploy) => declare?.outputs?.held === 'true'
-  || Boolean(declare?.outputs?.unauthorized) || Boolean(deploy?.outputs?.unauthorized);
+export const isHeld = (declare) => declare?.outputs?.held === 'true';
 
 /**
- * An environment record's row: one, or `null` when it is held or awaits its refusal code.
+ * An environment record's row: one, or `null` when it is held.
  * @param {Record<string, string | undefined>} env
  * @param {{ now?: Date, api?: import('./deploy-gate.mjs').Api }} [deps]
  */
@@ -212,7 +221,7 @@ export function environmentRow(env, { now = new Date(), api = ghApi } = {}) {
   const needs = /** @type {{ declare?: JobResult, deploy?: JobResult }} */ (JSON.parse(env.NEEDS || '{}'));
   const repo = String(env.GITHUB_REPOSITORY);
   const environment = String(env.ENVIRONMENT ?? '');
-  if (heldOrUnrecorded(needs.declare, needs.deploy)) return null;
+  if (isHeld(needs.declare)) return null;
   const ending = classifyEnvironment({
     ...needs,
     environment,
@@ -262,7 +271,7 @@ if (isCliEntry(import.meta.url)) {
   if (!row) {
     console.log(command === 'release'
       ? 'The run went on to the environments, which record their own rows: nothing to record here.'
-      : 'Production is held for the Maintainer\'s dispatch, or its dispatch was refused for an actor who isn\'t the Maintainer: no row.');
+      : 'Production is held for the Maintainer\'s dispatch: no row.');
     out('written=false\n');
   } else {
     const dir = join(env.RUNNER_TEMP ?? '.', 'kanon-deploy-row');
