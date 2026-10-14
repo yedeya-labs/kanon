@@ -18,9 +18,15 @@
 //                            ticks on it (plan 0004 step 8): an issue a merge closes is closed
 //                            by whoever merged, and one closed by hand by whoever closed it.
 //   pull_request `opened`    whoever opened it, `sender`, checked the same way.
-//   issues `opened`          whoever opened it, `sender`, checked the same way. The issue
-//                            backstop runs on it (kanon#768), so an issue opened by someone
-//                            without triage access is refused and gets no bucket from it.
+//   issues `opened`          REFUSED, EXCEPT on a lane whose gate step sets
+//                            `LANE_GATE_ISSUE_OPENED=anyone`: there it is admitted whoever
+//                            opened it, with no lookup. Only the issue backstop sets it
+//                            (kanon#768, Owner decision 2026-10-14): it runs no model, reads no
+//                            issue text, and writes only a bucket and labels, so an outsider
+//                            who opens an issue cannot steer it, and an outsider's issue gets
+//                            its bucket like any other (`K-WORK-1`). The Kanon pin is still
+//                            checked. tests/unit/lane-gate-run.test.ts holds that no other lane
+//                            sets it, and that every other lane refuses an opened issue.
 //   pull_request_target      as `pull_request`: the review lane's label trigger runs the base
 //                            branch's copy of its caller, with the same payload. EXCEPT
 //                            `closed`, which a lane acts on only as a MERGE (the Overseer's
@@ -153,7 +159,17 @@ export function triggeringActor(eventName, event, env) {
     case 'pull_request':
     case 'pull_request_target':
       if (event.action === 'labeled') return found(event.sender?.login, 'user who applied the label');
-      if (event.action === 'opened') return found(event.sender?.login, 'user who opened it');
+      if (event.action === 'opened' && eventName === 'issues' && env.LANE_GATE_ISSUE_OPENED === 'anyone') {
+        // The issue backstop's exception (kanon#768, see the header): admitted, never looked up.
+        return {
+          actor: {
+            login: event.sender?.login ?? 'someone',
+            source: 'user who opened the issue',
+            admitted: 'this lane admits whoever opens an issue: it runs no model, reads no issue text and writes only a bucket and labels (kanon#768, Owner decision 2026-10-14)',
+          },
+        };
+      }
+      if (eventName !== 'issues' && event.action === 'opened') return found(event.sender?.login, 'user who opened it');
       if (event.action === 'closed') {
         // A `pull_request_target` close is acted on only as a merge, and judged by who merged it.
         if (eventName === 'pull_request_target') {
