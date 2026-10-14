@@ -8,6 +8,6 @@ What `kanon init` and `kanon doctor` do for an adopter, where a project has need
 
 - `[CLI-1]` `[seed]` `kanon init` pins `vX.Y.Z` when that tag exists on Kanon, else `candidate-vX.Y.Z` when that tag exists, and otherwise refuses, saying which tags it looked for.
 
-## doctor
+## Retired
 
-- `[CLI-2]` `[seed]` `kanon doctor` reports the blocking finding `replay.on` when the adoption record's `Agent replay` choice is `on`, unless the record waives it.
+- `[CLI-2]` `[retired]` `kanon doctor` reports the blocking finding `replay.on` when the adoption record's `Agent replay` choice is `on`, unless the record waives it. Seeded by project #902's draft brief, and retired with the `Agent replay` choice under the Owner's no-leak rule (plan 0012, decision 6).
