@@ -175,6 +175,136 @@ describe('the guard goes red', { timeout: 30_000 }, () => {
     expect(problems.some((p) => p.startsWith('scripts/lib/labels.mjs: agent-lanes-smoke.yml, job implement-revise,') && p.includes('lane-agent-job.yml:run'))).toBe(true);
   });
 
+  // kanon#831: a lane spine hands its agent job the App token its mint job seals into an output,
+  // `app-token: ${{ needs.mint.outputs.sealed }}`, beside the Claude secret. The token alone holds
+  // a credential.
+  const SPINES = ['agent-lane.yml', 'review-run.yml', 'rebase-run.yml', 'lead-split-run.yml', 'explore-run.yml', 'code-audit-run.yml', 'overseer-run.yml', 'verify-acs-run.yml', 'merge-reconcile-run.yml', 'explore-telemetry-run.yml'];
+  const CLAUDE = /(\n {6}app-token: \$\{\{ needs\.mint\.outputs\.sealed \}\})\n {6}claude-token: \$\{\{ secrets\.claude-token \}\}\n {6}anthropic-api-key: \$\{\{ secrets\.anthropic-api-key \}\}/;
+  const withoutClaude = (spine: string) => {
+    const file = `.github/workflows/${spine}`;
+    const text = readFileSync(file, 'utf8');
+    expect(text, spine).toMatch(CLAUDE);
+    return { [file]: text.replace(CLAUDE, '$1') };
+  };
+
+  it("when a spine maps its agent job no Claude secret, the minted App token it still maps holds a credential", () => {
+    for (const spine of SPINES) expect(reached(credentialReach(withoutClaude(spine))), spine).toEqual(reached(REACH));
+  });
+
+  it("when the project-setup hook runs a green-zone file in a lane whose spine maps only the minted App token", () => {
+    const file = '.github/actions/project-setup/action.yml';
+    const anchor = '      run: npm ci\n';
+    const setup = readFileSync(file, 'utf8').replace(anchor, `${anchor}    - shell: bash\n      run: node ${GREEN}\n`);
+    for (const [spine, hit] of [['agent-lane.yml', `${GREEN}: implement.yml, job implement`], ['rebase-run.yml', `${GREEN}: rebase.yml, job rebase`]] as const) {
+      const problems = credentialProblems(credentialReach({ ...withoutClaude(spine), [file]: setup }), ESCALATIONS);
+      expect(problems.find((p) => p.startsWith(hit)), spine).toContain(`${spine}:`);
+    }
+  });
+
+  // A token minted from a real secret, carried in a job output to a job that holds no other.
+  const FIXTURE = '.github/workflows/fixture-831.yml';
+  const CALLED = '.github/workflows/fixture-831-called.yml';
+  const mintAnd = (jobs: string) => `on: push
+permissions: {}
+jobs:
+  mint:
+    runs-on: ubuntu-latest
+    outputs:
+      token: \${{ steps.mint.outputs.token }}
+    steps:
+      - id: mint
+        uses: actions/create-github-app-token@v3
+        with:
+          private-key: \${{ secrets.APP_PRIVATE_KEY }}
+  plain:
+    runs-on: ubuntu-latest
+    outputs:
+      count: \${{ steps.count.outputs.count }}
+    steps:
+      - id: count
+        run: echo count=1 >> "$GITHUB_OUTPUT"
+${jobs}`;
+  const runsGreen = (needs: string, env: string, extra = '') => `  use:
+    needs: ${needs}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read${extra}
+    env:
+      VALUE: ${env}
+    steps:
+      - run: node ${GREEN}
+`;
+  const called = (ref: string) => `on:
+  workflow_call:
+    inputs:
+      token:
+        type: string
+      count:
+        type: string
+    secrets:
+      token:
+        required: false
+jobs:
+  use:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - env:
+          VALUE: ${ref}
+        run: node ${GREEN}
+`;
+  const call = (needs: string, mapping: string) => `  call:
+    needs: ${needs}
+    uses: ./${CALLED}
+${mapping}
+`;
+  const problemsOf = (overrides: Record<string, string>) => credentialProblems(credentialReach(overrides), ESCALATIONS).map((p) => p.split(',').slice(0, 2).join(','));
+
+  it('when a job reads, in its `env:`, an output of a job that reads a real secret, and runs a green-zone file', () => {
+    expect(problemsOf({ [FIXTURE]: mintAnd(runsGreen('mint', '${{ needs.mint.outputs.token }}')) })).toEqual([`${GREEN}: fixture-831.yml, job use`]);
+    // Through a job that relays it, too.
+    const relay = `  relay:
+    needs: mint
+    runs-on: ubuntu-latest
+    outputs:
+      token: \${{ steps.relay.outputs.token }}
+    steps:
+      - id: relay
+        env:
+          TOKEN: \${{ needs.mint.outputs.token }}
+        run: echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+`;
+    expect(problemsOf({ [FIXTURE]: mintAnd(relay + runsGreen('relay', '${{ needs.relay.outputs.token }}')) })).toEqual([`${GREEN}: fixture-831.yml, job use`]);
+    // An output of a job that reads no secret holds none, and nor does an `if:` that reads one.
+    expect(problemsOf({ [FIXTURE]: mintAnd(runsGreen('plain', '${{ needs.plain.outputs.count }}')) })).toEqual([]);
+    expect(problemsOf({ [FIXTURE]: mintAnd(runsGreen('[mint, plain]', '${{ needs.plain.outputs.count }}', "\n    if: needs.mint.outputs.token != ''")) })).toEqual([]);
+  });
+
+  it("when a called workflow's job reads a minted token mapped to it as a secret or passed in its `with:`, and runs a green-zone file", () => {
+    const hit = [`${GREEN}: fixture-831.yml, job call`];
+    expect(problemsOf({ [FIXTURE]: mintAnd(call('mint', '    secrets:\n      token: ${{ needs.mint.outputs.token }}')), [CALLED]: called('${{ secrets.token }}') })).toEqual(hit);
+    expect(problemsOf({ [FIXTURE]: mintAnd(call('mint', '    with:\n      token: ${{ needs.mint.outputs.token }}')), [CALLED]: called('${{ inputs.token }}') })).toEqual(hit);
+    // An input that carries no credential, or one the job never reads, holds none.
+    expect(problemsOf({ [FIXTURE]: mintAnd(call('[mint, plain]', '    with:\n      token: ${{ needs.mint.outputs.token }}\n      count: ${{ needs.plain.outputs.count }}')), [CALLED]: called('${{ inputs.count }}') })).toEqual([]);
+  });
+
+  it('when a job reads an output of a called workflow given a minted token', () => {
+    const after = `  use:
+    needs: call
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VALUE: \${{ needs.call.outputs.token }}
+    steps:
+      - run: node ${GREEN}
+`;
+    const quiet = called('${{ inputs.count }}').replace(`node ${GREEN}`, 'true');
+    const problems = problemsOf({ [FIXTURE]: mintAnd(call('mint', '    with:\n      token: ${{ needs.mint.outputs.token }}') + after), [CALLED]: quiet });
+    expect(problems).toEqual([`${GREEN}: fixture-831.yml, job use`]);
+  });
+
   it('but not for a file a comment names', () => {
     expect(credentialProblems(credentialReach(withImport('cli/apps.mjs', `// import '../${GREEN}';\n/* require('../${GREEN}') */`)), ESCALATIONS)).toEqual([]);
   });

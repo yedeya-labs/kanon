@@ -29,11 +29,17 @@ import { parse } from 'yaml';
  * - the secrets it can read: a root workflow's secrets are all real, but those the caller names as
  *   never set; a called workflow's are the ones its caller maps from a real one (`secrets:
  *   inherit` maps them all), a hyphen in the name (`claude-token`) included. A secret the
- *   workflow's top-level `env:` reads is in every job's environment, so every job holds it.
+ *   workflow's top-level `env:` reads is in every job's environment, so every job holds it;
+ * - the credentials it is handed in a value (kanon#831): an output of a job it needs that holds
+ *   one (a lane spine's mint job seals the App token it mints from the App's key into an output,
+ *   and maps it to the agent's job as `app-token`), read in its `env:`, a step's or a call's
+ *   `with:` or a call's `secrets:`; and, in a called workflow, an input its caller passed one in.
+ *   A called workflow's outputs carry one when it was handed one, a real secret or such a value.
+ *   An `if:` reads a value without handing it to the job, so it never counts.
  *
  * A job holds a credential when it is granted any `write` scope (`id-token: write` among them) or
- * reads a real secret (an App's key, which mints its token, among them). A called workflow is
- * followed with its caller's grant and secrets.
+ * reads a real secret (an App's key, which mints its token, among them), or such a value. A called
+ * workflow is followed with its caller's grant, secrets and credential-carrying inputs.
  *
  * A job runs unless its `if:`, read under each event that starts its root workflow, can't hold
  * (`evaluateIf`): so the lanes `agent-lanes-smoke.yml` calls on a push run only their jobs that
@@ -110,6 +116,14 @@ const writes = (p: Perms) => Object.values(p).some((v) => v === 'write');
 
 // A called workflow's secret may be named with a hyphen (`claude-token`), which a repository's can't.
 const secretRefs = (text: string) => [...text.matchAll(/\bsecrets\.([A-Za-z_][A-Za-z0-9_-]*)/g)].map((m) => m[1]!);
+// A called workflow's input, never a dispatch's `github.event.inputs`, and a needed job's output.
+const inputRefs = (text: string) => [...text.matchAll(/(?<![\w.])inputs\.([A-Za-z_][A-Za-z0-9_-]*)/g)].map((m) => m[1]!);
+const outputRefs = (text: string) => [...text.matchAll(/\bneeds\.([A-Za-z_][A-Za-z0-9_-]*)\.outputs\b/g)].map((m) => m[1]!);
+
+/** A job's text, its own and its steps' `if:` aside: a condition reads a value but never holds it. */
+function heldText(job: Job): string {
+  return JSON.stringify(job, (key, value: unknown) => (key === 'if' ? undefined : value));
+}
 
 /** The triggers that run this repository's own branch, not a pull request's code. */
 export function ownBranchEvents(on: unknown): string[] {
@@ -472,7 +486,7 @@ export function credentialReach(overrides: Readonly<Record<string, string>> = {}
    * `uses: ./…`, and a call that leaves the release for a non-release ref. A `./` or `$/` call
    * inside it stays in the release.
    */
-  const walkWorkflow = (file: string, events: readonly string[], caller: Perms | null, secrets: Secrets, root: Root, chain: string[], pinned = false) => {
+  const walkWorkflow = (file: string, events: readonly string[], caller: Perms | null, secrets: Secrets, inputs: ReadonlySet<string>, root: Root, chain: string[], pinned = false) => {
     const wf = parsed[file];
     if (!wf || chain.length > 6) return;
     const wfPerms = normPerms(wf.permissions);
@@ -480,6 +494,29 @@ export function credentialReach(overrides: Readonly<Record<string, string>> = {}
     const wfEnv = JSON.stringify(wf.env ?? {});
     const jobs = wf.jobs ?? {};
     const needsOf = (j: Job) => (j.needs === undefined ? [] : Array.isArray(j.needs) ? j.needs : [j.needs]);
+    // Whether a value hands a job a credential: a real secret, an input passed one, or an output of
+    // a job it needs that holds one (kanon#831: the token a mint job seals into an output).
+    const carrying = new Map<string, boolean>();
+    const carries = (text: string, needs: readonly string[], depth = 0): boolean =>
+      readsSecret(text, secrets)
+      || inputRefs(text).some((i) => inputs.has(i))
+      || outputRefs(text).some((n) => needs.includes(n) && outputsCarry(n, depth + 1));
+    const outputsCarry = (name: string, depth: number): boolean => {
+      const hit = carrying.get(name);
+      if (hit !== undefined) return hit;
+      const job = jobs[name];
+      if (!job || depth > 50) return false;
+      carrying.set(name, false);
+      const needs = needsOf(job);
+      // A called workflow's outputs may carry whatever it was handed; a job's, whatever it holds.
+      const out = typeof job.uses === 'string'
+        ? job.secrets === 'inherit'
+          ? secrets === 'all' || secrets.size > 0 || Object.values(job.with ?? {}).some((v) => carries(String(v), needs, depth))
+          : [...Object.values(job.secrets ?? {}), ...Object.values(job.with ?? {})].some((v) => carries(String(v), needs, depth))
+        : carries(heldText(job) + wfEnv, needs, depth);
+      carrying.set(name, out);
+      return out;
+    };
     // The events under which each job may run, from its `if:` and its needed jobs'.
     const memo = new Map<string, string[]>();
     const runsUnder = (name: string, depth = 0): string[] => {
@@ -505,12 +542,14 @@ export function credentialReach(overrides: Readonly<Record<string, string>> = {}
         const called = p === null ? (release ? [release[0], release[1]] : inRelease ? LOCAL_WORKFLOW.exec(job.uses) : null)
           : new RegExp(`^${WORKFLOWS.replace(/\./g, '\\.')}/([^/]+\\.ya?ml)$`).exec(p);
         if (!called) continue; // another repository's
+        const needs = needsOf(job);
         const passed: Secrets = job.secrets === 'inherit' ? secrets
-          : new Set(Object.entries(job.secrets ?? {}).filter(([, v]) => readsSecret(String(v), secrets)).map(([k]) => k));
-        walkWorkflow(called[1]!, under, perms, passed, { workflow: at.workflow, job: at.job }, root === null ? [] : at.via, p === null);
+          : new Set(Object.entries(job.secrets ?? {}).filter(([, v]) => carries(String(v), needs)).map(([k]) => k));
+        const carried = new Set(Object.entries(job.with ?? {}).filter(([, v]) => carries(String(v), needs)).map(([k]) => k));
+        walkWorkflow(called[1]!, under, perms, passed, carried, { workflow: at.workflow, job: at.job }, root === null ? [] : at.via, p === null);
         continue;
       }
-      if (!writes(perms) && !readsSecret(JSON.stringify(job) + wfEnv, secrets)) continue;
+      if (!writes(perms) && !carries(heldText(job) + wfEnv, needsOf(job))) continue;
       const entries: Entries = { files: [], packages: [] };
       for (const s of job.steps ?? []) {
         const e = stepEntries(s, null, 0, pinned);
@@ -523,7 +562,7 @@ export function credentialReach(overrides: Readonly<Record<string, string>> = {}
 
   for (const [file, wf] of Object.entries(parsed)) {
     const events = ownBranchEvents(wf.on);
-    if (events.length > 0) walkWorkflow(file, events, null, 'all', null, []);
+    if (events.length > 0) walkWorkflow(file, events, null, 'all', new Set(), null, []);
   }
   return [...reaches.values()].sort((a, b) => a.file.localeCompare(b.file) || a.workflow.localeCompare(b.workflow) || a.job.localeCompare(b.job));
 }
