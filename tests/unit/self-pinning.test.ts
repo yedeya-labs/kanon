@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -9,10 +9,14 @@ import { parse } from 'yaml';
 // adopter's tree. A `yedeya-labs/kanon/…@ref` reference pins a second version beside the
 // one the adopter chose. Either would let two versions of Kanon run in one job.
 
+// Every Kanon action, nested ones too (plan 0011's `actions/notify/slack/action.yml`). The hook
+// files `kanon init` writes (`actions/notify/hooks/*.yml`) are the adopter's, not Kanon's, so they
+// pin Kanon by release on purpose (plan 0011 §7.1) and are not read here.
 const files = [
-  ...readdirSync('actions', { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => join('actions', d.name, 'action.yml')),
+  ...readdirSync('actions', { recursive: true, encoding: 'utf8' })
+    .filter((f) => basename(f) === 'action.yml')
+    .map((f) => join('actions', f))
+    .sort(),
   ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => join('.github/workflows', f)),
 ];
 

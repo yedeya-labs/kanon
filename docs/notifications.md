@@ -2,7 +2,7 @@
 
 Kanon's lanes tell people things in chat: the daily project digest, the weekly digest, and a deploy's announcement. **Kanon owns what a notification is; you own where it goes.** Every notification is one message in Kanon's contract, `kanon-notify` version 1, and the lanes hand it to a hook you choose: Kanon's Slack hook, Kanon's generic JSON webhook hook, or your own, for any other system ([plan 0011](plans/0011-notifications.md)).
 
-**What is built so far.** This page is the contract half: the message, its kinds and secrets, its limits, Kanon text, the library that builds and checks it, and the published JSON Schema ([plan 0011, step N2](plans/0011-notifications.md#12-order-of-moves)). The hook's interface, Kanon's two prebuilt hooks and the `notify` job that calls them come in the plan's later steps, and the digests still post as they do today until their release moves them. The security section below holds for the whole design, and is worth reading before you choose a hook.
+**What is built so far.** The contract: the message, its kinds and secrets, its limits, Kanon text, the library that builds and checks it, and the published JSON Schema ([plan 0011, step N2](plans/0011-notifications.md#12-order-of-moves)). And [Kanon's Slack hook](#kanons-slack-hook) (step N3), which nothing calls yet. The generic webhook hook, the `notify` job that calls a hook, and `kanon init`'s question come in the plan's later steps, and the digests still post as they do today until their release moves them. The security section below holds for the whole design, and is worth reading before you choose a hook.
 
 ## The message
 
@@ -104,6 +104,7 @@ A model's narrative is Kanon text by intent (it may bold a word), so it goes thr
 | `renderText(message)` | The message as **plain text**, at most 12,000 characters, for a hook that posts one string: the markup removed, the escapes resolved, a link written `label (url)`, the run's link last. Plain text, not Kanon text, so a system that renders Markdown can't turn a literal `#` into a heading |
 | `SCHEMAS`, `KINDS`, `SEVERITIES`, `LIMITS`, `KIND_SECRETS` | The spec of each version, version 1's lists and limits, and each kind's secret's name |
 | `jsonSchema(version)` | The JSON Schema of a version, generated from `SCHEMAS` |
+| `parseInline(line)`, `linesOf(text)` | Kanon text parsed, one line at a time, into text, code, strong, emphasis and link nodes, with every escape resolved: for a hook that renders Kanon text into its own system's markup, as Kanon's Slack hook does, so the subset is parsed in one place |
 
 ## The JSON Schema
 
@@ -118,6 +119,33 @@ As the telemetry schema's row kinds are versioned:
 - **Within a version, changes are additive only:** a new optional field, or a new kind. A hook must ignore a field it doesn't know, and post a kind it doesn't know.
 - **Anything else is a new version:** a field removed, renamed or retyped, a limit tightened. Kanon then hands a hook both versions for at least one stable release, and the hook reads the one it declares.
 - **Kanon's prebuilt hooks declare the versions their release writes,** so a repository on them moves with its pin.
+
+## Kanon's Slack hook
+
+Kanon ships a hook for Slack ([plan 0011 §7.2](plans/0011-notifications.md#72-the-slack-hook)). It is an ordinary hook: the lanes call it exactly as they would call your own, and choosing it means having it at the hook's path.
+
+**Two files.** The action, [`actions/notify/slack/action.yml`](../actions/notify/slack/action.yml) with [`slack.mjs`](../actions/notify/slack/slack.mjs), is the code, at a Kanon release; it reads the hook's four inputs (`message-v1`, `text`, `kind`, `secret`) and nothing else. The hook file, [`actions/notify/hooks/slack.yml`](../actions/notify/hooks/slack.yml), is what `kanon init` will write to `.github/actions/notify/action.yml`: a composite action whose one step is `yedeya-labs/kanon/actions/notify/slack` at the release `init` ran from, with the four inputs passed through. A release moves that pin in Kanon's copy, and `kanon upgrade` will move yours with your callers'. Change the step and it is your own hook.
+
+**One webhook, the one it is given.** `secret` is one Slack incoming-webhook URL, and the hook posts there and nowhere else: create an incoming webhook for the channel ([Slack's guide](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks)) and store its URL in the kind's secret. There is no routing inside a secret: each kind reaches its own channel because its own secret holds that channel's webhook, and the same URL in all three puts everything in one channel. **Anything but `https://hooks.slack.com/services/…` is refused,** naming the input and never echoing its value: another URL means another system, which is the generic webhook hook's job or your own hook's.
+
+**What Slack gets.** One `POST` of `application/json` with `text` and `blocks`. The payload sets no channel, name or icon, which an incoming webhook can't change. A redirect is not followed.
+
+| From | Block |
+|---|---|
+| `severity` and `title` | a `header`, `plain_text`: `:large_blue_circle:`, `:warning:` or `:rotating_light:` for `info`, `warning` or `critical` (an unknown severity reads as `info`), a space, then the title; cut at Slack's 150 characters with `…` |
+| `summary` | a `section`, `mrkdwn` |
+| each section | a `divider`, then a `section` whose text is the heading in bold and the body, with `fields` as the section's fields (each `*label*` and its value, at most 2,000 characters). A text past Slack's 3,000 characters after escaping splits into further sections, at a line boundary where a line fits |
+| `links` and `source.run_url` | one `context` block: one element per link, and the run's own last, at most 9 and 1, Slack's 10 |
+
+At most 50 blocks, Slack's limit: past it, the fiftieth block is a `context` saying the message was cut, with the run's link. A message within the contract reaches that only when escaping more than doubles its bodies. **Links are text, not buttons,** because a button needs a request URL that a webhook-only Slack app doesn't have. A kind the hook doesn't know is posted the same way, never dropped.
+
+**Kanon text to `mrkdwn`.** `**strong**` becomes `*strong*`, `_emphasis_` and `` `code` `` stay, `[label](url)` becomes `<url|label>`, and a `- ` bullet becomes `•`. **Every `&`, `<` and `>` is escaped** (`&amp;`, `&lt;`, `&gt;`, Slack's three control characters) in every field that goes into `mrkdwn`, so no text, an issue title or a model's narrative, can form `<!channel>`, `<!here>` or a mention. Slack documents no escape for its formatting characters, so a literal `*`, `_`, `` ` `` or `~` gets a zero-width space on each side, which keeps Slack from pairing it: `snake_case_name` and an issue titled `**urgent**` arrive as written. The header is `plain_text`, which Slack never parses, so the title there is not escaped.
+
+**The `text` fallback.** Slack shows the top-level `text` in notifications, mobile pushes and to screen readers first. It is the whole message in `mrkdwn` (a `Warning:` or `Critical:` lead in words, the title in bold, the summary, the sections, then the links) when that fits Slack's recommended 4,000 characters, and otherwise the title, the summary and the run's link, which the blocks complete.
+
+**Errors.** A non-2xx answer fails the step with its status and Slack's error string (`invalid_payload`, `no_text`, `channel_is_archived`, `invalid_token`, `action_prohibited`), never the URL; any other answer body is not printed. A `429` is retried once, after its `Retry-After`, when that is at most 60 seconds (one second when Slack sends none); a second `429` fails.
+
+**What isn't confirmed yet:** how a header with an emoji renders on Slack's mobile client, and whether the zero-width spaces keep Slack from formatting on desktop and mobile alike. Plan 0011's live step checks both in a test workspace.
 
 ## Security
 

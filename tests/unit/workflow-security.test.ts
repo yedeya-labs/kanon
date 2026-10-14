@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -16,9 +16,14 @@ type Doc = { on?: unknown; jobs?: Record<string, Job>; runs?: { steps?: Step[] }
 
 const files = [
   ...readdirSync('.github/workflows').filter((f) => f.endsWith('.yml')).map((f) => join('.github/workflows', f)),
-  ...readdirSync('actions', { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => join('actions', d.name, 'action.yml')),
+  // Every Kanon action, nested ones too (plan 0011's `actions/notify/slack/action.yml`).
+  ...readdirSync('actions', { recursive: true, encoding: 'utf8' })
+    .filter((f) => basename(f) === 'action.yml')
+    .map((f) => join('actions', f))
+    .sort(),
+  // The hook files `kanon init` writes into an adopter's repository (plan 0011 §7.1): they call
+  // Kanon by release, and K-ADOPT-12 holds that pin as it holds any other.
+  ...readdirSync('actions/notify/hooks').filter((f) => f.endsWith('.yml')).map((f) => join('actions/notify/hooks', f)),
   // The AWS QA store's actions (plan 0004 step P9), which an adopter's hook calls by path.
   'infra/qa-store/aws/action.yml',
   'infra/qa-store/aws/maintenance/action.yml',
