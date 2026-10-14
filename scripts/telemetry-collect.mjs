@@ -81,7 +81,7 @@ import { describeErrors, MAX_FINDINGS, SCHEMAS, validate } from '../actions/agen
 import { nameContext, verify } from '../actions/agent-telemetry/scrub.mjs';
 import { isCliEntry } from './lib/cli-entry.mjs';
 import { ARTIFACT_FILE, FINDING_ARTIFACT_FILE, ghApi, ghDownload, listTelemetryArtifacts, readZipEntry } from './lib/telemetry-artifacts.mjs';
-import { codeOf, HOSTED_INGEST_URL, REFUSED_TITLE, storeOf, storeRequest, TokenError } from './lib/telemetry-token.mjs';
+import { codeOf, HOSTED_INGEST_URL, REFUSED_TITLE, storeOf, storeRequest, TokenError, UNPUBLISHED_JOB } from './lib/telemetry-token.mjs';
 import { readUpstreamFindingsFrom, SENT_VALUES } from './lib/upstream-findings.mjs';
 import { ghAsync, workItemStep } from './telemetry-work-items.mjs';
 
@@ -106,6 +106,15 @@ export const COLLECT_JOB = 'Collect telemetry rows';
 export const COLLECT_JOB_OVERRIDE = `${COLLECT_JOB} (window override)`;
 /** The same job's name on an `erase: yes` dispatch, which sweeps nothing, so is never a watermark. */
 export const ERASE_JOB = 'Erase telemetry';
+/**
+ * The same job's name while the hosted store's URL is unpublished in this release and the caller
+ * names no store of its own: the run skips, green, so it is never a watermark. Anchoring on it
+ * would make the first real sweep, at the release that publishes the URL, reach back 90 minutes
+ * instead of to the last sweep before the skips, and drop the rows in between (#843). The job's
+ * name is evaluated before this script runs, so `telemetry-collect.yml` holds its own literal for
+ * the case, and tests/unit/telemetry-collect-lane.test.ts holds it to `HOSTED_INGEST_URL`.
+ */
+export { UNPUBLISHED_JOB };
 
 /** A finding row's free-text fields (plan 0006 §2.2), read from the schema: the `text` type. */
 export const TEXT_FIELDS = Object.freeze(Object.entries(/** @type {Record<string, { type: string }>} */ (SCHEMAS.finding?.[1] ?? {}))
@@ -199,7 +208,8 @@ export function workflowFileOf(ref) {
  * yet also succeeds, and anchoring on it would drop the rows of the time before. So each
  * successful run on the branch is checked for the collect job's own success, newest first.
  * A `window_minutes` override's run is passed over the same way: its job is named
- * `COLLECT_JOB_OVERRIDE`, which matches neither form below (kanon#315).
+ * `COLLECT_JOB_OVERRIDE`, which matches neither form below (kanon#315). So is a run that skipped
+ * because the hosted store's URL is unpublished, named `UNPUBLISHED_JOB` (#843).
  *
  * @param {{ api: Api, repo: string, file: string, branch: string, selfRunId: string, limit?: number }} opts
  */
@@ -603,8 +613,8 @@ async function main() {
   if (problems.length) fail(`${problems.join('; ')}. Nothing was sent, and no token was minted.`);
   if (!store.ok) {
     // The hosted URL isn't published in this release: the collector skips, green, as it did
-    // before its variables were set.
-    summary(`Telemetry collector **skipped**: ${store.why}.`);
+    // before its variables were set. The job is named `UNPUBLISHED_JOB`, so this run is no sweep.
+    summary(`Telemetry collector **skipped**: ${store.why}. This run is not a sweep: the first sweep at a release that publishes it reaches back to the last sweep before, up to ${SWEEP_CAP_DAYS} days.`);
     return;
   }
   const file = workflowFileOf(env.GITHUB_WORKFLOW_REF);

@@ -223,10 +223,10 @@ Off unless the person says yes. Say, in the question itself, everything the pers
 - **Who reads it:** Kanon's operator, to improve Kanon, who publishes only aggregates that at least three adopters contribute to; the repository reads only its own rows.
 - **How to stop and erase:** delete `.github/workflows/telemetry.yml`; to erase what was sent, first run it by hand with `erase: yes` (`docs/sharing.md` in Kanon's repository, "Stop and erase").
 - **Who else can write:** every job on the default branch that holds `id-token: write`, an existing OIDC job of theirs included, can write to the store, since its writer role trusts the default branch's ref; name each one `.inspection.idTokenHolders` lists as `unaccepted`, which `.answers.acceptedIdTokenHolders` asks about next.
-- **What is left after a yes:** nothing. The collector's first run on the default branch registers the repository, with no issue, no variable and no wait for the operator. On a private repository each hourly run costs about an Actions minute.
+- **What is left after a yes:** nothing. The collector's first run on the default branch registers the repository, with no issue, no variable and no wait for the operator. On a private repository each hourly run costs about an Actions minute. At a release that doesn't publish the hosted store's URL yet ([#843](https://github.com/yedeya-labs/kanon/issues/843)), say instead what `init`'s question says: the collector sends nothing and registers nothing until the pin moves to a release that does.
 
 - **Recommended:** **No**. Telemetry is never recommended for the person: it is theirs to offer.
-- **Options:** **No** (`--no-telemetry`): nothing is written and nothing is sent. **Yes** (`--telemetry`): `init` writes the collector's caller, which is the whole registration: no step is left, and the summary's *Sharing* line says it registers on the collector's first run.
+- **Options:** **No** (`--no-telemetry`): nothing is written and nothing is sent. **Yes** (`--telemetry`): `init` writes the collector's caller, which is the whole registration: no step is left, and the summary's *Sharing* line says it registers on the collector's first run, or, at a release that doesn't publish the hosted store's URL yet, that it "sends nothing yet"; relay the line as it is.
 
 ### `.answers.upstreamFindings`: where findings only Kanon can act on go
 

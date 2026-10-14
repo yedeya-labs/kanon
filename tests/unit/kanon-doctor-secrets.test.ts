@@ -6,6 +6,7 @@ import { checkout, clone, fakeGitHub, healthyFiles, identitiesOf, ids, LANES, NE
 import { SPAWNS } from './helpers/spawns.js';
 import { KEYS_HELP } from '../../cli/apps.mjs';
 import { renderNotice } from '../../actions/agent-classify/classify-agent-result.mjs';
+import { UNPUBLISHED_JOB } from '../../scripts/telemetry-collect.mjs';
 
 /**
  * `kanon doctor` on the secrets a workflow maps (#414) and a caller maps at the checked release (#415),
@@ -259,10 +260,10 @@ describe("kanon doctor and the telemetry collector's caller (#428, plan 0008 J5)
   const withCollector = (release = PINNED) => ({ ...healthyFiles(), [TELEMETRY_CALLER_PATH]: telemetryCallerFile(release) });
   const holderOf = (r: Result) => r.json.idTokenHolders.find((h: { workflow: string }) => h.workflow === TELEMETRY_CALLER_PATH);
   /** A GitHub whose caller has run on the default branch, its run's one job carrying `notes`. */
-  const ran = (conclusion: string, notes: Array<{ title: string; annotation_level: string; message: string }> = []) => {
+  const ran = (conclusion: string, notes: Array<{ title: string; annotation_level: string; message: string }> = [], job = 'collect / Collect telemetry rows') => {
     const github = fakeGitHub();
     github.st.runs[FILE] = [{ databaseId: 4242, conclusion, createdAt: '2026-10-14T07:40:00Z' }];
-    github.st.runJobs[4242] = [{ id: 99, name: 'collect / Collect telemetry rows', conclusion }];
+    github.st.runJobs[4242] = [{ id: 99, name: job, conclusion }];
     github.st.annotations[99] = notes;
     return github;
   };
@@ -303,6 +304,24 @@ describe("kanon doctor and the telemetry collector's caller (#428, plan 0008 J5)
     const waived = await run(dir, ran('success', [{ title: 'telemetry-refused', annotation_level: 'warning', message: 'the store answered 410 erased: …' }]), ['--json']);
     expect(waived.json.findings).toEqual([]);
     expect(waived.json.waived.map((w: { id: string }) => w.id)).toEqual(['telemetry.refused']);
+  });
+
+  // #843: a release whose hosted URL is empty skips, green, and registers nothing. Its run is
+  // finished, so `telemetry.not-run` no longer fires: doctor says what the skip means instead.
+  it("reports telemetry.unpublished, without blocking, when the caller's last run skipped because the hosted store is unpublished in its release (#843)", async () => {
+    const dir = checkout(withCollector());
+    const r = await run(dir, ran('success', [], `collect / ${UNPUBLISHED_JOB}`), ['--json']);
+    expect(r.status, r.out).toBe(EXIT.healthy);
+    expect(ids(r)).toEqual([`telemetry.unpublished ${TELEMETRY_CALLER_PATH}`]);
+    const f = r.json.findings[0];
+    expect(f).toMatchObject({ category: 'caller', blocking: false });
+    expect(f.message).toContain("its last run on main, 4242, sent nothing: Kanon's hosted telemetry store's URL is not published in the release of Kanon it calls");
+    expect(f.message).toContain('registers nothing');
+    expect(f.fix.text).toContain('Publish the hosted URLs');
+    expect(f.fix.commands).toEqual([`gh run view 4242 -R ${REPO}`]);
+    // A sweep under the job's own name is not, and neither is the skip's name on a red run.
+    expect(ids(await run(dir, ran('success'), ['--json']))).toEqual([]);
+    expect(ids(await run(dir, ran('failure', [], `collect / ${UNPUBLISHED_JOB}`), ['--json']))).toEqual([]);
   });
 
   it('reports nothing for a red run that is not a refusal, which the run itself pages', async () => {

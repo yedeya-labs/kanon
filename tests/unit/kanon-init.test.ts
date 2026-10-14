@@ -9,7 +9,8 @@ import { callerFile, ciFile, DEPENDABOT_ENTRY, loadRequirements, TRIGGERS } from
 import { appIdentities, appsArgs, callsRelease, CONFLICTS, init, LANE_CHECK, laneCatalogue, lineDiff, parseArgs, registerRolesOf, RULESET_NAME, rulesetGaps, SCHEMA, usage, USAGE, workflowName } from '../../cli/init.mjs';
 import { pluginSettingsFile, readPluginDeclaration } from '../../cli/plugin.mjs';
 import { TELEMETRY_CALLER_PATH, telemetryCallerFile } from '../../cli/callers.mjs';
-import { TELEMETRY_QUESTION, UPSTREAM_EVIDENCE_QUESTION, upstreamFindingsQuestion } from '../../cli/init.mjs';
+import { TELEMETRY_QUESTION, telemetryQuestion, telemetryRegisters, UPSTREAM_EVIDENCE_QUESTION, upstreamFindingsQuestion } from '../../cli/init.mjs';
+import { HOSTED_INGEST_URL } from '../../scripts/lib/telemetry-token.mjs';
 import { codeownersOf, CONSENT_LEVELS, CONSENT_OPTIONS, CONSENT_QUESTION, consentOf, consentQuestion, DATA_QUESTION, FEATURE_QUESTION, featureOf, REVIEW_HOW, sharingUrl, testDatabaseSignal } from '../../cli/init.mjs';
 import { parseUpstreamFindings } from '../../scripts/lib/upstream-findings.mjs';
 import { SPAWNS } from './helpers/spawns.js';
@@ -1893,6 +1894,17 @@ describe('kanon init and telemetry (#428)', () => {
     for (const s of ['registration issue', 'variable set', 'reader role']) expect(TELEMETRY_QUESTION).not.toContain(s);
   });
 
+  // #843: init pins the caller to its own release, so whether that release publishes the hosted
+  // store's URL is the CLI's own constant. Until it does, init says the collector sends nothing.
+  it("says the hosted store is unpublished, in its question and its summary, while this release's hosted URL is empty (#843)", () => {
+    expect(TELEMETRY_QUESTION).toBe(telemetryQuestion(HOSTED_INGEST_URL !== ''));
+    const unpublished = telemetryQuestion(false);
+    expect(unpublished).toContain("this release of Kanon doesn't publish the hosted store's URL yet, so until your pin moves to one that does, the collector sends nothing and registers nothing");
+    expect(telemetryQuestion(true)).not.toMatch(/doesn't publish|sends nothing/);
+    expect(telemetryRegisters(true)).toBe("registers on the collector's first run");
+    expect(telemetryRegisters(false)).toBe("sends nothing yet: this release of Kanon doesn't publish the hosted store's URL");
+  });
+
   it('says what the adopter gets for it, here, in the adopt skill and in the docs (#41 §2)', () => {
     for (const s of ['Kanon notices failures it caused in your runs', 'cross-adopter cost and reliability baselines']) expect(TELEMETRY_QUESTION).toContain(s);
     expect(read(ROOT, 'skills/adopt/SKILL.md')).toMatch(/^- \*\*What the person gets:\*\* Kanon notices failures that Kanon caused in their runs/m);
@@ -1911,7 +1923,8 @@ describe('kanon init and telemetry (#428)', () => {
     expect(github.calls.some((c) => c.args[0] === 'variable')).toBe(false);
     // The registration issue template is gone with the step that linked it.
     expect(existsSync(join(ROOT, '.github/ISSUE_TEMPLATE/telemetry-registration.yml'))).toBe(false);
-    expect(d.summary.find((l) => l.answer === 'Sharing')!.value).toContain("registers on the collector's first run");
+    expect(d.summary.find((l) => l.answer === 'Sharing')!.value).toContain(telemetryRegisters(HOSTED_INGEST_URL !== ''));
+    if (HOSTED_INGEST_URL === '') expect(d.summary.find((l) => l.answer === 'Sharing')!.value).not.toContain("registers on the collector's first run");
     // A second run leaves the caller as written.
     const again = parse(await run(dir, github, ['--yes', '--json', '--no-apps', '--telemetry']));
     expect(again.files.find((x) => x.path === TELEMETRY_CALLER_PATH)).toMatchObject({ status: 'same' });
