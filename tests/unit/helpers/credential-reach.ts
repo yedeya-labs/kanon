@@ -16,15 +16,20 @@ import { parse } from 'yaml';
  * `credentialReach` walks every workflow under `.github/workflows/` that a non-pull-request
  * event starts on this repository's branch (a `pull_request` or `merge_group` run executes the
  * pull request's own code before anything merges, which no escalation path can guard). A job or
- * step that uses a Kanon reusable workflow or action at a release tag runs that release and is
- * not followed; at any other ref, through `$/` or through `./`, it runs this tree and is. For
- * each job it computes what the job holds:
+ * step that uses a Kanon reusable workflow or action at a release tag runs that release; at any
+ * other ref, through `$/` or through `./`, it runs this tree and is followed. A reusable workflow
+ * called at a release tag is still walked, through this tree's copy of it, for what in it runs the
+ * caller's checkout, this tree, on `main` (kanon#814): its steps' `uses: ./…` (the project-setup
+ * hook among them), and any call it makes at a ref that is not a release; its `run:` steps and its
+ * `$/` and `./` calls are the release's. For each job it computes what the job holds:
  *
  * - its effective `permissions:`: its own, else its workflow's, capped by the caller's grant when
  *   the workflow is called; a root job with neither holds the repository default, read here as
  *   `write-all`;
- * - the secrets it can read: a root workflow's secrets are all real; a called workflow's are the
- *   ones its caller maps from a real one (`secrets: inherit` maps them all).
+ * - the secrets it can read: a root workflow's secrets are all real, but those the caller names as
+ *   never set; a called workflow's are the ones its caller maps from a real one (`secrets:
+ *   inherit` maps them all), a hyphen in the name (`claude-token`) included. A secret the
+ *   workflow's top-level `env:` reads is in every job's environment, so every job holds it.
  *
  * A job holds a credential when it is granted any `write` scope (`id-token: write` among them) or
  * reads a real secret (an App's key, which mints its token, among them). A called workflow is
@@ -43,6 +48,13 @@ import { parse } from 'yaml';
  * names a code file next to it or at the root (a script it spawns); and a shell script's tokens,
  * its comment lines aside, naming a code file next to it or at the root. It over-approximates on
  * purpose: a string that names a file it never runs still counts.
+ *
+ * A package-manager command in such a job's `run:`, or in a shell script it reaches, reads
+ * `package.json`, so that file is reached. `npm ci` and `npm install` run the root package's
+ * install hooks; while `package.json` declares none, that is all they run from this tree. Any
+ * other (`npm run`, `npm test`, `npm exec`, `npx`, `pnpm`, `yarn`), or an install with a hook,
+ * runs files this guard can't name: it is reported as an unmodelled entry point, a problem whether
+ * or not `package.json` escalates.
  */
 
 export const ROOT = process.cwd();
@@ -61,13 +73,17 @@ type Job = {
   steps?: Step[];
   env?: Record<string, unknown>;
 };
-type Workflow = { on?: unknown; permissions?: Perms | string; jobs: Record<string, Job> };
+type Workflow = { on?: unknown; permissions?: Perms | string; env?: Record<string, unknown>; jobs: Record<string, Job> };
 
 /** Every secret readable (`all`), or the names that hold a real one. */
 type Secrets = 'all' | ReadonlySet<string>;
 
-/** One file reached, and the chain from the job that runs it. */
-export type Reach = { file: string; workflow: string; job: string; via: string[] };
+/**
+ * One file reached, and the chain from the job that runs it. `unmodelled` names an entry point the
+ * job uses that this guard does not follow (an `npm` command that runs `package.json`'s scripts):
+ * such a reach is a problem whether or not its file escalates.
+ */
+export type Reach = { file: string; workflow: string; job: string; via: string[]; unmodelled?: string };
 
 const LEVEL: Record<string, number> = { none: 0, read: 1, write: 2 };
 
@@ -92,9 +108,8 @@ function cap(own: Perms, caller: Perms): Perms {
 }
 const writes = (p: Perms) => Object.values(p).some((v) => v === 'write');
 
-const secretRefs = (text: string) => [...text.matchAll(/\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!);
-const readsSecret = (text: string, secrets: Secrets) =>
-  secretRefs(text).some((s) => s !== 'GITHUB_TOKEN' && (secrets === 'all' || secrets.has(s)));
+// A called workflow's secret may be named with a hyphen (`claude-token`), which a repository's can't.
+const secretRefs = (text: string) => [...text.matchAll(/\bsecrets\.([A-Za-z_][A-Za-z0-9_-]*)/g)].map((m) => m[1]!);
 
 /** The triggers that run this repository's own branch, not a pull request's code. */
 export function ownBranchEvents(on: unknown): string[] {
@@ -134,6 +149,36 @@ export function runEntries(text: string, actionDir: string | null, tree: Tree = 
   return out;
 }
 
+/** A shell text's lines, its comment lines aside. */
+const shellCode = (text: string) => text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+
+/** The npm lifecycle scripts `npm ci` and `npm install` run from the root `package.json`. */
+const INSTALL_HOOKS = ['preinstall', 'install', 'postinstall', 'prepublish', 'preprepare', 'prepare', 'postprepare'];
+
+/**
+ * What a `run:` text's package-manager commands run from this tree: `package.json`, which every
+ * one of them reads, and, for each command whose scripts this guard does not follow, why. `npm ci`
+ * and `npm install` run only the root package's lifecycle hooks, so they are modelled while
+ * `package.json` declares none; `npm run`, `npm test`, `npm exec`, `npx` and the other package
+ * managers run a script or a binary this guard can't trace to files, so they never are.
+ */
+export function packageEntries(text: string, tree: Tree = treeOf()): { file: string; unmodelled?: string }[] {
+  const out: { file: string; unmodelled?: string }[] = [];
+  const pkgAbs = join(ROOT, 'package.json');
+  for (const m of shellCode(text).matchAll(/(?:^|[\s;&|(`])(npm|npx|pnpm|yarn)(?![\w.-])(?:\s+(?:-[\w-]+(?:=\S+)?\s+)*([\w:-]+))?/gm)) {
+    const [, tool, sub] = m;
+    const command = sub ? `${tool} ${sub}` : tool!;
+    if (tool === 'npm' && sub && ['ci', 'install', 'i', 'clean-install'].includes(sub)) {
+      const scripts = tree.isFile(pkgAbs) ? ((JSON.parse(tree.text(pkgAbs)) as { scripts?: Record<string, string> }).scripts ?? {}) : {};
+      const hooks = INSTALL_HOOKS.filter((h) => h in scripts);
+      out.push(hooks.length ? { file: 'package.json', unmodelled: `\`${command}\` runs package.json's ${hooks.join(', ')} script` } : { file: 'package.json' });
+    } else {
+      out.push({ file: 'package.json', unmodelled: `\`${command}\` runs a package.json script or a binary` });
+    }
+  }
+  return out;
+}
+
 /** The code files a reached file runs or imports, one step on. */
 export function fileEntries(abs: string, tree: Tree = treeOf()): string[] {
   const text = tree.text(abs);
@@ -145,7 +190,7 @@ export function fileEntries(abs: string, tree: Tree = treeOf()): string[] {
   };
   if (/\.(?:sh|awk)$/.test(abs)) {
     // Its comment lines aside, every token naming a code file, next to it or from the root.
-    const code = text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    const code = shellCode(text);
     for (const m of code.matchAll(/((?:\.{1,2}\/)*[\w@-][\w.@/-]*\.(?:mjs|cjs|js|sh|awk))\b/g)) {
       add(here, m[1]!);
       add(ROOT, m[1]!);
@@ -320,6 +365,13 @@ class IfParser {
 
 /** A Kanon release tag: what a pinned caller names. A branch or a commit of this tree isn't one. */
 const RELEASE = /^v\d+\.\d+\.\d+$/;
+/** A Kanon reusable workflow called at a release tag, and its file name. */
+const RELEASED = /^yedeya-labs\/kanon\/\.github\/workflows\/([^/]+\.ya?ml)@v\d+\.\d+\.\d+$/;
+/** A reusable workflow named from its own repository, and its file name. */
+const LOCAL_WORKFLOW = /^(?:\$\/|\.\/)\.github\/workflows\/([^/]+\.ya?ml)$/;
+
+/** The files a job's steps execute, and its package-manager commands. */
+type Entries = { files: string[]; packages: { file: string; unmodelled?: string }[] };
 
 /**
  * Where a `uses:` of Kanon's runs from: this tree's path (through `$/`, `./`, or
@@ -336,10 +388,15 @@ function treePath(uses: string): string | null {
 /**
  * Every file this tree's credential-holding runs reach, with `overrides` (repository-relative
  * path to text, a workflow among them) laid over the tree, so a test can add an import or a step
- * and see what it reaches.
+ * and see what it reaches. `options.unset` names the secrets the repository never sets (a smoke
+ * run maps a lane's secrets to one), which a root workflow reads as empty.
  */
-export function credentialReach(overrides: Readonly<Record<string, string>> = {}): Reach[] {
+export function credentialReach(overrides: Readonly<Record<string, string>> = {}, options: { unset?: readonly string[] } = {}): Reach[] {
   const tree = treeOf(overrides);
+  // A root workflow's secret is real unless the caller names it as one the repository never sets.
+  const unset = new Set(options.unset ?? []);
+  const readsSecret = (text: string, secrets: Secrets) =>
+    secretRefs(text).some((s) => s !== 'GITHUB_TOKEN' && (secrets === 'all' ? !unset.has(s) : secrets.has(s)));
   const names = new Set([
     ...readdirSync(join(ROOT, WORKFLOWS)),
     ...Object.keys(overrides).filter((p) => p.startsWith(`${WORKFLOWS}/`)).map((p) => p.slice(WORKFLOWS.length + 1)),
@@ -350,15 +407,21 @@ export function credentialReach(overrides: Readonly<Record<string, string>> = {}
     parsed[f] = { ...w, on: w.on ?? w.true };
   }
   const reaches = new Map<string, Reach>();
-  const follow = (entries: string[], w: Walk) => {
+  const record = (file: string, w: Walk, via: string[], unmodelled?: string) => {
+    const key = `${file}\0${w.workflow}\0${w.job}${unmodelled ? `\0${unmodelled}` : ''}`;
+    if (!reaches.has(key)) reaches.set(key, { file, workflow: w.workflow, job: w.job, via, ...(unmodelled ? { unmodelled } : {}) });
+  };
+  const follow = (entries: Entries, w: Walk) => {
+    for (const p of entries.packages) record(p.file, w, w.via, p.unmodelled);
     const seen = new Set<string>();
-    const queue = entries.map((abs) => ({ abs, via: w.via }));
+    const queue = entries.files.map((abs) => ({ abs, via: w.via }));
     while (queue.length) {
       const { abs, via } = queue.shift()!;
       if (seen.has(abs)) continue;
       seen.add(abs);
-      const key = `${rel(abs)}\0${w.workflow}\0${w.job}`;
-      if (!reaches.has(key)) reaches.set(key, { file: rel(abs), workflow: w.workflow, job: w.job, via });
+      record(rel(abs), w, via);
+      // A shell script's package-manager commands, like a step's.
+      if (/\.sh$/.test(abs)) for (const p of packageEntries(tree.text(abs), tree)) record(p.file, w, [...via, rel(abs)], p.unmodelled);
       for (const next of fileEntries(abs, tree)) queue.push({ abs: next, via: [...via, rel(abs)] });
     }
   };
@@ -368,24 +431,46 @@ export function credentialReach(overrides: Readonly<Record<string, string>> = {}
     const dir = join(ROOT, p);
     return tree.isFile(join(dir, 'action.yml')) ? dir : null;
   };
-  /** A step's entries: what its `run:` executes, what a script in its `with:` imports, and its composite action's. */
-  const stepEntries = (s: Step, dir: string | null, depth: number): string[] => {
-    const out: string[] = [];
-    if (typeof s.run === 'string') out.push(...runEntries(s.run, dir, tree));
-    if (s.with) out.push(...runEntries(JSON.stringify(s.with), null, tree));
+  /**
+   * A step's entries: what its `run:` executes and the package-manager commands it runs, what a
+   * script in its `with:` imports, and its composite action's. `pinned`, for a step of a
+   * release's workflow: only a `uses: ./…` runs this tree (the caller's checkout), so only that
+   * step is followed, and then its composite action in full.
+   */
+  const stepEntries = (s: Step, dir: string | null, depth: number, pinned = false): Entries => {
+    const out: Entries = { files: [], packages: [] };
+    const local = typeof s.uses === 'string' && /^\.\//.test(s.uses);
+    if (pinned && !local) return out;
+    if (typeof s.run === 'string') {
+      out.files.push(...runEntries(s.run, dir, tree));
+      out.packages.push(...packageEntries(s.run, tree));
+    }
+    if (s.with) out.files.push(...runEntries(JSON.stringify(s.with), null, tree));
     const inner = typeof s.uses === 'string' ? actionDir(s.uses) : null;
     if (inner && depth < 8) {
       const action = parse(tree.text(join(inner, 'action.yml'))) as { runs?: { steps?: Step[] } };
-      for (const t of action.runs?.steps ?? []) out.push(...stepEntries(t, inner, depth + 1));
+      for (const t of action.runs?.steps ?? []) {
+        const e = stepEntries(t, inner, depth + 1);
+        out.files.push(...e.files);
+        out.packages.push(...e.packages);
+      }
     }
     return out;
   };
 
   type Root = { workflow: string; job: string } | null;
-  const walkWorkflow = (file: string, events: readonly string[], caller: Perms | null, secrets: Secrets, root: Root, chain: string[]) => {
+  /**
+   * `pinned`: `file` is the workflow a caller runs at a release tag. This tree's copy stands in for
+   * the release, and only what in it runs the caller's checkout, this tree, is followed: a step's
+   * `uses: ./…`, and a call that leaves the release for a non-release ref. A `./` or `$/` call
+   * inside it stays in the release.
+   */
+  const walkWorkflow = (file: string, events: readonly string[], caller: Perms | null, secrets: Secrets, root: Root, chain: string[], pinned = false) => {
     const wf = parsed[file];
     if (!wf || chain.length > 6) return;
     const wfPerms = normPerms(wf.permissions);
+    // A workflow's top-level `env:` is every job's environment, so a secret it reads, each job holds.
+    const wfEnv = JSON.stringify(wf.env ?? {});
     const jobs = wf.jobs ?? {};
     const needsOf = (j: Job) => (j.needs === undefined ? [] : Array.isArray(j.needs) ? j.needs : [j.needs]);
     // The events under which each job may run, from its `if:` and its needed jobs'.
@@ -407,16 +492,25 @@ export function credentialReach(overrides: Readonly<Record<string, string>> = {}
       const perms = caller === null ? (own ?? { '*': 'write' }) : own ? cap(own, caller) : caller;
       const at: Walk = root === null ? { workflow: file, job: name, via: [] } : { ...root, via: [...chain, `${file}:${name}`] };
       if (typeof job.uses === 'string') {
-        const p = treePath(job.uses);
-        const called = p === null ? null : new RegExp(`^${WORKFLOWS.replace(/\./g, '\\.')}/([^/]+\\.ya?ml)$`).exec(p);
-        if (!called) continue; // a release, or another repository's
+        const inRelease = pinned && /^(?:\$\/|\.\/)/.test(job.uses);
+        const p = inRelease ? null : treePath(job.uses);
+        const release = p === null ? RELEASED.exec(job.uses) : null;
+        const called = p === null ? (release ? [release[0], release[1]] : inRelease ? LOCAL_WORKFLOW.exec(job.uses) : null)
+          : new RegExp(`^${WORKFLOWS.replace(/\./g, '\\.')}/([^/]+\\.ya?ml)$`).exec(p);
+        if (!called) continue; // another repository's
         const passed: Secrets = job.secrets === 'inherit' ? secrets
           : new Set(Object.entries(job.secrets ?? {}).filter(([, v]) => readsSecret(String(v), secrets)).map(([k]) => k));
-        walkWorkflow(called[1]!, under, perms, passed, { workflow: at.workflow, job: at.job }, root === null ? [] : at.via);
+        walkWorkflow(called[1]!, under, perms, passed, { workflow: at.workflow, job: at.job }, root === null ? [] : at.via, p === null);
         continue;
       }
-      if (!writes(perms) && !readsSecret(JSON.stringify(job), secrets)) continue;
-      follow((job.steps ?? []).flatMap((s) => stepEntries(s, null, 0)), at);
+      if (!writes(perms) && !readsSecret(JSON.stringify(job) + wfEnv, secrets)) continue;
+      const entries: Entries = { files: [], packages: [] };
+      for (const s of job.steps ?? []) {
+        const e = stepEntries(s, null, 0, pinned);
+        entries.files.push(...e.files);
+        entries.packages.push(...e.packages);
+      }
+      follow(entries, at);
     }
   };
 
@@ -432,7 +526,10 @@ export function credentialReach(overrides: Readonly<Record<string, string>> = {}
  * and the chain that reaches it. `escalations` is what the Merger holds a pull request to.
  */
 export function credentialProblems(reaches: readonly Reach[], escalations: ReadonlyArray<readonly [RegExp, string]>): string[] {
+  const through = (r: Reach) => (r.via.length ? ` (through ${r.via.join(' > ')})` : '');
   return reaches
-    .filter((r) => !escalations.some(([re]) => re.test(r.file)))
-    .map((r) => `${r.file}: ${r.workflow}, job ${r.job}, runs it with a credential${r.via.length ? ` (through ${r.via.join(' > ')})` : ''}, from this tree, but no escalation path in docs/qa/escalation-paths.md matches it, so the Merger could merge a change to it`);
+    .filter((r) => r.unmodelled !== undefined || !escalations.some(([re]) => re.test(r.file)))
+    .map((r) => (r.unmodelled !== undefined
+      ? `${r.file}: ${r.workflow}, job ${r.job}, holds a credential and ${r.unmodelled}${through(r)}, an entry point this guard does not follow to the files it runs, so a green-zone file could run there unseen: model it in tests/unit/helpers/credential-reach.ts or drop the command`
+      : `${r.file}: ${r.workflow}, job ${r.job}, runs it with a credential${through(r)}, from this tree, but no escalation path in docs/qa/escalation-paths.md matches it, so the Merger could merge a change to it`));
 }
