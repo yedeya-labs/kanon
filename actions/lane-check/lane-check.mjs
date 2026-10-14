@@ -209,6 +209,13 @@ let CALLERS = 0;
 const CALLED = [];
 /** Whether a workflow calls Kanon's telemetry collector, which sends `Upstream findings: sent` (plan 0006 §3.1). */
 let COLLECTOR = false;
+/**
+ * Whether this release's collector is on the token path, its requirements' `telemetry.token`
+ * (plan 0008 §8), and so refuses the SigV4 path's `url` and `writer-role` without `audience`.
+ */
+const TOKEN_PATH = (() => {
+  try { return JSON.parse(readFileSync(join(KANON_ROOT, 'requirements.json'), 'utf8'))?.telemetry?.token === true; } catch { return false; }
+})();
 /** @type {string[]} */
 const ROLES = [];
 /** @type {Array<[string, string]>} */
@@ -271,6 +278,21 @@ for (const f of WORKFLOWS) {
     if (!m) continue;
     const wf = /** @type {string} */ (m[1]);
     if (wf === 'telemetry-collect') COLLECTOR = true;
+    // THE SIGV4 PATH'S INPUTS WITHOUT `audience` (kanon#845), as doctor's `telemetry.legacy-inputs`
+    // reads them: the collector refuses them before it mints a token (Owner decision of
+    // 2026-10-14, kanon#842), but only on the default branch, after the pin's pull request merged.
+    // A pin bump changes only the `uses:` line, and both inputs are still declared, so this is
+    // what holds the bump's pull request to the caller's move. Only names reach the message.
+    // Judged only against the release the caller pins, which is this tree only when lane-check
+    // runs at that pin: in Kanon's own tree, read without `ACTION_REF`, the caller lags at the
+    // last release, whose collector still takes these inputs.
+    const pin = tostring(v.uses).slice(tostring(v.uses).lastIndexOf('@') + 1);
+    if (wf === 'telemetry-collect' && TOKEN_PATH && pin === ACTION_REF && isObject(v.with) && !Object.hasOwn(v.with, 'audience')) {
+      const legacy = ['url', 'writer-role'].filter((k) => Object.hasOwn(v.with, k));
+      if (legacy.length && tsv(name)) {
+        fail(f, `the job \`${tsv(name)}\` passes ${legacy.map((k) => `\`${k}:\``).join(' and ')} to Kanon's telemetry collector without \`audience:\`, the inputs of the SigV4 path this release no longer takes: the collector refuses them before it mints a token, so every run is red, and nothing is sent or registered. Run \`kanon init --telemetry\` again to write the new caller, which passes neither and sends to Kanon's hosted store; or, for a store of your own, add \`audience:\` beside \`url:\` and remove \`writer-role:\` (docs/telemetry.md, "Collect the rows"; telemetry.legacy-inputs)`);
+      }
+    }
     if (wf === lane || !Object.hasOwn(v, 'secrets') || isObject(v.secrets)) continue;
     if (!tsv(name)) continue;
     fail(f, `the job \`${tsv(name)}\` calls Kanon's ${tsv(wf)} workflow with \`secrets: ${tsv(tostring(v.secrets))}\`; map each secret it takes by name, or pass none (\`secrets: inherit\` would hand every secret to Kanon's code; plan 0001 decision 7)`);
