@@ -247,7 +247,7 @@ export function renderScheduleFinding(rows, { carried = [] } = {}) {
     '',
     'Why this is filed: a schedule that stops leaves no run at all, so no run turns red and GitHub tells nobody. Every lane that waits for its sweep waits with it.',
     '',
-    'This issue is refreshed when the set of silent workflows changes, and closed automatically once each one has a scheduled run inside its bound, but never on a tick that could not read one of them.',
+    'This issue is refreshed when the set of silent workflows changes, and closed automatically once each one has a scheduled run, or a change to its file, inside its bound, but never on a tick that could not read one of them.',
     '',
     scheduleMarker([...named.map((r) => r.file), ...carried]),
   ].join('\n');

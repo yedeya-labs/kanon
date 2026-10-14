@@ -859,7 +859,7 @@ function scheduleHeartbeat() {
   if (!next.named.length) {
     if (existing) {
       gh(['issue', 'close', String(existing.number), '--repo', REPO, '--comment',
-        'Every schedule this issue named has fired inside its bound again. Closing; the next daily check re-files if one goes silent again.']);
+        'Every schedule this issue named has fired, or had its file changed, inside its bound again. Closing; the next daily check re-files if one goes silent again.']);
       console.log(`closed #${existing.number} — the schedules recovered`);
     }
     return 0;
