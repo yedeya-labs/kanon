@@ -164,13 +164,13 @@ This chapter holds the opinions every other chapter is built on: why Kanon has n
 
 **Class.** framework
 
-### `K-PRIN-16` Record a changed premise where the rule lives
+### `K-PRIN-16` Rewrite a rule whose premise changed, and record the change
 
-**Rule.** When a premise behind a rule stops being true, say so next to the rule. Don't silently repair the conclusion.
+**Rule.** When a premise behind a rule stops being true, rewrite the rule so its Why states the premise that holds now, and record the change under the rule's id in [`rulebook/CHANGES.md`](CHANGES.md). Don't silently repair the conclusion.
 
 **Why.** Otherwise a later reader sees a rule whose reason no longer holds and concludes the guard is unnecessary.
 
-**Enforced by.** Prose only.
+**Enforced by.** `tests/unit/rulebook-why.test.ts` fails a "Premise changed" paragraph in a rule, and an entry in `CHANGES.md` for a rule the chapters don't have. Whether a rewritten Why states the premise that holds now is prose only.
 
 **Class.** framework
 

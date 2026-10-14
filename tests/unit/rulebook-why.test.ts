@@ -40,7 +40,7 @@ const ADOPTER_ISSUE = /\bRA-\d+\b/;
 const ISSUE_OR_PR_LINK = /github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+/;
 const ISSUE_NUMBER = /(?<![\w&/.#-])(?:[\w-]+)?#\d+(?![\w-])/;
 const DATE = /\b\d{4}-\d{2}-\d{2}\b/;
-const PREMISE_CHANGED = /\bPremise changed\b/i;
+const PREMISE_CHANGED = /\*\*Premise changed\b|^Premise changed\b/im;
 const OWN_PATH = /(?<![\w-])(?:\.github|tests|scripts|cli|infra)\/[\w./-]+|(?<![\w-])docs\/(?!decisions\/|plans\/|qa\/)[\w./-]+/;
 
 /** The reasons a Why's text names the project's issues or files, one per kind found. */
@@ -266,11 +266,13 @@ describe('#578 no rule carries its own history, and CHANGES.md holds it', () => 
     expect(named.filter((id, i) => named.indexOf(id) !== i)).toEqual([]);
   });
 
-  it('fails an entry for a rule that does not exist, or one without a date or a link', () => {
+  it('fails an entry for a rule that does not exist, a rule named twice, or an entry without a date or a link', () => {
     const { ids: named } = changesOf(`${changes}\n## \`K-NOPE-1\`\n\n- **2026-10-14.** Made up. [#1](https://github.com/example-org/example/issues/1)\n`);
     expect(named.filter((id) => !ids.has(id))).toEqual(['K-NOPE-1']);
     expect(changesOf('## `K-PRIN-13`\n\n- Retried once. [#759](https://github.com/example-org/example/pull/759)\n').malformed).toHaveLength(1);
     expect(changesOf('## `K-PRIN-13`\n\n- **2026-10-12.** Retried once.\n').malformed).toHaveLength(1);
     expect(changesOf('## K-PRIN-13\n').malformed).toHaveLength(1);
+    const twice = changesOf(`${changes}\n## \`K-PRIN-13\`\n\n- **2026-10-14.** Again. [#1](https://github.com/example-org/example/issues/1)\n`).ids;
+    expect(twice.filter((id, i) => twice.indexOf(id) !== i)).toEqual(['K-PRIN-13']);
   });
 });

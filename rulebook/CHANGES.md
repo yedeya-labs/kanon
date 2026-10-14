@@ -8,6 +8,10 @@ Rules are listed in chapter order, and each rule's changes oldest first. A rule 
 
 - **2026-10-12.** The Owner decided that a run which exits silently, with no verdict, is retried once like a run that died of its cause, and that the retry counts as an attempt, so a second silent exit is reported. [#759](https://github.com/yedeya-labs/kanon/pull/759)
 
+## `K-PRIN-16`
+
+- **2026-10-14.** The Owner decided that a rule records no history of its own: a rule whose premise changed is rewritten so its Why states the premise that holds now, and the change is recorded here, not in a "Premise changed" note beside the rule. [#578](https://github.com/yedeya-labs/kanon/issues/578), [#859](https://github.com/yedeya-labs/kanon/pull/859)
+
 ## `K-AGENT-24`
 
 - **2026-10-12.** The Reviewer's token mint asks for Checks, Commit statuses and Actions read again, after a narrowing of its permissions dropped the reads this rule depends on; a test now fails a mint that drops any of the three. [#691](https://github.com/yedeya-labs/kanon/issues/691)
