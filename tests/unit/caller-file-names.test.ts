@@ -127,3 +127,37 @@ describe('every workflow Kanon reaches by file name is one K-LAYOUT-18 fixes', (
     expect(LANES.filter((l) => declaredReads(l).includes('ci.yml')).sort()).toEqual(['agent-lead-reconcile.yml', 'agent-review.yml']);
   });
 });
+
+/**
+ * kanon#738: a re-run hint is a dispatch a human runs, and since kanon#726 a lane's caller need
+ * not have the lane's name (a `caller.misplaced` waiver; Kanon's own, beside the lanes). A hint
+ * that names the lane's own file dispatches the lane there, which runs only on `workflow_call`.
+ * So no hint fixes a lane's name: a lane prints the caller `GITHUB_WORKFLOW_REF` names. Comments
+ * are read too, since they quote the hint a reader copies.
+ */
+describe('no re-run hint dispatches a lane by its own file name (kanon#738)', () => {
+  /** Every file of the library, the actions, the command and the workflows. */
+  const walk = (dir: string): string[] =>
+    readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? (e.name === 'node_modules' ? [] : walk(`${dir}/${e.name}`)) : /\.(mjs|ya?ml|sh)$/.test(e.name) ? [`${dir}/${e.name}`] : []);
+  const FILES = ['.github/workflows', 'actions', 'scripts', 'cli'].flatMap(walk);
+  const HINT = /gh workflow run agent-[\w-]+\.ya?ml/;
+  /**
+   * The one exception, which the issue names: the Lead's QA-verification issue quotes the verify
+   * lane's dispatch, and `QA_BODY_ANCHOR` matches an earlier body by that exact text.
+   */
+  const KEPT = [{ file: 'scripts/lead-reconcile.mjs', line: '`gh workflow run agent-verify-acs.yml -f project=${world.project}' }];
+
+  it('reads the lanes and the scripts, so the sweep is not vacuous', () => {
+    expect(FILES).toContain('.github/workflows/review-agent-job.yml');
+    expect(FILES).toContain('actions/agent-classify/classify-agent-result.mjs');
+    expect(FILES).toContain('scripts/lead-reconcile.mjs');
+  });
+
+  it('finds none outside the one the Lead\'s verification issue quotes', () => {
+    const hits = FILES.flatMap((file) => read(file).split('\n').filter((l) => HINT.test(l)).map((l) => ({ file, l })));
+    const kept = hits.filter((h) => KEPT.some((k) => k.file === h.file && h.l.includes(k.line)));
+    expect(kept.length, 'the kept hint is still there, so its entry is not stale').toBe(KEPT.length);
+    expect(hits.filter((h) => !kept.includes(h)).map((h) => `${h.file}: ${h.l.trim()}`)).toEqual([]);
+  });
+});

@@ -20,6 +20,11 @@ laneCheck(() => {
     it('refuses a caller of the review lane named as Kanon names its own, `review.yml`', () =>
       red((t) => { reviewer(t); at(t, 'review.yml', 'agent-review.yml'); },
         'review.yml,title=lane-check::calls the Kanon lane agent-review, so it lives at .github/workflows/agent-review.yml'));
+    // kanon#738: since kanon#726 the scripts look a lane's caller up on the default branch, so
+    // the reason is the name they fall back to, not that they reach the runs only by it.
+    it('says the lane\'s file name is the one the scripts fall back to', () =>
+      red((t) => { reviewer(t); at(t, 'review.yml', 'agent-review.yml'); },
+        "review.yml,title=lane-check::calls the Kanon lane agent-review, so it lives at .github/workflows/agent-review.yml: that is the name Kanon's scripts fall back to when they can't find this lane's caller on the default branch (K-LAYOUT-18)"));
     it('refuses a revise caller under another name: the reconciler lists that file\'s runs', () =>
       red((t) => { const body = t.read(IMPL); t.rm(IMPL); t.write('.github/workflows/implement-revise.yml', body); },
         'calls the Kanon lane agent-implement-revise, so it lives at .github/workflows/agent-implement-revise.yml'));

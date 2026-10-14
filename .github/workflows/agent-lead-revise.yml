@@ -505,6 +505,12 @@ jobs:
             # developer" was announced on a green run's annotations, which is not where
             # a developer reads a disagreement. Idempotent via the marker, so a
             # re-fire does not turn one cap into a comment per event.
+            #
+            # THE COMMAND DISPATCHES THIS RUN'S CALLER (kanon#738): in a called workflow
+            # `GITHUB_WORKFLOW_REF` names the top-level one, the caller, which need not have
+            # the lane's file name (Kanon's own is `lead-revise.yml`, beside the lane). No
+            # workflow named: the lane's file name, as before.
+            CALLER="${GITHUB_WORKFLOW_REF:-}"; CALLER="${CALLER%%@*}"; CALLER="${CALLER##*/}"
             SEEN="$(gh pr view "$PR" --repo "$REPO" --json comments --jq '[.comments[].body] | join("\n")' || true)"
             case "$SEEN" in
               *"<!-- qa:lead-revise-capped -->"*) : ;;
@@ -513,7 +519,7 @@ jobs:
                    "" \
                    "This brief has been through $ROUNDS revise round(s) and changes are still being requested. A disagreement that survives two rounds belongs with you, not another iteration — the next round would spend two Opus agents re-deriving the same argument. (The count is the larger of the Lead's own revise markers and the DISTINCT patches that have been faulted, so it includes any review you filed yourself — and a content-free rebase, which changes no patch, spends nothing.)" \
                    "" \
-                   "Re-dispatch once it is resolved: \`gh workflow run agent-lead-revise.yml -f pr_number=$PR -f reset=true\`" \
+                   "Re-dispatch once it is resolved: \`gh workflow run ${CALLER:-agent-lead-revise.yml} -f pr_number=$PR -f reset=true\`" \
                    "" \
                    "<!-- qa:lead-revise-capped -->")" || echo "::warning::could not comment the cap on PR #$PR" ;;
             esac

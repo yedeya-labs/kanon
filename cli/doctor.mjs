@@ -1028,7 +1028,7 @@ export const diagnose = async (deps, opts) => {
       continue;
     }
     if (c.file !== `.github/workflows/${c.lane}.yml`) {
-      find('caller.misplaced', c.file, `calls the lane ${c.lane}, so it must live at .github/workflows/${c.lane}.yml: Kanon finds and dispatches the lane's runs by that file name (K-LAYOUT-18).`, {
+      find('caller.misplaced', c.file, `calls the lane ${c.lane}, so it must live at .github/workflows/${c.lane}.yml (K-LAYOUT-18): that is the name Kanon's scripts fall back to when they can't find the lane's caller on the default branch.`, {
         text: `Rename it to .github/workflows/${c.lane}.yml.`,
         commands: [`git mv ${c.file} .github/workflows/${c.lane}.yml`],
       });

@@ -4,8 +4,8 @@
 // Why a red agent run went red — the MODEL WAS UNREACHABLE, or a real failure (RA-1408).
 //
 // THE PROBLEM THIS SOLVES IS ADVICE, NOT DETECTION. Since RA-1400 a review run that
-// posts no verdict reds the job and prints `gh workflow run agent-review.yml -f
-// pr_number=N`. That instruction is WRONG for the most common cause: measured over
+// posts no verdict reds the job and prints `gh workflow run <the review caller> -f
+// pr_number=N` (the caller since kanon#738). That instruction is WRONG for the most common cause: measured over
 // every `agent-review.yml` failure in the last 300 runs (2026-09-01..09-03), 3 of 10
 // were the subscription's usage cap, where re-dispatching immediately fails the same
 // way and can extend the window. A human reads that annotation at exactly the moment
