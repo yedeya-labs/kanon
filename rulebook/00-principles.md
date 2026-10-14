@@ -134,7 +134,7 @@ This chapter holds the opinions every other chapter is built on: why Kanon has n
 
 ### `K-PRIN-13` Re-deliver on evidence, retry once
 
-**Rule.** Bound every automatic re-delivery by evidence of an attempt, not by a counter: re-fire only when no run of that workflow attempted this head, and count a failed run as an attempt. Retry a run automatically at most once, after a cool-down, and only when it died of its cause (the model was unreachable, or the API failed mid-run) or exited silently (the agent ran and posted no verdict). A silent exit is bounded to that one retry: the retry is an attempt too, so a second silent exit is reported. Any other run that ran and failed is not retried. (Owner decision 2026-10-12, [#759](https://github.com/yedeya-labs/kanon/pull/759): the silent exit.)
+**Rule.** Bound every automatic re-delivery by evidence of an attempt, not by a counter: re-fire only when no run of that workflow attempted this head, and count a failed run as an attempt. Retry a run automatically at most once, after a cool-down, and only when it died of its cause (the model was unreachable, or the API failed mid-run) or exited silently (the agent ran and posted no verdict). A silent exit is bounded to that one retry: the retry is an attempt too, so a second silent exit is reported. Any other run that ran and failed is not retried.
 
 **Why.** A usage cap or an outage must be reported, not repeated. "A run exists" was the wrong test once. When every in-flight run died on a session limit, PRs sat for hours until someone re-dispatched them by hand. A silent exit's cause is unknown, so one bounded retry costs less than a head nobody owns.
 
@@ -164,13 +164,13 @@ This chapter holds the opinions every other chapter is built on: why Kanon has n
 
 **Class.** framework
 
-### `K-PRIN-16` Record a changed premise where the rule lives
+### `K-PRIN-16` Rewrite a rule whose premise changed, and record the change
 
-**Rule.** When a premise behind a rule stops being true, say so next to the rule. Don't silently repair the conclusion.
+**Rule.** When a premise behind a rule stops being true, rewrite the rule so its Why states the premise that holds now, and record the change under the rule's id in [`rulebook/CHANGES.md`](CHANGES.md). Don't silently repair the conclusion.
 
 **Why.** Otherwise a later reader sees a rule whose reason no longer holds and concludes the guard is unnecessary.
 
-**Enforced by.** Prose only.
+**Enforced by.** `tests/unit/rulebook-why.test.ts` fails a "Premise changed" paragraph in a rule, and an entry in `CHANGES.md` for a rule the chapters don't have. Whether a rewritten Why states the premise that holds now is prose only.
 
 **Class.** framework
 

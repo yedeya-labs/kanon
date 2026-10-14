@@ -1,6 +1,6 @@
 # Contributing to Kanon
 
-Kanon is opinionated on purpose. Its rules are fixed, not configurable ([ADR 0002](docs/decisions/0002-standardise-dont-parameterise.md)). A contribution that changes a rule has to change it for every adopter, and must say why in the rule's own **Why** paragraph.
+Kanon is opinionated on purpose. Its rules are fixed, not configurable ([ADR 0002](docs/decisions/0002-standardise-dont-parameterise.md)). A contribution that changes a rule has to change it for every adopter, and must say why in the rule's own **Why** paragraph. The rule is written to read true now; the change itself, with its date and a link to the decision, goes in [`rulebook/CHANGES.md`](rulebook/CHANGES.md), never in the rule.
 
 ## Sign off every commit (DCO)
 
