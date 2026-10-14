@@ -5,9 +5,12 @@
 // rest by them: the review lane's caller (`SELF_CHECKS`, never waited on), and the
 // implement-revise and merge-reconcile callers' `filter` jobs, which race the Merger on the
 // same review event (`REVIEW_EVENT_CHECKS`). Under another name or job id the gate waits on
-// them. The Merger's own caller name is the lane's `# CALLER NAME:` line, which lane-check has
-// always failed; these three are read from the gate's own constants in
-// `scripts/lib/protocol-spellings.mjs`, so lane-check and the gate can't disagree.
+// them. Each lane says its caller's name on a `# CALLER NAME:` line, and a racer its calling
+// job's id on a `# CALLER JOB:` line, as the Merger's lane always has; lane-check holds callers
+// to those lines. The table below is the gate's own constants in
+// `scripts/lib/protocol-spellings.mjs`, and a test holds the three lanes' lines to it, so the
+// lanes, lane-check and the gate can't disagree. The Merger's name has always failed; these
+// three are in their release of warning.
 //
 // A WARNING FOR ONE RELEASE, THEN A FAILURE. Adopters on an earlier release's caller names
 // (the old spellings the gate still reads, or names of their own) get the release that
@@ -35,8 +38,8 @@ const jobOf = (workflow) => {
 };
 
 /**
- * Per lane, the caller's fixed name, and the calling job's fixed id where the gate reads one.
- * The review caller's job id is read by nothing, so it is free.
+ * Per lane in its release of warning, the caller's fixed name, and the calling job's fixed id
+ * where the gate reads one. The review caller's job id is read by nothing, so it is free.
  * @type {Readonly<Record<string, { name: string, job?: string }>>}
  */
 export const FIXED_CALLERS = Object.freeze({
@@ -82,11 +85,12 @@ export const kanonVersion = (root) => {
  * @param {string} name the caller's `name:`
  * @param {string | null} jobId the calling job's id, or `null` when there isn't exactly one job
  * @param {string} version the Kanon version lane-check runs at
+ * @param {{ name: string, job?: string }} [want] what the lane's `# CALLER NAME:` and
+ *   `# CALLER JOB:` lines say; the table's entry when left out
  * @returns {Array<{ level: 'warning' | 'error', message: string }>}
  */
-export const callerNameFindings = (lane, name, jobId, version) => {
-  const want = FIXED_CALLERS[lane];
-  if (!want) return [];
+export const callerNameFindings = (lane, name, jobId, version, want = FIXED_CALLERS[lane]) => {
+  if (!want || !FIXED_CALLERS[lane]) return [];
   const level = failsAt(version) ? 'error' : 'warning';
   const when = level === 'error'
     ? `since Kanon ${FAILS_FROM} this fails`

@@ -22,7 +22,7 @@ import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { callerNameFindings, kanonVersion } from './caller-names.mjs';
+import { FIXED_CALLERS, callerNameFindings, kanonVersion } from './caller-names.mjs';
 import { declarationFindings } from './declarations.mjs';
 import { LEDGER, readCapabilityWatch } from '../../scripts/lib/capability-watch.mjs';
 
@@ -338,9 +338,13 @@ for (const f of WORKFLOWS) {
   }
   // A check is reported under its caller's `name:`, and a lane whose checks another program
   // tells apart by that name (the Merger's, by `merge-gate.mjs`, which must not wait on itself)
-  // says what the caller's name must be, on a `# CALLER NAME: <name>` line (plan 0004 step 7).
+  // says what the caller's name must be, on a `# CALLER NAME: <name>` line (plan 0004 step 7),
+  // and, when its calling job's id is read too, that id on a `# CALLER JOB: <id>` line. A lane
+  // in its release of warning (caller-names.mjs) is checked below instead.
   const wantName = marked(laneFile, '# CALLER NAME: ')[0] ?? '';
-  if (wantName) {
+  const wantJob = marked(laneFile, '# CALLER JOB: ')[0] ?? '';
+  const warned = Object.hasOwn(FIXED_CALLERS, lane);
+  if (wantName && !warned) {
     const name = raw(alt(doc.name, ''));
     if (name !== wantName) {
       fail(f, `its name must be \`${wantName}\`, not \`${name}\`: GitHub reports the Kanon lane ${lane}'s checks under its caller's name, and the lane tells its own checks from the rest by it (docs/lanes.md)`);
@@ -358,12 +362,13 @@ for (const f of WORKFLOWS) {
   if (String(njobs) !== '1') fail(f, `a lane caller has exactly one job, not ${njobs}`);
   const job = /** @type {any} */ (Object.values(isObject(doc.jobs) ? doc.jobs : {})[0] ?? null);
   // The review, implement-revise and merge-reconcile callers' names, and the two racers' job
-  // ids, which the Merger also tells apart by (kanon#728): read from the gate's own constants,
-  // not from a line in the lane, and a warning until `FAILS_FROM` in caller-names.mjs. A lane
-  // that says its caller's name on a `# CALLER NAME:` line is held to that line above instead.
-  if (!wantName) {
+  // ids, which the Merger also tells apart by (kanon#728): held to the lane's `# CALLER NAME:`
+  // and `# CALLER JOB:` lines like the Merger's, but a warning until `FAILS_FROM` in
+  // caller-names.mjs. A release of the lane from before its lines falls back to the gate's table.
+  if (warned) {
     const jobId = String(njobs) === '1' && isObject(doc.jobs) ? /** @type {string} */ (Object.keys(doc.jobs)[0]) : null;
-    for (const { level, message } of callerNameFindings(lane, raw(alt(doc.name, '')), jobId, KANON_VERSION)) {
+    const want = wantName ? { name: wantName, ...(wantJob ? { job: wantJob } : {}) } : undefined;
+    for (const { level, message } of callerNameFindings(lane, raw(alt(doc.name, '')), jobId, KANON_VERSION, want)) {
       (level === 'error' ? fail : warn)(f, message);
     }
   }

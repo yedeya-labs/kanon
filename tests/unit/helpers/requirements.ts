@@ -97,6 +97,8 @@ export const buildRequirements = (root: string) => {
     if (variables.length) lane.optionalVariables = variables;
     const name = comment(text, 'CALLER NAME')[0];
     if (name) lane.callerName = name;
+    const job = comment(text, 'CALLER JOB')[0];
+    if (job) lane.callerJob = job;
     const runName = comment(text, 'CALLER RUN-NAME ENDS WITH')[0];
     if (runName) lane.callerRunNameEndsWith = runName;
     lanes[file.replace(/\.yml$/, '')] = lane;
