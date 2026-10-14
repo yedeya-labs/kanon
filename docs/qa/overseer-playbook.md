@@ -21,6 +21,7 @@ Tell a run that died from one that skipped by reading full run records, never a 
 | Explore the telemetry | `explore-telemetry.yml` | weekly (Tuesday 06:30 UTC), a dispatch |
 | Triage | `triage.yml` | an issue label (`qa:needs-triage`), a dispatch; since 2026-10-12 |
 | Dispatch sweep | `dispatch-sweep.yml` | daily (04:30 UTC), a dispatch; since 2026-10-12 |
+| Issue backstop | `issue-backstop.yml` | an issue opened, a dispatch; since 2026-10-14, running from the first release that ships the lane |
 | Merge reconcile | `merge-reconcile.yml` | a review submitted, a pull request closed, a dispatch; since 2026-10-12 |
 | Lead, brief | `lead.yml` | a dispatch only; since 2026-10-12 |
 | Lead, revise | `lead-revise.yml` | a review submitted, a label, a dispatch; since 2026-10-12 |

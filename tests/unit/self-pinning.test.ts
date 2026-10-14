@@ -50,7 +50,7 @@ const files = [
 // aggregate with that branch's lane, and its filing job would file with that branch's script.
 //
 // triage.yml, dispatch-sweep.yml, merge-reconcile.yml, lead.yml, lead-revise.yml, lead-split.yml,
-// lead-reconcile.yml, verify-acs.yml and merge.yml call the rest of the full pipeline (ADR 0011,
+// lead-reconcile.yml, verify-acs.yml, merge.yml and issue-backstop.yml (kanon#768) call the rest of the full pipeline (ADR 0011,
 // amended 2026-10-12), at the same release and for the same reason: through `$/`, a branch could
 // change the lane that plans, builds, reconciles or merges it, and a pull request could bring the
 // Merger that judges it.
@@ -91,6 +91,7 @@ const EXEMPT = new Set([
   '.github/workflows/explore-telemetry.yml: yedeya-labs/kanon/.github/workflows/agent-explore-telemetry.yml@vX.Y.Z',
   '.github/workflows/triage.yml: yedeya-labs/kanon/.github/workflows/agent-triage.yml@vX.Y.Z',
   '.github/workflows/dispatch-sweep.yml: yedeya-labs/kanon/.github/workflows/agent-dispatch-sweep.yml@vX.Y.Z',
+  '.github/workflows/issue-backstop.yml: yedeya-labs/kanon/.github/workflows/agent-issue-backstop.yml@vX.Y.Z',
   '.github/workflows/merge-reconcile.yml: yedeya-labs/kanon/.github/workflows/agent-merge-reconcile.yml@vX.Y.Z',
   '.github/workflows/lead.yml: yedeya-labs/kanon/.github/workflows/agent-lead.yml@vX.Y.Z',
   '.github/workflows/lead-revise.yml: yedeya-labs/kanon/.github/workflows/agent-lead-revise.yml@vX.Y.Z',

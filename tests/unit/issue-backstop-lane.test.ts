@@ -216,4 +216,14 @@ describe('agent-issue-backstop.yml', () => {
     expect(Object.keys(lane.on.workflow_call.secrets)).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY']);
     for (const k of ['issue_number', 'apply']) expect(lane.on.workflow_call.inputs[k]).toMatchObject({ type: 'string', required: false });
   });
+
+  it("Kanon's own caller calls it on an opened issue, at a release, with the two inputs and secrets", () => {
+    const caller = parse(readFileSync('.github/workflows/issue-backstop.yml', 'utf8')) as {
+      on: Record<string, { types?: string[]; inputs?: Record<string, unknown> }>; jobs: Record<string, { uses: string; with: Record<string, string>; secrets: Record<string, string> }>;
+    };
+    expect(caller.on.issues!.types).toEqual(['opened']);
+    expect(Object.keys(caller.on.workflow_dispatch!.inputs!)).toEqual(['issue_number', 'apply']);
+    expect(caller.jobs.backstop!.uses).toMatch(/^yedeya-labs\/kanon\/\.github\/workflows\/agent-issue-backstop\.yml@v\d+\.\d+\.\d+$/);
+    expect(Object.keys(caller.jobs.backstop!.secrets)).toEqual(['AUTHOR_APP_ID', 'AUTHOR_APP_PRIVATE_KEY']);
+  });
 });
