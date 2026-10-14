@@ -217,7 +217,15 @@ describe('readAggregateToken: one GET on the token URL, with a fresh OIDC token'
     expect([self.status, self.stdout]).toEqual([0, 'true\n']);
     const alone = run({ KANON_AGGREGATE_TOKEN_URL: SELF_URL });
     expect(alone.status).toBe(1);
-    expect(alone.stdout).toMatch(/^::error title=explore-telemetry::`the KANON_AGGREGATE_TOKEN_URL variable` and `the KANON_TELEMETRY_AUDIENCE variable` name a self-hosted store together/);
+    // On stderr: the gate runs `check` inside `$(…)`, which would swallow a workflow command on
+    // stdout, and the step would fail without naming the variable (#852's review).
+    expect(alone.stdout).toBe('');
+    expect(alone.stderr).toMatch(/^::error title=explore-telemetry::`the KANON_AGGREGATE_TOKEN_URL variable` and `the KANON_TELEMETRY_AUDIENCE variable` name a self-hosted store together/);
+    // And through the gate step's own assignment, under `bash -e`: the step fails, and the name reaches the log.
+    const step = spawnSync('bash', ['-e', '-c', `configured="$(${JSON.stringify(process.execPath)} ${JSON.stringify(SCRIPT)} check)"; echo reached`], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', KANON_AGGREGATE_TOKEN_URL: SELF_URL } });
+    expect(step.status).toBe(1);
+    expect(step.stdout).not.toContain('reached');
+    expect(step.stderr).toMatch(/::error title=explore-telemetry::.*name a self-hosted store together/);
     const hosted = run({});
     if (HOSTED_AGGREGATE_URL) expect([hosted.status, hosted.stdout]).toEqual([0, 'true\n']);
     else {

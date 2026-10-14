@@ -28,8 +28,8 @@
 //   node "$KANON/scripts/aggregate-read.mjs" check   the lane's gate: is there a store to call?
 //   env: KANON_AGGREGATE_TOKEN_URL, KANON_TELEMETRY_AUDIENCE (a self-hosted store's `AggregateTokenUrl`
 //        output and `Audience` parameter, together, or neither for Kanon's hosted store)
-//   prints: `true`, or `false` while the hosted URL is not published; exits 1 naming a variable
-//        given alone or of the wrong shape
+//   prints: `true`, or `false` while the hosted URL is not published, and nothing else on stdout;
+//        exits 1 naming a variable given alone or of the wrong shape, on stderr
 //
 //   node "$KANON/scripts/aggregate-read.mjs" token   the Explorer's `aggregate` job
 //   env: the two above, OUT (a directory, outside the workspace), ACTIONS_ID_TOKEN_REQUEST_URL and
@@ -381,7 +381,9 @@ if (isCliEntry(import.meta.url)) {
       process.stderr.write(`explore-telemetry: ${store.why}\n`);
       process.stdout.write('false\n');
     } else {
-      console.log(`::error title=explore-telemetry::${store.why}.`);
+      // On stderr, never stdout: the gate runs this inside `$(…)`, which would swallow the
+      // workflow command, and the step would fail without naming the variable.
+      process.stderr.write(`::error title=explore-telemetry::${store.why}.\n`);
       process.exit(1);
     }
     process.exit(0);
