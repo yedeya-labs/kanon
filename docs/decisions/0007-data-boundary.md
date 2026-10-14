@@ -50,6 +50,11 @@ Written as rules `K-OBS-16`, `K-OBS-17` and `K-OBS-18` in [chapter 08](../../rul
 - **Never:** the release's commit or tag, the adopter's version, an environment's name, a URL, the reviewer, or any name from the cloud. Any of them would let whoever can read the adopter's public repository say whose row it is, which the opaque key exists to prevent.
 - **Rule 5 for deploy rows:** they are stored, and not published across adopters (plan 0010 §10).
 
+**Amended 2026-10-14, by [plan 0011](../plans/0011-notifications.md)'s decision 14: the notify row.** A fifth row kind, the notify row, describes one `notify` job's delivery of one lane's message through the adopter's hook, and is written by that job, which runs no model. It is stored in its lane's partition, `<key>#<lane>`. Rule 1's allowed list grows for it in `K-OBS-16`, as it did for the work-item, finding and deploy rows; the "never" list is unchanged.
+- **Allowed:** the hook's kind, `slack`, `webhook` or `custom`; the message's kind and its contract version; the producer's attempt, beside the `notify` job's own run id and attempt; the outcome, `posted`, `failed` or `skipped`, with a skip reason or a failure from Kanon's closed lists; and a duration. Each is a number, a time or a value from a closed list.
+- **Never:** a URL, a channel, a host, the message's text, the hook's status body or a secret. A webhook URL is a credential, and any of the others would say whose row it is or quote the project the message describes.
+- **Rule 5 for notify rows:** they are stored, and not published: nothing reads them until the follow-up reader that decision 19 names, which counts posted and failed by hook kind and release, Kanon's prebuilt hooks only, behind the three-adopter floor (plan 0011 §11).
+
 ## Why
 
 - **Telemetry must be safe to leave a project by construction, not by review.** Free text is how content leaks: a bail reason or an error message can quote code, and a file path reveals a project's structure. A fixed schema with reason codes closes that route.

@@ -164,3 +164,50 @@ describe("K-MERGE-4 says a library the project's own lanes run only at a pinned 
     expect(merger).toMatch(/run only at a pinned release is product, not pipeline code \(`K-MERGE-4`\)/);
   });
 });
+
+describe("K-OBS-16 and ADR 0007 name the notify row the schema holds (kanon#943)", () => {
+  const rule = ruleOf('rulebook/08-observability-and-cost.md', 'K-OBS-16');
+  const notify = /^A notify row, [\s\S]*?(?=\n\nNo row contains)/m.exec(paragraph(rule, 'Rule'))?.[0] ?? '';
+  const fields = Object.keys(SCHEMAS.notify?.[1] ?? {});
+  /** What a notify row never carries (plan 0011 §11, decision 14), as the rule and the ADR say it. */
+  const NEVER = ['URL', 'channel', 'host', 'text', 'status body', 'secret'];
+
+  it('the rule names the fields its general list does not already cover', () => {
+    for (const f of ['hook', 'kind', 'contract_version', 'producer_attempt', 'skip_reason', 'failure']) expect(fields).toContain(f);
+    expect(notify).toMatch(/the hook's kind/);
+    expect(notify).toMatch(/the message's kind/);
+    expect(notify).toMatch(/contract version/);
+    expect(notify).toMatch(/producer's attempt/);
+    expect(notify).toMatch(/skip reason/);
+    expect(notify).toMatch(/failure/);
+  });
+
+  it('the rule says what a notify row never holds, no field holds it, and it is stored but not published', () => {
+    const never = /A notify row never holds ([^.]*)\./.exec(notify)?.[1] ?? '';
+    for (const n of NEVER) expect(never).toContain(n);
+    for (const n of ['url', 'channel', 'host', 'text', 'status', 'body', 'secret', 'webhook']) expect(fields).not.toContain(n);
+    expect(notify).toMatch(/Notify rows are stored, and not published/);
+  });
+
+  it("its Enforced by cites the schema test N5 added, which exists under the title it cites", () => {
+    const enforced = paragraph(rule, 'Enforced by');
+    const held = /The notify row is held the same way[\s\S]*?\)\./.exec(enforced)?.[0] ?? '';
+    expect(held).toContain('tests/unit/telemetry-schema.test.ts');
+    expect(read('tests/unit/telemetry-schema.test.ts')).toContain("describe('the notify row (plan 0011 §11, step N5)'");
+  });
+
+  it('CHANGES.md records the amendment under K-OBS-16, linking #943', () => {
+    const section = /^## `K-OBS-16`\n([\s\S]*?)(?=^## )/m.exec(read('rulebook/CHANGES.md'))?.[1] ?? '';
+    expect(section).toMatch(/^- \*\*2026-10-14\.\*\* [^\n]*notify row[^\n]*\[#943\]\(https:\/\/github\.com\/yedeya-labs\/kanon\/issues\/943\)/m);
+  });
+
+  it("ADR 0007 records the notify row as it records the deploy row: Allowed, Never and Rule 5", () => {
+    const adr = read('docs/decisions/0007-data-boundary.md');
+    const amendment = /^\*\*Amended [^\n]*: the notify row\.\*\*[^\n]*\n((?:- [^\n]*\n)+)/m.exec(adr)?.[1] ?? '';
+    const bullet = (name: string): string => new RegExp(`^- \\*\\*${name}[^\\n]*$`, 'm').exec(amendment)?.[0] ?? '';
+    for (const f of ['hook', 'kind', 'contract version', "producer's attempt", 'skip reason']) expect(bullet('Allowed:')).toContain(f);
+    for (const n of NEVER) expect(bullet('Never:')).toContain(n);
+    expect(bullet('Rule 5 for notify rows:')).toMatch(/stored, and not published/);
+    expect(bullet('Rule 5 for notify rows:')).toMatch(/decision 19/);
+  });
+});
